@@ -1,5 +1,7 @@
 # Recursive Task Architecture
 
+> **Retired (2026-10).** The lead/child task architecture this describes was removed. The root chat is the builder; it delegates only through builder subagents (`agent`/`agent_send`, docs/builder-tool-surface.md). Kept for history; do not implement from it.
+
 This document defines the product's agent orchestration contract and records
 the implementation boundary. Runtime adapters implement the contract but do
 not decide its semantics.

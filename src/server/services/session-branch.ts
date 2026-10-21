@@ -1,10 +1,18 @@
-import { sessionBranchName } from "#/domain/session-branch";
+import type { Project } from "#/domain/projects";
+import {
+	isGeneratedSessionBranch,
+	sessionBranchName,
+} from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	agentSessionForOwner,
+	projectBranchHeldByOtherSession,
 	saveSessionWorkingBranch,
 } from "#/server/adapters/agent-sessions";
-import { authorizedRepository } from "#/server/adapters/github";
+import {
+	authorizedRepository,
+	repositoryBranchSha,
+} from "#/server/adapters/github";
 import { projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
 
@@ -47,12 +55,68 @@ export async function commitChatBranchForSubmission(input: {
 		project.installationId,
 		project.repositoryId,
 	);
-	const selected = session.selectedBranch ?? repository.defaultBranch;
+	const selected =
+		session.selectedBranch ?? projectBaseBranch(project, repository);
 	const branch = hasConversation
 		? selected
-		: sessionBranchName({
+		: await availableChatBranchName({
+				userId: input.userId,
+				projectId: input.projectId,
+				sessionId: session.id,
 				title: input.text,
-				id: session.id,
+				token,
+				fullName: repository.fullName,
 			});
 	return saveSessionWorkingBranch(input.userId, session.id, branch, selected);
+}
+
+/** The project's base-branch setting (its connected branch), else the repository default. */
+export function projectBaseBranch(
+	project: Pick<Project, "branch">,
+	repository: { readonly defaultBranch: string },
+) {
+	const branch = project.branch?.trim();
+	return branch && !isGeneratedSessionBranch(branch)
+		? branch
+		: repository.defaultBranch;
+}
+
+const CHAT_BRANCH_ATTEMPTS = 6;
+
+/**
+ * The chat's `ytimesy/<slug>-<id>` name, with a short suffix when another
+ * chat in the project holds it or the branch already exists on GitHub (it
+ * cannot be this chat's: the name is chosen before its first push). A
+ * failed GitHub lookup counts as free; the push itself never forces.
+ */
+export async function availableChatBranchName(input: {
+	userId: string;
+	projectId: string;
+	sessionId: string;
+	title: string;
+	token: string;
+	fullName: string;
+}) {
+	let name = sessionBranchName({ title: input.title, id: input.sessionId });
+	for (let attempt = 0; attempt < CHAT_BRANCH_ATTEMPTS; attempt++) {
+		name = sessionBranchName({
+			title: input.title,
+			id: input.sessionId,
+			attempt,
+		});
+		const held = await projectBranchHeldByOtherSession(
+			input.userId,
+			input.projectId,
+			input.sessionId,
+			name,
+		);
+		if (held) continue;
+		const remote = await repositoryBranchSha(
+			input.token,
+			input.fullName,
+			name,
+		).catch(() => null);
+		if (!remote) return name;
+	}
+	return name;
 }

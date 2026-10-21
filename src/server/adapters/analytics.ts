@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PostHog } from "posthog-node";
+import { redactSecrets } from "#/domain/redact-secrets";
 import {
 	type ServerAnalyticsEvent,
 	type ServerAnalyticsProperties,
@@ -35,24 +36,7 @@ async function captureAnalytics<E extends ServerAnalyticsEvent>(
 		const parsed = serverAnalyticsEvents[event].safeParse(properties);
 		if (!parsed.success || !Number.isFinite(identity.timestamp.getTime()))
 			return;
-		const create = () =>
-			import("posthog-node").then(
-				({ PostHog }) =>
-					new PostHog(token, {
-						host: process.env.POSTHOG_HOST || "https://us.i.posthog.com",
-						disableGeoip: true,
-						flushInterval: 0,
-						fetchRetryCount: 1,
-						requestTimeout: 2_000,
-					}),
-			);
-		let active = scopedResource(analyticsResource, create, async (posthog) => {
-			await posthog.shutdown();
-		});
-		if (!active) {
-			client ??= create();
-			active = client;
-		}
+		const active = posthogClient(token);
 		const hex = createHash("sha256")
 			.update(JSON.stringify([userId, event, identity.key]))
 			.digest("hex");
@@ -76,4 +60,71 @@ async function captureAnalytics<E extends ServerAnalyticsEvent>(
 	} catch {
 		// Analytics outages must not fail a saved operation.
 	}
+}
+
+/** One PostHog client per invocation scope (Workers), else per process. */
+function posthogClient(token: string): Promise<PostHog> {
+	const create = () =>
+		import("posthog-node").then(
+			({ PostHog }) =>
+				new PostHog(token, {
+					host: process.env.POSTHOG_HOST || "https://us.i.posthog.com",
+					disableGeoip: true,
+					flushInterval: 0,
+					fetchRetryCount: 1,
+					requestTimeout: 2_000,
+				}),
+		);
+	let active = scopedResource(analyticsResource, create, async (posthog) => {
+		await posthog.shutdown();
+	});
+	if (!active) {
+		client ??= create();
+		active = client;
+	}
+	return active;
+}
+
+/** Error text with tokens, credentials in URLs and long opaque strings removed. */
+export const redactErrorText = (text: string) => redactSecrets(text);
+
+/**
+ * Best-effort server error tracking (PostHog exceptions): the error's class,
+ * redacted message and stack, and where it happened. Never throws.
+ */
+export function captureServerException(
+	error: unknown,
+	context: {
+		source: string;
+		userId?: string;
+		properties?: Record<string, string | number | boolean | null>;
+	},
+): Promise<void> {
+	return trackInvocationTask(
+		(async () => {
+			try {
+				const token = process.env.POSTHOG_PROJECT_TOKEN;
+				if (!token) return;
+				const original =
+					error instanceof Error ? error : new Error(String(error));
+				const safe = new Error(redactErrorText(original.message));
+				safe.name = original.name;
+				safe.stack = original.stack
+					? redactErrorText(original.stack)
+					: undefined;
+				await (await posthogClient(token)).captureExceptionImmediate(
+					safe,
+					context.userId || `server:${context.source}`,
+					{
+						...context.properties,
+						source: context.source,
+						$geoip_disable: true,
+						environment: process.env.YTIMESY_ENVIRONMENT ?? "unknown",
+					},
+				);
+			} catch {
+				// Error tracking outages must not add a second failure.
+			}
+		})(),
+	);
 }

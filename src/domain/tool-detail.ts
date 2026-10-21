@@ -1,7 +1,8 @@
-import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
+import { CODE_MODE_TOOL, codeModeCallItems, codeModeResult } from "./code-mode";
 import { commandActivityTitle } from "./command-activity-title";
 import { leanToolRole } from "./harness-model-profile";
 import { redactSecrets } from "./project-workspace";
+import type { SessionActivityGlyph } from "./session-activity";
 import type { DynamicToolCallItem } from "./session-item";
 
 export function toolCommand(item: DynamicToolCallItem): string | null {
@@ -91,6 +92,8 @@ export function publicToolDetail(
 	const safe = redactSecrets(format === "output" ? toolOutputText(text) : text)
 		.replace(/\bsk-[\w-]{12,}/g, "[redacted]")
 		.replace(/\bAIza[\w-]{20,}/g, "[redacted]")
+		// Google's newer key format (AQ. and an opaque token).
+		.replace(/\bAQ\.[\w-]{30,}/g, "[redacted]")
 		.replace(
 			/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(["'])(.*?)\2/gi,
 			"$1$2[redacted]$2",
@@ -113,15 +116,10 @@ type ToolActivity = {
 	added?: number;
 	removed?: number;
 	note?: string;
-	glyph?:
-		| "wait"
-		| "message"
-		| "image"
-		| "guide"
-		| "stop"
-		| "test"
-		| "read"
-		| "search";
+	/** Overrides the tool's own icon (activityGlyphForToolName). */
+	glyph?: SessionActivityGlyph;
+	/** No case knows this tool: the label is its name in words. */
+	fallback?: true;
 };
 
 /** What a command mostly does, for its icon. */
@@ -218,7 +216,8 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 		typeof input[key] === "string" ? (input[key] as string) : undefined;
 	const tool = item.tool;
 	const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(tool);
-	if (mcp) return { verb: mcp[1], target: mcp[2].replaceAll("_", " ") };
+	if (mcp)
+		return { verb: mcp[1], target: mcp[2].replaceAll("_", " "), glyph: "mcp" };
 	// A lean surface's tool shows as its role (LEAN_SHAPE_TOOLS).
 	const leanRole = leanToolRole(tool);
 	switch (leanRole ? `lean:${leanRole}` : tool) {
@@ -426,12 +425,16 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			};
 		}
 		case CODE_MODE_TOOL: {
-			// One card for the whole program; its inner calls are listed inside it.
-			const calls = codeModeResult(item)?.calls ?? [];
+			// One card for the whole program; its inner calls are listed inside it,
+			// summarized here by what they did ("Read ×2 · Edited · Ran").
+			const calls = codeModeCallItems(item);
+			const statuses = codeModeResult(item)?.calls ?? [];
 			const counts = new Map<string, number>();
-			for (const call of calls)
-				counts.set(call.tool, (counts.get(call.tool) ?? 0) + 1);
-			const notCompleted = calls.filter(
+			for (const call of calls) {
+				const verb = toolActivity(call).verb;
+				counts.set(verb, (counts.get(verb) ?? 0) + 1);
+			}
+			const notCompleted = statuses.filter(
 				(call) => call.status !== "completed",
 			).length;
 			return {
@@ -439,14 +442,13 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				target: counts.size
 					? clip(
 							[...counts]
-								.map(([name, count]) =>
-									count > 1 ? `${name} ×${count}` : name,
+								.map(([verb, count]) =>
+									count > 1 ? `${verb} ×${count}` : verb,
 								)
 								.join(" · "),
 							80,
 						)
 					: undefined,
-				code: true,
 				note: calls.length
 					? `${calls.length} ${calls.length === 1 ? "call" : "calls"}${notCompleted ? `, ${notCompleted} not completed` : ""}`
 					: undefined,
@@ -455,15 +457,216 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 		case "read_plugin_skill":
 			return {
 				verb: "Read skill",
-				target: text("name"),
+				target: text("skill") ?? text("name"),
 				code: true,
 				glyph: "guide",
 			};
 	}
+	const known = harnessToolActivity(tool, text, input, output);
+	if (known) return known;
 	const detail = text("path") ?? text("query") ?? text("title");
 	return {
 		verb: sentence(tool),
 		target: detail ? clip(detail, 80) : undefined,
 		code: Boolean(text("path")),
+		fallback: true,
 	};
+}
+
+const host = (url: string) =>
+	url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+const plural = (count: number, word: string) =>
+	`${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** The harness's own tools beyond the file and command ones, and the retired tools older chats hold. */
+function harnessToolActivity(
+	tool: string,
+	text: (key: string) => string | undefined,
+	input: Record<string, unknown>,
+	output: Record<string, unknown> | null,
+): ToolActivity | null {
+	const outputValue = (output?.type === "json" ? output.value : output) as
+		| Record<string, unknown>
+		| null
+		| undefined;
+	const field = (key: string) =>
+		typeof outputValue?.[key] === "string"
+			? (outputValue[key] as string)
+			: undefined;
+	switch (tool) {
+		case "check_deliverable": {
+			const command = text("command");
+			return {
+				verb: "Checked deliverable",
+				target: command ? displayCommand(command) : undefined,
+				code: true,
+			};
+		}
+		case "read_context_archive":
+			return { verb: "Read earlier context" };
+		case "search_context_history":
+			return {
+				verb: "Searched earlier context",
+				target: text("query") ? clip(text("query") as string, 80) : undefined,
+			};
+		case "browser_open":
+			return { verb: "Opened", target: host(text("url") ?? "page") };
+		case "browser_screenshot":
+			return { verb: "Took a browser screenshot" };
+		case "browser_inspect": {
+			const checks = Array.isArray(input.assertions)
+				? input.assertions.length
+				: 0;
+			return {
+				verb: "Inspected",
+				target: text("url") ? host(text("url") as string) : "page",
+				note: checks ? plural(checks, "check") : undefined,
+			};
+		}
+		case "browser_execute":
+			return {
+				verb: "Ran browser script",
+				target: text("code") ? clip(text("code") as string, 60) : undefined,
+				code: true,
+			};
+		case "browser_click":
+			return { verb: "Clicked", target: text("selector") ?? text("text") };
+		case "browser_type":
+			return { verb: "Typed into page" };
+		case "browser_key":
+			return { verb: "Pressed", target: text("key"), code: true };
+		case "report_task_blocked":
+			return {
+				verb: "Asked for a decision",
+				target: text("question")
+					? clip(text("question") as string, 80)
+					: undefined,
+			};
+		case "enter_plan_mode":
+			return {
+				verb: "Entered plan mode",
+				note: text("reason") ? clip(text("reason") as string, 80) : undefined,
+			};
+		case "propose_plan":
+			return { verb: "Proposed a plan" };
+		case "request_project_secret":
+			return { verb: "Asked for secret", target: text("name"), code: true };
+		case "search_mcp_tools":
+			return {
+				verb: "Searched MCP tools",
+				target: text("query") ? clip(text("query") as string, 80) : undefined,
+			};
+		case "call_mcp_tool":
+			return {
+				verb: text("server") ?? "MCP",
+				target: text("tool")?.replaceAll("_", " "),
+			};
+		case "agent": {
+			const role = text("role") ?? (field("role") as string | undefined);
+			const model = field("model");
+			const outcome = field("outcome");
+			return {
+				verb:
+					input.explore === true
+						? "Started exploration"
+						: role
+							? `Started ${role}`
+							: "Started agent",
+				target: text("title"),
+				note: [model, outcome].filter(Boolean).join(" · ") || undefined,
+			};
+		}
+		case "agent_send": {
+			const id =
+				text("id") ??
+				(typeof input.id === "number" ? String(input.id) : undefined);
+			const status = field("status");
+			return {
+				verb:
+					input.stop === true
+						? "Stopped agent"
+						: input.explore === true
+							? "Sent exploration round to agent"
+							: "Messaged agent",
+				target: id,
+				code: true,
+				note: status ? clip(status, 60) : undefined,
+			};
+		}
+		case "review_check":
+			return { verb: "Independent review" };
+		case "attempt_check":
+			return { verb: "Attempts" };
+		case "read_files": {
+			const paths = Array.isArray(input.paths) ? input.paths.length : 0;
+			return { verb: "Read", target: paths ? plural(paths, "file") : "files" };
+		}
+		case "list_files":
+			return { verb: "Listed files", target: text("path"), code: true };
+		case "search_files":
+		case "search_tools":
+			return {
+				verb: "Searched",
+				target: (text("query") ?? text("pattern"))?.slice(0, 80),
+				code: true,
+			};
+		case "inspect_changes":
+			return { verb: "Reviewed changes" };
+		case "verify_changes":
+		case "run_checks":
+			return { verb: "Ran checks" };
+		case "create_file":
+			return {
+				verb: "Created",
+				target: basename(text("path") ?? "file"),
+				code: true,
+			};
+		case "apply_patches":
+			return { verb: "Edited files" };
+		case "rename_symbol":
+			return { verb: "Renamed symbol", target: text("newName"), code: true };
+		case "rename_file":
+			return {
+				verb: "Renamed",
+				target: text("from") ?? text("path"),
+				code: true,
+			};
+		case "apply_code_action":
+			return { verb: "Applied code action" };
+		case "read_tool_output":
+			return { verb: "Read earlier tool output" };
+		case "compose_tools":
+			return { verb: "Ran tool steps" };
+		case "update_plan":
+			return { verb: "Updated plan" };
+		case "read_work_plan":
+			return { verb: "Read plan" };
+		case "plan_parallel_work":
+			return { verb: "Planned parallel work" };
+		case "remember_project":
+			return { verb: "Saved to project memory" };
+		case "inspect_project_evidence":
+			return { verb: "Read project evidence" };
+		case "inspect_code":
+		case "inspect_code_batch":
+		case "read_code":
+			return {
+				verb: "Inspected code",
+				target: text("path") ? basename(text("path") as string) : undefined,
+				code: true,
+			};
+		case "debug_program":
+		case "debug_node":
+			return { verb: "Debugged program" };
+		case "prepare_code_tools":
+			return { verb: "Prepared code tools" };
+	}
+	// The retired task tools of the removed lead/child design, in older chats.
+	if (
+		/^(read_task_|list_peers|send_peer_message|create_task|edit_task|start_task|list_tasks|send_task_message|request_task_wrap_up|inspect_task_diff|import_reviewed_task|mark_task_reviewed|publish_task)/.test(
+			tool,
+		)
+	)
+		return { verb: "Coordinated subagents", note: sentence(tool) };
+	return null;
 }

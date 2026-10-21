@@ -1,13 +1,22 @@
 import type { ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
+import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
+import {
+	HARNESS_EXPLORE_HEADING,
+	newSidekickState,
+	SIDEKICK_EXPLORE_NOTE,
+	type SidekickState,
+} from "#/domain/sidekick";
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
+	checkerWorkerTools,
 	type SubagentToolDeps,
+	startHarnessExploration,
 	startRuntimeSubagent,
 	subagentTools,
 } from "./subagent-tools";
@@ -55,6 +64,10 @@ function harness(
 		ancestors?: Row[];
 		deps?: Partial<SubagentToolDeps>;
 		roleModels?: RoleModels;
+		lead?: LeadMode;
+		parentReasoning?: string;
+		rigor?: boolean;
+		checkerMode?: CheckerMode;
 	} = {},
 ) {
 	const sessions: Row[] = options.sessions ?? [
@@ -123,9 +136,28 @@ function harness(
 		takeReport: vi.fn(async () => null),
 		message: vi.fn(async () => ({}) as never),
 		stop: vi.fn(async () => {}),
+		markRoundStart: vi.fn(async (input: { round: number }) =>
+			`start-${input.round}`.padEnd(40, "0"),
+		),
+		saveSidekick: vi.fn(
+			async (id: string, state: SidekickState, options?: object) => {
+				const child = sessions.find((entry) => entry.id === id);
+				if (child)
+					Object.assign(child, {
+						agentBudget: {
+							...child.agentBudget,
+							...(options ? { stopAtStep: undefined } : {}),
+							sidekick: state,
+						},
+					});
+			},
+		),
+		retireSidekick: vi.fn(async () => "retired" as const),
+		usageWindowsOpen: vi.fn(async () => {}),
 		...options.deps,
 	} satisfies SubagentToolDeps;
-	const tools: ToolSet = subagentTools({
+	const onSidekickRound = vi.fn();
+	const context = {
 		machines: { exec } as unknown as WorkspaceMachines,
 		parent,
 		workspace: async () => ({
@@ -136,7 +168,13 @@ function harness(
 		signal: new AbortController().signal,
 		deps,
 		roleModels: options.roleModels,
-	});
+		lead: options.lead,
+		parentReasoning: options.parentReasoning,
+		rigor: options.rigor,
+		checkerMode: options.checkerMode,
+		onSidekickRound,
+	};
+	const tools: ToolSet = subagentTools(context);
 	const call = (name: string, input: unknown) =>
 		tools[name]?.execute?.(
 			input as never,
@@ -146,7 +184,7 @@ function harness(
 				context: undefined,
 			} as never,
 		) as Promise<Record<string, unknown>>;
-	return { sessions, deps, call, exec, parent };
+	return { sessions, deps, call, exec, parent, context, onSidekickRound };
 }
 
 describe("agent tool", () => {
@@ -327,6 +365,25 @@ describe("agent tool", () => {
 			call("agent", { role: "writer", title: "x", brief: "y" }),
 		).rejects.toThrow("snapshot refused");
 		expect(deps.markFailed).toHaveBeenCalledWith("child-1");
+		expect(deps.start).not.toHaveBeenCalled();
+	});
+
+	it("checks the usage windows before opening a child or forking its VM", async () => {
+		const { deps, call } = harness({
+			deps: {
+				usageWindowsOpen: vi.fn(async () => {
+					throw new Error(
+						"You have reached your 5-hour cloud usage limit, so new work cannot start.",
+					);
+				}),
+			},
+		});
+		await expect(
+			call("agent", { role: "writer", title: "x", brief: "y" }),
+		).rejects.toThrow("5-hour cloud usage limit");
+		expect(deps.usageWindowsOpen).toHaveBeenCalledWith("user");
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
 		expect(deps.start).not.toHaveBeenCalled();
 	});
 
@@ -525,6 +582,41 @@ describe("role models", () => {
 		expect(result).not.toHaveProperty("modelNotice");
 	});
 
+	it("gives a child the parent's effort unless its entry sets one", async () => {
+		const inherits = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "high",
+		});
+		await inherits.call("agent", { role: "checker", title: "Check it" });
+		expect(inherits.deps.start).toHaveBeenCalledWith(
+			expect.anything(),
+			"child-1",
+			{ reasoning: "high" },
+		);
+		const own = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna", effort: "low" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "high",
+		});
+		await own.call("agent", { role: "checker", title: "Check it" });
+		expect(own.deps.start).toHaveBeenCalledWith(expect.anything(), "child-1", {
+			reasoning: "low",
+		});
+		// An effort the child's route does not offer: its default.
+		const unoffered = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "xhigh",
+		});
+		await unoffered.call("agent", { role: "checker", title: "Check it" });
+		expect(unoffered.deps.start).toHaveBeenCalledWith(
+			expect.anything(),
+			"child-1",
+			undefined,
+		);
+	});
+
 	it("resolves an API model under any connection for a role", async () => {
 		const { deps, call } = harness({
 			roleModels: { writer: { model: "api:gemini-3.8-flash" } },
@@ -589,5 +681,797 @@ describe("role models", () => {
 		const { call } = harness({ deps: { routes: routesFake } });
 		await call("agent", { role: "researcher", title: "x", brief: "y" });
 		expect(routesFake).not.toHaveBeenCalled();
+	});
+});
+
+describe("lead mode fusion: the persistent sidekick", () => {
+	const brief = {
+		role: "writer",
+		title: "Add the flag",
+		brief: "Add --json to src/cli.ts; done when npm test passes.",
+	};
+	/** A sidekick in the lead's checkout that reported round `round` and is idle now. */
+	const idleSidekick = (fields: Partial<SidekickState> = {}) =>
+		row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentSteps: 40,
+			taskPlacement: "shared",
+			taskAccess: "read_write",
+			providerRef: "vm-root",
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: {
+					...newSidekickState({ tokens: 2_000_000 }, at(-10)),
+					...fields,
+				},
+			},
+		});
+
+	it("makes the lead's first writer its sidekick in the lead's own checkout (no fork) and refuses a second writer while it lives", async () => {
+		const { call, deps, sessions, onSidekickRound } = harness({
+			lead: "fusion",
+		});
+		const started = await call("agent", brief);
+		expect(started).toMatchObject({
+			id: "1",
+			role: "writer",
+			vm: "shared-writer",
+		});
+		expect(started.sidekick).toContain(
+			"Your persistent sidekick for this chat: up to 6 rounds per user request",
+		);
+		expect(started.sidekick).toContain(
+			"It works in your checkout; you wait while it works",
+		);
+		// A writer on the lead's machine, not a fork.
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				placement: "shared",
+				access: "read_write",
+				sharedWriter: true,
+			}),
+		);
+		expect(deps.fork).not.toHaveBeenCalled();
+		expect(deps.mergeFork).not.toHaveBeenCalled();
+		// Round 1 starts from a snapshot of the lead's checkout; the lead stops writing.
+		expect(deps.markRoundStart).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm-root", label: "1", round: 1 }),
+		);
+		expect(onSidekickRound).toHaveBeenCalled();
+		const child = sessions.find((entry) => entry.id === "child-1");
+		expect(child?.agentBudget?.sidekick).toMatchObject({
+			round: 1,
+			maxRounds: 6,
+			roundStartSteps: 0,
+			roundTokens: 1_000_000,
+		});
+		expect(child?.agentBudget?.sidekick?.rounds[0]?.base).toMatch(/^start-1/);
+		await expect(call("agent", { ...brief, title: "Another" })).rejects.toThrow(
+			"Your sidekick 1 is still available (working): send it the next brief or feedback with agent_send (id 1)",
+		);
+		// Readers are still fine beside it.
+		await call("agent", {
+			role: "researcher",
+			title: "Map",
+			brief: "Where is X?",
+		});
+		expect(deps.openTask).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps ordinary forked writers with lead=off", async () => {
+		const { call, sessions, deps } = harness();
+		const started = await call("agent", brief);
+		expect(started.sidekick).toBeUndefined();
+		expect(started.vm).toBe("fork");
+		expect(deps.fork).toHaveBeenCalled();
+		expect(deps.markRoundStart).not.toHaveBeenCalled();
+		expect(
+			sessions.find((entry) => entry.id === "child-1")?.agentBudget?.sidekick,
+		).toBeUndefined();
+		await call("agent", { ...brief, title: "Second writer" });
+	});
+
+	it("starts round 2 in the same session from a snapshot of the lead's checkout, then delivers the feedback", async () => {
+		const sessions = [row("root", null), idleSidekick()];
+		const { call, deps, onSidekickRound } = harness({
+			sessions,
+			lead: "fusion",
+		});
+		const result = await call("agent_send", {
+			id: "1",
+			message: "The --json output misses the exit code; add it and test it.",
+		});
+		expect(result).toMatchObject({
+			id: "1",
+			status: "round 2/6 started",
+			delivery: "now",
+		});
+		expect(result.checkout).toContain("it works in your checkout now");
+		expect(deps.markRoundStart).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm-root", label: "1", round: 2 }),
+		);
+		expect(onSidekickRound).toHaveBeenCalled();
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state).toMatchObject({ round: 2, roundStartSteps: 40 });
+		expect(state.rounds.at(-1)?.n).toBe(2);
+		expect(state.rounds.at(-1)?.base).toMatch(/^start-2/);
+		expect(deps.saveSidekick).toHaveBeenCalledWith("s", expect.anything(), {
+			clearStop: true,
+		});
+		// The same agent session (its context) receives the message; nothing new is spawned.
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
+		expect(deps.mergeFork).not.toHaveBeenCalled();
+		const [, recipient, text] = vi.mocked(deps.message).mock.calls[0] ?? [];
+		expect(recipient).toBe("s");
+		expect(text).toMatch(
+			/^Round 2\/6 from your lead\. You work in the lead's checkout as it is now/,
+		);
+		expect(text).toContain("The --json output misses the exit code");
+		// The snapshot comes before delivery.
+		expect(
+			vi.mocked(deps.markRoundStart).mock.invocationCallOrder[0],
+		).toBeLessThan(
+			vi.mocked(deps.message).mock.invocationCallOrder[0] as number,
+		);
+	});
+
+	it("still starts a round when the checkout cannot be snapshotted", async () => {
+		const sessions = [row("root", null), idleSidekick()];
+		const { call, deps } = harness({
+			sessions,
+			lead: "fusion",
+			deps: {
+				markRoundStart: vi.fn(async () => {
+					throw new Error("git is gone");
+				}),
+			},
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		expect(
+			(await call("agent_send", { id: "1", message: "next" })).status,
+		).toBe("round 2/6 started");
+		warn.mockRestore();
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state.rounds.at(-1)?.base).toBeUndefined();
+		expect(deps.message).toHaveBeenCalled();
+	});
+
+	it("steers a working sidekick without a new round", async () => {
+		const sessions = [
+			row("root", null),
+			{ ...idleSidekick(), turnStatus: "running" } as never,
+		];
+		const { call, deps } = harness({ sessions, lead: "fusion" });
+		expect(
+			await call("agent_send", { id: "1", message: "Use port 4001." }),
+		).toMatchObject({
+			status: "message queued",
+		});
+		expect(deps.markRoundStart).not.toHaveBeenCalled();
+		expect(deps.saveSidekick).not.toHaveBeenCalled();
+	});
+
+	it("caps the rounds and refuses a retired sidekick", async () => {
+		const full = harness({
+			sessions: [row("root", null), idleSidekick({ round: 6 })],
+			lead: "fusion",
+		});
+		await expect(
+			full.call("agent_send", { id: "1", message: "again" }),
+		).rejects.toThrow(
+			"Sidekick 1 has used all 6 rounds. Take over, or stop it and start a new writer.",
+		);
+		expect(full.deps.markRoundStart).not.toHaveBeenCalled();
+		const retired = harness({
+			sessions: [
+				row("root", null),
+				idleSidekick({
+					retired: { at: at(-1), reason: "stopped by the lead" },
+				}),
+			],
+			lead: "fusion",
+		});
+		await expect(
+			retired.call("agent_send", { id: "1", message: "again" }),
+		).rejects.toThrow("Sidekick 1 is retired (stopped by the lead)");
+		// A retired sidekick no longer blocks a new writer, which becomes the next sidekick.
+		const next = await retired.call("agent", brief);
+		expect(next.sidekick).toBeDefined();
+	});
+
+	it("retires an idle sidekick on stop and stops a working one", async () => {
+		const idle = harness({
+			sessions: [row("root", null), idleSidekick()],
+			lead: "fusion",
+		});
+		expect(
+			await idle.call("agent_send", { id: "1", stop: true }),
+		).toMatchObject({
+			status: "retired",
+		});
+		expect(idle.deps.retireSidekick).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "s" }),
+			"stopped by the lead",
+		);
+		expect(idle.deps.message).not.toHaveBeenCalled();
+		const working = harness({
+			sessions: [
+				row("root", null),
+				{ ...idleSidekick(), turnStatus: "running" } as never,
+			],
+			lead: "fusion",
+			deps: { retireSidekick: vi.fn(async () => "stopping" as const) },
+		});
+		expect(
+			await working.call("agent_send", { id: "1", stop: true }),
+		).toMatchObject({
+			status: "stopping",
+		});
+		expect(working.deps.stop).toHaveBeenCalledWith("s");
+	});
+
+	it("marks an exploration round: the brief asks for snippets and the round is recorded as explore", async () => {
+		const { call, deps, sessions } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask })],
+		});
+		await call("agent", { ...brief, explore: true });
+		const prompt = vi.mocked(deps.openTask).mock.calls[0]?.[0].prompt;
+		expect(prompt).toContain(brief.brief);
+		expect(prompt).toContain(SIDEKICK_EXPLORE_NOTE);
+		const state = sessions.find((entry) => entry.id === "child-1")?.agentBudget
+			?.sidekick as SidekickState;
+		expect(state.rounds[0]).toMatchObject({ n: 1, kind: "explore" });
+		expect(state.requestKey).toBe("u1");
+		// The pair's tuning is recorded for the sidekick's own prompt.
+		expect(state.pair?.name).toBe("default");
+		// Only the sidekick explores.
+		await expect(
+			call("agent", {
+				role: "researcher",
+				title: "r",
+				brief: "b",
+				explore: true,
+			}),
+		).rejects.toThrow("explore applies only to your sidekick");
+	});
+
+	it("serves the chat's next user request with a fresh round count", async () => {
+		const sessions = [
+			row("root", null, { items: userTask }),
+			idleSidekick({ round: 6, requestKey: "u0" }),
+		];
+		const { call, deps } = harness({ sessions, lead: "fusion" });
+		const result = await call("agent_send", {
+			id: "1",
+			message: "The user now wants --yaml too.",
+			explore: true,
+		});
+		expect(result.status).toBe("round 7 (1/6 this turn) started");
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state).toMatchObject({
+			round: 7,
+			turnFirstRound: 7,
+			turns: 2,
+			requestKey: "u1",
+		});
+		expect(state.rounds.at(-1)).toMatchObject({ n: 7, kind: "explore" });
+		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
+		expect(text).toMatch(
+			/^Round 7 from your lead \(1\/6 for the user's new request\)\./,
+		);
+		expect(text).toContain(SIDEKICK_EXPLORE_NOTE);
+		// The same session takes it: no new writer.
+		expect(deps.openTask).not.toHaveBeenCalled();
+	});
+
+	it("sends a stuck sidekick's next round to the same session, which switches models at its compaction", async () => {
+		const sidekick = idleSidekick({
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-10),
+					endedAt: at(-5),
+					outcome: "finished",
+					patchFiles: 1,
+					signals: [{ kind: "same-check-failed", detail: "npm test" }],
+				},
+			],
+			pendingSwitch: {
+				to: "codex:gpt-6.1-sol",
+				reason: "it repeats npm test",
+				round: 1,
+				at: at(-5),
+			},
+		});
+		Object.assign(sidekick, { listedModelId: "gpt-6-luna", harness: "codex" });
+		const { call, deps, sessions } = harness({
+			sessions: [row("root", null, { items: userTask }), sidekick],
+			lead: "fusion",
+			roleModels: {
+				writer: { model: "codex:gpt-6-luna" },
+				writerEscalation: { model: "codex:gpt-6.1-sol" },
+			},
+		});
+		const result = await call("agent_send", {
+			id: "1",
+			message: "Make npm test pass: print the exit code in --json.",
+		});
+		expect(result.status).toBe("round 2/6 started");
+		expect(result.model).toContain("continues on codex:gpt-6.1-sol");
+		// No retirement and no new writer: the same session takes the round.
+		expect(deps.retireSidekick).not.toHaveBeenCalled();
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(vi.mocked(deps.message).mock.calls[0]?.[1]).toBe("s");
+		const state = sessions.find((entry) => entry.id === "s")?.agentBudget
+			?.sidekick as SidekickState;
+		expect(state.pendingSwitch?.to).toBe("codex:gpt-6.1-sol");
+		expect(state.round).toBe(2);
+	});
+});
+
+describe("lead mode fusion: the harness-started exploration", () => {
+	const request = {
+		requestKey: "u1",
+		requestText: "Add a --json flag to the CLI and test it.",
+	};
+
+	it("starts a new sidekick on an exploration brief built from the user's request", async () => {
+		const { deps, sessions, context, onSidekickRound } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask })],
+		});
+		expect(await startHarnessExploration(context, request)).toEqual({
+			id: "1",
+			round: 1,
+		});
+		const opened = vi.mocked(deps.openTask).mock.calls[0]?.[0];
+		expect(opened).toMatchObject({ placement: "shared", access: "read_write" });
+		expect(opened?.prompt.startsWith(HARNESS_EXPLORE_HEADING)).toBe(true);
+		expect(opened?.prompt).toContain(
+			"Add a --json flag to the CLI and test it.",
+		);
+		expect(opened?.prompt).toContain(SIDEKICK_EXPLORE_NOTE);
+		const state = sessions.find((entry) => entry.id === "child-1")?.agentBudget
+			?.sidekick as SidekickState;
+		expect(state).toMatchObject({ requestKey: "u1", round: 1 });
+		expect(state.rounds[0]?.kind).toBe("explore");
+		expect(onSidekickRound).toHaveBeenCalled();
+	});
+
+	it("gives an idle sidekick from an earlier request the exploration as its next round", async () => {
+		const sidekick = row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentSteps: 30,
+			taskPlacement: "shared",
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: {
+					...newSidekickState({ tokens: 2_000_000 }, at(-30), {
+						requestKey: "u0",
+					}),
+					rounds: [
+						{ n: 1, startedAt: at(-30), endedAt: at(-20), outcome: "finished" },
+					],
+				},
+			},
+		});
+		const { deps, sessions, context } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), sidekick],
+		});
+		expect(await startHarnessExploration(context, request)).toEqual({
+			id: "1",
+			round: 2,
+		});
+		expect(deps.openTask).not.toHaveBeenCalled();
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state).toMatchObject({
+			round: 2,
+			turnFirstRound: 2,
+			turns: 2,
+			requestKey: "u1",
+		});
+		expect(state.rounds.at(-1)).toMatchObject({ n: 2, kind: "explore" });
+		const text = vi.mocked(deps.message).mock.calls[0]?.[2] ?? "";
+		expect(text).toMatch(
+			/^Round 2 from your lead \(1\/6 for the user's new request\)\./,
+		);
+		expect(text).toContain(HARNESS_EXPLORE_HEADING);
+		expect(text).toContain("Add a --json flag");
+	});
+
+	it("starts nothing while the sidekick still works", async () => {
+		const sidekick = row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "running",
+			taskState: "working",
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: newSidekickState({ tokens: 2_000_000 }, at(-3)),
+			},
+		});
+		const { deps, context } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), sidekick],
+		});
+		expect(await startHarnessExploration(context, request)).toBeNull();
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(deps.message).not.toHaveBeenCalled();
+	});
+});
+
+describe("lead mode fusion: sidekicks from before the shared checkout, and the lead's own writes", () => {
+	const forked = (fields: Partial<Row> = {}) =>
+		row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: newSidekickState({ tokens: 2_000_000 }, at(-30)),
+			},
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+			},
+			...fields,
+		});
+
+	it("retires an idle forked sidekick and gives the brief to a fresh one in the lead's checkout", async () => {
+		const { call, deps } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), forked()],
+		});
+		const result = await call("agent_send", {
+			id: "1",
+			message: "Add --json and test it.",
+		});
+		expect(result.status).toContain(
+			"ran on a fork from before the shared checkout and is retired",
+		);
+		expect(deps.retireSidekick).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "s" }),
+			"it ran on a fork from before the shared checkout",
+		);
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				placement: "shared",
+				access: "read_write",
+				prompt: "Add --json and test it.",
+			}),
+		);
+		expect(deps.message).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
+	});
+
+	it("explores a new request with a fresh sidekick instead of a forked one", async () => {
+		const { context, deps } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), forked()],
+		});
+		expect(
+			await startHarnessExploration(context, {
+				requestKey: "u1",
+				requestText: "Add --json.",
+			}),
+		).toMatchObject({ round: 1 });
+		expect(deps.retireSidekick).toHaveBeenCalled();
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({ placement: "shared" }),
+		);
+	});
+
+	it("waits for the lead's writes already running before the round's snapshot, and notes its background commands", async () => {
+		const order: string[] = [];
+		const sessions = [
+			row("root", null),
+			row("s", "root", {
+				agentRole: "writer",
+				turnStatus: "completed",
+				taskPlacement: "shared",
+				agentBudget: {
+					steps: 150,
+					minutes: 30,
+					tokens: 2_000_000,
+					sidekick: newSidekickState({ tokens: 2_000_000 }, at(-10)),
+				},
+			}),
+		];
+		const { deps, context } = harness({
+			lead: "fusion",
+			sessions,
+			deps: {
+				markRoundStart: vi.fn(async () => {
+					order.push("snapshot");
+					return "a".repeat(40);
+				}),
+			},
+		});
+		const tools = subagentTools({
+			...context,
+			leadWritesSettled: async () => {
+				order.push("writes settled");
+			},
+			leadBackgroundCommands: () => ["job-7"],
+		});
+		const result = (await tools.agent_send?.execute?.(
+			{ id: "1", message: "Next: add --yaml." } as never,
+			{ toolCallId: "c", messages: [] } as never,
+		)) as Record<string, unknown>;
+		expect(order).toEqual(["writes settled", "snapshot"]);
+		expect(result.backgroundCommands).toContain("still running");
+		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
+		expect(text).toContain(
+			"The lead has background commands still running in this checkout (job-7)",
+		);
+	});
+});
+
+describe("checkerMode=pair: the checker's judge and worker", () => {
+	const routes: FailoverConnection[] = [
+		{
+			key: "codex",
+			label: "Codex",
+			kind: "subscription",
+			revision: "",
+			models: [
+				{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", reasoning: ["low", "high"] },
+				{ id: "gpt-6-luna", label: "GPT-6 Luna", reasoning: ["low", "high"] },
+			],
+		},
+	];
+	/** The review loop's judge, a minute into its 10-minute check. */
+	const judge = () =>
+		row("c", "root", {
+			agentRole: "checker",
+			turnStatus: "running",
+			harness: "codex",
+			listedModelId: "gpt-6.1-sol",
+			createdAt: at(-1),
+			agentBudget: {
+				steps: 60,
+				minutes: 10,
+				tokens: 800_000,
+				checkerPair: "judge",
+			},
+		});
+	const pair = (deps: Partial<SubagentToolDeps> = {}) => {
+		const sessions = [
+			row("root", null, { items: userTask, listedModelId: "gpt-6.1-sol" }),
+			judge(),
+		];
+		const h = harness({
+			sessions,
+			parent: sessions[1],
+			ancestors: [sessions[0] as Row],
+			checkerMode: "pair",
+			deps: { routes: vi.fn(async () => routes), ...deps },
+		});
+		const tools = checkerWorkerTools(h.context);
+		const call = (input: unknown) =>
+			tools.checker_worker?.execute?.(
+				input as never,
+				{ toolCallId: "call", messages: [], context: undefined } as never,
+			) as Promise<Record<string, unknown>>;
+		return { ...h, call };
+	};
+
+	it("starts a read-only worker on codex:gpt-6-luna with the judge's brief, most of the judge's time, and waits for its evidence", async () => {
+		const takeReport = vi.fn().mockResolvedValueOnce({
+			outcome: "completed",
+			report: "make test: exit 0\nsrc/cli.ts:12 parses --json",
+		});
+		const { call, deps } = pair({ takeReport });
+		const result = await call({
+			title: "Run the suite",
+			brief: "Copy /home/user/app to $HOME/work and run make test there.",
+		});
+		expect(result).toEqual({
+			id: "1.1",
+			model: "GPT-6 Luna · Codex",
+			outcome: "completed",
+			report: "make test: exit 0\nsrc/cli.ts:12 parses --json",
+		});
+		const opened = vi.mocked(deps.openTask).mock.calls[0]?.[0];
+		expect(opened).toMatchObject({
+			parentSessionId: "c",
+			harness: "codex",
+			modelId: "gpt-6-luna",
+			placement: "shared",
+			access: "read_only",
+		});
+		expect(opened?.prompt).toContain(
+			"You are the worker of an independent checker",
+		);
+		expect(opened?.prompt).toContain(
+			"<judge_brief>\nCopy /home/user/app to $HOME/work and run make test there.\n</judge_brief>",
+		);
+		// Neither the user's request nor anything of the builder's: only the judge's brief.
+		expect(opened?.prompt).not.toContain("Add a --json flag");
+		// 9 minutes left, less the judge's 2-minute wrap-up; half its tokens.
+		expect(deps.saveSpec).toHaveBeenCalledWith("user", "child-1", {
+			role: "researcher",
+			budget: {
+				steps: 75,
+				minutes: 7,
+				tokens: 400_000,
+				priceBasis: "gpt-6.1-sol",
+				checkerPair: "worker",
+			},
+		});
+		expect(deps.fork).not.toHaveBeenCalled();
+	});
+
+	it("briefs a worker that already reported again, and queues to one still working", async () => {
+		const takeReport = vi.fn().mockResolvedValue({
+			outcome: "completed",
+			report: "rerun: exit 1",
+		});
+		const { call, deps, sessions } = pair({ takeReport });
+		await call({ brief: "Run make test." });
+		expect(
+			await call({ id: "1.1", brief: "Run tests/edge.sh as well." }),
+		).toEqual({
+			id: "1.1",
+			status:
+				"message queued: it is still working; its report arrives as a message",
+		});
+		Object.assign(sessions.at(-1) as Row, { turnStatus: "completed" });
+		expect(await call({ id: "1.1", brief: "Rerun it." })).toEqual({
+			id: "1.1",
+			outcome: "completed",
+			report: "rerun: exit 1",
+		});
+		expect(vi.mocked(deps.message).mock.calls.map((entry) => entry[2])).toEqual(
+			["Run tests/edge.sh as well.", "Rerun it."],
+		);
+		await expect(call({ id: "2", brief: "x" })).rejects.toThrow(
+			"No worker 2 of yours. Your workers: 1.1 (done).",
+		);
+	});
+
+	it("starts up to 3 workers at once, splits the worker tokens, and waits for all their reports", async () => {
+		const reports: Record<string, string> = {
+			"child-1": "w1: exit 0",
+			"child-2": "w2: exit 1",
+			"child-3": "w3: exit 0",
+		};
+		const takeReport = vi.fn(async (id: string) =>
+			reports[id]
+				? { outcome: "completed" as const, report: reports[id] }
+				: null,
+		);
+		const { call, deps } = pair({ takeReport });
+		const result = await call({
+			workers: [
+				{ brief: "Group A in $SCRATCH/w1." },
+				{ brief: "Group B in $SCRATCH/w2." },
+				{ brief: "Group C in $SCRATCH/w3." },
+			],
+		});
+		expect(result).toEqual({
+			workers: [
+				{
+					id: "1.1",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w1: exit 0",
+				},
+				{
+					id: "1.2",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w2: exit 1",
+				},
+				{
+					id: "1.3",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w3: exit 0",
+				},
+			],
+		});
+		expect(deps.openTask).toHaveBeenCalledTimes(3);
+		// Half the judge's tokens, shared by three.
+		for (const entry of vi.mocked(deps.saveSpec).mock.calls)
+			expect(entry[2].budget).toMatchObject({ tokens: 133_333 });
+	});
+
+	it("refuses more than 3 live workers", async () => {
+		const { call, deps } = pair({ takeReport: vi.fn(async () => null) });
+		await expect(
+			call({ workers: [1, 2, 3, 4].map((n) => ({ brief: `Group ${n}` })) }),
+		).rejects.toThrow("At most 3 workers run at once; 0 still running.");
+		expect(deps.openTask).not.toHaveBeenCalled();
+		// Two still running: a batch of two more is refused, one more starts.
+		const running = pair({ takeReport: vi.fn(async () => null) });
+		Object.assign(running.context, { waitDeadlineAt: 0 });
+		await running.call({ workers: [{ brief: "a" }, { brief: "b" }] });
+		await expect(
+			running.call({ workers: [{ brief: "c" }, { brief: "d" }] }),
+		).rejects.toThrow("At most 3 workers run at once; 2 still running.");
+		await running.call({ brief: "c" });
+		expect(running.deps.openTask).toHaveBeenCalledTimes(3);
+	});
+
+	it("runs one strong worker on the judge's model, records it, and refuses a second", async () => {
+		const takeReport = vi.fn().mockResolvedValue({
+			outcome: "completed",
+			report: "traced it",
+		});
+		const { call, deps, sessions } = pair({ takeReport });
+		const result = await call({ brief: "Trace the race.", model: "strong" });
+		// No roleModels.checker set: the judge's own model.
+		expect(result).toMatchObject({ id: "1.1", model: "gpt-6.1-sol" });
+		expect(vi.mocked(deps.openTask).mock.calls[0]?.[0]).toMatchObject({
+			modelId: "gpt-6.1-sol",
+			access: "read_only",
+		});
+		expect(vi.mocked(deps.saveSpec).mock.calls[0]?.[2].budget).toMatchObject({
+			checkerPair: "worker",
+			checkerStrong: true,
+		});
+		Object.assign(sessions.at(-1) as Row, { turnStatus: "completed" });
+		await expect(
+			call({ brief: "Another hard one.", model: "strong" }),
+		).rejects.toThrow("At most 1 strong worker per check (already used).");
+		await expect(
+			call({
+				workers: [{ brief: "a", model: "strong" }, { brief: "b" }],
+			}),
+		).rejects.toThrow("At most 1 strong worker per check");
+		// The cheap worker is still available.
+		expect(await call({ brief: "Run make test." })).toMatchObject({
+			model: "GPT-6 Luna · Codex",
+		});
+	});
+
+	it("refuses a worker when the judge's time is nearly gone", async () => {
+		const { call, deps, sessions } = pair();
+		Object.assign(sessions[1] as Row, { createdAt: at(-7.5) });
+		await expect(call({ brief: "Run make test." })).rejects.toThrow(
+			"Too little of your time or budget is left for a worker.",
+		);
+		expect(deps.openTask).not.toHaveBeenCalled();
+	});
+
+	it("marks the builder's own checker and the runtime's checker as judges", async () => {
+		const { call, deps, context } = harness({ checkerMode: "pair" });
+		await call("agent", { role: "checker", title: "Check" });
+		expect(vi.mocked(deps.saveSpec).mock.calls[0]?.[2].budget).toMatchObject({
+			checkerPair: "judge",
+		});
+		expect(vi.mocked(deps.openTask).mock.calls[0]?.[0].prompt).toContain(
+			"<checker_pair>",
+		);
+		const started = await startRuntimeSubagent(context, {
+			role: "checker",
+			title: "Review 1 of 2",
+			brief: "runtime brief",
+			pair: true,
+		});
+		expect(started.budget.checkerPair).toBe("judge");
+		const single = harness();
+		await single.call("agent", { role: "checker", title: "Check" });
+		expect(
+			vi.mocked(single.deps.saveSpec).mock.calls[0]?.[2].budget,
+		).not.toHaveProperty("checkerPair");
+		expect(
+			vi.mocked(single.deps.openTask).mock.calls[0]?.[0].prompt,
+		).not.toContain("<checker_pair>");
 	});
 });

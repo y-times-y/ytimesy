@@ -25,7 +25,11 @@ export async function startGithubConnection(userId: string) {
 	);
 	await database().query(
 		"insert into github_oauth_state(state_hash,user_id,encrypted_verifier,expires_at) values($1,$2,$3,now()+interval '10 minutes')",
-		[hash(state), userId, await seal(verifier)],
+		[
+			hash(state),
+			userId,
+			await seal(verifier, { purpose: "github-pkce", userId }),
+		],
 	);
 	const url = new URL("https://github.com/login/oauth/authorize");
 	url.search = new URLSearchParams({
@@ -47,7 +51,10 @@ export async function finishGithubConnection(
 		[hash(state), userId],
 	);
 	if (!consumed.rowCount) throw new GithubConnectionFailure("expired");
-	const verifier = await unseal(consumed.rows[0].encrypted_verifier);
+	const verifier = await unseal(consumed.rows[0].encrypted_verifier, {
+		purpose: "github-pkce",
+		userId,
+	});
 	// GitHub rejects a code that expired or was already used.
 	const credentials = await exchangeGithubToken({
 		code,
@@ -72,7 +79,14 @@ export async function finishGithubConnection(
 		throw new GithubConnectionFailure("wrong-account");
 	await database().query(
 		"insert into github_connection(user_id,github_user_id,encrypted_credentials) values($1,$2,$3) on conflict(user_id) do update set github_user_id=excluded.github_user_id,encrypted_credentials=excluded.encrypted_credentials,updated_at=now()",
-		[userId, String(profile.data.id), await seal(JSON.stringify(credentials))],
+		[
+			userId,
+			String(profile.data.id),
+			await seal(JSON.stringify(credentials), {
+				purpose: "github-credentials",
+				userId,
+			}),
+		],
 	);
 }
 /** Row locking serializes refresh-token rotation across web processes. */
@@ -89,7 +103,12 @@ export async function githubAccessToken(userId: string) {
 				status: 409,
 			});
 		let credentials = githubCredentials.parse(
-			JSON.parse(await unseal(result.rows[0].encrypted_credentials)),
+			JSON.parse(
+				await unseal(result.rows[0].encrypted_credentials, {
+					purpose: "github-credentials",
+					userId,
+				}),
+			),
 		);
 		if (credentials.expiresAt && credentials.expiresAt < Date.now() + 60000) {
 			if (!credentials.refreshToken)
@@ -100,7 +119,13 @@ export async function githubAccessToken(userId: string) {
 			});
 			await connection.query(
 				"update github_connection set encrypted_credentials=$2,updated_at=now() where user_id=$1",
-				[userId, await seal(JSON.stringify(credentials))],
+				[
+					userId,
+					await seal(JSON.stringify(credentials), {
+						purpose: "github-credentials",
+						userId,
+					}),
+				],
 			);
 		}
 		await connection.query("commit");

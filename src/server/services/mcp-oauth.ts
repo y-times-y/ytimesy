@@ -31,8 +31,12 @@ class McpSignInRequired extends Error {
 export const mcpOAuthRedirectUrl = (appUrl: string) =>
 	new URL("/api/mcp/oauth/callback", appUrl).toString();
 
-export async function readOAuthRecord(sealed: string | null) {
-	return sealed ? (JSON.parse(await unseal(sealed)) as OAuthRecord) : {};
+export async function readOAuthRecord(sealed: string | null, userId: string) {
+	return sealed
+		? (JSON.parse(
+				await unseal(sealed, { purpose: "mcp-oauth", userId }),
+			) as OAuthRecord)
+		: {};
 }
 
 /**
@@ -112,7 +116,11 @@ export function storedOAuthProvider(input: {
 
 const persistFor =
 	(userId: string, serverId: string) => async (record: OAuthRecord) =>
-		saveMcpOAuth(userId, serverId, await seal(JSON.stringify(record)));
+		saveMcpOAuth(
+			userId,
+			serverId,
+			await seal(JSON.stringify(record), { purpose: "mcp-oauth", userId }),
+		);
 
 /** Starts sign-in: returns the provider's authorization URL, or null if already signed in. */
 export async function startMcpOAuth(input: {
@@ -125,7 +133,7 @@ export async function startMcpOAuth(input: {
 	if (server?.auth !== "oauth") throw new Error("MCP server not found.");
 	const state = randomBytes(32).toString("base64url");
 	const provider = storedOAuthProvider({
-		record: await readOAuthRecord(server.sealedOAuth),
+		record: await readOAuthRecord(server.sealedOAuth, input.userId),
 		redirectUrl: mcpOAuthRedirectUrl(input.appUrl),
 		persist: persistFor(input.userId, server.id),
 		state,
@@ -155,7 +163,7 @@ export async function finishMcpOAuth(input: {
 	const server = await mcpServerForOwner(input.userId, pending.serverId);
 	if (server?.auth !== "oauth") throw new Error("MCP server not found.");
 	const provider = storedOAuthProvider({
-		record: await readOAuthRecord(server.sealedOAuth),
+		record: await readOAuthRecord(server.sealedOAuth, input.userId),
 		redirectUrl: mcpOAuthRedirectUrl(input.appUrl),
 		persist: persistFor(input.userId, server.id),
 		verifier: pending.verifier,
@@ -180,7 +188,7 @@ export async function turnOAuthProvider(input: {
 	appUrl: string;
 }) {
 	return storedOAuthProvider({
-		record: await readOAuthRecord(input.sealedOAuth),
+		record: await readOAuthRecord(input.sealedOAuth, input.userId),
 		redirectUrl: mcpOAuthRedirectUrl(input.appUrl),
 		persist: persistFor(input.userId, input.serverId),
 	});

@@ -9,9 +9,13 @@ import { posixShellQuoted } from "#/domain/posix-command";
  * limit. It reports files and modules the run needed but the copy lacks, so a
  * deliverable that only works because of scratch data, caches, a workspace
  * virtualenv or ambient state is caught before the agent says it is done.
+ * With tracked:false (the task names its outputs), a declared data file that
+ * a delivered file reads at run time is reported too unless it is listed in
+ * namedData: the grader receives only what the task names, so data the agent
+ * added to `files` on its own passes here and is missing there.
  *
- * Arguments: base64 JSON {files, command, tracked, inputs, unprivileged,
- * timeoutSeconds, keepEnv}. Prints one JSON report; exits 0 even when the
+ * Arguments: base64 JSON {files, command, tracked, inputs, namedData,
+ * unprivileged, timeoutSeconds, keepEnv}. Prints one JSON report; exits 0 even when the
  * deliverable fails (the report says so), 2 on a usage error.
  */
 export const DELIVERABLE_CHECK_SOURCE = String.raw`import ast,base64,json,os,re,shutil,signal,subprocess,sys,tempfile,time
@@ -37,12 +41,16 @@ def walk(rel):
         found+= [os.path.relpath(os.path.join(directory,name),root) for name in names if not name.endswith('.pyc')]
     return found
 selected={}; problems=[]; warnings=[]
+# Only the listed files are delivered: the task names its outputs (tracked:false) or there is no Git checkout.
+listed_only=not args.get('tracked',True)
 if args.get('tracked',True):
     listed=subprocess.run(['git','-C',root,'ls-files','-z','--cached'],capture_output=True)
     if listed.returncode==0:
         for rel in listed.stdout.decode('utf-8','replace').split('\0'):
             if rel and os.path.lexists(os.path.join(root,rel)): selected[rel]='tracked'
-    else: warnings.append('The workspace is not a Git repository; only the listed files were copied.')
+    else:
+        listed_only=True
+        warnings.append('The workspace is not a Git repository; only the listed files were copied.')
 for kind in ('files','inputs'):
     for path in args.get(kind) or []:
         found=walk(inside(path))
@@ -61,6 +69,21 @@ for rel in sorted(selected):
     total+=os.path.getsize(source)
     if total>MAX_BYTES: shutil.rmtree(base,ignore_errors=True); fail('The delivered files exceed 1 GiB.')
     shutil.copy2(source,target)
+CODE=('.py','.pyw','.js','.mjs','.cjs','.ts','.sh','.bash','.rb','.go','.rs','.c','.h','.cc','.cpp','.java','.pl','.php','.r','.jl','.lua')
+DEPENDENCY=re.compile(r'(requirements.*\.txt|pyproject\.toml|setup\.(py|cfg)|environment\.yml|Pipfile(\.lock)?|package(-lock)?\.json|Cargo\.(toml|lock)|go\.(mod|sum)|Gemfile(\.lock)?)$')
+named_data={inside(item) for item in args.get('namedData') or []}
+data_files=[rel for rel,kind in selected.items() if kind=='delivered' and listed_only and not rel.lower().endswith(CODE) and not DEPENDENCY.match(os.path.basename(rel)) and rel not in named_data and rel not in command and os.path.basename(rel) not in command and not os.path.islink(os.path.join(copy,rel))][:200]
+# Reads show as a changed access time; where the mount does not record one,
+# a delivered file naming the data file counts as reading it.
+probe=os.path.join(base,'atime-probe')
+with open(probe,'w') as handle: handle.write('x')
+os.utime(probe,(0,os.stat(probe).st_mtime))
+with open(probe) as handle: handle.read()
+atime_works=os.stat(probe).st_atime>0
+os.remove(probe)
+for rel in data_files:
+    try: os.utime(os.path.join(copy,rel),(0,os.stat(os.path.join(copy,rel)).st_mtime))
+    except OSError: pass
 omitted=[]
 for directory,subdirectories,names in os.walk(root):
     subdirectories[:]=[name for name in subdirectories if name not in CACHE]
@@ -106,6 +129,11 @@ except subprocess.TimeoutExpired:
     except ProcessLookupError: pass
     stdout,stderr=process.communicate()
 elapsed=round(time.monotonic()-started,2)
+def accessed(rel):
+    if not atime_works: return True
+    try: return os.stat(os.path.join(copy,rel)).st_atime>0
+    except OSError: return True
+read_at_run={rel for rel in data_files if accessed(rel)}
 stdout=stdout.decode('utf-8','replace'); stderr=stderr.decode('utf-8','replace')
 output=stdout+'\n'+stderr
 def original(path):
@@ -150,6 +178,18 @@ for rel,kind in list(selected.items())[:2000]:
         seen.add(target)
         if os.path.lexists(os.path.join(root,target)):
             problems.append({'kind':'absolute-reference','path':target,'detail':rel+' reads '+os.path.join(root,target)+' by absolute path, which is neither delivered nor listed as an input. The clean run still saw the workspace copy; a third party will not have it.'})
+readers={}
+for rel,kind in selected.items():
+    if kind!='delivered' or rel in data_files or not data_files: continue
+    try:
+        if os.path.getsize(os.path.join(copy,rel))>2_000_000: continue
+        text=open(os.path.join(copy,rel),errors='strict').read()
+    except (OSError,UnicodeDecodeError): continue
+    for data in data_files:
+        if os.path.basename(data) in text: readers.setdefault(data,rel)
+for data,reader in readers.items():
+    if data not in read_at_run: continue
+    problems.append({'kind':'undeclared-by-task','path':data,'detail':reader+' reads '+data+' at run time, and the clean run had it only because you listed it in files. A grader receives only the files the task says are delivered: if the task does not name '+data+', it will be missing there. Build it into a file the task names, or generate it at run time, then check again without it. If the task itself names '+data+' as a deliverable, pass it in namedData.'})
 python_files=[rel for rel,kind in selected.items() if kind=='delivered' and rel.endswith('.py')][:200]
 if python_files:
     imported=set(); local=set()
@@ -194,6 +234,8 @@ export const deliverableCheckInput = z.object({
 	files: z.array(z.string().min(1).max(1000)).max(200).default([]),
 	tracked: z.boolean().default(true),
 	inputs: z.array(z.string().min(1).max(1000)).max(200).default([]),
+	/** Entries of `files` the task itself names that the deliverable also reads at run time. */
+	namedData: z.array(z.string().min(1).max(1000)).max(200).default([]),
 	unprivileged: z.boolean().default(false),
 	timeoutSeconds: z.number().int().min(1).max(540).default(120),
 	keepEnv: z
@@ -218,7 +260,7 @@ export function deliverableCheckTools(
 	return {
 		check_deliverable: tool({
 			description:
-				"Run your deliverable the way a third party would: copy only the delivered files (Git-tracked files plus `files`, plus any `inputs` the user or grader supplies) into a fresh temporary directory, clear the environment (no workspace virtualenv, PYTHONPATH or untracked data), optionally run as an unprivileged user, and run `command` there within timeoutSeconds. Workspace paths in the command point at the copy. Reports missing files and modules, permission failures and the exit status. When the task names its output files, list them in `files` and set tracked:false.",
+				"Run your deliverable the way a third party would: copy only the delivered files (Git-tracked files plus `files`, plus any `inputs` the user or grader supplies) into a fresh temporary directory, clear the environment (no workspace virtualenv, PYTHONPATH or untracked data), optionally run as an unprivileged user, and run `command` there within timeoutSeconds. Workspace paths in the command point at the copy. Reports missing files and modules, permission failures and the exit status. When the task names its output files, list exactly those in `files` and set tracked:false: a grader receives only what the task names, so do not add data files, models or helpers the deliverable reads unless the task names them too (it reports a delivered file that reads an unnamed one at run time; pass a data file the task does name in `namedData`).",
 			inputSchema: deliverableCheckInput,
 			execute: (input, options) =>
 				executeCommand(

@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { truncatedVerdictJson } from "./attempt-loop";
 import {
 	checkerDeadlineNotice,
+	checkerStandingRules,
 	checkerWrapUpLeadMs,
 	independentReviewBrief,
 	parseReviewVerdict,
+	reviewBriefRequest,
+	UNTESTED_PASS_NOTE,
 } from "./checker-brief";
 
 const input = {
@@ -16,6 +19,48 @@ const input = {
 };
 
 describe("independentReviewBrief", () => {
+	it("adds the rigor checks only with rigor=on", () => {
+		const plain = independentReviewBrief(input);
+		const rigor = independentReviewBrief({ ...input, rigor: true });
+		for (const check of [
+			"look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states",
+			"the reading the convention of the library, ecosystem or standard involved gives (else the strictest reading)",
+			"Run it once as an outside user would: a fresh shell in a clean directory holding only the files the request names",
+			"never helpers the builder wrote",
+			"A deliverable that itself admits unverified, failing or skipped parts (in its files, notes or output) is fail",
+		]) {
+			expect(rigor).toContain(check);
+			expect(plain).not.toContain(check);
+		}
+	});
+
+	it("adds the builder's requirements list only with rigor=on, as a claim compared after the checker's own list", () => {
+		const builderRequirements = ["out.json has a total field", "units: ms"];
+		const plain = independentReviewBrief({ ...input, builderRequirements });
+		const none = independentReviewBrief({ ...input, rigor: true });
+		const rigor = independentReviewBrief({
+			...input,
+			rigor: true,
+			builderRequirements,
+		});
+		for (const brief of [plain, none]) {
+			expect(brief).not.toContain("builder_requirements");
+			expect(brief).not.toContain("builder's understanding");
+		}
+		expect(rigor).toContain(
+			"Then, and only then, compare your list with the builder's understanding of the requirements at the end of this brief: it is the builder's claim, not ground truth",
+		);
+		expect(rigor).toContain(
+			"never drop one of yours because the builder's list lacks it",
+		);
+		expect(rigor).toContain(
+			"<builder_requirements>\nThe builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):\n- out.json has a total field\n- units: ms\n</builder_requirements>",
+		);
+		expect(rigor.indexOf("4. Test it yourself.")).toBeLessThan(
+			rigor.indexOf("<builder_requirements>"),
+		);
+	});
+
 	it("carries the request verbatim, the deliverable and the four review parts", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(`<request>\n${input.taskText}\n</request>`);
@@ -23,15 +68,59 @@ describe("independentReviewBrief", () => {
 		expect(brief).toContain(
 			"Files the run delivered outside it: /results/report.csv.",
 		);
-		expect(brief).toContain("cp -a /app /tmp/check/work");
+		// The checkout path is often a symbolic link (~/<project> -> /app on a
+		// hard-set VM): copying the link itself left the checker a "copy" that
+		// was the read-only original (rl-tests-luna), so the contents are copied.
+		expect(brief).toContain(
+			"mkdir -p /tmp/check/work && cp -a /app/. /tmp/check/work/",
+		);
+		expect(brief).not.toContain("cp -a /app /tmp/check/work");
 		for (const part of [
 			"1. Requirements.",
 			"2. Assumptions.",
 			"3. Plausibility.",
-			"4. Exercise it as an outside grader would.",
+			"4. Test it yourself.",
 		])
 			expect(brief).toContain(part);
 		expect(brief).toContain('"verdict": "pass" | "fail" | "unsure"');
+	});
+
+	it("requires new tests of its own: existing tests are necessary, not sufficient", () => {
+		const brief = independentReviewBrief(input);
+		expect(brief).toMatch(
+			/existing tests passed for the builder too and are not enough/,
+		);
+		expect(brief).toContain(
+			"For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under /tmp/check/tests",
+		);
+		expect(brief).toContain("cases the existing tests do not cover");
+		expect(brief).toContain(
+			"Run your tests against your copy, then the existing tests",
+		);
+		// Each test is reported: what it checks, the command, the result.
+		expect(brief).toContain(
+			'"tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "probe": false, "output": "<the lines that show the result>" }]',
+		);
+		// The verdict rules.
+		expect(brief).toContain(
+			"pass when every stated requirement is met with evidence and your non-probe tests and the existing checks pass",
+		);
+		expect(brief).toContain(
+			"fail only when the deliverable breaks something the request or its files state",
+		);
+		expect(brief).toContain(
+			"Your own re-derivation of an answer is not evidence by itself",
+		);
+		expect(brief).toContain("a failed probe is a note, not a failure");
+		expect(brief).toContain(
+			"a pass without new tests of your own counts as unsure",
+		);
+		expect(brief).toContain("shown by a failing test or command");
+		expect(brief).toContain(
+			"unsure only when you genuinely could not run what matters; say why in notes",
+		);
+		// Generic: nothing about a task or a domain beyond the request itself.
+		expect(brief).not.toMatch(/mvcc|lsm|compaction|flush/i);
 	});
 
 	it("says when no changed files were recorded and caps long lists", () => {
@@ -98,6 +187,7 @@ describe("parseReviewVerdict", () => {
 				JSON.stringify({
 					verdict: "pass",
 					failures: [],
+					tests: [{ name: "empty input", command: "c", passed: true }],
 					requirements: [{ requirement: "r", met: true, evidence: "e" }],
 				}),
 			).verdict,
@@ -106,6 +196,88 @@ describe("parseReviewVerdict", () => {
 		expect(missing.verdict).toBe("unsure");
 		expect(missing.parsed).toBe(false);
 		expect(missing.requirements).toEqual([]);
+	});
+});
+
+describe("the checker's own tests", () => {
+	it("reads each test: what it checks, its command, its result and output", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "fail",
+				failures: ["total exact: off by one (test: sum of inputs)"],
+				tests: [
+					{
+						name: "sum of inputs",
+						command: "python3 /tmp/check/tests/sum.py /tmp/check/work",
+						passed: false,
+						output: "expected 10\ngot 9",
+					},
+					{ checks: "empty input", command: "c2", result: "pass" },
+					{ name: "no result" },
+				],
+			}),
+		);
+		expect(verdict.tests).toEqual([
+			{
+				name: "sum of inputs",
+				passed: false,
+				command: "python3 /tmp/check/tests/sum.py /tmp/check/work",
+				output: "expected 10\ngot 9",
+			},
+			{ name: "empty input", passed: true, command: "c2" },
+		]);
+		expect(verdict.untested).toBeUndefined();
+	});
+
+	it("counts a pass without any new test as unsure, and flags it", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "pass",
+				failures: [],
+				requirements: [
+					{ requirement: "r", met: true, evidence: "make test passed" },
+				],
+				notes: "existing tests pass",
+			}),
+		);
+		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.untested).toBe(true);
+		expect(verdict.notes).toBe(`${UNTESTED_PASS_NOTE} existing tests pass`);
+		// A fail or unsure without tests stays as it is.
+		for (const kind of ["fail", "unsure"] as const) {
+			const other = parseReviewVerdict(
+				JSON.stringify({ verdict: kind, failures: ["x: y"] }),
+			);
+			expect(other.verdict).toBe(kind);
+			expect(other.untested).toBeUndefined();
+		}
+	});
+
+	it("never passes when one of its own tests failed, and reports it as a failure", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "pass",
+				tests: [
+					{ name: "a", command: "c", passed: true },
+					{ name: "b", command: "d", passed: false, output: "boom" },
+				],
+			}),
+		);
+		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.failures).toEqual(["b: boom"]);
+	});
+
+	it("still reads an older answer without tests (legacy fields)", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "fail",
+				failures: ["x"],
+				tests: [{ name: "n", passed: false, evidence: "e" }],
+			}),
+		);
+		expect(verdict.tests).toEqual([
+			{ name: "n", passed: false, evidence: "e" },
+		]);
 	});
 });
 
@@ -174,5 +346,27 @@ describe("a checker answer cut off or wrapped", () => {
 				diffCommand: "git -C /app diff base head",
 			}),
 		).toContain("`git -C /app diff base head` shows the whole change.");
+	});
+});
+
+describe("the project's remembered rules for a checker", () => {
+	it("are labelled as the user's own standing rules, each a requirement to check", () => {
+		const text = checkerStandingRules({
+			rules: ["New entity IDs use ULIDs"],
+			related: ["- Store timestamps in UTC [added: 2026-10-01]"],
+		});
+		expect(text).toContain("The user's standing rules for this project");
+		expect(text).toContain("not the builder's claims");
+		expect(text).toContain('"follows the project\'s remembered rules"');
+		expect(text).toContain("- New entity IDs use ULIDs\n</standing_rules>");
+		expect(text).toContain("<remembered>");
+		expect(checkerStandingRules({ rules: [], related: [] })).toBe("");
+	});
+
+	it("are recalled for the user's request, not the generic brief", () => {
+		expect(reviewBriefRequest(independentReviewBrief(input))).toBe(
+			input.taskText,
+		);
+		expect(reviewBriefRequest("Find the export code")).toBeNull();
 	});
 });

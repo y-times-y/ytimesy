@@ -32,6 +32,7 @@ import {
 	selectionReserveMs,
 	usageSince,
 } from "#/domain/attempt-loop";
+import { ATTEMPT_CHECK_TOOL } from "#/domain/check-summary";
 import { SessionItemId } from "#/domain/ids";
 import {
 	type ModelBilling,
@@ -119,6 +120,8 @@ export type AttemptLoopDeps = {
 		readonly title: string;
 		readonly brief: string;
 		readonly cap: Partial<SubagentBudget>;
+		/** checkerMode=pair: the checker is a judge with a worker (src/domain/checker-pair.ts). */
+		readonly pair?: boolean;
 	}) => Promise<{
 		readonly sessionId: string;
 		/** The child's model when the runtime knows it (priced at its own route). */
@@ -151,6 +154,8 @@ export type AttemptLoopInput = {
 	/** Whether a model message is a user request (not runtime context). */
 	readonly isRequest: (message: ModelMessage) => boolean;
 	readonly deps: AttemptLoopDeps;
+	/** Harness variant rigor=on: the checker's brief gets the rigor checks. */
+	readonly rigor?: boolean;
 };
 
 type Taken = {
@@ -434,7 +439,7 @@ function summaryItem(
 	return {
 		kind: "dynamicToolCall",
 		id: SessionItemId(id),
-		tool: "attempt_check",
+		tool: ATTEMPT_CHECK_TOOL,
 		input: `${state.candidates.length} of up to ${state.max} attempts`,
 		output: [
 			attemptLoopSummary(state),
@@ -621,6 +626,7 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 				base: state.checkpoint.ref,
 				candidate: snapshot.ref,
 				directory,
+				rigor: input.rigor,
 			}),
 			cap: {
 				...ATTEMPT_LOOP_LIMITS.checker,

@@ -481,11 +481,11 @@ describe("save hook", () => {
 		expect(
 			await runMemorySave("u1", "11111111-1111-4111-8111-111111111111", deps),
 		).toBe("saved");
-		// The prompt showed the related lines with their ids, not the index link.
+		// The prompt showed the memory lines with their ids (without their
+		// source links), not the index link.
 		const prompt = String(calls.agent[0].messages[0].content);
-		expect(prompt).toContain(
-			"tooling.md:2: - Use npm for installs [source: a]",
-		);
+		expect(prompt).toContain("tooling.md:2: - Use npm for installs\n");
+		expect(prompt).not.toContain("[source: a]");
 		expect(prompt).not.toContain("[[tooling]]");
 		expect(calls.agent[0].instructions).toContain('"replaces"');
 		const source =
@@ -517,6 +517,193 @@ describe("save hook", () => {
 			content:
 				"# logging\n- Log lines in orders.py start with [orders] [source: s; added: 2026-10-15]\n",
 		});
+	});
+
+	it("keeps an old line whose structured details the replacement would lose", () => {
+		const api =
+			'# api\n- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]\n';
+		const [change] = saveHookChanges(
+			{ "api.md": api },
+			[
+				{
+					file: "api.md",
+					text: "API error codes are UPPER_SNAKE_CASE, e.g. ITEMS_REQUIRED",
+					project: "",
+					replaces: {
+						path: "api.md",
+						raw: '- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]',
+					},
+				},
+			],
+			{
+				source: "s",
+				today: "2026-10-15",
+				message:
+					"Error codes must be UPPER_SNAKE_CASE from now on, like ITEMS_REQUIRED.",
+			},
+		);
+		expect(change.content).not.toContain("superseded-by");
+		expect(change.content).toContain("UPPER_SNAKE_CASE");
+		// Restating the whole shape retires the old line as before.
+		const [whole] = saveHookChanges(
+			{ "api.md": api },
+			[
+				{
+					file: "api.md",
+					text: 'API errors return {"error": {"code": "<UPPER_SNAKE_CASE>", "message": "<text>"}}',
+					project: "",
+					scope: "always",
+					replaces: {
+						path: "api.md",
+						raw: '- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]',
+					},
+				},
+			],
+			{ source: "s", today: "2026-10-15", message: "codes in upper case" },
+		);
+		expect(whole.content).toContain("[superseded-by: s]");
+		expect(whole.content).toContain(
+			"[scope: always; source: s; added: 2026-10-15]",
+		);
+	});
+
+	it("orders its prompt for the prompt cache and records the run once it is done", async () => {
+		const files = {
+			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n- [[api]]\n",
+			"tooling.md":
+				"# tooling\n- Use pnpm [source: https://ytimesy.test/?chat=a; added: 2026-10-01]\n",
+			"api.md": "# api\n- Errors are JSON [scope: always; source: b]\n",
+		};
+		const order: string[] = [];
+		const run = async (text: string) => {
+			const setup = harness({
+				files,
+				chats: [
+					chat("11111111-1111-4111-8111-111111111111", [
+						item({ kind: "userMessage", id: "1", text }),
+					]),
+				],
+				answer:
+					'{"entries":[{"file":"tooling.md","text":"Node is pinned to 22","project":""}]}',
+			});
+			const { recordUsage, recordSaved, warmLines } = setup.deps;
+			setup.deps.recordUsage = async (row) => {
+				order.push("usage");
+				return recordUsage(row);
+			};
+			setup.deps.recordSaved = async (...args) => {
+				order.push("saved");
+				return recordSaved(...args);
+			};
+			setup.deps.warmLines = async (...args) => {
+				order.push("warm");
+				return warmLines(...args);
+			};
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				setup.deps,
+			);
+			return setup.calls.agent[0];
+		};
+		const first = await run("Pin Node to 22");
+		const second = await run("Also, the API is versioned by header");
+		// Static instructions, then the whole memory in file order; the message last.
+		const a = String(first.messages[0].content);
+		const b = String(second.messages[0].content);
+		const prefix = a.slice(0, a.indexOf("Project of this chat"));
+		expect(b.startsWith(prefix)).toBe(true);
+		expect(prefix).toContain(
+			"Existing memory files: MEMORY.md, api.md, tooling.md\n\nThe user's memory, every line (id: line):\napi.md:2: - Errors are JSON [scope: always]\ntooling.md:2: - Use pnpm [added: 2026-10-01]\n",
+		);
+		expect(a.endsWith("Pin Node to 22")).toBe(true);
+		expect(first.instructions).toBe(second.instructions);
+		expect(first.cacheScopeId).toBe("memory-save:u1");
+		// The usage row says the save is done: after the lines are embedded and shown.
+		expect(order.slice(0, 3)).toEqual(["warm", "saved", "usage"]);
+	});
+
+	it("lists only the best matches, still in file order, when the memory is large", async () => {
+		const { saveHookListing } = await import("./memory-jobs");
+		const big = Array.from(
+			{ length: 400 },
+			(_, index) =>
+				`- Fact number ${index} about the warehouse ${"x".repeat(40)} [source: s${index}]`,
+		).join("\n");
+		const listing = await saveHookListing(
+			{
+				"a.md": `# a\n${big}\n`,
+				"b.md": "# b\n- Use pnpm for installs\n",
+			},
+			"install with pnpm",
+			"2026-10-15",
+			async () => null,
+		);
+		expect(listing.whole).toBe(false);
+		expect(listing.lines.map((entry) => entry.text)).toContain(
+			"Use pnpm for installs",
+		);
+		const ids = listing.lines.map((entry) => `${entry.path}:${entry.line}`);
+		expect(ids).toEqual(
+			[...listing.lines]
+				.sort((x, y) => x.path.localeCompare(y.path) || x.line - y.line)
+				.map((entry) => `${entry.path}:${entry.line}`),
+		);
+	});
+
+	it("retries a failed model call once, but not a timeout", async () => {
+		const failing = (name: string, failures: number) => {
+			const setup = harness({
+				files: { "MEMORY.md": "# Memory\n\n## Index\n" },
+				chats,
+				answer:
+					'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm","project":""}]}',
+			});
+			const run = setup.deps.runAgent;
+			let calls = 0;
+			const slept: number[] = [];
+			setup.deps.runAgent = async (input, route) => {
+				if (calls++ < failures)
+					throw Object.assign(new Error("boom"), { name });
+				return run(input, route);
+			};
+			setup.deps.sleep = async (ms) => {
+				slept.push(ms);
+			};
+			return { ...setup, slept, attempts: () => calls };
+		};
+		const once = failing("AI_APICallError", 1);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				once.deps,
+			),
+		).toBe("saved");
+		expect(once.attempts()).toBe(2);
+		expect(once.slept).toEqual([2000]);
+		expect(once.calls.usage).toEqual([
+			expect.objectContaining({ outcome: "failed:AI_APICallError" }),
+			expect.objectContaining({ outcome: "completed" }),
+		]);
+		const twice = failing("AI_APICallError", 2);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				twice.deps,
+			),
+		).toBe("failed:AI_APICallError");
+		expect(twice.attempts()).toBe(2);
+		const timeout = failing("TimeoutError", 1);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				timeout.deps,
+			),
+		).toBe("failed:TimeoutError");
+		expect(timeout.attempts()).toBe(1);
 	});
 
 	it("never duplicates an entry already in memory", () => {

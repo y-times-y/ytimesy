@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { lastMemoryReview, recentUnsavedMessages } from "./memory-settings";
+import {
+	lastMemoryReview,
+	pendingMemorySaves,
+	recentUnsavedMessages,
+} from "./memory-settings";
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
@@ -64,9 +68,9 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 		[randomUUID(), nothing],
 	);
 	await chat({ items: [said("an hour ago")], minutesAgo: 60 });
-	await chat({ items: [said("still running")], state: "running" });
 	await chat({ items: [said("someone else")], user: "u2" });
 	await chat({ items: [said("a child task")], parent: fresh });
+	await chat({ items: [said("failed")], state: "failed" });
 	expect(await recentUnsavedMessages("u1", current, 600)).toEqual([
 		{
 			sessionId: fresh,
@@ -75,6 +79,56 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 			at: expect.any(Date),
 		},
 	]);
+});
+
+it("counts a chat from when its message was sent: queued and running turns too", async () => {
+	const current = await chat({ items: [said("this chat")] });
+	// Its turn row may not read completed yet when the next chat starts.
+	const running = await chat({
+		items: [said("Every log line in orders.py starts with [orders]")],
+		state: "running",
+	});
+	const queued = await chat({
+		items: [said("JSON files use 4-space indentation")],
+		state: "queued",
+		minutesAgo: 30,
+	});
+	await chat({ items: [said("long done")], minutesAgo: 30 });
+	const rows = await recentUnsavedMessages("u1", current, 600);
+	expect(rows.map((row) => row.sessionId).sort()).toEqual(
+		[running, queued].sort(),
+	);
+});
+
+it("counts other chats whose last completed turn has no save-hook run yet", async () => {
+	const current = await chat({ items: [said("this chat")] });
+	expect(await pendingMemorySaves("u1", current, 120)).toBe(0);
+	const pending = await chat({ items: [said("New IDs use ULIDs")] });
+	const saved = await chat({ items: [said("Use pnpm")] });
+	await db.query(
+		"insert into memory_model_usage(id,user_id,kind,session_id,outcome) values($1,'u1','save',$2,'completed')",
+		[randomUUID(), saved],
+	);
+	// Not waited on: running, failed, long ago, a child task, another user.
+	await chat({ items: [said("still working")], state: "running" });
+	await chat({ items: [said("failed")], state: "failed" });
+	await chat({ items: [said("long done")], minutesAgo: 30 });
+	await chat({ items: [said("a child task")], parent: pending });
+	await chat({ items: [said("someone else")], user: "u2" });
+	expect(await pendingMemorySaves("u1", current, 120)).toBe(1);
+	// A save recorded before the turn ended was the previous turn's.
+	await db.query(
+		"insert into memory_model_usage(id,user_id,kind,session_id,outcome,created_at) values($1,'u1','save',$2,'completed',now()-interval '1 minute')",
+		[randomUUID(), pending],
+	);
+	expect(await pendingMemorySaves("u1", current, 120)).toBe(1);
+	await db.query(
+		"insert into memory_model_usage(id,user_id,kind,session_id,outcome,created_at) values($1,'u1','save',$2,'completed:nothing-new',now()+interval '1 second')",
+		[randomUUID(), pending],
+	);
+	expect(await pendingMemorySaves("u1", current, 120)).toBe(0);
+	// The asking chat is never counted; from there, "current" is the one pending.
+	expect(await pendingMemorySaves("u1", pending, 120)).toBe(1);
 });
 
 it("finds the last dream that reviewed the whole repo", async () => {

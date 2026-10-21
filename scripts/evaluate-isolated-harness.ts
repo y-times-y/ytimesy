@@ -136,7 +136,12 @@ try {
 		throw new Error(
 			"Source owner/account/prepared project is ambiguous or missing.",
 		);
-	const auth = JSON.parse(await unseal(account.rows[0].encrypted_codex_auth));
+	const auth = JSON.parse(
+		await unseal(account.rows[0].encrypted_codex_auth, {
+			purpose: "codex-auth",
+			userId,
+		}),
+	);
 	if (codexAccessTokenExpiresAt(auth) < Date.now() + 45 * 60 * 1000)
 		throw new Error(
 			"Access credential needs at least 45 minutes remaining; no refresh rotation is attempted by this proof.",
@@ -414,7 +419,8 @@ mkdir -p .ytimesy
 		YTIMESY_HARNESS_EVALUATION_ENABLED: "1",
 		YTIMESY_EVALUATION_APPROVED: "codex-subscription",
 		YTIMESY_INFRASTRUCTURE_ADMISSION: "true",
-		YTIMESY_USER_MONTHLY_MICRO_USD: String(Math.floor((cap - 0.5) * 1000000)),
+		YTIMESY_USER_5H_MICRO_USD: String(Math.floor((cap - 0.5) * 1000000)),
+		YTIMESY_USER_WEEKLY_MICRO_USD: String(Math.floor((cap - 0.5) * 1000000)),
 		YTIMESY_FLEET_MONTHLY_MICRO_USD: String(Math.floor((cap - 0.5) * 1000000)),
 		YTIMESY_FLEET_LIFETIME_MICRO_USD: String(Math.floor((cap - 0.5) * 1000000)),
 		YTIMESY_ENVIRONMENT_AUTO_REFRESH: "false",

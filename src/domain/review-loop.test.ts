@@ -3,6 +3,7 @@ import { parseReviewVerdict } from "./checker-brief";
 import {
 	decideAfterVerdict,
 	decideCheck,
+	failingTests,
 	findingResponses,
 	hasConcreteFindings,
 	isRunnableFile,
@@ -68,6 +69,53 @@ describe("review findings", () => {
 		expect(notice).toContain("(review 1 of 2)");
 		expect(notice).toContain("it can be wrong");
 	});
+
+	it("hands over the checker's failing tests with command and output", () => {
+		const verdict = review({
+			verdict: "fail",
+			failures: ["x: wrong"],
+			tests: [
+				{ name: "ok", command: "true", passed: true },
+				...Array.from({ length: 7 }, (_, index) => ({
+					name: `t${index}`,
+					command: `bash /s/tests/t${index}.sh`,
+					passed: false,
+					output: "line1\n  line2",
+				})),
+				{ name: "no command", passed: false, evidence: "seen" },
+			],
+		});
+		const tests = failingTests(verdict);
+		expect(tests.map((test) => test.name)).toEqual([
+			"t0",
+			"t1",
+			"t2",
+			"t3",
+			"t4",
+		]);
+		const notice = reviewNotice({
+			round: 1,
+			maxRounds: 2,
+			findings: reviewFindings(verdict),
+			failingTests: tests,
+		});
+		expect(notice).toContain("- t0: `bash /s/tests/t0.sh` -> line1 | line2");
+		expect(notice).not.toContain("- ok");
+		expect(
+			reviewNotice({
+				round: 1,
+				maxRounds: 2,
+				findings: [],
+				failingTests: failingTests(
+					review({
+						verdict: "fail",
+						tests: [{ name: "no command", passed: false, evidence: "seen" }],
+					}),
+				),
+			}),
+		).toContain("- no command -> seen");
+		expect(failingTests(null)).toEqual([]);
+	});
 });
 
 describe("finding responses", () => {
@@ -131,6 +179,18 @@ describe("review gating and time", () => {
 			kind: "check",
 			checkMs: REVIEW_LOOP_LIMITS.checker.minutes * 60_000,
 		});
+		// checkerMode=pair: a longer check, still bounded by the deadline less a fix.
+		expect(REVIEW_LOOP_LIMITS.pairCheckerMinutes).toBeGreaterThan(
+			REVIEW_LOOP_LIMITS.checker.minutes,
+		);
+		expect(decideCheck({ ...base, deadlineAt: 1e9, pair: true })).toEqual({
+			kind: "check",
+			checkMs: REVIEW_LOOP_LIMITS.pairCheckerMinutes * 60_000,
+		});
+		expect(decideCheck({ ...base, deadlineAt: 300_000, pair: true })).toEqual({
+			kind: "check",
+			checkMs: 240_000,
+		});
 		expect(decideCheck({ ...base, checksDone: 2, deadlineAt: 1e9 })).toEqual({
 			kind: "finish",
 			reason: "rounds",
@@ -146,7 +206,11 @@ describe("review gating and time", () => {
 		expect(
 			decideAfterVerdict({ verdict: fail, findings, now: 0, deadlineAt: 1000 }),
 		).toEqual({ kind: "finish", reason: "time" });
-		const pass = review({ verdict: "pass", failures: [] });
+		const pass = review({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
 		expect(
 			decideAfterVerdict({
 				verdict: pass,
@@ -163,6 +227,15 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "no-findings" });
+		).toEqual({ kind: "finish", reason: "unsure" });
+		// Unsure with findings still finishes: only a fail sends the builder back.
+		expect(
+			decideAfterVerdict({
+				verdict: review({ verdict: "unsure", failures: ["x: maybe wrong"] }),
+				findings: [{ kind: "failure", text: "x: maybe wrong" } as never],
+				now: 0,
+				deadlineAt: 1e9,
+			}),
+		).toEqual({ kind: "finish", reason: "unsure" });
 	});
 });

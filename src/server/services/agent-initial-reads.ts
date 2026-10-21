@@ -10,7 +10,6 @@ const initialReadOutput = z.json();
 export async function prefetchInitialAgentReads(input: {
 	messages: ModelMessage[];
 	tools: ToolSet;
-	coordination: boolean;
 	/** Fresh unbound OpenAI history only; signed/prefix-bound providers keep their original order. */
 	cacheStablePrefix?: boolean;
 	signal: AbortSignal;
@@ -23,15 +22,8 @@ export async function prefetchInitialAgentReads(input: {
 		arguments: Record<string, string>;
 	}[] = [
 		{ name: "read_repository_guidance", arguments: { scope: "." } },
-		...(!input.coordination
-			? ([
-					{ name: "read_environment_report", arguments: {} },
-					{ name: "inspect_changes", arguments: {} },
-				] as const)
-			: []),
-		...(input.coordination
-			? ([{ name: "read_task_capacity", arguments: {} }] as const)
-			: []),
+		{ name: "read_environment_report", arguments: {} },
+		{ name: "inspect_changes", arguments: {} },
 	];
 	// Builders get repository instructions as messages, not this tool; their
 	// environment report is still prefetched.

@@ -477,6 +477,77 @@ it("stops at a spent plan allowance instead of retrying a rate limit", async () 
 	).toHaveLength(1);
 });
 
+it("resends a request whose 200 response had no body, and never a started stream", async () => {
+	// rl-tests-sol failed on "Failed to process successful response": the
+	// SDK's EmptyResponseBodyError for a 200 without a body. Nothing streamed.
+	const sse = [
+		{
+			type: "response.created",
+			response: { id: "r", created_at: 1, model: "m" },
+		},
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { type: "message", id: "msg" },
+		},
+		{ type: "response.output_text.delta", item_id: "msg", delta: "done" },
+		{
+			type: "response.output_item.done",
+			output_index: 0,
+			item: { type: "message", id: "msg" },
+		},
+		{
+			type: "response.completed",
+			response: { usage: { input_tokens: 1, output_tokens: 1 } },
+		},
+	]
+		.map((event) => `data: ${JSON.stringify(event)}\n\n`)
+		.join("");
+	let inference = 0;
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+		if (String(url).includes("/models"))
+			return new Response(
+				JSON.stringify({
+					models: [{ slug: "empty-model", context_window: 272000 }],
+				}),
+			);
+		inference++;
+		if (inference === 1) return new Response(null, { status: 200 });
+		return new Response(sse, {
+			headers: { "Content-Type": "text/event-stream" },
+		});
+	});
+	const runtime = await codexSubscriptionModel(
+		"empty-owner",
+		"empty-model",
+		"low",
+	);
+	const result = streamText({
+		model: runtime.model,
+		prompt: "continue",
+		maxRetries: 4,
+		...runtime.requestSettings("instructions"),
+	});
+	expect(await result.text).toBe("done");
+	expect(inference).toBe(2);
+	// With retries off (as after output), the empty body still fails visibly.
+	inference = 0;
+	const once = streamText({
+		model: runtime.model,
+		prompt: "continue",
+		maxRetries: 0,
+		...runtime.requestSettings("instructions"),
+	});
+	let caught: unknown;
+	try {
+		for await (const part of once.fullStream)
+			if (part.type === "error") throw part.error;
+	} catch (error) {
+		caught = error;
+	}
+	expect((caught as Error).message).toMatch(/no response body/);
+});
+
 it("reads the reset time only from a usage-limit body", () => {
 	expect(
 		usageLimitReset('{"error":{"type":"usage_limit_reached","resets_at":10}}'),

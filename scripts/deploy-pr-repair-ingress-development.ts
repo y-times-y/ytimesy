@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { App } from "octokit";
 import { closeDatabase, database } from "#/server/adapters/database";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
-import { modelWorkflowSigningSecret } from "#/server/adapters/model-workflow-dispatch";
+import { prRepairIngressSigningSecret } from "#/server/adapters/model-workflow-dispatch";
 import {
 	DEVELOPMENT_EDGE_ORIGIN,
 	WORKERS_DEV_SUBDOMAIN,
@@ -40,8 +40,53 @@ function github<T>(args: string[], input?: object): T {
 	return JSON.parse(result.stdout) as T;
 }
 
+/**
+ * Secrets the ingress Worker no longer reads. MODEL_WORKFLOW_SECRET signed
+ * repair dispatches before the Worker got its own PR_REPAIR_INGRESS_SECRET;
+ * a Worker deployed before then still holds the executor's key, so it is
+ * deleted (wrangler secret put/--secrets-file never removes one).
+ */
+const STALE_INGRESS_SECRETS = ["MODEL_WORKFLOW_SECRET"] as const;
+
+function removeStaleIngressSecrets() {
+	const listed = spawnSync(
+		"pnpm",
+		[
+			"exec",
+			"wrangler",
+			"secret",
+			"list",
+			"--config",
+			config,
+			"--format",
+			"json",
+		],
+		{ encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+	);
+	if (listed.status !== 0)
+		throw new Error("The ingress Worker's secrets could not be listed.");
+	const names = new Set(
+		(JSON.parse(listed.stdout) as { name: string }[]).map((item) => item.name),
+	);
+	for (const name of STALE_INGRESS_SECRETS) {
+		if (!names.has(name)) continue;
+		// wrangler asks to confirm; the answer is piped in.
+		command(
+			["exec", "wrangler", "secret", "delete", name, "--config", config],
+			"y\n",
+		);
+		console.info(`Removed the stale ${name} from the ingress Worker.`);
+	}
+}
+
 /** Forwards to the development edge executor; never creates compute or changes the shared App hook. */
 async function main() {
+	// An ingress Worker deployed before its own signing key still holds the
+	// edge executor's MODEL_WORKFLOW_SECRET: remove it without redeploying.
+	if (process.argv.includes("--remove-stale-secrets")) {
+		removeStaleIngressSecrets();
+		return;
+	}
 	if (!process.argv.includes("--apply"))
 		throw new Error("Explicit --apply is required.");
 	const linked = (await readFile("supabase/.temp/project-ref", "utf8")).trim();
@@ -104,7 +149,7 @@ async function main() {
 			secretsFile,
 			JSON.stringify({
 				GITHUB_PR_REPAIR_WEBHOOK_SECRET: secret,
-				MODEL_WORKFLOW_SECRET: modelWorkflowSigningSecret(),
+				PR_REPAIR_INGRESS_SECRET: prRepairIngressSigningSecret(),
 			}),
 			{ mode: 0o600 },
 		);
@@ -122,6 +167,7 @@ async function main() {
 	} finally {
 		await rm(secretsDirectory, { recursive: true, force: true });
 	}
+	removeStaleIngressSecrets();
 	const body = JSON.stringify({ zen: "Development repair ingress proof" });
 	const unsigned = await fetch(endpoint, {
 		method: "POST",

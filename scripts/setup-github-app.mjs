@@ -21,7 +21,12 @@ const manifest = {
   redirect_url: `${origin}/callback`,
   hook_attributes: { url: 'https://ytimesy.com/api/github/webhook', active: false },
   public: true,
-  default_permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
+  // checks: read lets PR repair re-read the failing check run/suite it was woken for
+  // (src/server/adapters/github/pr-repair-evidence.ts). issues: read is what GitHub
+  // requires to deliver issue_comment (@ytimesy on a pull request); actions: read
+  // lets a CI wake-up include the failed job's log tail
+  // (src/server/adapters/github/pull-request-wake-github.ts).
+  default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', issues: 'read', actions: 'read', metadata: 'read' },
   default_events: [],
   request_oauth_on_install: false,
 };

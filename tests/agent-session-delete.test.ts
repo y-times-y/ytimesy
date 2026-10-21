@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+	adoptChatPublicationBranch,
 	insertAgentSession,
-	saveAgentTaskPublication,
-	saveAgentTaskReview,
-	saveAgentTaskState,
+	projectBranchHeldByOtherSession,
 	saveSessionBranchSelection,
 	saveSessionWorkingBranch,
 	selectAgentSessionHarness,
@@ -30,6 +29,37 @@ vi.mock("../src/server/adapters/database", () => ({
 		connect: async () => ({ query, release() {} }),
 	}),
 }));
+const storage = vi.hoisted(() => ({
+	configured: false,
+	removed: [] as string[],
+}));
+const purged = vi.hoisted(() => [] as string[]);
+vi.mock("../src/server/adapters/realtime-delivery", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../src/server/adapters/realtime-delivery")
+	>()),
+	purgeConversationState: async (_userId: string, sessionId: string) => {
+		purged.push(`purge:${sessionId}`);
+	},
+}));
+// Running turns are cancelled before a chat's state is purged.
+vi.mock("../src/server/services/cancel-server-turn", () => ({
+	cancelServerTurn: async (_userId: string, sessionId: string) => {
+		purged.push(`cancel:${sessionId}`);
+	},
+}));
+vi.mock(
+	"../src/server/adapters/checkpoints/storage",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../src/server/adapters/checkpoints/storage")
+		>()),
+		checkpointStorageConfigured: () => storage.configured,
+		removeChatObjects: async (_userId: string, sessionId: string) => {
+			storage.removed.push(sessionId);
+		},
+	}),
+);
 vi.mock("../src/server/config", () => ({
 	serverConfig: () => ({
 		APP_URL: "[REDACTED]",
@@ -61,6 +91,7 @@ beforeAll(async () => {
 		"20260927220000_agent_competitions.sql",
 		"20260930220000_chat_branches.sql",
 		"20261018010000_builder_subagents.sql",
+		"20261003022000_workspace_retention.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	// The harness constraint from 20260927203000_api_turns (this schema builds api_turn itself).
@@ -160,7 +191,7 @@ async function readyWorkspace() {
 	return { project, workspaceId };
 }
 
-it("starts a new lead without write access to its own workspace", async () => {
+it("starts a new root chat with no task access: it publishes as a chat", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const session = await insertAgentSession({
 		userId: "alice",
@@ -168,7 +199,7 @@ it("starts a new lead without write access to its own workspace", async () => {
 		workspaceId,
 		harness: "codex",
 	});
-	expect(session.taskAccess).toBe("read_only");
+	expect(session.taskAccess).toBeNull();
 	expect(session.parentSessionId).toBeNull();
 });
 
@@ -201,6 +232,52 @@ it("persists the selected runtime before a reused chat starts polling", async ()
 		).rows,
 	).toEqual([{ harness: "codex", listed_model_id: null }]);
 });
+
+it.each(["codex", "api"] as const)(
+	"gives a %s root chat whose VM is gone a fresh copy, never a child",
+	async (harness) => {
+		const { project, workspaceId } = await readyWorkspace();
+		const root = await insertAgentSession({
+			userId: "alice",
+			projectId: project.id,
+			workspaceId,
+			harness,
+			providerRef: "vm-gone",
+		});
+		const child = await insertAgentSession({
+			userId: "alice",
+			projectId: project.id,
+			workspaceId,
+			harness,
+			providerRef: "vm-gone",
+			parentSessionId: root.id,
+		});
+		const machines = {
+			ensureRunning: async (id: string) => {
+				if (id === "vm-gone") throw new Error("VM not found");
+				return id;
+			},
+			provisionSession: async () => "vm-fresh",
+			exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			writeTextFile: async () => {},
+		} as never;
+		const bound = await bindAgentSessionMachine(machines, {
+			userId: "alice",
+			projectId: project.id,
+			sessionId: root.id,
+			harness,
+		});
+		expect(bound.providerRef).toBe("vm-fresh");
+		await expect(
+			bindAgentSessionMachine(machines, {
+				userId: "alice",
+				projectId: project.id,
+				sessionId: child.id,
+				harness,
+			}),
+		).rejects.toThrow("VM not found");
+	},
+);
 
 it("does not switch a running turn or another owner's runtime", async () => {
 	const { project, workspaceId } = await readyWorkspace();
@@ -236,14 +313,14 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		projectId: project.id,
 		workspaceId,
 		harness: "api",
-		providerRef: "vm-agent",
+		providerRef: "vm-copy-agent",
 	});
 	await insertAgentSession({
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
 		harness: "api",
-		providerRef: "vm-side",
+		providerRef: "vm-copy-side",
 		parentSessionId: parent.id,
 	});
 	const destroyed: string[] = [];
@@ -252,10 +329,11 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: parent.id },
 	);
-	expect(destroyed.sort()).toEqual(["vm-agent", "vm-side"]);
+	expect(destroyed.sort()).toEqual(["vm-copy-agent", "vm-copy-side"]);
 	const remaining = await db.query(
 		"select id from agent_session where project_id=$1",
 		[project.id],
@@ -266,6 +344,84 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		[workspaceId],
 	);
 	expect(template.rows[0]?.provider_ref).toBe("vm-template");
+});
+
+it("deletes every stored file and the retained snapshots only the deleted chats used", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const parent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-chat",
+	});
+	const child = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: null,
+		parentSessionId: parent.id,
+	});
+	const sibling = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-sibling",
+	});
+	// The child was retained (its VM is gone); its snapshot is the parent's too,
+	// and the sibling shares another snapshot that must survive.
+	await db.query(
+		`insert into workspace_retention(session_id,user_id,vm_id,slug,resources,snapshot_id,phase,expires_at,verified_at) values
+		 ($1,'alice','vm-chat','slug-parent','{}','snap-chat','active',null,null),
+		 ($2,'alice','vm-child-retained','slug-child','{}','snap-child','retained',now()+interval '90 days',now()),
+		 ($3,'alice','vm-sibling','slug-sibling','{}','snap-shared','retained',now()+interval '90 days',now())`,
+		[parent.id, child.id, sibling.id],
+	);
+	await db.query(
+		"update workspace_retention set snapshot_id='snap-shared' where session_id=$1",
+		[parent.id],
+	);
+	storage.configured = true;
+	storage.removed.length = 0;
+	const destroyed: string[] = [];
+	const snapshots: string[] = [];
+	try {
+		await deleteAgentSessionMachine(
+			{
+				destroy: async (id) => {
+					destroyed.push(id);
+				},
+				destroySnapshot: async (id) => {
+					snapshots.push(id);
+				},
+			},
+			{ userId: "alice", projectId: project.id, sessionId: parent.id },
+		);
+	} finally {
+		storage.configured = false;
+	}
+	expect(storage.removed.sort()).toEqual([parent.id, child.id].sort());
+	// Each deleted chat's Durable Object state goes too, the sibling's stays.
+	expect(purged).toEqual(
+		expect.arrayContaining([`purge:${parent.id}`, `purge:${child.id}`]),
+	);
+	expect(purged).not.toContain(`purge:${sibling.id}`);
+	// Each chat's turn is cancelled before any purge.
+	expect(purged.indexOf(`cancel:${child.id}`)).toBeLessThan(
+		purged.indexOf(`purge:${parent.id}`),
+	);
+	expect(destroyed.sort()).toEqual(["vm-chat", "vm-child-retained"]);
+	expect(snapshots).toEqual(["snap-child"]);
+	expect(
+		(
+			await db.query(
+				"select session_id from workspace_retention where session_id in ($1,$2)",
+				[parent.id, child.id],
+			)
+		).rows,
+	).toEqual([]);
 });
 
 it("drops a leftover template-bound session row without deleting the template VM", async () => {
@@ -283,6 +439,7 @@ it("drops a leftover template-bound session row without deleting the template VM
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: session.id },
 	);
@@ -313,11 +470,9 @@ it("deletes a shared child session without destroying its parent's machine", asy
 		prompt: "Inspect the current working tree without editing it.",
 		placement: "shared",
 		access: "read_only",
-		execution: "parallel",
-		dependsOnSessionId: null,
 	});
 	await db.query(
-		"update agent_session set provider_ref='vm-parent' where id=$1",
+		"update agent_session set provider_ref='vm-parent',agent_role='researcher' where id=$1",
 		[child.id],
 	);
 	const destroyed: string[] = [];
@@ -326,6 +481,7 @@ it("deletes a shared child session without destroying its parent's machine", asy
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: child.id },
 	);
@@ -334,6 +490,73 @@ it("deletes a shared child session without destroying its parent's machine", asy
 		(await db.query("select id from agent_session where id=$1", [parent.id]))
 			.rows,
 	).toEqual([{ id: parent.id }]);
+});
+
+it("never destroys a parent VM its reader shares, deleting the reader alone or a legacy role-less shared child", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const parent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		listedModelId: "codex/gpt-test",
+	});
+	const reader = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Read", placement: "shared", access: "read_only" },
+	});
+	const legacy = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Old child", placement: "shared", access: "read_only" },
+	});
+	await db.query(
+		"update agent_session set agent_role='researcher' where id=$1",
+		[reader.id],
+	);
+	const destroyed: string[] = [];
+	const machines = {
+		destroy: async (vm: string) => {
+			destroyed.push(vm);
+		},
+		destroySnapshot: async () => {},
+	};
+	for (const child of [reader, legacy])
+		await deleteAgentSessionMachine(machines, {
+			userId: "alice",
+			projectId: project.id,
+			sessionId: child.id,
+		});
+	expect(destroyed).toEqual([]);
+	// Deleting the chat itself destroys its VM exactly once.
+	const another = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Read", placement: "shared", access: "read_only" },
+	});
+	await db.query("update agent_session set agent_role='reviewer' where id=$1", [
+		another.id,
+	]);
+	await deleteAgentSessionMachine(machines, {
+		userId: "alice",
+		projectId: project.id,
+		sessionId: parent.id,
+	});
+	expect(destroyed).toEqual(["vm-shared-parent"]);
 });
 
 it("does not let another user delete a session", async () => {
@@ -350,6 +573,9 @@ it("does not let another user delete a session", async () => {
 			{
 				destroy: async () => {
 					throw new Error("destroy must not run");
+				},
+				destroySnapshot: async () => {
+					throw new Error("destroySnapshot must not run");
 				},
 			},
 			{ userId: "bob", projectId: project.id, sessionId: session.id },
@@ -408,7 +634,7 @@ it("opens a new chat without copying a VM and inherits the last listed model", a
 	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
 });
 
-it("stores drafts without compute and gates stacked work on reviewed predecessors", async () => {
+it("stores a subagent draft without compute and starts it once", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const root = await insertAgentSession({
 		userId: "alice",
@@ -417,7 +643,7 @@ it("stores drafts without compute and gates stacked work on reviewed predecessor
 		harness: "codex",
 		listedModelId: "codex/gpt-test",
 	});
-	const first = await openAgentTask({
+	const draft = await openAgentTask({
 		userId: "alice",
 		projectId: project.id,
 		parentSessionId: root.id,
@@ -427,55 +653,74 @@ it("stores drafts without compute and gates stacked work on reviewed predecessor
 		prompt: "Implement and verify the schema.",
 		placement: "fresh",
 		access: "read_write",
-		execution: "parallel",
-		dependsOnSessionId: null,
 	});
-	expect(first.taskState).toBe("draft");
-	expect(first.providerRef).toBeNull();
-	const second = await openAgentTask({
-		userId: "alice",
-		projectId: project.id,
-		parentSessionId: root.id,
-		title: "API",
-		harness: "codex",
-		modelId: "codex/gpt-test",
-		prompt: "Build the API on the reviewed schema.",
-		placement: "fresh",
-		access: "read_write",
-		execution: "stacked",
-		dependsOnSessionId: first.id,
-	});
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("finish");
-	await saveAgentTaskState(first.id, "done");
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("Review");
-	await saveAgentTaskReview(first.id, "reviewed");
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("Publish");
-	await saveAgentTaskPublication(first.id, {
-		branch: "ytimesy-task-1",
-		pullRequestUrl: "https://example.test/pull/1",
-	});
+	expect(draft.taskState).toBe("draft");
+	expect(draft.providerRef).toBeNull();
 	const started = await prepareAgentTaskStart({
 		userId: "alice",
 		projectId: project.id,
-		taskSessionId: second.id,
+		taskSessionId: draft.id,
 	});
 	expect(started.task.taskState).toBe("working");
+	await expect(
+		prepareAgentTaskStart({
+			userId: "alice",
+			projectId: project.id,
+			taskSessionId: draft.id,
+		}),
+	).rejects.toThrow("new or idle");
+});
+
+it("gives a branchless root chat its publication branch once, during a running turn, and never renames it", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const chat = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+	});
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		chat.id,
+	]);
+	const adopted = await adoptChatPublicationBranch(
+		"alice",
+		chat.id,
+		"ytimesy/fix-parser-0c4a1e",
+		"main",
+	);
+	expect(adopted).toMatchObject({
+		workingBranch: "ytimesy/fix-parser-0c4a1e",
+		selectedBranch: "ytimesy/fix-parser-0c4a1e",
+		baseBranch: "main",
+	});
+	const again = await adoptChatPublicationBranch(
+		"alice",
+		chat.id,
+		"ytimesy/renamed-0c4a1e",
+		"develop",
+	);
+	expect(again.workingBranch).toBe("ytimesy/fix-parser-0c4a1e");
+	expect(again.baseBranch).toBe("main");
+	const other = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+	});
+	await expect(
+		projectBranchHeldByOtherSession(
+			"alice",
+			project.id,
+			other.id,
+			"ytimesy/fix-parser-0c4a1e",
+		),
+	).resolves.toBe(true);
+	await expect(
+		projectBranchHeldByOtherSession(
+			"alice",
+			project.id,
+			chat.id,
+			"ytimesy/fix-parser-0c4a1e",
+		),
+	).resolves.toBe(false);
 });

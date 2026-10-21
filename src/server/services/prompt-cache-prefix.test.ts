@@ -1,6 +1,8 @@
 import type { ModelMessage, ToolSet } from "ai";
 import { describe, expect, it } from "vitest";
+import type { InstructionVariant } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
+import { INSTRUCTION_PROFILE_ADDITIONS } from "#/domain/instruction-profiles";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { nativeWebSearchTools } from "#/server/adapters/native-web-search";
@@ -67,7 +69,6 @@ function stepSetup(step: number) {
 	return {
 		tools,
 		instructions: agentTurnInstructions({
-			shellBuilder: true,
 			session,
 			tools,
 			plugins: [],
@@ -81,7 +82,11 @@ function stepSetup(step: number) {
 class Captured extends Error {}
 
 /** The serialized Responses request one durable step sends for this history. */
-async function request(step: number, messages: ModelMessage[]) {
+async function request(
+	step: number,
+	messages: ModelMessage[],
+	instructionVariant?: InstructionVariant,
+) {
 	let body: Record<string, unknown> | undefined;
 	const capture: typeof fetch = async (_url, init) => {
 		body = JSON.parse(String(init?.body));
@@ -117,6 +122,7 @@ async function request(step: number, messages: ModelMessage[]) {
 			userId: "owner",
 			modelId: "gpt-6.1-sol",
 			toolSurface: "implementation",
+			instructionVariant,
 			instructions: setup.instructions,
 			messages,
 			tools: setup.tools,
@@ -287,5 +293,28 @@ describe("prompt-cache prefix stability", () => {
 			} as ModelMessage,
 		];
 		expectPrefix(lastOfTurn, prompt(await request(1, nextTurn)));
+	});
+});
+
+describe("instruction profiles reach the request", () => {
+	it("sends the variant's guidance and keeps it byte-stable across steps", async () => {
+		const messages: ModelMessage[] = [{ role: "user", content: "Fix it." }];
+		const baseline = String((await request(1, messages)).instructions);
+		expect(baseline).toContain("Harness tool profile v13-lean (openai)");
+		expect(baseline).not.toContain(
+			INSTRUCTION_PROFILE_ADDITIONS["verify-hard"],
+		);
+		const first = String(
+			(await request(1, messages, "verify-hard")).instructions,
+		);
+		const second = String(
+			(await request(2, messages, "verify-hard")).instructions,
+		);
+		expect(first).toContain("v13-lean+verify-hard (openai)");
+		expect(first).toContain(INSTRUCTION_PROFILE_ADDITIONS["verify-hard"]);
+		expect(second).toBe(first);
+		expect(String((await request(1, messages, "default")).instructions)).toBe(
+			baseline,
+		);
 	});
 });

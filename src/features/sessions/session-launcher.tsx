@@ -59,6 +59,7 @@ import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
+import { CloudUsageIndicator } from "../workspace/usage-windows";
 import {
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
@@ -750,19 +751,22 @@ export function SessionLauncher({
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
-									harnessId === "codex" ||
-									recordedContextUsage(session.items) ? (
-										<ContextUsage
-											context={
-												session.usage?.context ??
-												recordedContextUsage(session.items)?.context
-											}
-											compacting={
-												session.usage?.compacting ??
-												recordedContextUsage(session.items)?.compacting
-											}
-										/>
-									) : null
+									<>
+										<CloudUsageIndicator />
+										{harnessId === "codex" ||
+										recordedContextUsage(session.items) ? (
+											<ContextUsage
+												context={
+													session.usage?.context ??
+													recordedContextUsage(session.items)?.context
+												}
+												compacting={
+													session.usage?.compacting ??
+													recordedContextUsage(session.items)?.compacting
+												}
+											/>
+										) : null}
+									</>
 								}
 								connectionContent={
 									harnessLoginShouldShow({

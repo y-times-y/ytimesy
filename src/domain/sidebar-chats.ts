@@ -352,3 +352,61 @@ export function sessionWithoutOpenChat<
 		turnStatus: "idle",
 	};
 }
+
+/** How the left sidebar lists chats: newest first across projects, or under each project. */
+export type SidebarSort = "recent" | "projects";
+export const SIDEBAR_SORT_KEY = "ytimesy-sidebar-sort";
+
+export function parseSidebarSort(raw: string | null): SidebarSort {
+	return raw === "recent" ? "recent" : "projects";
+}
+
+const activityMs = (chat: Pick<SidebarChat, "updatedAt">) => {
+	const ms = chat.updatedAt ? Date.parse(chat.updatedAt) : Number.NaN;
+	return Number.isNaN(ms) ? 0 : ms;
+};
+
+/** One project's chats as the sidebar received them. */
+export type ProjectChats<P extends { readonly id: string }> = {
+	readonly project: P;
+	readonly chats: readonly SidebarChat[];
+};
+
+/**
+ * Every chat across projects, newest activity first (pinned chats on top),
+ * each with the project it belongs to.
+ */
+export function recentSidebarChats<P extends { readonly id: string }>(
+	groups: readonly ProjectChats<P>[],
+	pinnedIds: readonly string[] = [],
+): { readonly chat: SidebarChat; readonly project: P }[] {
+	const rows = groups
+		.flatMap(({ project, chats }) => chats.map((chat) => ({ chat, project })))
+		.sort((a, b) => activityMs(b.chat) - activityMs(a.chat));
+	const pinned = new Set(pinnedIds);
+	return [
+		...rows.filter((row) => pinned.has(row.chat.id)),
+		...rows.filter((row) => !pinned.has(row.chat.id)),
+	];
+}
+
+/** Projects ordered by their newest chat's activity; projects without chats keep their order, last. */
+export function projectsByRecentActivity<P extends { readonly id: string }>(
+	projects: readonly P[],
+	groups: readonly ProjectChats<P>[],
+): P[] {
+	const latest = new Map(
+		groups.map(({ project, chats }) => [
+			project.id,
+			Math.max(0, ...chats.map(activityMs)),
+		]),
+	);
+	return projects
+		.map((project, index) => ({ project, index }))
+		.sort(
+			(a, b) =>
+				(latest.get(b.project.id) ?? 0) - (latest.get(a.project.id) ?? 0) ||
+				a.index - b.index,
+		)
+		.map(({ project }) => project);
+}

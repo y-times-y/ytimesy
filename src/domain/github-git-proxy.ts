@@ -1,7 +1,15 @@
 import { z } from "zod";
-import { signDeliveryRequest, verifyDeliveryRequest } from "./delivery-auth";
+import {
+	EXPIRY_HEADER,
+	signDeliveryRequest,
+	verifyDeliveryRequest,
+} from "./delivery-auth";
 
 const repositoryPart = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+/**
+ * A write grant names the one branch it may update and carries a nonce the
+ * proxy consumes on the ref update, so a copied grant cannot be replayed.
+ */
 const grantSchema = z
 	.object({
 		userId: z.string().min(1).max(128),
@@ -10,9 +18,25 @@ const grantSchema = z
 		name: repositoryPart,
 		installationId: z.number().int().positive(),
 		access: z.enum(["read", "write"]),
+		branch: z
+			.string()
+			.min(1)
+			.max(255)
+			.regex(/^[^\s\0~^:?*[\\]+$/)
+			.optional(),
+		nonce: z
+			.string()
+			.regex(/^[a-f0-9]{32}$/)
+			.optional(),
 	})
-	.strict();
+	.strict()
+	.refine((grant) =>
+		grant.access === "write"
+			? Boolean(grant.branch && grant.nonce)
+			: !grant.branch && !grant.nonce,
+	);
 export type GitProxyGrant = z.infer<typeof grantSchema>;
+type GitProxyGrantInput = Omit<GitProxyGrant, "nonce">;
 const grantUrl = "https://git-grant.internal/git-grant";
 const grantHeader = "x-ytimesy-git-grant";
 export class GitProxyFailure extends Error {
@@ -21,15 +45,25 @@ export class GitProxyFailure extends Error {
 			| "database"
 			| "user-connection"
 			| "repository-access"
-			| "installation-token",
+			| "installation-token"
+			| "grant-claim",
 	) {
 		super("Git proxy authorization failed.");
 	}
 }
 
 /** Short-lived repository capability, not a GitHub credential. Never put it in a URL. */
-export async function issueGitProxyGrant(secret: string, input: GitProxyGrant) {
-	const body = JSON.stringify(grantSchema.parse(input));
+export async function issueGitProxyGrant(
+	secret: string,
+	input: GitProxyGrantInput,
+) {
+	const nonce =
+		input.access === "write"
+			? Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
+					value.toString(16).padStart(2, "0"),
+				).join("")
+			: undefined;
+	const body = JSON.stringify(grantSchema.parse({ ...input, nonce }));
 	return {
 		[grantHeader]: body,
 		...(await signDeliveryRequest(secret, "POST", grantUrl, body)),
@@ -60,18 +94,102 @@ function gitTarget(request: Request, grant: GitProxyGrant) {
 	return null;
 }
 
-/** Fixed-origin Git smart HTTP only. Neither Git packs nor responses are buffered. */
+type RefUpdate = { oldId: string; newId: string; ref: string };
+const MAX_COMMAND_BYTES = 65_536;
+const objectId = "(?:[0-9a-f]{40}|[0-9a-f]{64})";
+const commandLine = new RegExp(`^(${objectId}) (${objectId}) (\\S+)$`);
+const shallowLine = new RegExp(`^shallow ${objectId}$`);
+
+function ascii(bytes: Uint8Array) {
+	return String.fromCharCode(...bytes);
+}
+
+/**
+ * Reads receive-pack's ref update commands (pkt-lines up to the first flush)
+ * and returns a body that replays them ahead of the unread pack. Only the
+ * command list is buffered; null means it is malformed or too large.
+ */
+export async function readReceivePackCommands(
+	body: ReadableStream<Uint8Array>,
+) {
+	const reader = body.getReader();
+	let buffer = new Uint8Array(0);
+	let offset = 0;
+	const updates: RefUpdate[] = [];
+	const fail = () => {
+		reader.cancel().catch(() => undefined);
+		return null;
+	};
+	for (;;) {
+		if (buffer.length - offset >= 4) {
+			const header = ascii(buffer.subarray(offset, offset + 4));
+			if (!/^[0-9a-f]{4}$/i.test(header)) return fail();
+			const length = Number.parseInt(header, 16);
+			if (length === 0) break;
+			if (length < 5) return fail();
+			if (buffer.length - offset >= length) {
+				const line = ascii(buffer.subarray(offset + 4, offset + length))
+					.split("\0")[0]
+					.replace(/\n$/, "");
+				const command = commandLine.exec(line);
+				if (command)
+					updates.push({
+						oldId: command[1],
+						newId: command[2],
+						ref: command[3],
+					});
+				else if (!shallowLine.test(line)) return fail();
+				offset += length;
+				continue;
+			}
+		}
+		if (buffer.length >= MAX_COMMAND_BYTES) return fail();
+		const { done, value } = await reader.read();
+		if (done) return fail();
+		const next = new Uint8Array(buffer.length + value.length);
+		next.set(buffer);
+		next.set(value, buffer.length);
+		buffer = next;
+	}
+	const prefix = buffer;
+	return {
+		updates,
+		body: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(prefix);
+			},
+			async pull(controller) {
+				const { done, value } = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
+			},
+		}),
+	};
+}
+
+/**
+ * Fixed-origin Git smart HTTP only. Packs and responses are streamed; a push
+ * may update only the grant's branch, never delete it, and consumes the grant.
+ */
 export async function proxyGithubGit(
 	request: Request,
 	secret: string,
 	authorize: (grant: GitProxyGrant) => Promise<string | null>,
 	upstream: typeof fetch = fetch,
+	claimGrant: (
+		nonce: string,
+		expiresAt: number,
+	) => Promise<boolean> = async () => false,
 ) {
-	const body = request.headers.get(grantHeader);
-	if (!body || body.length > 2048) return new Response(null, { status: 401 });
+	const signed = request.headers.get(grantHeader);
+	if (!signed || signed.length > 2048)
+		return new Response(null, { status: 401 });
 	let grant: GitProxyGrant;
 	try {
-		grant = grantSchema.parse(JSON.parse(body));
+		grant = grantSchema.parse(JSON.parse(signed));
 	} catch {
 		return new Response(null, { status: 401 });
 	}
@@ -79,15 +197,47 @@ export async function proxyGithubGit(
 		!(await verifyDeliveryRequest(
 			secret,
 			new Request(grantUrl, { method: "POST", headers: request.headers }),
-			body,
+			signed,
 		))
 	)
 		return new Response(null, { status: 401 });
 	const target = gitTarget(request, grant);
 	if (!target) return new Response(null, { status: 403 });
+	let body: ReadableStream<Uint8Array> | null =
+		request.method === "POST" ? request.body : null;
+	let claims = false;
+	if (request.method === "POST" && target.endsWith("/git-receive-pack")) {
+		if (!request.body || request.headers.has("content-encoding"))
+			return new Response(null, { status: 403 });
+		const commands = await readReceivePackCommands(request.body);
+		if (
+			!commands ||
+			commands.updates.length > 1 ||
+			commands.updates.some(
+				(update) =>
+					update.ref !== `refs/heads/${grant.branch}` ||
+					/^0+$/.test(update.newId),
+			)
+		)
+			return new Response(null, { status: 403 });
+		body = commands.body;
+		// Git probes large pushes with an empty command list first; only the
+		// request that updates the ref spends the grant.
+		claims = commands.updates.length === 1;
+	}
 	try {
 		const token = await authorize(grant);
 		if (!token) return new Response(null, { status: 403 });
+		if (
+			claims &&
+			!(await claimGrant(
+				grant.nonce ?? "",
+				Number(request.headers.get(EXPIRY_HEADER)),
+			))
+		) {
+			body?.cancel().catch(() => undefined);
+			return new Response(null, { status: 403 });
+		}
 		const headers = new Headers({
 			authorization: `Basic ${btoa(`x-access-token:${token}`)}`,
 			"user-agent": "ytimesy-git-proxy",
@@ -103,7 +253,7 @@ export async function proxyGithubGit(
 		const response = await upstream(target, {
 			method: request.method,
 			headers,
-			body: request.method === "POST" ? request.body : null,
+			body,
 			redirect: "manual",
 			signal: request.signal,
 			duplex: "half",

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { APICallError } from "ai";
 import { z } from "zod";
 import {
+	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	SubscriptionMetadataFailure,
 	SubscriptionUsageLimitReached,
@@ -110,7 +112,8 @@ export function subscriptionLimits(
 }
 
 async function subscriptionRequest(userId: string, path: string) {
-	const signal = AbortSignal.timeout(7_000);
+	// Room for one blocked egress path (6s to headers) and the next one.
+	const signal = AbortSignal.timeout(12_000);
 	let response: Response;
 	try {
 		response = await subscriptionFetch(userId, path, {
@@ -124,7 +127,11 @@ async function subscriptionRequest(userId: string, path: string) {
 			signal,
 		});
 	} catch (error) {
-		if (error instanceof CodexReconnectRequired) throw error;
+		if (
+			error instanceof CodexReconnectRequired ||
+			error instanceof CodexEgressUnavailable
+		)
+			throw error;
 		throw new SubscriptionMetadataFailure(
 			signal.aborted ||
 				(error instanceof Error && error.name === "TimeoutError")
@@ -303,6 +310,19 @@ export async function codexSubscriptionModel(
 				throw new SubscriptionUsageLimitReached(limit);
 			}
 		}
+		// rl-tests-sol: a 200 with no body ("Failed to process successful
+		// response", the SDK's EmptyResponseBodyError) failed the turn. Nothing
+		// was streamed or executed, so this is a request-start failure the
+		// SDK's bounded retry may resend; any stream that started is never
+		// replayed.
+		if (response.ok && !response.body)
+			throw new APICallError({
+				message: "The provider accepted the request but sent no response body.",
+				url: String(url),
+				requestBodyValues: {},
+				statusCode: response.status,
+				isRetryable: true,
+			});
 		return timedFirstByte(response, startedAt);
 	};
 	const model = connectedLanguageModel(

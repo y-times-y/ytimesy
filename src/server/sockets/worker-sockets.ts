@@ -1,7 +1,16 @@
 import { trackInvocationTask } from "../adapters/invocation-tasks";
 import type { ClientSocket } from "./client-socket";
 import { webSocketCloseReason } from "./close-reason";
-import { DESKTOP_PATH, runDesktopSession } from "./desktop-session";
+import {
+	DESKTOP_PATH,
+	type OpenDesktopRemote,
+	runDesktopSession,
+} from "./desktop-session";
+import {
+	SOCKET_ORIGIN_REFUSED,
+	socketOriginAllowed,
+	trustedSocketOrigins,
+} from "./socket-origin";
 import { runTerminalSession, TERMINAL_PATH } from "./terminal-session";
 
 /** Adapts a Workers WebSocket (already accepted) to the shared session code. */
@@ -34,15 +43,19 @@ function workerSocket(socket: WebSocket): ClientSocket {
 	};
 }
 
-async function openWorkerRemoteSocket(url: string) {
+const openWorkerRemoteSocket: OpenDesktopRemote = async (url, auth) => {
 	const response = await fetch(url.replace(/^ws/i, "http"), {
-		headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": "binary" },
+		headers: {
+			Upgrade: "websocket",
+			"Sec-WebSocket-Protocol": "binary",
+			Authorization: auth.authorization,
+		},
 		signal: AbortSignal.timeout(8_000),
 	});
 	if (!response.webSocket) throw new Error("Desktop is not ready.");
 	response.webSocket.accept();
 	return workerSocket(response.webSocket);
-}
+};
 
 /**
  * Terminal and desktop sockets on Workers. Session setup (auth, database, VM)
@@ -56,6 +69,10 @@ export function handleWorkerSocket(request: Request): Response | null {
 		(url.pathname !== TERMINAL_PATH && url.pathname !== DESKTOP_PATH)
 	)
 		return null;
+	if (
+		!socketOriginAllowed(request.headers.get("origin"), trustedSocketOrigins())
+	)
+		return new Response(SOCKET_ORIGIN_REFUSED, { status: 403 });
 	const pair = new WebSocketPair();
 	const [client, server] = Object.values(pair);
 	server.accept();

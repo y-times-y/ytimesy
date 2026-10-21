@@ -10,10 +10,6 @@ const readName = z.enum([
 	"inspect_code_batch",
 	"inspect_project_evidence",
 	"search_project_memory",
-	"inspect_task_diff",
-	"read_task_handoff",
-	"read_task_checks",
-	"read_task_summary",
 ]);
 const requestSchema = z.object({
 	reads: z
@@ -31,7 +27,7 @@ const requestSchema = z.object({
 export function batchedAgentReads(tools: ToolSet, signal: AbortSignal) {
 	return tool({
 		description:
-			"Run two to six independent authorized reads in one call instead of serial inference steps. Only listed read tools are permitted. Supply each tool's ordinary arguments; results retain their original bounds, hashes and continuation cursors. Examples: source files + project-memory search, or a completed child's exact diff + its known check references. Do not batch a read whose arguments depend on another result. Follow incomplete-result cursors before claiming complete evidence. Repository guidance uses its individual tool so complete-read archival remains intact. No commands, edits, launches, reviews or publication.",
+			"Run two to six independent authorized reads in one call instead of serial inference steps. Only listed read tools are permitted. Supply each tool's ordinary arguments; results retain their original bounds, hashes and continuation cursors. Example: source files + project-memory search. Do not batch a read whose arguments depend on another result. Follow incomplete-result cursors before claiming complete evidence. Repository guidance uses its individual tool so complete-read archival remains intact. No commands, edits, launches, reviews or publication.",
 		inputSchema: requestSchema,
 		execute: async (request, options) => {
 			const { reads } = requestSchema.parse(request);

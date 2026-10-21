@@ -2,6 +2,7 @@ import { APICallError, RetryError } from "ai";
 import {
 	ApiModelPreparationFailure,
 	ApiTurnCancelled,
+	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	ContextWindowExhausted,
 	IncompleteAgentTurn,
@@ -127,6 +128,8 @@ export function failoverReason(error: unknown): FailoverReason | null {
 	for (const current of chain) {
 		if (NEVER_FAIL_OVER.some((type) => current instanceof type)) return null;
 		if (current instanceof SubscriptionUsageLimitReached) return "usage-limit";
+		// Every egress path is blocked: another provider route still works.
+		if (current instanceof CodexEgressUnavailable) return "outage";
 		if (current instanceof SubscriptionMetadataFailure)
 			return current.reason === "timeout"
 				? "timeout"

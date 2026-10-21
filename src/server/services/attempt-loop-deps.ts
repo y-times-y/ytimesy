@@ -1,6 +1,9 @@
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
-import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	descendantAgentSessions,
+} from "../adapters/agent-sessions";
 import {
 	attemptLoopDeadline,
 	loadAttemptLoopState,
@@ -33,6 +36,8 @@ export function attemptLoopDeps(input: {
 	readonly items: () => readonly SessionItem[];
 	/** The checker's and judge's models (harness variant roleModels). */
 	readonly roleModels?: RoleModels;
+	/** The builder turn's reasoning effort (children on another model inherit it). */
+	readonly parentReasoning?: string;
 }): AttemptLoopDeps {
 	const { turnId, signal } = input;
 	return {
@@ -60,6 +65,7 @@ export function attemptLoopDeps(input: {
 					signal,
 					waitDeadlineAt: input.waitDeadlineAt,
 					roleModels: input.roleModels,
+					parentReasoning: input.parentReasoning,
 				},
 				spec,
 			),
@@ -103,5 +109,21 @@ export function reviewLoopDeps(
 		...shared,
 		load: loadReviewLoopState,
 		save: saveReviewLoopState,
+		workers: async (checkerSessionId) =>
+			(
+				await descendantAgentSessions(input.parent.userId, checkerSessionId)
+			).map((session) => ({
+				sessionId: session.id,
+				...(session.listedModelId &&
+				(session.harness === "codex" || session.harness === "api")
+					? {
+							model: {
+								harness: session.harness,
+								modelId: session.listedModelId,
+							},
+						}
+					: {}),
+				items: session.items,
+			})),
 	};
 }

@@ -108,6 +108,12 @@
 .context-usage-trigger:hover {
 	color: #eee;
 }
+.context-usage-trigger[data-tone="low"] {
+	color: #f87171;
+}
+.context-usage-popover .codex-usage-window {
+	min-width: 220px;
+}
 .context-usage-popover {
 	width: max-content;
 	max-width: calc(100vw - 24px);

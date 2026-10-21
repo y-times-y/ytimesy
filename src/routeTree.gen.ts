@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as TrainingRouteImport } from './routes/training'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
@@ -31,9 +32,11 @@ import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/r
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
+import { Route as ApiVmEdgeAuthorizeRouteImport } from './routes/api/vm-edge/authorize'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 import { Route as ApiMcpOauthCallbackRouteImport } from './routes/api/mcp/oauth/callback'
 import { Route as ProjectsProjectIdEvidenceEvidenceIdRouteImport } from './routes/projects/$projectId/evidence/$evidenceId'
+import { Route as ProjectsProjectIdPullsLinkIdFixRouteImport } from './routes/projects/$projectId/pulls/$linkId/fix'
 import { Route as ApiProjectsProjectIdEvidenceEvidenceIdFileRouteImport } from './routes/api/projects/$projectId/evidence/$evidenceId/$file'
 
 const IndexRoute = IndexRouteImport.update({
@@ -54,6 +57,11 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TrainingRoute = TrainingRouteImport.update({
+  id: '/training',
+  path: '/training',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAccountRoute = ApiAccountRouteImport.update({
@@ -147,6 +155,11 @@ const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
   path: '/publish',
   getParentRoute: () => ApiProjectsRoute,
 } as any)
+const ApiVmEdgeAuthorizeRoute = ApiVmEdgeAuthorizeRouteImport.update({
+  id: '/api/vm-edge/authorize',
+  path: '/api/vm-edge/authorize',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   id: '/retry',
   path: '/retry',
@@ -163,6 +176,12 @@ const ProjectsProjectIdEvidenceEvidenceIdRoute =
     path: '/projects/$projectId/evidence/$evidenceId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsProjectIdPullsLinkIdFixRoute =
+  ProjectsProjectIdPullsLinkIdFixRouteImport.update({
+    id: '/projects/$projectId/pulls/$linkId/fix',
+    path: '/projects/$projectId/pulls/$linkId/fix',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiProjectsProjectIdEvidenceEvidenceIdFileRoute =
   ApiProjectsProjectIdEvidenceEvidenceIdFileRouteImport.update({
     id: '/$projectId/evidence/$evidenceId/$file',
@@ -175,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -193,9 +213,11 @@ export interface FileRoutesByFullPath {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
+  '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
 }
 export interface FileRoutesByTo {
@@ -203,6 +225,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -221,9 +244,11 @@ export interface FileRoutesByTo {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
+  '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
 }
 export interface FileRoutesById {
@@ -232,6 +257,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -250,9 +276,11 @@ export interface FileRoutesById {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
+  '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
 }
 export interface FileRouteTypes {
@@ -262,6 +290,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -280,9 +309,11 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
+    | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -290,6 +321,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -308,9 +340,11 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
+    | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
   id:
     | '__root__'
@@ -318,6 +352,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -336,9 +371,11 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
+    | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
   fileRoutesById: FileRoutesById
 }
@@ -347,6 +384,7 @@ export interface RootRouteChildren {
   OnboardingRoute: typeof OnboardingRoute
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
+  TrainingRoute: typeof TrainingRoute
   ApiAccountRoute: typeof ApiAccountRoute
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
@@ -364,8 +402,10 @@ export interface RootRouteChildren {
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
   ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
+  ApiVmEdgeAuthorizeRoute: typeof ApiVmEdgeAuthorizeRoute
   ApiMcpOauthCallbackRoute: typeof ApiMcpOauthCallbackRoute
   ProjectsProjectIdEvidenceEvidenceIdRoute: typeof ProjectsProjectIdEvidenceEvidenceIdRoute
+  ProjectsProjectIdPullsLinkIdFixRoute: typeof ProjectsProjectIdPullsLinkIdFixRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -396,6 +436,13 @@ declare module '@tanstack/react-router' {
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/training': {
+      id: '/training'
+      path: '/training'
+      fullPath: '/training'
+      preLoaderRoute: typeof TrainingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/account': {
@@ -524,6 +571,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsPublishRouteImport
       parentRoute: typeof ApiProjectsRoute
     }
+    '/api/vm-edge/authorize': {
+      id: '/api/vm-edge/authorize'
+      path: '/api/vm-edge/authorize'
+      fullPath: '/api/vm-edge/authorize'
+      preLoaderRoute: typeof ApiVmEdgeAuthorizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/workspaces/retry': {
       id: '/api/workspaces/retry'
       path: '/retry'
@@ -543,6 +597,13 @@ declare module '@tanstack/react-router' {
       path: '/projects/$projectId/evidence/$evidenceId'
       fullPath: '/projects/$projectId/evidence/$evidenceId'
       preLoaderRoute: typeof ProjectsProjectIdEvidenceEvidenceIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$projectId/pulls/$linkId/fix': {
+      id: '/projects/$projectId/pulls/$linkId/fix'
+      path: '/projects/$projectId/pulls/$linkId/fix'
+      fullPath: '/projects/$projectId/pulls/$linkId/fix'
+      preLoaderRoute: typeof ProjectsProjectIdPullsLinkIdFixRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/projects/$projectId/evidence/$evidenceId/$file': {
@@ -587,6 +648,7 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardingRoute: OnboardingRoute,
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,
+  TrainingRoute: TrainingRoute,
   ApiAccountRoute: ApiAccountRoute,
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
@@ -604,9 +666,11 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
   ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
+  ApiVmEdgeAuthorizeRoute: ApiVmEdgeAuthorizeRoute,
   ApiMcpOauthCallbackRoute: ApiMcpOauthCallbackRoute,
   ProjectsProjectIdEvidenceEvidenceIdRoute:
     ProjectsProjectIdEvidenceEvidenceIdRoute,
+  ProjectsProjectIdPullsLinkIdFixRoute: ProjectsProjectIdPullsLinkIdFixRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

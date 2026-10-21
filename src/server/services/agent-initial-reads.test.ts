@@ -24,7 +24,6 @@ it("prefetches a builder's actual working-tree state once using the existing rea
 	};
 	const options = {
 		tools,
-		coordination: false,
 		signal: new AbortController().signal,
 		onEvent: async () => {},
 	};
@@ -37,12 +36,6 @@ it("prefetches a builder's actual working-tree state once using the existing rea
 	expect(JSON.stringify(messages)).toContain("notes.md");
 	await prefetchInitialAgentReads({ ...options, messages });
 	expect(inspect).toHaveBeenCalledOnce();
-	await prefetchInitialAgentReads({
-		...options,
-		messages: fresh,
-		coordination: true,
-	});
-	expect(inspect).toHaveBeenCalledOnce();
 });
 
 it("keeps identical fresh OpenAI preflight prefixes independent of the task prompt", async () => {
@@ -50,7 +43,6 @@ it("keeps identical fresh OpenAI preflight prefixes independent of the task prom
 	const first = await prefetchInitialAgentReads({
 		messages: fresh,
 		tools: input.tools,
-		coordination: false,
 		cacheStablePrefix: true,
 		signal: new AbortController().signal,
 		onEvent: async () => {},
@@ -61,7 +53,6 @@ it("keeps identical fresh OpenAI preflight prefixes independent of the task prom
 	const second = await prefetchInitialAgentReads({
 		messages: otherRequest,
 		tools: input.tools,
-		coordination: false,
 		cacheStablePrefix: true,
 		signal: new AbortController().signal,
 		onEvent: async () => {},
@@ -74,7 +65,6 @@ it("keeps identical fresh OpenAI preflight prefixes independent of the task prom
 		await prefetchInitialAgentReads({
 			messages: first,
 			tools: input.tools,
-			coordination: false,
 			cacheStablePrefix: true,
 			signal: new AbortController().signal,
 			onEvent: async () => {},
@@ -87,11 +77,9 @@ function readTools() {
 		instructions: [{ path: "AGENTS.md", content: "Exact mandatory body" }],
 	});
 	const environment = vi.fn().mockResolvedValue({ available: false });
-	const capacity = vi.fn().mockResolvedValue({ simultaneousChildren: 3 });
 	return {
 		guidance,
 		environment,
-		capacity,
 		tools: {
 			read_repository_guidance: tool({
 				inputSchema: z.object({ scope: z.string() }),
@@ -100,10 +88,6 @@ function readTools() {
 			read_environment_report: tool({
 				inputSchema: z.object({}),
 				execute: environment,
-			}),
-			read_task_capacity: tool({
-				inputSchema: z.object({}),
-				execute: capacity,
 			}),
 		},
 	};
@@ -115,7 +99,6 @@ it("uses only existing authorized reads and preserves actual complete results an
 	const messages = await prefetchInitialAgentReads({
 		messages: fresh,
 		tools: input.tools,
-		coordination: true,
 		signal: new AbortController().signal,
 		onEvent,
 	});
@@ -125,8 +108,7 @@ it("uses only existing authorized reads and preserves actual complete results an
 		{ scope: "." },
 		expect.objectContaining({ messages: fresh }),
 	);
-	expect(input.environment).not.toHaveBeenCalled();
-	expect(input.capacity).toHaveBeenCalledOnce();
+	expect(input.environment).toHaveBeenCalledOnce();
 	expect(
 		onEvent.mock.calls.filter(([event]) => event.type === "tool-call"),
 	).toHaveLength(2);
@@ -134,11 +116,9 @@ it("uses only existing authorized reads and preserves actual complete results an
 		onEvent.mock.calls.filter(([event]) => event.type === "tool-result"),
 	).toHaveLength(2);
 	expect(JSON.stringify(messages)).toContain("Exact mandatory body");
-	expect(input.capacity).toHaveBeenCalledOnce();
 	const resumed = await prefetchInitialAgentReads({
 		messages,
 		tools: input.tools,
-		coordination: true,
 		signal: new AbortController().signal,
 		onEvent,
 	});
@@ -146,21 +126,12 @@ it("uses only existing authorized reads and preserves actual complete results an
 	expect(input.guidance).toHaveBeenCalledOnce();
 });
 
-it("does not fetch leader capacity for a builder, invent missing tools, or run after cancellation", async () => {
+it("does not invent missing tools or run after cancellation", async () => {
 	const input = readTools();
-	await prefetchInitialAgentReads({
-		messages: fresh,
-		tools: input.tools,
-		coordination: false,
-		signal: new AbortController().signal,
-		onEvent: async () => {},
-	});
-	expect(input.capacity).not.toHaveBeenCalled();
 	expect(
 		await prefetchInitialAgentReads({
 			messages: fresh,
 			tools: {},
-			coordination: true,
 			signal: new AbortController().signal,
 			onEvent: async () => {},
 		}),
@@ -170,12 +141,11 @@ it("does not fetch leader capacity for a builder, invent missing tools, or run a
 		prefetchInitialAgentReads({
 			messages: fresh,
 			tools: input.tools,
-			coordination: true,
 			signal,
 			onEvent: async () => {},
 		}),
 	).rejects.toThrow("Cancelled");
-	expect(input.guidance).toHaveBeenCalledTimes(1);
+	expect(input.guidance).not.toHaveBeenCalled();
 });
 
 it("checkpoints real preflight before the first inference, including full guidance", async () => {
@@ -218,7 +188,6 @@ it("checkpoints real preflight before the first inference, including full guidan
 			messages: fresh,
 			instructions: "Follow repository rules",
 			tools: input.tools,
-			toolSurface: "coordination",
 			signal: new AbortController().signal,
 			onEvent: async () => {},
 			onStep: checkpoint,
@@ -270,7 +239,6 @@ it("settles started reads after cancellation without leaking the underlying erro
 		prefetchInitialAgentReads({
 			messages: fresh,
 			tools: input.tools,
-			coordination: false,
 			signal: controller.signal,
 			onEvent,
 		}),
@@ -296,7 +264,6 @@ it("settles every initial read receipt when workspace preparation fails", async 
 		prefetchInitialAgentReads({
 			messages: fresh,
 			tools: input.tools,
-			coordination: false,
 			signal: new AbortController().signal,
 			onEvent,
 		}),
@@ -325,7 +292,6 @@ it("prefetches a builder's environment report without a repository guidance tool
 				execute: environment,
 			}),
 		},
-		coordination: false,
 		signal: new AbortController().signal,
 		onEvent: async () => {},
 	});

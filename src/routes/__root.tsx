@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
 import { Analytics } from "../features/analytics/analytics";
+import { ReplayConsentBanner } from "../features/analytics/replay-consent-banner";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { AuthProviders } from "../features/auth/auth-providers";
+import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
 
 import appCss from "../styles.css?url";
 
@@ -50,6 +52,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<QueryClientProvider client={queryClient}>
 					<AuthProviders>
 						<Analytics />
+						<LegalAcceptancePrompt />
+						<ReplayConsentBanner />
 						{children}
 					</AuthProviders>
 				</QueryClientProvider>

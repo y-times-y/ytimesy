@@ -1,5 +1,7 @@
 import { Effect, Either } from "effect";
+import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
+import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -24,7 +26,6 @@ export function deferredApiTurnWorkspace(
 	machines: WorkspaceMachines,
 	owner: AgentSessionRecord,
 	signal: AbortSignal,
-	ancestors: readonly string[] = [],
 	/** A durable step reuses its turn's earlier preparation; see turnWorkspaceReuse. */
 	reuse?: TurnWorkspaceReuse,
 ) {
@@ -50,9 +51,8 @@ export function deferredApiTurnWorkspace(
 		workspace: AgentToolWorkspace;
 		session: AgentSessionRecord;
 	}> {
+		if (sharesParentMachine(owner)) return attachSharedParent();
 		let additionalRepositoryNames: string[] = [];
-		if (ancestors.includes(owner.id) || ancestors.length > 8)
-			throw new Error("Invalid shared task ancestry.");
 		const checkoutScope = {
 			userId: owner.userId,
 			projectId: owner.projectId,
@@ -61,37 +61,20 @@ export function deferredApiTurnWorkspace(
 		// A root chat's checkout plan (project, branch and GitHub reads) does not
 		// depend on its VM, so it loads while the VM is bound and started. Its
 		// outcome, failure included, is used exactly where it was loaded before.
-		const earlyCheckout = owner.taskPlacement
+		const earlyCheckout = owner.parentSessionId
 			? undefined
 			: Effect.runPromise(
 					Effect.either(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
-		if (owner.taskPlacement === "shared") {
-			const parent = owner.parentSessionId
-				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
-				: null;
-			if (!parent || parent.projectId !== owner.projectId)
-				throw new Error("The shared parent task is unavailable.");
-			await deferredApiTurnWorkspace(machines, parent, signal, [
-				...ancestors,
-				owner.id,
-			])();
-		}
 		signal.throwIfAborted();
-		const predecessor = owner.dependsOnSessionId
-			? await agentSessionForOwner(owner.userId, owner.dependsOnSessionId)
-			: null;
-		if (predecessor && predecessor.projectId !== owner.projectId)
-			throw new Error("The stacked predecessor is unavailable.");
-		const bound = owner.taskPlacement
+		const bound = owner.parentSessionId
 			? await bindPreparedAgentTaskMachine(
 					machinesForAgentSession(machines, owner),
 					{
 						userId: owner.userId,
 						projectId: owner.projectId,
 						task: owner,
-						predecessor,
 					},
 				)
 			: await bindAgentSessionMachine(machines, {
@@ -105,37 +88,122 @@ export function deferredApiTurnWorkspace(
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
 		signal.throwIfAborted();
-		if (bound.session.taskPlacement !== "shared")
-			await Effect.runPromise(
-				Effect.gen(function* () {
-					const checkout = earlyCheckout
-						? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
-								onLeft: Effect.fail,
-								onRight: Effect.succeed,
-							})
-						: yield* loadTenantProjectCheckout(checkoutScope);
-					additionalRepositoryNames = (
-						checkout?.additionalRepositories ?? []
-					).map((repo) => repo.name);
-					yield* ensureProjectCheckout(scoped, vm, checkout);
-				}),
-			);
+		// Cloud metadata is refused for every user on the VM, re-applied each
+		// turn (a cold boot drops the rules); it overlaps the checkout.
+		const metadataBlocked = blockGuestMetadata(machines, vm);
+		metadataBlocked.catch(() => {});
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				const checkout = earlyCheckout
+					? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
+							onLeft: Effect.fail,
+							onRight: Effect.succeed,
+						})
+					: yield* loadTenantProjectCheckout(checkoutScope);
+				additionalRepositoryNames = (
+					checkout?.additionalRepositories ?? []
+				).map((repo) => repo.name);
+				yield* ensureProjectCheckout(scoped, vm, checkout);
+			}),
+		);
+		await metadataBlocked;
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("Prepared repository path is unavailable.");
-		if (
-			bound.session.taskPlacement !== "shared" &&
-			bound.session.taskAccess !== "read_only"
-		)
-			await establishVerificationBaselines({
+		const baselines = () =>
+			establishVerificationBaselines({
 				machines: scoped,
 				vm,
 				cwd,
 				userId: owner.userId,
 				sessionId: owner.id,
 				additionalRepositoryNames,
+				// A writer subagent works on a fork of its parent's VM (never pristine).
+				forkedFrom:
+					owner.parentSessionId && owner.agentFork?.vmId && owner.agentFork.base
+						? {
+								parentSessionId: owner.parentSessionId,
+								forkBase: owner.agentFork.base,
+							}
+						: undefined,
+			});
+		// A writer subagent's patch is measured from its pinned baseline.
+		if (bound.session.agentRole === "writer") await baselines();
+		// A root chat commits and publishes without that gate (turn-commit.ts);
+		// its baseline only scopes lifecycle hooks, so a chat whose checkout was
+		// already edited before baselines existed keeps working without one.
+		else if (!bound.session.parentSessionId)
+			await baselines().catch((error) => {
+				signal.throwIfAborted();
+				console.warn("Chat verification baseline unavailable.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 200) : "unknown",
+				});
 			});
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
+	/**
+	 * A reader (or a shared writer) runs in its parent's prepared checkout and
+	 * never prepares one: preparing would take the GitHub clone path whenever
+	 * the parent's VM is briefly unreachable, as it is while a sibling
+	 * writer's fork snapshots it. It waits, bounded, for that VM instead.
+	 */
+	async function attachSharedParent(): Promise<{
+		workspace: AgentToolWorkspace;
+		session: AgentSessionRecord;
+	}> {
+		const deadline = Date.now() + SHARED_PARENT_WAIT_MS;
+		let pause = 250;
+		let reason = "";
+		for (;;) {
+			signal.throwIfAborted();
+			const parent = owner.parentSessionId
+				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
+				: null;
+			if (!parent || parent.projectId !== owner.projectId)
+				throw new Error("The shared parent task is unavailable.");
+			try {
+				const bound = await bindPreparedAgentTaskMachine(
+					machinesForAgentSession(machines, owner),
+					{ userId: owner.userId, projectId: owner.projectId, task: owner },
+				);
+				const scoped = machinesForAgentSession(machines, bound.session);
+				const vm = WorkspaceId(bound.providerRef);
+				signal.throwIfAborted();
+				await scoped.ensureRunning(vm);
+				const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
+				if (cwd?.startsWith("/"))
+					return {
+						workspace: { machines: scoped, vm, cwd },
+						session: bound.session,
+					};
+				reason = "its prepared repository path is not readable";
+			} catch (error) {
+				signal.throwIfAborted();
+				reason = error instanceof Error ? error.message : String(error);
+			}
+			if (Date.now() + pause > deadline)
+				throw new Error(
+					`The parent's workspace is unavailable, so this subagent cannot attach to it (${reason.slice(0, 200)}). Retry once the parent's workspace is running.`,
+				);
+			await new Promise((resolve) => setTimeout(resolve, pause));
+			pause = Math.min(pause * 2, 2_000);
+		}
+	}
 }
+
+/** Fails closed: a VM whose metadata cannot be blocked runs no turn. */
+export async function blockGuestMetadata(
+	machines: Pick<WorkspaceMachines, "exec">,
+	vm: WorkspaceId,
+) {
+	const result = await machines.exec(vm, guestMetadataBlockCommand(), 30_000);
+	if (result.exitCode !== 0)
+		throw new Error(
+			`Cloud metadata could not be blocked on this machine: ${result.stderr.slice(-300)}`,
+		);
+}
+
+/** How long a reader waits for its parent's VM (a writer's fork pauses it). */
+const SHARED_PARENT_WAIT_MS = 120_000;

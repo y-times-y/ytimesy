@@ -95,6 +95,7 @@ export function attemptCheckerBrief(input: {
 	readonly base: string;
 	readonly candidate: string;
 	readonly directory: string;
+	readonly rigor?: boolean;
 }) {
 	const tests = `${input.directory}/tests`;
 	// The shared review brief, plus the acceptance suite that selection runs
@@ -106,9 +107,10 @@ export function attemptCheckerBrief(input: {
 			changedFiles: input.changedFiles,
 			scratch: input.directory,
 			diffCommand: `git -C ${input.checkout} diff ${input.base} ${input.candidate}`,
+			rigor: input.rigor,
 		}),
 		"",
-		`Also leave an acceptance suite for comparing attempts: \`bash ${tests}/run.sh <dir>\` runs your checks against the checkout at <dir>, prints one line per check (\`PASS <name>\` or \`FAIL <name>: <reason>\`), writes temporary files only under \`mktemp -d\`, exits 0 only when all pass and finishes within 2 minutes. Add \`"tests": [{ "name": "...", "passed": true, "evidence": "..." }], "testsPath": "${tests}"\` to your JSON.`,
+		`Also leave an acceptance suite for comparing attempts: \`bash ${tests}/run.sh <dir>\` runs your tests against the checkout at <dir>, prints one line per test (\`PASS <name>\` or \`FAIL <name>: <reason>\`), writes temporary files only under \`mktemp -d\`, exits 0 only when all pass and finishes within 2 minutes. Add \`"testsPath": "${tests}"\` to your JSON.`,
 	].join("\n");
 }
 

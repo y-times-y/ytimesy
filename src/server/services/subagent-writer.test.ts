@@ -1,90 +1,22 @@
 import { execFileSync } from "node:child_process";
 import {
-	cpSync,
-	mkdtempSync,
+	existsSync,
+	mkdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import { overlappingWriters } from "#/domain/subagent";
-import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { localVms } from "./local-vms.testing";
 import {
 	forkWriterWorkspace,
 	parseNumstat,
 	transferWriterPatch,
 } from "./subagent-writer";
-import type { WorkspaceMachines } from "./workspace-machines";
-
-/**
- * Local "VMs": each id is a home directory holding a repository; commands
- * run with bash in that home. A fork copies the parent's home, the way a
- * VM snapshot carries uncommitted work.
- */
-function localVms() {
-	const root = mkdtempSync(join(tmpdir(), "subagent-writer-"));
-	const homes = new Map<string, string>();
-	const path = (vm: string, file: string) =>
-		file === PROJECT_CWD_PATH
-			? join(homes.get(vm) as string, ".project-cwd")
-			: file;
-	const machines = {
-		exec: async (vm: string, command: string) => {
-			try {
-				const stdout = execFileSync("bash", ["-c", command], {
-					cwd: homes.get(vm),
-					env: { ...process.env, HOME: homes.get(vm) },
-					encoding: "utf8",
-					stdio: ["ignore", "pipe", "pipe"],
-				});
-				return { exitCode: 0, stdout, stderr: "" };
-			} catch (error) {
-				const failure = error as { status?: number; stderr?: string };
-				return {
-					exitCode: failure.status ?? 1,
-					stdout: "",
-					stderr: String(failure.stderr ?? ""),
-				};
-			}
-		},
-		readTextFile: async (vm: string, file: string) => {
-			try {
-				return readFileSync(path(vm, file), "utf8");
-			} catch {
-				return null;
-			}
-		},
-		writeTextFile: async (vm: string, file: string, contents: string) => {
-			writeFileSync(path(vm, file), contents);
-		},
-		forkWorkspace: async (source: string, slug: string) => {
-			const home = join(root, slug);
-			cpSync(homes.get(source) as string, home, { recursive: true });
-			const cwd = join(home, "repo");
-			writeFileSync(join(home, ".project-cwd"), `${cwd}\n`);
-			homes.set(slug, home);
-			return { vm: WorkspaceId(slug), forkMs: 5 };
-		},
-	} as unknown as WorkspaceMachines;
-	const git = (cwd: string, ...args: string[]) =>
-		execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-	const parentHome = join(root, "parent");
-	const parentRepo = join(parentHome, "repo");
-	execFileSync("mkdir", ["-p", parentRepo]);
-	homes.set("parent", parentHome);
-	writeFileSync(join(parentHome, ".project-cwd"), `${parentRepo}\n`);
-	git(parentRepo, "init", "-q", "-b", "main");
-	git(parentRepo, "config", "user.email", "t@example.test");
-	git(parentRepo, "config", "user.name", "t");
-	writeFileSync(join(parentRepo, "a.ts"), "export const a = 1;\n");
-	writeFileSync(join(parentRepo, "shared.ts"), "line 1\nline 2\nline 3\n");
-	git(parentRepo, "add", "-A");
-	git(parentRepo, "commit", "-q", "-m", "init");
-	return { root, machines, git, parentRepo, homes };
-}
 
 let cleanup: string | undefined;
 afterEach(() => {
@@ -121,8 +53,15 @@ describe("writer subagent git round trip", () => {
 			base: fork.base,
 			parentHead: fork.parentHead,
 		});
+		// An absolute path: the parent's commands may run as another user (a
+		// hard-set lead's run as root in the task container, where ~ is /root).
+		expect(patch?.path).toBe(
+			join(
+				realpathSync(vms.homes.get("parent") as string),
+				".ytimesy/agents/1.patch",
+			),
+		);
 		expect(patch).toMatchObject({
-			path: "~/.ytimesy/agents/1.patch",
 			files: ["a.ts", "b.ts"],
 			added: 2,
 			removed: 1,
@@ -223,6 +162,94 @@ describe("writer subagent git round trip", () => {
 				parentHead: fork.parentHead,
 			}),
 		).toBeNull();
+	});
+
+	it("keeps deliberate changes and leaves scratch, downloads and large binaries out, reporting them", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		writeFileSync(join(vms.parentRepo, ".gitignore"), "*.log\n");
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-1",
+		});
+		const write = (path: string, contents: string | Buffer) => {
+			mkdirSync(join(fork.cwd, path, ".."), { recursive: true });
+			writeFileSync(join(fork.cwd, path), contents);
+		};
+		const binary = (bytes: number) => Buffer.alloc(bytes, 0);
+		// Deliberate: a tracked edit, new source, a small asset, a named binary.
+		write("a.ts", "export const a = 2;\n");
+		write("src/new.ts", "export const fresh = 1;\n");
+		write("src/icon.png", binary(2_000));
+		write("docs/report.pdf", binary(300_000));
+		// Scratch: downloads, a cache the child even committed, big binaries
+		// and records, and an ignored log.
+		write("downloads/photo.jpg", binary(5_000));
+		write("downloads/records.json", '{"a":1}\n');
+		write(".cache/x/page.html", "<html></html>\n");
+		vms.git(fork.cwd, "add", "-A");
+		vms.git(fork.cwd, "commit", "-qm", "child commit with scratch");
+		write("dataset.parquet", binary(200_000));
+		write("records.csv", "x,y\n".repeat(300_000));
+		write("run.log", "noise\n");
+		const patch = await transferWriterPatch({
+			machines: vms.machines,
+			forkVm: fork.vm,
+			parentVm: WorkspaceId("parent"),
+			label: "1",
+			base: fork.base,
+			parentHead: fork.parentHead,
+			named: "Write docs/report.pdf from the data.",
+		});
+		expect([...(patch?.files ?? [])].sort()).toEqual([
+			"a.ts",
+			"docs/report.pdf",
+			"src/icon.png",
+			"src/new.ts",
+		]);
+		expect(patch?.excluded).toMatchObject({ count: 5 });
+		expect(patch?.excluded?.bytes).toBeGreaterThan(1_400_000);
+		expect(patch?.excluded?.paths.slice(0, 2)).toEqual([
+			"records.csv",
+			"dataset.parquet",
+		]);
+		expect(patch?.excluded?.paths).toEqual(
+			expect.arrayContaining([
+				"downloads/photo.jpg",
+				"downloads/records.json",
+				".cache/x/page.html",
+			]),
+		);
+		// Left out of the patch and ref, not deleted from the fork.
+		expect(existsSync(join(fork.cwd, "downloads/photo.jpg"))).toBe(true);
+		expect(
+			vms.git(fork.cwd, "ls-files", "downloads", ".cache", "records.csv"),
+		).toBe("");
+	});
+
+	it("reports left-out files when they were the writer's only changes", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-1",
+		});
+		mkdirSync(join(fork.cwd, "tmp"));
+		writeFileSync(join(fork.cwd, "tmp/out.txt"), "scratch\n");
+		await expect(
+			transferWriterPatch({
+				machines: vms.machines,
+				forkVm: fork.vm,
+				parentVm: WorkspaceId("parent"),
+				label: "1",
+				base: fork.base,
+				parentHead: fork.parentHead,
+			}),
+		).rejects.toThrow(
+			/changed nothing deliberate; left out 1 new file .*tmp\/out\.txt/,
+		);
 	});
 
 	it("parses numstat including binary files", () => {

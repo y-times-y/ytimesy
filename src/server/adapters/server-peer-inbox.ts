@@ -1,6 +1,10 @@
 import type { ModelMessage } from "ai";
 import type { UserMessageItem } from "#/domain/session-item";
 import { database } from "./database";
+import {
+	forgetPeerInboxObservation,
+	peerInboxMayHaveMessages,
+} from "./peer-inbox-observation";
 
 export async function stageServerPeerMessage(
 	recipientId: string,
@@ -11,6 +15,7 @@ export async function stageServerPeerMessage(
 		"insert into agent_peer_inbox(id,recipient_id,message) values($1,$2,$3) on conflict(id) do nothing",
 		[id, recipientId, message],
 	);
+	forgetPeerInboxObservation(recipientId);
 }
 export async function serverPeerMessageAccepted(
 	recipientId: string,
@@ -21,6 +26,14 @@ export async function serverPeerMessageAccepted(
 		[recipientId, id],
 	);
 	return result.rows[0]?.accepted ?? false;
+}
+/** Whether the recipient's mailbox holds this message, accepted or not. */
+export async function serverPeerMessageStaged(recipientId: string, id: string) {
+	const result = await database().query(
+		"select 1 from agent_peer_inbox where recipient_id=$1 and id=$2",
+		[recipientId, id],
+	);
+	return (result.rowCount ?? 0) > 0;
 }
 export async function removePendingServerPeerMessage(
 	recipientId: string,
@@ -57,6 +70,7 @@ export async function injectServerPeerMessages(
 	) => Promise<void>,
 	delivered: (messageId: string) => boolean = () => false,
 ) {
+	if (!peerInboxMayHaveMessages(recipientId)) return history;
 	const result = await database().query<{
 		id: string;
 		message: string;

@@ -62,7 +62,10 @@ import {
 	MEMORY_PART_OPEN,
 	type MemoryLine,
 	memoryLineEmbeddingText,
+	memoryLineShown,
+	memoryRulesPart,
 	memoryToday,
+	projectRules,
 	selectMemoryMatches,
 } from "../src/domain/memory-repo";
 import {
@@ -296,8 +299,10 @@ async function dryRun() {
 
 /**
  * The read hook's selection (selectMemoryMatches) on real embeddings: every
- * scenario rule plus distractors as memory lines; each probe must select
- * its rule.
+ * scenario rule plus distractors as memory lines; each probe must have its
+ * rule in context, from the always-on project rules or the hook's matches.
+ * Wrong lines are the hook's other matches; the rules section is counted
+ * once, as it rides on every chat whatever the request.
  */
 async function recall() {
 	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
@@ -324,8 +329,18 @@ async function recall() {
 	}));
 	const today = memoryToday();
 	const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
+	const rules = projectRules({ lines, today, project: null });
+	const rulesPart = memoryRulesPart(rules);
 	const rows = [
-		["probe", "rule", "similarity", "rank", "recalled", "wrong lines injected"],
+		[
+			"probe",
+			"rule",
+			"similarity",
+			"rank",
+			"recalled",
+			"from",
+			"wrong lines injected",
+		],
 	];
 	let recalled = 0;
 	let wrong = 0;
@@ -334,6 +349,7 @@ async function recall() {
 		line: string;
 		right: boolean;
 		score: number;
+		inRules: boolean;
 	}[] = [];
 	for (const probe of RECALL_PROBES) {
 		const query = await embed.query(probe.query);
@@ -351,6 +367,7 @@ async function recall() {
 				line: line.text,
 				right: line.id === probe.scenario,
 				score: scores.get(line) ?? 0,
+				inRules: rules.includes(line),
 			})),
 		);
 		const ranked = lines
@@ -362,12 +379,14 @@ async function recall() {
 		const selected = selectMemoryMatches({
 			lines,
 			scores,
-			alreadyShown: () => false,
+			alreadyShown: (raw) => memoryLineShown(raw, rulesPart),
 			today,
 			project: null,
+			query: probe.query,
 		});
 		const rule = lines.find((line) => line.id === probe.scenario);
-		const ok = Boolean(rule && selected.includes(rule));
+		const inRules = Boolean(rule && rules.includes(rule));
+		const ok = Boolean(rule && (inRules || selected.includes(rule)));
 		if (ok) recalled++;
 		const noise = selected.filter((line) => line !== rule).length;
 		wrong += noise;
@@ -377,12 +396,13 @@ async function recall() {
 			hit.score.toFixed(3),
 			String(rank),
 			ok ? "yes" : "MISS",
+			inRules ? "rules" : ok ? "hook" : "-",
 			String(noise),
 		]);
 	}
 	console.log(table(rows));
 	console.log(
-		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected in total (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}).`,
+		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected by the hook in total (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}); project rules on every chat: ${rules.length} lines.`,
 	);
 	// Threshold data: how right and wrong lines score, and what each cutoff would do.
 	const right = similarities.filter((row) => row.right).map((row) => row.score);

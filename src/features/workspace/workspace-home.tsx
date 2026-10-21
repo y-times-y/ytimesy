@@ -8,7 +8,7 @@ import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
-import { shouldPollAgentTasks } from "#/domain/agent-task";
+import { shouldPollSubagents } from "#/domain/agent-task";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -118,7 +118,9 @@ import {
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
+import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
+import { MemoryInspector } from "./memory-inspector";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -233,6 +235,22 @@ export function WorkspaceHome({
 			}),
 		enabled: Boolean(selectedProject?.id),
 	});
+	// Every project's chats, for the sidebar's Recent list and project order;
+	// the open project's list shares its cache entry with the query above.
+	const projectChatLists = useQueries({
+		queries: (projects.data ?? []).map((project) => ({
+			queryKey: ["agent-sessions", project.id],
+			queryFn: () =>
+				listProjectAgentSessions({ data: { projectId: project.id } }),
+			staleTime: 30_000,
+		})),
+	});
+	const projectChats = (projects.data ?? []).map((project, index) => ({
+		project,
+		chats: projectChatLists[index]?.data ?? [],
+	}));
+	/** The full-page Memory view from the left sidebar, in place of the chat. */
+	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
@@ -437,7 +455,7 @@ export function WorkspaceHome({
 			}),
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
-			shouldPollAgentTasks(session.turnStatus, query.state.data ?? [])
+			shouldPollSubagents(session.turnStatus, query.state.data ?? [])
 				? 2_500
 				: false,
 	});
@@ -457,13 +475,6 @@ export function WorkspaceHome({
 		refetchPullRequests,
 		chats.refetch,
 	]);
-	const taskHandoffs = (agentTasks.data ?? [])
-		.filter((task) => task.pullRequestUrl)
-		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
-		.join("|");
-	useEffect(() => {
-		if (taskHandoffs) void refetchPullRequests();
-	}, [taskHandoffs, refetchPullRequests]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		const chatId = activeSessionId;
@@ -577,6 +588,25 @@ export function WorkspaceHome({
 		);
 	}, []);
 
+	// `?project=<id>&chat=<id>` (from GitHub wake-ups) opens a chat in another project.
+	const linkedProject = useRef(
+		typeof window === "undefined"
+			? null
+			: new URLSearchParams(window.location.search).get("project"),
+	);
+	useEffect(() => {
+		const id = linkedProject.current;
+		if (!id || !projects.data?.some((project) => project.id === id)) return;
+		linkedProject.current = null;
+		const here = new URL(window.location.href);
+		here.searchParams.delete("project");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${here.pathname}${here.search}${here.hash}`,
+		);
+		selectProject(id);
+	});
 	const linkedChat = useRef(
 		typeof window === "undefined"
 			? null
@@ -959,6 +989,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
+		setMemoryPageOpen(false);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		bumpSessionEpoch();
@@ -991,6 +1022,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
+		setMemoryPageOpen(false);
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -1154,6 +1186,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
+		setMemoryPageOpen(false);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1427,6 +1460,16 @@ export function WorkspaceHome({
 					setSettingsSection(undefined);
 					setSettingsOpen(true);
 				}}
+				projectChats={projectChats}
+				onSelectChatInProject={(projectId, chatId) => {
+					selectProject(projectId);
+					openChat(chatId);
+				}}
+				onOpenMemory={() => {
+					setMemoryPageOpen(true);
+					if (compact) setProjectsOpen(false);
+				}}
+				memoryActive={memoryPageOpen}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1444,9 +1487,11 @@ export function WorkspaceHome({
 				onClose={() => setSettingsOpen(false)}
 				initialSection={settingsSection}
 			/>
+			<UsageWarningBanner />
 			<main
 				ref={workspaceMainRef}
 				className="workspace-main"
+				data-memory-page={memoryPageOpen ? "true" : undefined}
 				inert={compact && projectsOpen}
 				data-can-expand-inspector={
 					inspectorOpen && !compact && !inspectorCompact
@@ -1484,6 +1529,30 @@ export function WorkspaceHome({
 				>
 					<PanelRight size={18} />
 				</button>
+				{memoryPageOpen ? (
+					<section className="memory-page" aria-label="Memory page">
+						<header className="memory-page-header">
+							<h1>Memory</h1>
+							<p>
+								What the agent remembers across your chats: standing project
+								rules, preferences and decisions.
+							</p>
+						</header>
+						<MemoryInspector
+							active
+							layout="page"
+							onOpenChat={(chatId) => {
+								const listed = projectChats.find((group) =>
+									group.chats.some((chat) => chat.id === chatId),
+								);
+								if (!listed) return false;
+								selectProject(listed.project.id);
+								openChat(chatId);
+								return true;
+							}}
+						/>
+					</section>
+				) : null}
 				<WorkspacePanes
 					open={inspectorOpen}
 					compact={singlePane}
@@ -1504,6 +1573,25 @@ export function WorkspaceHome({
 							<div className="session-title-row">
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
+									{activeChat?.workingBranch && (
+										<span
+											className="session-title-meta"
+											title="This chat's branch: each turn that changes code is committed and pushed here"
+										>
+											{activeChat.workingBranch}
+										</span>
+									)}
+									{sessionPullRequest && (
+										<a
+											className="session-title-meta"
+											href={sessionPullRequest.url}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{sessionPullRequest.draft ? "Draft PR" : "PR"} #
+											{sessionPullRequest.number}
+										</a>
+									)}
 								</div>
 							</div>
 						) : inspectorOpen ? null : (

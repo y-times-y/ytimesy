@@ -30,8 +30,9 @@ import {
 	FieldSeparator,
 } from "#/components/ui/field.tsx";
 import { Input } from "#/components/ui/input.tsx";
-import { safeReturnTo } from "#/domain/return-to";
+import { safeReturnTo, withReturnTo } from "#/domain/return-to";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { TermsConsent } from "#/features/auth/terms-consent";
 import { cn } from "#/lib/utils.ts";
 import {
 	getAuthAdditionalFieldValidators,
@@ -132,6 +133,8 @@ export function SignUp({
 	)?.captchaComponent;
 
 	const [isCompromised, setIsCompromised] = useState(false);
+	// Terms and Privacy consent gates every way this page creates an account.
+	const [agreed, setAgreed] = useState(false);
 	const signUpFields = useMemo(
 		() => additionalFields?.filter((field) => field.signUp) ?? [],
 		[additionalFields],
@@ -145,13 +148,14 @@ export function SignUp({
 			password: "",
 		},
 		onSubmit: async ({ value }) => {
+			if (!agreed) return;
 			try {
 				await signUpEmail({
 					name: emailAndPassword?.name === false ? "" : value.name,
 					email: value.email.trim(),
 					password: value.password,
-					// The verification link signs in and returns to the page that asked.
-					callbackURL: safeReturnTo(redirectTo),
+					// The verification link lands on sign-in, which returns to the page that asked.
+					callbackURL: withReturnTo("/auth/sign-in", redirectTo),
 					...getAdditionalFieldSubmitValues(
 						signUpFields,
 						value.additionalFields,
@@ -182,7 +186,13 @@ export function SignUp({
 					{socialPosition === "top" && (
 						<>
 							{socialProviders && socialProviders.length > 0 && (
-								<ProviderButtons socialLayout={socialLayout} view="signUp" />
+								<fieldset
+									disabled={!agreed}
+									className="m-0 min-w-0 border-0 p-0"
+									title={agreed ? undefined : "Agree to the Terms first"}
+								>
+									<ProviderButtons socialLayout={socialLayout} view="signUp" />
+								</fieldset>
 							)}
 
 							{showSeparator && (
@@ -390,12 +400,18 @@ export function SignUp({
 											),
 									)}
 
+									<TermsConsent
+										checked={agreed}
+										onCheckedChange={setAgreed}
+										disabled={isPending}
+									/>
+
 									{Captcha && (
 										<div className="flex justify-center">{Captcha}</div>
 									)}
 
 									<div className="flex flex-col gap-3">
-										<form.AuthFormSubmitButton disabled={isPending}>
+										<form.AuthFormSubmitButton disabled={isPending || !agreed}>
 											{localization.auth.signUp}
 										</form.AuthFormSubmitButton>
 
@@ -422,7 +438,13 @@ export function SignUp({
 							)}
 
 							{socialProviders && socialProviders.length > 0 && (
-								<ProviderButtons socialLayout={socialLayout} view="signUp" />
+								<fieldset
+									disabled={!agreed}
+									className="m-0 min-w-0 border-0 p-0"
+									title={agreed ? undefined : "Agree to the Terms first"}
+								>
+									<ProviderButtons socialLayout={socialLayout} view="signUp" />
+								</fieldset>
 							)}
 						</>
 					)}

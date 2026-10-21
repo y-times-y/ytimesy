@@ -21,39 +21,6 @@ const options = {
 const make = (ran: () => Promise<unknown>) =>
 	tool({ inputSchema: z.object({}).passthrough(), execute: ran });
 
-it("refuses tools that would start writing work and leaves the rest working", async () => {
-	const ran = vi.fn(async () => ({ ok: true }));
-	const tools = withPlanMode({
-		create_task: make(ran),
-		launch_ready_tasks: make(ran),
-		start_task: make(ran),
-		batch_read: make(ran),
-	});
-	const refused = {
-		blocked: true,
-		error: expect.stringContaining("Plan mode"),
-	};
-	expect(
-		await tools.create_task.execute?.(
-			{ startImmediately: true, access: "read_write" },
-			options,
-		),
-	).toEqual(refused);
-	expect(await tools.launch_ready_tasks.execute?.({}, options)).toEqual(
-		refused,
-	);
-	expect(await tools.start_task.execute?.({}, options)).toEqual(refused);
-	expect(ran).not.toHaveBeenCalled();
-	// Drafts, read-only helpers and ordinary reads still run.
-	await tools.create_task.execute?.({ startImmediately: false }, options);
-	await tools.create_task.execute?.(
-		{ startImmediately: true, access: "read_only" },
-		options,
-	);
-	await tools.batch_read.execute?.({}, options);
-	expect(ran).toHaveBeenCalledTimes(3);
-});
-
 it("refuses the builder's edits and shell writes, but still runs reading commands", async () => {
 	const ran = vi.fn(async () => ({ ok: true }));
 	const tools = withPlanMode({
@@ -61,7 +28,6 @@ it("refuses the builder's edits and shell writes, but still runs reading command
 		apply_patches: make(ran),
 		replace_text: make(ran),
 		rename_symbol: make(ran),
-		publish_task: make(ran),
 		execute_command: make(ran),
 		view_image: make(ran),
 	});
@@ -70,7 +36,6 @@ it("refuses the builder's edits and shell writes, but still runs reading command
 		"apply_patches",
 		"replace_text",
 		"rename_symbol",
-		"publish_task",
 	])
 		expect(await tools[name].execute?.({}, options)).toMatchObject({
 			blocked: true,

@@ -402,3 +402,72 @@ it("loads a baseline without configuration as no hooks in one guest call, and fa
 		await fixture.cleanup();
 	}
 });
+
+it("redacts runtime secret values, and their encodings, from hook messages and refusals", async () => {
+	const fixture = await localHarnessWorkspace();
+	const secret = "sk-hook-secret-123456";
+	const encoded = Buffer.from(secret).toString("base64");
+	try {
+		await mkdir(join(fixture.root, ".ytimesy"));
+		await writeFile(
+			join(fixture.root, ".ytimesy/hooks.json"),
+			JSON.stringify({
+				version: 1,
+				hooks: [
+					{
+						event: "PreToolUse",
+						tool: "blocked",
+						command: `printf '{"block":true,"message":"key ${secret}"}'`,
+					},
+					{
+						event: "PostToolUse",
+						tool: "read_file",
+						command: `printf '{"message":"leak ${encoded}"}'`,
+					},
+				],
+			}),
+		);
+		await fixture.run("git", ["-C", fixture.root, "add", "."]);
+		await fixture.run("git", ["-C", fixture.root, "commit", "-qm", "hooks"]);
+		const baseline = (
+			await fixture.run("git", ["-C", fixture.root, "rev-parse", "HEAD"])
+		).stdout.trim();
+		const saved = new Map<string, unknown>();
+		const hooks = harnessLifecycleHooks({
+			workspace: async () => fixture.workspace,
+			turnId: randomUUID(),
+			readOnly: false,
+			signal: new AbortController().signal,
+			baseline: async () => baseline,
+			redact: [secret],
+			once: async (id, run) => {
+				if (!saved.has(id)) saved.set(id, await run());
+				return saved.get(id);
+			},
+		});
+		const tools = hooks.wrap({
+			read_file: tool({
+				inputSchema: z.object({}),
+				execute: async () => ({ content: "source" }),
+			}),
+			blocked: tool({
+				inputSchema: z.object({}),
+				execute: async () => ({ content: "never" }),
+			}),
+		});
+		const options = {
+			toolCallId: "call",
+			messages: [],
+			abortSignal: new AbortController().signal,
+			context: {},
+		};
+		const refused = await tools.blocked.execute?.({}, options);
+		await tools.read_file.execute?.({}, { ...options, toolCallId: "read" });
+		const seen = JSON.stringify([refused, hooks.drain([]), [...saved]]);
+		expect(seen).not.toContain(secret);
+		expect(seen).not.toContain(encoded.replace(/=+$/, ""));
+		expect(seen).toContain("[REDACTED]");
+	} finally {
+		await fixture.cleanup();
+	}
+});

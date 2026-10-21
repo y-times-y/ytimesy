@@ -323,22 +323,15 @@ it("only rewinds checkouts a session owns", () => {
 		ownsWritableCheckout({
 			provider_ref: "vm",
 			parent_session_id: "p",
-			task_access: "read_write",
+			agent_role: "writer",
 		}),
 	).toBe(true);
-	expect(
-		ownsWritableCheckout({
-			provider_ref: "vm",
-			parent_session_id: "p",
-			task_access: "read_only",
-		}),
-	).toBe(false);
-	expect(
-		ownsWritableCheckout({
-			provider_ref: "vm",
-			parent_session_id: "p",
-			task_access: "read_write",
-			task_placement: "shared",
-		}),
-	).toBe(false);
+	for (const agent_role of ["researcher", "reviewer", "checker", null] as const)
+		expect(
+			ownsWritableCheckout({
+				provider_ref: "vm",
+				parent_session_id: "p",
+				agent_role,
+			}),
+		).toBe(false);
 });

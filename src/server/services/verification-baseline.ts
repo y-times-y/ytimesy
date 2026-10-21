@@ -6,12 +6,22 @@ import {
 } from "../adapters/turn-verification";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-/** Only a pristine initial checkout establishes policy; legacy dirty tasks fail closed. */
+/**
+ * Only a pristine initial checkout establishes policy; legacy dirty tasks fail
+ * closed. A writer subagent's fork is never pristine: it starts from its
+ * parent's working tree, which the runtime commits as the fork base and
+ * records server-side (agent_fork.base). The fork takes its parent's pinned
+ * baseline for the same directory when there is one; a parent that pins
+ * none (a hard-set root chat is read-only) hands down the recorded fork
+ * base. Either commit must be in the fork.
+ */
 export async function establishVerificationBaselines(
 	input: AgentToolWorkspace & {
 		userId: string;
 		sessionId: string;
 		additionalRepositoryNames?: readonly string[];
+		/** A forked writer: its parent session and its recorded fork base. */
+		forkedFrom?: { parentSessionId: string; forkBase: string };
 	},
 ) {
 	for (const directory of [
@@ -24,6 +34,38 @@ export async function establishVerificationBaselines(
 			await readVerificationBaseline(input.userId, input.sessionId, directory)
 		)
 			continue;
+		const inherited = input.forkedFrom
+			? ((await readVerificationBaseline(
+					input.userId,
+					input.forkedFrom.parentSessionId,
+					directory,
+				)) ?? (directory === input.cwd ? input.forkedFrom.forkBase : null))
+			: null;
+		if (inherited) {
+			const present = await input.machines.exec(
+				input.vm,
+				posixShellCommand([
+					"git",
+					"-C",
+					directory,
+					"cat-file",
+					"-e",
+					`${inherited}^{commit}`,
+				]),
+				15000,
+			);
+			if (present.exitCode)
+				throw new Error(
+					"The fork does not carry its parent's verification baseline. Existing edits were preserved.",
+				);
+			await pinVerificationBaseline(
+				input.userId,
+				input.sessionId,
+				directory,
+				inherited,
+			);
+			continue;
+		}
 		const script = `import subprocess,sys
 root=sys.argv[1]
 def git(*args): return subprocess.check_output(['git','-C',root,*args],text=True).strip()

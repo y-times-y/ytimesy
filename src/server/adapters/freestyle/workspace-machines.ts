@@ -1,3 +1,4 @@
+import { applyVmNetworkPolicy } from "./vm-network";
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
@@ -6,6 +7,7 @@ import {
 	machineSize,
 	machineSizeId,
 } from "#/domain/machine-size";
+import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
@@ -24,6 +26,12 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
+import {
+	ensureVmEdgeAuthorizer,
+	listVmEdgeRoutes,
+	publishVmEdgeRoute,
+	withdrawVmEdgeRoutes,
+} from "./edge-routes";
 import { forkRunningVm } from "./fork-vm";
 import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
@@ -38,6 +46,11 @@ import {
 	requestedAuthSnapshotId,
 } from "./proof-vm";
 import { retryTransientProviderFailure } from "./provider-retry";
+import {
+	forgetRunningGuest,
+	recentlyRunningGuest,
+	rememberRunningGuest,
+} from "./recent-guest-state";
 import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
@@ -81,7 +94,18 @@ export function createFreestyleWorkspaceMachines(
 				: {}),
 	});
 
-	const machines: WorkspaceMachines = {
+	const machines: WorkspaceMachines &
+		Required<
+			Pick<
+				WorkspaceMachines,
+				"publishHttpRoute" | "listHttpRoutes" | "withdrawHttpRoutes"
+			>
+		> = {
+		async applyNetworkPolicy(workspaceId, policy) {
+			await retryTransientProviderFailure(() =>
+				applyVmNetworkPolicy(freestyle, workspaceId, policy),
+			);
+		},
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		async createProofWorkspace(
@@ -132,15 +156,16 @@ export function createFreestyleWorkspaceMachines(
 			timeoutMs = 120_000,
 		): Promise<CommandOutput> {
 			try {
-				await readyForGuestOperation(
+				const result = await onReadyGuest(
 					freestyle.vms.ref(workspaceId),
 					"exec",
 					Math.ceil(timeoutMs / 1000),
+					() =>
+						freestyle.vms.ref(workspaceId).exec({
+							command,
+							timeoutMs,
+						}),
 				);
-				const result = await freestyle.vms.ref(workspaceId).exec({
-					command,
-					timeoutMs,
-				});
 				return {
 					exitCode: result.statusCode ?? 124,
 					stdout: result.stdout ?? "",
@@ -162,11 +187,12 @@ export function createFreestyleWorkspaceMachines(
 			contents: string,
 		): Promise<void> {
 			try {
-				await readyForGuestOperation(
+				await onReadyGuest(
 					freestyle.vms.ref(workspaceId),
 					"writeFile",
+					60,
+					() => freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents),
 				);
-				await freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents);
 			} catch (cause) {
 				if (cause instanceof WorkspaceCommandError) throw cause;
 				throw new WorkspaceCommandError({
@@ -227,6 +253,7 @@ export function createFreestyleWorkspaceMachines(
 
 		async destroy(workspaceId: WorkspaceId): Promise<void> {
 			try {
+				forgetRunningGuest(workspaceId);
 				await freestyle.vms.ref(workspaceId).delete();
 			} catch (cause) {
 				if (cause instanceof FreestyleApiError && cause.status === 404) {
@@ -245,22 +272,13 @@ export function createFreestyleWorkspaceMachines(
 			port: number,
 			hostname: string,
 		): Promise<string> {
+			return (await machines.publishHttpRoute(workspaceId, { hostname, port }))
+				.origin;
+		},
+
+		async publishHttpRoute(workspaceId, route) {
 			try {
-				const listed = await freestyle.tls.rules.list({
-					vmId: workspaceId,
-				});
-				const already = listed.rules.some(
-					(rule) => rule.domain === hostname && rule.destination.port === port,
-				);
-				if (!already) {
-					await freestyle.tls.rules.create({
-						action: "allow",
-						domain: hostname,
-						source: { public: true },
-						destination: { vmId: workspaceId, port },
-					});
-				}
-				return `https://${hostname}`;
+				return await publishVmEdgeRoute(freestyle, workspaceId, route);
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
 					operation: "create",
@@ -269,6 +287,13 @@ export function createFreestyleWorkspaceMachines(
 				});
 			}
 		},
+
+		listHttpRoutes: (workspaceId) => listVmEdgeRoutes(freestyle, workspaceId),
+
+		withdrawHttpRoutes: (workspaceId, kinds, port) =>
+			withdrawVmEdgeRoutes(freestyle, workspaceId, kinds, port),
+
+		ensureEdgeAuthorizer: (config) => ensureVmEdgeAuthorizer(freestyle, config),
 
 		async destroyOrphans(slugPrefix: string): Promise<readonly string[]> {
 			try {
@@ -292,6 +317,8 @@ export function createFreestyleWorkspaceMachines(
 		},
 
 		async snapshotEnvironment(workspaceId, slug) {
+			// A snapshot may pause the machine; the next operation reads it fresh.
+			forgetRunningGuest(workspaceId);
 			try {
 				await scrubAgentSecrets(freestyle.vms.ref(workspaceId));
 				const created = await freestyle.vms.ref(workspaceId).snapshot({
@@ -322,6 +349,7 @@ export function createFreestyleWorkspaceMachines(
 		},
 
 		async forkWorkspace(source, slug, sizeId) {
+			forgetRunningGuest(source);
 			try {
 				const fork = await forkRunningVm({
 					source: freestyle.vms.ref(source),
@@ -330,6 +358,16 @@ export function createFreestyleWorkspaceMachines(
 						machines.provisionSession(slug, snapshotId, sizeId),
 					deleteSnapshot: (snapshotId) =>
 						freestyle.vms.snapshots.delete(snapshotId),
+					scrubFork: async (vmId) => {
+						const scrubbed = await machines.exec(
+							WorkspaceId(vmId),
+							SCRUB_MEMORY_CREDENTIAL,
+							30_000,
+						);
+						if (scrubbed.exitCode !== 0)
+							throw new Error("the memory clone still holds a token");
+					},
+					deleteVm: (vmId) => freestyle.vms.ref(vmId).delete(),
 				});
 				return { vm: WorkspaceId(fork.vmId), forkMs: fork.forkMs };
 			} catch (cause) {
@@ -472,8 +510,9 @@ export function createFreestyleWorkspaceMachines(
 		...machines,
 		runCapability: async (vm, request, signal) => {
 			signal.throwIfAborted();
-			await readyForGuestOperation(freestyle.vms.ref(vm), "exec", 180);
-			return invokeCapability(vm, request, signal);
+			return onReadyGuest(freestyle.vms.ref(vm), "exec", 180, () =>
+				invokeCapability(vm, request, signal),
+			);
 		},
 	};
 }
@@ -555,6 +594,8 @@ async function readyForGuestOperation(
 	operation: "exec" | "writeFile",
 	requiredSeconds = 60,
 ) {
+	const known = recentlyRunningGuest(vm.id, requiredSeconds);
+	if (known) return known;
 	let data = await vm.data();
 	if (
 		infrastructureAdmissionEnabled() &&
@@ -568,6 +609,29 @@ async function readyForGuestOperation(
 			message: blocked,
 			providerWorkspaceId: WorkspaceId(vm.id),
 		});
+	}
+	return data;
+}
+
+/**
+ * Runs a guest operation on a ready VM. Its success is recent guest activity
+ * on a running machine, which lets the next operation skip the provider read
+ * (recent-guest-state.ts); a failure forgets it.
+ */
+async function onReadyGuest<T>(
+	vm: ReturnType<Freestyle["vms"]["ref"]>,
+	operation: "exec" | "writeFile",
+	requiredSeconds: number,
+	run: () => Promise<T>,
+) {
+	const data = await readyForGuestOperation(vm, operation, requiredSeconds);
+	try {
+		const result = await run();
+		rememberRunningGuest(data);
+		return result;
+	} catch (cause) {
+		forgetRunningGuest(vm.id);
+		throw cause;
 	}
 }
 

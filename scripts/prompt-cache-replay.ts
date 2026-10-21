@@ -120,7 +120,6 @@ function stepRequest(stepIndex: number) {
 		...nativeWebSearchTools("openai"),
 	};
 	const instructions = agentTurnInstructions({
-		shellBuilder: true,
 		session,
 		tools,
 		plugins: [],

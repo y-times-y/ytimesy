@@ -8,6 +8,8 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import type { UsageWindowState } from "#/domain/infrastructure-usage";
+import { usageWarning } from "#/domain/usage-warning";
 import { InfrastructureStatements } from "./infrastructure-statements";
 import {
 	adjustInfrastructureUsageFn,
@@ -16,59 +18,85 @@ import {
 	infrastructureUsageFn,
 	infrastructureUsersFn,
 } from "./infrastructure-usage.fn";
+import { UsageWindowBars } from "./usage-windows";
 
-const MICRO_USD_PER_STANDARD_MINUTE = 2204;
-const minutes = (amount: number) =>
-	(amount / MICRO_USD_PER_STANDARD_MINUTE).toLocaleString("en-US", {
-		maximumFractionDigits: 1,
-	});
+const dollars = (amount: number) =>
+	`$${(amount / 1_000_000).toLocaleString("en-US", {
+		maximumFractionDigits: 2,
+	})}`;
 
-const wholeMinutes = (amount: number) =>
-	Math.max(
-		0,
-		Math.floor(amount / MICRO_USD_PER_STANDARD_MINUTE),
-	).toLocaleString("en-US");
+const ADJUSTMENT_LABELS: Record<string, string> = {
+	five_hour_limit: "5-hour limit set",
+	weekly_limit: "Weekly limit set",
+	monthly_limit: "Monthly allowance set (no longer enforced)",
+	grant: "Credit added (no longer enforced)",
+};
 
 function UsageSummary({
 	usage,
 }: {
-	usage: {
-		remainingMicroUsd: number;
-		allowanceMicroUsd: number;
-		consumedMicroUsd: number;
-		reservedMicroUsd: number;
-	};
+	usage: { windows: readonly UsageWindowState[] };
 }) {
-	const share =
-		usage.allowanceMicroUsd > 0
-			? Math.min(
-					1,
-					Math.max(0, usage.remainingMicroUsd / usage.allowanceMicroUsd),
-				)
-			: 0;
+	const warning = usageWarning(usage.windows);
 	return (
 		<div className="settings-group settings-group-body">
-			<div className="settings-usage-figure">
-				{wholeMinutes(usage.remainingMicroUsd)}
-				<small>of {wholeMinutes(usage.allowanceMicroUsd)} minutes left</small>
-			</div>
-			<div
-				className="settings-meter"
-				data-tone={share < 0.15 ? "low" : undefined}
-				role="meter"
-				aria-label="Cloud minutes left"
-				aria-valuemin={0}
-				aria-valuemax={100}
-				aria-valuenow={Math.round(share * 100)}
+			<UsageWindowBars windows={usage.windows} />
+			{warning ? (
+				<p className="settings-usage-warning" role="status">
+					{warning.message}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+const DISMISSED_USAGE_WARNING = "ytimesy:dismissed-usage-warning";
+
+/**
+ * Heads-up in the workspace once 80% of either cloud usage window is used,
+ * and again when one runs out. Dismissing hides it for this browser session
+ * until the next 10% step.
+ */
+export function UsageWarningBanner() {
+	const readUsage = useServerFn(infrastructureUsageFn);
+	const usage = useQuery({
+		queryKey: ["infrastructure-usage"],
+		queryFn: () => readUsage(),
+		refetchInterval: 60_000,
+		retry: false,
+	});
+	const warning = usage.data ? usageWarning(usage.data.windows) : null;
+	const step = warning
+		? `${warning.level}:${warning.window}:${Math.floor(warning.usedPercent / 10)}`
+		: null;
+	const [dismissed, setDismissed] = useState(() => {
+		try {
+			return sessionStorage.getItem(DISMISSED_USAGE_WARNING);
+		} catch {
+			return null;
+		}
+	});
+	if (!warning || dismissed === step) return null;
+	return (
+		<div
+			className="usage-warning-banner"
+			data-level={warning.level}
+			role="status"
+		>
+			<p>{warning.message}</p>
+			<button
+				type="button"
+				onClick={() => {
+					setDismissed(step);
+					try {
+						if (step) sessionStorage.setItem(DISMISSED_USAGE_WARNING, step);
+					} catch {
+						// Dismissal is a convenience; it may not persist.
+					}
+				}}
 			>
-				<span style={{ width: `${share * 100}%` }} />
-			</div>
-			<p className="settings-row-meta">
-				{wholeMinutes(usage.consumedMicroUsd)} used
-				{usage.reservedMicroUsd > 0
-					? ` · ${wholeMinutes(usage.reservedMicroUsd)} held for running machines`
-					: ""}
-			</p>
+				Dismiss
+			</button>
 		</div>
 	);
 }
@@ -102,7 +130,9 @@ export function InfrastructureUsage() {
 		enabled: usage.data?.admin === true,
 		refetchInterval: 300_000,
 	});
-	const [kind, setKind] = useState<"grant" | "monthly_limit">("grant");
+	const [kind, setKind] = useState<"five_hour_limit" | "weekly_limit">(
+		"five_hour_limit",
+	);
 	const [amount, setAmount] = useState("");
 	const [reason, setReason] = useState("");
 	const pendingRequest = useRef<{ signature: string; id: string } | null>(null);
@@ -122,9 +152,7 @@ export function InfrastructureUsage() {
 	function submit(event: FormEvent) {
 		event.preventDefault();
 		if (!usage.data) return;
-		const amountMicroUsd = Math.round(
-			Number(amount) * MICRO_USD_PER_STANDARD_MINUTE,
-		);
+		const amountMicroUsd = Math.round(Number(amount) * 1_000_000);
 		if (!Number.isSafeInteger(amountMicroUsd) || amountMicroUsd < 0) return;
 		const userId = target === "self" ? usage.data.userId : target;
 		const signature = JSON.stringify([userId, kind, amountMicroUsd, reason]);
@@ -142,10 +170,12 @@ export function InfrastructureUsage() {
 		<section className="settings-section" aria-label="Cloud execution usage">
 			<header className="settings-section-head">
 				<div>
-					<h3>Cloud minutes</h3>
+					<h3>Cloud usage</h3>
 					<p>
-						Time your agents' machines run this month (UTC). Larger machines use
-						minutes faster. Model usage is billed by your model provider.
+						Machine time your agents use, over a rolling 5-hour and a rolling
+						weekly limit. Larger machines use it faster. At a limit, work
+						already running finishes and new work waits until it refills. Model
+						usage is billed by your model provider.
 					</p>
 				</div>
 			</header>
@@ -187,20 +217,20 @@ export function InfrastructureUsage() {
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="grant">Add credit this month</SelectItem>
-								<SelectItem value="monthly_limit">
-									Set monthly allowance
+								<SelectItem value="five_hour_limit">
+									Set 5-hour limit
 								</SelectItem>
+								<SelectItem value="weekly_limit">Set weekly limit</SelectItem>
 							</SelectContent>
 						</Select>
 					</label>
 					<label>
-						Cloud minutes
+						Limit (USD)
 						<input
 							type="number"
 							min="0"
 							max="1000000"
-							step="1"
+							step="0.01"
 							required
 							value={amount}
 							onChange={(event) => setAmount(event.target.value)}
@@ -228,7 +258,7 @@ export function InfrastructureUsage() {
 						<p role="alert">The allowance could not be updated.</p>
 					) : null}
 					<p className="settings-copy">
-						Grants are audited. They never bypass the fleet budget.
+						Changes are audited. They never bypass the fleet budget.
 					</p>
 				</form>
 			) : null}
@@ -265,10 +295,8 @@ export function InfrastructureUsage() {
 							{users.data?.find((user) => user.id === entry.userId)?.name ??
 								entry.userId}
 							{" · "}
-							{entry.kind === "grant"
-								? "Credit added"
-								: "Monthly allowance set"}
-							: {minutes(entry.amountMicroUsd)} minutes
+							{ADJUSTMENT_LABELS[entry.kind] ?? entry.kind}:{" "}
+							{dollars(entry.amountMicroUsd)}
 							{" · "}
 							{entry.reason}
 							{" · "}

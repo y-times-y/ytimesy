@@ -22,6 +22,23 @@ export const MODEL_ROLES = [
 	"reviewer",
 	"checker",
 	"judge",
+	/**
+	 * Lead mode fusion: the model a stuck sidekick switches to at its next
+	 * context compaction (src/server/services/sidekick-model-switch.ts); no
+	 * switch without it.
+	 */
+	"writerEscalation",
+	/**
+	 * Lead mode fusion: the small model judging each sidekick round
+	 * (src/domain/sidekick-classifier.ts); codex:gpt-6-luna@low when unset.
+	 */
+	"classifier",
+	/**
+	 * checkerMode=pair: the checker's worker, which reads, writes and runs
+	 * the tests its judge (roleModels.checker) briefs
+	 * (src/domain/checker-pair.ts); codex:gpt-6-luna when unset.
+	 */
+	"checkerWorker",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
@@ -32,7 +49,8 @@ export type ModelRole = (typeof MODEL_ROLES)[number];
  *   (its OpenRouter id or the maker's own id), e.g. `api:google/gemini-3.8-flash`;
  * - `api/<connection>/<model>`: one exact API route;
  * - `<model>`: the plan if it serves the model, else an API connection.
- * `effort` is the reasoning effort for that role (the route's default when unset).
+ * `effort` is the reasoning effort for that role (when unset, the parent
+ * turn's effort if the route offers it, else the route's default).
  */
 export type RoleModel = { readonly model: string; readonly effort?: string };
 export type RoleModels = { readonly [Role in ModelRole]?: RoleModel };
@@ -86,11 +104,21 @@ export function roleModelsFlags(models: RoleModels): string[] {
 	});
 }
 
-/** The entry that applies to a role: the judge falls back to the reviewer's. */
+/** roleModels.checkerWorker when unset. */
+export const DEFAULT_CHECKER_WORKER_MODEL: RoleModel = {
+	model: "codex:gpt-6-luna",
+};
+
+/**
+ * The entry that applies to a role: the judge falls back to the reviewer's;
+ * the checker's worker has a default (a cheaper model than its judge's).
+ */
 export function roleModelFor(
 	models: RoleModels | undefined,
 	role: ModelRole,
 ): RoleModel | undefined {
+	if (role === "checkerWorker")
+		return models?.checkerWorker ?? DEFAULT_CHECKER_WORKER_MODEL;
 	if (!models) return undefined;
 	return models[role] ?? (role === "judge" ? models.reviewer : undefined);
 }
@@ -194,6 +222,8 @@ export function resolveRoleModel(input: {
 	readonly connections: readonly FailoverConnection[];
 	/** The parent's model, named in the fallback notice. */
 	readonly parentModel: string;
+	/** The parent turn's reasoning effort: used when the entry sets none and the route offers it. */
+	readonly parentEffort?: string;
 }): RoleModelResolution {
 	const entry = roleModelFor(input.roleModels, input.role);
 	if (!entry) return { kind: "inherit" };
@@ -219,7 +249,15 @@ export function resolveRoleModel(input: {
 		};
 	}
 	const model = routeOf(found.connection, found.model);
-	if (!entry.effort) return { kind: "role", model };
+	if (!entry.effort)
+		return {
+			kind: "role",
+			model:
+				input.parentEffort &&
+				found.model.reasoning?.includes(input.parentEffort)
+					? { ...model, reasoning: input.parentEffort }
+					: model,
+		};
 	if (!found.model.reasoning?.includes(entry.effort))
 		return {
 			kind: "role",

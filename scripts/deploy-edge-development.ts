@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+	codexRelaySettingNames,
+	codexRelaySettingsProblem,
+} from "../src/domain/codex-egress";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Deliberately fixed to development. Secrets travel over stdin, never shell arguments or logs.
@@ -43,6 +47,10 @@ secrets.GIT_PROXY_SECRET =
 secrets.ENVIRONMENT_WORKFLOW_SECRET =
 	process.env.YTIMESY_ENVIRONMENT_WORKFLOW_SECRET ||
 	derived("ytimesy:environment-workflows:development:v1");
+// Matches prRepairIngressSigningSecret, which the ingress Worker is deployed with.
+secrets.PR_REPAIR_INGRESS_SECRET =
+	process.env.YTIMESY_PR_REPAIR_INGRESS_SECRET ||
+	derived("ytimesy:pr-repair-ingress:development:v1");
 secrets.GIT_PROXY_ENABLED = "1";
 secrets.MODEL_EXECUTION_ENABLED = "1";
 secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
@@ -55,11 +63,18 @@ secrets.YTIMESY_ENVIRONMENT = "development";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+// New chat, environment and job objects start near the development database
+// (Supabase us-west-2); see src/server/edge/durable-object-location.ts.
+secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
+	process.env.YTIMESY_DURABLE_OBJECT_LOCATION_HINT || "wnam";
 // Development only: throwaway eval users (dev_eval_user) borrow their owner's
 // Codex login and carry per-run harness variants. Production never sets it.
 secrets.YTIMESY_DEV_EVAL_USERS = "1";
+secrets.YTIMESY_USER_5H_MICRO_USD =
+	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
 for (const name of [
-	"YTIMESY_USER_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
 ] as const) {
@@ -83,6 +98,10 @@ for (const name of [
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	// Further Codex egress relays, tried in order after the first (2..8).
+	...codexRelaySettingNames,
+	// The account whose login probes Codex egress paths every 5 minutes.
+	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
 	"YTIMESY_PR_REPAIR_ENABLED",
 	// Cloudflare Email Service sender for verification and password-reset mail.
 	"AUTH_EMAIL_FROM",
@@ -99,18 +118,8 @@ for (const name of [
 }
 // ytimesy.com is onboarded to Email Sending; the EMAIL binding sends from here.
 secrets.AUTH_EMAIL_FROM ||= "noreply@ytimesy.com";
-if (
-	Boolean(secrets.YTIMESY_CODEX_RELAY_URL) !==
-	Boolean(secrets.YTIMESY_CODEX_RELAY_SECRET)
-)
-	throw new Error(
-		"Subscription relay URL and signing key must be configured together.",
-	);
-if (
-	secrets.YTIMESY_CODEX_RELAY_SECRET &&
-	secrets.YTIMESY_CODEX_RELAY_SECRET.length < 32
-)
-	throw new Error("Subscription relay signing key is invalid.");
+const relayProblem = codexRelaySettingsProblem(secrets);
+if (relayProblem) throw new Error(relayProblem);
 if (!secrets.YTIMESY_REALTIME_URL || !secrets.YTIMESY_REALTIME_SECRET) {
 	const realtime = JSON.parse(
 		await readFile(".ytimesy/realtime-development.json", "utf8"),

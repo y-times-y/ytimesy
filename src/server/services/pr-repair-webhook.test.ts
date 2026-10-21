@@ -5,6 +5,10 @@ import { receivePrRepairWebhook } from "./pr-repair-webhook";
 const mocks = vi.hoisted(() => ({
 	query: vi.fn(async () => ({ rows: [] })),
 	enqueue: vi.fn(async () => null),
+	stageWakes: vi.fn(async () => 1),
+}));
+vi.mock("../adapters/pull-request-links", () => ({
+	stagePullRequestWakes: mocks.stageWakes,
 }));
 vi.mock("../adapters/database", () => ({
 	database: () => ({ query: mocks.query }),
@@ -76,4 +80,68 @@ it("accepts a real signed payload and rejects a body changed after signing", asy
 			)
 		).status,
 	).toBe(401);
+});
+
+async function signedDelivery(event: string, payload: unknown) {
+	const body = JSON.stringify(payload);
+	return new Request("http://localhost", {
+		method: "POST",
+		body,
+		headers: {
+			"x-github-delivery": "00000000-0000-4000-8000-000000000002",
+			"x-github-event": event,
+			"x-hub-signature-256": await new Webhooks({
+				secret: "fixture-only",
+			}).sign(body),
+		},
+	});
+}
+
+it("stages @ytimesy comments and failed checks as chat wake-ups", async () => {
+	vi.stubEnv("YTIMESY_PR_REPAIR_ENABLED", "1");
+	vi.stubEnv("GITHUB_PR_REPAIR_WEBHOOK_SECRET", "fixture-only");
+	const repository = { id: 1, full_name: "owner/repo" };
+	const response = await receivePrRepairWebhook(
+		await signedDelivery("issue_comment", {
+			action: "created",
+			repository,
+			installation: { id: 2 },
+			sender: { type: "User" },
+			issue: { number: 12, pull_request: {} },
+			comment: { id: 9, body: "@ytimesy fix the lint", user: { type: "User" } },
+		}),
+	);
+	expect(response.status).toBe(200);
+	expect(mocks.stageWakes).toHaveBeenCalledWith({
+		repositoryId: 1,
+		installationId: 2,
+		pullNumbers: [12],
+		deliveryId: "00000000-0000-4000-8000-000000000002",
+		kind: "comment",
+		sourceId: 9,
+		headSha: null,
+	});
+	mocks.stageWakes.mockClear();
+	await receivePrRepairWebhook(
+		await signedDelivery("check_run", {
+			action: "completed",
+			repository,
+			check_run: {
+				id: 3,
+				head_sha: "a".repeat(40),
+				conclusion: "failure",
+				pull_requests: [{ number: 12 }],
+			},
+		}),
+	);
+	expect(mocks.stageWakes).toHaveBeenCalledWith(
+		expect.objectContaining({
+			kind: "ci",
+			pullNumbers: [12],
+			headSha: "a".repeat(40),
+		}),
+	);
+	// Retired child-task PR repair staged its own rows; nothing else is written.
+	expect(mocks.query).not.toHaveBeenCalled();
+	expect(mocks.enqueue).toHaveBeenCalledTimes(2);
 });

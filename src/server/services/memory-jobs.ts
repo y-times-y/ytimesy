@@ -6,12 +6,14 @@ import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
 import { lexicalScores, memoryMatchScores } from "#/domain/memory-ranking";
 import {
 	appendMemoryEntry,
+	byFileAndLine,
 	chatIdFromSource,
 	chatSourceUrl,
 	cosineSimilarity,
 	type DreamChat,
 	dreamInstructions,
 	dreamReviewSection,
+	droppedDetails,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
@@ -23,9 +25,12 @@ import {
 	memoryLines,
 	memoryPath,
 	memoryToday,
+	parseMemoryLine,
 	parseSaveHookAnswer,
 	renderDreamInbox,
 	SAVE_HOOK_INSTRUCTIONS,
+	SAVE_HOOK_MEMORY_CHARS,
+	saveHookLine,
 	saveHookPrompt,
 	supersededLine,
 	withMemoryChanges,
@@ -74,6 +79,8 @@ export const SAVE_NOTHING_OUTCOME = ":nothing-new";
 export const DREAM_REVIEW_OUTCOME = ":review";
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
 const SAVE_TIMEOUT_MS = 90_000;
+/** The save hook's one retry after a failed model call (a 5xx, a dropped connection). */
+const SAVE_RETRY_DELAY_MS = 2000;
 const SOURCE_CHARS = 12_000;
 const READ_LINES = 200;
 
@@ -110,6 +117,8 @@ export type MemoryJobDeps = {
 	): Promise<Map<MemoryLine, number> | null>;
 	appUrl: string;
 	today(): string;
+	/** Waits before a retry; tests skip the wait. */
+	sleep?(ms: number): Promise<void>;
 };
 
 export function memoryJobDeps(): MemoryJobDeps {
@@ -180,11 +189,18 @@ async function runOnUserModel(
 		timeoutMs: number;
 		/** Appended to the recorded outcome; a function sees the model's answer. */
 		outcomeSuffix?: string | ((text: string) => string);
+		/**
+		 * A completed run's usage is recorded when the caller calls `record`
+		 * (a failed one at once), so the row also says the job is done.
+		 */
+		deferRecord?: boolean;
+		/** The provider prompt-cache scope; each kind of job caches its own prefix. */
+		cacheScope?: string;
 	},
 ) {
 	const subscription = subscriptionTurnSettings(input.route.connectionRevision);
 	if (!subscription && !input.route.connectionId)
-		return { outcome: "no-route", text: "", steps: 0 } as const;
+		return { outcome: "no-route", text: "", steps: 0, record: null } as const;
 	let usage: ApiTokenUsage | null = null;
 	let steps = 0;
 	let text = "";
@@ -197,7 +213,7 @@ async function runOnUserModel(
 				connectionId: input.route.connectionId ?? undefined,
 				connectionRevision: input.route.connectionRevision,
 				reasoning: subscription?.reasoning ?? input.route.settings?.reasoning,
-				cacheScopeId: `memory:${input.userId}`,
+				cacheScopeId: input.cacheScope ?? `memory:${input.userId}`,
 				messages: [{ role: "user", content: input.prompt }],
 				instructions: input.instructions,
 				tools: input.tools,
@@ -230,24 +246,28 @@ async function runOnUserModel(
 				? "step-limit"
 				: `failed:${error instanceof Error ? error.name : "unknown"}`;
 	}
-	await deps
-		.recordUsage({
-			userId: input.userId,
-			kind: input.kind,
-			sessionId: input.sessionId,
-			modelId: input.route.modelId,
-			usage,
-			steps,
-			outcome: `${outcome}${
-				typeof input.outcomeSuffix === "function"
-					? outcome === "completed"
-						? input.outcomeSuffix(text)
-						: ""
-					: (input.outcomeSuffix ?? "")
-			}`,
-		})
-		.catch(() => console.warn("Memory model usage could not be recorded."));
-	return { outcome, text, steps } as const;
+	const record = (suffix: string) =>
+		deps
+			.recordUsage({
+				userId: input.userId,
+				kind: input.kind,
+				sessionId: input.sessionId,
+				modelId: input.route.modelId,
+				usage,
+				steps,
+				outcome: `${outcome}${suffix}`,
+			})
+			.catch(() => console.warn("Memory model usage could not be recorded."));
+	const deferred = input.deferRecord && outcome === "completed";
+	if (!deferred)
+		await record(
+			typeof input.outcomeSuffix === "function"
+				? outcome === "completed"
+					? input.outcomeSuffix(text)
+					: ""
+				: (input.outcomeSuffix ?? ""),
+		);
+	return { outcome, text, steps, record: deferred ? record : null } as const;
 }
 
 // ---- save hook -------------------------------------------------------------
@@ -274,38 +294,53 @@ export async function runMemorySave(
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	let snapshot = await repo.snapshot();
-	const related = await relatedLines(
+	const listing = await saveHookListing(
 		snapshot.files,
 		message.text,
 		deps.today(),
 		(lines) => deps.similarity(userId, lines, message.text).catch(() => null),
 	);
 	const project = chat.project;
-	const run = await runOnUserModel(deps, {
-		userId,
-		kind: "save",
-		sessionId,
-		route,
-		instructions: SAVE_HOOK_INSTRUCTIONS,
-		prompt: saveHookPrompt({
-			message: message.text.slice(0, 6000),
-			memory: related
-				.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`)
-				.join("\n"),
-			files: Object.keys(snapshot.files).filter((path) => path.endsWith(".md")),
-			project,
-		}),
-		tools: {},
-		maxSteps: 1,
-		timeoutMs: SAVE_TIMEOUT_MS,
-		// Lets a new chat's read side stop showing this message at once.
-		outcomeSuffix: (text) =>
-			parseSaveHookAnswer(text).length ? "" : SAVE_NOTHING_OUTCOME,
-	});
+	const saveRun = () =>
+		runOnUserModel(deps, {
+			userId,
+			kind: "save",
+			sessionId,
+			route,
+			instructions: SAVE_HOOK_INSTRUCTIONS,
+			prompt: saveHookPrompt({
+				message: message.text.slice(0, 6000),
+				memory: listing.lines.map(saveHookLine).join("\n"),
+				whole: listing.whole,
+				files: Object.keys(snapshot.files)
+					.filter((path) => path.endsWith(".md"))
+					.sort(),
+				project,
+			}),
+			tools: {},
+			maxSteps: 1,
+			timeoutMs: SAVE_TIMEOUT_MS,
+			// Every save of this user shares one prefix: instructions, then memory.
+			cacheScope: `memory-save:${userId}`,
+			deferRecord: true,
+		});
+	let run = await saveRun();
+	// One retry for a failed call; a timeout or a step limit would only repeat.
+	if (retryableSaveFailure(run.outcome)) {
+		await (deps.sleep ?? delay)(SAVE_RETRY_DELAY_MS);
+		run = await saveRun();
+	}
 	if (run.outcome !== "completed") return run.outcome;
+	// Recorded once the save is done, whatever it found: a new chat waits for
+	// this row (pendingMemorySaves), and ":nothing-new" lets its read side
+	// stop showing the message at once.
+	const finish = async <T extends string>(outcome: T, suffix = "") => {
+		await run.record?.(suffix);
+		return outcome;
+	};
 	// "replaces" names a line the model was shown; it is applied by its text.
 	const shown = new Map(
-		related.map((entry) => [`${entry.path}:${entry.line}`, entry.raw]),
+		listing.lines.map((entry) => [`${entry.path}:${entry.line}`, entry.raw]),
 	);
 	const entries = parseSaveHookAnswer(run.text).map(
 		({ replaces, ...entry }) => {
@@ -313,40 +348,57 @@ export async function runMemorySave(
 			return raw ? { ...entry, replaces: { path: replaces.path, raw } } : entry;
 		},
 	);
-	if (!entries.length) return "nothing-new";
+	if (!entries.length) return finish("nothing-new", SAVE_NOTHING_OUTCOME);
 	const source = chatSourceUrl(deps.appUrl, sessionId);
-	for (let attempt = 0; attempt < 2; attempt++) {
-		const changes = saveHookChanges(snapshot.files, entries, {
-			source,
-			today: deps.today(),
-		});
-		if (!changes.length) return "nothing-new";
-		const outcome = await repo.commit(
-			snapshot,
-			changes,
-			`Remember from chat ${sessionId.slice(0, 8)} (save hook)`,
-		);
-		if (outcome.ok) {
-			const after = withMemoryChanges(snapshot.files, changes);
-			// The next chat's read hook finds these lines embedded already.
-			await deps
-				.warmLines(userId, newLineTexts(snapshot.files, after))
-				.catch(() => console.warn("New memory lines could not be embedded."));
-			await deps
-				.recordSaved(
-					userId,
-					sessionId,
-					message.id,
-					savedMemoryLines(snapshot.files, after, sessionId),
-				)
-				.catch(() =>
-					console.warn("Saved memory marker could not be recorded."),
-				);
-			return "saved";
+	try {
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const changes = saveHookChanges(snapshot.files, entries, {
+				source,
+				today: deps.today(),
+				message: message.text,
+			});
+			if (!changes.length)
+				return await finish("nothing-new", SAVE_NOTHING_OUTCOME);
+			const outcome = await repo.commit(
+				snapshot,
+				changes,
+				`Remember from chat ${sessionId.slice(0, 8)} (save hook)`,
+			);
+			if (outcome.ok) {
+				const after = withMemoryChanges(snapshot.files, changes);
+				// The next chat's read hook finds these lines embedded already.
+				await deps
+					.warmLines(userId, newLineTexts(snapshot.files, after))
+					.catch(() => console.warn("New memory lines could not be embedded."));
+				await deps
+					.recordSaved(
+						userId,
+						sessionId,
+						message.id,
+						savedMemoryLines(snapshot.files, after, sessionId),
+					)
+					.catch(() =>
+						console.warn("Saved memory marker could not be recorded."),
+					);
+				return await finish("saved");
+			}
+			snapshot = await repo.snapshot();
 		}
-		snapshot = await repo.snapshot();
+		return await finish("conflict", ":conflict");
+	} catch (error) {
+		await finish("failed", ":not-saved");
+		throw error;
 	}
-	return "conflict";
+}
+
+const delay = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** A failed model call worth one more try: not a timeout or abort (those would repeat). */
+export function retryableSaveFailure(outcome: string) {
+	return (
+		outcome.startsWith("failed:") && !/TimeoutError|AbortError/.test(outcome)
+	);
 }
 
 export type SaveHookEntry = {
@@ -355,16 +407,20 @@ export type SaveHookEntry = {
 	project: string;
 	/** An existing line (by its file and text) this entry replaces. */
 	replaces?: { path: string; raw: string };
+	/** "always": a rule every change follows (memory-repo.ts `scope: always`). */
+	scope?: string;
 };
 
 /**
  * Appends each new entry, citing its chat, and marks the line it replaces
  * `superseded-by` that chat (the read side hides it; a dream removes it).
+ * A replacement that would lose structured details of the old line the
+ * user did not change (`droppedDetails`) leaves the old line in place.
  */
 export function saveHookChanges(
 	files: MemoryFiles,
 	entries: readonly SaveHookEntry[],
-	context: { source: string; today: string },
+	context: { source: string; today: string; message?: string },
 ) {
 	let working = files;
 	const changed = new Set<string>();
@@ -375,7 +431,11 @@ export function saveHookChanges(
 			const content = working[path];
 			const lines = content?.split("\n") ?? [];
 			const index = lines.indexOf(raw);
-			if (content !== undefined && index >= 0) {
+			const old = parseMemoryLine(raw);
+			const keeps =
+				!old ||
+				!droppedDetails(old.text, entry.text, context.message ?? "").length;
+			if (content !== undefined && index >= 0 && keeps) {
 				lines[index] = supersededLine(raw, context.source);
 				working = withMemoryChanges(working, [
 					{ path, content: lines.join("\n") },
@@ -389,6 +449,7 @@ export function saveHookChanges(
 			entry.file,
 			memoryBullet(entry.text, {
 				project: entry.project,
+				scope: entry.scope,
 				source: context.source,
 				added: context.today,
 			}),
@@ -417,30 +478,44 @@ export function newLineTexts(before: MemoryFiles, after: MemoryFiles) {
 const RELATED_LINES = 24;
 
 /**
- * The memory lines the save hook sees: the best matches for the message by
+ * The memory lines the save hook sees, so it can skip what is known and
+ * replace what changed: the whole memory in file and line order when it fits
+ * SAVE_HOOK_MEMORY_CHARS (a prefix that stays the same from one save to the
+ * next, so the provider caches it), else the best matches for the message by
  * the read hook's ranking (cosine when embeddings are available, plus words
- * and topic file), so it can skip what is known and replace what changed.
- * Index links and retired lines are left out.
+ * and topic file), still listed in file and line order. Index links and
+ * retired lines are left out.
  */
-async function relatedLines(
+export async function saveHookListing(
 	files: MemoryFiles,
 	message: string,
 	today: string,
 	similarity: (
 		lines: readonly MemoryLine[],
 	) => Promise<Map<MemoryLine, number> | null>,
-) {
+): Promise<{ lines: MemoryLine[]; whole: boolean }> {
 	const lines = memoryLines(
 		withMemoryChanges(files, withoutExpired(files, today)),
-	).filter((entry) => !/^\[\[[^\]]+\]\]$/.test(entry.text));
-	if (!lines.length) return [];
+	)
+		.filter((entry) => !/^\[\[[^\]]+\]\]$/.test(entry.text))
+		.sort(byFileAndLine);
+	if (!lines.length) return { lines: [], whole: true };
+	const size = lines.reduce(
+		(total, entry) => total + saveHookLine(entry).length + 1,
+		0,
+	);
+	if (size <= SAVE_HOOK_MEMORY_CHARS) return { lines, whole: true };
 	const cosine = await similarity(lines);
 	const lexical = lexicalScores(lines, message);
 	const scores = cosine ? memoryMatchScores(lines, cosine, message) : lexical;
-	return lines
-		.filter((entry) => cosine || (lexical.get(entry) ?? 0) > 0)
-		.sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0))
-		.slice(0, RELATED_LINES);
+	return {
+		lines: lines
+			.filter((entry) => cosine || (lexical.get(entry) ?? 0) > 0)
+			.sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0))
+			.slice(0, RELATED_LINES)
+			.sort(byFileAndLine),
+		whole: false,
+	};
 }
 
 // ---- dreaming -----------------------------------------------------------------

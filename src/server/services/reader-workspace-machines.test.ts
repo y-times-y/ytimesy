@@ -1,9 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import {
+	READER_NETWORK_ISOLATION_CHECK,
+	READER_NETWORK_NAMESPACE,
+	SHARED_RUNTIME_PARENTS,
+} from "#/domain/subagent-reader";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { commandRoot } from "./api-agent-command-tools";
+import { commandScopeRoot } from "./api-command-scope";
 import { writeAgentProjectSecrets } from "./project-secrets";
 import { forgetPreparedReaders } from "./reader-workspace-machines";
-import { machinesForAgentSession } from "./session-workspace-machines";
+import {
+	machinesForAgentSession,
+	sessionRuntimeRoot,
+} from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const vm = WorkspaceId("vm-parent");
@@ -39,16 +49,16 @@ const decoded = (command: string) =>
 describe("read-only subagent machines", () => {
 	beforeEach(() => forgetPreparedReaders());
 
-	it("leaves the builder, writers and old shared tasks unwrapped", async () => {
+	it("leaves the builder and writers unwrapped", async () => {
 		const { machines, commands } = fakeMachines();
 		await machinesForAgentSession(machines, {
-			id: "writer",
 			taskPlacement: "fresh",
+			id: "writer",
 			agentRole: "writer",
 		}).exec(vm, "touch a", 1000);
 		await machinesForAgentSession(machines, {
-			id: "legacy",
-			taskPlacement: "shared",
+			id: "builder",
+			taskPlacement: null,
 		}).exec(vm, "ls", 1000);
 		expect(commands[0]).toBe("touch a");
 		expect(commands[1]).not.toContain("ytimesy-reader");
@@ -57,8 +67,8 @@ describe("read-only subagent machines", () => {
 	it("prepares the VM once, then runs every command as the reader user", async () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
-			id: "child-1",
 			taskPlacement: "shared",
+			id: "child-1",
 			agentRole: "reviewer",
 		});
 		await reader.exec(vm, "git diff", 1000);
@@ -80,11 +90,48 @@ describe("read-only subagent machines", () => {
 		expect(reader.runCapability).toBeUndefined();
 	});
 
+	it("refuses the reader where it cannot get its own network namespace, and runs every command in one", async () => {
+		const { machines, commands } = fakeMachines();
+		let namespaces = false;
+		vi.mocked(machines.exec).mockImplementation(async (_target, command) => {
+			commands.push(command);
+			if (!namespaces && command.includes(READER_NETWORK_ISOLATION_CHECK))
+				return {
+					exitCode: 1,
+					stdout: "",
+					stderr: "ytimesy: network namespaces are unavailable",
+				};
+			return { exitCode: 0, stdout: "contents", stderr: "" };
+		});
+		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
+			id: "child-1",
+			agentRole: "reviewer",
+		});
+		await expect(reader.exec(vm, "ls", 1000)).rejects.toThrow(
+			"could not be isolated",
+		);
+		expect(
+			commands.some((command) => command.includes("ytimesy-reader --")),
+		).toBe(false);
+		namespaces = true;
+		await reader.exec(vm, "curl http://127.0.0.1:9222/json", 1000);
+		await reader.readTextFile(vm, "/etc/hostname");
+		const runs = commands.filter((command) =>
+			command.includes("sudo -n -u ytimesy-reader --"),
+		);
+		expect(runs).toHaveLength(2);
+		for (const run of runs)
+			expect(run.startsWith(`${READER_NETWORK_NAMESPACE} sudo -n -u`)).toBe(
+				true,
+			);
+	});
+
 	it("refuses runtime writes outside the scratch and hands allowed files to the reader", async () => {
 		const { machines, writes, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
-			id: "child-1",
 			taskPlacement: "shared",
+			id: "child-1",
 			agentRole: "checker",
 		});
 		await expect(
@@ -104,8 +151,8 @@ describe("read-only subagent machines", () => {
 	it("reads files as the reader, except its own runtime's control file", async () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
-			id: "child-1",
 			taskPlacement: "shared",
+			id: "child-1",
 			agentRole: "researcher",
 		});
 		expect(await reader.readTextFile(vm, PROJECT_CWD_PATH)).toContain(
@@ -134,7 +181,7 @@ describe("read-only subagent machines", () => {
 			ownedByDefaultUser &&
 			command.includes("ytimesy-reader") &&
 			decoded(command).some((line) =>
-				line.includes("chmod 700 '/tmp/ytimesy-secrets'"),
+				line.includes("install -d -m 0700 '/tmp/ytimesy-secrets'"),
 			)
 				? {
 						exitCode: 1,
@@ -145,8 +192,8 @@ describe("read-only subagent machines", () => {
 				: { exitCode: 0, stdout: "contents", stderr: "" },
 		);
 		const reader = machinesForAgentSession(machines, {
-			id: "checker-1",
 			taskPlacement: "shared",
+			id: "checker-1",
 			agentRole: "checker",
 		});
 		const secrets = { envFile: "", redact: [], names: [] };
@@ -158,5 +205,28 @@ describe("read-only subagent machines", () => {
 		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
 			"cannot write /tmp/ytimesy-secrets/agent.env",
 		);
+	});
+
+	// rl-live-2: the builder's first command created /tmp/ytimesy-api-commands
+	// as ubuntu 0755, so the checker's `mkdir -p <its command root>` failed
+	// and every bash call threw "Could not start or observe command".
+	it("opens every shared runtime parent a reader's commands write under", async () => {
+		const parent = (path: string) => path.slice(0, path.lastIndexOf("/"));
+		const { machines, commands } = fakeMachines();
+		await machinesForAgentSession(machines, {
+			taskPlacement: "shared",
+			id: "child-1",
+			agentRole: "checker",
+		}).exec(vm, "pwd", 1000);
+		for (const root of [
+			commandRoot("child-1"),
+			commandScopeRoot("turn-1"),
+			sessionRuntimeRoot("child-1"),
+		]) {
+			expect(SHARED_RUNTIME_PARENTS).toContain(parent(root));
+			expect(commands[0]).toContain(
+				`sudo -n install -d -m 1777 ${parent(root)} && sudo -n chmod 1777 ${parent(root)}`,
+			);
+		}
 	});
 });

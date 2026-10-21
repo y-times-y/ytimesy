@@ -3,22 +3,25 @@ import {
 	accountCleanupTargets,
 	deleteAccountRecords,
 } from "../adapters/account-deletion";
+import { deleteAnalyticsPerson } from "../adapters/analytics-deletion";
 import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
+import { purgeConversationState } from "../adapters/realtime-delivery";
+import { cancelServerTurn } from "./cancel-server-turn";
 import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Calls in flight at once: keeps a heavy account's deletion fast without a burst. */
-const CLEANUP_CONCURRENCY = 6;
+export const CLEANUP_CONCURRENCY = 6;
 
 /**
  * Runs `work` over `items` with at most `limit` calls in flight. The first
  * failure stops new calls from starting and is rethrown once in-flight ones end.
  */
-async function eachLimited<T>(
+export async function eachLimited<T>(
 	items: readonly T[],
 	limit: number,
 	work: (item: T) => Promise<void>,
@@ -42,8 +45,8 @@ async function eachLimited<T>(
 /**
  * Deletes an account and what it owns: its chats' stored checkpoints and
  * attachments, then every database row (they cascade from auth_user, sessions
- * included, which signs it out everywhere), then its VMs, private snapshots
- * and memory repo.
+ * included, which signs it out everywhere), then its VMs, private snapshots,
+ * memory repo and analytics person. Its running turns are cancelled first.
  *
  * The steps that can fail and be retried come first: a storage or database
  * failure leaves the account intact with its VMs and snapshots, so retrying
@@ -56,6 +59,18 @@ export async function deleteAccount(
 	userId: string,
 ) {
 	const targets = await accountCleanupTargets(userId);
+	// Running turns stop first, so none writes a checkpoint, chat state or a
+	// row while the account is being removed; a stop that cannot be recorded
+	// stops the deletion for a retry. (A purged chat's object also refuses
+	// anything an in-flight turn still writes.)
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		cancelServerTurn(userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"Your account was not deleted because a running turn could not be stopped. Try again.",
+			{ status: 503 },
+		);
+	});
 	if (checkpointStorageConfigured())
 		await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
 			removeChatObjects(userId, sessionId),
@@ -65,6 +80,14 @@ export async function deleteAccount(
 				{ status: 503 },
 			);
 		});
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		purgeConversationState(userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"Your account was not deleted because its chats' state could not be removed. Try again.",
+			{ status: 503 },
+		);
+	});
 	// Pull request evidence media, before the rows that point at it go.
 	await removeUserPullRequestEvidence(userId).catch(() => {
 		throw new Response(
@@ -99,6 +122,14 @@ export async function deleteAccount(
 			.catch(() => {
 				leftovers.push(`memory:${name}`);
 			});
+	// Product analytics: the person, their events and session recordings.
+	await deleteAnalyticsPerson(userId)
+		.then((deleted) => {
+			if (!deleted) leftovers.push("analytics:unconfigured");
+		})
+		.catch(() => {
+			leftovers.push("analytics:person");
+		});
 	if (leftovers.length)
 		console.warn("Account deletion left provider resources to expire.", {
 			userId,

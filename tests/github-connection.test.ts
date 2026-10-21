@@ -125,7 +125,14 @@ async function storeGithubCredentials(
 ) {
 	await db.query(
 		"insert into github_connection(user_id,github_user_id,encrypted_credentials) values($1,$2,$3) on conflict(user_id) do update set encrypted_credentials=excluded.encrypted_credentials",
-		[userId, "123", await seal(JSON.stringify(credentials))],
+		[
+			userId,
+			"123",
+			await seal(JSON.stringify(credentials), {
+				purpose: "github-credentials",
+				userId,
+			}),
+		],
 	);
 }
 
@@ -164,7 +171,12 @@ it("rotates an expired GitHub token and stores the replacement", async () => {
 		"rotated-access-token",
 	);
 	expect(
-		JSON.parse(await unseal(stored.rows[0].encrypted_credentials)),
+		JSON.parse(
+			await unseal(stored.rows[0].encrypted_credentials, {
+				purpose: "github-credentials",
+				userId: "alice",
+			}),
+		),
 	).toEqual({
 		accessToken: "rotated-access-token",
 		refreshToken: "rotated-refresh-token",

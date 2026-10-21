@@ -32,14 +32,37 @@ const mocks = vi.hoisted(() => ({
 	reviewLoop: vi.fn(),
 	beforeModel: vi.fn(),
 	afterAttempt: vi.fn(),
+	leadGate: vi.fn(async (): Promise<"ready" | "wait"> => "ready"),
+	/** A lean surface (lead mode needs one); off by default. */
+	lean: null as null | Record<string, unknown>,
+	roundOpen: vi.fn(async () => false),
+	/** Cross-chat memory for the root builder; off unless a test sets one. */
+	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+}));
+// Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
+vi.mock("../services/turn-memory", () => ({
+	turnMemory: mocks.turnMemory,
+	subagentMemory: mocks.subagentMemory,
 }));
 // Development eval users pick harness variants; everyone else gets the default.
+vi.mock("../services/subagent-runtime", async (original) => ({
+	...(await original<typeof import("../services/subagent-runtime")>()),
+	subagentReport: async (input: { text: string }) => input.text,
+}));
 vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../adapters/dev-eval-users")>()),
 	devEvalUsersEnabled: () => mocks.variant() !== undefined,
 	harnessVariantForUser: async () => mocks.variant(),
+	isDevEvalUser: async () => false,
 }));
 vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
+// Lead mode fusion's gate and completion check (their rule is tested in fusion-lead.test.ts).
+vi.mock("../services/fusion-lead", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/fusion-lead")>()),
+	fusionLeadGate: mocks.leadGate,
+	fusionRoundOpen: mocks.roundOpen,
+}));
 vi.mock("../services/review-loop", () => ({
 	createReviewLoop: mocks.reviewLoop,
 }));
@@ -99,6 +122,8 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.turnMemory.mockReset().mockResolvedValue(null);
+	mocks.subagentMemory.mockReset().mockResolvedValue(null);
 	mocks.variant.mockReset().mockReturnValue(undefined);
 	mocks.reviewLoop.mockReset().mockImplementation(() => ({
 		beforeModel: mocks.beforeModel,
@@ -129,6 +154,7 @@ beforeEach(() => {
 		taskAccess: "read_write",
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
+	mocks.lean = null;
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -265,7 +291,8 @@ vi.mock("../services/api-agent-tools", () => ({
 }));
 // The mocked tool set carries probe fields; the shell filter has its own tests.
 vi.mock("../services/builder-shell-surface", () => ({
-	builderToolSurface: ({ tools }: { tools: unknown }) => ({ tools }),
+	builderToolSurface: ({ tools }: { tools: unknown }) =>
+		mocks.lean ? { tools, lean: mocks.lean } : { tools },
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,
@@ -357,6 +384,111 @@ it("keeps completion capture and no cross-chat memory for Codex subscription tur
 	);
 	expect(mocks.runtime).not.toHaveBeenCalled();
 	expect(mocks.report).toHaveBeenCalledOnce();
+});
+
+describe("a Codex subscription (ChatGPT plan) root chat publishes like an API chat", () => {
+	const subscriptionTurn = (extra: Partial<ApiTurn> = {}) =>
+		({
+			id: "turn",
+			session_id: "session",
+			user_id: "owner",
+			connection_id: null,
+			connection_revision: subscriptionTurnRevision("medium"),
+			model_id: "gpt-5.5",
+			state: "running",
+			messages: [{ role: "user", content: "Fix branches" }],
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("user"),
+					text: "Fix branches",
+				},
+			],
+			lease_id: "lease",
+			...extra,
+		}) as ApiTurn;
+	const codexOwner = (extra: Record<string, unknown> = {}) =>
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "codex",
+			providerRef: "vm",
+			parentSessionId: null,
+			taskAccess: null,
+			...extra,
+		});
+	const answering = () =>
+		mocks.subscriptionRuntime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
+			return [];
+		});
+
+	it("commits and pushes the turn at the completion boundary on its machine", async () => {
+		codexOwner();
+		answering();
+		mocks.commit.mockResolvedValueOnce({
+			publication: {
+				branch: "ytimesy/fix-branches-abc123",
+				pullRequestUrl: null,
+			},
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(mocks.subscriptionRuntime).toHaveBeenCalledOnce();
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		expect(mocks.commit.mock.calls[0][0]).toMatchObject({
+			id: "session",
+			harness: "codex",
+			providerRef: "vm",
+		});
+	});
+
+	it("shows why its changes were not pushed and still completes", async () => {
+		codexOwner();
+		answering();
+		mocks.commit.mockResolvedValueOnce({
+			notice: "Changes are committed in this chat but were not pushed.",
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "notice", id: "turn:publication" }),
+			]),
+		);
+	});
+
+	it("commits nothing for a subagent or a turn that ends in plan mode", async () => {
+		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
+		answering();
+		await runApiTurn({} as WorkspaceMachines, subscriptionTurn());
+		codexOwner();
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			subscriptionTurn({
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user"),
+						text: "Plan branches",
+					},
+					{
+						kind: "dynamicToolCall",
+						id: SessionItemId("enter"),
+						tool: "enter_plan_mode",
+						status: "completed",
+					},
+				],
+			} as Partial<ApiTurn>),
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
 });
 
 it("stops command groups on abort while the model loop is still awaiting a tool", async () => {
@@ -668,13 +800,14 @@ it("awaits an in-flight heartbeat before the invocation can close its database p
 	}
 });
 
-it("immediately queues a completed child's parent event", async () => {
+it("immediately queues a completed subagent's parent event", async () => {
 	mocks.owner.mockResolvedValue({
 		id: "session",
 		userId: "owner",
 		projectId: "project",
 		harness: "api",
 		parentSessionId: "parent",
+		agentRole: "researcher",
 	});
 	mocks.runtime.mockImplementation(async (input) =>
 		input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
@@ -686,6 +819,80 @@ it("immediately queues a completed child's parent event", async () => {
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
 });
 
+it("gives a subagent the project's memory read only: attached to its request, never saved", async () => {
+	const saveHook = vi.fn();
+	const rootMemory = {
+		mode: "full",
+		instructions: "memory instructions",
+		prepareVm: vi.fn(),
+		vmTokens: () => [],
+		releaseVm: vi.fn(),
+		attach: vi.fn(),
+		recordSaved: vi.fn(),
+		afterTurn: saveHook,
+	};
+	mocks.turnMemory.mockResolvedValue(rootMemory);
+	const attach = vi.fn(async (messages: { content: unknown }[]) => ({
+		messages: messages.map((message) => ({
+			...message,
+			content: [
+				{ type: "text", text: String(message.content) },
+				{ type: "text", text: "<memory>\nProject rules\n</memory>" },
+			],
+		})),
+		recall: { head: "abc", lines: [] },
+	}));
+	mocks.subagentMemory.mockResolvedValue({ attach });
+	const seen: { instructions: string; messages: unknown }[] = [];
+	mocks.runtime.mockImplementation(async (input) => {
+		seen.push({ instructions: input.instructions, messages: input.messages });
+		return [];
+	});
+	mocks.promptSubmit.mockResolvedValue({ block: false });
+	const brief = {
+		...childTurn,
+		messages: [{ role: "user", content: "Check the export" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("brief"),
+				text: "Check the export",
+			},
+		],
+	} as ApiTurn;
+	for (const agentRole of ["checker", "writer"] as const) {
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			parentSessionId: "parent",
+			taskAccess: agentRole === "writer" ? "read_write" : "read_only",
+			agentRole,
+		});
+		await runApiTurn({} as WorkspaceMachines, brief);
+		expect(mocks.subagentMemory).toHaveBeenLastCalledWith(
+			expect.objectContaining({ userId: "owner", projectId: "project" }),
+			expect.anything(),
+		);
+		expect(mocks.subagentMemory.mock.lastCall?.[0]).toMatchObject({
+			role: agentRole,
+		});
+	}
+	expect(attach).toHaveBeenCalledTimes(2);
+	expect(seen).toHaveLength(2);
+	for (const request of seen) {
+		expect(JSON.stringify(request.messages)).toContain("Project rules");
+		// No memory instructions: a child is never told to write memory.
+		expect(request.instructions).not.toContain("memory instructions");
+	}
+	// Only the root chat's memory has a save hook, and a child never loads it.
+	expect(mocks.turnMemory).not.toHaveBeenCalled();
+	expect(saveHook).not.toHaveBeenCalled();
+	expect(rootMemory.prepareVm).not.toHaveBeenCalled();
+	expect(rootMemory.recordSaved).not.toHaveBeenCalled();
+});
+
 it("tells builders their repository instructions are supplied, with the same system prompt every turn", async () => {
 	mocks.owner.mockResolvedValue({
 		id: "session",
@@ -694,6 +901,7 @@ it("tells builders their repository instructions are supplied, with the same sys
 		harness: "api",
 		parentSessionId: "parent",
 		taskAccess: "read_write",
+		agentRole: "writer",
 	});
 	const seen: string[] = [];
 	const capture = async (input: { instructions: string }) => {
@@ -990,7 +1198,7 @@ it("finishes a bounded step limit without starting inference or publishing a fak
 });
 
 it.each([false, true])(
-	"admits builder step 31 for root chats and writable children (child: %s)",
+	"admits builder step 31 for root chats and writer subagents (child: %s)",
 	async (child) => {
 		mocks.owner.mockResolvedValue({
 			id: "session",
@@ -1002,6 +1210,7 @@ it.each([false, true])(
 						parentSessionId: "parent",
 						taskAccess: "read_write",
 						taskPlacement: "fresh",
+						agentRole: "writer",
 					}
 				: {}),
 		});
@@ -1215,7 +1424,7 @@ it("still reports a lost turn lease that the user did not ask to stop", async ()
 });
 
 it.each([
-	["a child", { parentSessionId: "parent" }],
+	["a subagent", { parentSessionId: "parent", agentRole: "researcher" }],
 	["a root chat", {}],
 ])(
 	"fails %s out of time with a time-limit message and notifies its parent",
@@ -1332,6 +1541,51 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			return { messages: input.messages, outcome: "completed" };
 		});
 
+	it("lead=fusion: a round still open at completion continues the turn once; the next step completes", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			lead: "fusion",
+		});
+		finishing();
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		mocks.leadGate.mockClear();
+		mocks.roundOpen.mockReset().mockResolvedValueOnce(true);
+		const before = Date.now();
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: "turn-lead" },
+				durable(),
+			),
+		).toBe("continue");
+		expect(mocks.leadGate).toHaveBeenCalledOnce();
+		// Bounded by this step's gate: only a round started since then holds it.
+		const [owner, since] = mocks.roundOpen.mock.calls[0] as unknown as [
+			{ id: string },
+			number,
+		];
+		expect(owner.id).toBe("session");
+		expect(since).toBeGreaterThanOrEqual(before);
+		expect(mocks.commit).not.toHaveBeenCalled();
+		mocks.roundOpen.mockResolvedValue(false);
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: "turn-lead" },
+				{ index: 3, signal: new AbortController().signal },
+			),
+		).toBe("completed");
+		expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		mocks.lean = null;
+	});
+
 	it("is off by default: no loop, the turn completes as before", async () => {
 		finishing();
 		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
@@ -1340,6 +1594,47 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(mocks.loop).not.toHaveBeenCalled();
 		expect(mocks.reviewLoop).not.toHaveBeenCalled();
 		expect(mocks.commit).toHaveBeenCalledOnce();
+	});
+
+	it("commits and pushes nothing for a root turn that ends in plan mode", async () => {
+		finishing();
+		const planning = {
+			...rootTurn,
+			items: [
+				...rootTurn.items,
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("enter"),
+					tool: "enter_plan_mode",
+					status: "completed",
+				},
+			],
+		} as ApiTurn;
+		expect(await runApiTurn({} as WorkspaceMachines, planning, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("shows why a root chat's changes were not pushed, and still completes", async () => {
+		finishing();
+		mocks.commit.mockResolvedValueOnce({
+			notice: "Changes are committed in this chat but were not pushed.",
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "notice",
+					id: "turn:publication",
+					message: "Changes are committed in this chat but were not pushed.",
+				}),
+			]),
+		);
 	});
 
 	it("review=on hands the checker's findings back to the same run instead of publishing", async () => {
@@ -1472,5 +1767,82 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 				expect.objectContaining({ text: "Kept attempt 2 of 3." }),
 			]),
 		);
+	});
+});
+
+describe("the VM's memory token is released however a step ends", () => {
+	function fakeMemory() {
+		return {
+			mode: "full",
+			instructions: "",
+			prepareVm: vi.fn(async () => {}),
+			vmTokens: () => [],
+			releaseVm: vi.fn(async () => {}),
+			attach: async (messages: unknown) => ({ messages, recall: null }),
+			recordSaved: async (items: unknown) => items,
+			afterTurn: vi.fn(async () => {}),
+		};
+	}
+	const rootTurn = (id: string) => ({ ...childTurn, id }) as ApiTurn;
+
+	it("on a failed turn", async () => {
+		const memory = fakeMemory();
+		mocks.turnMemory.mockResolvedValue(memory);
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			throw new Error("Model unavailable");
+		});
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				rootTurn("00000000-0000-4000-8000-0000000000f1"),
+				{ index: 1, signal: new AbortController().signal },
+			),
+		).toBe("failed");
+		expect(memory.prepareVm).toHaveBeenCalledOnce();
+		expect(memory.releaseVm).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm" }),
+		);
+	});
+
+	it("on a cancelled turn", async () => {
+		vi.useFakeTimers();
+		try {
+			const memory = fakeMemory();
+			mocks.turnMemory.mockResolvedValue(memory);
+			mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+			mocks.cancelRequested.mockResolvedValue(true);
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.tools.workspace();
+				return hangUntilAborted(input);
+			});
+			const outcome = runApiTurn(
+				{} as WorkspaceMachines,
+				rootTurn("00000000-0000-4000-8000-0000000000f2"),
+				{ index: 1, signal: new AbortController().signal },
+			);
+			await vi.advanceTimersByTimeAsync(1_500);
+			expect(await outcome).toBe("cancelled");
+			expect(memory.releaseVm).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm" }),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("revokes earlier steps' tokens even when this step never prepared the VM", async () => {
+		const memory = fakeMemory();
+		mocks.turnMemory.mockResolvedValue(memory);
+		mocks.stepRuntime.mockImplementation(async () => {
+			throw new Error("Model unavailable");
+		});
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			rootTurn("00000000-0000-4000-8000-0000000000f3"),
+			{ index: 2, signal: new AbortController().signal },
+		);
+		expect(memory.prepareVm).not.toHaveBeenCalled();
+		expect(memory.releaseVm).toHaveBeenCalledWith(undefined);
 	});
 });

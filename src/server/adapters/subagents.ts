@@ -1,3 +1,4 @@
+import type { SidekickState } from "#/domain/sidekick";
 import type {
 	SubagentBudget,
 	SubagentFork,
@@ -82,8 +83,101 @@ export async function subagentTree(
 }
 
 /**
+ * Saves a sidekick's state (src/domain/sidekick.ts) into its budget.
+ * `clearStop` drops an earlier agent_send stop's step limit (a new round).
+ */
+export async function saveSidekickState(
+	sessionId: string,
+	state: SidekickState,
+	options: { readonly clearStop?: boolean } = {},
+) {
+	await database().query(
+		`update agent_session set agent_budget=(coalesce(agent_budget,'{}'::jsonb)${options.clearStop ? " - 'stopAtStep'" : ""}) || jsonb_build_object('sidekick', $2::jsonb), updated_at=now()
+		 where id=$1 and agent_role='writer'`,
+		[sessionId, JSON.stringify(state)],
+	);
+}
+
+/**
+ * Applies `mutate` to the sidekick's current state and saves it only if
+ * nothing changed it meanwhile (compare-and-set on the stored state,
+ * retried), so a slow caller (the classifier) never overwrites a newer
+ * write. A retired sidekick stays retired. With `model` the session's model
+ * changes in the same statement (a switch at compaction). Returns the saved
+ * state, or null when there is no sidekick or `mutate` declines.
+ */
+export async function updateSidekickState(
+	sessionId: string,
+	mutate: (current: SidekickState) => SidekickState | null,
+	model?: { readonly listedModelId: string; readonly harness: "codex" | "api" },
+): Promise<SidekickState | null> {
+	for (let attempt = 0; attempt < 5; attempt++) {
+		const read = await database().query<{ sidekick: SidekickState | null }>(
+			`select agent_budget->'sidekick' as sidekick from agent_session
+			 where id=$1 and agent_role='writer'`,
+			[sessionId],
+		);
+		const current = read.rows[0]?.sidekick;
+		if (!current) return null;
+		const mutated = mutate(current);
+		if (!mutated) return null;
+		const next =
+			current.retired && !mutated.retired
+				? { ...mutated, retired: current.retired }
+				: mutated;
+		const saved = await database().query(
+			`update agent_session
+			 set agent_budget=jsonb_set(agent_budget, '{sidekick}', $2::jsonb),
+			     listed_model_id=coalesce($4, listed_model_id),
+			     harness=coalesce($5, harness),
+			     updated_at=now()
+			 where id=$1 and agent_role='writer' and agent_budget->'sidekick' = $3::jsonb`,
+			[
+				sessionId,
+				JSON.stringify(next),
+				JSON.stringify(current),
+				model?.listedModelId ?? null,
+				model?.harness ?? null,
+			],
+		);
+		if (saved.rowCount) return next;
+	}
+	throw new Error("The sidekick's state kept changing; it was not saved.");
+}
+
+/**
+ * Adds a one-off model call's usage (the sidekick classifier's) to the
+ * session's latest request, where its turns' usage lives, so session and
+ * eval totals include it. Compare-and-set on the items, retried.
+ */
+export async function addSessionRequestUsage(
+	sessionId: string,
+	add: (items: unknown[]) => unknown[] | null,
+) {
+	for (let attempt = 0; attempt < 5; attempt++) {
+		const read = await database().query<{ items: unknown[] | null }>(
+			"select items from agent_session where id=$1",
+			[sessionId],
+		);
+		const items = read.rows[0]?.items;
+		if (!Array.isArray(items)) return false;
+		const next = add(items);
+		if (!next) return false;
+		const saved = await database().query(
+			`update agent_session set items=$2::jsonb, updated_at=now()
+			 where id=$1 and items = $3::jsonb`,
+			[sessionId, JSON.stringify(next), JSON.stringify(items)],
+		);
+		if (saved.rowCount) return true;
+	}
+	return false;
+}
+
+/**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
- * idle, or whose session is no longer running anything.
+ * idle, or whose session is no longer running anything. Lead mode
+ * fusion's sidekick has no fork (it works in the lead's checkout); an
+ * older forked one stays while active.
  */
 export async function forkedWritersDueForTeardown(graceMinutes: number) {
 	const result = await database().query(
@@ -95,6 +189,10 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 		   and agent_fork ? 'reportedAt'
 		   and (agent_fork->>'reportedAt')::timestamptz < now() - make_interval(mins => $1)
 		   and turn_status <> 'running'
+		   and not (
+		     agent_budget ? 'sidekick'
+		     and not (agent_budget->'sidekick' ? 'retired')
+		   )
 		 limit 32`,
 		[graceMinutes],
 	);
@@ -108,20 +206,70 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 }
 
 /**
+ * Active sidekicks idle (not working, their lead not working) for at least
+ * `idleMinutes` since their last report: the maintenance sweep retires
+ * them (they hold no VM of their own).
+ */
+export async function idleSidekicksPastTtl(idleMinutes: number) {
+	const result = await database().query(
+		`select id, agent_role, agent_budget, agent_fork, turn_status
+		 from agent_session
+		 where agent_role='writer'
+		   and agent_budget ? 'sidekick'
+		   and not (agent_budget->'sidekick' ? 'retired')
+		   and turn_status <> 'running'
+		   and coalesce((agent_fork->>'reportedAt')::timestamptz, updated_at) < now() - ($1::float8 * interval '1 minute')
+		   and not exists (
+		     select 1 from agent_session lead_session
+		     where lead_session.id = agent_session.parent_session_id and lead_session.turn_status = 'running'
+		   )
+		 limit 32`,
+		[idleMinutes],
+	);
+	return result.rows.map(
+		(row: {
+			id: string;
+			agent_role: SubagentRole;
+			agent_budget: SubagentBudget;
+			agent_fork: SubagentFork | null;
+			turn_status: AgentSessionRecord["turnStatus"];
+		}) => ({
+			id: row.id,
+			agentRole: row.agent_role,
+			agentBudget: row.agent_budget,
+			agentFork: row.agent_fork,
+			turnStatus: row.turn_status,
+		}),
+	);
+}
+
+/**
  * Takes a child's undelivered terminal report for a parent that waited on
  * it (agent with wait: true), so the same report is not delivered again as
  * a message. Null when there is none yet or delivery already claimed it.
  */
 export async function takeSubagentReport(childSessionId: string) {
+	// Also a report the delivery worker is staging ('delivering'): the waiter
+	// wins, and the staged copy is retracted from the parent's mailbox.
 	const result = await database().query(
-		`update agent_task_event set status='delivered', delivered_at=now()
-		 where child_session_id=$1 and status='pending' and event_type in ('completed','failed')
-		 returning event_type, payload`,
+		`update agent_task_event set status='delivered', delivered_at=now(), last_error=null
+		 where child_session_id=$1 and status in ('pending','delivering') and event_type in ('completed','failed')
+		 returning id, parent_session_id, event_type, payload`,
 		[childSessionId],
 	);
 	const row = result.rows[0] as
-		| { event_type: "completed" | "failed"; payload: { message?: unknown } }
+		| {
+				id: string;
+				parent_session_id: string;
+				event_type: "completed" | "failed";
+				payload: { message?: unknown };
+		  }
 		| undefined;
+	if (row)
+		await database().query(
+			"delete from agent_peer_inbox where recipient_id=$1 and id=$2 and not accepted",
+			[row.parent_session_id, row.id],
+		);
 	return row
 		? {
 				outcome: row.event_type,
@@ -131,11 +279,17 @@ export async function takeSubagentReport(childSessionId: string) {
 		: null;
 }
 
-/** Asks a running subagent to wrap up: its budget treats the next few steps as its last. */
-export async function requestSubagentStop(sessionId: string) {
+/**
+ * Asks a running subagent to wrap up: its budget treats the next few steps
+ * as its last, or with `now` its next step (it reports at once).
+ */
+export async function requestSubagentStop(
+	sessionId: string,
+	options: { readonly now?: boolean } = {},
+) {
 	await database().query(
-		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + 3), updated_at=now()
+		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + $2::int), updated_at=now()
 		 where id=$1 and agent_role is not null`,
-		[sessionId],
+		[sessionId, options.now ? 0 : 3],
 	);
 }

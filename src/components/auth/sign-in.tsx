@@ -38,9 +38,10 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
-import { safeReturnTo } from "#/domain/return-to";
+import { withReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { TermsNotice } from "#/features/auth/terms-consent";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
@@ -123,8 +124,9 @@ export function SignIn({
 			await signInEmail({
 				email: value.email,
 				password: value.password,
-				// An unverified account gets a verification link back to the same page.
-				callbackURL: safeReturnTo(redirectTo),
+				// An unverified account gets a verification link back to sign-in,
+				// which then returns to the same page.
+				callbackURL: withReturnTo("/auth/sign-in", redirectTo),
 				...(emailAndPassword?.rememberMe
 					? { rememberMe: value.rememberMe }
 					: {}),
@@ -383,6 +385,8 @@ export function SignIn({
 							</Link>
 						</FieldDescription>
 					)}
+
+					<TermsNotice />
 				</div>
 			</CardContent>
 		</Card>

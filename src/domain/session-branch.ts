@@ -1,5 +1,8 @@
 const SESSION_BRANCH_PREFIX = "ytimesy";
 const SESSION_BRANCH_SLUG_MAX_LENGTH = 24;
+const SESSION_BRANCH_ID_LENGTH = 6;
+/** A whole chat branch name, prefix and collision suffix included. */
+export const SESSION_BRANCH_MAX_LENGTH = 40;
 
 export function isGeneratedSessionBranch(name: string): boolean {
 	const branch = name.trim();
@@ -9,35 +12,53 @@ export function isGeneratedSessionBranch(name: string): boolean {
 	);
 }
 
-function sessionBranchSlug(text: string): string {
+/** The first words of the text: lowercase a-z0-9 runs joined by single hyphens, cut at a word boundary. */
+function sessionBranchSlug(text: string, maxLength: number): string {
 	const slug = text
 		.trim()
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "");
-	if (slug.length <= SESSION_BRANCH_SLUG_MAX_LENGTH) return slug || "workspace";
-	const shortened = slug.slice(0, SESSION_BRANCH_SLUG_MAX_LENGTH);
+	if (slug.length <= maxLength) return slug || "chat";
+	const shortened = slug.slice(0, maxLength);
+	if (slug[maxLength] === "-") return shortened;
 	const wordBoundary = shortened.lastIndexOf("-");
-	if (slug[SESSION_BRANCH_SLUG_MAX_LENGTH] === "-") return shortened;
 	return wordBoundary > 0 ? shortened.slice(0, wordBoundary) : shortened;
 }
 
+/** Six lowercase base36/hex characters of the chat id. */
 function sessionBranchSuffix(id: string): string {
 	const trimmed = id.trim();
+	const width = SESSION_BRANCH_ID_LENGTH;
 	if (/^\d+$/.test(trimmed)) {
-		return Number(trimmed).toString(16).padStart(4, "0").slice(-4);
+		return Number(trimmed).toString(16).padStart(width, "0").slice(-width);
 	}
 	const hex = trimmed.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
-	if (hex.length >= 4) return hex.slice(-4);
+	if (hex.length >= width) return hex.slice(-width);
 	const compact = trimmed.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-	return compact.padStart(4, "0").slice(-4);
+	return compact.padStart(width, "0").slice(-width);
 }
 
+/**
+ * `ytimesy/<slug>-<id>`, at most 40 characters. `attempt` > 0 adds a short
+ * suffix (`-2`, `-3`, ...) for a name another chat already holds.
+ */
 export function sessionBranchName(input: {
 	readonly title?: string;
 	readonly id: string;
+	readonly attempt?: number;
 }): string {
-	return `${SESSION_BRANCH_PREFIX}/${sessionBranchSlug(input.title ?? "")}-${sessionBranchSuffix(input.id)}`;
+	const attempt = Math.max(0, Math.floor(input.attempt ?? 0));
+	const collision = attempt > 0 ? `-${(attempt + 1).toString(36)}` : "";
+	const suffix = `-${sessionBranchSuffix(input.id)}${collision}`;
+	const slugBudget = Math.min(
+		SESSION_BRANCH_SLUG_MAX_LENGTH,
+		SESSION_BRANCH_MAX_LENGTH -
+			SESSION_BRANCH_PREFIX.length -
+			1 -
+			suffix.length,
+	);
+	return `${SESSION_BRANCH_PREFIX}/${sessionBranchSlug(input.title ?? "", slugBudget)}${suffix}`;
 }
 
 export function sessionWorkingBranch(input: {

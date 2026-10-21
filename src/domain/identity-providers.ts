@@ -10,4 +10,6 @@ export type IdentityOptions = {
 	readonly socialProviders: readonly SocialProviderId[];
 	/** Email can be sent, so email sign-up and password reset work. */
 	readonly emailDelivery: boolean;
+	/** Public Turnstile site key; email sign-up, sign-in and reset need a token. */
+	readonly turnstileSiteKey?: string;
 };

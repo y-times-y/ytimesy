@@ -1,6 +1,6 @@
 import { sessionBilling, usageCostUsd } from "./model-pricing";
 import { sessionItemsFromUnknown } from "./session-item";
-import type { SubagentRole } from "./subagent";
+import type { SubagentBudget, SubagentRole } from "./subagent";
 import { sessionTokenUsage } from "./subagent-usage";
 
 /**
@@ -8,14 +8,22 @@ import { sessionTokenUsage } from "./subagent-usage";
  * runner; any runner that keeps the session tree can use it): per run or arm
  * the average cost per task, cost per solved task, tokens, model calls,
  * cache hit rate and time per task, and the spend split by who spent it
- * (builder, subagents, checker, judge) and on which model.
+ * (builder, sidekick, subagents, checker and its worker, judge) and on which model.
  */
 
-export type SpendRole = "builder" | "subagent" | "checker" | "judge";
+export type SpendRole =
+	| "builder"
+	| "sidekick"
+	| "subagent"
+	| "checker"
+	| "checkerWorker"
+	| "judge";
 const ROLE_ORDER: readonly SpendRole[] = [
 	"builder",
+	"sidekick",
 	"subagent",
 	"checker",
+	"checkerWorker",
 	"judge",
 ];
 
@@ -43,6 +51,8 @@ export type SpendSession = {
 	readonly listedModelId: string | null;
 	readonly items: unknown;
 	readonly agentRole?: SubagentRole | null;
+	/** A sidekick (lead mode fusion) carries its state in its budget. */
+	readonly agentBudget?: SubagentBudget | null;
 };
 
 const plusNull = (a: number | null, b: number | null) =>
@@ -62,7 +72,8 @@ function modelLabel(listedModelId: string | null) {
 /**
  * A run's spend per role and model from its session tree: the root is the
  * builder; the loops' tiebreak judges (by id) are the judge; checker-role
- * sessions are the checker; every other child is a subagent.
+ * sessions are the checker (a pair's judge, checkerMode=pair) and its
+ * workers the checkerWorker; every other child is a subagent.
  */
 export function treeModelSpend(input: {
 	readonly rootId: string;
@@ -81,7 +92,12 @@ export function treeModelSpend(input: {
 							? "judge"
 							: session.agentRole === "checker"
 								? "checker"
-								: "subagent",
+								: session.agentBudget?.checkerPair === "worker"
+									? "checkerWorker"
+									: session.agentRole === "writer" &&
+											session.agentBudget?.sidekick
+										? "sidekick"
+										: "subagent",
 				model: modelLabel(session.listedModelId),
 				agents: 1,
 				requests: usage ? (usage.requests ?? null) : 0,

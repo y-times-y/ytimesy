@@ -1,6 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+	codexRelaySettingNames,
+	codexRelaySettingsProblem,
+} from "../src/domain/codex-egress";
+import {
+	assertProductionRoutes,
+	productionAnalyticsSettings,
+	productionRuntimeSettings,
+} from "./production-settings";
 
 /**
  * Production deploy for the edge executor and the web Worker. Not run yet:
@@ -35,16 +44,21 @@ const required = [
 	// Master key for stored project secrets and credentials. Escrow it before
 	// any user data exists; there is no file fallback in production.
 	"YTIMESY_SECRETS_KEY",
-	// Open decision (launch checklist): the hostname VM guests use for the Git
-	// proxy and realtime, behind Access with a service token or executor-only.
+	// The executor's custom domain VM guests use for the signed Git proxy and
+	// realtime (docs/guest-hostname-design.md), e.g. https://edge.ytimesy.com.
 	"YTIMESY_GIT_PROXY_URL",
-	"YTIMESY_USER_MONTHLY_MICRO_USD",
+	// Verifies GitHub's signature on /api/github/repair-events deliveries; the
+	// production GitHub App's webhook secret. Without it PR repair is off.
+	"GITHUB_PR_REPAIR_WEBHOOK_SECRET",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
 	"R2_ACCOUNT_ID",
 	"R2_ACCESS_KEY_ID",
 	"R2_SECRET_ACCESS_KEY",
 	"R2_CHECKPOINT_BUCKET",
+	// Cloudflare Turnstile on email sign-up, sign-in and password reset.
+	"TURNSTILE_SITE_KEY",
+	"TURNSTILE_SECRET_KEY",
 ] as const;
 const secrets: Record<string, string> = {};
 for (const name of required) {
@@ -52,6 +66,13 @@ for (const name of required) {
 	if (!value) throw new Error(`Production deployment is missing ${name}.`);
 	secrets[name] = value;
 }
+
+// Per-user rolling usage windows (micro-USD of VM cost); the deployment's
+// environment tunes them, these are the defaults.
+secrets.YTIMESY_USER_5H_MICRO_USD =
+	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
 
 const database = new URL(secrets.DATABASE_URL);
 if (
@@ -68,18 +89,15 @@ for (const name of ["APP_URL", "YTIMESY_GIT_PROXY_URL"] as const) {
 		throw new Error(`${name} must be a production HTTPS hostname.`);
 }
 
-// Launch gate: no public route or workers.dev URL until the owner says go live.
-for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"]) {
-	const text = await readFile(file, "utf8");
-	const production = text.slice(text.indexOf('"production"'));
-	if (
-		!/"workers_dev":\s*false/.test(production) ||
-		/"routes"\s*:/.test(production)
-	)
-		throw new Error(
-			`${file} production must keep workers_dev off and no routes.`,
-		);
-}
+// Launch gate: no public app route or workers.dev URL until the owner says go
+// live; only the executor's own custom domain (the Git proxy host) is allowed.
+for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
+	assertProductionRoutes({
+		file,
+		text: await readFile(file, "utf8"),
+		gitProxyUrl: secrets.YTIMESY_GIT_PROXY_URL,
+		appUrl: secrets.APP_URL,
+	});
 
 // Every migration must be applied to production before its code ships.
 const migrations = execFileSync(
@@ -114,32 +132,32 @@ secrets.ENVIRONMENT_WORKFLOW_SECRET = derived(
 secrets.BACKGROUND_WORKFLOW_SECRET = derived(
 	"ytimesy:background-workflows:production:v1",
 );
+secrets.PR_REPAIR_INGRESS_SECRET = derived(
+	"ytimesy:pr-repair-ingress:production:v1",
+);
 secrets.YTIMESY_REALTIME_SECRET = derived("ytimesy:realtime:production:v1");
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
 // Background delivery and recovery address the same chat objects as inference.
 secrets.YTIMESY_REALTIME_URL = secrets.YTIMESY_GIT_PROXY_URL;
-// Set here, not in a wrangler vars block (that breaks the generated types).
-secrets.YTIMESY_ENVIRONMENT = "production";
-secrets.GIT_PROXY_ENABLED = "1";
-secrets.MODEL_EXECUTION_ENABLED = "1";
-secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
-secrets.BACKGROUND_EXECUTION_ENABLED = "1";
-secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
-secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
-secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
-// Auth email goes out through the EMAIL send_email binding (wrangler config).
-secrets.AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "noreply@ytimesy.com";
+Object.assign(secrets, productionRuntimeSettings(process.env));
+Object.assign(secrets, productionAnalyticsSettings(process.env));
 for (const name of [
-	"POSTHOG_KEY",
-	"POSTHOG_HOST",
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	// Further Codex egress relays, tried in order after the first (2..8).
+	...codexRelaySettingNames,
+	// The account whose login probes Codex egress paths every 5 minutes.
+	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
+	// Owner alerts go to het@ytimesy.com unless this names another address.
+	"YTIMESY_ALERT_EMAIL",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
+const relayProblem = codexRelaySettingsProblem(secrets);
+if (relayProblem) throw new Error(relayProblem);
 const key = Buffer.from(
 	secrets.YTIMESY_SECRETS_KEY,
 	/^[a-f0-9]{64}$/i.test(secrets.YTIMESY_SECRETS_KEY) ? "hex" : "base64",
@@ -190,5 +208,5 @@ run("pnpm", ["exec", "vite", "build"], undefined, {
 wrangler("wrangler.web.jsonc", ["deploy"]);
 wrangler("wrangler.web.jsonc", ["secret", "bulk"], JSON.stringify(secrets));
 console.log(
-	"Production deployed with no public route. Reach it only through Cloudflare Access until launch.",
+	"Production deployed with no public app route. Reach it only through Cloudflare Access until launch.",
 );

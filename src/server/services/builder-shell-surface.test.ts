@@ -51,14 +51,15 @@ it("offers a shell surface exactly as given, without compose_tools or search_too
 		tool({ inputSchema: z.object({}), execute: async () => ({}) });
 	const shell = { execute_command: make(), apply_patch: make() };
 	expect(isShellSurface(Object.keys(shell))).toBe(true);
-	expect(
-		Object.keys(discoverableAgentTools(shell, [], [], "implementation")),
-	).toEqual(["execute_command", "apply_patch"]);
+	expect(Object.keys(discoverableAgentTools(shell))).toEqual([
+		"execute_command",
+		"apply_patch",
+	]);
 	const specialist = { execute_command: make(), run_checks: make() };
 	expect(isShellSurface(Object.keys(specialist))).toBe(false);
-	expect(
-		Object.keys(discoverableAgentTools(specialist, [], [], "implementation")),
-	).toContain("search_tools");
+	expect(Object.keys(discoverableAgentTools(specialist))).toContain(
+		"search_tools",
+	);
 	// The loop skips composition for shell surfaces; specialist surfaces still compose.
 	expect(
 		Object.keys(
@@ -96,9 +97,6 @@ it("lets the product builder do visual QA without leaving the shell surface", as
 	expect(isShellSurface(kept)).toBe(true);
 	const offered = discoverableAgentTools(
 		Object.fromEntries(kept.map((name) => [name, make()])),
-		[],
-		[],
-		"implementation",
 	);
 	expect(Object.keys(offered)).not.toContain("search_tools");
 	expect(
@@ -174,7 +172,6 @@ it("gives a reader subagent a lean surface whose command tool runs, without writ
 		expect(profile).not.toMatch(/execute_command|Edit files|tools\.edit/);
 	}
 	const prompt = agentTurnInstructions({
-		shellBuilder: true,
 		session: { agentRole: "checker", agentBudget: null } as never,
 		tools: { ...surface.tools, run_code: base.report_task_blocked },
 		plugins: [],

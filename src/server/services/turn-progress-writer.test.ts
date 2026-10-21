@@ -55,3 +55,29 @@ it("reports storage failure, rejects draining and never writes later stale progr
 	expect(() => writer.offer(snapshot("later"))).toThrow(error);
 	expect(write).toHaveBeenCalledTimes(1);
 });
+
+it("drops a waiting snapshot a checkpoint supersedes, but finishes the write in flight", async () => {
+	let release: () => void = () => {};
+	const write = vi
+		.fn()
+		.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		)
+		.mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	writer.offer(snapshot("in flight"));
+	writer.offer(snapshot("waiting"));
+	writer.supersede();
+	const done = writer.drain();
+	release();
+	await done;
+	expect(write.mock.calls.map((call) => call[0][0].text)).toEqual([
+		"in flight",
+	]);
+	writer.offer(snapshot("after"));
+	await writer.drain();
+	expect(write).toHaveBeenCalledTimes(2);
+});

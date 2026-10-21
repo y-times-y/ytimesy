@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { chromeOpenCommand } from "#/server/services/api-agent-browser-tools";
+import { browserUseSetup } from "../browser-use-cli";
 import {
+	DESKTOP_X_ENVIRONMENT,
 	ENSURE_WORKSPACE_DESKTOP,
 	START_WORKSPACE_DESKTOP,
 } from "./start-desktop";
@@ -41,6 +44,50 @@ describe("start workspace desktop", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain(
 			"Chrome is still installing; desktop is up on DISPLAY=:0",
 		);
+	});
+
+	it("keeps the display, viewer and its credential from other users on the VM", () => {
+		expect(START_WORKSPACE_DESKTOP).not.toMatch(/Xvfb :0 -screen[^\n]*-ac/);
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			'Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp',
+		);
+		expect(START_WORKSPACE_DESKTOP).toContain('xauth -q -f "$XAUTH" source -');
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			'-unixsock "$VNC_SOCKET" -rfbport 0',
+		);
+		expect(START_WORKSPACE_DESKTOP).not.toContain("-rfbport 5900 >");
+		expect(START_WORKSPACE_DESKTOP).toContain('install -d -m 0700 "$VNC_DIR"');
+		expect(START_WORKSPACE_DESKTOP).not.toContain('$(cat "$DESK_AUTH_FILE")');
+	});
+
+	it("keeps Chrome and the builder's X clients working across the locked-down restart", () => {
+		// Chrome is closed before its display and reopened on the new one.
+		const restart = START_WORKSPACE_DESKTOP.indexOf(
+			"pgrep -f '[X]vfb :0 .*-ac'",
+		);
+		const closeChrome = START_WORKSPACE_DESKTOP.indexOf(
+			"pkill -TERM -x 'chrome|chromium|chromium-browse'",
+		);
+		const killX = START_WORKSPACE_DESKTOP.indexOf("pkill -x Xvfb");
+		expect(restart).toBeGreaterThan(0);
+		expect(closeChrome).toBeGreaterThan(restart);
+		expect(killX).toBeGreaterThan(closeChrome);
+		expect(START_WORKSPACE_DESKTOP).toMatch(
+			/CHROME_REOPEN" = 1 \] && ! pgrep -x[^\n]*\n\s*nohup "\$\(find_chrome_bin\)"[^\n]*--restore-last-session[^\n]*--user-data-dir=\/tmp\/ytimesy-chrome-profile/,
+		);
+		// The cookie lives at a fixed path, so clients without HOME find it,
+		// and the builder's uid reaches the display without it.
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			"XAUTH=/tmp/ytimesy-desktop-private/Xauthority",
+		);
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			'xhost "+SI:localuser:$(id -un)"',
+		);
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain(DESKTOP_X_ENVIRONMENT);
+		expect(chromeOpenCommand("'https://example.com'")).toContain(
+			DESKTOP_X_ENVIRONMENT,
+		);
+		expect(browserUseSetup("s")).toContain(DESKTOP_X_ENVIRONMENT);
 	});
 
 	it("can add the dock to a desktop that is already running", () => {

@@ -38,3 +38,32 @@ describe("server-verified identity", () => {
 		).toBe("Sign in");
 	});
 });
+
+describe("signed-out landing", () => {
+	it("shows the landing page to signed-out visitors, from the first render", () => {
+		state.isPending = true;
+		expect(
+			renderToStaticMarkup(
+				<IdentityGate initialSignedIn={false} signedOut="Landing">
+					Workspace
+				</IdentityGate>,
+			),
+		).toBe("Landing");
+		state.isPending = false;
+		state.data = null;
+		expect(
+			renderToStaticMarkup(
+				<IdentityGate signedOut="Landing">Workspace</IdentityGate>,
+			),
+		).toBe("Landing");
+	});
+	it("still sends signed-in users to the app", () => {
+		state.isPending = false;
+		state.data = { user: { id: "u" } };
+		expect(
+			renderToStaticMarkup(
+				<IdentityGate signedOut="Landing">Workspace</IdentityGate>,
+			),
+		).toBe("Workspace");
+	});
+});

@@ -8,6 +8,7 @@ import {
 	codeModeResult,
 } from "../../src/domain/code-mode";
 import type { SessionItem } from "../../src/domain/session-item";
+import type { AgentSessionRecord } from "../../src/server/adapters/agent-sessions";
 
 export type ToolCallSummary = {
 	/** Recorded tool calls (the chat's items), per tool name. */
@@ -297,4 +298,34 @@ export function efficiencyTable(rows: readonly EfficiencyRow[]): string[][] {
 			});
 		}),
 	];
+}
+
+/**
+ * The setup log as the record keeps it: the script's `[setup ...]` lines
+ * (each step and self-test result), plus the raw tail when setup failed
+ * (a failed self-test prints its own line before exiting).
+ */
+export function setupLogSummary(log: string, exit: number) {
+	const steps = log
+		.split("\n")
+		.filter((line) => line.startsWith("[setup "))
+		.join("\n")
+		.slice(-6000);
+	return exit === 0
+		? steps
+		: `${steps}\n--- exit ${exit}, last output:\n${log.slice(-1500)}`;
+}
+
+/** One subagent session as the transcript keeps it. */
+export function childTranscript(session: AgentSessionRecord) {
+	return {
+		id: session.id,
+		parentSessionId: session.parentSessionId,
+		agentRole: session.agentRole ?? null,
+		title: session.title,
+		taskState: session.taskState,
+		taskPlacement: session.taskPlacement,
+		createdAt: session.createdAt,
+		items: session.items,
+	};
 }

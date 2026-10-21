@@ -36,6 +36,10 @@ import {
 } from "../../src/domain/harness-variant";
 import type { MemoryMode } from "../../src/domain/memory-repo";
 import {
+	type ConnectedModel,
+	MODEL_PROVIDERS,
+} from "../../src/domain/model-connection";
+import {
 	accountCleanupTargets,
 	deleteAccountRecords,
 } from "../../src/server/adapters/account-deletion";
@@ -75,6 +79,8 @@ export type EvalUser = {
 	project: EvalProject;
 	/** The user's OpenRouter connection (a copy of the owner's), if any. */
 	openRouterConnectionId: string | null;
+	/** The direct Google connection created with `google`, else null. */
+	googleConnectionId: string | null;
 	/** The user's memory repo name (user_memory.repo). */
 	memoryRepo: string;
 	/** Sets this user's memory mode and repo (the repo is deleted on release). */
@@ -227,7 +233,12 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 	).rows;
 	const ids: string[] = [];
 	for (const row of rows) {
-		const credential = JSON.parse(await unseal(row.sealed_credential)) as {
+		const credential = JSON.parse(
+			await unseal(row.sealed_credential, {
+				purpose: "model-credential",
+				userId: ownerId,
+			}),
+		) as {
 			id: string;
 			userId: string;
 			apiKey: string;
@@ -244,7 +255,10 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 				userId,
 				row.label,
 				row.base_url,
-				await seal(JSON.stringify({ ...credential, id, userId })),
+				await seal(JSON.stringify({ ...credential, id, userId }), {
+					purpose: "model-credential",
+					userId,
+				}),
 				JSON.stringify(row.models),
 				randomUUID(),
 				row.last_probe_at,
@@ -253,6 +267,30 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 		ids.push(id);
 	}
 	return ids;
+}
+
+/** A direct Google connection for an eval user (rows cascade on release). */
+async function insertGoogleConnection(
+	userId: string,
+	google: { apiKey: string; models: readonly ConnectedModel[] },
+) {
+	const id = randomUUID();
+	await database().query(
+		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,models,revision,last_probe_at)
+		 values($1,$2,'google','Google Gemini (eval)',$3,$4,$5::jsonb,$6,null)`,
+		[
+			id,
+			userId,
+			MODEL_PROVIDERS.google.baseUrl,
+			await seal(JSON.stringify({ id, userId, apiKey: google.apiKey }), {
+				purpose: "model-credential",
+				userId,
+			}),
+			JSON.stringify(google.models),
+			randomUUID(),
+		],
+	);
+	return id;
 }
 
 function manifestPath(userId: string) {
@@ -446,6 +484,11 @@ export async function createEvalUser(options: {
 	asOwner?: boolean;
 	/** Copy the owner's OpenRouter connection(s). */
 	openRouter?: boolean;
+	/**
+	 * A direct Google Gemini connection with this key and model list (e.g.
+	 * the dev key in .secrets/gemini-api-key); sealed for the eval user only.
+	 */
+	google?: { apiKey: string; models: readonly ConnectedModel[] };
 	/** Initial memory mode for the user (default off: no hooks, no repo). */
 	memory?: MemoryMode;
 	/** Leave memory repos behind on release (inspection; delete them yourself). */
@@ -482,6 +525,7 @@ export async function createEvalUser(options: {
 				dirName: source.full_name.split("/")[1],
 			},
 			openRouterConnectionId: gateways.length === 1 ? gateways[0].id : null,
+			googleConnectionId: null,
 			memoryRepo: memoryRepoName(ownerId),
 			setMemory: async () => {
 				throw new Error("Memory settings need an eval user, not --as-owner.");
@@ -516,6 +560,7 @@ export async function createEvalUser(options: {
 		variant,
 		project: { projectId: "", workspaceId: "", fullName: "", dirName: "" },
 		openRouterConnectionId: null,
+		googleConnectionId: null,
 		memoryRepo: memoryRepoName(userId),
 		async setMemory(mode, repo) {
 			const name = repo ?? user.memoryRepo;
@@ -557,16 +602,20 @@ export async function createEvalUser(options: {
 			"insert into dev_eval_user(user_id,owner_user_id,label,harness_variant) values($1,$2,$3,$4::jsonb)",
 			[userId, ownerId, label, JSON.stringify(harnessVariantChanges(variant))],
 		);
-		// A run starts one VM per task and repeat; the product default monthly
-		// allowance covers only a few concurrent holds. The fleet caps still apply.
+		// A run starts one VM per task and repeat; the product's default usage
+		// windows cover only a few concurrent holds. The fleet caps still apply.
 		await db.query(
-			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd) values($1,$2)",
+			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd,five_hour_micro_usd,weekly_micro_usd) values($1,$2,$2,$2)",
 			[userId, EVAL_USER_VM_ALLOWANCE_MICRO_USD],
 		);
 		await db.query(
 			`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
 			 select $1,'codex','connected',plan_type,now(),$3 from agent_account where user_id=$2 and provider='codex'`,
-			[userId, ownerId, await seal(placeholderCodexAuth())],
+			[
+				userId,
+				ownerId,
+				await seal(placeholderCodexAuth(), { purpose: "codex-auth", userId }),
+			],
 		);
 		// The subscription model list is a cache of the same account's catalog.
 		await db.query(
@@ -578,6 +627,11 @@ export async function createEvalUser(options: {
 			const ids = await copyOpenRouterConnections(ownerId, userId);
 			user.openRouterConnectionId = ids.length === 1 ? ids[0] : null;
 		}
+		if (options.google)
+			user.googleConnectionId = await insertGoogleConnection(
+				userId,
+				options.google,
+			);
 		await user.setMemory(options.memory ?? "off");
 		user.project = await copyProject(ownerId, userId);
 	} catch (error) {
@@ -757,6 +811,12 @@ export const SLOT_LIMITS = {
 	codex: Number(process.env.YTIMESY_EVAL_CODEX_SLOTS) || 8,
 	/** Concurrent OpenRouter `:free` runs (20 requests/min per account). */
 	openRouterFree: Number(process.env.YTIMESY_EVAL_FREE_SLOTS) || 2,
+	/**
+	 * Concurrent Gemini API runs on the development key. Its free tier allows
+	 * 5 requests/min per project and model (measured 2026-10-18), shared by
+	 * every run, so one at a time unless the key is on a paid tier.
+	 */
+	gemini: Number(process.env.YTIMESY_EVAL_GEMINI_SLOTS) || 1,
 };
 
 // ---------------------------------------------------------------------------

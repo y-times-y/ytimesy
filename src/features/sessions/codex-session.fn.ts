@@ -11,6 +11,7 @@ import { incomingAttachments } from "#/domain/message-attachment";
 import { chatHoldingSend } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
+import { consumeUserAction } from "#/server/adapters/user-action-rate";
 import { requireUser } from "#/server/auth/auth";
 import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
@@ -208,6 +209,11 @@ export const connectCodexSession = createServerFn({ method: "POST" })
 		);
 	});
 
+/** About 100k tokens; a longer paste belongs in an attached file. */
+const messageText = z
+	.string()
+	.max(400_000, "Message is too long; attach long text as a file instead.");
+
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
 	.validator(
 		(data: {
@@ -232,7 +238,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 					? []
 					: incomingAttachments.parse(data.attachments);
 			const text =
-				data.text.trim() ||
+				messageText.parse(data.text).trim() ||
 				(attachments.length ? "See the attached files." : "");
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
@@ -273,6 +279,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
+		await consumeUserAction(scope.userId, "chat-send");
 		return withQueuedMessages(
 			await runWithMachines((machines) =>
 				sendComposerMessage(machines, scope, data),

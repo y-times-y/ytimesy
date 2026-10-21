@@ -7,6 +7,8 @@ export type WorkspaceDesktop =
 	| {
 			readonly status: "running";
 			readonly viewerUrl: string | null;
+			/** The desktop's VNC password, for the owner's viewer only. */
+			readonly viewerPassword?: string;
 			readonly display: ":0";
 			readonly message: string | null;
 	  }
@@ -100,14 +102,6 @@ export function desktopClientViewerUrl(input: {
 
 export function desktopRemoteOrigin(hostname: string) {
 	return `https://${hostname.replace(/\/$/, "")}`;
-}
-
-export function desktopHostname(providerRef: string) {
-	const slug = providerRef
-		.replaceAll(/[^a-zA-Z0-9]/g, "")
-		.slice(-12)
-		.toLowerCase();
-	return `ytimesy-desk-${slug || "local"}.style.dev`;
 }
 
 export function desktopPortIsListening(output: string) {

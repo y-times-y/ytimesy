@@ -702,7 +702,6 @@ describe("harness durable steps (runModelAgentStep)", () => {
 					modelId: "fixture",
 					messages: saved,
 					instructions: "Work.",
-					knownTools: ["read_file"],
 					tools,
 					signal: new AbortController().signal,
 					onStep: async () => {},

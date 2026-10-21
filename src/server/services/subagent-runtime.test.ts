@@ -2,6 +2,17 @@ import type { ModelMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
+import {
+	newSidekickState,
+	retireSidekickState,
+	type SidekickState,
+} from "#/domain/sidekick";
+import {
+	type ClassifierInput,
+	rulesDecision,
+	type SidekickDecision,
+	type SidekickDecisionRecord,
+} from "#/domain/sidekick-classifier";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 
 const adapters = vi.hoisted(() => ({
@@ -10,6 +21,8 @@ const adapters = vi.hoisted(() => ({
 	session: vi.fn(),
 	mergeFork: vi.fn(async () => {}),
 	transfer: vi.fn(),
+	idle: vi.fn(async (): Promise<unknown[]> => []),
+	saveState: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/subagents", () => ({
 	subagentAncestors: adapters.ancestors,
@@ -17,6 +30,9 @@ vi.mock("../adapters/subagents", () => ({
 	mergeSubagentFork: adapters.mergeFork,
 	recordSubagentStep: vi.fn(),
 	forkedWritersDueForTeardown: vi.fn(async () => []),
+	idleSidekicksPastTtl: adapters.idle,
+	saveSidekickState: adapters.saveState,
+	requestSubagentStop: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
@@ -25,9 +41,57 @@ vi.mock("../adapters/agent-sessions", () => ({
 vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
 }));
+// No model call in these tests: the classifier answers as its rules would.
+vi.mock("./sidekick-classifier", () => ({
+	classifySidekick: vi.fn(async ({ summary }: { summary: ClassifierInput }) => {
+		const answer = rulesDecision(summary.signals, summary.canSwitch);
+		return { answer, record: decisionRecord(answer.decision, "rules") };
+	}),
+}));
 
-const { guardSubagentStep, SubagentBudgetExhausted, subagentReport } =
-	await import("./subagent-runtime");
+/** A compare-and-set fake: applies the change to `stored` (what the database holds now) and saves it. */
+function applying(
+	stored: SidekickState,
+	save: (id: string, state: SidekickState) => Promise<void>,
+) {
+	return vi.fn(
+		async (
+			id: string,
+			mutate: (current: SidekickState) => SidekickState | null,
+		) => {
+			const next = mutate(stored);
+			if (next) await save(id, next);
+			return next;
+		},
+	);
+}
+
+function decisionRecord(
+	decision: SidekickDecision,
+	source: SidekickDecisionRecord["source"] = "classifier",
+): SidekickDecisionRecord {
+	return {
+		point: "round",
+		round: 2,
+		decision,
+		reason: "test",
+		source,
+		inputsHash: "h",
+		latencyMs: 5,
+		tokens: 100,
+		costUsd: 0.001,
+		planBilled: true,
+		at: "2026-10-18T12:00:00.000Z",
+	};
+}
+
+const {
+	guardSubagentStep,
+	retireLeadSidekicks,
+	SubagentBudgetExhausted,
+	subagentReport,
+	teardownSubagentForks,
+} = await import("./subagent-runtime");
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
 const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString();
@@ -271,5 +335,626 @@ describe("subagent report", () => {
 			now: NOW,
 		});
 		expect(report).toMatch(/· ~\$[\d.]+ list-price est\.\]/);
+	});
+});
+
+describe("sidekick (lead mode fusion)", () => {
+	const sidekickState = (
+		fields: Partial<SidekickState> = {},
+	): SidekickState => ({
+		...newSidekickState({ tokens: 1_000_000 }, at(-30)),
+		...fields,
+	});
+	const sidekickBudget = (state: SidekickState) => ({
+		...budget,
+		sidekick: state,
+	});
+	const sidekickSession = (state: SidekickState) => ({
+		...session,
+		agentRole: "writer" as const,
+		createdAt: at(-60),
+		agentBudget: sidekickBudget(state),
+	});
+	const step = (
+		state: SidekickState,
+		steps: number,
+		options: {
+			items?: SessionItem[];
+			history?: ModelMessage[];
+			stopAtStep?: number;
+		} = {},
+	) =>
+		guardSubagentStep({
+			session: sidekickSession(state),
+			items: options.items ?? [],
+			messages: options.history ?? messages,
+			now: NOW,
+			deps: {
+				recordStep: vi.fn(async () => ({
+					steps,
+					budget: {
+						...sidekickBudget(state),
+						...(options.stopAtStep === undefined
+							? {}
+							: { stopAtStep: options.stopAtStep }),
+					},
+				})),
+				descendants: vi.fn(async () => []),
+			},
+		});
+	const round2 = sidekickState({
+		round: 2,
+		roundStartedAt: at(-2),
+		roundStartSteps: 95,
+		roundStartTokens: 300_000,
+	});
+
+	it("counts steps and minutes from the round's start, not the agent's creation", async () => {
+		// 140 steps in all, 60 minutes old: over an ordinary agent's budget,
+		// but round 2 has used 45 steps and 2 minutes.
+		expect(await step(round2, 140)).toBe(messages);
+		await expect(step(round2, 195)).rejects.toThrow(
+			"Budget exhausted (round 2, steps 100/100).",
+		);
+	});
+
+	it("caps one round's tokens and the sidekick's lifetime tokens", async () => {
+		// Round cap 500k: 300k before the round plus 520k now is 520k in the round.
+		await expect(step(round2, 100, { items: used(820_000) })).rejects.toThrow(
+			"round 2, tokens",
+		);
+		// Lifetime 1M: 900k before the round leaves 100k for it.
+		const late = sidekickState({ ...round2, roundStartTokens: 900_000 });
+		await expect(step(late, 100, { items: used(1_000_000) })).rejects.toThrow(
+			"Budget exhausted (round 2, tokens 100,000/100,000).",
+		);
+	});
+
+	it("wraps up once per round, though an earlier round's notice is in its history", async () => {
+		const earlier: ModelMessage[] = [
+			...messages,
+			{
+				role: "user",
+				content: "Budget nearly used (round 1, steps 90/100). Wrap up now.",
+			},
+		];
+		const wrapped = await step(round2, 185, { history: earlier });
+		expect(wrapped).toHaveLength(3);
+		expect(wrapped.at(-1)?.content).toContain(
+			"Budget nearly used (round 2, steps 90/100)",
+		);
+		expect(await step(round2, 186, { history: wrapped })).toBe(wrapped);
+	});
+
+	it("applies an agent_send stop within the round", async () => {
+		await expect(step(round2, 98, { stopAtStep: 98 })).rejects.toThrow(
+			"stopped by the parent",
+		);
+	});
+
+	it("reports what the round changed in the lead's checkout and keeps the sidekick for the next round", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-30),
+					endedAt: at(-20),
+					outcome: "finished",
+					patchFiles: 0,
+					kind: "explore",
+				},
+				{ n: 2, startedAt: at(-3), base: "a".repeat(40) },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			agentSteps: 60,
+			taskPlacement: "shared",
+			providerRef: "vm-root",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		adapters.transfer.mockClear();
+		const roundChanges = vi.fn(async () => ({
+			end: "b".repeat(40),
+			files: ["src/cli.ts", "test/cli.test.ts"],
+			stat: " src/cli.ts       | 3 ++-\n test/cli.test.ts | 9 +++++++++\n 2 files changed, 11 insertions(+), 1 deletion(-)",
+		}));
+		const saveState = vi.fn(async () => {});
+		const destroy = vi.fn(async () => {});
+		const report = await subagentReport({
+			machines: { destroy } as never,
+			session: sidekick,
+			items: used(10_000),
+			outcome: "finished",
+			text: "Fixed the flag; npm test exit 0.",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
+				roundChanges,
+			},
+		});
+		expect(report).toContain(
+			"[agent 1 writer finished · round 2/6 · 60 steps · 3m",
+		);
+		// Snapshotted in the lead's VM against the round's start; no fork, no patch.
+		expect(roundChanges).toHaveBeenCalledWith(
+			expect.objectContaining({
+				vm: "vm-root",
+				label: "1",
+				round: 2,
+				base: "a".repeat(40),
+			}),
+		);
+		expect(adapters.transfer).not.toHaveBeenCalled();
+		expect(report).toContain(
+			"Sidekick 1 worked in your checkout: this round changed 2 files, uncommitted in your working tree.",
+		);
+		expect(report).toContain(
+			`\`git diff ${"a".repeat(12)} ${"b".repeat(12)}\` is this round alone`,
+		);
+		expect(report).toContain("2 files changed, 11 insertions(+)");
+		expect(report).not.toContain(".patch");
+		expect(report).toContain("Sidekick 1: round 2/6 done.");
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.rounds.at(-1)).toMatchObject({
+			n: 2,
+			outcome: "finished",
+			patchFiles: 2,
+			base: "a".repeat(40),
+			end: "b".repeat(40),
+		});
+		expect(saved.retired).toBeUndefined();
+		expect(destroy).not.toHaveBeenCalled();
+	});
+
+	it("reports an in-flight forked sidekick's patch, then retires it", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{ n: 1, startedAt: at(-30), endedAt: at(-20), outcome: "finished" },
+				{ n: 2, startedAt: at(-3) },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		adapters.transfer.mockResolvedValue({
+			path: "/home/u/.ytimesy/agents/1.patch",
+			files: ["src/cli.ts"],
+			added: 1,
+			removed: 0,
+			sha256: "e".repeat(64),
+			ref: "refs/ytimesy/agents/1",
+			base: "lead-tree",
+		});
+		const saveState = vi.fn(async () => {});
+		const roundChanges = vi.fn();
+		const report = await subagentReport({
+			machines: {} as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState,
+				roundChanges,
+				mergeFork: adapters.mergeFork,
+			},
+		});
+		expect(report).toContain("/home/u/.ytimesy/agents/1.patch");
+		expect(report).toContain(
+			"ran on a fork from before the shared checkout, so it is retired after this report",
+		);
+		expect(roundChanges).not.toHaveBeenCalled();
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.retired?.reason).toBe(
+			"it ran on a fork from before the shared checkout",
+		);
+		expect(saved.rounds.at(-1)).toMatchObject({ n: 2, patchFiles: 1 });
+	});
+
+	it("still reports a round whose changes could not be listed", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 1, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const report = await subagentReport({
+			machines: {} as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(
+					state,
+					vi.fn(async () => {}),
+				),
+				addUsage: vi.fn(async () => true),
+				roundChanges: vi.fn(async () => {
+					throw new Error("no git");
+				}),
+			},
+		});
+		expect(report).toContain(
+			"Review them in place with `git status` and `git diff` (this round's exact changes could not be listed).",
+		);
+	});
+
+	it("retires the sidekick after its last round's report (it holds no VM)", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 6, roundStartedAt: at(-1) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const destroy = vi.fn(async () => {});
+		const saveState = vi.fn(async () => {});
+		const report = await subagentReport({
+			machines: { destroy } as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
+				roundChanges: vi.fn(async () => ({
+					end: "e".repeat(40),
+					files: [],
+					stat: "",
+				})),
+			},
+		});
+		expect(report).toContain("Sidekick 1 is retired (all rounds used).");
+		expect(destroy).not.toHaveBeenCalled();
+	});
+
+	it("classifies a stuck round and marks a model switch for the sidekick's next compaction", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-30),
+					endedAt: at(-20),
+					outcome: "finished",
+					patchFiles: 1,
+					evidence: {
+						failedChecks: ["make test"],
+						errors: ["make: *** [Makefile:#: test] Error #"],
+					},
+				},
+				{ n: 2, startedAt: at(-3), kind: "build", base: "a".repeat(40) },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("r1"),
+				text: "Make the flag work.",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("old"),
+				tool: "bash",
+				input: JSON.stringify({ command: "make lint" }),
+				output: "lint failed\n\nexit 2",
+				status: "completed",
+			},
+			{
+				kind: "userMessage",
+				id: SessionItemId("r2"),
+				text: "Peer message from lead (root):\n\nRound 2/6 from your lead. Fix it.",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("code"),
+				tool: "run_code",
+				input: "{}",
+				output: JSON.stringify({
+					ok: true,
+					result: "",
+					calls: [
+						{
+							tool: "bash",
+							input: JSON.stringify({ command: "make  test" }),
+							output: JSON.stringify({
+								output: "make: *** [Makefile:12: test] Error 2\n",
+								exitCode: 2,
+							}),
+							status: "completed",
+						},
+						{
+							tool: "bash",
+							input: JSON.stringify({ command: "grep -n missing src/cli.ts" }),
+							output: JSON.stringify({ output: "", exitCode: 1 }),
+							status: "completed",
+						},
+					],
+				}),
+				status: "completed",
+			},
+		];
+		const saveState = vi.fn(async () => {});
+		const classify = vi.fn(async (_summary: ClassifierInput) => ({
+			answer: {
+				decision: "switch_model" as const,
+				reason: "it repeats make test",
+			},
+			record: decisionRecord("switch_model"),
+			usage: null,
+		}));
+		const report = await subagentReport({
+			machines: { destroy: vi.fn() } as never,
+			session: sidekick,
+			items,
+			outcome: "finished",
+			text: "Still failing.",
+			now: NOW,
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
+				classify,
+				roundChanges: vi.fn(async () => ({
+					end: "b".repeat(40),
+					files: ["src/cli.ts"],
+					stat: " src/cli.ts | 1 +\n 1 file changed, 1 insertion(+)",
+				})),
+			},
+		});
+		// The classifier sees the round: its brief, report, commands, diff and signals.
+		const summary = classify.mock.calls[0]?.[0] as unknown as ClassifierInput;
+		expect(summary).toMatchObject({
+			point: "round",
+			round: 2,
+			model: "gpt-6-luna",
+			brief: expect.stringContaining("Round 2/6 from your lead"),
+			report: "Still failing.",
+			diff: { files: ["src/cli.ts"], added: 1, removed: 0 },
+			canSwitch: true,
+		});
+		expect(summary.commands).toEqual([
+			{ command: "make test", exitCode: 2 },
+			{ command: "grep -n missing src/cli.ts", exitCode: 1 },
+		]);
+		expect(summary.signals).toEqual([
+			{ kind: "same-check-failed", detail: "make test" },
+		]);
+		expect(report).toContain(
+			"Runtime notice: sidekick 1 looks stuck (it repeats make test).",
+		);
+		expect(report).toContain(
+			"The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
+		);
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.pendingSwitch).toMatchObject({
+			to: "codex:gpt-6.1-sol",
+			reason: "it repeats make test",
+			round: 2,
+		});
+		expect(saved.decisions?.[0]).toMatchObject({
+			decision: "switch_model",
+			source: "classifier",
+		});
+		// Only this round's failures count; a no-match grep is not a failure.
+		expect(saved.rounds.at(-1)?.evidence?.failedChecks).toEqual(["make test"]);
+		expect(saved.rounds.at(-1)?.signals).toEqual([
+			{ kind: "same-check-failed", detail: "make test" },
+		]);
+	});
+
+	it("applies the round's decision to the stored state: a sidekick the lead stopped meanwhile stays retired; its usage is charged", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 2, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const usage = {
+			inputTokens: 900,
+			outputTokens: 30,
+			uncachedInputTokens: 900,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		};
+		const saveState = vi.fn(async () => {});
+		const addUsage = vi.fn(async () => true);
+		const chargeUsage = vi.fn(async () => {});
+		const stored = retireSidekickState(state, "stopped by the lead", at(-1));
+		const report = await subagentReport({
+			machines: { destroy: vi.fn(async () => {}) } as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "Still failing.",
+			now: NOW,
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(stored, saveState),
+				addUsage,
+				chargeUsage,
+				classify: vi.fn(async () => ({
+					answer: { decision: "switch_model" as const, reason: "stuck" },
+					record: decisionRecord("switch_model"),
+					usage,
+				})),
+			},
+		});
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.retired?.reason).toBe("stopped by the lead");
+		expect(saved.pendingSwitch).toBeUndefined();
+		expect(saved.decisions).toHaveLength(1);
+		expect(report).toContain("Sidekick 1 is retired (stopped by the lead)");
+		expect(report).toContain("needs you (stuck)");
+		expect(addUsage).toHaveBeenCalledWith("s", usage);
+		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");
+	});
+
+	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {
+		const state = sidekickState();
+		const idle = record("idle", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentBudget: sidekickBudget(state),
+		});
+		const running = record("running", "root", {
+			agentRole: "writer",
+			turnStatus: "running",
+			agentBudget: sidekickBudget(state),
+		});
+		const stop = vi.fn(async () => {});
+		const count = await retireLeadSidekicks(
+			{} as never,
+			{ userId: "user", id: "root" },
+			"the lead's turn ended while it worked",
+			{
+				descendants: vi.fn(async () => [idle, running]),
+				stop,
+				saveState: vi.fn(async () => {}),
+				now: () => NOW,
+			},
+			{ keepIdle: true },
+		);
+		expect(count).toBe(1);
+		expect(stop).toHaveBeenCalledWith("running");
+	});
+
+	it("retires a sidekick idle past its TTL from the maintenance sweep (no VM to delete)", async () => {
+		const idle = {
+			id: "idle",
+			agentRole: "writer" as const,
+			agentBudget: sidekickBudget(sidekickState()),
+			agentFork: null,
+			turnStatus: "completed" as const,
+		};
+		adapters.idle.mockResolvedValueOnce([idle]);
+		adapters.saveState.mockClear();
+		const destroy = vi.fn(async () => {});
+		expect(await teardownSubagentForks({ destroy } as never, 30, 45)).toBe(0);
+		expect(adapters.idle).toHaveBeenCalledWith(45);
+		expect(destroy).not.toHaveBeenCalled();
+		expect(adapters.saveState).toHaveBeenCalledWith(
+			"idle",
+			expect.objectContaining({
+				retired: expect.objectContaining({
+					reason: "idle for over 45 minutes",
+				}),
+			}),
+		);
+	});
+
+	it("retires the lead's sidekicks when its turn ends: running ones are stopped", async () => {
+		const state = sidekickState();
+		const idle = record("idle", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: sidekickBudget(state),
+		});
+		const running = record("running", "root", {
+			agentRole: "writer",
+			turnStatus: "running",
+			agentBudget: sidekickBudget(state),
+		});
+		const retired = record("retired", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: sidekickBudget(
+				retireSidekickState(state, "stopped", at(-5)),
+			),
+		});
+		const ordinary = record("writer", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: budget,
+		});
+		const stop = vi.fn(async () => {});
+		const saveState = vi.fn(async () => {});
+		const count = await retireLeadSidekicks(
+			{} as never,
+			{ userId: "user", id: "root" },
+			"the lead's turn ended",
+			{
+				descendants: vi.fn(async () => [idle, running, retired, ordinary]),
+				stop,
+				saveState,
+				now: () => NOW,
+			},
+		);
+		expect(count).toBe(2);
+		expect(stop).toHaveBeenCalledTimes(1);
+		expect(stop).toHaveBeenCalledWith("running");
+		expect(saveState).toHaveBeenCalledWith(
+			"running",
+			expect.objectContaining({
+				retired: {
+					at: new Date(NOW).toISOString(),
+					reason: "the lead's turn ended",
+				},
+			}),
+		);
+		expect(saveState).toHaveBeenCalledWith(
+			"idle",
+			expect.objectContaining({
+				retired: expect.objectContaining({ reason: "the lead's turn ended" }),
+			}),
+		);
 	});
 });

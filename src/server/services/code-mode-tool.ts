@@ -50,8 +50,8 @@ const FAILURE_VALUE =
 
 /**
  * The tools a program may call: the lean surface's own tools (every shape's
- * names), the user's MCP tools and the subagent tools (subagents=on; a
- * program calls them without loading them through find_tools), never
+ * names), the user's MCP tools and the subagent tools (subagents=on; also
+ * in the tool list, so the model may call them either way), never
  * provider-hosted tools (web search runs inside the model call, so a program
  * cannot call it), plan, secret or turn-ending tools.
  */
@@ -267,8 +267,9 @@ export function codeModeTool(input: {
 	limits?: Partial<CodeModeLimits>;
 	/**
 	 * primary (harness variant codeMode=primary): run_code is the main way to
-	 * work; its description teaches batching, and `deferred` tools are
-	 * callable only from programs, found with searchTools(query).
+	 * work; its description teaches batching, and `deferred` tools (a large
+	 * MCP setup's search and call tools) are callable only from programs,
+	 * found with searchTools(query).
 	 */
 	mode?: "on" | "primary";
 	/** Tools not in the request's tool list that programs may call (primary). */

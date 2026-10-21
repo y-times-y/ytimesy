@@ -1,65 +1,79 @@
+import { turnPublicationRole } from "#/domain/agent-task";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
-import { sessionBranchName } from "#/domain/session-branch";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
-import {
-	agentSessionForOwner,
-	saveAgentTaskPublication,
-} from "../adapters/agent-sessions";
+import { adoptChatPublicationBranch } from "../adapters/agent-sessions";
+import { isDevEvalUser } from "../adapters/dev-eval-users";
 import { authorizedRepository, compareBranchAhead } from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
+import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { githubAccessToken } from "../auth/github-connection";
 import { queuePullRequestEvidence } from "./pr-evidence-job";
+import { availableChatBranchName, projectBaseBranch } from "./session-branch";
 
 export type TurnGitRuntime = Pick<WorkspaceRuntime, "exec"> &
 	Partial<Pick<WorkspaceRuntime, "readTextFile" | "writeTextFile">>;
 
-/** Draft handoff happens before completion, without accepting or merging the task. */
+/** Where a completed turn landed on GitHub; null branch when nothing was pushed. */
+export type TurnPublication = {
+	readonly branch: string | null;
+	readonly pullRequestUrl: string | null;
+};
+
+/** A root chat's turn was kept local on purpose; the message is shown in the chat. */
+export class ChatPublicationSkipped extends Error {}
+
+/** The last revision this checkout pushed, so a turn that changed nothing pushes nothing. */
+const PUBLISHED_REF = "refs/ytimesy/published";
+
+/**
+ * Evaluation runs (Terminal-Bench, isolated harness) and throwaway dev eval
+ * users (hard set, side-by-side evals) never reach GitHub: eval users' projects
+ * are copies of their owner's rows, pointing at the owner's real repository.
+ */
+export async function turnPublicationExcluded(
+	session: Pick<AgentSessionRecord, "userId" | "id">,
+) {
+	if (await isDevEvalUser(session.userId)) return true;
+	return Boolean(await evaluationRunForTask(session.userId, session.id));
+}
+
+/**
+ * Draft handoff happens before completion, without accepting or merging the
+ * task. A root chat pushes its own `ytimesy/` branch and keeps one draft PR
+ * open on it; follow-up turns push to the same branch, updating the PR.
+ */
 export async function publishCompletedSessionTurn(
 	session: AgentSessionRecord,
 	runtime: TurnGitRuntime,
 	turn: string,
-) {
+): Promise<TurnPublication | undefined> {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn handoff identity.");
 	const revision = `refs/ytimesy/turn-commits/${turn}`;
-	if (
-		!session.providerRef ||
-		session.taskAccess === "read_only" ||
-		session.taskPlacement === "shared"
-	)
-		return;
+	if (turnPublicationRole(session) !== "chat") return;
+	if (await turnPublicationExcluded(session)) return;
 	const project = await projectForOwner(session.userId, session.projectId);
 	if (!project)
 		throw new Error("The chat's project is unavailable for automatic handoff.");
-	const predecessor =
-		session.taskExecution === "stacked" && session.dependsOnSessionId
-			? await agentSessionForOwner(session.userId, session.dependsOnSessionId)
-			: null;
-	if (
-		session.taskExecution === "stacked" &&
-		(!predecessor?.taskBranch || predecessor.projectId !== session.projectId)
-	)
-		throw new Error("The stacked task's published base is unavailable.");
-	const head =
-		session.workingBranch ||
-		session.taskBranch ||
-		sessionBranchName({ title: session.title, id: session.id });
 	const providerRef = session.providerRef;
+	if (!providerRef) return;
+	// A chat publishes only its own working branch (taken below if it has
+	// none yet).
+	let head = session.workingBranch;
+	let chatBase = session.baseBranch;
 	let token: string | undefined;
-	for (const repo of repositoriesForProject(project)) {
+	let published: TurnPublication | undefined;
+	const repositories = repositoriesForProject(project);
+	for (const repo of repositories) {
 		const directory = repositoryDirectory(repo.fullName);
 		const changed = await runtime.exec(
 			providerRef,
-			[
-				"bash",
-				"-lc",
-				`git -C ${posixShellQuoted(directory)} rev-list --count refs/ytimesy/base..${revision}`,
-			],
+			["bash", "-lc", unpublishedCommitCountCommand(directory, revision)],
 			{},
 			15_000,
 		);
@@ -72,14 +86,56 @@ export async function publishCompletedSessionTurn(
 			repo.installationId,
 			repo.repositoryId,
 		);
+		if (!head) {
+			// A chat opened before chats published: it takes its branch now,
+			// once, and its checkout moves onto it so later turns stay there.
+			const primaryRepo =
+				repositories.find((each) => each.fullName === project.fullName) ?? repo;
+			const primaryRepository =
+				primaryRepo === repo
+					? repository
+					: await authorizedRepository(
+							token,
+							primaryRepo.installationId,
+							primaryRepo.repositoryId,
+						);
+			const adopted = await adoptChatPublicationBranch(
+				session.userId,
+				session.id,
+				await availableChatBranchName({
+					userId: session.userId,
+					projectId: session.projectId,
+					sessionId: session.id,
+					title: chatBranchTitle(session),
+					token,
+					fullName: primaryRepository.fullName,
+				}),
+				projectBaseBranch(project, primaryRepository),
+			);
+			head = adopted.workingBranch;
+			chatBase = adopted.baseBranch;
+			if (!head) throw new Error("The chat's branch could not be saved.");
+			const moved = await runtime.exec(
+				providerRef,
+				[
+					"bash",
+					"-lc",
+					`git -C ${posixShellQuoted(repositoryDirectory(project.fullName))} checkout -B ${posixShellQuoted(head)}`,
+				],
+				{},
+				15_000,
+			);
+			if (moved.exitCode !== 0)
+				throw new Error(`Could not move the chat's checkout onto ${head}.`);
+		}
 		const primary = repo.fullName === project.fullName;
 		const base = primary
-			? predecessor?.taskBranch ||
-				session.baseBranch ||
-				repository.defaultBranch
+			? chatBase || projectBaseBranch(project, repository)
 			: repo.branch || repository.defaultBranch;
 		if (head === base || head === repository.defaultBranch)
-			throw new Error("Automatic handoff requires a separate task branch.");
+			throw new ChatPublicationSkipped(
+				`Changes are committed in this chat but were not pushed: it works directly on ${head}, and ytimesy never pushes to a base or default branch automatically. Start a new chat to get its own branch.`,
+			);
 		await pushBrokeredRepository(
 			{
 				exec: (command, timeout) =>
@@ -107,8 +163,11 @@ export async function publishCompletedSessionTurn(
 				revision,
 			},
 		);
-		if ((await compareBranchAhead(token, repo.fullName, base, head)) < 1)
+		if ((await compareBranchAhead(token, repo.fullName, base, head)) < 1) {
+			await markPublished(runtime, providerRef, directory, revision);
+			if (primary) published = { branch: head, pullRequestUrl: null };
 			continue;
+		}
 		const pull = await ensureAppDraftPullRequest(
 			repo.installationId,
 			repo.fullName,
@@ -119,6 +178,12 @@ export async function publishCompletedSessionTurn(
 				body: "Automatic draft handoff from ytimesy. Review the changes and verification evidence before merging.",
 				head,
 				base,
+			},
+			{
+				userId: session.userId,
+				projectId: session.projectId,
+				repositoryId: repo.repositoryId,
+				sessionId: session.id,
 			},
 		);
 		// Harness-captured evidence (prEvidence=on) runs as a background job after
@@ -137,10 +202,39 @@ export async function publishCompletedSessionTurn(
 						error instanceof Error ? error.message.slice(0, 300) : "unknown",
 				}),
 			);
-		if (primary && session.parentSessionId)
-			await saveAgentTaskPublication(session.id, {
-				branch: head,
-				pullRequestUrl: pull.url,
-			});
+		await markPublished(runtime, providerRef, directory, revision);
+		if (primary) published = { branch: head, pullRequestUrl: pull.url };
 	}
+	return published;
+}
+
+/** The chat's first request names its branch, like a new chat's first send. */
+function chatBranchTitle(session: AgentSessionRecord) {
+	return session.title === "New session" ? "" : session.title;
+}
+
+/** Commits since the chat's base, or 0 when this exact revision was already pushed. */
+function unpublishedCommitCountCommand(directory: string, revision: string) {
+	const git = `git -C ${posixShellQuoted(directory)}`;
+	return `if [ "$(${git} rev-parse -q --verify ${revision} || true)" = "$(${git} rev-parse -q --verify ${PUBLISHED_REF} || echo none)" ]; then echo 0; else ${git} rev-list --count refs/ytimesy/base..${revision}; fi`;
+}
+
+async function markPublished(
+	runtime: TurnGitRuntime,
+	providerRef: string,
+	directory: string,
+	revision: string,
+) {
+	await runtime
+		.exec(
+			providerRef,
+			[
+				"bash",
+				"-lc",
+				`git -C ${posixShellQuoted(directory)} update-ref ${PUBLISHED_REF} ${revision}`,
+			],
+			{},
+			15_000,
+		)
+		.catch(() => undefined);
 }

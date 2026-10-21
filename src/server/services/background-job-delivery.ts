@@ -22,10 +22,6 @@ import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { enqueueSessionCheckpoint } from "../jobs/queue";
 import {
-	recoverChildTurnEvents,
-	superviseAgentChildren,
-} from "./agent-child-supervision";
-import {
 	deliverAgentPeerMessage,
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
@@ -36,12 +32,18 @@ import {
 	runMemoryDream,
 	runMemorySave,
 } from "./memory-jobs";
+import {
+	alertAbandonedTurns,
+	alertFailedEmails,
+	alertFleetBudget,
+} from "./operational-alerts";
 import { expirePullRequestEvidence } from "./pr-evidence-cleanup";
 import { runPullRequestEvidenceJob } from "./pr-evidence-job";
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
 import { teardownSubagentForks } from "./subagent-runtime";
+import { recoverChildTurnEvents } from "./subagent-turn-recovery";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function deliverBackgroundJob(
@@ -54,18 +56,18 @@ export async function deliverBackgroundJob(
 				case "reconcile":
 					await recoverExpiredEnvironmentBuilds();
 					await recoverStaleQueuedWorkspaces();
-					await expireApiTurnLeases();
+					await alertAbandonedTurns(await expireApiTurnLeases());
 					break;
 				case "supervise":
-					await recoverChildTurnEvents();
-					await superviseAgentChildren(machines);
+					await recoverChildTurnEvents(machines);
 					// Writer subagents' forks, 30 minutes after their report.
 					await teardownSubagentForks(machines);
 					break;
 				case "delivery":
 					await relayConversationDeliveriesOnce();
 					// Verification and password-reset mail queued by the web app.
-					if (authEmailDeliveryConfigured()) await deliverAuthEmails();
+					if (authEmailDeliveryConfigured())
+						await alertFailedEmails((await deliverAuthEmails()).failed);
 					break;
 				case "checkpoints":
 					if (checkpointStorageConfigured())
@@ -90,6 +92,7 @@ export async function deliverBackgroundJob(
 					await reconcileInfrastructureVms(client);
 					await observeFleetCosts(client);
 					await recycleIdleWorkspaces(client);
+					await alertFleetBudget();
 					break;
 				}
 				case "memory-dreams":
