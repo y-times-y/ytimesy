@@ -30,10 +30,9 @@ import {
  *   - its report is its final message; its usage is its own events.
  *
  * Difference from the product: the product's checker runs its commands as
- * a reader Linux user that cannot write the checkout. A Harbor container
- * has no such user, so after each check the checkout is restored to the
- * tree the checker was given (restoreConversationCode); anything the
- * checker changed in the checkout is undone before the builder continues.
+ * a reader Linux user that cannot write the checkout. In the bridge the
+ * checker (and a pair judge's workers) work in their own cp -a copy of the
+ * checkout (trial.ts readerCopyCommand); nothing is restored afterwards.
  */
 
 export type CheckerRun = {
