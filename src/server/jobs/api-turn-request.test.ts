@@ -409,7 +409,7 @@ it.each([
 		);
 		// The workflow tools are there from the first step, never loaded later.
 		expect(first.names).toEqual(
-			expect.arrayContaining(["agent", "agent_send", "enter_plan_mode"]),
+			expect.arrayContaining(["agent", "agent_send"]),
 		);
 		expect(first.names).not.toContain("find_tools");
 	},
@@ -686,14 +686,11 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 					names.indexOf("web_search"),
 				);
 			}
-			// A root chat (a person can approve a plan) always offers plan mode.
-			if (role === "builder") {
-				expect(names).toContain("enter_plan_mode");
-				expect(names.indexOf("enter_plan_mode")).toBeLessThan(
-					names.indexOf("web_search"),
-				);
-				expect(names).toContain("request_project_secret");
-			} else expect(names).not.toContain("enter_plan_mode");
+			// Plan mode is gone: the agent asks in words when something is unclear.
+			expect(names).not.toContain("enter_plan_mode");
+			expect(names).not.toContain("propose_plan");
+			// A root chat (a person can answer the card) offers the secret request.
+			if (role === "builder") expect(names).toContain("request_project_secret");
 			if (codeMode === "primary") expect(names[0]).toBe("run_code");
 			// Readers share the parent's VM read-only: nothing that changes files.
 			if (role !== "builder" && role !== "writer" && role !== "sidekick")

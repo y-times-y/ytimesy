@@ -9,7 +9,6 @@ import {
 	useState,
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
-import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	type AgentProviderId,
 	agentProviderById,
@@ -328,8 +327,6 @@ export function SessionLauncher({
 		turnStatus,
 		listedTitle,
 	});
-	/** A plan waits for the user's answer, given in words like any reply. */
-	const planWaiting = turnStatus !== "running" && pendingPlanId(items) !== null;
 	function composerCanSend(text: string, slashCommand: boolean) {
 		return composerSendIsEnabled({
 			harnessId,
@@ -699,11 +696,9 @@ export function SessionLauncher({
 							onSubmit={sendDraft}
 							disabled={busy}
 							placeholder={
-								planWaiting
-									? "Reply to approve or change the plan"
-									: followUpLayout
-										? "Follow up…"
-										: "What would you like to work on?"
+								followUpLayout
+									? "Follow up…"
+									: "What would you like to work on?"
 							}
 							onKeyDown={handleComposerKey}
 						/>

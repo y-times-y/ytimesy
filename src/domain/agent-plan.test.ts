@@ -27,31 +27,13 @@ it("is off until the agent enters plan mode", () => {
 	expect(agentPlanState([user("u1"), entered])).toEqual({ kind: "planning" });
 });
 
-const exited = (status: "completed" | "failed" = "completed"): SessionItem => ({
-	kind: "dynamicToolCall",
-	id: SessionItemId("t3:exit"),
-	tool: "exit_plan_mode",
-	status,
-});
-
-it("keeps a proposed plan waiting through feedback until the agent leaves plan mode", () => {
+it("keeps a proposed plan from an old chat waiting until its approve flag", () => {
 	const proposed = [user("u1"), entered, plan("t1:p")];
 	expect(agentPlanState(proposed)).toEqual({
 		kind: "proposed",
 		planId: "t1:p",
 	});
-	// The user's reply alone unlocks nothing: the agent judges it in its next turn.
-	const reply = [...proposed, user("u2")];
-	expect(pendingPlanId(reply)).toBe("t1:p");
-	const revised = [...reply, plan("t2:p")];
-	expect(pendingPlanId(revised)).toBe("t2:p");
-	const approvedInWords = [...revised, user("u3"), exited()];
-	expect(agentPlanState(approvedInWords)).toEqual({ kind: "none" });
-	// A refused exit (no plan waiting) leaves the lock on.
-	expect(agentPlanState([...revised, user("u3"), exited("failed")])).toEqual({
-		kind: "proposed",
-		planId: "t2:p",
-	});
+	expect(pendingPlanId([...proposed, user("u2")])).toBe("t1:p");
 });
 
 it("still honours the approve flag of chats from before plans were approved in words", () => {

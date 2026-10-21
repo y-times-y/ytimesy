@@ -5,12 +5,6 @@ import type { DynamicToolCallItem, SessionItem } from "./session-item";
 export const ENTER_PLAN_MODE_TOOL = "enter_plan_mode";
 /** The agent submits its plan with this tool; the turn ends and waits for the user. */
 export const PROPOSE_PLAN_TOOL = "propose_plan";
-/**
- * The agent unlocks edits with this tool once the user's reply approves its
- * plan. The plan is an ordinary chat message: the user answers in words, not
- * with a button, and the agent judges whether the answer approves it.
- */
-export const EXIT_PLAN_MODE_TOOL = "exit_plan_mode";
 export const PLAN_TEXT_LIMIT = 20_000;
 
 export type AgentPlanState =
@@ -37,8 +31,6 @@ export function agentPlanState(items: readonly SessionItem[]): AgentPlanState {
 			if (item.approvesPlan) return { kind: "none" };
 			laterTurn = true;
 		}
-		if (item.kind === "dynamicToolCall" && completes(item, EXIT_PLAN_MODE_TOOL))
-			return { kind: "none" };
 		if (item.kind === "planProposal")
 			return { kind: "proposed", planId: item.id };
 		if (!laterTurn && item.kind === "dynamicToolCall" && entersPlanMode(item))
