@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
 import type { ApiTokenUsage } from "../../src/domain/api-token-usage";
 import type {
 	AttemptSnapshot,
@@ -11,10 +12,7 @@ import type { SessionItem } from "../../src/domain/session-item";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import { subagentWrapUpNotice } from "../../src/domain/subagent-instructions";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
-import {
-	captureConversationCode,
-	restoreConversationCode,
-} from "../../src/server/services/conversation-code-checkpoint";
+import { captureConversationCode } from "../../src/server/services/conversation-code-checkpoint";
 import type { TrialSessions } from "./sessions";
 import { runsUsage } from "./trial";
 import {
@@ -57,7 +55,6 @@ export type ReviewTrace = {
 	checks: {
 		sessionId: string;
 		snapshot: string;
-		restored: boolean | "failed";
 	}[];
 };
 
@@ -122,22 +119,12 @@ export function harborReviewDeps(input: {
 			};
 			checkers.set(sessionId, entry);
 			void run.done.then(
-				async (result) => {
-					// Undo anything the checker changed in the checkout before the
-					// loop reads its report and the builder continues.
-					const record = {
+				(result) => {
+					// The checker worked in its own copy: nothing to undo here.
+					input.trace.checks.push({
 						sessionId,
 						snapshot: entry.snapshot?.ref ?? "",
-						restored: false as boolean | "failed",
-					};
-					if (entry.snapshot)
-						try {
-							await restoreConversationCode(input.workspace, entry.snapshot);
-							record.restored = true;
-						} catch {
-							record.restored = "failed";
-						}
-					input.trace.checks.push(record);
+					});
 					entry.settled = result;
 				},
 				() => {
@@ -153,16 +140,19 @@ export function harborReviewDeps(input: {
 		},
 		childItems: async (child) => {
 			const usage = checkers.get(child)?.usage() ?? null;
-			return usage
-				? [
-						{
-							kind: "userMessage",
-							id: SessionItemId(`${child}-usage`),
-							text: "",
-							apiUsage: usage,
-						},
-					]
-				: [];
+			return [
+				...commandItems(child, input.sessions?.get(child)?.events ?? []),
+				...(usage
+					? [
+							{
+								kind: "userMessage" as const,
+								id: SessionItemId(`${child}-usage`),
+								text: "",
+								apiUsage: usage,
+							},
+						]
+					: []),
+			];
 		},
 		stopChild: async (child) => {
 			checkers.get(child)?.stop();
@@ -179,21 +169,53 @@ export function harborReviewDeps(input: {
 							modelId: worker.model.modelId,
 							reasoning: worker.model.effort,
 						},
-						items: usage
-							? [
-									{
-										kind: "userMessage",
-										id: SessionItemId(`${worker.id}-usage`),
-										text: "",
-										apiUsage: usage,
-									},
-								]
-							: [],
+						// Its commands, so the judge's tests are marked with who ran them.
+						items: [
+							...commandItems(worker.id, worker.events),
+							...(usage
+								? [
+										{
+											kind: "userMessage",
+											id: SessionItemId(`${worker.id}-usage`),
+											text: "",
+											apiUsage: usage,
+										},
+									]
+								: []),
+						],
 					};
 				}),
 		vm: (command, timeoutMs) =>
 			input.workspace.machines.exec(input.workspace.vm, command, timeoutMs),
 	};
+}
+
+/** A session's tool calls as items (ranCommandsText reads the command, else the input). */
+export function commandItems(
+	sessionId: string,
+	events: readonly { event: ApiAgentEvent }[],
+): SessionItem[] {
+	return events.flatMap(({ event }, index) => {
+		if (event.type !== "tool-call") return [];
+		const input = event.input as { command?: unknown; code?: unknown } | null;
+		const text =
+			typeof input?.command === "string"
+				? input.command
+				: typeof input?.code === "string"
+					? input.code
+					: typeof event.input === "string"
+						? event.input
+						: JSON.stringify(event.input ?? "");
+		return [
+			{
+				kind: "dynamicToolCall" as const,
+				id: SessionItemId(`${sessionId}-call-${index}`),
+				tool: event.name,
+				input: text,
+				status: "completed" as const,
+			},
+		];
+	});
 }
 
 /** The builder's turn as the review loop reads it: the request with its usage, then the final answer. */

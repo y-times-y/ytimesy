@@ -279,6 +279,18 @@ export function runsUsage(
 	);
 }
 
+/** Where a reader's copy of the checkout goes (outside the checkout). */
+export function readerCopyPath(trialId: string, sessionId: string) {
+	const safe = (value: string) => value.replaceAll(/[^a-zA-Z0-9.-]/g, "");
+	return `/tmp/ytimesy-readers/${safe(trialId)}/${safe(sessionId)}/checkout`;
+}
+
+/** Copies the checkout (with .git and the review refs) for a reader. */
+export function readerCopyCommand(cwd: string, copy: string) {
+	const q = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	return `rm -rf ${q(copy)} && mkdir -p "$(dirname ${q(copy)})" && cp -a ${q(cwd)} ${q(copy)}`;
+}
+
 function mcpNoteFor(servers: readonly string[] | undefined) {
 	return servers?.length
 		? ` MCP servers are available in this environment: ${servers.join(", ")}. Use them through a shell command: \`mcp-call <server> list\` lists a server's tools and arguments; \`mcp-call <server> call <tool> '<json arguments>'\` calls one. Each server keeps one session, so state such as an open browser page persists between calls.`
@@ -331,6 +343,7 @@ export async function runHarborTrial(
 	const builderStarts: number[] = [];
 	const notices: TimedNotice[] = [];
 	const sessions = trialSessions(now);
+	const readerCopies: { sessionId: string; copy: string; ok: boolean }[] = [];
 	const fusionTrace: FusionTrace = { decisions: [], rounds: [], refused: [] };
 	const builderModel: HarborModel = {
 		modelId: config.modelId,
@@ -427,6 +440,7 @@ export async function runHarborTrial(
 			const child = await harborHarness({
 				workspace: {
 					...workspace,
+					cwd: options.cwd ?? input.cwd,
 					signal: childSignal,
 					sessionId: session.id,
 					turnId: `${session.id}-turn`,
@@ -494,7 +508,11 @@ export async function runHarborTrial(
 				return report;
 			} finally {
 				await stopApiTurnCommands(
-					{ machines: input.machines, vm: workspace.vm, cwd: input.cwd },
+					{
+						machines: input.machines,
+						vm: workspace.vm,
+						cwd: options.cwd ?? input.cwd,
+					},
 					`${session.id}-turn`,
 				).catch(() => {});
 			}
@@ -516,24 +534,48 @@ export async function runHarborTrial(
 			});
 			checkerBudgets.set(session.id, spec.budget);
 			const pair = config.variant.checkerMode === "pair";
-			const done = runRound(session, spec.brief, {
-				readOnly: true,
-				...(pair
-					? {
-							extraTools: () =>
-								checkerWorkerTool({
-									judge: session,
-									sessions,
-									model: (strong) =>
-										strong ? checkerModel : roleModel("checkerWorker"),
-									runRound: (worker, brief, options) => {
-										checkerBudgets.set(worker.id, spec.budget);
-										return runRound(worker, brief, options);
-									},
-								}),
-						}
-					: {}),
-			});
+			// Readers never touch the checkout: the checker (and a pair judge's
+			// workers) work in their own copy of it, the brief's paths moved there.
+			const copy = readerCopyPath(input.trialId, session.id);
+			const done = (async () => {
+				const made = await input.machines.exec(
+					workspace.vm,
+					readerCopyCommand(input.cwd, copy),
+					120_000,
+				);
+				readerCopies.push({
+					sessionId: session.id,
+					copy,
+					ok: made.exitCode === 0,
+				});
+				if (made.exitCode !== 0) {
+					log(
+						`checker ${session.id}: no read copy (${made.stderr.slice(0, 200)})`,
+					);
+					const failed = { outcome: "failed" as const, report: "" };
+					session.reports.push(failed);
+					return failed;
+				}
+				return runRound(session, spec.brief.split(input.cwd).join(copy), {
+					readOnly: true,
+					cwd: copy,
+					...(pair
+						? {
+								extraTools: () =>
+									checkerWorkerTool({
+										judge: session,
+										sessions,
+										model: (strong) =>
+											strong ? checkerModel : roleModel("checkerWorker"),
+										runRound: (worker, brief, options) => {
+											checkerBudgets.set(worker.id, spec.budget);
+											return runRound(worker, brief, { ...options, cwd: copy });
+										},
+									}),
+							}
+						: {}),
+				});
+			})();
 			return {
 				done,
 				usage: () => lastUsage(session.events),
@@ -574,7 +616,10 @@ export async function runHarborTrial(
 								},
 								await runtimeFor(session.model),
 							);
-							return finalAnswer(out);
+							return {
+								text: finalAnswer(out),
+								usage: runsUsage(session.events, session.starts),
+							};
 						},
 						changedFiles: async () => {
 							const status = await input.machines.exec(
@@ -763,6 +808,7 @@ export async function runHarborTrial(
 			review: {
 				rounds: reviewRounds,
 				checks: reviewTrace.checks,
+				readerCopies,
 				state: reviewTrace.state ?? null,
 				summary: reviewSummary,
 			},
