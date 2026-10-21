@@ -45,8 +45,13 @@ vi.mock("../src/server/adapters/analytics-deletion", () => ({
 	deleteAnalyticsPerson: analytics.deleted,
 }));
 const cancelled = vi.hoisted(() => [] as string[]);
+const cancelFails = vi.hoisted(() => ({ next: false }));
 vi.mock("../src/server/services/cancel-server-turn", () => ({
 	cancelServerTurn: async (userId: string, sessionId: string) => {
+		if (cancelFails.next) {
+			cancelFails.next = false;
+			throw new Error("database down");
+		}
 		cancelled.push(`${userId}/${sessionId}`);
 	},
 }));
@@ -318,4 +323,20 @@ it("cancels running turns before anything is removed and deletes the analytics p
 	// An analytics failure is logged as a leftover, never undoes the deletion.
 	analytics.deleted.mockRejectedValueOnce(new Error("PostHog down"));
 	await expect(deleteAccount(machines, "bob")).resolves.toBeUndefined();
+});
+
+it("stops before removing anything when a running turn cannot be cancelled", async () => {
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	realtime.purge.mockClear();
+	cancelFails.next = true;
+	const refused = await deleteAccount(machines, "alice").catch(
+		(error: unknown) => error,
+	);
+	expect(refused).toBeInstanceOf(Response);
+	expect((refused as Response).status).toBe(503);
+	expect(realtime.purge).not.toHaveBeenCalled();
+	expect(machines.destroy).not.toHaveBeenCalled();
 });

@@ -252,4 +252,15 @@ it("purges a chat object's stored state on a signed request, idempotently", asyn
 				})
 			).status,
 		).toBe(204);
+	// The tombstone refuses a write an in-flight turn still makes.
+	const later = body.replace('"revision":"1"', '"revision":"2"');
+	expect(
+		(
+			await worker.fetch(snapshotUrl, {
+				method: "POST",
+				body: later,
+				headers: await signDeliveryRequest(secret, "POST", snapshotUrl, later),
+			})
+		).status,
+	).toBe(410);
 });
