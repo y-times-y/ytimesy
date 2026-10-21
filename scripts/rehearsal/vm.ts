@@ -19,12 +19,12 @@ import type {
 	WorkspaceMachines,
 } from "../../src/server/services/workspace-machines";
 
-export const VM_IMAGE = "ytimesy-rehearsal-vm:1";
+export const VM_IMAGE = "ytimesy-rehearsal-vm:2";
 const LABEL = "ytimesy-rehearsal=1";
 
 const DOCKERFILE = `FROM ubuntu:24.04
 RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \\
-    docker.io docker-compose-v2 sudo acl python3 git tmux iproute2 ripgrep jq curl ca-certificates procps psmisc \\
+    docker.io docker-compose-v2 sudo acl python3 git tmux iproute2 iptables ripgrep jq curl ca-certificates procps psmisc \\
     >/dev/null && rm -rf /var/lib/apt/lists/*
 RUN usermod -aG docker ubuntu && echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \\
  && printf '#!/bin/sh\\nexit 0\\n' > /usr/local/bin/systemctl \\

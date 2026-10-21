@@ -80,12 +80,16 @@ import {
 	type RecentChatMessage,
 	recentUnsavedMessages,
 } from "../adapters/memory-settings";
+import {
+	type MemoryVmTokenLedger,
+	memoryVmTokens,
+} from "../adapters/memory-vm-tokens";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 /**
  * The VM's Git token outlives any single durable step (each step mints a new
- * one) by a few minutes; a completed turn revokes it and removes it from the
- * clone sooner.
+ * one) by a few minutes; every step's end, however the step ends, revokes it
+ * and removes it from the clone sooner.
  */
 const VM_TOKEN_TTL_SECONDS = MODEL_WORKFLOW_DEADLINE_MS / 1000 + 5 * 60;
 /**
@@ -127,8 +131,12 @@ export type TurnMemory = {
 	prepareVm(workspace: AgentToolWorkspace): Promise<void>;
 	/** Tokens prepareVm put on the VM, for tool-result redaction. */
 	vmTokens(): readonly string[];
-	/** Removes the token from the clone and revokes it; never fails. */
-	releaseVm(workspace: AgentToolWorkspace): Promise<void>;
+	/**
+	 * Removes the token from the clone (when this step has the VM) and
+	 * revokes every token this chat's steps put on a VM, whichever isolate
+	 * minted it; never fails.
+	 */
+	releaseVm(workspace?: AgentToolWorkspace): Promise<void>;
 	/**
 	 * MEMORY.md at chat start and the read hook, attached to the current
 	 * request; `recall` is what the chat shows of it (null when memory was
@@ -273,6 +281,8 @@ export async function turnMemory(
 		recentMessages?: () => Promise<readonly RecentChatMessage[]>;
 		/** How many of the user's other chats have a save hook still to finish. */
 		pendingSaves?: () => Promise<number>;
+		/** Where the ids of tokens put on a VM are kept for revocation. */
+		vmTokenLedger?: MemoryVmTokenLedger;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const source = await memorySource(owner, options);
@@ -289,6 +299,10 @@ export async function turnMemory(
 		(() =>
 			pendingMemorySaves(owner.userId, owner.id, SAVE_WAIT_WINDOW_SECONDS));
 	const vmTokens: string[] = [];
+	/** Ids this isolate already revoked, and the id of each token it minted. */
+	const revokedIds = new Set<string>();
+	const minted = new Map<string, string>();
+	const ledger = options.vmTokenLedger ?? memoryVmTokens;
 	return {
 		mode,
 		instructions: memoryInstructions(
@@ -303,7 +317,24 @@ export async function turnMemory(
 		async prepareVm(workspace) {
 			try {
 				const credentials = await repo.credentials(VM_TOKEN_TTL_SECONDS);
+				// Recorded before it reaches the VM, so any isolate can revoke it;
+				// a token that cannot be recorded never goes there.
+				if (credentials.tokenId)
+					try {
+						await ledger.record({
+							tokenId: credentials.tokenId,
+							userId: owner.userId,
+							sessionId: owner.id,
+							repo: repo.name,
+							expiresAt: new Date(Date.now() + VM_TOKEN_TTL_SECONDS * 1000),
+						});
+					} catch (error) {
+						await repo.revokeCredential?.(credentials.token).catch(() => {});
+						throw error;
+					}
 				vmTokens.push(credentials.token);
+				if (credentials.tokenId)
+					minted.set(credentials.token, credentials.tokenId);
 				const result = await workspace.machines.exec(
 					workspace.vm,
 					memoryCloneScript(credentials),
@@ -322,17 +353,36 @@ export async function turnMemory(
 		vmTokens: () => vmTokens,
 		async releaseVm(workspace) {
 			const tokens = vmTokens.splice(0);
-			if (!tokens.length) return;
-			const scrubbed = await workspace.machines
-				.exec(workspace.vm, SCRUB_MEMORY_CREDENTIAL, 15_000)
-				.catch(() => null);
-			if (scrubbed?.exitCode !== 0)
-				console.warn("Memory token could not be removed from the VM.");
-			await Promise.all(
-				tokens.map((token) => repo.revokeCredential?.(token)),
-			).catch(() => {
-				console.warn("Memory token could not be revoked; it expires soon.");
+			// Earlier steps' tokens, possibly minted in another isolate.
+			const recorded = await ledger
+				.open(owner.userId, owner.id)
+				.catch(() => [] as string[]);
+			const localIds = tokens.flatMap((token) => {
+				const id = minted.get(token);
+				minted.delete(token);
+				return id ? [id] : [];
 			});
+			const others = recorded.filter(
+				(id) => !localIds.includes(id) && !revokedIds.has(id),
+			);
+			if (!tokens.length && !others.length) return;
+			if (workspace && tokens.length) {
+				const scrubbed = await workspace.machines
+					.exec(workspace.vm, SCRUB_MEMORY_CREDENTIAL, 15_000)
+					.catch(() => null);
+				if (scrubbed?.exitCode !== 0)
+					console.warn("Memory token could not be removed from the VM.");
+			}
+			try {
+				await Promise.all([
+					...tokens.map((token) => repo.revokeCredential?.(token)),
+					...others.map((id) => repo.revokeCredential?.(id)),
+				]);
+				for (const id of [...localIds, ...others]) revokedIds.add(id);
+				await ledger.revoked(owner.userId, [...localIds, ...others]);
+			} catch {
+				console.warn("Memory token could not be revoked; it expires soon.");
+			}
 		},
 		async attach(messages, items, workspace) {
 			const unchanged = { messages, recall: null };

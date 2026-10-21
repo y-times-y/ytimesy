@@ -7,6 +7,8 @@ export type WorkspaceDesktop =
 	| {
 			readonly status: "running";
 			readonly viewerUrl: string | null;
+			/** The desktop's VNC password, for the owner's viewer only. */
+			readonly viewerPassword?: string;
 			readonly display: ":0";
 			readonly message: string | null;
 	  }

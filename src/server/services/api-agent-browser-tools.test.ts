@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { DESKTOP_PRIVATE_READY } from "#/server/adapters/freestyle/start-desktop";
 import {
 	apiAgentBrowserTools,
 	safeBrowserUrl,
@@ -31,7 +32,9 @@ it("exposes the Desktop tab viewer once when the agent starts the desktop itself
 	const exec = vi.fn(async (_vm: WorkspaceId, command: string) =>
 		command.includes("scrot")
 			? { exitCode: 0, stdout: "iVBORw0KGgo=", stderr: "" }
-			: { exitCode: 0, stdout: "LISTEN 0 5 127.0.0.1:6080", stderr: "" },
+			: command.includes(DESKTOP_PRIVATE_READY)
+				? { exitCode: 0, stdout: DESKTOP_PRIVATE_READY, stderr: "" }
+				: { exitCode: 0, stdout: "LISTEN 0 5 127.0.0.1:6080", stderr: "" },
 	);
 	const exposeHttp = vi.fn(async () => "https://viewer");
 	const machines = {
@@ -61,11 +64,15 @@ it("exposes the Desktop tab viewer once when the agent starts the desktop itself
 
 it("says why the shared desktop could not start", async () => {
 	const machines = {
-		exec: vi.fn(async () => ({
-			exitCode: 100,
-			stdout: "",
-			stderr: "E: Could not get lock /var/lib/dpkg/lock-frontend",
-		})),
+		exec: vi.fn(async (_vm: WorkspaceId, command: string) =>
+			command.includes(DESKTOP_PRIVATE_READY)
+				? { exitCode: 0, stdout: DESKTOP_PRIVATE_READY, stderr: "" }
+				: {
+						exitCode: 100,
+						stdout: "",
+						stderr: "E: Could not get lock /var/lib/dpkg/lock-frontend",
+					},
+		),
 		writeTextFile: vi.fn(async () => {}),
 		exposeHttp: vi.fn(async () => "https://viewer"),
 	} as unknown as WorkspaceMachines;

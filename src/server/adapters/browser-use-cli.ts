@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { posixShellCommand, posixShellQuoted } from "#/domain/posix-command";
+import { DESKTOP_X_ENVIRONMENT } from "./freestyle/start-desktop";
 
 export const PINNED_BROWSER_USE_VERSION = "0.13.11";
 const uvVersion = "0.12.24";
@@ -17,7 +18,7 @@ export function browserUseSetup(sessionId: string) {
 		.digest("hex")
 		.slice(0, 24);
 	return `set -eu
-export DISPLAY=:0
+${DESKTOP_X_ENVIRONMENT}
 export BH_HOME=/tmp/yb-${identity}
 export BU_CDP_URL=http://127.0.0.1:9222
 export BH_TELEMETRY=0 ANONYMIZED_TELEMETRY=false BH_RECORD=0 BH_TAB_MARKER=0 BU_AUTOSPAWN=0

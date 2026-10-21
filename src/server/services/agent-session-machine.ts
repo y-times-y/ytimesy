@@ -43,6 +43,7 @@ import {
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { purgeConversationState } from "../adapters/realtime-delivery";
+import { cancelServerTurn } from "./cancel-server-turn";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -409,6 +410,8 @@ export async function deleteAgentSessionMachine(
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	const children = await descendantAgentSessions(input.userId, session.id);
 	const removed = [session, ...children];
+	// Their running turns stop before their state goes (cancel, then purge).
+	for (const chat of removed) await cancelServerTurn(input.userId, chat.id);
 	if (checkpointStorageConfigured())
 		for (const chat of removed) await removeChatObjects(input.userId, chat.id);
 	for (const chat of removed)

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `9`;
+exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `10`;
 
 exports[`admits a running VM that has no admission yet and enrolls its retention 1`] = `
 [
@@ -425,7 +425,7 @@ exports[`settles a paused VM and buys a fresh cap before resuming it 2`] = `
 }
 `;
 
-exports[`tops up a running VM whose cap no longer covers the operation > round trips 1`] = `9`;
+exports[`tops up a running VM whose cap no longer covers the operation > round trips 1`] = `10`;
 
 exports[`tops up a running VM whose cap no longer covers the operation 1`] = `
 {
