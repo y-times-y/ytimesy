@@ -11,7 +11,6 @@ import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { agentCall } from "#/domain/agent-call";
-import { pendingPlanId, planOutcome } from "#/domain/agent-plan";
 import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
@@ -80,7 +79,6 @@ import {
 	type FailoverActions,
 	ModelSwitchCard,
 } from "./model-switch-card";
-import { type PlanActions, PlanProposalCard } from "./plan-proposal-card";
 import {
 	type SecretRequestActions,
 	SecretRequestCard,
@@ -104,7 +102,6 @@ export function SessionTimeline({
 	autoScroll = true,
 	collapseInstructions = false,
 	recoveryControls,
-	planActions,
 	secretActions,
 	failoverActions,
 	memoryActions,
@@ -119,8 +116,6 @@ export function SessionTimeline({
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
 	secretActions?: SecretRequestActions;
-	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
-	planActions?: PlanActions;
 	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
 	failoverActions?: FailoverActions;
 	recoveryControls?: (messageId: string) => ReactNode;
@@ -191,16 +186,7 @@ export function SessionTimeline({
 						>
 							<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
 								{row.kind === "item" && row.item.kind === "planProposal" ? (
-									<PlanProposalCard
-										item={row.item}
-										outcome={planOutcome(items, row.item.id)}
-										actions={
-											row.item.id === pendingPlanId(items)
-												? planActions
-												: undefined
-										}
-										onOpenFile={onOpenFile}
-									/>
+									<PlanMessage text={row.item.text} onOpenFile={onOpenFile} />
 								) : row.kind === "item" && row.item.kind === "secretRequest" ? (
 									<SecretRequestCard
 										item={row.item}
@@ -659,13 +645,7 @@ function SessionItemView({
 		case "secretRequest":
 			return <SecretRequestCard item={item} outcome="answered" />;
 		case "planProposal":
-			return (
-				<PlanProposalCard
-					item={item}
-					outcome="pending"
-					onOpenFile={onOpenFile}
-				/>
-			);
+			return <PlanMessage text={item.text} onOpenFile={onOpenFile} />;
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
@@ -1027,4 +1007,19 @@ function activityStatusLabel(status: string): string | null {
 function programLinesLabel(program: string): string {
 	const lines = program.split("\n").length;
 	return `Program · ${lines} ${lines === 1 ? "line" : "lines"}`;
+}
+
+/** A proposed plan reads as the agent's reply; the user answers it in the chat. */
+function PlanMessage({
+	text,
+	onOpenFile,
+}: {
+	text: string;
+	onOpenFile?: (path: string) => void;
+}) {
+	return (
+		<div className="session-message" data-role="assistant" data-plan="true">
+			<AgentMarkdown text={text} onOpenFile={onOpenFile} />
+		</div>
+	);
 }

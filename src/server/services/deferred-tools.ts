@@ -1,5 +1,5 @@
 import type { ModelMessage, ToolSet } from "ai";
-import { PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
+import { EXIT_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
 import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
@@ -168,7 +168,10 @@ export const CODE_MODE_DEFERRED_TOOLS: readonly string[] = [
 ];
 
 /** Offered only while plan mode is on, never callable from a program (it ends the turn). */
-export const PLAN_ONLY_TOOLS: readonly string[] = [PROPOSE_PLAN_TOOL];
+export const PLAN_ONLY_TOOLS: readonly string[] = [
+	PROPOSE_PLAN_TOOL,
+	EXIT_PLAN_MODE_TOOL,
+];
 
 /**
  * The deferred tools a chat has added, in order: its recorded calls (every

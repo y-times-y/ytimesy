@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
 	type AgentPlanState,
 	ENTER_PLAN_MODE_TOOL,
+	EXIT_PLAN_MODE_TOOL,
 	PLAN_TEXT_LIMIT,
 	PROPOSE_PLAN_TOOL,
 } from "#/domain/agent-plan";
@@ -16,7 +17,7 @@ import { fileChangesFromShellCommand } from "#/domain/shell-file-change";
 export const PLAN_END_TURN_TOOLS = [PROPOSE_PLAN_TOOL] as const;
 
 export const PLAN_REVISION_NOTICE =
-	"Plan mode: the user replied to your proposed plan without approving it. Treat the reply as feedback, investigate read-only if needed, and call propose_plan with the revised plan. If they asked for something else, propose a plan for that. File edits stay refused until the user approves.";
+	'Plan mode: the user replied to your proposed plan. If the reply approves it (for example "yes", "go ahead", "looks good, build it"), call exit_plan_mode, then implement the plan, applying any small adjustments the reply asks for. If it asks for changes, raises questions, or asks for something else, it is not approval: investigate read-only if needed and call propose_plan with the revised plan. When unsure, ask the user in plain words instead of guessing. File edits stay refused until you call exit_plan_mode.';
 
 export const PLAN_CONTINUE_NOTICE =
 	"Plan mode is still on: investigate read-only and finish with propose_plan. File edits stay refused until the user approves.";
@@ -41,7 +42,7 @@ const COMMAND_TOOLS: Readonly<Record<string, string>> = {
 const REFUSAL = {
 	blocked: true,
 	error:
-		"Plan mode: implementation is paused until the user approves the plan. Investigate read-only and call propose_plan.",
+		"Plan mode: implementation is paused until the user approves the plan. Investigate read-only and call propose_plan; once the user's reply approves it, call exit_plan_mode.",
 };
 
 /** Tools that would edit files; read-only helpers stay available. */
@@ -90,17 +91,33 @@ export function withPlanMode(
 	) as ToolSet;
 }
 
-/** The turn's plan lock: starts from the transcript; the plan tools turn it on. */
+/** The turn's plan lock: starts from the transcript; the plan tools turn it on and off. */
 export class PlanLock {
 	#planning: boolean;
+	/** A plan was proposed before this turn, so the user's message is its answer. */
+	#answering: boolean;
 	constructor(state: AgentPlanState) {
 		this.#planning = state.kind !== "none";
+		this.#answering = state.kind === "proposed";
 	}
 	get planning() {
 		return this.#planning;
 	}
+	/** exit_plan_mode is allowed only while answering a plan proposed in an earlier turn. */
+	get canExit() {
+		return this.#planning && this.#answering;
+	}
 	enter() {
 		this.#planning = true;
+	}
+	propose() {
+		this.#planning = true;
+		// A plan proposed this turn has no answer yet.
+		this.#answering = false;
+	}
+	exit() {
+		this.#planning = false;
+		this.#answering = false;
 	}
 }
 
@@ -126,12 +143,12 @@ export function planTools(lock: PlanLock): ToolSet {
 		}),
 		[PROPOSE_PLAN_TOOL]: tool({
 			description:
-				"Submit your plan for the user's approval and end this turn. The user sees it with an Approve button; their reply is either approval (edits unlock and you implement it) or feedback (revise and propose again). Write Markdown: the goal, the approach, the files to change, risks and open questions, and the checks that will prove it works. Do not repeat the plan in a message.",
+				"Submit your plan for the user's approval and end this turn. The user reads it as your chat message and answers in words: approval (you call exit_plan_mode and implement it) or feedback (revise and propose again). Write Markdown: the goal, the approach, the files to change, risks and open questions, and the checks that will prove it works. Do not repeat the plan in a message.",
 			inputSchema: z.object({
 				plan: z.string().min(1).max(PLAN_TEXT_LIMIT),
 			}),
 			execute: async ({ plan }) => {
-				lock.enter();
+				lock.propose();
 				return {
 					proposed: true,
 					// The transcript records the plan from this result, so a call
@@ -144,6 +161,29 @@ export function planTools(lock: PlanLock): ToolSet {
 			toModelOutput: ({ output }) => {
 				const { plan: _plan, ...rest } = output as Record<string, unknown>;
 				return { type: "json", value: rest as JSONValue };
+			},
+		}),
+		[EXIT_PLAN_MODE_TOOL]: tool({
+			description:
+				'Leave plan mode and unlock file edits. Call it only when the user\'s latest message approves the plan you proposed ("yes", "go ahead", "looks good, build it"), then implement that plan. Never call it on feedback, questions or a different request: revise with propose_plan instead.',
+			inputSchema: z.object({
+				approval: z
+					.string()
+					.max(300)
+					.describe("The words of the user's reply that approve the plan."),
+			}),
+			execute: async () => {
+				if (!lock.canExit)
+					return {
+						blocked: true,
+						error:
+							"No proposed plan is waiting for the user's answer: propose_plan first, and leave plan mode only after the user approves it in their next message.",
+					};
+				lock.exit();
+				return {
+					planMode: false,
+					next: "Edits are unlocked. Implement the approved plan now.",
+				};
 			},
 		}),
 	};

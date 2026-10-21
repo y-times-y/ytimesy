@@ -9,7 +9,7 @@ import {
 	useState,
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
-import { PLAN_APPROVAL_TEXT } from "#/domain/agent-plan";
+import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	type AgentProviderId,
 	agentProviderById,
@@ -328,6 +328,8 @@ export function SessionLauncher({
 		turnStatus,
 		listedTitle,
 	});
+	/** A plan waits for the user's answer, given in words like any reply. */
+	const planWaiting = turnStatus !== "running" && pendingPlanId(items) !== null;
 	function composerCanSend(text: string, slashCommand: boolean) {
 		return composerSendIsEnabled({
 			harnessId,
@@ -437,24 +439,17 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	function sendText(
-		typed: string,
-		plan?: { readonly approves: true },
-		continueOn?: string,
-	) {
+	function sendText(typed: string, continueOn?: string) {
 		const text = sendableDraft(typed);
-		if (!composerCanSend(text, false) || (!plan && attachmentError)) return;
-		// An approval carries no files; the composer keeps any it holds.
-		const files = plan ? [] : attachments;
+		if (!composerCanSend(text, false) || attachmentError) return;
+		const files = attachments;
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
 			attempts: 1,
 		});
 		const retry = unsentSend.current;
 		const userMessageId =
-			!plan && retry && sameSend(retry, text, files)
-				? retry.id
-				: crypto.randomUUID();
+			retry && sameSend(retry, text, files) ? retry.id : crypto.randomUUID();
 		unsentSend.current = null;
 		setOptimisticItems((current) => [
 			...current,
@@ -474,7 +469,6 @@ export function SessionLauncher({
 							})),
 						}
 					: {}),
-				...(plan ? { approvesPlan: true as const } : {}),
 			},
 		]);
 		// Nothing was sent: take the message back and return what the user typed.
@@ -482,7 +476,7 @@ export function SessionLauncher({
 			setOptimisticItems((current) =>
 				current.filter((item) => item.id !== SessionItemId(userMessageId)),
 			);
-			if (plan || !restore) return;
+			if (!restore) return;
 			unsentSend.current = { id: userMessageId, text, files };
 			setDraft((current) => (current.trim() ? current : typed));
 			if (files.length)
@@ -493,15 +487,13 @@ export function SessionLauncher({
 			onSend(text, modelId, {
 				...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
 				...(speed ? { speed } : {}),
-				...(plan ? { approvesPlan: true } : {}),
 				...(continueOn ? { continueOn } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
 			})?.then((result) => {
 				if (result !== "sent") unsend(result === "unsent");
 			});
-		// Approving from the plan card leaves a draft in progress alone.
-		if (!plan) setDraft("");
+		setDraft("");
 		if (!files.length) {
 			send([]);
 			return;
@@ -649,14 +641,6 @@ export function SessionLauncher({
 				turnStatus={turnStatus}
 				fill={followUpLayout}
 				onOpenFile={onOpenFile}
-				planActions={{
-					disabled: busy || turnStatus === "running",
-					onApprove: () => sendText(PLAN_APPROVAL_TEXT, { approves: true }),
-					onRevise: () =>
-						document
-							.querySelector<HTMLTextAreaElement>(".session-dock textarea")
-							?.focus(),
-				}}
 				secretActions={
 					selectedProject
 						? {
@@ -673,7 +657,7 @@ export function SessionLauncher({
 				}
 				failoverActions={{
 					disabled: busy || turnStatus === "running",
-					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, undefined, key),
+					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
 				}}
 				onRemoveQueued={onRemoveQueued}
 			/>
@@ -715,9 +699,11 @@ export function SessionLauncher({
 							onSubmit={sendDraft}
 							disabled={busy}
 							placeholder={
-								followUpLayout
-									? "Follow up…"
-									: "What would you like to work on?"
+								planWaiting
+									? "Reply to approve or change the plan"
+									: followUpLayout
+										? "Follow up…"
+										: "What would you like to work on?"
 							}
 							onKeyDown={handleComposerKey}
 						/>

@@ -549,6 +549,8 @@ function harnessToolActivity(
 			};
 		case "propose_plan":
 			return { verb: "Proposed a plan" };
+		case "exit_plan_mode":
+			return { verb: "Plan approved, building" };
 		case "request_project_secret":
 			return { verb: "Asked for secret", target: text("name"), code: true };
 		case "search_mcp_tools":
