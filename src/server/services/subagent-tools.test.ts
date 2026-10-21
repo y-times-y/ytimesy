@@ -1,6 +1,6 @@
 import type { ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
-import type { LeadMode } from "#/domain/harness-variant";
+import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import type { RoleModels } from "#/domain/role-models";
@@ -14,6 +14,7 @@ import {
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
+	checkerWorkerTools,
 	type SubagentToolDeps,
 	startHarnessExploration,
 	startRuntimeSubagent,
@@ -66,6 +67,7 @@ function harness(
 		lead?: LeadMode;
 		parentReasoning?: string;
 		rigor?: boolean;
+		checkerMode?: CheckerMode;
 	} = {},
 ) {
 	const sessions: Row[] = options.sessions ?? [
@@ -168,6 +170,7 @@ function harness(
 		lead: options.lead,
 		parentReasoning: options.parentReasoning,
 		rigor: options.rigor,
+		checkerMode: options.checkerMode,
 		onSidekickRound,
 	};
 	const tools: ToolSet = subagentTools(context);
@@ -1195,5 +1198,164 @@ describe("lead mode fusion: sidekicks from before the shared checkout, and the l
 		expect(text).toContain(
 			"The lead has background commands still running in this checkout (job-7)",
 		);
+	});
+});
+
+describe("checkerMode=pair: the checker's judge and worker", () => {
+	const routes: FailoverConnection[] = [
+		{
+			key: "codex",
+			label: "Codex",
+			kind: "subscription",
+			revision: "",
+			models: [
+				{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", reasoning: ["low", "high"] },
+				{ id: "gpt-6-luna", label: "GPT-6 Luna", reasoning: ["low", "high"] },
+			],
+		},
+	];
+	/** The review loop's judge, a minute into its 10-minute check. */
+	const judge = () =>
+		row("c", "root", {
+			agentRole: "checker",
+			turnStatus: "running",
+			harness: "codex",
+			listedModelId: "gpt-6.1-sol",
+			createdAt: at(-1),
+			agentBudget: {
+				steps: 60,
+				minutes: 10,
+				tokens: 800_000,
+				checkerPair: "judge",
+			},
+		});
+	const pair = (deps: Partial<SubagentToolDeps> = {}) => {
+		const sessions = [
+			row("root", null, { items: userTask, listedModelId: "gpt-6.1-sol" }),
+			judge(),
+		];
+		const h = harness({
+			sessions,
+			parent: sessions[1],
+			ancestors: [sessions[0] as Row],
+			checkerMode: "pair",
+			deps: { routes: vi.fn(async () => routes), ...deps },
+		});
+		const tools = checkerWorkerTools(h.context);
+		const call = (input: unknown) =>
+			tools.checker_worker?.execute?.(
+				input as never,
+				{ toolCallId: "call", messages: [], context: undefined } as never,
+			) as Promise<Record<string, unknown>>;
+		return { ...h, call };
+	};
+
+	it("starts a read-only worker on codex:gpt-6-luna with the judge's brief, most of the judge's time, and waits for its evidence", async () => {
+		const takeReport = vi.fn().mockResolvedValueOnce({
+			outcome: "completed",
+			report: "make test: exit 0\nsrc/cli.ts:12 parses --json",
+		});
+		const { call, deps } = pair({ takeReport });
+		const result = await call({
+			title: "Run the suite",
+			brief: "Copy /home/user/app to $HOME/work and run make test there.",
+		});
+		expect(result).toEqual({
+			id: "1.1",
+			model: "GPT-6 Luna · Codex",
+			outcome: "completed",
+			report: "make test: exit 0\nsrc/cli.ts:12 parses --json",
+		});
+		const opened = vi.mocked(deps.openTask).mock.calls[0]?.[0];
+		expect(opened).toMatchObject({
+			parentSessionId: "c",
+			harness: "codex",
+			modelId: "gpt-6-luna",
+			placement: "shared",
+			access: "read_only",
+		});
+		expect(opened?.prompt).toContain(
+			"You are the worker of an independent checker",
+		);
+		expect(opened?.prompt).toContain(
+			"<judge_brief>\nCopy /home/user/app to $HOME/work and run make test there.\n</judge_brief>",
+		);
+		// Neither the user's request nor anything of the builder's: only the judge's brief.
+		expect(opened?.prompt).not.toContain("Add a --json flag");
+		// 9 minutes left, less the judge's 2-minute wrap-up; half its tokens.
+		expect(deps.saveSpec).toHaveBeenCalledWith("user", "child-1", {
+			role: "researcher",
+			budget: {
+				steps: 75,
+				minutes: 7,
+				tokens: 400_000,
+				priceBasis: "gpt-6.1-sol",
+				checkerPair: "worker",
+			},
+		});
+		expect(deps.fork).not.toHaveBeenCalled();
+	});
+
+	it("briefs a worker that already reported again, and queues to one still working", async () => {
+		const takeReport = vi.fn().mockResolvedValue({
+			outcome: "completed",
+			report: "rerun: exit 1",
+		});
+		const { call, deps, sessions } = pair({ takeReport });
+		await call({ brief: "Run make test." });
+		expect(
+			await call({ id: "1.1", brief: "Run tests/edge.sh as well." }),
+		).toEqual({
+			id: "1.1",
+			status:
+				"message queued: it is still working; its report arrives as a message",
+		});
+		Object.assign(sessions.at(-1) as Row, { turnStatus: "completed" });
+		expect(await call({ id: "1.1", brief: "Rerun it." })).toEqual({
+			id: "1.1",
+			outcome: "completed",
+			report: "rerun: exit 1",
+		});
+		expect(vi.mocked(deps.message).mock.calls.map((entry) => entry[2])).toEqual(
+			["Run tests/edge.sh as well.", "Rerun it."],
+		);
+		await expect(call({ id: "2", brief: "x" })).rejects.toThrow(
+			"No worker 2 of yours. Your workers: 1.1 (done).",
+		);
+	});
+
+	it("refuses a worker when the judge's time is nearly gone", async () => {
+		const { call, deps, sessions } = pair();
+		Object.assign(sessions[1] as Row, { createdAt: at(-7.5) });
+		await expect(call({ brief: "Run make test." })).rejects.toThrow(
+			"Too little of your time or budget is left for a worker.",
+		);
+		expect(deps.openTask).not.toHaveBeenCalled();
+	});
+
+	it("marks the builder's own checker and the runtime's checker as judges", async () => {
+		const { call, deps, context } = harness({ checkerMode: "pair" });
+		await call("agent", { role: "checker", title: "Check" });
+		expect(vi.mocked(deps.saveSpec).mock.calls[0]?.[2].budget).toMatchObject({
+			checkerPair: "judge",
+		});
+		expect(vi.mocked(deps.openTask).mock.calls[0]?.[0].prompt).toContain(
+			"<checker_pair>",
+		);
+		const started = await startRuntimeSubagent(context, {
+			role: "checker",
+			title: "Review 1 of 2",
+			brief: "runtime brief",
+			pair: true,
+		});
+		expect(started.budget.checkerPair).toBe("judge");
+		const single = harness();
+		await single.call("agent", { role: "checker", title: "Check" });
+		expect(
+			vi.mocked(single.deps.saveSpec).mock.calls[0]?.[2].budget,
+		).not.toHaveProperty("checkerPair");
+		expect(
+			vi.mocked(single.deps.openTask).mock.calls[0]?.[0].prompt,
+		).not.toContain("<checker_pair>");
 	});
 });

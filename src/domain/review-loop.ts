@@ -311,6 +311,10 @@ export type ReviewRound = {
 		readonly usage?: ApiTokenUsage | null;
 		/** The checker's own model (roleModels); absent = the builder's. */
 		readonly model?: LoopChildModel;
+		/** checkerMode=pair: the checker was the judge of a pair (src/domain/checker-pair.ts). */
+		readonly pair?: true;
+		/** checkerMode=pair: the judge's workers, their models and spend (in the checker's). */
+		readonly workers?: readonly ReviewWorker[];
 	};
 	readonly verdict: ReviewVerdict | null;
 	readonly timedOut?: boolean;
@@ -328,6 +332,13 @@ export type ReviewRound = {
 		readonly usage?: ApiTokenUsage | null;
 		readonly responses?: FindingResponses;
 	};
+};
+
+/** checkerMode=pair: one worker of a round's judge. */
+export type ReviewWorker = {
+	readonly sessionId: string;
+	readonly model?: LoopChildModel;
+	readonly usage: ApiTokenUsage | null;
 };
 
 export type ReviewLoopPhase = "building" | "checking" | "fixing" | "done";

@@ -16,6 +16,8 @@ export type CheckerTest = {
 	readonly command?: string;
 	/** The output lines that show its result. */
 	readonly output?: string;
+	/** checkerMode=pair: which session of the pair ran its command (src/domain/checker-pair.ts). */
+	readonly ranBy?: "worker" | "judge";
 };
 
 /** The checker's structured answer, normalized. */
@@ -231,6 +233,10 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 		...(truncated ? { truncated: true } : {}),
 	};
 }
+
+/** The note an untested pass gets. */
+export const UNTESTED_PASS_NOTE =
+	"(Said pass without running a new test of its own; counted as unsure.)";
 
 /** The failure a report without verdict JSON gets (not a finding about the work). */
 export const NO_VERDICT_FAILURE = "The checker's report held no verdict JSON.";

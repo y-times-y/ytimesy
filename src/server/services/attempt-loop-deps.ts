@@ -1,6 +1,9 @@
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
-import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	descendantAgentSessions,
+} from "../adapters/agent-sessions";
 import {
 	attemptLoopDeadline,
 	loadAttemptLoopState,
@@ -106,5 +109,21 @@ export function reviewLoopDeps(
 		...shared,
 		load: loadReviewLoopState,
 		save: saveReviewLoopState,
+		workers: async (checkerSessionId) =>
+			(
+				await descendantAgentSessions(input.parent.userId, checkerSessionId)
+			).map((session) => ({
+				sessionId: session.id,
+				...(session.listedModelId &&
+				(session.harness === "codex" || session.harness === "api")
+					? {
+							model: {
+								harness: session.harness,
+								modelId: session.listedModelId,
+							},
+						}
+					: {}),
+				items: session.items,
+			})),
 	};
 }
