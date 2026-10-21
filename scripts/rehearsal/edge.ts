@@ -176,6 +176,12 @@ export class RehearsalEdge {
 
 	/** startBackgroundJob: idempotent per id, run in its own invocation. */
 	private readonly jobs = new Set<string>();
+	/** Memory jobs queued (recorded, not run). */
+	readonly memoryJobs: {
+		action: string;
+		userId: string;
+		sessionId: string | null;
+	}[] = [];
 	async dispatch(job: BackgroundJob) {
 		if (this.jobs.has(job.id) || this.stopped) return;
 		this.jobs.add(job.id);
@@ -185,6 +191,16 @@ export class RehearsalEdge {
 
 	private async runJob(job: BackgroundJob) {
 		if (job.kind === "model-admission") return this.admit();
+		// The save hook and dreams call a memory model the rehearsal has not
+		// scripted; which chats queued them is what the checks need.
+		if (job.kind === "memory") {
+			this.memoryJobs.push({
+				action: job.action,
+				userId: job.userId,
+				sessionId: job.sessionId ?? null,
+			});
+			return;
+		}
 		// Environment builds run in the ProjectEnvironment object; the rehearsal
 		// prepares its VM with the hard-set setup instead.
 		if (job.kind === "prepare") {
