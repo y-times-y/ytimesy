@@ -120,6 +120,8 @@ type ToolActivity = {
 	glyph?: SessionActivityGlyph;
 	/** No case knows this tool: the label is its name in words. */
 	fallback?: true;
+	/** A command left running in the background (ytimesy-job). */
+	background?: true;
 };
 
 /** What a command mostly does, for its icon. */
@@ -228,12 +230,19 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			const command = text("command") ?? text("cmd");
 			if (!command) return { verb: "Ran command" };
 			const display = displayCommand(command);
-			return {
-				verb: "Ran",
-				target: display,
-				code: true,
-				glyph: commandGlyph(display),
-			};
+			const background =
+				input.run_in_background === true ||
+				input.is_background === true ||
+				output?.status === "running" ||
+				/\bin background with ID\b/.test(item.output ?? "");
+			return background
+				? { verb: "Started", target: display, code: true, background: true }
+				: {
+						verb: "Ran",
+						target: display,
+						code: true,
+						glyph: commandGlyph(display),
+					};
 		}
 		case "continue_command":
 		case "read_command":

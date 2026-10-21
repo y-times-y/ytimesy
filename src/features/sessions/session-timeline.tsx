@@ -10,10 +10,10 @@ import {
 } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
-	type AgentColor,
 	agentDoing,
 	finishLineAnchorId,
 	helperFinishedNote,
+	helperKind,
 	helperStatus,
 	steeringSender,
 } from "#/domain/agent-panel";
@@ -35,6 +35,13 @@ import {
 	fileChangeActivityTitle,
 } from "#/domain/file-change-copy";
 import { fileBasename } from "#/domain/file-kind";
+import {
+	agentColor,
+	type HelperIdentity,
+	helperName,
+	KIND_ICONS,
+	KIND_TAGS,
+} from "#/domain/helper-names";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
@@ -68,6 +75,7 @@ import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
+import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
@@ -382,7 +390,7 @@ export function SessionTimeline({
 export type HelperLines = {
 	readonly identities: ReadonlyMap<
 		string,
-		{ readonly name: string; readonly color: AgentColor }
+		Pick<HelperIdentity, "name" | "color" | "icon" | "tag">
 	>;
 	readonly onSelect?: (helperId: string) => void;
 };
@@ -401,7 +409,8 @@ function HelperLine({
 	finished?: boolean;
 }) {
 	const identity = lines?.identities.get(task.id);
-	const name = identity?.name ?? task.title;
+	const name = `“${identity?.name ?? helperName(task.title)}”`;
+	const kind = helperKind(task);
 	const status = helperStatus(task.status);
 	const text = finished
 		? helperFinishedNote({
@@ -410,19 +419,20 @@ function HelperLine({
 				doing: agentDoing({
 					status,
 					items: task.items,
-					title: task.title,
+					title: "",
 					summary: task.summary,
 				}),
 			})
-		: `Started ${name}: ${task.title}`;
+		: `Started ${name}`;
 	const content = (
 		<>
-			<span
-				className="agent-dot"
-				data-color={identity?.color ?? "lead"}
-				aria-hidden="true"
+			<AgentIcon
+				icon={identity?.icon ?? KIND_ICONS[kind]}
+				color={identity?.color ?? agentColor(kind)}
+				size={14}
 			/>
 			<span className="helper-line-text">{text}</span>
+			<span className="agent-row-tag">{identity?.tag ?? KIND_TAGS[kind]}</span>
 		</>
 	);
 	return lines?.onSelect ? (
@@ -462,9 +472,9 @@ function QueuedMessage({
 					{item.attachments.map((attachment) => (
 						<li key={attachment.id} title={attachment.name}>
 							{attachment.mediaType.startsWith("image/") ? (
-								<ImageIcon size={13} aria-hidden="true" />
+								<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
 							) : (
-								<Paperclip size={13} aria-hidden="true" />
+								<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
 							)}
 							<span>{attachment.name}</span>
 						</li>
@@ -472,7 +482,7 @@ function QueuedMessage({
 				</ul>
 			) : null}
 			<p className="session-queued-note" role="status">
-				<Clock3 size={12} aria-hidden="true" />
+				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Queued for the agent's next step</span>
 				{onRemove ? (
 					<button
@@ -481,7 +491,7 @@ function QueuedMessage({
 						title="Remove this message before it is delivered"
 						onClick={() => onRemove(item.id)}
 					>
-						<X size={12} aria-hidden="true" />
+						<X size={14} strokeWidth={1.5} aria-hidden="true" />
 					</button>
 				) : null}
 			</p>
@@ -511,7 +521,11 @@ function TimelineRowView({
 					<span title="Elapsed time from dispatch to observed completion">
 						{row.label}
 					</span>
-					<ChevronRight size={12} className="session-activity-chevron" />
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+					/>
 				</summary>
 				<div className="session-work-items">
 					{groupExplorationRows(row.items).map((child) => (
@@ -546,7 +560,11 @@ function TimelineRowView({
 					>
 						{explorationLabel(row.counts)}
 					</span>
-					<ChevronRight size={12} className="session-activity-chevron" />
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+					/>
 				</summary>
 				{row.items.map((item) => (
 					<SessionItemView
@@ -607,7 +625,8 @@ function SessionItemView({
 								<summary>
 									<span>{firstWords(message.text)}</span>
 									<ChevronRight
-										size={12}
+										size={14}
+										strokeWidth={1.5}
 										className="session-activity-chevron"
 									/>
 								</summary>
@@ -626,7 +645,11 @@ function SessionItemView({
 					<details className="session-work child-task-instructions">
 						<summary>
 							<span>Brief</span>
-							<ChevronRight size={12} className="session-activity-chevron" />
+							<ChevronRight
+								size={14}
+								strokeWidth={1.5}
+								className="session-activity-chevron"
+							/>
 						</summary>
 						<div className="session-work-items">
 							<AgentMarkdown text={item.text} onOpenFile={onOpenFile} />
@@ -645,9 +668,9 @@ function SessionItemView({
 							{item.attachments.map((attachment) => (
 								<li key={attachment.id} title={attachment.name}>
 									{attachment.mediaType.startsWith("image/") ? (
-										<ImageIcon size={13} aria-hidden="true" />
+										<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
 									) : (
-										<Paperclip size={13} aria-hidden="true" />
+										<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
 									)}
 									<span>{attachment.name}</span>
 								</li>
@@ -718,7 +741,11 @@ function SessionItemView({
 							{summaries[0]?.split("\n")[0].replace(/^#+\s*|\*\*/g, "") ||
 								title}
 						</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					{summaries.map((summary) => (
 						<p key={`${item.id}:${summary}`}>{summary}</p>
@@ -733,7 +760,11 @@ function SessionItemView({
 					<summary>
 						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					<p>{item.text || "Planning…"}</p>
 				</details>
@@ -760,7 +791,11 @@ function SessionItemView({
 						{status ? (
 							<span className="session-activity-status">{status}</span>
 						) : null}
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					<div className="session-command-detail">
 						<ShellCommandCode command={item.command} />
@@ -833,7 +868,11 @@ function SessionItemView({
 						<ActivityIcon glyph="edit" />
 						<span className={titleClass}>{title}</span>
 						{counts}
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 						{progress}
 					</summary>
 					{item.changes.map((change) => (
@@ -898,15 +937,23 @@ function SessionItemView({
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
+					data-background={activity.background ? "true" : undefined}
 				>
 					<summary>
-						<ActivityIcon
-							glyph={
-								item.status === "failed"
-									? "error"
-									: (activity.glyph ?? activityGlyphForToolName(item.tool))
-							}
-						/>
+						{activity.background ? (
+							<AgentIcon
+								icon={KIND_ICONS.background}
+								color={agentColor("background")}
+							/>
+						) : (
+							<ActivityIcon
+								glyph={
+									item.status === "failed"
+										? "error"
+										: (activity.glyph ?? activityGlyphForToolName(item.tool))
+								}
+							/>
+						)}
 						<span className={titleClass} title={toolDetailTitle(item)}>
 							<span className="session-tool-verb">{activity.verb}</span>
 							{activity.target ? (
@@ -926,7 +973,14 @@ function SessionItemView({
 								<span className="session-tool-note">{activity.note}</span>
 							) : null}
 						</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
+						{activity.background ? (
+							<span className="agent-row-tag">{KIND_TAGS.background}</span>
+						) : null}
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 						{activityStatus(item.status)}
 					</summary>
 					{item.input &&
@@ -937,7 +991,8 @@ function SessionItemView({
 										{programLinesLabel(program)}
 									</span>
 									<ChevronRight
-										size={12}
+										size={14}
+										strokeWidth={1.5}
 										className="session-activity-chevron"
 									/>
 								</summary>

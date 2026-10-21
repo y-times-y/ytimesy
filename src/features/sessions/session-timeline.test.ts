@@ -94,7 +94,15 @@ describe("session timeline live collapse", () => {
 				tasks: [child],
 				helperLines: {
 					identities: new Map([
-						["child", { name: "Writer", color: "blue" as const }],
+						[
+							"child",
+							{
+								name: "Fix branch picker",
+								color: "var(--agent-build)",
+								icon: "hammer" as const,
+								tag: "Build",
+							},
+						],
 					]),
 					onSelect: () => {},
 				},
@@ -114,8 +122,8 @@ describe("session timeline live collapse", () => {
 			}),
 		);
 		// The lead's chat shows a start line and a finish line, not the helper's transcript.
-		expect(html).toContain("Started Writer: Fix branch picker");
-		expect(html).toContain("Writer finished: Implemented");
+		expect(html).toContain("Started “Fix branch picker”");
+		expect(html).toContain("“Fix branch picker” finished: Implemented");
 		expect(html).not.toContain("child-task-card");
 		expect(html).not.toContain("Looking at the session timeline");
 		expect(html).not.toContain("Its final summary is below");
@@ -134,8 +142,8 @@ describe("session timeline live collapse", () => {
 		const html = renderToString(
 			createElement(SessionTimeline, {
 				turnStatus: "running",
-				senderName: "Lead",
-				queuedSteering: [{ id: "q", from: "Lead", text: "Use the v2 API" }],
+				senderName: "Main",
+				queuedSteering: [{ id: "q", from: "Main", text: "Use the v2 API" }],
 				items: [
 					{
 						kind: "userMessage",
@@ -150,7 +158,7 @@ describe("session timeline live collapse", () => {
 				],
 			}),
 		);
-		expect(html).toContain('<span class="session-message-sender">Lead</span>');
+		expect(html).toContain('<span class="session-message-sender">Main</span>');
 		expect(html).toContain('<span class="session-message-sender">You</span>');
 		expect(html).toContain("<p>Skip the docs</p>");
 		expect(html).not.toContain("Coordination message ID");
