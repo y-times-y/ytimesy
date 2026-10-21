@@ -1474,6 +1474,9 @@ async function runApiTurnAttempt(
 							}),
 							rigor: variant.rigor === "on",
 							pair: variant.checkerMode === "pair",
+							// Lead mode fusion: a turn that ends while the writer's
+							// round runs hands the check to the turn its report wakes.
+							...(leadGate ? { handedOff: leadWrites.busy } : {}),
 						})
 					: null;
 		const attemptWaitUntil = () =>

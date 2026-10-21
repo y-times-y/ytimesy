@@ -121,7 +121,7 @@ const NOTICE = "independent checker reviewed your work";
 export const REQUIREMENTS_INSTRUCTION =
 	"- Requirements: before you start, write the request's requirements";
 export const LEAD_REQUIREMENTS_INSTRUCTION =
-	"- As the lead, write the list right after the exploration report";
+	"- As Main, write the list right after the exploration report";
 /** The checker brief's label for the builder's list. */
 export const BUILDER_LIST_LABEL =
 	"The builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):";
@@ -420,8 +420,9 @@ return JSON.stringify(apply);`);
 			}
 			if (applied >= 1)
 				return { text: `Rehearsal lead finished: ${applied} patches applied.` };
-			// Waiting for the writer's report: keep the turn alive.
-			return bash("sleep 15; echo waiting-for-report");
+			// Waiting for the writer's report: Main hands off and ends its turn;
+			// the report wakes it in a new turn, which applies the patch.
+			return handOff();
 		},
 	};
 }

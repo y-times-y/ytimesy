@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentTaskEvent } from "#/server/adapters/agent-task-events";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
+	deliverAgentTaskEvents,
 	deliverParentTaskNotification,
 	REPORT_HELD_FOR_TURN,
 	subagentReportMessage,
@@ -14,6 +15,18 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	ack: vi.fn(),
 	send: vi.fn(),
+	claim: vi.fn(),
+	defer: vi.fn(),
+	delivered: vi.fn(),
+	session: vi.fn(),
+}));
+vi.mock("#/server/adapters/agent-task-events", () => ({
+	claimAgentTaskEvent: mocks.claim,
+	deferAgentTaskEvent: mocks.defer,
+	markAgentTaskEventDelivered: mocks.delivered,
+}));
+vi.mock("#/server/adapters/agent-sessions", () => ({
+	agentSessionForOwner: mocks.session,
 }));
 vi.mock("../adapters/server-peer-inbox", () => ({
 	serverPeerMessageAccepted: mocks.accepted,
@@ -58,6 +71,26 @@ it("holds a report to a chat whose turn runs: no mid-turn injection, no second t
 		),
 	).rejects.toThrow(REPORT_HELD_FOR_TURN);
 	expect(mocks.stage).not.toHaveBeenCalled();
+	expect(mocks.send).not.toHaveBeenCalled();
+});
+it("a held report deferred by its own delivery job is not an error: the turn's end releases it", async () => {
+	const event = {
+		id: "event-1",
+		userId: "owner",
+		parentSessionId: "main",
+		childSessionId: "child",
+		eventType: "completed",
+		payload: { message: "Child finished" },
+	} as unknown as AgentTaskEvent;
+	mocks.claim.mockResolvedValueOnce(event);
+	mocks.session.mockImplementation(async (_user: string, id: string) =>
+		id === "main"
+			? { ...parent, id: "main", parentSessionId: null }
+			: { ...parent, id: "child", agentRole: "writer" },
+	);
+	await expect(deliverAgentTaskEvents({} as never, "event-1")).resolves.toBe(0);
+	expect(mocks.defer).toHaveBeenCalledWith("event-1", REPORT_HELD_FOR_TURN);
+	expect(mocks.delivered).not.toHaveBeenCalled();
 	expect(mocks.send).not.toHaveBeenCalled();
 });
 it("injects notifications into an active subagent parent without launching a second turn", async () => {
