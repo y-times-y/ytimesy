@@ -113,7 +113,9 @@ export async function codexExternalTokens(
 		);
 		const sealed = rows[0]?.encrypted_codex_auth;
 		if (!sealed) throw new Error("Connect Codex before starting this agent.");
-		const auth = managedAuth(JSON.parse(await unseal(sealed)));
+		const auth = managedAuth(
+			JSON.parse(await unseal(sealed, { purpose: "codex-auth", userId })),
+		);
 		if (codexAccessTokenExpiresAt(auth) >= Date.now() + 300_000)
 			return externalTokens(auth);
 	}
@@ -137,7 +139,14 @@ async function lockedExternalTokens(
 		if (!row?.encrypted_codex_auth) {
 			throw new Error("Connect Codex before starting this agent.");
 		}
-		let auth = managedAuth(JSON.parse(await unseal(row.encrypted_codex_auth)));
+		let auth = managedAuth(
+			JSON.parse(
+				await unseal(row.encrypted_codex_auth, {
+					purpose: "codex-auth",
+					userId,
+				}),
+			),
+		);
 		if (
 			forceRefresh ||
 			codexAccessTokenExpiresAt(auth) < Date.now() + 300_000
@@ -162,7 +171,11 @@ async function lockedExternalTokens(
 			// Plan changes surface on refresh; keep the displayed plan current.
 			await client.query(
 				"update agent_account set encrypted_codex_auth=$2,plan_type=coalesce($3,plan_type),updated_at=now() where user_id=$1 and provider='codex'",
-				[userId, await seal(JSON.stringify(auth)), codexPlanType(auth)],
+				[
+					userId,
+					await seal(JSON.stringify(auth), { purpose: "codex-auth", userId }),
+					codexPlanType(auth),
+				],
 			);
 		}
 		await client.query("commit");

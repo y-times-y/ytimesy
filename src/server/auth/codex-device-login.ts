@@ -82,9 +82,11 @@ function pendingView(login: PendingLogin): CodexDeviceLogin {
 	};
 }
 
-async function openPending(sealed: string | null) {
+async function openPending(sealed: string | null, userId: string) {
 	if (!sealed) return null;
-	const parsed = pendingLogin.safeParse(JSON.parse(await unseal(sealed)));
+	const parsed = pendingLogin.safeParse(
+		JSON.parse(await unseal(sealed, { purpose: "codex-device-login", userId })),
+	);
 	return parsed.success ? parsed.data : null;
 }
 
@@ -98,7 +100,7 @@ export async function readCodexDeviceLogin(
 			[userId],
 		)
 	).rows[0];
-	const login = await openPending(row?.encrypted_device_login ?? null);
+	const login = await openPending(row?.encrypted_device_login ?? null, userId);
 	return login && login.expiresAt > Date.now()
 		? pendingView(login)
 		: { status: "none" };
@@ -142,7 +144,13 @@ export async function startCodexDeviceLogin(
 		 values($1,'codex','disconnected',$2)
 		 on conflict(user_id,provider) do update set
 		 encrypted_device_login=excluded.encrypted_device_login,updated_at=now()`,
-		[userId, await seal(JSON.stringify(login))],
+		[
+			userId,
+			await seal(JSON.stringify(login), {
+				purpose: "codex-device-login",
+				userId,
+			}),
+		],
 	);
 	return pendingView(login);
 }
@@ -168,7 +176,10 @@ export async function advanceCodexDeviceLogin(
 				[userId],
 			)
 		).rows[0];
-		const login = await openPending(row?.encrypted_device_login ?? null);
+		const login = await openPending(
+			row?.encrypted_device_login ?? null,
+			userId,
+		);
 		const finish = async (result: CodexDeviceLogin) => {
 			if (row?.encrypted_device_login)
 				await client.query(
@@ -258,7 +269,11 @@ export async function advanceCodexDeviceLogin(
 			`update agent_account set status='connected',encrypted_codex_auth=$2,
 			 plan_type=$3,message=null,encrypted_device_login=null,updated_at=now()
 			 where user_id=$1 and provider='codex'`,
-			[userId, await seal(JSON.stringify(auth)), codexPlanType(auth)],
+			[
+				userId,
+				await seal(JSON.stringify(auth), { purpose: "codex-auth", userId }),
+				codexPlanType(auth),
+			],
 		);
 		await client.query("commit");
 		return { status: "connected" };
