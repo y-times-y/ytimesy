@@ -18,6 +18,8 @@ export type CheckerTest = {
 	readonly output?: string;
 	/** checkerMode=pair: which session of the pair ran its command (src/domain/checker-pair.ts). */
 	readonly ranBy?: "worker" | "judge";
+	/** A robustness probe beyond what the request states: its failure is a note, never a finding. */
+	readonly probe?: true;
 };
 
 /** The checker's structured answer, normalized. */
@@ -181,12 +183,14 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 								: null;
 				if (!name || passed === null) return [];
 				const evidence = text(test.evidence, 600);
+				const probe = test.probe === true;
 				const command = text(test.command, 500);
 				const output = text(test.output, 800);
 				return [
 					{
 						name,
 						passed,
+						...(probe ? { probe: true as const } : {}),
 						...(evidence ? { evidence } : {}),
 						...(command ? { command } : {}),
 						...(output ? { output } : {}),
@@ -209,14 +213,15 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 		listed.length
 			? listed
 			: tests
-					.filter((test) => !test.passed)
+					.filter((test) => !test.passed && !test.probe)
 					.map((test) => {
 						const evidence = test.evidence ?? test.output;
 						return evidence ? `${test.name}: ${evidence}` : test.name;
 					})
 	).slice(0, 20);
 	const testsPath = text(record.testsPath, 500);
-	const anyFailed = tests.some((test) => !test.passed);
+	// A failed probe beyond the request's stated scope never blocks a pass.
+	const anyFailed = tests.some((test) => !test.passed && !test.probe);
 	const notes = text(record.notes, 2000);
 	return {
 		verdict:

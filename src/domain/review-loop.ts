@@ -269,7 +269,8 @@ export type ReviewOutcome =
 	| "rounds"
 	| "time"
 	| "not-eligible"
-	| "check-failed";
+	| "check-failed"
+	| "unsure";
 
 /**
  * After a verdict: pass finishes (unless the builder admitted unverified
@@ -288,6 +289,13 @@ export function decideAfterVerdict(input: {
 		!input.findings.some((finding) => finding.kind === "unverified")
 	)
 		return { kind: "finish", reason: "pass" };
+	// Unsure is not evidence that the work is wrong: only a fail (or rigor's
+	// admitted-unverified finding) sends the builder back.
+	if (
+		input.verdict.verdict === "unsure" &&
+		!input.findings.some((finding) => finding.kind === "unverified")
+	)
+		return { kind: "finish", reason: "unsure" };
 	if (!hasConcreteFindings(input.findings))
 		return { kind: "finish", reason: "no-findings" };
 	if (input.deadlineAt - input.now < REVIEW_LOOP_LIMITS.minFixMs)

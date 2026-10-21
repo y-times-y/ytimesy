@@ -532,7 +532,7 @@ ${TASK}
 		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
 			"finished",
 		);
-		expect(h.state()?.outcome).toBe("no-findings");
+		expect(h.state()?.outcome).toBe("unsure");
 
 		const g = harness({ reports: [FAIL] });
 		await g.loop.beforeModel(g.step(0, ""));
