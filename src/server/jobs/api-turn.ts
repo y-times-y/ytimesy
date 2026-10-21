@@ -216,7 +216,7 @@ import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
-import { turnMemory } from "../services/turn-memory";
+import { subagentMemory, turnMemory } from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -579,6 +579,26 @@ async function runApiTurnAttempt(
 									wording: variant.memoryWording,
 									writer: variant.memoryWriter,
 								},
+							),
+						),
+					).catch(() => null)
+				: Promise.resolve(null);
+		// Its subagents read the same project's memory, never write it: no
+		// save hook, no ~/memory clone, no memory instructions. Same
+		// exclusions as the root chat's.
+		const childRole = owner.parentSessionId ? owner.agentRole : null;
+		const subagentMemoryLoading =
+			childRole && !evaluation
+				? timed("turn:memory", () =>
+						turnMemo(`${turn.id}:subagent-memory`, () =>
+							subagentMemory(
+								{
+									id: owner.id,
+									userId: owner.userId,
+									projectId: owner.projectId ?? null,
+									role: childRole,
+								},
+								{ wording: variant.memoryWording },
 							),
 						),
 					).catch(() => null)
@@ -1012,6 +1032,17 @@ async function runApiTurnAttempt(
 			);
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
+			if (attached.recall) {
+				items = withMemoryRecall(items, attached.recall);
+				progress.offer(items);
+			}
+		}
+		const readOnlyMemory = await subagentMemoryLoading;
+		if (readOnlyMemory && firstStep) {
+			const attached = await timed("turn:memoryAttach", () =>
+				readOnlyMemory.attach(messages, items),
+			);
+			messages = attached.messages;
 			if (attached.recall) {
 				items = withMemoryRecall(items, attached.recall);
 				progress.offer(items);
