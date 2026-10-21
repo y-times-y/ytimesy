@@ -6,6 +6,7 @@ import {
 	type MemoryLine,
 	memoryLines,
 	parseMemoryLine,
+	trailingMemoryKeys,
 } from "./memory-repo";
 import type { SessionItem } from "./session-item";
 
@@ -188,7 +189,8 @@ export function withSavedMemory(
 export function memoryHoldsLine(files: MemoryFiles, line: SavedMemoryLine) {
 	const content = files[line.path];
 	if (content === undefined) return false;
-	const key = normalized(line.text);
+	// Older records kept trailing key text ("kind: inferred.") in the line.
+	const key = normalized(trailingMemoryKeys(line.text).text);
 	return content
 		.split("\n")
 		.some((raw) => normalized(parseMemoryLine(raw)?.text ?? "") === key);
@@ -201,7 +203,7 @@ export function withoutMemoryLine(
 ): MemoryChange | null {
 	const content = files[line.path];
 	if (content === undefined || !memoryHoldsLine(files, line)) return null;
-	const key = normalized(line.text);
+	const key = normalized(trailingMemoryKeys(line.text).text);
 	const kept = content
 		.split("\n")
 		.filter((raw) => normalized(parseMemoryLine(raw)?.text ?? "") !== key);

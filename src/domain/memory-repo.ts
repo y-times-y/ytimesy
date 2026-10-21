@@ -154,7 +154,44 @@ export function parseMemoryLine(
 		}
 		text = text.slice(0, group.index).trimEnd();
 	}
-	return { path, line, raw, text, meta };
+	const loose = trailingMemoryKeys(text);
+	for (const [key, value] of Object.entries(loose.meta)) meta[key] ??= value;
+	return { path, line, raw, text: loose.text, meta };
+}
+
+/**
+ * Keys a save sometimes writes as trailing text ("... totals. kind: inferred.")
+ * instead of inside the [...] metadata, with the values each may take.
+ */
+const LOOSE_KEYS =
+	/(?:^|\s)(kind|scope|expires)\s*:\s*(inferred|stated|always|\d{4}-\d{2}-\d{2})\s*[.;,]?\s*$/i;
+
+/**
+ * An entry's text without trailing `kind:`/`scope:`/`expires:` key text, and
+ * those keys: so either way of writing them reads the same.
+ */
+export function trailingMemoryKeys(text: string): {
+	text: string;
+	meta: Record<string, string>;
+} {
+	const meta: Record<string, string> = {};
+	let rest = text;
+	for (;;) {
+		const match = LOOSE_KEYS.exec(rest);
+		if (!match) break;
+		const key = match[1].toLowerCase();
+		const value = match[2].toLowerCase();
+		const fits =
+			key === "kind"
+				? value === "inferred" || value === "stated"
+				: key === "scope"
+					? value === "always"
+					: /^\d{4}-\d{2}-\d{2}$/.test(value);
+		if (!fits || meta[key] !== undefined) break;
+		meta[key] = value;
+		rest = rest.slice(0, match.index).trimEnd();
+	}
+	return { text: rest || text, meta };
 }
 
 export function memoryLines(files: MemoryFiles): MemoryLine[] {
