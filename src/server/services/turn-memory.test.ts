@@ -897,6 +897,85 @@ describe("the VM's memory token", () => {
 		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_1");
 		expect(memory.vmTokens()).toEqual([]);
 	});
+
+	it("records each token's id before it reaches the VM and revokes earlier steps' tokens from any isolate", async () => {
+		const ledger = new Map<string, { sessionId: string; revoked: boolean }>();
+		const vmTokenLedger = {
+			record: vi.fn(async (input: { tokenId: string; sessionId: string }) => {
+				ledger.set(input.tokenId, {
+					sessionId: input.sessionId,
+					revoked: false,
+				});
+			}),
+			open: vi.fn(async (_user: string, sessionId: string) =>
+				[...ledger]
+					.filter(([, row]) => row.sessionId === sessionId && !row.revoked)
+					.map(([id]) => id),
+			),
+			revoked: vi.fn(async (_user: string, ids: readonly string[]) => {
+				for (const id of ids) {
+					const row = ledger.get(id);
+					if (row) row.revoked = true;
+				}
+			}),
+		};
+		let minted = 0;
+		const repo = {
+			...fakeRepo({}),
+			credentials: vi.fn(async (_ttl: number) => {
+				minted += 1;
+				return {
+					remote: "https://git/memory.git",
+					token: `art_vm_token_${minted}`,
+					tokenId: `tok-${minted}`,
+				};
+			}),
+			revokeCredential: vi.fn(async (_token: string) => {}),
+		};
+		const owner = {
+			id: "11111111-1111-4111-8111-111111111111",
+			userId: "u1",
+			projectId: null,
+		};
+		const options = {
+			repo,
+			embed: null,
+			appUrl: "https://ytimesy.test",
+			projectName: null,
+			vmTokenLedger,
+		};
+		const exec = vi.fn(async (_vm: string, _command: string) => ({
+			exitCode: 0,
+			stdout: "",
+			stderr: "",
+		}));
+		const vm = { machines: { exec }, vm: "vm-1" } as never;
+		// Step 1 in one isolate clones and is evicted before it releases.
+		const first = await turnMemory(owner, options);
+		await first?.prepareVm(vm);
+		expect(vmTokenLedger.record).toHaveBeenCalledWith(
+			expect.objectContaining({ tokenId: "tok-1", sessionId: owner.id }),
+		);
+		// Step 2 in another isolate releases both.
+		const second = await turnMemory(owner, options);
+		await second?.prepareVm(vm);
+		await second?.releaseVm(vm);
+		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_2");
+		expect(repo.revokeCredential).toHaveBeenCalledWith("tok-1");
+		expect(await vmTokenLedger.open("u1", owner.id)).toEqual([]);
+		// A step without the VM still revokes what earlier steps left.
+		await first?.prepareVm(vm);
+		const third = await turnMemory(owner, options);
+		await third?.releaseVm();
+		expect(repo.revokeCredential).toHaveBeenCalledWith("tok-3");
+		// A token whose id cannot be recorded is revoked and never cloned.
+		vmTokenLedger.record.mockRejectedValueOnce(new Error("db down"));
+		exec.mockClear();
+		await third?.prepareVm(vm);
+		expect(exec).not.toHaveBeenCalled();
+		expect(third?.vmTokens()).toEqual([]);
+		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_4");
+	});
 });
 
 describe("subagents and the checker (read only)", () => {

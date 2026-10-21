@@ -15,7 +15,10 @@ import {
 	type TaskEnvironment,
 } from "../../scripts/hard-set/environment";
 import { SOURCE_AGENT_SECRETS } from "../../src/domain/project-secret";
-import { READER_LINUX_USER } from "../../src/domain/subagent-reader";
+import {
+	READER_LINUX_USER,
+	READER_NETWORK_NAMESPACE,
+} from "../../src/domain/subagent-reader";
 
 /** The reader's uid and gid the fake sudo reports (the VM's useradd --system value). */
 export const FAKE_READER_UID = "998";
@@ -160,9 +163,13 @@ exec env -i PATH="$PATH" HOME=/ "\${envs[@]}" "$@"`,
  * arrive wrapped in readerCommand (src/domain/subagent-reader.ts).
  */
 export function vmCommandUser(sent: string) {
+	// The reader's network namespace wraps the switch to its user.
+	const inNamespace = sent.startsWith(`${READER_NETWORK_NAMESPACE} `)
+		? sent.slice(READER_NETWORK_NAMESPACE.length + 1)
+		: sent;
 	const reader =
 		/^sudo -n -u ytimesy-reader -- env HOME=(\S+) .* bash -c "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"$/s.exec(
-			sent,
+			inNamespace,
 		);
 	return reader
 		? {

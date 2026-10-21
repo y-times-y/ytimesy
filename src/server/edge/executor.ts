@@ -127,13 +127,23 @@ async function resolveModelConversation(step: WorkflowStep) {
 	return result.rows[0] ?? null;
 }
 
+const PURGE_TOMBSTONE_TABLE =
+	"create table if not exists conversation_tombstone(id integer primary key check(id=1),purged_at integer not null)";
+
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
 	private readonly history: TurnHistoryCache;
 	private readonly queue: SqliteTurnQueue;
 	private readonly room: ConversationRoom;
+	/**
+	 * The chat was deleted: its tombstone (kept in SQLite across restarts)
+	 * refuses every later request, turn, step and alarm, so an in-flight turn
+	 * cannot recreate its state after the purge.
+	 */
+	private purged = false;
 	private bindIdentity(scope: { userId: string; sessionId: string }) {
+		if (this.purged) return false;
 		const name = modelConversationName(scope);
 		const existing = this.ctx.storage.sql
 			.exec<{ name: string }>("select name from conversation_identity")
@@ -226,6 +236,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	/** The turn loop and the room's lease expiry share this object's single alarm. */
 	private async wake(purpose: "turn" | "room", at: number | null) {
+		if (this.purged) return;
 		if (at === null)
 			this.ctx.storage.sql.exec(
 				"delete from conversation_wake where purpose=?",
@@ -251,21 +262,22 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * project or its account is deleted. A second purge finds nothing left.
 	 */
 	private async purge(scope: { userId: string; sessionId: string }) {
-		let existing: string | undefined;
-		try {
-			existing = this.ctx.storage.sql
-				.exec<{ name: string }>("select name from conversation_identity")
-				.toArray()[0]?.name;
-		} catch {
-			// Its tables went with an earlier purge by this instance.
-			return new Response(null, { status: 204 });
-		}
+		if (this.purged) return new Response(null, { status: 204 });
+		const existing = this.ctx.storage.sql
+			.exec<{ name: string }>("select name from conversation_identity")
+			.toArray()[0]?.name;
 		if (existing && existing !== modelConversationName(scope))
 			return new Response(null, { status: 403 });
-		this.room.forget();
+		this.purged = true;
 		this.history.clear();
 		await this.ctx.storage.deleteAlarm();
-		await this.ctx.storage.deleteAll();
+		// Deletes everything, then keeps the room's tombstone.
+		await this.room.purge();
+		this.ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
+		this.ctx.storage.sql.exec(
+			"insert or ignore into conversation_tombstone(id,purged_at) values(1,?)",
+			Date.now(),
+		);
 		return new Response(null, { status: 204 });
 	}
 	/**
@@ -273,6 +285,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * the alarm; the step's receipt is still "processing", so it is resumed.
 	 */
 	async alarm() {
+		if (this.purged) {
+			await this.ctx.storage.deleteAlarm();
+			return;
+		}
 		const now = Date.now();
 		const rows = this.ctx.storage.sql
 			.exec<{ purpose: string; at: number }>(
@@ -543,6 +559,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				secret,
 				async (scope, authenticated) => {
 					if (path === "/purge") return this.purge(scope);
+					if (this.purged) return new Response(null, { status: 410 });
 					if (!this.bindIdentity(scope))
 						return new Response(null, { status: 403 });
 					if (path === "/turn/cancel") {
@@ -567,6 +584,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					secrets.MODEL_WORKFLOW_SECRET,
 					resolveModelConversation,
 					async (scope, authenticated) => {
+						if (this.purged) return new Response(null, { status: 410 });
 						if (!this.bindIdentity(scope))
 							return new Response(null, { status: 403 });
 						return this.withLocalConversation(scope, () =>
@@ -626,6 +644,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_wake(purpose text primary key,at integer not null)",
 		);
+		ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
+		this.purged =
+			ctx.storage.sql
+				.exec<{ n: number }>("select count(*) as n from conversation_tombstone")
+				.toArray()[0]?.n > 0;
 	}
 }
 

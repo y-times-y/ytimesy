@@ -117,10 +117,10 @@ export async function enqueueApiTurn(input: {
 	/** The user chose to continue this turn on a fallback route from the start. */
 	failover?: TurnFailover;
 }) {
-	// A turn the user (or a wake-up) starts is new work and waits for an
-	// exhausted usage window; a subagent's task belongs to its parent's
-	// running turn, which always finishes.
-	if (!input.preparedTask && infrastructureAdmissionEnabled())
+	// Every turn is new work and waits for an exhausted usage window: one the
+	// user (or a wake-up) starts, and a subagent's task too (its parent's own
+	// turn still finishes, without starting more work past the limit).
+	if (infrastructureAdmissionEnabled())
 		await assertUsageWindowsOpen(input.userId);
 	const client = await database().connect();
 	let turnId: string | undefined;

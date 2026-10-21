@@ -2,8 +2,10 @@ import type { PoolClient } from "pg";
 import {
 	blockingUsageWindow,
 	USAGE_WINDOWS,
+	UsageCeilingReached,
 	type UsageCharge,
 	UsageWindowExhausted,
+	usageWindowCeiling,
 	usageWindowState,
 	utcUsageMonth,
 	validUsageAmount,
@@ -176,7 +178,10 @@ async function usageTransaction<T>(
 	}
 }
 
-/** Replays reuse the same reservation; an uncertain remote failure retains the entire hold. */
+/**
+ * Replays reuse the same reservation; an uncertain remote failure retains the
+ * entire hold. Returns the hold's total as it now stands.
+ */
 export async function reserveInfrastructureUsage(
 	input: {
 		id: string;
@@ -184,10 +189,22 @@ export async function reserveInfrastructureUsage(
 		resourceKey: string;
 		amountMicroUsd: number;
 		/**
+		 * The machine's hourly cost: running work may carry a window about an
+		 * hour of it past the limit (the hard ceiling), never further. Without
+		 * it the ceiling is the limit itself.
+		 */
+		hourlyMicroUsd?: number;
+		/**
+		 * When set, a hold that would pass the ceiling shrinks to fit under it,
+		 * down to this total; the caller sizes its runtime to what is returned.
+		 */
+		minimumMicroUsd?: number;
+		/**
 		 * True while the machine is already running: its hold may grow past a
-		 * usage window, so running work finishes. A start or a new machine is
-		 * refused once a window is exhausted, unless one of the user's turns
-		 * is still running (it was admitted before the limit).
+		 * usage window up to the ceiling, so running work finishes. A start or
+		 * a new machine is refused once a window is exhausted, unless a turn
+		 * of the session this machine belongs to is still running (it was
+		 * admitted before the limit).
 		 */
 		continuing?: boolean;
 	},
@@ -236,27 +253,50 @@ export async function reserveInfrastructureUsage(
 				throw new Error("Infrastructure reservation identity changed.");
 			if (row.consumed_micro_usd !== null)
 				throw new Error("Infrastructure reservation is already settled.");
-			if (mode === "create") return;
+			if (mode === "create") return Number(row.reserved_micro_usd);
 			amountToReserve = Math.max(
 				0,
 				input.amountMicroUsd - Number(row.reserved_micro_usd),
 			);
-			if (!amountToReserve) return;
+			if (!amountToReserve) return Number(row.reserved_micro_usd);
 		} else if (mode === "increase")
 			throw new Error("Infrastructure reservation is unavailable.");
 		if (!row.owner) throw new Error("Usage account is unavailable.");
+		const { windows } = await readWindows(client, input.userId, limits);
 		if (!input.continuing && mode === "create") {
-			const blocking = blockingUsageWindow(
-				(await readWindows(client, input.userId, limits)).windows,
-			);
+			const blocking = blockingUsageWindow(windows);
 			if (blocking) {
+				// Only the machine of a session whose turn is still running may
+				// start past the limit: that turn was admitted before it.
 				const running = await client.query(
-					"select 1 from api_turn where user_id=$1 and state in ('queued','running') limit 1",
-					[input.userId],
+					`select 1 from api_turn t where t.user_id=$1 and t.state in ('queued','running')
+					 and 'vm:ytimesy-ag-' || left(replace(t.session_id::text,'-',''),16)=$2 limit 1`,
+					[input.userId, input.resourceKey],
 				);
 				if (!running.rows.length) throw new UsageWindowExhausted(blocking);
 			}
 		}
+		// The hard ceiling holds for every hold, running machines included.
+		const held = mode === "increase" ? Number(row.reserved_micro_usd) : 0;
+		const overrun = input.hourlyMicroUsd ?? 0;
+		const [binding] = windows
+			.map((window) => ({
+				window,
+				room:
+					usageWindowCeiling(window.limitMicroUsd, overrun) -
+					window.usedMicroUsd,
+			}))
+			.sort((a, b) => a.room - b.room);
+		if (binding && amountToReserve > binding.room) {
+			if (
+				input.minimumMicroUsd === undefined ||
+				held + binding.room < input.minimumMicroUsd ||
+				binding.room <= 0
+			)
+				throw new UsageCeilingReached(binding.window);
+			amountToReserve = binding.room;
+		}
+		const total = held + amountToReserve;
 		// Holds survive month boundaries until settled: an old run cannot evade the new fleet cap.
 		if (Number(row.fleet) + amountToReserve > limits.fleetMicroUsd)
 			throw new Error("The fleet cloud execution budget is exhausted.");
@@ -267,14 +307,15 @@ export async function reserveInfrastructureUsage(
 		if (mode === "increase") {
 			await client.query(
 				"update infrastructure_usage_reservation set reserved_micro_usd=$2 where id=$1",
-				[input.id, input.amountMicroUsd],
+				[input.id, total],
 			);
-			return;
+			return total;
 		}
 		await client.query(
 			"insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd) values($1,$2,$3,$4,$5)",
-			[input.id, input.userId, input.resourceKey, period, input.amountMicroUsd],
+			[input.id, input.userId, input.resourceKey, period, total],
 		);
+		return total;
 	}, existingClient);
 }
 

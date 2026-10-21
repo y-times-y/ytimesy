@@ -14,10 +14,12 @@ import {
 } from "#/server/services/workspace-preview";
 
 const scopeInput = z.object({
-	projectId: z.string().trim().min(1),
-	sessionId: z.string().trim().min(1),
+	projectId: z.uuid(),
+	sessionId: z.uuid(),
 });
-const portInput = scopeInput.extend({ port: z.number().int() });
+const portInput = scopeInput.extend({
+	port: z.number().int().min(1).max(65_535),
+});
 
 async function withPreviews<A>(
 	run: (

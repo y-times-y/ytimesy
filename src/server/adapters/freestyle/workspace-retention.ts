@@ -273,6 +273,7 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 					amountMicroUsd: Math.ceil(
 						(computeHourlyMicroUsd(data.resources) * 80) / 3600,
 					),
+					hourlyMicroUsd: computeHourlyMicroUsd(data.resources),
 				},
 				connection,
 			);

@@ -834,7 +834,11 @@ export function memoryCloneScript(input: { remote: string; token: string }) {
 	const remote = quote(input.remote);
 	const header = quote(`Authorization: Bearer ${input.token}`);
 	return `set -eu
+umask 077
 m="$HOME/${MEMORY_HOME_FOLDER}"
+# The clone holds a write token: only the builder may enter it (the home is
+# traversable by read-only agents, so the clone itself is 0700, its config 0600).
+private() { chmod 700 "$m" "$m/.git" && touch "$m/.git/config" && chmod 600 "$m/.git/config"; }
 git_m() { git -C "$m" -c core.hooksPath=/dev/null "$@"; }
 configure() {
 	git_m remote set-url origin ${remote} 2>/dev/null || git_m remote add origin ${remote}
@@ -848,7 +852,9 @@ if [ ! -d "$m/.git" ]; then
 	[ -e "$m" ] && [ -n "$(ls -A "$m")" ] && { echo "${MEMORY_DIRECTORY} exists and is not a git repo" >&2; exit 3; }
 	git init -q -b main "$m"
 fi
+private
 configure
+private
 heads=$(git_m ls-remote --heads origin main) || { echo "memory remote unreachable" >&2; exit 4; }
 if [ -n "$heads" ]; then
 	git_m fetch -q origin main
@@ -861,6 +867,7 @@ if [ -n "$heads" ]; then
 else
 	rm -rf "$m"
 	git init -q -b main "$m"
+	private
 	configure
 	printf '%s' ${quote(EMPTY_MEMORY)} > "$m/MEMORY.md"
 	git_m add MEMORY.md

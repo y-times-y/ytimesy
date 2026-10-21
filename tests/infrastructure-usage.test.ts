@@ -31,7 +31,7 @@ vi.mock("../src/server/adapters/database", () => ({
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(
-		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); create table api_turn(id text,user_id text,state text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
+		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); create table api_turn(id text,user_id text,state text,session_id text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
 	);
 	await db.exec(
 		readFileSync(
@@ -449,8 +449,13 @@ it("funds the requested long operation before resuming a paused machine", async 
 it("refuses new holds once a window is exhausted, but never work already running", async () => {
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
 	await reserveInfrastructureUsage(reservation());
-	// Under the 5-hour limit a start is admitted even if it carries past it.
-	await reserveInfrastructureUsage({ ...reservation(), resourceKey: "vm:two" });
+	// Under the 5-hour limit a start is admitted even if it carries past it
+	// (within the ceiling: the limit plus an hour of the machine).
+	await reserveInfrastructureUsage({
+		...reservation(),
+		resourceKey: "vm:two",
+		hourlyMicroUsd: 100,
+	});
 	const before = await userInfrastructureUsage("alice");
 	expect(before.windows.map((window) => window.exhausted)).toEqual([
 		true,
@@ -459,16 +464,55 @@ it("refuses new holds once a window is exhausted, but never work already running
 	await expect(
 		reserveInfrastructureUsage({ ...reservation(), resourceKey: "vm:two" }),
 	).rejects.toThrow(/reached your weekly cloud usage limit.*until \d{4}/);
-	// A machine that is already running keeps buying runtime.
+	// A machine that is already running keeps buying runtime, up to the
+	// ceiling: the limit plus an hour of that machine (here 200).
 	await reserveInfrastructureUsage({
 		...reservation(),
 		resourceKey: "vm:two",
+		hourlyMicroUsd: 200,
 		continuing: true,
 	});
-	// So does any start while one of the user's turns still runs.
-	await query("insert into api_turn values('t1','alice','running')");
-	await reserveInfrastructureUsage({ ...reservation(), resourceKey: "vm:two" });
+	// So does a start of the machine of a session whose turn still runs; a
+	// turn of another session (a new subagent's fork) exempts nothing.
+	const session = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+	const own = {
+		resourceKey: "vm:ytimesy-ag-aaaaaaaabbbb4ccc",
+		hourlyMicroUsd: 200,
+	};
+	await query("insert into api_turn values('t0','alice','running','other')");
+	await expect(
+		reserveInfrastructureUsage({ ...reservation(), ...own }),
+	).rejects.toThrow(/reached your weekly cloud usage limit/);
+	await query("insert into api_turn values('t1','alice','running',$1)", [
+		session,
+	]);
+	await reserveInfrastructureUsage({ ...reservation(), ...own });
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(240);
+	// Past the ceiling nothing extends, running or not; a hold that may shrink
+	// gets what is left (300 - 240), never less than its minimum.
+	await expect(
+		reserveInfrastructureUsage({
+			...reservation("alice", 61),
+			...own,
+			continuing: true,
+		}),
+	).rejects.toThrow(/grace past your (?:5-hour|weekly) cloud usage limit/);
+	expect(
+		await reserveInfrastructureUsage({
+			...reservation("alice", 61),
+			...own,
+			continuing: true,
+			minimumMicroUsd: 50,
+		}),
+	).toBe(60);
+	await expect(
+		reserveInfrastructureUsage({
+			...reservation("alice", 10),
+			...own,
+			continuing: true,
+			minimumMicroUsd: 1,
+		}),
+	).rejects.toThrow(/grace past your/);
 	expect(await userInfrastructureUsage("bob")).toMatchObject({
 		reservedMicroUsd: 0,
 		windows: [

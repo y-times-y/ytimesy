@@ -218,7 +218,11 @@ import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
-import { subagentMemory, turnMemory } from "../services/turn-memory";
+import {
+	subagentMemory,
+	type TurnMemory,
+	turnMemory,
+} from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -411,6 +415,10 @@ async function runApiTurnAttempt(
 	};
 	let coordinated = false;
 	let closeMcp: (() => Promise<void>) | undefined;
+	// Cross-chat memory and its VM clone; the clone's token is released when
+	// this step ends, however it ends.
+	let memoryLoading: Promise<TurnMemory | null> = Promise.resolve(null);
+	let memoryCloned: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -567,7 +575,7 @@ async function runApiTurnAttempt(
 		const writable = writesOwnCheckout(owner);
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
-		const memoryLoading =
+		memoryLoading =
 			writable && !owner.parentSessionId && !evaluation
 				? timed("turn:memory", () =>
 						turnMemo(`${turn.id}:memory`, () =>
@@ -605,7 +613,6 @@ async function runApiTurnAttempt(
 						),
 					).catch(() => null)
 				: Promise.resolve(null);
-		let memoryCloned: Promise<void> | undefined;
 		// Turn-fixed configuration is loaded by the turn's first durable step and
 		// reused by later steps in the same isolate (see turn-memo). It may change
 		// between turns; within one, keeping it fixed also keeps the tools and the
@@ -1706,12 +1713,6 @@ async function runApiTurnAttempt(
 				{ keepIdle: true },
 			).catch(() => {});
 		await memory?.afterTurn(turn.id);
-		// The turn's own memory writes are done; its VM token goes now rather
-		// than at expiry. A later turn clones with a new one.
-		if (memoryCloned && execution) {
-			const ready = execution;
-			await memoryCloned.then(() => memory?.releaseVm(ready)).catch(() => {});
-		}
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
 				"Completed turn saved, but its project report needs recovery.",
@@ -2062,6 +2063,18 @@ async function runApiTurnAttempt(
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
+		// The VM's memory token goes when the step ends (completed, failed,
+		// cancelled or continued in a later step) rather than at expiry, with
+		// any earlier step's; a later step clones with a new one.
+		const cloned = memoryCloned;
+		const vm = execution;
+		await memoryLoading
+			.then(async (memory) => {
+				if (!memory) return;
+				await cloned?.catch(() => {});
+				await memory.releaseVm(cloned ? vm : undefined);
+			})
+			.catch(() => {});
 		await closeMcp?.().catch(() => {});
 		clearInterval(heartbeat);
 		await heartbeatPending;
