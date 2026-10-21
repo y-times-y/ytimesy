@@ -1,5 +1,4 @@
 import {
-	Bot,
 	CircleCheck,
 	Eye,
 	Hammer,
@@ -9,8 +8,7 @@ import {
 } from "lucide-react";
 import type { AgentIcon as AgentIconId } from "#/domain/helper-names";
 
-const ICONS: Record<AgentIconId, LucideIcon> = {
-	bot: Bot,
+const ICONS: Record<Exclude<AgentIconId, "dot">, LucideIcon> = {
 	hammer: Hammer,
 	search: Search,
 	eye: Eye,
@@ -28,6 +26,20 @@ export function AgentIcon({
 	color: string;
 	size?: number;
 }) {
+	// Main has no pictogram: a plain dot in its colour.
+	if (icon === "dot")
+		return (
+			<svg
+				className="agent-icon"
+				width={size}
+				height={size}
+				viewBox="0 0 16 16"
+				style={{ color }}
+				aria-hidden="true"
+			>
+				<circle cx="8" cy="8" r="3" fill="currentColor" />
+			</svg>
+		);
 	const Icon = ICONS[icon];
 	return (
 		<Icon

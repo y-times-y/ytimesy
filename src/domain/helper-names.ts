@@ -27,14 +27,14 @@ export const KIND_TAGS: Record<AgentKind, string | null> = {
 
 /** Lucide icon per kind (drawn in agent-icon.tsx). */
 export type AgentIcon =
-	| "bot"
+	| "dot"
 	| "hammer"
 	| "search"
 	| "eye"
 	| "circle-check"
 	| "terminal";
 export const KIND_ICONS: Record<AgentKind, AgentIcon> = {
-	main: "bot",
+	main: "dot",
 	sidekick: "hammer",
 	writer: "hammer",
 	researcher: "search",

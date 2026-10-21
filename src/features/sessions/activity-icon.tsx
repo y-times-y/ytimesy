@@ -1,11 +1,11 @@
 import {
-	Bot,
 	Brain,
 	FilePenLine,
 	FileText,
 	Globe,
 	Info,
 	type LucideIcon,
+	Split,
 	SquareTerminal,
 } from "lucide-react";
 import type { SessionActivityGlyph } from "#/domain/session-activity";
@@ -19,7 +19,7 @@ const read = FileText;
 const edit = FilePenLine;
 const run = SquareTerminal;
 const web = Globe;
-const agent = Bot;
+const agent = Split;
 const notice = Info;
 
 const icons = {
