@@ -8,11 +8,10 @@ import { memoryTokens } from "./memory-ranking";
 
 /**
  * Memory lanes: the memory repo as its history. One lane per scope
- * (Personal, then each project), time running left to right; each line is a
- * mark on its lane at its `added:` date, a line that replaced another is
- * joined to it by a curve, and each dream is a marker across the lanes,
- * with the lines it merged converging into a merge mark. Pure; the view
- * maps days to pixels.
+ * (Personal, then each project); each line sits on its lane at its `added:`
+ * date, a line that replaced another is linked to it, and each dream records
+ * the lines it merged. `memoryHistory` lays this out as a commit list
+ * (newest first) for the view. Pure.
  */
 
 export const NEW_DAYS = 7;
@@ -92,6 +91,14 @@ export type DreamInput = {
 	readonly at: string;
 	readonly message: string;
 	readonly merges: readonly DreamMergeInput[];
+	/** How many lines the dream added, merged, replaced, expired and removed. */
+	readonly counts?: {
+		readonly added: number;
+		readonly merged: number;
+		readonly replaced: number;
+		readonly expired: number;
+		readonly removed: number;
+	};
 };
 
 export type LaneGhost = {
@@ -106,6 +113,7 @@ export type LaneDream = {
 	readonly day: number;
 	readonly at: string;
 	readonly message: string;
+	readonly counts?: DreamInput["counts"];
 	readonly merges: readonly {
 		readonly lane: number;
 		/** The line the merge produced, when memory still holds it. */
@@ -280,6 +288,7 @@ export function memoryLanes(input: {
 			day: dreamDays[index],
 			at: dream.at,
 			message: dream.message,
+			...(dream.counts ? { counts: dream.counts } : {}),
 			merges: dream.merges.flatMap((merge) => {
 				const into = byText.get(key(merge.into));
 				const lane = into
@@ -329,9 +338,105 @@ export function memoryLanes(input: {
 	};
 }
 
-/** Days per tick on the time axis for a given scale (pixels per day). */
-export function axisStep(pixelsPerDay: number) {
-	for (const step of [1, 2, 7, 14, 30, 61, 91, 182, 365])
-		if (step * pixelsPerDay >= 64) return step;
-	return 365;
+// ---- history (git log --graph) ------------------------------------------------
+
+export type HistoryItem =
+	| { readonly kind: "memory"; readonly id: string; readonly node: LaneNode }
+	| { readonly kind: "dream"; readonly id: string; readonly dream: LaneDream }
+	| {
+			readonly kind: "merged";
+			readonly id: string;
+			readonly text: string;
+			readonly lane: number;
+			readonly mark: "stated" | "inferred";
+			/** The memory row this line was merged into, when memory still holds it. */
+			readonly into: string | null;
+	  };
+
+export type HistoryLink = {
+	readonly id: string;
+	readonly kind: "replaced" | "merged";
+	/** Row indexes: the older row (below) and the newer row (above). */
+	readonly from: number;
+	readonly to: number;
+	readonly fromLane: number;
+	readonly toLane: number;
+	/** The newer memory's id, for highlighting its chain. */
+	readonly target: string;
+};
+
+/**
+ * Memory as a commit list, newest first: one row per line, a divider row per
+ * dream with the lines it merged just below it, and links from an older row
+ * up into the row that replaced it or that it was merged into. Lines without
+ * a date go last. Rows on the same day keep file order.
+ */
+export function memoryHistory(input: Parameters<typeof memoryLanes>[0]) {
+	const lanes = memoryLanes(input);
+	type Keyed = { at: number; order: number; items: HistoryItem[] };
+	const keyed: Keyed[] = lanes.nodes.map((node, order) => ({
+		at: node.undated ? Number.NEGATIVE_INFINITY : node.day + 0.5,
+		order,
+		items: [{ kind: "memory", id: node.id, node }],
+	}));
+	for (const [index, dream] of lanes.dreams.entries())
+		keyed.push({
+			at: Date.parse(dream.at) / DAY,
+			order: index - lanes.dreams.length,
+			items: [
+				{ kind: "dream", id: dream.id, dream },
+				...dream.merges.flatMap((merge) =>
+					merge.ghosts.map(
+						(ghost, g): HistoryItem => ({
+							kind: "merged",
+							id: `${dream.id}:${merge.text}:${g}`,
+							text: ghost.text,
+							lane: ghost.lane,
+							mark: ghost.mark,
+							into: merge.into,
+						}),
+					),
+				),
+			],
+		});
+	const items = keyed
+		.sort((a, b) => b.at - a.at || a.order - b.order)
+		.flatMap((entry) => entry.items);
+	const row = new Map(items.map((item, index) => [item.id, index]));
+	const laneOf = new Map(lanes.nodes.map((node) => [node.id, node.lane]));
+	const links: HistoryLink[] = [
+		...lanes.curves.flatMap((curve) => {
+			const from = row.get(curve.from);
+			const to = row.get(curve.to);
+			if (from === undefined || to === undefined) return [];
+			return [
+				{
+					id: `replaced:${curve.id}`,
+					kind: "replaced" as const,
+					from,
+					to,
+					fromLane: laneOf.get(curve.from) ?? 0,
+					toLane: laneOf.get(curve.to) ?? 0,
+					target: curve.to,
+				},
+			];
+		}),
+		...items.flatMap((item, from) => {
+			if (item.kind !== "merged" || !item.into) return [];
+			const to = row.get(item.into);
+			if (to === undefined) return [];
+			return [
+				{
+					id: `merged:${item.id}`,
+					kind: "merged" as const,
+					from,
+					to,
+					fromLane: item.lane,
+					toLane: laneOf.get(item.into) ?? 0,
+					target: item.into,
+				},
+			];
+		}),
+	];
+	return { lanes: lanes.lanes, items, links };
 }

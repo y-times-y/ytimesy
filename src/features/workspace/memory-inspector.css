@@ -627,7 +627,7 @@ a.memory-row-action:hover {
 	text-decoration-color: #ffffff26;
 }
 
-/* ---- memory lanes ---------------------------------------------------------- */
+/* ---- memory history (git log --graph) ------------------------------------ */
 .memory-page[data-view="graph"] {
 	max-width: none;
 	padding: 0;
@@ -671,170 +671,6 @@ a.memory-row-action:hover {
 	margin: 0;
 	color: #6f6f6f;
 }
-.memory-lanes-frame {
-	position: absolute;
-	inset: 0 0 44px;
-	overflow-x: hidden;
-	overflow-y: auto;
-	touch-action: pan-y;
-}
-.memory-lanes-svg {
-	display: block;
-	width: 100%;
-	min-height: 100%;
-	cursor: grab;
-	user-select: none;
-}
-.memory-lanes-svg:active {
-	cursor: grabbing;
-}
-.lane-rules line {
-	stroke: #ffffff;
-	stroke-opacity: 0.05;
-}
-.lane-rules .lane-divider {
-	stroke-opacity: 0.035;
-}
-.lane-axis line {
-	stroke: #ffffff;
-	stroke-opacity: 0.08;
-}
-.lane-axis text {
-	fill: #6a6a6a;
-	font-size: 11px;
-	text-anchor: middle;
-}
-.lane-today line {
-	stroke: #ffffff;
-	stroke-opacity: 0.18;
-	stroke-dasharray: 2 4;
-}
-.lane-today text {
-	fill: #d4d4d4;
-	font-weight: 500;
-	font-size: 10.5px;
-	text-anchor: middle;
-}
-.lane-dream line {
-	stroke: #ffffff;
-	stroke-opacity: 0.14;
-	stroke-width: 1;
-	stroke-dasharray: 3 4;
-}
-.lane-dream text {
-	fill: #6a6a6a;
-	font-size: 10px;
-	letter-spacing: 0.02em;
-	text-anchor: middle;
-}
-.lane-dot {
-	fill: currentColor;
-}
-.lane-mark[data-mark="inferred"] {
-	opacity: 0.45;
-}
-.lane-mark[data-retired="true"] {
-	opacity: 0.2;
-}
-.lane-new {
-	fill: none;
-	stroke: currentColor;
-	stroke-opacity: 0.75;
-	stroke-width: 1;
-}
-.lane-rule {
-	stroke: currentColor;
-	stroke-width: 2;
-	stroke-linecap: round;
-}
-.lane-merge-end {
-	fill: #d4d4d4;
-	opacity: 0.6;
-}
-.lane-merge-line {
-	fill: none;
-	stroke: #d4d4d4;
-	stroke-opacity: 0.28;
-	stroke-width: 1;
-}
-.lane-curves path {
-	fill: none;
-	stroke: #9a9a9a;
-	stroke-opacity: 0.35;
-	stroke-width: 1.2;
-	transition: stroke-opacity 140ms ease;
-}
-.lane-curves path[data-active="true"] {
-	stroke: #ededed;
-	stroke-opacity: 0.9;
-	stroke-width: 1.6;
-}
-.lane-curves[data-focus="true"] path:not([data-active="true"]) {
-	stroke-opacity: 0.12;
-}
-.lane-nodes > g {
-	cursor: pointer;
-	transition: opacity 140ms ease;
-}
-.lane-nodes[data-focus="true"] > g:not([data-chain="true"]) {
-	opacity: 0.45;
-}
-.lane-nodes > g[data-chain="true"] {
-	opacity: 1;
-}
-.lane-hit {
-	fill: transparent;
-}
-.lane-ring {
-	fill: none;
-	stroke: #ededed;
-	stroke-opacity: 0.8;
-	stroke-width: 1.2;
-}
-.lane-labels {
-	position: absolute;
-	top: 0;
-	left: 0;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	pointer-events: none;
-}
-.lane-labels li {
-	position: absolute;
-	left: 0;
-	right: 0;
-	display: flex;
-	align-items: center;
-	padding-left: 12px;
-	background: linear-gradient(90deg, #0b0b0b 85%, transparent);
-}
-.memory-graph-page .lane-labels button {
-	pointer-events: auto;
-	max-width: 100%;
-	gap: 7px;
-	padding: 0 8px;
-	color: #b4b4b4;
-	font-size: 12px;
-}
-.memory-graph-page .lane-labels button[aria-pressed="true"] {
-	background: #ffffff10;
-	color: #f2f2f2;
-}
-.lane-labels i {
-	flex: none;
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-}
-.lane-labels span {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.lane-labels small {
-	color: #5f5f5f;
-	font-size: 11px;
-}
 .memory-graph-card {
 	position: absolute;
 	z-index: 2;
@@ -842,67 +678,6 @@ a.memory-row-action:hover {
 	border-radius: 10px;
 	background: #141414f2;
 	box-shadow: 0 12px 32px #0008;
-}
-.memory-graph-page button.memory-graph-scope {
-	top: 14px;
-	left: 14px;
-	height: auto;
-	gap: 10px;
-	padding: 7px 10px 7px 12px;
-	color: #8a8a8a;
-}
-.memory-graph-scope span {
-	display: grid;
-	text-align: left;
-}
-.memory-graph-scope strong {
-	color: #f2f2f2;
-	font-size: 13px;
-	font-weight: 500;
-}
-.memory-graph-scope small {
-	color: #6f6f6f;
-	font-size: 11.5px;
-}
-.memory-lanes-zoom {
-	top: 14px;
-	right: 14px;
-	display: flex;
-	padding: 2px;
-	border-color: #ffffff0f;
-	background: #111111;
-	box-shadow: none;
-}
-.memory-graph-page .memory-lanes-zoom button {
-	height: 24px;
-	padding: 0 8px;
-	color: #8a8a8a;
-	font-size: 11.5px;
-}
-.memory-graph-tip {
-	position: absolute;
-	z-index: 3;
-	max-width: 280px;
-	padding: 6px 9px;
-	border: 1px solid #ffffff1a;
-	border-radius: 7px;
-	background: #171717f2;
-	box-shadow: 0 8px 24px #00000080;
-	pointer-events: none;
-	transform: translate(12px, 12px);
-}
-.memory-graph-tip[data-flip="true"] {
-	transform: translate(calc(-100% - 12px), 12px);
-}
-.memory-graph-tip p {
-	margin: 0 0 2px;
-	color: #ededed;
-	font-size: 12px;
-	line-height: 1.45;
-}
-.memory-graph-tip span {
-	color: #7a7a7a;
-	font-size: 11px;
 }
 .memory-graph-details {
 	top: 58px;
@@ -1014,50 +789,232 @@ a.memory-row-action:hover {
 .memory-title-tip:focus-visible {
 	box-shadow: 0 0 0 2px #ffffff30;
 }
-.memory-lanes-legend {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
+.memory-log-page {
 	display: flex;
-	flex-wrap: wrap;
+	flex-direction: column;
+}
+.memory-log-bar {
+	display: flex;
+	flex: none;
 	align-items: center;
-	gap: 4px 16px;
-	min-height: 44px;
+	gap: 10px;
+	height: 52px;
+	padding: 0 14px;
+	border-bottom: 1px solid #ffffff0a;
+}
+.memory-graph-page button.memory-log-scope {
+	gap: 6px;
+	height: 30px;
+	padding: 0 8px 0 10px;
+	color: #8a8a8a;
+}
+.memory-log-scope strong {
+	color: #ededed;
+	font-size: 13px;
+	font-weight: 500;
+}
+.memory-log-count {
+	color: #6a6a6a;
+	font-size: 12px;
+}
+.memory-log-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 6px 0 24px;
+}
+.memory-log-body {
+	position: relative;
+}
+.memory-log-page[data-details="true"] .memory-log-body {
+	margin-right: 340px;
+}
+.memory-log-graph {
+	position: absolute;
+	top: 0;
+	left: 0;
+	z-index: 1;
+	overflow: visible;
+	pointer-events: none;
+}
+.history-lane {
+	stroke-width: 1.5;
+	stroke-opacity: 0.45;
+}
+.history-link {
+	fill: none;
+	stroke-width: 1.5;
+	stroke-opacity: 0.45;
+	stroke-linecap: round;
+	transition: stroke-opacity 120ms ease;
+}
+.history-branch {
+	stroke-dasharray: 2 3;
+}
+.history-link[data-active="true"] {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the inline lane colour */
+	stroke: #ededed !important;
+	stroke-opacity: 0.9;
+	stroke-dasharray: none;
+}
+.memory-log-graph[data-focus="true"] .history-link:not([data-active="true"]) {
+	stroke-opacity: 0.2;
+}
+.history-dot {
+	fill: currentColor;
+	fill-opacity: 0.75;
+	stroke: #0b0b0b;
+	stroke-width: 2;
+	paint-order: stroke;
+}
+.history-dot[data-recent="true"] {
+	fill-opacity: 1;
+}
+.history-dot[data-retired="true"] {
+	fill: #0b0b0b;
+	stroke: currentColor;
+	stroke-width: 1.25;
+	stroke-opacity: 0.6;
+}
+.history-dot[data-chain="true"] {
+	fill-opacity: 1;
+}
+.memory-log {
 	margin: 0;
-	padding: 8px 16px;
-	border-top: 1px solid #ffffff0a;
+	padding: 0;
 	list-style: none;
+}
+.memory-log > li {
+	transition: opacity 120ms ease;
+}
+.memory-log[data-focus="true"]
+	> li:not([data-chain="true"]):not(.history-dream) {
+	opacity: 0.45;
+}
+.memory-graph-page .history-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 36px;
+	height: auto;
+	padding: 0 16px 0 calc(var(--gutter) + 4px);
+	border-radius: 0;
+	color: #d4d4d4;
+	font-size: 13px;
+	text-align: left;
+	white-space: normal;
+}
+.memory-graph-page .history-row:hover:enabled,
+.memory-log > li[data-chain="true"] .history-row,
+.memory-log > li.history-row[data-chain="true"] {
+	background: #ffffff08;
+	color: #f2f2f2;
+}
+.memory-log > li.history-row:hover {
+	background: #ffffff08;
+}
+.memory-graph-page .history-row[aria-pressed="true"] {
+	background: #ffffff0f;
+	color: #f2f2f2;
+}
+.memory-graph-page .history-row:focus-visible {
+	outline: none;
+	box-shadow: inset 2px 0 0 #ffffff40;
+}
+.history-text {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.history-row[data-retired="true"] .history-text,
+.history-row[data-kind="merged"] .history-text {
+	color: #6a6a6a;
+	text-decoration: line-through;
+	text-decoration-color: #ffffff30;
+}
+.history-tag {
+	flex: none;
+	padding: 0 5px;
+	border: 1px solid #ffffff14;
+	border-radius: 4px;
+	color: #8a8a8a;
+	font-size: 10.5px;
+	line-height: 16px;
+}
+.history-meta {
+	display: flex;
+	flex: none;
+	gap: 12px;
+	margin-left: auto;
+	padding-left: 12px;
+	color: #6a6a6a;
+	font-size: 11.5px;
+	white-space: nowrap;
+}
+.history-scope {
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.history-date {
+	min-width: 42px;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+.history-dream {
+	display: flex;
+	align-items: center;
+	height: 32px;
+	padding: 0 16px 0 calc(var(--gutter) + 4px);
+	border-block: 1px solid #ffffff0a;
+	background: #ffffff05;
 	color: #8a8a8a;
 	font-size: 11.5px;
+	letter-spacing: 0.01em;
 }
-.memory-lanes-legend li {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	color: #6f6f6f;
+.history-dream span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
-.memory-lanes[data-narrow="true"] .memory-graph-details {
+.memory-log-page[data-narrow="true"] .memory-log-bar {
+	height: auto;
+	padding: 48px 10px 8px;
+}
+.memory-log-page[data-narrow="true"] .memory-log-body {
+	margin-right: 0;
+}
+.memory-log-page[data-narrow="true"] .history-row {
+	flex-wrap: wrap;
+	align-content: center;
+	gap: 2px 8px;
+	padding: 7px 12px 7px calc(var(--gutter) + 2px);
+}
+.memory-log-page[data-narrow="true"] .history-text {
+	flex-basis: 100%;
+	white-space: normal;
+	line-height: 1.4;
+}
+.memory-log-page[data-narrow="true"] .history-meta {
+	margin-left: 0;
+	padding-left: 0;
+	gap: 8px;
+	font-size: 11px;
+}
+.memory-log-page[data-narrow="true"] .history-date {
+	min-width: 0;
+	text-align: left;
+}
+.memory-log-page[data-narrow="true"] .memory-graph-details {
 	top: auto;
 	right: 8px;
 	bottom: 8px;
 	left: 8px;
 	width: auto;
 	max-height: 60%;
-}
-.memory-lanes[data-narrow="true"] .memory-graph-scope {
-	top: 56px;
-}
-.memory-lanes[data-narrow="true"] .memory-lanes-zoom {
-	top: 56px;
-}
-.memory-lanes[data-narrow="true"] .memory-lanes-frame {
-	inset: 44px 0 64px;
-}
-.memory-lanes[data-narrow="true"] .memory-lanes-legend {
-	gap: 2px 10px;
-	padding: 6px 10px;
-	font-size: 11px;
 }
 
 /* The full-page Memory view from the left sidebar replaces the chat entirely:

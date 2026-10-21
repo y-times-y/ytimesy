@@ -1,22 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ChevronDown, Minus, Plus, X } from "lucide-react";
-import {
-	type ReactNode,
-	type PointerEvent as ReactPointerEvent,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { ChevronDown, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MEMORY_EDIT_TEXT_MAX, type MemoryEdit } from "#/domain/memory-edit";
 import {
-	axisStep,
-	dayDate,
+	type HistoryItem,
+	type HistoryLink,
+	type LaneDream,
 	type LaneNode,
 	laneColor,
-	memoryLanes,
+	memoryHistory,
 } from "#/domain/memory-lanes";
 import { type MemoryRow, memoryRows } from "#/domain/memory-overview";
 import type { Project } from "#/domain/projects";
@@ -31,74 +24,62 @@ import "./memory-inspector.css";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const ALL = "__all";
-const DAY = 86_400_000;
-/** Pixels: the label column, the space above the first lane and below the last. */
-const TOP = 76;
-const AXIS = 34;
-const SLOT = 13;
-/** Readable whatever the zoom: marks are sized in pixels (a 6px dot), not in days. */
-const R = 3;
+/** Pixels: a memory row, a dream row, and where a row's dot sits. */
+const ROW = 36;
+const DREAM_ROW = 32;
+const DOT_Y = ROW / 2;
 
-type View = { pxPerDay: number; offset: number };
-
-function shortDate(day: number) {
-	return new Date(day * DAY).toLocaleDateString("en-US", {
+function shortDate(value: string) {
+	return new Date(value).toLocaleDateString("en-US", {
 		month: "short",
 		day: "numeric",
 		timeZone: "UTC",
 	});
 }
 
-/**
- * One line's mark: always the same small dot in its lane colour. Status is
- * weight, not shape: inferred is dimmer, replaced faint, new carries a fine
- * ring, and an always-on rule a short underline.
- */
-export function LaneMark({
-	mark,
-	color,
-	recent,
-	retired,
-	x = 0,
-	y = 0,
-}: {
-	mark: LaneNode["mark"];
-	color: string;
-	recent?: boolean;
-	retired?: boolean;
-	x?: number;
-	y?: number;
-}) {
-	return (
-		<g
-			className="lane-mark"
-			data-mark={mark}
-			data-retired={retired ? "true" : undefined}
-			style={{ color }}
-		>
-			{recent ? (
-				<circle className="lane-new" cx={x} cy={y} r={R + 2.5} />
-			) : null}
-			<circle className="lane-dot" cx={x} cy={y} r={R} />
-			{mark === "rule" ? (
-				<line
-					className="lane-rule"
-					x1={x - 3.5}
-					x2={x + 3.5}
-					y1={y + R + 3}
-					y2={y + R + 3}
-				/>
-			) : null}
-		</g>
+/** "1 added, 1 merged, 1 replaced", or the dream's message when it has no counts. */
+export function dreamSummary(dream: LaneDream) {
+	const counts = dream.counts;
+	const merged = dream.merges.reduce(
+		(sum, merge) => sum + merge.ghosts.length,
+		0,
 	);
+	const parts = counts
+		? [
+				[counts.added, "added"],
+				[counts.merged, "merged"],
+				[counts.replaced, "replaced"],
+				[counts.expired, "expired"],
+				[counts.removed, "removed"],
+			]
+		: [[merged, "merged"]];
+	const text = parts
+		.filter(([count]) => Number(count) > 0)
+		.map(([count, label]) => `${count} ${label}`)
+		.join(", ");
+	return text || dream.message;
+}
+
+type Geometry = readonly { readonly top: number; readonly height: number }[];
+
+/** Row tops and heights before the rows are measured: every row at its minimum height. */
+function estimate(items: readonly HistoryItem[]): Geometry {
+	let top = 0;
+	return items.map((item) => {
+		const height = item.kind === "dream" ? DREAM_ROW : ROW;
+		const row = { top, height };
+		top += height;
+		return row;
+	});
 }
 
 /**
- * Memory lanes: the memory repo as its history. One lane per scope, time
- * left to right with today at the right; lines as marks at their dates,
- * version changes as curves, dreams as markers across the lanes with their
- * merges. Drag to pan, scroll or pinch to zoom time; click a mark for its
- * details and edits, a lane label to show only that scope.
+ * Memory as a commit list (git log --graph): one row per memory, newest at
+ * the top, its text on the row and quiet meta on the right. A narrow gutter
+ * holds one thin lane per scope; a row's dot sits on its scope's lane. A
+ * replaced row joins its replacement with a short curve; a dream is a divider
+ * row, the lines it merged branching in just below it. Click a row for its
+ * details and edits; hover shows its version chain.
  */
 export function MemoryGraphPage({
 	active,
@@ -118,7 +99,7 @@ export function MemoryGraphPage({
 		queryFn: () => readMemory(),
 		enabled: active,
 	});
-	const history = useQuery({
+	const dreams = useQuery({
 		queryKey: ["memory-lanes", memory.data?.files],
 		queryFn: () => readGraph(),
 		enabled: active && Boolean(memory.data?.available),
@@ -126,11 +107,7 @@ export function MemoryGraphPage({
 	});
 	const [scope, setScope] = useState<string>(ALL);
 	const [selected, setSelected] = useState<string | null>(null);
-	const [hovered, setHovered] = useState<{
-		id: string;
-		left: number;
-		top: number;
-	} | null>(null);
+	const [hovered, setHovered] = useState<string | null>(null);
 	const repo = useMemo(
 		() =>
 			Object.fromEntries(
@@ -141,15 +118,15 @@ export function MemoryGraphPage({
 	const date = today();
 	const rows = useMemo(() => memoryRows(repo, date), [repo, date]);
 	const { scopes, scopeTitle, choices } = useMemoryScopeNames(rows, projects);
-	const lanes = useMemo(
+	const history = useMemo(
 		() =>
-			memoryLanes({
+			memoryHistory({
 				rows,
 				today: date,
 				scope: scope === ALL ? null : scope,
-				dreams: history.data?.dreams,
+				dreams: dreams.data?.dreams,
 			}),
-		[rows, date, scope, history.data],
+		[rows, date, scope, dreams.data],
 	);
 	const cachedProjects =
 		projects ?? queryClient.getQueryData<Project[]>(["projects"]);
@@ -160,139 +137,45 @@ export function MemoryGraphPage({
 		);
 		return laneColor(known?.id ?? project.toLowerCase());
 	};
-	const laneColors = lanes.lanes.map((lane) => colorOf(lane.project));
-	const [height, setHeight] = useState(700);
-	// Lanes share the height they have, between a readable minimum and a calm maximum.
-	const fill = Math.min(
-		180,
-		Math.max(64, (height - TOP - AXIS - 16) / Math.max(1, lanes.lanes.length)),
-	);
-	const laneHeights = lanes.lanes.map((lane) =>
-		Math.max(fill, Math.min(160, 56 + (lane.depth - 1) * SLOT)),
-	);
-	const laneTop = laneHeights.map((_, index) =>
-		laneHeights.slice(0, index).reduce((sum, height) => sum + height, TOP),
-	);
-	const lanesBottom =
-		TOP + laneHeights.reduce((sum, height) => sum + height, 0);
+	const laneColors = history.lanes.map((lane) => colorOf(lane.project));
 
-	const frame = useRef<HTMLDivElement | null>(null);
-	// The frame mounts after memory loads, so effects follow the element itself.
-	const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
+	// Rows wrap on narrow screens, so the graph follows their measured positions.
+	const [listElement, setListElement] = useState<HTMLOListElement | null>(null);
 	const [width, setWidth] = useState(1200);
-	const narrow = width < 640;
-	const labelWidth = narrow ? 96 : 168;
-	const [view, setView] = useState<View>({ pxPerDay: 24, offset: 0 });
-	const fitView = useCallback(() => {
-		const element = frame.current;
-		const span = Math.max(1, lanes.end - lanes.start);
-		const available = (element?.clientWidth ?? 1200) - (narrow ? 96 : 168) - 40;
-		const pxPerDay = Math.max(narrow ? 30 : 4, Math.min(120, available / span));
-		// When the history is wider than the screen, start at today (the right end).
-		setView({ pxPerDay, offset: Math.min(0, available - span * pxPerDay) });
-	}, [lanes.end, lanes.start, narrow]);
+	const [measured, setMeasured] = useState<Geometry | null>(null);
+	const geometry =
+		measured && measured.length === history.items.length
+			? measured
+			: estimate(history.items);
+	const measure = useRef(() => {});
+	measure.current = () => {
+		if (!listElement) return;
+		const next = [...listElement.children].map((child) => {
+			const element = child as HTMLElement;
+			return { top: element.offsetTop, height: element.offsetHeight };
+		});
+		setMeasured((current) =>
+			current &&
+			current.length === next.length &&
+			current.every(
+				(row, index) =>
+					row.top === next[index].top && row.height === next[index].height,
+			)
+				? current
+				: next,
+		);
+	};
+	useLayoutEffect(() => measure.current());
 	useEffect(() => {
-		const element = frameElement;
-		if (!element || typeof ResizeObserver === "undefined") return;
+		if (!listElement || typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(([entry]) => {
 			setWidth(Math.round(entry.contentRect.width));
-			setHeight(Math.round(entry.contentRect.height));
+			measure.current();
 		});
-		observer.observe(element);
+		observer.observe(listElement);
 		return () => observer.disconnect();
-	}, [frameElement]);
-	const fittedFor = useRef("");
-	useEffect(() => {
-		const id = `${lanes.start}:${lanes.end}:${width}`;
-		if (fittedFor.current !== id && width) {
-			fittedFor.current = id;
-			fitView();
-		}
-	}, [lanes.start, lanes.end, width, fitView]);
-	const x = (day: number) =>
-		labelWidth + 16 + (day - lanes.start) * view.pxPerDay + view.offset;
-	const laneY = (lane: number) => laneTop[lane] + laneHeights[lane] / 2;
-	const nodeAt = new Map(
-		lanes.nodes.map((node) => [
-			node.id,
-			{ node, x: x(node.day + 0.5), y: laneY(node.lane) + node.slot * SLOT },
-		]),
-	);
-
-	// Wheel: zoom time around the cursor (pinch arrives as ctrl+wheel); sideways scroll pans.
-	useEffect(() => {
-		const element = frameElement;
-		if (!element) return;
-		const wheel = (event: WheelEvent) => {
-			event.preventDefault();
-			const rect = element.getBoundingClientRect();
-			const px = event.clientX - rect.left;
-			setView((current) => {
-				if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && !event.ctrlKey)
-					return { ...current, offset: current.offset - event.deltaX };
-				const pxPerDay = Math.max(
-					2,
-					Math.min(160, current.pxPerDay * Math.exp(-event.deltaY * 0.002)),
-				);
-				const origin = labelWidth + 16;
-				const day = (px - origin - current.offset) / current.pxPerDay;
-				return { pxPerDay, offset: px - origin - day * pxPerDay };
-			});
-		};
-		element.addEventListener("wheel", wheel, { passive: false });
-		return () => element.removeEventListener("wheel", wheel);
-	}, [frameElement, labelWidth]);
-
-	const drag = useRef<{
-		startX: number;
-		offset: number;
-		moved: boolean;
-		/** The mark under the pointer when it went down (capture retargets later events). */
-		node: string | null;
-	} | null>(null);
-	const markAt = (target: EventTarget | null) =>
-		(target as Element | null)
-			?.closest?.("[data-node]")
-			?.getAttribute("data-node") ?? null;
-	const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-		if (event.button !== 0) return;
-		event.currentTarget.setPointerCapture(event.pointerId);
-		drag.current = {
-			startX: event.clientX,
-			offset: view.offset,
-			moved: false,
-			node: markAt(event.target),
-		};
-	};
-	const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-		const current = drag.current;
-		if (current) {
-			const dx = event.clientX - current.startX;
-			if (Math.abs(dx) > 3) current.moved = true;
-			if (current.moved) {
-				setHovered(null);
-				setView((value) => ({ ...value, offset: current.offset + dx }));
-			}
-			return;
-		}
-		const id = markAt(event.target);
-		const rect = frame.current?.getBoundingClientRect();
-		if (id && rect)
-			setHovered({
-				id,
-				left: event.clientX - rect.left,
-				top: event.clientY - rect.top,
-			});
-		else if (hovered) setHovered(null);
-	};
-	const onPointerUp = () => {
-		const current = drag.current;
-		drag.current = null;
-		if (!current || current.moved) return;
-		const id = current.node;
-		setHovered(null);
-		setSelected(id && id !== selected ? id : null);
-	};
+	}, [listElement]);
+	const narrow = width < 640;
 
 	const edit = useMutation({
 		mutationFn: (data: MemoryEdit) => editMemory({ data }),
@@ -315,11 +198,61 @@ export function MemoryGraphPage({
 				Memory is unavailable.
 			</section>
 		);
-	const focus = hovered?.id ?? selected;
-	const focusChain = new Set(
-		focus ? (nodeAt.get(focus)?.node.chain ?? []) : [],
+
+	const { items, links, lanes } = history;
+	const hasMerged = items.some((item) => item.kind === "merged");
+	const pad = narrow ? 10 : 14;
+	const gap = narrow ? 10 : 14;
+	const laneX = (lane: number) => pad + lane * gap;
+	const sideX = laneX(lanes.length);
+	const gutter = pad * 2 + (lanes.length - 1 + (hasMerged ? 1 : 0)) * gap;
+	const dotY = (index: number) =>
+		geometry[index].top +
+		(items[index].kind === "dream" ? geometry[index].height / 2 : DOT_Y);
+	const totalHeight = geometry.length
+		? geometry[geometry.length - 1].top + geometry[geometry.length - 1].height
+		: 0;
+
+	// Focus: the hovered (or selected) row, its version chain and what it absorbed.
+	const nodes = new Map(
+		items.flatMap((item) =>
+			item.kind === "memory" ? [[item.id, item.node] as const] : [],
+		),
 	);
-	const total = lanes.nodes.filter((node) => !node.retired).length;
+	const focus = hovered ?? selected;
+	const chain = new Set<string>();
+	if (focus) {
+		const merged = items.find((item) => item.id === focus);
+		const ids =
+			merged?.kind === "merged"
+				? [merged.id, ...(merged.into ? [merged.into] : [])]
+				: (nodes.get(focus)?.chain ?? [focus]);
+		for (const id of ids) chain.add(id);
+		for (const item of items)
+			if (item.kind === "merged" && item.into && chain.has(item.into))
+				chain.add(item.id);
+	}
+	const focusing = chain.size > 1;
+	const linkActive = (link: HistoryLink) =>
+		focusing && chain.has(items[link.from].id) && chain.has(link.target);
+
+	// Lane lines run from a lane's newest row to its oldest.
+	const spans = lanes.map(() => ({ first: -1, last: -1 }));
+	items.forEach((item, index) => {
+		const lane = item.kind === "memory" ? item.node.lane : null;
+		if (lane === null) return;
+		if (spans[lane].first < 0) spans[lane].first = index;
+		spans[lane].last = index;
+	});
+	for (const link of links)
+		if (link.kind === "replaced") {
+			const span = spans[link.fromLane];
+			span.first = Math.min(span.first, link.to + 1);
+		}
+
+	const total = items.filter(
+		(item) => item.kind === "memory" && !item.node.retired,
+	).length;
 	const scopeChoices = [
 		{
 			value: ALL,
@@ -332,292 +265,236 @@ export function MemoryGraphPage({
 			hint: String(entry.count),
 		})),
 	];
-	const step = axisStep(view.pxPerDay);
-	const ticks: number[] = [];
-	const firstTick = Math.ceil(lanes.start / step) * step;
-	for (let day = firstTick; day <= lanes.end; day += step) ticks.push(day);
-	const svgHeight = lanesBottom + AXIS;
-	const hoveredNode = hovered ? nodeAt.get(hovered.id)?.node : undefined;
-	const selectedNode = selected ? nodeAt.get(selected)?.node : undefined;
-	const dreamX = (at: string) => x(Date.parse(at) / DAY);
+	const selectedNode = selected ? nodes.get(selected) : undefined;
+	const laneTitle = (lane: number) => scopeTitle(lanes[lane]?.id ?? "personal");
+
+	let dreamIndex = -1;
+	const branches: { from: number; dream: number; lane: number }[] = [];
+	for (const [index, item] of items.entries()) {
+		if (item.kind === "dream") dreamIndex = index;
+		if (item.kind === "merged" && dreamIndex >= 0) {
+			const into = item.into ? nodes.get(item.into) : undefined;
+			branches.push({
+				from: index,
+				dream: dreamIndex,
+				lane: into?.lane ?? item.lane,
+			});
+		}
+	}
+
 	return (
 		<section
-			className="memory-graph-page memory-lanes"
-			aria-label="Memory lanes"
+			className="memory-graph-page memory-log-page"
+			aria-label="Memory history"
 			data-narrow={narrow ? "true" : undefined}
+			data-details={selectedNode ? "true" : undefined}
 		>
-			<div
-				ref={(element) => {
-					frame.current = element;
-					setFrameElement(element);
-				}}
-				className="memory-lanes-frame"
-			>
-				<svg
-					className="memory-lanes-svg"
-					role="img"
-					aria-label={`Memory lanes: ${total} memories in ${lanes.lanes.length} ${lanes.lanes.length === 1 ? "scope" : "scopes"}`}
-					height={svgHeight}
-					onPointerDown={onPointerDown}
-					onPointerMove={onPointerMove}
-					onPointerUp={onPointerUp}
-					onPointerCancel={() => {
-						drag.current = null;
-					}}
-					onPointerLeave={() => setHovered(null)}
-					onKeyDown={(event) => {
-						if (event.key === "Escape") setSelected(null);
+			<header className="memory-log-bar">
+				<MemoryScopeMenu
+					label="Show"
+					choices={scopeChoices}
+					value={scope}
+					onChoose={(value) => {
+						setScope(value ?? ALL);
+						setSelected(null);
 					}}
 				>
-					<g className="lane-rules">
-						{lanes.lanes.map((lane, index) => (
-							<g key={lane.id}>
+					<button type="button" className="memory-log-scope">
+						<strong>{scope === ALL ? "All memory" : scopeTitle(scope)}</strong>
+						<ChevronDown size={16} strokeWidth={1.5} aria-hidden="true" />
+					</button>
+				</MemoryScopeMenu>
+				<span className="memory-log-count">
+					{total} {total === 1 ? "memory" : "memories"}
+				</span>
+			</header>
+
+			<div className="memory-log-scroll">
+				<div className="memory-log-body">
+					<svg
+						className="memory-log-graph"
+						width={gutter}
+						height={totalHeight}
+						aria-hidden="true"
+						data-focus={focusing ? "true" : undefined}
+					>
+						{spans.map((span, lane) =>
+							span.first < 0 ? null : (
 								<line
-									x1={labelWidth}
-									x2="100%"
-									y1={laneY(index)}
-									y2={laneY(index)}
+									key={lanes[lane].id}
+									className="history-lane"
+									x1={laneX(lane)}
+									x2={laneX(lane)}
+									y1={dotY(span.first)}
+									y2={dotY(span.last)}
+									style={{ stroke: laneColors[lane] }}
 								/>
-								{index ? (
-									<line
-										className="lane-divider"
-										x1={0}
-										x2="100%"
-										y1={laneTop[index]}
-										y2={laneTop[index]}
-									/>
-								) : null}
-							</g>
-						))}
-					</g>
-					<g className="lane-axis">
-						<line
-							x1={labelWidth}
-							x2="100%"
-							y1={lanesBottom + 4}
-							y2={lanesBottom + 4}
-						/>
-						{ticks.map((day) =>
-							x(day) > labelWidth + 8 &&
-							Math.abs(x(day + 0.5) - x(lanes.today + 0.5)) > 36 ? (
-								<text key={day} x={x(day + 0.5)} y={lanesBottom + 22}>
-									{shortDate(day)}
-								</text>
-							) : null,
+							),
 						)}
-					</g>
-					<g className="lane-today">
-						<line
-							x1={x(lanes.today + 0.5)}
-							x2={x(lanes.today + 0.5)}
-							y1={TOP - 8}
-							y2={lanesBottom + 4}
-						/>
-						<text x={x(lanes.today + 0.5)} y={lanesBottom + 22}>
-							Today
-						</text>
-					</g>
-					<g className="lane-dreams">
-						{lanes.dreams.map((dream) => {
-							const dx = dreamX(dream.at);
-							return (
-								<g key={dream.id} className="lane-dream">
-									<line x1={dx} x2={dx} y1={TOP - 4} y2={lanesBottom} />
-									<text x={dx} y={TOP - 14}>
-										Dream
-									</text>
-									<title>{`Dream, ${shortDate(dream.day)}: ${dream.message}`}</title>
-									{dream.merges.map((merge) => {
-										const my = laneY(merge.lane);
-										const target = merge.into ? nodeAt.get(merge.into) : null;
-										return (
-											<g key={`${dream.id}:${merge.text}`}>
-												{merge.ghosts.map((ghost) => {
-													const gx = x(ghost.day + 0.5);
-													const gy =
-														laneY(ghost.lane) + laneHeights[ghost.lane] * 0.28;
-													return (
-														<g key={ghost.text} className="lane-ghost">
-															<path
-																className="lane-merge-line"
-																d={(() => {
-																	// Merged lines converge into the line they became.
-																	const tx = target?.x ?? dx;
-																	const ty = target?.y ?? my;
-																	const mid = (gx + tx) / 2;
-																	return `M${gx} ${gy}C${mid} ${gy} ${mid} ${ty} ${tx} ${ty}`;
-																})()}
-															/>
-															<LaneMark
-																mark={ghost.mark}
-																color={laneColors[ghost.lane]}
-																retired
-																x={gx}
-																y={gy}
-															/>
-															<title>{`Merged: ${ghost.text}`}</title>
-														</g>
-													);
-												})}
-												{target ? null : (
-													<circle
-														className="lane-merge-end"
-														cx={dx}
-														cy={my}
-														r={R}
-													/>
-												)}
-											</g>
-										);
-									})}
-								</g>
-							);
-						})}
-					</g>
-					<g className="lane-curves" data-focus={focus ? "true" : undefined}>
-						{lanes.curves.map((curve) => {
-							const a = nodeAt.get(curve.from);
-							const b = nodeAt.get(curve.to);
-							if (!a || !b) return null;
-							const mid = (a.x + b.x) / 2;
+						{links.map((link) => {
+							if (link.kind !== "replaced") return null;
+							// Up the old row's lane, then a short curve into the new row's dot.
+							const ox = laneX(link.fromLane);
+							const nx = laneX(link.toLane);
+							const step = link.from > link.to ? 1 : -1;
+							const oy = dotY(link.from);
+							const ny = dotY(link.to);
+							const near = Math.abs(link.from - link.to) === 1;
+							const sy = near ? oy : dotY(link.to + step);
+							const bend = ox === nx ? 9 : 0;
+							const curve = `C${ox + bend} ${(sy + ny) / 2} ${nx + bend} ${(sy + ny) / 2} ${nx} ${ny}`;
 							return (
 								<path
-									key={curve.id}
-									data-active={
-										focusChain.has(curve.from) && focusChain.has(curve.to)
-											? "true"
-											: undefined
-									}
-									d={`M${a.x} ${a.y}C${mid} ${a.y} ${mid} ${b.y} ${b.x} ${b.y}`}
+									key={link.id}
+									className="history-link"
+									data-active={linkActive(link) ? "true" : undefined}
+									d={`M${ox} ${oy}L${ox} ${sy}${curve}`}
+									style={{ stroke: laneColors[link.fromLane] }}
 								/>
 							);
 						})}
-					</g>
-					<g className="lane-nodes" data-focus={focus ? "true" : undefined}>
-						{lanes.nodes.map((node) => {
-							const at = nodeAt.get(node.id);
-							if (!at || at.x < labelWidth - 4) return null;
+						{branches.map((branch) => {
+							const by = dotY(branch.from);
+							const dy = dotY(branch.dream);
+							const tx = laneX(branch.lane);
+							const link = links.find(
+								(entry) =>
+									entry.kind === "merged" && entry.from === branch.from,
+							);
 							return (
-								<g
-									key={node.id}
-									data-node={node.id}
-									data-retired={node.retired ? "true" : undefined}
-									data-chain={focusChain.has(node.id) ? "true" : undefined}
-									data-selected={selected === node.id ? "true" : undefined}
-								>
-									<circle className="lane-hit" cx={at.x} cy={at.y} r={10} />
-									{selected === node.id || hovered?.id === node.id ? (
-										<circle
-											className="lane-ring"
-											cx={at.x}
-											cy={at.y}
-											r={R + 5}
-										/>
-									) : null}
-									<LaneMark
-										mark={node.mark}
-										color={laneColors[node.lane]}
-										recent={node.recent}
-										x={at.x}
-										y={at.y}
-									/>
-								</g>
+								<path
+									key={`branch:${branch.from}`}
+									className="history-link history-branch"
+									data-active={link && linkActive(link) ? "true" : undefined}
+									d={`M${sideX} ${by}L${sideX} ${dy + 12}C${sideX} ${dy + 4} ${tx} ${dy + 6} ${tx} ${dy}`}
+									style={{ stroke: laneColors[branch.lane] }}
+								/>
 							);
 						})}
-					</g>
-				</svg>
-				<ul className="lane-labels" style={{ width: labelWidth }}>
-					{lanes.lanes.map((lane, index) => (
-						<li
-							key={lane.id}
-							style={{ top: laneTop[index], height: laneHeights[index] }}
-						>
-							<button
-								type="button"
-								aria-pressed={scope === lane.id}
-								title={
-									scope === lane.id ? "Show all" : `Only ${scopeTitle(lane.id)}`
-								}
-								onClick={() => {
-									setScope(scope === lane.id ? ALL : lane.id);
-									setSelected(null);
-								}}
-							>
-								<i style={{ background: laneColors[index] }} />
-								<span>{scopeTitle(lane.id)}</span>
-								<small>{lane.count}</small>
-							</button>
-						</li>
-					))}
-				</ul>
-				{hoveredNode && hovered ? (
-					<div
-						className="memory-graph-tip"
-						role="tooltip"
-						style={{ left: hovered.left, top: hovered.top }}
-						data-flip={hovered.left > width * 0.6 ? "true" : undefined}
+						{items.map((item, index) => {
+							if (item.kind === "dream") return null;
+							const y = dotY(index);
+							if (item.kind === "merged")
+								return (
+									<circle
+										key={item.id}
+										className="history-dot"
+										data-retired="true"
+										cx={sideX}
+										cy={y}
+										r={3}
+										style={{ color: laneColors[item.lane] }}
+									/>
+								);
+							const node = item.node;
+							return (
+								<circle
+									key={item.id}
+									className="history-dot"
+									data-recent={node.recent ? "true" : undefined}
+									data-retired={node.retired ? "true" : undefined}
+									data-chain={
+										focusing && chain.has(item.id) ? "true" : undefined
+									}
+									cx={laneX(node.lane)}
+									cy={y}
+									r={node.recent ? 4 : 3.5}
+									style={{ color: laneColors[node.lane] }}
+								/>
+							);
+						})}
+					</svg>
+					<ol
+						ref={setListElement}
+						className="memory-log"
+						aria-label={`${total} memories in ${lanes.length} ${lanes.length === 1 ? "scope" : "scopes"}`}
+						data-focus={focusing ? "true" : undefined}
+						style={{ ["--gutter" as string]: `${gutter}px` }}
+						onPointerLeave={() => setHovered(null)}
+						onKeyDown={(event) => {
+							if (event.key === "Escape") setSelected(null);
+						}}
 					>
-						<p>{hoveredNode.row.text}</p>
-						<span>
-							{hoveredNode.undated
-								? "undated"
-								: formatMemoryDate(dayDate(hoveredNode.day))}
-							{hoveredNode.versions > 1
-								? ` · v${hoveredNode.version} of ${hoveredNode.versions}`
-								: ""}
-						</span>
-					</div>
-				) : null}
-			</div>
-
-			<MemoryScopeMenu
-				label="Show"
-				choices={scopeChoices}
-				value={scope}
-				onChoose={(value) => {
-					setScope(value ?? ALL);
-					setSelected(null);
-				}}
-			>
-				<button type="button" className="memory-graph-card memory-graph-scope">
-					<span>
-						<strong>{scope === ALL ? "All memory" : scopeTitle(scope)}</strong>
-						<small>
-							{total} {total === 1 ? "memory" : "memories"}
-						</small>
-					</span>
-					<ChevronDown size={14} strokeWidth={1.5} aria-hidden="true" />
-				</button>
-			</MemoryScopeMenu>
-
-			<div className="memory-graph-card memory-lanes-zoom">
-				<button
-					type="button"
-					aria-label="Zoom out"
-					onClick={() =>
-						setView((current) => ({
-							...current,
-							pxPerDay: Math.max(2, current.pxPerDay / 1.4),
-						}))
-					}
-				>
-					<Minus size={14} strokeWidth={1.5} />
-				</button>
-				<button
-					type="button"
-					aria-label="Zoom in"
-					onClick={() =>
-						setView((current) => ({
-							...current,
-							pxPerDay: Math.min(160, current.pxPerDay * 1.4),
-						}))
-					}
-				>
-					<Plus size={14} strokeWidth={1.5} />
-				</button>
-				<button type="button" onClick={fitView}>
-					Fit
-				</button>
+						{items.map((item) => {
+							if (item.kind === "dream")
+								return (
+									<li
+										key={item.id}
+										className="history-dream"
+										title={item.dream.message}
+									>
+										<span>
+											Dream · {shortDate(item.dream.at)} ·{" "}
+											{dreamSummary(item.dream)}
+										</span>
+									</li>
+								);
+							if (item.kind === "merged")
+								return (
+									<li
+										key={item.id}
+										className="history-row"
+										data-row={item.id}
+										data-kind="merged"
+										data-chain={
+											focusing && chain.has(item.id) ? "true" : undefined
+										}
+										onPointerEnter={() => setHovered(item.id)}
+									>
+										<span className="history-text" title={item.text}>
+											{item.text}
+										</span>
+										<span className="history-meta">
+											{item.mark === "inferred" ? <span>Inferred</span> : null}
+											<span>Merged</span>
+										</span>
+									</li>
+								);
+							const node = item.node;
+							const row = node.row;
+							return (
+								<li
+									key={item.id}
+									data-row={item.id}
+									data-chain={
+										focusing && chain.has(item.id) ? "true" : undefined
+									}
+								>
+									<button
+										type="button"
+										className="history-row"
+										data-retired={node.retired ? "true" : undefined}
+										aria-pressed={selected === item.id}
+										onPointerEnter={() => setHovered(item.id)}
+										onFocus={() => setHovered(item.id)}
+										onBlur={() => setHovered(null)}
+										onClick={() =>
+											setSelected(selected === item.id ? null : item.id)
+										}
+									>
+										<span className="history-text" title={row.text}>
+											{row.text}
+										</span>
+										{row.rule ? (
+											<span className="history-tag">Always on</span>
+										) : null}
+										<span className="history-meta">
+											{row.kind === "inferred" ? <span>Inferred</span> : null}
+											{scope === ALL ? (
+												<span className="history-scope">
+													{laneTitle(node.lane)}
+												</span>
+											) : null}
+											<span className="history-date">
+												{row.added ? shortDate(`${row.added}T00:00:00Z`) : ""}
+											</span>
+										</span>
+									</button>
+								</li>
+							);
+						})}
+					</ol>
+				</div>
 			</div>
 
 			{selectedNode ? (
@@ -639,8 +516,6 @@ export function MemoryGraphPage({
 					onEdit={(data) => edit.mutate(data)}
 				/>
 			) : null}
-
-			<MemoryLanesLegend />
 		</section>
 	);
 }
@@ -815,31 +690,5 @@ function MemoryDetails({
 				</p>
 			) : null}
 		</aside>
-	);
-}
-
-/** One quiet line: the four marks that need explaining, drawn the same way. */
-export function MemoryLanesLegend() {
-	const item = (mark: ReactNode, label: string) => (
-		<li>
-			<svg viewBox="-8 -8 16 16" width={14} height={14} aria-hidden="true">
-				{mark}
-			</svg>
-			{label}
-		</li>
-	);
-	const grey = "#a3a3a3";
-	return (
-		<ul className="memory-lanes-legend" aria-label="Legend">
-			{item(<LaneMark mark="inferred" color={grey} />, "Inferred")}
-			{item(<LaneMark mark="stated" color={grey} recent />, "New this week")}
-			{item(<LaneMark mark="rule" color={grey} y={-2} />, "Always on")}
-			{item(
-				<g className="lane-curves">
-					<path data-active="true" d="M-7 4C-1 4 1 -4 7 -4" />
-				</g>,
-				"Replaced by",
-			)}
-		</ul>
 	);
 }

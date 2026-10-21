@@ -93,6 +93,13 @@ export async function dreamHistory(
 			return {
 				at: new Date(commit.committedAt).toISOString(),
 				message: commit.message.slice(DREAM_COMMIT_PREFIX.length).trim(),
+				counts: {
+					added: summary.added.length,
+					merged: summary.merged.length,
+					replaced: summary.resolved.length,
+					expired: summary.expired.length,
+					removed: summary.removed.length,
+				},
 				merges: summary.merged.map((merge) => ({
 					into: merge.into,
 					from: merge.from.map((text) => {
