@@ -95,7 +95,9 @@ export function readerPreparationScript(input: {
 					// The Git transfer writes HEAD, the index and objects under umask
 					// 077, so without this git sees no repository for the reader.
 					// .git holds no credential (the proxy's lives in its own /tmp).
-					`if [ -d ${shellQuote(`${input.checkout}/.git`)} ]; then chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)}; fi`,
+					// Files another user owns (root after a restore, sudo installs) need
+					// sudo; if neither works the reader still starts, without git.
+					`if [ -d ${shellQuote(`${input.checkout}/.git`)} ]; then sudo -n chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || true; fi`,
 				]
 			: []),
 	].join("\n");
