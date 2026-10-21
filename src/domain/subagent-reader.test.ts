@@ -1,11 +1,22 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	READER_ISOLATION_FAILED,
+	READER_ISOLATION_FAILED_EXIT,
 	READER_LINUX_USER,
 	READER_LOOPBACK_BLOCK_SCRIPT,
 	READER_USER_SETUP_SCRIPT,
 	readerCommand,
+	readerLoopbackGuardCommand,
 	readerMayWrite,
 	readerPreparationScript,
 	readerScratchDirectory,
@@ -49,6 +60,53 @@ describe("reader Linux user", () => {
 		);
 		expect(READER_LOOPBACK_BLOCK_SCRIPT).toContain('"$table" -w -C $rule');
 		expect(READER_LOOPBACK_BLOCK_SCRIPT).toContain("ip6tables");
+	});
+
+	it("fails closed: no iptables, or a rule that does not verify, refuses the reader", () => {
+		const dir = mkdtempSync(join(tmpdir(), "reader-iptables-"));
+		try {
+			const run = () =>
+				spawnSync("/bin/bash", ["-c", READER_LOOPBACK_BLOCK_SCRIPT], {
+					env: { PATH: dir },
+					encoding: "utf8",
+				});
+			// Neither table on PATH.
+			const missing = run();
+			expect(missing.status).not.toBe(0);
+			expect(missing.stderr).toContain("iptables unavailable");
+			// A table that accepts -I but never holds the rule (no owner match).
+			const table = (name: string, body: string) => {
+				writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+				chmodSync(join(dir, name), 0o755);
+			};
+			const forgetful = 'case "$2" in -C) exit 1;; *) exit 0;; esac';
+			table("iptables", forgetful);
+			table("ip6tables", forgetful);
+			const unverified = run();
+			expect(unverified.status).not.toBe(0);
+			expect(unverified.stderr).toContain("refused the reader loopback rule");
+			// Only iptables works: ip6tables still refuses the reader.
+			const holding = `case "$2" in -C) test -f "${dir}/\${0##*/}.rule";; -I) : > "${dir}/\${0##*/}.rule";; esac`;
+			table("iptables", holding);
+			expect(run().status).not.toBe(0);
+			table("ip6tables", holding);
+			expect(run().status).toBe(0);
+			// The guard that precedes every reader command refuses distinctly.
+			rmSync(join(dir, "ip6tables"));
+			const guarded = spawnSync(
+				"/bin/bash",
+				[
+					"-c",
+					`${readerLoopbackGuardCommand().replace("sudo -n ", "")} && echo ran`,
+				],
+				{ env: { PATH: `${dir}:/usr/bin:/bin` }, encoding: "utf8" },
+			);
+			expect(guarded.status).toBe(READER_ISOLATION_FAILED_EXIT);
+			expect(guarded.stderr).toContain(READER_ISOLATION_FAILED);
+			expect(guarded.stdout).not.toContain("ran");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("runs a command as the reader with its scratch as HOME and the command intact", () => {
