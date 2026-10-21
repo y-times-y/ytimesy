@@ -17,6 +17,8 @@ export type SidebarChat = {
 	readonly workingBranch?: string | null;
 	readonly prUrl?: string | null;
 	readonly prNeed?: SidebarChatPrNeed | null;
+	/** What the chat waits on from the user, if anything (chatWaitingOn). */
+	readonly waitingOn?: ChatWaitingOn | null;
 };
 
 type SidebarChatAttention = "running" | "attention" | "idle";
@@ -409,4 +411,99 @@ export function projectsByRecentActivity<P extends { readonly id: string }>(
 				a.index - b.index,
 		)
 		.map(({ project }) => project);
+}
+
+/** Why a chat that is not running waits on the user. */
+export type ChatWaitingOn =
+	| "question"
+	| "secret"
+	| "plan"
+	| "paused"
+	| "failed";
+
+/**
+ * A chat needs the user when its turn ended on a card only they can answer
+ * (an ask_user question, a secret request, a proposed plan, a paused model
+ * switch) and nothing was sent since, or when its last turn failed.
+ */
+export function chatWaitingOn(
+	items: readonly SessionItem[],
+	turnStatus: SessionTurnStatus,
+): ChatWaitingOn | null {
+	if (turnStatus === "running") return null;
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (!item || item.kind === "userMessage") break;
+		if (item.kind === "userQuestion") return "question";
+		if (item.kind === "secretRequest") return "secret";
+		if (item.kind === "planProposal") return "plan";
+		if (item.kind === "modelSwitch" && item.state === "awaitingApproval")
+			return "paused";
+	}
+	return turnStatus === "failed" ? "failed" : null;
+}
+
+export function chatWaitingOnLabel(waitingOn: ChatWaitingOn) {
+	return {
+		question: "Has a question for you",
+		secret: "Needs a secret",
+		plan: "Plan waits for your approval",
+		paused: "Paused for your approval",
+		failed: "Last run failed",
+	}[waitingOn];
+}
+
+export type SidebarStatusGroup = "needs-you" | "working" | "done";
+
+export function sidebarStatusGroup(input: {
+	readonly running: boolean;
+	readonly waitingOn?: ChatWaitingOn | null;
+}): SidebarStatusGroup {
+	if (input.running) return "working";
+	return input.waitingOn ? "needs-you" : "done";
+}
+
+/** Done rows shown before "Show N more". */
+export const SIDEBAR_DONE_VISIBLE = 8;
+
+/**
+ * Rows split by status in order (Needs you, Working, Done), each keeping
+ * the order it came in; Done shows its first SIDEBAR_DONE_VISIBLE rows
+ * unless expanded.
+ */
+export function sidebarStatusSections<T>(
+	rows: readonly T[],
+	groupOf: (row: T) => SidebarStatusGroup,
+	doneExpanded = false,
+) {
+	const byGroup = (group: SidebarStatusGroup) =>
+		rows.filter((row) => groupOf(row) === group);
+	const done = byGroup("done");
+	return {
+		needsYou: byGroup("needs-you"),
+		working: byGroup("working"),
+		done: doneExpanded ? done : done.slice(0, SIDEBAR_DONE_VISIBLE),
+		doneTotal: done.length,
+		doneHidden: doneExpanded
+			? 0
+			: Math.max(0, done.length - SIDEBAR_DONE_VISIBLE),
+	};
+}
+
+/** Muted project dot colours (no settings yet): picked from the project id. */
+export const PROJECT_COLORS = [
+	"#6b8fd6",
+	"#5fae8b",
+	"#c9a45a",
+	"#9a83d4",
+	"#cf7d93",
+	"#4fa8ad",
+	"#c98a5e",
+	"#8a9aa8",
+] as const;
+
+export function projectColor(projectId: string): string {
+	let hash = 0;
+	for (const char of projectId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+	return PROJECT_COLORS[hash % PROJECT_COLORS.length] as string;
 }

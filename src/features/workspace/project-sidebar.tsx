@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import {
 	Archive,
+	ArrowUpDown,
 	BookMarked,
+	Check,
 	ChevronRight,
 	CircleAlert,
 	Clock3,
-	Folder,
 	GitCompareArrows,
 	GitMerge,
 	GitPullRequest,
@@ -16,12 +17,14 @@ import {
 	Plus,
 	ShieldX,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { DropdownMenu } from "radix-ui";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
 	CHAT_SEEN_STORAGE_KEY,
 	chatsWithPinnedFirst,
+	chatWaitingOnLabel,
 	collapsedProjectStorageValue,
 	compactRelativeAge,
 	newChatIsActive,
@@ -31,6 +34,7 @@ import {
 	parseSeenChatKeys,
 	parseSidebarSort,
 	pinnedChatStorageValue,
+	projectColor,
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
 	recentSidebarChats,
@@ -39,12 +43,15 @@ import {
 	SIDEBAR_SORT_KEY,
 	type SidebarChat,
 	type SidebarSort,
+	type SidebarStatusGroup,
 	seenChatStorageValue,
 	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
 	sidebarHasAttentionChat,
+	sidebarStatusGroup,
+	sidebarStatusSections,
 	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
 	withProjectExpanded,
@@ -150,6 +157,7 @@ export function ProjectSidebar({
 						?.chats ?? []),
 	}));
 	const recentChats = recentSidebarChats(groups, pinnedChatIds);
+	const [doneExpanded, setDoneExpanded] = useState(false);
 	const orderedProjects = projectsByRecentActivity(projects, groups);
 	function chooseSort(next: SidebarSort) {
 		setSort(next);
@@ -271,8 +279,53 @@ export function ProjectSidebar({
 		});
 	}
 
+	function chatRunning(chat: SidebarChat) {
+		return sidebarChatIsRunning({
+			chatId: chat.id,
+			turnStatus: chat.id === selectedChatId ? openTurnStatus : chat.turnStatus,
+			busyChatIds,
+			openChatId: selectedChatId,
+			openTurnStatus,
+		});
+	}
+
+	function chatStatus(chat: SidebarChat): SidebarStatusGroup {
+		const running = chatRunning(chat);
+		// The open chat's own turn is fresher than the listed one.
+		const waitingOn =
+			chat.id === selectedChatId && openTurnStatus === "running"
+				? null
+				: chat.waitingOn;
+		return sidebarStatusGroup({ running, waitingOn });
+	}
+
+	function statusSection(
+		group: SidebarStatusGroup,
+		label: string,
+		rows: readonly { chat: SidebarChat; project: Project }[],
+		total: number,
+	) {
+		if (!total) return null;
+		return (
+			<li key={group} className="sidebar-status-group" data-group={group}>
+				<h3 className="sidebar-status-heading">
+					<span>{label}</span>
+					<span className="sidebar-status-count">{total}</span>
+				</h3>
+				<ul className="sidebar-chats">
+					{rows.map(({ chat, project }) => chatRow(chat, project))}
+				</ul>
+			</li>
+		);
+	}
+
 	function chatRow(chat: SidebarChat, project?: Project) {
 		const attention = chatAttention(chat);
+		const status = chatStatus(chat);
+		const waiting =
+			status === "needs-you" && chat.waitingOn
+				? chatWaitingOnLabel(chat.waitingOn)
+				: null;
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = pinnedChatIds.includes(chat.id);
 		return (
@@ -286,7 +339,8 @@ export function ProjectSidebar({
 					type="button"
 					className="sidebar-chat"
 					data-selected={chat.id === selectedChatId}
-					data-activity={attention}
+					data-activity={status === "needs-you" ? "needs-you" : attention}
+					title={waiting ? `${chat.title} · ${waiting}` : chat.title}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
@@ -298,9 +352,15 @@ export function ProjectSidebar({
 					<span className="sidebar-chat-title">{chat.title}</span>
 					{project ? (
 						<span className="sidebar-chat-project">
-							{projectDisplayName(project)}
+							<span
+								className="sidebar-project-dot"
+								style={{ background: projectColor(project.id) }}
+								aria-hidden="true"
+							/>
+							<span>{projectDisplayName(project)}</span>
 						</span>
 					) : null}
+					{waiting ? <span className="sr-only">{waiting}</span> : null}
 					{attention === "running" ? (
 						<span className="sr-only">Running</span>
 					) : null}
@@ -463,29 +523,56 @@ export function ProjectSidebar({
 				{projects.length ? (
 					<div className="sidebar-list-header">
 						<span>Chats</span>
-						<fieldset className="sidebar-sort" aria-label="Sort chats">
-							<button
-								type="button"
-								aria-pressed={sort === "recent"}
-								onClick={() => chooseSort("recent")}
-							>
-								Recent
-							</button>
-							<button
-								type="button"
-								aria-pressed={sort === "projects"}
-								onClick={() => chooseSort("projects")}
-							>
-								Projects
-							</button>
-						</fieldset>
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger asChild>
+								<button
+									type="button"
+									className="sidebar-sort-button"
+									aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
+									title="Sort chats"
+								>
+									<ArrowUpDown size={13} strokeWidth={1.5} />
+								</button>
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Portal>
+								<DropdownMenu.Content
+									className="recovery-menu sidebar-sort-menu"
+									align="end"
+									sideOffset={4}
+								>
+									<DropdownMenu.RadioGroup
+										value={sort}
+										onValueChange={(value) =>
+											chooseSort(value === "recent" ? "recent" : "projects")
+										}
+									>
+										{(["recent", "projects"] as const).map((value) => (
+											<DropdownMenu.RadioItem key={value} value={value}>
+												<span className="sidebar-sort-check">
+													<DropdownMenu.ItemIndicator>
+														<Check size={13} />
+													</DropdownMenu.ItemIndicator>
+												</span>
+												{value === "recent" ? "Recent" : "Projects"}
+											</DropdownMenu.RadioItem>
+										))}
+									</DropdownMenu.RadioGroup>
+								</DropdownMenu.Content>
+							</DropdownMenu.Portal>
+						</DropdownMenu.Root>
 					</div>
 				) : null}
 				{projects.length && sort === "recent" ? (
 					recentChats.length ? (
-						<ul className="sidebar-chats sidebar-recent">
-							{recentChats.map(({ chat, project }) => chatRow(chat, project))}
-						</ul>
+						<RecentSections
+							sections={sidebarStatusSections(
+								recentChats,
+								(row) => chatStatus(row.chat),
+								doneExpanded,
+							)}
+							render={statusSection}
+							onShowMore={() => setDoneExpanded(true)}
+						/>
 					) : (
 						<p className="sidebar-empty">{emptyCopy}</p>
 					)
@@ -529,7 +616,11 @@ export function ProjectSidebar({
 													: openProject(project.id)
 											}
 										>
-											<Folder size={16} />
+											<span
+												className="sidebar-project-dot"
+												style={{ background: projectColor(project.id) }}
+												aria-hidden="true"
+											/>
 											<span>{projectDisplayName(project)}</span>
 										</button>
 										<div className="sidebar-folder-actions">
@@ -643,6 +734,50 @@ export function ProjectSidebar({
 				) : null}
 			</nav>
 		</div>
+	);
+}
+
+type StatusSections = ReturnType<
+	typeof sidebarStatusSections<{ chat: SidebarChat; project: Project }>
+>;
+
+/** The Recent list by status: Needs you, Working, then Done (folded after a few). */
+function RecentSections({
+	sections,
+	render,
+	onShowMore,
+}: {
+	sections: StatusSections;
+	render: (
+		group: SidebarStatusGroup,
+		label: string,
+		rows: StatusSections["done"],
+		total: number,
+	) => ReactNode;
+	onShowMore: () => void;
+}) {
+	return (
+		<ul className="sidebar-recent sidebar-status-groups">
+			{render(
+				"needs-you",
+				"Needs you",
+				sections.needsYou,
+				sections.needsYou.length,
+			)}
+			{render("working", "Working", sections.working, sections.working.length)}
+			{render("done", "Done", sections.done, sections.doneTotal)}
+			{sections.doneHidden ? (
+				<li>
+					<button
+						type="button"
+						className="sidebar-show-more"
+						onClick={onShowMore}
+					>
+						Show {sections.doneHidden} more
+					</button>
+				</li>
+			) : null}
+		</ul>
 	);
 }
 

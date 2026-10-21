@@ -1,6 +1,10 @@
 import type { AgentProviderId } from "./agent-provider";
 import { isWorkspaceAtCapacity, workspaceLooksGone } from "./failure-message";
-import type { SessionTurnStatus } from "./session-item";
+import {
+	type SessionTurnStatus,
+	sessionItemsFromUnknown,
+} from "./session-item";
+import { chatWaitingOn } from "./sidebar-chats";
 
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
@@ -71,6 +75,8 @@ export function chatsFromAgentSessions(
 		readonly workspaceId?: string | null;
 		readonly workingBranch?: string | null;
 		readonly taskBranch?: string | null;
+		/** The chat's history: only what it waits on from the user is listed. */
+		readonly items?: unknown;
 	}[],
 ) {
 	return sessions
@@ -83,6 +89,14 @@ export function chatsFromAgentSessions(
 			harnessId: session.harness ?? null,
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
+			...(session.items === undefined
+				? {}
+				: {
+						waitingOn: chatWaitingOn(
+							sessionItemsFromUnknown(session.items),
+							session.turnStatus ?? "idle",
+						),
+					}),
 			...(session.workingBranch || session.taskBranch
 				? { workingBranch: session.workingBranch || session.taskBranch }
 				: {}),
