@@ -15,7 +15,7 @@ import { type LeanSurfaceContext, leanShapeTools } from "./lean-tools";
  * they saved in measured builder runs. The prompt profile follows the tools.
  * Repository instructions arrive as conversation messages, not a tool call.
  */
-const BUILDER_SHELL_TOOLS = new Set([
+export const BUILDER_SHELL_TOOLS: ReadonlySet<string> = new Set([
 	"execute_command",
 	"continue_command",
 	"stop_command",

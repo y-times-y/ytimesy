@@ -7,6 +7,7 @@ import {
 	RIGOR_BUILDER_INSTRUCTIONS,
 	RIGOR_REQUIREMENTS_INSTRUCTIONS,
 	requirementsFromText,
+	requirementsSegments,
 } from "./rigor";
 import type { SessionItem } from "./session-item";
 
@@ -99,5 +100,25 @@ describe("rigor", () => {
 		expect(RIGOR_REQUIREMENTS_INSTRUCTIONS).toContain(
 			"Mark an ambiguous item with the reading you chose.",
 		);
+	});
+});
+
+describe("requirementsSegments", () => {
+	it("splits a message around its requirements block, also while it streams", () => {
+		expect(
+			requirementsSegments(
+				"Plan:\n<requirements>\n- a\n2. b\n</requirements>\nGo.",
+			),
+		).toEqual([
+			{ kind: "text", text: "Plan:\n" },
+			{ kind: "requirements", items: ["a", "b"] },
+			{ kind: "text", text: "\nGo." },
+		]);
+		expect(requirementsSegments("<requirements>\n- a\n- b")).toEqual([
+			{ kind: "requirements", items: ["a", "b"] },
+		]);
+		expect(requirementsSegments("No list.")).toEqual([
+			{ kind: "text", text: "No list." },
+		]);
 	});
 });
