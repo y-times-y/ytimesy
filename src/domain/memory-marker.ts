@@ -53,6 +53,12 @@ export type MemoryRecall = {
 		readonly outcome: MemoryReadHookOutcome;
 		readonly ms: number;
 		readonly error?: string;
+		/**
+		 * Where the request's memory time went, in ms (and line counts by
+		 * vector source): the snapshot, the wait for other chats' saves (not
+		 * part of `ms`), the query embedding, the line vectors and ranking.
+		 */
+		readonly spans?: Readonly<Record<string, number>>;
 	};
 };
 

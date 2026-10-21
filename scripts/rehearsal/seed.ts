@@ -11,6 +11,7 @@ import {
 	harnessVariantChanges,
 } from "../../src/domain/harness-variant";
 import { WorkspaceId } from "../../src/domain/ids";
+import type { MemoryFiles } from "../../src/domain/memory-repo";
 import {
 	insertAgentSession,
 	saveAgentSessionProviderRef,
@@ -26,6 +27,7 @@ import {
 import { database } from "../../src/server/adapters/database";
 import { seal } from "../../src/server/auth/token-vault";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
+import { seedRehearsalMemory } from "./memory";
 
 export const MODEL = "gpt-6.1-sol";
 
@@ -99,6 +101,8 @@ export async function createRehearsalUser(
 	owner: Awaited<ReturnType<typeof seedOwner>>,
 	label: string,
 	variant: HarnessVariant,
+	/** Memory on (full mode) with this repo content; off without it. */
+	memory?: MemoryFiles,
 ): Promise<RehearsalUser> {
 	const db = database();
 	const userId = `eval-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -131,9 +135,10 @@ export async function createRehearsalUser(
 		[userId, owner.ownerId],
 	);
 	await db.query(
-		`insert into user_memory(user_id,mode,repo,dreamed_through) values($1,'off',$2,now())`,
-		[userId, `memory-${userId}`],
+		`insert into user_memory(user_id,mode,repo,dreamed_through) values($1,$3,$2,now())`,
+		[userId, `memory-${userId}`, memory ? "full" : "off"],
 	);
+	if (memory) seedRehearsalMemory(`memory-${userId}`, memory);
 	const projectId = randomUUID();
 	const workspaceId = randomUUID();
 	await db.query(
