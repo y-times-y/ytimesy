@@ -7,6 +7,7 @@ import {
 	memoryEntryText,
 	memoryProjectValue,
 	memoryTopicPath,
+	suggestMemoryTopic,
 	updateMemoryLine,
 } from "./memory-edit";
 import { memoryLines, withMemoryChanges } from "./memory-repo";
@@ -83,6 +84,32 @@ describe("memory edits", () => {
 			"# deploy\n- Deploy only on Tuesdays [scope: always; project: acme/web; source: manual; added: 2026-10-21]\n",
 		);
 		expect(next["MEMORY.md"]).toContain("- [[deploy]]");
+	});
+
+	it("files a new line under the topic it shares the most words with, else notes", () => {
+		const topics = {
+			...files,
+			"api.md": "# API\n\n- Errors use problem+json [added: 2026-10-01]\n",
+		};
+		expect(suggestMemoryTopic(topics, "Run tests with Vitest in CI")).toBe(
+			"tooling.md",
+		);
+		expect(suggestMemoryTopic(topics, "API errors include a trace id")).toBe(
+			"api.md",
+		);
+		expect(suggestMemoryTopic(topics, "Likes dark roast coffee")).toBe(
+			"notes.md",
+		);
+		const result = addMemoryLine(topics, {
+			text: "API errors include a trace id",
+			project: null,
+			always: false,
+			today,
+		});
+		expect(result).toMatchObject({
+			ok: true,
+			added: { path: "api.md", line: 4, text: "API errors include a trace id" },
+		});
 	});
 
 	it("rejects text, projects and topics it cannot store", () => {

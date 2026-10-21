@@ -6,6 +6,7 @@ import {
 	type MemoryFiles,
 	memoryLines,
 	SCOPE_KEY,
+	SUPERSEDED_KEY,
 } from "./memory-repo";
 
 /**
@@ -30,21 +31,11 @@ export type MemoryRow = {
 	readonly added?: string;
 	/** The chat the entry came from. */
 	readonly chatId?: string;
+	/** Added by the user in the Memory view (`source: manual`). */
+	readonly manual?: true;
+	/** The chat whose statement replaced this line (`superseded-by:`). */
+	readonly supersededBy?: string;
 };
-
-/** A topic in the Memory view's list: a memory file, or the pinned project rules. */
-export type MemoryTopic = {
-	/** A file path, or RULES_TOPIC for the project rules across files. */
-	readonly id: string;
-	readonly title: string;
-	/** Entries in use (replaced ones not counted). */
-	readonly count: number;
-	/** The newest `added:` date among its entries. */
-	readonly updated?: string;
-};
-
-export const RULES_TOPIC = "rules:always";
-const RULES_TITLE = "Project rules";
 
 export function memoryRows(files: MemoryFiles, today: string): MemoryRow[] {
 	return memoryLines(files).map((entry) => {
@@ -64,6 +55,16 @@ export function memoryRows(files: MemoryFiles, today: string): MemoryRow[] {
 				? { added: entry.meta.added }
 				: {}),
 			...(chatId ? { chatId } : {}),
+			...(entry.meta.source?.trim() === "manual"
+				? { manual: true as const }
+				: {}),
+			...(entry.meta[SUPERSEDED_KEY]
+				? {
+						supersededBy:
+							chatIdFromSource(entry.meta[SUPERSEDED_KEY]) ??
+							entry.meta[SUPERSEDED_KEY],
+					}
+				: {}),
 		};
 	});
 }
@@ -79,69 +80,6 @@ const newest = (rows: readonly MemoryRow[]) =>
 function fileTitle(path: string, content: string) {
 	const heading = /^#\s+(.+)$/m.exec(content)?.[1]?.trim();
 	return heading || path.replace(/\.md$/, "");
-}
-
-/**
- * The topic list: the project rules first (when any), then each topic file by
- * its newest entry, and the MEMORY.md index last.
- */
-export function memoryTopics(files: MemoryFiles, today: string): MemoryTopic[] {
-	const rows = memoryRows(files, today);
-	const live = rows.filter((row) => !row.replaced);
-	const rules = live.filter((row) => row.rule);
-	const topics = Object.entries(files)
-		.filter(([path]) => path.endsWith(".md") && path !== MEMORY_ENTRY)
-		.map(([path, content]) => {
-			const own = live.filter((row) => row.path === path);
-			return {
-				id: path,
-				// A file titled like the pinned rules topic goes by its file name.
-				title:
-					rules.length &&
-					fileTitle(path, content).toLowerCase() === RULES_TITLE.toLowerCase()
-						? path.replace(/\.md$/, "")
-						: fileTitle(path, content),
-				count: own.length,
-				...(newest(own) ? { updated: newest(own) } : {}),
-			};
-		})
-		.sort(
-			(a, b) =>
-				(b.updated ?? "").localeCompare(a.updated ?? "") ||
-				a.title.localeCompare(b.title),
-		);
-	return [
-		...(rules.length
-			? [
-					{
-						id: RULES_TOPIC,
-						title: RULES_TITLE,
-						count: rules.length,
-						...(newest(rules) ? { updated: newest(rules) } : {}),
-					},
-				]
-			: []),
-		...topics,
-		...(files[MEMORY_ENTRY] !== undefined
-			? [
-					{
-						id: MEMORY_ENTRY,
-						title: "Index",
-						count: live.filter((row) => row.path === MEMORY_ENTRY).length,
-					},
-				]
-			: []),
-	];
-}
-
-/** A topic's rows: the rules across files, or one file's entries in file order. */
-export function topicRows(
-	rows: readonly MemoryRow[],
-	topic: string,
-): MemoryRow[] {
-	return topic === RULES_TOPIC
-		? rows.filter((row) => row.rule && !row.replaced)
-		: rows.filter((row) => row.path === topic);
 }
 
 /** The newest dated entries in use, newest first. */

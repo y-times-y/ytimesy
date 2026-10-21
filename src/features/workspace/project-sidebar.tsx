@@ -15,6 +15,7 @@ import {
 	Pin,
 	Plus,
 	ShieldX,
+	Waypoints,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
@@ -83,6 +84,9 @@ interface ProjectSidebarProps {
 	onSelectChatInProject?: (projectId: string, chatId: string) => void;
 	/** Opens the full-page Memory view. */
 	onOpenMemory?: () => void;
+	/** Opens the full-page Memory graph. */
+	onOpenMemoryGraph?: () => void;
+	memoryGraphActive?: boolean;
 	memoryActive?: boolean;
 }
 
@@ -107,6 +111,8 @@ export function ProjectSidebar({
 	projectChats = [],
 	onSelectChatInProject,
 	onOpenMemory,
+	onOpenMemoryGraph,
+	memoryGraphActive = false,
 	memoryActive = false,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
@@ -458,6 +464,17 @@ export function ProjectSidebar({
 							<BookMarked size={16} strokeWidth={1.5} />
 							Memory
 						</button>
+						{onOpenMemoryGraph ? (
+							<button
+								type="button"
+								className="sidebar-nav-item"
+								aria-current={memoryGraphActive ? "page" : undefined}
+								onClick={onOpenMemoryGraph}
+							>
+								<Waypoints size={16} strokeWidth={1.5} />
+								Memory graph
+							</button>
+						) : null}
 					</nav>
 				) : null}
 				{projects.length ? (
@@ -639,6 +656,18 @@ export function ProjectSidebar({
 						onClick={onOpenMemory}
 					>
 						<BookMarked size={16} strokeWidth={1.5} />
+					</button>
+				) : null}
+				{onOpenMemoryGraph ? (
+					<button
+						type="button"
+						className="panel-toggle"
+						aria-label="Memory graph"
+						title="Memory graph"
+						data-active={memoryGraphActive}
+						onClick={onOpenMemoryGraph}
+					>
+						<Waypoints size={16} strokeWidth={1.5} />
 					</button>
 				) : null}
 			</nav>

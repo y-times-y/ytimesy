@@ -1,5 +1,9 @@
 import { DREAM_COMMIT_PREFIX } from "#/domain/memory-dream-schedule";
-import { applyMemoryEdit, type MemoryEdit } from "#/domain/memory-edit";
+import {
+	applyMemoryEdit,
+	type MemoryEdit,
+	type MemoryLineRef,
+} from "#/domain/memory-edit";
 import { memoryChangeSummary } from "#/domain/memory-overview";
 import { memoryTokens } from "#/domain/memory-ranking";
 import type { MemoryRepo } from "../adapters/memory-repos";
@@ -13,13 +17,14 @@ export async function commitMemoryEdit(
 	repo: MemoryRepo,
 	edit: MemoryEdit,
 	today: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; added?: MemoryLineRef } | { ok: false; error: string }> {
 	let snapshot = await repo.snapshot();
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const result = applyMemoryEdit(snapshot.files, edit, today);
 		if (!result.ok) return result;
 		const outcome = await repo.commit(snapshot, result.changes, result.message);
-		if (outcome.ok) return { ok: true };
+		if (outcome.ok)
+			return result.added ? { ok: true, added: result.added } : { ok: true };
 		snapshot = outcome.current;
 	}
 	return { ok: false, error: "Memory changed while saving; try again." };

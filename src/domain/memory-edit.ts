@@ -1,3 +1,4 @@
+import { memoryTokens } from "./memory-ranking";
 import {
 	ALWAYS_SCOPE,
 	appendMemoryEntry,
@@ -113,8 +114,52 @@ function clipped(text: string) {
 }
 
 export type MemoryEditResult =
-	| { ok: true; changes: MemoryChange[]; message: string }
+	| {
+			ok: true;
+			changes: MemoryChange[];
+			message: string;
+			/** The new line, for an add (so the view can show and undo it). */
+			added?: MemoryLineRef;
+	  }
 	| { ok: false; error: string };
+
+/**
+ * The topic file a new line fits best: the one sharing the most words with
+ * the text, by its title (counted double) and its lines; ties go to the
+ * larger topic. Deterministic and model-free. DEFAULT_TOPIC when nothing
+ * shares a word.
+ */
+export function suggestMemoryTopic(files: MemoryFiles, text: string): string {
+	const words = new Set(memoryTokens(text));
+	if (!words.size) return DEFAULT_TOPIC;
+	let best: { path: string; score: number; size: number } | null = null;
+	for (const [path, content] of Object.entries(files)) {
+		if (!path.endsWith(".md") || path === MEMORY_ENTRY) continue;
+		const title = /^#\s+(.+)$/m.exec(content)?.[1] ?? path.replace(/\.md$/, "");
+		const titleWords = new Set(
+			memoryTokens(
+				`${title} ${path.replace(/\.md$/, "").replaceAll(/[-_/]/g, " ")}`,
+			),
+		);
+		const lines = content.split("\n").flatMap((raw) => {
+			const entry = parseMemoryLine(raw);
+			return entry ? [new Set(memoryTokens(entry.text))] : [];
+		});
+		let score = 0;
+		for (const word of words) {
+			if (titleWords.has(word)) score += 2;
+			score += Math.min(2, lines.filter((line) => line.has(word)).length) * 0.5;
+		}
+		if (
+			score > 0 &&
+			(!best ||
+				score > best.score ||
+				(score === best.score && lines.length > best.size))
+		)
+			best = { path, score, size: lines.length };
+	}
+	return best ? best.path : DEFAULT_TOPIC;
+}
 
 /** A new line in plain words, stated by the user, dated today. */
 export function addMemoryLine(
@@ -133,7 +178,7 @@ export function addMemoryLine(
 		input.project === null ? null : memoryProjectValue(input.project);
 	if (input.project !== null && !project)
 		return { ok: false, error: "That project name cannot be stored." };
-	const topic = memoryTopicPath(input.topic || DEFAULT_TOPIC);
+	const topic = memoryTopicPath(input.topic || suggestMemoryTopic(files, text));
 	if (!topic) return { ok: false, error: "That topic cannot be used." };
 	const bullet = memoryBullet(text, {
 		...(input.always ? { [SCOPE_KEY]: ALWAYS_SCOPE } : {}),
@@ -141,9 +186,13 @@ export function addMemoryLine(
 		source: MANUAL_SOURCE,
 		added: input.today,
 	});
+	const changes = appendMemoryEntry(files, topic, bullet);
+	const written =
+		changes.find((change) => change.path === topic)?.content ?? "";
 	return {
 		ok: true,
-		changes: appendMemoryEntry(files, topic, bullet),
+		changes,
+		added: { path: topic, line: written.trimEnd().split("\n").length, text },
 		message: `${input.always ? "Add always-on rule" : "Add memory"} (${scopeLabel(project)}): ${clipped(text)}`,
 	};
 }
