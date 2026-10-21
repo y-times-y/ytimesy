@@ -181,7 +181,7 @@ describe("read-only subagent machines", () => {
 			ownedByDefaultUser &&
 			command.includes("ytimesy-reader") &&
 			decoded(command).some((line) =>
-				line.includes("chmod 700 '/tmp/ytimesy-secrets'"),
+				line.includes("install -d -m 0700 '/tmp/ytimesy-secrets'"),
 			)
 				? {
 						exitCode: 1,

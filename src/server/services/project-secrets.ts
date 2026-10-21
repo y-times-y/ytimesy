@@ -4,7 +4,10 @@ import {
 	secretHint,
 } from "#/domain/encrypted-secret";
 import type { WorkspaceId } from "#/domain/ids";
-import { posixShellQuoted } from "#/domain/posix-command";
+import {
+	posixShellQuoted,
+	privateDirectoryShell,
+} from "#/domain/posix-command";
 import {
 	AGENT_SECRETS_DIRECTORY,
 	AGENT_SECRETS_ENV_PATH,
@@ -112,10 +115,9 @@ export async function writeAgentProjectSecrets(
 	vm: WorkspaceId,
 	secrets: AgentProjectSecrets,
 ) {
-	const directory = posixShellQuoted(AGENT_SECRETS_DIRECTORY);
 	const prepared = await machines.exec(
 		vm,
-		`mkdir -p ${directory} && chmod 700 ${directory}`,
+		privateDirectoryShell(AGENT_SECRETS_DIRECTORY),
 		10_000,
 	);
 	if (prepared.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
