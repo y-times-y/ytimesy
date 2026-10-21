@@ -3,6 +3,7 @@ import type { ModelMessage, ToolSet } from "ai";
 import { z } from "zod";
 import { reportedToolFailure } from "#/domain/harness-performance";
 import { posixShellQuoted } from "#/domain/posix-command";
+import { redactSecretValues } from "#/domain/project-secret";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { scopedShellCommand } from "./api-command-scope";
@@ -59,7 +60,16 @@ export function harnessLifecycleHooks(input: {
 		key: string,
 		load: () => Promise<z.infer<typeof lifecycleHookConfig>>,
 	) => Promise<z.infer<typeof lifecycleHookConfig>>;
+	/**
+	 * Runtime secret values to remove from hook output. Hooks run with the
+	 * project's secrets loaded, so their messages and failures pass through
+	 * the same redactor as tool results. Read on each call: a turn adds values
+	 * after its hooks exist.
+	 */
+	redact?: readonly string[];
 }) {
+	const clean = <T>(value: T): T =>
+		input.redact?.length ? redactSecretValues(value, input.redact) : value;
 	let configured: Promise<z.infer<typeof lifecycleHookConfig>> | undefined;
 	let pending: string[] = [];
 	async function config() {
@@ -148,9 +158,9 @@ export function harnessLifecycleHooks(input: {
 				if (!receipt.stdout.trim()) return { continue: false };
 				if (receipt.stdoutNextStart !== null)
 					throw new Error("Lifecycle hook verdict was truncated.");
-				return verdict.parse(JSON.parse(receipt.stdout));
+				return clean(verdict.parse(JSON.parse(receipt.stdout)));
 			});
-			results.push(verdict.parse(result));
+			results.push(clean(verdict.parse(result)));
 		}
 		return {
 			continue: results.some((result) => result.continue),
@@ -192,7 +202,9 @@ export function harnessLifecycleHooks(input: {
 			return outcome.messages.join(" ") || "The repository policy refused it.";
 		} catch (error) {
 			input.signal.throwIfAborted();
-			return `The PreToolUse hook failed (${error instanceof Error ? error.message : "unknown failure"}), so the call was not run.`;
+			return clean(
+				`The PreToolUse hook failed (${error instanceof Error ? error.message : "unknown failure"}), so the call was not run.`,
+			);
 		}
 	}
 
@@ -207,7 +219,9 @@ export function harnessLifecycleHooks(input: {
 		} catch (error) {
 			input.signal.throwIfAborted();
 			pending.push(
-				`${event} hook failed: ${error instanceof Error ? error.message : "unknown failure"}. The original tool result remains authoritative.`,
+				clean(
+					`${event} hook failed: ${error instanceof Error ? error.message : "unknown failure"}. The original tool result remains authoritative.`,
+				),
 			);
 		}
 	}
@@ -317,6 +331,7 @@ export function harnessLifecycleHooks(input: {
 		},
 		drain: (messages: ModelMessage[]): ModelMessage[] => {
 			if (!pending.length) return messages;
+			pending = pending.map(clean);
 			const updated: ModelMessage[] = [
 				...messages,
 				...pending.map((content) => ({

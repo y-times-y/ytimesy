@@ -678,7 +678,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		<section className="settings-section settings-section-gap">
 			<SettingsHeader
 				title="Secrets"
-				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values are replaced with [REDACTED] in everything the agent and this chat see, and commits containing them are refused. Build secrets are only passed to environment setup."
+				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values (and common encodings of them) are redacted from what the model and this chat see on a best-effort basis, and commits containing them are refused. Build secrets are only passed to environment setup."
 			/>
 			<ul className="settings-group">
 				{secrets.length === 0 ? (
