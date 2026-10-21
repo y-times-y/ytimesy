@@ -1,6 +1,6 @@
 import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
-import { ASK_USER_TOOL, askedQuestions } from "./user-question";
 import type { ApiAgentEvent } from "./api-agent-event";
+import { backgroundCommandLabel } from "./background-command";
 import {
 	CODE_MODE_TOOL,
 	type CodeModeResult,
@@ -16,6 +16,7 @@ import {
 } from "./secret-request";
 import type { SessionItem } from "./session-item";
 import { publicToolDetail } from "./tool-detail";
+import { ASK_USER_TOOL, askedQuestions } from "./user-question";
 
 export function recordedContextUsage(items: readonly SessionItem[]) {
 	for (let index = items.length - 1; index >= 0; index--) {
@@ -159,10 +160,37 @@ export function applyApiProgress(
 						? "failed"
 						: "completed",
 		};
+		const background =
+			existing?.kind === "dynamicToolCall" && existing.background
+				? existing.background
+				: event.type === "tool-result" && !event.failed
+					? startedBackgroundCommand(event.output)
+					: null;
+		if (background) next = { ...next, background };
 	} else return [...items];
 	return existing
 		? items.map((item) => (item.id === id ? next : item))
 		: [...items, next];
+}
+
+/** A lean command result that started a background command (lean-engine.ts). */
+function startedBackgroundCommand(value: unknown) {
+	const output = value as {
+		background?: unknown;
+		status?: unknown;
+		id?: unknown;
+		command?: unknown;
+	} | null;
+	return output?.background === true &&
+		output.status === "running" &&
+		typeof output.id === "string" &&
+		typeof output.command === "string"
+		? {
+				id: output.id,
+				label: backgroundCommandLabel(output.command),
+				startedAt: Date.now(),
+			}
+		: null;
 }
 
 /** The request an accepted request_project_secret call returned, if any. */

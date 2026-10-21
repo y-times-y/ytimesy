@@ -60,7 +60,6 @@ import {
 import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
-import { ASK_USER_TOOL } from "#/domain/user-question";
 import type {
 	ModelSwitchItem,
 	SessionItem,
@@ -79,6 +78,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { ASK_USER_TOOL } from "#/domain/user-question";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -125,6 +125,10 @@ import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import {
+	ASK_USER_END_TURN_TOOLS,
+	askUserTools,
+} from "../services/ask-user-tool";
 import { createAttemptLoop } from "../services/attempt-loop";
 import { attemptLoopDeps, reviewLoopDeps } from "../services/attempt-loop-deps";
 import { automaticRepositoryContext } from "../services/automatic-repository-context";
@@ -132,6 +136,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
+import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
@@ -177,10 +182,6 @@ import {
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { createReviewLoop } from "../services/review-loop";
-import {
-	ASK_USER_END_TURN_TOOLS,
-	askUserTools,
-} from "../services/ask-user-tool";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
 	secretRequestTools,
@@ -1282,6 +1283,22 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
+				// Background commands that exited since the last step: their cards and notices.
+				const background = await withBackgroundCommandNotices({
+					workspace,
+					sessionId: owner.id,
+					items,
+					messages: history,
+				}).catch((error: unknown) => {
+					console.warn("Background commands were not observed.", error);
+					return null;
+				});
+				if (background?.changed) {
+					items = background.items;
+					history = messages = background.messages;
+					await saveCheckpoint();
+					await publishProgress?.("running");
+				}
 				return injectServerPeerMessages(
 					owner.id,
 					history,
@@ -1526,6 +1543,15 @@ async function runApiTurnAttempt(
 			coordinated = false;
 			return "continue";
 		}
+		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
+		const background = await withBackgroundCommandNotices({
+			workspace,
+			sessionId: owner.id,
+			items,
+			messages,
+			claim: false,
+		}).catch(() => null);
+		if (background?.changed) items = background.items;
 		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
 		const historyBeforeCompletion = messages;
 		const finalHistory = await withBackgroundCommandContext({

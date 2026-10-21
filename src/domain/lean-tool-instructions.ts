@@ -45,8 +45,9 @@ function toolsSentence(shape: LeanToolShape, readOnly: boolean) {
 const READ_ONLY_COMMANDS =
 	"Your commands run as a read-only user: you can read the checkout and run its programs and tests, but you cannot change the checkout or other agents' files. Write copies, scripts and scratch inputs only under $HOME or the scratch directory your brief names; when a command must write next to the code (build output, caches), copy the checkout there first and run it from the copy.";
 
-/** The core bash tool waits for every command, so long-lived processes must be started detached. */
-const DETACHED_LONG_RUNNING = `${LEAN_SHAPE_TOOLS.core.command} waits for each command to finish: start servers and other long-running processes detached, with \`tmux new -d -s <name> '<command> > /tmp/<name>.log 2>&1'\` (or \`setsid nohup <command> > /tmp/<name>.log 2>&1 &\`), then read the log.`;
+/** Every shape's command tool has a background option (lean-shapes/*.ts); one static line for all. */
+const BACKGROUND_COMMANDS =
+	"- Background commands notify you when they finish; don't poll them with status/wait loops unless you need their output now.";
 
 export function leanToolInstructions(
 	shape: LeanToolShape,
@@ -65,7 +66,7 @@ export function leanToolInstructions(
 			`Your tools: ${runCode}${toolsSentence(shape, true)} ${READ_ONLY_COMMANDS}`,
 			"- Parts of this conversation removed to save space are saved in `~/.ytimesy/history/`. Search there when you need exact earlier details.",
 			"- `~/.ytimesy/environment.md` (if present) describes how this workspace was prepared.",
-			...(shape === "core" ? [DETACHED_LONG_RUNNING] : []),
+			BACKGROUND_COMMANDS,
 		].join("\n");
 	return [
 		`Your tools: ${runCode}${toolsSentence(shape, false)} Everything else is a command in the workspace:`,
@@ -73,7 +74,7 @@ export function leanToolInstructions(
 		"- Parts of this conversation removed to save space are saved in `~/.ytimesy/history/`. Search there when you need exact earlier details.",
 		"- `~/.ytimesy/environment.md` (if present) describes how this workspace was prepared.",
 		"- `ytimesy-browser open|screenshot|inspect|exec` drives the desktop browser for visual checks.",
-		...(shape === "core" ? [DETACHED_LONG_RUNNING] : []),
+		BACKGROUND_COMMANDS,
 	].join("\n");
 }
 

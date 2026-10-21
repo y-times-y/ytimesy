@@ -211,6 +211,37 @@ describe("workspace commands", () => {
 		}
 	});
 
+	it("ytimesy-job wait or stop of a background command means the agent needs no completion notice", async () => {
+		const commands = commandRoot("session-1");
+		await mkdir(commands, { recursive: true });
+		const waited = randomUUID();
+		const stopped = randomUUID();
+		const files = [waited, stopped].flatMap((id) =>
+			["output", "status", "background", "notified"].map((suffix) =>
+				join(commands, `${id}.${suffix}`),
+			),
+		);
+		try {
+			for (const id of [waited, stopped]) {
+				await writeFile(join(commands, `${id}.output`), "");
+				await writeFile(join(commands, `${id}.background`), "{}");
+			}
+			await writeFile(join(commands, `${waited}.status`), "0\n");
+			expect((await sh(`ytimesy-job wait ${waited} 1`)).stdout).toContain(
+				"exited: 0",
+			);
+			expect(await readFile(join(commands, `${waited}.notified`), "utf8")).toBe(
+				"agent",
+			);
+			await sh(`ytimesy-job stop ${stopped}`);
+			expect(
+				await readFile(join(commands, `${stopped}.notified`), "utf8"),
+			).toBe("agent");
+		} finally {
+			await Promise.all(files.map((file) => rm(file, { force: true })));
+		}
+	});
+
 	it("does not touch environment.md without a report", async () => {
 		const command = environmentMarkdownCommand(join(root, "absent.json"));
 		expect((await sh(command)).exitCode).toBe(0);
@@ -302,7 +333,12 @@ describe("lean instructions", () => {
 			"apply_patch changes files",
 		);
 		expect(leanToolInstructions("qwen")).toContain("edit and write_file");
-		expect(leanToolInstructions("core")).toContain("tmux new -d");
+		expect(leanToolInstructions("core")).toContain(
+			"Background commands notify you when they finish",
+		);
+		expect(leanToolInstructions("core", { readOnly: true })).toContain(
+			"Background commands notify you when they finish",
+		);
 	});
 
 	it("replace the builder's tool-specific system prompt", () => {
@@ -318,7 +354,7 @@ describe("lean instructions", () => {
 		expect(lean).toContain("You are the coding agent for this chat");
 		expect(lean).toContain("`ytimesy-browser screenshot`");
 		expect(lean).toContain("look at the PNG it prints with read_file");
-		expect(lean.length).toBeLessThan(current.length + 1800);
+		expect(lean.length).toBeLessThan(current.length + 1900);
 		const knowing = agentTurnInstructions({
 			...input,
 			projectKnowledge: "Billing lives in billing/.",
