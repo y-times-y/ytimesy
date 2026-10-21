@@ -231,7 +231,8 @@ try {
 		"setup",
 		`set -euo pipefail
 cd ${WORK}
-sudo -u ubuntu git clone -q repo.bundle repo
+sudo -u ubuntu git init -q repo
+sudo -u ubuntu git -C repo fetch -q ../repo.bundle "${tempRef}:refs/remote-check/head"
 sudo -u ubuntu git -C repo checkout -q --detach ${sha}
 arch=$(uname -m); case "$arch" in x86_64) narch=x64;; aarch64) narch=arm64;; esac
 curl -fsSL https://nodejs.org/dist/${nodeVersion}/node-${nodeVersion}-linux-$narch.tar.xz | tar -xJ -C /usr/local --strip-components=1
