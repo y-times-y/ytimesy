@@ -37,7 +37,9 @@ export async function deliverAgentTaskEvents(
 				event.id,
 				cause instanceof Error ? cause.message : String(cause),
 			);
-			if (eventId) throw cause;
+			// A report held for the chat's running turn is expected: its turn's
+			// end releases it (releaseHeldAgentTaskEvents), not an error.
+			if (eventId && !(cause instanceof ReportHeldForTurn)) throw cause;
 		}
 	}
 	return delivered;
@@ -77,6 +79,14 @@ export function boundedNotificationText(runtimeText: string) {
 export const REPORT_HELD_FOR_TURN =
 	"The report waits for the chat's running turn to end.";
 
+/** A report to a chat whose turn runs: held (deferred), not failed. */
+export class ReportHeldForTurn extends Error {
+	constructor() {
+		super(REPORT_HELD_FOR_TURN);
+		this.name = "ReportHeldForTurn";
+	}
+}
+
 /**
  * Idle parents wake with the report. A chat's own turn (Main, the user's
  * chat) is never interrupted: the report is held and delivered after it
@@ -93,7 +103,7 @@ export async function deliverParentTaskNotification(
 	const scopedMachines = machinesForAgentSession(machines, parent);
 	if (await serverPeerMessageAccepted(parent.id, notificationId)) return;
 	if (parent.turnStatus === "running" && !parent.parentSessionId)
-		throw new Error(REPORT_HELD_FOR_TURN);
+		throw new ReportHeldForTurn();
 	if (parent.turnStatus === "running") {
 		await stageServerPeerMessage(parent.id, notificationId, runtimeText);
 		throw new Error(

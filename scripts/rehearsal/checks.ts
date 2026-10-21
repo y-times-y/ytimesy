@@ -1,6 +1,7 @@
 // What a rehearsal scenario left behind (turn items, child sessions, model
 // requests, VM state) and the checks each scenario must pass.
 
+import { isInternalChildTaskMessage } from "../../src/domain/child-task-activity";
 import {
 	MEMORY_DIRECTORY,
 	MEMORY_PROJECT_RULES_HEADER,
@@ -745,7 +746,19 @@ export async function checkScenario(
 			writerCalls.length >= 2,
 			`${writerCalls.length} calls`,
 		);
-		const started = calls(items, "agent");
+		// Main hands off while the writer works; the report wakes it in a
+		// new turn, which applies the patch: look across the chat's turns.
+		const started = calls(data.rootItems, "agent");
+		check(
+			"Main handed off while the writer worked and its report woke Main in a new turn",
+			data.rootTurns.length >= 2 &&
+				data.rootItems.some(
+					(item) =>
+						item.kind === "agentMessage" && has(item.text, MAIN_HANDOFF),
+				) &&
+				calls(items, "run_code").some((item) => has(item.input, "git apply")),
+			JSON.stringify({ rootTurns: data.rootTurns.length }),
+		);
 		check(
 			"the agent tool started the writer on a fork",
 			has(started[0]?.output, '"vm": "fork"'),
@@ -763,7 +776,7 @@ export async function checkScenario(
 			),
 			clip(calls(writer?.items ?? [], "run_code")[0]?.output),
 		);
-		const applied = calls(items, "run_code").filter((item) =>
+		const applied = calls(data.rootItems, "run_code").filter((item) =>
 			has(item.input, "git apply"),
 		);
 		check(
@@ -1120,12 +1133,21 @@ export async function checkScenario(
 		}
 
 		if (id === "fusion-multiturn") {
+			// Besides the two requests' turns, each build round's report woke
+			// Main in a turn of its own (Main hands off during a round).
+			const requestTurns = data.rootTurns.filter((turn) =>
+				turn.items.some(
+					(item) =>
+						item.kind === "userMessage" &&
+						!isInternalChildTaskMessage(item.text ?? ""),
+				),
+			);
 			check(
 				"two user requests, both turns completed",
-				data.rootTurns.length === 2 &&
+				requestTurns.length === 2 &&
 					data.rootTurns.every((turn) => turn.state === "completed") &&
 					has(JSON.stringify(data.rootItems), MULTITURN_FOLLOW_UP.slice(0, 40)),
-				data.rootTurns.map((turn) => turn.state).join(","),
+				`${requestTurns.length} request turns; ${data.rootTurns.map((turn) => turn.state).join(",")}`,
 			);
 			check(
 				"one sidekick served both requests (no second writer)",

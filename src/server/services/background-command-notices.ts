@@ -23,7 +23,7 @@ import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import {
 	deliverParentTaskNotification,
-	REPORT_HELD_FOR_TURN,
+	ReportHeldForTurn,
 } from "./agent-task-event-delivery";
 import {
 	type AgentToolWorkspaceInput,
@@ -266,7 +266,7 @@ const watchDependencies = (): BackgroundWatchDependencies => ({
 			);
 		} catch (error) {
 			// A turn started meanwhile: its own command's exit is read at its next step.
-			if (error instanceof Error && error.message === REPORT_HELD_FOR_TURN)
+			if (error instanceof ReportHeldForTurn)
 				await stageServerPeerMessage(session.id, notificationId, text);
 			else throw error;
 		}
