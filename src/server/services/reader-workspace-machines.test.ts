@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import { SHARED_RUNTIME_PARENTS } from "#/domain/subagent-reader";
+import {
+	READER_NETWORK_ISOLATION_CHECK,
+	READER_NETWORK_NAMESPACE,
+	SHARED_RUNTIME_PARENTS,
+} from "#/domain/subagent-reader";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { commandRoot } from "./api-agent-command-tools";
 import { commandScopeRoot } from "./api-command-scope";
@@ -84,6 +88,43 @@ describe("read-only subagent machines", () => {
 			);
 		expect(decoded(runs[0]).join("\n")).toContain("git diff");
 		expect(reader.runCapability).toBeUndefined();
+	});
+
+	it("refuses the reader where it cannot get its own network namespace, and runs every command in one", async () => {
+		const { machines, commands } = fakeMachines();
+		let namespaces = false;
+		vi.mocked(machines.exec).mockImplementation(async (_target, command) => {
+			commands.push(command);
+			if (!namespaces && command.includes(READER_NETWORK_ISOLATION_CHECK))
+				return {
+					exitCode: 1,
+					stdout: "",
+					stderr: "ytimesy: network namespaces are unavailable",
+				};
+			return { exitCode: 0, stdout: "contents", stderr: "" };
+		});
+		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
+			id: "child-1",
+			agentRole: "reviewer",
+		});
+		await expect(reader.exec(vm, "ls", 1000)).rejects.toThrow(
+			"could not be isolated",
+		);
+		expect(
+			commands.some((command) => command.includes("ytimesy-reader --")),
+		).toBe(false);
+		namespaces = true;
+		await reader.exec(vm, "curl http://127.0.0.1:9222/json", 1000);
+		await reader.readTextFile(vm, "/etc/hostname");
+		const runs = commands.filter((command) =>
+			command.includes("sudo -n -u ytimesy-reader --"),
+		);
+		expect(runs).toHaveLength(2);
+		for (const run of runs)
+			expect(run.startsWith(`${READER_NETWORK_NAMESPACE} sudo -n -u`)).toBe(
+				true,
+			);
 	});
 
 	it("refuses runtime writes outside the scratch and hands allowed files to the reader", async () => {

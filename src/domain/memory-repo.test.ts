@@ -504,3 +504,42 @@ describe("embedding text", () => {
 		expect(query.endsWith("zzz")).toBe(true);
 	});
 });
+
+describe("keys written outside the metadata brackets", () => {
+	const inside =
+		"- Use pnpm, never npm [scope: always; kind: stated; source: /?chat=1; added: 2026-10-02]";
+	const outside =
+		"- Use pnpm, never npm. scope: always. kind: stated. [source: /?chat=1; added: 2026-10-02]";
+
+	it("reads scope and kind from either place and drops the key text from the line", () => {
+		for (const raw of [inside, outside]) {
+			const entry = parseMemoryLine(raw);
+			expect(entry?.meta).toMatchObject({
+				scope: "always",
+				kind: "stated",
+				added: "2026-10-02",
+			});
+			expect(entry?.text).toMatch(/^Use pnpm, never npm\.?$/);
+		}
+		expect(
+			parseMemoryLine("- Counts rows, not quantities. kind: inferred.")?.meta,
+		).toEqual({ kind: "inferred" });
+	});
+
+	it("keeps ordinary prose that only looks like a key", () => {
+		const entry = parseMemoryLine(
+			"- The deploy scope: staging first [added: 2026-10-02]",
+		);
+		expect(entry?.text).toBe("The deploy scope: staging first");
+		expect(entry?.meta.scope).toBeUndefined();
+	});
+
+	it("attaches an outside-bracket scope: always line as a project rule", () => {
+		const rules = projectRules({
+			lines: memoryLines({ "rules.md": `# Rules\n\n${outside}\n` }),
+			today: "2026-10-20",
+			project: null,
+		});
+		expect(rules.map((rule) => rule.text)).toEqual(["Use pnpm, never npm."]);
+	});
+});

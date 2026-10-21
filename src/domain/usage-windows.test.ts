@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
+import { usageCapFailureMessage } from "./failure-message";
 import {
 	blockingUsageWindow,
 	USAGE_WINDOW_REFUSAL_PATTERN,
+	usageCeilingRefusal,
+	usageWindowCeiling,
 	usageWindowRefusal,
 	usageWindowState,
 } from "./infrastructure-usage";
@@ -72,4 +75,13 @@ it("picks the window that reopens last and words its refusal with the time", () 
 it("treats a zero limit as exhausted and refuses invalid amounts", () => {
 	expect(usageWindowState("five_hour", [], 0, now).exhausted).toBe(true);
 	expect(() => usageWindowState("five_hour", [], -1, now)).toThrow();
+});
+
+it("puts the hard ceiling an hour of the machine past the limit and words its refusal", () => {
+	expect(usageWindowCeiling(1000, 132_240)).toBe(133_240);
+	expect(usageWindowCeiling(1000, 0)).toBe(1000);
+	const fiveHour = usageWindowState("five_hour", [settled(1, 1000)], 1000, now);
+	const refusal = usageCeilingRefusal(fiveHour);
+	expect(refusal).toContain("until 2026-10-20 16:00 UTC");
+	expect(usageCapFailureMessage(`Error: ${refusal}`)).toBe(refusal);
 });

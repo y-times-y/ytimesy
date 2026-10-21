@@ -29,7 +29,13 @@ export type HardSetReviewRound = {
 	findings: number;
 	findingTexts: string[];
 	/** The tests the checker wrote and ran (absent on records before 2026-10-19). */
-	checkerTests?: { name: string; passed: boolean; command: string | null }[];
+	checkerTests?: {
+		name: string;
+		passed: boolean;
+		command: string | null;
+		/** checkerMode=pair: which of the pair ran its command (absent: neither, or a single checker). */
+		ranBy?: "worker" | "judge";
+	}[];
 	/** It said pass without a test of its own (parsed as unsure). */
 	untested?: boolean;
 	/** rigor=on: the builder's requirements list the checker got (absent before 2026-10-20). */
@@ -38,6 +44,8 @@ export type HardSetReviewRound = {
 	decision: string | null;
 	checkerTokens: number;
 	checkerCostUsd: number | null;
+	/** checkerMode=pair: the checker's spend split as judge and its workers (absent for a single checker). */
+	pair?: PairSpend & { workers: number };
 	checkMinutes: number;
 	fixTokens: number;
 	fixCostUsd: number | null;
@@ -55,6 +63,14 @@ export type HardSetReviewRound = {
 	graderPassed: boolean | null;
 };
 
+/** checkerMode=pair: the judge's and its workers' share of the checker's spend. */
+export type PairSpend = {
+	judgeTokens: number;
+	judgeCostUsd: number | null;
+	workerTokens: number;
+	workerCostUsd: number | null;
+};
+
 export type HardSetReviewRecord = {
 	phase: string;
 	outcome: string | null;
@@ -64,6 +80,8 @@ export type HardSetReviewRecord = {
 	extraTokens: number;
 	extraCostUsd: number | null;
 	checkers: number;
+	/** checkerMode=pair: the checker spend above, split as judge and worker. */
+	pair?: PairSpend;
 	finalTree: string | null;
 	branch: string;
 	attemptGrading: "none" | "grading" | "final";
@@ -92,7 +110,20 @@ function checkerTestsLabel(round: HardSetReviewRound) {
 	if (!round.checkerTests) return "";
 	const failed = round.checkerTests.filter((test) => !test.passed).length;
 	const count = round.checkerTests.length;
-	return ` [${count} test${count === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${round.untested ? ", untested pass" : ""}${round.builderRequirements ? `, builder listed ${round.builderRequirements.length} requirement${round.builderRequirements.length === 1 ? "" : "s"}` : ""}]`;
+	const byWorker = round.checkerTests.filter(
+		(test) => test.ranBy === "worker",
+	).length;
+	return ` [${count} test${count === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${round.pair ? `, ${byWorker} run by the worker` : ""}${round.untested ? ", untested pass" : ""}${round.builderRequirements ? `, builder listed ${round.builderRequirements.length} requirement${round.builderRequirements.length === 1 ? "" : "s"}` : ""}]`;
+}
+
+const dollars = (value: number | null) =>
+	value === null ? "$?" : `$${value.toFixed(value < 1 ? 3 : 2)}`;
+
+/** checkerMode=pair: ` judge $0.050 / worker $0.020`. */
+function pairLabel(spend: PairSpend | undefined) {
+	return spend
+		? ` judge ${dollars(spend.judgeCostUsd)} / worker ${dollars(spend.workerCostUsd)}`
+		: "";
 }
 
 /** Report lines for the runs that had a review loop (empty when none). */
@@ -127,7 +158,7 @@ export function reviewLoopReport(records: readonly RunWithReview[]) {
 		const rounds = loop.rounds
 			.map(
 				(round) =>
-					`R${round.n} ${round.verdict ?? (round.timedOut ? "no-verdict" : "-")}${round.findings ? `(${round.findings})` : ""}${checkerTestsLabel(round)}->${grade(round.graderPassed)} ${round.checkMinutes.toFixed(1)}m${round.decision === "fix" ? ` fix ${round.fixMinutes.toFixed(1)}m fixed ${round.fixed} rejected ${round.rejected}${round.unanswered ? ` unanswered ${round.unanswered}` : ""}` : ""}`,
+					`R${round.n} ${round.verdict ?? (round.timedOut ? "no-verdict" : "-")}${round.findings ? `(${round.findings})` : ""}${checkerTestsLabel(round)}->${grade(round.graderPassed)} ${round.checkMinutes.toFixed(1)}m${pairLabel(round.pair)}${round.decision === "fix" ? ` fix ${round.fixMinutes.toFixed(1)}m fixed ${round.fixed} rejected ${round.rejected}${round.unanswered ? ` unanswered ${round.unanswered}` : ""}` : ""}`,
 			)
 			.join(", ");
 		lines.push(
@@ -147,6 +178,26 @@ export function reviewLoopReport(records: readonly RunWithReview[]) {
 	lines.push(
 		`${runs.length} run(s), ${checks} check(s), ${fixes} fix round(s). First checked tree -> final grade: fail->PASS ${moves.failToPass}, PASS->fail ${moves.passToFail}, fail->fail ${moves.failStayed}, PASS->PASS ${moves.passStayed}, ungraded ${moves.unknown}, no check ${moves.unchecked}.`,
 	);
+	const paired = runs.flatMap((record) => record.reviewLoop?.pair ?? []);
+	if (paired.length) {
+		const sum = (pick: (spend: PairSpend) => number | null) =>
+			paired.reduce<number | null>(
+				(total, spend) =>
+					total === null || pick(spend) === null
+						? null
+						: total + (pick(spend) as number),
+				0,
+			);
+		const judge = sum((spend) => spend.judgeCostUsd);
+		const worker = sum((spend) => spend.workerCostUsd);
+		const share = (part: number | null) =>
+			part !== null && judge !== null && worker !== null && judge + worker > 0
+				? ` (${Math.round((part / (judge + worker)) * 100)}%)`
+				: "";
+		lines.push(
+			`Checker pair spend over ${paired.length} run(s): judge ${dollars(judge)}${share(judge)}, ${Math.round((sum((spend) => spend.judgeTokens) ?? 0) / 1000)}k tokens; worker ${dollars(worker)}${share(worker)}, ${Math.round((sum((spend) => spend.workerTokens) ?? 0) / 1000)}k tokens.`,
+		);
+	}
 	const rows = runs.flatMap((record) =>
 		(record.reviewLoop as HardSetReviewRecord).rounds.flatMap((round) =>
 			round.verdict && round.graderPassed !== null

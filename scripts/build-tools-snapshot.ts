@@ -41,7 +41,7 @@ curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc
 chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
 apt-get -o DPkg::Lock::Timeout=180 update -qq
-apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ripgrep gh openjdk-21-jdk-headless >/dev/null
+apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ripgrep gh openjdk-21-jdk-headless iptables >/dev/null
 apt-get clean
 rm -rf /var/lib/apt/lists/*`,
 	},
@@ -106,7 +106,7 @@ const VERSIONS = `
 for c in "node --version" "npm --version" "corepack --version" "pnpm --version" "yarn --version" "bun --version" \\
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
-  "git --version" "docker --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader"; do
+  "git --version" "docker --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done`;

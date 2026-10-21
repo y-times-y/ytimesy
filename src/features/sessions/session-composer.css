@@ -1209,6 +1209,8 @@ details[open] > summary .session-activity-chevron {
 }
 .session-activity[data-kind="mcpToolCall"],
 .session-activity[data-kind="dynamicToolCall"]:not([data-nested]),
+.session-activity[data-kind="agentCall"]:not([data-nested]),
+.session-activity[data-kind="check"]:not([data-nested]),
 .session-activity[data-kind="unknown"]:not([data-nested]) {
 	overflow: hidden;
 	margin: 2px 0;
@@ -1956,9 +1958,9 @@ code.session-tool-target {
 .secret-request-note {
 	flex-basis: 100%;
 }
-/* Cross-chat memory markers: muted, plain text, collapsed by default. */
+/* Cross-chat memory markers: a quiet icon row, collapsed to a count. */
 .memory-marker {
-	margin: 4px 0 0;
+	margin: 2px 0 0;
 	min-width: 0;
 	color: rgba(255, 255, 255, 0.45);
 	font-size: 12px;
@@ -1969,11 +1971,6 @@ code.session-tool-target {
 }
 .session-timeline li[data-kind="memorySave"] {
 	margin: 2px 0 14px;
-}
-.memory-marker-title {
-	min-width: 0;
-	overflow-wrap: anywhere;
-	color: rgba(255, 255, 255, 0.45);
 }
 .memory-marker-summary {
 	display: inline-flex;
@@ -1992,23 +1989,47 @@ code.session-tool-target {
 	outline-offset: 2px;
 	border-radius: 3px;
 }
-.memory-marker-summary:hover .memory-marker-title {
-	color: rgba(255, 255, 255, 0.7);
+.memory-marker-icon {
+	flex-shrink: 0;
+	color: rgba(255, 255, 255, 0.4);
 }
-.memory-marker-single {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	column-gap: 10px;
+.memory-marker-title {
+	min-width: 0;
+	color: rgba(255, 255, 255, 0.5);
+	font-size: 13px;
+	white-space: nowrap;
+}
+.memory-marker-note {
+	color: #6f6f6f;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.memory-marker-summary:hover .memory-marker-title {
+	color: rgba(255, 255, 255, 0.72);
+}
+.memory-marker-body {
+	display: grid;
+	gap: 8px;
+	margin: 4px 0 6px 6px;
+	padding-left: 14px;
+	border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+.memory-marker-group {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+.memory-marker-group-title {
 	margin: 0;
-	min-height: 22px;
+	color: #6f6f6f;
+	font-size: 11px;
+	letter-spacing: 0.02em;
 }
 .memory-marker-lines {
 	display: grid;
-	gap: 8px;
-	margin: 4px 0 6px 2px;
-	padding: 0 0 0 12px;
-	border-left: 1px solid rgba(255, 255, 255, 0.07);
+	gap: 6px;
+	margin: 0;
+	padding: 0;
 	list-style: none;
 }
 .memory-marker-entry {
@@ -2018,11 +2039,27 @@ code.session-tool-target {
 }
 .memory-marker-text {
 	color: rgba(255, 255, 255, 0.72);
+	font-size: 13px;
+	line-height: 19px;
 	overflow-wrap: anywhere;
 }
 .memory-marker-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 4px;
+	min-width: 0;
 	color: rgba(255, 255, 255, 0.4);
+	font-size: 11px;
 	overflow-wrap: anywhere;
+}
+.memory-marker-actions {
+	display: inline-flex;
+	gap: 10px;
+	margin-left: 8px;
+}
+.memory-marker-index {
+	display: block;
 }
 .memory-marker-link {
 	display: inline;
@@ -2034,6 +2071,10 @@ code.session-tool-target {
 	font: inherit;
 	text-decoration: none;
 	cursor: pointer;
+}
+.memory-marker-more {
+	margin-left: 6px;
+	font-size: 11px;
 }
 .memory-marker-link:hover,
 .memory-marker-link:focus-visible {

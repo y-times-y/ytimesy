@@ -137,6 +137,7 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { builderToolSurface } from "../services/builder-shell-surface";
+import { checkerPairGate } from "../services/checker-pair-gate";
 import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
 import {
 	runCodexSubscriptionAgent,
@@ -209,6 +210,7 @@ import {
 	subagentReport,
 } from "../services/subagent-runtime";
 import {
+	checkerWorkerTools,
 	type SubagentToolContext,
 	subagentTools,
 } from "../services/subagent-tools";
@@ -216,7 +218,11 @@ import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
-import { turnMemory } from "../services/turn-memory";
+import {
+	subagentMemory,
+	type TurnMemory,
+	turnMemory,
+} from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -409,6 +415,10 @@ async function runApiTurnAttempt(
 	};
 	let coordinated = false;
 	let closeMcp: (() => Promise<void>) | undefined;
+	// Cross-chat memory and its VM clone; the clone's token is released when
+	// this step ends, however it ends.
+	let memoryLoading: Promise<TurnMemory | null> = Promise.resolve(null);
+	let memoryCloned: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -565,7 +575,7 @@ async function runApiTurnAttempt(
 		const writable = writesOwnCheckout(owner);
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
-		const memoryLoading =
+		memoryLoading =
 			writable && !owner.parentSessionId && !evaluation
 				? timed("turn:memory", () =>
 						turnMemo(`${turn.id}:memory`, () =>
@@ -583,7 +593,26 @@ async function runApiTurnAttempt(
 						),
 					).catch(() => null)
 				: Promise.resolve(null);
-		let memoryCloned: Promise<void> | undefined;
+		// Its subagents read the same project's memory, never write it: no
+		// save hook, no ~/memory clone, no memory instructions. Same
+		// exclusions as the root chat's.
+		const childRole = owner.parentSessionId ? owner.agentRole : null;
+		const subagentMemoryLoading =
+			childRole && !evaluation
+				? timed("turn:memory", () =>
+						turnMemo(`${turn.id}:subagent-memory`, () =>
+							subagentMemory(
+								{
+									id: owner.id,
+									userId: owner.userId,
+									projectId: owner.projectId ?? null,
+									role: childRole,
+								},
+								{ wording: variant.memoryWording },
+							),
+						),
+					).catch(() => null)
+				: Promise.resolve(null);
 		// Turn-fixed configuration is loaded by the turn's first durable step and
 		// reused by later steps in the same isolate (see turn-memo). It may change
 		// between turns; within one, keeping it fixed also keeps the tools and the
@@ -884,8 +913,16 @@ async function runApiTurnAttempt(
 				? owner.agentRole !== "checker" &&
 					// A sidekick does the work itself (lead mode fusion).
 					!isActiveSidekick(owner) &&
+					// So does a checker pair's worker (checkerMode=pair).
+					owner.agentBudget?.checkerPair !== "worker" &&
 					subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId);
+		// checkerMode=pair: the judge's only delegation is its worker (src/domain/checker-pair.ts).
+		const pairJudge =
+			!!surface.lean &&
+			owner.agentRole === "checker" &&
+			owner.agentBudget?.checkerPair === "judge" &&
+			subagentLevel < MAX_SUBAGENT_LEVEL;
 		const subagentContext: SubagentToolContext = {
 			machines: unscopedMachines,
 			parent: owner as AgentSessionRecord,
@@ -896,6 +933,7 @@ async function runApiTurnAttempt(
 			lead: variant.lead,
 			parentReasoning: turnReasoning,
 			rigor: variant.rigor === "on",
+			checkerMode: variant.checkerMode,
 			// Lead mode fusion: one writer at a time in the shared checkout.
 			onSidekickRound: leadWrites.start,
 			leadWritesSettled: leadWrites.settled,
@@ -903,7 +941,9 @@ async function runApiTurnAttempt(
 		};
 		const delegation: ToolSet = delegates
 			? withRedactedResults(subagentTools(subagentContext), redact)
-			: {};
+			: pairJudge
+				? withRedactedResults(checkerWorkerTools(subagentContext), redact)
+				: {};
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
 		// starts the request's exploration, and the lead waits while its
 		// sidekick works in the shared checkout.
@@ -921,6 +961,15 @@ async function runApiTurnAttempt(
 							return ready;
 						})
 				: null;
+		// checkerMode=pair: the judge waits for its workers' reports (checker-pair-gate.ts).
+		const judgeGate = pairJudge
+			? (waitUntil: number) =>
+					checkerPairGate({
+						judge: owner as AgentSessionRecord,
+						signal: abort.signal,
+						waitUntil,
+					})
+			: null;
 		// Code mode is a development harness variant on a lean surface only
 		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
 		// MCP setup's search and call tools are callable only from inside it.
@@ -1012,6 +1061,17 @@ async function runApiTurnAttempt(
 			);
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
+			if (attached.recall) {
+				items = withMemoryRecall(items, attached.recall);
+				progress.offer(items);
+			}
+		}
+		const readOnlyMemory = await subagentMemoryLoading;
+		if (readOnlyMemory && firstStep) {
+			const attached = await timed("turn:memoryAttach", () =>
+				readOnlyMemory.attach(messages, items),
+			);
+			messages = attached.messages;
 			if (attached.recall) {
 				items = withMemoryRecall(items, attached.recall);
 				progress.offer(items);
@@ -1222,6 +1282,7 @@ async function runApiTurnAttempt(
 				// The local worker's loop calls the model several times in one
 				// run; durable steps wait before their one call instead (below).
 				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
+				if (!step && judgeGate) await judgeGate(Number.POSITIVE_INFINITY);
 				if (owner.agentRole) {
 					// Counted and checked before every model step: a wrap-up
 					// notice at 90%, the turn stops at 100% (reported as such).
@@ -1406,6 +1467,7 @@ async function runApiTurnAttempt(
 								parentReasoning: turnReasoning,
 							}),
 							rigor: variant.rigor === "on",
+							pair: variant.checkerMode === "pair",
 						})
 					: null;
 		const attemptWaitUntil = () =>
@@ -1421,6 +1483,17 @@ async function runApiTurnAttempt(
 			leadGateAt = Date.now();
 			const gate = await timed("turn:fusionLead", () =>
 				leadGate(attemptWaitUntil()),
+			);
+			if (gate === "wait") {
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+		}
+		// checkerMode=pair: no judge model call while a worker still works.
+		if (step && judgeGate) {
+			const gate = await timed("turn:checkerPair", () =>
+				judgeGate(attemptWaitUntil()),
 			);
 			if (gate === "wait") {
 				await saveCheckpoint();
@@ -1640,12 +1713,6 @@ async function runApiTurnAttempt(
 				{ keepIdle: true },
 			).catch(() => {});
 		await memory?.afterTurn(turn.id);
-		// The turn's own memory writes are done; its VM token goes now rather
-		// than at expiry. A later turn clones with a new one.
-		if (memoryCloned && execution) {
-			const ready = execution;
-			await memoryCloned.then(() => memory?.releaseVm(ready)).catch(() => {});
-		}
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
 				"Completed turn saved, but its project report needs recovery.",
@@ -1996,6 +2063,18 @@ async function runApiTurnAttempt(
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
+		// The VM's memory token goes when the step ends (completed, failed,
+		// cancelled or continued in a later step) rather than at expiry, with
+		// any earlier step's; a later step clones with a new one.
+		const cloned = memoryCloned;
+		const vm = execution;
+		await memoryLoading
+			.then(async (memory) => {
+				if (!memory) return;
+				await cloned?.catch(() => {});
+				await memory.releaseVm(cloned ? vm : undefined);
+			})
+			.catch(() => {});
 		await closeMcp?.().catch(() => {});
 		clearInterval(heartbeat);
 		await heartbeatPending;

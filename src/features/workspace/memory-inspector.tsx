@@ -1,49 +1,77 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { History, Network, Rows3, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { memoryGraph } from "#/domain/memory-graph";
+import { Clock3, History, Pin, Search, Trash2, X } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
-	chatIdFromSource,
-	MEMORY_ENTRY,
-	memoryLinks,
-	parseMemoryLine,
-} from "#/domain/memory-repo";
+	type MemoryRow,
+	memoryRows,
+	memoryTopics,
+	RULES_TOPIC,
+	recentMemoryRows,
+	searchMemoryRows,
+	topicRows,
+} from "#/domain/memory-overview";
+import { MEMORY_ENTRY, memoryLinks } from "#/domain/memory-repo";
 import {
 	clearMemoryFn,
 	readMemoryFn,
 	readMemoryHistoryFn,
 	saveMemoryModeFn,
+	undoMemoryLineFn,
 } from "./memory.fn";
 import "./memory-inspector.css";
 
-const WIDTH = 600;
-const HEIGHT = 420;
+/** The recent feed's id in the topic list. */
+const RECENT = "recent";
 
-/** The user's memory repo: a read-only graph of files and links, each file's entries and history. */
+const today = () => new Date().toISOString().slice(0, 10);
+
+function formatDate(date: string) {
+	const parsed = new Date(`${date}T00:00:00Z`);
+	return Number.isNaN(parsed.getTime())
+		? date
+		: parsed.toLocaleDateString("en-US", {
+				month: "short",
+				day: "numeric",
+				timeZone: "UTC",
+			});
+}
+
+/**
+ * The user's memory: a topic list (project rules pinned first), a feed of
+ * the newest lines, the selected topic's lines as rows, and a search across
+ * every line. The same view fills the right panel and the Memory page.
+ */
 export function MemoryInspector({
 	active,
 	focus,
 	onOpenChat,
+	layout = "panel",
 }: {
 	active: boolean;
 	/** A file a chat's memory marker opened; each new request selects it again. */
 	focus?: { path: string };
 	onOpenChat: (chatId: string) => boolean;
+	/** "page": the full-page Memory view from the left sidebar. */
+	layout?: "panel" | "page";
 }) {
 	const readMemory = useServerFn(readMemoryFn);
 	const saveMode = useServerFn(saveMemoryModeFn);
 	const clearMemory = useServerFn(clearMemoryFn);
+	const undoLine = useServerFn(undoMemoryLineFn);
 	const queryClient = useQueryClient();
 	const memory = useQuery({
 		queryKey: ["memory"],
 		queryFn: () => readMemory(),
 		enabled: active,
 	});
-	const [view, setView] = useState<"graph" | "files">("graph");
-	const [selected, setSelected] = useState<string>(focus?.path ?? MEMORY_ENTRY);
+	const [selected, setSelected] = useState<string>(focus?.path ?? RECENT);
+	const [query, setQuery] = useState("");
 	useEffect(() => {
-		if (focus) setSelected(focus.path);
+		if (focus) {
+			setSelected(focus.path);
+			setQuery("");
+		}
 	}, [focus]);
 	const [confirmClear, setConfirmClear] = useState(false);
 	const toggle = useMutation({
@@ -54,16 +82,26 @@ export function MemoryInspector({
 		mutationFn: () => clearMemory(),
 		onSuccess: () => {
 			setConfirmClear(false);
-			setSelected(MEMORY_ENTRY);
+			setSelected(RECENT);
 			return queryClient.invalidateQueries({ queryKey: ["memory"] });
 		},
 	});
-	const files = memory.data?.files ?? [];
-	const graph = useMemo(
-		() => memoryGraph(files, { width: WIDTH, height: HEIGHT }),
+	const undo = useMutation({
+		mutationFn: (row: MemoryRow) =>
+			undoLine({ data: { path: row.path, text: row.text } }),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["memory"] }),
+	});
+	const files = memory.data?.files;
+	const repo = useMemo(
+		() =>
+			Object.fromEntries(
+				(files ?? []).map((file) => [file.path, file.content]),
+			),
 		[files],
 	);
-	const file = files.find((row) => row.path === selected) ?? files[0];
+	const date = today();
+	const rows = useMemo(() => memoryRows(repo, date), [repo, date]);
+	const topics = useMemo(() => memoryTopics(repo, date), [repo, date]);
 
 	if (memory.isPending)
 		return (
@@ -79,25 +117,60 @@ export function MemoryInspector({
 			</section>
 		);
 	const on = memory.data.mode !== "off";
+	const topic = topics.find((row) => row.id === selected);
+	const view = query.trim()
+		? "search"
+		: selected === RECENT || !topic
+			? "recent"
+			: "topic";
+	const shown =
+		view === "search"
+			? searchMemoryRows(rows, query)
+			: view === "recent"
+				? recentMemoryRows(rows)
+				: topicRows(rows, selected);
+	const openTopic = (id: string) => {
+		setSelected(id);
+		setQuery("");
+	};
+	const rowList = (showTopic: boolean) => (
+		<MemoryRowList
+			rows={shown}
+			showTopic={showTopic}
+			topics={repo}
+			onOpenTopic={openTopic}
+			onOpenChat={onOpenChat}
+			onUndo={(row) => undo.mutate(row)}
+			undoing={undo.isPending ? undo.variables : undefined}
+		/>
+	);
 	return (
-		<section className="memory-inspector" aria-label="Memory">
+		<section
+			className="memory-inspector"
+			data-layout={layout}
+			aria-label="Memory"
+		>
 			<div className="memory-toolbar">
-				<div className="memory-views">
-					<button
-						type="button"
-						aria-pressed={view === "graph"}
-						onClick={() => setView("graph")}
-					>
-						<Network size={14} /> Graph
-					</button>
-					<button
-						type="button"
-						aria-pressed={view === "files"}
-						onClick={() => setView("files")}
-					>
-						<Rows3 size={14} /> Files
-					</button>
-				</div>
+				<label className="memory-search">
+					<Search size={14} aria-hidden="true" />
+					<input
+						type="search"
+						placeholder="Search memory"
+						aria-label="Search memory"
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+					/>
+					{query ? (
+						<button
+							type="button"
+							className="memory-search-clear"
+							aria-label="Clear search"
+							onClick={() => setQuery("")}
+						>
+							<X size={12} />
+						</button>
+					) : null}
+				</label>
 				<div className="memory-actions">
 					<button
 						type="button"
@@ -125,7 +198,7 @@ export function MemoryInspector({
 						<button
 							type="button"
 							aria-label="Clear memory"
-							disabled={!files.length}
+							disabled={!files?.length}
 							onClick={() => setConfirmClear(true)}
 						>
 							<Trash2 size={14} /> Clear
@@ -133,7 +206,7 @@ export function MemoryInspector({
 					)}
 				</div>
 			</div>
-			{!files.length ? (
+			{!files?.length ? (
 				<div className="inspector-empty">
 					<h2>No memory yet.</h2>
 					<p>
@@ -143,149 +216,111 @@ export function MemoryInspector({
 				</div>
 			) : (
 				<div className="memory-body">
-					{view === "graph" ? (
-						<svg
-							className="memory-graph"
-							viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-							role="img"
-							aria-label="Memory files and their links"
+					<nav className="memory-topics" aria-label="Memory topics">
+						<button
+							type="button"
+							className="memory-topic"
+							aria-pressed={view === "recent"}
+							onClick={() => openTopic(RECENT)}
 						>
-							{graph.edges.map((edge) => {
-								const from = graph.nodes.find(
-									(node) => node.path === edge.from,
-								);
-								const to = graph.nodes.find((node) => node.path === edge.to);
-								return from && to ? (
-									<line
-										key={`${edge.from}->${edge.to}`}
-										x1={from.x}
-										y1={from.y}
-										x2={to.x}
-										y2={to.y}
-										data-active={
-											file?.path === edge.from || file?.path === edge.to
-										}
-									/>
-								) : null;
-							})}
-							{graph.nodes.map((node) => (
-								// biome-ignore lint/a11y/useSemanticElements: an SVG node cannot be a <button>.
-								<g
-									key={node.path}
-									role="button"
-									tabIndex={0}
-									aria-label={node.path}
-									data-root={node.root}
-									data-active={file?.path === node.path}
-									transform={`translate(${node.x} ${node.y})`}
-									onClick={() => setSelected(node.path)}
-									onKeyDown={(event) => {
-										if (event.key === "Enter" || event.key === " ")
-											setSelected(node.path);
-									}}
-								>
-									<circle
-										r={node.root ? 11 : 5 + Math.min(node.backlinks.length, 5)}
-									/>
-									<text y={node.root ? 26 : 20}>
-										{node.path.replace(/\.md$/, "")}
-									</text>
-								</g>
-							))}
-						</svg>
-					) : (
-						<ul className="memory-files">
-							{files.map((row) => (
-								<li key={row.path}>
-									<button
-										type="button"
-										aria-pressed={file?.path === row.path}
-										onClick={() => setSelected(row.path)}
-									>
-										<span>{row.path}</span>
-										<span className="memory-muted">
-											{row.content.split("\n").length} lines
-										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-					{file ? (
-						<MemoryFilePanel
-							key={file.path}
-							path={file.path}
-							content={file.content}
-							backlinks={
-								graph.nodes.find((node) => node.path === file.path)
-									?.backlinks ?? []
-							}
-							onOpenFile={setSelected}
-							onOpenChat={onOpenChat}
-							exists={(path) => files.some((row) => row.path === path)}
-						/>
-					) : null}
+							<Clock3 size={13} aria-hidden="true" />
+							<span className="memory-topic-title">Recently added</span>
+						</button>
+						{topics.map((row) => (
+							<button
+								key={row.id}
+								type="button"
+								className="memory-topic"
+								data-pinned={row.id === RULES_TOPIC ? "true" : undefined}
+								aria-pressed={view === "topic" && selected === row.id}
+								onClick={() => openTopic(row.id)}
+							>
+								{row.id === RULES_TOPIC ? (
+									<Pin size={13} aria-hidden="true" />
+								) : (
+									<span className="memory-topic-dot" aria-hidden="true" />
+								)}
+								<span className="memory-topic-title">{row.title}</span>
+								<span className="memory-topic-meta">
+									{row.count}
+									{row.updated ? ` · ${formatDate(row.updated)}` : ""}
+								</span>
+							</button>
+						))}
+					</nav>
+					<div className="memory-panel">
+						{view === "topic" && topic ? (
+							<TopicView
+								key={topic.id}
+								title={topic.title}
+								path={topic.id === RULES_TOPIC ? null : topic.id}
+								content={repo[topic.id] ?? ""}
+							>
+								{rowList(topic.id === RULES_TOPIC)}
+							</TopicView>
+						) : (
+							<>
+								<header>
+									<h3>
+										{view === "search"
+											? `${shown.length} ${shown.length === 1 ? "match" : "matches"}`
+											: "Recently added"}
+									</h3>
+								</header>
+								{shown.length ? (
+									rowList(true)
+								) : (
+									<p className="memory-muted">
+										{view === "search"
+											? "No memory line matches."
+											: "No dated lines yet."}
+									</p>
+								)}
+							</>
+						)}
+					</div>
 				</div>
 			)}
 		</section>
 	);
 }
 
-function MemoryFilePanel({
+/** A topic's title, its rows, and its file's history on request. */
+function TopicView({
+	title,
 	path,
 	content,
-	backlinks,
-	onOpenFile,
-	onOpenChat,
-	exists,
+	children,
 }: {
-	path: string;
+	title: string;
+	/** The topic's file; null for the project rules across files. */
+	path: string | null;
 	content: string;
-	backlinks: string[];
-	onOpenFile: (path: string) => void;
-	onOpenChat: (chatId: string) => boolean;
-	exists: (path: string) => boolean;
+	children: ReactNode;
 }) {
 	const [showHistory, setShowHistory] = useState(false);
 	const readHistory = useServerFn(readMemoryHistoryFn);
 	const history = useQuery({
 		queryKey: ["memory-history", path, content],
-		queryFn: () => readHistory({ data: { path } }),
-		enabled: showHistory,
+		queryFn: () => readHistory({ data: { path: path ?? MEMORY_ENTRY } }),
+		enabled: showHistory && Boolean(path),
 	});
-	const inline = (text: string) =>
-		text.split(/(\[\[[^\]]+\]\])/g).map((part, index) => {
-			const target = /^\[\[([^\]]+)\]\]$/.exec(part)?.[1];
-			if (!target) return part;
-			const resolved = memoryLinks(part)[0];
-			return exists(resolved) ? (
-				<button
-					// biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed line.
-					key={index}
-					type="button"
-					className="memory-link"
-					onClick={() => onOpenFile(resolved)}
-				>
-					{target}
-				</button>
-			) : (
-				// biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed line.
-				<span key={index} className="memory-muted">
-					{target}
-				</span>
-			);
-		});
 	return (
-		<article className="memory-panel" aria-label={path}>
+		<>
 			<header>
-				<h3>{path}</h3>
-				<button
-					type="button"
-					aria-pressed={showHistory}
-					onClick={() => setShowHistory((value) => !value)}
-				>
-					<History size={14} /> History
-				</button>
+				<h3>
+					{title}
+					{path ? <span className="memory-muted"> {path}</span> : null}
+				</h3>
+				{path ? (
+					<button
+						type="button"
+						aria-pressed={showHistory}
+						onClick={() => setShowHistory((value) => !value)}
+					>
+						<History size={14} /> History
+					</button>
+				) : null}
 			</header>
 			{showHistory ? (
 				<ol className="memory-history">
@@ -323,80 +358,110 @@ function MemoryFilePanel({
 					)}
 				</ol>
 			) : (
-				<div className="memory-content">
-					{content.split("\n").map((raw, index) => {
-						const entry = parseMemoryLine(raw);
-						const key = `${index}:${raw}`;
-						if (entry) {
-							const chat = entry.meta.source
-								? chatIdFromSource(entry.meta.source)
-								: null;
-							return (
-								<p key={key} className="memory-entry">
-									<span>{inline(entry.text)}</span>
-									{entry.meta.kind === "inferred" ? (
-										<span
-											className="memory-badge"
-											title="Derived by the agent, not stated by you"
-										>
-											inferred
-										</span>
-									) : null}
-									{entry.meta.project ? (
-										<span className="memory-badge">{entry.meta.project}</span>
-									) : null}
-									{entry.meta.expires ? (
-										<span className="memory-badge">
-											until {entry.meta.expires}
-										</span>
-									) : null}
-									{chat ? (
-										<a
-											className="memory-source"
-											href={`/?chat=${chat}`}
-											onClick={(event) => {
-												if (onOpenChat(chat)) event.preventDefault();
-											}}
-										>
-											source
-										</a>
-									) : null}
-									{entry.meta.added ? (
-										<span className="memory-muted">{entry.meta.added}</span>
-									) : null}
-								</p>
-							);
-						}
-						const heading = /^(#{1,6})\s+(.*)$/.exec(raw);
-						if (heading)
-							return (
-								<p
-									key={key}
-									className="memory-heading"
-									data-level={heading[1].length}
-								>
-									{inline(heading[2])}
-								</p>
-							);
-						return raw.trim() ? <p key={key}>{inline(raw)}</p> : null;
-					})}
-				</div>
+				children
 			)}
-			{backlinks.length ? (
-				<footer>
-					<span className="memory-muted">Linked from</span>
-					{backlinks.map((link) => (
-						<button
-							key={link}
-							type="button"
-							className="memory-link"
-							onClick={() => onOpenFile(link)}
-						>
-							{link.replace(/\.md$/, "")}
-						</button>
-					))}
-				</footer>
-			) : null}
-		</article>
+		</>
+	);
+}
+
+/** Memory lines as rows: text with badges, then kind, topic, date and source muted, with small actions. */
+export function MemoryRowList({
+	rows,
+	showTopic,
+	topics,
+	onOpenTopic,
+	onOpenChat,
+	onUndo,
+	undoing,
+}: {
+	rows: readonly MemoryRow[];
+	/** Rows from several topics (feed, search, rules) name their topic. */
+	showTopic: boolean;
+	topics: Readonly<Record<string, string>>;
+	onOpenTopic: (path: string) => void;
+	onOpenChat: (chatId: string) => boolean;
+	onUndo?: (row: MemoryRow) => void;
+	undoing?: MemoryRow;
+}) {
+	const inline = (text: string) =>
+		text.split(/(\[\[[^\]]+\]\])/g).map((part, index) => {
+			const target = /^\[\[([^\]]+)\]\]$/.exec(part)?.[1];
+			if (!target) return part;
+			const resolved = memoryLinks(part)[0];
+			return topics[resolved] !== undefined ? (
+				<button
+					// biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed line.
+					key={index}
+					type="button"
+					className="memory-link"
+					onClick={() => onOpenTopic(resolved)}
+				>
+					{target}
+				</button>
+			) : (
+				// biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed line.
+				<span key={index} className="memory-muted">
+					{target}
+				</span>
+			);
+		});
+	return (
+		<ul className="memory-rows">
+			{rows.map((row) => (
+				<li
+					key={`${row.path}:${row.line}`}
+					className="memory-row"
+					data-replaced={row.replaced ? "true" : undefined}
+				>
+					<p className="memory-row-text">
+						{row.rule ? <span className="memory-badge">Rule</span> : null}
+						{row.replaced ? (
+							<span className="memory-badge" data-tone="replaced">
+								Replaced
+							</span>
+						) : null}
+						<span>{inline(row.text)}</span>
+					</p>
+					<p className="memory-row-meta">
+						<span>{row.kind}</span>
+						{showTopic ? (
+							<button
+								type="button"
+								className="memory-row-action"
+								onClick={() => onOpenTopic(row.path)}
+							>
+								{row.path.replace(/\.md$/, "")}
+							</button>
+						) : null}
+						{row.project ? <span>{row.project}</span> : null}
+						{row.expires ? <span>until {row.expires}</span> : null}
+						{row.added ? <span>{formatDate(row.added)}</span> : null}
+						{row.chatId ? (
+							<a
+								className="memory-row-action"
+								href={`/?chat=${row.chatId}`}
+								onClick={(event) => {
+									if (row.chatId && onOpenChat(row.chatId))
+										event.preventDefault();
+								}}
+							>
+								Open chat
+							</a>
+						) : null}
+						{onUndo && !row.replaced ? (
+							<button
+								type="button"
+								className="memory-row-action"
+								disabled={undoing === row}
+								title="Remove this line from memory"
+								onClick={() => onUndo(row)}
+							>
+								{undoing === row ? "Undoing…" : "Undo"}
+							</button>
+						) : null}
+					</p>
+				</li>
+			))}
+		</ul>
 	);
 }

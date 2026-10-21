@@ -1,19 +1,26 @@
 import {
+	AppWindow,
 	ArrowLeftRight,
 	BookOpen,
+	Bot,
 	Brain,
 	FilePenLine,
 	Files,
 	FileText,
 	FlaskConical,
 	Globe,
+	History,
 	Hourglass,
 	Image,
+	Info,
+	KeyRound,
 	ListChecks,
 	MessageSquare,
 	Plug,
 	Search,
+	ShieldCheck,
 	Square,
+	SquareCode,
 	SquareTerminal,
 	TriangleAlert,
 	Wrench,
@@ -39,7 +46,14 @@ const icons = {
 	stop: Square,
 	test: FlaskConical,
 	switch: ArrowLeftRight,
-} as const;
+	agent: Bot,
+	browser: AppWindow,
+	code: SquareCode,
+	review: ShieldCheck,
+	history: History,
+	secret: KeyRound,
+	notice: Info,
+} as const satisfies Record<SessionActivityGlyph, unknown>;
 
 export function ActivityIcon({ glyph }: { glyph: SessionActivityGlyph }) {
 	const Icon = icons[glyph];

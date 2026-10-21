@@ -210,7 +210,7 @@ vi.mock("../services/api-turn-workspace", () => ({
 					if (answered) return answered;
 					// A reader's command: the same script, run as the reader user.
 					const encoded =
-						/^sudo -n -u ytimesy-reader -- .* bash -c "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"$/s.exec(
+						/sudo -n -u ytimesy-reader -- .* bash -c "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"$/s.exec(
 							sent,
 						)?.[1];
 					const command = encoded

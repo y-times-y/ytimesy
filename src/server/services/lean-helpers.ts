@@ -3,7 +3,10 @@ import type { ModelMessage } from "ai";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { browserUseSetup } from "../adapters/browser-use-cli";
 import { desktopWallpaperBase64 } from "../adapters/freestyle/desktop-wallpaper";
-import { START_WORKSPACE_DESKTOP } from "../adapters/freestyle/start-desktop";
+import {
+	DESKTOP_X_ENVIRONMENT,
+	START_WORKSPACE_DESKTOP,
+} from "../adapters/freestyle/start-desktop";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { chromeOpenCommand } from "./api-agent-browser-tools";
@@ -184,7 +187,7 @@ case "\${1:-}" in
   screenshot)
     desktop
     path=\${2:-/tmp/ytimesy-screenshot-$(date +%Y%m%d-%H%M%S).png}
-    DISPLAY=:0 scrot -o -z "$path" && echo "$path" ;;
+    ${DESKTOP_X_ENVIRONMENT}; scrot -o -z "$path" && echo "$path" ;;
   inspect)
     url=\${2:-}; [[ "$url" =~ ^https?:// ]] || { usage; exit 2; }
     desktop

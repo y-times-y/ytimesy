@@ -1,4 +1,7 @@
-import { USAGE_WINDOW_REFUSAL_PATTERN } from "./infrastructure-usage";
+import {
+	USAGE_CEILING_REFUSAL_PATTERN,
+	USAGE_WINDOW_REFUSAL_PATTERN,
+} from "./infrastructure-usage";
 
 const GENERIC_EFFECT_PROMISE_FAILURE =
 	"An unknown error occurred in Effect.tryPromise";
@@ -27,6 +30,8 @@ export const FLEET_LIFETIME_CAP_MESSAGE =
 export function usageCapFailureMessage(message: string): string | null {
 	const window = USAGE_WINDOW_REFUSAL_PATTERN.exec(message);
 	if (window) return window[0];
+	const ceiling = USAGE_CEILING_REFUSAL_PATTERN.exec(message);
+	if (ceiling) return ceiling[0];
 	if (/lifetime fleet cloud execution budget is exhausted/i.test(message))
 		return FLEET_LIFETIME_CAP_MESSAGE;
 	if (/fleet cloud execution budget is exhausted/i.test(message))

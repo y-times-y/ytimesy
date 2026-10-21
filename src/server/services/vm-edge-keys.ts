@@ -31,6 +31,14 @@ export function desktopViewerCredential(vmId: string) {
 	return `ytimesy:${vmEdgeKey("desk-auth", vmId).slice(0, 40)}`;
 }
 
+/**
+ * x11vnc's VNC password (VNC keeps 8 characters): the guest's x11vnc asks
+ * every client for it, and only the owner's viewer is given it.
+ */
+export function desktopVncPassword(vmId: string) {
+	return vmEdgeKey("desk-vnc", vmId).slice(0, 8);
+}
+
 export function desktopViewerAuthorization(vmId: string) {
 	return `Basic ${Buffer.from(desktopViewerCredential(vmId)).toString("base64")}`;
 }
