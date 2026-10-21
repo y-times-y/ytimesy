@@ -1,6 +1,10 @@
 // What a rehearsal scenario left behind (turn items, child sessions, model
 // requests, VM state) and the checks each scenario must pass.
 
+import {
+	MEMORY_DIRECTORY,
+	MEMORY_PROJECT_RULES_HEADER,
+} from "../../src/domain/memory-repo";
 import type { ReviewLoopState } from "../../src/domain/review-loop";
 import {
 	fusionTurnMetrics,
@@ -22,6 +26,7 @@ import {
 	EXPLORE_FILE,
 	LEAD_REQUIREMENTS,
 	LEAD_REQUIREMENTS_INSTRUCTION,
+	MEMORY_RULE,
 	MULTITURN_FOLLOW_UP,
 	REQUIREMENTS_INSTRUCTION,
 	REQUIREMENTS_MARK,
@@ -117,6 +122,10 @@ export async function collect(input: {
 		forks: input.vms.forks,
 		destroyed: input.vms.destroyed,
 		edgeErrors: input.edge.errors,
+		// One edge serves every scenario; each has its own user.
+		memoryJobs: input.edge.memoryJobs.filter(
+			(job) => job.userId === input.userId,
+		),
 	};
 }
 
@@ -1170,5 +1179,50 @@ export async function checkScenario(
 			);
 		}
 	}
+	// Memory scenarios: subagents and the checker read the project's memory
+	// (its always-on rules on their first request); only the root chat saves.
+	if (id === "review" || id === "subagents") {
+		for (const role of id === "review"
+			? ["checker"]
+			: ["writer", "researcher"]) {
+			const roleRequests = requests(role);
+			const first = roleRequests[0]?.users.join("\n\n");
+			check(
+				`memory: the ${role}'s first request carries the project's rules`,
+				has(
+					first,
+					MEMORY_RULE,
+					...(role === "checker"
+						? ["<standing_rules>", "follows the project's remembered rules"]
+						: [MEMORY_PROJECT_RULES_HEADER]),
+				),
+				clip(first?.slice(-800), 800),
+			);
+			check(
+				`memory: the ${role} is never told to write memory`,
+				roleRequests.length > 0 &&
+					roleRequests.every(
+						(request) => !request.instructions.includes(MEMORY_DIRECTORY),
+					),
+			);
+		}
+		const saves = data.memoryJobs.filter((job) => job.action === "save");
+		const children = new Set(data.children.map((child) => child.id));
+		check(
+			"memory: the root chat's save hook was queued",
+			saves.some((job) => job.sessionId === data.sessionId),
+			JSON.stringify(data.memoryJobs),
+		);
+		check(
+			"memory: no save hook ran for a subagent",
+			saves.every(
+				(job) =>
+					job.sessionId === data.sessionId &&
+					!(job.sessionId && children.has(job.sessionId)),
+			),
+			JSON.stringify(saves),
+		);
+	}
+
 	return checks;
 }

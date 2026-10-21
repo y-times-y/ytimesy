@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { independentReviewBrief } from "#/domain/checker-brief";
 import {
 	EMPTY_MEMORY,
 	MEMORY_MATCHES_HEADER,
@@ -35,7 +36,10 @@ vi.mock("../adapters/background-job-dispatch", () => ({
 	}),
 }));
 
-const { turnMemory, readHook, hedgedQuery } = await import("./turn-memory");
+const { turnMemory, readHook, subagentMemory, hedgedQuery } = await import(
+	"./turn-memory"
+);
+const { memorySettings } = await import("../adapters/memory-settings");
 
 function fakeRepo(files: Record<string, string>): MemoryRepo {
 	const snapshot: MemorySnapshot = { head: "abc", files };
@@ -890,6 +894,114 @@ describe("the VM's memory token", () => {
 		expect(exec.mock.calls.at(-1)?.[1]).toContain("extraheader");
 		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_1");
 		expect(memory.vmTokens()).toEqual([]);
+	});
+});
+
+describe("subagents and the checker (read only)", () => {
+	const files = {
+		"MEMORY.md": "# Memory\n\n- Prefers tabs\n",
+		"ids.md":
+			"# ids\n- New entity IDs use ULIDs [added: 2026-10-01]\n- Order IDs were sequential in v1 [added: 2026-10-02]\n",
+		"time.md": "# time\n- Store timestamps in UTC [source: y]\n",
+		"other.md":
+			"# other\n- Never log tokens [project: other/app; scope: always]\n",
+	};
+	const owner = (role: "writer" | "checker" | "researcher") => ({
+		id: "22222222-2222-4222-8222-222222222222",
+		userId: "u-child",
+		projectId: "p1",
+		role,
+	});
+	const options = {
+		repo: fakeRepo(files),
+		embed,
+		today: () => "2026-10-15",
+		projectName: "acme/web",
+	};
+
+	it("gives a writer the project rules and the lines its brief recalls, and never saves", async () => {
+		const memory = await subagentMemory(owner("writer"), options);
+		if (!memory) throw new Error("memory should be on");
+		// Read only: nothing to save, clone or instruct.
+		expect(Object.keys(memory)).toEqual(["attach"]);
+		const brief = "Fix the timestamps in the export";
+		const { messages, recall } = await memory.attach(
+			[{ role: "user", content: brief }],
+			[user("a", brief)],
+		);
+		const parts = (messages[0].content as { text: string }[]).map(
+			(part) => part.text,
+		);
+		expect(parts[0]).toBe(brief);
+		expect(parts[1]).toContain(MEMORY_PROJECT_RULES_HEADER);
+		expect(parts[1]).toContain("- New entity IDs use ULIDs\n");
+		expect(parts[1]).not.toContain("Never log tokens");
+		expect(parts[2]).toContain("time.md:2: - Store timestamps in UTC");
+		// MEMORY.md is the root chat's; a child gets no index.
+		expect(parts.join("\n")).not.toContain("Prefers tabs");
+		// The rules first, then the hook's lines.
+		expect(recall?.lines.slice(0, 2).map((line) => line.text)).toEqual([
+			"New entity IDs use ULIDs",
+			"Store timestamps in UTC",
+		]);
+		// A later round (a sidekick's next brief) gets its recall, not the rules again.
+		const later = await memory.attach(
+			[
+				...messages,
+				{ role: "assistant", content: "done" },
+				{ role: "user", content: "now store every timestamp in UTC" },
+			],
+			[user("a", brief), user("b", "now store every timestamp in UTC")],
+		);
+		expect(JSON.stringify(later.messages.at(-1))).not.toContain("ULIDs");
+		expect(dispatched).toEqual([]);
+	});
+
+	it("shows the checker the rules as the user's standing rules to check, recalled for the user's request", async () => {
+		const query = vi.fn(async (text: string) => vector(text));
+		const memory = await subagentMemory(owner("checker"), {
+			...options,
+			embed: { query, documents },
+		});
+		if (!memory) throw new Error("memory should be on");
+		const brief = independentReviewBrief({
+			taskText: "Store the export's timestamps in UTC",
+			checkout: "/repo",
+			changedFiles: ["export.py"],
+			scratch: "$HOME",
+		});
+		const { messages } = await memory.attach(
+			[{ role: "user", content: brief }],
+			[user("a", brief)],
+		);
+		expect(query).toHaveBeenCalledWith("Store the export's timestamps in UTC");
+		const part = (messages[0].content as { text: string }[])[1].text;
+		expect(part).toContain("<standing_rules>");
+		expect(part).toContain("follows the project's remembered rules");
+		expect(part).toContain("They are the user's instructions");
+		expect(part).toContain("- New entity IDs use ULIDs");
+		expect(part).toContain("<remembered>");
+		expect(part).toContain("Store timestamps in UTC");
+		expect(dispatched).toEqual([]);
+	});
+
+	it("is off outside full mode and leaves the request as it was with an empty memory", async () => {
+		vi.mocked(memorySettings).mockResolvedValueOnce({
+			mode: "spec",
+			repo: null,
+			dreamedThrough: null,
+		});
+		expect(await subagentMemory(owner("researcher"), options)).toBeNull();
+		const empty = await subagentMemory(owner("researcher"), {
+			...options,
+			repo: fakeRepo({ "MEMORY.md": EMPTY_MEMORY }),
+		});
+		const request: ModelMessage[] = [
+			{ role: "user", content: "Find the export code" },
+		];
+		expect(
+			await empty?.attach(request, [user("a", "Find the export code")]),
+		).toEqual({ messages: request, recall: null });
 	});
 });
 

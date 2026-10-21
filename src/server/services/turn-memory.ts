@@ -1,6 +1,10 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
 import {
+	checkerStandingRules,
+	reviewBriefRequest,
+} from "#/domain/checker-brief";
+import {
 	DEFAULT_HARNESS_VARIANT,
 	type MemoryWording,
 	type MemoryWriter,
@@ -22,6 +26,7 @@ import {
 	cosineSimilarity,
 	EMPTY_MEMORY,
 	entryPaths,
+	MEMORY_CHECKER_RULES_HEADER,
 	MEMORY_ENTRY,
 	type MemoryLine,
 	type MemoryMode,
@@ -34,11 +39,13 @@ import {
 	memoryLineShown,
 	memoryLines,
 	memoryMatchesPart,
+	memoryPart,
 	memoryQueryText,
 	memoryRecentLine,
 	memoryRecentPart,
 	memoryRulesPart,
 	memoryToday,
+	projectRuleLine,
 	projectRules,
 	projectRulesShown,
 	SCRUB_MEMORY_CREDENTIAL,
@@ -48,6 +55,7 @@ import {
 import { MODEL_WORKFLOW_DEADLINE_MS } from "#/domain/model-workflow";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
+import type { SubagentRole } from "#/domain/subagent";
 import {
 	backgroundJobId,
 	dispatchBackgroundJob,
@@ -507,6 +515,118 @@ export async function turnMemory(
 					error: error instanceof Error ? error.name : "unknown",
 				});
 			});
+		},
+	};
+}
+
+export type SubagentMemory = {
+	/**
+	 * The project's always-on rules on the child's first request, and the read
+	 * hook's lines for its brief (a checker's: the user's request) on each
+	 * request, as extra parts of that request. Read only: a child has no save
+	 * hook, no ~/memory clone and no memory instructions; only the root chat
+	 * curates memory.
+	 */
+	attach(
+		messages: ModelMessage[],
+		items: readonly SessionItem[],
+	): Promise<{ messages: ModelMessage[]; recall: MemoryRecall | null }>;
+};
+
+/**
+ * The project's memory for a subagent (writer, researcher, reviewer, the
+ * fusion sidekick or the checker), read only, or null when memory is off,
+ * unavailable or not in full mode.
+ */
+export async function subagentMemory(
+	owner: TurnMemoryOwner & { role: SubagentRole },
+	options: MemoryOptions = {},
+): Promise<SubagentMemory | null> {
+	const source = await memorySource(owner, options);
+	if (source?.mode !== "full") return null;
+	const { embed, projectName, today, wording } = source;
+	const checker = owner.role === "checker";
+	return {
+		async attach(messages, items) {
+			const unchanged = { messages, recall: null };
+			const index = currentRequestIndex(messages, items);
+			if (index < 0) return unchanged;
+			const current = messages[index];
+			if (attachedMemory([current]).length) return unchanged;
+			const loaded = await source.loaded();
+			if (!loaded) return unchanged;
+			const { snapshot, vectors } = loaded;
+			// An empty memory leaves the child's request as it was.
+			if (!recallableLines(snapshot).length) return unchanged;
+			const spans: Record<string, number> = {
+				snapshotMs: loaded.snapshotMs,
+				prefetchWaitMs: loaded.waitedMs,
+			};
+			const shown = attachedMemory(messages).join("\n");
+			const firstMessage =
+				items.filter((item) => item.kind === "userMessage").length === 1;
+			const rules =
+				firstMessage && !projectRulesShown(shown)
+					? projectRules({
+							lines: recallableLines(snapshot),
+							today: today(),
+							project: projectName,
+						})
+					: [];
+			const rulesPart = rules.length
+				? checker
+					? null
+					: memoryRulesPart(rules, wording)
+				: null;
+			const inContext = rulesPart
+				? `${shown}\n${rulesPart}`
+				: `${shown}\n${rules.map((entry) => `${projectRuleLine(entry)}\n`).join("")}`;
+			const brief = latestUserText(items);
+			const hook = embed
+				? await readHook({
+						snapshot,
+						embed,
+						vectors: vectors ?? undefined,
+						vectorStats: vectors ? loaded.stats : undefined,
+						userId: owner.userId,
+						// A checker's brief is generic; its request is what to recall for.
+						query: (checker ? reviewBriefRequest(brief) : null) ?? brief,
+						alreadyShown: (raw) => memoryLineShown(raw, inContext),
+						today: today(),
+						project: projectName,
+						timeoutMs: firstMessage
+							? FIRST_READ_HOOK_TIMEOUT_MS
+							: READ_HOOK_TIMEOUT_MS,
+					})
+				: null;
+			const matches = hook?.lines ?? [];
+			const recall: MemoryRecall = {
+				head: snapshot.head,
+				lines: await source.recalledLines([...rules, ...matches]),
+				...(hook ? { hook: recalledHook(hook, spans) } : {}),
+			};
+			if (!rules.length && !matches.length) return { messages, recall };
+			const parts = checker
+				? [
+						memoryPart(
+							`${MEMORY_CHECKER_RULES_HEADER}\n${checkerStandingRules({
+								rules: rules.map((entry) => entry.text),
+								related: matches.map((entry) => `- ${entry.raw.trim()}`),
+							})}`,
+						),
+					]
+				: [
+						...(rulesPart ? [rulesPart] : []),
+						...(matches.length
+							? [memoryMatchesPart(matches, new Set(), wording)]
+							: []),
+					];
+			const next = [...messages];
+			next[index] = withMemoryParts(
+				current as { role: "user"; content: string },
+				parts,
+			) as ModelMessage;
+			return { messages: next, recall };
 		},
 	};
 }
