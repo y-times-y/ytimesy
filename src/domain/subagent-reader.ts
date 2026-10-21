@@ -92,6 +92,10 @@ export function readerPreparationScript(input: {
 		...(input.checkout
 			? [
 					`find ${shellQuote(input.checkout)} -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} + 2>/dev/null || true`,
+					// The Git transfer writes HEAD, the index and objects under umask
+					// 077, so without this git sees no repository for the reader.
+					// .git holds no credential (the proxy's lives in its own /tmp).
+					`if [ -d ${shellQuote(`${input.checkout}/.git`)} ]; then chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)}; fi`,
 				]
 			: []),
 	].join("\n");
