@@ -21,7 +21,7 @@ export function secretRequestTools(existing: readonly string[]): ToolSet {
 	return {
 		[REQUEST_PROJECT_SECRET_TOOL]: tool({
 			description:
-				"Ask the user for a credential or configuration value the task needs and the project does not have (for example an API key or database URL). The user pastes it into a field in the chat; it is saved as a project secret and set as an environment variable from your next step on. You never see the value. This ends your turn, so ask only when you cannot proceed without it, and never ask the user to paste secrets into a message.",
+				"Ask the user for a credential or configuration value the task needs and the project does not have (for example an API key or database URL). The user pastes it into a field in the chat; it is saved as a project secret and set as an environment variable from your next step on. Its value is redacted from what you see on a best-effort basis. This ends your turn, so ask only when you cannot proceed without it, and never ask the user to paste secrets into a message.",
 			inputSchema: z.object({
 				name: z
 					.string()

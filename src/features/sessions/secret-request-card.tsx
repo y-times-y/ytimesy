@@ -109,7 +109,7 @@ export function SecretRequestCard({
 					<p className="secret-request-note">
 						{error ??
 							(item.secretKind === "runtime"
-								? "Saved encrypted to this project's secrets. The agent never sees the value; it is redacted from all output."
+								? "Saved encrypted to this project's secrets. Its value is redacted from what the model sees on a best-effort basis."
 								: "Saved to this project's environment variables, visible in output.")}
 					</p>
 				</form>

@@ -1,3 +1,5 @@
+import { privateDirectoryShell } from "#/domain/posix-command";
+
 /**
  * The builder's private desktop directory (0700, the builder's own): the X
  * cookie, the viewer credential the runtime drops for the start script, the
@@ -206,7 +208,8 @@ if [ ! -s /tmp/ytimesy-desktop-wallpaper.b64 ]; then
 fi
 WALL_DIR="\${HOME}/.ytimesy"
 WALLPAPER="$WALL_DIR/desktop-wallpaper.png"
-mkdir -p "$WALL_DIR" "\${HOME}/.fluxbox" /tmp/ytimesy-chrome-profile
+mkdir -p "$WALL_DIR" "\${HOME}/.fluxbox"
+${privateDirectoryShell("/tmp/ytimesy-chrome-profile")}
 base64 -d /tmp/ytimesy-desktop-wallpaper.b64 > "$WALLPAPER"
 if [ ! -s "$WALLPAPER" ]; then
   echo "ytimesy desktop wallpaper could not be decoded" >&2
