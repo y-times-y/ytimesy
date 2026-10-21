@@ -27,7 +27,9 @@ import { parseArgs } from "node:util";
 import { WorkspaceId } from "../src/domain/ids";
 import { MACHINE_SIZES } from "../src/domain/machine-size";
 import { computeHourlyMicroUsd } from "../src/server/adapters/freestyle/usage-admission";
+import { insertAgentSession } from "../src/server/adapters/agent-sessions";
 import { sh, taskVms } from "./hard-set/vm";
+import { createEvalUser, type EvalUser } from "./smoke/eval-user";
 
 const DEVELOPMENT_REF = "exampledevprojectref";
 const STEPS = ["typecheck", "vitest", "rehearsal"] as const;
@@ -166,6 +168,8 @@ const asUbuntu = (command: string) =>
 		)} PATH=/usr/local/bin:/usr/bin:/bin:${HOME}/.bun/bin bash -c ${sh(`set -o pipefail; ${command}`)}`;
 
 let exitCode = 1;
+// VM admission meters every VM against one owner: a throwaway eval user owns it.
+let owner: EvalUser | undefined;
 const scratch = await mkdtemp(join(tmpdir(), "remote-check-"));
 const tempRef = `refs/remote-check/${process.pid}`;
 try {
@@ -184,7 +188,15 @@ try {
 		git(["update-ref", "-d", tempRef]);
 	}
 
-	const slug = `ytimesy-rcheck-${sha.slice(0, 8)}-${Date.now().toString(36)}`;
+	owner = await createEvalUser({ label: "remote-check" });
+	const session = await insertAgentSession({
+		userId: owner.userId,
+		projectId: owner.project.projectId,
+		workspaceId: owner.project.workspaceId,
+		harness: "codex",
+		title: `remote-check ${sha.slice(0, 8)}`,
+	});
+	const slug = `ytimesy-ag-${session.id.replaceAll("-", "").slice(0, 16)}`;
 	const shape = await vms.createVm(
 		slug,
 		"remote-check",
@@ -194,6 +206,7 @@ try {
 		(id) => {
 			vm = id;
 			vmStarted = Date.now();
+			void owner?.trackVm(id);
 		},
 	);
 	if (!vm) throw new Error("VM was not created.");
@@ -373,6 +386,12 @@ echo "node $(node -v) pnpm $(pnpm -v) bun $(${HOME}/.bun/bin/bun --version) dock
 			`remote-check cleanup: VM ${vm} kept (--keep); it stops itself after ${lifetimeSec / 3600}h`,
 		);
 	else console.log("remote-check cleanup: no VM was created");
+	if (owner) {
+		const left = await owner.release().catch((error: Error) => [error.message]);
+		console.log(
+			`remote-check cleanup: eval user ${left.length ? `release left: ${left.join("; ")}` : "removed"}`,
+		);
+	}
 
 	const vmHours = vmStarted ? (Date.now() - vmStarted) / 3_600_000 : 0;
 	const cost = vmHours * (computeHourlyMicroUsd(size) / 1e6);
