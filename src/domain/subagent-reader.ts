@@ -17,41 +17,19 @@ export function readerScratchDirectory(sessionId: string) {
 }
 
 /**
- * Root shell that refuses the reader every TCP connection over loopback: the
- * builder's Chrome DevTools (9222), debug adapters, desktop viewer and dev
- * servers listen there without their own credentials. Idempotent, and cheap
- * when the rules are in place (one -C check per table). Fails closed: a VM
- * without iptables, ip6tables or the owner match, or where a rule does not
- * verify after insertion, exits non-zero and the reader does not start.
+ * Readers run every command in a network namespace of their own (created as
+ * root, entered before switching to the reader): the builder's Chrome
+ * DevTools (9222), debug adapters, desktop viewer, dev servers and cloud
+ * metadata are out of reach, on 127.0.0.1, ::1 and every other address,
+ * whatever they listen on. Freestyle's kernel has no iptables owner match,
+ * so a per-user firewall rule never installed there. The reader's own
+ * loopback comes up inside, for servers it starts itself; it has no other
+ * network. If the namespace cannot be created the command never runs.
  */
-export const READER_LOOPBACK_BLOCK_SCRIPT = `for table in iptables ip6tables; do
-  command -v "$table" >/dev/null 2>&1 || { echo "ytimesy: $table unavailable; the reader cannot be kept from loopback services" >&2; exit 1; }
-  rule="OUTPUT -o lo -p tcp -m owner --uid-owner ${READER_LINUX_USER} -j REJECT --reject-with tcp-reset"
-  if ! "$table" -w -C $rule 2>/dev/null; then
-    "$table" -w -I $rule && "$table" -w -C $rule || { echo "ytimesy: $table refused the reader loopback rule" >&2; exit 1; }
-  fi
-done`;
+export const READER_NETWORK_NAMESPACE = `sudo -n unshare --net -- sh -c 'ip link set lo up >/dev/null 2>&1; exec "$@"' ytimesy-reader-net`;
 
-/** Exit status and stderr marker of a reader command refused by its isolation guard. */
-export const READER_ISOLATION_FAILED_EXIT = 97;
-export const READER_ISOLATION_FAILED = "ytimesy: reader isolation unavailable";
-
-function rootScript(script: string) {
-	return `sudo -n bash -c "$(printf %s ${Buffer.from(script, "utf8").toString("base64")} | base64 -d)"`;
-}
-
-/**
- * Runs before every reader command, as root, in the same guest call: the
- * loopback rules are checked (and re-applied) each time, so a VM that cold
- * booted or was restored since the reader was prepared never runs a reader
- * command without them. Refuses with READER_ISOLATION_FAILED_EXIT.
- */
-export function readerLoopbackGuardCommand() {
-	return `{ ${rootScript(READER_LOOPBACK_BLOCK_SCRIPT)} >/dev/null || { echo "${READER_ISOLATION_FAILED}" >&2; exit ${READER_ISOLATION_FAILED_EXIT}; }; }`;
-}
-
-/** Installs iptables on an image without it (best effort; the block script decides). */
-const READER_IPTABLES_INSTALL = `command -v iptables >/dev/null 2>&1 && command -v ip6tables >/dev/null 2>&1 || sudo -n apt-get install -y -qq --no-install-recommends iptables >/dev/null 2>&1 || { sudo -n apt-get update -qq >/dev/null 2>&1 && sudo -n apt-get install -y -qq --no-install-recommends iptables >/dev/null 2>&1; } || true`;
+/** Preparation refuses the reader where network namespaces are unavailable. */
+export const READER_NETWORK_ISOLATION_CHECK = `sudo -n unshare --net -- true || { echo "ytimesy: network namespaces are unavailable; the read-only agent cannot be isolated from the builder's loopback services" >&2; exit 1; }`;
 
 /**
  * Root shell that creates the reader user (idempotent). Baked into the tools
@@ -104,8 +82,7 @@ export function readerPreparationScript(input: {
 		"set -e",
 		readerUserSetupCommand(),
 		`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${scratch}`,
-		READER_IPTABLES_INSTALL,
-		rootScript(READER_LOOPBACK_BLOCK_SCRIPT),
+		READER_NETWORK_ISOLATION_CHECK,
 		...SHARED_RUNTIME_PARENTS.map(
 			(directory) =>
 				`sudo -n install -d -m 1777 ${directory} && sudo -n chmod 1777 ${directory}`,
@@ -133,13 +110,14 @@ const READER_GIT_ENVIRONMENT =
 	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'";
 
 /**
- * One guest command run as the reader: its own HOME (the scratch
- * directory), the command passed base64-encoded so quoting never multiplies.
+ * One guest command run as the reader in its own network namespace: its own
+ * HOME (the scratch directory), the command passed base64-encoded so quoting
+ * never multiplies.
  */
 export function readerCommand(sessionId: string, command: string) {
 	const scratch = readerScratchDirectory(sessionId);
 	const encoded = Buffer.from(command, "utf8").toString("base64");
-	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
+	return `${READER_NETWORK_NAMESPACE} sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
 /**
