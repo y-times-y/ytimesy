@@ -185,9 +185,16 @@ it("owns realtime snapshots and cancellation in the model chat DO without access
 	expect(streamed.status).toBe(200);
 	const reader = streamed.body?.getReader();
 	if (!reader) throw new Error("Missing chat stream.");
-	expect(new TextDecoder().decode((await reader.read()).value)).toContain(
-		"Unified chat state",
-	);
+	// An event can arrive split across chunks: read until the snapshot shows.
+	const decoder = new TextDecoder();
+	let received = "";
+	const until = Date.now() + 5_000;
+	while (!received.includes("Unified chat state") && Date.now() < until) {
+		const { value, done } = await reader.read();
+		if (done) break;
+		received += decoder.decode(value, { stream: true });
+	}
+	expect(received).toContain("Unified chat state");
 	await reader.cancel();
 	const turn = {
 		userId: "edge-alice",
