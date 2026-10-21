@@ -66,7 +66,7 @@ describe("ensureDesktopProcesses", () => {
 		expect(machines.exec.mock.calls[0]?.[1]).toContain(
 			desktopViewerCredentialDigest("vm-cold"),
 		);
-		expect(machines.writeTextFile).toHaveBeenCalledTimes(2);
+		expect(machines.writeTextFile).toHaveBeenCalledTimes(3);
 		expect(machines.writeTextFile).toHaveBeenCalledWith(
 			"vm-cold",
 			DESKTOP_VIEWER_CREDENTIAL_PATH,

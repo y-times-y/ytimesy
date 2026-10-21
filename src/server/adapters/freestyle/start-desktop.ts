@@ -8,6 +8,8 @@
 export const DESKTOP_PRIVATE_DIRECTORY = "/tmp/ytimesy-desktop-private";
 export const DESKTOP_VIEWER_CREDENTIAL_PATH = `${DESKTOP_PRIVATE_DIRECTORY}/viewer.auth`;
 export const DESKTOP_XAUTHORITY = `${DESKTOP_PRIVATE_DIRECTORY}/Xauthority`;
+/** The VNC password the runtime drops; x11vnc asks every client for it. */
+export const DESKTOP_VNC_PASSWORD_PATH = `${DESKTOP_PRIVATE_DIRECTORY}/vnc.password`;
 const DESKTOP_AUTH_APPLIED = `${DESKTOP_PRIVATE_DIRECTORY}/viewer.applied`;
 
 /** What every X client of the builder exports, whatever its HOME. */
@@ -33,7 +35,7 @@ case "$(ls -ld "$dir")" in drwx------*) ;; *) refuse ;; esac`;
  */
 export const DESKTOP_PRIVATE_READY = "YTIMESY_DESKTOP_PRIVATE_READY";
 export const DESKTOP_CREDENTIAL_DROP_SETUP = `${DESKTOP_PRIVATE_DIRECTORY_CHECK}
-rm -f "$dir/viewer.auth"
+rm -f "$dir/viewer.auth" "$dir/vnc.password"
 echo ${DESKTOP_PRIVATE_READY}`;
 
 export const START_WORKSPACE_DESKTOP = `set -eu
@@ -217,10 +219,10 @@ write_desktop_launchers
 # password) restarts locked down. Chrome cannot outlive its display: it is
 # closed first (its profile keeps the tabs) and reopened on the new one.
 CHROME_REOPEN=0
-if pgrep -f 'Xvfb :0 .*-ac' >/dev/null 2>&1; then
-  if pgrep -f -- '--remote-debugging-port=9222' >/dev/null 2>&1; then
+if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
+  if pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
     CHROME_REOPEN=1
-    pkill -TERM -f -- '--user-data-dir=/tmp/ytimesy-chrome-profile' >/dev/null 2>&1 || true
+    pkill -TERM -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1 || true
     sleep 2
   fi
   pkill -x x11vnc >/dev/null 2>&1 || true
@@ -257,23 +259,44 @@ if command -v tint2 >/dev/null 2>&1; then
 fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
-elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -f -- '--remote-debugging-port=9222' >/dev/null 2>&1; then
+elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
   nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
 fi
-# VNC listens only on a Unix socket in a 0700 directory, not on TCP; the
-# viewer proxy below is its one client. x11vnc has no VNC password: the
-# socket's permissions and the proxy's credential are the access control.
+# VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
+# or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
+# for the VNC password the runtime drops (the owner's viewer gets it from the
+# server); the proxy below is its one client. A desktop on TCP, or on an
+# older password, restarts its x11vnc; the display and Chrome stay.
 VNC_DIR="\${HOME}/.ytimesy/vnc"
 VNC_SOCKET="$VNC_DIR/rfb.sock"
-if pgrep -f 'x11vnc.*-rfbport 5900' >/dev/null 2>&1; then
+VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
+VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
+VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
+if [ -f "$VNC_PASS_DROP" ] && [ ! -L "$VNC_PASS_DROP" ]; then
+  (umask 077; head -n 1 "$VNC_PASS_DROP" > "$VNC_PASS_FILE.new")
+  mv -f "$VNC_PASS_FILE.new" "$VNC_PASS_FILE"
+  rm -f "$VNC_PASS_DROP"
+fi
+if [ ! -s "$VNC_PASS_FILE" ]; then
+  (umask 077; od -An -tx1 -N4 /dev/urandom | tr -d ' \\n' > "$VNC_PASS_FILE")
+fi
+VNC_PASS_DIGEST="$(sha256sum "$VNC_PASS_FILE" | cut -d' ' -f1)"
+vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
+if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || [ "$(cat "$VNC_APPLIED" 2>/dev/null)" != "$VNC_PASS_DIGEST" ]; }; then
   pkill -x x11vnc >/dev/null 2>&1 || true
   sleep 1
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   install -d -m 0700 "$VNC_DIR"
   rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -nopw -unixsock "$VNC_SOCKET" -rfbport 0 >/tmp/ytimesy-desk.log 2>&1 &
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 -localhost >/tmp/ytimesy-desk.log 2>&1 &
   sleep 1
+  printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
+fi
+if vnc_on_tcp; then
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  echo "ytimesy: x11vnc listened on TCP; it was stopped and the desktop refused" >&2
+  exit 1
 fi
 # The viewer port is published at the edge, so it only listens publicly behind
 # the server-held credential (BasicHTTPAuth). Without one it stays local. The
@@ -303,11 +326,11 @@ class FileBasicHTTPAuth(BasicHTTPAuth):
 PY
 desk_proxy_listening() { ss -ltn | grep -q ':6080 '; }
 # A proxy from before the Unix-socket viewer forwards to a port nothing serves.
-desk_proxy_current() { pgrep -f 'websockify.*--unix-target' >/dev/null 2>&1; }
+desk_proxy_current() { pgrep -f "[w]ebsockify.*--unix-target=$VNC_SOCKET" >/dev/null 2>&1; }
 if [ -s "$DESK_AUTH_FILE" ]; then
   DESK_AUTH_DIGEST="$(sha256sum "$DESK_AUTH_FILE" | cut -d' ' -f1)"
   if ! desk_proxy_listening || ! desk_proxy_current || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
-    pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
+    pkill -x websockify >/dev/null 2>&1 || true
     sleep 1
     PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source "$DESK_AUTH_FILE" --unix-target="$VNC_SOCKET" 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
     sleep 1
@@ -315,7 +338,7 @@ if [ -s "$DESK_AUTH_FILE" ]; then
   fi
 else
   if ss -ltn | grep -qF -e '0.0.0.0:6080 ' -e '*:6080 ' -e '[::]:6080 ' || { desk_proxy_listening && ! desk_proxy_current; }; then
-    pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
+    pkill -x websockify >/dev/null 2>&1 || true
     sleep 1
   fi
   if ! desk_proxy_listening || ! desk_proxy_current; then
