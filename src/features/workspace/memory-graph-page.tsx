@@ -177,8 +177,14 @@ export function MemoryGraphPage({
 		return laneColor(known?.id ?? project.toLowerCase());
 	};
 	const laneColors = lanes.lanes.map((lane) => colorOf(lane.project));
+	const [height, setHeight] = useState(700);
+	// Lanes share the height they have, between a readable minimum and a calm maximum.
+	const fill = Math.min(
+		180,
+		Math.max(64, (height - TOP - AXIS - 16) / Math.max(1, lanes.lanes.length)),
+	);
 	const laneHeights = lanes.lanes.map((lane) =>
-		Math.min(150, 56 + (lane.depth - 1) * SLOT),
+		Math.max(fill, Math.min(160, 56 + (lane.depth - 1) * SLOT)),
 	);
 	const laneTop = laneHeights.map((_, index) =>
 		laneHeights.slice(0, index).reduce((sum, height) => sum + height, TOP),
@@ -186,7 +192,9 @@ export function MemoryGraphPage({
 	const lanesBottom =
 		TOP + laneHeights.reduce((sum, height) => sum + height, 0);
 
-	const frame = useRef<HTMLDivElement>(null);
+	const frame = useRef<HTMLDivElement | null>(null);
+	// The frame mounts after memory loads, so effects follow the element itself.
+	const [frameElement, setFrameElement] = useState<HTMLDivElement | null>(null);
 	const [width, setWidth] = useState(1200);
 	const narrow = width < 640;
 	const labelWidth = narrow ? 96 : 168;
@@ -195,19 +203,20 @@ export function MemoryGraphPage({
 		const element = frame.current;
 		const span = Math.max(1, lanes.end - lanes.start);
 		const available = (element?.clientWidth ?? 1200) - (narrow ? 96 : 168) - 40;
-		const pxPerDay = Math.max(narrow ? 10 : 4, Math.min(120, available / span));
+		const pxPerDay = Math.max(narrow ? 30 : 4, Math.min(120, available / span));
 		// When the history is wider than the screen, start at today (the right end).
 		setView({ pxPerDay, offset: Math.min(0, available - span * pxPerDay) });
 	}, [lanes.end, lanes.start, narrow]);
 	useEffect(() => {
-		const element = frame.current;
+		const element = frameElement;
 		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(([entry]) =>
-			setWidth(Math.round(entry.contentRect.width)),
-		);
+		const observer = new ResizeObserver(([entry]) => {
+			setWidth(Math.round(entry.contentRect.width));
+			setHeight(Math.round(entry.contentRect.height));
+		});
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, []);
+	}, [frameElement]);
 	const fittedFor = useRef("");
 	useEffect(() => {
 		const id = `${lanes.start}:${lanes.end}:${width}`;
@@ -222,13 +231,13 @@ export function MemoryGraphPage({
 	const nodeAt = new Map(
 		lanes.nodes.map((node) => [
 			node.id,
-			{ node, x: x(node.day), y: laneY(node.lane) + node.slot * SLOT },
+			{ node, x: x(node.day + 0.5), y: laneY(node.lane) + node.slot * SLOT },
 		]),
 	);
 
 	// Wheel: zoom time around the cursor (pinch arrives as ctrl+wheel); sideways scroll pans.
 	useEffect(() => {
-		const element = frame.current;
+		const element = frameElement;
 		if (!element) return;
 		const wheel = (event: WheelEvent) => {
 			event.preventDefault();
@@ -248,12 +257,14 @@ export function MemoryGraphPage({
 		};
 		element.addEventListener("wheel", wheel, { passive: false });
 		return () => element.removeEventListener("wheel", wheel);
-	}, [labelWidth]);
+	}, [frameElement, labelWidth]);
 
 	const drag = useRef<{
 		startX: number;
 		offset: number;
 		moved: boolean;
+		/** The mark under the pointer when it went down (capture retargets later events). */
+		node: string | null;
 	} | null>(null);
 	const markAt = (target: EventTarget | null) =>
 		(target as Element | null)
@@ -262,7 +273,12 @@ export function MemoryGraphPage({
 	const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
 		if (event.button !== 0) return;
 		event.currentTarget.setPointerCapture(event.pointerId);
-		drag.current = { startX: event.clientX, offset: view.offset, moved: false };
+		drag.current = {
+			startX: event.clientX,
+			offset: view.offset,
+			moved: false,
+			node: markAt(event.target),
+		};
 	};
 	const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
 		const current = drag.current;
@@ -285,11 +301,11 @@ export function MemoryGraphPage({
 			});
 		else if (hovered) setHovered(null);
 	};
-	const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+	const onPointerUp = () => {
 		const current = drag.current;
 		drag.current = null;
 		if (!current || current.moved) return;
-		const id = markAt(event.target);
+		const id = current.node;
 		setHovered(null);
 		setSelected(id && id !== selected ? id : null);
 	};
@@ -346,7 +362,13 @@ export function MemoryGraphPage({
 			aria-label="Memory lanes"
 			data-narrow={narrow ? "true" : undefined}
 		>
-			<div ref={frame} className="memory-lanes-frame">
+			<div
+				ref={(element) => {
+					frame.current = element;
+					setFrameElement(element);
+				}}
+				className="memory-lanes-frame"
+			>
 				<svg
 					className="memory-lanes-svg"
 					role="img"
@@ -392,8 +414,9 @@ export function MemoryGraphPage({
 							y2={lanesBottom + 4}
 						/>
 						{ticks.map((day) =>
-							x(day) > labelWidth + 8 ? (
-								<text key={day} x={x(day)} y={lanesBottom + 22}>
+							x(day) > labelWidth + 8 &&
+							Math.abs(x(day + 0.5) - x(lanes.today + 0.5)) > 36 ? (
+								<text key={day} x={x(day + 0.5)} y={lanesBottom + 22}>
 									{shortDate(day)}
 								</text>
 							) : null,
@@ -401,12 +424,12 @@ export function MemoryGraphPage({
 					</g>
 					<g className="lane-today">
 						<line
-							x1={x(lanes.today)}
-							x2={x(lanes.today)}
+							x1={x(lanes.today + 0.5)}
+							x2={x(lanes.today + 0.5)}
 							y1={TOP - 8}
 							y2={lanesBottom + 4}
 						/>
-						<text x={x(lanes.today)} y={TOP - 14}>
+						<text x={x(lanes.today + 0.5)} y={lanesBottom + 22}>
 							Today
 						</text>
 					</g>
@@ -430,8 +453,9 @@ export function MemoryGraphPage({
 										return (
 											<g key={`${dream.id}:${merge.text}`}>
 												{merge.ghosts.map((ghost) => {
-													const gx = x(ghost.day);
-													const gy = laneY(ghost.lane) + SLOT;
+													const gx = x(ghost.day + 0.5);
+													const gy =
+														laneY(ghost.lane) + laneHeights[ghost.lane] * 0.28;
 													return (
 														<g key={ghost.text} className="lane-ghost">
 															<path
