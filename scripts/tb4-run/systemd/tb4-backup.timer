@@ -1,0 +1,10 @@
+[Unit]
+Description=Copy TB4 results to R2 every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
