@@ -15,6 +15,9 @@ import {
 	sidekickDecisionNotice,
 } from "../../src/domain/sidekick-classifier";
 import { harnessExplorationBrief } from "../../src/domain/sidekick";
+import type { ApiTokenUsage } from "../../src/domain/api-token-usage";
+import { usageCostUsd } from "../../src/domain/model-pricing";
+import { usageTokens } from "../../src/domain/subagent-usage";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "../../src/domain/subagent";
 import type { BridgeRole, HarborModel } from "./config";
 import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
@@ -43,7 +46,12 @@ import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
 export type RunRound = (
 	session: ChildSession,
 	brief: string,
-	options: { readOnly: boolean; extraTools?: (tools: ToolSet) => ToolSet },
+	options: {
+		readOnly: boolean;
+		extraTools?: (tools: ToolSet) => ToolSet;
+		/** A reader's own copy of the checkout (default: the lead's checkout). */
+		cwd?: string;
+	},
 ) => Promise<ChildReport>;
 
 /** One tool-free model call (the classifier), its text. */
@@ -51,7 +59,7 @@ export type CallOnce = (
 	session: ChildSession,
 	instructions: string,
 	message: string,
-) => Promise<string>;
+) => Promise<{ text: string; usage: ApiTokenUsage | null }>;
 
 export type FusionTrace = {
 	decisions: SidekickDecisionRecord[];
@@ -121,12 +129,15 @@ export function fusionLead(input: {
 		let source: "classifier" | "rules" = "rules";
 		let fallback: string | undefined;
 		let answer = rulesDecision([], canSwitch);
+		let usage: ApiTokenUsage | null = null;
 		try {
-			const text = await input.callOnce(
+			const reply = await input.callOnce(
 				classifier,
 				CLASSIFIER_INSTRUCTIONS,
 				classifierMessage(summary),
 			);
+			usage = reply.usage;
+			const text = reply.text;
 			const parsed = parseClassifierReply(text);
 			if (parsed) {
 				answer = applicableDecision(parsed, canSwitch);
@@ -145,8 +156,8 @@ export function fusionLead(input: {
 			...(fallback ? { fallback } : {}),
 			inputsHash: "",
 			latencyMs: Math.max(0, now() - started),
-			tokens: 0,
-			costUsd: 0,
+			tokens: usageTokens(usage),
+			costUsd: usageCostUsd(usage, classifier.model.billing) ?? 0,
 			planBilled: classifier.model.billing.kind === "plan",
 			model: classifier.model.modelId,
 			at: new Date(now()).toISOString(),
