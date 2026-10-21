@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-	axisStep,
 	dayNumber,
 	laneColor,
+	memoryHistory,
 	memoryLanes,
 	PERSONAL_COLOR,
 } from "./memory-lanes";
@@ -123,7 +123,66 @@ describe("memory lanes", () => {
 	it("colours projects like the sidebar dots and keeps Personal neutral", () => {
 		expect(laneColor(null)).toBe(PERSONAL_COLOR);
 		expect(laneColor("p1")).toBe(laneColor("p1"));
-		expect(axisStep(40)).toBe(2);
-		expect(axisStep(2)).toBe(61);
+	});
+});
+
+describe("memory history", () => {
+	const history = memoryHistory({ rows, today, scope: null, dreams });
+	const kinds = history.items.map((item) =>
+		item.kind === "memory"
+			? item.node.row.text
+			: item.kind === "merged"
+				? `[merged] ${item.text}`
+				: `[dream] ${item.dream.message}`,
+	);
+	const at = (text: string) => kinds.indexOf(text);
+
+	it("lists memories newest first in file order, each dream above the lines it merged, undated last", () => {
+		expect(kinds).toEqual([
+			"[dream] Merged the error notes",
+			"[merged] Errors are JSON",
+			"[merged] API errors use problem+json",
+			"New webhook events go to v2 only",
+			"Uses pnpm",
+			"Prefers early returns",
+			"Errors are problem+json",
+			"Cents, never floats",
+			"New webhook events go to v1",
+			"Undated note",
+		]);
+	});
+
+	it("links a replaced row to its replacement, and merged rows to the result", () => {
+		expect(
+			history.links.map((link) => [
+				link.kind,
+				link.from,
+				link.to,
+				link.fromLane,
+				link.toLane,
+			]),
+		).toEqual([
+			[
+				"replaced",
+				at("New webhook events go to v1"),
+				at("New webhook events go to v2 only"),
+				0,
+				2,
+			],
+			[
+				"merged",
+				at("[merged] Errors are JSON"),
+				at("Errors are problem+json"),
+				2,
+				2,
+			],
+			[
+				"merged",
+				at("[merged] API errors use problem+json"),
+				at("Errors are problem+json"),
+				2,
+				2,
+			],
+		]);
 	});
 });

@@ -14,9 +14,7 @@ vi.mock("./memory.fn", () => ({
 	editMemoryFn: async () => ({ ok: true }),
 }));
 
-const { MemoryGraphPage, MemoryLanesLegend } = await import(
-	"./memory-graph-page"
-);
+const { MemoryGraphPage } = await import("./memory-graph-page");
 
 const A = "11111111-1111-4111-8111-111111111111";
 const files = [
@@ -56,34 +54,27 @@ function render() {
 	);
 }
 
-describe("Memory lanes page", () => {
-	it("draws one lane per scope with a mark per line, a dream and its merge", () => {
+describe("Memory history page", () => {
+	it("lists one readable row per memory, newest first, with a dream divider and its merge", () => {
 		const html = render();
-		expect(html).toContain('aria-label="Memory lanes: 2 memories in 2 scopes"');
-		expect(html.match(/data-node="/g)).toHaveLength(3);
+		expect(html).toContain('aria-label="2 memories in 2 scopes"');
+		expect(html.match(/data-row="/g)).toHaveLength(4);
+		const order = [
+			"Errors are problem+json",
+			"Dream · Oct 19 · 1 merged",
+			"Errors are JSON",
+			"Always pnpm",
+			"Old webhook note",
+		].map((text) => html.indexOf(text));
+		expect(order.every((at) => at >= 0)).toBe(true);
+		expect([...order].sort((a, b) => a - b)).toEqual(order);
+		// Replaced rows fade; the merge branches in; always on is a text tag.
 		expect(html).toContain('data-retired="true"');
-		expect(html).toContain('data-mark="rule"');
-		// Merged lines converge into the line they became; no extra merge glyph.
-		expect(html.match(/class="lane-merge-line"/g)).toHaveLength(1);
-		expect(html).toContain(">Dream</text>");
-		expect(html).not.toContain('lane-merge"');
-		expect(html).toContain('class="lane-rule"');
-		expect(html).toContain(">Today<");
-		const labels = html.slice(html.indexOf("lane-labels"));
-		expect(labels.indexOf("Personal")).toBeLessThan(labels.indexOf("web"));
+		expect(html.match(/history-branch/g)).toHaveLength(1);
+		expect(html).toContain('class="history-tag">Always on<');
+		expect(html).toContain(">Inferred<");
+		expect(html).not.toContain("Zoom");
+		expect(html).not.toContain("Today");
 		expect(html).not.toContain("<select");
-		expect(html).not.toContain("hex");
-	});
-
-	it("explains the marks in one short legend line", () => {
-		const html = renderToStaticMarkup(<MemoryLanesLegend />);
-		for (const label of [
-			"Inferred",
-			"New this week",
-			"Always on",
-			"Replaced by",
-		])
-			expect(html).toContain(label);
-		expect(html.match(/<li>/g)).toHaveLength(4);
 	});
 });

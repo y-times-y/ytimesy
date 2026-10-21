@@ -164,6 +164,7 @@ describe("manual memory edits", () => {
 			{
 				at: "2026-10-19T03:00:00.000Z",
 				message: "merged error notes",
+				counts: { added: 0, merged: 1, replaced: 0, expired: 0, removed: 0 },
 				merges: [
 					{
 						into: "Errors use RFC 9457 problem+json bodies",
