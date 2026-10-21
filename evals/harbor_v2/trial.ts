@@ -15,6 +15,7 @@ import {
 import { harnessVariantLabel } from "../../src/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
+import { newSidekickState } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
@@ -455,7 +456,18 @@ export async function runHarborTrial(
 				onEvent: onChildEvent,
 				subagent: {
 					role: session.role === "sidekick" ? "writer" : "checker",
-					budget,
+					// The sidekick's state in its budget gives it the product's
+					// sidekick role block (no commit, stash, reset or branch switch:
+					// publishing stays the lead's).
+					budget:
+						session.role === "sidekick"
+							? {
+									...budget,
+									sidekick: newSidekickState(budget, session.startedAt, {
+										model: session.model.modelId,
+									}),
+								}
+							: budget,
 					readOnly: options.readOnly,
 				},
 				...(options.extraTools ? { extraTools: options.extraTools } : {}),
