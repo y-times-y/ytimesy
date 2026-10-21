@@ -5,7 +5,7 @@
 // clone. Prints PASS/FAIL per check, never a secret. No model runs.
 //
 //   VM_SECURITY_PROOF=1 node --env-file=.env --import tsx scripts/prove-vm-security.ts
-import { RFB_SECURITY_PY, rfbRequiresPassword } from "./vnc-rfb-probe";
+
 //
 // Development only: refuses any database but the development project.
 // Everything it creates (users, chats, VMs, snapshots, routes, the forward
@@ -93,6 +93,7 @@ import {
 import { attachTerminalUpgrade } from "../src/server/terminal-ws";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import { createEvalUser, MEMORY_NAMESPACE } from "./smoke/eval-user";
+import { RFB_SECURITY_PY, rfbRequiresPassword } from "./vnc-rfb-probe";
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
@@ -505,9 +506,8 @@ async function startAuthorizerTunnel() {
 				out.writeHead(404).end();
 				return;
 			}
-			void sendResponse(
-				authorizePreviewRequest(toRequest(request, "http://local")),
-				out,
+			void authorizePreviewRequest(toRequest(request, "http://local")).then(
+				(response) => sendResponse(response, out),
 			);
 		}),
 	);
@@ -921,7 +921,15 @@ try {
 			badLogin.status !== 303 && !badLogin.setCookie,
 			`HTTP ${shown(badLogin)}, cookie ${badLogin.setCookie ? "set" : "not set"}`,
 		);
-		const login = await httpProbe(previewLoginUrl(route.origin, route.ruleId));
+		if (!scope.sessionId) throw new Error("The probe chat was not created.");
+		const login = await httpProbe(
+			await previewLoginUrl(route.origin, {
+				ruleId: route.ruleId,
+				userId: scope.userId,
+				projectId: scope.projectId,
+				sessionId: scope.sessionId,
+			}),
+		);
 		previewCookie = (login.setCookie ?? "").split(";")[0];
 		const granted = previewCookie
 			? await httpProbe(`${route.origin}/`, {

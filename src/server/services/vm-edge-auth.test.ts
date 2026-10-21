@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { PreviewGrantStore } from "../adapters/preview-grants";
 import {
 	authorizePreviewRequest,
 	EDGE_AUTHORIZER_HEADER,
@@ -8,9 +9,66 @@ import {
 	previewLoginUrl,
 } from "./vm-edge-auth";
 
-beforeEach(() => vi.stubEnv("BETTER_AUTH_SECRET", "r".repeat(40)));
+/** In-memory stand-in for the preview_route_grant / preview_login_nonce tables. */
+function memoryStore() {
+	let sequence = 0;
+	const grants = new Map<
+		string,
+		{ userId: string; sessionId: string; version: number }
+	>();
+	const nonces = new Map<
+		string,
+		{ ruleId: string; userId: string; expiresAt: Date }
+	>();
+	const store: PreviewGrantStore = {
+		async grant(input) {
+			const current = grants.get(input.ruleId);
+			const version =
+				current && current.userId === input.userId
+					? current.version
+					: ++sequence;
+			grants.set(input.ruleId, { ...input, version });
+			return version;
+		},
+		async recordNonce(input) {
+			nonces.set(input.nonce, input);
+		},
+		async consumeNonce(input) {
+			const nonce = nonces.get(input.nonce);
+			nonces.delete(input.nonce);
+			if (
+				!nonce ||
+				nonce.ruleId !== input.ruleId ||
+				nonce.userId !== input.userId
+			)
+				return null;
+			const grant = grants.get(input.ruleId);
+			return grant && grant.userId === input.userId ? grant.version : null;
+		},
+		async version(ruleId, userId) {
+			const grant = grants.get(ruleId);
+			return grant && grant.userId === userId ? grant.version : null;
+		},
+		async revokeScope(input) {
+			for (const grant of grants.values())
+				if (
+					grant.userId === input.userId &&
+					grant.sessionId === input.sessionId
+				)
+					grant.version = ++sequence;
+		},
+	};
+	return { store, grants };
+}
+
+let db: ReturnType<typeof memoryStore>;
+beforeEach(() => {
+	vi.stubEnv("BETTER_AUTH_SECRET", "r".repeat(40));
+	db = memoryStore();
+});
 
 const now = 1_800_000_000_000;
+const scope = { userId: "u1", projectId: "p1", sessionId: "s1" };
 function edgeRequest(
 	uri: string,
 	options: { rule?: string; cookie?: string; key?: string } = {},
@@ -25,15 +83,27 @@ function edgeRequest(
 	if (options.cookie) headers.set("cookie", options.cookie);
 	return new Request("https://app.example/api/vm-edge/authorize", { headers });
 }
-function loginUri(rule = "tls-1", at = now) {
+async function loginUri(rule = "tls-1", at = now) {
 	const url = new URL(
-		previewLoginUrl("https://ytimesy-pv-x-3000.style.dev", rule, at),
+		await previewLoginUrl(
+			"https://ytimesy-pv-x-3000.style.dev",
+			{ ...scope, ruleId: rule },
+			db.store,
+			at,
+		),
 	);
 	return `${url.pathname}${url.search}`;
 }
+const authorize = (request: Request, at = now) =>
+	authorizePreviewRequest(request, at, db.store);
+async function signIn() {
+	const login = await authorize(edgeRequest(await loginUri()));
+	expect(login.status).toBe(303);
+	return `other=1; ${(login.headers.get("set-cookie") ?? "").split(";")[0]}`;
+}
 
-it("signs a browser in from the app's link, then admits it to that route only", () => {
-	const login = authorizePreviewRequest(edgeRequest(loginUri()), now);
+it("signs a browser in from the app's link, then admits it to that route only", async () => {
+	const login = await authorize(edgeRequest(await loginUri()));
 	expect(login.status).toBe(303);
 	expect(login.headers.get("location")).toBe("/");
 	const setCookie = login.headers.get("set-cookie") ?? "";
@@ -44,46 +114,69 @@ it("signs a browser in from the app's link, then admits it to that route only", 
 	);
 	const cookie = `other=1; ${setCookie.split(";")[0]}`;
 	expect(
-		authorizePreviewRequest(edgeRequest("/app.js", { cookie }), now + 1000)
-			.status,
+		(await authorize(edgeRequest("/app.js", { cookie }), now + 1000)).status,
 	).toBe(204);
 	expect(
-		authorizePreviewRequest(edgeRequest("/", { cookie, rule: "tls-2" }), now)
-			.status,
+		(await authorize(edgeRequest("/", { cookie, rule: "tls-2" }))).status,
 	).toBe(401);
 	expect(
-		authorizePreviewRequest(edgeRequest("/", { cookie }), now + 9 * 3600_000)
-			.status,
+		(await authorize(edgeRequest("/", { cookie }), now + 9 * 3600_000)).status,
 	).toBe(401);
+	// Opening the preview again keeps the version: the first cookie still works.
+	const second = await signIn();
+	expect((await authorize(edgeRequest("/", { cookie }))).status).toBe(204);
+	expect((await authorize(edgeRequest("/", { cookie: second }))).status).toBe(
+		204,
+	);
 });
 
-it("refuses expired, foreign-route or tampered sign-in links and anonymous visitors", () => {
+it("uses a sign-in link once", async () => {
+	const uri = await loginUri();
+	expect((await authorize(edgeRequest(uri))).status).toBe(303);
+	expect((await authorize(edgeRequest(uri), now + 1000)).status).toBe(401);
+});
+
+it("refuses cookies once access is withdrawn or the chat is deleted", async () => {
+	const cookie = await signIn();
+	await db.store.revokeScope(scope);
+	expect((await authorize(edgeRequest("/", { cookie }))).status).toBe(401);
+	const fresh = await signIn();
+	expect((await authorize(edgeRequest("/", { cookie: fresh }))).status).toBe(
+		204,
+	);
+	db.grants.delete("tls-1"); // chat, project or account deleted: the row cascades away
+	expect((await authorize(edgeRequest("/", { cookie: fresh }))).status).toBe(
+		401,
+	);
+});
+
+it("refuses expired, foreign-route or tampered sign-in links and anonymous visitors", async () => {
 	expect(
-		authorizePreviewRequest(edgeRequest(loginUri("tls-1", now - 121_000)), now)
+		(await authorize(edgeRequest(await loginUri("tls-1", now - 121_000))))
 			.status,
 	).toBe(401);
+	expect((await authorize(edgeRequest(await loginUri("tls-2")))).status).toBe(
+		401,
+	);
+	expect((await authorize(edgeRequest(`${await loginUri()}x`))).status).toBe(
+		401,
+	);
+	expect((await authorize(edgeRequest("/"))).status).toBe(401);
 	expect(
-		authorizePreviewRequest(edgeRequest(loginUri("tls-2")), now).status,
-	).toBe(401);
-	expect(
-		authorizePreviewRequest(edgeRequest(`${loginUri()}x`), now).status,
-	).toBe(401);
-	expect(authorizePreviewRequest(edgeRequest("/"), now).status).toBe(401);
-	expect(
-		authorizePreviewRequest(
-			edgeRequest("/", { cookie: `${PREVIEW_COOKIE}=forged.sig` }),
-			now,
+		(
+			await authorize(
+				edgeRequest("/", { cookie: `${PREVIEW_COOKIE}=forged.sig` }),
+			)
 		).status,
 	).toBe(401);
 });
 
-it("answers only Freestyle (static key) and only for a named rule", () => {
+it("answers only Freestyle (static key) and only for a named rule", async () => {
 	expect(
-		authorizePreviewRequest(edgeRequest(loginUri(), { key: "nope" }), now)
-			.status,
+		(await authorize(edgeRequest(await loginUri(), { key: "nope" }))).status,
 	).toBe(403);
 	expect(
-		authorizePreviewRequest(edgeRequest(loginUri(), { rule: "" }), now).status,
+		(await authorize(edgeRequest(await loginUri(), { rule: "" }))).status,
 	).toBe(403);
 });
 
