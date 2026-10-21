@@ -43,6 +43,11 @@ import { installWithEnvironmentRepair } from "./environment-repair";
 import { prepareProjectCheckout } from "./prepare-project-checkout";
 import { loadProjectSecretEnvironment } from "./project-secrets";
 import { removeCodexCredentialsFromProjectTemplate } from "./project-template-credentials";
+import {
+	SCRUB_VALUES_VARIABLE,
+	scrubValues,
+	templateCredentialScrub,
+} from "./template-credential-scrub";
 
 export type PreparedRepository = ProjectRepository & {
 	commit: string;
@@ -578,6 +583,28 @@ export async function activateEnvironmentBuild(
 		`${prepared[0].directory}\n`,
 	);
 	await removeCodexCredentialsFromProjectTemplate(runtime, vm);
+	// Setup ran with build secrets: `npm login`, `docker login` and generated
+	// .env files must not persist in the reusable template.
+	const scrubbed = await runtime.exec(
+		vm,
+		[
+			"bash",
+			"-c",
+			templateCredentialScrub({
+				checkouts: prepared.map((repo) => repo.directory),
+			}),
+		],
+		{
+			[SCRUB_VALUES_VARIABLE]: scrubValues(
+				await loadProjectSecretEnvironment(input.userId, input.projectId),
+			),
+		},
+		60_000,
+	);
+	if (scrubbed.exitCode !== 0)
+		throw new Error(
+			"Could not remove credentials from the environment template.",
+		);
 	// Setup command logs may echo secrets; they must not reach the task template.
 	await runtime.exec(vm, ["rm", "-rf", DETACHED_COMMAND_ROOT], {}, 15_000);
 	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`);
