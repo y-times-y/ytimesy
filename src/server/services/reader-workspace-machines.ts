@@ -1,10 +1,7 @@
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
-	READER_ISOLATION_FAILED,
-	READER_ISOLATION_FAILED_EXIT,
 	READER_LINUX_USER,
 	readerCommand,
-	readerLoopbackGuardCommand,
 	readerMayWrite,
 	readerPreparationScript,
 } from "#/domain/subagent-reader";
@@ -66,28 +63,11 @@ export function readerWorkspaceMachines(
 		}
 		return ready;
 	};
-	// Every reader command re-checks its loopback isolation in the same guest
-	// call: preparation is remembered per isolate, but the VM may have cold
-	// booted or been restored since (iptables rules do not survive a boot).
-	const runAsReader = async (
+	const runAsReader = (
 		vm: Parameters<WorkspaceMachines["exec"]>[0],
 		command: string,
 		timeoutMs?: number,
-	) => {
-		const result = await base.exec(
-			vm,
-			`${readerLoopbackGuardCommand()} && ${readerCommand(sessionId, command)}`,
-			timeoutMs,
-		);
-		if (
-			result.exitCode === READER_ISOLATION_FAILED_EXIT &&
-			result.stderr.includes(READER_ISOLATION_FAILED)
-		)
-			throw new Error(
-				`The read-only agent could not be isolated: ${result.stderr.slice(-400)}`,
-			);
-		return result;
-	};
+	) => base.exec(vm, readerCommand(sessionId, command), timeoutMs);
 	return {
 		...base,
 		runCapability: undefined,

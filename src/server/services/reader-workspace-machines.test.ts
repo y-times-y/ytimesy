@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import { SHARED_RUNTIME_PARENTS } from "#/domain/subagent-reader";
+import {
+	READER_NETWORK_ISOLATION_CHECK,
+	READER_NETWORK_NAMESPACE,
+	SHARED_RUNTIME_PARENTS,
+} from "#/domain/subagent-reader";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { commandRoot } from "./api-agent-command-tools";
 import { commandScopeRoot } from "./api-command-scope";
@@ -86,22 +90,17 @@ describe("read-only subagent machines", () => {
 		expect(reader.runCapability).toBeUndefined();
 	});
 
-	it("refuses the reader when loopback isolation cannot be set up, and re-checks it before every command", async () => {
+	it("refuses the reader where it cannot get its own network namespace, and runs every command in one", async () => {
 		const { machines, commands } = fakeMachines();
-		let iptables = false;
+		let namespaces = false;
 		vi.mocked(machines.exec).mockImplementation(async (_target, command) => {
 			commands.push(command);
-			const isolation = decoded(command).some((line) =>
-				line.includes("for table in iptables ip6tables"),
-			);
-			if (isolation && !iptables)
-				return command.includes("chmod o-rw,o+x")
-					? { exitCode: 1, stdout: "", stderr: "iptables unavailable" }
-					: {
-							exitCode: 97,
-							stdout: "",
-							stderr: "ytimesy: reader isolation unavailable",
-						};
+			if (!namespaces && command.includes(READER_NETWORK_ISOLATION_CHECK))
+				return {
+					exitCode: 1,
+					stdout: "",
+					stderr: "ytimesy: network namespaces are unavailable",
+				};
 			return { exitCode: 0, stdout: "contents", stderr: "" };
 		});
 		const reader = machinesForAgentSession(machines, {
@@ -115,16 +114,17 @@ describe("read-only subagent machines", () => {
 		expect(
 			commands.some((command) => command.includes("ytimesy-reader --")),
 		).toBe(false);
-		iptables = true;
-		await reader.exec(vm, "ls", 1000);
-		// The VM lost its rules (a cold boot): the next command is refused.
-		iptables = false;
-		await expect(reader.exec(vm, "ls", 1000)).rejects.toThrow(
-			"could not be isolated",
+		namespaces = true;
+		await reader.exec(vm, "curl http://127.0.0.1:9222/json", 1000);
+		await reader.readTextFile(vm, "/etc/hostname");
+		const runs = commands.filter((command) =>
+			command.includes("sudo -n -u ytimesy-reader --"),
 		);
-		await expect(reader.readTextFile(vm, "/etc/hostname")).rejects.toThrow(
-			"could not be isolated",
-		);
+		expect(runs).toHaveLength(2);
+		for (const run of runs)
+			expect(run.startsWith(`${READER_NETWORK_NAMESPACE} sudo -n -u`)).toBe(
+				true,
+			);
 	});
 
 	it("refuses runtime writes outside the scratch and hands allowed files to the reader", async () => {
