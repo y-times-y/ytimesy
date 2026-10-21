@@ -413,7 +413,9 @@ export async function turnMemory(
 			// chats' recent messages and the checkout's missing paths.
 			const afterStarted = Date.now();
 			const [lines, fresh, missing] = await Promise.all([
-				source.recalledLines([...rules, ...matches]),
+				source
+					.recalledLines([...rules, ...matches])
+					.then((recalled) => markedRules(recalled, rules.length)),
 				recent,
 				mode === "full" && (showEntry || matches.length)
 					? missingPaths(
@@ -602,7 +604,10 @@ export async function subagentMemory(
 			const matches = hook?.lines ?? [];
 			const recall: MemoryRecall = {
 				head: snapshot.head,
-				lines: await source.recalledLines([...rules, ...matches]),
+				lines: markedRules(
+					await source.recalledLines([...rules, ...matches]),
+					rules.length,
+				),
 				...(hook ? { hook: recalledHook(hook, spans) } : {}),
 			};
 			if (!rules.length && !matches.length) return { messages, recall };
@@ -629,6 +634,13 @@ export async function subagentMemory(
 			return { messages: next, recall };
 		},
 	};
+}
+
+/** Recalled lines with the first `count` (the project's rules) marked as rules. */
+function markedRules<T extends object>(lines: readonly T[], count: number) {
+	return lines.map((line, index) =>
+		index < count ? { ...line, rule: true as const } : line,
+	);
 }
 
 /** Recent messages as attached lines, minus any already attached in this chat; never fails. */

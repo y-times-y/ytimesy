@@ -46,6 +46,35 @@ export function requirementsFromText(text: string): string[] | null {
 		.map((line) => (line.length > 300 ? `${line.slice(0, 297)}...` : line));
 }
 
+/** A message as the chat shows it: its prose, and each requirements block as a list. */
+export type RequirementsSegment =
+	| { readonly kind: "text"; readonly text: string }
+	| { readonly kind: "requirements"; readonly items: readonly string[] };
+
+/**
+ * Splits a builder's message around its <requirements> blocks, so the chat
+ * renders each as a list instead of raw tags. A block still streaming (no
+ * closing line yet) is a list of the lines so far.
+ */
+export function requirementsSegments(text: string): RequirementsSegment[] {
+	const segments: RequirementsSegment[] = [];
+	const pattern = /<requirements>([\s\S]*?)(?:<\/requirements>|$(?![\s\S]))/gi;
+	let last = 0;
+	for (const match of text.matchAll(pattern)) {
+		const before = text.slice(last, match.index);
+		if (before.trim()) segments.push({ kind: "text", text: before });
+		const items = requirementsFromText(
+			`<requirements>${match[1]}</requirements>`,
+		);
+		segments.push({ kind: "requirements", items: items ?? [] });
+		last = (match.index ?? 0) + match[0].length;
+	}
+	const rest = text.slice(last);
+	if (rest.trim() || segments.length === 0)
+		segments.push({ kind: "text", text: rest });
+	return segments;
+}
+
 /**
  * The builder's latest requirements list in this turn: its messages since
  * the person's latest request (child-event messages do not start a turn).
