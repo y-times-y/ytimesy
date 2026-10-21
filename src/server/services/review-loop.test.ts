@@ -531,8 +531,8 @@ ${TASK}
 		h.setTree("t-writer");
 		writerWorking = false;
 		h.advance(4 * 60_000);
-		// Turn 2: woken by the report (no user request of its own).
-		const wake = loop("turn-2", "");
+		// Turn 2: woken by the report (it answers the same request).
+		const wake = loop("turn-2", TASK);
 		await wake.beforeModel(h.step(0, ""));
 		expect(states.get("turn-2")?.checkpoint.tree).toBe("t-base");
 		const woke: SessionItem[] = [

@@ -279,6 +279,14 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		),
 	});
 
+	/**
+	 * Whether this turn still answers the handed-off turn's request: a turn
+	 * woken by its writer's report (it carries no request of its own, or the
+	 * same one), not a new user request.
+	 */
+	const continues = (carried: ReviewLoopState["carried"]) =>
+		!!carried && (!input.taskText() || input.taskText() === carried.taskText);
+
 	/** The request the loop checks: this turn's, else the handed-off turn's. */
 	const requestText = (state: ReviewLoopState) =>
 		input.taskText() || state.carried?.taskText || "";
@@ -286,23 +294,23 @@ export function createReviewLoop(input: ReviewLoopInput) {
 	/** rigor=on: the builder's latest list this turn, else the handed-off turn's. */
 	const requirementsOf = (state: ReviewLoopState, items: SessionItem[]) =>
 		builderRequirements(items) ??
-		(input.taskText() ? null : (state.carried?.requirements ?? null));
+		(continues(state.carried) ? (state.carried?.requirements ?? null) : null);
 
 	/**
 	 * Step 1: the checkpoint, before the builder changes anything. A turn
-	 * woken by the report of a writer a handed-off turn left working (no user
-	 * request of its own) keeps that turn's checkpoint, request and list, so
-	 * the check covers the writer's work.
+	 * woken by the report of a writer a handed-off turn left working keeps
+	 * that turn's checkpoint, request and list, so the check covers the
+	 * writer's work; a new user request starts its own.
 	 */
 	async function begin() {
 		const workspace = await input.workspace();
 		const now = deps.now();
 		const runner = await deps.runnerDeadline(sessionId).catch(() => null);
-		const previous = input.taskText()
-			? null
-			: await deps.latest?.(sessionId).catch(() => null);
+		const previous = await deps.latest?.(sessionId).catch(() => null);
 		const continued =
-			previous?.phase === "handed-off" && previous.turnId !== turnId
+			previous?.phase === "handed-off" &&
+			previous.turnId !== turnId &&
+			continues(previous.carried)
 				? previous
 				: null;
 		const checkpoint =
