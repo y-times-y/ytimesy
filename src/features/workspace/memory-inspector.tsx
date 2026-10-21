@@ -574,6 +574,7 @@ function MemoryComposer({
 					choices={choices}
 					value={project}
 					onChoose={setProject}
+					onClosed={() => input.current?.focus()}
 				>
 					<button
 						type="button"

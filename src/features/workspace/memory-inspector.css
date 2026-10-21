@@ -1,5 +1,4 @@
 .memory-inspector {
-	container: memory / inline-size;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
@@ -84,7 +83,7 @@
 	justify-content: flex-end;
 	gap: 4px;
 }
-@container memory (min-width: 860px) {
+@container (min-width: 860px) {
 	.memory-inspector {
 		flex-direction: row;
 		align-items: flex-start;
@@ -1029,6 +1028,9 @@ ul.memory-graph-legend-row {
 		right: 12px;
 		bottom: 12px;
 	}
+	.memory-graph-details ~ .memory-graph-legend {
+		display: none;
+	}
 }
 
 /* The full-page Memory view from the left sidebar replaces the chat entirely:
@@ -1038,6 +1040,7 @@ ul.memory-graph-legend-row {
 	display: none !important;
 }
 .memory-page {
+	container-type: inline-size;
 	display: flex;
 	flex: 1;
 	flex-direction: column;

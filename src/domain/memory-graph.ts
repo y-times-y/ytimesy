@@ -298,7 +298,7 @@ export function seedLayout(model: MemoryGraphModel): SimNode[] {
 		.slice()
 		.sort((a, b) => b.count - a.count || a.id.localeCompare(b.id))
 		.forEach((hub, index) => {
-			const distance = 170 * Math.sqrt(index);
+			const distance = 110 * Math.sqrt(index);
 			const x = Math.cos(index * GOLDEN) * distance;
 			const y = Math.sin(index * GOLDEN) * distance * 0.75;
 			centres.set(hub.id, { x, y });
@@ -310,7 +310,7 @@ export function seedLayout(model: MemoryGraphModel): SimNode[] {
 		const index = placed.get(memory.hub) ?? 0;
 		placed.set(memory.hub, index + 1);
 		const angle = index * GOLDEN * 2.1 + 0.4;
-		const distance = 70 + 10 * Math.sqrt(index);
+		const distance = 55 + 10 * Math.sqrt(index);
 		nodes.push({
 			id: memory.id,
 			hub: false,
@@ -325,7 +325,7 @@ export function seedLayout(model: MemoryGraphModel): SimNode[] {
 }
 
 const LINK = {
-	source: { distance: 80, strength: 0.18 },
+	source: { distance: 58, strength: 0.25 },
 	version: { distance: 60, strength: 0.25 },
 	similar: { distance: 140, strength: 0.03 },
 } as const;
@@ -355,7 +355,7 @@ export function stepLayout(
 			}
 			if (d2 > 360_000) continue;
 			const d = Math.sqrt(d2);
-			const charge = a.hub && b.hub ? 2700 : 300;
+			const charge = a.hub && b.hub ? 900 : 260;
 			let force = (charge / d2) * alpha;
 			const min = a.r + b.r;
 			if (d < min) force += ((min - d) / d) * 0.5;
@@ -397,8 +397,8 @@ export function stepLayout(
 			node.vy = 0;
 			continue;
 		}
-		node.vx -= node.x * 0.004 * alpha;
-		node.vy -= node.y * 0.006 * alpha;
+		node.vx -= node.x * 0.02 * alpha;
+		node.vy -= node.y * 0.03 * alpha;
 		node.vx *= 0.6;
 		node.vy *= 0.6;
 		node.x += node.vx;
