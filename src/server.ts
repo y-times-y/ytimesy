@@ -7,6 +7,7 @@ import { canonicalOriginRedirect } from "./server/web/canonical-origin";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
 import { limitRequestBody } from "./server/web/request-size";
+import { serverFnOriginRejection } from "./server/web/server-fn-origin";
 import { withSecurityHeaders } from "./server/web/security-headers";
 
 type WorkerContext = { waitUntil(work: Promise<unknown>): void };
@@ -50,6 +51,8 @@ export default createServerEntry({
 		];
 		const redirect = canonicalOriginRedirect(incoming, process.env.APP_URL);
 		if (redirect) return redirect;
+		const crossOrigin = serverFnOriginRejection(incoming, process.env.APP_URL);
+		if (crossOrigin) return withSecurityHeaders(crossOrigin);
 		const request = limitRequestBody(incoming);
 		if (request instanceof Response) return withSecurityHeaders(request);
 		if (!env?.HYPERDRIVE || !context)
