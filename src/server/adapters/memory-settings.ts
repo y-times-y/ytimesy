@@ -414,3 +414,31 @@ export async function lastMemoryReview(userId: string): Promise<Date | null> {
 	).rows[0];
 	return row?.at ? new Date(row.at) : null;
 }
+
+/** When a dream last ran for the user, whatever its outcome, or null. */
+export async function lastMemoryDreamRun(userId: string): Promise<Date | null> {
+	const row = (
+		await database().query<{ at: Date | null }>(
+			"select max(created_at) as at from memory_model_usage where user_id=$1 and kind='dream'",
+			[userId],
+		)
+	).rows[0];
+	return row?.at ? new Date(row.at) : null;
+}
+
+/**
+ * The user's latest chat activity a dream would read (root chats, last 7
+ * days, no benchmark sessions), as memoryDreamCandidates counts it.
+ */
+export async function memoryLastActivity(userId: string): Promise<Date | null> {
+	const row = (
+		await database().query<{ at: Date | null }>(
+			`select max(t.updated_at) as at
+			 from api_turn t join agent_session s on s.id=t.session_id and s.user_id=t.user_id
+			 where t.user_id=$1 and s.parent_session_id is null and t.updated_at > now()-interval '7 days'
+			   and not exists(select 1 from harness_evaluation_run e where e.root_session_id=s.id)`,
+			[userId],
+		)
+	).rows[0];
+	return row?.at ? new Date(row.at) : null;
+}
