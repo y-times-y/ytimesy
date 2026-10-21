@@ -6,6 +6,7 @@ import {
 	NO_ATTEMPT_SPEND,
 	usageSince,
 } from "#/domain/attempt-loop";
+import { REVIEW_CHECK_TOOL } from "#/domain/check-summary";
 import {
 	independentReviewBrief,
 	parseReviewVerdict,
@@ -170,6 +171,14 @@ export function reviewLoopSpend(state: ReviewLoopState, billing: ModelBilling) {
 	};
 }
 
+/** How many tests the round's checker ran, for the chat's verdict card. */
+function checkerTestsLine(round: ReviewRound | undefined): string[] {
+	const tests = round?.verdict?.tests ?? [];
+	if (!tests.length) return [];
+	const failed = tests.filter((test) => !test.passed).length;
+	return [`Checker tests: ${tests.length} run, ${failed} failed.`];
+}
+
 function summaryItem(
 	state: ReviewLoopState,
 	billing: ModelBilling,
@@ -182,7 +191,7 @@ function summaryItem(
 	return {
 		kind: "dynamicToolCall",
 		id: SessionItemId(id),
-		tool: "review_check",
+		tool: REVIEW_CHECK_TOOL,
 		input: `independent review ${state.rounds.length} of up to ${REVIEW_LOOP_LIMITS.maxRounds}`,
 		output: [
 			reviewLoopSummary(state),
@@ -193,6 +202,7 @@ function summaryItem(
 				(test) =>
 					`Failing test: ${test.name}${test.command ? ` (\`${test.command}\`)` : ""}`,
 			),
+			...checkerTestsLine(findingsOf ?? state.rounds.at(-1)),
 			`Checker spent ${Math.round(spend.checker.tokens / 1000)}k tokens${dollars(spend.checker.costUsd, spend.checker.estimated)}.`,
 		].join("\n"),
 		status: "completed",

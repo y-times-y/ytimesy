@@ -1209,6 +1209,8 @@ details[open] > summary .session-activity-chevron {
 }
 .session-activity[data-kind="mcpToolCall"],
 .session-activity[data-kind="dynamicToolCall"]:not([data-nested]),
+.session-activity[data-kind="agentCall"]:not([data-nested]),
+.session-activity[data-kind="check"]:not([data-nested]),
 .session-activity[data-kind="unknown"]:not([data-nested]) {
 	overflow: hidden;
 	margin: 2px 0;

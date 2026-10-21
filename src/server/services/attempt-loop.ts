@@ -32,6 +32,7 @@ import {
 	selectionReserveMs,
 	usageSince,
 } from "#/domain/attempt-loop";
+import { ATTEMPT_CHECK_TOOL } from "#/domain/check-summary";
 import { SessionItemId } from "#/domain/ids";
 import {
 	type ModelBilling,
@@ -436,7 +437,7 @@ function summaryItem(
 	return {
 		kind: "dynamicToolCall",
 		id: SessionItemId(id),
-		tool: "attempt_check",
+		tool: ATTEMPT_CHECK_TOOL,
 		input: `${state.candidates.length} of up to ${state.max} attempts`,
 		output: [
 			attemptLoopSummary(state),
