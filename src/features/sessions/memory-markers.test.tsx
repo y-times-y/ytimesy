@@ -46,8 +46,8 @@ describe("recalled memory under a request", () => {
 		);
 		expect(html).toContain("<details");
 		expect(html).not.toContain("open=");
-		expect(html).toContain("Recalled 2 memories");
-		expect(html).toContain("Loaded memory index");
+		expect(html).toContain("Used 2 memories");
+		expect(html).toContain("Memory index");
 		expect(html).toContain("Uses pnpm, never npm");
 		expect(html).toContain("tooling.md");
 		expect(html).toContain(`href="/?chat=${OTHER}"`);
@@ -61,12 +61,64 @@ describe("recalled memory under a request", () => {
 			renderToStaticMarkup(
 				<MemoryRecallNote recall={{ head: "h1", index: true, lines: [] }} />,
 			),
-		).toContain("Loaded memory index");
+		).toContain("Used the memory index");
 		expect(
 			renderToStaticMarkup(
 				<MemoryRecallNote recall={{ head: "h1", lines: [] }} />,
 			),
 		).toBe("");
+	});
+});
+
+describe("memory marker layout", () => {
+	it("groups the standing project rules apart from the lines matched for the request", () => {
+		const html = renderToStaticMarkup(
+			<MemoryRecallNote
+				recall={{
+					head: "h1",
+					lines: [
+						{
+							path: "rules.md",
+							text: "Every file starts with a license header",
+							rule: true,
+						},
+						{ path: "tooling.md", text: "Uses pnpm" },
+					],
+				}}
+			/>,
+		);
+		expect(html).toContain("Used 2 memories");
+		expect(html).toContain("1 project rule");
+		expect(html).toContain('aria-label="Project rules"');
+		expect(html).toContain("Matched this request");
+		expect(html.indexOf("license header")).toBeLessThan(
+			html.indexOf("Uses pnpm"),
+		);
+		expect(html).toMatch(/class="[^"]*memory-marker-icon/);
+		expect(html).not.toMatch(EMOJI);
+	});
+
+	it("names no groups when nothing is a project rule", () => {
+		const html = renderToStaticMarkup(
+			<MemoryRecallNote
+				recall={{ head: "h1", lines: [{ path: "a.md", text: "Short" }] }}
+			/>,
+		);
+		expect(html).not.toContain("Project rules");
+		expect(html).not.toContain("Matched this request");
+	});
+
+	it("clips a long line with a More control instead of a wall of text", () => {
+		const long = `Always ${"run the whole suite before pushing ".repeat(8)}`;
+		const html = renderToStaticMarkup(
+			<MemoryRecallNote
+				recall={{ head: "h1", lines: [{ path: "a.md", text: long }] }}
+			/>,
+		);
+		expect(html).not.toContain(long);
+		expect(html).toContain("…");
+		expect(html).toContain('aria-expanded="false"');
+		expect(html).toContain(">More</button>");
 	});
 });
 
@@ -83,7 +135,10 @@ describe("saved memory after a turn", () => {
 				<MemorySaveNote item={one} />
 			</MemoryMarkerProvider>,
 		);
-		expect(html).toContain("Saved to memory: “Runs tests with vitest”");
+		expect(html).toContain("Saved 1 memory");
+		expect(html).toContain("<details");
+		expect(html).not.toContain("open=");
+		expect(html).toContain("Runs tests with vitest");
 		expect(html).toContain(">Undo</button>");
 		expect(html).toContain(">Open in Memory</button>");
 		expect(html).not.toMatch(EMOJI);
@@ -142,9 +197,9 @@ it("renders the request as typed, with recalled memory as a separate muted note"
 	);
 	expect(html).toContain("<p>install a date library</p>");
 	expect(html).not.toContain("&lt;memory&gt;");
-	expect(html).toContain("Recalled 1 memory");
-	expect(html).toContain("Saved to memory: “Uses date-fns”");
+	expect(html).toContain("Used 1 memory");
+	expect(html).toContain("Saved 1 memory");
 	expect(html.indexOf("Installed.")).toBeLessThan(
-		html.indexOf("Saved to memory"),
+		html.indexOf("Saved 1 memory"),
 	);
 });

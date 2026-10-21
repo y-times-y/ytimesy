@@ -740,7 +740,7 @@ describe("run_code in the chat", () => {
 		});
 		expect(toolActivity(card)).toMatchObject({
 			verb: "Ran code",
-			target: "read ×2 · bash",
+			target: "Read ×2 · Ran",
 			note: "3 calls, 1 not completed",
 		});
 		const inner = codeModeCallItems(card);
