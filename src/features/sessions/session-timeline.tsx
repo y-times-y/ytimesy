@@ -1,16 +1,24 @@
 import {
+	Activity,
 	Check,
 	ChevronRight,
 	CircleAlert,
 	Clock3,
 	ImageIcon,
 	Paperclip,
+	SquareTerminal,
 	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { agentCall } from "#/domain/agent-call";
+import {
+	BACKGROUND_COMMAND_KIND_TAG,
+	type BackgroundCommandRecord,
+	backgroundCommandStateText,
+	backgroundCommandStatus,
+} from "#/domain/background-command";
 import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
@@ -34,7 +42,6 @@ import { parseModelRouteId } from "#/domain/model-connection";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
-import { userQuestionReply } from "#/domain/user-question";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
@@ -62,6 +69,7 @@ import {
 	toolDetailTitle,
 	toolOutputText,
 } from "#/domain/tool-detail";
+import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
@@ -81,10 +89,6 @@ import {
 	ModelSwitchCard,
 } from "./model-switch-card";
 import {
-	type UserQuestionActions,
-	UserQuestionCard,
-} from "./user-question-card";
-import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
@@ -96,6 +100,10 @@ import {
 	RequirementsList,
 	ToolInputFields,
 } from "./tool-cards";
+import {
+	type UserQuestionActions,
+	UserQuestionCard,
+} from "./user-question-card";
 
 export function SessionTimeline({
 	items: allItems,
@@ -844,8 +852,11 @@ function SessionItemView({
 								<span className="session-tool-note">{activity.note}</span>
 							) : null}
 						</span>
+						{item.background ? (
+							<BackgroundCommandTag record={item.background} />
+						) : null}
 						<ChevronRight size={12} className="session-activity-chevron" />
-						{activityStatus(item.status)}
+						{item.background ? null : activityStatus(item.status)}
 					</summary>
 					{item.input &&
 						(program !== null ? (
@@ -960,10 +971,15 @@ function SessionItemView({
 				<div
 					className="session-activity session-system-notice"
 					data-kind="notice"
+					data-background={item.background ? "true" : undefined}
 					role="status"
 				>
 					<p>
-						<ActivityIcon glyph="notice" />
+						{item.background ? (
+							<SquareTerminal size={14} strokeWidth={1.5} aria-hidden="true" />
+						) : (
+							<ActivityIcon glyph="notice" />
+						)}
 						<span className="session-activity-title" title={item.message}>
 							{item.message}
 						</span>
@@ -984,6 +1000,22 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+/** A background command's tag and live state: "Background · running 3m", "exited 0", "failed (exit 2)". */
+function BackgroundCommandTag({ record }: { record: BackgroundCommandRecord }) {
+	return (
+		<span
+			className="session-background-tag"
+			data-state={backgroundCommandStatus(record)}
+		>
+			<Activity size={11} strokeWidth={1.5} aria-hidden="true" />
+			{BACKGROUND_COMMAND_KIND_TAG}
+			<span className="session-background-state">
+				{backgroundCommandStateText(record, Date.now())}
+			</span>
+		</span>
+	);
 }
 
 /** The running turn is compacting its context (the latest request's usage says so). */

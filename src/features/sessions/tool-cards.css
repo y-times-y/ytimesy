@@ -145,3 +145,21 @@
 	white-space: normal;
 	color: #d7c4c4;
 }
+
+/* A background command's card: a small muted tag with its live state. */
+.session-background-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 8px;
+	flex-shrink: 0;
+	color: #737373;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.session-background-state {
+	color: #8a8a8a;
+}
+.session-background-tag[data-state="failed"] .session-background-state {
+	color: #f87171;
+}

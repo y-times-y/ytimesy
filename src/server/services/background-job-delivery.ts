@@ -26,6 +26,7 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
+import { wakeChatsForBackgroundCommands } from "./background-command-notices";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import {
 	DREAM_IDLE_SECONDS,
@@ -60,6 +61,8 @@ export async function deliverBackgroundJob(
 					break;
 				case "supervise":
 					await recoverChildTurnEvents(machines);
+					// Background commands that exited while their chat was between turns.
+					await wakeChatsForBackgroundCommands(machines);
 					// Writer subagents' forks, 30 minutes after their report.
 					await teardownSubagentForks(machines);
 					break;
