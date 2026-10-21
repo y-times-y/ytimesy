@@ -31,7 +31,12 @@ try {
 	if (owners.rows.length !== 1)
 		throw new Error("Proof requires one unambiguous connected owner.");
 	const owner = owners.rows[0];
-	const auth = JSON.parse(await unseal(owner.encrypted_codex_auth));
+	const auth = JSON.parse(
+		await unseal(owner.encrypted_codex_auth, {
+			purpose: "codex-auth",
+			userId: owner.user_id,
+		}),
+	);
 	if (codexAccessTokenExpiresAt(auth) < Date.now() + 180_000) {
 		throw new Error(
 			"Saved access token expires too soon; reconnect or refresh through the existing auth service first.",

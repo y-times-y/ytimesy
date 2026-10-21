@@ -54,6 +54,7 @@ async function connection() {
 		],
 		sealedCredential: await seal(
 			JSON.stringify({ id, userId: "alice", apiKey: "fixture-only-secret" }),
+			{ purpose: "model-credential", userId: "alice" },
 		),
 	};
 	await saveModelConnection("alice", input, false);

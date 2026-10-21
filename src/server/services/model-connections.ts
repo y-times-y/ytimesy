@@ -91,9 +91,12 @@ export async function connectionApiKey(
 		.object({ id: z.string(), userId: z.string(), apiKey: z.string().min(8) })
 		.parse(
 			JSON.parse(
+				// A blob sealed for another user fails authentication here.
 				await unseal(connection.sealedCredential, {
 					purpose: "model-credential",
 					userId,
+				}).catch(() => {
+					throw new Error("Model connection ownership mismatch.");
 				}),
 			),
 		);
