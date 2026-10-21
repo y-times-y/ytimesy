@@ -115,7 +115,7 @@ describe("independentReviewBrief", () => {
 		expect(brief).toContain(
 			"a pass without new tests of your own counts as unsure",
 		);
-		expect(brief).toContain("with the failing test as its evidence");
+		expect(brief).toContain("shown by a failing test or command");
 		expect(brief).toContain(
 			"unsure only when you genuinely could not run what matters; say why in notes",
 		);
