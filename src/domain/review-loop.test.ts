@@ -179,6 +179,18 @@ describe("review gating and time", () => {
 			kind: "check",
 			checkMs: REVIEW_LOOP_LIMITS.checker.minutes * 60_000,
 		});
+		// checkerMode=pair: a longer check, still bounded by the deadline less a fix.
+		expect(REVIEW_LOOP_LIMITS.pairCheckerMinutes).toBeGreaterThan(
+			REVIEW_LOOP_LIMITS.checker.minutes,
+		);
+		expect(decideCheck({ ...base, deadlineAt: 1e9, pair: true })).toEqual({
+			kind: "check",
+			checkMs: REVIEW_LOOP_LIMITS.pairCheckerMinutes * 60_000,
+		});
+		expect(decideCheck({ ...base, deadlineAt: 300_000, pair: true })).toEqual({
+			kind: "check",
+			checkMs: 240_000,
+		});
 		expect(decideCheck({ ...base, checksDone: 2, deadlineAt: 1e9 })).toEqual({
 			kind: "finish",
 			reason: "rounds",
