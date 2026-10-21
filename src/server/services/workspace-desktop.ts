@@ -15,6 +15,8 @@ import {
 	desktopWallpaperBase64,
 } from "#/server/adapters/freestyle/desktop-wallpaper";
 import {
+	DESKTOP_CREDENTIAL_DROP_SETUP,
+	DESKTOP_PRIVATE_READY,
 	DESKTOP_VIEWER_CREDENTIAL_PATH,
 	ENSURE_WORKSPACE_DESKTOP,
 	probeWorkspaceDesktop,
@@ -195,6 +197,13 @@ export async function ensureDesktopProcesses(
 		DESKTOP_WALLPAPER_B64_PATH,
 		desktopWallpaperBase64(),
 	);
+	// The credential goes only into the builder's verified 0700 directory;
+	// one another user created or linked first is refused.
+	const drop = await machines.exec(id, DESKTOP_CREDENTIAL_DROP_SETUP, 15_000);
+	if (drop.exitCode !== 0 || !drop.stdout.includes(DESKTOP_PRIVATE_READY))
+		throw new Error(
+			`The desktop's private directory could not be secured: ${drop.stderr.slice(-300)}`,
+		);
 	await machines.writeTextFile(
 		id,
 		DESKTOP_VIEWER_CREDENTIAL_PATH,
