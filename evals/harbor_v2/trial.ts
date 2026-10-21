@@ -1,5 +1,5 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
-import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import type { LanguageModel, ModelMessage } from "ai";
 import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
 import {
 	type ApiTokenUsage,
@@ -14,7 +14,8 @@ import {
 } from "../../src/domain/eval-efficiency";
 import { harnessVariantLabel } from "../../src/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
-import { usageCostUsd } from "../../src/domain/model-pricing";
+import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
+import type { SubagentBudget } from "../../src/domain/subagent";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
 import {
@@ -32,9 +33,18 @@ import {
 import {
 	API_ENDPOINTS,
 	type HarborBridgeConfig,
+	type BridgeRole,
 	type HarborModel,
 } from "./config";
+import {
+	checkerWorkerTool,
+	type FusionTrace,
+	fusionLead,
+	type RunRound,
+	roundMessages,
+} from "./children";
 import { type HarborWorkspace, harborHarness } from "./harness";
+import { type TrialRole, trialSessions } from "./sessions";
 import {
 	type CheckerRun,
 	checkerStepGuard,
@@ -136,12 +146,52 @@ function usageSession(
 	};
 }
 
+/** The sidekick classifier's calls, one row per model (not a session in the product's tree). */
+function classifierRows(input: {
+	harness: "codex" | "api";
+	children: readonly {
+		role: TrialRole;
+		modelId: string;
+		usage: ApiTokenUsage | null;
+	}[];
+}): ModelSpendRow[] {
+	const byModel = new Map<
+		string,
+		{ usage: ApiTokenUsage | null; agents: number }
+	>();
+	for (const child of input.children.filter(
+		(entry) => entry.role === "classifier",
+	)) {
+		const row = byModel.get(child.modelId) ?? { usage: null, agents: 0 };
+		row.usage = child.usage
+			? addApiTokenUsage(row.usage, child.usage)
+			: row.usage;
+		row.agents++;
+		byModel.set(child.modelId, row);
+	}
+	return [...byModel].map(([model, row]) => {
+		const billing = modelBilling({ harness: input.harness, modelId: model });
+		return {
+			role: "classifier",
+			model,
+			agents: row.agents,
+			requests: row.usage?.requests ?? 0,
+			inputTokens: row.usage?.inputTokens ?? 0,
+			outputTokens: row.usage?.outputTokens ?? 0,
+			cacheReadTokens: row.usage?.cacheReadTokens ?? 0,
+			costUsd: usageCostUsd(row.usage, billing),
+			estimated: billing.kind === "plan",
+		};
+	});
+}
+
 export function trialEfficiency(input: {
 	rootId: string;
 	harness: "codex" | "api";
 	builder: { modelId: string; usage: ApiTokenUsage | null };
-	checkers: readonly {
+	children: readonly {
 		sessionId: string;
+		role: TrialRole;
 		modelId: string;
 		usage: ApiTokenUsage | null;
 	}[];
@@ -158,19 +208,32 @@ export function trialEfficiency(input: {
 				},
 				input.builder.usage,
 			),
-			...input.checkers.map((checker) =>
-				usageSession(
-					{
-						id: checker.sessionId,
-						harness: input.harness,
-						listedModelId: checker.modelId,
-						agentRole: "checker",
-					},
-					checker.usage,
+			...input.children
+				.filter((child) => child.role !== "classifier")
+				.map((child) =>
+					usageSession(
+						{
+							id: child.sessionId,
+							harness: input.harness,
+							listedModelId: child.modelId,
+							// Each role as the product's tree marks it (eval-efficiency.ts).
+							agentRole: child.role === "sidekick" ? "writer" : "checker",
+							...(child.role === "sidekick"
+								? { agentBudget: { sidekick: {} } as unknown as SubagentBudget }
+								: child.role === "checkerWorker"
+									? {
+											agentRole: "writer" as const,
+											agentBudget: {
+												checkerPair: "worker",
+											} as unknown as SubagentBudget,
+										}
+									: {}),
+						},
+						child.usage,
+					),
 				),
-			),
 		],
-	});
+	}).concat(classifierRows(input));
 	const {
 		solved: _solved,
 		perSolvedUsd: _perSolved,
@@ -267,16 +330,8 @@ export async function runHarborTrial(
 	// Event indexes where each builder run began (a review fix is a new run).
 	const builderStarts: number[] = [];
 	const notices: TimedNotice[] = [];
-	const checkerRuns: {
-		sessionId: string;
-		model: HarborModel;
-		events: TimedEvent[];
-		brief: string;
-		instructions: string;
-		tools: ToolSet;
-		startedAt: string;
-		run: CheckerRun;
-	}[] = [];
+	const sessions = trialSessions(now);
+	const fusionTrace: FusionTrace = { decisions: [], rounds: [], refused: [] };
 	const builderModel: HarborModel = {
 		modelId: config.modelId,
 		effort: config.effort,
@@ -287,14 +342,14 @@ export async function runHarborTrial(
 	const totalUsage = () =>
 		sum([
 			runsUsage(events, builderStarts),
-			...checkerRuns.map((checker) => lastUsage(checker.events)),
+			...sessions.all().map((child) => runsUsage(child.events, child.starts)),
 		]);
 	// Each run at its own model's price (a cheaper checker counts less).
 	const spendParts = () => [
 		{ usage: runsUsage(events, builderStarts), billing: config.billing },
-		...checkerRuns.map((checker) => ({
-			usage: lastUsage(checker.events),
-			billing: checker.model.billing,
+		...sessions.all().map((child) => ({
+			usage: runsUsage(child.events, child.starts),
+			billing: child.model.billing,
 		})),
 	];
 	const guard = trialSpendGuard({
@@ -322,13 +377,6 @@ export async function runHarborTrial(
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
-		// Built on the first check, only when the checker has its own model.
-		let checkerRuntime: Promise<ModelAgentRuntime> | null = null;
-		const runtimeForChecker = () => {
-			if (!config.checker) return Promise.resolve(runtime);
-			checkerRuntime ??= input.runtime(wrapModel, config.checker);
-			return checkerRuntime;
-		};
 		const provider =
 			config.route === "codex-subscription"
 				? "codex-subscription"
@@ -342,6 +390,204 @@ export async function runHarborTrial(
 					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${guard.spentUsd().toFixed(4)}`,
 				);
 		};
+		const runtimes = new Map<string, Promise<ModelAgentRuntime>>();
+		const runtimeFor = (model: HarborModel) => {
+			if (model.modelId === config.modelId && model.effort === config.effort)
+				return Promise.resolve(runtime);
+			const key = `${model.modelId}@${model.effort}`;
+			let ready = runtimes.get(key);
+			if (!ready) {
+				ready = input.runtime(wrapModel, model);
+				runtimes.set(key, ready);
+			}
+			return ready;
+		};
+		const roleModel = (role: BridgeRole) =>
+			config.roles[role] ?? (role === "checker" ? checkerModel : builderModel);
+		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		// One round of a child session (sidekick, checker, worker) in process,
+		// on the same container: its harness, the product's role prompt.
+		const runRound: RunRound = async (session, brief, options) => {
+			const stop = new AbortController();
+			const budget =
+				session.role === "checker" || session.role === "checkerWorker"
+					? (checkerBudgets.get(session.id) ?? CHILD_BUDGET)
+					: CHILD_BUDGET;
+			const childSignal = AbortSignal.any([
+				signal,
+				stop.signal,
+				AbortSignal.timeout(budget.minutes * 60_000),
+			]);
+			session.stop = () => stop.abort(new Error("Stopped by its parent."));
+			session.briefs.push(brief);
+			const started = now();
+			const onChildEvent = async (event: ApiAgentEvent) => {
+				session.events.push({ at: new Date(now()).toISOString(), event });
+			};
+			const child = await harborHarness({
+				workspace: {
+					...workspace,
+					signal: childSignal,
+					sessionId: session.id,
+					turnId: `${session.id}-turn`,
+				},
+				userId: input.userId,
+				modelId: session.model.modelId,
+				provider,
+				variant: config.variant,
+				webSearch: false,
+				instruction: brief,
+				storage: input.storage,
+				onEvent: onChildEvent,
+				subagent: {
+					role: session.role === "sidekick" ? "writer" : "checker",
+					budget,
+					readOnly: options.readOnly,
+				},
+				...(options.extraTools ? { extraTools: options.extraTools } : {}),
+			});
+			session.instructions = child.instructions;
+			session.tools = child.tools;
+			const stepGuard = checkerStepGuard({
+				budget,
+				startedAt: started,
+				usage: () => lastUsage(session.events),
+			});
+			session.starts.push(session.events.length);
+			try {
+				const messages = await runModelAgent(
+					{
+						userId: input.userId,
+						modelId: session.model.modelId,
+						reasoning: session.model.effort,
+						toolSurface: "implementation",
+						cacheScopeId: session.id,
+						...child.input,
+						prepareMessages: async (history) =>
+							stepGuard(
+								(await child.input.prepareMessages?.(history)) ?? history,
+							),
+						tools: child.tools,
+						instructions: child.instructions,
+						signal: childSignal,
+						maxSteps: budget.steps,
+						turnTimeoutMs: budget.minutes * 60_000,
+						messages: roundMessages(session, brief),
+						onEvent: onChildEvent,
+						onStep: async () => {},
+					},
+					await runtimeFor(session.model),
+				);
+				session.messages = messages;
+				const report = {
+					outcome: "completed" as const,
+					report: finalAnswer(messages),
+				};
+				session.reports.push(report);
+				return report;
+			} catch (error) {
+				log(
+					`${session.role} ${session.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				const report = { outcome: "failed" as const, report: "" };
+				session.reports.push(report);
+				return report;
+			} finally {
+				await stopApiTurnCommands(
+					{ machines: input.machines, vm: workspace.vm, cwd: input.cwd },
+					`${session.id}-turn`,
+				).catch(() => {});
+			}
+		};
+		const checkerBudgets = new Map<
+			string,
+			{ steps: number; minutes: number; tokens: number }
+		>();
+		const startChecker = (spec: {
+			sessionId: string;
+			brief: string;
+			budget: { steps: number; minutes: number; tokens: number };
+		}): CheckerRun => {
+			const session = sessions.add({
+				role: "checker",
+				parentId: input.trialId,
+				id: spec.sessionId,
+				model: checkerModel,
+			});
+			checkerBudgets.set(session.id, spec.budget);
+			const pair = config.variant.checkerMode === "pair";
+			const done = runRound(session, spec.brief, {
+				readOnly: true,
+				...(pair
+					? {
+							extraTools: () =>
+								checkerWorkerTool({
+									judge: session,
+									sessions,
+									model: (strong) =>
+										strong ? checkerModel : roleModel("checkerWorker"),
+									runRound: (worker, brief, options) => {
+										checkerBudgets.set(worker.id, spec.budget);
+										return runRound(worker, brief, options);
+									},
+								}),
+						}
+					: {}),
+			});
+			return {
+				done,
+				usage: () => lastUsage(session.events),
+				stop: () => session.stop(),
+			};
+		};
+		// lead=fusion: the builder is the lead, with one sidekick in its checkout.
+		const lead =
+			config.variant.lead === "fusion"
+				? fusionLead({
+						parentId: input.trialId,
+						sessions,
+						model: roleModel,
+						escalation: config.roles.writerEscalation ?? null,
+						runRound,
+						callOnce: async (session, system, message) => {
+							session.starts.push(session.events.length);
+							const out = await runModelAgent(
+								{
+									userId: input.userId,
+									modelId: session.model.modelId,
+									reasoning: session.model.effort,
+									toolSurface: "implementation",
+									cacheScopeId: session.id,
+									tools: {},
+									instructions: system,
+									signal,
+									maxSteps: 1,
+									turnTimeoutMs: 60_000,
+									messages: [{ role: "user", content: message }],
+									onEvent: async (event) => {
+										session.events.push({
+											at: new Date(now()).toISOString(),
+											event,
+										});
+									},
+									onStep: async () => {},
+								},
+								await runtimeFor(session.model),
+							);
+							return finalAnswer(out);
+						},
+						changedFiles: async () => {
+							const status = await input.machines.exec(
+								workspace.vm,
+								`git -C ${JSON.stringify(input.cwd)} status --short`,
+								20_000,
+							);
+							return status.stdout.split("\n").filter(Boolean).slice(0, 40);
+						},
+						trace: fusionTrace,
+						now,
+					})
+				: null;
 		const harness = await harborHarness({
 			workspace,
 			userId: input.userId,
@@ -353,6 +599,9 @@ export async function runHarborTrial(
 			storage: input.storage,
 			onEvent,
 			mcpNote: mcpNoteFor(input.mcpServers),
+			...(config.variant.lead === "fusion"
+				? { extraTools: () => lead?.tools() ?? {} }
+				: {}),
 		});
 		instructions = harness.instructions;
 		tools = harness.tools;
@@ -378,113 +627,15 @@ export async function runHarborTrial(
 				runtime,
 			);
 		};
-		const startChecker = (spec: {
-			sessionId: string;
-			brief: string;
-			budget: { steps: number; minutes: number; tokens: number };
-		}): CheckerRun => {
-			const stop = new AbortController();
-			const checkerSignal = AbortSignal.any([
-				signal,
-				stop.signal,
-				AbortSignal.timeout(spec.budget.minutes * 60_000),
-			]);
-			const checkerEvents: TimedEvent[] = [];
-			const started = now();
-			const entry = {
-				sessionId: spec.sessionId,
-				model: checkerModel,
-				events: checkerEvents,
-				brief: spec.brief,
-				instructions: "",
-				tools: {} as ToolSet,
-				startedAt: new Date(started).toISOString(),
-				run: null as unknown as CheckerRun,
-			};
-			const done = (async () => {
-				const checkerRuntimeReady = runtimeForChecker();
-				const checker = await harborHarness({
-					workspace: {
-						...workspace,
-						signal: checkerSignal,
-						sessionId: spec.sessionId,
-						turnId: `${spec.sessionId}-turn`,
-					},
-					userId: input.userId,
-					modelId: checkerModel.modelId,
-					provider,
-					variant: config.variant,
-					webSearch: false,
-					instruction: spec.brief,
-					storage: input.storage,
-					onEvent: async (event) => {
-						checkerEvents.push({ at: new Date(now()).toISOString(), event });
-					},
-					subagent: { role: "checker", budget: spec.budget },
-				});
-				entry.instructions = checker.instructions;
-				entry.tools = checker.tools;
-				const stepGuard = checkerStepGuard({
-					budget: spec.budget,
-					startedAt: started,
-					usage: () => lastUsage(checkerEvents),
-				});
-				try {
-					const messages = await runModelAgent(
-						{
-							userId: input.userId,
-							modelId: checkerModel.modelId,
-							reasoning: checkerModel.effort,
-							toolSurface: "implementation",
-							cacheScopeId: spec.sessionId,
-							...checker.input,
-							prepareMessages: async (history) =>
-								stepGuard(
-									(await checker.input.prepareMessages?.(history)) ?? history,
-								),
-							tools: checker.tools,
-							instructions: checker.instructions,
-							signal: checkerSignal,
-							maxSteps: spec.budget.steps,
-							turnTimeoutMs: spec.budget.minutes * 60_000,
-							messages: [{ role: "user", content: spec.brief }],
-							onEvent: async (event) => {
-								checkerEvents.push({
-									at: new Date(now()).toISOString(),
-									event,
-								});
-							},
-							onStep: async () => {},
-						},
-						await checkerRuntimeReady,
-					);
-					return {
-						outcome: "completed" as const,
-						report: finalAnswer(messages),
-					};
-				} catch (error) {
-					log(
-						`checker ${spec.sessionId} failed: ${error instanceof Error ? error.message : String(error)}`,
-					);
-					return { outcome: "failed" as const, report: "" };
-				} finally {
-					await stopApiTurnCommands(
-						{ machines: input.machines, vm: workspace.vm, cwd: input.cwd },
-						`${spec.sessionId}-turn`,
-					).catch(() => {});
-				}
-			})();
-			entry.run = {
-				done,
-				usage: () => lastUsage(checkerEvents),
-				stop: () => stop.abort(new Error("Review loop stopped the checker.")),
-			};
-			checkerRuns.push(entry);
-			return entry.run;
-		};
 		let messages: ModelMessage[] = [
 			{ role: "user", content: input.instruction },
 		];
+		// The request's exploration round, before the lead's first model call.
+		if (lead)
+			messages.push({
+				role: "user",
+				content: await lead.explore(input.instruction),
+			});
 		if (config.variant.review === "on") {
 			const loop = harborReviewLoop({
 				sessionId: input.trialId,
@@ -493,12 +644,15 @@ export async function runHarborTrial(
 				signal,
 				billing: config.billing,
 				instruction: input.instruction,
+				rigor: config.variant.rigor === "on",
+				pair: config.variant.checkerMode === "pair",
 				deps: harborReviewDeps({
 					workspace,
 					// Leave the grader's side two minutes.
 					deadlineAt: input.deadlineAt - 120_000,
 					startChecker,
 					trace: reviewTrace,
+					sessions,
 					...(config.checker
 						? {
 								checkerModel: {
@@ -555,7 +709,7 @@ export async function runHarborTrial(
 			{ machines: input.machines, vm: workspace.vm, cwd: input.cwd },
 			workspace.turnId,
 		).catch(() => {});
-		for (const checker of checkerRuns) checker.run?.stop();
+		for (const child of sessions.all()) child.stop();
 	}
 	const usage = totalUsage();
 	// Each run at its own model's price; unknown when any price is unknown.
@@ -572,10 +726,11 @@ export async function runHarborTrial(
 			modelId: config.modelId,
 			usage: runsUsage(events, builderStarts),
 		},
-		checkers: checkerRuns.map((checker) => ({
-			sessionId: checker.sessionId,
-			modelId: checker.model.modelId,
-			usage: lastUsage(checker.events),
+		children: sessions.all().map((child) => ({
+			sessionId: child.id,
+			role: child.role,
+			modelId: child.model.modelId,
+			usage: runsUsage(child.events, child.starts),
 		})),
 		seconds: (now() - Date.parse(startedAt)) / 1000,
 	});
@@ -613,30 +768,40 @@ export async function runHarborTrial(
 			},
 			events,
 			notices,
-			checkers: checkerRuns.map(({ sessionId, model, events, brief }) => ({
-				sessionId,
-				model: model.modelId,
-				effort: model.effort,
-				brief,
-				events,
+			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
+			roleModels: Object.fromEntries(
+				Object.entries(config.roles).map(([role, model]) => [
+					role,
+					{ model: model.modelId, effort: model.effort },
+				]),
+			),
+			checkers: sessions.all().map((child) => ({
+				sessionId: child.id,
+				role: child.role,
+				parentId: child.parentId,
+				model: child.model.modelId,
+				effort: child.model.effort,
+				brief: child.briefs[0] ?? "",
+				briefs: child.briefs,
+				events: child.events,
 			})),
 		}),
 	);
 	const toolDefinitions = await atifToolDefinitions(tools).catch(() => []);
 	const subagents: AtifTrajectory[] = await Promise.all(
-		checkerRuns.map(async (checker) =>
+		sessions.all().map(async (checker) =>
 			atifTrajectory({
 				sessionId: input.trialId,
-				trajectoryId: checker.sessionId,
+				trajectoryId: checker.id,
 				agent: {
-					name: `${input.harness.name}-checker`,
+					name: `${input.harness.name}-${checker.role}`,
 					version: input.harness.version,
 				},
 				modelName: checker.model.modelId,
 				effort: checker.model.effort,
 				billing: checker.model.billing,
-				systemPrompt: checker.instructions || "(checker)",
-				instruction: checker.brief,
+				systemPrompt: checker.instructions || `(${checker.role})`,
+				instruction: checker.briefs[0] ?? "",
 				startedAt: checker.startedAt,
 				events: checker.events,
 				toolDefinitions: await atifToolDefinitions(checker.tools).catch(
