@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the TB4 watchdog every 5 minutes (re-arms itself; survives reboot)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
