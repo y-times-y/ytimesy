@@ -652,6 +652,10 @@ export function SessionLauncher({
 							}
 						: undefined
 				}
+				questionActions={{
+					disabled: busy || turnStatus === "running",
+					onAnswer: (text) => sendText(text),
+				}}
 				failoverActions={{
 					disabled: busy || turnStatus === "running",
 					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),

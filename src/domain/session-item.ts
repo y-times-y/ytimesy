@@ -1,4 +1,5 @@
 import { pendingPlanId } from "./agent-plan";
+import type { UserQuestion } from "./user-question";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
@@ -77,6 +78,13 @@ export type SecretRequestItem = {
 	readonly name: string;
 	readonly secretKind: RequestableSecretKind;
 	readonly reason: string;
+};
+
+/** Questions the agent asked with ask_user; the turn ended to wait for the user's choice. */
+export type UserQuestionItem = {
+	readonly kind: "userQuestion";
+	readonly id: SessionItemId;
+	readonly questions: readonly UserQuestion[];
 };
 
 /** Memory lines this turn added: by the agent's own commits or the save hook after it. */
@@ -182,6 +190,7 @@ export type SessionItem =
 	| PlanItem
 	| PlanProposalItem
 	| SecretRequestItem
+	| UserQuestionItem
 	| MemorySaveItem
 	| CommandExecutionItem
 	| FileChangeItem

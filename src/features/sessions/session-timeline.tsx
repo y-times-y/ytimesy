@@ -34,6 +34,7 @@ import { parseModelRouteId } from "#/domain/model-connection";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
+import { userQuestionReply } from "#/domain/user-question";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
@@ -80,6 +81,10 @@ import {
 	ModelSwitchCard,
 } from "./model-switch-card";
 import {
+	type UserQuestionActions,
+	UserQuestionCard,
+} from "./user-question-card";
+import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
@@ -103,6 +108,7 @@ export function SessionTimeline({
 	collapseInstructions = false,
 	recoveryControls,
 	secretActions,
+	questionActions,
 	failoverActions,
 	memoryActions,
 	onRemoveQueued,
@@ -116,6 +122,8 @@ export function SessionTimeline({
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
 	secretActions?: SecretRequestActions;
+	/** Answer the agent's question card; omitted where nobody can answer. */
+	questionActions?: UserQuestionActions;
 	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
 	failoverActions?: FailoverActions;
 	recoveryControls?: (messageId: string) => ReactNode;
@@ -187,6 +195,12 @@ export function SessionTimeline({
 							<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
 								{row.kind === "item" && row.item.kind === "planProposal" ? (
 									<PlanMessage text={row.item.text} onOpenFile={onOpenFile} />
+								) : row.kind === "item" && row.item.kind === "userQuestion" ? (
+									<UserQuestionCard
+										item={row.item}
+										reply={userQuestionReply(items, row.item.id)}
+										actions={questionActions}
+									/>
 								) : row.kind === "item" && row.item.kind === "secretRequest" ? (
 									<SecretRequestCard
 										item={row.item}
@@ -642,6 +656,8 @@ function SessionItemView({
 					<p>{item.text || "Planning…"}</p>
 				</details>
 			);
+		case "userQuestion":
+			return <UserQuestionCard item={item} reply={null} />;
 		case "secretRequest":
 			return <SecretRequestCard item={item} outcome="answered" />;
 		case "planProposal":
