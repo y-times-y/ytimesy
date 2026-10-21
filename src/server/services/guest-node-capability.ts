@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
+import { privateDirectoryShell } from "#/domain/posix-command";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
@@ -41,9 +42,9 @@ export function guestCapabilityCommand(
 	const dependencies = packages[capability];
 	const directory = guestCapabilityDirectory(capability);
 	if (options.onlyInstalled)
-		return `if test -f ${quote(`${directory}/ready`)}; then timeout --kill-after=5s ${seconds}s node --input-type=module -e ${quote(source)} ${quote(directory)} ${quote(JSON.stringify(arguments_))}; else printf '%s\\n' '{"available":false}'; fi`;
+		return `if test ! -L ${quote(directory)} && test -n "$(find ${quote(directory)} -maxdepth 0 -type d -user "$(id -u)" -perm 700 2>/dev/null)" && test -f ${quote(`${directory}/ready`)} && test ! -L ${quote(`${directory}/ready`)}; then timeout --kill-after=5s ${seconds}s node --input-type=module -e ${quote(source)} ${quote(directory)} ${quote(JSON.stringify(arguments_))}; else printf '%s\\n' '{"available":false}'; fi`;
 	return `set -eu
-mkdir -p ${quote(directory)}
+${privateDirectoryShell(directory)}
 (
 flock -w 120 9
 if ! test -f ${quote(`${directory}/ready`)}; then

@@ -177,6 +177,8 @@ const server = createServer(async (request,response) => {
     for await (const chunk of request) {size+=chunk.length;if(size>500000)throw new Error('Request too large.');chunks.push(chunk);}
     const job=JSON.parse(Buffer.concat(chunks).toString());
     if (typeof job.source !== 'string' || job.source.length>100000 || !/^\/tmp\/ytimesy-capability-[a-z]+-[a-f0-9]{16}$/.test(job.packages)) throw new Error('Invalid guest program.');
+    const owned=await lstat(job.packages).catch(()=>null);
+    if (!owned?.isDirectory() || owned.uid!==process.getuid() || (owned.mode&0o077)) throw new Error('Guest capability packages are not a private directory owned by this user.');
     const digest=createHash('sha256').update(job.source).digest('hex');
     let program=programs.get(digest);
     if (!program) {
