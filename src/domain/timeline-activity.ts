@@ -107,6 +107,7 @@ export function groupTimelineRows(
 				item.kind !== "error" &&
 				item.kind !== "planProposal" &&
 				item.kind !== "secretRequest" &&
+				item.kind !== "userQuestion" &&
 				item.kind !== "memorySave" &&
 				item.kind !== "modelSwitch" &&
 				item.kind !== "notice",
@@ -130,7 +131,9 @@ export function groupTimelineRows(
 			...visible
 				.filter(
 					(item) =>
-						item.kind === "planProposal" || item.kind === "secretRequest",
+						item.kind === "planProposal" ||
+						item.kind === "secretRequest" ||
+						item.kind === "userQuestion",
 				)
 				.map((item) => ({ kind: "item" as const, item })),
 		);

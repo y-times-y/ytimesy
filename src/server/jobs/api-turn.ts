@@ -60,6 +60,7 @@ import {
 import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
+import { ASK_USER_TOOL } from "#/domain/user-question";
 import type {
 	ModelSwitchItem,
 	SessionItem,
@@ -176,6 +177,10 @@ import {
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { createReviewLoop } from "../services/review-loop";
+import {
+	ASK_USER_END_TURN_TOOLS,
+	askUserTools,
+} from "../services/ask-user-tool";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
 	secretRequestTools,
@@ -1116,7 +1121,14 @@ async function runApiTurnAttempt(
 			reasoning: turnReasoning,
 			speed: apiSettings.speed,
 			...(deferral ? { toolOrder: deferral.order } : {}),
-			...(rootChat ? { endTurnTools: [...SECRET_REQUEST_END_TURN_TOOLS] } : {}),
+			...(rootChat
+				? {
+						endTurnTools: [
+							...SECRET_REQUEST_END_TURN_TOOLS,
+							...ASK_USER_END_TURN_TOOLS,
+						],
+					}
+				: {}),
 			onToolMetric: (metric) => {
 				recordStepTiming(`tool:${metric.tool_name}`, metric.duration_ms);
 				void captureServerAnalytics(
@@ -1566,7 +1578,8 @@ async function runApiTurnAttempt(
 					(item.kind === "agentMessage" && item.text.trim()) ||
 					// A proposed plan or a secret request is the turn's result; it waits for the user.
 					item.kind === "planProposal" ||
-					item.kind === "secretRequest",
+					item.kind === "secretRequest" ||
+					item.kind === "userQuestion",
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
@@ -2088,11 +2101,15 @@ function turnTools(input: {
 		rootChat && projectSecrets
 			? secretRequestTools(projectSecrets.names.map(({ name }) => name))
 			: {};
+	const questionTools = rootChat ? askUserTools() : {};
 	// Large MCP setups are searched and called through two fixed tools; the
 	// real tools they run keep their hooks and redaction.
 	return mcpToolSurface({
 		tools: hooks.wrap(
-			withRedactedResults({ ...withMcp, ...secretTools }, redact),
+			withRedactedResults(
+				{ ...withMcp, ...secretTools, ...questionTools },
+				redact,
+			),
 		),
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
@@ -2121,6 +2138,7 @@ function inLeanToolOrder(
 		AGENT_SEND_TOOL,
 		...groups.webSearch,
 		REQUEST_PROJECT_SECRET_TOOL,
+		ASK_USER_TOOL,
 	].filter((name) => name in tools);
 	const names = [
 		...new Set([
