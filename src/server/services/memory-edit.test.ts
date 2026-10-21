@@ -4,7 +4,7 @@ import type {
 	MemoryRepo,
 	MemorySnapshot,
 } from "../adapters/memory-repos";
-import { commitMemoryEdit, lastDreamChange } from "./memory-edit";
+import { commitMemoryEdit, dreamHistory, lastDreamChange } from "./memory-edit";
 
 const first: MemorySnapshot = {
 	head: "h1",
@@ -129,5 +129,60 @@ describe("manual memory edits", () => {
 			},
 		});
 		expect(await lastDreamChange(repo([], []), "2026-10-21")).toBeNull();
+	});
+
+	it("lists dream commits with the lines each merged, at their own dates", async () => {
+		const before = {
+			"api.md":
+				"# API\n- Errors use problem+json bodies [project: acme/web; added: 2026-10-01]\n- Errors are RFC 9457 problem+json [kind: inferred; added: 2026-10-05]\n",
+		};
+		const after = {
+			"api.md":
+				"# API\n- Errors use RFC 9457 problem+json bodies [added: 2026-10-19]\n",
+		};
+		const memory = repo([], [], {
+			log: async () => [
+				{
+					hash: "c3",
+					message: "Add memory (Personal): x",
+					committedAt: 3,
+					parent: "c2",
+				},
+				{
+					hash: "c2",
+					message: "Dream: merged error notes",
+					committedAt: Date.parse("2026-10-19T03:00:00Z"),
+					parent: "c1",
+				},
+			],
+			snapshotAt: async (hash) => ({
+				head: hash,
+				files: hash === "c2" ? after : before,
+			}),
+		});
+		expect(await dreamHistory(memory, "2026-10-21")).toEqual([
+			{
+				at: "2026-10-19T03:00:00.000Z",
+				message: "merged error notes",
+				merges: [
+					{
+						into: "Errors use RFC 9457 problem+json bodies",
+						from: [
+							{
+								text: "Errors use problem+json bodies",
+								added: "2026-10-01",
+								project: "acme/web",
+								kind: "stated",
+							},
+							{
+								text: "Errors are RFC 9457 problem+json",
+								added: "2026-10-05",
+								kind: "inferred",
+							},
+						],
+					},
+				],
+			},
+		]);
 	});
 });

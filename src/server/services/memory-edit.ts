@@ -4,7 +4,8 @@ import {
 	type MemoryEdit,
 	type MemoryLineRef,
 } from "#/domain/memory-edit";
-import { memoryChangeSummary } from "#/domain/memory-overview";
+import type { DreamInput } from "#/domain/memory-lanes";
+import { memoryChangeSummary, memoryRows } from "#/domain/memory-overview";
 import { memoryTokens } from "#/domain/memory-ranking";
 import type { MemoryRepo } from "../adapters/memory-repos";
 
@@ -58,4 +59,53 @@ export async function lastDreamChange(
 			memoryTokens,
 		),
 	};
+}
+
+/**
+ * The newest dream commits (up to `limit` among the last `depth` commits),
+ * each with the lines it merged: the merged lines' own dates, scopes and
+ * kinds from the commit's parent, so the lanes can draw them converging.
+ */
+export async function dreamHistory(
+	repo: MemoryRepo,
+	today: string,
+	options: { depth?: number; limit?: number } = {},
+): Promise<DreamInput[]> {
+	if (!repo.log) return [];
+	const commits = (await repo.log(options.depth ?? 80))
+		.filter((commit) => commit.message.startsWith(DREAM_COMMIT_PREFIX))
+		.slice(0, options.limit ?? 8);
+	return Promise.all(
+		commits.map(async (commit) => {
+			const [after, before] = await Promise.all([
+				repo.snapshotAt(commit.hash),
+				commit.parent
+					? repo.snapshotAt(commit.parent)
+					: Promise.resolve({ head: null, files: {} }),
+			]);
+			const summary = memoryChangeSummary(
+				before.files,
+				after.files,
+				today,
+				memoryTokens,
+			);
+			const old = memoryRows(before.files, today);
+			return {
+				at: new Date(commit.committedAt).toISOString(),
+				message: commit.message.slice(DREAM_COMMIT_PREFIX.length).trim(),
+				merges: summary.merged.map((merge) => ({
+					into: merge.into,
+					from: merge.from.map((text) => {
+						const row = old.find((entry) => entry.text === text);
+						return {
+							text,
+							...(row?.added ? { added: row.added } : {}),
+							...(row?.project ? { project: row.project } : {}),
+							...(row ? { kind: row.kind } : {}),
+						};
+					}),
+				})),
+			};
+		}),
+	);
 }

@@ -8,13 +8,13 @@ vi.mock("@tanstack/react-start", () => ({
 vi.mock("./memory.fn", () => ({
 	readMemoryFn: async () => null,
 	readMemoryDreamsFn: async () => null,
-	readMemoryGraphFn: async () => null,
+	readMemoryGraphFn: async () => ({ dreams: [] }),
 	readMemoryHistoryFn: async () => [],
 	clearMemoryFn: async () => undefined,
 	editMemoryFn: async () => ({ ok: true }),
 }));
 
-const { MemoryGraphPage, MemoryGraphLegend, hexagonPath } = await import(
+const { MemoryGraphPage, MemoryLanesLegend } = await import(
 	"./memory-graph-page"
 );
 
@@ -22,13 +22,33 @@ const A = "11111111-1111-4111-8111-111111111111";
 const files = [
 	{
 		path: "api.md",
-		content: `# API\n\n- Errors are problem+json [source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
+		content: `# API\n\n- Errors are problem+json [project: acme/web; source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
 	},
 ];
 
 function render() {
 	const client = new QueryClient();
 	client.setQueryData(["memory"], { available: true, mode: "full", files });
+	client.setQueryData(["memory-lanes", files], {
+		dreams: [
+			{
+				at: "2026-10-19T03:00:00Z",
+				message: "Merged notes",
+				merges: [
+					{
+						into: "Errors are problem+json",
+						from: [
+							{
+								text: "Errors are JSON",
+								added: "2026-10-03",
+								project: "acme/web",
+							},
+						],
+					},
+				],
+			},
+		],
+	});
 	return renderToStaticMarkup(
 		<QueryClientProvider client={client}>
 			<MemoryGraphPage active onOpenChat={() => true} />
@@ -36,46 +56,32 @@ function render() {
 	);
 }
 
-describe("Memory graph page", () => {
-	it("draws chat hubs and one hexagon per memory, statuses as badges", () => {
-		const page = render();
-		const html = page.slice(0, page.indexOf("memory-graph-legend"));
-		expect(html).toContain(
-			'aria-label="Memory graph: 3 memories from 3 sources"',
-		);
-		expect(html.match(/class="memory-hex"/g)).toHaveLength(3);
-		expect(html.match(/class="memory-hub"/g)).toHaveLength(3);
-		expect(html).toContain('data-status="forgotten"');
-		expect(html).toContain('data-status="rule"');
-		expect(html).toContain('data-inferred="true"');
-		expect(html).toContain("All memory");
-		expect(html).toContain("3 memories");
+describe("Memory lanes page", () => {
+	it("draws one lane per scope with a mark per line, a dream and its merge", () => {
+		const html = render();
+		expect(html).toContain('aria-label="Memory lanes: 2 memories in 2 scopes"');
+		expect(html.match(/data-node="/g)).toHaveLength(3);
+		expect(html).toContain('data-retired="true"');
+		expect(html).toContain('data-mark="rule"');
+		expect(html).toContain('class="lane-merge"');
+		expect(html).toContain(">Today<");
+		const labels = html.slice(html.indexOf("lane-labels"));
+		expect(labels.indexOf("Personal")).toBeLessThan(labels.indexOf("web"));
 		expect(html).not.toContain("<select");
+		expect(html).not.toContain("hex");
 	});
 
-	it("explains every mark in the legend with the same shapes", () => {
-		const html = renderToStaticMarkup(
-			<MemoryGraphLegend similarBasis="meaning" />,
-		);
+	it("explains every mark in one legend row", () => {
+		const html = renderToStaticMarkup(<MemoryLanesLegend />);
 		for (const label of [
-			"Chat",
-			"Memory",
-			"Older version",
-			"New",
-			"Expiring soon",
-			"Retired",
+			"Stated",
+			"Inferred",
 			"Always on",
-			"From chat",
-			"Similar",
-			"Newer version",
-			"Weak",
-			"Strong",
+			"New",
+			"Replaced",
+			"Changed",
+			"Dream",
 		])
 			expect(html).toContain(label);
-		expect(html).toContain('class="memory-hex-shape"');
-	});
-
-	it("rounds the hexagon's six corners", () => {
-		expect(hexagonPath(15).match(/Q/g)).toHaveLength(6);
 	});
 });

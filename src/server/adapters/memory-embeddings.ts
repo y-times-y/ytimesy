@@ -264,24 +264,3 @@ export async function cachedLineEmbeddings(
 	}
 	return hashes.map((hash) => known.get(hash) ?? []);
 }
-
-/**
- * Vectors already stored for `texts` (this isolate's warm set, then the
- * database), undefined for lines never embedded. Never calls the model.
- */
-export async function storedLineEmbeddings(
-	userId: string,
-	texts: readonly string[],
-	load = memoryEmbeddings,
-): Promise<(number[] | undefined)[]> {
-	const hashes = texts.map(lineHash);
-	const missing = [
-		...new Set(hashes.filter((hash) => !warm.has(warmKey(userId, hash)))),
-	];
-	const loaded = missing.length
-		? await load(userId, MEMORY_EMBEDDING_MODEL, missing)
-		: new Map<string, number[]>();
-	return hashes.map(
-		(hash) => warm.get(warmKey(userId, hash)) ?? loaded.get(hash),
-	);
-}

@@ -1,21 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
-	Archive,
 	Calendar,
 	ChevronDown,
-	Eye,
 	FolderInput,
 	Hash,
 	Maximize2,
-	MessageSquare,
 	Minus,
+	Moon,
 	Pencil,
 	Pin,
 	PinOff,
 	Plus,
 	Trash2,
-	User,
 	X,
 } from "lucide-react";
 import {
@@ -29,18 +26,13 @@ import {
 } from "react";
 import { MEMORY_EDIT_TEXT_MAX, type MemoryEdit } from "#/domain/memory-edit";
 import {
-	type GraphEdge,
-	type GraphHub,
-	type GraphMemory,
-	layoutBounds,
-	MANUAL_HUB,
-	memoryGraphModel,
-	type SimNode,
-	settleLayout,
-	stepLayout,
-	UNKNOWN_HUB,
-} from "#/domain/memory-graph";
-import { memoryRows } from "#/domain/memory-overview";
+	axisStep,
+	dayDate,
+	type LaneNode,
+	laneColor,
+	memoryLanes,
+} from "#/domain/memory-lanes";
+import { type MemoryRow, memoryRows } from "#/domain/memory-overview";
 import type { Project } from "#/domain/projects";
 import { editMemoryFn, readMemoryFn, readMemoryGraphFn } from "./memory.fn";
 import {
@@ -53,145 +45,76 @@ import "./memory-inspector.css";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const ALL = "__all";
-/** Memory hexagon radius in graph units (about 30px across at 1x). */
-const HEX = 15;
+const DAY = 86_400_000;
+/** Pixels: the label column, the space above the first lane and below the last. */
+const TOP = 76;
+const AXIS = 34;
+const SLOT = 13;
+/** Readable whatever the zoom: marks are sized in pixels, not in days. */
+const R = 4.5;
+const R_NEW = 5.5;
 
-/** A hexagon with rounded corners, pointy top, centred on 0,0. */
-export function hexagonPath(radius: number, round = radius * 0.2) {
-	const corners = Array.from({ length: 6 }, (_, index) => {
-		const angle = (Math.PI / 3) * index - Math.PI / 2;
-		return [Math.cos(angle) * radius, Math.sin(angle) * radius] as const;
+type View = { pxPerDay: number; offset: number };
+
+function shortDate(day: number) {
+	return new Date(day * DAY).toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		timeZone: "UTC",
 	});
-	const toward = (
-		from: readonly [number, number],
-		to: readonly [number, number],
-		distance: number,
-	) => {
-		const dx = to[0] - from[0];
-		const dy = to[1] - from[1];
-		const length = Math.hypot(dx, dy);
-		return [
-			from[0] + (dx / length) * distance,
-			from[1] + (dy / length) * distance,
-		] as const;
-	};
-	let path = "";
-	corners.forEach((corner, index) => {
-		const before = corners[(index + 5) % 6];
-		const after = corners[(index + 1) % 6];
-		const start = toward(corner, before, round);
-		const end = toward(corner, after, round);
-		path += `${index === 0 ? "M" : "L"}${start[0].toFixed(2)} ${start[1].toFixed(2)}Q${corner[0].toFixed(2)} ${corner[1].toFixed(2)} ${end[0].toFixed(2)} ${end[1].toFixed(2)}`;
-	});
-	return `${path}Z`;
 }
 
-const HEX_PATH = hexagonPath(HEX);
-const HALO_PATH = hexagonPath(HEX + 6, 4);
-
-/** One memory: the same rounded hexagon always; status as corner badges. */
-export function MemoryHexagon({
-	memory,
-	selected,
-	hovered,
+/** One line's mark: solid (stated), hollow (inferred) or a diamond (always on). */
+export function LaneMark({
+	mark,
+	color,
+	recent,
+	x = 0,
+	y = 0,
 }: {
-	memory: Pick<
-		GraphMemory,
-		"forgotten" | "expiring" | "recent" | "version" | "versions"
-	> & { row: Pick<GraphMemory["row"], "kind" | "rule"> };
-	selected?: boolean;
-	hovered?: boolean;
+	mark: LaneNode["mark"];
+	color: string;
+	recent?: boolean;
+	x?: number;
+	y?: number;
 }) {
-	const older = memory.version < memory.versions || memory.forgotten;
-	const status = memory.forgotten
-		? "forgotten"
-		: memory.expiring
-			? "expiring"
-			: memory.recent
-				? "new"
-				: null;
-	const corner = HEX * 0.72;
+	const r = recent ? R_NEW : R;
 	return (
-		<g
-			className="memory-hex"
-			data-older={older ? "true" : undefined}
-			data-selected={selected ? "true" : undefined}
-			data-hovered={hovered ? "true" : undefined}
-		>
-			{selected ? <path className="memory-hex-halo" d={HALO_PATH} /> : null}
-			<path
-				className="memory-hex-shape"
-				d={HEX_PATH}
-				data-inferred={memory.row.kind === "inferred" ? "true" : undefined}
-			/>
-			{status === "forgotten" ? (
-				<g
-					className="memory-hex-badge"
-					data-status="forgotten"
-					transform={`translate(${corner} ${-corner})`}
-				>
-					<circle r={4.2} />
-					<path d="M-1.8 -1.8L1.8 1.8M1.8 -1.8L-1.8 1.8" />
-				</g>
-			) : status ? (
-				<circle
-					className="memory-hex-badge"
-					data-status={status}
-					cx={corner}
-					cy={-corner}
-					r={3.6}
+		<g className="lane-mark" data-mark={mark} style={{ color }}>
+			{recent ? <circle className="lane-glow" cx={x} cy={y} r={r + 5} /> : null}
+			{mark === "rule" ? (
+				<path
+					className="lane-shape"
+					d={`M${x} ${y - r - 1}L${x + r + 1} ${y}L${x} ${y + r + 1}L${x - r - 1} ${y}Z`}
 				/>
-			) : null}
-			{memory.row.rule ? (
-				<g
-					className="memory-hex-badge"
-					data-status="rule"
-					transform={`translate(${-corner} ${-corner})`}
-				>
-					<circle r={5.2} />
-					<Pin x={-3.5} y={-3.5} width={7} height={7} strokeWidth={2.4} />
-				</g>
-			) : null}
+			) : (
+				<circle
+					className="lane-shape"
+					cx={x}
+					cy={y}
+					r={mark === "inferred" ? r - 0.75 : r}
+				/>
+			)}
 		</g>
 	);
 }
 
-/** A source hub: a rounded rectangle with the chat (or person) glyph. */
-export function MemoryHubMark({
-	hub,
-	active,
-}: {
-	hub: Pick<GraphHub, "id">;
-	active?: boolean;
-}) {
-	const Icon =
-		hub.id === MANUAL_HUB
-			? User
-			: hub.id === UNKNOWN_HUB
-				? Archive
-				: MessageSquare;
+/** A dream's merge: a ring with a plus, like a merge commit. */
+export function MergeMark({ x = 0, y = 0 }: { x?: number; y?: number }) {
 	return (
-		<g className="memory-hub" data-active={active ? "true" : undefined}>
-			<rect x={-22} y={-15} width={44} height={30} rx={8} />
-			<Icon x={-7} y={-7} width={14} height={14} strokeWidth={1.6} />
+		<g className="lane-merge">
+			<circle cx={x} cy={y} r={6.5} />
+			<path d={`M${x - 3} ${y}H${x + 3}M${x} ${y - 3}V${y + 3}`} />
 		</g>
 	);
 }
-
-function edgePath(edge: GraphEdge, a: SimNode, b: SimNode) {
-	if (edge.kind !== "similar") return `M${a.x} ${a.y}L${b.x} ${b.y}`;
-	const mx = (a.x + b.x) / 2 - (b.y - a.y) * 0.15;
-	const my = (a.y + b.y) / 2 + (b.x - a.x) * 0.15;
-	return `M${a.x} ${a.y}Q${mx} ${my} ${b.x} ${b.y}`;
-}
-
-type View = { x: number; y: number; k: number };
 
 /**
- * The memory graph as a full page: a dark canvas with source chats as hubs
- * and memories as hexagons around them, similar and version edges between
- * memories. Pan, zoom, drag nodes; hover for the line; click for details
- * and the same edits as the list.
+ * Memory lanes: the memory repo as its history. One lane per scope, time
+ * left to right with today at the right; lines as marks at their dates,
+ * version changes as curves, dreams as markers across the lanes with their
+ * merges. Drag to pan, scroll or pinch to zoom time; click a mark for its
+ * details and edits, a lane label to show only that scope.
  */
 export function MemoryGraphPage({
 	active,
@@ -200,7 +123,7 @@ export function MemoryGraphPage({
 }: {
 	active: boolean;
 	onOpenChat: (chatId: string) => boolean;
-	projects?: readonly Pick<Project, "fullName" | "name">[];
+	projects?: readonly Pick<Project, "id" | "fullName" | "name">[];
 }) {
 	const readMemory = useServerFn(readMemoryFn);
 	const readGraph = useServerFn(readMemoryGraphFn);
@@ -211,8 +134,8 @@ export function MemoryGraphPage({
 		queryFn: () => readMemory(),
 		enabled: active,
 	});
-	const graphData = useQuery({
-		queryKey: ["memory-graph", memory.data?.files],
+	const history = useQuery({
+		queryKey: ["memory-lanes", memory.data?.files],
 		queryFn: () => readGraph(),
 		enabled: active && Boolean(memory.data?.available),
 		staleTime: 60_000,
@@ -224,9 +147,6 @@ export function MemoryGraphPage({
 		left: number;
 		top: number;
 	} | null>(null);
-	const [legendOpen, setLegendOpen] = useState(
-		() => typeof window === "undefined" || window.innerWidth > 640,
-	);
 	const repo = useMemo(
 		() =>
 			Object.fromEntries(
@@ -237,60 +157,76 @@ export function MemoryGraphPage({
 	const date = today();
 	const rows = useMemo(() => memoryRows(repo, date), [repo, date]);
 	const { scopes, scopeTitle, choices } = useMemoryScopeNames(rows, projects);
-	const model = useMemo(
+	const lanes = useMemo(
 		() =>
-			memoryGraphModel({
+			memoryLanes({
 				rows,
 				today: date,
 				scope: scope === ALL ? null : scope,
-				chatTitles: graphData.data?.titles,
-				similar: graphData.data?.similar.pairs,
+				dreams: history.data?.dreams,
 			}),
-		[rows, date, scope, graphData.data],
+		[rows, date, scope, history.data],
 	);
-	const nodes = useMemo(() => settleLayout(model), [model]);
-	const byId = useMemo(
-		() => new Map(nodes.map((node) => [node.id, node])),
-		[nodes],
+	const cachedProjects =
+		projects ?? queryClient.getQueryData<Project[]>(["projects"]);
+	const colorOf = (project: string | null) => {
+		if (!project) return laneColor(null);
+		const known = cachedProjects?.find(
+			(entry) => entry.fullName.toLowerCase() === project.toLowerCase(),
+		);
+		return laneColor(known?.id ?? project.toLowerCase());
+	};
+	const laneColors = lanes.lanes.map((lane) => colorOf(lane.project));
+	const laneHeights = lanes.lanes.map((lane) =>
+		Math.min(150, 56 + (lane.depth - 1) * SLOT),
 	);
-	const memories = useMemo(
-		() => new Map(model.memories.map((entry) => [entry.id, entry])),
-		[model],
+	const laneTop = laneHeights.map((_, index) =>
+		laneHeights.slice(0, index).reduce((sum, height) => sum + height, TOP),
 	);
-	const hubs = useMemo(
-		() => new Map(model.hubs.map((hub) => [hub.id, hub])),
-		[model],
-	);
-	const [, setFrame] = useState(0);
+	const lanesBottom =
+		TOP + laneHeights.reduce((sum, height) => sum + height, 0);
+
 	const frame = useRef<HTMLDivElement>(null);
-	const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
-	const fitted = useRef<SimNode[] | null>(null);
+	const [width, setWidth] = useState(1200);
+	const narrow = width < 640;
+	const labelWidth = narrow ? 96 : 168;
+	const [view, setView] = useState<View>({ pxPerDay: 24, offset: 0 });
 	const fitView = useCallback(() => {
 		const element = frame.current;
-		if (!element) return;
-		const box = layoutBounds(nodes, 70);
-		// Leave the legend's column free on wide screens.
-		const reserved = element.clientWidth > 640 ? 240 : 0;
-		const width = (element.clientWidth || 800) - reserved;
-		const height = element.clientHeight || 600;
-		const k = Math.max(
-			0.25,
-			Math.min(1.5, Math.min(width / box.width, height / box.height)),
-		);
-		setView({
-			k,
-			x: width / 2 - (box.x + box.width / 2) * k,
-			y: height / 2 - (box.y + box.height / 2) * k,
-		});
-	}, [nodes]);
+		const span = Math.max(1, lanes.end - lanes.start);
+		const available = (element?.clientWidth ?? 1200) - (narrow ? 96 : 168) - 40;
+		const pxPerDay = Math.max(narrow ? 10 : 4, Math.min(120, available / span));
+		// When the history is wider than the screen, start at today (the right end).
+		setView({ pxPerDay, offset: Math.min(0, available - span * pxPerDay) });
+	}, [lanes.end, lanes.start, narrow]);
 	useEffect(() => {
-		if (fitted.current !== nodes && nodes.length) {
-			fitted.current = nodes;
+		const element = frame.current;
+		if (!element || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(([entry]) =>
+			setWidth(Math.round(entry.contentRect.width)),
+		);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const fittedFor = useRef("");
+	useEffect(() => {
+		const id = `${lanes.start}:${lanes.end}:${width}`;
+		if (fittedFor.current !== id && width) {
+			fittedFor.current = id;
 			fitView();
 		}
-	}, [nodes, fitView]);
+	}, [lanes.start, lanes.end, width, fitView]);
+	const x = (day: number) =>
+		labelWidth + 16 + (day - lanes.start) * view.pxPerDay + view.offset;
+	const laneY = (lane: number) => laneTop[lane] + laneHeights[lane] / 2;
+	const nodeAt = new Map(
+		lanes.nodes.map((node) => [
+			node.id,
+			{ node, x: x(node.day), y: laneY(node.lane) + node.slot * SLOT },
+		]),
+	);
 
-	// Wheel zoom around the cursor (non-passive, so the page does not scroll).
+	// Wheel: zoom time around the cursor (pinch arrives as ctrl+wheel); sideways scroll pans.
 	useEffect(() => {
 		const element = frame.current;
 		if (!element) return;
@@ -298,145 +234,64 @@ export function MemoryGraphPage({
 			event.preventDefault();
 			const rect = element.getBoundingClientRect();
 			const px = event.clientX - rect.left;
-			const py = event.clientY - rect.top;
 			setView((current) => {
-				const k = Math.max(
-					0.2,
-					Math.min(4, current.k * Math.exp(-event.deltaY * 0.0015)),
+				if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && !event.ctrlKey)
+					return { ...current, offset: current.offset - event.deltaX };
+				const pxPerDay = Math.max(
+					2,
+					Math.min(160, current.pxPerDay * Math.exp(-event.deltaY * 0.002)),
 				);
-				return {
-					k,
-					x: px - ((px - current.x) / current.k) * k,
-					y: py - ((py - current.y) / current.k) * k,
-				};
+				const origin = labelWidth + 16;
+				const day = (px - origin - current.offset) / current.pxPerDay;
+				return { pxPerDay, offset: px - origin - day * pxPerDay };
 			});
 		};
 		element.addEventListener("wheel", wheel, { passive: false });
 		return () => element.removeEventListener("wheel", wheel);
-	}, []);
+	}, [labelWidth]);
 
-	// While a node is dragged (and briefly after), the simulation keeps running.
-	const running = useRef<{ alpha: number; raf: number } | null>(null);
-	const kick = useCallback(
-		(alpha: number) => {
-			if (running.current) {
-				running.current.alpha = Math.max(running.current.alpha, alpha);
-				return;
-			}
-			const loop = () => {
-				const state = running.current;
-				if (!state) return;
-				stepLayout(nodes, model.edges, state.alpha);
-				state.alpha *= 0.96;
-				setFrame((value) => value + 1);
-				if (state.alpha < 0.01) {
-					running.current = null;
-					return;
-				}
-				state.raf = requestAnimationFrame(loop);
-			};
-			running.current = { alpha, raf: requestAnimationFrame(loop) };
-		},
-		[nodes, model.edges],
-	);
-	useEffect(
-		() => () => {
-			if (running.current) cancelAnimationFrame(running.current.raf);
-			running.current = null;
-		},
-		[],
-	);
-
-	const gesture = useRef<
-		| {
-				kind: "node";
-				node: SimNode;
-				startX: number;
-				startY: number;
-				moved: boolean;
-		  }
-		| {
-				kind: "pan";
-				startX: number;
-				startY: number;
-				view: View;
-				moved: boolean;
-		  }
-		| null
-	>(null);
-	const nodeAt = (target: EventTarget | null) => {
-		const id = (target as Element | null)
+	const drag = useRef<{
+		startX: number;
+		offset: number;
+		moved: boolean;
+	} | null>(null);
+	const markAt = (target: EventTarget | null) =>
+		(target as Element | null)
 			?.closest?.("[data-node]")
-			?.getAttribute("data-node");
-		return id ? byId.get(id) : undefined;
-	};
+			?.getAttribute("data-node") ?? null;
 	const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
 		if (event.button !== 0) return;
-		const node = nodeAt(event.target);
 		event.currentTarget.setPointerCapture(event.pointerId);
-		gesture.current = node
-			? {
-					kind: "node",
-					node,
-					startX: event.clientX,
-					startY: event.clientY,
-					moved: false,
-				}
-			: {
-					kind: "pan",
-					startX: event.clientX,
-					startY: event.clientY,
-					view,
-					moved: false,
-				};
-		if (node) node.fixed = true;
+		drag.current = { startX: event.clientX, offset: view.offset, moved: false };
 	};
 	const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-		const current = gesture.current;
-		if (!current) {
-			const node = nodeAt(event.target);
-			const rect = frame.current?.getBoundingClientRect();
-			if (node && rect)
-				setHovered({
-					id: node.id,
-					left: event.clientX - rect.left,
-					top: event.clientY - rect.top,
-				});
-			else if (hovered) setHovered(null);
+		const current = drag.current;
+		if (current) {
+			const dx = event.clientX - current.startX;
+			if (Math.abs(dx) > 3) current.moved = true;
+			if (current.moved) {
+				setHovered(null);
+				setView((value) => ({ ...value, offset: current.offset + dx }));
+			}
 			return;
 		}
-		const dx = event.clientX - current.startX;
-		const dy = event.clientY - current.startY;
-		if (Math.hypot(dx, dy) > 3) current.moved = true;
-		if (!current.moved) return;
-		if (current.kind === "pan") {
-			setView({
-				...current.view,
-				x: current.view.x + dx,
-				y: current.view.y + dy,
-			});
-			return;
-		}
+		const id = markAt(event.target);
 		const rect = frame.current?.getBoundingClientRect();
-		if (!rect) return;
-		current.node.x = (event.clientX - rect.left - view.x) / view.k;
-		current.node.y = (event.clientY - rect.top - view.y) / view.k;
-		setHovered(null);
-		kick(0.3);
+		if (id && rect)
+			setHovered({
+				id,
+				left: event.clientX - rect.left,
+				top: event.clientY - rect.top,
+			});
+		else if (hovered) setHovered(null);
 	};
-	const onPointerUp = () => {
-		const current = gesture.current;
-		gesture.current = null;
-		if (!current) return;
-		if (current.kind === "node") {
-			current.node.fixed = false;
-			if (!current.moved) setHovered(null);
-			if (!current.moved)
-				setSelected((value) =>
-					value === current.node.id ? null : current.node.id,
-				);
-			else kick(0.15);
-		} else if (!current.moved) setSelected(null);
+	const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+		const current = drag.current;
+		drag.current = null;
+		if (!current || current.moved) return;
+		const id = markAt(event.target);
+		setHovered(null);
+		setSelected(id && id !== selected ? id : null);
 	};
 
 	const edit = useMutation({
@@ -461,15 +316,10 @@ export function MemoryGraphPage({
 			</section>
 		);
 	const focus = hovered?.id ?? selected;
-	const linked = new Set<string>();
-	if (focus)
-		for (const edge of model.edges)
-			if (edge.from === focus || edge.to === focus) {
-				linked.add(edge.id);
-				linked.add(edge.from);
-				linked.add(edge.to);
-			}
-	const total = model.memories.length;
+	const focusChain = new Set(
+		focus ? (nodeAt.get(focus)?.node.chain ?? []) : [],
+	);
+	const total = lanes.nodes.filter((node) => !node.retired).length;
 	const scopeChoices = [
 		{
 			value: ALL,
@@ -482,137 +332,229 @@ export function MemoryGraphPage({
 			hint: String(entry.count),
 		})),
 	];
-	const hoveredMemory = hovered ? memories.get(hovered.id) : undefined;
-	const hoveredHub = hovered ? hubs.get(hovered.id) : undefined;
-	const selectedMemory = selected ? memories.get(selected) : undefined;
-	const selectedHub = selected ? hubs.get(selected) : undefined;
-	const grid = 40 * view.k;
+	const step = axisStep(view.pxPerDay);
+	const ticks: number[] = [];
+	const firstTick = Math.ceil(lanes.start / step) * step;
+	for (let day = firstTick; day <= lanes.end; day += step) ticks.push(day);
+	const svgHeight = lanesBottom + AXIS;
+	const hoveredNode = hovered ? nodeAt.get(hovered.id)?.node : undefined;
+	const selectedNode = selected ? nodeAt.get(selected)?.node : undefined;
+	const dreamX = (at: string) => x(Date.parse(at) / DAY);
 	return (
-		<section className="memory-graph-page" aria-label="Memory graph">
-			<div
-				ref={frame}
-				className="memory-graph-canvas"
-				style={{
-					backgroundSize: `${grid}px ${grid}px`,
-					backgroundPosition: `${view.x}px ${view.y}px`,
-				}}
-			>
-				{model.memories.length ? (
-					<svg
-						className="memory-graph-svg"
-						role="img"
-						aria-label={`Memory graph: ${model.memories.length} memories from ${model.hubs.length} sources`}
-						onPointerDown={onPointerDown}
-						onPointerMove={onPointerMove}
-						onPointerUp={onPointerUp}
-						onPointerCancel={onPointerUp}
-						onPointerLeave={() => setHovered(null)}
-						onKeyDown={(event) => {
-							if (event.key === "Escape") setSelected(null);
-						}}
-					>
-						<g
-							transform={`translate(${view.x} ${view.y}) scale(${view.k})`}
-							data-focus={focus ? "true" : undefined}
-						>
-							<g className="memory-graph-edges">
-								{model.edges.map((edge) => {
-									const a = byId.get(edge.from);
-									const b = byId.get(edge.to);
-									if (!a || !b) return null;
-									const d = edgePath(edge, a, b);
-									const active = linked.has(edge.id) ? "true" : undefined;
-									return edge.kind === "version" ? (
-										<g key={edge.id}>
-											<path d={d} data-kind="version" data-active={active} />
-											<path
-												d={d}
-												data-kind="version-core"
-												data-active={active}
-											/>
-										</g>
-									) : (
-										<path
-											key={edge.id}
-											d={d}
-											data-kind={edge.kind}
-											data-active={active}
-											style={
-												edge.kind === "similar"
-													? { opacity: 0.15 + edge.weight * 0.45 }
-													: undefined
-											}
+		<section
+			className="memory-graph-page memory-lanes"
+			aria-label="Memory lanes"
+			data-narrow={narrow ? "true" : undefined}
+		>
+			<div ref={frame} className="memory-lanes-frame">
+				<svg
+					className="memory-lanes-svg"
+					role="img"
+					aria-label={`Memory lanes: ${total} memories in ${lanes.lanes.length} ${lanes.lanes.length === 1 ? "scope" : "scopes"}`}
+					height={svgHeight}
+					onPointerDown={onPointerDown}
+					onPointerMove={onPointerMove}
+					onPointerUp={onPointerUp}
+					onPointerCancel={() => {
+						drag.current = null;
+					}}
+					onPointerLeave={() => setHovered(null)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") setSelected(null);
+					}}
+				>
+					<g className="lane-rules">
+						{lanes.lanes.map((lane, index) => (
+							<g key={lane.id}>
+								<line
+									x1={labelWidth}
+									x2="100%"
+									y1={laneY(index)}
+									y2={laneY(index)}
+								/>
+								{index ? (
+									<line
+										className="lane-divider"
+										x1={0}
+										x2="100%"
+										y1={laneTop[index]}
+										y2={laneTop[index]}
+									/>
+								) : null}
+							</g>
+						))}
+					</g>
+					<g className="lane-axis">
+						<line
+							x1={labelWidth}
+							x2="100%"
+							y1={lanesBottom + 4}
+							y2={lanesBottom + 4}
+						/>
+						{ticks.map((day) =>
+							x(day) > labelWidth + 8 ? (
+								<text key={day} x={x(day)} y={lanesBottom + 22}>
+									{shortDate(day)}
+								</text>
+							) : null,
+						)}
+					</g>
+					<g className="lane-today">
+						<line
+							x1={x(lanes.today)}
+							x2={x(lanes.today)}
+							y1={TOP - 8}
+							y2={lanesBottom + 4}
+						/>
+						<text x={x(lanes.today)} y={TOP - 14}>
+							Today
+						</text>
+					</g>
+					<g className="lane-dreams">
+						{lanes.dreams.map((dream) => {
+							const dx = dreamX(dream.at);
+							return (
+								<g key={dream.id} className="lane-dream">
+									<line x1={dx} x2={dx} y1={TOP - 4} y2={lanesBottom} />
+									<Moon
+										x={dx - 6}
+										y={TOP - 26}
+										width={12}
+										height={12}
+										strokeWidth={1.8}
+									/>
+									<title>{`Dream, ${shortDate(dream.day)}: ${dream.message}`}</title>
+									{dream.merges.map((merge) => {
+										const my = laneY(merge.lane);
+										const target = merge.into ? nodeAt.get(merge.into) : null;
+										return (
+											<g key={`${dream.id}:${merge.text}`}>
+												{merge.ghosts.map((ghost) => {
+													const gx = x(ghost.day);
+													const gy = laneY(ghost.lane) + SLOT;
+													return (
+														<g key={ghost.text} className="lane-ghost">
+															<path
+																className="lane-merge-line"
+																d={`M${gx} ${gy}C${(gx + dx) / 2} ${gy} ${(gx + dx) / 2} ${my} ${dx - 7} ${my}`}
+															/>
+															<LaneMark
+																mark={ghost.mark}
+																color={laneColors[ghost.lane]}
+																x={gx}
+																y={gy}
+															/>
+															<title>{`Merged: ${ghost.text}`}</title>
+														</g>
+													);
+												})}
+												{target ? (
+													<path
+														className="lane-merge-line"
+														data-into="true"
+														d={`M${dx + 7} ${my}C${(dx + target.x) / 2} ${my} ${(dx + target.x) / 2} ${target.y} ${target.x} ${target.y}`}
+													/>
+												) : null}
+												<MergeMark x={dx} y={my} />
+											</g>
+										);
+									})}
+								</g>
+							);
+						})}
+					</g>
+					<g className="lane-curves" data-focus={focus ? "true" : undefined}>
+						{lanes.curves.map((curve) => {
+							const a = nodeAt.get(curve.from);
+							const b = nodeAt.get(curve.to);
+							if (!a || !b) return null;
+							const mid = (a.x + b.x) / 2;
+							return (
+								<path
+									key={curve.id}
+									data-active={
+										focusChain.has(curve.from) && focusChain.has(curve.to)
+											? "true"
+											: undefined
+									}
+									d={`M${a.x} ${a.y}C${mid} ${a.y} ${mid} ${b.y} ${b.x} ${b.y}`}
+								/>
+							);
+						})}
+					</g>
+					<g className="lane-nodes" data-focus={focus ? "true" : undefined}>
+						{lanes.nodes.map((node) => {
+							const at = nodeAt.get(node.id);
+							if (!at || at.x < labelWidth - 4) return null;
+							return (
+								<g
+									key={node.id}
+									data-node={node.id}
+									data-retired={node.retired ? "true" : undefined}
+									data-chain={focusChain.has(node.id) ? "true" : undefined}
+									data-selected={selected === node.id ? "true" : undefined}
+								>
+									<circle className="lane-hit" cx={at.x} cy={at.y} r={10} />
+									{selected === node.id || hovered?.id === node.id ? (
+										<circle
+											className="lane-ring"
+											cx={at.x}
+											cy={at.y}
+											r={(node.recent ? R_NEW : R) + 4}
 										/>
-									);
-								})}
-							</g>
-							<g className="memory-graph-nodes">
-								{nodes.map((node) => {
-									const hub = hubs.get(node.id);
-									const entry = memories.get(node.id);
-									return (
-										<g
-											key={node.id}
-											data-node={node.id}
-											data-linked={
-												focus && (linked.has(node.id) || node.id === focus)
-													? "true"
-													: undefined
-											}
-											transform={`translate(${node.x} ${node.y})`}
-										>
-											{hub ? (
-												<MemoryHubMark
-													hub={hub}
-													active={selected === node.id}
-												/>
-											) : entry ? (
-												<MemoryHexagon
-													memory={entry}
-													selected={selected === node.id}
-													hovered={hovered?.id === node.id}
-												/>
-											) : null}
-										</g>
-									);
-								})}
-							</g>
-						</g>
-					</svg>
-				) : (
-					<p className="memory-graph-empty">No memory here yet.</p>
-				)}
-				{hoveredMemory || hoveredHub ? (
+									) : null}
+									<LaneMark
+										mark={node.mark}
+										color={laneColors[node.lane]}
+										recent={node.recent}
+										x={at.x}
+										y={at.y}
+									/>
+								</g>
+							);
+						})}
+					</g>
+				</svg>
+				<ul className="lane-labels" style={{ width: labelWidth }}>
+					{lanes.lanes.map((lane, index) => (
+						<li
+							key={lane.id}
+							style={{ top: laneTop[index], height: laneHeights[index] }}
+						>
+							<button
+								type="button"
+								aria-pressed={scope === lane.id}
+								title={
+									scope === lane.id ? "Show all" : `Only ${scopeTitle(lane.id)}`
+								}
+								onClick={() => {
+									setScope(scope === lane.id ? ALL : lane.id);
+									setSelected(null);
+								}}
+							>
+								<i style={{ background: laneColors[index] }} />
+								<span>{scopeTitle(lane.id)}</span>
+								<small>{lane.count}</small>
+							</button>
+						</li>
+					))}
+				</ul>
+				{hoveredNode && hovered ? (
 					<div
 						className="memory-graph-tip"
 						role="tooltip"
-						style={{ left: hovered?.left, top: hovered?.top }}
-						data-flip={
-							frame.current &&
-							(hovered?.left ?? 0) > frame.current.clientWidth * 0.6
-								? "true"
-								: undefined
-						}
+						style={{ left: hovered.left, top: hovered.top }}
+						data-flip={hovered.left > width * 0.6 ? "true" : undefined}
 					>
-						{hoveredMemory ? (
-							<>
-								<p>{hoveredMemory.row.text}</p>
-								<span>
-									{scopeTitle(hoveredMemory.scope)}
-									{hoveredMemory.row.added
-										? ` · ${formatMemoryDate(hoveredMemory.row.added)}`
-										: ""}
-								</span>
-							</>
-						) : hoveredHub ? (
-							<>
-								<p>{hoveredHub.label}</p>
-								<span>
-									{hoveredHub.count}{" "}
-									{hoveredHub.count === 1 ? "memory" : "memories"}
-								</span>
-							</>
-						) : null}
+						<p>{hoveredNode.row.text}</p>
+						<span>
+							{hoveredNode.undated
+								? "undated"
+								: formatMemoryDate(dayDate(hoveredNode.day))}
+							{hoveredNode.versions > 1
+								? ` · v${hoveredNode.version} of ${hoveredNode.versions}`
+								: ""}
+						</span>
 					</div>
 				) : null}
 			</div>
@@ -627,7 +569,6 @@ export function MemoryGraphPage({
 				}}
 			>
 				<button type="button" className="memory-graph-card memory-graph-scope">
-					<Eye size={15} aria-hidden="true" />
 					<span>
 						<strong>{scope === ALL ? "All memory" : scopeTitle(scope)}</strong>
 						<small>
@@ -638,36 +579,45 @@ export function MemoryGraphPage({
 				</button>
 			</MemoryScopeMenu>
 
-			<div className="memory-graph-card memory-graph-zoom">
-				<button
-					type="button"
-					aria-label="Zoom in"
-					onClick={() =>
-						setView((current) => zoomAt(current, 1.25, frame.current))
-					}
-				>
-					<Plus size={14} />
-				</button>
+			<div className="memory-graph-card memory-lanes-zoom">
 				<button
 					type="button"
 					aria-label="Zoom out"
 					onClick={() =>
-						setView((current) => zoomAt(current, 0.8, frame.current))
+						setView((current) => ({
+							...current,
+							pxPerDay: Math.max(2, current.pxPerDay / 1.4),
+						}))
 					}
 				>
 					<Minus size={14} />
 				</button>
-				<button type="button" aria-label="Fit to screen" onClick={fitView}>
-					<Maximize2 size={13} />
+				<button
+					type="button"
+					aria-label="Zoom in"
+					onClick={() =>
+						setView((current) => ({
+							...current,
+							pxPerDay: Math.min(160, current.pxPerDay * 1.4),
+						}))
+					}
+				>
+					<Plus size={14} />
+				</button>
+				<button type="button" onClick={fitView}>
+					<Maximize2 size={13} aria-hidden="true" /> Fit
 				</button>
 			</div>
 
-			{selectedMemory ? (
+			{selectedNode ? (
 				<MemoryDetails
-					key={selectedMemory.id}
-					memory={selectedMemory}
-					hubLabel={hubs.get(selectedMemory.hub)?.label}
-					scopeLabel={scopeTitle(selectedMemory.scope)}
+					key={selectedNode.id}
+					node={selectedNode}
+					scopeLabel={scopeTitle(
+						selectedNode.row.project?.trim()
+							? `project:${selectedNode.row.project.trim().toLowerCase()}`
+							: "personal",
+					)}
 					choices={choices}
 					busy={edit.isPending}
 					error={
@@ -677,77 +627,16 @@ export function MemoryGraphPage({
 					onOpenChat={onOpenChat}
 					onEdit={(data) => edit.mutate(data)}
 				/>
-			) : selectedHub ? (
-				<aside className="memory-graph-card memory-graph-details">
-					<header>
-						<MessageSquare size={14} aria-hidden="true" />
-						<h2>{selectedHub.chatId ? "Chat" : "Source"}</h2>
-						<button
-							type="button"
-							aria-label="Close"
-							onClick={() => setSelected(null)}
-						>
-							<X size={14} />
-						</button>
-					</header>
-					<p className="memory-graph-text">{selectedHub.label}</p>
-					<p className="memory-graph-foot">
-						{selectedHub.count}{" "}
-						{selectedHub.count === 1 ? "memory" : "memories"}
-						{selectedHub.chatId ? (
-							<a
-								href={`/?chat=${selectedHub.chatId}`}
-								onClick={(event) => {
-									if (selectedHub.chatId && onOpenChat(selectedHub.chatId))
-										event.preventDefault();
-								}}
-							>
-								Open chat
-							</a>
-						) : null}
-					</p>
-				</aside>
 			) : null}
 
-			<aside
-				className="memory-graph-card memory-graph-legend"
-				data-open={legendOpen ? "true" : undefined}
-				aria-label="Legend"
-			>
-				<button
-					type="button"
-					className="memory-graph-legend-toggle"
-					aria-expanded={legendOpen}
-					onClick={() => setLegendOpen((value) => !value)}
-				>
-					Legend
-					<ChevronDown size={13} aria-hidden="true" />
-				</button>
-				{legendOpen ? (
-					<MemoryGraphLegend
-						similarBasis={graphData.data?.similar.basis ?? "words"}
-					/>
-				) : null}
-			</aside>
+			<MemoryLanesLegend />
 		</section>
 	);
 }
 
-function zoomAt(view: View, factor: number, element: HTMLElement | null) {
-	const width = element?.clientWidth ?? 800;
-	const height = element?.clientHeight ?? 600;
-	const k = Math.max(0.2, Math.min(4, view.k * factor));
-	return {
-		k,
-		x: width / 2 - ((width / 2 - view.x) / view.k) * k,
-		y: height / 2 - ((height / 2 - view.y) / view.k) * k,
-	};
-}
-
-/** The selected memory: its text, where it applies, its version, and the list's edits. */
+/** The selected line: its text, where it applies, its version, and the list's edits. */
 function MemoryDetails({
-	memory,
-	hubLabel,
+	node,
 	scopeLabel,
 	choices,
 	busy,
@@ -756,8 +645,7 @@ function MemoryDetails({
 	onOpenChat,
 	onEdit,
 }: {
-	memory: GraphMemory;
-	hubLabel?: string;
+	node: LaneNode;
 	scopeLabel: string;
 	choices: ReturnType<typeof useMemoryScopeNames>["choices"];
 	busy: boolean;
@@ -766,24 +654,21 @@ function MemoryDetails({
 	onOpenChat: (chatId: string) => boolean;
 	onEdit: (edit: MemoryEdit) => void;
 }) {
-	const { row } = memory;
+	const row: MemoryRow = node.row;
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(row.text);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const ref = memoryLineRef(row);
-	const status = memory.forgotten
-		? "Replaced"
-		: memory.expiring
-			? `Expires ${row.expires}`
-			: memory.recent
-				? "New"
+	const status = node.retired
+		? "replaced"
+		: row.expires
+			? `until ${row.expires}`
+			: node.recent
+				? "new"
 				: null;
 	return (
 		<aside className="memory-graph-card memory-graph-details">
 			<header>
-				<svg viewBox="-17 -17 34 34" width={16} height={16} aria-hidden="true">
-					<path className="memory-hex-icon" d={HEX_PATH} />
-				</svg>
 				<h2>Memory</h2>
 				<button type="button" aria-label="Close" onClick={onClose}>
 					<X size={14} />
@@ -823,8 +708,8 @@ function MemoryDetails({
 				<div>
 					<dt>Version</dt>
 					<dd>
-						v{memory.version}
-						{memory.versions > 1 ? ` of ${memory.versions}` : ""}
+						v{node.version}
+						{node.versions > 1 ? ` of ${node.versions}` : ""}
 						{status ? <span className="memory-muted"> · {status}</span> : null}
 					</dd>
 				</div>
@@ -852,7 +737,6 @@ function MemoryDetails({
 				{row.chatId ? (
 					<a
 						href={`/?chat=${row.chatId}`}
-						title={hubLabel}
 						onClick={(event) => {
 							if (row.chatId && onOpenChat(row.chatId)) event.preventDefault();
 						}}
@@ -937,121 +821,49 @@ function MemoryDetails({
 	);
 }
 
-/** The legend, drawn with the graph's own marks. */
-export function MemoryGraphLegend({
-	similarBasis,
-}: {
-	similarBasis: "meaning" | "words";
-}) {
-	const base = {
-		forgotten: false,
-		expiring: false,
-		recent: false,
-		version: 1,
-		versions: 1,
-		row: { kind: "stated" as const, rule: false },
-	};
-	const mark = (child: ReactNode, width = 40) => (
-		<svg
-			viewBox={`${-width / 2} -18 ${width} 36`}
-			width={width / 1.6}
-			height={22}
-			aria-hidden="true"
-		>
-			{child}
-		</svg>
+/** One row: every mark and line the lanes use, drawn the same way. */
+export function MemoryLanesLegend() {
+	const item = (mark: ReactNode, label: string, width = 18) => (
+		<li>
+			<svg
+				viewBox={`${-width / 2} -9 ${width} 18`}
+				width={width}
+				height={18}
+				aria-hidden="true"
+			>
+				{mark}
+			</svg>
+			{label}
+		</li>
 	);
-	const line = (kind: GraphEdge["kind"], opacity?: number) => (
-		<svg viewBox="0 0 36 12" width={30} height={10} aria-hidden="true">
-			<g className="memory-graph-edges">
-				<path
-					d="M2 6L34 6"
-					data-kind={kind}
-					data-active="true"
-					style={opacity === undefined ? undefined : { opacity }}
-				/>
-				{kind === "version" ? (
-					<path d="M2 6L34 6" data-kind="version-core" data-active="true" />
-				) : null}
-			</g>
-		</svg>
-	);
+	const grey = "#a3a3a3";
 	return (
-		<div className="memory-graph-legend-body">
-			<h3>Nodes</h3>
-			<ul>
-				<li>
-					{mark(<MemoryHubMark hub={{ id: "hub:x" }} />, 50)}
-					Chat
-				</li>
-				<li>
-					{mark(<MemoryHexagon memory={base} />)}
-					Memory
-				</li>
-				<li>
-					{mark(
-						<MemoryHexagon memory={{ ...base, version: 1, versions: 2 }} />,
-					)}
-					Older version
-				</li>
-				<li>
-					{mark(
-						<MemoryHexagon
-							memory={{ ...base, row: { kind: "inferred", rule: false } }}
-						/>,
-					)}
-					Inferred
-				</li>
-			</ul>
-			<h3>Status</h3>
-			<ul>
-				<li>
-					{mark(<MemoryHexagon memory={{ ...base, recent: true }} />)}
-					New
-				</li>
-				<li>
-					{mark(<MemoryHexagon memory={{ ...base, expiring: true }} />)}
-					Expiring soon
-				</li>
-				<li>
-					{mark(<MemoryHexagon memory={{ ...base, forgotten: true }} />)}
-					Retired
-				</li>
-				<li>
-					{mark(
-						<MemoryHexagon
-							memory={{ ...base, row: { kind: "stated", rule: true } }}
-						/>,
-					)}
-					Always on
-				</li>
-			</ul>
-			<h3>Connections</h3>
-			<ul>
-				<li>
-					{line("source")}
-					From chat
-				</li>
-				<li>
-					{line("similar", 0.6)}
-					{similarBasis === "meaning" ? "Similar" : "Shared words"}
-				</li>
-				<li>
-					{line("version")}
-					Newer version
-				</li>
-			</ul>
-			<h3>Similarity</h3>
-			<ul className="memory-graph-legend-row">
-				<li>
-					{line("similar", 0.18)}
-					Weak
-				</li>
-				<li>
-					{line("similar", 0.6)}
-					Strong
-				</li>
-			</ul>
-		</div>
+		<ul className="memory-lanes-legend" aria-label="Legend">
+			{item(<LaneMark mark="stated" color={grey} />, "Stated")}
+			{item(<LaneMark mark="inferred" color={grey} />, "Inferred")}
+			{item(<LaneMark mark="rule" color={grey} />, "Always on")}
+			{item(<LaneMark mark="stated" color={grey} recent />, "New", 22)}
+			{item(
+				<g opacity={0.3}>
+					<LaneMark mark="stated" color={grey} />
+				</g>,
+				"Replaced",
+			)}
+			{item(
+				<g className="lane-curves">
+					<path data-active="true" d="M-12 5C-2 5 2 -5 12 -5" />
+				</g>,
+				"Changed",
+				26,
+			)}
+			{item(
+				<g className="lane-dream">
+					<line x1={-8} x2={-8} y1={-9} y2={9} />
+					<MergeMark x={4} y={0} />
+				</g>,
+				"Dream",
+				26,
+			)}
+		</ul>
 	);
 }
