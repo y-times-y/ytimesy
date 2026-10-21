@@ -1,4 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+	type PreviewGrantStore,
+	previewGrants,
+} from "../adapters/preview-grants";
 import { vmEdgeKey } from "./vm-edge-keys";
 
 /**
@@ -13,13 +17,24 @@ export const PREVIEW_LOGIN_PATH = "/__ytimesy/preview";
 const LOGIN_GRANT_SECONDS = 120;
 const SESSION_GRANT_SECONDS = 8 * 60 * 60;
 
-type GrantPurpose = "login" | "session";
-type PreviewGrant = {
+type GrantBase = {
 	/** The TLS rule (one VM port) this grant opens; Freestyle names it per request. */
 	readonly rule: string;
-	readonly purpose: GrantPurpose;
+	/** The ytimesy user the grant was issued to. */
+	readonly user: string;
 	readonly expires: number;
 };
+/** A sign-in link: its nonce is recorded server side and usable once. */
+type LoginGrant = GrantBase & {
+	readonly purpose: "login";
+	readonly nonce: string;
+};
+/** The cookie: valid only while the route's grant version is still `version`. */
+type SessionGrant = GrantBase & {
+	readonly purpose: "session";
+	readonly version: number;
+};
+type PreviewGrant = LoginGrant | SessionGrant;
 
 export function edgeAuthorizerKey() {
 	return vmEdgeKey("edge-authorizer", "freestyle");
@@ -48,46 +63,71 @@ function grantToken(grant: PreviewGrant) {
 	return `${payload}.${sign(payload)}`;
 }
 
-function verifiedGrant(
+function verifiedGrant<P extends PreviewGrant["purpose"]>(
 	token: string | null | undefined,
 	rule: string,
-	purpose: GrantPurpose,
+	purpose: P,
 	now: number,
-) {
+): Extract<PreviewGrant, { purpose: P }> | null {
 	const [payload, signature, extra] = (token ?? "").split(".");
-	if (!payload || !signature || extra !== undefined) return false;
+	if (!payload || !signature || extra !== undefined) return null;
 	const expected = Buffer.from(sign(payload));
 	const presented = Buffer.from(signature);
 	if (
 		expected.length !== presented.length ||
 		!timingSafeEqual(expected, presented)
 	)
-		return false;
+		return null;
 	try {
 		const grant = JSON.parse(
 			Buffer.from(payload, "base64url").toString(),
 		) as PreviewGrant;
-		return (
-			grant.rule === rule && grant.purpose === purpose && grant.expires > now
-		);
+		return grant.rule === rule &&
+			grant.purpose === purpose &&
+			typeof grant.user === "string" &&
+			grant.user.length > 0 &&
+			grant.expires > now
+			? (grant as Extract<PreviewGrant, { purpose: P }>)
+			: null;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
-/** A two-minute link that signs the browser in to one preview route. */
-export function previewLoginUrl(
+/**
+ * A two-minute, single-use link that signs the browser in to one preview
+ * route. Binds the route to this user's chat first, so deleting the chat,
+ * project or account (or withdrawing access) invalidates its cookies.
+ */
+export async function previewLoginUrl(
 	origin: string,
-	ruleId: string,
+	scope: {
+		ruleId: string;
+		userId: string;
+		projectId: string;
+		sessionId: string;
+	},
+	store: PreviewGrantStore = previewGrants,
 	now = Date.now(),
 ) {
+	await store.grant(scope);
+	const nonce = randomBytes(24).toString("base64url");
+	const expires = now + LOGIN_GRANT_SECONDS * 1000;
+	await store.recordNonce({
+		nonce,
+		ruleId: scope.ruleId,
+		userId: scope.userId,
+		expiresAt: new Date(expires),
+	});
 	const url = new URL(PREVIEW_LOGIN_PATH, origin);
 	url.searchParams.set(
 		"t",
 		grantToken({
-			rule: ruleId,
+			rule: scope.ruleId,
+			user: scope.userId,
 			purpose: "login",
-			expires: now + LOGIN_GRANT_SECONDS * 1000,
+			nonce,
+			expires,
 		}),
 	);
 	return url.href;
@@ -120,7 +160,11 @@ const privatePreview = () =>
 	);
 
 /** Answers one Freestyle forward-auth subrequest for a preview route. */
-export function authorizePreviewRequest(request: Request, now = Date.now()) {
+export async function authorizePreviewRequest(
+	request: Request,
+	now = Date.now(),
+	store: PreviewGrantStore = previewGrants,
+) {
 	if (!keyMatches(request.headers.get(EDGE_AUTHORIZER_HEADER)))
 		return new Response(null, { status: 403 });
 	const rule = request.headers.get("x-freestyle-tls-rule-id");
@@ -130,11 +174,24 @@ export function authorizePreviewRequest(request: Request, now = Date.now()) {
 		"https://preview.invalid",
 	);
 	if (target.pathname === PREVIEW_LOGIN_PATH) {
-		if (!verifiedGrant(target.searchParams.get("t"), rule, "login", now))
-			return privatePreview();
+		const login = verifiedGrant(
+			target.searchParams.get("t"),
+			rule,
+			"login",
+			now,
+		);
+		if (!login || typeof login.nonce !== "string") return privatePreview();
+		const version = await store.consumeNonce({
+			nonce: login.nonce,
+			ruleId: rule,
+			userId: login.user,
+		});
+		if (version === null) return privatePreview();
 		const session = grantToken({
 			rule,
+			user: login.user,
 			purpose: "session",
+			version,
 			expires: now + SESSION_GRANT_SECONDS * 1000,
 		});
 		return new Response(null, {
@@ -146,12 +203,14 @@ export function authorizePreviewRequest(request: Request, now = Date.now()) {
 			},
 		});
 	}
-	return verifiedGrant(
+	const session = verifiedGrant(
 		cookieValue(request.headers.get("cookie"), PREVIEW_COOKIE),
 		rule,
 		"session",
 		now,
-	)
+	);
+	if (!session || typeof session.version !== "number") return privatePreview();
+	return (await store.version(rule, session.user)) === session.version
 		? new Response(null, { status: 204 })
 		: privatePreview();
 }
