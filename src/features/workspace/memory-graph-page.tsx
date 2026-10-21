@@ -224,7 +224,9 @@ export function MemoryGraphPage({
 		left: number;
 		top: number;
 	} | null>(null);
-	const [legendOpen, setLegendOpen] = useState(true);
+	const [legendOpen, setLegendOpen] = useState(
+		() => typeof window === "undefined" || window.innerWidth > 640,
+	);
 	const repo = useMemo(
 		() =>
 			Object.fromEntries(
@@ -267,7 +269,9 @@ export function MemoryGraphPage({
 		const element = frame.current;
 		if (!element) return;
 		const box = layoutBounds(nodes, 70);
-		const width = element.clientWidth || 800;
+		// Leave the legend's column free on wide screens.
+		const reserved = element.clientWidth > 640 ? 240 : 0;
+		const width = (element.clientWidth || 800) - reserved;
 		const height = element.clientHeight || 600;
 		const k = Math.max(
 			0.25,
@@ -426,6 +430,7 @@ export function MemoryGraphPage({
 		if (!current) return;
 		if (current.kind === "node") {
 			current.node.fixed = false;
+			if (!current.moved) setHovered(null);
 			if (!current.moved)
 				setSelected((value) =>
 					value === current.node.id ? null : current.node.id,

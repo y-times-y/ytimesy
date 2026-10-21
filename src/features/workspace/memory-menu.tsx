@@ -21,6 +21,7 @@ export function MemoryScopeMenu({
 	onChoose,
 	children,
 	align = "start",
+	onClosed,
 }: {
 	label: string;
 	choices: readonly MemoryMenuChoice[];
@@ -29,6 +30,8 @@ export function MemoryScopeMenu({
 	/** The trigger: one button element. */
 	children: ReactNode;
 	align?: "start" | "end";
+	/** Where focus goes when the menu closes, instead of back to the trigger. */
+	onClosed?: () => void;
 }) {
 	return (
 		<DropdownMenu.Root modal={false}>
@@ -38,6 +41,11 @@ export function MemoryScopeMenu({
 					className="recovery-menu memory-menu"
 					sideOffset={6}
 					align={align}
+					onCloseAutoFocus={(event) => {
+						if (!onClosed) return;
+						event.preventDefault();
+						onClosed();
+					}}
 				>
 					<DropdownMenu.Label className="recovery-menu-label">
 						{label}
