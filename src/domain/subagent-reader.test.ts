@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
@@ -68,6 +70,35 @@ describe("reader Linux user", () => {
 			"find '/home/ubuntu/repo' -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} +",
 		);
 		expect(script).toContain("sudo -n chmod 1777 /tmp/ytimesy-sessions");
+	});
+
+	it("makes the checkout's Git metadata readable, though the transfer wrote it under umask 077", () => {
+		const repo = mkdtempSync(join(tmpdir(), "reader-git-"));
+		try {
+			mkdirSync(join(repo, ".git", "objects", "ab"), { recursive: true });
+			writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+			writeFileSync(join(repo, ".git", "objects", "ab", "cd"), "x");
+			chmodSync(join(repo, ".git", "HEAD"), 0o600);
+			chmodSync(join(repo, ".git", "objects", "ab", "cd"), 0o400);
+			chmodSync(join(repo, ".git", "objects", "ab"), 0o700);
+			const line = readerPreparationScript({
+				sessionId: "child-1",
+				checkout: repo,
+			})
+				.split("\n")
+				.find((l) => l.includes("/.git"));
+			expect(line).toBeDefined();
+			expect(spawnSync("/bin/sh", ["-c", line ?? "false"]).status).toBe(0);
+			expect(statSync(join(repo, ".git", "HEAD")).mode & 0o777).toBe(0o644);
+			expect(statSync(join(repo, ".git", "objects", "ab")).mode & 0o777).toBe(
+				0o755,
+			);
+			expect(
+				statSync(join(repo, ".git", "objects", "ab", "cd")).mode & 0o777,
+			).toBe(0o444);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
 	});
 
 	it("refuses a reader where network namespaces are unavailable", () => {
