@@ -11,6 +11,7 @@ import {
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	agentPanelRows,
+	type BackgroundRun,
 	helperIdentities,
 	LEAD_ROW_ID,
 } from "#/domain/agent-panel";
@@ -29,6 +30,7 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
+import { MAIN_NAME } from "#/domain/helper-names";
 import { SessionItemId } from "#/domain/ids";
 import {
 	composerModelIdForCatalog,
@@ -65,6 +67,7 @@ import type { PublicCodexSession } from "#/server/services/codex-workspace-sessi
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import { CloudUsageIndicator } from "../workspace/usage-windows";
+import { AgentIcon } from "./agent-icon";
 import { AgentPanel } from "./agent-panel";
 import {
 	getConversationRecoveryPoints,
@@ -121,7 +124,10 @@ export function SessionLauncher({
 	onProjectPickerOpenChange,
 	memoryActions,
 	onRemoveQueued,
+	backgroundRuns,
 }: {
+	/** Background commands this chat started (their read model), shown as list rows. */
+	backgroundRuns?: readonly BackgroundRun[];
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
 	memoryActions?: MemoryMarkerActions;
 	/** Takes back a message still waiting behind the running turn. */
@@ -334,6 +340,9 @@ export function SessionLauncher({
 		tasks: childTasks,
 		leadItems: items,
 		leadTurnStatus: turnStatus,
+		leadHarness: harnessId,
+		leadModelId: session.listedModelId,
+		background: backgroundRuns,
 	});
 	const identities = useMemo(() => helperIdentities(childTasks), [childTasks]);
 	const [selectedAgentId, setSelectedAgentId] = useState(LEAD_ROW_ID);
@@ -383,8 +392,8 @@ export function SessionLauncher({
 		const text = draft.trim();
 		if (!selectedHelper || !text || !selectedProject || !session.agentSessionId)
 			return;
-		if (selectedHelper.status !== "working") {
-			setHelperError(`${selectedHelper.name} is no longer running.`);
+		if (!selectedHelper.messageable) {
+			setHelperError(`“${selectedHelper.name}” has finished.`);
 			return;
 		}
 		const id = crypto.randomUUID();
@@ -418,8 +427,8 @@ export function SessionLauncher({
 	}
 	const parentName = (parentId: string) =>
 		parentId === session.agentSessionId
-			? "Lead"
-			: (identities.get(parentId)?.name ?? "Lead");
+			? MAIN_NAME
+			: (identities.get(parentId)?.name ?? MAIN_NAME);
 	const helperLines = { identities, onSelect: openAgent };
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
@@ -700,37 +709,56 @@ export function SessionLauncher({
 				Session
 			</h1>
 			{selectedHelper && selectedTask ? (
-				<SessionTimeline
-					key={selectedTask.id}
-					items={selectedTask.items}
-					turnStatus={selectedTask.turnStatus}
-					tasks={childTasks}
-					taskParentId={selectedTask.id}
-					helperLines={helperLines}
-					senderName={parentName(selectedTask.parentSessionId)}
-					queuedSteering={[
-						...(selectedTask.queuedSteering ?? []).map((message) => ({
-							id: message.id,
-							from:
-								message.from === "user"
-									? "You"
-									: parentName(selectedTask.parentSessionId),
-							text: message.text,
-						})),
-						...helperOutbox
-							.filter(
-								(sent) =>
-									sent.helperId === selectedTask.id &&
-									!selectedTask.queuedSteering?.some(
-										(message) =>
-											message.from === "user" && message.text === sent.text,
-									),
-							)
-							.map((sent) => ({ id: sent.id, from: "You", text: sent.text })),
-					]}
-					fill={followUpLayout}
-					onOpenFile={onOpenFile}
-				/>
+				<>
+					<div className="helper-view-header">
+						<AgentIcon
+							icon={selectedHelper.icon}
+							color={selectedHelper.color}
+						/>
+						<span className="helper-view-name">{selectedHelper.name}</span>
+						{selectedHelper.tag ? (
+							<span className="agent-row-tag">{selectedHelper.tag}</span>
+						) : null}
+						<button
+							type="button"
+							className="helper-view-back"
+							onClick={() => openAgent(LEAD_ROW_ID)}
+						>
+							Back to Main
+						</button>
+					</div>
+					<SessionTimeline
+						key={selectedTask.id}
+						items={selectedTask.items}
+						turnStatus={selectedTask.turnStatus}
+						tasks={childTasks}
+						taskParentId={selectedTask.id}
+						helperLines={helperLines}
+						senderName={parentName(selectedTask.parentSessionId)}
+						queuedSteering={[
+							...(selectedTask.queuedSteering ?? []).map((message) => ({
+								id: message.id,
+								from:
+									message.from === "user"
+										? "You"
+										: parentName(selectedTask.parentSessionId),
+								text: message.text,
+							})),
+							...helperOutbox
+								.filter(
+									(sent) =>
+										sent.helperId === selectedTask.id &&
+										!selectedTask.queuedSteering?.some(
+											(message) =>
+												message.from === "user" && message.text === sent.text,
+										),
+								)
+								.map((sent) => ({ id: sent.id, from: "You", text: sent.text })),
+						]}
+						fill={followUpLayout}
+						onOpenFile={onOpenFile}
+					/>
+				</>
 			) : (
 				<SessionTimeline
 					recoveryControls={
@@ -844,10 +872,12 @@ export function SessionLauncher({
 							disabled={busy && !selectedHelper}
 							placeholder={
 								selectedHelper
-									? `Message ${selectedHelper.name}…`
-									: followUpLayout
-										? "Follow up…"
-										: "What would you like to work on?"
+									? `Message “${selectedHelper.name}”…`
+									: agents.lead.status === "free"
+										? "Ask Main anything while helpers work"
+										: followUpLayout
+											? "Follow up…"
+											: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
 								selectedHelper ? false : handleComposerKey(event)
@@ -979,14 +1009,12 @@ export function SessionLauncher({
 								<button
 									type="button"
 									className="session-send"
-									aria-label={`Send to ${selectedHelper.name}`}
-									disabled={
-										!draft.trim() || selectedHelper.status !== "working"
-									}
+									aria-label={`Send to “${selectedHelper.name}”`}
+									disabled={!draft.trim() || !selectedHelper.messageable}
 									title={
-										selectedHelper.status === "working"
-											? `Send to ${selectedHelper.name}; it reads it at its next step`
-											: `${selectedHelper.name} is no longer running`
+										selectedHelper.messageable
+											? "Send; it reads it at its next step"
+											: "It has finished"
 									}
 									onClick={sendDraftToHelper}
 								>
@@ -1045,6 +1073,7 @@ export function SessionLauncher({
 				<AgentPanel
 					lead={agents.lead}
 					helpers={agents.helpers}
+					background={agents.background}
 					selectedId={selectedHelper ? selectedHelper.id : LEAD_ROW_ID}
 					onSelect={openAgent}
 				/>

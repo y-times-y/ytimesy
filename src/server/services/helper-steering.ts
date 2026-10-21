@@ -1,6 +1,5 @@
-import { helperIdentities } from "#/domain/agent-panel";
-import { userSteeringNotice } from "#/domain/agent-steering";
-import { agentTaskTree } from "#/domain/agent-task";
+import { steeringTexts, userSteeringNotice } from "#/domain/agent-steering";
+import { isActiveSidekick } from "#/domain/sidekick";
 import { subagentTaskViews } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
@@ -20,6 +19,12 @@ export type HelperSteeringDeps = {
 		rootId: string,
 	) => Promise<readonly AgentSessionRecord[]>;
 	readonly enqueue: typeof enqueuePeerMessage;
+	/** Puts steering in a subagent's mailbox for its next model step. */
+	readonly stage: (
+		recipientId: string,
+		id: string,
+		message: string,
+	) => Promise<void>;
 	readonly notifyLead: (
 		rootId: string,
 		id: string,
@@ -32,6 +37,7 @@ const liveDeps: HelperSteeringDeps = {
 	session: agentSessionForOwner,
 	descendants: descendantAgentSessions,
 	enqueue: enqueuePeerMessage,
+	stage: stageServerPeerMessage,
 	notifyLead: stageServerPeerMessage,
 	now: Date.now,
 };
@@ -67,33 +73,47 @@ export async function sendUserMessageToHelper(
 	const helper = helpers.find((session) => session.id === input.helperId);
 	if (!helper?.parentSessionId)
 		throw new HelperSteeringError("That agent is not part of this chat.");
-	if (helper.turnStatus !== "running")
+	const running = helper.turnStatus === "running";
+	// A sidekick resting between rounds takes it at its next round.
+	const resting = !running && isActiveSidekick(helper);
+	if (!running && !resting)
 		throw new HelperSteeringError(
-			"That agent is no longer running; message the lead instead.",
+			"That agent has finished; message the lead instead.",
 		);
-	const views = subagentTaskViews(root.id, [root, ...helpers], deps.now());
 	const name =
-		helperIdentities(
-			agentTaskTree(root.id, helpers).map((task) => ({
-				id: task.id,
-				createdAt: task.createdAt,
-				subagent: views.get(task.id),
-			})),
-		).get(helper.id)?.name ?? "a helper";
-	await deps.enqueue(
-		{
-			userId: input.userId,
-			senderId: helper.parentSessionId,
-			recipientId: helper.id,
-			message,
-			fromUser: true,
-		},
-		`user:${helper.id}:${input.requestId}`,
-	);
+		subagentTaskViews(root.id, [root, ...helpers], deps.now()).get(helper.id)
+			?.name ?? "a helper";
+	if (resting)
+		// No job: delivery would start a turn now, beside the lead's own work.
+		await deps.stage(
+			helper.id,
+			`user-steer-helper:${input.requestId}`,
+			steeringTexts({
+				sender: { kind: "user" },
+				message,
+				messageId: input.requestId,
+			}).runtimeText,
+		);
+	else
+		await deps.enqueue(
+			{
+				userId: input.userId,
+				senderId: helper.parentSessionId,
+				recipientId: helper.id,
+				message,
+				fromUser: true,
+			},
+			`user:${helper.id}:${input.requestId}`,
+		);
 	await deps.notifyLead(
 		root.id,
 		`user-steer:${input.requestId}`,
 		userSteeringNotice(name, message),
 	);
-	return { helperId: helper.id, name, status: "queued" as const };
+	return {
+		helperId: helper.id,
+		name,
+		status: "queued" as const,
+		delivery: resting ? "next round" : "next step",
+	};
 }

@@ -54,6 +54,7 @@ function deps(sessions: AgentSessionRecord[]) {
 			return out;
 		}),
 		enqueue: vi.fn<HelperSteeringDeps["enqueue"]>(async () => "job"),
+		stage: vi.fn(async () => {}),
 		notifyLead: vi.fn(async () => {}),
 		now: () => Date.parse("2026-10-21T10:05:00Z"),
 	} satisfies HelperSteeringDeps;
@@ -73,6 +74,7 @@ describe("the user steering a helper", () => {
 		const fake = deps([
 			row("root", null),
 			row("helper", "root", {
+				title: "Build the export",
 				agentBudget: {
 					steps: 1,
 					minutes: 1,
@@ -82,8 +84,9 @@ describe("the user steering a helper", () => {
 			}),
 		]);
 		await expect(sendUserMessageToHelper(input, fake)).resolves.toMatchObject({
-			name: "Sidekick A",
+			name: "Build the export (Build)",
 			status: "queued",
+			delivery: "next step",
 		});
 		expect(fake.enqueue).toHaveBeenCalledWith(
 			{
@@ -98,7 +101,7 @@ describe("the user steering a helper", () => {
 		expect(fake.notifyLead).toHaveBeenCalledWith(
 			"root",
 			"user-steer:req-1",
-			"The user sent Sidekick A: Skip the docs",
+			"The user sent Build the export (Build): Skip the docs",
 		);
 	});
 	it("reaches a nested helper through its own parent", async () => {
@@ -146,13 +149,48 @@ describe("the user steering a helper", () => {
 			),
 		).rejects.toThrow("That chat is not available.");
 	});
+	it("queues a message for a sidekick resting between rounds in its mailbox, without starting a turn", async () => {
+		const sidekick = (retired: boolean) =>
+			row("helper", "root", {
+				title: "Build the export",
+				turnStatus: "completed",
+				taskState: "done",
+				agentBudget: {
+					steps: 1,
+					minutes: 1,
+					tokens: 1,
+					sidekick: {
+						maxRounds: 6,
+						...(retired ? { retired: { at: "x", reason: "stopped" } } : {}),
+					},
+				} as never,
+			});
+		const fake = deps([row("root", null), sidekick(false)]);
+		await expect(sendUserMessageToHelper(input, fake)).resolves.toMatchObject({
+			delivery: "next round",
+		});
+		expect(fake.enqueue).not.toHaveBeenCalled();
+		expect(fake.stage).toHaveBeenCalledWith(
+			"helper",
+			"user-steer-helper:req-1",
+			expect.stringContaining(
+				"Message from the user, sent directly from the chat:\n\nSkip the docs",
+			),
+		);
+		expect(fake.notifyLead).toHaveBeenCalledOnce();
+		const retired = deps([row("root", null), sidekick(true)]);
+		await expect(sendUserMessageToHelper(input, retired)).rejects.toThrow(
+			"has finished",
+		);
+		expect(retired.stage).not.toHaveBeenCalled();
+	});
 	it("refuses a helper that has finished", async () => {
 		const fake = deps([
 			row("root", null),
 			row("helper", "root", { turnStatus: "completed", taskState: "done" }),
 		]);
 		await expect(sendUserMessageToHelper(input, fake)).rejects.toThrow(
-			"no longer running",
+			"has finished",
 		);
 		expect(fake.enqueue).not.toHaveBeenCalled();
 		expect(fake.notifyLead).not.toHaveBeenCalled();
