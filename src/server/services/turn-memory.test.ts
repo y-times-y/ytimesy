@@ -645,6 +645,8 @@ describe("memory markers", () => {
 				{
 					path: "tooling.md",
 					text: "Uses pnpm to install any library, never npm",
+					// A standing rule attached to every chat, shown in its own group.
+					rule: true,
 					source: {
 						chatId: otherChat,
 						title: "Set up the monorepo",

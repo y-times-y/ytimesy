@@ -19,6 +19,8 @@ export type RecalledMemoryLine = {
 	readonly path: string;
 	/** The entry without its bullet and metadata. */
 	readonly text: string;
+	/** A standing project rule attached to every chat (projectRules), not a match for this request. */
+	readonly rule?: true;
 	/** The chat the entry came from, when its `source:` names one. */
 	readonly source?: {
 		readonly chatId: string;

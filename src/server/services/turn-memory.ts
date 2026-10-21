@@ -357,7 +357,10 @@ export async function turnMemory(
 			const recall: MemoryRecall = {
 				head: snapshot.head,
 				...(showEntry ? { index: true as const } : {}),
-				lines: await recalledLines([...rules, ...matches]),
+				lines: (await recalledLines([...rules, ...matches])).map(
+					(line, index) =>
+						index < rules.length ? { ...line, rule: true as const } : line,
+				),
 				...(hook
 					? {
 							hook: {
