@@ -22,7 +22,13 @@ beforeAll(async () => {
 		logLevel: "error",
 		experimental: { disableExperimentalWarning: true },
 	});
-}, 30_000);
+	// The first request pays workerd's module load (about 5 s); warm it here so
+	// no test's own timeout is charged for start-up.
+	await worker.fetch("http://localhost/jobs/start", {
+		method: "POST",
+		body: "{}",
+	});
+}, 60_000);
 
 afterAll(async () => {
 	await worker?.stop();
