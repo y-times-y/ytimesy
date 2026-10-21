@@ -29,6 +29,10 @@ describe("forking a live VM for a writer", () => {
 			sourceVmId: "vm-parent",
 			boot,
 			deleteSnapshot,
+			scrubFork: async (vmId) => {
+				order.push(`scrub:${vmId}`);
+			},
+			deleteVm: async () => {},
 			now: () => (clock += 2500),
 		});
 		expect(fork).toEqual({
@@ -42,7 +46,7 @@ describe("forking a live VM for a writer", () => {
 			displayName: "ytimesy subagent fork",
 			autoDeleteSeconds: FORK_SNAPSHOT_AUTO_DELETE_SECONDS,
 		});
-		expect(order).toEqual(["boot:snap-1", "delete:snap-1"]);
+		expect(order).toEqual(["boot:snap-1", "scrub:vm-fork", "delete:snap-1"]);
 	});
 
 	it("deletes a public snapshot and refuses the fork", async () => {
@@ -54,6 +58,8 @@ describe("forking a live VM for a writer", () => {
 				sourceVmId: "vm-parent",
 				boot,
 				deleteSnapshot,
+				scrubFork: async () => {},
+				deleteVm: async () => {},
 			}),
 		).rejects.toThrow("public snapshot");
 		expect(deleteSnapshot).toHaveBeenCalledWith("snap-1");
@@ -70,9 +76,40 @@ describe("forking a live VM for a writer", () => {
 					throw new Error("no capacity");
 				},
 				deleteSnapshot,
+				scrubFork: async () => {},
+				deleteVm: async () => {},
 			}),
 		).rejects.toThrow("no capacity");
 		expect(deleteSnapshot).toHaveBeenCalledWith("snap-1");
+	});
+
+	it("gives the fork no memory token: a fork it cannot scrub is deleted and refused", async () => {
+		const deleteSnapshot = vi.fn(async () => {});
+		const deleteVm = vi.fn(async () => {});
+		await expect(
+			forkRunningVm({
+				source: source() as never,
+				sourceVmId: "vm-parent",
+				boot: async () => "vm-fork",
+				deleteSnapshot,
+				scrubFork: async () => {
+					throw new Error("the memory clone still holds a token");
+				},
+				deleteVm,
+			}),
+		).rejects.toThrow("memory token could not be removed");
+		expect(deleteVm).toHaveBeenCalledWith("vm-fork");
+		expect(deleteSnapshot).toHaveBeenCalledWith("snap-1");
+		// The adapter scrubs the fork with the same proof as a snapshot does.
+		const adapter = readFileSync(
+			"src/server/adapters/freestyle/workspace-machines.ts",
+			"utf8",
+		);
+		const fork = adapter.slice(
+			adapter.indexOf("async forkWorkspace("),
+			adapter.indexOf("async provisionSession("),
+		);
+		expect(fork).toMatch(/scrubFork: async[\s\S]*SCRUB_MEMORY_CREDENTIAL/);
 	});
 
 	it("is the only snapshot path in the adapter without scrubAgentSecrets", () => {

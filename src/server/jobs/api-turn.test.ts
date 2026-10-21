@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
 	/** A lean surface (lead mode needs one); off by default. */
 	lean: null as null | Record<string, unknown>,
 	roundOpen: vi.fn(async () => false),
+	/** Cross-chat memory for the root builder; off unless a test sets one. */
+	memory: vi.fn(async (): Promise<unknown> => null),
 }));
+vi.mock("../services/turn-memory", () => ({ turnMemory: mocks.memory }));
 // Development eval users pick harness variants; everyone else gets the default.
 vi.mock("../services/subagent-runtime", async (original) => ({
 	...(await original<typeof import("../services/subagent-runtime")>()),
@@ -114,6 +117,7 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.memory.mockReset().mockResolvedValue(null);
 	mocks.variant.mockReset().mockReturnValue(undefined);
 	mocks.reviewLoop.mockReset().mockImplementation(() => ({
 		beforeModel: mocks.beforeModel,
@@ -1683,5 +1687,82 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 				expect.objectContaining({ text: "Kept attempt 2 of 3." }),
 			]),
 		);
+	});
+});
+
+describe("the VM's memory token is released however a step ends", () => {
+	function fakeMemory() {
+		return {
+			mode: "full",
+			instructions: "",
+			prepareVm: vi.fn(async () => {}),
+			vmTokens: () => [],
+			releaseVm: vi.fn(async () => {}),
+			attach: async (messages: unknown) => ({ messages, recall: null }),
+			recordSaved: async (items: unknown) => items,
+			afterTurn: vi.fn(async () => {}),
+		};
+	}
+	const rootTurn = (id: string) => ({ ...childTurn, id }) as ApiTurn;
+
+	it("on a failed turn", async () => {
+		const memory = fakeMemory();
+		mocks.memory.mockResolvedValue(memory);
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			throw new Error("Model unavailable");
+		});
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				rootTurn("00000000-0000-4000-8000-0000000000f1"),
+				{ index: 1, signal: new AbortController().signal },
+			),
+		).toBe("failed");
+		expect(memory.prepareVm).toHaveBeenCalledOnce();
+		expect(memory.releaseVm).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm" }),
+		);
+	});
+
+	it("on a cancelled turn", async () => {
+		vi.useFakeTimers();
+		try {
+			const memory = fakeMemory();
+			mocks.memory.mockResolvedValue(memory);
+			mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+			mocks.cancelRequested.mockResolvedValue(true);
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.tools.workspace();
+				return hangUntilAborted(input);
+			});
+			const outcome = runApiTurn(
+				{} as WorkspaceMachines,
+				rootTurn("00000000-0000-4000-8000-0000000000f2"),
+				{ index: 1, signal: new AbortController().signal },
+			);
+			await vi.advanceTimersByTimeAsync(1_500);
+			expect(await outcome).toBe("cancelled");
+			expect(memory.releaseVm).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm" }),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("revokes earlier steps' tokens even when this step never prepared the VM", async () => {
+		const memory = fakeMemory();
+		mocks.memory.mockResolvedValue(memory);
+		mocks.stepRuntime.mockImplementation(async () => {
+			throw new Error("Model unavailable");
+		});
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			rootTurn("00000000-0000-4000-8000-0000000000f3"),
+			{ index: 2, signal: new AbortController().signal },
+		);
+		expect(memory.prepareVm).not.toHaveBeenCalled();
+		expect(memory.releaseVm).toHaveBeenCalledWith(undefined);
 	});
 });
