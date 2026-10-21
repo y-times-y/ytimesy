@@ -249,15 +249,27 @@ export async function idleSidekicksPastTtl(idleMinutes: number) {
  * a message. Null when there is none yet or delivery already claimed it.
  */
 export async function takeSubagentReport(childSessionId: string) {
+	// Also a report the delivery worker is staging ('delivering'): the waiter
+	// wins, and the staged copy is retracted from the parent's mailbox.
 	const result = await database().query(
-		`update agent_task_event set status='delivered', delivered_at=now()
-		 where child_session_id=$1 and status='pending' and event_type in ('completed','failed')
-		 returning event_type, payload`,
+		`update agent_task_event set status='delivered', delivered_at=now(), last_error=null
+		 where child_session_id=$1 and status in ('pending','delivering') and event_type in ('completed','failed')
+		 returning id, parent_session_id, event_type, payload`,
 		[childSessionId],
 	);
 	const row = result.rows[0] as
-		| { event_type: "completed" | "failed"; payload: { message?: unknown } }
+		| {
+				id: string;
+				parent_session_id: string;
+				event_type: "completed" | "failed";
+				payload: { message?: unknown };
+		  }
 		| undefined;
+	if (row)
+		await database().query(
+			"delete from agent_peer_inbox where recipient_id=$1 and id=$2 and not accepted",
+			[row.parent_session_id, row.id],
+		);
 	return row
 		? {
 				outcome: row.event_type,

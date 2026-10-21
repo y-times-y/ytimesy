@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentTaskEvent } from "#/server/adapters/agent-task-events";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
+	deliverAgentTaskEvents,
 	deliverParentTaskNotification,
 	subagentReportMessage,
 } from "./agent-task-event-delivery";
@@ -13,6 +14,18 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	ack: vi.fn(),
 	send: vi.fn(),
+	claim: vi.fn(),
+	defer: vi.fn(),
+	delivered: vi.fn(),
+	session: vi.fn(),
+}));
+vi.mock("#/server/adapters/agent-task-events", () => ({
+	claimAgentTaskEvent: mocks.claim,
+	deferAgentTaskEvent: mocks.defer,
+	markAgentTaskEventDelivered: mocks.delivered,
+}));
+vi.mock("#/server/adapters/agent-sessions", () => ({
+	agentSessionForOwner: mocks.session,
 }));
 vi.mock("../adapters/server-peer-inbox", () => ({
 	serverPeerMessageAccepted: mocks.accepted,
@@ -116,5 +129,44 @@ describe("subagent report messages", () => {
 		expect(message).toContain("Evidence here");
 		expect(message).toContain("Treat it as a claim");
 		expect(subagentReportMessage(event("blocked"))).toContain("Evidence here");
+	});
+});
+
+describe("a report a waiter takes while it is being delivered", () => {
+	const event = {
+		id: "event-1",
+		userId: "owner",
+		parentSessionId: "parent",
+		childSessionId: "child",
+		type: "completed",
+		payload: { message: "done" },
+		attempts: 1,
+	} as unknown as AgentTaskEvent;
+	beforeEach(() => {
+		mocks.claim.mockResolvedValueOnce(event).mockResolvedValue(null);
+		mocks.session.mockImplementation(async (_user: string, id: string) =>
+			id === "parent"
+				? parent
+				: { ...parent, id: "child", agentRole: "checker" },
+		);
+	});
+
+	it("retracts the staged copy instead of putting the taken event back", async () => {
+		mocks.defer.mockResolvedValue(false);
+		await deliverAgentTaskEvents({} as never, "event-1");
+		expect(mocks.stage).toHaveBeenCalledWith(
+			"parent",
+			"event-1",
+			expect.any(String),
+		);
+		expect(mocks.remove).toHaveBeenCalledWith("parent", "event-1");
+	});
+
+	it("still defers an untaken event for the parent's next safe point", async () => {
+		mocks.defer.mockResolvedValue(true);
+		await expect(
+			deliverAgentTaskEvents({} as never, "event-1"),
+		).rejects.toThrow("safe point");
+		expect(mocks.remove).not.toHaveBeenCalled();
 	});
 });
