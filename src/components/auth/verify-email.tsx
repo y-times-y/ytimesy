@@ -1,6 +1,10 @@
 "use client";
 
-import { useAuth, useSendVerificationEmail } from "@better-auth-ui/react";
+import {
+	useAuth,
+	useFetchOptions,
+	useSendVerificationEmail,
+} from "@better-auth-ui/react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -46,7 +50,13 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 		redirectTo,
 		viewPaths,
 		Link,
+		plugins,
 	} = useAuth();
+	// Resending is Turnstile-protected like sign-in (TURNSTILE_ENDPOINTS).
+	const { fetchOptions, resetFetchOptions } = useFetchOptions();
+	const Captcha = plugins.find(
+		(plugin) => plugin.captchaComponent,
+	)?.captchaComponent;
 
 	const isHydrated = useIsHydrated();
 	const [email, setEmail] = useState(
@@ -71,7 +81,9 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 	const { mutate: sendVerificationEmail, isPending } = useSendVerificationEmail(
 		authClient,
 		{
+			onError: () => resetFetchOptions(),
 			onSuccess: () => {
+				resetFetchOptions();
 				toast.success(localization.auth.verificationEmailSent);
 				setCooldown(RESEND_COOLDOWN_SECONDS);
 			},
@@ -98,6 +110,8 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 						<div className="flex flex-col gap-3">
 							<OpenEmailButton email={email} />
 
+							{Captcha && <div className="flex justify-center">{Captcha}</div>}
+
 							<Button
 								type="button"
 								variant="outline"
@@ -106,6 +120,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 									sendVerificationEmail({
 										email,
 										callbackURL: `${baseURL}${withReturnTo("/auth/sign-in", redirectTo)}`,
+										fetchOptions,
 									})
 								}
 							>

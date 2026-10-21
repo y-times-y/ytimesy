@@ -67,7 +67,13 @@ export async function seedOwner() {
 	await db.query(
 		`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
 		 values($1,'codex','connected','pro',now(),$2)`,
-		[ownerId, await seal(codexLogin("rehearsal-account"))],
+		[
+			ownerId,
+			await seal(codexLogin("rehearsal-account"), {
+				purpose: "codex-auth",
+				userId: ownerId,
+			}),
+		],
 	);
 	await db.query(
 		"insert into agent_model_catalog(user_id,provider,models,updated_at) values($1,'codex',$2::jsonb,now())",
@@ -127,7 +133,13 @@ export async function createRehearsalUser(
 	await db.query(
 		`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
 		 values($1,'codex','connected','pro',now(),$2)`,
-		[userId, await seal(codexLogin("eval-user-delegates-to-owner"))],
+		[
+			userId,
+			await seal(codexLogin("eval-user-delegates-to-owner"), {
+				purpose: "codex-auth",
+				userId,
+			}),
+		],
 	);
 	await db.query(
 		`insert into agent_model_catalog(user_id,provider,models,updated_at)

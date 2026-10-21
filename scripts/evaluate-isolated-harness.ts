@@ -136,7 +136,12 @@ try {
 		throw new Error(
 			"Source owner/account/prepared project is ambiguous or missing.",
 		);
-	const auth = JSON.parse(await unseal(account.rows[0].encrypted_codex_auth));
+	const auth = JSON.parse(
+		await unseal(account.rows[0].encrypted_codex_auth, {
+			purpose: "codex-auth",
+			userId,
+		}),
+	);
 	if (codexAccessTokenExpiresAt(auth) < Date.now() + 45 * 60 * 1000)
 		throw new Error(
 			"Access credential needs at least 45 minutes remaining; no refresh rotation is attempted by this proof.",

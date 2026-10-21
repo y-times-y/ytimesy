@@ -13,6 +13,7 @@ import {
 	requestAllowsLocalQaIdentity,
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
+import { trackInvocationTask } from "../adapters/invocation-tasks";
 import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
 
 /**
@@ -91,12 +92,16 @@ export function authOptions() {
 				user: { email: string };
 				url: string;
 			}) => {
-				await persistAuthEmail({
-					to: user.email,
-					subject: "Reset your ytimesy password",
-					purpose: "reset-password",
-					actionUrl: url,
-				});
+				// Not awaited: the response must take the same time whether or not
+				// the account exists. The outbox row is retried by the cron.
+				void trackInvocationTask(
+					persistAuthEmail({
+						to: user.email,
+						subject: "Reset your ytimesy password",
+						purpose: "reset-password",
+						actionUrl: url,
+					}),
+				).catch(() => undefined);
 			},
 		},
 		emailVerification: {

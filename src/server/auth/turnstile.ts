@@ -1,6 +1,6 @@
 /**
- * Cloudflare Turnstile on the email sign-up, email sign-in and password reset
- * endpoints (Better Auth's captcha plugin verifies the token server side
+ * Cloudflare Turnstile on the email sign-up, email sign-in, password reset
+ * and resend-verification endpoints (Better Auth's captcha plugin verifies the token server side
  * against siteverify). Required in production, off everywhere else so local
  * development and tests never call Cloudflare. GitHub and Google sign-in are
  * not challenged: they already require an account with that provider.
@@ -14,6 +14,7 @@ export const TURNSTILE_ENDPOINTS = [
 	"/sign-up/email",
 	"/sign-in/email",
 	"/request-password-reset",
+	"/send-verification-email",
 ];
 
 export function turnstileSettings(

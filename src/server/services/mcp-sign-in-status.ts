@@ -30,7 +30,7 @@ export async function mcpSignInState(input: {
 	appUrl: string;
 	fetchFn?: typeof fetch;
 }): Promise<McpSignInState> {
-	const record = await readOAuthRecord(input.sealedOAuth);
+	const record = await readOAuthRecord(input.sealedOAuth, input.userId);
 	if (!record.tokens?.access_token) return "needs-sign-in";
 	const provider = storedOAuthProvider({
 		record,
@@ -39,7 +39,10 @@ export async function mcpSignInState(input: {
 			saveMcpOAuth(
 				input.userId,
 				input.serverId,
-				await seal(JSON.stringify(next)),
+				await seal(JSON.stringify(next), {
+					purpose: "mcp-oauth",
+					userId: input.userId,
+				}),
 			),
 	});
 	try {
