@@ -86,6 +86,47 @@ describe("read-only subagent machines", () => {
 		expect(reader.runCapability).toBeUndefined();
 	});
 
+	it("refuses the reader when loopback isolation cannot be set up, and re-checks it before every command", async () => {
+		const { machines, commands } = fakeMachines();
+		let iptables = false;
+		vi.mocked(machines.exec).mockImplementation(async (_target, command) => {
+			commands.push(command);
+			const isolation = decoded(command).some((line) =>
+				line.includes("for table in iptables ip6tables"),
+			);
+			if (isolation && !iptables)
+				return command.includes("chmod o-rw,o+x")
+					? { exitCode: 1, stdout: "", stderr: "iptables unavailable" }
+					: {
+							exitCode: 97,
+							stdout: "",
+							stderr: "ytimesy: reader isolation unavailable",
+						};
+			return { exitCode: 0, stdout: "contents", stderr: "" };
+		});
+		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
+			id: "child-1",
+			agentRole: "reviewer",
+		});
+		await expect(reader.exec(vm, "ls", 1000)).rejects.toThrow(
+			"could not be isolated",
+		);
+		expect(
+			commands.some((command) => command.includes("ytimesy-reader --")),
+		).toBe(false);
+		iptables = true;
+		await reader.exec(vm, "ls", 1000);
+		// The VM lost its rules (a cold boot): the next command is refused.
+		iptables = false;
+		await expect(reader.exec(vm, "ls", 1000)).rejects.toThrow(
+			"could not be isolated",
+		);
+		await expect(reader.readTextFile(vm, "/etc/hostname")).rejects.toThrow(
+			"could not be isolated",
+		);
+	});
+
 	it("refuses runtime writes outside the scratch and hands allowed files to the reader", async () => {
 		const { machines, writes, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
