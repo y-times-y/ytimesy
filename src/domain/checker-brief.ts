@@ -1,6 +1,8 @@
+import { checkerJudgeSection, previousFindingsSection } from "./checker-pair";
 import {
 	type CheckerVerdict,
 	parseCheckerVerdict,
+	UNTESTED_PASS_NOTE,
 	verdictRecords,
 } from "./checker-verdict";
 
@@ -33,6 +35,16 @@ export type ReviewBriefInput = {
 	 * claim the checker compares with its own list after deriving that.
 	 */
 	readonly builderRequirements?: readonly string[];
+	/**
+	 * Harness variant checkerMode=pair: the checker is a judge that briefs a
+	 * worker for the reading and test runs (src/domain/checker-pair.ts).
+	 */
+	readonly pair?: boolean;
+	/**
+	 * checkerMode=pair: the earlier review rounds' findings, as context for a
+	 * round that is still a full check.
+	 */
+	readonly previousFindings?: readonly string[];
 };
 
 /** rigor=on: stated interpretations get the convention-based reading tested. */
@@ -99,6 +111,12 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 					"</builder_requirements>",
 				]
 			: []),
+		...(input.pair
+			? ["", checkerJudgeSection({ scratch: input.scratch, work })]
+			: []),
+		...(input.pair && input.previousFindings?.length
+			? ["", previousFindingsSection(input.previousFindings)]
+			: []),
 		"",
 		"Answer with only this JSON:",
 		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
@@ -125,9 +143,7 @@ export type ReviewVerdict = CheckerVerdict & {
 	readonly untested?: boolean;
 };
 
-/** The note an untested pass gets. */
-export const UNTESTED_PASS_NOTE =
-	"(Said pass without running a new test of its own; counted as unsure.)";
+export { UNTESTED_PASS_NOTE };
 
 const clip = (value: unknown, max: number) =>
 	typeof value === "string" ? value.trim().slice(0, max) : "";

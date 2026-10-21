@@ -209,6 +209,7 @@ import {
 	subagentReport,
 } from "../services/subagent-runtime";
 import {
+	checkerWorkerTools,
 	type SubagentToolContext,
 	subagentTools,
 } from "../services/subagent-tools";
@@ -884,8 +885,16 @@ async function runApiTurnAttempt(
 				? owner.agentRole !== "checker" &&
 					// A sidekick does the work itself (lead mode fusion).
 					!isActiveSidekick(owner) &&
+					// So does a checker pair's worker (checkerMode=pair).
+					owner.agentBudget?.checkerPair !== "worker" &&
 					subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId);
+		// checkerMode=pair: the judge's only delegation is its worker (src/domain/checker-pair.ts).
+		const pairJudge =
+			!!surface.lean &&
+			owner.agentRole === "checker" &&
+			owner.agentBudget?.checkerPair === "judge" &&
+			subagentLevel < MAX_SUBAGENT_LEVEL;
 		const subagentContext: SubagentToolContext = {
 			machines: unscopedMachines,
 			parent: owner as AgentSessionRecord,
@@ -896,6 +905,7 @@ async function runApiTurnAttempt(
 			lead: variant.lead,
 			parentReasoning: turnReasoning,
 			rigor: variant.rigor === "on",
+			checkerMode: variant.checkerMode,
 			// Lead mode fusion: one writer at a time in the shared checkout.
 			onSidekickRound: leadWrites.start,
 			leadWritesSettled: leadWrites.settled,
@@ -903,7 +913,9 @@ async function runApiTurnAttempt(
 		};
 		const delegation: ToolSet = delegates
 			? withRedactedResults(subagentTools(subagentContext), redact)
-			: {};
+			: pairJudge
+				? withRedactedResults(checkerWorkerTools(subagentContext), redact)
+				: {};
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
 		// starts the request's exploration, and the lead waits while its
 		// sidekick works in the shared checkout.
@@ -1406,6 +1418,7 @@ async function runApiTurnAttempt(
 								parentReasoning: turnReasoning,
 							}),
 							rigor: variant.rigor === "on",
+							pair: variant.checkerMode === "pair",
 						})
 					: null;
 		const attemptWaitUntil = () =>
