@@ -1,4 +1,5 @@
 import { Effect, Either } from "effect";
+import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
@@ -87,6 +88,10 @@ export function deferredApiTurnWorkspace(
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
 		signal.throwIfAborted();
+		// Cloud metadata is refused for every user on the VM, re-applied each
+		// turn (a cold boot drops the rules); it overlaps the checkout.
+		const metadataBlocked = blockGuestMetadata(machines, vm);
+		metadataBlocked.catch(() => {});
 		await Effect.runPromise(
 			Effect.gen(function* () {
 				const checkout = earlyCheckout
@@ -101,6 +106,7 @@ export function deferredApiTurnWorkspace(
 				yield* ensureProjectCheckout(scoped, vm, checkout);
 			}),
 		);
+		await metadataBlocked;
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
@@ -185,6 +191,18 @@ export function deferredApiTurnWorkspace(
 			pause = Math.min(pause * 2, 2_000);
 		}
 	}
+}
+
+/** Fails closed: a VM whose metadata cannot be blocked runs no turn. */
+export async function blockGuestMetadata(
+	machines: Pick<WorkspaceMachines, "exec">,
+	vm: WorkspaceId,
+) {
+	const result = await machines.exec(vm, guestMetadataBlockCommand(), 30_000);
+	if (result.exitCode !== 0)
+		throw new Error(
+			`Cloud metadata could not be blocked on this machine: ${result.stderr.slice(-300)}`,
+		);
 }
 
 /** How long a reader waits for its parent's VM (a writer's fork pauses it). */

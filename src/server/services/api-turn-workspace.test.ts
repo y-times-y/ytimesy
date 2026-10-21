@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
+import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import { turnWorkspaceReuse } from "./turn-workspace-reuse";
@@ -44,6 +45,8 @@ const root = {
 const machines = {
 	ensureRunning: vi.fn(async () => undefined),
 	readTextFile: vi.fn(async () => "/workspace/repo"),
+	// The cloud metadata block each preparation runs.
+	exec: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
 } as unknown as WorkspaceMachines;
 
 beforeEach(() => {
@@ -72,6 +75,12 @@ it("does not bind until a repository tool asks, and shares concurrent preparatio
 	const [first, second] = await Promise.all([prepare(), prepare()]);
 	expect(first).toBe(second);
 	expect(mocks.root).toHaveBeenCalledTimes(1);
+	// Every prepared VM refuses cloud metadata (as root) before it is used.
+	expect(vi.mocked(machines.exec)).toHaveBeenCalledWith(
+		expect.anything(),
+		guestMetadataBlockCommand(),
+		30_000,
+	);
 });
 
 it("binds a shared child to its parent's workspace without preparing a checkout", async () => {
