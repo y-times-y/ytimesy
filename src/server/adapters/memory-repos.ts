@@ -25,7 +25,7 @@ type ArtifactsRepoHandle = {
 	createToken(
 		scope?: "read" | "write",
 		ttl?: number,
-	): Promise<{ plaintext: string }>;
+	): Promise<{ id?: string; plaintext: string }>;
 	revokeToken?(tokenOrId: string): Promise<boolean>;
 	log(opts?: { ref?: string; limit?: number }): Promise<ArtifactsCommit[]>;
 	readCommit(hash: string): Promise<ArtifactsCommit | null>;
@@ -65,10 +65,15 @@ export type MemoryRepo = {
 		changes: readonly MemoryChange[],
 		message: string,
 	): Promise<MemoryCommitOutcome>;
-	/** Remote URL and a write token for a Git client, creating the repo on first use. */
-	credentials(ttlSeconds: number): Promise<{ remote: string; token: string }>;
-	/** Revokes a token `credentials` returned, before its TTL runs out. */
-	revokeCredential?(token: string): Promise<void>;
+	/**
+	 * Remote URL and a write token for a Git client, creating the repo on
+	 * first use; `tokenId` names the token for revocation without it.
+	 */
+	credentials(
+		ttlSeconds: number,
+	): Promise<{ remote: string; token: string; tokenId?: string }>;
+	/** Revokes a token `credentials` returned (or its id), before its TTL runs out. */
+	revokeCredential?(tokenOrId: string): Promise<void>;
 	/** Commits that changed `path`, newest first, with the file before and after. */
 	history(
 		path: string,
@@ -159,7 +164,7 @@ function artifactsMemoryRepo(
 	async function credentials(ttlSeconds: number) {
 		const existing = await withRepo(async (repo) => ({
 			remote: (await repo.info()).remote,
-			token: (await repo.createToken("write", ttlSeconds)).plaintext,
+			...tokenFields(await repo.createToken("write", ttlSeconds)),
 		}));
 		if (existing) return minted(existing);
 		try {
@@ -172,18 +177,26 @@ function artifactsMemoryRepo(
 		}
 		const created = await withRepo(async (repo) => ({
 			remote: (await repo.info()).remote,
-			token: (await repo.createToken("write", ttlSeconds)).plaintext,
+			...tokenFields(await repo.createToken("write", ttlSeconds)),
 		}));
 		if (!created) throw new Error("Memory repo could not be created.");
 		return minted(created);
 	}
 	/** Plaintext as Artifacts issued it, by the bare token handed out, for revocation. */
 	const issued = new Map<string, string>();
-	function minted(credential: { remote: string; token: string }) {
+	function minted(credential: {
+		remote: string;
+		token: string;
+		tokenId?: string;
+	}) {
 		const token = bareToken(credential.token);
 		if (issued.size > 64) issued.delete(issued.keys().next().value as string);
 		issued.set(token, credential.token);
-		return { remote: credential.remote, token };
+		return {
+			remote: credential.remote,
+			token,
+			...(credential.tokenId ? { tokenId: credential.tokenId } : {}),
+		};
 	}
 
 	async function filesAt(repo: ArtifactsRepoHandle, commit: ArtifactsCommit) {
@@ -416,6 +429,13 @@ function isRejectedPush(error: unknown) {
 
 function artifactsCode(error: unknown) {
 	return (error as { code?: string } | null)?.code;
+}
+
+function tokenFields(created: { id?: string; plaintext: string }) {
+	return {
+		token: created.plaintext,
+		...(created.id ? { tokenId: created.id } : {}),
+	};
 }
 
 /** Tokens carry `?expires=` for display; Git wants the bare secret. */

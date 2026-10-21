@@ -15,6 +15,10 @@ export const FORK_SNAPSHOT_AUTO_DELETE_SECONDS = 3600;
  * is the parent's live VM. The fork carries the parent's secrets (same
  * user, same task), so the snapshot must stay private: a public one is
  * deleted and the fork refused, and it is never reused as a template.
+ *
+ * The parent's memory repo write token is not the fork's: `scrubFork`
+ * removes it from the booted fork before anyone uses it, and a fork it
+ * cannot prove clean is deleted and refused.
  */
 export async function forkRunningVm(input: {
 	readonly source: Pick<Vm, "snapshot">;
@@ -22,6 +26,9 @@ export async function forkRunningVm(input: {
 	/** Boots a VM from the snapshot and waits until it runs. */
 	readonly boot: (snapshotId: string) => Promise<string>;
 	readonly deleteSnapshot: (snapshotId: string) => Promise<unknown>;
+	/** Removes the parent's memory token from the fork; throws when it cannot. */
+	readonly scrubFork: (vmId: string) => Promise<void>;
+	readonly deleteVm: (vmId: string) => Promise<unknown>;
 	readonly now?: () => number;
 }): Promise<{ vmId: string; snapshotId: string; forkMs: number }> {
 	const now = input.now ?? Date.now;
@@ -41,6 +48,18 @@ export async function forkRunningVm(input: {
 	}
 	try {
 		const vmId = await input.boot(created.snapshotId);
+		try {
+			await input.scrubFork(vmId);
+		} catch (cause) {
+			await input.deleteVm(vmId).catch(() => {
+				console.warn("A fork that kept the memory token could not be deleted.");
+			});
+			throw new WorkspaceProvisionError({
+				operation: "snapshot",
+				message: `The fork's memory token could not be removed; deleted it and refused the fork: ${cause instanceof Error ? cause.message : "unknown"}`,
+				providerWorkspaceId: input.sourceVmId,
+			});
+		}
 		return { vmId, snapshotId: created.snapshotId, forkMs: now() - started };
 	} finally {
 		// Gone once the VM runs (or failed to): never a reusable template.
