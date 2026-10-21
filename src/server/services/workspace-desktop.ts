@@ -18,6 +18,7 @@ import {
 	DESKTOP_CREDENTIAL_DROP_SETUP,
 	DESKTOP_PRIVATE_READY,
 	DESKTOP_VIEWER_CREDENTIAL_PATH,
+	DESKTOP_VNC_PASSWORD_PATH,
 	ENSURE_WORKSPACE_DESKTOP,
 	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
@@ -32,6 +33,7 @@ import {
 	desktopViewerAuthorization,
 	desktopViewerCredential,
 	desktopViewerCredentialDigest,
+	desktopVncPassword,
 } from "./vm-edge-keys";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -209,6 +211,11 @@ export async function ensureDesktopProcesses(
 		DESKTOP_VIEWER_CREDENTIAL_PATH,
 		desktopViewerCredential(providerRef),
 	);
+	await machines.writeTextFile(
+		id,
+		DESKTOP_VNC_PASSWORD_PATH,
+		desktopVncPassword(providerRef),
+	);
 	return machines.exec(id, START_WORKSPACE_DESKTOP, 300_000);
 }
 
@@ -355,8 +362,11 @@ function clientFacingDesktop(
 	scope: DesktopScope,
 ): WorkspaceDesktop {
 	if (desktop.status !== "running") return desktop;
+	const providerRef = remotes.get(scopeKey(scope));
 	return {
 		...desktop,
+		// Only the owner's viewer gets the VNC password (this scope is theirs).
+		...(providerRef ? { viewerPassword: desktopVncPassword(providerRef) } : {}),
 		viewerUrl: scope.projectId
 			? desktopClientViewerUrl({
 					projectId: scope.projectId,

@@ -62,16 +62,18 @@ describe("start workspace desktop", () => {
 
 	it("keeps Chrome and the builder's X clients working across the locked-down restart", () => {
 		// Chrome is closed before its display and reopened on the new one.
-		const restart = START_WORKSPACE_DESKTOP.indexOf("pgrep -f 'Xvfb :0 .*-ac'");
+		const restart = START_WORKSPACE_DESKTOP.indexOf(
+			"pgrep -f '[X]vfb :0 .*-ac'",
+		);
 		const closeChrome = START_WORKSPACE_DESKTOP.indexOf(
-			"pkill -TERM -f -- '--user-data-dir=/tmp/ytimesy-chrome-profile'",
+			"pkill -TERM -x 'chrome|chromium|chromium-browse'",
 		);
 		const killX = START_WORKSPACE_DESKTOP.indexOf("pkill -x Xvfb");
 		expect(restart).toBeGreaterThan(0);
 		expect(closeChrome).toBeGreaterThan(restart);
 		expect(killX).toBeGreaterThan(closeChrome);
 		expect(START_WORKSPACE_DESKTOP).toMatch(
-			/CHROME_REOPEN" = 1 \] && ! pgrep[^\n]*\n\s*nohup "\$\(find_chrome_bin\)"[^\n]*--restore-last-session[^\n]*--user-data-dir=\/tmp\/ytimesy-chrome-profile/,
+			/CHROME_REOPEN" = 1 \] && ! pgrep -x[^\n]*\n\s*nohup "\$\(find_chrome_bin\)"[^\n]*--restore-last-session[^\n]*--user-data-dir=\/tmp\/ytimesy-chrome-profile/,
 		);
 		// The cookie lives at a fixed path, so clients without HOME find it,
 		// and the builder's uid reaches the display without it.

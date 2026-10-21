@@ -51,7 +51,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function run(
 	listening = "",
-	running = listening ? "websockify --unix-target" : "",
+	running = listening ? `websockify --unix-target=${dir}/rfb.sock` : "",
 ) {
 	writeFileSync(join(dir, "ss.out"), listening);
 	writeFileSync(join(dir, "pgrep.out"), running);
@@ -68,7 +68,7 @@ function run(
 it("listens publicly only behind the credential, and records which one", () => {
 	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret");
 	expect(run()).toEqual([
-		"pkill -f websockify.*:6080",
+		"pkill -x websockify",
 		`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/viewer.credential --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
 	]);
 	// The credential is read from its file, never passed in argv.
@@ -91,13 +91,13 @@ it("replaces a proxy started with an older credential", () => {
 	writeFileSync(join(dir, "viewer.auth"), "ytimesy:new");
 	writeFileSync(join(dir, "viewer.applied"), "old");
 	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")[0]).toBe(
-		"pkill -f websockify.*:6080",
+		"pkill -x websockify",
 	);
 });
 
 it("without a credential, stops an open public proxy and listens on loopback only", () => {
 	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")).toEqual([
-		"pkill -f websockify.*:6080",
+		"pkill -x websockify",
 	]);
 	rmSync(join(dir, "calls"));
 	expect(run("")).toEqual([
@@ -124,7 +124,7 @@ it("restarts a proxy left from the TCP viewer even when its credential is curren
 			"LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n",
 			"websockify 0.0.0.0:6080 127.0.0.1:5900",
 		)[0],
-	).toBe("pkill -f websockify.*:6080");
+	).toBe("pkill -x websockify");
 });
 
 it("loads the viewer credential from its file in the auth plugin", () => {
@@ -213,4 +213,75 @@ it("refuses a credential directory another user pre-created or linked in /tmp", 
 		expect(foreign.status).not.toBe(0);
 		expect(foreign.stdout).not.toContain(DESKTOP_PRIVATE_READY);
 	}
+});
+
+it("never matches its own command line when it looks for or stops processes", () => {
+	// Run as `bash -c <script>` the script's command line holds every pattern
+	// it greps for; a self-matching pkill -f killed the start (exit 143).
+	const patterns = [
+		...START_WORKSPACE_DESKTOP.matchAll(
+			/p(?:grep|kill)(?: -TERM)? -f (?:-- )?(['"])(.+?)\1/g,
+		),
+	].map((match) => match[2].replaceAll("$VNC_SOCKET", "/x/rfb.sock"));
+	expect(patterns.length).toBeGreaterThanOrEqual(2);
+	for (const pattern of patterns)
+		expect(new RegExp(pattern).test(START_WORKSPACE_DESKTOP), pattern).toBe(
+			false,
+		);
+});
+
+/** The x11vnc block of the start script, run against stub commands. */
+function vncBlock() {
+	const start = START_WORKSPACE_DESKTOP.indexOf('VNC_DIR="');
+	const end = START_WORKSPACE_DESKTOP.indexOf("# The viewer port", start);
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nXAUTH=${dir}/Xauthority\n${START_WORKSPACE_DESKTOP.slice(
+		start,
+		end,
+	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
+}
+
+function runVnc(listening: string, x11vncRunning = false) {
+	writeFileSync(join(dir, "ss.out"), listening);
+	writeFileSync(join(dir, "pgrep.out"), x11vncRunning ? "x11vnc" : "");
+	writeFileSync(
+		join(dir, "pgrep"),
+		`#!/bin/sh\nif [ "$1" = -x ]; then grep -qx -- "$2" "${dir}/pgrep.out" 2>/dev/null; else exit 1; fi\n`,
+	);
+	chmodSync(join(dir, "pgrep"), 0o755);
+	writeFileSync(
+		join(dir, "x11vnc"),
+		`#!/bin/sh\necho "x11vnc $*" >> "${dir}/calls"\n`,
+	);
+	chmodSync(join(dir, "x11vnc"), 0o755);
+	const result = spawnSync("/bin/sh", ["-eu", "-c", `${vncBlock()}\nwait`], {
+		env: { PATH: `${dir}:/usr/bin:/bin` },
+		encoding: "utf8",
+	});
+	let calls: string[] = [];
+	try {
+		calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n");
+	} catch {}
+	return { ...result, calls };
+}
+
+it("serves VNC on its Unix socket only, behind the dropped password", () => {
+	writeFileSync(join(dir, "vnc.password"), "pass1234\n");
+	const started = runVnc("");
+	expect(started.status).toBe(0);
+	const x11vnc = started.calls.find((call) => call.startsWith("x11vnc"));
+	expect(x11vnc).toContain(`-passwdfile ${dir}/vnc.passwd`);
+	expect(x11vnc).toContain("-rfbport 0 -rfbportv6 -1 -noipv6 -localhost");
+	expect(x11vnc).not.toContain("-nopw");
+	expect(existsSync(join(dir, "vnc.password"))).toBe(false);
+	expect(readFileSync(join(dir, "vnc.passwd"), "utf8")).toBe("pass1234\n");
+	expect(statSync(join(dir, "vnc.passwd")).mode & 0o777).toBe(0o600);
+});
+
+it("restarts an x11vnc found on TCP and refuses the desktop if it stays there", () => {
+	writeFileSync(join(dir, "vnc.password"), "pass1234\n");
+	// The live failure: x11vnc on [::]:5900 with no password.
+	const exposed = runVnc("LISTEN 0 32 [::]:5900 [::]:*\n", true);
+	expect(exposed.calls).toContain("pkill -x x11vnc");
+	expect(exposed.status).not.toBe(0);
+	expect(exposed.stderr).toContain("x11vnc listened on TCP");
 });
