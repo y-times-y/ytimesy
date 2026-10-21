@@ -202,6 +202,22 @@ describe("queued steering delivery", () => {
 		await deliverAgentPeerMessage(machines, message, "job");
 		expect(fake.send).toHaveBeenCalledOnce();
 	});
+	it("delivers the user's own message to a running helper as theirs, not the parent's", async () => {
+		session("b", "root", { agentRole: "writer", turnStatus: "running" });
+		await expect(
+			deliverAgentPeerMessage(
+				machines,
+				{ ...message, message: "Skip the docs", fromUser: true },
+				"job-user",
+			),
+		).rejects.toThrow("safe point");
+		const staged = fake.stage.mock.calls[0]?.[2] as string;
+		expect(staged).toContain(
+			"Message from the user, sent directly from the chat:\n\nSkip the docs",
+		);
+		expect(staged).toContain("This is the user steering you directly");
+		expect(staged).not.toContain("Message from root");
+	});
 	it("finishes the queue job once an active runtime acknowledges the message", async () => {
 		session("b", "root", { agentRole: "writer", turnStatus: "running" });
 		fake.accepted.mockResolvedValueOnce(true);
