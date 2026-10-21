@@ -35,7 +35,12 @@ export const installPluginFn = createServerFn({ method: "POST" })
 			.object({
 				catalogId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
 				projectId: z.string().uuid().nullable().default(null),
-				config: z.record(z.string(), z.string().max(4096)).default({}),
+				config: z
+					.record(z.string().max(128), z.string().max(4096))
+					.refine((config) => Object.keys(config).length <= 64, {
+						message: "Too many settings.",
+					})
+					.default({}),
 			})
 			.strict()
 			.parse(data),
