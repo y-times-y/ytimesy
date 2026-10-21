@@ -209,6 +209,7 @@ const requestIdOf = (headers: Headers) =>
 	headers.get("x-request-id") ??
 	headers.get("request-id") ??
 	headers.get("x-goog-request-id") ??
+	headers.get("x-amzn-requestid") ??
 	null;
 
 export function guardedFetch(

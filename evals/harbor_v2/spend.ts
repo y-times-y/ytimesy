@@ -19,7 +19,9 @@ import {
  * spend plus every open reservation plus its own cap stays within the total.
  * At the end it settles its estimate. A trial that dies without settling
  * keeps its reservation (conservative: the total can only be overcounted).
- * A `<ledger>.stop` file refuses every new trial.
+ * A `<ledger>.stop` file refuses every new trial. When the committed total
+ * first reaches 50% and then 80% of the total cap, a `warning` line is
+ * appended (once each) and returned for the trial's log.
  */
 
 export class SpendCapReached extends Error {
@@ -120,7 +122,18 @@ export function guardedLanguageModel(
 
 type LedgerEntry =
 	| { type: "reserve"; trial: string; usd: number; at: string }
-	| { type: "settle"; trial: string; usd: number; at: string };
+	| { type: "settle"; trial: string; usd: number; at: string }
+	| {
+			type: "warning";
+			/** The share of the total cap now committed (0.5 or 0.8). */
+			threshold: number;
+			committedUsd: number;
+			totalCapUsd: number;
+			message: string;
+			at: string;
+	  };
+
+export const LEDGER_WARNING_THRESHOLDS = [0.5, 0.8] as const;
 
 async function readLedger(path: string): Promise<LedgerEntry[]> {
 	let text: string;
@@ -141,11 +154,48 @@ export function committedUsd(entries: readonly LedgerEntry[]) {
 	const settled = new Map<string, number>();
 	const reserved = new Map<string, number>();
 	for (const entry of entries)
-		(entry.type === "settle" ? settled : reserved).set(entry.trial, entry.usd);
+		if (entry.type !== "warning")
+			(entry.type === "settle" ? settled : reserved).set(
+				entry.trial,
+				entry.usd,
+			);
 	let total = 0;
 	for (const usd of settled.values()) total += usd;
 	for (const [trial, usd] of reserved) if (!settled.has(trial)) total += usd;
 	return total;
+}
+
+/**
+ * Appends a warning line for each threshold the committed total has reached
+ * without one yet; returns the new warnings' messages. Call under the lock.
+ */
+async function appendLedgerWarnings(
+	path: string,
+	entries: readonly LedgerEntry[],
+	totalCapUsd: number,
+) {
+	const committed = committedUsd(entries);
+	const warned = new Set(
+		entries.flatMap((entry) =>
+			entry.type === "warning" ? [entry.threshold] : [],
+		),
+	);
+	const messages: string[] = [];
+	for (const threshold of LEDGER_WARNING_THRESHOLDS) {
+		if (warned.has(threshold) || committed < threshold * totalCapUsd) continue;
+		const message = `Spend ledger at ${Math.round(threshold * 100)}% of its total cap: $${committed.toFixed(2)} committed of $${totalCapUsd}.`;
+		const entry: LedgerEntry = {
+			type: "warning",
+			threshold,
+			committedUsd: committed,
+			totalCapUsd,
+			message,
+			at: new Date().toISOString(),
+		};
+		await appendFile(path, `${JSON.stringify(entry)}\n`);
+		messages.push(message);
+	}
+	return messages;
 }
 
 /** A cross-process lock: mkdir is atomic. A lock older than a minute is stale. */
@@ -190,7 +240,11 @@ export async function reserveTrial(input: {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 		const entries = await readLedger(input.ledger);
-		if (entries.some((entry) => entry.trial === input.trial))
+		if (
+			entries.some(
+				(entry) => entry.type !== "warning" && entry.trial === input.trial,
+			)
+		)
 			throw new Error(`Trial ${input.trial} is already in the spend ledger.`);
 		const committed = committedUsd(entries);
 		if (committed + input.trialCapUsd > input.totalCapUsd)
@@ -204,7 +258,12 @@ export async function reserveTrial(input: {
 			at: new Date().toISOString(),
 		};
 		await appendFile(input.ledger, `${JSON.stringify(entry)}\n`);
-		return { committedUsd: committed };
+		const warnings = await appendLedgerWarnings(
+			input.ledger,
+			[...entries, entry],
+			input.totalCapUsd,
+		);
+		return { committedUsd: committed, warnings };
 	});
 }
 
@@ -212,11 +271,15 @@ export async function settleTrial(input: {
 	ledger: string;
 	trial: string;
 	usd: number;
-}) {
-	await withLedgerLock(input.ledger, async () => {
+	/** The total cap, for the 50%/80% warning lines. */
+	totalCapUsd?: number;
+}): Promise<{ warnings: string[] }> {
+	return withLedgerLock(input.ledger, async () => {
 		// An unknown estimate settles at the trial's reservation.
-		const reserved = (await readLedger(input.ledger)).find(
-			(entry) => entry.type === "reserve" && entry.trial === input.trial,
+		const entries = await readLedger(input.ledger);
+		const reserved = entries.find(
+			(entry): entry is Extract<LedgerEntry, { type: "reserve" }> =>
+				entry.type === "reserve" && entry.trial === input.trial,
 		);
 		const entry: LedgerEntry = {
 			type: "settle",
@@ -225,10 +288,26 @@ export async function settleTrial(input: {
 			at: new Date().toISOString(),
 		};
 		await appendFile(input.ledger, `${JSON.stringify(entry)}\n`);
+		return {
+			warnings:
+				input.totalCapUsd === undefined
+					? []
+					: await appendLedgerWarnings(
+							input.ledger,
+							[...entries, entry],
+							input.totalCapUsd,
+						),
+		};
 	});
 }
 
 export async function ledgerSummary(ledger: string) {
 	const entries = await readLedger(ledger);
-	return { committedUsd: committedUsd(entries), entries: entries.length };
+	return {
+		committedUsd: committedUsd(entries),
+		entries: entries.length,
+		warnings: entries.flatMap((entry) =>
+			entry.type === "warning" ? [entry.message] : [],
+		),
+	};
 }

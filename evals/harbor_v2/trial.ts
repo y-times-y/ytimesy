@@ -32,20 +32,19 @@ import {
 	type TimedNotice,
 } from "./atif";
 import {
-	API_ENDPOINTS,
-	type HarborBridgeConfig,
-	type BridgeRole,
-	type HarborModel,
-} from "./config";
-import {
 	checkerWorkerTool,
 	type FusionTrace,
 	fusionLead,
 	type RunRound,
 	roundMessages,
 } from "./children";
+import {
+	type BridgeRole,
+	type HarborBridgeConfig,
+	type HarborModel,
+	routeProvider,
+} from "./config";
 import { type HarborWorkspace, harborHarness } from "./harness";
-import { type TrialRole, trialSessions } from "./sessions";
 import {
 	type CheckerRun,
 	checkerStepGuard,
@@ -55,6 +54,7 @@ import {
 	type ReviewTrace,
 	reviewItems,
 } from "./review";
+import { type TrialRole, trialSessions } from "./sessions";
 import {
 	guardedLanguageModel,
 	reserveTrial,
@@ -319,12 +319,13 @@ export async function runHarborTrial(
 	const startedAt = new Date(now()).toISOString();
 	if (config.total) {
 		try {
-			await reserveTrial({
+			const reserved = await reserveTrial({
 				ledger: config.total.ledger,
 				totalCapUsd: config.total.capUsd,
 				trial: input.trialId,
 				trialCapUsd: config.trialUsdCap ?? config.total.capUsd,
 			});
+			for (const warning of reserved.warnings) log(`warning: ${warning}`);
 		} catch (error) {
 			if (error instanceof SpendCapReached)
 				return {
@@ -391,10 +392,7 @@ export async function runHarborTrial(
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
-		const provider =
-			config.route === "codex-subscription"
-				? "codex-subscription"
-				: API_ENDPOINTS[config.route].provider;
+		const provider = routeProvider(config.route);
 		const onEvent = async (event: ApiAgentEvent) => {
 			events.push({ at: new Date(now()).toISOString(), event });
 			if (event.type === "tool-call")
@@ -894,11 +892,15 @@ export async function runHarborTrial(
 		JSON.stringify(trajectory, null, 2),
 	);
 	if (config.total)
-		await settleTrial({
-			ledger: config.total.ledger,
-			trial: input.trialId,
-			usd: costUsd ?? Number.NaN,
-		});
+		for (const warning of (
+			await settleTrial({
+				ledger: config.total.ledger,
+				trial: input.trialId,
+				usd: costUsd ?? Number.NaN,
+				totalCapUsd: config.total.capUsd,
+			})
+		).warnings)
+			log(`warning: ${warning}`);
 	return {
 		refused: null,
 		failure,

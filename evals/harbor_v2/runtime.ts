@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { LanguageModel } from "ai";
+import { pricedModelId } from "../../src/domain/model-pricing";
 import { codexSubscriptionModel } from "../../src/server/adapters/codex-subscription";
 import { nativeModelCompactor } from "../../src/server/adapters/model-compaction";
 import { apiModelRuntime } from "../../src/server/services/api-agent-runtime";
 import type { ModelAgentRuntime } from "../../src/server/services/model-agent-loop";
+import { bedrockCredentials, bedrockSigningFetch } from "./bedrock";
 import { API_ENDPOINTS, type HarborBridgeConfig } from "./config";
 
 const KEY_SHAPES: Record<keyof typeof API_ENDPOINTS, RegExp> = {
@@ -17,8 +20,8 @@ export async function routeApiKey(
 	config: HarborBridgeConfig,
 	env: Record<string, string | undefined>,
 ) {
-	if (config.route === "codex-subscription")
-		throw new Error("The subscription route has no API key.");
+	if (config.route === "codex-subscription" || config.route === "bedrock")
+		throw new Error(`The ${config.route} route has no API key.`);
 	const fromEnv = config.keyEnv ? env[config.keyEnv]?.trim() : undefined;
 	const key =
 		fromEnv ||
@@ -66,6 +69,7 @@ export async function harborRuntime(input: {
 			);
 		return runtime;
 	}
+	if (config.route === "bedrock") return bedrockRuntime(input);
 	const endpoint = API_ENDPOINTS[config.route];
 	return apiModelRuntime({
 		provider: endpoint.provider,
@@ -80,4 +84,70 @@ export async function harborRuntime(input: {
 		fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
 		wrapModel: input.wrapModel,
 	});
+}
+
+/**
+ * OpenAI models in Amazon Bedrock (bedrock.ts): the product's OpenAI
+ * Responses runtime pointed at bedrock-runtime, every request SigV4-signed
+ * from the operator's AWS credentials. The OpenAI client is given the bare
+ * model id (gpt-6-luna) so it treats the model exactly as on the openai-api
+ * route (reasoning effort, developer instructions, catalog context window);
+ * the signer sends the inference profile id (global.openai.gpt-6-luna) in
+ * its place. Prompt caching keys requests to the trial's cache scope as the
+ * openai-api route does.
+ */
+async function bedrockRuntime(input: {
+	config: HarborBridgeConfig;
+	env: Record<string, string | undefined>;
+	userId: string;
+	cacheScope: string;
+	wrapModel: (model: LanguageModel) => LanguageModel;
+	fetch?: typeof globalThis.fetch;
+}): Promise<ModelAgentRuntime> {
+	const { config } = input;
+	const bedrock = config.bedrock;
+	if (!bedrock) throw new Error("The bedrock route needs its settings.");
+	const credentials = await bedrockCredentials(input.env);
+	const clientModel = pricedModelId(config.modelId);
+	const runtime = await apiModelRuntime({
+		provider: "openai",
+		baseUrl: bedrock.baseUrl,
+		// The OpenAI client needs a key; the signer replaces its header.
+		apiKey: "aws-sigv4",
+		modelId: clientModel,
+		userId: input.userId,
+		connectionId: `harbor:${config.route}`,
+		cacheScopeId: input.cacheScope,
+		contextCacheKey: JSON.stringify(["harbor", config.route, config.modelId]),
+		reasoning: config.effort,
+		fetch: bedrockSigningFetch({
+			credentials,
+			region: bedrock.region,
+			fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
+			model: { client: clientModel, profile: config.modelId },
+		}),
+		wrapModel: input.wrapModel,
+	});
+	const promptCacheKey = createHash("sha256")
+		.update(`ytimesy:harbor:${input.userId}:${input.cacheScope}`)
+		.digest("hex");
+	const requestSettings = runtime.requestSettings;
+	return {
+		...runtime,
+		requestSettings: requestSettings
+			? (instructions) => {
+					const settings = requestSettings(instructions);
+					return {
+						...settings,
+						providerOptions: {
+							...settings.providerOptions,
+							openai: {
+								...settings.providerOptions?.openai,
+								promptCacheKey,
+							},
+						},
+					};
+				}
+			: undefined,
+	};
 }

@@ -57,7 +57,7 @@ describe("harborBridgeConfig", () => {
 			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_APPROVED: "openai-api" }),
 		).toThrow(/YTIMESY_HARBOR_APPROVED=anthropic/);
 		expect(() =>
-			harborBridgeConfig({ YTIMESY_HARBOR_ROUTE: "bedrock" }),
+			harborBridgeConfig({ YTIMESY_HARBOR_ROUTE: "vertex" }),
 		).toThrow(/must be one of/);
 	});
 

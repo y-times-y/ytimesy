@@ -201,3 +201,63 @@ describe("budget weights", () => {
 		expect(budgetTokenWeight("gpt-6-luna", undefined)).toBe(1);
 	});
 });
+
+describe("Bedrock OpenAI prices", () => {
+	const million = (fields: Record<string, number>) => ({
+		inputTokens: null,
+		outputTokens: null,
+		uncachedInputTokens: null,
+		cacheReadTokens: null,
+		cacheWriteTokens: null,
+		...fields,
+	});
+
+	it("maps foundation ids and inference profiles onto the catalog id", () => {
+		expect(pricedModelId("openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("global.openai.gpt-6-luna")).toBe("gpt-6-luna");
+		expect(pricedModelId("us.openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("us-gov.openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+	});
+
+	it("bills the global profile at list price and a regional one 10% above it", () => {
+		expect(modelPrice("global.openai.gpt-6.1-sol")).toEqual(
+			KNOWN_MODEL_PRICES["openai/gpt-6.1-sol"],
+		);
+		const regional = modelPrice("us.openai.gpt-6-luna");
+		expect(regional?.input).toBeCloseTo(0.11, 10);
+		expect(regional?.cacheRead).toBeCloseTo(0.011, 10);
+		expect(regional?.cacheWrite).toBeCloseTo(0.1375, 10);
+		expect(regional?.output).toBeCloseTo(0.55, 10);
+		expect(regional?.longContext?.aboveInputTokens).toBe(272_000);
+		expect(regional?.longContext?.input).toBeCloseTo(0.22, 10);
+	});
+
+	it("prices cache writes and the long-context tier for Sol", () => {
+		const billing = modelBilling({
+			harness: "api",
+			modelId: "global.openai.gpt-6.1-sol",
+		});
+		// 1M uncached + 1M cache reads + 1M cache writes + 1M output, base tier.
+		const base = million({
+			inputTokens: 3_000_000,
+			outputTokens: 1_000_000,
+			cacheReadTokens: 1_000_000,
+			cacheWriteTokens: 1_000_000,
+		});
+		expect(usageCostUsd(base, billing)).toBeCloseTo(2 + 0.1 + 2.5 + 10, 10);
+		// One 300K-input request above 272K: the whole request at the long tier.
+		const long = requestTokenUsage(
+			million({
+				inputTokens: 300_000,
+				outputTokens: 10_000,
+				cacheReadTokens: 200_000,
+				cacheWriteTokens: 50_000,
+			}),
+			longContextThreshold("global.openai.gpt-6.1-sol"),
+		);
+		expect(usageCostUsd(long, billing)).toBeCloseTo(
+			(50_000 * 4 + 200_000 * 0.2 + 50_000 * 5 + 10_000 * 15) / 1_000_000,
+			10,
+		);
+	});
+});

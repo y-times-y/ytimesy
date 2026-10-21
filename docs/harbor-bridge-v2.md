@@ -7,7 +7,7 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 
 | | v13 (frozen) | v2 |
 |---|---|---|
-| Model | OpenAI API, `gpt-6.1-sol` only | OpenAI API, Anthropic direct, Gemini, Codex subscription; any model id with a known price |
+| Model | OpenAI API, `gpt-6.1-sol` only | OpenAI API, Anthropic direct, Gemini, Codex subscription, OpenAI models in Amazon Bedrock; any model id with a known price |
 | Tools | `current` shell surface | `builderToolSurface` for the variant: `lean` (default), `lean-native`, `current`; code mode; hosted web search |
 | Prompt | custom one-liner | the product's `agentTurnInstructions` (root builder, lean shape) |
 | Repository guidance | tool | conversation messages at turn start (as the product) |
@@ -34,6 +34,8 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 - `runtime.ts`: the route's runtime. API routes use `apiModelRuntime`
   (`src/server/services/api-agent-runtime.ts`), the same builder a stored connection
   uses; the subscription uses `codexSubscriptionModel`.
+- `bedrock.ts`: the `bedrock` route's endpoint, inference-profile ids, AWS credentials and
+  SigV4 request signing; `bedrock-smoke.ts`: a two-request paid smoke (run only when approved).
 - `config.ts`, `spend.ts`, `transport-guard.ts`, `atif.ts`, `review.ts`, `preflight.ts`,
   `harbor-machines.ts` (wire protocol, same format as v13).
 
@@ -41,15 +43,18 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 
 | Variable | Meaning |
 |---|---|
-| `YTIMESY_HARBOR_ROUTE` | `openai-api`, `anthropic`, `gemini` or `codex-subscription` (required) |
+| `YTIMESY_HARBOR_ROUTE` | `openai-api`, `anthropic`, `gemini`, `codex-subscription` or `bedrock` (required) |
 | `YTIMESY_HARBOR_APPROVED` | must equal the route: the operator's billing approval (required) |
-| `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` |
+| `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` / `openai.gpt-6.1-sol` (bedrock) |
 | `YTIMESY_HARBOR_EFFORT` | `low` … `max` (default `max`) |
 | `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `rigor`, `promptCacheScope`, `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
 | `YTIMESY_HARBOR_TRIAL_USD_CAP` | per-trial cap; default $20 or the total cap if lower; at most $100 |
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
-| `YTIMESY_HARBOR_WEB_SEARCH` | `off` removes the provider's hosted web search (default on, as in the product) |
+| `YTIMESY_HARBOR_WEB_SEARCH` | `off` removes the provider's hosted web search (default on, as in the product; bedrock: off, and `on` is refused) |
+| `YTIMESY_HARBOR_BEDROCK_REGION` | bedrock: the bedrock-runtime Region (default `us-east-1`) |
+| `YTIMESY_HARBOR_BEDROCK_PROFILE` | bedrock: `global` (default, list price) or `us` (geographic, +10%) inference profile |
+| `YTIMESY_HARBOR_AWS_PROFILE` | bedrock: AWS profile in `~/.aws/credentials` (else `AWS_PROFILE`; else `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` when set; else `harbor`) |
 | `YTIMESY_HARBOR_PREFLIGHT` | the preflight file (`preflight.ts` output), or `skip` |
 | `YTIMESY_HARBOR_KEY_FILE` | key file; default `.secrets/openai-api-key`, `.secrets/anthropic-api-key`, `.secrets/gemini-api-key`. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` win when set. |
 | `YTIMESY_EVALUATION_CODEX_AUTH_FILE` | subscription route: local Codex sign-in (`~/.codex/auth.json`), ≥ 2 h of access left |
@@ -62,6 +67,47 @@ instead of touching the development database). The subscription route loads `.en
 and then points `DATABASE_URL` at a per-trial loopback Postgres in Docker
 (`benchmarks/evaluation/operator-database.ts`, needs the `postgres:13` image and a
 repository checkout on the host), holding only the access token.
+
+## Amazon Bedrock (route `bedrock`)
+
+OpenAI models in Amazon Bedrock through the **OpenAI Responses API on bedrock-runtime**
+(`https://bedrock-runtime.<region>.amazonaws.com/openai/v1/responses`), AWS's recommended
+endpoint for these models (docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html).
+It is the same request and stream format as api.openai.com, so the product's OpenAI
+Responses transport (`apiModelRuntime`, provider `openai`) runs unchanged: function tools,
+streaming, reasoning effort, `store: false` with encrypted reasoning carried forward, and
+`prompt_cache_key` (keyed to the trial's cache scope). Converse was not used: it would need a
+new transport and loses the Responses-shaped reasoning items the loop relies on. Mantle
+(`bedrock-mantle`) was not used: no global profile there; its one extra (hosted web search)
+is the only thing this route lacks.
+
+- **Models**: give foundation ids (`openai.gpt-6.1-sol`, `openai.gpt-6-luna`); the bridge
+  requests them through the inference profile `global.openai.<model>` (or `us.` with
+  `YTIMESY_HARBOR_BEDROCK_PROFILE=us`). bedrock-runtime only serves these models through a
+  profile. There is no silent fallback: if the global profile is refused, rerun with
+  `YTIMESY_HARBOR_BEDROCK_PROFILE=us` (and the Region where the model is enabled).
+  The OpenAI client is given the bare id (`gpt-6-luna`) so it treats the model exactly as on
+  `openai-api` (reasoning model, developer instructions, catalog context window); the signer
+  puts the profile id in the request body before signing.
+- **roleModels**: `bedrock:<model>`, `api:<model>` or a bare `<model>` on this route, e.g.
+  `lead=fusion,review=on,checkerMode=pair,roleModels.checker=bedrock:openai.gpt-6.1-sol,roleModels.writer=bedrock:openai.gpt-6-luna,roleModels.checkerWorker=bedrock:openai.gpt-6-luna,roleModels.classifier=bedrock:openai.gpt-6-luna@low`.
+  `bedrock:` on another route, or `codex:` here, is refused.
+- **Auth**: every request is signed with AWS SigV4 (service `bedrock`) from the operator's AWS
+  credentials (see `YTIMESY_HARBOR_AWS_PROFILE`); nothing is written to a file or logged. The
+  signer refuses any host but the configured bedrock-runtime one. Needs
+  `bedrock:InvokeModel`/`InvokeModelWithResponseStream` on the profile and the default project.
+- **Prices** (`src/domain/model-pricing.ts`): a global profile is billed at OpenAI's list price
+  (Sol $2 / $0.10 cached / $2.50 cache write / $10 out, above 272K input $4 / $0.20 / $5 / $15;
+  Luna $0.10 / $0.01 / $0.125 / $0.50, above 272K $0.20 / $0.02 / $0.25 / $0.75); a
+  geographic profile at +10%. Bedrock bills cache writes: they are priced from
+  `input_tokens_details.cache_write_tokens` when the response reports it; if it does not,
+  written tokens are priced as uncached input (an undercount of at most $0.50 per million
+  written for Sol).
+- **Spending**: the same guard and ledger as other paid routes (`YTIMESY_HARBOR_APPROVED=bedrock`,
+  per-trial and total caps). Request ids (`x-amzn-requestid`) appear in the transport log; the
+  transport guard covers these streams as OpenAI Responses streams.
+- **Smoke** (two paid requests, one per model, tool call + stream + cache stats):
+  `YTIMESY_HARBOR_ROUTE=bedrock YTIMESY_HARBOR_APPROVED=bedrock YTIMESY_HARBOR_TOTAL_USD_CAP=0.05 YTIMESY_HARBOR_TRIAL_USD_CAP=0.05 YTIMESY_HARBOR_SPEND_LEDGER=.ytimesy/harbor-v2/bedrock-smoke.jsonl YTIMESY_HARBOR_EFFORT=low pnpm exec tsx evals/harbor_v2/bedrock-smoke.ts`
 
 ## Checker model (roleModels.checker)
 
@@ -145,7 +191,10 @@ node --import tsx evals/harbor_v2/efficiency.ts .ytimesy/harbor-v2/smoke [job ..
   start only if settled spend + open reservations + its cap ≤ the total. At the end it
   settles its estimate. A crashed trial keeps its reservation (overcounts, never under).
   Concurrent trials are serialized by an atomic `mkdir` lock (tested with 8 parallel
-  reservations). `touch <ledger>.stop` refuses every new trial.
+  reservations). `touch <ledger>.stop` refuses every new trial. When the committed total first
+  reaches 50% and then 80% of the total cap, a `{"type":"warning",...}` line is appended to the
+  ledger (once each) and the trial log prints `warning: Spend ledger at 50% ...`;
+  `ledgerSummary` returns them.
 - A model without a known list price cannot run on a paid route (no price, no cap).
 - Not counted: a stream the transport guard resent (the cut attempt was billed but its
   usage never reached the harness; every cut is in the transport log) and hosted web
