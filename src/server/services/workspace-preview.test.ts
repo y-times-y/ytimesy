@@ -5,6 +5,16 @@ import type { WorkspaceMachines } from "./workspace-machines";
 const mocks = vi.hoisted(() => ({
 	peek: vi.fn(),
 	ensure: vi.fn(),
+	grants: {
+		grant: vi.fn(async () => 1),
+		recordNonce: vi.fn(async () => {}),
+		consumeNonce: vi.fn(async () => 1),
+		version: vi.fn(async () => 1),
+		revokeScope: vi.fn(async () => {}),
+	},
+}));
+vi.mock("../adapters/preview-grants", () => ({
+	previewGrants: mocks.grants,
 }));
 vi.mock("../config", () => ({
 	serverConfig: () => ({ APP_URL: "https://app.example" }),
@@ -97,6 +107,15 @@ it("opens a port privately: forward auth on the route and a signed sign-in link"
 			`^https://${previewHostname("vm-s", 3000).replaceAll(".", "\\.")}/__ytimesy/preview\\?t=`,
 		),
 	);
+	expect(mocks.grants.grant).toHaveBeenCalledWith({
+		ruleId: "tls-9",
+		userId: "u",
+		projectId: "p",
+		sessionId: "s",
+	});
+	expect(mocks.grants.recordNonce).toHaveBeenCalledWith(
+		expect.objectContaining({ ruleId: "tls-9", userId: "u" }),
+	);
 });
 
 it("shares a port on its own public name and unshares only that", async () => {
@@ -120,6 +139,8 @@ it("shares a port on its own public name and unshares only that", async () => {
 		["share"],
 		3000,
 	);
+	expect(mocks.grants.revokeScope).toHaveBeenCalledTimes(1);
+	expect(mocks.grants.revokeScope).toHaveBeenCalledWith(scope);
 });
 
 it("refuses our own service ports", async () => {

@@ -7,6 +7,7 @@ import {
 	previewPortAllowed,
 	type WorkspacePreviews,
 } from "#/domain/workspace-preview";
+import { previewGrants } from "../adapters/preview-grants";
 import { serverConfig } from "../config";
 import {
 	EDGE_AUTHORIZER_HEADER,
@@ -118,7 +119,16 @@ export async function openWorkspacePreview(
 		port,
 		forwardAuthId: authorizer,
 	});
-	return { url: previewLoginUrl(route.origin, route.ruleId) };
+	if (!scope.projectId || !scope.sessionId)
+		throw new Error("Open a chat to preview its apps.");
+	return {
+		url: await previewLoginUrl(route.origin, {
+			ruleId: route.ruleId,
+			userId: scope.userId,
+			projectId: scope.projectId,
+			sessionId: scope.sessionId,
+		}),
+	};
 }
 
 /** Turns the port's public link on (anyone with it can open the app) or off. */
@@ -134,6 +144,13 @@ export async function setWorkspacePreviewSharing(
 	const vm = WorkspaceId(providerRef);
 	if (!shared) {
 		await machines.withdrawHttpRoutes(vm, ["share"], port);
+		// Access withdrawn: signed-in preview cookies for this chat stop working too.
+		if (scope.projectId && scope.sessionId)
+			await previewGrants.revokeScope({
+				userId: scope.userId,
+				projectId: scope.projectId,
+				sessionId: scope.sessionId,
+			});
 		return { shareUrl: null };
 	}
 	const route = await machines.publishHttpRoute(vm, {
