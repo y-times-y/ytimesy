@@ -1135,13 +1135,22 @@ export async function checkScenario(
 		if (id === "fusion-multiturn") {
 			// Besides the two requests' turns, each build round's report woke
 			// Main in a turn of its own (Main hands off during a round).
-			const requestTurns = data.rootTurns.filter((turn) =>
-				turn.items.some(
-					(item) =>
-						item.kind === "userMessage" &&
-						!isInternalChildTaskMessage(item.text ?? ""),
+			// A turn's items start with the chat's earlier ones: the requests
+			// are the distinct latest user messages (report messages skipped).
+			const requestTurns = [
+				...new Set(
+					data.rootTurns.map(
+						(turn) =>
+							turn.items
+								.filter(
+									(item) =>
+										item.kind === "userMessage" &&
+										!isInternalChildTaskMessage(item.text ?? ""),
+								)
+								.at(-1)?.text,
+					),
 				),
-			);
+			];
 			check(
 				"two user requests, both turns completed",
 				requestTurns.length === 2 &&
