@@ -8,6 +8,7 @@ import {
 } from "./harness-variant";
 import type { FailoverConnection } from "./model-failover";
 import {
+	DEFAULT_CHECKER_WORKER_MODEL,
 	parseRoleModel,
 	resolveRoleModel,
 	roleModelFor,
@@ -87,6 +88,25 @@ describe("role model specs", () => {
 		const reviewer = { model: "gpt-6-luna" };
 		expect(roleModelFor({ reviewer }, "judge")).toBe(reviewer);
 		expect(roleModelFor({ reviewer }, "checker")).toBeUndefined();
+	});
+
+	it("gives the checker's worker its own entry, else codex:gpt-6-luna", () => {
+		expect(roleModelFor(undefined, "checkerWorker")).toEqual(
+			DEFAULT_CHECKER_WORKER_MODEL,
+		);
+		expect(DEFAULT_CHECKER_WORKER_MODEL).toEqual({ model: "codex:gpt-6-luna" });
+		const checker = { model: "codex:gpt-6.1-sol" };
+		expect(roleModelFor({ checker }, "checkerWorker")).toEqual(
+			DEFAULT_CHECKER_WORKER_MODEL,
+		);
+		const checkerWorker = { model: "api:google/gemini-3.8-flash" };
+		expect(roleModelFor({ checker, checkerWorker }, "checkerWorker")).toBe(
+			checkerWorker,
+		);
+		expect(
+			harnessVariantFromFlags(["roleModels.checkerWorker=codex:gpt-6-luna@low"])
+				.roleModels,
+		).toEqual({ checkerWorker: { model: "codex:gpt-6-luna", effort: "low" } });
 	});
 });
 

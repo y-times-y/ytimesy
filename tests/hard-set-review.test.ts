@@ -165,6 +165,59 @@ describe("hard set review report: the checker's own tests", () => {
 	});
 });
 
+describe("hard set review report: checkerMode=pair", () => {
+	it("splits the checker's spend as judge and worker per round and over the runs", () => {
+		const pair = {
+			judgeTokens: 20_000,
+			judgeCostUsd: 0.04,
+			workerTokens: 300_000,
+			workerCostUsd: 0.06,
+		};
+		const lines = reviewLoopReport([
+			{
+				task: "mvcc",
+				attempt: "1",
+				status: "final",
+				passed: true,
+				reviewLoop: loop(
+					[
+						round({
+							checkerTests: [
+								{ name: "a", passed: false, command: "c", ranBy: "worker" },
+								{ name: "b", passed: true, command: "d", ranBy: "judge" },
+								{ name: "c", passed: true, command: "e" },
+							],
+							pair: { ...pair, workers: 1 },
+						}),
+						round({
+							n: 2,
+							verdict: "pass",
+							findings: 0,
+							decision: "pass",
+							graderPassed: true,
+							pair: { ...pair, workers: 2 },
+						}),
+					],
+					{
+						pair: {
+							judgeTokens: 40_000,
+							judgeCostUsd: 0.08,
+							workerTokens: 600_000,
+							workerCostUsd: 0.12,
+						},
+					},
+				),
+			},
+		]);
+		expect(lines[2]).toBe(
+			"- mvcc.1: R1 fail(2) [3 tests, 1 failed, 1 run by the worker]->fail 2.5m judge $0.040 / worker $0.060 fix 1.2m fixed 1 rejected 1, R2 pass->PASS 2.5m judge $0.040 / worker $0.060; pass; final PASS",
+		);
+		expect(lines).toContain(
+			"Checker pair spend over 1 run(s): judge $0.080 (40%), 40k tokens; worker $0.120 (60%), 600k tokens.",
+		);
+	});
+});
+
 describe("hard set review state", () => {
 	// rl-live-2: the checker's completion woke a second builder turn whose
 	// own state was "not-eligible (no files changed)".

@@ -33,6 +33,12 @@ export const MODEL_ROLES = [
 	 * (src/domain/sidekick-classifier.ts); codex:gpt-6-luna@low when unset.
 	 */
 	"classifier",
+	/**
+	 * checkerMode=pair: the checker's worker, which reads, writes and runs
+	 * the tests its judge (roleModels.checker) briefs
+	 * (src/domain/checker-pair.ts); codex:gpt-6-luna when unset.
+	 */
+	"checkerWorker",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
@@ -98,11 +104,21 @@ export function roleModelsFlags(models: RoleModels): string[] {
 	});
 }
 
-/** The entry that applies to a role: the judge falls back to the reviewer's. */
+/** roleModels.checkerWorker when unset. */
+export const DEFAULT_CHECKER_WORKER_MODEL: RoleModel = {
+	model: "codex:gpt-6-luna",
+};
+
+/**
+ * The entry that applies to a role: the judge falls back to the reviewer's;
+ * the checker's worker has a default (a cheaper model than its judge's).
+ */
 export function roleModelFor(
 	models: RoleModels | undefined,
 	role: ModelRole,
 ): RoleModel | undefined {
+	if (role === "checkerWorker")
+		return models?.checkerWorker ?? DEFAULT_CHECKER_WORKER_MODEL;
 	if (!models) return undefined;
 	return models[role] ?? (role === "judge" ? models.reviewer : undefined);
 }

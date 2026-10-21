@@ -11,6 +11,7 @@ import {
 	parseReviewVerdict,
 	type ReviewVerdict,
 } from "#/domain/checker-brief";
+import { pairReviewVerdict, ranCommandsText } from "#/domain/checker-pair";
 import { SessionItemId } from "#/domain/ids";
 import { type ModelBilling, usageCostUsd } from "#/domain/model-pricing";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
@@ -24,6 +25,7 @@ import {
 	type ReviewLoopState,
 	type ReviewOutcome,
 	type ReviewRound,
+	type ReviewWorker,
 	reviewEligibility,
 	reviewFindings,
 	reviewLoopSummary,
@@ -82,6 +84,17 @@ export type ReviewLoopDeps = Omit<
 		turnId: string,
 	) => Promise<ReviewLoopState | null>;
 	readonly save: (sessionId: string, state: ReviewLoopState) => Promise<void>;
+	/** checkerMode=pair: the judge's workers (its child sessions). */
+	readonly workers: (
+		checkerSessionId: string,
+	) => Promise<readonly LoopWorker[]>;
+};
+
+/** A pair judge's worker session as the loop reads it. */
+export type LoopWorker = {
+	readonly sessionId: string;
+	readonly model?: ReviewWorker["model"];
+	readonly items: unknown;
 };
 
 export type ReviewLoopInput = {
@@ -101,6 +114,13 @@ export type ReviewLoopInput = {
 	 * checker as a claim and is kept on the round.
 	 */
 	readonly rigor?: boolean;
+	/**
+	 * Harness variant checkerMode=pair: each round's checker is a judge that
+	 * briefs a cheaper worker (src/domain/checker-pair.ts); its brief adds
+	 * the earlier rounds' findings, the round is still a full check, and
+	 * the workers' spend counts as the checker's.
+	 */
+	readonly pair?: boolean;
 };
 
 type StepInput = {
@@ -146,27 +166,42 @@ const plus = (left: AttemptSpend, right: AttemptSpend): AttemptSpend => ({
 	estimated: left.estimated || right.estimated,
 });
 
-/** Per round: the checker's spend (its own session) and the fix's (the builder's turn). */
+/**
+ * Per round: the checker's spend (its own session, plus its workers' with
+ * checkerMode=pair, split as judge and worker) and the fix's (the builder's
+ * turn).
+ */
 export function reviewLoopSpend(state: ReviewLoopState, billing: ModelBilling) {
-	const rounds = state.rounds.map((round) => ({
-		n: round.n,
-		checker: spendOf(
+	const rounds = state.rounds.map((round) => {
+		const judge = spendOf(
 			round.checker.usage,
 			childBilling(round.checker.model, billing),
-		),
-		fix: spendOf(round.fix?.usage, billing),
-		checkMs:
-			(round.checker.endedAt ?? round.checker.startedAt) -
-			round.checker.startedAt,
-		fixMs: round.fix?.endedAt ? round.fix.endedAt - round.fix.startedAt : 0,
-	}));
+		);
+		const worker = (round.checker.workers ?? []).reduce(
+			(sum, entry) =>
+				plus(sum, spendOf(entry.usage, childBilling(entry.model, billing))),
+			NO_ATTEMPT_SPEND,
+		);
+		return {
+			n: round.n,
+			checker: plus(judge, worker),
+			judge,
+			worker,
+			fix: spendOf(round.fix?.usage, billing),
+			checkMs:
+				(round.checker.endedAt ?? round.checker.startedAt) -
+				round.checker.startedAt,
+			fixMs: round.fix?.endedAt ? round.fix.endedAt - round.fix.startedAt : 0,
+		};
+	});
+	const total = (pick: (round: (typeof rounds)[number]) => AttemptSpend) =>
+		rounds.reduce((sum, round) => plus(sum, pick(round)), NO_ATTEMPT_SPEND);
 	return {
 		rounds,
-		checker: rounds.reduce(
-			(sum, round) => plus(sum, round.checker),
-			NO_ATTEMPT_SPEND,
-		),
-		fix: rounds.reduce((sum, round) => plus(sum, round.fix), NO_ATTEMPT_SPEND),
+		checker: total((round) => round.checker),
+		judge: total((round) => round.judge),
+		worker: total((round) => round.worker),
+		fix: total((round) => round.fix),
 	};
 }
 
@@ -193,7 +228,11 @@ function summaryItem(
 				(test) =>
 					`Failing test: ${test.name}${test.command ? ` (\`${test.command}\`)` : ""}`,
 			),
-			`Checker spent ${Math.round(spend.checker.tokens / 1000)}k tokens${dollars(spend.checker.costUsd, spend.checker.estimated)}.`,
+			`Checker spent ${Math.round(spend.checker.tokens / 1000)}k tokens${dollars(spend.checker.costUsd, spend.checker.estimated)}${
+				state.rounds.some((round) => round.checker.pair)
+					? ` (judge ${Math.round(spend.judge.tokens / 1000)}k${dollars(spend.judge.costUsd, spend.judge.estimated)}, worker ${Math.round(spend.worker.tokens / 1000)}k${dollars(spend.worker.costUsd, spend.worker.estimated)})`
+					: ""
+			}.`,
 		].join("\n"),
 		status: "completed",
 	};
@@ -327,6 +366,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			const checker = await deps.startSubagent({
 				role: "checker",
 				title: `Review ${n} of ${REVIEW_LOOP_LIMITS.maxRounds}`,
+				...(input.pair ? { pair: true } : {}),
 				brief: independentReviewBrief({
 					taskText: input.taskText(),
 					checkout: workspace.cwd,
@@ -335,6 +375,18 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					diffCommand: `git -C ${workspace.cwd} diff ${state.checkpoint.ref} ${snapshot.ref}`,
 					rigor: input.rigor,
 					...(requirements ? { builderRequirements: requirements } : {}),
+					// A full check every round: the same brief, earlier findings as context.
+					...(input.pair
+						? {
+								pair: true,
+								previousFindings: state.rounds.flatMap((round) =>
+									round.findings.map(
+										(finding) =>
+											`Review ${round.n}, ${finding.id}: ${finding.text}`,
+									),
+								),
+							}
+						: {}),
 				}),
 				cap: {
 					...REVIEW_LOOP_LIMITS.checker,
@@ -363,6 +415,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					checker: {
 						sessionId: sessionIdOfChecker,
 						...(modelOfChecker ? { model: modelOfChecker } : {}),
+						...(input.pair ? { pair: true as const } : {}),
 						startedAt: deps.now(),
 						budgetMs: decision.checkMs,
 					},
@@ -374,6 +427,26 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			],
 		});
 		return awaitChecker(checking, step);
+	}
+
+	/**
+	 * checkerMode=pair: the judge's workers with their spend and the commands
+	 * they ran; any still running are stopped (the judge has answered).
+	 */
+	async function pairWorkers(checkerSessionId: string) {
+		const sessions = await deps.workers(checkerSessionId).catch(() => []);
+		return Promise.all(
+			sessions.map(async (session) => {
+				await deps.stopChild(session.sessionId).catch(() => {});
+				const items = sessionItemsFromUnknown(session.items);
+				return {
+					sessionId: session.sessionId,
+					...(session.model ? { model: session.model } : {}),
+					usage: sessionTokenUsage(items),
+					ran: ranCommandsText(items),
+				};
+			}),
+		);
 	}
 
 	/** Waits for the running checker's report until the step's deadline. */
@@ -422,15 +495,25 @@ export function createReviewLoop(input: ReviewLoopInput) {
 	): Promise<AttemptLoopOutcome> {
 		const round = state.rounds.at(-1) as ReviewRound;
 		const now = deps.now();
-		const verdict: ReviewVerdict | null = taken.timedOut
+		const judgeItems = sessionItemsFromUnknown(
+			await deps.childItems(round.checker.sessionId).catch(() => []),
+		);
+		const usage = sessionTokenUsage(judgeItems);
+		const workers = round.checker.pair
+			? await pairWorkers(round.checker.sessionId)
+			: null;
+		const parsed: ReviewVerdict | null = taken.timedOut
 			? null
 			: parseReviewVerdict(taken.report);
+		// checkerMode=pair: the judge's verdict, its tests marked with who ran them.
+		const verdict =
+			parsed && workers
+				? pairReviewVerdict(parsed, {
+						worker: workers.map((worker) => worker.ran).join("\n"),
+						judge: ranCommandsText(judgeItems),
+					})
+				: parsed;
 		const findings = verdict ? reviewFindings(verdict, round.admitted) : [];
-		const usage = sessionTokenUsage(
-			sessionItemsFromUnknown(
-				await deps.childItems(round.checker.sessionId).catch(() => []),
-			),
-		);
 		const decision = verdict
 			? decideAfterVerdict({
 					verdict,
@@ -445,7 +528,16 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			...(taken.timedOut ? { timedOut: true } : {}),
 			findings,
 			decision: decision.kind === "fix" ? "fix" : decision.reason,
-			checker: { ...current.checker, endedAt: now, usage },
+			checker: {
+				...current.checker,
+				endedAt: now,
+				usage,
+				...(workers
+					? {
+							workers: workers.map(({ ran: _ran, ...worker }) => worker),
+						}
+					: {}),
+			},
 		}));
 		if (decision.kind === "finish")
 			return finish(
