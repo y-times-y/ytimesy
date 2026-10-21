@@ -10,6 +10,7 @@ export type Check = { name: string; ok: boolean; detail?: string };
 export type ScenarioId =
 	| "builder"
 	| "review"
+	| "review-pair"
 	| "fusion"
 	| "fusion-explore"
 	| "fusion-multiturn"
@@ -123,9 +124,12 @@ export const BUILDER_REQUIREMENTS = [
 export const requirementsMessage = (items: readonly string[]) =>
 	`Requirements first.\n<requirements>\n${items.map((item) => `- ${item}`).join("\n")}\n</requirements>`;
 
-function reviewBuilderScript(tag: string): AgentScript {
+function reviewBuilderScript(
+	tag: string,
+	name = "review-builder",
+): AgentScript {
 	return {
-		name: "review-builder",
+		name,
 		match: (first) => first.includes(tag) && !isChecker(first),
 		reply: ({ step, userTexts, calls }) => {
 			const notices = userTexts.filter((text) => text.includes(NOTICE));
@@ -229,6 +233,121 @@ return JSON.stringify({ copy, write, make, probe });`);
 					assumptions: [],
 					notes: `rehearsal review ${round}`,
 				}),
+			};
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// b2. review=on, checkerMode=pair: each round's checker is a judge (Sol) that
+// briefs a worker (Luna) through checker_worker; the worker copies the
+// checkout, writes the probe and runs make test and the probe in the judge's
+// scratch as the reader user and reports evidence; the judge spot-checks the
+// scratch itself and writes the verdict JSON. Round 1 fails, round 2 passes.
+
+/** The pair's worker conversations carry this in the judge's brief. */
+export const PAIR_WORKER_TAG = "[rehearsal:pair-worker]";
+/** The opening of the runtime's frame around a judge's brief (src/domain/checker-pair.ts). */
+export const PAIR_WORKER_MARKER =
+	"You are the worker of an independent checker";
+
+function pairJudgeScript(tag: string): AgentScript {
+	let reviews = 0;
+	return {
+		name: "pair-judge",
+		match: (first) => isChecker(first) && first.includes(tag),
+		reply: ({ step, userTexts, tools }) => {
+			const paths = checkerPaths(userTexts.join("\n"));
+			if (step === 0) {
+				reviews++;
+				if (!tools.includes("checker_worker"))
+					return { text: "NO_WORKER_TOOL" };
+				return {
+					calls: [
+						{
+							name: "checker_worker",
+							args: {
+								title: `Run the checks (review ${reviews})`,
+								brief: `${PAIR_WORKER_TAG} Copy the checkout and test the copy. SCRATCH=${paths.scratch} WORK=${paths.work} CHECKOUT=${paths.checkout}\n1. Copy: \`${paths.copy}\`.\n2. Write a probe at ${paths.scratch}/tests/rehearsal_probe.sh that checks the copy's build prints the rehearsal line.\n3. Run make test in the copy, then the probe. Report each command, its exit status and the lines that matter.`,
+							},
+						},
+					],
+				};
+			}
+			if (step === 1)
+				return runCode(`const r = await tools.bash({ command: ${JSON.stringify(`id -u; ls ${paths.scratch}/tests`)} });
+return JSON.stringify(r);`);
+			const round = reviews;
+			const fail = round === 1;
+			return {
+				text: JSON.stringify({
+					verdict: fail ? "fail" : "pass",
+					failures: fail
+						? [
+								"Rehearsal finding: the regression output must be confirmed by the pair's test",
+							]
+						: [],
+					tests: [
+						{
+							name: "rehearsal probe: the copy builds in place and prints the edit",
+							command: `bash ${paths.scratch}/tests/rehearsal_probe.sh`,
+							passed: !fail,
+							output: fail ? "rehearsal: failed on purpose" : "PROBE_PASSED",
+						},
+					],
+					requirements: [
+						{
+							requirement: "make test passes",
+							met: true,
+							evidence: "the worker's make test in the copy",
+						},
+					],
+					assumptions: [],
+					notes: `rehearsal pair review ${round}`,
+				}),
+			};
+		},
+	};
+}
+
+/**
+ * The worker: copies the checkout and writes the probe, runs make test in
+ * the copy (waiting it out with ytimesy-job when it outlives its call), runs
+ * the probe, then reports its evidence.
+ */
+function pairWorkerScript(): AgentScript {
+	return {
+		name: "pair-worker",
+		match: (first) => first.includes(PAIR_WORKER_TAG) && !isChecker(first),
+		reply: ({ step, userTexts, calls }) => {
+			const brief = userTexts.join("\n");
+			const value = (key: string) =>
+				new RegExp(`${key}=(\\S+)`).exec(brief)?.[1] ?? "/nonexistent";
+			const scratch = value("SCRATCH");
+			const work = value("WORK");
+			const checkout = value("CHECKOUT");
+			const probe = `bash ${scratch}/tests/rehearsal_probe.sh`;
+			if (step === 0)
+				return runCode(`const who = await tools.bash({ command: "pwd; id -u; touch .worker-write-probe 2>&1 || echo READ_ONLY_OK" });
+const copy = await tools.bash({ command: ${JSON.stringify(`mkdir -p ${work} && cp -a ${checkout}/. ${work}/ && ls -ld ${work}`)} });
+const write = await tools.bash({ command: ${JSON.stringify(`mkdir -p ${scratch}/tests && cat > ${scratch}/tests/rehearsal_probe.sh <<'EOF'\n${PROBE(work)}\nEOF\nchmod +x ${scratch}/tests/rehearsal_probe.sh && echo PROBE_WRITTEN`)} });
+return JSON.stringify({ who, copy, write });`);
+			const shells = calls.filter((call) => call.name === "bash");
+			if (!shells.length)
+				return bash(
+					`cd ${work} && rm -rf build && make test && ls -ld build`,
+					600,
+				);
+			const yielded =
+				/Still running after [\s\S]*?\(ID ([A-Za-z0-9_.:-]+)\)/.exec(
+					shells.at(-1)?.output ?? "",
+				)?.[1];
+			if (yielded) return bash(`ytimesy-job wait ${yielded}`, 600);
+			if (!shells.some((call) => JSON.stringify(call.args).includes(probe)))
+				return bash(probe, 120);
+			const outputs = shells.map((call) => call.output).join("\n");
+			return {
+				text: `Evidence: make test in ${work}: ${/all regression tests passed/.test(outputs) ? "exit 0 (all regression tests passed)" : "did not pass"}; \`${probe}\`: ${/PROBE_PASSED/.test(outputs) ? "PROBE_PASSED" : "failed"}.`,
 			};
 		},
 	};
@@ -875,6 +994,18 @@ export function scenarios(): Scenario[] {
 			scripts: [
 				reviewBuilderScript("[rehearsal:review]"),
 				checkerScript("[rehearsal:review]"),
+			],
+		},
+		{
+			id: "review-pair",
+			title:
+				"b2. review=on, checkerMode=pair: a Sol judge briefs a Luna worker, which copies, tests and runs make test as the reader; the judge's verdict, costs split, both rounds full",
+			variant:
+				"codeMode=primary,subagents=on,review=on,checkerMode=pair,roleModels.checker=codex:gpt-6.1-sol,roleModels.checkerWorker=codex:gpt-6-luna",
+			scripts: [
+				reviewBuilderScript("[rehearsal:review-pair]", "pair-builder"),
+				pairJudgeScript("[rehearsal:review-pair]"),
+				pairWorkerScript(),
 			],
 		},
 		{

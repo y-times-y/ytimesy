@@ -23,6 +23,8 @@ import {
 	LEAD_REQUIREMENTS,
 	LEAD_REQUIREMENTS_INSTRUCTION,
 	MULTITURN_FOLLOW_UP,
+	PAIR_WORKER_MARKER,
+	PAIR_WORKER_TAG,
 	REQUIREMENTS_INSTRUCTION,
 	REQUIREMENTS_MARK,
 	RIGOR_BLOCK,
@@ -402,6 +404,228 @@ export async function checkScenario(
 			ownCalls.every((request) =>
 				request.lastOutputs.every((output) => !has(output, CAP_NOTE)),
 			),
+		);
+	}
+
+	if (id === "review-pair") {
+		const judges = data.children.filter(
+			(child) => child.agent_role === "checker",
+		);
+		const judgeIds = new Set(judges.map((judge) => judge.id));
+		const workers = data.children.filter((child) =>
+			judgeIds.has(child.parent_session_id),
+		);
+		check(
+			"one judge per round (2), each a checker on gpt-6.1-sol marked as the pair's judge",
+			judges.length === 2 &&
+				judges.every(
+					(judge) =>
+						judge.listed_model_id === "gpt-6.1-sol" &&
+						judge.agent_budget?.checkerPair === "judge",
+				),
+			JSON.stringify(
+				judges.map((judge) => [judge.listed_model_id, judge.agent_budget]),
+			),
+		);
+		check(
+			"each judge started its own worker: a read-only reader on gpt-6-luna on the shared VM, marked as the worker",
+			workers.length === 2 &&
+				judges.every((judge) =>
+					workers.some((worker) => worker.parent_session_id === judge.id),
+				) &&
+				workers.every(
+					(worker) =>
+						worker.agent_role === "researcher" &&
+						worker.listed_model_id === "gpt-6-luna" &&
+						worker.task_access === "read_only" &&
+						worker.task_placement === "shared" &&
+						worker.agent_budget?.checkerPair === "worker",
+				),
+			JSON.stringify(
+				workers.map((worker) => [
+					worker.agent_role,
+					worker.listed_model_id,
+					worker.task_access,
+					worker.task_placement,
+					worker.agent_budget?.checkerPair,
+				]),
+			),
+		);
+		const judgeCalls = requests("pair-judge");
+		const workerCalls = requests("pair-worker");
+		check(
+			"the judges ran on gpt-6.1-sol with checker_worker and no agent tool",
+			judgeCalls.length >= 6 &&
+				judgeCalls.every(
+					(request) =>
+						request.model === "gpt-6.1-sol" &&
+						request.tools.includes("checker_worker") &&
+						!request.tools.includes("agent"),
+				),
+			judgeCalls
+				.map((request) => `${request.model}:${request.tools.join("/")}`)
+				.join(" "),
+		);
+		check(
+			"the workers ran on gpt-6-luna and can start no agent",
+			workerCalls.length >= 4 &&
+				workerCalls.every(
+					(request) =>
+						request.model === "gpt-6-luna" &&
+						!request.tools.includes("agent") &&
+						!request.tools.includes("checker_worker"),
+				),
+			workerCalls
+				.map((request) => `${request.model}:${request.tools.join("/")}`)
+				.join(" "),
+		);
+		const briefs = judgeCalls
+			.filter((request) => request.step === 0)
+			.map((request) => checkerBrief(request) ?? "");
+		check(
+			"both rounds are full checks: the judge's whole brief with the pair section; round 2 adds round 1's findings as context",
+			briefs.length === 2 &&
+				briefs.every((brief) =>
+					has(
+						brief,
+						"[rehearsal:review-pair]",
+						"Review in four parts:",
+						"4. Test it yourself.",
+						"<checker_pair>",
+					),
+				) &&
+				!has(briefs[0], "<previous_review>") &&
+				has(
+					briefs[1],
+					"<previous_review>",
+					"this review is a full, independent check of all four parts",
+					"Review 1, F1: Rehearsal finding",
+				),
+			clip(briefs[1]?.slice(briefs[1].indexOf("<previous_review>")), 400),
+		);
+		const workerBriefs = workerCalls
+			.filter((request) => request.step === 0)
+			.map((request) => request.users.join("\n"));
+		check(
+			"each worker saw only the judge's brief in the runtime's frame: no request, no builder conversation",
+			workerBriefs.length === 2 &&
+				workerBriefs.every(
+					(brief) =>
+						has(brief, PAIR_WORKER_MARKER, "<judge_brief>", PAIR_WORKER_TAG) &&
+						!has(brief, "[rehearsal:review-pair]") &&
+						!has(brief, "<request>") &&
+						!has(brief, "Rehearsal change made") &&
+						!has(brief, "<requirements>"),
+				),
+			clip(workerBriefs[0], 400),
+		);
+		const workerRuns = workers.map((worker) => {
+			const [who, copy, write] =
+				parseOutput(calls(worker.items, "run_code")[0]).calls ?? [];
+			const shells = calls(worker.items, "bash").map(
+				(call) => `${call.input}\n${call.output}`,
+			);
+			return { who, copy, write, shells: shells.join("\n") };
+		});
+		check(
+			"each round's worker ran the whole check as the reader in the container: copy, new test, make test, the test",
+			workerRuns.length === 2 &&
+				workerRuns.every(
+					(run) =>
+						has(run.who?.output, "/app", "999", "READ_ONLY_OK") &&
+						run.copy?.status === "completed" &&
+						has(run.write?.output, "PROBE_WRITTEN") &&
+						has(
+							run.shells,
+							"make test",
+							"all regression tests passed",
+							"rehearsal_probe.sh",
+							"PROBE_PASSED",
+						),
+				),
+			clip(JSON.stringify(workerRuns), 800),
+		);
+		check(
+			"the worker's evidence reached each judge before its next model call (the tool's result, or its report held for it)",
+			judgeCalls.filter((request) => request.step === 1).length === 2 &&
+				judgeCalls
+					.filter((request) => request.step === 1)
+					.every((request) =>
+						has(
+							request.users.join("\n") + request.lastOutputs.join("\n"),
+							"researcher finished",
+							"PROBE_PASSED",
+						),
+					),
+			clip(
+				JSON.stringify(
+					judgeCalls
+						.filter((request) => request.step === 1)
+						.map((request) => request.lastUser.slice(0, 200)),
+				),
+				500,
+			),
+		);
+		const spot = judges.map((judge) =>
+			parseOutput(calls(judge.items, "run_code")[0]),
+		);
+		check(
+			"the judge spot-checked the shared scratch itself as the reader",
+			spot.length === 2 &&
+				spot.every((program) =>
+					has(program.result, "999", "rehearsal_probe.sh"),
+				),
+			clip(JSON.stringify(spot.map((program) => program.result)), 300),
+		);
+		const state = data.reviewState
+			.map((row) => row.response as ReviewLoopState | null)
+			.find((entry) => entry?.rounds?.length);
+		const rounds = state?.rounds ?? [];
+		check(
+			"the verdicts are the judge's JSON: review 1 fail with its failing test, review 2 pass; tests marked as run by the worker",
+			rounds.length === 2 &&
+				rounds[0]?.verdict?.verdict === "fail" &&
+				rounds[1]?.verdict?.verdict === "pass" &&
+				rounds.every(
+					(round) =>
+						round.checker.pair === true &&
+						round.verdict?.notes.startsWith("rehearsal pair review") &&
+						round.verdict.tests.length === 1 &&
+						round.verdict.tests[0]?.ranBy === "worker",
+				),
+			clip(JSON.stringify(rounds.map((round) => round.verdict)), 600),
+		);
+		check(
+			"each round recorded its worker's spend apart from the judge's",
+			rounds.every(
+				(round) =>
+					(round.checker.usage?.inputTokens ?? 0) > 0 &&
+					round.checker.workers?.length === 1 &&
+					(round.checker.workers[0]?.usage?.inputTokens ?? 0) > 0 &&
+					round.checker.workers[0]?.model?.modelId === "gpt-6-luna",
+			),
+			clip(JSON.stringify(rounds.map((round) => round.checker)), 600),
+		);
+		const reviews = calls(items, "review_check");
+		check(
+			"the chat's review summary splits the checker's spend as judge and worker",
+			reviews.length >= 2 &&
+				reviews.every((review) =>
+					/Checker spent \d+k tokens.*\(judge \d+k.*, worker \d+k/.test(
+						review.output ?? "",
+					),
+				) &&
+				has(reviews[0]?.output, "Review 1: fail", "rehearsal_probe.sh") &&
+				reviews.some((review) => has(review.output, "Review 2: pass")),
+			reviews.map((review) => clip(review.output, 300)).join(" / "),
+		);
+		const notice = requests("pair-builder").find((request) =>
+			request.lastUser.includes("independent checker reviewed your work"),
+		);
+		check(
+			"the builder got the judge's findings and failing test",
+			has(notice?.lastUser, "F1. Rehearsal finding", "rehearsal_probe.sh"),
+			clip(notice?.lastUser, 400),
 		);
 	}
 
