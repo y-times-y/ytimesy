@@ -179,6 +179,13 @@ export function SessionTimeline({
 					: undefined,
 		};
 	});
+	// A helper's start line stands in for the agent call that started it.
+	const startsHelper = (row: TimelineRow) =>
+		!!helperLines &&
+		row.kind === "item" &&
+		row.item.kind === "dynamicToolCall" &&
+		row.item.tool === "agent" &&
+		helperMarks.some((mark) => mark.start === row.item.id);
 	const rowHas = (row: TimelineRow, id: SessionItem["id"] | null | undefined) =>
 		!!id &&
 		(row.kind === "item"
@@ -231,51 +238,58 @@ export function SessionTimeline({
 									row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`
 								}
 							>
-								<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
-									{row.kind === "item" && row.item.kind === "planProposal" ? (
-										<PlanMessage text={row.item.text} onOpenFile={onOpenFile} />
-									) : row.kind === "item" &&
-										row.item.kind === "userQuestion" ? (
-										<UserQuestionCard
-											item={row.item}
-											reply={userQuestionReply(items, row.item.id)}
-											actions={questionActions}
-										/>
-									) : row.kind === "item" &&
-										row.item.kind === "secretRequest" ? (
-										<SecretRequestCard
-											item={row.item}
-											outcome={secretRequestOutcome(items, row.item.id)}
-											actions={secretActions}
-										/>
-									) : row.kind === "item" &&
-										row.item.kind === "modelSwitch" &&
-										row.item.state === "awaitingApproval" ? (
-										<ModelSwitchCard
-											item={row.item}
-											answered={answeredAfter(items, row.item.id)}
-											actions={failoverActions}
-										/>
-									) : (
-										<TimelineRowView
-											row={row}
-											collapseInstructions={collapseInstructions}
-											turnRunning={
-												turnStatus === "running" && currentTurnIds.has(rowId)
-											}
-											isLastItem={
-												(row.kind === "item"
-													? row.item.id
-													: row.items.at(-1)?.id) === visible.at(-1)?.id
-											}
-											fileChanges={fileChanges}
-											onOpenFile={onOpenFile}
-										/>
-									)}
-									{row.kind === "item" && row.item.kind === "userMessage"
-										? recoveryControls?.(row.item.id)
-										: null}
-								</li>
+								{startsHelper(row) ? null : (
+									<li
+										data-kind={row.kind === "item" ? row.item.kind : row.kind}
+									>
+										{row.kind === "item" && row.item.kind === "planProposal" ? (
+											<PlanMessage
+												text={row.item.text}
+												onOpenFile={onOpenFile}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "userQuestion" ? (
+											<UserQuestionCard
+												item={row.item}
+												reply={userQuestionReply(items, row.item.id)}
+												actions={questionActions}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "secretRequest" ? (
+											<SecretRequestCard
+												item={row.item}
+												outcome={secretRequestOutcome(items, row.item.id)}
+												actions={secretActions}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "modelSwitch" &&
+											row.item.state === "awaitingApproval" ? (
+											<ModelSwitchCard
+												item={row.item}
+												answered={answeredAfter(items, row.item.id)}
+												actions={failoverActions}
+											/>
+										) : (
+											<TimelineRowView
+												row={row}
+												collapseInstructions={collapseInstructions}
+												turnRunning={
+													turnStatus === "running" && currentTurnIds.has(rowId)
+												}
+												isLastItem={
+													(row.kind === "item"
+														? row.item.id
+														: row.items.at(-1)?.id) === visible.at(-1)?.id
+												}
+												fileChanges={fileChanges}
+												onOpenFile={onOpenFile}
+											/>
+										)}
+										{row.kind === "item" && row.item.kind === "userMessage"
+											? recoveryControls?.(row.item.id)
+											: null}
+									</li>
+								)}
 								{helperMarks
 									.filter((mark) => rowHas(row, mark.start))
 									.map(({ task }) => (
