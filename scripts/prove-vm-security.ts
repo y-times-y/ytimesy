@@ -5,6 +5,7 @@
 // clone. Prints PASS/FAIL per check, never a secret. No model runs.
 //
 //   VM_SECURITY_PROOF=1 node --env-file=.env --import tsx scripts/prove-vm-security.ts
+import { RFB_SECURITY_PY, rfbRequiresPassword } from "./vnc-rfb-probe";
 //
 // Development only: refuses any database but the development project.
 // Everything it creates (users, chats, VMs, snapshots, routes, the forward
@@ -332,26 +333,6 @@ for path in sys.argv[1:]:
     finally:
         s.close()
 print(json.dumps(out))
-`;
-
-/** RFB handshake on a Unix socket: the security types the server offers. */
-const RFB_PY = `
-import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5)
-version = b""
-try:
-    s.connect(sys.argv[1])
-    version = s.recv(12)
-    if not version.startswith(b"RFB "):
-        raise ConnectionError("no RFB banner")
-    s.sendall(version)
-    count = s.recv(1)[0]
-    types = list(s.recv(count)) if count else []
-    print("types=" + ",".join(str(t) for t in types))
-except Exception as e:
-    print("error:" + type(e).__name__ + " banner=" + repr(version[:11]))
-finally:
-    s.close()
 `;
 
 function pythonCommand(source: string, args: string[]) {
@@ -742,17 +723,15 @@ try {
 	const rfbSecurity = (
 		await exec(
 			vm,
-			pythonCommand(RFB_PY, [`${builderHome}/.ytimesy/vnc/rfb.sock`]),
+			pythonCommand(RFB_SECURITY_PY, [`${builderHome}/.ytimesy/vnc/rfb.sock`]),
 			30_000,
 		)
 	).stdout.trim();
 	record(
 		"1",
 		"VNC handshake (as the builder, on the socket) offers only password auth",
-		/^types=/.test(rfbSecurity) &&
-			rfbSecurity.split("=")[1].split(",").includes("2") &&
-			!rfbSecurity.split("=")[1].split(",").includes("1"),
-		`${rfbSecurity || "no answer"} (1 = none, 2 = VNC password)`,
+		rfbRequiresPassword(rfbSecurity),
+		`${rfbSecurity || "no answer"} (1 = none, 2 = VNC password, 18/19 = TLS/VeNCrypt)`,
 	);
 	// A VNC server on TCP makes the start script stop x11vnc and refuse.
 	await execOk(
