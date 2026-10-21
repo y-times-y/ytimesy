@@ -87,6 +87,41 @@ it("locks edits only once the agent enters plan mode, mid-turn", async () => {
 	).toEqual({ type: "json", value: { proposed: true, next: proposed.next } });
 });
 
+it("unlocks edits only when the agent leaves plan mode while answering a plan", async () => {
+	const ran = vi.fn(async () => ({ ok: true }));
+	// No plan waits for an answer: leaving is refused and edits stay locked.
+	const planning = new PlanLock({ kind: "planning" });
+	const early = planTools(planning);
+	expect(
+		await early.exit_plan_mode.execute?.({ approval: "go" }, options),
+	).toMatchObject({ blocked: true });
+	expect(planning.planning).toBe(true);
+	// The user's reply to a proposed plan approves it in words.
+	const answering = new PlanLock({ kind: "proposed", planId: "t:p" as never });
+	const tools = withPlanMode(
+		{ apply_patch: make(ran), ...planTools(answering) },
+		() => answering.planning,
+	);
+	expect(await tools.apply_patch.execute?.({}, options)).toMatchObject({
+		blocked: true,
+	});
+	expect(
+		await tools.exit_plan_mode.execute?.(
+			{ approval: "Looks good, build it" },
+			options,
+		),
+	).toMatchObject({ planMode: false });
+	await tools.apply_patch.execute?.({}, options);
+	expect(ran).toHaveBeenCalledTimes(1);
+	// A plan proposed this turn has no answer yet: leaving is refused again.
+	const fresh = new PlanLock({ kind: "proposed", planId: "t:p" as never });
+	const again = planTools(fresh);
+	await again.propose_plan.execute?.({ plan: "2. Revised" }, options);
+	expect(
+		await again.exit_plan_mode.execute?.({ approval: "go" }, options),
+	).toMatchObject({ blocked: true });
+});
+
 it("starts locked when the transcript says a plan is in progress", () => {
 	expect(new PlanLock({ kind: "planning" }).planning).toBe(true);
 	expect(

@@ -77,6 +77,7 @@ const TOOL_GLYPHS: Readonly<Record<string, SessionActivityGlyph>> = {
 	call_mcp_tool: "mcp",
 	enter_plan_mode: "plan",
 	propose_plan: "plan",
+	exit_plan_mode: "plan",
 	request_project_secret: "secret",
 	agent: "agent",
 	agent_send: "agent",

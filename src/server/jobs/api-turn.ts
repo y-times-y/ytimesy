@@ -3,6 +3,7 @@ import type { ModelMessage, ToolSet } from "ai";
 import {
 	agentPlanState,
 	ENTER_PLAN_MODE_TOOL,
+	EXIT_PLAN_MODE_TOOL,
 	PROPOSE_PLAN_TOOL,
 } from "#/domain/agent-plan";
 import {
@@ -2173,6 +2174,7 @@ function inLeanToolOrder(
 		AGENT_SEND_TOOL,
 		ENTER_PLAN_MODE_TOOL,
 		PROPOSE_PLAN_TOOL,
+		EXIT_PLAN_MODE_TOOL,
 		...groups.webSearch,
 		REQUEST_PROJECT_SECRET_TOOL,
 	].filter((name) => name in tools);

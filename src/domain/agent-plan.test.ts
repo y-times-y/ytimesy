@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { agentPlanState, pendingPlanId, planOutcome } from "./agent-plan";
+import { agentPlanState, pendingPlanId } from "./agent-plan";
 import { applyApiProgress } from "./api-progress";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
@@ -27,21 +27,37 @@ it("is off until the agent enters plan mode", () => {
 	expect(agentPlanState([user("u1"), entered])).toEqual({ kind: "planning" });
 });
 
-it("keeps a proposed plan waiting through feedback until it is approved", () => {
+const exited = (status: "completed" | "failed" = "completed"): SessionItem => ({
+	kind: "dynamicToolCall",
+	id: SessionItemId("t3:exit"),
+	tool: "exit_plan_mode",
+	status,
+});
+
+it("keeps a proposed plan waiting through feedback until the agent leaves plan mode", () => {
 	const proposed = [user("u1"), entered, plan("t1:p")];
 	expect(agentPlanState(proposed)).toEqual({
 		kind: "proposed",
 		planId: "t1:p",
 	});
-	expect(planOutcome(proposed, SessionItemId("t1:p"))).toBe("pending");
-	const feedback = [...proposed, user("u2")];
-	expect(pendingPlanId(feedback)).toBe("t1:p");
-	expect(planOutcome(feedback, SessionItemId("t1:p"))).toBe("revised");
-	const revised = [...feedback, plan("t2:p")];
+	// The user's reply alone unlocks nothing: the agent judges it in its next turn.
+	const reply = [...proposed, user("u2")];
+	expect(pendingPlanId(reply)).toBe("t1:p");
+	const revised = [...reply, plan("t2:p")];
 	expect(pendingPlanId(revised)).toBe("t2:p");
-	const approved = [...revised, user("u3", true)];
-	expect(agentPlanState(approved)).toEqual({ kind: "none" });
-	expect(planOutcome(approved, SessionItemId("t2:p"))).toBe("approved");
+	const approvedInWords = [...revised, user("u3"), exited()];
+	expect(agentPlanState(approvedInWords)).toEqual({ kind: "none" });
+	// A refused exit (no plan waiting) leaves the lock on.
+	expect(agentPlanState([...revised, user("u3"), exited("failed")])).toEqual({
+		kind: "proposed",
+		planId: "t2:p",
+	});
+});
+
+it("still honours the approve flag of chats from before plans were approved in words", () => {
+	expect(
+		agentPlanState([user("u1"), entered, plan("t1:p"), user("u2", true)]),
+	).toEqual({ kind: "none" });
 });
 
 it("lifts a plan mode entered by a turn that ended without proposing", () => {
