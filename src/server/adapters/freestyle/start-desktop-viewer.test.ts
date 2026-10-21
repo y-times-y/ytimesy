@@ -1,28 +1,35 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import {
+	DESKTOP_CREDENTIAL_DROP_SETUP,
+	DESKTOP_PRIVATE_DIRECTORY,
+	DESKTOP_PRIVATE_READY,
 	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
 } from "./start-desktop";
 
 /** The viewer-proxy block of the start script, run against stub commands in a scratch dir. */
 function viewerBlock(dir: string) {
-	const start = START_WORKSPACE_DESKTOP.indexOf("DESK_AUTH_FILE=");
+	const start = START_WORKSPACE_DESKTOP.indexOf("DESK_AUTH_DROP=");
 	const end = START_WORKSPACE_DESKTOP.indexOf("python3 - <<'PY'", start);
-	return `HOME=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${START_WORKSPACE_DESKTOP.slice(
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${START_WORKSPACE_DESKTOP.slice(
 		start,
 		end,
-	).replaceAll("/tmp/ytimesy-desk", `${dir}/ytimesy-desk`)}`;
+	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
 }
 
 let dir: string;
@@ -59,30 +66,30 @@ function run(
 }
 
 it("listens publicly only behind the credential, and records which one", () => {
-	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret");
 	expect(run()).toEqual([
 		"pkill -f websockify.*:6080",
-		`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/ytimesy-desk-viewer.auth --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
+		`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/viewer.credential --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
 	]);
 	// The credential is read from its file, never passed in argv.
 	expect(readFileSync(join(dir, "calls"), "utf8")).not.toContain("secret");
-	expect(readFileSync(join(dir, "ytimesy-desk-auth.applied"), "utf8")).toBe(
+	expect(readFileSync(join(dir, "viewer.applied"), "utf8")).toBe(
 		createHash("sha256").update("ytimesy:secret").digest("hex"),
 	);
 });
 
 it("keeps a proxy that already runs with the current credential", () => {
-	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret");
 	writeFileSync(
-		join(dir, "ytimesy-desk-auth.applied"),
+		join(dir, "viewer.applied"),
 		createHash("sha256").update("ytimesy:secret").digest("hex"),
 	);
 	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")).toEqual([]);
 });
 
 it("replaces a proxy started with an older credential", () => {
-	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:new");
-	writeFileSync(join(dir, "ytimesy-desk-auth.applied"), "old");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:new");
+	writeFileSync(join(dir, "viewer.applied"), "old");
 	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")[0]).toBe(
 		"pkill -f websockify.*:6080",
 	);
@@ -107,9 +114,9 @@ it("probes for the credential it expects and refuses anything but a digest", () 
 });
 
 it("restarts a proxy left from the TCP viewer even when its credential is current", () => {
-	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret");
 	writeFileSync(
-		join(dir, "ytimesy-desk-auth.applied"),
+		join(dir, "viewer.applied"),
 		createHash("sha256").update("ytimesy:secret").digest("hex"),
 	);
 	expect(
@@ -132,13 +139,13 @@ it("loads the viewer credential from its file in the auth plugin", () => {
 		join(fake, "auth_plugins.py"),
 		"class BasicHTTPAuth:\n    def __init__(self, src=None):\n        self.src = src\n",
 	);
-	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret\n");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret\n");
 	const src = execFileSync(
 		"python3",
 		[
 			"-c",
 			"import sys, ytimesy_desk_auth as a; print(a.FileBasicHTTPAuth(sys.argv[1]).src)",
-			join(dir, "ytimesy-desk-viewer.auth"),
+			join(dir, "viewer.auth"),
 		],
 		{
 			env: {
@@ -148,4 +155,62 @@ it("loads the viewer credential from its file in the auth plugin", () => {
 		},
 	);
 	expect(src).toBe("ytimesy:secret\n");
+});
+
+it("moves the dropped credential into the proxy's own 0600 file and removes the drop", () => {
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret", { mode: 0o644 });
+	run();
+	expect(existsSync(join(dir, "viewer.auth"))).toBe(false);
+	expect(readFileSync(join(dir, "viewer.credential"), "utf8")).toBe(
+		"ytimesy:secret",
+	);
+	expect(statSync(join(dir, "viewer.credential")).mode & 0o777).toBe(0o600);
+});
+
+/** The drop setup against a scratch path instead of the VM's fixed one. */
+function dropSetup(path: string) {
+	return spawnSync(
+		"/bin/sh",
+		[
+			"-c",
+			DESKTOP_CREDENTIAL_DROP_SETUP.replaceAll(DESKTOP_PRIVATE_DIRECTORY, path),
+		],
+		{ encoding: "utf8" },
+	);
+}
+
+it("creates the credential's directory 0700 as this user and clears an earlier drop", () => {
+	const path = join(dir, "private");
+	const created = dropSetup(path);
+	expect(created.status).toBe(0);
+	expect(created.stdout).toContain(DESKTOP_PRIVATE_READY);
+	expect(statSync(path).mode & 0o777).toBe(0o700);
+	writeFileSync(join(path, "viewer.auth"), "stale");
+	expect(dropSetup(path).status).toBe(0);
+	expect(existsSync(join(path, "viewer.auth"))).toBe(false);
+	// One this user made too open is tightened, not trusted as is.
+	chmodSync(path, 0o777);
+	expect(dropSetup(path).status).toBe(0);
+	expect(statSync(path).mode & 0o777).toBe(0o700);
+});
+
+it("refuses a credential directory another user pre-created or linked in /tmp", () => {
+	// A link to a directory this user owns is still refused.
+	const target = join(dir, "elsewhere");
+	mkdirSync(target);
+	const link = join(dir, "linked");
+	symlinkSync(target, link);
+	const linked = dropSetup(link);
+	expect(linked.status).not.toBe(0);
+	expect(linked.stdout).not.toContain(DESKTOP_PRIVATE_READY);
+	expect(linked.stderr).toContain("refusing the desktop credential");
+	// A file in its place.
+	writeFileSync(join(dir, "file"), "");
+	expect(dropSetup(join(dir, "file")).status).not.toBe(0);
+	// A directory another user owns (root's, as a stand-in for a reader's).
+	if (process.getuid?.() !== 0) {
+		const foreign = dropSetup("/usr");
+		expect(foreign.status).not.toBe(0);
+		expect(foreign.stdout).not.toContain(DESKTOP_PRIVATE_READY);
+	}
 });

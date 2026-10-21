@@ -50,11 +50,19 @@ describe("ensureDesktopProcesses", () => {
 					stdout: "YTIMESY_DESKTOP_DOWN",
 					stderr: "",
 				})
+				.mockResolvedValueOnce({
+					exitCode: 0,
+					stdout: "YTIMESY_DESKTOP_PRIVATE_READY\n",
+					stderr: "",
+				})
 				.mockResolvedValueOnce({ exitCode: 0, stdout: "started", stderr: "" }),
 			writeTextFile: vi.fn().mockResolvedValue(undefined),
 		};
 		await ensureDesktopProcesses(machines, "vm-cold");
-		expect(machines.exec).toHaveBeenCalledTimes(2);
+		expect(machines.exec).toHaveBeenCalledTimes(3);
+		expect(machines.exec.mock.calls[1]?.[1]).toContain(
+			'install -d -o "$(id -un)" -m 0700',
+		);
 		expect(machines.exec.mock.calls[0]?.[1]).toContain(
 			desktopViewerCredentialDigest("vm-cold"),
 		);
@@ -63,6 +71,36 @@ describe("ensureDesktopProcesses", () => {
 			"vm-cold",
 			DESKTOP_VIEWER_CREDENTIAL_PATH,
 			desktopViewerCredential("vm-cold"),
+		);
+	});
+
+	it("never writes the viewer credential when its private directory is not secured", async () => {
+		const machines = {
+			exec: vi
+				.fn()
+				.mockResolvedValueOnce({
+					exitCode: 0,
+					stdout: "YTIMESY_DESKTOP_DOWN",
+					stderr: "",
+				})
+				.mockResolvedValueOnce({
+					exitCode: 1,
+					stdout: "",
+					stderr:
+						"ytimesy: /tmp/ytimesy-desktop-private is not this user's private directory; refusing the desktop credential",
+				}),
+			writeTextFile: vi.fn().mockResolvedValue(undefined),
+		};
+		await expect(ensureDesktopProcesses(machines, "vm-cold")).rejects.toThrow(
+			"private directory could not be secured",
+		);
+		expect(machines.writeTextFile).not.toHaveBeenCalledWith(
+			"vm-cold",
+			DESKTOP_VIEWER_CREDENTIAL_PATH,
+			expect.anything(),
+		);
+		expect(DESKTOP_VIEWER_CREDENTIAL_PATH).toBe(
+			"/tmp/ytimesy-desktop-private/viewer.auth",
 		);
 	});
 });

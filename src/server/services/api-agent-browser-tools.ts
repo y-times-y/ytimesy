@@ -4,6 +4,7 @@ import { type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { publicToolDetail } from "#/domain/tool-detail";
 import { browserUseCommand } from "#/server/adapters/browser-use-cli";
+import { DESKTOP_X_ENVIRONMENT } from "#/server/adapters/freestyle/start-desktop";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
 import {
 	type AgentToolWorkspaceInput,
@@ -48,7 +49,7 @@ export async function safeBrowserUrl(value: string): Promise<string> {
 
 /** Opens a URL (already shell-quoted, or a shell expansion) in the shared desktop's Chrome; exit 127 when Chrome never appears. */
 export function chromeOpenCommand(quotedUrl: string) {
-	return `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
+	return `${DESKTOP_X_ENVIRONMENT}; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
 }
 
 export function apiAgentBrowserTools(
@@ -130,7 +131,7 @@ export function apiAgentBrowserTools(
 				try {
 					const result = await machines.exec(
 						vm,
-						`DISPLAY=:0 scrot -z ${quote(path)} && base64 -w0 ${quote(path)}`,
+						`${DESKTOP_X_ENVIRONMENT}; scrot -z ${quote(path)} && base64 -w0 ${quote(path)}`,
 						20_000,
 					);
 					if (result.exitCode || !result.stdout)
