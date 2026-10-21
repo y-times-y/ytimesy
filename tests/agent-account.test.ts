@@ -56,7 +56,7 @@ afterAll(() => db.close());
 async function storeLogin(userId: string, login: string) {
 	await db.query(
 		"insert into agent_account(user_id,provider,status,encrypted_codex_auth,plan_type) values($1,'codex','connected',$2,'prolite')",
-		[userId, await seal(login)],
+		[userId, await seal(login, { purpose: "codex-auth", userId })],
 	);
 }
 

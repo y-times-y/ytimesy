@@ -7,6 +7,11 @@ export const turnControlSchema = z.object({
 	leaseId: z.string().uuid(),
 });
 export type TurnControl = z.infer<typeof turnControlSchema>;
+/** Deletes a chat's Durable Object state when the chat, its project or its account goes. */
+export const conversationPurgeSchema = turnControlSchema.pick({
+	userId: true,
+	sessionId: true,
+});
 export type ActiveConversationTurn = TurnControl & {
 	expiresAt: number;
 	cancelled: boolean;

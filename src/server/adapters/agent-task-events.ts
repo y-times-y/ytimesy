@@ -113,13 +113,19 @@ export async function markAgentTaskEventDelivered(eventId: string) {
 	);
 }
 
+/**
+ * Puts a claimed event back for a later try. False when a waiter took it
+ * meanwhile (takeSubagentReport, the attempt loop): a taken report is never
+ * resurrected, and the caller retracts what it staged.
+ */
 export async function deferAgentTaskEvent(eventId: string, message: string) {
-	await database().query(
+	const result = await database().query(
 		`update agent_task_event
 		 set status='pending', available_at=now() + interval '15 seconds', last_error=$2
-		 where id=$1`,
+		 where id=$1 and status='delivering'`,
 		[eventId, message.slice(0, 1_000)],
 	);
+	return (result.rowCount ?? 0) > 0;
 }
 
 function taskEventDedupeKey(
@@ -157,4 +163,26 @@ function toAgentTaskEvent(row: AgentTaskEventRow): AgentTaskEvent {
 		},
 		attempts: row.attempts,
 	};
+}
+
+/**
+ * A child's report events (completed or failed) created since `since`,
+ * oldest first, with whether delivery still owes them to the parent
+ * (lead mode fusion: the lead waits for its sidekick round's report).
+ */
+export async function childReportEventsSince(
+	childSessionId: string,
+	since: string,
+) {
+	const result = await database().query<AgentTaskEventRow & { status: string }>(
+		`select id,user_id,parent_session_id,child_session_id,event_type,payload,attempts,status
+		 from agent_task_event
+		 where child_session_id=$1 and event_type in ('completed','failed') and created_at >= $2::timestamptz
+		 order by created_at`,
+		[childSessionId, since],
+	);
+	return result.rows.map((row) => ({
+		...toAgentTaskEvent(row),
+		pending: row.status === "pending" || row.status === "delivering",
+	}));
 }

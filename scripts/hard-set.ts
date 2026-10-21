@@ -43,15 +43,22 @@ import {
 	type ModelSpendRow,
 	treeModelSpend,
 } from "../src/domain/eval-efficiency";
-import { evalWorkSuffix } from "../src/domain/eval-prompt";
 import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
+import { modelRouteId } from "../src/domain/model-connection";
 import { modelBilling } from "../src/domain/model-pricing";
 import type { ReviewLoopState } from "../src/domain/review-loop";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
+import {
+	type FusionTurnMetrics,
+	fusionMeansLine,
+	fusionMetricsLine,
+	fusionMetricsMeans,
+	fusionTurnMetrics,
+} from "../src/domain/sidekick";
 import {
 	agentSessionForOwner,
 	deleteAgentSessionForOwner,
@@ -70,6 +77,7 @@ import { withBackgroundJobDispatcher } from "../src/server/adapters/background-j
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { modelRequestLog } from "../src/server/adapters/model-request-log";
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
+import { sendApiWorkspaceTask } from "../src/server/services/api-workspace-session";
 import {
 	attemptLoopSpend,
 	restoreSnapshotCommand,
@@ -103,16 +111,34 @@ import {
 	setupFiles,
 	stageScript,
 	type TaskEnvironment,
+	taskMessage,
 	verifyScript,
 } from "./hard-set/environment";
 import {
+	DEFAULT_GEMINI_KEY_FILE,
+	geminiConnectionModels,
+	probeGeminiQuota,
+	readGeminiKey,
+} from "./hard-set/gemini";
+import type { HardSetRecord as BaseHardSetRecord } from "./hard-set/records";
+import {
 	type HardSetReviewRecord,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "./hard-set/review-report";
+import {
+	type HardSetRoute,
+	hardSetRoute,
+	quotaStop,
+	recordPricing,
+} from "./hard-set/route";
+import { infraFailure, isScored } from "./hard-set/scoring";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import {
+	childTranscript,
 	efficiencyRow,
 	efficiencyTable,
+	setupLogSummary,
 	type ToolCallSummary,
 	toolCallLine,
 	toolCallSummary,
@@ -122,7 +148,6 @@ import {
 	assertDevelopmentDatabase,
 	emptyRecord,
 	measureRun,
-	type RunRecord,
 	safe,
 	table,
 	turnState,
@@ -141,7 +166,6 @@ import {
 
 const DEFAULT_DATASET = resolve("../cloud/.ytimesy/tb4-dataset");
 const RUNS = resolve(".ytimesy/hard-set");
-const USAGE_LIMIT = /usage limit is used up|usage_limit_reached/i;
 // Wall-time reserve after the agent: cancel/settle, staging, artifact transfer.
 const AFTER_AGENT_RESERVE_SEC = 75;
 // A grader VM lives at most this long (its tests may outlast the invocation;
@@ -167,7 +191,10 @@ const { values: flags } = parseArgs({
 		chunk: { type: "string" },
 		/** agent (default), oracle (reference solution, expect 1) or nop (no agent, expect 0). */
 		mode: { type: "string", default: "agent" },
+		/** A Codex model id (subscription) or google/<model> (Gemini API key). */
 		model: { type: "string", default: "gpt-6.1-sol" },
+		/** The Gemini key file for google/<model> runs (never printed). */
+		"google-key-file": { type: "string", default: DEFAULT_GEMINI_KEY_FILE },
 		/** Reasoning effort for the subscription turn; the model default when unset. */
 		reasoning: { type: "string" },
 		variant: { type: "string", multiple: true },
@@ -180,6 +207,8 @@ const { values: flags } = parseArgs({
 		dataset: { type: "string", default: DEFAULT_DATASET },
 		/** Keep each agent run's stored items and model messages (run directory). */
 		transcripts: { type: "boolean", default: false },
+		/** Text appended to every task's message (behaviour probes, e.g. a delegation positive control). */
+		"task-suffix": { type: "string" },
 	},
 });
 
@@ -193,8 +222,7 @@ function estimatedCost(record: HardSetRecord) {
 	if (record.inputTokens === null || record.inputTokens === undefined)
 		return null;
 	return runListPrice({
-		harness: "codex",
-		modelId: record.model,
+		...recordPricing(record.model),
 		inputTokens: record.inputTokens,
 		cachedTokens: record.cachedTokens ?? null,
 		outputTokens: record.outputTokens ?? null,
@@ -236,36 +264,14 @@ function costSummary(records: HardSetRecord[]) {
 
 const seconds = (from: number) => Math.round((Date.now() - from) / 1000);
 
-type HardSetRecord = RunRecord & {
-	run: string;
-	attempt: string;
-	category: string;
-	mode: string;
-	variant: string;
-	reasoning: string | null;
-	startedAt: string;
-	reward: number | null;
-	passed: boolean;
+/** The shared record (scripts/hard-set/records.ts) plus this runner's loop and detached state. */
+type HardSetRecord = BaseHardSetRecord & {
 	/**
-	 * final, grading (tests still running on graderVmId), error, or for a
-	 * detached run queued (waiting for a Codex slot) and running (its turn is
-	 * on the edge, or its finalize was interrupted).
+	 * The setup script's own log lines (`[setup +Ns] ...`, its self-tests
+	 * included) and its last lines on failure: what the VM proved before the
+	 * agent started.
 	 */
-	status: "final" | "grading" | "error" | "queued" | "running";
-	setupSec: number;
-	agentSec: number;
-	agentBudgetSec: number;
-	agentRequestedSec: number;
-	stageSec: number;
-	gradeSec: number;
-	testsExit: number | null;
-	testsTail: string;
-	gradeError: string | null;
-	usageLimit: string | null;
-	vmResources: string | null;
-	graderVmId: string | null;
-	gradeStartedAt: string | null;
-	gradeTimeoutSec: number | null;
+	setupLog?: string | null;
 	/** attempts=3: the loop's attempts, checker verdicts and per-attempt grades. */
 	attemptLoop?: HardSetLoopRecord | null;
 	/** review=on: the review rounds, checker verdicts and the grade of each checked tree. */
@@ -291,6 +297,8 @@ type HardSetRecord = RunRecord & {
 	 * its own route's price, from the session tree before cleanup.
 	 */
 	modelBreakdown?: ModelSpendRow[] | null;
+	/** lead=fusion: handoffs, sidekick rounds, lead edits, patches applied, spend split (src/domain/sidekick.ts). */
+	fusion?: FusionTurnMetrics | null;
 };
 
 type HardSetLoopAttempt = {
@@ -415,9 +423,11 @@ function printTable(records: HardSetRecord[]) {
 				record.reward === null ? "-" : String(record.reward),
 				record.usageLimit
 					? "usage-limit"
-					: ["grading", "queued", "running"].includes(record.status)
-						? record.status
-						: record.state,
+					: infraFailure(record)
+						? "infra"
+						: ["grading", "queued", "running"].includes(record.status)
+							? record.status
+							: record.state,
 				String(record.agentSec),
 				String(record.agentBudgetSec),
 				String(record.setupSec),
@@ -432,14 +442,6 @@ function printTable(records: HardSetRecord[]) {
 		]),
 	);
 }
-
-/** Scored = graded, not skipped, not stopped by the usage limit, full agent budget. */
-const isScored = (record: HardSetRecord) =>
-	record.status === "final" &&
-	record.state !== "skipped" &&
-	!record.usageLimit &&
-	record.reward !== null &&
-	record.agentBudgetSec >= record.agentRequestedSec - 30;
 
 /** The attempt loop's per-attempt lines and the checker's accuracy against the grader. */
 function printAttemptLoops(records: HardSetRecord[]) {
@@ -571,7 +573,7 @@ async function readAttemptLoop(
 		);
 	const spend = attemptLoopSpend(
 		state,
-		modelBilling({ harness: "codex", modelId: model }),
+		modelBilling(recordPricing(hardSetRoute(model).recordModel)),
 	);
 	const extra = spend.attempts.reduce(
 		(sum, attempt) => ({
@@ -627,6 +629,19 @@ async function readAttemptLoop(
 	};
 }
 
+/** checkerMode=pair: the judge's and the workers' share of a checker spend. */
+function pairSpend(spend: {
+	judge: { tokens: number; costUsd: number | null };
+	worker: { tokens: number; costUsd: number | null };
+}) {
+	return {
+		judgeTokens: spend.judge.tokens,
+		judgeCostUsd: spend.judge.costUsd,
+		workerTokens: spend.worker.tokens,
+		workerCostUsd: spend.worker.costUsd,
+	};
+}
+
 /**
  * The review loop's record after the turn: per round the checker's verdict,
  * findings, the builder's answers and spend, and the tree it checked (graded
@@ -639,7 +654,9 @@ async function readReviewLoop(
 	model: string,
 	loaded?: ReviewLoopState[],
 ): Promise<HardSetReviewRecord | null> {
-	const state = (loaded ?? (await reviewLoopStates(sessionId))).at(-1);
+	const state = reviewStateForRecord(
+		loaded ?? (await reviewLoopStates(sessionId)),
+	);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
 	const notes: string[] = [];
@@ -660,7 +677,7 @@ async function readReviewLoop(
 		);
 	const spend = reviewLoopSpend(
 		state,
-		modelBilling({ harness: "codex", modelId: model }),
+		modelBilling(recordPricing(hardSetRoute(model).recordModel)),
 	);
 	return {
 		phase: state.phase,
@@ -683,9 +700,27 @@ async function readReviewLoop(
 				findingTexts: round.findings
 					.slice(0, 5)
 					.map((finding) => `${finding.id} ${finding.text.slice(0, 200)}`),
+				checkerTests: (round.verdict?.tests ?? []).map((test) => ({
+					name: test.name.slice(0, 200),
+					passed: test.passed,
+					command: test.command?.slice(0, 300) ?? null,
+					...(test.ranBy ? { ranBy: test.ranBy } : {}),
+				})),
+				untested: !!round.verdict?.untested,
+				...(round.builderRequirements
+					? { builderRequirements: [...round.builderRequirements] }
+					: {}),
 				decision: round.decision ?? null,
 				checkerTokens: roundSpend?.checker.tokens ?? 0,
 				checkerCostUsd: roundSpend?.checker.costUsd ?? null,
+				...(round.checker.pair && roundSpend
+					? {
+							pair: {
+								...pairSpend(roundSpend),
+								workers: round.checker.workers?.length ?? 0,
+							},
+						}
+					: {}),
 				checkMinutes: (roundSpend?.checkMs ?? 0) / 60_000,
 				fixTokens: roundSpend?.fix.tokens ?? 0,
 				fixCostUsd: roundSpend?.fix.costUsd ?? null,
@@ -705,6 +740,9 @@ async function readReviewLoop(
 		extraTokens: spend.checker.tokens,
 		extraCostUsd: spend.checker.costUsd,
 		checkers: state.rounds.length,
+		...(state.rounds.some((round) => round.checker.pair)
+			? { pair: pairSpend(spend) }
+			: {}),
 		finalTree: final?.tree ?? null,
 		branch,
 		attemptGrading: "none",
@@ -746,6 +784,32 @@ function printEfficiency(records: HardSetRecord[]) {
 	console.log(table(efficiencyTable(rows)));
 }
 
+/** lead=fusion runs: one line per run, then per-arm means. */
+function printFusion(
+	records: HardSetRecord[],
+	groupBy: (record: HardSetRecord) => string,
+) {
+	const runs = records.filter(
+		(record) => record.mode === "agent" && record.fusion,
+	);
+	if (!runs.length) return;
+	console.log(
+		"\nFusion (lead=fusion; handoffs = rounds the lead started; lead edits = its own edit/write calls; spend at list price):",
+	);
+	for (const record of runs)
+		console.log(
+			`- ${record.task}.${record.attempt} ${groupBy(record)} ${record.passed ? "PASS" : "fail"}: ${fusionMetricsLine(record.fusion as FusionTurnMetrics, record.agentSec)}`,
+		);
+	const groups = new Map<string, FusionTurnMetrics[]>();
+	for (const record of runs.filter(isScored))
+		groups.set(groupBy(record), [
+			...(groups.get(groupBy(record)) ?? []),
+			record.fusion as FusionTurnMetrics,
+		]);
+	for (const [name, list] of groups)
+		console.log(`  ${name}: ${fusionMeansLine(fusionMetricsMeans(list))}`);
+}
+
 if (flags.compare) {
 	const runs = flags.compare.split(",").map((run) => run.trim());
 	const records: HardSetRecord[] = [];
@@ -767,6 +831,7 @@ if (flags.compare) {
 	if (!records.length) throw new Error(`No records in ${runs.join(", ")}.`);
 	printEfficiency(records);
 	printEfficiencyBlocks(records, (record) => `${record.run} ${record.variant}`);
+	printFusion(records, (record) => `${record.run} ${record.variant}`);
 	process.exit(0);
 }
 
@@ -782,8 +847,21 @@ if (flags.report) {
 		return `${category} ${list.filter((record) => record.passed).length}/${list.length}`;
 	};
 	console.log(
-		`\nRun ${flags.run}: ${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed (${byCategory("hard")}, ${byCategory("time-pressure")}, ${byCategory("control")}); ${records.length - scored.length} not scored (grading, skipped, usage limit, short budget or no reward).`,
+		`\nRun ${flags.run}: ${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed (${byCategory("hard")}, ${byCategory("time-pressure")}, ${byCategory("control")}); ${records.length - scored.length} not scored (grading, skipped, infra or usage limit, short budget or no reward).`,
 	);
+	const retry = [
+		...new Set(records.filter(infraFailure).map((record) => record.task)),
+	].filter(
+		(task) =>
+			!scored.some((record) => record.task === task) &&
+			!records.some(
+				(record) => record.task === task && record.status === "grading",
+			),
+	);
+	if (retry.length)
+		console.log(
+			`Infra failures (not the model's): retry with --tasks ${retry.join(",")} --run ${flags.run}`,
+		);
 	const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 	if (cost) console.log(cost);
 	printAttemptLoops(records);
@@ -792,6 +870,7 @@ if (flags.report) {
 	printEfficiencyBlocks(records, () => `Run ${flags.run}`);
 	if (new Set(records.map((record) => record.variant)).size > 1)
 		printEfficiencyBlocks(records, (record) => `Arm ${record.variant}`);
+	printFusion(records, (record) => `Arm ${record.variant}`);
 	const agentRuns = records.filter((record) => record.mode === "agent");
 	if (agentRuns.length) {
 		console.log(
@@ -948,13 +1027,16 @@ async function finishGrading(record: HardSetRecord, until: number) {
 // all of it) and the detached one (--detach starts it, --collect finishes it).
 
 type RunOptions = {
+	/** As passed: a Codex model id or google/<model>. */
 	model: string;
+	route: HardSetRoute;
 	reasoning: string | null;
 	variantFlags: string[];
 	variant: ReturnType<typeof harnessVariantFromFlags>;
 	loopAttempts: number;
 	mode: "agent" | "oracle" | "nop";
 	transcripts: boolean;
+	taskSuffix: string | null;
 	/** The agent budget for this task (its maxAgentMinutes applied). */
 	agentSeconds: number;
 };
@@ -980,8 +1062,6 @@ let stopping = false;
 let usageLimitHit: string | null = null;
 const live = new Set<() => Promise<void>>();
 
-const ENVIRONMENT_NOTE = (workdir: string) =>
-	`\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)`;
 // Setup of the task's environment never takes longer than this.
 const SETUP_LIMIT_SEC = 300;
 
@@ -991,10 +1071,10 @@ function runOptions(input: {
 	variantFlags: string[];
 	mode: string;
 	transcripts: boolean;
+	taskSuffix?: string | null;
 	agentSeconds: number;
 }): RunOptions {
-	if (!/^[a-z0-9._-]+$/.test(input.model))
-		throw new Error("Unexpected model id.");
+	const route = hardSetRoute(input.model);
 	if (input.reasoning && !/^[a-z]+$/.test(input.reasoning))
 		throw new Error(
 			"--reasoning expects an effort name such as medium or high.",
@@ -1004,12 +1084,14 @@ function runOptions(input: {
 	const variant = harnessVariantFromFlags(input.variantFlags);
 	return {
 		model: input.model,
+		route,
 		reasoning: input.reasoning,
 		variantFlags: input.variantFlags,
 		variant,
 		loopAttempts: attemptLimit(variant.attempts),
 		mode: input.mode as RunOptions["mode"],
 		transcripts: input.transcripts,
+		taskSuffix: input.taskSuffix?.trim() || null,
 		agentSeconds: input.agentSeconds,
 	};
 }
@@ -1037,7 +1119,7 @@ function newRecord(
 	options: RunOptions,
 ): HardSetRecord {
 	return {
-		...emptyRecord(`codex:${options.model}`, task.id),
+		...emptyRecord(options.route.recordModel, task.id),
 		run: flags.run as string,
 		attempt,
 		category: task.category,
@@ -1063,6 +1145,54 @@ function newRecord(
 		gradeStartedAt: null,
 		gradeTimeoutSec: null,
 	};
+}
+
+// Gemini's free tier is per project and model (5 requests/min measured on
+// 2026-10-18), so Gemini runs share the `gemini` slots (default 1).
+const slotName = (route: HardSetRoute) =>
+	route.kind === "google" ? "gemini" : "codex";
+const slotLimit = (route: HardSetRoute) =>
+	route.kind === "google" ? SLOT_LIMITS.gemini : SLOT_LIMITS.codex;
+
+/** The session's model id: the Codex id, or the eval user's Gemini connection route. */
+const listedModelId = (route: HardSetRoute, user: EvalUser) =>
+	route.kind === "google"
+		? modelRouteId(user.googleConnectionId as string, route.modelId)
+		: route.modelId;
+
+const googleSetups = new Map<
+	string,
+	Promise<{
+		apiKey: string;
+		models: Awaited<ReturnType<typeof geminiConnectionModels>>;
+	}>
+>();
+/**
+ * A Gemini run: the key's catalog entry for the model, and one probe request
+ * so a spent quota stops the run before any VM starts (once per invocation).
+ */
+function ensureGoogle(modelId: string) {
+	let setup = googleSetups.get(modelId);
+	if (!setup) {
+		setup = (async () => {
+			const apiKey = await readGeminiKey(flags["google-key-file"]);
+			const models = await geminiConnectionModels(apiKey, modelId);
+			const quota = await probeGeminiQuota(apiKey, modelId);
+			if (quota.state === "limited") {
+				console.log(
+					`GEMINI_QUOTA ${JSON.stringify({ daily: quota.daily, retryAfterSec: quota.retryAfterSec, quotaIds: quota.quotaIds })}`,
+				);
+				throw new Error(
+					`Gemini quota reached (${quota.quotaIds.join(", ") || "429"}${quota.retryAfterSec ? `, retry in ${quota.retryAfterSec}s` : ""}); not starting.`,
+				);
+			}
+			if (quota.state === "error")
+				throw new Error(`Gemini probe failed (HTTP ${quota.status}).`);
+			return { apiKey, models };
+		})();
+		googleSetups.set(modelId, setup);
+	}
+	return setup;
 }
 
 /** The grader VM: boots and pulls the verifier image (while the agent works, when attached). */
@@ -1094,9 +1224,14 @@ function startGrader(run: TaskRun) {
 async function provision(run: TaskRun) {
 	const { task, environment, record, options } = run;
 	const started = Date.now();
+	const google =
+		options.route.kind === "google"
+			? await ensureGoogle(options.route.modelId)
+			: null;
 	const user = await createEvalUser({
 		label: `hard-set ${task.id} ${harnessVariantLabel(options.variant)}`,
 		variant: options.variant,
+		...(google ? { google } : {}),
 		// A role model off the Codex plan needs the owner's OpenRouter connection.
 		openRouter: Object.values(options.variant.roleModels).some(
 			(entry) => !entry?.model.startsWith("codex:"),
@@ -1108,9 +1243,9 @@ async function provision(run: TaskRun) {
 		userId: user.userId,
 		projectId: user.project.projectId,
 		workspaceId: user.project.workspaceId,
-		harness: "codex",
+		harness: options.route.kind === "google" ? "api" : "codex",
 		title: `Hard set ${task.id}`,
-		listedModelId: options.model,
+		listedModelId: listedModelId(options.route, user),
 	});
 	run.sessionId = session.id;
 	if (run.record.detached) {
@@ -1167,6 +1302,7 @@ async function provision(run: TaskRun) {
 				),
 	);
 	record.setupSec = seconds(started);
+	record.setupLog = setupLogSummary(setup.log, setup.exit);
 	console.info(
 		`${task.id}: setup ${setup.exit === 0 ? "ok" : `FAILED (${setup.exit})`} in ${record.setupSec}s`,
 	);
@@ -1209,22 +1345,30 @@ async function startTurn(run: TaskRun) {
 		await saveAttemptLoopDeadline(sessionId, run.agentDeadline - 20_000);
 	// The edge cancels the turn at the deadline, with or without this runner.
 	await saveTurnDeadline(sessionId, run.agentDeadline);
-	const text = `${environment.instruction}${ENVIRONMENT_NOTE(run.workdir)}${evalWorkSuffix({ where: "environment", done: "task", subagents: options.variant.subagents === "on" })}`;
+	const text = taskMessage(
+		environment,
+		run.workdir,
+		options.variant.subagents !== "off",
+		options.taskSuffix,
+	);
+	const scope = {
+		userId: user.userId,
+		projectId: user.project.projectId,
+		sessionId,
+	};
 	await withBackgroundJobDispatcher(
 		async () => {},
 		() =>
-			sendSubscriptionTask(
-				{
-					userId: user.userId,
-					projectId: user.project.projectId,
-					sessionId,
-				},
-				{
-					modelId: options.model,
-					text,
-					variant: options.reasoning ?? undefined,
-				},
-			),
+			options.route.kind === "google"
+				? sendApiWorkspaceTask(scope, {
+						modelId: listedModelId(options.route, user),
+						text,
+					})
+				: sendSubscriptionTask(scope, {
+						modelId: options.route.modelId,
+						text,
+						variant: options.reasoning ?? undefined,
+					}),
 	);
 	const admitStarted = Date.now();
 	while (Date.now() < admitStarted + 120_000 && !stopping) {
@@ -1245,18 +1389,19 @@ async function startTurn(run: TaskRun) {
 	throw new Error("Turn was not admitted within two minutes.");
 }
 
-/** Reads the turn once into the record; flags the Codex usage limit. */
+/** Reads the turn once into the record; flags a usage limit or provider quota. */
 async function pollTurn(run: { record: HardSetRecord; sessionId: string }) {
 	const state = await turnState(run.sessionId);
 	const items = sessionItemsFromUnknown(state?.items);
 	measureRun(run.record, items, state?.messages, () => 0);
 	run.record.state = state?.state ?? "missing";
-	const failure = JSON.stringify(items.filter((item) => item.kind === "error"));
-	if (USAGE_LIMIT.test(failure)) {
-		run.record.usageLimit =
-			/Your ChatGPT plan's Codex usage limit[^"]*/.exec(failure)?.[0] ??
-			"Codex usage limit reached";
-		usageLimitHit = run.record.usageLimit;
+	const quota = quotaStop(
+		run.record.model.startsWith("google/") ? "google" : "codex",
+		JSON.stringify(items.filter((item) => item.kind === "error")),
+	);
+	if (quota) {
+		run.record.usageLimit = quota;
+		usageLimitHit = quota;
 		stopping = true;
 	}
 	return run.record.state;
@@ -1301,10 +1446,21 @@ async function saveTranscript(run: TaskRun) {
 		console.warn("Model requests were not read:", safe(error));
 		return null;
 	});
+	// The subagents' own sessions (the review loop's checker among them):
+	// their tool calls and outputs, which the root's items do not hold and
+	// the eval user's cleanup deletes.
+	const children = run.userId
+		? await descendantAgentSessions(run.userId, run.sessionId)
+				.then((sessions) => sessions.map(childTranscript))
+				.catch((error) => {
+					console.warn("Subagent sessions were not read:", safe(error));
+					return null;
+				})
+		: null;
 	await writeFile(
 		join(runDir, `${run.task.id}.${run.record.attempt}.transcript.json`),
 		JSON.stringify(
-			{ items: state?.items, messages: state?.messages, requests },
+			{ items: state?.items, messages: state?.messages, requests, children },
 			null,
 			1,
 		),
@@ -1357,34 +1513,38 @@ async function recordTurn(run: {
 				options.model,
 				loopStates.review,
 			);
-		const breakdown = run.userId
-			? await sessionTreeSpend(run.userId, sessionId, loopStates.attempt)
+		const tree = run.userId ? await sessionTree(run.userId, sessionId) : null;
+		const breakdown = tree
+			? sessionTreeSpend(sessionId, tree, loopStates.attempt)
 			: null;
 		// Sessions only grow until cleanup; never replace a copy with nothing.
 		if (breakdown?.length) record.modelBreakdown = breakdown;
+		if (tree && (record.variant.includes("lead=fusion") || record.fusion))
+			record.fusion = fusionTurnMetrics({ rootId: sessionId, sessions: tree });
 	} catch (error) {
 		record.errors.push(`Turn record not saved: ${safe(error).slice(0, 200)}`);
 	}
 }
 
-/** The run's spend per role and model from its stored session tree. */
-async function sessionTreeSpend(
-	userId: string,
-	rootId: string,
-	attemptStates: readonly AttemptLoopState[],
-) {
+/** The run's stored session tree: the root (the builder) first. */
+async function sessionTree(userId: string, rootId: string) {
 	const root = await agentSessionForOwner(userId, rootId);
 	if (!root) return null;
+	return [root, ...(await descendantAgentSessions(userId, rootId))];
+}
+
+/** The run's spend per role and model from its session tree. */
+function sessionTreeSpend(
+	rootId: string,
+	sessions: Awaited<ReturnType<typeof sessionTree>> & object,
+	attemptStates: readonly AttemptLoopState[],
+) {
 	const judgeIds = new Set(
 		attemptStates.flatMap((state) =>
 			state.selection?.judge ? [state.selection.judge.sessionId] : [],
 		),
 	);
-	return treeModelSpend({
-		rootId,
-		sessions: [root, ...(await descendantAgentSessions(userId, rootId))],
-		judgeIds,
-	});
+	return treeModelSpend({ rootId, sessions, judgeIds });
 }
 
 /**
@@ -1646,6 +1806,19 @@ async function stageAndGrade(run: TaskRun) {
 }
 
 /** Deletes the run's session, agent VM and eval user (and the grader unless it grades). */
+/** Forked writer VMs under a chat that are not deleted yet. */
+async function childForkVms(sessionId: string) {
+	const result = await database().query<{ vm_id: string }>(
+		`with recursive tree as (select id from agent_session where id=$1
+		 union all select s.id from agent_session s join tree t on s.parent_session_id=t.id)
+		 select agent_fork->>'vmId' as vm_id from agent_session
+		 where id in (select id from tree) and id<>$1
+		   and agent_fork ? 'vmId' and not (agent_fork ? 'deletedAt')`,
+		[sessionId],
+	);
+	return result.rows.map((row) => row.vm_id).filter(Boolean);
+}
+
 async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	const { record } = run;
 	// Before the session and eval user (and their loop rows) are deleted.
@@ -1653,6 +1826,11 @@ async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	if (run.userId && run.sessionId)
 		await cancelServerTurn(run.userId, run.sessionId).catch(() => {});
 	if (run.agentVm) await client.vms.delete(run.agentVm).catch(() => {});
+	// Writer forks (subagents=on) go before the session row; lead=fusion's
+	// sidekick works in the agent VM and has none.
+	if (run.userId && run.sessionId)
+		for (const vmId of await childForkVms(run.sessionId).catch(() => []))
+			await client.vms.delete(vmId).catch(() => {});
 	if (run.userId && run.sessionId)
 		await deleteAgentSessionForOwner(run.userId, run.sessionId).catch(() => {});
 	if (run.userId) {
@@ -1672,7 +1850,7 @@ async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 function logResult(run: TaskRun, started: number) {
 	const { record } = run;
 	console.info(
-		`${run.task.id}.${record.attempt}: ${record.status === "grading" ? "grading (collect later)" : record.passed ? "PASS" : record.status === "running" ? "running on the edge" : record.status === "queued" ? "queued for a Codex slot" : "fail"} reward=${record.reward} state=${record.state} agent=${record.agentSec}s/${record.agentBudgetSec}s total=${seconds(started)}s${record.errors.length ? ` errors=${record.errors.join(" | ").slice(0, 300)}` : ""}`,
+		`${run.task.id}.${record.attempt}: ${record.status === "grading" ? "grading (collect later)" : record.passed ? "PASS" : record.status === "running" ? "running on the edge" : record.status === "queued" ? "queued for a model slot" : "fail"} reward=${record.reward} state=${record.state} agent=${record.agentSec}s/${record.agentBudgetSec}s total=${seconds(started)}s${record.errors.length ? ` errors=${record.errors.join(" | ").slice(0, 300)}` : ""}`,
 	);
 }
 
@@ -1743,8 +1921,8 @@ async function runTask(
 				record.errors.push(safe(oracle.log.slice(-600)));
 		} else if (options.mode === "agent") {
 			await withSlot(
-				"codex",
-				SLOT_LIMITS.codex,
+				slotName(options.route),
+				slotLimit(options.route),
 				async () => {
 					await startTurn(run);
 					await watchTurn(run);
@@ -1826,8 +2004,8 @@ async function startDetachedTask(
 	}
 	if (!(await lockDetached(record))) return record;
 	state.slot = await tryDetachedSlot(
-		"codex",
-		SLOT_LIMITS.codex,
+		slotName(options.route),
+		slotLimit(options.route),
 		`${record.run}/${task.id}.${record.attempt}`,
 		// Upper bound: setup, the budget, settling.
 		Date.now() + (SETUP_LIMIT_SEC + options.agentSeconds + 300) * 1000,
@@ -2012,7 +2190,7 @@ async function advanceDetached(record: HardSetRecord) {
 			usageLimit: !!usageLimitHit,
 		});
 		if (action.kind === "start") {
-			await ensureAgentPreflight();
+			await ensureAgentPreflight(options.route);
 			await startDetachedTask(task, environment, record, options);
 			return;
 		}
@@ -2093,10 +2271,14 @@ async function wireDevelopmentEdge() {
 }
 
 let preflight: Promise<void> | null = null;
-/** The executor preflight and the Codex usage check, once per invocation. */
-function ensureAgentPreflight() {
+/**
+ * The executor preflight and, for a Codex run, the usage check, once per
+ * invocation (a Gemini run's quota probe happens in ensureGoogle).
+ */
+function ensureAgentPreflight(route: HardSetRoute) {
 	preflight ??= (async () => {
 		await preflightExecutor();
+		if (route.kind !== "codex") return;
 		const ownerId = await subscriptionOwner();
 		const usage = await codexUsage(ownerId);
 		console.info(`Codex usage: ${usage}.`);
@@ -2184,6 +2366,7 @@ const baseOptions = runOptions({
 	variantFlags: flags.variant ?? [],
 	mode: flags.mode as string,
 	transcripts: flags.transcripts as boolean,
+	taskSuffix: flags["task-suffix"] ?? null,
 	agentSeconds: requestedAgentSeconds,
 });
 const mode = baseOptions.mode;
@@ -2197,7 +2380,10 @@ if (!flags.detach && requestedAgentSeconds > maxMinutes * 60)
 	);
 const concurrency = Math.max(
 	1,
-	Math.min(SLOT_LIMITS.codex, Number(flags.concurrency) || tasks.length),
+	Math.min(
+		slotLimit(baseOptions.route),
+		Number(flags.concurrency) || tasks.length,
+	),
 );
 await wireDevelopmentEdge();
 
@@ -2213,7 +2399,12 @@ for (const task of tasks) {
 	environments.set(task.id, environment);
 }
 if (mode === "agent") await preflightExecutor();
-const ownerId = mode === "agent" ? await subscriptionOwner() : null;
+if (mode === "agent" && baseOptions.route.kind === "google")
+	await ensureGoogle(baseOptions.route.modelId);
+const ownerId =
+	mode === "agent" && baseOptions.route.kind === "codex"
+		? await subscriptionOwner()
+		: null;
 const usageBefore = ownerId ? await codexUsage(ownerId) : null;
 console.info(
 	`Hard set run ${flags.run}: ${tasks.length} task(s), mode ${mode}, variant ${harnessVariantLabel(baseOptions.variant)}, model ${baseOptions.model}${baseOptions.reasoning ? ` (${baseOptions.reasoning})` : ""}, agent ${requestedAgentSeconds}s (less for large images), ${flags.detach ? "detached (--collect finishes each task)" : `ceiling ${maxMinutes} min`}, concurrency ${concurrency}.${usageBefore ? ` Codex usage before: ${usageBefore}.` : ""}`,
@@ -2248,6 +2439,7 @@ if (flags.detach) {
 				variantFlags: options.variantFlags,
 				agentSeconds: options.agentSeconds,
 				transcripts: options.transcripts,
+				taskSuffix: options.taskSuffix,
 			};
 			const record = newRecord(task, attempt, options);
 			record.status = "queued";
@@ -2283,7 +2475,7 @@ if (flags.detach) {
 		.map((record) => record.detached?.agentDeadlineAt ?? 0)
 		.filter(Boolean);
 	console.log(
-		`\n${running.length} turn(s) running on the edge, ${queued.length} queued for a Codex slot, ${records.length - running.length - queued.length} failed to start. Wall ${seconds(invocationStart)}s.${deadlines.length ? ` Last deadline ${new Date(Math.max(...deadlines)).toISOString()}.` : ""}\nNext: --status --run ${flags.run}; --collect --run ${flags.run} after the deadlines (repeat until every task is final; it also starts queued tasks).${usageLimitHit ? ` STOPPED on the Codex usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
+		`\n${running.length} turn(s) running on the edge, ${queued.length} queued for a model slot, ${records.length - running.length - queued.length} failed to start. Wall ${seconds(invocationStart)}s.${deadlines.length ? ` Last deadline ${new Date(Math.max(...deadlines)).toISOString()}.` : ""}\nNext: --status --run ${flags.run}; --collect --run ${flags.run} after the deadlines (repeat until every task is final; it also starts queued tasks).${usageLimitHit ? ` STOPPED on a usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
 	);
 	for (const record of records.filter((record) => record.status === "error"))
 		console.log(
@@ -2315,7 +2507,7 @@ printTable(records);
 const scored = records.filter(isScored);
 const grading = records.filter((record) => record.status === "grading");
 console.log(
-	`\n${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed; ${grading.length} still grading${grading.length ? ` (then: --collect --run ${flags.run})` : ""}. Wall ${seconds(invocationStart)}s.${usageAfter ? ` Codex usage after: ${usageAfter}.` : ""}${usageLimitHit ? ` STOPPED on the Codex usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
+	`\n${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed; ${grading.length} still grading${grading.length ? ` (then: --collect --run ${flags.run})` : ""}. Wall ${seconds(invocationStart)}s.${usageAfter ? ` Codex usage after: ${usageAfter}.` : ""}${usageLimitHit ? ` STOPPED on a usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
 );
 const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 if (cost) console.log(cost);

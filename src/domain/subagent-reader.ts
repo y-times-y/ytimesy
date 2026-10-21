@@ -17,6 +17,21 @@ export function readerScratchDirectory(sessionId: string) {
 }
 
 /**
+ * Readers run every command in a network namespace of their own (created as
+ * root, entered before switching to the reader): the builder's Chrome
+ * DevTools (9222), debug adapters, desktop viewer, dev servers and cloud
+ * metadata are out of reach, on 127.0.0.1, ::1 and every other address,
+ * whatever they listen on. Freestyle's kernel has no iptables owner match,
+ * so a per-user firewall rule never installed there. The reader's own
+ * loopback comes up inside, for servers it starts itself; it has no other
+ * network. If the namespace cannot be created the command never runs.
+ */
+export const READER_NETWORK_NAMESPACE = `sudo -n unshare --net -- sh -c 'ip link set lo up >/dev/null 2>&1; exec "$@"' ytimesy-reader-net`;
+
+/** Preparation refuses the reader where network namespaces are unavailable. */
+export const READER_NETWORK_ISOLATION_CHECK = `sudo -n unshare --net -- true || { echo "ytimesy: network namespaces are unavailable; the read-only agent cannot be isolated from the builder's loopback services" >&2; exit 1; }`;
+
+/**
  * Root shell that creates the reader user (idempotent). Baked into the tools
  * snapshot (scripts/build-tools-snapshot.ts); the runtime runs it again with
  * `sudo -n` on VMs booted from an older image.
@@ -36,11 +51,21 @@ export function readerUserSetupCommand() {
 	return `sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
-/** Runtime directories every session writes under; sticky like /tmp so a reader can add its own entries only. */
-const SHARED_RUNTIME_PARENTS = [
+/**
+ * Runtime directories every session writes under; sticky like /tmp so a
+ * reader can add its own entries only. The first session to run a command
+ * creates them as its own user (0755), and on a shared VM that is the
+ * builder, so without this a reader cannot create its entry and every
+ * command it runs fails before it starts: its command records
+ * (`commandRoot`, api-agent-command-tools.ts), its process scopes
+ * (`COMMAND_SCOPES_DIRECTORY`, api-command-scope.ts) and its runtime root
+ * (`sessionRuntimeRoot`, session-workspace-machines.ts).
+ */
+export const SHARED_RUNTIME_PARENTS = [
+	"/tmp/ytimesy-api-commands",
 	"/tmp/ytimesy-api-command-scopes",
 	"/tmp/ytimesy-sessions",
-];
+] as const;
 
 /**
  * Prepares the shared VM for one reader, run as the builder's user (who has
@@ -57,6 +82,7 @@ export function readerPreparationScript(input: {
 		"set -e",
 		readerUserSetupCommand(),
 		`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${scratch}`,
+		READER_NETWORK_ISOLATION_CHECK,
 		...SHARED_RUNTIME_PARENTS.map(
 			(directory) =>
 				`sudo -n install -d -m 1777 ${directory} && sudo -n chmod 1777 ${directory}`,
@@ -66,6 +92,12 @@ export function readerPreparationScript(input: {
 		...(input.checkout
 			? [
 					`find ${shellQuote(input.checkout)} -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} + 2>/dev/null || true`,
+					// The Git transfer writes HEAD, the index and objects under umask
+					// 077, so without this git sees no repository for the reader.
+					// .git holds no credential (the proxy's lives in its own /tmp).
+					// Files another user owns (root after a restore, sudo installs) need
+					// sudo; if neither works the reader still starts, without git.
+					`if [ -d ${shellQuote(`${input.checkout}/.git`)} ]; then sudo -n chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || true; fi`,
 				]
 			: []),
 	].join("\n");
@@ -84,13 +116,14 @@ const READER_GIT_ENVIRONMENT =
 	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'";
 
 /**
- * One guest command run as the reader: its own HOME (the scratch
- * directory), the command passed base64-encoded so quoting never multiplies.
+ * One guest command run as the reader in its own network namespace: its own
+ * HOME (the scratch directory), the command passed base64-encoded so quoting
+ * never multiplies.
  */
 export function readerCommand(sessionId: string, command: string) {
 	const scratch = readerScratchDirectory(sessionId);
 	const encoded = Buffer.from(command, "utf8").toString("base64");
-	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
+	return `${READER_NETWORK_NAMESPACE} sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
 /**

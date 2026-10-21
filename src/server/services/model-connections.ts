@@ -72,6 +72,7 @@ export function connectApiModels(userId: string, raw: unknown) {
 					models,
 					sealedCredential: await seal(
 						JSON.stringify({ id, userId, apiKey: input.apiKey }),
+						{ purpose: "model-credential", userId },
 					),
 				},
 				Boolean(input.id),
@@ -88,7 +89,17 @@ export async function connectionApiKey(
 ): Promise<string> {
 	const value = z
 		.object({ id: z.string(), userId: z.string(), apiKey: z.string().min(8) })
-		.parse(JSON.parse(await unseal(connection.sealedCredential)));
+		.parse(
+			JSON.parse(
+				// A blob sealed for another user fails authentication here.
+				await unseal(connection.sealedCredential, {
+					purpose: "model-credential",
+					userId,
+				}).catch(() => {
+					throw new Error("Model connection ownership mismatch.");
+				}),
+			),
+		);
 	if (value.id !== connection.id || value.userId !== userId)
 		throw new Error("Connection credential ownership mismatch.");
 	return value.apiKey;

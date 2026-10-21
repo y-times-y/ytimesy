@@ -1,3 +1,5 @@
+import type { SidekickState } from "./sidekick";
+
 /**
  * Builder subagents (docs/subagents.md, decision 2026-10-17): the builder is
  * level 0 and spawns children through one `agent` tool. Placement follows
@@ -24,18 +26,35 @@ export function isReaderRole(role: SubagentRole | null | undefined) {
 }
 
 /**
- * A read-only subagent on its parent's VM: every guest command runs as the
- * reader Linux user (src/server/services/reader-workspace-machines.ts).
+ * A reader subagent runs on its parent's VM (stored task_placement 'shared'):
+ * it owns neither that machine nor its checkout. So does lead mode fusion's
+ * sidekick, a writer in its lead's checkout (src/domain/sidekick.ts), which
+ * runs as the builder's user, not the reader's.
  */
-export function runsAsReader(session: {
-	readonly taskPlacement?: string | null;
+export function sharesParentMachine(session: {
 	readonly agentRole?: SubagentRole | null;
+	readonly taskPlacement: string | null;
 }) {
-	return session.taskPlacement === "shared" && isReaderRole(session.agentRole);
+	return (
+		isReaderRole(session.agentRole) ||
+		(session.agentRole === "writer" && session.taskPlacement === "shared")
+	);
 }
 
-/** Where a child runs; not an argument, because it follows from the role. */
-export type SubagentPlacement = "fork" | "shared-read-only";
+/** The root chat (the builder) and writer subagents edit their own checkout. */
+export function writesOwnCheckout(session: {
+	readonly parentSessionId: string | null;
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return !session.parentSessionId || session.agentRole === "writer";
+}
+
+/**
+ * Where a child runs; not an argument, because it follows from the role.
+ * Lead mode fusion's sidekick is the exception: a writer in the lead's own
+ * checkout ("shared-writer", src/domain/sidekick.ts).
+ */
+export type SubagentPlacement = "fork" | "shared-read-only" | "shared-writer";
 
 export function subagentPlacement(role: SubagentRole): SubagentPlacement {
 	return role === "writer" ? "fork" : "shared-read-only";
@@ -63,6 +82,20 @@ export type SubagentBudget = {
 	 * tokens.
 	 */
 	readonly priceBasis?: string;
+	/**
+	 * Lead mode fusion: this writer is the lead's persistent sidekick
+	 * (src/domain/sidekick.ts). steps and minutes then apply per round,
+	 * tokens over its whole life, with a per-round token cap in the state.
+	 */
+	readonly sidekick?: SidekickState;
+	/**
+	 * checkerMode=pair (src/domain/checker-pair.ts): a checker that is the
+	 * pair's judge (it gets the worker tool), or a reader that is its worker
+	 * (it starts no agents).
+	 */
+	readonly checkerPair?: "judge" | "worker";
+	/** checkerMode=pair: a worker the judge started on its own model (`model: "strong"`). */
+	readonly checkerStrong?: true;
 };
 
 type Level = 1 | 2 | 3;
@@ -249,6 +282,8 @@ export function subagentReportHeader(input: {
 	readonly costUsd?: number | null;
 	/** costUsd is a list-price estimate for a plan-billed route. */
 	readonly costEstimated?: boolean;
+	/** A sidekick's round, e.g. "round 2/6". */
+	readonly round?: string;
 }) {
 	const tokens =
 		input.tokens >= 1_000_000
@@ -260,7 +295,7 @@ export function subagentReportHeader(input: {
 			: input.costEstimated
 				? ` · ~$${input.costUsd.toFixed(2)} list-price est.`
 				: ` · $${input.costUsd.toFixed(2)}`;
-	return `[agent ${input.label} ${input.role} ${input.outcome} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
+	return `[agent ${input.label} ${input.role} ${input.outcome}${input.round ? ` · ${input.round}` : ""} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
 }
 
 export type WriterPatch = {
@@ -272,7 +307,89 @@ export type WriterPatch = {
 	readonly sha256: string;
 	readonly ref: string;
 	readonly base: string;
+	/** New files left out of the patch (still on the writer's fork until it is deleted). */
+	readonly excluded?: WriterPatchExclusions;
 };
+
+export type WriterPatchExclusions = {
+	readonly count: number;
+	readonly bytes: number;
+	/** The first few, by size. */
+	readonly paths: readonly string[];
+};
+
+/** Directories a writer fills with downloads, caches and scratch, never deliverables. */
+const SCRATCH_DIRECTORIES = new Set([
+	".cache",
+	".mypy_cache",
+	".pytest_cache",
+	".ruff_cache",
+	".tmp",
+	".venv",
+	".ytimesy",
+	"__pycache__",
+	"cache",
+	"download",
+	"downloads",
+	"node_modules",
+	"scratch",
+	"temp",
+	"tmp",
+	"venv",
+]);
+/** A new binary at least this large is data the writer fetched, not a change. */
+const LARGE_BINARY_BYTES = 100 * 1024;
+/** A new file at least this large is not a deliberate edit, text or not. */
+const LARGE_FILE_BYTES = 1024 * 1024;
+
+/**
+ * Why a file the writer added stays out of its patch, or null to keep it.
+ * Ignored files never reach the patch (git add -A skips them); of the rest,
+ * scratch, download and cache directories and large binaries are left out
+ * unless the writer's brief or messages name the file.
+ */
+export function writerPatchExclusion(
+	file: {
+		readonly path: string;
+		readonly bytes: number;
+		readonly binary: boolean;
+	},
+	named: string,
+): "scratch" | "binary" | "large" | null {
+	const name = file.path.split("/").at(-1) ?? file.path;
+	if (named.includes(file.path) || (name.length >= 3 && named.includes(name)))
+		return null;
+	if (
+		file.path
+			.split("/")
+			.slice(0, -1)
+			.some((segment) => SCRATCH_DIRECTORIES.has(segment.toLowerCase()))
+	)
+		return "scratch";
+	if (file.binary && file.bytes >= LARGE_BINARY_BYTES) return "binary";
+	if (file.bytes >= LARGE_FILE_BYTES) return "large";
+	return null;
+}
+
+/** A patch this large is more likely to carry stray output than intent. */
+export function unusuallyLargePatch(patch: {
+	readonly files: readonly unknown[];
+	readonly added: number;
+	readonly removed: number;
+}) {
+	return patch.files.length > 30 || patch.added + patch.removed > 2_000;
+}
+
+function sizeLabel(bytes: number) {
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+	return `${bytes} B`;
+}
+
+/** The new files a writer's patch left out, so the parent knows they exist. */
+export function excludedFilesNote(excluded: WriterPatchExclusions) {
+	return `${excluded.count} new file${excluded.count === 1 ? "" : "s"} (${sizeLabel(excluded.bytes)}) in scratch, download or cache directories or large binaries the brief did not name: ${excluded.paths.join(", ")}${excluded.count > excluded.paths.length ? ", …" : ""}. They stay only on the writer's fork, which is deleted about 30 minutes after this report; name them in a brief if they are deliverables.`;
+}
 
 export function writerPatchRef(label: string) {
 	return `refs/ytimesy/agents/${label}`;
@@ -309,6 +426,14 @@ export function writerPatchBlock(
 	return [
 		`Patch: ${patch.path} (${patch.files.length} files, +${patch.added} −${patch.removed}, sha256 ${patch.sha256.slice(0, 16)})`,
 		`Ref:   ${patch.ref}   Base: ${patch.base}`,
+		...(unusuallyLargePatch(patch)
+			? [
+					`Warning: this patch is unusually large; check \`git diff --stat ${patch.base} ${patch.ref}\` for downloads or generated output before applying.`,
+				]
+			: []),
+		...(patch.excluded?.count
+			? [`Left out: ${excludedFilesNote(patch.excluded)}`]
+			: []),
 		...(overlaps.length
 			? [
 					`Overlaps with: ${overlaps.map((overlap) => `agent ${overlap.label} (${overlap.files.slice(0, 4).join(", ")}${overlap.files.length > 4 ? ", …" : ""})`).join("; ")}`,
@@ -318,7 +443,7 @@ export function writerPatchBlock(
 	].join("\n");
 }
 
-/** The builder's delegation tools (loaded on demand through find_tools). */
+/** The builder's delegation tools (always in the tool list when offered). */
 export const AGENT_TOOL = "agent";
 export const AGENT_SEND_TOOL = "agent_send";
 

@@ -13,6 +13,11 @@ const configuration = z.object({
 	),
 	APP_URL: z.url(),
 	BETTER_AUTH_SECRET: z.string().min(32),
+	// Dedicated token-vault key; falls back to BETTER_AUTH_SECRET when unset.
+	TOKEN_VAULT_KEY: z.preprocess(
+		(value) => (value === "" || value == null ? undefined : value),
+		z.string().min(32).optional(),
+	),
 	// On Workers connections come from Hyperdrive per request; the URL is unused.
 	DATABASE_URL: z.string().refine((value) => {
 		if (process.env.YTIMESY_DATABASE_VIA_HYPERDRIVE === "1") return true;

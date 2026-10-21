@@ -3,8 +3,22 @@ import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
-import { independentReviewBrief } from "#/domain/checker-brief";
+import {
+	checkerWrapUpLeadMs,
+	independentReviewBrief,
+} from "#/domain/checker-brief";
+import {
+	CHECKER_WORKER_BRIEF_MAX,
+	CHECKER_WORKER_TOOL,
+	checkerWorkerBrief,
+	checkerWorkerBudget,
+	checkerWorkerModelRole,
+	MAX_LIVE_CHECKER_WORKERS,
+	MAX_STRONG_CHECKER_WORKERS,
+} from "#/domain/checker-pair";
 import { latestUserRequestText } from "#/domain/child-task-activity";
+import { fusionPairProfile } from "#/domain/fusion-pairs";
+import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import { posixShellQuoted } from "#/domain/posix-command";
@@ -17,6 +31,20 @@ import {
 } from "#/domain/role-models";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
+	beginSidekickRound,
+	harnessExplorationBrief,
+	isActiveSidekick,
+	latestUserRequestId,
+	newSidekickState,
+	SIDEKICK_EXPLORE_NOTE,
+	type SidekickState,
+	sidekickRoundLabel,
+	sidekickRoundMessage,
+	sidekickRoundsLeft,
+	sidekickState,
+} from "#/domain/sidekick";
+import type { SidekickRoundKind } from "#/domain/sidekick-signals";
+import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
 	builderRemaining,
@@ -25,6 +53,8 @@ import {
 	SUBAGENT_ROLES,
 	SUBAGENT_TITLE_MAX,
 	type SubagentBudget,
+	type SubagentPlacement,
+	type SubagentRemaining,
 	type SubagentRole,
 	subagentAdmission,
 	subagentPlacement,
@@ -42,10 +72,13 @@ import {
 	saveAgentSessionProviderRef,
 	saveAgentTaskState,
 } from "../adapters/agent-sessions";
+import { infrastructureAdmissionEnabled } from "../adapters/freestyle/usage-admission";
+import { assertUsageWindowsOpen } from "../adapters/infrastructure-usage";
 import {
 	subagentTree as loadSubagentTree,
 	mergeSubagentFork,
 	requestSubagentStop,
+	saveSidekickState,
 	saveSubagentSpec,
 	subagentAncestors,
 	takeSubagentReport,
@@ -55,9 +88,13 @@ import { openAgentTask } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { startPreparedAgentTask } from "./harness-workspace-session";
 import { failoverConnections } from "./model-failover";
+import { markSidekickRoundStart } from "./sidekick-workspace";
+import { retireSidekick } from "./subagent-runtime";
 import { forkWriterWorkspace } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
+/** What queueAgentPeerMessage delivers at most. */
+const PEER_MESSAGE_MAX = 8_000;
 /** The longest a reader's caller blocks on wait: true before the report arrives as a message instead. */
 const MAX_WAIT_MS = 10 * 60_000;
 const WAIT_POLL_MS = 3_000;
@@ -94,6 +131,12 @@ export type SubagentToolDeps = {
 	readonly takeReport: typeof takeSubagentReport;
 	readonly message: typeof queueAgentPeerMessage;
 	readonly stop: typeof requestSubagentStop;
+	/** Lead mode fusion: the round's start snapshot, the sidekick's state and retirement. */
+	readonly markRoundStart: typeof markSidekickRoundStart;
+	readonly saveSidekick: typeof saveSidekickState;
+	readonly retireSidekick: typeof retireSidekick;
+	/** Refuses a new child (and its fork) while a usage window is exhausted. */
+	readonly usageWindowsOpen: (userId: string) => Promise<void>;
 };
 
 // Resolved at call time, so a test that mocks one of these modules does not
@@ -119,14 +162,18 @@ const defaultDeps: SubagentToolDeps = {
 	saveProviderRef: (...args) => saveAgentSessionProviderRef(...args),
 	mergeFork: (...args) => mergeSubagentFork(...args),
 	start: (scope, taskId, options) =>
-		Effect.runPromise(
-			startPreparedAgentTask(scope, taskId, undefined, options),
-		),
+		Effect.runPromise(startPreparedAgentTask(scope, taskId, options)),
 	routes: (userId) => failoverConnections(userId),
 	markFailed: (sessionId) => saveAgentTaskState(sessionId, "failed"),
 	takeReport: (...args) => takeSubagentReport(...args),
 	message: (...args) => queueAgentPeerMessage(...args),
 	stop: (...args) => requestSubagentStop(...args),
+	markRoundStart: (...args) => markSidekickRoundStart(...args),
+	saveSidekick: (...args) => saveSidekickState(...args),
+	retireSidekick: (...args) => retireSidekick(...args),
+	usageWindowsOpen: async (userId) => {
+		if (infrastructureAdmissionEnabled()) await assertUsageWindowsOpen(userId);
+	},
 };
 
 export type SubagentToolContext = {
@@ -140,15 +187,74 @@ export type SubagentToolContext = {
 	readonly waitDeadlineAt?: number;
 	/** A model per role (harness variant roleModels); children inherit the parent's model otherwise. */
 	readonly roleModels?: RoleModels;
+	/** Harness variant lead: fusion makes the root's first writer a persistent sidekick. */
+	readonly lead?: LeadMode;
+	/**
+	 * The parent turn's reasoning effort: a child on another model gets it
+	 * unless its roleModels entry sets one (a same-model child inherits the
+	 * parent turn's settings when its first turn is sent).
+	 */
+	readonly parentReasoning?: string;
+	/** Harness variant rigor=on: the checker's brief gets the rigor checks. */
+	readonly rigor?: boolean;
+	/** Harness variant checkerMode=pair: a checker is a judge with a worker (src/domain/checker-pair.ts). */
+	readonly checkerMode?: CheckerMode;
+	/**
+	 * Lead mode fusion: called when a sidekick round starts, so the lead's
+	 * turn stops writing to the shared checkout at once (fusion-lead.ts).
+	 */
+	readonly onSidekickRound?: () => void;
+	/** Lead mode fusion: resolves once the lead's writing calls already started have finished. */
+	readonly leadWritesSettled?: () => Promise<void>;
+	/** Lead mode fusion: the lead's background commands still running (they may write while the sidekick works). */
+	readonly leadBackgroundCommands?: () => readonly string[];
 	readonly deps?: Partial<SubagentToolDeps>;
 };
 
+/** A sidekick started before the shared checkout, on its own fork. */
+const FORKED_SIDEKICK = "it ran on a fork from before the shared checkout";
+function forkedSidekick(session: AgentSessionRecord | undefined) {
+	return !!session?.agentFork?.vmId && !session.agentFork.deletedAt;
+}
+
+/**
+ * Retires an idle sidekick that still has its own fork (started before the
+ * shared checkout): its next round starts a fresh sidekick in the lead's
+ * checkout instead. True when it was retired.
+ */
+async function retireForkedSidekick(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	session: (SubagentTreeSession & AgentSessionRecord) | undefined,
+	live: boolean,
+) {
+	if (
+		!session ||
+		live ||
+		!forkedSidekick(session) ||
+		!isActiveSidekick(session)
+	)
+		return false;
+	await deps.retireSidekick(context.machines, session, FORKED_SIDEKICK);
+	return true;
+}
+
+/** The lead's background commands still running, as a note for the sidekick's round message. */
+function backgroundNote(context: SubagentToolContext) {
+	const ids = context.leadBackgroundCommands?.() ?? [];
+	return ids.length
+		? `The lead has background commands still running in this checkout (${ids.join(", ")}); they may write files while you work.`
+		: "";
+}
+
+const ROLE_TEXT =
+	"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
+/** Lead mode fusion: the writer is the sidekick, in the lead's own checkout. */
+const LEAD_ROLE_TEXT =
+	"writer: your sidekick, which works in your own checkout while you wait (its changes stay uncommitted in your working tree for you to review); researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
+
 const agentInput = z.object({
-	role: z
-		.enum(SUBAGENT_ROLES)
-		.describe(
-			"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task",
-		),
+	role: z.enum(SUBAGENT_ROLES).describe(ROLE_TEXT),
 	title: z.string().min(1).max(SUBAGENT_TITLE_MAX),
 	brief: z
 		.string()
@@ -164,6 +270,14 @@ const agentInput = z.object({
 			"Readers only: block until the report (default false: keep working, the report arrives as a message)",
 		),
 });
+
+/** Lead mode fusion: the lead marks a round as exploration. */
+const exploreField = z
+	.boolean()
+	.optional()
+	.describe(
+		"Writer (your sidekick) only: an exploration round. It changes no files and returns the relevant file paths, key snippets with line ranges, the check commands and open questions for you to plan from.",
+	);
 
 const sendInput = z.object({
 	id: z.string().min(1).max(20).describe('The agent id, e.g. "1.2"'),
@@ -194,12 +308,27 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	const { parent } = context;
 	const loadTree = () => loadTreeFor(deps, parent);
 
+	// Lead mode fusion: the root's writer is its persistent sidekick, and the
+	// lead may mark a round as exploration.
+	const isLead = context.lead === "fusion" && !parent.parentSessionId;
+	const requestKey = () =>
+		latestUserRequestId(sessionItemsFromUnknown(parent.items));
 	const agent = tool({
-		description:
-			"Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
-		inputSchema: agentInput,
-		execute: async (input) => {
+		description: isLead
+			? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer is your sidekick: it works directly in your checkout, you wait while it works (the runtime holds your turn until its report), and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
+			: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
+		inputSchema: isLead
+			? agentInput.extend({
+					role: z.enum(SUBAGENT_ROLES).describe(LEAD_ROLE_TEXT),
+					explore: exploreField,
+				})
+			: agentInput,
+		execute: async (
+			input: z.infer<typeof agentInput> & { explore?: boolean },
+		) => {
 			const role: SubagentRole = input.role;
+			// Before any await: a write in the same batch must already see the round.
+			if (isLead && role === "writer") context.onSidekickRound?.();
 			if (role === "checker" && input.brief?.trim())
 				throw new Error(
 					"A checker takes no brief: the runtime gives it the user's task and your deliverable, so its verdict stays independent.",
@@ -214,6 +343,32 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				throw new Error(
 					"A read-only agent cannot start a writer; report what should change instead.",
 				);
+			if (input.explore && !(isLead && role === "writer"))
+				throw new Error("explore applies only to your sidekick (a writer).");
+			// Lead mode fusion: the root's writer is its one persistent sidekick.
+			const sidekick = isLead && role === "writer";
+			if (sidekick) {
+				const tree = await loadTree();
+				const alive = tree.nodes.find(
+					(node) =>
+						node.parentId === parent.id &&
+						isActiveSidekick(
+							tree.sessions.find((session) => session.id === node.id),
+						),
+				);
+				const replaced =
+					alive &&
+					(await retireForkedSidekick(
+						context,
+						deps,
+						tree.sessions.find((session) => session.id === alive.id),
+						alive.live,
+					));
+				if (alive && !replaced)
+					throw new Error(
+						`Your sidekick ${alive.label} is still available (${alive.live ? "working" : "idle"}): send it the next brief or feedback with ${AGENT_SEND_TOOL} (id ${alive.label}) instead of starting another writer. To replace it, stop it first (${AGENT_SEND_TOOL} with stop: true).`,
+					);
+			}
 			const workspace = await context.workspace();
 			const { childId, budget, placement, model, notice } = await spawnSubagent(
 				context,
@@ -221,11 +376,20 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				{
 					role,
 					modelRole: role,
+					...(role === "checker" && context.checkerMode === "pair"
+						? { pair: "judge" as const }
+						: {}),
+					sidekick: sidekick
+						? {
+								kind: input.explore ? "explore" : "build",
+								requestKey: requestKey(),
+							}
+						: undefined,
 					title: input.title,
 					brief: async (tree) =>
 						role === "checker"
 							? await checkerBriefFor(context, tree.root, workspace)
-							: (input.brief as string).trim(),
+							: `${(input.brief as string).trim()}${input.explore ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`,
 				},
 				workspace,
 			);
@@ -240,6 +404,11 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				model: model.label,
 				budget: publicBudget(budget, model.listedModelId),
 				...(notice ? { modelNotice: notice } : {}),
+				...(budget.sidekick
+					? {
+							sidekick: `Your persistent sidekick for this chat: up to ${budget.sidekick.maxRounds} rounds per user request, steps and minutes per round. It works in your checkout; you wait while it works and review its changes in place after its report. Then send feedback or the next brief with ${AGENT_SEND_TOOL} (also on the user's later messages); it keeps its context.`,
+						}
+					: {}),
 			};
 			if (!input.wait) return started;
 			const report = await waitForReport(context, deps, childId, budget);
@@ -253,12 +422,21 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	});
 
 	const agentSend = tool({
-		description:
-			"Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
-		inputSchema: sendInput,
-		execute: async (input) => {
+		description: isLead
+			? "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A message to your idle sidekick starts its next round in your checkout; you wait for its report. A finished reader resumes with the message."
+			: "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
+		inputSchema: isLead
+			? sendInput.extend({ explore: exploreField })
+			: sendInput,
+		execute: async (
+			input: z.infer<typeof sendInput> & { explore?: boolean },
+		) => {
 			if (!input.message && !input.stop)
 				throw new Error("Pass a message, stop: true, or both.");
+			// Before any await: a message usually starts a sidekick round, and a
+			// write in the same batch must already see it (the next step's gate
+			// lifts this when no round runs).
+			if (isLead && input.message && !input.stop) context.onSidekickRound?.();
 			const tree = await loadTree();
 			const target = tree.nodes.find(
 				(node) => node.label === input.id && node.parentId === parent.id,
@@ -272,6 +450,54 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 							.join(", ") || "none"
 					}.`,
 				);
+			const session = tree.sessions.find((entry) => entry.id === target.id);
+			const sidekick = sidekickState(session);
+			if (
+				sidekick &&
+				session &&
+				input.message &&
+				!input.stop &&
+				(await retireForkedSidekick(context, deps, session, target.live))
+			) {
+				const workspace = await context.workspace();
+				const spawned = await spawnSubagent(
+					context,
+					deps,
+					{
+						role: "writer",
+						modelRole: "writer",
+						title: session.title,
+						sidekick: {
+							kind: input.explore ? "explore" : "build",
+							requestKey: requestKey(),
+						},
+						brief: async () =>
+							`${input.message?.trim()}${input.explore ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`,
+					},
+					workspace,
+				);
+				const label =
+					(await loadTree()).nodes.find((node) => node.id === spawned.childId)
+						?.label ?? "?";
+				return {
+					id: label,
+					status: `sidekick ${target.label} ran on a fork from before the shared checkout and is retired; sidekick ${label} took this brief in your checkout, round 1/${spawned.budget.sidekick?.maxRounds ?? "?"} started`,
+					note: `Use id ${label} from now on.`,
+					delivery: "now",
+				};
+			}
+			if (sidekick && session) {
+				const handled = await sendToSidekick(context, deps, {
+					target,
+					session,
+					state: sidekick,
+					message: input.message,
+					stop: !!input.stop,
+					kind: input.explore ? "explore" : "build",
+					requestKey: requestKey(),
+				});
+				if (handled) return handled;
+			}
 			if (input.stop) await deps.stop(target.id);
 			const text = [
 				input.message,
@@ -293,7 +519,405 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	return { [AGENT_TOOL]: agent, [AGENT_SEND_TOOL]: agentSend };
 }
 
+const workerBrief = z
+	.string()
+	.min(1)
+	.max(CHECKER_WORKER_BRIEF_MAX)
+	.describe(
+		"Self-contained: what to read and summarize, the copy to make, the tests and probes to write under your scratch and run, the existing tests to run, and the evidence to return. The worker sees only this.",
+	);
+const workerModel = z
+	.enum(["cheap", "strong"])
+	.optional()
+	.describe(
+		`"strong" runs this worker on your own model, for one hard investigation (at most ${MAX_STRONG_CHECKER_WORKERS} per check); default "cheap".`,
+	);
+const workerSpec = z.object({
+	brief: workerBrief,
+	title: z.string().min(1).max(SUBAGENT_TITLE_MAX).optional(),
+	model: workerModel,
+});
+const workerInput = z.object({
+	brief: workerBrief.optional(),
+	title: z.string().min(1).max(SUBAGENT_TITLE_MAX).optional(),
+	model: workerModel,
+	workers: z
+		.array(workerSpec)
+		.min(1)
+		.max(MAX_LIVE_CHECKER_WORKERS)
+		.optional()
+		.describe(
+			`Instead of brief: start up to ${MAX_LIVE_CHECKER_WORKERS} workers at once on independent requirement groups (each its own scratch subdirectory) and wait for all their reports.`,
+		),
+	id: z
+		.string()
+		.min(1)
+		.max(20)
+		.optional()
+		.describe(
+			'A worker of yours that already reported (e.g. "1.1"): send it this brief as a follow-up; it keeps its context',
+		),
+});
+
+type WorkerSpec = z.infer<typeof workerSpec>;
+
+/**
+ * checkerMode=pair: the judge's one delegation tool (src/domain/checker-pair.ts).
+ * It starts read-only workers on roleModels.checkerWorker (or, for one
+ * `model: "strong"` worker per check, the judge's roleModels.checker) with
+ * the judge's briefs in the runtime's frame, up to MAX_LIVE_CHECKER_WORKERS
+ * at once sharing the worker token budget, or briefs a worker that already
+ * reported again, and waits for the reports. Workers share the VM read-only
+ * as the reader user, like the judge.
+ */
+export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
+	const deps = { ...defaultDeps, ...context.deps };
+	const { parent } = context;
+	const worker = tool({
+		description: `Hand reading, test writing and test runs to workers: cheaper read-only agents on this VM that see only your brief and report compact evidence (commands with exit status and output, file:line excerpts, test results). Pass brief for one worker, or workers (up to ${MAX_LIVE_CHECKER_WORKERS}) to run independent groups in parallel; waits for every report. model "strong" uses your own model for one hard investigation. Pass id with brief to brief a worker that already reported again.`,
+		inputSchema: workerInput,
+		execute: async (input: z.infer<typeof workerInput>) => {
+			if (input.id) {
+				if (!input.brief) throw new Error("A follow-up needs a brief.");
+				const tree = await loadTreeFor(deps, parent);
+				const target = tree.nodes.find(
+					(node) => node.label === input.id && node.parentId === parent.id,
+				);
+				const session = tree.sessions.find((entry) => entry.id === target?.id);
+				if (!target || !session?.agentBudget)
+					throw new Error(
+						`No worker ${input.id} of yours. Your workers: ${
+							tree.nodes
+								.filter((node) => node.parentId === parent.id)
+								.map((node) => `${node.label} (${node.state})`)
+								.join(", ") || "none"
+						}.`,
+					);
+				await deps.message(parent, target.id, input.brief.trim(), randomUUID());
+				if (target.live)
+					return {
+						id: target.label,
+						status:
+							"message queued: it is still working; its report arrives as a message",
+					};
+				const report = await waitForReport(
+					context,
+					deps,
+					target.id,
+					session.agentBudget,
+				);
+				return report
+					? { id: target.label, ...report }
+					: {
+							id: target.label,
+							note: "Still running; its report will arrive as a message.",
+						};
+			}
+			const specs: WorkerSpec[] = input.workers?.length
+				? input.workers
+				: input.brief
+					? [{ brief: input.brief, title: input.title, model: input.model }]
+					: [];
+			if (!specs.length)
+				throw new Error("Pass brief, workers, or id with brief.");
+			const tree = await loadTreeFor(deps, parent);
+			const mine = tree.nodes.filter((node) => node.parentId === parent.id);
+			const live = mine.filter((node) => node.live).length;
+			if (live + specs.length > MAX_LIVE_CHECKER_WORKERS)
+				throw new Error(
+					`At most ${MAX_LIVE_CHECKER_WORKERS} workers run at once; ${live} still running. Wait for their reports or start fewer.`,
+				);
+			const strongUsed = tree.sessions.filter(
+				(session) =>
+					session.parentSessionId === parent.id &&
+					session.agentBudget?.checkerStrong,
+			).length;
+			const strong = specs.filter((spec) => spec.model === "strong").length;
+			if (strongUsed + strong > MAX_STRONG_CHECKER_WORKERS)
+				throw new Error(
+					`At most ${MAX_STRONG_CHECKER_WORKERS} strong worker per check${strongUsed ? " (already used)" : ""}. Use the cheap worker with a more exact brief.`,
+				);
+			const workspace = await context.workspace();
+			const share = live + specs.length;
+			const started = [];
+			for (const spec of specs) {
+				const run = await spawnSubagent(
+					context,
+					deps,
+					{
+						role: "researcher",
+						modelRole: checkerWorkerModelRole(spec.model),
+						pair: "worker",
+						workerShare: share,
+						...(spec.model === "strong" ? { strongWorker: true } : {}),
+						title: spec.title ?? "Checker worker",
+						brief: async () => checkerWorkerBrief(spec.brief),
+					},
+					workspace,
+				);
+				started.push(run);
+			}
+			const labels = (await loadTreeFor(deps, parent)).nodes;
+			const results = await Promise.all(
+				started.map(async ({ childId, budget, model, notice }) => {
+					const report = await waitForReport(context, deps, childId, budget);
+					return {
+						id: labels.find((node) => node.id === childId)?.label ?? "?",
+						model: model.label,
+						...(notice ? { modelNotice: notice } : {}),
+						...(report ?? {
+							note: "Still running; its report will arrive as a message.",
+						}),
+					};
+				}),
+			);
+			return input.workers?.length ? { workers: results } : results[0];
+		},
+	});
+	return { [CHECKER_WORKER_TOOL]: worker };
+}
+
 type LoadedTree = Tree & { level: number };
+
+/**
+ * agent_send to a sidekick (lead mode fusion). Stop retires it. A message
+ * while it is idle starts its next round in the lead's checkout: the
+ * checkout is snapshotted (the round's changes are diffed against it), the
+ * round's budget starts, and the message arrives. A message while it works
+ * is ordinary steering (null: the caller handles it).
+ */
+async function sendToSidekick(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	input: {
+		readonly target: SubagentNode;
+		readonly session: SubagentTreeSession & AgentSessionRecord;
+		readonly state: SidekickState;
+		readonly message?: string;
+		readonly stop: boolean;
+		readonly kind: SidekickRoundKind;
+		readonly requestKey?: string;
+	},
+) {
+	const { target, session, state } = input;
+	if (input.stop) {
+		const status = await deps.retireSidekick(
+			context.machines,
+			session,
+			"stopped by the lead",
+		);
+		if (status !== "stopping")
+			return {
+				id: target.label,
+				status: "retired",
+				note: "A new writer becomes your next sidekick.",
+			};
+		return null;
+	}
+	if (state.retired)
+		throw new Error(
+			`Sidekick ${target.label} is retired (${state.retired.reason}). Start a new writer, or do this yourself.`,
+		);
+	if (target.live) return null;
+	if (!sidekickRoundsLeft(state, input.requestKey))
+		throw new Error(
+			`Sidekick ${target.label} has used all ${state.maxRounds} rounds. Take over, or stop it and start a new writer.`,
+		);
+	const round = state.round + 1;
+	// The runtime's heading goes in front; delivery takes 8,000 characters.
+	const note = sidekickRoundMessage({
+		round,
+		maxRounds: state.maxRounds,
+		message: "",
+		turnFirstRound: round,
+	}).length;
+	if (note + (input.message ?? "").trim().length > PEER_MESSAGE_MAX)
+		throw new Error(
+			`A sidekick round's message takes at most ${PEER_MESSAGE_MAX - note} characters; shorten it or point to a file in your checkout (the sidekick works in it).`,
+		);
+	const next = await beginRound(context, deps, {
+		target,
+		state,
+		round,
+		kind: input.kind,
+		requestKey: input.requestKey,
+	});
+	await deps.message(
+		context.parent,
+		target.id,
+		sidekickRoundMessage({
+			round,
+			maxRounds: state.maxRounds,
+			message: [input.message ?? "", backgroundNote(context)]
+				.filter(Boolean)
+				.join("\n\n"),
+			turnFirstRound: next.turnFirstRound,
+			kind: input.kind,
+		}),
+		randomUUID(),
+	);
+	return {
+		id: target.label,
+		status: `${sidekickRoundLabel(next)} started`,
+		checkout:
+			"it works in your checkout now; you wait for its report, then review its changes in place",
+		...(backgroundNote(context)
+			? {
+					backgroundCommands:
+						"Your background commands are still running and may write while it works; stop them (ytimesy-job stop) if they touch its files.",
+				}
+			: {}),
+		...(next.pendingSwitch
+			? {
+					model: `this round starts by compacting its context; it continues on ${next.pendingSwitch.to} (same session)`,
+				}
+			: {}),
+		delivery: "now",
+	};
+}
+
+/**
+ * Starts a sidekick's next round: snapshots the lead's checkout (the
+ * round's base) and saves the round's state. The lead stops writing at once.
+ */
+async function beginRound(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	input: {
+		readonly target: SubagentNode;
+		readonly state: SidekickState;
+		readonly round: number;
+		readonly kind: SidekickRoundKind;
+		readonly requestKey?: string;
+	},
+) {
+	context.onSidekickRound?.();
+	// A write the lead started earlier in this batch finishes before the snapshot.
+	await context.leadWritesSettled?.();
+	const workspace = await context.workspace();
+	const base = await roundBase(
+		context,
+		deps,
+		workspace,
+		input.target.label,
+		input.round,
+	);
+	const next = beginSidekickRound(input.state, {
+		now: new Date(deps.now()).toISOString(),
+		steps: input.target.steps,
+		tokens: input.target.subtree.budgetTokens,
+		base,
+		kind: input.kind,
+		requestKey: input.requestKey,
+	});
+	await deps.saveSidekick(input.target.id, next, { clearStop: true });
+	return next;
+}
+
+/** The round's start snapshot; a failed snapshot only costs the round's precise diff. */
+async function roundBase(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	workspace: AgentToolWorkspace,
+	label: string,
+	round: number,
+) {
+	try {
+		return await deps.markRoundStart({
+			machines: context.machines,
+			vm: WorkspaceId(workspace.vm),
+			label,
+			round,
+		});
+	} catch (cause) {
+		console.warn("A sidekick round's start could not be snapshotted.", {
+			message: cause instanceof Error ? cause.message.slice(0, 200) : "",
+		});
+		return undefined;
+	}
+}
+
+/**
+ * Lead mode fusion's first step (Devin Fusion: the user's task, then the
+ * sidekick's code exploration): before the lead's first model call for a
+ * user request, the harness starts an exploration round with a brief built
+ * from the request. An idle sidekick from the chat's earlier requests takes
+ * it as its next round; otherwise a new sidekick starts. Null when the lead
+ * has a working sidekick or none can start (the lead then plans alone).
+ */
+export async function startHarnessExploration(
+	context: SubagentToolContext,
+	input: { readonly requestKey: string; readonly requestText: string },
+) {
+	const deps = { ...defaultDeps, ...context.deps };
+	const { parent } = context;
+	const tree = await loadTreeFor(deps, parent);
+	const node = tree.nodes.find(
+		(entry) =>
+			entry.parentId === parent.id &&
+			isActiveSidekick(
+				tree.sessions.find((session) => session.id === entry.id),
+			),
+	);
+	const brief = harnessExplorationBrief(input.requestText);
+	const forked =
+		!!node &&
+		(await retireForkedSidekick(
+			context,
+			deps,
+			tree.sessions.find((entry) => entry.id === node.id),
+			node.live,
+		));
+	if (node && !forked) {
+		const session = tree.sessions.find((entry) => entry.id === node.id);
+		const state = sidekickState(session);
+		if (!session || !state || node.live) return null;
+		if (!sidekickRoundsLeft(state, input.requestKey)) return null;
+		const round = state.round + 1;
+		const next = await beginRound(context, deps, {
+			target: node,
+			state,
+			round,
+			kind: "explore",
+			requestKey: input.requestKey,
+		});
+		await deps.message(
+			parent,
+			node.id,
+			sidekickRoundMessage({
+				round,
+				maxRounds: state.maxRounds,
+				message: [
+					brief.slice(0, PEER_MESSAGE_MAX - 800),
+					backgroundNote(context),
+				]
+					.filter(Boolean)
+					.join("\n\n"),
+				turnFirstRound: next.turnFirstRound,
+			}),
+			randomUUID(),
+		);
+		return { id: node.label, round };
+	}
+	const workspace = await context.workspace();
+	const { childId } = await spawnSubagent(
+		context,
+		deps,
+		{
+			role: "writer",
+			modelRole: "writer",
+			title: "Explore the code for this request",
+			sidekick: { kind: "explore", requestKey: input.requestKey },
+			brief: async () => brief,
+		},
+		workspace,
+	);
+	const label =
+		(await loadTreeFor(deps, parent)).nodes.find(
+			(entry) => entry.id === childId,
+		)?.label ?? "?";
+	return { id: label, round: 1 };
+}
 
 async function loadTreeFor(
 	deps: SubagentToolDeps,
@@ -325,6 +949,20 @@ async function spawnSubagent(
 		readonly title: string;
 		readonly brief: (tree: LoadedTree) => Promise<string>;
 		readonly cap?: Partial<SubagentBudget>;
+		/**
+		 * checkerMode=pair: the checker is the pair's judge, or the reader is
+		 * its worker (whose budget comes from checkerWorkerBudget).
+		 */
+		readonly pair?: "judge" | "worker";
+		/** checkerMode=pair: workers sharing the worker token budget. */
+		readonly workerShare?: number;
+		/** checkerMode=pair: a worker on the judge's model (`model: "strong"`). */
+		readonly strongWorker?: true;
+		/** Lead mode fusion: a writer that persists across rounds, and its first round. */
+		readonly sidekick?: {
+			readonly kind: SidekickRoundKind;
+			readonly requestKey?: string;
+		};
 	},
 	workspace: AgentToolWorkspace,
 ) {
@@ -332,6 +970,8 @@ async function spawnSubagent(
 	const { role } = input;
 	if (!parent.listedModelId)
 		throw new Error("Your session has no model for a subagent to inherit.");
+	// A child is new work: no session, fork or turn starts past the limit.
+	await deps.usageWindowsOpen(parent.userId);
 	const { model, notice } = await childModel(
 		context,
 		deps,
@@ -355,15 +995,38 @@ async function spawnSubagent(
 		parentRemaining: parentRemaining ?? builderRemaining(0),
 	});
 	if (!admission.admitted) throw new Error(admission.reason);
-	const budget: SubagentBudget = {
-		steps: Math.min(admission.budget.steps, input.cap?.steps ?? Infinity),
-		minutes: Math.min(admission.budget.minutes, input.cap?.minutes ?? Infinity),
-		tokens: Math.min(admission.budget.tokens, input.cap?.tokens ?? Infinity),
+	const admitted =
+		input.pair === "worker"
+			? workerBudget(
+					parent,
+					admission.level,
+					parentRemaining,
+					input.workerShare,
+				)
+			: admission.budget;
+	let budget: SubagentBudget = {
+		steps: Math.min(admitted.steps, input.cap?.steps ?? Infinity),
+		minutes: Math.min(admitted.minutes, input.cap?.minutes ?? Infinity),
+		tokens: Math.min(admitted.tokens, input.cap?.tokens ?? Infinity),
 		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
 		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
+		...(input.pair ? { checkerPair: input.pair } : {}),
+		...(input.strongWorker ? { checkerStrong: true as const } : {}),
 	};
-	const brief = await input.brief(tree);
-	const placement = subagentPlacement(role);
+	const brief = [
+		await input.brief(tree),
+		input.sidekick ? backgroundNote(context) : "",
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	// Lead mode fusion's sidekick works in the lead's own checkout.
+	const placement: SubagentPlacement = input.sidekick
+		? "shared-writer"
+		: subagentPlacement(role);
+	if (input.sidekick) {
+		context.onSidekickRound?.();
+		await context.leadWritesSettled?.();
+	}
 	const child = await deps.openTask({
 		userId: parent.userId,
 		projectId: parent.projectId,
@@ -373,13 +1036,40 @@ async function spawnSubagent(
 		modelId: model.listedModelId,
 		prompt: brief,
 		placement: placement === "fork" ? "fresh" : "shared",
-		access: placement === "fork" ? "read_write" : "read_only",
-		execution: "parallel",
-		dependsOnSessionId: null,
+		access: placement === "shared-read-only" ? "read_only" : "read_write",
+		...(placement === "shared-writer" ? { sharedWriter: true } : {}),
 	});
 	const childId = child.id;
 	try {
+		if (input.sidekick)
+			budget = {
+				...budget,
+				sidekick: newSidekickState(budget, new Date(deps.now()).toISOString(), {
+					...input.sidekick,
+					model: model.listedModelId,
+					pair: fusionPairProfile(parent.listedModelId, model.listedModelId),
+				}),
+			};
 		await deps.saveSpec(parent.userId, childId, { role, budget });
+		// Round 1's base: the lead's checkout before the sidekick starts.
+		if (budget.sidekick) {
+			const label = (await loadTreeFor(deps, parent)).nodes.find(
+				(node) => node.id === childId,
+			)?.label;
+			const base = label
+				? await roundBase(context, deps, workspace, label, 1)
+				: undefined;
+			if (base) {
+				const sidekick: SidekickState = {
+					...budget.sidekick,
+					rounds: budget.sidekick.rounds.map((round) =>
+						round.n === 1 ? { ...round, base } : round,
+					),
+				};
+				budget = { ...budget, sidekick };
+				await deps.saveSidekick(childId, sidekick);
+			}
+		}
 		if (placement === "fork") {
 			const fork = await deps.fork({
 				machines: context.machines,
@@ -415,6 +1105,32 @@ async function spawnSubagent(
 }
 
 /**
+ * checkerMode=pair: a worker's budget, most of its judge's remaining time
+ * (the judge waits for it) less the judge's time to write its verdict.
+ */
+function workerBudget(
+	judge: AgentSessionRecord,
+	level: number,
+	judgeRemaining: SubagentRemaining | null | undefined,
+	share?: number,
+) {
+	const judgeMinutes = judge.agentBudget?.minutes;
+	const budget = checkerWorkerBudget({
+		level,
+		judgeRemaining: judgeRemaining ?? builderRemaining(0),
+		judgeWrapUpMinutes: judgeMinutes
+			? checkerWrapUpLeadMs(judgeMinutes * 60_000) / 60_000
+			: 0,
+		...(share ? { share } : {}),
+	});
+	if (!budget)
+		throw new Error(
+			"Too little of your time or budget is left for a worker. Do this work yourself.",
+		);
+	return budget;
+}
+
+/**
  * The child's model: its role's entry in roleModels when the user can use
  * that route (an API child under a Codex builder and the reverse are both
  * fine), else the parent's, with a notice when an entry was set but unusable.
@@ -445,6 +1161,7 @@ async function childModel(
 		roleModels: context.roleModels,
 		connections,
 		parentModel,
+		parentEffort: context.parentReasoning,
 	});
 	if (resolved.kind === "inherit") return { model: inherited };
 	if (resolved.kind === "fallback")
@@ -453,7 +1170,7 @@ async function childModel(
 }
 
 /**
- * Starts a read-only child with a brief the runtime wrote (the builder never
+ * Starts a read-only subagent with a brief the runtime wrote (the builder never
  * adds to it): the attempt loop's checker and tiebreak judge. Its report is
  * taken by the runtime, not delivered to the builder.
  */
@@ -466,6 +1183,8 @@ export async function startRuntimeSubagent(
 		readonly title: string;
 		readonly brief: string;
 		readonly cap?: Partial<SubagentBudget>;
+		/** checkerMode=pair: the checker is a judge with the worker tool. */
+		readonly pair?: boolean;
 	},
 ) {
 	const deps = { ...defaultDeps, ...context.deps };
@@ -479,6 +1198,9 @@ export async function startRuntimeSubagent(
 			title: input.title.slice(0, SUBAGENT_TITLE_MAX),
 			brief: async () => input.brief,
 			cap: input.cap,
+			...(input.pair && input.role === "checker"
+				? { pair: "judge" as const }
+				: {}),
 		},
 		workspace,
 	);
@@ -535,6 +1257,8 @@ async function checkerBriefFor(
 		checkout: workspace.cwd,
 		changedFiles,
 		scratch: "$HOME",
+		rigor: context.rigor,
+		pair: context.checkerMode === "pair",
 	});
 }
 

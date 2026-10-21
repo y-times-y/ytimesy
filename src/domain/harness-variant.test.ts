@@ -5,6 +5,7 @@ import {
 	harnessVariantFromFlags,
 	harnessVariantFromUnknown,
 	harnessVariantLabel,
+	outputCapCharacters,
 	promptCacheScopeId,
 } from "./harness-variant";
 
@@ -18,8 +19,13 @@ describe("harness variants", () => {
 			codeMode: "off",
 			subagents: "off",
 			prEvidence: "off",
+			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
+			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 	});
@@ -38,8 +44,13 @@ describe("harness variants", () => {
 			codeMode: "off",
 			subagents: "off",
 			prEvidence: "off",
+			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
+			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(
@@ -52,8 +63,13 @@ describe("harness variants", () => {
 			codeMode: "off",
 			subagents: "off",
 			prEvidence: "off",
+			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
+			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(
@@ -86,8 +102,13 @@ describe("harness variants", () => {
 			codeMode: "off",
 			subagents: "off",
 			prEvidence: "off",
+			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
+			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
@@ -134,6 +155,51 @@ describe("harness variants", () => {
 				harnessVariantFromFlags(["subagents=on,codeMode=on"]),
 			),
 		).toBe("codeMode=on,subagents=on");
+	});
+
+	it("offers rigor and an output cap only when asked", () => {
+		expect(DEFAULT_HARNESS_VARIANT.rigor).toBe("off");
+		expect(outputCapCharacters(DEFAULT_HARNESS_VARIANT.outputCap)).toBe(
+			undefined,
+		);
+		const variant = harnessVariantFromFlags(["rigor=on,outputCap=10000"]);
+		expect(variant).toMatchObject({ rigor: "on", outputCap: "10000" });
+		expect(outputCapCharacters(variant.outputCap)).toBe(10_000);
+		expect(harnessVariantLabel(variant)).toBe("rigor=on,outputCap=10000");
+		expect(harnessVariantFromUnknown({ outputCap: "123" }).outputCap).toBe(
+			"off",
+		);
+		expect(() => harnessVariantFromFlags(["outputCap=123"])).toThrow(
+			"accepts off, 10000, 16000",
+		);
+	});
+
+	it("keeps the single checker unless checkerMode=pair is asked", () => {
+		expect(DEFAULT_HARNESS_VARIANT.checkerMode).toBe("single");
+		const variant = harnessVariantFromFlags([
+			"review=on,checkerMode=pair,roleModels.checker=codex:gpt-6.1-sol",
+			"roleModels.checkerWorker=codex:gpt-6-luna",
+		]);
+		expect(variant).toMatchObject({
+			review: "on",
+			checkerMode: "pair",
+			roleModels: {
+				checker: { model: "codex:gpt-6.1-sol" },
+				checkerWorker: { model: "codex:gpt-6-luna" },
+			},
+		});
+		expect(harnessVariantLabel(variant)).toBe(
+			"review=on,checkerMode=pair,roleModels.checker=codex:gpt-6.1-sol,roleModels.checkerWorker=codex:gpt-6-luna",
+		);
+		expect(harnessVariantFromUnknown({ checkerMode: "trio" }).checkerMode).toBe(
+			"single",
+		);
+		expect(harnessVariantFromUnknown({ checkerMode: "pair" }).checkerMode).toBe(
+			"pair",
+		);
+		expect(() => harnessVariantFromFlags(["checkerMode=trio"])).toThrow(
+			"accepts single, pair",
+		);
 	});
 
 	it("keys the prompt cache per chat unless the variant shares it per account", () => {

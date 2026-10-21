@@ -10,7 +10,9 @@ import {
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import { agentCall } from "#/domain/agent-call";
 import { pendingPlanId, planOutcome } from "#/domain/agent-plan";
+import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
 	childTaskAnchorId,
@@ -31,6 +33,7 @@ import { fileBasename } from "#/domain/file-kind";
 import { listedModelDisplayName } from "#/domain/listed-model";
 import { parseModelRouteId } from "#/domain/model-connection";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
+import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
@@ -44,6 +47,7 @@ import {
 	showTurnWorking,
 	type UserMessageItem,
 } from "#/domain/session-item";
+import { subagentLabelFromTaskLabel } from "#/domain/subagent";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
 	explorationGroupIsLive,
@@ -83,6 +87,12 @@ import {
 } from "./secret-request-card";
 import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
+import {
+	AgentCallView,
+	CheckVerdictCard,
+	RequirementsList,
+	ToolInputFields,
+} from "./tool-cards";
 
 export function SessionTimeline({
 	items: allItems,
@@ -272,7 +282,9 @@ export function SessionTimeline({
 				))}
 				{showTurnWorking(items, turnStatus) ? (
 					<li data-kind="working">
-						<p className="session-working session-shimmer">Thinking</p>
+						<p className="session-working session-shimmer">
+							{compactingContext(items) ? "Compacting context" : "Thinking"}
+						</p>
 					</li>
 				) : null}
 				{queued.map((item) => (
@@ -284,7 +296,7 @@ export function SessionTimeline({
 				childTasks.some((task) => task.turnStatus === "running") ? (
 					<li data-kind="waiting-for-children">
 						<p className="session-working" role="status">
-							Waiting for child agents
+							Waiting for subagents
 						</p>
 					</li>
 				) : null}
@@ -348,17 +360,17 @@ function ChildTaskCard({
 	const busy = task.status === "working" || task.status === "waiting";
 	const status =
 		task.status === "done"
-			? task.reviewState === "pending"
-				? "Awaiting review"
-				: "Completed"
+			? "Completed"
 			: task.status === "failed"
 				? "Failed"
 				: task.status === "draft"
-					? "Planned"
+					? "Starting"
 					: busy
 						? "Working"
 						: "Idle";
 	const activity = childTaskPublicItems(task.items);
+	const role = task.subagent?.role;
+	const who = `${role ? role.charAt(0).toUpperCase() + role.slice(1) : "Agent"} ${subagentLabelFromTaskLabel(task.label)}`;
 	return (
 		<details className="child-task-card" data-status={task.status}>
 			<summary>
@@ -378,7 +390,7 @@ function ChildTaskCard({
 				<span className="child-task-card-copy">
 					<strong>{task.title}</strong>
 					<small>
-						{task.label}
+						{who}
 						{task.listedModelId
 							? ` · ${listedModelDisplayName(parseModelRouteId(task.listedModelId)?.modelId ?? task.listedModelId)}`
 							: ""}
@@ -531,7 +543,7 @@ function SessionItemView({
 				return (
 					<details className="session-work child-task-instructions">
 						<summary>
-							<span>Task instructions</span>
+							<span>Brief</span>
 							<ChevronRight size={12} className="session-activity-chevron" />
 						</summary>
 						<div className="session-work-items">
@@ -572,12 +584,24 @@ function SessionItemView({
 					data-role="assistant"
 					data-streaming={turnRunning && item.streaming ? "true" : undefined}
 				>
-					<AgentMarkdown
-						text={item.text}
-						streaming={Boolean(turnRunning && item.streaming)}
-						fileChanges={fileChanges}
-						onOpenFile={onOpenFile}
-					/>
+					{requirementsSegments(item.text).map((segment, index) =>
+						segment.kind === "requirements" ? (
+							<RequirementsList
+								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+								key={index}
+								items={segment.items}
+							/>
+						) : (
+							<AgentMarkdown
+								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+								key={index}
+								text={segment.text}
+								streaming={Boolean(turnRunning && item.streaming)}
+								fileChanges={fileChanges}
+								onOpenFile={onOpenFile}
+							/>
+						),
+					)}
 				</div>
 			);
 		case "reasoning": {
@@ -769,6 +793,20 @@ function SessionItemView({
 				</div>
 			);
 		case "dynamicToolCall": {
+			const check = checkSummary(item);
+			if (check) return <CheckVerdictCard summary={check} nested={nested} />;
+			const agent = agentCall(item);
+			if (agent)
+				return (
+					<AgentCallView
+						item={item}
+						call={agent}
+						titleClass={titleClass}
+						nested={nested}
+						live={live}
+						onOpenFile={onOpenFile}
+					/>
+				);
 			const command = toolCommand(item);
 			const activity = toolActivity(item);
 			// A run_code program: one card listing its inner calls as ordinary tool cards.
@@ -813,21 +851,35 @@ function SessionItemView({
 						<ChevronRight size={12} className="session-activity-chevron" />
 						{activityStatus(item.status)}
 					</summary>
-					{item.input && (
-						<div className="session-command-detail">
-							<p className="session-activity-meta">
-								{program === null ? "Input" : "Program"}
-							</p>
-							{command ? (
-								<ShellCommandCode command={command} />
-							) : (
-								<pre className="session-output">{program ?? item.input}</pre>
-							)}
-						</div>
-					)}
+					{item.input &&
+						(program !== null ? (
+							<details className="session-command-detail session-program">
+								<summary>
+									<span className="session-activity-meta">
+										{programLinesLabel(program)}
+									</span>
+									<ChevronRight
+										size={12}
+										className="session-activity-chevron"
+									/>
+								</summary>
+								<pre className="session-output">{program}</pre>
+							</details>
+						) : (
+							<div className="session-command-detail">
+								<p className="session-activity-meta">Input</p>
+								{command ? (
+									<ShellCommandCode command={command} />
+								) : (
+									<ToolInputFields input={item.input} />
+								)}
+							</div>
+						))}
 					{innerCalls.length > 0 && (
 						<div className="session-command-detail">
-							<p className="session-activity-meta">Tool calls</p>
+							<p className="session-activity-meta">
+								{`${innerCalls.length} tool ${innerCalls.length === 1 ? "call" : "calls"}`}
+							</p>
 							{innerCalls.map((call) => (
 								<SessionItemView
 									key={call.id}
@@ -857,9 +909,7 @@ function SessionItemView({
 						item.output && (
 							<div className="session-command-detail">
 								<p className="session-activity-meta">Result</p>
-								<pre className="session-output">
-									{toolOutputText(item.output)}
-								</pre>
+								<ToolInputFields input={toolOutputText(item.output)} />
 							</div>
 						)
 					)}
@@ -895,10 +945,32 @@ function SessionItemView({
 			);
 		case "modelSwitch":
 			return (
-				<div className="session-activity" data-kind="modelSwitch" role="status">
+				<div
+					className="session-activity session-system-notice"
+					data-kind="modelSwitch"
+					data-reason={item.reason}
+					role="status"
+				>
 					<p>
 						<ActivityIcon glyph="switch" />
-						<span className="session-activity-title">{item.message}</span>
+						<span className="session-activity-title" title={item.message}>
+							{item.message}
+						</span>
+					</p>
+				</div>
+			);
+		case "notice":
+			return (
+				<div
+					className="session-activity session-system-notice"
+					data-kind="notice"
+					role="status"
+				>
+					<p>
+						<ActivityIcon glyph="notice" />
+						<span className="session-activity-title" title={item.message}>
+							{item.message}
+						</span>
 					</p>
 				</div>
 			);
@@ -916,6 +988,16 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+/** The running turn is compacting its context (the latest request's usage says so). */
+function compactingContext(items: readonly SessionItem[]): boolean {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage")
+			return item.contextUsage?.compacting === true;
+	}
+	return false;
 }
 
 function activityStatus(status: string) {
@@ -940,4 +1022,9 @@ function activityStatusLabel(status: string): string | null {
 	if (status === "failed") return "Failed";
 	if (status === "declined") return "Declined";
 	return null;
+}
+
+function programLinesLabel(program: string): string {
+	const lines = program.split("\n").length;
+	return `Program · ${lines} ${lines === 1 ? "line" : "lines"}`;
 }

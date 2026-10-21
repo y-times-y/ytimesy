@@ -88,10 +88,11 @@ it("persists only authenticated, explicitly enabled repair references without ru
 			)
 		).status,
 	).toBe(200);
-	expect(mocks.stage).toHaveBeenCalledWith(
-		delivery.deliveryId,
-		delivery.signal,
-	);
+	// A delivery from an older ingress without pull request numbers still parses.
+	expect(mocks.stage).toHaveBeenCalledWith(delivery.deliveryId, {
+		...delivery.signal,
+		prNumbers: [],
+	});
 	expect(mocks.run).not.toHaveBeenCalled();
 	expect(mocks.claim).not.toHaveBeenCalled();
 });

@@ -1,7 +1,7 @@
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
 import type { ReviewVerdict } from "./checker-brief";
-import { NO_VERDICT_FAILURE } from "./checker-verdict";
+import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 
 /**
  * The review loop (harness variant review=on, decision 2026-10-18 "A"):
@@ -20,6 +20,12 @@ export const REVIEW_LOOP_LIMITS = {
 	/** Wall time for a turn's reviews and fixes in the product (a runner's deadline only shortens it). */
 	loopMinutes: 60,
 	checker: { steps: 60, minutes: 10, tokens: 800_000 },
+	/**
+	 * checkerMode=pair: the pair's check gets more time than a single checker
+	 * (the judge waits on its workers and follows up on what they could not
+	 * establish); still bounded by the loop's deadline less a fix.
+	 */
+	pairCheckerMinutes: 14,
 	/** What a check is expected to take before one has been timed in this turn. */
 	expectedCheckMs: 150_000,
 	/** The least time a fix needs after its check. */
@@ -30,6 +36,8 @@ export const REVIEW_LOOP_LIMITS = {
 	maxFindings: 8,
 	/** Assumptions handed over per round (after failures and unmet requirements). */
 	maxAssumptions: 3,
+	/** The checker's failing tests handed over per round, to reproduce its findings. */
+	maxFailingTests: 5,
 } as const;
 
 /** Files that run: code, scripts, build and service definitions. */
@@ -67,9 +75,15 @@ export function reviewEligibility(input: {
 /** One finding handed to the builder, numbered F1, F2, ... */
 export type ReviewFinding = {
 	readonly id: string;
-	readonly kind: "failure" | "requirement" | "assumption";
+	/** unverified: the builder's own final answer admitted unverified work (rigor=on). */
+	readonly kind: "failure" | "requirement" | "assumption" | "unverified";
 	readonly text: string;
 };
+
+/** rigor=on: the finding for a final answer that admits unverified work with time left. */
+function unverifiedText(admitted: readonly string[]) {
+	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.`;
+}
 
 const RUNTIME_FAILURES = new Set([
 	NO_VERDICT_FAILURE,
@@ -82,9 +96,14 @@ const clip = (value: string, max: number) =>
 /**
  * The checker's specific findings, most important first: its failures, the
  * unmet requirements it did not already list, then the assumptions it
- * examined (alternative and outcome), as evidence to weigh.
+ * examined (alternative and outcome), as evidence to weigh. With rigor=on an
+ * admission of unverified work in the builder's answer comes first.
  */
-export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
+export function reviewFindings(
+	verdict: ReviewVerdict,
+	/** rigor=on: lines of the builder's final answer that admit unverified work. */
+	admitted: readonly string[] = [],
+): ReviewFinding[] {
 	const failures = verdict.failures.filter(
 		(failure) => !RUNTIME_FAILURES.has(failure),
 	);
@@ -103,6 +122,9 @@ export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
 				),
 		);
 	const concrete = [
+		...(admitted.length
+			? [{ kind: "unverified" as const, text: unverifiedText(admitted) }]
+			: []),
 		...failures.map((text) => ({ kind: "failure" as const, text })),
 		...unmet.map((text) => ({ kind: "requirement" as const, text })),
 	].slice(0, REVIEW_LOOP_LIMITS.maxFindings);
@@ -131,18 +153,43 @@ export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
 export const hasConcreteFindings = (findings: readonly ReviewFinding[]) =>
 	findings.some((finding) => finding.kind !== "assumption");
 
+/** The checker's own tests that failed, with the command and output to reproduce each. */
+export function failingTests(verdict: ReviewVerdict | null): CheckerTest[] {
+	return (verdict?.tests ?? [])
+		.filter((test) => !test.passed)
+		.slice(0, REVIEW_LOOP_LIMITS.maxFailingTests);
+}
+
+function failingTestLine(test: CheckerTest) {
+	const output = test.output ?? test.evidence;
+	return [
+		`- ${clip(test.name, 200)}`,
+		test.command ? `: \`${clip(test.command, 500)}\`` : "",
+		output ? ` -> ${clip(output.replace(/\s*\n\s*/g, " | "), 600)}` : "",
+	].join("");
+}
+
 /**
  * The one runtime notice a review round adds to the builder's own run: the
- * checker's findings with their evidence, and what to do with them.
+ * checker's findings with their evidence, the failing tests it wrote (command
+ * and output, to reproduce them), and what to do with them.
  */
 export function reviewNotice(input: {
 	readonly round: number;
 	readonly maxRounds: number;
 	readonly findings: readonly ReviewFinding[];
+	readonly failingTests?: readonly CheckerTest[];
 }) {
+	const tests = input.failingTests ?? [];
 	return [
 		`Runtime notice, not a new user request. An independent checker reviewed your work against the request above (review ${input.round} of ${input.maxRounds}). It saw only the request and the files, not your reasoning, and it can be wrong. Its findings:`,
 		...input.findings.map((finding) => `${finding.id}. ${finding.text}`),
+		...(tests.length
+			? [
+					"Tests it wrote that failed (run each command to reproduce; the test itself may be wrong):",
+					...tests.map(failingTestLine),
+				]
+			: []),
 		"Verify each finding yourself. Fix the real ones and re-run what proves each fix; do not change correct work to satisfy a wrong finding. End your final answer with one line per finding: `F1: fixed` or `F1: rejected - <why>`.",
 	].join("\n");
 }
@@ -207,6 +254,8 @@ export function decideCheck(input: {
 	readonly deadlineAt: number;
 	/** Mean of this turn's earlier checks, else the default. */
 	readonly expectedCheckMs: number;
+	/** checkerMode=pair: the check may use pairCheckerMinutes. */
+	readonly pair?: boolean;
 }): ReviewDecision {
 	if (input.checksDone >= REVIEW_LOOP_LIMITS.maxRounds)
 		return { kind: "finish", reason: "rounds" };
@@ -216,7 +265,9 @@ export function decideCheck(input: {
 	return {
 		kind: "check",
 		checkMs: Math.min(
-			REVIEW_LOOP_LIMITS.checker.minutes * 60_000,
+			(input.pair
+				? REVIEW_LOOP_LIMITS.pairCheckerMinutes
+				: REVIEW_LOOP_LIMITS.checker.minutes) * 60_000,
 			available - REVIEW_LOOP_LIMITS.minFixMs,
 		),
 	};
@@ -228,9 +279,13 @@ export type ReviewOutcome =
 	| "rounds"
 	| "time"
 	| "not-eligible"
-	| "check-failed";
+	| "check-failed"
+	| "unsure";
 
-/** After a verdict: pass finishes; concrete findings get a fix while time allows. */
+/**
+ * After a verdict: pass finishes (unless the builder admitted unverified
+ * work, rigor=on); concrete findings get a fix while time allows.
+ */
 export function decideAfterVerdict(input: {
 	readonly verdict: ReviewVerdict;
 	readonly findings: readonly ReviewFinding[];
@@ -239,8 +294,18 @@ export function decideAfterVerdict(input: {
 }):
 	| { readonly kind: "fix" }
 	| { readonly kind: "finish"; readonly reason: ReviewOutcome } {
-	if (input.verdict.verdict === "pass")
+	if (
+		input.verdict.verdict === "pass" &&
+		!input.findings.some((finding) => finding.kind === "unverified")
+	)
 		return { kind: "finish", reason: "pass" };
+	// Unsure is not evidence that the work is wrong: only a fail (or rigor's
+	// admitted-unverified finding) sends the builder back.
+	if (
+		input.verdict.verdict === "unsure" &&
+		!input.findings.some((finding) => finding.kind === "unverified")
+	)
+		return { kind: "finish", reason: "unsure" };
 	if (!hasConcreteFindings(input.findings))
 		return { kind: "finish", reason: "no-findings" };
 	if (input.deadlineAt - input.now < REVIEW_LOOP_LIMITS.minFixMs)
@@ -264,9 +329,17 @@ export type ReviewRound = {
 		readonly usage?: ApiTokenUsage | null;
 		/** The checker's own model (roleModels); absent = the builder's. */
 		readonly model?: LoopChildModel;
+		/** checkerMode=pair: the checker was the judge of a pair (src/domain/checker-pair.ts). */
+		readonly pair?: true;
+		/** checkerMode=pair: the judge's workers, their models and spend (in the checker's). */
+		readonly workers?: readonly ReviewWorker[];
 	};
 	readonly verdict: ReviewVerdict | null;
 	readonly timedOut?: boolean;
+	/** rigor=on: what the builder's final answer admitted, with over half the time left. */
+	readonly admitted?: readonly string[];
+	/** rigor=on: the builder's requirements list the checker got as a claim. */
+	readonly builderRequirements?: readonly string[];
 	readonly findings: readonly ReviewFinding[];
 	/** What followed the verdict. */
 	readonly decision?: "fix" | ReviewOutcome;
@@ -277,6 +350,13 @@ export type ReviewRound = {
 		readonly usage?: ApiTokenUsage | null;
 		readonly responses?: FindingResponses;
 	};
+};
+
+/** checkerMode=pair: one worker of a round's judge. */
+export type ReviewWorker = {
+	readonly sessionId: string;
+	readonly model?: LoopChildModel;
+	readonly usage: ApiTokenUsage | null;
 };
 
 export type ReviewLoopPhase = "building" | "checking" | "fixing" | "done";

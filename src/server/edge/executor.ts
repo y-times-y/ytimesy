@@ -29,7 +29,10 @@ import {
 	backgroundJobId,
 	withBackgroundJobDispatcher,
 } from "../adapters/background-job-dispatch";
-import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
+import {
+	probeCodexEgress,
+	withCodexSubscriptionEgress,
+} from "../adapters/codex-subscription-transport";
 import { withConversationProgressWake } from "../adapters/conversation-progress-wake";
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
 import { database } from "../adapters/database";
@@ -48,11 +51,16 @@ import {
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
+import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
 import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
+import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
-import { authorizeGitProxy } from "./github-git-authorization";
+import {
+	authorizeGitProxy,
+	claimGitProxyGrant,
+} from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
@@ -73,6 +81,11 @@ const executorSecrets = z.object({
 	DATABASE_SSL_CA: z.string().optional(),
 	MODEL_WORKFLOW_SECRET: z.string().min(32),
 	MODEL_EXECUTION_ENABLED: z.enum(["0", "1"]).default("0"),
+});
+// The PR-repair ingress Worker holds only this key, so it can stage repair
+// signals but never sign a model step or turn start.
+const prRepairIngressSecrets = z.object({
+	PR_REPAIR_INGRESS_SECRET: z.string().min(32),
 });
 const gitProxySecrets = z.object({
 	DATABASE_URL: z.string().min(1),
@@ -114,13 +127,23 @@ async function resolveModelConversation(step: WorkflowStep) {
 	return result.rows[0] ?? null;
 }
 
+const PURGE_TOMBSTONE_TABLE =
+	"create table if not exists conversation_tombstone(id integer primary key check(id=1),purged_at integer not null)";
+
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
 	private readonly history: TurnHistoryCache;
 	private readonly queue: SqliteTurnQueue;
 	private readonly room: ConversationRoom;
+	/**
+	 * The chat was deleted: its tombstone (kept in SQLite across restarts)
+	 * refuses every later request, turn, step and alarm, so an in-flight turn
+	 * cannot recreate its state after the purge.
+	 */
+	private purged = false;
 	private bindIdentity(scope: { userId: string; sessionId: string }) {
+		if (this.purged) return false;
 		const name = modelConversationName(scope);
 		const existing = this.ctx.storage.sql
 			.exec<{ name: string }>("select name from conversation_identity")
@@ -213,6 +236,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	/** The turn loop and the room's lease expiry share this object's single alarm. */
 	private async wake(purpose: "turn" | "room", at: number | null) {
+		if (this.purged) return;
 		if (at === null)
 			this.ctx.storage.sql.exec(
 				"delete from conversation_wake where purpose=?",
@@ -233,10 +257,38 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		else await this.ctx.storage.setAlarm(next);
 	}
 	/**
+	 * Deletes everything this chat stored here (step receipts, history cache,
+	 * queue, turn loop, room snapshot) and its alarm, when the chat, its
+	 * project or its account is deleted. A second purge finds nothing left.
+	 */
+	private async purge(scope: { userId: string; sessionId: string }) {
+		if (this.purged) return new Response(null, { status: 204 });
+		const existing = this.ctx.storage.sql
+			.exec<{ name: string }>("select name from conversation_identity")
+			.toArray()[0]?.name;
+		if (existing && existing !== modelConversationName(scope))
+			return new Response(null, { status: 403 });
+		this.purged = true;
+		this.history.clear();
+		await this.ctx.storage.deleteAlarm();
+		// Deletes everything, then keeps the room's tombstone.
+		await this.room.purge();
+		this.ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
+		this.ctx.storage.sql.exec(
+			"insert or ignore into conversation_tombstone(id,purged_at) values(1,?)",
+			Date.now(),
+		);
+		return new Response(null, { status: 204 });
+	}
+	/**
 	 * A deploy or crash that resets this object mid-step makes Cloudflare re-run
 	 * the alarm; the step's receipt is still "processing", so it is resumed.
 	 */
 	async alarm() {
+		if (this.purged) {
+			await this.ctx.storage.deleteAlarm();
+			return;
+		}
 		const now = Date.now();
 		const rows = this.ctx.storage.sql
 			.exec<{ purpose: string; at: number }>(
@@ -496,6 +548,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (
 			path === "/snapshot" ||
 			path === "/stream" ||
+			path === "/purge" ||
 			path.startsWith("/turn/")
 		) {
 			const secret = process.env.YTIMESY_REALTIME_SECRET;
@@ -505,6 +558,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				request,
 				secret,
 				async (scope, authenticated) => {
+					if (path === "/purge") return this.purge(scope);
+					if (this.purged) return new Response(null, { status: 410 });
 					if (!this.bindIdentity(scope))
 						return new Response(null, { status: 403 });
 					if (path === "/turn/cancel") {
@@ -529,6 +584,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					secrets.MODEL_WORKFLOW_SECRET,
 					resolveModelConversation,
 					async (scope, authenticated) => {
+						if (this.purged) return new Response(null, { status: 410 });
 						if (!this.bindIdentity(scope))
 							return new Response(null, { status: 403 });
 						return this.withLocalConversation(scope, () =>
@@ -588,6 +644,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_wake(purpose text primary key,at integer not null)",
 		);
+		ctx.storage.sql.exec(PURGE_TOMBSTONE_TABLE);
+		this.purged =
+			ctx.storage.sql
+				.exec<{ n: number }>("select count(*) as n from conversation_tombstone")
+				.toArray()[0]?.n > 0;
 	}
 }
 
@@ -599,12 +660,32 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		const minute = Math.floor(controller.scheduledTime / 60_000);
+		// Codex egress health: every 5 minutes, only when an account to probe
+		// with is named. Alerts the owner when a path is blocked.
+		const probeUser = process.env.YTIMESY_CODEX_EGRESS_PROBE_USER_ID;
+		const probe =
+			probeUser && minute % 5 === 0
+				? withDatabaseScope(
+						env.HYPERDRIVE.connectionString,
+						() =>
+							withCodexSubscriptionEgress(
+								(input, options) => env.CODEX_EGRESS.fetch(input, options),
+								() => probeCodexEgress(probeUser),
+							),
+						null,
+					).then(
+						(results) => console.info("Codex egress probe.", { results }),
+						() => console.warn("Codex egress probe failed."),
+					)
+				: undefined;
 		if (
 			process.env.BACKGROUND_EXECUTION_ENABLED !== "1" ||
 			process.env.YTIMESY_BACKGROUND_CRON_ENABLED !== "1"
-		)
+		) {
+			await probe;
 			return;
-		const minute = Math.floor(controller.scheduledTime / 60_000);
+		}
 		const jobs = [
 			backgroundJob.parse({
 				id: backgroundJobId(`cron:${minute}:model-admission`),
@@ -669,12 +750,22 @@ export default {
 				)
 				.map((job) => runBackgroundJob(env, job)),
 		);
+		const failures: Promise<unknown>[] = [];
 		for (const [index, result] of results.entries())
-			if (result.status === "rejected")
-				console.warn("Scheduled job failed.", {
+			if (result.status === "rejected") {
+				const job = {
 					kind: jobs[index].kind,
 					action: "action" in jobs[index] ? jobs[index].action : undefined,
-				});
+				};
+				console.warn("Scheduled job failed.", job);
+				// Error tracking and an owner email (at most hourly per job).
+				failures.push(
+					withDatabaseScope(env.HYPERDRIVE.connectionString, () =>
+						alertCronFailure(job, result.reason),
+					).catch(() => undefined),
+				);
+			}
+		await Promise.all([...failures, probe]);
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
 		registerAuthEmailBinding(env.EMAIL);
@@ -686,15 +777,17 @@ export default {
 			if (
 				path === "/snapshot" ||
 				path === "/stream" ||
+				path === "/purge" ||
 				path.startsWith("/turn/")
 			) {
 				const secret = process.env.YTIMESY_REALTIME_SECRET;
 				if (!secret || secret.length < 32)
 					return new Response(null, { status: 503 });
 				return routeRealtimeRequest(request, secret, (scope, authenticated) =>
-					env.MODEL_CONVERSATIONS.getByName(modelConversationName(scope)).fetch(
-						authenticated,
-					),
+					env.MODEL_CONVERSATIONS.getByName(
+						modelConversationName(scope),
+						durableObjectLocation(),
+					).fetch(authenticated),
 				);
 			}
 			if (new URL(request.url).pathname === "/jobs/start") {
@@ -746,7 +839,8 @@ export default {
 				);
 			}
 			if (new URL(request.url).pathname === "/pr-repair-event") {
-				const secrets = executorSecrets.parse(env);
+				const secrets = prRepairIngressSecrets.safeParse(env);
+				if (!secrets.success) return new Response(null, { status: 503 });
 				return await withDatabaseScope(
 					env.HYPERDRIVE.connectionString,
 					() =>
@@ -757,7 +851,7 @@ export default {
 							() =>
 								executeWorkflowRequest(
 									request,
-									secrets.MODEL_WORKFLOW_SECRET,
+									secrets.data.PR_REPAIR_INGRESS_SECRET,
 									() => {
 										throw new Error("Repair intake does not run model steps.");
 									},
@@ -803,6 +897,7 @@ export default {
 					!scope ||
 					!(await env.MODEL_CONVERSATIONS.getByName(
 						modelConversationName(scope),
+						durableObjectLocation(),
 					).startTurn(scope, turn.data))
 				)
 					return new Response(null, { status: 409 });
@@ -835,20 +930,31 @@ export default {
 				}
 				const parsed = environmentWorkflowRequest.safeParse(value);
 				if (!parsed.success) return new Response(null, { status: 400 });
-				await env.PROJECT_ENVIRONMENTS.getByName(parsed.data.workspaceId).start(
-					parsed.data,
-				);
+				await env.PROJECT_ENVIRONMENTS.getByName(
+					parsed.data.workspaceId,
+					durableObjectLocation(),
+				).start(parsed.data);
 				return new Response(null, { status: 202 });
 			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });
-				return proxyGithubGit(request, config.data.GIT_PROXY_SECRET, (grant) =>
-					withDatabaseScope(
-						env.HYPERDRIVE.connectionString,
-						() => authorizeGitProxy(grant),
-						null,
-					),
+				return proxyGithubGit(
+					request,
+					config.data.GIT_PROXY_SECRET,
+					(grant) =>
+						withDatabaseScope(
+							env.HYPERDRIVE.connectionString,
+							() => authorizeGitProxy(grant),
+							null,
+						),
+					fetch,
+					(nonce, expiresAt) =>
+						withDatabaseScope(
+							env.HYPERDRIVE.connectionString,
+							() => claimGitProxyGrant(nonce, expiresAt),
+							null,
+						),
 				);
 			}
 			const secrets = executorSecrets.parse(env);
@@ -870,6 +976,7 @@ export default {
 					stage = "model-chat";
 					return await env.MODEL_CONVERSATIONS.getByName(
 						modelConversationName(scope),
+						durableObjectLocation(),
 					).fetch(authenticated);
 				},
 			);

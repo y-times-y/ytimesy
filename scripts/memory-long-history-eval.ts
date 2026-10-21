@@ -15,6 +15,10 @@
 //       /tmp/memory-long-history-<arm>-<time>.json.
 //   node --import tsx scripts/memory-long-history-eval.ts --report a.json,b.json,c.json
 //       Tables across arms.
+//   CLOUDFLARE_API_TOKEN=$(npx wrangler auth token) node --import tsx scripts/memory-long-history-eval.ts \
+//       --recall-check a.json,b.json [--embed-cache /tmp/memory-recall-embeddings.json]
+//       Offline: the read hook's selection for every probe on those ours runs'
+//       saved snapshots (what a ranking change would have injected).
 //
 // Arms:
 //   ours                 memory mode full, the default harness variant. The
@@ -66,6 +70,7 @@ import {
 	PROBES,
 	type Probe,
 	seedFiles,
+	staleLineIn,
 	supermemorySeedDocuments,
 	UPDATES,
 } from "./memory-eval/long-history";
@@ -99,6 +104,8 @@ const { values: flags } = parseArgs({
 		report: { type: "string" },
 		/** Offline: the read hook's ranking for each probe on an ours run's snapshot. */
 		"recall-check": { type: "string" },
+		/** --recall-check: a JSON file of embeddings by text, reused across runs. */
+		"embed-cache": { type: "string" },
 		/** Offline: the read hook's wall time on the seeded ~150 lines, cold and warm. */
 		"hook-latency": { type: "boolean", default: false },
 		arm: { type: "string" },
@@ -445,7 +452,12 @@ export type ChatResult = {
 	verifierOutput: string;
 	expiredLeak: string | null;
 	/** Ours: the read hook's outcome and wall time, as recorded on the request. */
-	hook?: { outcome: string; ms: number; error?: string };
+	hook?: {
+		outcome: string;
+		ms: number;
+		error?: string;
+		spans?: Record<string, number>;
+	};
 	/** Supermemory: the plugin's recall for this prompt. */
 	smRecall?: {
 		profileItems: number;
@@ -1178,7 +1190,7 @@ function probeRecord(probe: Probe, chat: ChatResult): ProbeRecord {
 		type: probe.type,
 		fact: probe.fact,
 		injectedRight: probe.right.test(chat.injected),
-		injectedStale: probe.stale ? probe.stale.test(chat.injected) : false,
+		injectedStale: staleLineIn(probe, chat.injected),
 		injectedChars: chat.injected.length,
 	};
 }
@@ -1553,6 +1565,12 @@ async function live() {
 // --report
 
 function printReport(outputs: ArmOutput[]) {
+	// Recomputed per line, so older runs count stale lines the same way.
+	for (const output of outputs)
+		for (const row of output.probes) {
+			const probe = PROBES.find((entry) => entry.id === row.id);
+			if (probe) row.injectedStale = staleLineIn(probe, row.injected);
+		}
 	const pct = (part: number, whole: number) =>
 		whole ? `${part}/${whole}` : "-";
 	const types = [
@@ -1702,6 +1720,20 @@ function printReport(outputs: ArmOutput[]) {
 			console.log(
 				`\n${output.arm} read hook: ${[...outcomes].map(([outcome, count]) => `${outcome} ${count}`).join(", ")}; median ${ms[Math.floor(ms.length / 2)]}ms, max ${ms[ms.length - 1]}ms`,
 			);
+			// Where the time went (runs from 2026-10-20 on); saveWaitMs is not part of ms.
+			const spans = new Map<string, number[]>();
+			for (const hook of hooks)
+				for (const [name, value] of Object.entries(hook.spans ?? {}))
+					spans.set(name, [...(spans.get(name) ?? []), value]);
+			if (spans.size)
+				console.log(
+					`${output.arm} read hook spans: ${[...spans]
+						.map(([name, values]) => {
+							const sorted = [...values].sort((a, b) => a - b);
+							return `${name} median ${sorted[Math.floor(sorted.length / 2)]} max ${sorted[sorted.length - 1]}`;
+						})
+						.join("; ")}`,
+				);
 		}
 		if (output.costs.length)
 			console.log(
@@ -1750,6 +1782,47 @@ async function report() {
 // ---------------------------------------------------------------------------
 // --recall-check: was a miss the ranking or the hook's timeout?
 
+/**
+ * Embeddings by text, kept on disk between runs (`--embed-cache`), so a
+ * ranking change is compared on the same vectors.
+ */
+async function cachedEmbedder(
+	embed: {
+		query(text: string): Promise<number[]>;
+		documents(texts: readonly string[]): Promise<number[][]>;
+	},
+	path: string | undefined,
+) {
+	const stored: Record<string, number[]> = path
+		? await readFile(path, "utf8").then(
+				(text) => JSON.parse(text) as Record<string, number[]>,
+				() => ({}),
+			)
+		: {};
+	return {
+		async query(text: string) {
+			const key = `q\n${text}`;
+			stored[key] ??= await embed.query(text);
+			return stored[key];
+		},
+		async documents(texts: readonly string[]) {
+			const missing = [
+				...new Set(texts.filter((text) => !stored[`d\n${text}`])),
+			];
+			if (missing.length) {
+				const vectors = await embed.documents(missing);
+				missing.forEach((text, index) => {
+					stored[`d\n${text}`] = vectors[index];
+				});
+			}
+			return texts.map((text) => stored[`d\n${text}`]);
+		},
+		async save() {
+			if (path) await writeFile(path, JSON.stringify(stored));
+		},
+	};
+}
+
 async function recallCheck() {
 	const { CLOUDFLARE_ACCOUNT_ID } = await import("./development-config");
 	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
@@ -1763,14 +1836,16 @@ async function recallCheck() {
 		MEMORY_MATCH_MIN_SCORE,
 		selectMemoryMatches,
 		memoryQueryText,
+		annotateMemoryText,
+		projectRules,
+		memoryRulesPart,
+		memoryLineShown,
 	} = await import("../src/domain/memory-repo");
 	const { memoryMatchScores } = await import("../src/domain/memory-ranking");
-	const embed = memoryEmbedder();
-	if (!embed)
+	const remote = memoryEmbedder();
+	if (!remote)
 		throw new Error("Set CLOUDFLARE_API_TOKEN (npx wrangler auth token).");
-	const output = JSON.parse(
-		await readFile(flags["recall-check"] as string, "utf8"),
-	) as ArmOutput;
+	const embed = await cachedEmbedder(remote, flags["embed-cache"]);
 	const rows = [
 		[
 			"probe",
@@ -1778,75 +1853,127 @@ async function recallCheck() {
 			"cosine rank",
 			"hybrid rank",
 			"hybrid score",
-			"selected",
+			"in context",
+			"lines",
+			"stale lines",
 			"top score",
 			"live injected lines",
 		],
 	];
-	const totals = { probes: 0, cosine5: 0, hybrid5: 0, selected: 0 };
-	for (const label of ["after-updates", "end"]) {
-		const files = output.repoFiles[label];
-		if (!files) continue;
-		const lines = memoryLines(files).filter(
-			(entry) => entry.path !== "MEMORY.md",
-		);
-		const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
-		for (const probe of [...PROBES, ...FRESHNESS.map((pair) => pair.probe)]) {
-			const live =
-				output.probes.find((row) => row.id === probe.id) ??
-				output.freshness.find((row) => row.id === probe.id)?.probe;
-			const query = memoryQueryText(`${probe.prompt}${PROMPT_SUFFIX}`);
-			if (!query) continue;
-			const vector = await embed.query(query);
-			const similarity = new Map(
-				lines.map((entry, index) => [
-					entry,
-					cosineSimilarity(vector, vectors[index]),
-				]),
+	const totals = {
+		probes: 0,
+		cosine5: 0,
+		hybrid5: 0,
+		inContext: 0,
+		lines: 0,
+		stale: 0,
+		queries: 0,
+		rules: 0,
+		snapshots: 0,
+	};
+	const paths = (flags["recall-check"] as string).split(",").filter(Boolean);
+	for (const path of paths) {
+		const output = JSON.parse(await readFile(path, "utf8")) as ArmOutput;
+		const name = path.replace(/^.*\//, "").replace(/\.json$/, "");
+		for (const label of ["after-updates", "end"]) {
+			const files = output.repoFiles[label];
+			if (!files) continue;
+			const lines = memoryLines(files).filter(
+				(entry) => entry.path !== "MEMORY.md",
 			);
-			const scores = memoryMatchScores(lines, similarity, query);
-			const rankBy = (by: Map<(typeof lines)[number], number>) =>
-				[...lines]
-					.sort((a, b) => (by.get(b) ?? 0) - (by.get(a) ?? 0))
-					.findIndex((entry) => probe.right.test(entry.text)) + 1;
-			const cosineRank = rankBy(similarity);
-			const rank = rankBy(scores);
-			const ranked = [...lines].sort(
-				(a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0),
-			);
-			const selected = selectMemoryMatches({
+			// MEMORY.md is attached whole to a chat's first request.
+			const index = annotateMemoryText(files["MEMORY.md"] ?? "", {
+				today: memoryToday(),
+			});
+			// The always-on project rules ride with it (project: null leaves out
+			// rules tied to a project, as in an eval chat without one).
+			const rules = projectRules({
 				lines,
-				scores,
-				alreadyShown: () => false,
 				today: memoryToday(),
 				project: null,
-			}).some((entry) => probe.right.test(entry.text));
-			if (rank) {
-				totals.probes++;
-				if (cosineRank <= 5) totals.cosine5++;
-				if (rank <= 5) totals.hybrid5++;
-				if (selected) totals.selected++;
+			});
+			const shown = `${index}\n${memoryRulesPart(rules)}`;
+			totals.rules += rules.length;
+			totals.snapshots++;
+			const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
+			for (const probe of [...PROBES, ...FRESHNESS.map((pair) => pair.probe)]) {
+				const live =
+					output.probes.find((row) => row.id === probe.id) ??
+					output.freshness.find((row) => row.id === probe.id)?.probe;
+				const query = memoryQueryText(`${probe.prompt}${PROMPT_SUFFIX}`);
+				if (!query) continue;
+				const vector = await embed.query(query);
+				const similarity = new Map(
+					lines.map((entry, index) => [
+						entry,
+						cosineSimilarity(vector, vectors[index]),
+					]),
+				);
+				const scores = memoryMatchScores(lines, similarity, query);
+				const rankBy = (by: Map<(typeof lines)[number], number>) =>
+					[...lines]
+						.sort((a, b) => (by.get(b) ?? 0) - (by.get(a) ?? 0))
+						.findIndex((entry) => probe.right.test(entry.text)) + 1;
+				const cosineRank = rankBy(similarity);
+				const rank = rankBy(scores);
+				const ranked = [...lines].sort(
+					(a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0),
+				);
+				const selected = selectMemoryMatches({
+					lines,
+					scores,
+					alreadyShown: (raw) => memoryLineShown(raw, shown),
+					today: memoryToday(),
+					project: null,
+					query,
+				});
+				const inIndex = index
+					.split("\n")
+					.some((row) => row.startsWith("- ") && probe.right.test(row));
+				const inRules = rules.some((entry) => probe.right.test(entry.text));
+				const inContext =
+					inIndex ||
+					inRules ||
+					selected.some((entry) => probe.right.test(entry.text));
+				const stale = probe.stale
+					? selected.filter(
+							(entry) =>
+								probe.stale?.test(entry.text) && !probe.right.test(entry.text),
+						).length
+					: 0;
+				totals.queries++;
+				totals.lines += selected.length;
+				totals.stale += stale ? 1 : 0;
+				if (rank || inIndex) {
+					totals.probes++;
+					if (cosineRank && cosineRank <= 5) totals.cosine5++;
+					if (rank && rank <= 5) totals.hybrid5++;
+					if (inContext) totals.inContext++;
+				}
+				const liveLines = live
+					? (live.injected.split("apply to this message")[1] ?? "")
+							.split("\n")
+							.filter((row) => /^[\w/.-]+\.md:\d+:/.test(row)).length
+					: 0;
+				rows.push([
+					probe.id,
+					`${name}:${label}`,
+					cosineRank ? String(cosineRank) : "-",
+					rank ? String(rank) : "-",
+					rank ? (scores.get(ranked[rank - 1]) ?? 0).toFixed(3) : "-",
+					inIndex ? "MEMORY.md" : inRules ? "rules" : inContext ? "yes" : "no",
+					String(selected.length),
+					String(stale),
+					(scores.get(ranked[0]) ?? 0).toFixed(3),
+					String(liveLines),
+				]);
 			}
-			const liveLines = live
-				? (live.injected.split("apply to this message")[1] ?? "")
-						.split("\n")
-						.filter((row) => /^[\w/.-]+\.md:\d+:/.test(row)).length
-				: 0;
-			rows.push([
-				probe.id,
-				label,
-				cosineRank ? String(cosineRank) : "-",
-				rank ? String(rank) : "-",
-				rank ? (scores.get(ranked[rank - 1]) ?? 0).toFixed(3) : "-",
-				selected ? "yes" : "no",
-				(scores.get(ranked[0]) ?? 0).toFixed(3),
-				String(liveLines),
-			]);
 		}
 	}
+	await embed.save();
 	console.log(table(rows));
 	console.log(
-		`Probes whose fact is in the snapshot: ${totals.probes}; recall@5 cosine ${totals.cosine5}, hybrid ${totals.hybrid5}; selected by the read hook (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}) ${totals.selected}. "live injected lines" = read-hook lines the probe actually got in that run.`,
+		`Probes whose fact is in the snapshot: ${totals.probes}; recall@5 cosine ${totals.cosine5}, hybrid ${totals.hybrid5}; in context (MEMORY.md, the project rules, or selected by the read hook: up to ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}) ${totals.inContext}. Project rules per chat ${(totals.rules / Math.max(1, totals.snapshots)).toFixed(1)} lines. Lines selected per query ${(totals.lines / Math.max(1, totals.queries)).toFixed(2)}; queries with a stale line selected ${totals.stale}/${totals.queries}. "live injected lines" = read-hook lines the probe actually got in that run.`,
 	);
 }
 

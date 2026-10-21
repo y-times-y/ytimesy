@@ -5,7 +5,17 @@ const sdk = vi.hoisted(() => ({
 	capture: vi.fn(),
 	identify: vi.fn(),
 	reset: vi.fn(),
+	startSessionRecording: vi.fn(),
+	stopSessionRecording: vi.fn(),
+	sessionRecordingStarted: vi.fn(() => false),
 }));
+function storage(initial: Record<string, string> = {}) {
+	const values = new Map(Object.entries(initial));
+	return {
+		getItem: (key: string) => values.get(key) ?? null,
+		setItem: (key: string, value: string) => values.set(key, value),
+	};
+}
 vi.mock("posthog-js", () => ({ default: sdk }));
 
 beforeEach(() => {
@@ -31,10 +41,15 @@ describe("PostHog client", () => {
 			autocapture: false,
 			capture_pageview: false,
 			capture_pageleave: false,
-			disable_session_recording: false,
+			// Replay is off until the visitor accepts it.
+			disable_session_recording: true,
 			enable_recording_console_log: false,
 			capture_performance: false,
-			capture_exceptions: false,
+			capture_exceptions: {
+				capture_unhandled_errors: true,
+				capture_unhandled_rejections: true,
+				capture_console_errors: false,
+			},
 			respect_dnt: true,
 		});
 		expect(
@@ -58,9 +73,6 @@ describe("PostHog client", () => {
 			$window_id: undefined,
 			environment: "development",
 		});
-		expect(
-			config.before_send({ event: "$exception", properties: {} }),
-		).toBeNull();
 		const snapshot = [{ type: 2, timestamp: 1, data: { node: {} } }];
 		expect(
 			config.before_send({
@@ -104,6 +116,31 @@ describe("PostHog client", () => {
 		expect(replayPrivacy.captureCanvas?.recordCanvas).toBe(false);
 		expect(replayPrivacy.recordHeaders).toBe(false);
 		expect(replayPrivacy.recordBody).toBe(false);
+	});
+	it("records sessions only after the visitor accepts, and stops on decline", async () => {
+		vi.stubGlobal("localStorage", storage());
+		const { captureAnalytics } = await import("./client");
+		const { saveReplayConsent } = await import("./replay-consent");
+		captureAnalytics("app_viewed", { surface: "workspace" });
+		await vi.waitFor(() => expect(sdk.capture).toHaveBeenCalled());
+		expect(sdk.startSessionRecording).not.toHaveBeenCalled();
+		saveReplayConsent("accepted");
+		expect(sdk.startSessionRecording).toHaveBeenCalledTimes(1);
+		sdk.sessionRecordingStarted.mockReturnValue(true);
+		saveReplayConsent("declined");
+		expect(sdk.stopSessionRecording).toHaveBeenCalledTimes(1);
+		sdk.sessionRecordingStarted.mockReturnValue(false);
+	});
+	it("resumes recording on a later visit only for a stored acceptance", async () => {
+		vi.stubGlobal(
+			"localStorage",
+			storage({ "ytimesy.replay-consent": "accepted" }),
+		);
+		const { captureAnalytics } = await import("./client");
+		captureAnalytics("app_viewed", { surface: "workspace" });
+		await vi.waitFor(() =>
+			expect(sdk.startSessionRecording).toHaveBeenCalledTimes(1),
+		);
 	});
 	it("identifies by internal ID only and resets on logout", async () => {
 		const { setAnalyticsUser } = await import("./client");

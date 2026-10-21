@@ -4,9 +4,12 @@ import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
 export function DesktopStage({
 	projectId,
 	sessionId,
+	password,
 }: {
 	projectId: string;
 	sessionId: string;
+	/** The desktop's VNC password; its x11vnc asks every client for it. */
+	password?: string;
 }) {
 	const host = useRef<HTMLDivElement>(null);
 	const [disconnected, setDisconnected] = useState<string | null>(null);
@@ -28,6 +31,7 @@ export function DesktopStage({
 				const client = new RFB(
 					target,
 					`${protocol}://${window.location.host}${path}`,
+					password ? { credentials: { password } } : undefined,
 				);
 				client.scaleViewport = true;
 				client.clipViewport = true;
@@ -64,7 +68,7 @@ export function DesktopStage({
 				target.replaceChildren();
 			}
 		};
-	}, [projectId, sessionId, generation]);
+	}, [projectId, sessionId, password, generation]);
 
 	return (
 		<>

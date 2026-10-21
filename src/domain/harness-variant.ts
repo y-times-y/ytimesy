@@ -1,5 +1,6 @@
 import {
 	isModelRole,
+	MODEL_ROLES,
 	parseRoleModel,
 	type RoleModels,
 	roleModelsFlags,
@@ -51,19 +52,23 @@ export const HARNESS_VARIANT_VALUES = {
 	 * that calls the other tools (several reads, searches and commands in one
 	 * model call; src/server/services/code-mode-tool.ts); primary makes
 	 * run_code the main way to work (its description and instructions teach
-	 * batching) and the deferred tools (agent, plan, MCP search) callable
-	 * only from inside run_code (searchTools(query) for their declarations,
-	 * no find_tools); off offers the surface unchanged (the default).
+	 * batching) and a large MCP setup's search and call tools callable only
+	 * from inside run_code (searchTools(query) for their declarations);
+	 * agent, agent_send and enter_plan_mode stay in the tool list. off
+	 * offers the surface unchanged (the default).
 	 */
 	codeMode: ["off", "on", "primary"],
 	/**
 	 * Builder subagents (docs/subagents.md): on gives the builder the agent
-	 * and agent_send tools (loaded on demand through find_tools, with the
-	 * other rarely used tools), the orchestration prompt block, per-level
+	 * and agent_send tools (ordinary tools in the tool list, in every code
+	 * mode), the orchestration prompt block, per-level
 	 * budgets and the subagent tree; off offers the surface unchanged (the
-	 * default) until the evals show it pays off.
+	 * default) until the evals show it pays off. force is on plus a prompt
+	 * line that requires the root builder to delegate at least once (the
+	 * shape is its choice): the positive control that measures what
+	 * delegation is worth when the model would not choose it.
 	 */
-	subagents: ["off", "on"],
+	subagents: ["off", "on", "force"],
 	/**
 	 * Pull request evidence: on makes the harness capture screenshots, a
 	 * short recording or CLI output from the pushed commit when a turn's
@@ -72,6 +77,22 @@ export const HARNESS_VARIANT_VALUES = {
 	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
 	 */
 	prEvidence: ["off", "on"],
+	/**
+	 * Behavioural guidance on a lean surface (src/domain/instruction-profiles.ts,
+	 * docs/instruction-tuning.md): default = the model family's chosen profile
+	 * (INSTRUCTION_PROFILE_BY_FAMILY, baseline for every family today);
+	 * baseline = the v13-lean guidance unchanged; verify-hard, plan-first and
+	 * persist each add one paragraph; concise replaces the guidance with a
+	 * short version.
+	 */
+	instructions: [
+		"baseline",
+		"verify-hard",
+		"plan-first",
+		"persist",
+		"concise",
+		"default",
+	],
 	/**
 	 * The attempt loop (src/server/services/attempt-loop.ts, decision
 	 * 2026-10-17 Phase 2): 3 = when the root builder finishes, an independent
@@ -93,6 +114,42 @@ export const HARNESS_VARIANT_VALUES = {
 	 * combined with attempts=3 (the attempt loop wins).
 	 */
 	review: ["off", "on"],
+	/**
+	 * The checker's shape (src/domain/checker-pair.ts): single = one checker
+	 * reads, tests and judges (the default); pair = a judge on
+	 * roleModels.checker plans the check and writes the verdict, and a
+	 * cheaper read-only worker on roleModels.checkerWorker (codex:gpt-6-luna
+	 * when unset) does the reading, test writing and running it briefs. Each
+	 * review round is still a full independent check.
+	 */
+	checkerMode: ["single", "pair"],
+	/**
+	 * Lead mode (src/domain/sidekick.ts, Devin Fusion style): fusion makes
+	 * the root builder a lead that plans, briefs, reviews and answers the
+	 * user, and makes its first writer a persistent sidekick (cheaper model
+	 * via roleModels.writer) that keeps its context and fork across rounds of
+	 * briefs and feedback, its fork synced with the lead's checkout before
+	 * each round. Implies the agent tools (as subagents=on). off = unchanged
+	 * behaviour (the default).
+	 */
+	lead: ["off", "fusion"],
+	/**
+	 * Rigor (src/domain/rigor.ts): on adds the builder's rigor block
+	 * (ambiguity resolved by convention, else the strictest reading, with a
+	 * margin on numeric thresholds; no finishing with time left and something
+	 * unverified; one run of the deliverable as an outside user would run it),
+	 * the matching checks to every checker brief, and makes the review loop
+	 * send back a final answer that admits unverified work while over half
+	 * the time is left. off = unchanged behaviour (the default).
+	 */
+	rigor: ["off", "on"],
+	/**
+	 * The most characters one tool result shows the model (the builder's
+	 * surface tools, src/server/services/tool-output-cap.ts): a longer one
+	 * keeps its head and tail, and the note between them says where the rest
+	 * is. off = the surface's own limits only (the default).
+	 */
+	outputCap: ["off", "10000", "16000"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -101,7 +158,7 @@ export type HarnessVariant = {
 } & {
 	/**
 	 * A model per subagent role (src/domain/role-models.ts): writer,
-	 * researcher, reviewer, checker, judge. Empty (the default): every child
+	 * researcher, reviewer, checker, judge, checkerWorker, ... Empty (the default): every child
 	 * runs on its parent's model. Flags: `roleModels.<role>=<model>[@<effort>]`.
 	 */
 	readonly roleModels: RoleModels;
@@ -113,8 +170,13 @@ export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 export type CodeMode = HarnessVariant["codeMode"];
 export type SubagentsMode = HarnessVariant["subagents"];
 export type PrEvidence = HarnessVariant["prEvidence"];
+export type InstructionVariant = HarnessVariant["instructions"];
 export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
+export type CheckerMode = HarnessVariant["checkerMode"];
+export type LeadMode = HarnessVariant["lead"];
+export type RigorMode = HarnessVariant["rigor"];
+export type OutputCap = HarnessVariant["outputCap"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -124,10 +186,20 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	codeMode: "off",
 	subagents: "off",
 	prEvidence: "off",
+	instructions: "default",
 	attempts: "1",
 	review: "off",
+	checkerMode: "single",
+	lead: "off",
+	rigor: "off",
+	outputCap: "off",
 	roleModels: {},
 };
+
+/** The outputCap variant's limit in characters; undefined when off. */
+export function outputCapCharacters(cap: OutputCap) {
+	return cap === "off" ? undefined : Number(cap);
+}
 
 /**
  * The scope a turn's prompt-cache key is derived from (hashed with the user
@@ -172,7 +244,7 @@ export function harnessVariantFromFlags(
 			if (role !== undefined && value !== undefined && !rest.length) {
 				if (!isModelRole(role))
 					throw new Error(
-						`--variant roleModels.<role> takes a role in writer, researcher, reviewer, checker, judge; got "${role}".`,
+						`--variant roleModels.<role> takes a role in ${MODEL_ROLES.join(", ")}; got "${role}".`,
 					);
 				variant.roleModels = {
 					...(variant.roleModels as RoleModels),

@@ -219,10 +219,13 @@ try {
 			prompt: "Read edge-proof.txt",
 			placement: "shared",
 			access: "read_only",
-			execution: "parallel",
-			dependsOnSessionId: null,
 		},
 	});
+	// A read-only (reader) subagent on the parent's machine.
+	await db.query(
+		"update agent_session set agent_role='researcher' where id=$1",
+		[child.id],
+	);
 	sessions.push({ userId, sessionId: child.id });
 	// Ingress readiness alone does not establish propagation at the chat DO.
 	const readinessId = randomUUID();

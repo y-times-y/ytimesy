@@ -13,6 +13,15 @@ describe("memory ranking", () => {
 		expect(
 			memoryTokens("Add the installs to config.py and new CLI scripts"),
 		).toEqual(["install", "config", "py", "cli", "script"]);
+		// Short plurals meet the singular; a URL's scheme meets "HTTP".
+		expect(memoryTokens("New entity IDs, API keys")).toEqual([
+			"entity",
+			"id",
+			"api",
+			"key",
+		]);
+		expect(memoryTokens("GET https://example.invalid/v1")).toContain("http");
+		expect(memoryTokens("the bus is here")).toEqual(["bus", "here"]);
 		expect(memoryTokens("SVC_DB_URL")).toEqual([
 			"svc_db_url",
 			"svc",

@@ -3,7 +3,7 @@ import {
 	addedProjectBranch,
 	singleRepositoryProject,
 } from "../../domain/add-project";
-import { WorkspaceId } from "../../domain/ids";
+import { AuthSnapshotId, WorkspaceId } from "../../domain/ids";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
 import {
 	type ProjectGroupSelection,
@@ -17,8 +17,12 @@ import {
 	isGeneratedSessionBranch,
 	sessionBranchChangeRestartsWorkspace,
 } from "../../domain/session-branch";
-import { listProjectProviderRefs } from "../adapters/agent-sessions";
+import { projectCleanupTargets } from "../adapters/account-deletion";
 import { captureServerAnalytics } from "../adapters/analytics";
+import {
+	checkpointStorageConfigured,
+	removeChatObjects,
+} from "../adapters/checkpoints/storage";
 import {
 	authorizedRepository,
 	createAuthorizedRepository,
@@ -33,11 +37,14 @@ import {
 	saveProject,
 	saveProjectGroup,
 } from "../adapters/projects";
+import { purgeConversationState } from "../adapters/realtime-delivery";
 import {
 	saveWorkspaceStatus,
 	workspaceForProject,
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
+import { CLEANUP_CONCURRENCY, eachLimited } from "./account-deletion";
+import { cancelServerTurn } from "./cancel-server-turn";
 import { rejectRequest } from "./errors";
 import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -262,13 +269,18 @@ export function createScratchProject(
 }
 
 /**
- * Drops this ytimesy project and its template/session VMs. The GitHub
- * repository stays; the same repo can be added again from the picker.
- * Freestyle destroy failures are ignored so the sidebar can clear; leftover
- * machines are reclaimed by the idle timeout.
+ * Drops this ytimesy project and what it owns, mirroring account deletion:
+ * its chats' stored checkpoints, context archives and attachments, its pull
+ * request evidence, then its rows, then its VMs and private snapshots. The
+ * GitHub repository stays; the same repo can be added again from the picker.
+ *
+ * Storage failures stop before any row is deleted, so a retry finds
+ * everything again. Provider resources go only once the rows are gone; a
+ * destroy failure is logged and left to expire (VMs by their idle timeout)
+ * so the sidebar can clear.
  */
 export async function removeProjectMachine(
-	machines: Pick<WorkspaceMachines, "destroy">,
+	machines: Pick<WorkspaceMachines, "destroy" | "destroySnapshot">,
 	input: {
 		readonly userId: string;
 		readonly projectId: string;
@@ -277,21 +289,58 @@ export async function removeProjectMachine(
 	const project = await projectForOwner(input.userId, input.projectId);
 	if (!project) throw new Error("Project is not available.");
 	const workspace = await workspaceForProject(input.userId, input.projectId);
-	const refs = projectMachineRefsToDestroy({
-		sessionProviderRefs: await listProjectProviderRefs(
-			input.userId,
-			input.projectId,
-		),
-		templateProviderRef: workspace?.providerRef,
+	const targets = await projectCleanupTargets(input.userId, input.projectId);
+	// Running turns stop before their chats' state goes (cancel, then purge).
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		cancelServerTurn(input.userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"The project was not removed because a running turn could not be stopped. Try again.",
+			{ status: 503 },
+		);
 	});
-	for (const ref of refs) {
-		try {
-			await machines.destroy(WorkspaceId(ref));
-		} catch {
-			// Idle timeout reclaims machines that Freestyle did not delete.
-		}
-	}
+	if (checkpointStorageConfigured())
+		await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+			removeChatObjects(input.userId, sessionId),
+		).catch(() => {
+			throw new Response(
+				"The project was not removed because its saved chat files could not be deleted. Try again.",
+				{ status: 503 },
+			);
+		});
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		purgeConversationState(input.userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"The project was not removed because its chats' state could not be deleted. Try again.",
+			{ status: 503 },
+		);
+	});
 	// Pull request evidence media in private storage; its rows cascade with the project.
 	await removeProjectPullRequestEvidence(input.userId, input.projectId);
 	await deleteProjectForOwner(input.userId, input.projectId);
+	const refs = projectMachineRefsToDestroy({
+		sessionProviderRefs: targets.vmIds,
+		templateProviderRef: workspace?.providerRef,
+	});
+	const sharedToolsSnapshot = process.env.YTIMESY_TOOLS_SNAPSHOT_ID?.trim();
+	const leftovers: string[] = [];
+	await eachLimited(refs, CLEANUP_CONCURRENCY, (ref) =>
+		machines.destroy(WorkspaceId(ref)).catch(() => {
+			leftovers.push(`vm:${ref}`);
+		}),
+	);
+	await eachLimited(
+		targets.snapshotIds.filter((id) => id !== sharedToolsSnapshot),
+		CLEANUP_CONCURRENCY,
+		(snapshotId) =>
+			machines.destroySnapshot(AuthSnapshotId(snapshotId)).catch(() => {
+				leftovers.push(`snapshot:${snapshotId}`);
+			}),
+	);
+	if (leftovers.length)
+		console.warn("Project removal left provider resources to expire.", {
+			projectId: input.projectId,
+			leftovers,
+		});
 }

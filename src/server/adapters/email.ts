@@ -37,7 +37,9 @@ export type AuthEmailBinding = {
 let emailBinding: AuthEmailBinding | null = null;
 
 /** Workers hand over their binding at startup; the Node server has none. */
-export function registerAuthEmailBinding(binding: AuthEmailBinding | undefined) {
+export function registerAuthEmailBinding(
+	binding: AuthEmailBinding | undefined,
+) {
 	if (binding) emailBinding = binding;
 }
 
@@ -57,6 +59,17 @@ function authEmailSender(): SendAuthEmail | null {
 
 export function authEmailDeliveryConfigured() {
 	return authEmailSender() !== null;
+}
+
+/**
+ * Sends one operational message (owner alerts) through the same sender as
+ * auth email, without the outbox. False when no sender is configured.
+ */
+export async function sendOperationalEmail(message: OutgoingAuthEmail) {
+	const send = authEmailSender();
+	if (!send) return false;
+	await send(message);
+	return true;
 }
 
 const AUTH_EMAIL_REPLY_TO = "support@ytimesy.com";

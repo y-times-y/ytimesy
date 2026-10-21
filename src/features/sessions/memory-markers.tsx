@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { BookMarked, BookmarkPlus, ChevronRight } from "lucide-react";
 import { createContext, type ReactNode, useContext, useState } from "react";
 import type {
 	MemoryRecall,
@@ -87,43 +87,131 @@ function SourceChat({
 	);
 }
 
-/** Under a request: what memory was read for it, collapsed by default. */
+/** Longer lines show their start; More shows the rest. */
+export const CLIPPED_MEMORY_LINE = 140;
+
+function MemoryLineText({ text }: { text: string }) {
+	const [open, setOpen] = useState(false);
+	const long = text.length > CLIPPED_MEMORY_LINE;
+	return (
+		<span className="memory-marker-text">
+			{long && !open
+				? `${text.slice(0, CLIPPED_MEMORY_LINE - 1).trimEnd()}…`
+				: text}
+			{long ? (
+				<button
+					type="button"
+					className="memory-marker-link memory-marker-more"
+					aria-expanded={open}
+					onClick={() => setOpen(!open)}
+				>
+					{open ? "Less" : "More"}
+				</button>
+			) : null}
+		</span>
+	);
+}
+
+function MemorySummary({
+	icon: Icon,
+	label,
+	note,
+}: {
+	icon: typeof BookMarked;
+	label: string;
+	note?: string;
+}) {
+	return (
+		<summary className="memory-marker-summary">
+			<Icon
+				className="memory-marker-icon"
+				size={14}
+				strokeWidth={1.5}
+				aria-hidden="true"
+			/>
+			<span className="memory-marker-title">{label}</span>
+			{note ? <span className="memory-marker-note">{note}</span> : null}
+			<ChevronRight
+				size={12}
+				className="session-activity-chevron"
+				aria-hidden="true"
+			/>
+		</summary>
+	);
+}
+
+function RecalledRow({ line }: { line: RecalledMemoryLine }) {
+	return (
+		<li className="memory-marker-entry">
+			<MemoryLineText text={line.text} />
+			<span className="memory-marker-meta">
+				<FileLink path={line.path} />
+				{line.source ? <SourceChat source={line.source} /> : null}
+			</span>
+		</li>
+	);
+}
+
+/**
+ * Under a request: the memory used for it, collapsed to a count. Open, it
+ * lists the standing project rules and the lines matched for this request
+ * as separate groups, one line per row with its file and source muted.
+ */
 export function MemoryRecallNote({ recall }: { recall: MemoryRecall }) {
 	if (!recall.index && !recall.lines.length) return null;
+	const rules = recall.lines.filter((line) => line.rule);
+	const matched = recall.lines.filter((line) => !line.rule);
 	return (
 		<details className="memory-marker" data-kind="recall">
-			<summary className="memory-marker-summary">
-				<span className="memory-marker-title">
-					{recall.lines.length
-						? `Recalled ${count(recall.lines.length)}`
-						: "Loaded memory index"}
-				</span>
-				<ChevronRight
-					size={12}
-					className="session-activity-chevron"
-					aria-hidden="true"
-				/>
-			</summary>
-			<ul className="memory-marker-lines">
-				{recall.index ? (
-					<li className="memory-marker-entry">
-						<span className="memory-marker-text">Loaded memory index</span>
-						<span className="memory-marker-meta">
-							<FileLink path={MEMORY_ENTRY} />
-							{" · attached at the start of this chat"}
-						</span>
-					</li>
+			<MemorySummary
+				icon={BookMarked}
+				label={
+					recall.lines.length
+						? `Used ${count(recall.lines.length)}`
+						: "Used the memory index"
+				}
+				note={
+					rules.length
+						? `${rules.length} project ${rules.length === 1 ? "rule" : "rules"}`
+						: undefined
+				}
+			/>
+			<div className="memory-marker-body">
+				{rules.length ? (
+					<section className="memory-marker-group" aria-label="Project rules">
+						<div className="memory-marker-group-title">Project rules</div>
+						<ul className="memory-marker-lines">
+							{rules.map((line) => (
+								<RecalledRow key={`${line.path}:${line.text}`} line={line} />
+							))}
+						</ul>
+					</section>
 				) : null}
-				{recall.lines.map((line) => (
-					<li className="memory-marker-entry" key={`${line.path}:${line.text}`}>
-						<span className="memory-marker-text">{line.text}</span>
-						<span className="memory-marker-meta">
-							<FileLink path={line.path} />
-							{line.source ? <SourceChat source={line.source} /> : null}
-						</span>
-					</li>
-				))}
-			</ul>
+				{matched.length ? (
+					<section
+						className="memory-marker-group"
+						aria-label={rules.length ? "Matched this request" : undefined}
+					>
+						{rules.length ? (
+							<div className="memory-marker-group-title">
+								Matched this request
+							</div>
+						) : null}
+						<ul className="memory-marker-lines">
+							{matched.map((line) => (
+								<RecalledRow key={`${line.path}:${line.text}`} line={line} />
+							))}
+						</ul>
+					</section>
+				) : null}
+				{recall.index ? (
+					<div className="memory-marker-meta memory-marker-index">
+						{"Memory index "}
+						<FileLink path={MEMORY_ENTRY} />
+						{" attached at the start of this chat"}
+					</div>
+				) : null}
+			</div>
 		</details>
 	);
 }
@@ -156,7 +244,6 @@ function SavedLineActions({ line }: { line: SavedMemoryLine }) {
 					{state === "undoing" ? "Undoing…" : "Undo"}
 				</button>
 			) : null}
-			{onUndo && onOpenMemory ? " · " : null}
 			{onOpenMemory ? (
 				<button
 					type="button"
@@ -167,53 +254,39 @@ function SavedLineActions({ line }: { line: SavedMemoryLine }) {
 				</button>
 			) : null}
 			{state === "failed" ? (
-				<span role="alert"> · Could not undo; try again.</span>
+				<span role="alert">Could not undo; try again.</span>
 			) : null}
 		</>
 	);
 }
 
-/** After a turn's answer: the memory it saved, each line with Undo. */
+/** After a turn's answer: the memory it saved, collapsed to a count; open, each line with Undo. */
 export function MemorySaveNote({ item }: { item: MemorySaveItem }) {
-	const [only] = item.lines;
-	if (!only) return null;
-	if (item.lines.length === 1)
-		return (
-			<div className="memory-marker" data-kind="save">
-				<p className="memory-marker-single">
-					<span className="memory-marker-title">
-						Saved to memory: “{only.text}”
-					</span>
-					<span className="memory-marker-meta">
-						<SavedLineActions line={only} />
-					</span>
-				</p>
-			</div>
-		);
+	if (!item.lines.length) return null;
 	return (
 		<details className="memory-marker" data-kind="save">
-			<summary className="memory-marker-summary">
-				<span className="memory-marker-title">
-					Saved {count(item.lines.length)}
-				</span>
-				<ChevronRight
-					size={12}
-					className="session-activity-chevron"
-					aria-hidden="true"
-				/>
-			</summary>
-			<ul className="memory-marker-lines">
-				{item.lines.map((line) => (
-					<li className="memory-marker-entry" key={`${line.path}:${line.text}`}>
-						<span className="memory-marker-text">“{line.text}”</span>
-						<span className="memory-marker-meta">
-							<FileLink path={line.path} />
-							{" · "}
-							<SavedLineActions line={line} />
-						</span>
-					</li>
-				))}
-			</ul>
+			<MemorySummary
+				icon={BookmarkPlus}
+				label={`Saved ${count(item.lines.length)}`}
+			/>
+			<div className="memory-marker-body">
+				<ul className="memory-marker-lines">
+					{item.lines.map((line) => (
+						<li
+							className="memory-marker-entry"
+							key={`${line.path}:${line.text}`}
+						>
+							<MemoryLineText text={line.text} />
+							<span className="memory-marker-meta">
+								<FileLink path={line.path} />
+								<span className="memory-marker-actions">
+									<SavedLineActions line={line} />
+								</span>
+							</span>
+						</li>
+					))}
+				</ul>
+			</div>
 		</details>
 	);
 }

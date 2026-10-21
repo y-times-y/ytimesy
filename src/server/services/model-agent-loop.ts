@@ -39,11 +39,13 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import type { InstructionVariant } from "#/domain/harness-variant";
 import {
 	IMAGE_VIEWING_TOOLS,
 	NO_IMAGE_INPUT_INSTRUCTIONS,
 	withImagePlaceholders,
 } from "#/domain/image-placeholders";
+import { instructionProfile } from "#/domain/instruction-profiles";
 import { longContextThreshold } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
@@ -67,7 +69,6 @@ import {
 	STATE_SNAPSHOT_HEADING,
 	type UserRequestPredicate,
 	userMessageBudget,
-	workingContextTarget,
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
@@ -95,14 +96,16 @@ export type ModelAgentInput = {
 	messages: ModelMessage[];
 	instructions: string;
 	tools: ToolSet;
-	knownTools?: readonly string[];
 	/**
 	 * Deferred tools (deferred-tools.ts): the tools each request offers, in
 	 * order. Tools outside it stay in `tools` but are neither sent nor
 	 * callable until they appear here. Read before every step.
 	 */
 	toolOrder?: () => readonly string[];
-	toolSurface?: "coordination" | "implementation";
+	/** Retired and ignored: every turn uses the implementation surface; frozen benchmark runners still pass it. */
+	toolSurface?: "implementation";
+	/** Harness variant `instructions`; unset or default = the family's profile. */
+	instructionVariant?: InstructionVariant;
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
 	endTurnTools?: readonly string[];
 	signal: AbortSignal;
@@ -138,6 +141,27 @@ export type ModelAgentInput = {
 	) => Promise<string | undefined>;
 	afterTools?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	/**
+	 * Compact before the first step even below the threshold, when
+	 * `switchAtCompaction` names a model to continue on (lead mode fusion: a
+	 * sidekick's pending model switch is carried out at its next round's start).
+	 */
+	compactFirst?: boolean;
+	/**
+	 * Asked at each compaction before it runs (lead mode fusion's sidekick):
+	 * a model to continue on after it, or null. With one, the compaction
+	 * writes a provider-neutral text summary (a native checkpoint is bound to
+	 * this model) and the run ends with ModelSwitchAtCompaction once the
+	 * compacted history is saved; the caller continues on the new model.
+	 */
+	switchAtCompaction?: (input: {
+		readonly history: ModelMessage[];
+		readonly forced: boolean;
+	}) => Promise<{
+		readonly target: ModelSwitchTarget | null;
+		/** A call made to decide (the classifier's): charged to this run's usage. */
+		readonly usage?: ApiTokenUsage | null;
+	}>;
+	/**
 	 * Called once when the run gives up, before it throws: the last cleanly
 	 * finished history, whether a failed step's partial output was saved after
 	 * it, and the ids of that partial output (never retracted by a retry).
@@ -152,6 +176,37 @@ export type ModelAgentInput = {
 		readonly inFlight?: ModelMessage[];
 	}) => void;
 };
+
+/** The model a run continues on after a compaction (src/server/services/sidekick-model-switch.ts). */
+export type ModelSwitchTarget = {
+	/** The roleModels spec, e.g. codex:gpt-6.1-sol. */
+	readonly spec: string;
+	readonly reason: string;
+	/** pending: decided earlier; compaction: decided at this compaction. */
+	readonly trigger: "pending" | "compaction";
+};
+
+/** Ends a run whose history was just compacted for a model switch; it is saved already. */
+export class ModelSwitchAtCompaction extends Error {
+	constructor(
+		readonly target: ModelSwitchTarget,
+		/** False when the compaction failed and the history was kept whole. */
+		readonly compacted: boolean,
+	) {
+		super(`Model switch at compaction to ${target.spec}.`);
+		this.name = "ModelSwitchAtCompaction";
+	}
+}
+
+/** A request's settings without the tool-call options of a run with tools (one-off calls send none). */
+export function withoutToolSettings<T extends object>(settings: T): T {
+	const options = (settings as { providerOptions?: Record<string, unknown> })
+		.providerOptions;
+	const openai = options?.openai as Record<string, unknown> | undefined;
+	if (!openai || !("parallelToolCalls" in openai)) return settings;
+	const { parallelToolCalls: _, ...rest } = openai;
+	return { ...settings, providerOptions: { ...options, openai: rest } };
+}
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
 export async function runModelAgent(
@@ -467,8 +522,6 @@ export type ModelAgentRuntime = {
 	autoCompactTokenLimit?: number;
 	/** Optional operating budget; distinct from the provider's hard context window. */
 	workingContextTokens?: number;
-	/** Coordination may need enough room to dispatch before compacting large guidance. */
-	coordinationWorkingContextTokens?: number;
 	/** Retired and ignored; frozen benchmark runtimes still pass false. */
 	archiveConsumedGuidance?: false;
 	prefetchInitialReads?: boolean;
@@ -530,6 +583,7 @@ async function executeModelSteps(
 					? "freeform"
 					: input.tools.apply_patch?.type === "provider",
 				Object.keys(input.tools),
+				instructionProfile(input.instructionVariant, modelFamily),
 			),
 		]
 			.filter(Boolean)
@@ -543,12 +597,7 @@ async function executeModelSteps(
 		AbortSignal.timeout(input.turnTimeoutMs ?? 30 * 60 * 1000),
 	]);
 	const { model, cacheSettings = {} } = runtime;
-	const tools = discoverableAgentTools(
-		input.tools,
-		input.messages,
-		input.knownTools,
-		input.toolSurface,
-	);
+	const tools = discoverableAgentTools(input.tools);
 	const reads = new Set<string>();
 	let activeToolCount = 0;
 	let preparedPromptCharacters = 0;
@@ -572,6 +621,7 @@ async function executeModelSteps(
 		((instructions: string) => ({ system: instructions }));
 	let history = input.messages;
 	let pendingCompaction = forceCompaction;
+	let compactFirst = input.compactFirst === true;
 	// A rejected request proved the last measurement wrong; estimate afresh.
 	let measured =
 		!forceCompaction &&
@@ -591,34 +641,19 @@ async function executeModelSteps(
 			schema: await asSchema(definition.inputSchema).jsonSchema,
 		})),
 	);
-	const contextBudget = (messages: ModelMessage[]) => {
-		const visibleTools = discoverableAgentTools(
-			input.tools,
-			messages,
-			input.knownTools,
-			input.toolSurface,
-		);
-		return modelContextBudget({
+	const contextBudget = (_messages: ModelMessage[]) =>
+		modelContextBudget({
 			contextWindow: runtime.contextWindow,
 			maxOutputTokens: runtime.maxOutputTokens,
 			autoCompactTokenLimit: runtime.autoCompactTokenLimit,
-			workingContextTokens: workingContextTarget({
-				history: messages,
-				implementation: input.toolSurface === "implementation",
-				workingContextTokens: runtime.workingContextTokens,
-				coordinationWorkingContextTokens:
-					runtime.coordinationWorkingContextTokens,
-			}),
+			workingContextTokens: runtime.workingContextTokens,
 			fixedTokens: estimateContextTokens({
 				instructions: input.instructions,
 				tools: toolSchemas.filter(
-					({ name }) =>
-						visibleTools[name]?.deferLoading !== true &&
-						(!input.toolOrder || input.toolOrder().includes(name)),
+					({ name }) => !input.toolOrder || input.toolOrder().includes(name),
 				),
 			}),
 		});
-	};
 	const accumulated = { usage: null as ApiTokenUsage | null };
 	/** Rehydrate exact instructions, then describe current state from the runtime, not from memory. */
 	const afterCompaction = async (
@@ -759,7 +794,6 @@ async function executeModelSteps(
 						prefetchInitialAgentReads({
 							messages: history,
 							tools: input.tools,
-							coordination: input.toolSurface === "coordination",
 							cacheStablePrefix:
 								modelFamily === "openai" &&
 								runtime.fallbackContextPolicy !== "bound-prefix",
@@ -776,10 +810,105 @@ async function executeModelSteps(
 				const estimatedHistory = estimateContextTokens(history);
 				const forced = pendingCompaction;
 				pendingCompaction = undefined;
+				const firstForced = compactFirst;
+				compactFirst = false;
 				const budget = forced
 					? overflowCompactionBudget(contextBudget(history), forced)
 					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
+				// Each compaction is a chance to switch models (the cache misses anyway).
+				const switchDecision =
+					input.switchAtCompaction &&
+					(forced || firstForced || contextTokens >= budget.compactAtTokens)
+						? await input.switchAtCompaction({
+								history,
+								forced: firstForced && !forced,
+							})
+						: null;
+				if (switchDecision?.usage) {
+					accumulated.usage = addApiTokenUsage(
+						accumulated.usage,
+						switchDecision.usage,
+					);
+					await input.onEvent({ type: "usage", usage: accumulated.usage });
+				}
+				const switchTarget = switchDecision?.target ?? null;
+				if (switchTarget) {
+					const summarize = async (older: ModelMessage[]) => {
+						await input.onEvent({ type: "context", compacting: true });
+						try {
+							await input.beforeCompaction?.(older);
+							runSignal.throwIfAborted();
+							const summary = streamText({
+								...cacheSettings,
+								model,
+								...withoutToolSettings(
+									requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+								),
+								prompt: JSON.stringify(older),
+								maxRetries: 1,
+								maxOutputTokens: 2048,
+								abortSignal: runSignal,
+								onError: () => {},
+							});
+							for await (const part of summary.fullStream)
+								if (part.type === "error") throw part.error;
+							await recordUsage(await summary.totalUsage);
+							return await summary.text;
+						} finally {
+							await input.onEvent({ type: "context", compacting: false });
+						}
+					};
+					// The archive is a convenience here: a failed upload must not
+					// cost the summary (and the switch its compaction).
+					const archive = input.archiveHistory;
+					const bestEffortArchive =
+						archive &&
+						(async (messages: ModelMessage[]) => {
+							try {
+								return await archive(messages);
+							} catch (error) {
+								console.warn("Context archive failed at a model switch.", {
+									message:
+										error instanceof Error ? error.message.slice(0, 200) : "",
+								});
+								return null;
+							}
+						});
+					let switched: { messages: ModelMessage[]; compacted: boolean };
+					try {
+						switched = await compactApiHistory(
+							history,
+							summarize,
+							{
+								...budget,
+								compactAtTokens: Math.min(
+									budget.compactAtTokens,
+									estimatedHistory,
+								),
+							},
+							bestEffortArchive,
+							// At a round's start everything before its message is summarized.
+							firstForced ? "whole-turns" : "completed-steps",
+							input.isUserRequest,
+						);
+					} catch (error) {
+						// An overflow must shrink; a switch at a round's start goes ahead
+						// on the whole provider-neutral history instead.
+						if (forced || !firstForced) throw error;
+						console.warn("Compaction for a model switch failed.", {
+							message:
+								error instanceof Error ? error.message.slice(0, 200) : "",
+						});
+						switched = { messages: history, compacted: false };
+					}
+					if (switched.compacted) {
+						history = await afterCompaction(switched.messages, history);
+						measured = undefined;
+						await input.onStep(history);
+					}
+					throw new ModelSwitchAtCompaction(switchTarget, switched.compacted);
+				}
 				const compact = async (older: ModelMessage[]) => {
 					await input.onEvent({ type: "context", compacting: true });
 					try {
@@ -912,15 +1041,14 @@ async function executeModelSteps(
 			streamRetries: 0,
 			maxOutputTokens: runtime.maxOutputTokens,
 			stopWhen: [
-				isStepCount(
-					input.maxSteps ?? modelStepLimit(input.toolSurface ?? "coordination"),
-				),
+				isStepCount(input.maxSteps ?? modelStepLimit()),
 				...(input.endTurnTools?.length
 					? [hasToolCall(...input.endTurnTools)]
 					: []),
 			],
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
+				if (error instanceof ModelSwitchAtCompaction) return;
 				console.warn(
 					error instanceof InitialAgentReadFailure
 						? "Agent preparation failed"
@@ -1166,7 +1294,11 @@ async function executeModelSteps(
 					});
 					break;
 				case "error":
-					if (part.error instanceof InitialAgentReadFailure) throw part.error;
+					if (
+						part.error instanceof InitialAgentReadFailure ||
+						part.error instanceof ModelSwitchAtCompaction
+					)
+						throw part.error;
 					throw new SafeApiModelFailure(part.error);
 				case "abort":
 					throw new Error("Model run cancelled.");

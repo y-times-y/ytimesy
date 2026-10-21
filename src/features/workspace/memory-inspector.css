@@ -61,52 +61,78 @@
 	flex-direction: column;
 	overflow: auto;
 }
-.memory-graph {
-	flex: 0 0 auto;
-	width: 100%;
-	max-height: 46%;
-	min-height: 220px;
-	border-bottom: 1px solid #ffffff0d;
+.memory-search {
+	display: flex;
+	flex: 1 1 200px;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	height: 28px;
+	padding: 0 8px;
+	border: 1px solid #ffffff12;
+	border-radius: 6px;
+	background: #ffffff08;
+	color: #8a8a8a;
 }
-.memory-graph line {
-	stroke: #ffffff26;
-	stroke-width: 1;
+.memory-search:focus-within {
+	border-color: #ffffff2e;
 }
-.memory-graph line[data-active="true"] {
-	stroke: #ffffff73;
-}
-.memory-graph g {
-	cursor: pointer;
+.memory-search input {
+	flex: 1;
+	min-width: 0;
+	border: 0;
 	outline: none;
+	background: transparent;
+	color: #f2f2f2;
+	font: inherit;
+	font-size: 12px;
 }
-.memory-graph circle {
-	fill: #6b6b6b;
-	stroke: #0a0a0a;
-	stroke-width: 2;
+.memory-search input::-webkit-search-cancel-button {
+	display: none;
 }
-.memory-graph g[data-root="true"] circle {
-	fill: #d9b45a;
+.memory-inspector .memory-search-clear {
+	height: 20px;
+	padding: 0 4px;
 }
-.memory-graph g[data-active="true"] circle,
-.memory-graph g:focus-visible circle {
-	fill: #e5e5e5;
-	stroke: #d9b45a;
-}
-.memory-graph text {
-	fill: #a3a3a3;
-	font-size: 11px;
-	text-anchor: middle;
-	pointer-events: none;
-}
-.memory-files {
-	list-style: none;
-	margin: 0;
+.memory-topics {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
 	padding: 6px;
 	border-bottom: 1px solid #ffffff0d;
 }
-.memory-files button {
+.memory-inspector .memory-topic {
+	justify-content: flex-start;
 	width: 100%;
-	justify-content: space-between;
+	height: 28px;
+	text-align: left;
+}
+.memory-topic svg,
+.memory-topic-dot {
+	flex-shrink: 0;
+	color: #8a8a8a;
+}
+.memory-topic-dot {
+	width: 5px;
+	height: 5px;
+	margin: 0 4px;
+	border-radius: 50%;
+	background: #5a5a5a;
+}
+.memory-topic[data-pinned="true"] svg {
+	color: #d9b45a;
+}
+.memory-topic-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.memory-topic-meta {
+	flex-shrink: 0;
+	color: #6f6f6f;
+	font-size: 11px;
 }
 .memory-panel {
 	display: flex;
@@ -128,50 +154,75 @@
 	color: #f2f2f2;
 	overflow-wrap: anywhere;
 }
-.memory-content p {
-	margin: 0 0 6px;
-	line-height: 1.55;
-	overflow-wrap: anywhere;
-}
-.memory-content .memory-heading {
-	margin-top: 10px;
-	color: #f2f2f2;
-	font-weight: 500;
-}
-.memory-entry {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 6px;
-	padding-left: 12px;
-	position: relative;
-}
-.memory-entry::before {
-	content: "•";
-	position: absolute;
-	left: 0;
-	color: #6b6b6b;
-}
-.memory-entry > span:first-child {
-	flex: 1 1 220px;
-}
-.memory-badge {
-	padding: 0 6px;
-	border-radius: 4px;
-	background: #ffffff0f;
-	color: #a3a3a3;
-	font-size: 11px;
-}
-.memory-badge[title] {
-	color: #d9b45a;
-	background: #d9b45a1a;
-}
-.memory-source {
-	color: #8fb3ff;
+.memory-panel h3 .memory-muted {
+	font-weight: 400;
 	font-size: 12px;
 }
-.memory-source:hover {
+.memory-rows {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.memory-row {
+	display: grid;
+	gap: 2px;
+	padding: 8px 0;
+	border-bottom: 1px solid #ffffff0a;
+	min-width: 0;
+}
+.memory-row:last-child {
+	border-bottom: 0;
+}
+.memory-row[data-replaced="true"] .memory-row-text > span:last-child {
+	color: #7a7a7a;
+	text-decoration: line-through;
+	text-decoration-color: #ffffff30;
+}
+.memory-row-text {
+	margin: 0;
+	color: #e5e5e5;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.memory-row-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: 10px;
+	margin: 0;
+	color: #6f6f6f;
+	font-size: 11px;
+}
+.memory-inspector .memory-row-action {
+	display: inline;
+	height: auto;
+	padding: 0;
+	color: #a3a3a3;
+	font-size: 11px;
+	text-decoration: none;
+}
+.memory-inspector .memory-row-action:hover:enabled,
+a.memory-row-action:hover {
+	background: transparent;
+	color: #f2f2f2;
 	text-decoration: underline;
+}
+.memory-badge {
+	display: inline-block;
+	margin-right: 6px;
+	padding: 0 6px;
+	border-radius: 4px;
+	background: #d9b45a1a;
+	color: #d9b45a;
+	font-size: 11px;
+	line-height: 17px;
+	vertical-align: 1px;
+}
+.memory-badge[data-tone="replaced"] {
+	background: #ffffff0f;
+	color: #a3a3a3;
 }
 .memory-inspector .memory-link {
 	display: inline;
@@ -183,14 +234,6 @@
 .memory-inspector .memory-link:hover:enabled {
 	background: transparent;
 	text-decoration: underline;
-}
-.memory-panel footer {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-	padding-top: 8px;
-	border-top: 1px solid #ffffff0d;
-	font-size: 12px;
 }
 .memory-history {
 	list-style: none;
@@ -221,20 +264,66 @@
 .memory-history [data-change="delete"] {
 	color: #ffa5a2;
 }
-@container (min-width: 760px) {
+@container (min-width: 640px) {
 	.memory-body {
 		flex-direction: row;
 	}
-	.memory-graph,
-	.memory-files {
-		flex: 1 1 55%;
-		max-height: none;
+	.memory-topics {
+		flex: 0 0 220px;
 		border-bottom: 0;
 		border-right: 1px solid #ffffff0d;
 		overflow: auto;
 	}
 	.memory-panel {
-		flex: 1 1 45%;
+		flex: 1 1 auto;
 		overflow: auto;
+	}
+}
+.memory-inspector[data-layout="page"] .memory-panel {
+	max-width: 860px;
+	padding: 16px 24px 32px;
+}
+
+/* The full-page Memory view from the left sidebar, in place of the chat. */
+.workspace-main[data-memory-page="true"] > .workspace-body,
+.workspace-main[data-memory-page="true"] > .workspace-inspector-toggle,
+.workspace-main[data-memory-page="true"] > .workspace-inspector-expand {
+	display: none;
+}
+.memory-page {
+	container-type: inline-size;
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	width: 100%;
+	max-width: 1120px;
+	margin: 0 auto;
+	padding: 28px 24px 0;
+}
+.memory-page-header {
+	padding: 0 4px 14px;
+}
+.memory-page-header h1 {
+	margin: 0;
+	color: #f2f2f2;
+	font-size: 20px;
+	font-weight: 550;
+	letter-spacing: -0.4px;
+}
+.memory-page-header p {
+	margin: 4px 0 0;
+	color: #8a8a8a;
+	font-size: 13px;
+}
+.memory-page .memory-inspector {
+	border: 1px solid #ffffff12;
+	border-radius: 10px;
+	overflow: hidden;
+	margin-bottom: 20px;
+}
+@media (max-width: 600px) {
+	.memory-page {
+		padding: 56px 12px 0;
 	}
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { WorkspaceId } from "#/domain/ids";
 import { jsonbText } from "#/domain/jsonb";
+import { type SubagentRole, writesOwnCheckout } from "#/domain/subagent";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import {
 	conversationPoint,
@@ -50,17 +51,21 @@ export async function ensureConversationCodePoint(
 
 /**
  * Code points exist only where the turn wrote to the session's own checkout: a
- * builder-direct root chat or an isolated writable child task.
- * Shared-placement children run inside their parent's VM, so they never rewind it.
+ * builder-direct root chat or an isolated writer subagent. Readers run inside
+ * their parent's VM, so they never rewind it.
  */
 export function ownsWritableCheckout(row: {
 	provider_ref?: string | null;
 	parent_session_id?: string | null;
-	task_placement?: string | null;
-	task_access?: string | null;
+	agent_role?: SubagentRole | null;
 }) {
-	if (!row.provider_ref || row.task_placement === "shared") return false;
-	return !row.parent_session_id || row.task_access === "read_write";
+	return (
+		!!row.provider_ref &&
+		writesOwnCheckout({
+			parentSessionId: row.parent_session_id ?? null,
+			agentRole: row.agent_role,
+		})
+	);
 }
 
 /** Session locks exclude new turns and active descendants. A pre-restore Git point makes code replacement recoverable. */
@@ -131,8 +136,8 @@ export async function recoverConversation(
 			id = randomUUID();
 			// A fork has an independent lazy workspace and fresh task ancestry; it cannot control source children.
 			await client.query(
-				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,task_access,selected_branch)
-        values($1,$2,$3,$4,$5,$6,$7,'starting','idle','read_only',$8)`,
+				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch)
+        values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8)`,
 				[
 					id,
 					userId,

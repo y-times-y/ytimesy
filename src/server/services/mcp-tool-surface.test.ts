@@ -8,9 +8,11 @@ import { estimateContextTokens } from "./api-agent-context";
 import {
 	inlineMcpTokens,
 	mcpSchemaIssues,
+	mcpToolListing,
 	mcpToolSurface,
 	searchMcpCatalog,
 } from "./mcp-tool-surface";
+import type { McpCatalogEntry } from "./mcp-tools";
 import { connectMcpTools } from "./mcp-tools";
 import { withRedactedResults } from "./redacted-tools";
 
@@ -142,10 +144,12 @@ describe("deferred MCP tools", () => {
 				"execute_command",
 				"search_mcp_tools",
 			]);
-			const listing = offered.search_mcp_tools.description ?? "";
+			const listing = String(offered.search_mcp_tools.description);
 			expect(listing).toContain(
-				"- notion (Notion workspace: search, read and write pages and databases.): 14 tools: notion-search, notion-fetch",
+				"- notion (Notion workspace: search, read and write pages and databases.): 14 tools\n  - notion-create-comment: ",
 			);
+			for (const entry of mcp.catalog)
+				expect(listing).toContain(`\n  - ${entry.tool}`);
 			expect(listing).not.toContain("Notion-flavored Markdown");
 			const before = await definitionTokens(inline);
 			const after = await definitionTokens(offered);
@@ -355,5 +359,118 @@ describe("deferred MCP tools", () => {
 				status: "completed",
 			}),
 		]);
+	});
+
+	// A Supermemory-shaped server: 30 tools, about 13k tokens of schemas.
+	const memoryCatalog = (count = 30, server = "supermemory") =>
+		Array.from({ length: count }, (_, index): McpCatalogEntry => {
+			const tool =
+				index === 7
+					? "search_memory"
+					: `tool_${String(index).padStart(3, "0")}`;
+			return {
+				name: `mcp__${server}__${tool}`,
+				server,
+				tool,
+				description: `${index === 7 ? "Search the user's saved memories by meaning" : `Does thing ${index} with the memory store`}. ${"Long details about arguments and behavior. ".repeat(30)}`,
+				inputSchema: {
+					type: "object",
+					properties: {
+						query: { type: "string", description: "x".repeat(1_500) },
+					},
+					required: ["query"],
+				},
+			};
+		}).reverse();
+	const memoryTools = (catalog: readonly McpCatalogEntry[]) =>
+		Object.fromEntries(
+			catalog.map((entry) => [
+				entry.name,
+				{
+					description: entry.description,
+					inputSchema: jsonSchema(entry.inputSchema),
+					execute: async (args: unknown) => ({ ran: entry.tool, args }),
+				} as ToolSet[string],
+			]),
+		) as ToolSet;
+
+	it("lists every deferred tool by name with a one-line description, sorted", () => {
+		const catalog = memoryCatalog();
+		expect(inlineMcpTokens(catalog)).toBeGreaterThan(10_000);
+		const offered = mcpToolSurface({
+			tools: { ...core, ...memoryTools(catalog) },
+			catalog,
+			purposes: { supermemory: "Long-term memory for the user. More text." },
+		});
+		const listing = String(offered.search_mcp_tools.description);
+		expect(listing).toContain(
+			"- supermemory (Long-term memory for the user.): 30 tools\n  - search_memory: Search the user's saved memories by meaning.\n  - tool_000: Does thing 0 with the memory store.\n",
+		);
+		expect(listing).not.toContain("Long details");
+		const names = [...listing.matchAll(/^ {2}- (\S+?):/gm)].map(
+			(match) => match[1],
+		);
+		expect(names).toHaveLength(30);
+		expect(names).toEqual([...names].sort());
+		// Order-independent and byte-stable: a reshuffled catalog lists the same.
+		expect(mcpToolListing([...catalog].reverse())).toBe(
+			mcpToolListing(catalog),
+		);
+		expect(
+			estimateContextTokens(offered.search_mcp_tools.description),
+		).toBeLessThan(1_000);
+	});
+
+	it("caps a huge listing: names only past 150 tools, then +N more", () => {
+		const many = memoryCatalog(200, "big");
+		const namesOnly = mcpToolListing(many);
+		expect(namesOnly).toMatch(/^- big: 200 tools: search_memory, tool_000, /);
+		expect(namesOnly).not.toContain("Does thing");
+		expect(namesOnly).not.toContain("more");
+
+		const huge = Array.from({ length: 1_200 }, (_, index) => ({
+			...many[0],
+			tool: `a_rather_long_tool_name_${String(index).padStart(4, "0")}`,
+		}));
+		const capped = mcpToolListing([...huge, ...memoryCatalog(5, "other")]);
+		expect(capped.length).toBeLessThan(7_700);
+		expect(capped).toMatch(
+			/, \+\d+ more — search by keyword\n- other: 5 tools: /,
+		);
+		const described = mcpToolListing(
+			Array.from({ length: 140 }, (_, index) => ({
+				...many[0],
+				tool: `t${String(index).padStart(3, "0")}`,
+				description: "y".repeat(300),
+			})),
+		);
+		expect(described.length).toBeLessThan(7_700);
+		expect(described).toMatch(/\n {2}- \+\d+ more — search by keyword$/);
+	});
+
+	it("calls a listed tool directly by name, returning its schema on bad arguments", async () => {
+		const catalog = memoryCatalog();
+		const offered = mcpToolSurface({
+			tools: memoryTools(catalog),
+			catalog,
+		});
+		const wrong = (await offered.call_mcp_tool.execute?.(
+			{ server: "supermemory", tool: "search_memory", arguments: {} },
+			options,
+		)) as { isError: boolean; inputSchema: unknown };
+		expect(wrong).toMatchObject({
+			isError: true,
+			inputSchema: { required: ["query"] },
+		});
+		expect(
+			await offered.call_mcp_tool.execute?.(
+				{
+					server: "supermemory",
+					tool: "search_memory",
+					arguments: { query: "favorite editor" },
+				},
+				options,
+			),
+		).toEqual({ ran: "search_memory", args: { query: "favorite editor" } });
 	});
 });

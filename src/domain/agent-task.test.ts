@@ -1,60 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-	agentTaskStartBlockedByDependency,
-	agentTaskStatusReceipt,
-	agentTaskSummaryPage,
-	agentTaskTree,
-	canSpawnAgentTask,
-	MAX_AGENT_TASK_DEPTH,
-	taskExecutionCapabilities,
-	validateAgentTaskPlan,
-} from "./agent-task";
-
-it("grants commands and edits only to writable child tasks", () => {
-	expect(
-		taskExecutionCapabilities({
-			parentSessionId: "lead",
-			taskAccess: "read_only",
-		}),
-	).toEqual({ commandExecution: false, workspaceEdits: false });
-	expect(
-		taskExecutionCapabilities({
-			parentSessionId: "lead",
-			taskAccess: "read_write",
-		}),
-	).toEqual({ commandExecution: true, workspaceEdits: true });
-	expect(
-		taskExecutionCapabilities({
-			parentSessionId: null,
-			taskAccess: "read_write",
-		}),
-	).toEqual({ commandExecution: false, workspaceEdits: false });
-});
-
-it("pages complete recorded summaries without splitting Unicode or implying verification", () => {
-	const summary = `${"🙂".repeat(4001)} retained-output-reference`;
-	const first = agentTaskSummaryPage(summary);
-	expect(first).toEqual({
-		content: "🙂".repeat(4000),
-		start: 0,
-		nextStart: 4000,
-	});
-	expect(agentTaskSummaryPage(summary, first.nextStart)).toEqual({
-		content: "🙂 retained-output-reference",
-		start: 4000,
-		nextStart: null,
-	});
-	expect(agentTaskSummaryPage(null)).toEqual({
-		content: "",
-		start: 0,
-		nextStart: null,
-	});
-	for (const start of [-1, 0.5, NaN, Infinity, "0", null, 32_000_001])
-		expect(() => agentTaskSummaryPage(summary, start)).toThrow("Summary start");
-});
+import { agentTaskTree, turnPublicationRole } from "./agent-task";
 
 describe("agentTaskTree", () => {
-	it("omits assignments from status receipts unless explicitly requested", () => {
+	it("keeps the brief and derives a finished status from the turn", () => {
 		const [task] = agentTaskTree("root", [
 			{
 				id: "child",
@@ -68,13 +16,7 @@ describe("agentTaskTree", () => {
 				updatedAt: "2026-09-21T12:01:00.000Z",
 			},
 		]);
-		expect(agentTaskStatusReceipt(task)).not.toHaveProperty("prompt");
-		expect(agentTaskStatusReceipt(task)).toMatchObject({
-			id: task.id,
-			status: "done",
-			title: task.title,
-		});
-		expect(agentTaskStatusReceipt(task, true)).toBe(task);
+		expect(task).toMatchObject({ id: "child", status: "done" });
 		expect(task.prompt).toBe("Exact original contract");
 	});
 	it("numbers recursive tasks by their position under each parent", () => {
@@ -131,81 +73,17 @@ describe("agentTaskTree", () => {
 	});
 });
 
-describe("canSpawnAgentTask", () => {
-	it("caps recursive delegation at three task levels", () => {
-		expect(canSpawnAgentTask(MAX_AGENT_TASK_DEPTH - 1)).toBe(true);
-		expect(canSpawnAgentTask(MAX_AGENT_TASK_DEPTH)).toBe(false);
+describe("turnPublicationRole", () => {
+	const base = { providerRef: "vm", parentSessionId: null };
+	it("publishes every root chat as a chat", () => {
+		expect(turnPublicationRole(base)).toBe("chat");
 	});
-});
-
-describe("validateAgentTaskPlan", () => {
-	it("keeps shared machines read-only", () => {
-		expect(
-			validateAgentTaskPlan({
-				prompt: "Implement the change",
-				placement: "shared",
-				access: "read_write",
-				execution: "parallel",
-				dependsOnSessionId: null,
-			}),
-		).toBe("Shared-machine tasks must be read-only.");
+	it("never publishes a subagent", () => {
+		expect(turnPublicationRole({ ...base, parentSessionId: "builder" })).toBe(
+			null,
+		);
 	});
-
-	it("requires an explicit predecessor only for stacked work", () => {
-		expect(
-			validateAgentTaskPlan({
-				prompt: "Continue the migration",
-				placement: "fresh",
-				access: "read_write",
-				execution: "stacked",
-				dependsOnSessionId: null,
-			}),
-		).toBe("Stacked tasks require a predecessor.");
-		expect(
-			validateAgentTaskPlan({
-				prompt: "Audit the API",
-				placement: "shared",
-				access: "read_only",
-				execution: "parallel",
-				dependsOnSessionId: null,
-			}),
-		).toBeNull();
-	});
-});
-
-describe("agentTaskStartBlockedByDependency", () => {
-	it("requires a completed and reviewed predecessor", () => {
-		const task = {
-			execution: "stacked" as const,
-			dependsOnSessionId: "task-1",
-		};
-		expect(
-			agentTaskStartBlockedByDependency(task, {
-				status: "working",
-				reviewState: "pending",
-				branch: null,
-			}),
-		).toContain("finish");
-		expect(
-			agentTaskStartBlockedByDependency(task, {
-				status: "done",
-				reviewState: "pending",
-				branch: null,
-			}),
-		).toContain("Review");
-		expect(
-			agentTaskStartBlockedByDependency(task, {
-				status: "done",
-				reviewState: "reviewed",
-				branch: null,
-			}),
-		).toContain("Publish");
-		expect(
-			agentTaskStartBlockedByDependency(task, {
-				status: "done",
-				reviewState: "reviewed",
-				branch: "task-1",
-			}),
-		).toBeNull();
+	it("never publishes without a machine", () => {
+		expect(turnPublicationRole({ ...base, providerRef: null })).toBe(null);
 	});
 });

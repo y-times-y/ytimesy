@@ -1,14 +1,13 @@
-import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	claimAgentTaskCommand,
 	completeAgentTaskCommand,
 } from "../adapters/agent-task-command-receipts";
+import { saveAgentTaskBlockedEvent } from "../adapters/agent-task-events";
 import { readModelContextArchive } from "../adapters/context-archives";
 import { repositorySearchCommand } from "./api-agent-search-tools";
 import { apiAgentTools } from "./api-agent-tools";
-import { runAgentTaskTool } from "./harness-workspace-session";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 vi.mock("../adapters/context-archives", async (original) => ({
@@ -21,8 +20,11 @@ vi.mock("../adapters/agent-task-command-receipts", () => ({
 	completeAgentTaskCommand: vi.fn(async () => {}),
 	renewAgentTaskCommandClaim: vi.fn(async () => {}),
 }));
-vi.mock("./harness-workspace-session", () => ({
-	runAgentTaskTool: vi.fn(() => Effect.succeed({ peers: [] })),
+vi.mock("../adapters/agent-task-events", () => ({
+	saveAgentTaskBlockedEvent: vi.fn(async () => null),
+}));
+vi.mock("../jobs/queue", () => ({
+	enqueueAgentTaskEvent: vi.fn(async () => {}),
 }));
 
 it("keeps control-plane tools usable while the execution VM is unavailable", async () => {
@@ -32,9 +34,10 @@ it("keeps control-plane tools usable while the execution VM is unavailable", asy
 	const tools = apiAgentTools({
 		machines: {} as WorkspaceMachines,
 		session: {
-			id: "lead",
+			id: "child",
 			userId: "owner",
 			projectId: "project",
+			parentSessionId: "lead",
 			providerRef: null,
 			harness: "codex",
 			taskAccess: "read_only",
@@ -44,70 +47,24 @@ it("keeps control-plane tools usable while the execution VM is unavailable", asy
 		signal: new AbortController().signal,
 	});
 	expect(workspace).not.toHaveBeenCalled();
-	expect(await executeInspectionTool(tools.list_peers, {})).toEqual({
-		peers: [],
-	});
+	expect(
+		await executeInspectionTool(tools.report_task_blocked, { question: "q" }),
+	).toEqual({ taskId: "child", status: "waiting" });
 	expect(workspace).not.toHaveBeenCalled();
 	await expect(executeInspectionTool(tools.list_files, {})).rejects.toThrow(
 		"VM unavailable",
 	);
 });
 
-it("binds batched review reads to each original authorized tool and its arguments", async () => {
-	const { tools } = leadTools();
-	vi.mocked(runAgentTaskTool)
-		.mockImplementationOnce(() =>
-			Effect.succeed({ sha256: "exact", nextStart: 200 }),
-		)
-		.mockImplementationOnce(() =>
-			Effect.succeed({ sourcesCurrent: true, checks: [] }),
-		);
-	const result = await executeInspectionTool(tools.batch_read, {
-		reads: [
-			{ tool: "inspect_task_diff", arguments: { taskId: "child" } },
-			{
-				tool: "read_task_checks",
-				arguments: { taskId: "child", references: ["proof"] },
-			},
-		],
-	});
-	expect(result).toMatchObject({
-		reads: [
-			{ status: "completed", result: { sha256: "exact", nextStart: 200 } },
-			{ status: "completed", result: { sourcesCurrent: true } },
-		],
-	});
-	for (const [index, name] of [
-		"inspect_task_diff",
-		"read_task_checks",
-	].entries()) {
-		expect(claimAgentTaskCommand).toHaveBeenCalledWith(
-			"lead",
-			`turn-1:inspection:read:${index}`,
-		);
-		expect(runAgentTaskTool).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.anything(),
-			expect.anything(),
-			expect.objectContaining({
-				id: `inspection:read:${index}`,
-				tool: name,
-				arguments: expect.objectContaining({ taskId: "child" }),
-			}),
-			expect.anything(),
-		);
-	}
-});
-
 it("records failed execution and replays its cause without repeating a potentially partial effect", async () => {
-	const { tools } = leadTools();
+	const tools = childTools();
 	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({ kind: "claimed" });
-	vi.mocked(runAgentTaskTool).mockImplementationOnce(() =>
-		Effect.fail(new Error("Peer unavailable")),
+	vi.mocked(saveAgentTaskBlockedEvent).mockRejectedValueOnce(
+		new Error("Peer unavailable"),
 	);
-	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
-		"Peer unavailable",
-	);
+	await expect(
+		executeInspectionTool(tools.report_task_blocked, { question: "q" }),
+	).rejects.toThrow("Peer unavailable");
 	const completed = vi.mocked(completeAgentTaskCommand).mock.calls.at(-1)?.[1];
 	expect(completed).toMatchObject({
 		ok: false,
@@ -118,41 +75,41 @@ it("records failed execution and replays its cause without repeating a potential
 		kind: "done",
 		response: completed,
 	});
-	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
-	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
-		"Peer unavailable",
-	);
-	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
+	const calls = vi.mocked(saveAgentTaskBlockedEvent).mock.calls.length;
+	await expect(
+		executeInspectionTool(tools.report_task_blocked, { question: "q" }),
+	).rejects.toThrow("Peer unavailable");
+	expect(saveAgentTaskBlockedEvent).toHaveBeenCalledTimes(calls);
 });
 
 it("refuses a reused call ID with changed arguments before executing another operation", async () => {
-	const { tools } = leadTools();
+	const tools = childTools();
 	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({ kind: "claimed" });
-	await executeInspectionTool(tools.list_peers, {});
+	await executeInspectionTool(tools.report_task_blocked, { question: "q" });
 	const completed = vi.mocked(completeAgentTaskCommand).mock.calls.at(-1)?.[1];
 	if (!completed) throw new Error("Tool receipt was not persisted");
 	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({
 		kind: "done",
 		response: completed,
 	});
-	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
+	const calls = vi.mocked(saveAgentTaskBlockedEvent).mock.calls.length;
 	await expect(
-		executeInspectionTool(tools.list_peers, { changed: true }),
+		executeInspectionTool(tools.report_task_blocked, { question: "r" }),
 	).rejects.toThrow("No operation was replayed");
-	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
+	expect(saveAgentTaskBlockedEvent).toHaveBeenCalledTimes(calls);
 });
 
 it("does not infer matching inputs from a legacy receipt without a fingerprint", async () => {
-	const { tools } = leadTools();
+	const tools = childTools();
 	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({
 		kind: "done",
-		response: { id: "inspection", ok: true, result: { peers: [] } },
+		response: { id: "inspection", ok: true, result: { status: "waiting" } },
 	});
-	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
-	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
-		"predate input validation",
-	);
-	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
+	const calls = vi.mocked(saveAgentTaskBlockedEvent).mock.calls.length;
+	await expect(
+		executeInspectionTool(tools.report_task_blocked, { question: "q" }),
+	).rejects.toThrow("predate input validation");
+	expect(saveAgentTaskBlockedEvent).toHaveBeenCalledTimes(calls);
 });
 
 it("reads archived evidence without a VM, bounded and scoped to the current chat", async () => {
@@ -237,7 +194,11 @@ it("separates repeated provider call IDs across durable steps", async () => {
 	for (const index of [1, 2]) {
 		const tools = apiAgentTools({
 			machines: {} as WorkspaceMachines,
-			session: { id: "lead", taskAccess: "read_only" } as AgentSessionRecord,
+			session: {
+				id: "child",
+				parentSessionId: "lead",
+				taskAccess: "read_only",
+			} as AgentSessionRecord,
 			workspace: async () => {
 				throw new Error("No VM needed");
 			},
@@ -245,23 +206,29 @@ it("separates repeated provider call IDs across durable steps", async () => {
 			toolCallPrefix: `step-${index}:`,
 			signal: new AbortController().signal,
 		});
-		await executeInspectionTool(tools.list_peers, {});
+		await executeInspectionTool(tools.report_task_blocked, { question: "q" });
 		expect(claimAgentTaskCommand).toHaveBeenCalledWith(
-			"lead",
+			"child",
 			`turn:step-${index}:inspection`,
-		);
-		expect(runAgentTaskTool).toHaveBeenLastCalledWith(
-			expect.anything(),
-			expect.anything(),
-			expect.anything(),
-			expect.objectContaining({ id: `step-${index}:inspection` }),
-			expect.objectContaining({
-				signal: expect.any(AbortSignal),
-				turnId: "turn",
-			}),
 		);
 	}
 });
+
+function childTools() {
+	return apiAgentTools({
+		machines: {} as WorkspaceMachines,
+		session: {
+			id: "child",
+			parentSessionId: "lead",
+			taskAccess: "read_only",
+		} as AgentSessionRecord,
+		workspace: async () => {
+			throw new Error("No VM needed");
+		},
+		turnId: "turn-1",
+		signal: new AbortController().signal,
+	});
+}
 
 async function executeInspectionTool(
 	tool: unknown,

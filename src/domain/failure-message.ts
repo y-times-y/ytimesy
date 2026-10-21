@@ -1,9 +1,44 @@
+import {
+	USAGE_CEILING_REFUSAL_PATTERN,
+	USAGE_WINDOW_REFUSAL_PATTERN,
+} from "./infrastructure-usage";
+
 const GENERIC_EFFECT_PROMISE_FAILURE =
 	"An unknown error occurred in Effect.tryPromise";
 
 export function failureMessage(cause: unknown): string {
 	const message = unwrapFailureMessage(cause, new Set());
-	return message || "Something went wrong.";
+	return (
+		(message && usageCapFailureMessage(message)) ||
+		message ||
+		"Something went wrong."
+	);
+}
+
+export const USER_USAGE_CAP_MESSAGE =
+	"You have reached your cloud usage limit, so new machine time cannot start. Your work is preserved; the limit refills over the next hours (see Settings for the exact time).";
+export const FLEET_MONTHLY_CAP_MESSAGE =
+	"The ytimesy free beta has used its shared cloud budget for this month, so new machine time cannot start. Your work is preserved; the budget resets on the 1st (UTC). Questions: support@ytimesy.com.";
+export const FLEET_LIFETIME_CAP_MESSAGE =
+	"The ytimesy free beta has used its total cloud budget, so new machine time cannot start. Your work is preserved; we will reopen capacity as soon as we can. Questions: support@ytimesy.com.";
+
+/**
+ * The user-facing wording for a usage cap refusal (src/server/adapters/
+ * infrastructure-usage.ts), or null when the text is not one. Fleet caps are
+ * the beta's shared budget, not something the user did or can fix.
+ */
+export function usageCapFailureMessage(message: string): string | null {
+	const window = USAGE_WINDOW_REFUSAL_PATTERN.exec(message);
+	if (window) return window[0];
+	const ceiling = USAGE_CEILING_REFUSAL_PATTERN.exec(message);
+	if (ceiling) return ceiling[0];
+	if (/lifetime fleet cloud execution budget is exhausted/i.test(message))
+		return FLEET_LIFETIME_CAP_MESSAGE;
+	if (/fleet cloud execution budget is exhausted/i.test(message))
+		return FLEET_MONTHLY_CAP_MESSAGE;
+	if (/your cloud execution allowance is exhausted/i.test(message))
+		return USER_USAGE_CAP_MESSAGE;
+	return null;
 }
 
 export function workspaceLooksGone(message: string): boolean {

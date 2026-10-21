@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { type Freestyle, FreestyleApiError } from "freestyle";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { SCRUB_AGENT_SECRETS } from "../src/domain/project-secret";
 import { snapshotSupportsRetention } from "../src/domain/workspace-retention";
+import { SCRUB_WORKSPACE_SECRETS } from "../src/server/adapters/freestyle/scrub-agent-secrets";
 import {
 	expireRetainedWorkspace,
 	recycleWorkspace,
@@ -37,7 +37,7 @@ const resources = { cpu: 2, memory: 4096, storage: 16384 };
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice');
-	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text);
+	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text,agent_role text);
 	create table api_turn(session_id uuid,state text); create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);`);
 	for (const file of [
 		"20261003020000_infrastructure_usage",
@@ -45,13 +45,15 @@ beforeAll(async () => {
 		"20261003022000_workspace_retention",
 		"20261003024000_infrastructure_zero_runtime",
 		"20261013060000_infrastructure_vm_lease",
+		"20261020130000_infrastructure_usage_windows",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_WORKSPACE_RETENTION", "true");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "true");
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "66120");
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "66120");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "66120");
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "500000000");
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
 	await db.exec(
@@ -171,7 +173,7 @@ it("persists verified recovery BEFORE source deletion and includes ignored files
 	expect(verification.delete).toHaveBeenCalledOnce();
 	// Project secrets are removed before the image is taken.
 	expect(source.exec).toHaveBeenCalledWith(
-		expect.objectContaining({ command: SCRUB_AGENT_SECRETS }),
+		expect.objectContaining({ command: SCRUB_WORKSPACE_SECRETS }),
 	);
 	expect(source.exec.mock.invocationCallOrder[0]).toBeLessThan(
 		source.snapshot.mock.invocationCallOrder[0] ?? 0,

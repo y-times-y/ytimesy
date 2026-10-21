@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import {
+	excludedFilesNote,
 	type WriterPatch,
+	type WriterPatchExclusions,
+	writerPatchExclusion,
 	writerPatchPath,
 	writerPatchRef,
 } from "#/domain/subagent";
@@ -45,6 +48,59 @@ export function parseForkBase(stdout: string) {
 	return { parentHead, base };
 }
 
+/**
+ * Run in the fork at the end, before the export: stage everything git does
+ * not ignore and list the files added since the fork-base (numstat, then
+ * each one's size in the same order).
+ */
+export function writerAddedFilesScript(input: {
+	readonly cwd: string;
+	readonly base: string;
+}) {
+	const base = quote(input.base);
+	return [
+		"set -e",
+		`cd ${quote(input.cwd)}`,
+		"git add -A",
+		`git -c core.quotePath=false diff --cached --numstat --diff-filter=A ${base}`,
+		`echo ${ADDED_SIZES}`,
+		`git diff --cached --raw --no-abbrev --diff-filter=A ${base} | cut -d' ' -f4 | git cat-file --batch-check='%(objectsize)'`,
+	].join("\n");
+}
+
+const ADDED_SIZES = "ytimesy-added-sizes";
+
+/** Files added since the fork-base, from writerAddedFilesScript's output. */
+export function parseAddedFiles(stdout: string) {
+	const [numstat = "", sizes = ""] = stdout.split(`${ADDED_SIZES}\n`);
+	const rows = numstat.split("\n").filter((line) => line.includes("\t"));
+	const bytes = sizes.split("\n").filter(Boolean);
+	// Out of step (a path git had to quote, a gitlink): keep everything.
+	if (rows.length !== bytes.length) return [];
+	return rows.map((row, index) => {
+		const [plus, minus, ...path] = row.split("\t");
+		return {
+			path: path.join("\t"),
+			binary: plus === "-" && minus === "-",
+			bytes: Number(bytes[index]) || 0,
+		};
+	});
+}
+
+/**
+ * The added files a patch leaves out (see writerPatchExclusion). A path git
+ * quoted is kept, since it cannot be named back to git exactly.
+ */
+export function writerPatchExclusions(
+	added: ReturnType<typeof parseAddedFiles>,
+	named: string,
+) {
+	return added.filter(
+		(file) =>
+			!file.path.startsWith('"') && writerPatchExclusion(file, named) !== null,
+	);
+}
+
 /** Run in the fork at the end: auto-commit, then write the patch, stats and bundle. */
 export function writerExportScript(input: {
 	readonly cwd: string;
@@ -52,12 +108,20 @@ export function writerExportScript(input: {
 	readonly base: string;
 	readonly parentHead: string;
 	readonly outDir: string;
+	/** A pathspec file of added files to keep out of the commit (they stay on disk). */
+	readonly excludeFile?: string;
 }) {
 	const out = quote(input.outDir);
 	return [
 		"set -e",
 		`cd ${quote(input.cwd)}`,
 		"git add -A",
+		...(input.excludeFile
+			? [
+					`git rm -q --cached --ignore-unmatch --pathspec-from-file=${quote(input.excludeFile)}`,
+					`rm -f ${quote(input.excludeFile)}`,
+				]
+			: []),
 		`if ! git diff --cached --quiet; then ${GIT} commit -q --no-verify -m ${quote(`wip (ytimesy agent ${input.label})`)}; fi`,
 		`rm -rf ${out} && mkdir -p ${out}`,
 		`git diff --binary ${input.base} HEAD > ${out}/patch`,
@@ -82,6 +146,8 @@ export function parseNumstat(numstat: string) {
 	return { files, added, removed };
 }
 
+const PATCH_PATH_MARKER = "ytimesy-patch-path:";
+
 /** Run in the parent: store the patch, fetch the bundle into the agent's ref. */
 export function parentImportScript(input: {
 	readonly cwd: string;
@@ -104,6 +170,9 @@ export function parentImportScript(input: {
 					'rm -f "$bundle"',
 				]
 			: []),
+		// The absolute path: the parent's commands may run as another user
+		// (a hard-set task container runs them as root), where ~ is not this home.
+		`printf '${PATCH_PATH_MARKER}%s\\n' "$(cd ${directory} && pwd -P)/${input.label}.patch"`,
 	].join("\n");
 }
 
@@ -152,6 +221,8 @@ export async function transferWriterPatch(input: {
 	readonly label: string;
 	readonly base: string;
 	readonly parentHead: string;
+	/** The writer's brief and messages: a file they name is a deliverable. */
+	readonly named?: string;
 }): Promise<WriterPatch | null> {
 	const { machines, forkVm, parentVm } = input;
 	const [forkCwd, parentCwd] = await Promise.all(
@@ -161,7 +232,39 @@ export async function transferWriterPatch(input: {
 	);
 	if (!forkCwd?.startsWith("/") || !parentCwd?.startsWith("/"))
 		throw new Error("A repository path is unavailable.");
-	const outDir = `/tmp/ytimesy-agent-export-${input.label}`;
+	const listed = await machines.exec(
+		forkVm,
+		writerAddedFilesScript({ cwd: forkCwd, base: input.base }),
+		120_000,
+	);
+	if (listed.exitCode !== 0)
+		throw new Error(
+			`The writer's new files could not be listed: ${listed.stderr.slice(-400)}`,
+		);
+	const left = writerPatchExclusions(
+		parseAddedFiles(listed.stdout),
+		input.named ?? "",
+	);
+	let excludeFile: string | undefined;
+	if (left.length) {
+		excludeFile = `/tmp/ytimesy-agent-exclude-${randomUUID()}`;
+		await machines.writeTextFile(
+			forkVm,
+			excludeFile,
+			left.map((file) => `:(literal)${file.path}\n`).join(""),
+		);
+	}
+	const excluded: WriterPatchExclusions | undefined = left.length
+		? {
+				count: left.length,
+				bytes: left.reduce((sum, file) => sum + file.bytes, 0),
+				paths: [...left]
+					.sort((a, b) => b.bytes - a.bytes)
+					.slice(0, 8)
+					.map((file) => file.path),
+			}
+		: undefined;
+	const outDir = `/tmp/ytimesy-agent-export-${input.label}-${randomUUID()}`;
 	const exported = await machines.exec(
 		forkVm,
 		writerExportScript({
@@ -170,6 +273,7 @@ export async function transferWriterPatch(input: {
 			base: input.base,
 			parentHead: input.parentHead,
 			outDir,
+			excludeFile,
 		}),
 		120_000,
 	);
@@ -185,7 +289,13 @@ export async function transferWriterPatch(input: {
 		read("sha256"),
 		read("bundle.b64"),
 	]);
-	if (!patch?.trim()) return null;
+	if (!patch?.trim()) {
+		if (excluded)
+			throw new Error(
+				`the writer changed nothing deliberate; left out ${excludedFilesNote(excluded)}`,
+			);
+		return null;
+	}
 	const patchPayload = `/tmp/ytimesy-agent-patch-${randomUUID()}.patch`;
 	await machines.writeTextFile(parentVm, patchPayload, patch);
 	let bundlePayload: string | null = null;
@@ -208,12 +318,18 @@ export async function transferWriterPatch(input: {
 			`The patch could not be stored in your checkout: ${imported.stderr.slice(-400)}`,
 		);
 	return {
-		path: writerPatchPath(input.label),
+		path:
+			imported.stdout
+				.split("\n")
+				.find((line) => line.startsWith(PATCH_PATH_MARKER))
+				?.slice(PATCH_PATH_MARKER.length)
+				.trim() || writerPatchPath(input.label),
 		...parseNumstat(numstat ?? ""),
 		sha256: (sha256 ?? "").trim(),
 		ref: bundlePayload
 			? writerPatchRef(input.label)
 			: "(bundle too large; patch only)",
 		base: input.base,
+		...(excluded ? { excluded } : {}),
 	};
 }

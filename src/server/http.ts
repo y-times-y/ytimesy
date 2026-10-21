@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { captureServerException } from "./adapters/analytics";
 import { authTrustedOrigins } from "./auth/providers";
 import { serverConfig } from "./config";
 export function requireSameOrigin(request: Request) {
@@ -28,7 +29,9 @@ export async function endpoint(
 				{ error: "GitHub access expired or was denied. Reconnect GitHub." },
 				{ status: 409 },
 			);
-		// Provider exceptions can contain credentials in request headers; never log them.
+		// Provider exceptions can contain credentials in request headers; never
+		// log them. Error tracking gets a redacted copy.
+		void captureServerException(error, { source: "api" });
 		return Response.json(
 			{
 				error:

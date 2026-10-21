@@ -226,7 +226,7 @@ async function changeCloudProjectMemory(
 ) {
 	if (session.parentSessionId)
 		throw new Error(
-			"Report discoveries to the lead; only root chats maintain shared project knowledge.",
+			"Put discoveries in your report to your parent agent; only root chats maintain shared project knowledge.",
 		);
 	const client = await database().connect();
 	try {

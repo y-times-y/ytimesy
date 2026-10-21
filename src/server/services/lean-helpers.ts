@@ -3,7 +3,10 @@ import type { ModelMessage } from "ai";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { browserUseSetup } from "../adapters/browser-use-cli";
 import { desktopWallpaperBase64 } from "../adapters/freestyle/desktop-wallpaper";
-import { START_WORKSPACE_DESKTOP } from "../adapters/freestyle/start-desktop";
+import {
+	DESKTOP_X_ENVIRONMENT,
+	START_WORKSPACE_DESKTOP,
+} from "../adapters/freestyle/start-desktop";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { chromeOpenCommand } from "./api-agent-browser-tools";
@@ -44,7 +47,7 @@ export const LEAN_HELPER_COMMANDS = [
 ] as const;
 
 const CHECK_USAGE =
-	"usage: ytimesy-check --files <delivered paths> [--input <paths the user or grader supplies>] [--unprivileged] [--timeout <seconds>] [--keep-env <NAME>...] [--no-tracked] -- <run command>";
+	"usage: ytimesy-check --files <delivered paths> [--input <paths the user or grader supplies>] [--named-data <data files the task itself names>] [--unprivileged] [--timeout <seconds>] [--keep-env <NAME>...] [--no-tracked] -- <run command>";
 
 /** Parses check_deliverable's arguments from a command line and runs the same check. */
 const CHECK_SCRIPT = `#!/usr/bin/env python3
@@ -61,8 +64,8 @@ split = argv.index('--')
 options, command = argv[:split], argv[split + 1:]
 if not command:
     print(USAGE, file=sys.stderr); sys.exit(2)
-args = {'command': command[0] if len(command) == 1 else shlex.join(command), 'files': [], 'inputs': [], 'tracked': True, 'unprivileged': False, 'timeoutSeconds': 120, 'keepEnv': []}
-lists = {'--files': 'files', '--file': 'files', '--input': 'inputs', '--inputs': 'inputs', '--keep-env': 'keepEnv'}
+args = {'command': command[0] if len(command) == 1 else shlex.join(command), 'files': [], 'inputs': [], 'namedData': [], 'tracked': True, 'unprivileged': False, 'timeoutSeconds': 120, 'keepEnv': []}
+lists = {'--files': 'files', '--file': 'files', '--input': 'inputs', '--inputs': 'inputs', '--named-data': 'namedData', '--keep-env': 'keepEnv'}
 current = None
 index = 0
 while index < len(options):
@@ -184,7 +187,7 @@ case "\${1:-}" in
   screenshot)
     desktop
     path=\${2:-/tmp/ytimesy-screenshot-$(date +%Y%m%d-%H%M%S).png}
-    DISPLAY=:0 scrot -o -z "$path" && echo "$path" ;;
+    ${DESKTOP_X_ENVIRONMENT}; scrot -o -z "$path" && echo "$path" ;;
   inspect)
     url=\${2:-}; [[ "$url" =~ ^https?:// ]] || { usage; exit 2; }
     desktop

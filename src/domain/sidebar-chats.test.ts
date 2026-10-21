@@ -9,7 +9,10 @@ import {
 	listedChatModelId,
 	listedChatTurnStatus,
 	newChatIsActive,
+	parseSidebarSort,
 	projectFolderIsExpanded,
+	projectsByRecentActivity,
+	recentSidebarChats,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sessionWithoutOpenChat,
@@ -377,5 +380,51 @@ describe("unsent sends", () => {
 		expect(unsentSendReturnsHere({ sentEpoch: 1, currentEpoch: 2 })).toBe(
 			false,
 		);
+	});
+});
+
+describe("sidebar sort", () => {
+	const a = { id: "a", name: "Alpha" };
+	const b = { id: "b", name: "Beta" };
+	const c = { id: "c", name: "Gamma" };
+	const groups = [
+		{
+			project: a,
+			chats: [
+				{ id: "a1", title: "Old", updatedAt: "2026-10-01T00:00:00Z" },
+				{ id: "a2", title: "Mid", updatedAt: "2026-10-10T00:00:00Z" },
+			],
+		},
+		{
+			project: b,
+			chats: [{ id: "b1", title: "New", updatedAt: "2026-10-19T00:00:00Z" }],
+		},
+		{ project: c, chats: [] },
+	];
+
+	it("reads the stored choice, defaulting to projects", () => {
+		expect(parseSidebarSort("recent")).toBe("recent");
+		expect(parseSidebarSort("projects")).toBe("projects");
+		expect(parseSidebarSort(null)).toBe("projects");
+		expect(parseSidebarSort("bogus")).toBe("projects");
+	});
+
+	it("lists every chat newest first with its project, pinned on top", () => {
+		expect(
+			recentSidebarChats(groups).map((row) => [row.chat.id, row.project.id]),
+		).toEqual([
+			["b1", "b"],
+			["a2", "a"],
+			["a1", "a"],
+		]);
+		expect(
+			recentSidebarChats(groups, ["a1"]).map((row) => row.chat.id),
+		).toEqual(["a1", "b1", "a2"]);
+	});
+
+	it("orders projects by their newest chat, empty projects last in their order", () => {
+		expect(
+			projectsByRecentActivity([c, a, b], groups).map((project) => project.id),
+		).toEqual(["b", "a", "c"]);
 	});
 });

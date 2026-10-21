@@ -59,6 +59,20 @@ describe("efficiency block", () => {
 			items: turn(50_000, 0, 1_000, 2),
 		},
 	];
+	/** checkerMode=pair: the checker is the judge; its worker is a reader. */
+	const pairWorker = {
+		id: "cw",
+		harness: "codex",
+		listedModelId: "gpt-6-luna",
+		agentRole: "researcher" as const,
+		agentBudget: {
+			steps: 75,
+			minutes: 7,
+			tokens: 400_000,
+			checkerPair: "worker" as const,
+		},
+		items: turn(300_000, 200_000, 3_000, 9),
+	};
 
 	it("splits a tree's spend by role and model, each at its own price", () => {
 		const rows = treeModelSpend({
@@ -71,6 +85,14 @@ describe("efficiency block", () => {
 			["subagent", "google/gemini-3.8-flash", 12],
 			["checker", "gpt-6-luna", 6],
 			["judge", "gpt-6-luna", 2],
+		]);
+		expect(
+			treeModelSpend({ rootId: "root", sessions: [...sessions, pairWorker] })
+				.filter((row) => row.role.startsWith("checker"))
+				.map((row) => [row.role, row.requests]),
+		).toEqual([
+			["checker", 6],
+			["checkerWorker", 9],
 		]);
 		// Sol: 100K × $2 + 900K × $0.10 + 10K × $10 (plan: an estimate).
 		expect(rows[0].costUsd).toBeCloseTo(0.2 + 0.09 + 0.1);

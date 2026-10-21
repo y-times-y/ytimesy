@@ -63,14 +63,17 @@ export function readerWorkspaceMachines(
 		}
 		return ready;
 	};
-	const asReader = (command: string) =>
-		readerCommand(sessionId, scope(command));
+	const runAsReader = (
+		vm: Parameters<WorkspaceMachines["exec"]>[0],
+		command: string,
+		timeoutMs?: number,
+	) => base.exec(vm, readerCommand(sessionId, command), timeoutMs);
 	return {
 		...base,
 		runCapability: undefined,
 		exec: async (vm, command, timeoutMs) => {
 			await prepare(vm);
-			return base.exec(vm, asReader(command), timeoutMs);
+			return runAsReader(vm, scope(command), timeoutMs);
 		},
 		writeTextFile: async (vm, requested, contents) => {
 			const path = scope(requested);
@@ -93,12 +96,9 @@ export function readerWorkspaceMachines(
 				return base.readTextFile(vm, requested);
 			const path = posixShellQuoted(scope(requested));
 			await prepare(vm);
-			const result = await base.exec(
+			const result = await runAsReader(
 				vm,
-				readerCommand(
-					sessionId,
-					`if [ -e ${path} ]; then cat -- ${path}; else exit 44; fi`,
-				),
+				`if [ -e ${path} ]; then cat -- ${path}; else exit 44; fi`,
 				30_000,
 			);
 			if (result.exitCode === 44) return null;

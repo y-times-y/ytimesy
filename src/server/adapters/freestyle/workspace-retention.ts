@@ -25,6 +25,7 @@ import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
 	computeHourlyMicroUsd,
+	infrastructureAdmissionEnabled,
 	lockedVm,
 } from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
@@ -43,8 +44,45 @@ type Retention = {
 export function workspaceRetentionEnabled() {
 	return (
 		process.env.YTIMESY_WORKSPACE_RETENTION === "true" &&
-		process.env.YTIMESY_INFRASTRUCTURE_ADMISSION === "true"
+		infrastructureAdmissionEnabled()
 	);
+}
+
+/**
+ * The retention touch as SQL common table expressions, so admission can run it
+ * in the same round trip as its own reads. Parameters: $1 slug, $2 VM id,
+ * $3 resources, $4 enroll (no row yet and created after the cutover), $5 touch
+ * (retention applies to this VM). `prior` is the row before the touch; the
+ * upsert only runs where touchedRetention would not refuse.
+ */
+export const RETENTION_TOUCH_CTES = `retention_prior as (select phase,vm_id from workspace_retention where $5::boolean and slug=$1),
+ retention_touched as (insert into workspace_retention(session_id,user_id,vm_id,slug,resources)
+  select id,user_id,$2,$1,$3::jsonb from agent_session where $5::boolean and 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1 and (agent_role is null or agent_role='writer')
+  and coalesce((select phase='active' and vm_id=$2 from retention_prior),$4::boolean)
+  on conflict(session_id) do update set last_activity_at=now(),vm_id=$2,resources=$3::jsonb where workspace_retention.phase='active' returning 1)`;
+
+/** Parameters $1-$5 of RETENTION_TOUCH_CTES for this VM. */
+export function retentionTouchParams(data: VmData) {
+	const touch =
+		workspaceRetentionEnabled() && !!data.slug?.startsWith("ytimesy-ag-");
+	// A fixed deployment cutover protects pre-existing user machines from automatic deletion.
+	const cutover = Date.parse(process.env.YTIMESY_RETENTION_ENROLL_AFTER ?? "");
+	const created = Date.parse(data.createdAt);
+	const enroll =
+		Number.isFinite(cutover) && Number.isFinite(created) && created >= cutover;
+	return [data.slug, data.id, JSON.stringify(data.resources), enroll, touch];
+}
+
+/** Refuses a touch that found the workspace mid-recovery or bound to another VM. */
+export function assertRetentionTouched(
+	prior: { phase: string | null; vmId: string | null },
+	data: VmData,
+) {
+	if (prior.phase === null) return;
+	if (prior.phase !== "active")
+		throw new Error("Workspace recovery is in progress. Retry shortly.");
+	if (prior.vmId !== data.id)
+		throw new Error("Workspace recovery binding changed. Retry shortly.");
 }
 
 /** Runs under the same per-VM fence as every compute admission. Never enroll templates or operator VMs. */
@@ -52,34 +90,18 @@ export async function touchWorkspaceRetention(
 	client: PoolClient,
 	data: VmData,
 ) {
-	if (!workspaceRetentionEnabled() || !data.slug?.startsWith("ytimesy-ag-"))
-		return;
-	const prior = await client.query<Retention>(
-		"select * from workspace_retention where slug=$1",
-		[data.slug],
+	const params = retentionTouchParams(data);
+	if (!params[4]) return;
+	const result = await client.query<{
+		phase: string | null;
+		vm_id: string | null;
+	}>(
+		`with ${RETENTION_TOUCH_CTES} select (select phase from retention_prior) as phase,(select vm_id from retention_prior) as vm_id`,
+		params,
 	);
-	if (prior.rows[0] && prior.rows[0].phase !== "active")
-		throw new Error("Workspace recovery is in progress. Retry shortly.");
-	if (prior.rows[0] && prior.rows[0].vm_id !== data.id)
-		throw new Error("Workspace recovery binding changed. Retry shortly.");
-	// A fixed deployment cutover protects pre-existing user machines from automatic deletion.
-	if (!prior.rows[0]) {
-		const cutover = Date.parse(
-			process.env.YTIMESY_RETENTION_ENROLL_AFTER ?? "",
-		);
-		const created = Date.parse(data.createdAt);
-		if (
-			!Number.isFinite(cutover) ||
-			!Number.isFinite(created) ||
-			created < cutover
-		)
-			return;
-	}
-	await client.query(
-		`insert into workspace_retention(session_id,user_id,vm_id,slug,resources)
-	 select id,user_id,$2,$1,$3 from agent_session where 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1 and task_placement is distinct from 'shared'
-	 on conflict(session_id) do update set last_activity_at=now(),vm_id=$2,resources=$3 where workspace_retention.phase='active'`,
-		[data.slug, data.id, JSON.stringify(data.resources)],
+	assertRetentionTouched(
+		{ phase: result.rows[0].phase, vmId: result.rows[0].vm_id },
+		data,
 	);
 }
 
@@ -251,6 +273,7 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 					amountMicroUsd: Math.ceil(
 						(computeHourlyMicroUsd(data.resources) * 80) / 3600,
 					),
+					hourlyMicroUsd: computeHourlyMicroUsd(data.resources),
 				},
 				connection,
 			);

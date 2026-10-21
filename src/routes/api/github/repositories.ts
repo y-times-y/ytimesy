@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { scratchRepositoryName } from "../../../domain/add-project";
 import { listAuthorizedRepositories } from "../../../server/adapters/github";
+import { requireUserAction } from "../../../server/adapters/user-action-rate";
 import { requireUser } from "../../../server/auth/auth";
 import { githubAccessToken } from "../../../server/auth/github-connection";
 import { serverConfig } from "../../../server/config";
@@ -30,6 +31,7 @@ export const Route = createFileRoute("/api/github/repositories")({
 				endpoint(async () => {
 					requireSameOrigin(request);
 					const user = await requireUser(request.headers);
+					await requireUserAction(user.id, "project-create");
 					const name = scratchRepositoryName(
 						scratchRepository.parse(await request.json()).name,
 					);

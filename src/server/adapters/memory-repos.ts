@@ -25,7 +25,8 @@ type ArtifactsRepoHandle = {
 	createToken(
 		scope?: "read" | "write",
 		ttl?: number,
-	): Promise<{ plaintext: string }>;
+	): Promise<{ id?: string; plaintext: string }>;
+	revokeToken?(tokenOrId: string): Promise<boolean>;
 	log(opts?: { ref?: string; limit?: number }): Promise<ArtifactsCommit[]>;
 	readCommit(hash: string): Promise<ArtifactsCommit | null>;
 	readTree(
@@ -64,8 +65,15 @@ export type MemoryRepo = {
 		changes: readonly MemoryChange[],
 		message: string,
 	): Promise<MemoryCommitOutcome>;
-	/** Remote URL and a write token for a Git client, creating the repo on first use. */
-	credentials(ttlSeconds: number): Promise<{ remote: string; token: string }>;
+	/**
+	 * Remote URL and a write token for a Git client, creating the repo on
+	 * first use; `tokenId` names the token for revocation without it.
+	 */
+	credentials(
+		ttlSeconds: number,
+	): Promise<{ remote: string; token: string; tokenId?: string }>;
+	/** Revokes a token `credentials` returned (or its id), before its TTL runs out. */
+	revokeCredential?(tokenOrId: string): Promise<void>;
 	/** Commits that changed `path`, newest first, with the file before and after. */
 	history(
 		path: string,
@@ -156,9 +164,9 @@ function artifactsMemoryRepo(
 	async function credentials(ttlSeconds: number) {
 		const existing = await withRepo(async (repo) => ({
 			remote: (await repo.info()).remote,
-			token: (await repo.createToken("write", ttlSeconds)).plaintext,
+			...tokenFields(await repo.createToken("write", ttlSeconds)),
 		}));
-		if (existing) return { ...existing, token: bareToken(existing.token) };
+		if (existing) return minted(existing);
 		try {
 			await artifacts.create(name, {
 				description: "Agent Memory Repo",
@@ -169,10 +177,26 @@ function artifactsMemoryRepo(
 		}
 		const created = await withRepo(async (repo) => ({
 			remote: (await repo.info()).remote,
-			token: (await repo.createToken("write", ttlSeconds)).plaintext,
+			...tokenFields(await repo.createToken("write", ttlSeconds)),
 		}));
 		if (!created) throw new Error("Memory repo could not be created.");
-		return { ...created, token: bareToken(created.token) };
+		return minted(created);
+	}
+	/** Plaintext as Artifacts issued it, by the bare token handed out, for revocation. */
+	const issued = new Map<string, string>();
+	function minted(credential: {
+		remote: string;
+		token: string;
+		tokenId?: string;
+	}) {
+		const token = bareToken(credential.token);
+		if (issued.size > 64) issued.delete(issued.keys().next().value as string);
+		issued.set(token, credential.token);
+		return {
+			remote: credential.remote,
+			token,
+			...(credential.tokenId ? { tokenId: credential.tokenId } : {}),
+		};
 	}
 
 	async function filesAt(repo: ArtifactsRepoHandle, commit: ArtifactsCommit) {
@@ -221,6 +245,13 @@ function artifactsMemoryRepo(
 		snapshot,
 		snapshotAt,
 		credentials,
+		async revokeCredential(token) {
+			const plaintext = issued.get(token) ?? token;
+			issued.delete(token);
+			await withRepo(async (repo) => {
+				await repo.revokeToken?.(plaintext);
+			});
+		},
 		async commit(base, changes, message) {
 			const effective = changes.filter(
 				(change) => (base.files[change.path] ?? null) !== change.content,
@@ -398,6 +429,13 @@ function isRejectedPush(error: unknown) {
 
 function artifactsCode(error: unknown) {
 	return (error as { code?: string } | null)?.code;
+}
+
+function tokenFields(created: { id?: string; plaintext: string }) {
+	return {
+		token: created.plaintext,
+		...(created.id ? { tokenId: created.id } : {}),
+	};
 }
 
 /** Tokens carry `?expires=` for display; Git wants the bare secret. */

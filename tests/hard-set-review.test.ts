@@ -3,7 +3,9 @@ import {
 	type HardSetReviewRecord,
 	type HardSetReviewRound,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "../scripts/hard-set/review-report";
+import type { ReviewLoopState } from "../src/domain/review-loop";
 
 const snapshot = {
 	cwd: "/app",
@@ -125,5 +127,117 @@ describe("hard set review report", () => {
 				{ task: "x", attempt: "1", status: "final", passed: true },
 			]),
 		).toEqual([]);
+	});
+});
+
+describe("hard set review report: the checker's own tests", () => {
+	it("counts the tests the checker wrote and flags an untested pass", () => {
+		const lines = reviewLoopReport([
+			{
+				task: "mvcc",
+				attempt: "1",
+				status: "final",
+				passed: false,
+				reviewLoop: loop(
+					[
+						round({
+							checkerTests: [
+								{ name: "a", passed: false, command: "c" },
+								{ name: "b", passed: true, command: null },
+							],
+						}),
+						round({
+							n: 2,
+							verdict: "unsure",
+							findings: 0,
+							decision: "no-findings",
+							checkerTests: [],
+							untested: true,
+						}),
+					],
+					{ outcome: "no-findings" },
+				),
+			},
+		]);
+		expect(lines[2]).toBe(
+			"- mvcc.1: R1 fail(2) [2 tests, 1 failed]->fail 2.5m fix 1.2m fixed 1 rejected 1, R2 unsure [0 tests, untested pass]->fail 2.5m; no-findings; final fail",
+		);
+	});
+});
+
+describe("hard set review report: checkerMode=pair", () => {
+	it("splits the checker's spend as judge and worker per round and over the runs", () => {
+		const pair = {
+			judgeTokens: 20_000,
+			judgeCostUsd: 0.04,
+			workerTokens: 300_000,
+			workerCostUsd: 0.06,
+		};
+		const lines = reviewLoopReport([
+			{
+				task: "mvcc",
+				attempt: "1",
+				status: "final",
+				passed: true,
+				reviewLoop: loop(
+					[
+						round({
+							checkerTests: [
+								{ name: "a", passed: false, command: "c", ranBy: "worker" },
+								{ name: "b", passed: true, command: "d", ranBy: "judge" },
+								{ name: "c", passed: true, command: "e" },
+							],
+							pair: { ...pair, workers: 1 },
+						}),
+						round({
+							n: 2,
+							verdict: "pass",
+							findings: 0,
+							decision: "pass",
+							graderPassed: true,
+							pair: { ...pair, workers: 2 },
+						}),
+					],
+					{
+						pair: {
+							judgeTokens: 40_000,
+							judgeCostUsd: 0.08,
+							workerTokens: 600_000,
+							workerCostUsd: 0.12,
+						},
+					},
+				),
+			},
+		]);
+		expect(lines[2]).toBe(
+			"- mvcc.1: R1 fail(2) [3 tests, 1 failed, 1 run by the worker]->fail 2.5m judge $0.040 / worker $0.060 fix 1.2m fixed 1 rejected 1, R2 pass->PASS 2.5m judge $0.040 / worker $0.060; pass; final PASS",
+		);
+		expect(lines).toContain(
+			"Checker pair spend over 1 run(s): judge $0.080 (40%), 40k tokens; worker $0.120 (60%), 600k tokens.",
+		);
+	});
+});
+
+describe("hard set review state", () => {
+	// rl-live-2: the checker's completion woke a second builder turn whose
+	// own state was "not-eligible (no files changed)".
+	const checked = {
+		turnId: "turn-1",
+		outcome: "no-findings",
+		rounds: [{ n: 1 }],
+	} as unknown as ReviewLoopState;
+	const wake = {
+		turnId: "turn-2",
+		outcome: "not-eligible",
+		rounds: [],
+	} as unknown as ReviewLoopState;
+
+	it("reports the latest state that ran a round, not a later empty wake turn", () => {
+		expect(reviewStateForRecord([checked, wake])).toBe(checked);
+	});
+
+	it("falls back to the last state when no turn ran a round", () => {
+		expect(reviewStateForRecord([wake])).toBe(wake);
+		expect(reviewStateForRecord([])).toBeNull();
 	});
 });

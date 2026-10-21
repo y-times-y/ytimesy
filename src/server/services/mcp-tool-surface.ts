@@ -17,8 +17,13 @@ import type { McpCatalogEntry } from "./mcp-tools";
 const INLINE_MCP_TOKEN_LIMIT = 2_000;
 type JSONSchema7Definition = JSONSchema7 | boolean;
 
-const SERVER_LINE_CHARACTERS = 400;
 const PURPOSE_CHARACTERS = 160;
+/** Each listed tool's description is its first sentence, clipped to this. */
+const LISTED_DESCRIPTION_CHARACTERS = 100;
+/** Above this many tools the listing drops descriptions and keeps names. */
+const DESCRIBED_TOOLS_LIMIT = 150;
+/** The listing's size cap (about 2,500 tokens); later tools become "+N more". */
+const LISTING_CHARACTERS = 7_500;
 const SEARCH_RESULTS = 8;
 /** Full descriptions and schemas returned by one search, best matches first. */
 const SEARCH_DETAIL_CHARACTERS = 24_000;
@@ -35,22 +40,53 @@ export function inlineMcpTokens(catalog: readonly McpCatalogEntry[]) {
 	);
 }
 
-/** One bounded line per server: name, purpose and tool names. */
-function mcpServerCatalog(
+const byName = (left: string, right: string) =>
+	left < right ? -1 : left > right ? 1 : 0;
+
+const firstSentence = (text: string) => {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return /^.*?[.!?](?=\s|$)/.exec(flat)?.[0] ?? flat;
+};
+
+/**
+ * Every MCP tool by name, grouped by server, both sorted so the text is
+ * byte-identical every step. Each tool gets a one-line description unless
+ * there are more than DESCRIBED_TOOLS_LIMIT, then names only. Past
+ * LISTING_CHARACTERS the rest of a server's tools collapse to "+N more".
+ */
+export function mcpToolListing(
 	catalog: readonly McpCatalogEntry[],
 	purposes: Readonly<Record<string, string>> = {},
 ) {
-	const servers = [...new Set(catalog.map((entry) => entry.server))];
+	const servers = [...new Set(catalog.map((entry) => entry.server))].sort(
+		byName,
+	);
+	const described = catalog.length <= DESCRIBED_TOOLS_LIMIT;
+	let budget = LISTING_CHARACTERS;
+	const more = (count: number) => `+${count} more — search by keyword`;
 	return servers
 		.map((server) => {
 			const tools = catalog
 				.filter((entry) => entry.server === server)
-				.map((entry) => entry.tool);
+				.sort((left, right) => byName(left.tool, right.tool));
 			const purpose = purposes[server]?.split(/(?<=[.!?])\s|\n/)[0]?.trim();
-			return clip(
-				`- ${server}${purpose ? ` (${clip(purpose, PURPOSE_CHARACTERS)})` : ""}: ${tools.length} tools: ${tools.join(", ")}`,
-				SERVER_LINE_CHARACTERS,
-			);
+			const header = `- ${server}${purpose ? ` (${clip(purpose, PURPOSE_CHARACTERS)})` : ""}: ${tools.length} tools`;
+			budget -= header.length;
+			const items: string[] = [];
+			for (const entry of tools) {
+				const item = described
+					? `  - ${entry.tool}${entry.description ? `: ${clip(firstSentence(entry.description), LISTED_DESCRIPTION_CHARACTERS)}` : ""}`
+					: entry.tool;
+				if (item.length + 2 > budget) break;
+				budget -= item.length + 2;
+				items.push(item);
+			}
+			const rest = tools.length - items.length;
+			if (described)
+				return [header, ...items, ...(rest ? [`  - ${more(rest)}`] : [])].join(
+					"\n",
+				);
+			return `${header}: ${[...items, ...(rest ? [more(rest)] : [])].join(", ")}`;
 		})
 		.join("\n");
 }
@@ -130,16 +166,16 @@ export function mcpSchemaIssues(
 			: Array.isArray(schema.type)
 				? schema.type
 				: [schema.type];
-	if (types.length && !types.some((type) => matchesType(value, type)))
+	if (types.length && !types.some((type: string) => matchesType(value, type)))
 		return [`${path}: expected ${types.join(" or ")}, got ${typeOf(value)}`];
 	if (
 		schema.enum &&
 		!schema.enum.some(
-			(option) => JSON.stringify(option) === JSON.stringify(value),
+			(option: unknown) => JSON.stringify(option) === JSON.stringify(value),
 		)
 	)
 		issues.push(
-			`${path}: must be one of ${schema.enum.map((option) => JSON.stringify(option)).join(", ")}`,
+			`${path}: must be one of ${schema.enum.map((option: unknown) => JSON.stringify(option)).join(", ")}`,
 		);
 	if (
 		schema.const !== undefined &&
@@ -150,7 +186,8 @@ export function mcpSchemaIssues(
 	if (
 		branches &&
 		!branches.some(
-			(branch) => mcpSchemaIssues(branch, value, path, depth + 1).length === 0,
+			(branch: JSONSchema7Definition) =>
+				mcpSchemaIssues(branch, value, path, depth + 1).length === 0,
 		)
 	)
 		issues.push(`${path}: matches none of the allowed shapes`);
@@ -245,8 +282,10 @@ export function mcpToolSurface(input: {
 	)
 		return tools;
 	const deferred = new Set(catalog.map((entry) => entry.name));
-	const servers = [...new Set(catalog.map((entry) => entry.server))];
-	const listing = mcpServerCatalog(catalog, input.purposes);
+	const servers = [...new Set(catalog.map((entry) => entry.server))].sort(
+		byName,
+	);
+	const listing = mcpToolListing(catalog, input.purposes);
 	const resolve = (server: string, name: string) =>
 		catalog.find(
 			(entry) =>
@@ -257,7 +296,7 @@ export function mcpToolSurface(input: {
 			Object.entries(tools).filter(([name]) => !deferred.has(name)),
 		),
 		[SEARCH_MCP_TOOLS_TOOL]: tool({
-			description: `Find tools on the user's connected MCP servers and get their descriptions and input schemas before calling them with ${CALL_MCP_TOOL_TOOL}. Connected servers:\n${listing}`,
+			description: `Get the full description and input schema of tools on the user's connected MCP servers, by keywords or exact tool name. Tools are listed below by name (a very long list ends in "+N more"); call one with ${CALL_MCP_TOOL_TOOL}. Connected servers and their tools:\n${listing}`,
 			inputSchema: jsonSchema<{ query: string; server?: string }>({
 				type: "object",
 				properties: {
@@ -282,7 +321,7 @@ export function mcpToolSurface(input: {
 			},
 		}),
 		[CALL_MCP_TOOL_TOOL]: tool({
-			description: `Call a tool on a connected MCP server (listed in ${SEARCH_MCP_TOOLS_TOOL}). Get the tool's input schema with ${SEARCH_MCP_TOOLS_TOOL} first unless you already have it; arguments are validated against it.`,
+			description: `Call a tool on a connected MCP server by its exact server and tool name (all listed in ${SEARCH_MCP_TOOLS_TOOL}). You may call a listed tool directly without searching first: arguments are checked against its input schema, and if they do not match nothing runs and the result returns the schema so you can fix them and call again. Search first when you are unsure which tool fits or what it takes.`,
 			inputSchema: jsonSchema<{
 				server: string;
 				tool: string;

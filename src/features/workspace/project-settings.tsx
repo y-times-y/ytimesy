@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Blocks, Bot, Folder, Plug, User, X } from "lucide-react";
+import { Blocks, Bot, Folder, Plug, Shield, User, X } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -42,12 +42,17 @@ import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { MachineSizeSettings } from "./machine-size-settings";
+import { NetworkAccessSettings } from "./network-access-settings";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
 import { codexSubscriptionUsageFn } from "./subscription-usage.fn";
+import {
+	ProjectTrainingSettings,
+	TrainingConsentSettings,
+} from "./training-consent-settings";
 
 type AccountView = {
 	readonly user: {
@@ -61,6 +66,7 @@ type AccountView = {
 
 const sectionIcon = {
 	account: User,
+	privacy: Shield,
 	github: GithubMark,
 	project: Folder,
 	agents: Bot,
@@ -179,6 +185,7 @@ export function ProjectSettings({
 										<InfrastructureUsage />
 									</>
 								) : null}
+								{section === "privacy" ? <TrainingConsentSettings /> : null}
 								{section === "github" ? (
 									<GithubSection
 										loading={account.isPending}
@@ -202,7 +209,19 @@ export function ProjectSettings({
 												projectId={settingsProject.id}
 											/>
 										) : null}
+										{settingsProject ? (
+											<NetworkAccessSettings
+												key={`network-${settingsProject.id}`}
+												projectId={settingsProject.id}
+											/>
+										) : null}
 										<ProjectSecretsSection project={settingsProject} />
+										{settingsProject ? (
+											<ProjectTrainingSettings
+												key={`training-${settingsProject.id}`}
+												projectId={settingsProject.id}
+											/>
+										) : null}
 									</>
 								) : null}
 								{section === "plugins" ? <Plugins /> : null}
@@ -666,7 +685,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		<section className="settings-section settings-section-gap">
 			<SettingsHeader
 				title="Secrets"
-				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values are replaced with [REDACTED] in everything the agent and this chat see, and commits containing them are refused. Build secrets are only passed to environment setup."
+				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values (and common encodings of them) are redacted from what the model and this chat see on a best-effort basis, and commits containing them are refused. Build secrets are only passed to environment setup."
 			/>
 			<ul className="settings-group">
 				{secrets.length === 0 ? (

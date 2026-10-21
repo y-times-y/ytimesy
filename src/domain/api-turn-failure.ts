@@ -3,6 +3,7 @@ import { CoordinationFailure } from "./conversation-turn-control";
 import {
 	isWorkspaceAtCapacity,
 	isWorkspaceComputeAllowanceExhausted,
+	usageCapFailureMessage,
 } from "./failure-message";
 import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
 import { VerificationPolicyFailure } from "./task-integration-checks";
@@ -148,6 +149,8 @@ function machineFailureReason(message: string) {
 		)
 	)
 		return "its saved state is still being restored";
+	if (/too many new machines/i.test(message))
+		return "this account started too many new machines in the last hour; wait a few minutes";
 	if (/another operation is updating this machine/i.test(message))
 		return "another operation was updating it";
 	if (/did not become running|stopped before it became running/i.test(message))
@@ -178,8 +181,24 @@ function repositoryFetchFailed(error: unknown, depth = 0): boolean {
 	return repositoryFetchFailed(inner, depth + 1);
 }
 
+/**
+ * A usage cap refusal anywhere in the error chain, worded for the user. The
+ * cap texts are our own fixed wording, so they are matched even untagged.
+ */
+function usageCapFailure(error: unknown, depth = 0): string | null {
+	if (depth > 4 || !(error instanceof Error)) return null;
+	const capped = usageCapFailureMessage(error.message);
+	if (capped) return capped;
+	const inner =
+		(error as { providerError?: unknown }).providerError ??
+		(RetryError.isInstance(error) ? error.lastError : error.cause);
+	return usageCapFailure(inner, depth + 1);
+}
+
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
+	const capped = usageCapFailure(error);
+	if (capped) return capped;
 	const found = machineError(error);
 	if (!found) return null;
 	const reason = machineFailureReason(found.message);
@@ -279,6 +298,16 @@ export class SubscriptionMetadataFailure extends Error {
 	}
 }
 
+/** Every configured egress path to the Codex backend was blocked for this request. */
+export class CodexEgressUnavailable extends Error {
+	constructor(readonly attempts: readonly { path: string; reason: string }[]) {
+		super(
+			`Codex subscription is unreachable: every network path was blocked (${attempts.map((row) => `${row.path}: ${row.reason}`).join(", ") || "none configured"}). Nothing was sent to the model. Retry in a few minutes; the owner has been alerted.`,
+		);
+		this.name = "CodexEgressUnavailable";
+	}
+}
+
 /** The stored subscription login was definitively rejected; only the user can sign in again. */
 export class CodexReconnectRequired extends Error {
 	constructor() {
@@ -306,8 +335,7 @@ export class InitialAgentReadFailure extends Error {
 		read:
 			| "read_repository_guidance"
 			| "read_environment_report"
-			| "inspect_changes"
-			| "read_task_capacity",
+			| "inspect_changes",
 	) {
 		super(
 			`Workspace preparation failed during ${read}. No model request was started. Repair or reconnect the environment before retrying.`,
@@ -648,6 +676,7 @@ export function apiTurnFailureMessage(
 	if (error instanceof IncompleteAgentTurn) return error.message;
 	if (error instanceof InitialAgentReadFailure) return error.message;
 	if (error instanceof SubscriptionMetadataFailure) return error.message;
+	if (error instanceof CodexEgressUnavailable) return error.message;
 	if (error instanceof VerificationPolicyFailure) return error.message;
 	if (error instanceof LifecycleHookRefusal) return error.message;
 	const reconnect = reconnectCause(error);

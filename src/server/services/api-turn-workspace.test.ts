@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
+import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import { turnWorkspaceReuse } from "./turn-workspace-reuse";
@@ -44,6 +45,8 @@ const root = {
 const machines = {
 	ensureRunning: vi.fn(async () => undefined),
 	readTextFile: vi.fn(async () => "/workspace/repo"),
+	// The cloud metadata block each preparation runs.
+	exec: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
 } as unknown as WorkspaceMachines;
 
 beforeEach(() => {
@@ -55,7 +58,10 @@ beforeEach(() => {
 	}));
 	mocks.child.mockImplementation(async (_machines, input) => ({
 		session: input.task,
-		providerRef: input.task.taskPlacement === "shared" ? "vm-root" : "vm-child",
+		providerRef:
+			input.task.agentRole && input.task.agentRole !== "writer"
+				? "vm-root"
+				: "vm-child",
 	}));
 });
 
@@ -69,15 +75,22 @@ it("does not bind until a repository tool asks, and shares concurrent preparatio
 	const [first, second] = await Promise.all([prepare(), prepare()]);
 	expect(first).toBe(second);
 	expect(mocks.root).toHaveBeenCalledTimes(1);
+	// Every prepared VM refuses cloud metadata (as root) before it is used.
+	expect(vi.mocked(machines.exec)).toHaveBeenCalledWith(
+		expect.anything(),
+		guestMetadataBlockCommand(),
+		30_000,
+	);
 });
 
-it("prepares a cold shared parent before binding the child to that exact workspace", async () => {
+it("binds a shared child to its parent's workspace without preparing a checkout", async () => {
 	mocks.read.mockResolvedValue(root);
 	const task = {
 		...root,
 		id: "child",
 		taskPlacement: "shared",
 		parentSessionId: root.id,
+		agentRole: "researcher",
 	} as AgentSessionRecord;
 	const binding = await deferredApiTurnWorkspace(
 		machines,
@@ -85,38 +98,42 @@ it("prepares a cold shared parent before binding the child to that exact workspa
 		new AbortController().signal,
 	)();
 	expect(binding.vm).toBe("vm-root");
-	expect(mocks.root).toHaveBeenCalledTimes(1);
+	expect(mocks.root).not.toHaveBeenCalled();
 	expect(mocks.child).toHaveBeenCalledWith(
 		machines,
 		expect.objectContaining({ task }),
 	);
-	expect(mocks.checkout).toHaveBeenCalledTimes(1);
+	expect(mocks.load).not.toHaveBeenCalled();
+	expect(mocks.checkout).not.toHaveBeenCalled();
 });
 
-it("preserves the validated stacked predecessor when lazily binding a writer", async () => {
-	const predecessor = {
-		...root,
-		id: "previous",
-		taskBranch: "ytimesy/previous",
-	};
-	mocks.read.mockResolvedValue(predecessor);
-	const task = {
-		...root,
-		id: "child",
-		taskPlacement: "fresh",
-		taskExecution: "stacked",
-		dependsOnSessionId: predecessor.id,
-	} as AgentSessionRecord;
-	await deferredApiTurnWorkspace(
-		machines,
-		task,
-		new AbortController().signal,
-	)();
-	expect(mocks.root).not.toHaveBeenCalled();
-	expect(mocks.child).toHaveBeenCalledWith(
-		machines,
-		expect.objectContaining({ task, predecessor }),
-	);
+it("fails a shared child clearly when its parent's workspace stays unavailable", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.read.mockResolvedValue(root);
+		mocks.child.mockRejectedValue(
+			new Error("Start the parent workspace before sharing its state."),
+		);
+		const attaching = deferredApiTurnWorkspace(
+			machines,
+			{
+				...root,
+				id: "child",
+				taskPlacement: "shared",
+				parentSessionId: root.id,
+				agentRole: "reviewer",
+			} as AgentSessionRecord,
+			new AbortController().signal,
+		)();
+		const failed = expect(attaching).rejects.toThrow(
+			/parent's workspace is unavailable.*Start the parent workspace/,
+		);
+		await vi.runAllTimersAsync();
+		await failed;
+		expect(mocks.checkout).not.toHaveBeenCalled();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("rejects cancelled preparation and cross-project shared parents", async () => {
@@ -134,6 +151,7 @@ it("rejects cancelled preparation and cross-project shared parents", async () =>
 				id: "child",
 				taskPlacement: "shared",
 				parentSessionId: root.id,
+				agentRole: "reviewer",
 			} as AgentSessionRecord,
 			new AbortController().signal,
 		)(),
@@ -148,7 +166,6 @@ it("reuses a turn's preparation in its next step until the turn forgets it", asy
 			machines,
 			root,
 			new AbortController().signal,
-			[],
 			reuse,
 		)();
 	const first = await step();
@@ -172,7 +189,6 @@ it("does not keep a failed preparation for the next step", async () => {
 			machines,
 			root,
 			new AbortController().signal,
-			[],
 			reuse,
 		)();
 	await expect(step()).rejects.toThrow("bind failed");
@@ -223,4 +239,38 @@ it("loads a root chat's checkout plan while its VM is bound, and fails where it 
 	await expect(
 		deferredApiTurnWorkspace(machines, root, new AbortController().signal)(),
 	).rejects.toThrow("Repository access is unavailable.");
+});
+
+it("keeps a root chat working when its already-edited checkout cannot pin a baseline", async () => {
+	mocks.baseline.mockRejectedValueOnce(
+		new Error("A pristine server-owned verification baseline is required"),
+	);
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	const binding = await deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	)();
+	expect(binding.vm).toBe("vm-root");
+	expect(mocks.baseline).toHaveBeenCalledTimes(1);
+	warn.mockRestore();
+});
+
+it("still requires the baseline for a writer subagent", async () => {
+	mocks.baseline.mockRejectedValueOnce(new Error("not pristine"));
+	mocks.read.mockResolvedValue(root);
+	await expect(
+		deferredApiTurnWorkspace(
+			machines,
+			{
+				...root,
+				id: "writer",
+				parentSessionId: root.id,
+				taskPlacement: "fresh",
+				taskAccess: "read_write",
+				agentRole: "writer",
+			} as AgentSessionRecord,
+			new AbortController().signal,
+		)(),
+	).rejects.toThrow("not pristine");
 });

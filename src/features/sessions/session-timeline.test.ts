@@ -67,12 +67,7 @@ describe("session timeline live collapse", () => {
 			prompt: "Fix the picker",
 			placement: "fresh",
 			access: "read_write",
-			execution: "parallel",
-			dependsOnSessionId: null,
 			summary: "Implemented",
-			reviewState: "pending",
-			branch: null,
-			pullRequestUrl: null,
 			harnessId: "codex",
 			listedModelId: null,
 			createdAt: new Date(2000).toISOString(),
@@ -119,7 +114,8 @@ describe("session timeline live collapse", () => {
 		expect(html).toContain(
 			'<details class="session-work child-task-instructions">',
 		);
-		expect(html).toContain("Task instructions");
+		expect(html).toContain(">Brief<");
+		expect(html).toContain("Agent 1");
 		expect(html).toContain("Looking at the session timeline");
 		expect(html).toContain("read file");
 		expect(html).not.toContain("Its final summary is below");
@@ -131,7 +127,7 @@ describe("session timeline live collapse", () => {
 				tasks: [{ ...child, turnStatus: "running", status: "working" }],
 			}),
 		);
-		expect(waiting).toContain("Waiting for child agents");
+		expect(waiting).toContain("Waiting for subagents");
 		expect(waiting).not.toContain(">Thinking<");
 	});
 	it("shows a persisted failure reason in the chat", () => {

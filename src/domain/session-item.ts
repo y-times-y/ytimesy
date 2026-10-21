@@ -148,7 +148,8 @@ export type ModelSwitchItem = {
 	readonly kind: "modelSwitch";
 	readonly id: SessionItemId;
 	readonly message: string;
-	readonly reason: FailoverReason;
+	/** A failover's reason, or lead mode fusion's sidekick switching models at a compaction. */
+	readonly reason: FailoverReason | "sidekick-escalation";
 	readonly from: { readonly model: string; readonly connection: string };
 	readonly to: {
 		readonly model: string;
@@ -159,6 +160,13 @@ export type ModelSwitchItem = {
 	readonly state: "switched" | "awaitingApproval";
 	/** The turn's usage before the switch; usage after it was served by `to`. */
 	readonly usageBefore?: ApiTokenUsage;
+};
+
+/** A server note about the turn, such as why its changes were not pushed to GitHub. */
+export type NoticeSessionItem = {
+	readonly kind: "notice";
+	readonly id: SessionItemId;
+	readonly message: string;
 };
 
 export type UnknownSessionItem = {
@@ -182,6 +190,7 @@ export type SessionItem =
 	| WebSearchItem
 	| ErrorSessionItem
 	| ModelSwitchItem
+	| NoticeSessionItem
 	| UnknownSessionItem;
 
 export function isTurnRunning(status: SessionTurnStatus): boolean {

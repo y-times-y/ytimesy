@@ -14,6 +14,7 @@ import {
 } from "../src/server/adapters/freestyle/usage-admission";
 import {
 	adjustInfrastructureAllowance,
+	assertUsageWindowsOpen,
 	reserveInfrastructureUsage,
 	settleInfrastructureUsage,
 	userInfrastructureUsage,
@@ -30,7 +31,7 @@ vi.mock("../src/server/adapters/database", () => ({
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(
-		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
+		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); create table api_turn(id text,user_id text,state text,session_id text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
 	);
 	await db.exec(
 		readFileSync(
@@ -56,15 +57,22 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261020130000_infrastructure_usage_windows.sql",
+			"utf8",
+		),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "100");
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "100");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "100");
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "150");
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "1000");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
 	await db.exec(
-		"truncate infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy;",
+		"truncate infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy,api_turn;",
 	);
 });
 afterAll(async () => {
@@ -80,7 +88,8 @@ const reservation = (userId = "alice", amountMicroUsd = 60) => ({
 
 function enableVmAllowance() {
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "true");
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "66120");
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "66120");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "66120");
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "500000000");
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
 }
@@ -330,7 +339,7 @@ it("extends an active VM before a long command without charging its earlier hold
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(24244);
 });
 
-it("resolves setup ownership through the workspace and limits long preparation to available credit", async () => {
+it("resolves setup ownership through the workspace and funds long preparation without a monthly bound", async () => {
 	enableVmAllowance();
 	const create = vi.fn(async (_cap?: number) => "build-vm");
 	await admitVmCreate(
@@ -340,8 +349,11 @@ it("resolves setup ownership through the workspace and limits long preparation t
 		create,
 		3600,
 	);
-	expect(create).toHaveBeenCalledWith(1740);
-	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(66120);
+	// Usage windows gate starting work, not its size: the full hour is held.
+	expect(create).toHaveBeenCalledWith(3600);
+	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(
+		Math.ceil((3660 * 132_240) / 3600),
+	);
 });
 
 it("retains a paused hold if the provider fails to confirm revocation", async () => {
@@ -434,20 +446,103 @@ it("funds the requested long operation before resuming a paused machine", async 
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(35815);
 });
 
-it("shares one allowance across child VMs and rejects admission without adding a row", async () => {
+it("refuses new holds once a window is exhausted, but never work already running", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
 	await reserveInfrastructureUsage(reservation());
+	// Under the 5-hour limit a start is admitted even if it carries past it
+	// (within the ceiling: the limit plus an hour of the machine).
+	await reserveInfrastructureUsage({
+		...reservation(),
+		resourceKey: "vm:two",
+		hourlyMicroUsd: 100,
+	});
+	const before = await userInfrastructureUsage("alice");
+	expect(before.windows.map((window) => window.exhausted)).toEqual([
+		true,
+		true,
+	]);
 	await expect(
 		reserveInfrastructureUsage({ ...reservation(), resourceKey: "vm:two" }),
-	).rejects.toThrow("allowance is exhausted");
-	expect(await userInfrastructureUsage("alice")).toMatchObject({
-		consumedMicroUsd: 0,
-		reservedMicroUsd: 60,
-		remainingMicroUsd: 40,
+	).rejects.toThrow(/reached your weekly cloud usage limit.*until \d{4}/);
+	// A machine that is already running keeps buying runtime, up to the
+	// ceiling: the limit plus an hour of that machine (here 200).
+	await reserveInfrastructureUsage({
+		...reservation(),
+		resourceKey: "vm:two",
+		hourlyMicroUsd: 200,
+		continuing: true,
 	});
+	// So does a start of the machine of a session whose turn still runs; a
+	// turn of another session (a new subagent's fork) exempts nothing.
+	const session = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+	const own = {
+		resourceKey: "vm:ytimesy-ag-aaaaaaaabbbb4ccc",
+		hourlyMicroUsd: 200,
+	};
+	await query("insert into api_turn values('t0','alice','running','other')");
+	await expect(
+		reserveInfrastructureUsage({ ...reservation(), ...own }),
+	).rejects.toThrow(/reached your weekly cloud usage limit/);
+	await query("insert into api_turn values('t1','alice','running',$1)", [
+		session,
+	]);
+	await reserveInfrastructureUsage({ ...reservation(), ...own });
+	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(240);
+	// Past the ceiling nothing extends, running or not; a hold that may shrink
+	// gets what is left (300 - 240), never less than its minimum.
+	await expect(
+		reserveInfrastructureUsage({
+			...reservation("alice", 61),
+			...own,
+			continuing: true,
+		}),
+	).rejects.toThrow(/grace past your (?:5-hour|weekly) cloud usage limit/);
+	expect(
+		await reserveInfrastructureUsage({
+			...reservation("alice", 61),
+			...own,
+			continuing: true,
+			minimumMicroUsd: 50,
+		}),
+	).toBe(60);
+	await expect(
+		reserveInfrastructureUsage({
+			...reservation("alice", 10),
+			...own,
+			continuing: true,
+			minimumMicroUsd: 1,
+		}),
+	).rejects.toThrow(/grace past your/);
 	expect(await userInfrastructureUsage("bob")).toMatchObject({
 		reservedMicroUsd: 0,
-		remainingMicroUsd: 100,
+		windows: [
+			{ id: "five_hour", usedMicroUsd: 0, exhausted: false },
+			{ id: "weekly", usedMicroUsd: 0, exhausted: false },
+		],
 	});
+});
+it("reopens the 5-hour window as settled usage ages out, while the weekly one still counts it", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "1000");
+	const hold = reservation("alice", 100);
+	await reserveInfrastructureUsage(hold);
+	await settleInfrastructureUsage({
+		id: hold.id,
+		userId: "alice",
+		consumedMicroUsd: 100,
+	});
+	await expect(reserveInfrastructureUsage(reservation())).rejects.toThrow(
+		"5-hour cloud usage limit",
+	);
+	await query(
+		"update infrastructure_usage_reservation set settled_at=now()-interval '6 hours',created_at=now()-interval '7 hours'",
+	);
+	const usage = await userInfrastructureUsage("alice");
+	expect(usage.windows).toMatchObject([
+		{ id: "five_hour", usedMicroUsd: 0, exhausted: false },
+		{ id: "weekly", usedMicroUsd: 100, usedPercent: 10 },
+	]);
+	await reserveInfrastructureUsage(reservation());
 });
 it("retries a hold once and rejects changing its owner or amount", async () => {
 	const hold = reservation();
@@ -501,24 +596,44 @@ it("settles once, releases only verified unused usage, and refuses overspend or 
 	expect(await userInfrastructureUsage("alice")).toMatchObject({
 		consumedMicroUsd: 20,
 		reservedMicroUsd: 0,
-		remainingMicroUsd: 80,
+	});
+	expect((await userInfrastructureUsage("alice")).windows[0]).toMatchObject({
+		id: "five_hour",
+		usedMicroUsd: 20,
+		usedPercent: 20,
 	});
 });
-it("permits audited admin grants including self, but never bypasses the fleet budget", async () => {
-	const grant = {
+it("permits audited per-user window overrides including self, but never bypasses the fleet budget", async () => {
+	const override = {
 		id: randomUUID(),
 		actorId: "admin",
 		userId: "admin",
-		kind: "grant" as const,
-		amountMicroUsd: 100,
+		kind: "five_hour_limit" as const,
+		amountMicroUsd: 200,
 		reason: "Dogfood testing",
 	};
 	await expect(
-		adjustInfrastructureAllowance({ ...grant, actorId: "alice" }),
+		adjustInfrastructureAllowance({ ...override, actorId: "alice" }),
 	).rejects.toBeInstanceOf(Response);
-	await adjustInfrastructureAllowance(grant);
-	await adjustInfrastructureAllowance(grant);
-	expect((await userInfrastructureUsage("admin")).allowanceMicroUsd).toBe(200);
+	await adjustInfrastructureAllowance(override);
+	await adjustInfrastructureAllowance(override);
+	await adjustInfrastructureAllowance({
+		...override,
+		id: randomUUID(),
+		kind: "weekly_limit",
+		amountMicroUsd: 300,
+	});
+	expect(
+		(await userInfrastructureUsage("admin")).windows.map(
+			(window) => window.limitMicroUsd,
+		),
+	).toEqual([200, 300]);
+	// Other users keep the deployment's limits.
+	expect(
+		(await userInfrastructureUsage("alice")).windows.map(
+			(window) => window.limitMicroUsd,
+		),
+	).toEqual([100, 100]);
 	await reserveInfrastructureUsage(reservation("admin", 140));
 	await expect(
 		reserveInfrastructureUsage(reservation("bob", 20)),
@@ -529,38 +644,30 @@ it("permits audited admin grants including self, but never bypasses the fleet bu
 				"select count(*) as count from infrastructure_usage_adjustment",
 			)
 		).rows,
-	).toEqual([{ count: 1 }]);
+	).toEqual([{ count: 2 }]);
 });
-it("sets a persistent monthly override without deleting prior consumption", async () => {
-	await reserveInfrastructureUsage(reservation());
-	await adjustInfrastructureAllowance({
-		id: randomUUID(),
-		actorId: "admin",
-		userId: "alice",
-		kind: "monthly_limit",
-		amountMicroUsd: 20,
-		reason: "Reduced allocation",
-	});
-	expect(await userInfrastructureUsage("alice")).toMatchObject({
-		allowanceMicroUsd: 20,
-		reservedMicroUsd: 60,
-		remainingMicroUsd: 0,
-	});
-});
-it("carries uncertain reservations across month boundaries", async () => {
-	await reserveInfrastructureUsage(reservation());
+it("counts a running machine's hold however old it is", async () => {
+	await reserveInfrastructureUsage(reservation("alice", 100));
 	await query(
-		"update infrastructure_usage_reservation set period='2020-01-01'",
+		"update infrastructure_usage_reservation set period='2020-01-01',created_at=now()-interval '30 days'",
 	);
-	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(60);
+	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(100);
 	await expect(reserveInfrastructureUsage(reservation())).rejects.toThrow(
-		"allowance",
+		"cloud usage limit",
 	);
 });
 it("fails closed on invalid configuration and unknown users", async () => {
 	await expect(
 		reserveInfrastructureUsage(reservation("missing")),
 	).rejects.toThrow("unavailable");
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "");
+	await expect(reserveInfrastructureUsage(reservation())).rejects.toThrow(
+		"YTIMESY_USER_5H_MICRO_USD must be configured",
+	);
+	await expect(userInfrastructureUsage("alice")).rejects.toThrow(
+		"must be configured",
+	);
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "100");
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "NaN");
 	await expect(reserveInfrastructureUsage(reservation())).rejects.toThrow(
 		"Invalid",
@@ -645,4 +752,14 @@ it("settles stopped VMs like paused ones and converts a deleted VM's hold into u
 	expect(usage.reservedMicroUsd).toBe(0);
 	// The stopped VM pays for its 10 seconds; the deleted one keeps its whole hold.
 	expect(usage.consumedMicroUsd).toBe(Math.ceil((10 * 132240) / 3600) + 13224);
+});
+
+it("holds back a new turn while a window is exhausted, naming when it reopens", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	await assertUsageWindowsOpen("alice");
+	await reserveInfrastructureUsage(reservation("alice", 100));
+	await expect(assertUsageWindowsOpen("alice")).rejects.toThrow(
+		/reached your weekly cloud usage limit, so new work cannot start until/,
+	);
+	await assertUsageWindowsOpen("bob");
 });

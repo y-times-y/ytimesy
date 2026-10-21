@@ -251,7 +251,6 @@ it("restores user requests on an adopted background checkpoint", async () => {
 			userId: "alice",
 			modelId: "gpt-6.1-sol",
 			instructions: "Inspect",
-			knownTools: ["inspect"],
 			messages: [
 				{ role: "user", content: requests[0] },
 				{ role: "assistant", content: "e".repeat(5_000) },

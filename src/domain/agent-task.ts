@@ -1,8 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import type { SessionTurnStatus } from "./session-item";
 
-export const MAX_AGENT_TASK_DEPTH = 3;
-
 export type AgentTaskStatus =
 	| "draft"
 	| "working"
@@ -11,36 +9,33 @@ export type AgentTaskStatus =
 	| "done"
 	| "failed";
 
-export function shouldPollAgentTasks(
-	leadStatus: SessionTurnStatus,
+/** Poll a chat's subagents while the chat runs or any subagent is busy. */
+export function shouldPollSubagents(
+	chatStatus: SessionTurnStatus,
 	tasks: readonly Pick<AgentTask, "status">[],
 ): boolean {
 	return (
-		leadStatus === "running" ||
+		chatStatus === "running" ||
 		tasks.some((task) => task.status === "working" || task.status === "waiting")
 	);
 }
 export type AgentTaskPlacement = "shared" | "fresh";
 export type AgentTaskAccess = "read_only" | "read_write";
-export type AgentTaskExecution = "parallel" | "stacked";
 export type AgentTaskReviewState = "pending" | "reviewed" | "rejected";
 
-/** Read-only tasks expose inspection tools, not arbitrary shell execution. */
-export function taskExecutionCapabilities(task: {
+/**
+ * How a completed turn reaches GitHub. Every root chat ("chat") commits,
+ * pushes its own branch and keeps a draft PR open; its task_access is not
+ * consulted (root chats carry the legacy 'read_only' label). Subagents never
+ * publish: their work reaches the parent as a report or patch. Machine-less
+ * sessions publish nothing. Plan-mode turns are excluded by the caller.
+ */
+export function turnPublicationRole(session: {
+	readonly providerRef: string | null;
 	readonly parentSessionId: string | null;
-	readonly taskAccess: string | null;
-}) {
-	const writable = !!task.parentSessionId && task.taskAccess === "read_write";
-	return { commandExecution: writable, workspaceEdits: writable };
+}): "chat" | null {
+	return session.providerRef && !session.parentSessionId ? "chat" : null;
 }
-
-type AgentTaskPlan = {
-	readonly prompt: string;
-	readonly placement: AgentTaskPlacement;
-	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
-};
 
 export type AgentTask = {
 	readonly id: string;
@@ -52,45 +47,12 @@ export type AgentTask = {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;
 	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
 	readonly summary: string | null;
-	readonly reviewState: AgentTaskReviewState;
-	readonly branch: string | null;
-	readonly pullRequestUrl: string | null;
 	readonly harnessId: AgentProviderId;
 	readonly listedModelId: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 };
-
-export function agentTaskStatusReceipt(
-	task: AgentTask,
-	includePrompts = false,
-) {
-	if (includePrompts) return task;
-	const { prompt: _assignment, ...status } = task;
-	return status;
-}
-
-export function agentTaskSummaryPage(
-	summary: string | null,
-	start: unknown = 0,
-) {
-	if (
-		typeof start !== "number" ||
-		!Number.isSafeInteger(start) ||
-		start < 0 ||
-		start > 32_000_000
-	)
-		throw new Error("Summary start must be a non-negative safe integer.");
-	const characters = Array.from(summary ?? "");
-	return {
-		content: characters.slice(start, start + 4000).join(""),
-		start,
-		nextStart: start + 4000 < characters.length ? start + 4000 : null,
-	};
-}
 
 type TaskSession = {
 	readonly id: string;
@@ -105,12 +67,7 @@ type TaskSession = {
 	readonly taskState?: AgentTaskStatus | null;
 	readonly taskPlacement?: AgentTaskPlacement | null;
 	readonly taskAccess?: AgentTaskAccess | null;
-	readonly taskExecution?: AgentTaskExecution | null;
-	readonly dependsOnSessionId?: string | null;
 	readonly taskSummary?: string | null;
-	readonly taskReviewState?: AgentTaskReviewState | null;
-	readonly taskBranch?: string | null;
-	readonly taskPullRequestUrl?: string | null;
 };
 
 function taskStatusFromTurn(
@@ -159,12 +116,7 @@ export function agentTaskTree(
 				prompt: session.taskPrompt ?? "",
 				placement: session.taskPlacement ?? "fresh",
 				access: session.taskAccess ?? "read_write",
-				execution: session.taskExecution ?? "parallel",
-				dependsOnSessionId: session.dependsOnSessionId ?? null,
 				summary: session.taskSummary ?? null,
-				reviewState: session.taskReviewState ?? "pending",
-				branch: session.taskBranch ?? null,
-				pullRequestUrl: session.taskPullRequestUrl ?? null,
 				harnessId: session.harness,
 				listedModelId: session.listedModelId,
 				createdAt: session.createdAt,
@@ -175,42 +127,4 @@ export function agentTaskTree(
 	}
 	append(rootSessionId, "", 1);
 	return tasks;
-}
-
-export function canSpawnAgentTask(parentDepth: number) {
-	return parentDepth < MAX_AGENT_TASK_DEPTH;
-}
-
-export function validateAgentTaskPlan(plan: AgentTaskPlan): string | null {
-	if (!plan.prompt.trim()) return "A task prompt is required.";
-	if (plan.placement === "shared" && plan.access !== "read_only") {
-		return "Shared-machine tasks must be read-only.";
-	}
-	if (plan.execution === "stacked" && !plan.dependsOnSessionId) {
-		return "Stacked tasks require a predecessor.";
-	}
-	if (plan.execution === "parallel" && plan.dependsOnSessionId) {
-		return "Parallel tasks cannot declare a predecessor.";
-	}
-	return null;
-}
-
-export function agentTaskStartBlockedByDependency(
-	task: Pick<AgentTask, "execution" | "dependsOnSessionId">,
-	predecessor: Pick<AgentTask, "status" | "reviewState" | "branch"> | null,
-): string | null {
-	if (task.execution !== "stacked") return null;
-	if (!task.dependsOnSessionId || !predecessor) {
-		return "The stacked task predecessor is unavailable.";
-	}
-	if (predecessor.status !== "done") {
-		return "The stacked task must wait for its predecessor to finish.";
-	}
-	if (predecessor.reviewState !== "reviewed") {
-		return "Review the predecessor before starting stacked work.";
-	}
-	if (!predecessor.branch) {
-		return "Publish the predecessor before starting stacked work.";
-	}
-	return null;
 }

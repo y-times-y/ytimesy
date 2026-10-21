@@ -1,6 +1,11 @@
 import type { ModelMessage } from "ai";
 import { CODE_MODE_TOOL } from "./code-mode";
 import type { HarnessToolSurfaceId } from "./harness-variant";
+import {
+	CONCISE_GUIDANCE,
+	INSTRUCTION_PROFILE_ADDITIONS,
+	type InstructionProfile,
+} from "./instruction-profiles";
 
 export type HarnessModelFamily = "openai" | "anthropic" | "google" | "other";
 
@@ -286,6 +291,7 @@ const SHELL_BEHAVIOUR = [
 function leanHarnessInstructions(
 	shape: LeanToolShape,
 	family: HarnessModelFamily,
+	profile: InstructionProfile = "baseline",
 	/** run_code is offered (harness variant codeMode): batching goes through it. */
 	codeMode = false,
 	/** A read-only subagent: it checks and reports, it does not edit. */
@@ -310,21 +316,41 @@ function leanHarnessInstructions(
 				: `Inspect with ${run} (rg, sed -n, git, project CLIs, the project's tests), reading related files together in one command rather than slice by slice.`,
 			"Back each conclusion with a command you ran and its output, or a file and line; run the project's existing tests and the documented invocation rather than reasoning about what they would do. Do not stop to ask about ambiguity you can resolve yourself: state the reading you chose and check the alternative when a result hinges on it.",
 		].join(" ");
+	// Baseline keeps its exact v13-lean text; other profiles name themselves
+	// (docs/instruction-tuning.md).
+	const label = profile === "baseline" ? "v13-lean" : `v13-lean+${profile}`;
+	const addition =
+		profile === "baseline" || profile === "concise"
+			? ""
+			: INSTRUCTION_PROFILE_ADDITIONS[profile];
 	// With run_code offered, the shell-only wording would contradict the
 	// run_code paragraph (measured: GPT then used only the command tool).
 	if (codeMode)
 		return [
-			`Harness tool profile v13-lean (${family}): Edit files with ${edit}; when you also run its check, make the edit and run the check in one run_code program. ${context}`,
+			`Harness tool profile ${label} (${family}): Edit files with ${edit}; when you also run its check, make the edit and run the check in one run_code program. ${context}`,
 			`Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs) and returns only the relevant lines. Reproduce the problem with the smallest executable check early. ${fix}`,
-			...SHELL_BEHAVIOUR.map((line) =>
-				line === SHELL_BEHAVIOUR[1] ? RUN_CODE_VERIFICATION : line,
-			),
-		].join(" ");
+			...(profile === "concise"
+				? [CONCISE_GUIDANCE]
+				: [
+						...SHELL_BEHAVIOUR.map((line) =>
+							line === SHELL_BEHAVIOUR[1] ? RUN_CODE_VERIFICATION : line,
+						),
+						addition,
+					]),
+		]
+			.filter(Boolean)
+			.join(" ");
+	const header = `Harness tool profile ${label} (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`;
+	if (profile === "concise")
+		return `${header} Inspect with ${run}, reading related files together in one command. ${CONCISE_GUIDANCE}`;
 	return [
-		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
+		header,
 		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. ${fix}`,
 		...SHELL_BEHAVIOUR,
-	].join(" ");
+		addition,
+	]
+		.filter(Boolean)
+		.join(" ");
 }
 
 export function harnessModelToolInstructions(
@@ -332,6 +358,8 @@ export function harnessModelToolInstructions(
 	/** "freeform": Codex's grammar-constrained apply_patch that takes raw patch text. */
 	nativePatch: boolean | "freeform",
 	availableTools?: readonly string[],
+	/** Lean surfaces only: the behavioural guidance profile (instruction-profiles.ts). */
+	profile: InstructionProfile = "baseline",
 ) {
 	const editing =
 		nativePatch === "freeform"
@@ -355,6 +383,7 @@ export function harnessModelToolInstructions(
 		return leanHarnessInstructions(
 			lean,
 			family,
+			profile,
 			availableTools.includes(CODE_MODE_TOOL),
 			readOnlyLeanSurface(lean, availableTools),
 		);
@@ -366,7 +395,7 @@ export function harnessModelToolInstructions(
 			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command, which waits until they finish, so one call replaces repeated checks; stop_command cancels.",
 			...SHELL_BEHAVIOUR.slice(0, 4),
 			availableTools.includes("check_deliverable")
-				? "When you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run check_deliverable once before finishing with what they receive and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports. Skip it for edits to an existing project whose own tests you ran."
+				? "When you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run check_deliverable once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports. Skip it for edits to an existing project whose own tests you ran."
 				: "",
 			...SHELL_BEHAVIOUR.slice(4),
 		]

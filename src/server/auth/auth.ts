@@ -1,20 +1,76 @@
 import { betterAuth } from "better-auth";
+import { captcha } from "better-auth/plugins";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
 import {
 	authEmailDeliveryConfigured,
 	persistAuthEmail,
 } from "../adapters/email";
+import { recordLegalAcceptance } from "../adapters/legal-acceptance";
 import { serverConfig } from "../config";
 import {
 	loadLocalQaUser,
 	requestAllowsLocalQaIdentity,
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
+import { trackInvocationTask } from "../adapters/invocation-tasks";
+import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
 
-function authOptions() {
+/**
+ * OAuth state lives in the database and is bound to the browser that started
+ * the sign-in by a signed `state` cookie. The callback must present both, so a
+ * callback URL captured from someone else's sign-in cannot be completed in a
+ * victim's browser (login CSRF). Never set `skipStateCookieCheck`: the local
+ * loopback-alias mismatch it once papered over is fixed by
+ * `canonicalOriginRedirect` sending every page to the APP_URL host.
+ */
+export const oauthAccountPolicy = {
+	encryptOAuthTokens: true,
+	accountLinking: { enabled: false },
+	storeStateStrategy: "database" as const,
+};
+
+/**
+ * Runs once an account exists (after Better Auth commits it). Every path that
+ * creates an account shows the Terms and Privacy consent first: the sign-up
+ * checkbox gates the email form and the GitHub/Google buttons, and sign-in
+ * (which can create an account through a provider) states that continuing
+ * accepts them. A failed write is logged, not thrown: the user then gets the
+ * acceptance prompt on their next visit instead of a broken sign-up.
+ */
+export async function accountCreated(user: { id: string; createdAt: Date }) {
+	await recordLegalAcceptance(user.id, "signup").catch((error: unknown) => {
+		console.error("Could not record Terms acceptance at sign-up.", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	});
+	void captureServerAnalytics(
+		user.id,
+		"account_created",
+		{},
+		{ key: user.id, timestamp: user.createdAt },
+	);
+}
+
+/** Server-side Turnstile verification, when this environment requires it. */
+export function authCaptchaPlugins(appUrl: string) {
+	const turnstile = turnstileSettings();
+	if (!turnstile) return [];
+	return [
+		captcha({
+			provider: "cloudflare-turnstile",
+			secretKey: turnstile.secretKey,
+			endpoints: TURNSTILE_ENDPOINTS,
+			allowedHostnames: [new URL(appUrl).hostname],
+		}),
+	];
+}
+
+export function authOptions() {
 	const config = serverConfig();
 	return {
+		plugins: authCaptchaPlugins(config.APP_URL),
 		database: database(),
 		baseURL: config.APP_URL,
 		secret: config.BETTER_AUTH_SECRET,
@@ -27,6 +83,8 @@ function authOptions() {
 			requireEmailVerification: true,
 			minPasswordLength: 8,
 			autoSignIn: false,
+			// A reset password ends every other session, including a thief's.
+			revokeSessionsOnPasswordReset: true,
 			sendResetPassword: async ({
 				user,
 				url,
@@ -34,18 +92,25 @@ function authOptions() {
 				user: { email: string };
 				url: string;
 			}) => {
-				await persistAuthEmail({
-					to: user.email,
-					subject: "Reset your ytimesy password",
-					purpose: "reset-password",
-					actionUrl: url,
-				});
+				// Not awaited: the response must take the same time whether or not
+				// the account exists. The outbox row is retried by the cron.
+				void trackInvocationTask(
+					persistAuthEmail({
+						to: user.email,
+						subject: "Reset your ytimesy password",
+						purpose: "reset-password",
+						actionUrl: url,
+					}),
+				).catch(() => undefined);
 			},
 		},
 		emailVerification: {
 			sendOnSignUp: true,
 			sendOnSignIn: true,
-			autoSignInAfterVerification: true,
+			// A verification link is a bearer token sitting in an inbox; it
+			// proves the address, it does not sign anyone in. The link lands on
+			// sign-in, which returns to the page that asked.
+			autoSignInAfterVerification: false,
 			sendVerificationEmail: async ({
 				user,
 				url,
@@ -80,26 +145,11 @@ function authOptions() {
 		user: { modelName: "auth_user" },
 		databaseHooks: {
 			user: {
-				create: {
-					after: async (user: { id: string; createdAt: Date }) => {
-						void captureServerAnalytics(
-							user.id,
-							"account_created",
-							{},
-							{ key: user.id, timestamp: user.createdAt },
-						);
-					},
-				},
+				create: { after: accountCreated },
 			},
 		},
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },
-		account: {
-			modelName: "auth_account",
-			encryptOAuthTokens: true,
-			accountLinking: { enabled: false },
-			storeStateStrategy: "database" as const,
-			skipStateCookieCheck: true,
-		},
+		account: { modelName: "auth_account", ...oauthAccountPolicy },
 		onAPIError: {
 			errorURL: `${config.APP_URL}/auth/sign-in`,
 		},

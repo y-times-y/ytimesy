@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type {
 	AgentTaskAccess,
-	AgentTaskExecution,
 	AgentTaskPlacement,
 	AgentTaskReviewState,
 	AgentTaskStatus,
@@ -18,7 +17,7 @@ import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
 
 export async function selectAgentSessionHarness(
 	userId: string,
@@ -172,15 +171,13 @@ export type AgentSessionRecord = {
 	taskState: AgentTaskStatus | null;
 	taskPlacement: AgentTaskPlacement | null;
 	taskAccess: AgentTaskAccess | null;
-	taskExecution: AgentTaskExecution | null;
-	dependsOnSessionId: string | null;
 	taskSummary: string | null;
+	/** Retired lead/child review state; read only by benchmarks/evaluation/production.ts. */
 	taskReviewState: AgentTaskReviewState | null;
 	taskBranch: string | null;
 	selectedBranch?: string | null;
 	baseBranch?: string | null;
 	workingBranch?: string | null;
-	taskPullRequestUrl: string | null;
 	/** Set for children started through the builder's agent tool (docs/subagents.md). */
 	agentRole?: SubagentRole | null;
 	agentBudget?: SubagentBudget | null;
@@ -208,15 +205,12 @@ interface AgentSessionRow {
 	task_state: AgentTaskStatus | null;
 	task_placement: AgentTaskPlacement | null;
 	task_access: AgentTaskAccess | null;
-	task_execution: AgentTaskExecution | null;
-	depends_on_session_id: string | null;
 	task_summary: string | null;
 	task_review_state: AgentTaskReviewState | null;
 	task_branch: string | null;
 	selected_branch: string | null;
 	base_branch: string | null;
 	working_branch: string | null;
-	task_pull_request_url: string | null;
 	agent_role?: SubagentRole | null;
 	agent_budget?: SubagentBudget | null;
 	agent_fork?: SubagentFork | null;
@@ -315,6 +309,45 @@ export async function saveSessionWorkingBranch(
 	return toSession(result.rows[0]);
 }
 
+/**
+ * Gives a root chat that has no branch of its own (one opened before chats
+ * published) its publication branch, during the turn that first pushes. Only
+ * a chat still without a working branch takes it, so a name is never
+ * replaced; the stored row is returned either way.
+ */
+export async function adoptChatPublicationBranch(
+	userId: string,
+	sessionId: string,
+	branch: string,
+	baseBranch: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce(base_branch,$4), updated_at=now()
+		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is null
+		 returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch, baseBranch],
+	);
+	if (result.rows[0]) return toSession(result.rows[0]);
+	const stored = await agentSessionForOwner(userId, sessionId);
+	if (!stored) throw new Error("This chat is no longer available.");
+	return stored;
+}
+
+/** Whether another chat or task in the project already works on or published this branch. */
+export async function projectBranchHeldByOtherSession(
+	userId: string,
+	projectId: string,
+	sessionId: string,
+	branch: string,
+) {
+	const result = await database().query(
+		`select 1 from agent_session where user_id=$1 and project_id=$2 and id<>$3
+		 and (working_branch=$4 or task_branch=$4) limit 1`,
+		[userId, projectId, sessionId, branch],
+	);
+	return Boolean(result.rows[0]);
+}
+
 export async function agentSessionById(sessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS} from agent_session where id=$1`,
@@ -365,6 +398,19 @@ export async function descendantAgentSessions(
 	return result.rows.map((row: AgentSessionRow) => toSession(row));
 }
 
+/** VMs still bound to one of the owner's sessions outside `sessionIds`. */
+export async function providerRefsHeldOutside(
+	userId: string,
+	sessionIds: readonly string[],
+) {
+	const result = await database().query<{ provider_ref: string }>(
+		`select distinct provider_ref from agent_session
+		where user_id=$1 and provider_ref is not null and not (id::text = any($2::text[]))`,
+		[userId, sessionIds],
+	);
+	return new Set(result.rows.map((row) => row.provider_ref));
+}
+
 export async function deleteAgentSessionForOwner(
 	userId: string,
 	sessionId: string,
@@ -388,8 +434,6 @@ export async function insertAgentSession(input: {
 		readonly prompt: string;
 		readonly placement: AgentTaskPlacement;
 		readonly access: AgentTaskAccess;
-		readonly execution: AgentTaskExecution;
-		readonly dependsOnSessionId: string | null;
 	};
 }) {
 	const id = randomUUID();
@@ -397,10 +441,9 @@ export async function insertAgentSession(input: {
 		`insert into agent_session(
 			id,user_id,project_id,workspace_id,harness,provider_ref,
 			parent_session_id,title,listed_model_id,status,
-			task_prompt,task_state,task_placement,task_access,task_execution,
-			depends_on_session_id,task_review_state
+			task_prompt,task_state,task_placement,task_access
 		)
-			 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting',$10,$11,$12,$13,$14,$15,$16)
+			 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting',$10,$11,$12,$13)
 		 returning ${SESSION_COLUMNS}`,
 		[
 			id,
@@ -415,10 +458,8 @@ export async function insertAgentSession(input: {
 			input.task?.prompt ?? null,
 			input.task ? "draft" : null,
 			input.task?.placement ?? null,
-			input.task?.access ?? (input.parentSessionId ? null : "read_only"),
-			input.task?.execution ?? null,
-			input.task?.dependsOnSessionId ?? null,
-			input.task ? "pending" : null,
+			// Root chats carry no task access: they publish as chats (turnPublicationRole).
+			input.task?.access ?? null,
 		],
 	);
 	const session = toSession(result.rows[0]);
@@ -436,42 +477,6 @@ export async function insertAgentSession(input: {
 		{ key: session.id, timestamp: new Date(session.createdAt) },
 	);
 	return session;
-}
-
-export async function saveAgentTaskDraft(input: {
-	readonly userId: string;
-	readonly sessionId: string;
-	readonly title: string;
-	readonly prompt: string;
-	readonly harness: AgentProviderId;
-	readonly modelId: string;
-	readonly placement: AgentTaskPlacement;
-	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
-}) {
-	const result = await database().query(
-		`update agent_session set
-		 title=$3,task_prompt=$4,harness=$5,listed_model_id=$6,
-		 task_placement=$7,task_access=$8,task_execution=$9,
-		 depends_on_session_id=$10,updated_at=now()
-		 where id=$1 and user_id=$2 and task_state='draft'
-		 and parent_session_id is not null and provider_ref is null
-		 returning ${SESSION_COLUMNS}`,
-		[
-			input.sessionId,
-			input.userId,
-			input.title,
-			input.prompt,
-			input.harness,
-			input.modelId,
-			input.placement,
-			input.access,
-			input.execution,
-			input.dependsOnSessionId,
-		],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
 export async function saveAgentTaskState(
@@ -492,34 +497,6 @@ export async function saveAgentTaskState(
 		 where id=$1 and parent_session_id is not null
 		 returning ${SESSION_COLUMNS}`,
 		[sessionId, taskState, turnStatus],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function saveAgentTaskReview(
-	sessionId: string,
-	reviewState: AgentTaskReviewState,
-) {
-	const result = await database().query(
-		`update agent_session
-		 set task_review_state=$2, updated_at=now()
-		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, reviewState],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function saveAgentTaskPublication(
-	sessionId: string,
-	input: { readonly branch: string; readonly pullRequestUrl: string },
-) {
-	const result = await database().query(
-		`update agent_session
-		 set task_branch=$2, task_pull_request_url=$3, updated_at=now()
-		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, input.branch, input.pullRequestUrl],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
@@ -594,15 +571,12 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		taskState: row.task_state,
 		taskPlacement: row.task_placement,
 		taskAccess: row.task_access,
-		taskExecution: row.task_execution,
-		dependsOnSessionId: row.depends_on_session_id,
 		taskSummary: row.task_summary,
 		taskReviewState: row.task_review_state,
 		taskBranch: row.task_branch,
 		selectedBranch: row.selected_branch ?? null,
 		baseBranch: row.base_branch ?? null,
 		workingBranch: row.working_branch ?? null,
-		taskPullRequestUrl: row.task_pull_request_url,
 		agentRole: row.agent_role ?? null,
 		agentBudget: row.agent_budget ?? null,
 		agentFork: row.agent_fork ?? null,

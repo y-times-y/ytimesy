@@ -37,7 +37,11 @@ export function DesktopInspector({
 	if (desktop.status === "running" && projectId && sessionId) {
 		return (
 			<section className="desktop-inspector" aria-label="Workspace desktop">
-				<DesktopStage projectId={projectId} sessionId={sessionId} />
+				<DesktopStage
+					projectId={projectId}
+					sessionId={sessionId}
+					password={desktop.viewerPassword}
+				/>
 			</section>
 		);
 	}

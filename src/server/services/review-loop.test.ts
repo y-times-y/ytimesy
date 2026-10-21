@@ -7,6 +7,7 @@ import type { SessionItem } from "#/domain/session-item";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
 	createReviewLoop,
+	type LoopWorker,
 	type ReviewLoopDeps,
 	reviewLoopSpend,
 } from "./review-loop";
@@ -22,6 +23,10 @@ function harness(options: {
 	reports: (string | null)[];
 	deadlineAt?: number;
 	changed?: string;
+	rigor?: boolean;
+	/** checkerMode=pair, with each judge's workers. */
+	pair?: boolean;
+	workers?: (checkerSessionId: string) => LoopWorker[];
 }) {
 	let now = 1_000_000;
 	let tree = "t-base";
@@ -33,6 +38,7 @@ function harness(options: {
 		title: string;
 		brief: string;
 		cap: unknown;
+		pair?: boolean;
 	}[] = [];
 	const vm: string[] = [];
 	const deps: ReviewLoopDeps = {
@@ -79,6 +85,7 @@ function harness(options: {
 			},
 		],
 		stopChild: vi.fn(async () => {}),
+		workers: async (id) => options.workers?.(id) ?? [],
 		vm: async (command) => {
 			vm.push(command);
 			if (command.includes("diff --name-only"))
@@ -99,6 +106,8 @@ function harness(options: {
 		billing: { kind: "plan", price: { input: 2, output: 10, cacheRead: 0.25 } },
 		taskText: () => TASK,
 		deps,
+		rigor: options.rigor,
+		pair: options.pair,
 	});
 	const items = (usage: number, text: string): SessionItem[] => [
 		{
@@ -147,6 +156,15 @@ const verdict = (value: Record<string, unknown>) =>
 const FAIL = verdict({
 	verdict: "fail",
 	failures: ["ordering: a newer tombstone hides an older live version"],
+	tests: [
+		{
+			name: "a tombstone over a live version, then compaction",
+			command: "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py",
+			passed: false,
+			output: "AssertionError: get(k) returned None\nexpected v1",
+		},
+		{ name: "empty store compacts", command: "true", passed: true },
+	],
 	requirements: [
 		{ requirement: "regression test", met: true, evidence: "make test ok" },
 		{
@@ -167,7 +185,14 @@ const FAIL = verdict({
 describe("review loop", () => {
 	it("checks the finished turn, hands concrete findings back to the same run, and finishes on pass", async () => {
 		const h = harness({
-			reports: [FAIL, verdict({ verdict: "pass", failures: [] })],
+			reports: [
+				FAIL,
+				verdict({
+					verdict: "pass",
+					failures: [],
+					tests: [{ name: "edge", command: "c", passed: true }],
+				}),
+			],
 		});
 		expect((await h.loop.beforeModel(h.step(0, ""))).kind).toBe("run");
 		expect(h.state()?.checkpoint.ref).toBe("refs/ytimesy/review/turn-base");
@@ -208,6 +233,11 @@ describe("review loop", () => {
 		);
 		expect(notice).toContain("`F1: fixed` or `F1: rejected - <why>`");
 		expect(notice).not.toContain("regression test");
+		// The checker's failing test, with the command and output to reproduce it.
+		expect(notice).toContain(
+			"Tests it wrote that failed (run each command to reproduce; the test itself may be wrong):\n- a tombstone over a live version, then compaction: `python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py` -> AssertionError: get(k) returned None | expected v1",
+		);
+		expect(notice).not.toContain("empty store compacts");
 		expect(h.state()?.phase).toBe("fixing");
 		expect(first.items?.at(-1)).toMatchObject({ tool: "review_check" });
 		// The fix: the builder answers, the tree changed; a second check passes.
@@ -242,6 +272,237 @@ describe("review loop", () => {
 		expect(spend.rounds).toHaveLength(2);
 	});
 
+	it("with checkerMode=pair, starts a judge each round with the full brief, keeps the worker's spend and marks the tests it ran", async () => {
+		const PROBE = "python3 /tmp/ytimesy-attempts/turn/review-2/tests/t2.py";
+		const h = harness({
+			pair: true,
+			reports: [
+				FAIL,
+				verdict({
+					verdict: "pass",
+					failures: [],
+					tests: [{ name: "newest wins", command: PROBE, passed: true }],
+				}),
+			],
+			workers: (id) => [
+				{
+					sessionId: `${id}-worker`,
+					model: { harness: "codex", modelId: "gpt-6-luna" },
+					items: [
+						{
+							kind: "userMessage",
+							id: "w",
+							text: "worker brief",
+							apiUsage: {
+								inputTokens: 30_000,
+								outputTokens: 3_000,
+								uncachedInputTokens: 30_000,
+								cacheReadTokens: 0,
+								cacheWriteTokens: 0,
+							},
+						},
+						{
+							kind: "commandExecution",
+							id: "c1",
+							command:
+								id === "child-1"
+									? "cd /tmp && python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py"
+									: `bash -lc '${PROBE}'`,
+							cwd: null,
+							status: "completed",
+							output: "",
+							exitCode: 0,
+						},
+					],
+				},
+			],
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const first = await h.loop.afterAttempt(h.step(10_000, "Done."));
+		expect(h.started[0]).toMatchObject({ role: "checker", pair: true });
+		expect(h.started[0].brief).toContain("<checker_pair>");
+		expect(h.started[0].brief).not.toContain("<previous_review>");
+		expect(first.kind).toBe("run");
+		const round1 = h.state()?.rounds[0];
+		expect(round1?.checker.pair).toBe(true);
+		expect(round1?.checker.workers).toEqual([
+			{
+				sessionId: "child-1-worker",
+				model: { harness: "codex", modelId: "gpt-6-luna" },
+				usage: expect.objectContaining({ inputTokens: 30_000 }),
+			},
+		]);
+		expect(round1?.verdict?.tests.map((test) => test.ranBy)).toEqual([
+			"worker",
+			undefined,
+		]);
+		expect(h.deps.stopChild).toHaveBeenCalledWith("child-1-worker");
+		// Round 2 is a full check: the same brief, round 1's findings as context.
+		h.setTree("t-2");
+		const done = await h.loop.afterAttempt(h.step(14_000, "F1: fixed"));
+		expect(done.kind).toBe("finished");
+		const second = h.started[1].brief;
+		expect(second).toContain(`<request>
+${TASK}
+</request>`);
+		expect(second).toContain("Review in four parts:");
+		expect(second).toContain("<checker_pair>");
+		expect(second).toContain(
+			"- Review 1, F1: ordering: a newer tombstone hides an older live version",
+		);
+		const state = h.state() as ReviewLoopState;
+		expect(state.outcome).toBe("pass");
+		expect(state.rounds[1].verdict?.tests[0].ranBy).toBe("worker");
+		const spend = reviewLoopSpend(state, {
+			kind: "plan",
+			price: { input: 2, output: 10, cacheRead: 0.25 },
+		});
+		expect(spend.judge.tokens).toBe(4400);
+		expect(spend.worker.tokens).toBe(66_000);
+		expect(spend.checker.tokens).toBe(70_400);
+		expect(spend.rounds[0].checker.tokens).toBe(35_200);
+		if (done.kind !== "finished") throw new Error();
+		const summary = done.items.at(-1);
+		if (summary?.kind !== "dynamicToolCall") throw new Error();
+		expect(summary.output).toMatch(
+			/Checker spent 70k tokens .*\(judge 4k.*, worker 66k/,
+		);
+	});
+
+	it("without checkerMode=pair, the checker is single and reads no workers", async () => {
+		const workers = vi.fn(() => []);
+		const h = harness({ reports: [FAIL], workers });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		await h.loop.afterAttempt(h.step(10_000, "Done."));
+		expect(h.started[0].pair).toBeUndefined();
+		expect(h.started[0].brief).not.toContain("<checker_pair>");
+		expect(h.state()?.rounds[0].checker.pair).toBeUndefined();
+		expect(h.state()?.rounds[0].verdict?.tests[0].ranBy).toBeUndefined();
+		expect(workers).not.toHaveBeenCalled();
+	});
+
+	it("with rigor=on, sends back a passed turn whose answer admits unverified work while time is left", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: [PASS, PASS], rigor: true });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const first = await h.loop.afterAttempt(
+			h.step(
+				1,
+				"Compaction fixed.\nUnverified: the concurrent-writer path was not tested.",
+			),
+		);
+		expect(h.started[0].brief).toContain(
+			"look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states",
+		);
+		expect(first.kind).toBe("run");
+		if (first.kind !== "run") throw new Error();
+		const notice = String(first.messages?.at(-1)?.content);
+		expect(notice).toContain(
+			'F1. Your final answer admits unverified or open work while over half of the time is left: "Unverified: the concurrent-writer path was not tested."',
+		);
+		expect(h.state()?.rounds[0].decision).toBe("fix");
+		// The fix verifies it; nothing is admitted any more, so the pass finishes.
+		h.setTree("t-2");
+		const done = await h.loop.afterAttempt(
+			h.step(
+				2,
+				"Tested the concurrent-writer path.\nF1: fixed\nUnverified: none.",
+			),
+		);
+		expect(done.kind).toBe("finished");
+		expect(h.state()?.outcome).toBe("pass");
+	});
+
+	it("with rigor=on, gives the checker the builder's requirements list as a claim and keeps it on the round", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const LIST =
+			"Planned.\n<requirements>\n- compaction keeps the newest version per key\n- `make test` passes (reading: the whole suite)\n</requirements>";
+		const withList = (h: ReturnType<typeof harness>, answer: string) => {
+			const step = h.step(1, answer);
+			return {
+				...step,
+				items: [
+					step.items[0],
+					{
+						kind: "agentMessage" as const,
+						id: SessionItemId("plan"),
+						text: LIST,
+					},
+					...step.items.slice(1),
+				],
+			};
+		};
+		const on = harness({ reports: [PASS], rigor: true });
+		await on.loop.beforeModel(on.step(0, ""));
+		on.setTree("t-1");
+		on.advance(4 * 60_000);
+		await on.loop.afterAttempt(withList(on, "Done."));
+		const brief = on.started[0].brief;
+		expect(brief).toContain(
+			"<builder_requirements>\nThe builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):\n- compaction keeps the newest version per key\n- `make test` passes (reading: the whole suite)\n</builder_requirements>",
+		);
+		// The checker's own list comes first; the claim follows the review parts.
+		expect(brief.indexOf("1. Requirements.")).toBeLessThan(
+			brief.indexOf("<builder_requirements>"),
+		);
+		expect(on.state()?.rounds[0].builderRequirements).toEqual([
+			"compaction keeps the newest version per key",
+			"`make test` passes (reading: the whole suite)",
+		]);
+		const off = harness({ reports: [PASS] });
+		await off.loop.beforeModel(off.step(0, ""));
+		off.setTree("t-1");
+		off.advance(4 * 60_000);
+		await off.loop.afterAttempt(withList(off, "Done."));
+		expect(off.started[0].brief).not.toContain("builder_requirements");
+		expect(off.state()?.rounds[0].builderRequirements).toBeUndefined();
+	});
+
+	it("without rigor, or with under half the time left, a passed turn finishes despite admitted gaps", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const off = harness({ reports: [PASS] });
+		await off.loop.beforeModel(off.step(0, ""));
+		off.setTree("t-1");
+		off.advance(4 * 60_000);
+		expect(
+			(await off.loop.afterAttempt(off.step(1, "Done. Not tested on Windows.")))
+				.kind,
+		).toBe("finished");
+		expect(off.started[0].brief).not.toContain(
+			"assumptions or interpretations it states",
+		);
+		const late = harness({ reports: [PASS], rigor: true });
+		await late.loop.beforeModel(late.step(0, ""));
+		late.setTree("t-1");
+		late.advance(35 * 60_000);
+		expect(
+			(
+				await late.loop.afterAttempt(
+					late.step(1, "Done. Not tested on Windows."),
+				)
+			).kind,
+		).toBe("finished");
+		expect(late.state()?.outcome).toBe("pass");
+	});
+
 	it("stops after two rounds", async () => {
 		const h = harness({ reports: [FAIL, FAIL] });
 		await h.loop.beforeModel(h.step(0, ""));
@@ -271,7 +532,7 @@ describe("review loop", () => {
 		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
 			"finished",
 		);
-		expect(h.state()?.outcome).toBe("no-findings");
+		expect(h.state()?.outcome).toBe("unsure");
 
 		const g = harness({ reports: [FAIL] });
 		await g.loop.beforeModel(g.step(0, ""));

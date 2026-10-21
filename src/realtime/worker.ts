@@ -8,6 +8,7 @@ import {
 } from "../domain/conversation-delivery";
 import {
 	type ActiveConversationTurn,
+	conversationPurgeSchema,
 	TURN_COORDINATION_LEASE_MS,
 	turnControlSchema,
 } from "../domain/conversation-turn-control";
@@ -28,6 +29,7 @@ interface ConversationStorage {
 	put(key: string, value: unknown): Promise<void>;
 	put(entries: Record<string, unknown>): Promise<void>;
 	delete(key: string): Promise<boolean>;
+	deleteAll?(): Promise<void>;
 	deleteAlarm(): Promise<void>;
 	setAlarm(time: number): Promise<void>;
 }
@@ -44,9 +46,18 @@ async function boundedBody(request: Request) {
 	return readBoundedRequestBody(request, MAX_DELIVERY_BYTES);
 }
 
+/** The tombstone a purged chat's object keeps; see ConversationRoom.purge. */
+const PURGED_KEY = "purged";
+
 /** One current snapshot per conversation; PG remains the transcript and inference authority. */
 export class ConversationRoom {
 	private latest: ConversationSnapshot | null = null;
+	/**
+	 * Set once the chat was deleted: the stored tombstone refuses every later
+	 * write (a snapshot, turn control, an in-flight turn's renewal, an alarm),
+	 * so nothing recreates the chat's state after its purge.
+	 */
+	private purged = false;
 	private readonly subscribers = new Set<
 		(snapshot: ConversationSnapshot) => void
 	>();
@@ -68,7 +79,14 @@ export class ConversationRoom {
 							? state.storage.deleteAlarm()
 							: state.storage.setAlarm(at);
 		state.blockConcurrencyWhile(async () => {
-			const head = await state.storage.get<SnapshotHead>("head");
+			const [purged, head] = await Promise.all([
+				state.storage.get<boolean>(PURGED_KEY),
+				state.storage.get<SnapshotHead>("head"),
+			]);
+			if (purged === true) {
+				this.purged = true;
+				return;
+			}
 			if (!head) return;
 			const keys = Array.from(
 				{ length: head.chunks },
@@ -86,8 +104,30 @@ export class ConversationRoom {
 			this.latest = conversationSnapshotSchema.parse(JSON.parse(text));
 		});
 	}
+	/**
+	 * Deletes the object's stored state and leaves only the tombstone; from
+	 * now on the room refuses every write. The host deletes its own state and
+	 * the alarm first. Idempotent.
+	 */
+	async purge() {
+		this.purged = true;
+		this.latest = null;
+		await this.state.storage.deleteAll?.();
+		await this.state.storage.put(PURGED_KEY, true);
+	}
+	get isPurged() {
+		return this.purged;
+	}
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		// The standalone realtime Worker's room owns all of its object's storage.
+		if (url.pathname === "/purge") {
+			this.purged = true;
+			await this.state.storage.deleteAlarm();
+			await this.purge();
+			return new Response(null, { status: 204 });
+		}
+		if (this.purged) return new Response(null, { status: 410 });
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
 		if (request.method === "POST") {
 			const incoming = conversationSnapshotSchema.parse(await request.json());
@@ -103,28 +143,34 @@ export class ConversationRoom {
 				!this.latest ||
 				BigInt(incoming.revision) > BigInt(this.latest.revision)
 			) {
-				await this.state.storage.transaction(async (transaction) => {
-					const current = await transaction.get<SnapshotHead>("head");
-					if (
-						!current ||
-						BigInt(incoming.revision) > BigInt(current.revision)
-					) {
-						const text = JSON.stringify(incoming);
-						const chunks = Math.ceil(text.length / 128_000);
-						const entries: Record<string, unknown> = {
-							head: { revision: incoming.revision, chunks },
-						};
-						// Each entry stays below the platform's 2 MiB key/value limit.
-						for (let index = 0; index < chunks; index++)
-							entries[`snapshot:${index}`] = text.slice(
-								index * 128_000,
-								(index + 1) * 128_000,
-							);
-						await transaction.put(entries);
-						for (let index = chunks; index < (current?.chunks ?? 0); index++)
-							await transaction.delete(`snapshot:${index}`);
-					}
-				});
+				const written = await this.state.storage.transaction(
+					async (transaction) => {
+						// A purge that ran while this request awaited wins.
+						if (this.purged) return false;
+						const current = await transaction.get<SnapshotHead>("head");
+						if (
+							!current ||
+							BigInt(incoming.revision) > BigInt(current.revision)
+						) {
+							const text = JSON.stringify(incoming);
+							const chunks = Math.ceil(text.length / 128_000);
+							const entries: Record<string, unknown> = {
+								head: { revision: incoming.revision, chunks },
+							};
+							// Each entry stays below the platform's 2 MiB key/value limit.
+							for (let index = 0; index < chunks; index++)
+								entries[`snapshot:${index}`] = text.slice(
+									index * 128_000,
+									(index + 1) * 128_000,
+								);
+							await transaction.put(entries);
+							for (let index = chunks; index < (current?.chunks ?? 0); index++)
+								await transaction.delete(`snapshot:${index}`);
+						}
+						return true;
+					},
+				);
+				if (!written) return new Response(null, { status: 410 });
 				// Storage awaits permit interleaving: never regress the in-memory broadcast either.
 				if (
 					!this.latest ||
@@ -204,6 +250,7 @@ export class ConversationRoom {
 		const input = turnControlSchema.parse(await request.json());
 		const action = new URL(request.url).pathname.split("/").at(-1);
 		return this.state.storage.transaction(async (storage) => {
+			if (this.purged) return new Response(null, { status: 410 });
 			const identity = await storage.get<{ userId: string; sessionId: string }>(
 				"identity",
 			);
@@ -266,6 +313,7 @@ export class ConversationRoom {
 	 */
 	async reclaim(input: { turnId: string; leaseId: string }) {
 		return this.state.storage.transaction(async (storage) => {
+			if (this.purged) return false;
 			const current = await storage.get<ActiveConversationTurn>("active-turn");
 			// The resuming chat rotates the lease, so the turn ID alone identifies it.
 			if (current) {
@@ -294,6 +342,7 @@ export class ConversationRoom {
 	}
 	async alarm() {
 		await this.state.storage.transaction(async (storage) => {
+			if (this.purged) return;
 			const turn = await storage.get<ActiveConversationTurn>("active-turn");
 			if (!turn) return;
 			if (turn.expiresAt <= Date.now()) {
@@ -344,6 +393,7 @@ export async function routeRealtimeRequest(
 			!(
 				(request.method === "POST" &&
 					(url.pathname === "/snapshot" ||
+						url.pathname === "/purge" ||
 						/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
 				(request.method === "GET" && url.pathname === "/stream")
 			)
@@ -356,7 +406,9 @@ export async function routeRealtimeRequest(
 			request.method === "POST"
 				? (url.pathname === "/snapshot"
 						? conversationSnapshotSchema
-						: turnControlSchema
+						: url.pathname === "/purge"
+							? conversationPurgeSchema
+							: turnControlSchema
 					).parse(JSON.parse(body))
 				: {
 						userId: url.searchParams.get("userId"),

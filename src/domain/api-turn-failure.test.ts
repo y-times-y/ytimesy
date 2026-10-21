@@ -12,6 +12,12 @@ import {
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 } from "./api-turn-failure";
+import {
+	FLEET_LIFETIME_CAP_MESSAGE,
+	FLEET_MONTHLY_CAP_MESSAGE,
+	failureMessage,
+	USER_USAGE_CAP_MESSAGE,
+} from "./failure-message";
 import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
 
 it("preserves safe metadata failure categories in the visible model-stage error", () => {
@@ -289,20 +295,49 @@ it("names a provider internal error on a machine as temporary without echoing it
 });
 
 it("says the chat's machine reached its usage limit when the budget cannot fund it", () => {
-	for (const error of [
-		new MachineUsageLimitReached(),
-		taggedMachineError(
-			"WorkspaceProvisionError",
-			"Your cloud execution allowance is exhausted.",
+	expect(
+		apiTurnFailureMessage("model", new MachineUsageLimitReached()),
+	).toMatch(/^This chat's machine reached its usage limit/);
+	expect(
+		apiTurnFailureMessage(
+			"model",
+			taggedMachineError(
+				"WorkspaceProvisionError",
+				"Your cloud execution allowance is exhausted.",
+			),
 		),
-		taggedMachineError(
-			"WorkspaceProvisionError",
+	).toBe(USER_USAGE_CAP_MESSAGE);
+});
+
+it("words fleet caps as the beta's shared budget, tagged or not", () => {
+	for (const [text, expected] of [
+		[
 			"The fleet cloud execution budget is exhausted.",
-		),
-	])
-		expect(apiTurnFailureMessage("model", error)).toMatch(
-			/^This chat's machine reached its usage limit/,
-		);
+			FLEET_MONTHLY_CAP_MESSAGE,
+		],
+		[
+			"The lifetime fleet cloud execution budget is exhausted.",
+			FLEET_LIFETIME_CAP_MESSAGE,
+		],
+	]) {
+		expect(
+			apiTurnFailureMessage(
+				"model",
+				taggedMachineError("WorkspaceProvisionError", text),
+			),
+		).toBe(expected);
+		expect(
+			apiTurnFailureMessage(
+				"workspace",
+				new Error("wrapped", { cause: new Error(text) }),
+			),
+		).toBe(expected);
+		expect(
+			apiModelFailureMessage(new SafeApiModelFailure(new Error(text))),
+		).toBe(expected);
+		expect(failureMessage(new Error(text))).toBe(expected);
+	}
+	expect(FLEET_MONTHLY_CAP_MESSAGE).toContain("support@ytimesy.com");
 });
 
 it("keeps unknown machine error text out of the user message", () => {

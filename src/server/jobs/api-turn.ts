@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
-import { Effect } from "effect";
 import {
 	agentPlanState,
 	ENTER_PLAN_MODE_TOOL,
@@ -11,7 +10,7 @@ import {
 	isUserRequestMessage,
 } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
-import { addApiTokenUsage } from "#/domain/api-token-usage";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	ApiTurnCancelled,
 	type ApiTurnFailureStage,
@@ -29,8 +28,10 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { fusionPairFor } from "#/domain/fusion-pairs";
 import {
 	DEFAULT_HARNESS_VARIANT,
+	outputCapCharacters,
 	promptCacheScopeId,
 } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
@@ -38,7 +39,6 @@ import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
-	type FailoverReason,
 	failoverExhaustedDetail,
 	failoverNotice,
 	failoverQuestion,
@@ -48,6 +48,7 @@ import {
 	routeConnectionKey,
 	routeKey,
 	servingRoute,
+	turnFailover,
 } from "#/domain/model-failover";
 import {
 	developmentOutageError,
@@ -60,19 +61,27 @@ import {
 	agentSecretsEnvFile,
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
+import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
+import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type {
 	ModelSwitchItem,
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { MAX_SUBAGENT_LEVEL, runsAsReader } from "#/domain/subagent";
-import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
-	completedChildrenForReview,
-	hasDelegatedTasks,
-	withDelegationContext,
-} from "../adapters/agent-delegation-context";
+	isActiveSidekick,
+	sidekickState,
+	sidekickSwitchDue,
+} from "#/domain/sidekick";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	isReaderRole,
+	MAX_SUBAGENT_LEVEL,
+	writesOwnCheckout,
+} from "#/domain/subagent";
+import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -113,7 +122,6 @@ import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
-import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
 import { agentTurnInstructions } from "../services/agent-turn-instructions";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
@@ -128,6 +136,7 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { builderToolSurface } from "../services/builder-shell-surface";
+import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	CODE_MODE_TOOL,
 	codeModeTool,
@@ -138,17 +147,21 @@ import {
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
-import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
-	BUILDER_DEFERRED_TOOL_GROUPS,
-	CODE_MODE_DEFERRED_TOOL_GROUPS,
-	CODE_MODE_DIRECT_ONLY_TOOLS,
+	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
+	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
+import {
+	type FusionLeadGateInput,
+	fusionLeadGate,
+	fusionRoundOpen,
+	leadWriteTracker,
+	withSidekickWriteGuard,
+} from "../services/fusion-lead";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
-import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
@@ -157,7 +170,10 @@ import {
 	materializeMessageAttachments,
 	sessionAttachments,
 } from "../services/message-attachments";
-import type { ModelAgentInput } from "../services/model-agent-loop";
+import {
+	type ModelAgentInput,
+	ModelSwitchAtCompaction,
+} from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
 import {
@@ -170,10 +186,7 @@ import {
 	withPlanModeNotice,
 } from "../services/plan-mode";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
-import {
-	loadCloudProjectKnowledge,
-	recordCloudProjectReport,
-} from "../services/project-knowledge";
+import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
 	loadAgentProjectSecrets,
 	writeAgentProjectSecrets,
@@ -186,17 +199,33 @@ import {
 	secretRequestTools,
 } from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import {
+	blockSidekickSwitch,
+	completeSidekickModelSwitch,
+	sidekickSwitchAllowed,
+	sidekickSwitchAtCompaction,
+} from "../services/sidekick-model-switch";
 import { recordStepTiming, timed } from "../services/step-timing";
 import {
 	guardSubagentStep,
+	retireLeadSidekicks,
 	SubagentBudgetExhausted,
 	subagentReport,
 } from "../services/subagent-runtime";
-import { subagentTools } from "../services/subagent-tools";
+import {
+	checkerWorkerTools,
+	type SubagentToolContext,
+	subagentTools,
+} from "../services/subagent-tools";
+import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
-import { turnMemory } from "../services/turn-memory";
+import {
+	subagentMemory,
+	type TurnMemory,
+	turnMemory,
+} from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -324,6 +353,14 @@ async function runApiTurnAttempt(
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
 	let subagentSession: AgentSessionRecord | undefined;
+	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
+	let fusionLead: { userId: string; id: string } | undefined;
+	/** Lead mode fusion: the variant's role models (a sidekick's classifier and escalation model). */
+	let fusionRoleModels: RoleModels | undefined;
+	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
+	const leadWrites = leadWriteTracker();
+	/** Lead mode fusion: when this step's gate began (the completion check's bound). */
+	let leadGateAt = Date.now();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -361,9 +398,13 @@ async function runApiTurnAttempt(
 		| undefined;
 	const saveCheckpoint = () =>
 		timed("turn:checkpoint", async () => {
+			const saved = () =>
+				checkpointed?.messages === messages && checkpointed.items === items;
+			// The checkpoint writes the newest items, so a snapshot still waiting
+			// to be written would only cost a write (and a relay) before it.
+			if (!saved()) progress.supersede();
 			await progress.drain();
-			if (checkpointed?.messages === messages && checkpointed.items === items)
-				return;
+			if (saved()) return;
 			const saving = { messages, items };
 			await checkpointApiTurn(turn, saving.messages, saving.items);
 			checkpointed = saving;
@@ -377,6 +418,10 @@ async function runApiTurnAttempt(
 	};
 	let coordinated = false;
 	let closeMcp: (() => Promise<void>) | undefined;
+	// Cross-chat memory and its VM clone; the clone's token is released when
+	// this step ends, however it ends.
+	let memoryLoading: Promise<TurnMemory | null> = Promise.resolve(null);
+	let memoryCloned: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -464,13 +509,24 @@ async function runApiTurnAttempt(
 		const metadata = await loadingMetadata;
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
+		// A child without a subagent role belongs to the retired lead/child
+		// architecture; only the root builder and its subagents run.
+		if (owner.parentSessionId && !owner.agentRole)
+			throw new Error("This retired child task can no longer run.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const variant = await turnHarnessVariant(turn.id, owner.userId);
 		if (owner.agentRole) subagentSession = owner;
-		// Builder subagents (harness variant subagents=on): the agent tools,
-		// deferred tool loading and per-level budgets. Children carry the role.
-		const subagentsOn = variant.subagents === "on" || !!owner.agentRole;
+		// Builder subagents (harness variant subagents=on): the agent tools
+		// and per-level budgets. Children carry the role.
+		// Lead mode fusion implies them: the lead delegates to its sidekick.
+		const subagentsOn =
+			variant.subagents !== "off" ||
+			variant.lead === "fusion" ||
+			!!owner.agentRole;
+		if (variant.lead === "fusion" && !owner.parentSessionId)
+			fusionLead = { userId: owner.userId, id: owner.id };
+		fusionRoleModels = variant.roleModels;
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -481,6 +537,8 @@ async function runApiTurnAttempt(
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
+		// This turn's reasoning effort; children on another model inherit it.
+		const turnReasoning = subscription?.reasoning ?? apiSettings.reasoning;
 		// The subscription endpoint rejects the public Responses apply_patch tool;
 		// it gets native Codex's freeform apply_patch (Lark grammar) instead.
 		let nativePatch = false;
@@ -516,12 +574,11 @@ async function runApiTurnAttempt(
 			runtime: owner.harness === "codex" ? "codex" : "api",
 			role: analyticsAgentRole(owner),
 		};
-		// The root chat is the builder itself; writable children build too.
-		const writable =
-			!owner.parentSessionId || owner.taskAccess === "read_write";
+		// The root chat is the builder itself; writer subagents build too.
+		const writable = writesOwnCheckout(owner);
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
-		const memoryLoading =
+		memoryLoading =
 			writable && !owner.parentSessionId && !evaluation
 				? timed("turn:memory", () =>
 						turnMemo(`${turn.id}:memory`, () =>
@@ -539,7 +596,26 @@ async function runApiTurnAttempt(
 						),
 					).catch(() => null)
 				: Promise.resolve(null);
-		let memoryCloned: Promise<void> | undefined;
+		// Its subagents read the same project's memory, never write it: no
+		// save hook, no ~/memory clone, no memory instructions. Same
+		// exclusions as the root chat's.
+		const childRole = owner.parentSessionId ? owner.agentRole : null;
+		const subagentMemoryLoading =
+			childRole && !evaluation
+				? timed("turn:memory", () =>
+						turnMemo(`${turn.id}:subagent-memory`, () =>
+							subagentMemory(
+								{
+									id: owner.id,
+									userId: owner.userId,
+									projectId: owner.projectId ?? null,
+									role: childRole,
+								},
+								{ wording: variant.memoryWording },
+							),
+						),
+					).catch(() => null)
+				: Promise.resolve(null);
 		// Turn-fixed configuration is loaded by the turn's first durable step and
 		// reused by later steps in the same isolate (see turn-memo). It may change
 		// between turns; within one, keeping it fixed also keeps the tools and the
@@ -559,13 +635,15 @@ async function runApiTurnAttempt(
 			: null;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
+		// Values every tool result is redacted of. The memory clone's token
+		// joins once it is on the VM, so tools read this list at call time.
+		const redact: string[] = [...(projectSecrets?.redact ?? [])];
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
 			abort.signal,
-			[],
 			workspaceReuse,
 		);
 		let codePoint: Promise<void> | undefined;
@@ -598,11 +676,16 @@ async function runApiTurnAttempt(
 			const ready = execution;
 			const cloning = memoryLoading.then((memory) => {
 				if (!memory) return;
-				memoryCloned ??= memory.prepareVm(ready);
+				memoryCloned ??= memory.prepareVm(ready).then(() => {
+					for (const token of memory.vmTokens())
+						if (!redact.includes(token)) redact.push(token);
+				});
 				return memoryCloned;
 			});
 			await attachmentsWritten;
-			if (writable) {
+			// A shared writer (lead mode fusion's sidekick) works in its lead's
+			// checkout, whose code points are the lead's.
+			if (writable && owner.taskPlacement !== "shared") {
 				const prompt = [...items]
 					.reverse()
 					.find((item) => item.kind === "userMessage");
@@ -651,16 +734,22 @@ async function runApiTurnAttempt(
 		// overlaps the remaining setup. It is the same memoized preparation, so a
 		// failure still surfaces where the workspace is awaited.
 		if (firstStep && writable) void workspace().catch(() => {});
-		const running = timed(
-			"turn:publishRunning",
-			() => publishProgress?.("running") ?? Promise.resolve(),
-		);
+		// A later durable step starts from items its predecessor just
+		// checkpointed (and delivered); republishing them is a wasted write and
+		// relay on every step.
+		const running =
+			step && step.index > 1
+				? Promise.resolve()
+				: timed(
+						"turn:publishRunning",
+						() => publishProgress?.("running") ?? Promise.resolve(),
+					);
 		// Awaited below; this only keeps an early failure from being unhandled.
 		running.catch(() => {});
 		// A read-only subagent's commands run as the reader Linux user, which
 		// cannot write the checkout (reader-workspace-machines.ts), so it gets
 		// the command runner its shell surface is built on.
-		const reader = runsAsReader(owner);
+		const reader = isReaderRole(owner.agentRole);
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
@@ -690,6 +779,7 @@ async function runApiTurnAttempt(
 					(base) => base !== null,
 				),
 			configCache: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			redact,
 			once: (id, run) =>
 				journaledToolOperation(
 					{
@@ -709,18 +799,12 @@ async function runApiTurnAttempt(
 		const planState = agentPlanState(items);
 		const planLock =
 			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
-		// Writable builders get the validated shell surface; so do read-only
-		// subagents, whose commands run as the reader Linux user that cannot
-		// write the checkout (reader-workspace-machines.ts).
-		const shellBuilder = writable || reader;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
-			instructionMessages: shellBuilder
-				? { turnStart: step ? step.index === 1 : !continued }
-				: undefined,
+			instructionMessages: { turnStart: step ? step.index === 1 : !continued },
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
 				progress.offer(items);
@@ -728,23 +812,23 @@ async function runApiTurnAttempt(
 		});
 		// The builder's tool surface (docs/builder-tool-surface.md): "current"
 		// for everyone; a development eval user's harness variant may pick a
-		// lean one (docs/parallel-evals.md).
-		const surface = !shellBuilder
-			? { tools: repositoryContext.tools, lean: undefined }
-			: builderToolSurface({
-					variant: variant.toolSurface,
-					modelId: route.modelId,
-					tools: repositoryContext.tools,
-					readOnly: reader,
-					lean: {
-						workspace,
-						sessionId: owner.id,
-						turnId: turn.id,
-						toolCallPrefix: step ? `step-${step.index}:` : undefined,
-						signal: abort.signal,
-						memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
-					},
-				});
+		// lean one (docs/parallel-evals.md). Read-only subagents get it too:
+		// their commands run as the reader Linux user that cannot write the
+		// checkout (reader-workspace-machines.ts).
+		const surface = builderToolSurface({
+			variant: variant.toolSurface,
+			modelId: route.modelId,
+			tools: repositoryContext.tools,
+			readOnly: reader,
+			lean: {
+				workspace,
+				sessionId: owner.id,
+				turnId: turn.id,
+				toolCallPrefix: step ? `step-${step.index}:` : undefined,
+				signal: abort.signal,
+				memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			},
+		});
 		const surfaceTools = surface.tools;
 		// A lean surface names the repository's absolute path in its system
 		// prompt (Claude Code's tools take absolute paths). The first step
@@ -824,105 +908,142 @@ async function runApiTurnAttempt(
 		const commandReader =
 			surface.lean?.commandReader ??
 			("read_command" in surfaceTools ? "read_command" : "continue_command");
-		// Delegated-task context concerns only sessions with children. A session
-		// without the task tools (the builder) cannot gain children mid-turn, so
-		// its answer holds for the turn; one with them re-checks until it has one.
-		const canDelegate = "create_task" in surfaceTools;
-		const hasChildren = () =>
-			turnMemo(
-				`${turn.id}:has-children`,
-				() => hasDelegatedTasks(owner.userId, owner.id),
-				(present) => present || !canDelegate,
-			);
 		// The builder and subagents above the deepest level may delegate; a
 		// checker reviews the deliverable itself, on the smallest surface.
-		const delegation: ToolSet =
+		const delegates =
 			subagentsOn &&
-			surface.lean &&
+			!!surface.lean &&
 			(owner.agentRole
-				? owner.agentRole !== "checker" && subagentLevel < MAX_SUBAGENT_LEVEL
-				: !owner.parentSessionId)
-				? withRedactedResults(
-						subagentTools({
-							machines: unscopedMachines,
-							parent: owner as AgentSessionRecord,
-							workspace,
-							signal: abort.signal,
-							waitDeadlineAt: step?.waitDeadlineAt,
-							roleModels: variant.roleModels,
-						}),
-						projectSecrets?.redact ?? [],
-					)
+				? owner.agentRole !== "checker" &&
+					// A sidekick does the work itself (lead mode fusion).
+					!isActiveSidekick(owner) &&
+					// So does a checker pair's worker (checkerMode=pair).
+					owner.agentBudget?.checkerPair !== "worker" &&
+					subagentLevel < MAX_SUBAGENT_LEVEL
+				: !owner.parentSessionId);
+		// checkerMode=pair: the judge's only delegation is its worker (src/domain/checker-pair.ts).
+		const pairJudge =
+			!!surface.lean &&
+			owner.agentRole === "checker" &&
+			owner.agentBudget?.checkerPair === "judge" &&
+			subagentLevel < MAX_SUBAGENT_LEVEL;
+		const subagentContext: SubagentToolContext = {
+			machines: unscopedMachines,
+			parent: owner as AgentSessionRecord,
+			workspace,
+			signal: abort.signal,
+			waitDeadlineAt: step?.waitDeadlineAt,
+			roleModels: variant.roleModels,
+			lead: variant.lead,
+			parentReasoning: turnReasoning,
+			rigor: variant.rigor === "on",
+			checkerMode: variant.checkerMode,
+			// Lead mode fusion: one writer at a time in the shared checkout.
+			onSidekickRound: leadWrites.start,
+			leadWritesSettled: leadWrites.settled,
+			leadBackgroundCommands: () => pendingAgentCommandIds(items),
+		};
+		const delegation: ToolSet = delegates
+			? withRedactedResults(subagentTools(subagentContext), redact)
+			: pairJudge
+				? withRedactedResults(checkerWorkerTools(subagentContext), redact)
 				: {};
+		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
+		// starts the request's exploration, and the lead waits while its
+		// sidekick works in the shared checkout.
+		const leadGate =
+			fusionLead && delegates
+				? (waitUntil: number) =>
+						fusionLeadGate({
+							context: subagentContext,
+							items,
+							explore: fusionPairFor(owner.listedModelId, variant.roleModels)
+								.sidekickExplores,
+							waitUntil,
+						} satisfies FusionLeadGateInput).then((ready) => {
+							if (ready === "ready") leadWrites.clear();
+							return ready;
+						})
+				: null;
+		// checkerMode=pair: the judge waits for its workers' reports (checker-pair-gate.ts).
+		const judgeGate = pairJudge
+			? (waitUntil: number) =>
+					checkerPairGate({
+						judge: owner as AgentSessionRecord,
+						signal: abort.signal,
+						waitUntil,
+					})
+			: null;
 		// Code mode is a development harness variant on a lean surface only
-		// (docs/parallel-evals.md). primary: run_code is the main tool and the
-		// deferred tools are callable only from inside it.
+		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
+		// MCP setup's search and call tools are callable only from inside it.
 		const codeMode =
 			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		const ownTools = turnTools({
+			surfaceTools,
+			mcp,
+			plugins,
+			webSearch,
+			hooks,
+			planLock,
+			projectSecrets,
+			redact,
+		});
 		const baseTools: ToolSet = {
-			...turnTools({
-				surfaceTools,
-				mcp,
-				plugins,
-				webSearch,
-				hooks,
-				planLock,
-				projectSecrets,
-			}),
+			...(leadGate ? withSidekickWriteGuard(ownTools, leadWrites) : ownTools),
 			...delegation,
 		};
-		// Rarely used tools stay out of the tool list: loaded on demand through
-		// find_tools (subagents=on on a lean surface), or called from run_code
-		// (codeMode=primary). Loads append, so earlier requests' tool lists stay
-		// a cached prefix.
-		const deferredGroups =
-			codeMode === "primary"
-				? CODE_MODE_DEFERRED_TOOL_GROUPS
-				: subagentsOn && surface.lean
-					? BUILDER_DEFERRED_TOOL_GROUPS
-					: null;
-		const allTools = withCodeMode(
-			baseTools,
-			codeMode
-				? {
-						signal: abort.signal,
-						sessionId: owner.id,
-						turnId: turn.id,
-						toolCallPrefix: step ? `step-${step.index}:` : undefined,
-						redact: projectSecrets?.redact ?? [],
-						mode: codeMode,
-						deferred:
-							codeMode === "primary"
-								? CODE_MODE_DEFERRED_TOOL_GROUPS.flatMap(
-										(group) => group.tools,
-									).filter(
-										(name) =>
-											name in baseTools &&
-											!CODE_MODE_DIRECT_ONLY_TOOLS.includes(name),
-									)
-								: [],
-					}
-				: null,
+		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
+		// call tools (run_code only), and propose_plan, offered only while
+		// planning (it ends the turn). agent, agent_send, enter_plan_mode and
+		// request_project_secret are ordinary tools. Additions append, so
+		// earlier requests' tool lists stay a cached prefix.
+		const deferredNames = [
+			...(codeMode === "primary" ? CODE_MODE_DEFERRED_TOOLS : []),
+			...(codeMode === "primary" || (subagentsOn && surface.lean)
+				? PLAN_ONLY_TOOLS
+				: []),
+		];
+		// Harness variant outputCap: each result the model reads keeps its
+		// head and tail within the cap (tool-output-cap.ts).
+		const allTools = withOutputCap(
+			withCodeMode(
+				baseTools,
+				codeMode
+					? {
+							signal: abort.signal,
+							sessionId: owner.id,
+							turnId: turn.id,
+							toolCallPrefix: step ? `step-${step.index}:` : undefined,
+							redact,
+							mode: codeMode,
+							deferred:
+								codeMode === "primary"
+									? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
+									: [],
+						}
+					: null,
+			),
+			outputCapCharacters(variant.outputCap),
 		);
-		const planToolsWhilePlanning = () =>
-			planLock?.planning ? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL] : [];
-		const deferral = deferredGroups
+		const orderedTools = surface.lean
+			? inLeanToolOrder(allTools, {
+					surface: Object.keys(surfaceTools),
+					webSearch: Object.keys(webSearch),
+					runCodeFirst: codeMode === "primary",
+				})
+			: allTools;
+		const deferral = deferredNames.length
 			? deferredToolSurface({
-					tools: allTools,
-					groups: deferredGroups,
-					loaded: loadedDeferredTools(items, messages, deferredGroups),
-					...(codeMode === "primary"
-						? {
-								// Plan mode can start inside a program; propose_plan
-								// must then be a direct call (it ends the turn).
-								forceLoaded: planToolsWhilePlanning,
-								discovery: "run_code" as const,
-								unlisted: CODE_MODE_DIRECT_ONLY_TOOLS,
-							}
-						: { forceLoaded: planToolsWhilePlanning() }),
+					tools: orderedTools,
+					deferred: deferredNames,
+					loaded: loadedDeferredTools(items, messages, deferredNames),
+					// Plan mode can start mid-turn; propose_plan must then be offered.
+					forceLoaded: () => (planLock?.planning ? PLAN_ONLY_TOOLS : []),
+					unlisted: PLAN_ONLY_TOOLS,
 				})
 			: null;
-		const tools = deferral?.tools ?? allTools;
+		const tools = deferral?.tools ?? orderedTools;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -949,20 +1070,21 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			}
 		}
-		const projectKnowledge = shellBuilder
-			? null
-			: await loadCloudProjectKnowledge(
-					owner,
-					currentTask?.kind === "userMessage"
-						? currentTask.text
-						: (owner.taskPrompt ?? owner.title),
-				);
+		const readOnlyMemory = await subagentMemoryLoading;
+		if (readOnlyMemory && firstStep) {
+			const attached = await timed("turn:memoryAttach", () =>
+				readOnlyMemory.attach(messages, items),
+			);
+			messages = attached.messages;
+			if (attached.recall) {
+				items = withMemoryRecall(items, attached.recall);
+				progress.offer(items);
+			}
+		}
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
-		// Every root chat and child task works on the implementation surface.
-		const toolSurface = "implementation";
-		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
+		if (step && (step.limitReached || step.index > modelStepLimit()))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
 		if (firstStep) {
@@ -1022,14 +1144,13 @@ async function runApiTurnAttempt(
 						}
 					: undefined,
 			cacheScopeId: promptCacheScopeId(variant.promptCacheScope, owner.id),
+			instructionVariant: variant.instructions,
 			userId: turn.user_id,
 			connectionId: route.connectionId ?? undefined,
 			connectionRevision: route.connectionRevision,
-			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
+			reasoning: turnReasoning,
 			speed: apiSettings.speed,
-			knownTools: discoveredToolsFromSession(items),
 			...(deferral ? { toolOrder: deferral.order } : {}),
-			toolSurface,
 			...(planLock
 				? {
 						endTurnTools: [
@@ -1081,6 +1202,33 @@ async function runApiTurnAttempt(
 				failedAttempt = state;
 			},
 			messages,
+			// Lead mode fusion's sidekick: each compaction may switch its model;
+			// a pending switch compacts first (src/server/services/sidekick-model-switch.ts).
+			...(sidekickState(owner)
+				? {
+						compactFirst:
+							sidekickSwitchDue(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							) &&
+							sidekickSwitchAllowed(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							),
+						switchAtCompaction: sidekickSwitchAtCompaction({
+							userId: owner.userId,
+							sessionId: owner.id,
+							turnId: turn.id,
+							roleModels: variant.roleModels,
+							items: () => items,
+							signal: abort.signal,
+						}),
+					}
+				: {}),
 			archiveHistory: async (history) => {
 				const reference = await archiveModelContext(
 					owner.userId,
@@ -1093,11 +1241,10 @@ async function runApiTurnAttempt(
 			},
 			instructions: turnInstructions(
 				{
-					shellBuilder,
 					session: owner,
 					tools,
 					plugins,
-					projectKnowledge,
+					projectKnowledge: null,
 					secretNames: receivesSecrets ? projectSecrets?.names : undefined,
 					leanShape: surface.lean?.shape,
 					leanReadOnly: surface.lean?.readOnly,
@@ -1105,6 +1252,13 @@ async function runApiTurnAttempt(
 					deferredTools: deferral?.deferred,
 					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
+					lead: variant.lead,
+					rigor: variant.rigor === "on",
+					forceDelegation: variant.subagents === "force",
+					fusionPair:
+						variant.lead === "fusion" && !owner.parentSessionId
+							? fusionPairFor(owner.listedModelId, variant.roleModels)
+							: undefined,
 				},
 				memory,
 			),
@@ -1129,6 +1283,10 @@ async function runApiTurnAttempt(
 			afterTools: async (history) =>
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				// The local worker's loop calls the model several times in one
+				// run; durable steps wait before their one call instead (below).
+				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
+				if (!step && judgeGate) await judgeGate(Number.POSITIVE_INFINITY);
 				if (owner.agentRole) {
 					// Counted and checked before every model step: a wrap-up
 					// notice at 90%, the turn stops at 100% (reported as such).
@@ -1154,47 +1312,9 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
-				const delegated = await hasChildren();
-				let current = delegated
-					? await withDelegationContext(owner.userId, owner.id, history)
-					: history;
-				if (delegated && !owner.parentSessionId && owner.projectId) {
-					current = await withCompletedTaskReviewContext({
-						messages: current,
-						children: await completedChildrenForReview(
-							owner.userId,
-							owner.projectId,
-							owner.id,
-						),
-						signal: abort.signal,
-						readHandoff: (taskId) =>
-							Effect.runPromise(
-								runAgentTaskTool(
-									machines,
-									{
-										userId: owner.userId,
-										projectId: owner.projectId,
-										sessionId: owner.id,
-										harnessId: owner.harness,
-									},
-									owner,
-									{
-										id: `${turn.id}:handoff:${taskId}`,
-										tool: "read_task_handoff",
-										arguments: { taskId },
-									},
-									{ signal: abort.signal, turnId: turn.id },
-								),
-							),
-					});
-				}
-				if (current !== history) {
-					messages = current;
-					await saveCheckpoint();
-				}
 				return injectServerPeerMessages(
 					owner.id,
-					current,
+					history,
 					async (injected, delivered) => {
 						messages = injected;
 						if (delivered.length) {
@@ -1327,7 +1447,9 @@ async function runApiTurnAttempt(
 							waitDeadlineAt: step.waitDeadlineAt,
 							items: () => items,
 							roleModels: variant.roleModels,
+							parentReasoning: turnReasoning,
 						}),
+						rigor: variant.rigor === "on",
 					})
 				: step && loopEligible && variant.review === "on"
 					? createReviewLoop({
@@ -1346,7 +1468,10 @@ async function runApiTurnAttempt(
 								waitDeadlineAt: step.waitDeadlineAt,
 								items: () => items,
 								roleModels: variant.roleModels,
+								parentReasoning: turnReasoning,
 							}),
+							rigor: variant.rigor === "on",
+							pair: variant.checkerMode === "pair",
 						})
 					: null;
 		const attemptWaitUntil = () =>
@@ -1355,6 +1480,31 @@ async function runApiTurnAttempt(
 				Date.now() + 10 * 60_000,
 			);
 		let result: Awaited<ReturnType<typeof runAgent>>;
+		// Lead mode fusion: no model call while the sidekick works in the shared
+		// checkout; a round still running at the step's deadline continues the
+		// wait in the next step. Its report is in the mailbox once it is ready.
+		if (step && leadGate) {
+			leadGateAt = Date.now();
+			const gate = await timed("turn:fusionLead", () =>
+				leadGate(attemptWaitUntil()),
+			);
+			if (gate === "wait") {
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+		}
+		// checkerMode=pair: no judge model call while a worker still works.
+		if (step && judgeGate) {
+			const gate = await timed("turn:checkerPair", () =>
+				judgeGate(attemptWaitUntil()),
+			);
+			if (gate === "wait") {
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+		}
 		const loopStep = attemptLoop
 			? await timed("turn:attemptLoop", () =>
 					attemptLoop.beforeModel({
@@ -1443,6 +1593,17 @@ async function runApiTurnAttempt(
 			}
 			throw new IncompleteAgentTurn("background-command-review-required");
 		}
+		// Lead mode fusion: the turn does not complete while a sidekick round
+		// runs; the next step waits for its report and the lead answers after it.
+		if (
+			step &&
+			leadGate &&
+			(await fusionRoundOpen(owner as AgentSessionRecord, leadGateAt))
+		) {
+			await saveCheckpoint();
+			coordinated = false;
+			return "continue";
+		}
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;
 		if (
@@ -1487,34 +1648,46 @@ async function runApiTurnAttempt(
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
-		// patch and ref), never as a commit or a published branch.
-		if (!owner.agentRole)
-			await timed("turn:commit", () =>
-				commitCompletedSessionTurn(
-					{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-					items,
-					{
-						exec: (providerRef, argv, _env, timeout) =>
-							(execution?.machines ?? machines).exec(
-								WorkspaceId(providerRef),
-								posixShellCommand(argv),
-								timeout,
-							),
-						writeTextFile: (providerRef, path, contents) =>
-							(execution?.machines ?? machines).writeTextFile(
-								WorkspaceId(providerRef),
-								path,
-								contents,
-							),
-						readTextFile: (providerRef, path) =>
-							(execution?.machines ?? machines).readTextFile(
-								WorkspaceId(providerRef),
-								path,
-							),
-					},
-					abort.signal,
-				),
-			);
+		// patch and ref), never as a commit or a published branch. A turn that
+		// ends in plan mode commits and pushes nothing.
+		const committed =
+			!owner.agentRole && !planLock?.planning
+				? await timed("turn:commit", () =>
+						commitCompletedSessionTurn(
+							{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+							items,
+							{
+								exec: (providerRef, argv, _env, timeout) =>
+									(execution?.machines ?? machines).exec(
+										WorkspaceId(providerRef),
+										posixShellCommand(argv),
+										timeout,
+									),
+								writeTextFile: (providerRef, path, contents) =>
+									(execution?.machines ?? machines).writeTextFile(
+										WorkspaceId(providerRef),
+										path,
+										contents,
+									),
+								readTextFile: (providerRef, path) =>
+									(execution?.machines ?? machines).readTextFile(
+										WorkspaceId(providerRef),
+										path,
+									),
+							},
+							abort.signal,
+						),
+					)
+				: undefined;
+		if (committed?.notice)
+			items = [
+				...items.filter((item) => item.id !== `${turn.id}:publication`),
+				{
+					kind: "notice",
+					id: SessionItemId(`${turn.id}:publication`),
+					message: committed.notice,
+				},
+			];
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))
@@ -1533,6 +1706,16 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		// The sidekick lives as long as the chat: an idle one waits for the
+		// next message (until its idle TTL); one still working is stopped.
+		if (fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				"the lead's turn ended while it worked",
+				undefined,
+				{ keepIdle: true },
+			).catch(() => {});
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
@@ -1549,16 +1732,27 @@ async function runApiTurnAttempt(
 				sessionId: owner.id,
 				turnId: turn.id,
 				eventType: "completed",
-				summary: owner.agentRole
-					? await subagentReport({
-							machines: unscopedMachines,
-							session: owner as AgentSessionRecord,
-							items,
-							outcome: "finished",
-							text: finalText.slice(-9000) || "(no final report)",
-						})
-					: finalText.slice(-16000) ||
-						"Turn ended without a recorded final summary; inspect the task before accepting it.",
+				// Only subagents reach here: a role-less child is refused above.
+				summary: await subagentReport({
+					machines: unscopedMachines,
+					session: owner as AgentSessionRecord,
+					items,
+					outcome: "finished",
+					text: finalText.slice(-9000) || "(no final report)",
+					roleModels: fusionRoleModels,
+					...(evaluation
+						? {
+								deps: {
+									chargeUsage: (usage: ApiTokenUsage, key: string) =>
+										recordEvaluationUsage(
+											evaluation as EvaluationRun,
+											`${turn.id}:${key}`,
+											usage,
+										),
+								},
+							}
+						: {}),
+				}),
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
@@ -1569,6 +1763,82 @@ async function runApiTurnAttempt(
 	} catch (error) {
 		workspaceReuse?.forget();
 		await progress.drain().catch(() => {});
+		// A sidekick's run ended at a compaction to switch models: the same
+		// turn continues on the escalation route from the compacted history.
+		if (
+			error instanceof ModelSwitchAtCompaction &&
+			subagentSession &&
+			!abort.signal.aborted &&
+			!progressFailed &&
+			!coordinationFailure
+		) {
+			try {
+				const current = {
+					route,
+					label: {
+						model: route.modelId,
+						connection: route.connectionId ?? "Codex",
+					},
+				};
+				// A switch that throws is dropped like an unavailable route: the
+				// turn continues where it was, and switches no more this turn.
+				const outcome = await completeSidekickModelSwitch({
+					userId: turn.user_id,
+					sessionId: turn.session_id,
+					turnId: turn.id,
+					roleModels: fusionRoleModels,
+					target: error.target,
+					compacted: error.compacted,
+					current,
+					previous: turnFailover(turn.failover),
+					messages,
+				}).catch((cause: unknown) => {
+					blockSidekickSwitch(turn.id);
+					return {
+						kind: "kept" as const,
+						reason: cause instanceof Error ? cause.message : String(cause),
+					};
+				});
+				if (outcome.kind === "kept")
+					console.warn("A sidekick's model switch was dropped.", {
+						reason: outcome.reason.slice(0, 200),
+					});
+				const failover =
+					outcome.kind === "switched" ? outcome.failover : undefined;
+				if (outcome.kind === "switched") {
+					messages = outcome.messages;
+					items = [
+						...items,
+						modelSwitchItem(items, {
+							id: `${turn.id}:sidekick-switch-${failover?.switches ?? 1}`,
+							state: "switched",
+							message: `Switched from ${outcome.from} to ${outcome.to} at a context compaction (${error.target.reason.replace(/[.\s]+$/, "")}).`,
+							reason: "sidekick-escalation",
+							from: current.label,
+							to: {
+								...outcome.label,
+								key: routeKey(outcome.failover.route),
+							},
+						}),
+					];
+				}
+				await checkpointApiTurn(turn, messages, items, failover);
+				// The turn's lease carries over to the step on the new route.
+				coordinated = false;
+				return {
+					failedOver: {
+						...turn,
+						...(failover ? { failover } : {}),
+						messages,
+						items,
+					},
+				};
+			} catch (cause) {
+				console.warn("A sidekick's model switch failed.", {
+					...apiTurnFailureClassification(cause),
+				});
+			}
+		}
 		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
 			console.warn("API turn failed", {
 				stage: coordinationFailure ? "coordination" : failureStage,
@@ -1748,6 +2018,14 @@ async function runApiTurnAttempt(
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},
 			);
+		if (saved && fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				saved === "cancelled"
+					? "the lead was stopped"
+					: "the lead's turn ended",
+			).catch(() => {});
 		if (saved === "failed") {
 			// A subagent still reports: what it said so far and, for a writer,
 			// the partial patch (its work in progress is committed for it).
@@ -1760,6 +2038,7 @@ async function runApiTurnAttempt(
 							error instanceof SubagentBudgetExhausted
 								? "budget exhausted"
 								: "failed",
+						roleModels: fusionRoleModels,
 						text: [
 							failureMessage,
 							items
@@ -1788,6 +2067,18 @@ async function runApiTurnAttempt(
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
+		// The VM's memory token goes when the step ends (completed, failed,
+		// cancelled or continued in a later step) rather than at expiry, with
+		// any earlier step's; a later step clones with a new one.
+		const cloned = memoryCloned;
+		const vm = execution;
+		await memoryLoading
+			.then(async (memory) => {
+				if (!memory) return;
+				await cloned?.catch(() => {});
+				await memory.releaseVm(cloned ? vm : undefined);
+			})
+			.catch(() => {});
 		await closeMcp?.().catch(() => {});
 		clearInterval(heartbeat);
 		await heartbeatPending;
@@ -1831,15 +2122,15 @@ function turnTools(input: {
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
 	planLock: PlanLock | null;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
+	redact: readonly string[];
 }) {
-	const { mcp, hooks, planLock, projectSecrets } = input;
+	const { mcp, hooks, planLock, projectSecrets, redact } = input;
 	const withMcp = {
 		...input.surfaceTools,
 		...mcp.tools,
 		...pluginSkillTools(input.plugins),
 		...input.webSearch,
 	};
-	const redact = projectSecrets?.redact ?? [];
 	// Only a person in a root chat can paste a secret into the card.
 	const secretTools =
 		planLock && projectSecrets
@@ -1862,6 +2153,40 @@ function turnTools(input: {
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
 	});
+}
+
+/**
+ * A lean builder's tool list in a fixed order, so it is byte-stable within
+ * a chat: run_code first in code mode primary, the surface's own tools, the
+ * workflow tools (agent, agent_send, enter_plan_mode, propose_plan when not
+ * deferred), web search, request_project_secret, then the rest (MCP,
+ * plugins, run_code in code mode on) in insertion order.
+ */
+function inLeanToolOrder(
+	tools: ToolSet,
+	groups: {
+		surface: readonly string[];
+		webSearch: readonly string[];
+		runCodeFirst: boolean;
+	},
+): ToolSet {
+	const leading = [
+		...(groups.runCodeFirst ? [CODE_MODE_TOOL] : []),
+		...groups.surface,
+		AGENT_TOOL,
+		AGENT_SEND_TOOL,
+		ENTER_PLAN_MODE_TOOL,
+		PROPOSE_PLAN_TOOL,
+		...groups.webSearch,
+		REQUEST_PROJECT_SECRET_TOOL,
+	].filter((name) => name in tools);
+	const names = [
+		...new Set([
+			...leading,
+			...Object.keys(tools).filter((name) => !leading.includes(name)),
+		]),
+	];
+	return Object.fromEntries(names.map((name) => [name, tools[name]]));
 }
 
 /**
@@ -1907,7 +2232,7 @@ function modelSwitchItem(
 		id: string;
 		state: ModelSwitchItem["state"];
 		message: string;
-		reason: FailoverReason;
+		reason: ModelSwitchItem["reason"];
 		from: ModelSwitchItem["from"];
 		to: ModelSwitchItem["to"];
 	},

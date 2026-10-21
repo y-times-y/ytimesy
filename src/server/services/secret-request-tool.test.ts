@@ -27,3 +27,10 @@ it("refuses a secret the project already has, and invalid names", async () => {
 		run({ name: "stripe key", kind: "runtime", reason: "" }),
 	).rejects.toThrow("uppercase");
 });
+
+it("does not promise the agent never sees the value", () => {
+	const description =
+		secretRequestTools([])[REQUEST_PROJECT_SECRET_TOOL]?.description ?? "";
+	expect(description).not.toMatch(/never see/i);
+	expect(description).toContain("best-effort");
+});

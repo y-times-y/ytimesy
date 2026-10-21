@@ -95,7 +95,10 @@ it("reports sign-in and project errors to the terminal without opening a PTY", a
 it("pipes the desktop both ways, trying the websockify path when the origin refuses", async () => {
 	mocks.user.mockResolvedValue({ id: "u" });
 	mocks.project.mockResolvedValue({ fullName: "org/repo" });
-	mocks.desktop.mockResolvedValue("https://vm.example");
+	mocks.desktop.mockResolvedValue({
+		origin: "https://vm.example",
+		authorization: "Basic dmlld2VyOnNlY3JldA==",
+	});
 	const remote = fakeSocket();
 	const openRemote = vi
 		.fn()
@@ -108,9 +111,12 @@ it("pipes the desktop both ways, trying the websockify path when the origin refu
 		url("/api/desktop", "projectId=p"),
 		openRemote,
 	);
-	expect(openRemote.mock.calls.map((call) => call[0])).toEqual([
-		"wss://vm.example",
-		"wss://vm.example/websockify",
+	expect(openRemote.mock.calls).toEqual([
+		["wss://vm.example", { authorization: "Basic dmlld2VyOnNlY3JldA==" }],
+		[
+			"wss://vm.example/websockify",
+			{ authorization: "Basic dmlld2VyOnNlY3JldA==" },
+		],
 	]);
 	client.emit.message?.(new Uint8Array([1]), true);
 	remote.emit.message?.(new Uint8Array([2]), true);

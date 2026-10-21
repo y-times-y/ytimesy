@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import type { ClientSocket } from "./client-socket";
 import { webSocketCloseReason } from "./close-reason";
+import type { OpenDesktopRemote } from "./desktop-session";
 
 /** Adapts a `ws` socket (local Node dev server) to the shared session code. */
 export function nodeClientSocket(socket: WebSocket): ClientSocket {
@@ -21,9 +22,11 @@ export function nodeClientSocket(socket: WebSocket): ClientSocket {
 	};
 }
 
-export function openNodeRemoteSocket(url: string) {
-	return new Promise<ClientSocket>((resolve, reject) => {
-		const remote = new WebSocket(url, ["binary"]);
+export const openNodeRemoteSocket: OpenDesktopRemote = (url, auth) =>
+	new Promise<ClientSocket>((resolve, reject) => {
+		const remote = new WebSocket(url, ["binary"], {
+			headers: { authorization: auth.authorization },
+		});
 		const timer = setTimeout(() => {
 			remote.terminate();
 			reject(new Error("Desktop is not ready."));
@@ -37,7 +40,6 @@ export function openNodeRemoteSocket(url: string) {
 			reject(cause);
 		});
 	});
-}
 
 function toBytes(raw: WebSocket.RawData): Uint8Array {
 	if (Array.isArray(raw)) return Buffer.concat(raw);

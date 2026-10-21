@@ -79,7 +79,12 @@ export async function addMcpServer(
 			server.projectId,
 			server.name,
 			server.url,
-			names.length ? await seal(JSON.stringify(server.headers)) : null,
+			names.length
+				? await seal(JSON.stringify(server.headers), {
+						purpose: "mcp-headers",
+						userId,
+					})
+				: null,
 			names,
 			server.pluginId,
 			server.auth,
@@ -136,10 +141,12 @@ export async function connectableMcpServers(
 			name: row.name,
 			url: row.url,
 			headers: row.sealed_headers
-				? (JSON.parse(await unseal(row.sealed_headers)) as Record<
-						string,
-						string
-					>)
+				? (JSON.parse(
+						await unseal(row.sealed_headers, {
+							purpose: "mcp-headers",
+							userId,
+						}),
+					) as Record<string, string>)
 				: {},
 		})),
 	);
@@ -188,7 +195,12 @@ export async function saveMcpOAuthState(
 	await database().query(
 		`insert into mcp_oauth_state(state_hash,user_id,server_id,encrypted_verifier,expires_at)
 		 values($1,$2,$3,$4,now()+interval '10 minutes')`,
-		[stateHash(state), userId, serverId, await seal(verifier)],
+		[
+			stateHash(state),
+			userId,
+			serverId,
+			await seal(verifier, { purpose: "mcp-pkce", userId }),
+		],
 	);
 }
 
@@ -205,7 +217,10 @@ export async function takeMcpOAuthState(userId: string, state: string) {
 	return row
 		? {
 				serverId: row.server_id,
-				verifier: await unseal(row.encrypted_verifier),
+				verifier: await unseal(row.encrypted_verifier, {
+					purpose: "mcp-pkce",
+					userId,
+				}),
 			}
 		: null;
 }
