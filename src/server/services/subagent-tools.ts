@@ -12,6 +12,9 @@ import {
 	CHECKER_WORKER_TOOL,
 	checkerWorkerBrief,
 	checkerWorkerBudget,
+	checkerWorkerModelRole,
+	MAX_LIVE_CHECKER_WORKERS,
+	MAX_STRONG_CHECKER_WORKERS,
 } from "#/domain/checker-pair";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import { fusionPairProfile } from "#/domain/fusion-pairs";
@@ -516,15 +519,36 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	return { [AGENT_TOOL]: agent, [AGENT_SEND_TOOL]: agentSend };
 }
 
-const workerInput = z.object({
-	brief: z
-		.string()
-		.min(1)
-		.max(CHECKER_WORKER_BRIEF_MAX)
-		.describe(
-			"Self-contained: what to read and summarize, the copy to make, the tests and probes to write under your scratch and run, the existing tests to run, and the evidence to return. The worker sees only this.",
-		),
+const workerBrief = z
+	.string()
+	.min(1)
+	.max(CHECKER_WORKER_BRIEF_MAX)
+	.describe(
+		"Self-contained: what to read and summarize, the copy to make, the tests and probes to write under your scratch and run, the existing tests to run, and the evidence to return. The worker sees only this.",
+	);
+const workerModel = z
+	.enum(["cheap", "strong"])
+	.optional()
+	.describe(
+		`"strong" runs this worker on your own model, for one hard investigation (at most ${MAX_STRONG_CHECKER_WORKERS} per check); default "cheap".`,
+	);
+const workerSpec = z.object({
+	brief: workerBrief,
 	title: z.string().min(1).max(SUBAGENT_TITLE_MAX).optional(),
+	model: workerModel,
+});
+const workerInput = z.object({
+	brief: workerBrief.optional(),
+	title: z.string().min(1).max(SUBAGENT_TITLE_MAX).optional(),
+	model: workerModel,
+	workers: z
+		.array(workerSpec)
+		.min(1)
+		.max(MAX_LIVE_CHECKER_WORKERS)
+		.optional()
+		.describe(
+			`Instead of brief: start up to ${MAX_LIVE_CHECKER_WORKERS} workers at once on independent requirement groups (each its own scratch subdirectory) and wait for all their reports.`,
+		),
 	id: z
 		.string()
 		.min(1)
@@ -535,22 +559,26 @@ const workerInput = z.object({
 		),
 });
 
+type WorkerSpec = z.infer<typeof workerSpec>;
+
 /**
  * checkerMode=pair: the judge's one delegation tool (src/domain/checker-pair.ts).
- * It starts a read-only worker on roleModels.checkerWorker with the judge's
- * brief in the runtime's frame, or briefs a worker that already reported
- * again, and waits for its report. The worker shares the VM read-only as the
- * reader user, like the judge.
+ * It starts read-only workers on roleModels.checkerWorker (or, for one
+ * `model: "strong"` worker per check, the judge's roleModels.checker) with
+ * the judge's briefs in the runtime's frame, up to MAX_LIVE_CHECKER_WORKERS
+ * at once sharing the worker token budget, or briefs a worker that already
+ * reported again, and waits for the reports. Workers share the VM read-only
+ * as the reader user, like the judge.
  */
 export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 	const deps = { ...defaultDeps, ...context.deps };
 	const { parent } = context;
 	const worker = tool({
-		description:
-			"Hand reading, test writing and test runs to your worker: a cheaper read-only agent on this VM that sees only your brief and reports compact evidence (commands with exit status and output, file:line excerpts, test results). Waits for its report. Pass id to brief a worker that already reported again.",
+		description: `Hand reading, test writing and test runs to workers: cheaper read-only agents on this VM that see only your brief and report compact evidence (commands with exit status and output, file:line excerpts, test results). Pass brief for one worker, or workers (up to ${MAX_LIVE_CHECKER_WORKERS}) to run independent groups in parallel; waits for every report. model "strong" uses your own model for one hard investigation. Pass id with brief to brief a worker that already reported again.`,
 		inputSchema: workerInput,
 		execute: async (input: z.infer<typeof workerInput>) => {
 			if (input.id) {
+				if (!input.brief) throw new Error("A follow-up needs a brief.");
 				const tree = await loadTreeFor(deps, parent);
 				const target = tree.nodes.find(
 					(node) => node.label === input.id && node.parentId === parent.id,
@@ -585,32 +613,65 @@ export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 							note: "Still running; its report will arrive as a message.",
 						};
 			}
+			const specs: WorkerSpec[] = input.workers?.length
+				? input.workers
+				: input.brief
+					? [{ brief: input.brief, title: input.title, model: input.model }]
+					: [];
+			if (!specs.length)
+				throw new Error("Pass brief, workers, or id with brief.");
+			const tree = await loadTreeFor(deps, parent);
+			const mine = tree.nodes.filter((node) => node.parentId === parent.id);
+			const live = mine.filter((node) => node.live).length;
+			if (live + specs.length > MAX_LIVE_CHECKER_WORKERS)
+				throw new Error(
+					`At most ${MAX_LIVE_CHECKER_WORKERS} workers run at once; ${live} still running. Wait for their reports or start fewer.`,
+				);
+			const strongUsed = tree.sessions.filter(
+				(session) =>
+					session.parentSessionId === parent.id &&
+					session.agentBudget?.checkerStrong,
+			).length;
+			const strong = specs.filter((spec) => spec.model === "strong").length;
+			if (strongUsed + strong > MAX_STRONG_CHECKER_WORKERS)
+				throw new Error(
+					`At most ${MAX_STRONG_CHECKER_WORKERS} strong worker per check${strongUsed ? " (already used)" : ""}. Use the cheap worker with a more exact brief.`,
+				);
 			const workspace = await context.workspace();
-			const { childId, budget, model, notice } = await spawnSubagent(
-				context,
-				deps,
-				{
-					role: "researcher",
-					modelRole: "checkerWorker",
-					pair: "worker",
-					title: input.title ?? "Checker worker",
-					brief: async () => checkerWorkerBrief(input.brief),
-				},
-				workspace,
-			);
-			const label =
-				(await loadTreeFor(deps, parent)).nodes.find(
-					(node) => node.id === childId,
-				)?.label ?? "?";
-			const report = await waitForReport(context, deps, childId, budget);
-			return {
-				id: label,
-				model: model.label,
-				...(notice ? { modelNotice: notice } : {}),
-				...(report ?? {
-					note: "Still running; its report will arrive as a message.",
+			const share = live + specs.length;
+			const started = [];
+			for (const spec of specs) {
+				const run = await spawnSubagent(
+					context,
+					deps,
+					{
+						role: "researcher",
+						modelRole: checkerWorkerModelRole(spec.model),
+						pair: "worker",
+						workerShare: share,
+						...(spec.model === "strong" ? { strongWorker: true } : {}),
+						title: spec.title ?? "Checker worker",
+						brief: async () => checkerWorkerBrief(spec.brief),
+					},
+					workspace,
+				);
+				started.push(run);
+			}
+			const labels = (await loadTreeFor(deps, parent)).nodes;
+			const results = await Promise.all(
+				started.map(async ({ childId, budget, model, notice }) => {
+					const report = await waitForReport(context, deps, childId, budget);
+					return {
+						id: labels.find((node) => node.id === childId)?.label ?? "?",
+						model: model.label,
+						...(notice ? { modelNotice: notice } : {}),
+						...(report ?? {
+							note: "Still running; its report will arrive as a message.",
+						}),
+					};
 				}),
-			};
+			);
+			return input.workers?.length ? { workers: results } : results[0];
 		},
 	});
 	return { [CHECKER_WORKER_TOOL]: worker };
@@ -893,6 +954,10 @@ async function spawnSubagent(
 		 * its worker (whose budget comes from checkerWorkerBudget).
 		 */
 		readonly pair?: "judge" | "worker";
+		/** checkerMode=pair: workers sharing the worker token budget. */
+		readonly workerShare?: number;
+		/** checkerMode=pair: a worker on the judge's model (`model: "strong"`). */
+		readonly strongWorker?: true;
 		/** Lead mode fusion: a writer that persists across rounds, and its first round. */
 		readonly sidekick?: {
 			readonly kind: SidekickRoundKind;
@@ -932,7 +997,12 @@ async function spawnSubagent(
 	if (!admission.admitted) throw new Error(admission.reason);
 	const admitted =
 		input.pair === "worker"
-			? workerBudget(parent, admission.level, parentRemaining)
+			? workerBudget(
+					parent,
+					admission.level,
+					parentRemaining,
+					input.workerShare,
+				)
 			: admission.budget;
 	let budget: SubagentBudget = {
 		steps: Math.min(admitted.steps, input.cap?.steps ?? Infinity),
@@ -941,6 +1011,7 @@ async function spawnSubagent(
 		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
 		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
 		...(input.pair ? { checkerPair: input.pair } : {}),
+		...(input.strongWorker ? { checkerStrong: true as const } : {}),
 	};
 	const brief = [
 		await input.brief(tree),
@@ -1041,6 +1112,7 @@ function workerBudget(
 	judge: AgentSessionRecord,
 	level: number,
 	judgeRemaining: SubagentRemaining | null | undefined,
+	share?: number,
 ) {
 	const judgeMinutes = judge.agentBudget?.minutes;
 	const budget = checkerWorkerBudget({
@@ -1049,6 +1121,7 @@ function workerBudget(
 		judgeWrapUpMinutes: judgeMinutes
 			? checkerWrapUpLeadMs(judgeMinutes * 60_000) / 60_000
 			: 0,
+		...(share ? { share } : {}),
 	});
 	if (!budget)
 		throw new Error(

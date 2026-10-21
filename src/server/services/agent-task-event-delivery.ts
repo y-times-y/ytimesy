@@ -33,10 +33,16 @@ export async function deliverAgentTaskEvents(
 			await markAgentTaskEventDelivered(event.id);
 			delivered += 1;
 		} catch (cause) {
-			await deferAgentTaskEvent(
+			const deferred = await deferAgentTaskEvent(
 				event.id,
 				cause instanceof Error ? cause.message : String(cause),
 			);
+			// A waiter took the report while this delivery staged it: the
+			// waiter has it, so the parent's mailbox must not get it again.
+			if (!deferred) {
+				await removePendingServerPeerMessage(event.parentSessionId, event.id);
+				continue;
+			}
 			if (eventId) throw cause;
 		}
 	}

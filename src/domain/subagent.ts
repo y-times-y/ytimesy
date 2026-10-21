@@ -94,6 +94,8 @@ export type SubagentBudget = {
 	 * (it starts no agents).
 	 */
 	readonly checkerPair?: "judge" | "worker";
+	/** checkerMode=pair: a worker the judge started on its own model (`model: "strong"`). */
+	readonly checkerStrong?: true;
 };
 
 type Level = 1 | 2 | 3;

@@ -25,6 +25,17 @@ import {
 /** The judge's tool that starts a worker (or briefs one again) and waits for its evidence. */
 export const CHECKER_WORKER_TOOL = "checker_worker";
 
+/** A judge's workers running at once; parallel workers share the worker token budget. */
+export const MAX_LIVE_CHECKER_WORKERS = 3;
+
+/** Workers per check that may run on the judge's own model (`model: "strong"`). */
+export const MAX_STRONG_CHECKER_WORKERS = 1;
+
+/** Which roleModels entry a worker runs on: the worker's, or the judge's for a strong one. */
+export function checkerWorkerModelRole(model: "cheap" | "strong" | undefined) {
+	return model === "strong" ? ("checker" as const) : ("checkerWorker" as const);
+}
+
 /** The judge's part of its brief: how the pair works. */
 export function checkerJudgeSection(input: {
 	readonly scratch: string;
@@ -35,7 +46,9 @@ export function checkerJudgeSection(input: {
 		`You are the judge of a checker pair. A worker agent (a cheaper model, read-only like you, on this machine as the same user, with ${input.scratch} writable) does the reading, test writing and running for you; you plan the check, weigh the evidence and write the verdict. The four parts above are yours to cover in full; the worker carries out what you assign.`,
 		`- Brief it with \`${CHECKER_WORKER_TOOL}\`: it sees only your brief (never the builder's conversation or this one), so make each brief self-contained: the request's relevant wording, the paths, what to read and summarize, the copy to make (\`${input.work}\`), which new tests and probes to write under ${input.scratch}/tests and run, which existing tests and callers to run, and the evidence to return. The call waits for its report.`,
 		"- Ask for compact evidence, not narration: each command as run with its exit status and the output lines that matter, file:line excerpts (only the lines that settle a point), and for each test its file, the one command that runs it and its result.",
-		`- Independent parts can go to separate workers at once (several calls in one step); \`id\` sends a follow-up to a worker that already reported (it keeps its context): to rerun, extend or settle something its evidence leaves open.`,
+		`- Independent requirement groups can go to up to ${MAX_LIVE_CHECKER_WORKERS} workers at once: pass \`workers\` (one self-contained brief each) and the call waits for all of them. Give each its own subdirectory (${input.scratch}/w1, ${input.scratch}/w2, ...) for its copy, tests and inputs so they never clobber each other; they share the worker token budget. \`id\` sends a follow-up to a worker that already reported (it keeps its context): to rerun, extend or settle something its evidence leaves open.`,
+		`- \`model: "strong"\` runs one worker on your own (stronger) model, for one hard investigation the cheap worker failed at or cannot do (at most ${MAX_STRONG_CHECKER_WORKERS} per check); default to the cheap worker.`,
+		'- No requirement stays unsettled while time remains: for every point a worker reports it could not establish, send a targeted follow-up (with `id`, or a new worker) naming the exact command to run, the path to read and how to run it, or settle it yourself, before you conclude. "unsure" is only for when time runs out or the thing truly cannot run on this machine; then say which requirement and why.',
 		"- Read a specific file or run a short command yourself only to settle a point the evidence leaves open; heavy reading and test runs go to the worker.",
 		'- The verdict is yours alone: a worker\'s report is evidence, not a verdict; check that its tests test what you asked for. Tests the worker wrote and ran at your direction count as your own new tests; list them in "tests" with the commands exactly as they were run.',
 		"</checker_pair>",
@@ -71,7 +84,8 @@ export const CHECKER_WORKER_BRIEF_MAX = 10_000;
 /**
  * A worker's budget: the level's steps and tokens (half of what the judge
  * has left at most), and the judge's remaining minutes less the time it
- * needs to write its verdict. Unlike an ordinary child it may use most of
+ * needs to write its verdict, the tokens split evenly among the workers
+ * running at once (`share`). Unlike an ordinary child it may use most of
  * its parent's time: the judge waits for it. Null when too little is left.
  */
 export function checkerWorkerBudget(input: {
@@ -79,6 +93,8 @@ export function checkerWorkerBudget(input: {
 	readonly judgeRemaining: SubagentRemaining;
 	/** The judge's wrap-up lead (checkerWrapUpLeadMs) in minutes. */
 	readonly judgeWrapUpMinutes: number;
+	/** Workers sharing the token budget (running ones plus those starting now). */
+	readonly share?: number;
 }): SubagentBudget | null {
 	if (input.level < 1 || input.level > MAX_SUBAGENT_LEVEL) return null;
 	const limits =
@@ -95,7 +111,10 @@ export function checkerWorkerBudget(input: {
 	const budget = {
 		steps: limits.steps,
 		minutes,
-		tokens: Math.min(limits.tokens, half(remaining.tokens)),
+		tokens: Math.floor(
+			Math.min(limits.tokens, half(remaining.tokens)) /
+				Math.max(1, input.share ?? 1),
+		),
 	};
 	return budget.minutes >= 1 && budget.tokens >= 50_000 ? budget : null;
 }
