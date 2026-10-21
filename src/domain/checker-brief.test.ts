@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { truncatedVerdictJson } from "./attempt-loop";
 import {
 	checkerDeadlineNotice,
+	checkerStandingRules,
 	checkerWrapUpLeadMs,
 	independentReviewBrief,
 	parseReviewVerdict,
+	reviewBriefRequest,
 	UNTESTED_PASS_NOTE,
 } from "./checker-brief";
 
@@ -337,5 +339,27 @@ describe("a checker answer cut off or wrapped", () => {
 				diffCommand: "git -C /app diff base head",
 			}),
 		).toContain("`git -C /app diff base head` shows the whole change.");
+	});
+});
+
+describe("the project's remembered rules for a checker", () => {
+	it("are labelled as the user's own standing rules, each a requirement to check", () => {
+		const text = checkerStandingRules({
+			rules: ["New entity IDs use ULIDs"],
+			related: ["- Store timestamps in UTC [added: 2026-10-01]"],
+		});
+		expect(text).toContain("The user's standing rules for this project");
+		expect(text).toContain("not the builder's claims");
+		expect(text).toContain('"follows the project\'s remembered rules"');
+		expect(text).toContain("- New entity IDs use ULIDs\n</standing_rules>");
+		expect(text).toContain("<remembered>");
+		expect(checkerStandingRules({ rules: [], related: [] })).toBe("");
+	});
+
+	it("are recalled for the user's request, not the generic brief", () => {
+		expect(reviewBriefRequest(independentReviewBrief(input))).toBe(
+			input.taskText,
+		);
+		expect(reviewBriefRequest("Find the export code")).toBeNull();
 	});
 });
