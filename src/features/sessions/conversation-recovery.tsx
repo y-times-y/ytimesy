@@ -1,5 +1,5 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { History } from "lucide-react";
+import { FileCode2, GitFork, History, Undo2 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 
@@ -63,30 +63,40 @@ export function ConversationRecovery({
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Portal>
 					<DropdownMenu.Content
-						className="inspector-view-menu"
-						sideOffset={4}
+						className="recovery-menu"
+						sideOffset={6}
 						align="end"
+						// Focus returning to the icon would keep it showing after the
+						// pointer leaves; keyboard users reach it again with Tab.
+						onCloseAutoFocus={(event) => event.preventDefault()}
 					>
+						<DropdownMenu.Label className="recovery-menu-label">
+							From this message
+						</DropdownMenu.Label>
 						{codeAvailable ? (
 							<>
 								<DropdownMenu.Item
 									disabled={disabled}
 									onSelect={() => void recover("code")}
 								>
+									<FileCode2 size={15} aria-hidden="true" />
 									Restore code
 								</DropdownMenu.Item>
 								<DropdownMenu.Item
 									disabled={disabled}
 									onSelect={() => void recover("both")}
 								>
+									<Undo2 size={15} aria-hidden="true" />
 									Restore code and conversation
 								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
 							</>
 						) : null}
 						<DropdownMenu.Item
 							disabled={disabled}
 							onSelect={() => void recover("fork")}
 						>
+							<GitFork size={15} aria-hidden="true" />
 							Fork conversation
 						</DropdownMenu.Item>
 					</DropdownMenu.Content>
