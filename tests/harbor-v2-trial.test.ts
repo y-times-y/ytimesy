@@ -315,7 +315,7 @@ describe("runHarborTrial", () => {
 });
 
 describe("runHarborTrial with review=on", () => {
-	it("runs the product's review loop in process: checker findings go back to the builder, checker edits are undone", async () => {
+	it("runs the product's review loop in process: checker findings go back to the builder, checker works in its own copy", async () => {
 		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
 		const failing = JSON.stringify({
 			verdict: "fail",
@@ -397,7 +397,11 @@ describe("runHarborTrial with review=on", () => {
 			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
 		);
 		expect(trace.review.checks).toHaveLength(2);
-		expect(trace.review.checks[0].restored).toBe(true);
+		// The checker worked in its own copy: its stray file never reached the checkout.
+		expect(trace.review.readerCopies[0]).toMatchObject({
+			sessionId: "harbor-checker-1",
+			ok: true,
+		});
 		expect(trace.review.summary).toBeTruthy();
 		// Builder and checkers count against one trial: 7 requests, 700 + 70 tokens.
 		expect(result.requests).toBe(7);
@@ -568,5 +572,227 @@ describe("runHarborTrial with review=on", () => {
 				n_input_tokens: 1000,
 			});
 		}
+	}, 120_000);
+	it("runs lead=fusion: exploration, a sidekick build in the checkout, a classifier decision, the lead's answer; costs per role", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,rigor=on,roleModels.writer=claude-sonnet-5-5,roleModels.classifier=claude-haiku-5-5@low",
+		});
+		const onTrack = JSON.stringify({ decision: "on_track", reason: "fine" });
+		const lead = scriptedModel([
+			[
+				call("l1", "agent_send", {
+					id: "trial-fusion.1",
+					message: "Create solution.py that prints 42; run it.",
+				}),
+				finish(100, 10, true),
+			],
+			[...text("l2", "Done: solution.py prints 42."), finish(100, 10)],
+		]);
+		const sidekick = scriptedModel([
+			[...text("s1", "Explored: no solution.py yet."), finish(50, 5)],
+			[
+				call("s2", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(50, 5, true),
+			],
+			[
+				...text("s3", "Wrote solution.py; python3 solution.py -> 42"),
+				finish(50, 5),
+			],
+		]);
+		const classifier = scriptedModel([[...text("c1", onTrack), finish(20, 2)]]);
+		const runtimes: (string | null)[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: "trial-fusion",
+			instruction: "Create solution.py that prints 42.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap, model) => {
+				runtimes.push(model?.modelId ?? null);
+				return {
+					model: wrap(
+						model?.modelId === "claude-sonnet-5-5"
+							? sidekick.model
+							: model?.modelId === "claude-haiku-5-5"
+								? classifier.model
+								: lead.model,
+					),
+				};
+			},
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect([lead.calls(), sidekick.calls(), classifier.calls()]).toEqual([
+			2, 3, 2,
+		]);
+		// The sidekick wrote the lead's own checkout.
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.fusion.rounds.map((r: { kind: string }) => r.kind)).toEqual([
+			"explore",
+			"build",
+		]);
+		expect(trace.fusion.decisions).toHaveLength(2);
+		expect(trace.fusion.decisions[1]).toMatchObject({
+			decision: "on_track",
+			source: "classifier",
+			model: "claude-haiku-5-5",
+			tokens: 22,
+		});
+		expect(trace.fusion.decisions[1].costUsd).toBeGreaterThan(0);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		// The lead's prompt is the product's fusion lead block, with the rigor block.
+		expect(trajectory.steps[0].message).toContain("you are the lead");
+		expect(
+			trajectory.agent.tool_definitions.map(
+				(entry: { function: { name: string } }) => entry.function.name,
+			),
+		).toEqual(expect.arrayContaining(["agent", "agent_send"]));
+		expect(
+			result.efficiency?.models.map((row) => [
+				row.role,
+				row.model,
+				row.requests,
+			]),
+		).toEqual([
+			["builder", "claude-opus-5-5", 2],
+			["sidekick", "claude-sonnet-5-5", 3],
+			["classifier", "claude-haiku-5-5", 2],
+		]);
+	}, 120_000);
+
+	it("runs review=on with checkerMode=pair: the judge briefs a read-only worker, its findings reach the builder, costs per role", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"review=on,checkerMode=pair,roleModels.checker=claude-sonnet-5-5,roleModels.checkerWorker=claude-haiku-5-5",
+		});
+		const verdict = (pass: boolean) =>
+			JSON.stringify({
+				verdict: pass ? "pass" : "fail",
+				failures: pass
+					? []
+					: ["Output: solution.py prints 41, the request asks for 42"],
+				requirements: [
+					{
+						requirement: "prints 42",
+						met: pass,
+						evidence: "worker ran python3 solution.py",
+					},
+				],
+				tests: [
+					{
+						name: "prints 42",
+						passed: pass,
+						command: "python3 solution.py > worker-out.txt; cat worker-out.txt",
+					},
+				],
+				assumptions: [],
+				notes: "",
+			});
+		const builder = scriptedModel([
+			[
+				call("b1", "write", { path: "solution.py", content: "print(41)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+			[
+				call("b3", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b4", "Fixed."), finish(100, 10)],
+		]);
+		const judge = scriptedModel([
+			[
+				call("j1", "checker_worker", {
+					brief: "Run python3 solution.py and report its output.",
+				}),
+				finish(200, 20, true),
+			],
+			[...text("j2", verdict(false)), finish(200, 20)],
+			[...text("j3", verdict(true)), finish(200, 20)],
+		]);
+		const worker = scriptedModel([
+			[
+				call("w1", "bash", {
+					command: "python3 solution.py > worker-out.txt; cat worker-out.txt",
+				}),
+				finish(30, 3, true),
+			],
+			[...text("w2", "python3 solution.py exit 0, prints 41"), finish(30, 3)],
+		]);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: "trial-pair",
+			instruction: "Create solution.py that prints 42.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap, model) => ({
+				model: wrap(
+					model?.modelId === "claude-sonnet-5-5"
+						? judge.model
+						: model?.modelId === "claude-haiku-5-5"
+							? worker.model
+							: builder.model,
+				),
+			}),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect([builder.calls(), judge.calls(), worker.calls()]).toEqual([4, 3, 2]);
+		expect(result.reviewRounds).toBe(1);
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		// The worker wrote only in the judge's copy.
+		await expect(
+			readFile(join(f.checkout.root, "worker-out.txt")),
+		).rejects.toThrow();
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		const round = trace.review.state.rounds[0];
+		expect(round.checker.pair).toBe(true);
+		expect(round.checker.workers[0]).toMatchObject({
+			sessionId: "harbor-checker-1.1",
+		});
+		expect(round.findings[0].text).toContain("prints 41");
+		// The worker's commands reach the verdict: its test is marked as the worker's.
+		expect(round.verdict.tests[0].ranBy).toBe("worker");
+		expect(
+			result.efficiency?.models.map((row) => [
+				row.role,
+				row.model,
+				row.requests,
+			]),
+		).toEqual([
+			["builder", "claude-opus-5-5", 4],
+			["checker", "claude-sonnet-5-5", 3],
+			["checkerWorker", "claude-haiku-5-5", 2],
+		]);
 	}, 120_000);
 });
