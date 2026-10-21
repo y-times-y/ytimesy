@@ -55,7 +55,7 @@ try {
 		timeoutMs: 300_000,
 	});
 	console.log(
-		`desktop start as ${who.stdout.trim()}: exit ${start.statusCode}`,
+		`desktop start as ${(who.stdout ?? "").trim()}: exit ${start.statusCode}`,
 	);
 	if (start.statusCode !== 0)
 		console.log((start.stderr ?? "").split("\n").slice(-8).join("\n"));
