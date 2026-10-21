@@ -8,6 +8,9 @@ import {
 	CHECKER_WORKER_TOOL,
 	checkerWorkerBrief,
 	checkerWorkerBudget,
+	checkerWorkerModelRole,
+	MAX_LIVE_CHECKER_WORKERS,
+	MAX_STRONG_CHECKER_WORKERS,
 	pairReviewVerdict,
 	ranCommandsText,
 	testWasRun,
@@ -89,7 +92,59 @@ describe("the checker pair's brief", () => {
 	});
 });
 
+describe("the judge's follow-ups, parallel and strong workers", () => {
+	it("tells the judge to follow up before unsure, run parallel workers in their own subdirectories, and use one strong worker", () => {
+		const pair = independentReviewBrief({ ...BRIEF, pair: true });
+		expect(pair).toContain(
+			"for every point a worker reports it could not establish, send a targeted follow-up",
+		);
+		expect(pair).toContain(
+			"the exact command to run, the path to read and how to run it",
+		);
+		expect(pair).toContain(
+			'"unsure" is only for when time runs out or the thing truly cannot run on this machine; then say which requirement and why.',
+		);
+		expect(pair).toContain("up to 3 workers at once: pass `workers`");
+		expect(pair).toContain(
+			"(/tmp/ytimesy-attempts/turn/review-1/w1, /tmp/ytimesy-attempts/turn/review-1/w2, ...)",
+		);
+		expect(pair).toContain('`model: "strong"`');
+		expect(pair).toContain("(at most 1 per check)");
+		expect(independentReviewBrief(BRIEF)).not.toContain("could not establish");
+	});
+
+	it("runs a strong worker on the judge's model entry, the default on the worker's", () => {
+		expect(MAX_LIVE_CHECKER_WORKERS).toBe(3);
+		expect(MAX_STRONG_CHECKER_WORKERS).toBe(1);
+		expect(checkerWorkerModelRole("strong")).toBe("checker");
+		expect(checkerWorkerModelRole("cheap")).toBe("checkerWorker");
+		expect(checkerWorkerModelRole(undefined)).toBe("checkerWorker");
+	});
+});
+
 describe("a worker's budget", () => {
+	it("splits the worker token budget among workers running at once", () => {
+		const input = {
+			level: 2,
+			judgeRemaining: { steps: 58, minutes: 9.5, tokens: 780_000 },
+			judgeWrapUpMinutes: 2,
+		};
+		expect(checkerWorkerBudget({ ...input, share: 1 })?.tokens).toBe(390_000);
+		expect(checkerWorkerBudget({ ...input, share: 3 })).toEqual({
+			steps: 75,
+			minutes: 7.5,
+			tokens: 130_000,
+		});
+		// Below the floor each, refused.
+		expect(
+			checkerWorkerBudget({
+				...input,
+				judgeRemaining: { ...input.judgeRemaining, tokens: 200_000 },
+				share: 3,
+			}),
+		).toBeNull();
+	});
+
 	it("gets most of the judge's time less its wrap-up, the level's steps and half the tokens", () => {
 		expect(
 			checkerWorkerBudget({

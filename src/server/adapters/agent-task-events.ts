@@ -113,13 +113,19 @@ export async function markAgentTaskEventDelivered(eventId: string) {
 	);
 }
 
+/**
+ * Puts a claimed event back for a later try. False when a waiter took it
+ * meanwhile (takeSubagentReport, the attempt loop): a taken report is never
+ * resurrected, and the caller retracts what it staged.
+ */
 export async function deferAgentTaskEvent(eventId: string, message: string) {
-	await database().query(
+	const result = await database().query(
 		`update agent_task_event
 		 set status='pending', available_at=now() + interval '15 seconds', last_error=$2
-		 where id=$1`,
+		 where id=$1 and status='delivering'`,
 		[eventId, message.slice(0, 1_000)],
 	);
+	return (result.rowCount ?? 0) > 0;
 }
 
 function taskEventDedupeKey(

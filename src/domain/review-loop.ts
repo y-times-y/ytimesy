@@ -20,6 +20,12 @@ export const REVIEW_LOOP_LIMITS = {
 	/** Wall time for a turn's reviews and fixes in the product (a runner's deadline only shortens it). */
 	loopMinutes: 60,
 	checker: { steps: 60, minutes: 10, tokens: 800_000 },
+	/**
+	 * checkerMode=pair: the pair's check gets more time than a single checker
+	 * (the judge waits on its workers and follows up on what they could not
+	 * establish); still bounded by the loop's deadline less a fix.
+	 */
+	pairCheckerMinutes: 14,
 	/** What a check is expected to take before one has been timed in this turn. */
 	expectedCheckMs: 150_000,
 	/** The least time a fix needs after its check. */
@@ -248,6 +254,8 @@ export function decideCheck(input: {
 	readonly deadlineAt: number;
 	/** Mean of this turn's earlier checks, else the default. */
 	readonly expectedCheckMs: number;
+	/** checkerMode=pair: the check may use pairCheckerMinutes. */
+	readonly pair?: boolean;
 }): ReviewDecision {
 	if (input.checksDone >= REVIEW_LOOP_LIMITS.maxRounds)
 		return { kind: "finish", reason: "rounds" };
@@ -257,7 +265,9 @@ export function decideCheck(input: {
 	return {
 		kind: "check",
 		checkMs: Math.min(
-			REVIEW_LOOP_LIMITS.checker.minutes * 60_000,
+			(input.pair
+				? REVIEW_LOOP_LIMITS.pairCheckerMinutes
+				: REVIEW_LOOP_LIMITS.checker.minutes) * 60_000,
 			available - REVIEW_LOOP_LIMITS.minFixMs,
 		),
 	};

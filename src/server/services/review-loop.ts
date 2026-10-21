@@ -324,6 +324,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			now,
 			deadlineAt: state.deadlineAt,
 			expectedCheckMs: expectedCheckMs(state),
+			...(input.pair ? { pair: true } : {}),
 		});
 		if (decision.kind === "finish")
 			return finish(
