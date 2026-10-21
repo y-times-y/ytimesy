@@ -3,14 +3,27 @@ import {
 	activityPhrase,
 	agentDoing,
 	agentPanelRows,
+	backgroundRows,
 	finishLineAnchorId,
 	foldAgentRows,
+	formatElapsed,
+	formatTokens,
 	helperFinishedNote,
 	helperIdentities,
+	helperMetric,
+	leadMetric,
+	metricDetail,
+	metricText,
 	steeringSender,
 } from "./agent-panel";
 import { parseSteering, steeringTexts } from "./agent-steering";
 import type { AgentTaskActivity } from "./child-task-activity";
+import {
+	helperName,
+	helperReference,
+	KIND_COLORS,
+	kindShade,
+} from "./helper-names";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 
@@ -72,23 +85,198 @@ const tool = (
 	status,
 });
 
-describe("helper names and colours", () => {
-	it("letters sidekicks, numbers several of a kind, keeps a lone kind plain, colours in start order", () => {
+describe("helper names, tags, icons and colours", () => {
+	it("names a helper by its task, tags its kind, and shades repeats of a kind", () => {
 		const ids = helperIdentities([
-			task("w2", { createdAt: "2026-10-21T10:03:00Z" }),
-			task("s", { sidekick: true, createdAt: "2026-10-21T10:00:00Z" }),
-			task("w1", { createdAt: "2026-10-21T10:01:00Z" }),
-			task("r", { role: "researcher", createdAt: "2026-10-21T10:02:00Z" }),
+			task("w2", {
+				title: "Write the release notes",
+				createdAt: "2026-10-21T10:03:00Z",
+			}),
+			task("s", {
+				title: "Build the CSV export",
+				sidekick: true,
+				createdAt: "2026-10-21T10:00:00Z",
+			}),
+			task("w1", {
+				title: "Fix the rounding bug",
+				createdAt: "2026-10-21T10:01:00Z",
+			}),
+			task("r", {
+				role: "researcher",
+				title: "Trace dashboard totals",
+				createdAt: "2026-10-21T10:02:00Z",
+			}),
 		]);
-		expect(ids.get("s")).toMatchObject({ name: "Sidekick A", color: "blue" });
-		expect(ids.get("w1")).toMatchObject({ name: "Writer 1", color: "green" });
-		expect(ids.get("r")).toMatchObject({ name: "Researcher", color: "amber" });
-		expect(ids.get("w2")).toMatchObject({ name: "Writer 2", color: "violet" });
+		expect(ids.get("s")).toMatchObject({
+			name: "Build the CSV export",
+			tag: "Build",
+			icon: "hammer",
+			color: "var(--agent-sidekick)",
+		});
+		expect(ids.get("w1")).toMatchObject({
+			tag: "Build",
+			color: "var(--agent-build)",
+		});
+		expect(ids.get("w2")?.color).toBe(
+			"color-mix(in oklab, var(--agent-build), white 12%)",
+		);
+		expect(ids.get("r")).toMatchObject({ tag: "Research", icon: "search" });
+	});
+	it("cuts a long task title cleanly at a word", () => {
+		expect(
+			helperName(
+				"Investigate why the nightly export job drops rows with null customer ids",
+			),
+		).toBe("Investigate why the nightly export…");
+		expect(helperReference("Review the patch", "reviewer")).toBe(
+			"Review the patch (Review)",
+		);
+		expect(kindShade(0)).toBe(0);
+		expect(kindShade(2)).toBeCloseTo(0.24);
+		expect(kindShade(9)).toBeCloseTo(0.36);
+		expect(KIND_COLORS.sidekick).toBe("#7AA2F7");
+	});
+});
+
+describe("time and tokens", () => {
+	it("formats elapsed time and compact token counts", () => {
+		expect(formatElapsed(45_000)).toBe("45s");
+		expect(formatElapsed(125_000)).toBe("2m 05s");
+		expect(formatElapsed(3_840_000)).toBe("1h 04m");
+		expect(formatTokens(850)).toBe("850");
+		expect(formatTokens(9_200)).toBe("9k");
+		expect(formatTokens(21_400)).toBe("21k");
+		expect(formatTokens(1_230_000)).toBe("1.2M");
+	});
+	it("counts a running agent from its start and a finished one by its duration", () => {
+		const metric = {
+			startedAt: 0,
+			tokens: {
+				input: 18_000,
+				output: 3_000,
+				costUsd: 0.042,
+				estimated: false,
+			},
+		};
+		expect(metricText(metric, 125_000)).toBe("2m 05s · 21k tokens");
+		expect(metricText({ ...metric, endedAt: 60_000 }, 999_999)).toBe(
+			"1m 00s · 21k tokens",
+		);
+		expect(metricText({ startedAt: 0 }, 5_000)).toBe("5s");
+		expect(metricDetail(metric)).toBe("18k in · 3k out · $0.04");
+		expect(
+			metricDetail({ ...metric, tokens: { ...metric.tokens, costUsd: null } }),
+		).toBe("18k in · 3k out · cost unknown");
+	});
+	it("takes a helper's tokens from its spend and a sidekick's time from its round", () => {
+		const spend = {
+			tokens: 21_000,
+			inputTokens: 18_000,
+			outputTokens: 3_000,
+			costUsd: 0.04,
+			planBilled: true,
+		} as never;
+		const helper = task("s", {
+			sidekick: true,
+			createdAt: "2026-10-21T10:00:00Z",
+			updatedAt: "2026-10-21T10:30:00Z",
+			status: "done",
+			subagent: {
+				role: "writer",
+				vm: "shared",
+				steps: 1,
+				minutes: 1,
+				budget: {
+					sidekick: { roundStartedAt: "2026-10-21T10:20:00Z" },
+				} as never,
+				spend,
+				subtree: spend,
+			},
+		});
+		expect(helperMetric(helper)).toEqual({
+			startedAt: Date.parse("2026-10-21T10:20:00Z"),
+			endedAt: Date.parse("2026-10-21T10:30:00Z"),
+			tokens: { input: 18_000, output: 3_000, costUsd: 0.04, estimated: true },
+		});
+	});
+	it("gives Main the latest request's time and tokens", () => {
+		const metric = leadMetric({
+			turnStatus: "running",
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("old"),
+					text: "old",
+					timing: { startedAt: 1 },
+					apiUsage: {
+						inputTokens: 9e6,
+						outputTokens: 0,
+						uncachedInputTokens: null,
+						cacheReadTokens: null,
+						cacheWriteTokens: null,
+					},
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("new"),
+					text: "new",
+					timing: { startedAt: 5_000 },
+					apiUsage: {
+						inputTokens: 4_000,
+						outputTokens: 600,
+						uncachedInputTokens: null,
+						cacheReadTokens: null,
+						cacheWriteTokens: null,
+						costUsd: 0.01,
+					},
+				},
+			],
+		});
+		expect(metric).toMatchObject({
+			startedAt: 5_000,
+			tokens: { input: 4_000, output: 600 },
+		});
+		expect(metric?.endedAt).toBeUndefined();
+	});
+});
+
+describe("background commands", () => {
+	it("are named by what they run, with live status and time only", () => {
+		const rows = backgroundRows([
+			{
+				id: "1",
+				command: "pnpm dev --port 3000",
+				status: "running",
+				startedAt: 0,
+			},
+			{
+				id: "2",
+				command: "pnpm vitest run",
+				status: "exited",
+				exitCode: 0,
+				startedAt: 0,
+				endedAt: 9_000,
+			},
+			{
+				id: "3",
+				command: "./scripts/seed.sh",
+				status: "failed",
+				startedAt: 0,
+				endedAt: 1_000,
+			},
+		]);
+		expect(rows.map((row) => [row.name, row.statusLabel, row.tag])).toEqual([
+			["dev server", "running", "Background"],
+			["test suite", "exited 0", "Background"],
+			["seed.sh", "failed", "Background"],
+		]);
+		expect(rows[0]?.metric?.tokens).toBeUndefined();
+		expect(rows[0]?.messageable).toBe(false);
 	});
 });
 
 describe("the live line under an agent's name", () => {
-	it("falls back to the task title before the first activity", () => {
+	it("falls back to the given title (empty for helpers, named by their task) before the first activity", () => {
 		expect(
 			agentDoing({ status: "working", items: [], title: "Fix the export" }),
 		).toBe("Fix the export");
@@ -189,13 +377,59 @@ describe("agents list rows", () => {
 			leadItems: [prompt("first", 500), prompt("second", 5_000)],
 			leadTurnStatus: "running",
 		});
-		expect(rows.lead).toMatchObject({ name: "Lead", status: "working" });
+		expect(rows.lead).toMatchObject({ name: "Main", status: "working" });
 		expect(rows.helpers.map((row) => row.name)).toEqual([
-			"Sidekick A",
-			"Researcher",
+			"Task sk",
+			"Task now",
 		]);
-		expect(rows.helpers[0]).toMatchObject({ status: "working", queued: 1 });
-		expect(rows.helpers[1]).toMatchObject({ status: "done" });
+		expect(rows.helpers[0]).toMatchObject({
+			status: "working",
+			queued: 1,
+			tag: "Build",
+			messageable: true,
+		});
+		expect(rows.helpers[1]).toMatchObject({
+			status: "done",
+			tag: "Research",
+			messageable: false,
+		});
+	});
+	it("shows Main as free while its helpers work after its turn ended", () => {
+		const rows = agentPanelRows({
+			tasks: [task("sk", { sidekick: true })],
+			leadItems: [],
+			leadTurnStatus: "completed",
+		});
+		expect(rows.lead).toMatchObject({ status: "free", statusLabel: "free" });
+	});
+	it("lets the user message a sidekick resting between rounds, not a retired one", () => {
+		const resting = (retired: boolean) =>
+			task("sk", {
+				status: "done",
+				turnStatus: "completed",
+				subagent: {
+					role: "writer",
+					vm: "shared",
+					steps: 0,
+					minutes: 0,
+					budget: {
+						sidekick: {
+							maxRounds: 6,
+							...(retired ? { retired: { at: "x", reason: "stopped" } } : {}),
+						},
+					} as never,
+					spend: {} as never,
+					subtree: {} as never,
+				},
+			});
+		const row = (retired: boolean) =>
+			agentPanelRows({
+				tasks: [resting(retired)],
+				leadItems: [],
+				leadTurnStatus: "idle",
+			}).helpers[0];
+		expect(row(false)?.messageable).toBe(true);
+		expect(row(true)?.messageable).toBe(false);
 	});
 	it("folds finished helpers into +N done when there are many, active first", () => {
 		const row = (id: string, status: "working" | "done") =>
@@ -203,11 +437,15 @@ describe("agents list rows", () => {
 				id,
 				name: id,
 				kind: "writer",
-				color: "blue",
+				tag: "Build",
+				icon: "hammer",
+				color: "",
 				status,
+				statusLabel: status,
 				doing: "",
 				queued: 0,
 				title: "",
+				messageable: false,
 			}) as const;
 		const folded = foldAgentRows([
 			row("a", "done"),

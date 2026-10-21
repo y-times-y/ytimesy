@@ -1,5 +1,4 @@
 import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
-import { ASK_USER_TOOL, askedQuestions } from "./user-question";
 import type { ApiAgentEvent } from "./api-agent-event";
 import {
 	CODE_MODE_TOOL,
@@ -16,6 +15,7 @@ import {
 } from "./secret-request";
 import type { SessionItem } from "./session-item";
 import { publicToolDetail } from "./tool-detail";
+import { ASK_USER_TOOL, askedQuestions } from "./user-question";
 
 export function recordedContextUsage(items: readonly SessionItem[]) {
 	for (let index = items.length - 1; index >= 0; index--) {

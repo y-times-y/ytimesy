@@ -222,6 +222,7 @@ export async function subagentReport(input: {
 		: null;
 	const header = subagentReportHeader({
 		label,
+		...(node ? { name: node.name } : {}),
 		role,
 		outcome: input.outcome,
 		steps: node?.steps ?? session.agentSteps ?? 0,

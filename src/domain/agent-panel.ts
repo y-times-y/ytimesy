@@ -8,8 +8,19 @@ import {
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
 import { fileChangeActivity } from "./file-change-copy";
+import {
+	type AgentIcon,
+	type AgentKind,
+	agentColor,
+	helperIdentitiesOf,
+	helperKind,
+	KIND_ICONS,
+	KIND_TAGS,
+	kindShade,
+	MAIN_NAME,
+} from "./helper-names";
+import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
-import type { SubagentRole } from "./subagent";
 import { toolActivity } from "./tool-detail";
 
 /**
@@ -19,19 +30,44 @@ import { toolActivity } from "./tool-detail";
  * Pure rules; the view is src/features/sessions/agent-panel.tsx.
  */
 
-/** Muted dot colours, assigned to helpers in start order. */
-export const AGENT_COLORS = [
-	"blue",
-	"green",
-	"amber",
-	"violet",
-	"rose",
-	"teal",
-] as const;
-export type AgentColor = (typeof AGENT_COLORS)[number] | "lead";
+export {
+	type AgentIcon,
+	type AgentKind,
+	type HelperKind,
+	helperKind,
+} from "./helper-names";
 
-export type HelperKind = "sidekick" | SubagentRole;
-export type AgentPanelStatus = "working" | "done" | "failed" | "idle";
+/** "free": the lead's turn ended while its helpers or background runs work on. */
+export type AgentPanelStatus = "working" | "free" | "done" | "failed" | "idle";
+
+/** Time and tokens on a row's right. */
+export type AgentMetric = {
+	/** Epoch ms the agent (or the lead's request, or a sidekick's round) started. */
+	readonly startedAt: number;
+	/** Set once it ended: the time shown is then its total duration. */
+	readonly endedAt?: number;
+	readonly tokens?: {
+		readonly input: number;
+		readonly output: number;
+		/** Null when a price is unknown. */
+		readonly costUsd: number | null;
+		/** Plan-billed: the dollars are a list-price estimate. */
+		readonly estimated: boolean;
+	};
+};
+
+/**
+ * A background command the chat started (ytimesy-job), as its read model
+ * gives it; adapted into a "Loop" row.
+ */
+export type BackgroundRun = {
+	readonly id: string;
+	readonly command: string;
+	readonly status: "running" | "exited" | "failed";
+	readonly exitCode?: number | null;
+	readonly startedAt: number;
+	readonly endedAt?: number | null;
+};
 
 /** A steering message to a helper that its next step has not taken yet. */
 export type QueuedSteering = {
@@ -44,80 +80,41 @@ export type AgentPanelRow = {
 	/** The helper's session id; the lead's row uses LEAD_ROW_ID. */
 	readonly id: string;
 	readonly name: string;
-	readonly kind: HelperKind | "lead";
-	readonly color: AgentColor;
+	readonly kind: AgentKind;
+	/** Its kind's tag ("Build"); none for Main. */
+	readonly tag: string | null;
+	readonly icon: AgentIcon;
+	/** A CSS colour for its icon and accents (helper-names.ts agentColor). */
+	readonly color: string;
 	readonly status: AgentPanelStatus;
+	/** The short status word on the right ("working", "exited 0"). */
+	readonly statusLabel: string;
 	/** One line: what it does now, or how it ended. */
 	readonly doing: string;
 	readonly queued: number;
 	readonly title: string;
+	readonly metric?: AgentMetric;
+	/** The user can write to it: running, or a sidekick resting between rounds. */
+	readonly messageable: boolean;
 };
 
 export const LEAD_ROW_ID = "lead";
 
-type HelperIdentity = Pick<AgentTaskActivity, "id" | "createdAt"> & {
-	readonly subagent?: AgentTaskActivity["subagent"];
-};
-
-/** Lead mode fusion's sidekick is a writer whose budget carries its sidekick state. */
-export function helperKind(task: Pick<AgentTaskActivity, "subagent">) {
-	if (task.subagent?.budget?.sidekick) return "sidekick" as const;
-	return task.subagent?.role ?? "writer";
-}
-
-const KIND_NAMES: Record<HelperKind, string> = {
-	sidekick: "Sidekick",
-	writer: "Writer",
-	researcher: "Researcher",
-	reviewer: "Reviewer",
-	checker: "Checker",
-};
-
-const letter = (index: number) =>
-	index < 26
-		? String.fromCharCode(65 + index)
-		: `${String.fromCharCode(65 + (index % 26))}${Math.floor(index / 26)}`;
-
-/**
- * Names and colours over every helper of the chat, in start order, so a
- * helper keeps both for the whole chat. Sidekicks are lettered (a chat's
- * sidekick can be replaced: Sidekick A, then B); other kinds are plain and
- * numbered only when the chat has several of that kind.
- */
-export function helperIdentities(tasks: readonly HelperIdentity[]) {
-	const ordered = [...tasks].sort(
-		(left, right) =>
-			left.createdAt.localeCompare(right.createdAt) ||
-			left.id.localeCompare(right.id),
+/** Name, tag, icon and colour of every helper of the chat (helper-names.ts). */
+export function helperIdentities(
+	tasks: readonly Pick<
+		AgentTaskActivity,
+		"id" | "createdAt" | "title" | "subagent"
+	>[],
+) {
+	return helperIdentitiesOf(
+		tasks.map((task) => ({
+			id: task.id,
+			createdAt: task.createdAt,
+			title: task.title,
+			kind: helperKind(task),
+		})),
 	);
-	const totals = new Map<HelperKind, number>();
-	for (const task of ordered) {
-		const kind = helperKind(task);
-		totals.set(kind, (totals.get(kind) ?? 0) + 1);
-	}
-	const seen = new Map<HelperKind, number>();
-	const identities = new Map<
-		string,
-		{ readonly name: string; readonly kind: HelperKind; color: AgentColor }
-	>();
-	for (const [index, task] of ordered.entries()) {
-		const kind = helperKind(task);
-		const position = seen.get(kind) ?? 0;
-		seen.set(kind, position + 1);
-		const base = KIND_NAMES[kind];
-		const name =
-			kind === "sidekick"
-				? `${base} ${letter(position)}`
-				: (totals.get(kind) ?? 0) > 1
-					? `${base} ${position + 1}`
-					: base;
-		identities.set(task.id, {
-			name,
-			kind,
-			color: AGENT_COLORS[index % AGENT_COLORS.length] as AgentColor,
-		});
-	}
-	return identities;
 }
 
 export function helperStatus(status: AgentTaskStatus): AgentPanelStatus {
@@ -297,57 +294,251 @@ export function queuedSteeringFor(task: AgentTaskActivity) {
 	return task.queuedSteering ?? [];
 }
 
+const STATUS_LABELS: Record<AgentPanelStatus, string> = {
+	working: "working",
+	free: "free",
+	done: "done",
+	failed: "failed",
+	idle: "idle",
+};
+
+/** A helper's time: its sidekick round, or its whole run. */
+export function helperMetric(task: AgentTaskActivity): AgentMetric {
+	const round = task.subagent?.budget?.sidekick?.roundStartedAt;
+	const startedAt = Date.parse(round ?? task.createdAt);
+	const ended = helperStatus(task.status) !== "working";
+	const spend = task.subagent?.spend;
+	return {
+		startedAt,
+		...(ended
+			? { endedAt: Math.max(startedAt, Date.parse(task.updatedAt)) }
+			: {}),
+		...(spend
+			? {
+					tokens: {
+						input: spend.inputTokens,
+						output: spend.outputTokens,
+						costUsd: spend.costUsd,
+						estimated: spend.planBilled,
+					},
+				}
+			: {}),
+	};
+}
+
+/** The lead's time and tokens for the current request (the latest prompt's turn). */
+export function leadMetric(input: {
+	readonly items: readonly SessionItem[];
+	readonly turnStatus: SessionTurnStatus;
+	readonly harness?: string | null;
+	readonly listedModelId?: string | null;
+}): AgentMetric | undefined {
+	const prompt = latestPrompt(input.items);
+	const startedAt = prompt?.timing?.startedAt;
+	if (!prompt || startedAt === undefined) return undefined;
+	const usage = prompt.apiUsage;
+	const completedAt = prompt.timing?.completedAt;
+	return {
+		startedAt,
+		...(input.turnStatus !== "running" && completedAt
+			? { endedAt: completedAt }
+			: {}),
+		...(usage
+			? {
+					tokens: {
+						input: usage.inputTokens ?? 0,
+						output: usage.outputTokens ?? 0,
+						costUsd: usageCostUsd(
+							usage,
+							sessionBilling({
+								harness: input.harness ?? "api",
+								listedModelId: input.listedModelId ?? null,
+							}),
+						),
+						estimated: input.harness === "codex",
+					},
+				}
+			: {}),
+	};
+}
+
+/** A background command's short name: "dev server", "test suite", or its program. */
+export function backgroundLabel(command: string) {
+	const text = command.replace(/\s+/g, " ").trim();
+	if (
+		/\b(dev|serve|start|preview)\b/.test(text) ||
+		/\bvite\b(?! build)/.test(text)
+	)
+		return "dev server";
+	if (/\b(test|vitest|jest|pytest)\b/.test(text)) return "test suite";
+	if (/\bbuild\b/.test(text)) return "build";
+	if (/\b(watch|tsc -w)\b/.test(text)) return "watcher";
+	if (/\b(lint|biome|eslint)\b/.test(text)) return "lint";
+	const program = text.split(" ")[0]?.split("/").at(-1) ?? "";
+	return program || "command";
+}
+
+/** Background commands as rows, named by what they run. */
+export function backgroundRows(
+	runs: readonly BackgroundRun[],
+): AgentPanelRow[] {
+	return runs.map((run, index) => {
+		const status: AgentPanelStatus =
+			run.status === "running"
+				? "working"
+				: run.status === "failed"
+					? "failed"
+					: "done";
+		return {
+			id: `background:${run.id}`,
+			name: backgroundLabel(run.command),
+			kind: "background",
+			tag: KIND_TAGS.background,
+			icon: KIND_ICONS.background,
+			color: agentColor("background", kindShade(index)),
+			status,
+			statusLabel:
+				run.status === "running"
+					? "running"
+					: run.status === "failed"
+						? "failed"
+						: `exited ${run.exitCode ?? 0}`,
+			doing: run.command,
+			queued: 0,
+			title: run.command,
+			metric: {
+				startedAt: run.startedAt,
+				...(run.endedAt ? { endedAt: run.endedAt } : {}),
+			},
+			messageable: false,
+		};
+	});
+}
+
 /** The lead's row, then one per helper of the current request in start order. */
 export function agentPanelRows(input: {
 	readonly tasks: readonly AgentTaskActivity[];
 	readonly leadItems: readonly SessionItem[];
 	readonly leadTurnStatus: SessionTurnStatus;
 	readonly leadTitle?: string;
-}): { readonly lead: AgentPanelRow; readonly helpers: AgentPanelRow[] } {
+	readonly leadHarness?: string | null;
+	readonly leadModelId?: string | null;
+	readonly background?: readonly BackgroundRun[];
+}): {
+	readonly lead: AgentPanelRow;
+	readonly helpers: AgentPanelRow[];
+	readonly background: AgentPanelRow[];
+} {
 	const identities = helperIdentities(input.tasks);
 	const helpers = currentRequestHelpers(input.tasks, input.leadItems)
 		.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
 		.map((task): AgentPanelRow => {
 			const identity = identities.get(task.id);
 			const status = helperStatus(task.status);
+			const kind = identity?.kind ?? helperKind(task);
+			const restingSidekick =
+				kind === "sidekick" &&
+				status !== "working" &&
+				!!task.subagent?.budget?.sidekick &&
+				!task.subagent.budget.sidekick.retired;
 			return {
 				id: task.id,
-				name: identity?.name ?? "Helper",
-				kind: identity?.kind ?? "writer",
-				color: identity?.color ?? "blue",
+				name: identity?.name ?? task.title,
+				kind,
+				tag: KIND_TAGS[kind],
+				icon: KIND_ICONS[kind],
+				color: identity?.color ?? agentColor(kind),
 				status,
+				statusLabel: STATUS_LABELS[status],
+				// The name is the task, so the line starts at "starting".
 				doing: agentDoing({
 					status,
 					items: task.items,
-					title: task.title,
+					title: "",
 					summary: task.summary,
 				}),
 				queued: queuedSteeringFor(task).length,
 				title: task.title,
+				metric: helperMetric(task),
+				messageable: status === "working" || restingSidekick,
 			};
 		});
-	const status = leadStatus(input.leadTurnStatus);
+	const background = backgroundRows(input.background ?? []);
+	const othersWork = [...helpers, ...background].some(
+		(row) => row.status === "working",
+	);
+	const turn = leadStatus(input.leadTurnStatus);
+	const status: AgentPanelStatus =
+		turn === "working" ? "working" : othersWork ? "free" : turn;
 	return {
 		lead: {
 			id: LEAD_ROW_ID,
-			name: "Lead",
-			kind: "lead",
-			color: "lead",
+			name: MAIN_NAME,
+			kind: "main",
+			tag: null,
+			icon: KIND_ICONS.main,
+			color: agentColor("main"),
 			status,
+			statusLabel: STATUS_LABELS[status],
 			doing:
 				status === "working"
 					? agentDoing({ status, items: input.leadItems, title: "" }) ||
 						"thinking"
-					: helpers.some((helper) => helper.status === "working")
-						? "waiting for helpers"
+					: status === "free"
+						? "free while helpers work"
 						: status === "failed"
 							? "failed"
 							: "waiting for you",
 			queued: 0,
 			title: input.leadTitle ?? "",
+			metric: leadMetric({
+				items: input.leadItems,
+				turnStatus: input.leadTurnStatus,
+				harness: input.leadHarness,
+				listedModelId: input.leadModelId,
+			}),
+			messageable: true,
 		},
 		helpers,
+		background,
 	};
+}
+
+/** "45s", "2m 05s", "1h 04m". */
+export function formatElapsed(ms: number) {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60)
+		return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+	return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** "850", "9k", "21k", "1.2M". */
+export function formatTokens(count: number) {
+	if (count < 1000) return String(Math.max(0, Math.round(count)));
+	if (count < 999_500) return `${Math.round(count / 1000)}k`;
+	return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+/** The right-hand metric: "2m 05s · 21k tokens"; time only without tokens. */
+export function metricText(metric: AgentMetric, now: number) {
+	const time = formatElapsed((metric.endedAt ?? now) - metric.startedAt);
+	const tokens = metric.tokens
+		? metric.tokens.input + metric.tokens.output
+		: null;
+	return tokens === null ? time : `${time} · ${formatTokens(tokens)} tokens`;
+}
+
+/** The metric's hover: the input/output split and estimated cost. */
+export function metricDetail(metric: AgentMetric) {
+	if (!metric.tokens) return null;
+	const { input, output, costUsd, estimated } = metric.tokens;
+	const cost =
+		costUsd === null
+			? "cost unknown"
+			: `${estimated ? "about " : ""}$${costUsd < 0.01 && costUsd > 0 ? costUsd.toFixed(3) : costUsd.toFixed(2)}${estimated ? " at list price" : ""}`;
+	return `${formatTokens(input)} in · ${formatTokens(output)} out · ${cost}`;
 }
 
 /** More rows than this and finished helpers fold into "+N done". */
@@ -359,7 +550,10 @@ export function foldAgentRows(
 	max = AGENT_PANEL_UNFOLDED,
 ) {
 	const active = helpers.filter(
-		(row) => row.status === "working" || row.status === "idle",
+		(row) =>
+			row.status === "working" ||
+			row.status === "idle" ||
+			row.status === "free",
 	);
 	const finished = helpers.filter(
 		(row) => row.status === "done" || row.status === "failed",
@@ -368,7 +562,7 @@ export function foldAgentRows(
 	return { shown: active, folded: finished };
 }
 
-/** "Sidekick A finished: tests pass, 3 files changed". */
+/** "Build the CSV export finished: tests pass, 3 files changed". */
 export function helperFinishedNote(
 	row: Pick<AgentPanelRow, "name" | "status" | "doing">,
 ) {

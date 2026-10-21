@@ -1,5 +1,4 @@
 import { pendingPlanId } from "./agent-plan";
-import type { UserQuestion } from "./user-question";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
@@ -13,6 +12,7 @@ import {
 	fileChangesFromShellCommand,
 	remainingShellCommandAfterWrites,
 } from "./shell-file-change";
+import type { UserQuestion } from "./user-question";
 
 export type SessionTurnStatus = "idle" | "running" | "completed" | "failed";
 

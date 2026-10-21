@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import { type AgentTaskStatus, agentTaskTree } from "./agent-task";
+import { helperKindOf, helperReference } from "./helper-names";
 import { sessionBilling } from "./model-pricing";
 import {
 	type SessionItem,
@@ -47,6 +48,8 @@ export type SubagentNode = {
 	readonly parentId: string;
 	/** Positional id: 1, 1.2, 1.2.1. */
 	readonly label: string;
+	/** How the chat names it (helper-names.ts): "Build the CSV export (Build)". */
+	readonly name: string;
 	readonly level: number;
 	readonly title: string;
 	readonly role: SubagentRole;
@@ -119,6 +122,10 @@ export function subagentTree(
 			id: task.id,
 			parentId: task.parentSessionId,
 			label: subagentLabelFromTaskLabel(task.label),
+			name: helperReference(
+				task.title,
+				helperKindOf(session.agentRole, session.agentBudget),
+			),
 			level: task.depth,
 			title: task.title,
 			role: session.agentRole,
@@ -161,6 +168,8 @@ export function subagentNodeRemaining(
 /** What the task panel shows for a subagent row (no prompts, no transcripts). */
 export type SubagentTaskView = {
 	readonly role: SubagentRole;
+	/** How the chat names it (helper-names.ts): its task, then its kind. */
+	readonly name?: string;
 	readonly vm: "fork" | "shared";
 	readonly steps: number;
 	readonly minutes: number;
@@ -182,6 +191,7 @@ export function subagentTaskViews(
 			node.id,
 			{
 				role: node.role,
+				name: node.name,
 				vm: node.vm,
 				steps: node.steps,
 				minutes: node.minutes,
