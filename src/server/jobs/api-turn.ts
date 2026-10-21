@@ -776,6 +776,7 @@ async function runApiTurnAttempt(
 					(base) => base !== null,
 				),
 			configCache: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			redact,
 			once: (id, run) =>
 				journaledToolOperation(
 					{
