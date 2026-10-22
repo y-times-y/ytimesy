@@ -121,16 +121,17 @@ export const saveMemoryModeFn = createServerFn({ method: "POST" })
  * Deletes the memory repo and its cached embeddings. Earlier chats are not
  * dreamed back into the new, empty memory.
  */
-export const clearMemoryFn = createServerFn({ method: "POST" }).handler(
-	async () => {
+export const clearMemoryFn = createServerFn({ method: "POST" })
+	// An empty object, so the call has the JSON body requireSameOrigin needs.
+	.validator((data: unknown) => z.object({}).strict().parse(data))
+	.handler(async () => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
 		const { repo } = await userRepo(user.id);
 		await repo?.destroy();
 		await forgetMemoryEmbeddings(user.id);
 		await markMemoryDreamed(user.id, new Date());
-	},
-);
+	});
 
 /**
  * Undo for "Saved to memory": removes that entry in one commit. A concurrent
