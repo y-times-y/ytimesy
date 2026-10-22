@@ -270,6 +270,56 @@ describe("waking a chat between turns", () => {
 		expect(notify).not.toHaveBeenCalled();
 	});
 
+	it("checks chats a few at a time, not one after another, and stops starting new ones past its budget", async () => {
+		const machines = hostMachines();
+		let inFlight = 0;
+		let peak = 0;
+		const checked: string[] = [];
+		const candidates = Array.from({ length: 12 }, (_, index) => ({
+			userId: "user",
+			id: `chat-${index}`,
+		}));
+		const slowSession = async (_user: string, id: string) => {
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			checked.push(id);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			inFlight -= 1;
+			return null;
+		};
+		const dependencies = {
+			candidates: async () => candidates,
+			session: slowSession,
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify: async () => undefined,
+		};
+		const started = Date.now();
+		await wakeChatsForBackgroundCommands(machines, dependencies, {
+			concurrency: 4,
+		});
+		expect(peak).toBe(4);
+		expect(checked).toHaveLength(12);
+		// Serial would be 12 x 20ms; four at a time is about 3 x 20ms.
+		expect(Date.now() - started).toBeLessThan(200);
+		// Past the budget no new chat starts; the next tick takes the rest.
+		checked.length = 0;
+		let clock = 0;
+		await wakeChatsForBackgroundCommands(
+			machines,
+			{
+				...dependencies,
+				session: async (user: string, id: string) => {
+					clock += 1_000;
+					return slowSession(user, id);
+				},
+			},
+			{ concurrency: 2, budgetMs: 3_000, now: () => clock },
+		);
+		expect(checked.length).toBeLessThan(12);
+		expect(checked.length).toBeGreaterThanOrEqual(2);
+	});
+
 	it("skips chats whose turn runs (the turn reads it at its next step) and machines that stopped", async () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
