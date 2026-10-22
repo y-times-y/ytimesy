@@ -103,3 +103,36 @@ export async function readProjectDerivedValue(
 	);
 	return result.rows[0]?.value ?? null;
 }
+
+/** The receipt a chat's machine copied ahead of its first turn records (machine-prewarm.ts). */
+export const MACHINE_PREWARM_KEY = "machine-prewarm";
+
+/**
+ * The commit a chat's fresh copy of its project template holds for one
+ * repository branch: the ready environment build of the snapshot the copy
+ * was (or will be) made from, the one a pre-copied machine recorded, else the
+ * project's current template. Null when no build names that branch.
+ */
+export async function templateCheckoutCommit(
+	userId: string,
+	sessionId: string,
+	fullName: string,
+	branch: string,
+): Promise<string | null> {
+	const result = await database().query<{ commit: unknown }>(
+		`select src->>'commit' as commit
+		 from agent_session s join workspace w on w.id=s.workspace_id and w.user_id=s.user_id
+		 join environment_build b on b.status='ready' and b.snapshot_id=coalesce(
+		   (select r.response->'result'->>'snapshotId' from agent_task_command_receipt r
+		    where r.parent_session_id=s.id and r.request_id=$5 and r.status='done'),
+		   w.template_snapshot_id)
+		 cross join jsonb_array_elements(b.sources) src
+		 where s.id=$1 and s.user_id=$2 and src->>'fullName'=$3 and src->>'branch'=$4
+		 order by b.completed_at desc limit 1`,
+		[sessionId, userId, fullName, branch, MACHINE_PREWARM_KEY],
+	);
+	const commit = result.rows[0]?.commit;
+	return typeof commit === "string" && /^[a-f0-9]{40,64}$/.test(commit)
+		? commit
+		: null;
+}

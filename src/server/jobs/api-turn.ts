@@ -987,9 +987,10 @@ async function runApiTurnAttempt(
 			redact,
 			// Without the workspace: the pinned baseline of the path the chat
 			// last reported, and the configuration journaled for it. A new chat
-			// has no baseline yet; when its checkout is pinned to a commit known
-			// now (pinNewChatBase), the configuration another chat of the same
-			// user's project read from that very commit answers for it, else that
+			// has no baseline yet; when the commit its checkout will hold is
+			// known now (pinNewChatBase: its new branch's start, or its template
+			// copy's commit), the configuration another chat of the same user's
+			// project read from that very commit answers for it, else that
 			// commit's file read from GitHub (still the VM's baseline). Hooks
 			// come only from the repository at the baseline (.ytimesy/hooks.json;
 			// plugin hooks are not run), so the commit names all of it.
@@ -1113,6 +1114,10 @@ async function runApiTurnAttempt(
 						owner.projectId ?? null,
 					),
 				).catch(() => null);
+				// A project's first chat: where its fresh template copy holds the
+				// repository (a wrong guess is corrected below, as for a moved path).
+				reportedDirectory ??=
+					(await prepareWorkspace.plannedDirectory?.()) ?? null;
 				if (!reportedDirectory) timing?.early(false, "no-reported-directory");
 			}
 		}
