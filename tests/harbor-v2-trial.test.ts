@@ -826,3 +826,331 @@ describe("runHarborTrial with review=on", () => {
 		]);
 	}, 120_000);
 });
+
+/**
+ * Rehearsal of the tb4 harness fixes: each case one whole trial against
+ * scripted models, through the Harbor wire protocol to a local checkout.
+ */
+describe("runHarborTrial rehearsal: unattended review and child budgets", () => {
+	const verdict = (pass: boolean) =>
+		JSON.stringify({
+			verdict: pass ? "pass" : "fail",
+			failures: pass ? [] : ["solution.py is missing"],
+			requirements: [
+				{
+					requirement: "prints 42",
+					met: pass,
+					evidence: pass ? "python3 solution.py -> 42" : "no solution.py",
+				},
+			],
+			tests: [
+				{
+					name: "prints 42",
+					command: "python3 solution.py",
+					passed: pass,
+					probe: false,
+					output: pass ? "42" : "No such file",
+				},
+			],
+			assumptions: [],
+			notes: "",
+		});
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const trace = async (logs: string) =>
+		JSON.parse(await readFile(join(logs, "ytimesy-trace.json"), "utf8"));
+	const notices = async (logs: string) =>
+		JSON.parse(
+			await readFile(join(logs, "trajectory.json"), "utf8"),
+		).steps.filter(
+			(step: { extra?: { kind?: string } }) =>
+				step.extra?.kind === "runtime-notice",
+		);
+	async function trial(
+		f: Awaited<ReturnType<typeof fixture>>,
+		trialId: string,
+		runtime: Parameters<typeof runHarborTrial>[0]["runtime"],
+		extra: { deadlineAt?: number; now?: () => number } = {},
+	) {
+		for (const round of [1, 2, 3])
+			await rm(commandScopeRoot(harborTurnId(`${trialId}.1`, round)), {
+				recursive: true,
+				force: true,
+			});
+		return runHarborTrial({
+			config: f.config,
+			trialId,
+			instruction: "Create solution.py that prints 42.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: extra.deadlineAt ?? Date.now() + 3 * 60 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime,
+			harness,
+			...(extra.now ? { now: extra.now } : {}),
+		});
+	}
+
+	it("lead + sidekick + checker: the sidekick builds, the lead answers, the checker reviews the lead's turn", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,review=on,roleModels.writer=claude-sonnet-5-5,roleModels.classifier=claude-haiku-5-5@low",
+		});
+		// The checker runs on the lead's model: its verdict follows the lead's answer.
+		const lead = scriptedModel([
+			[
+				call("l1", "agent_send", {
+					id: "rh-fusion.1",
+					message: "Create solution.py that prints 42; run it.",
+				}),
+				finish(100, 10, true),
+			],
+			[...text("l2", "Done: solution.py prints 42."), finish(100, 10)],
+			[...text("k1", verdict(true)), finish(100, 10)],
+		]);
+		const sidekick = scriptedModel([
+			[...text("s1", "Explored: no solution.py yet."), finish(50, 5)],
+			[
+				call("s2", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(50, 5, true),
+			],
+			[...text("s3", "Wrote solution.py; prints 42"), finish(50, 5)],
+		]);
+		const classifier = scriptedModel([
+			[
+				...text("c1", JSON.stringify({ decision: "on_track", reason: "ok" })),
+				finish(20, 2),
+			],
+		]);
+		const result = await trial(f, "rh-fusion", async (wrap, model) => ({
+			model: wrap(
+				model?.modelId === "claude-sonnet-5-5"
+					? sidekick.model
+					: model?.modelId === "claude-haiku-5-5"
+						? classifier.model
+						: lead.model,
+			),
+		}));
+		expect(result.failure).toBeNull();
+		expect([lead.calls(), sidekick.calls()]).toEqual([3, 3]);
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		const t = await trace(f.logs);
+		expect(t.fusion.rounds.map((r: { kind: string }) => r.kind)).toEqual([
+			"explore",
+			"build",
+		]);
+		expect(t.review.checks).toHaveLength(1);
+		expect(t.review.state.outcome).toBe("pass");
+		expect(result.efficiency?.models.map((row) => row.role)).toEqual(
+			expect.arrayContaining(["builder", "sidekick", "classifier", "checker"]),
+		);
+	}, 120_000);
+
+	it("reviews a turn that changed nothing in the checkout", async () => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
+		const { model, calls } = scriptedModel([
+			[...text("b1", "Wrote the result to /app/out.txt."), finish(100, 10)],
+			[...text("k1", verdict(true)), finish(100, 10)],
+		]);
+		const result = await trial(f, "rh-nochange", async (wrap) => ({
+			model: wrap(model),
+		}));
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(2);
+		const t = await trace(f.logs);
+		expect(t.review.checks).toHaveLength(1);
+		expect(t.review.state.rounds[0].changedFiles).toBe(0);
+		expect(t.review.state.outcome).toBe("pass");
+	}, 120_000);
+
+	it("sends back an answer that asks the user a question (rigor=on)", async () => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on,rigor=on" });
+		const { model, calls } = scriptedModel([
+			[
+				...text(
+					"b1",
+					"The spec and the tests disagree.\nPlease confirm whether solution.py should print 41 or 42.",
+				),
+				finish(100, 10),
+			],
+			[...text("k1", verdict(true)), finish(100, 10)],
+			[
+				call("b2", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[
+				...text("b3", "Done: prints 42 (assumed 42 per the request)."),
+				finish(100, 10),
+			],
+			[...text("k2", verdict(true)), finish(100, 10)],
+		]);
+		const result = await trial(f, "rh-question", async (wrap) => ({
+			model: wrap(model),
+		}));
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(5);
+		expect(result.reviewRounds).toBe(1);
+		const [notice] = await notices(f.logs);
+		expect(notice.message).toContain("Please confirm whether");
+		expect(notice.message).toContain("Nobody will answer a question");
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+	}, 120_000);
+
+	it("reviews a build that ran past the product's hour, with trial time left", async () => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
+		let offset = 0;
+		const now = () => Date.now() + offset;
+		const deadlineAt = Date.now() + 3 * 60 * 60_000;
+		const builder = scriptedModel([
+			[
+				call("b1", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+			[...text("k1", verdict(true)), finish(100, 10)],
+		]);
+		const original = builder.model.doStream.bind(builder.model);
+		builder.model.doStream = async (options) => {
+			// The build's first step takes 70 minutes.
+			if (builder.calls() === 0) offset += 70 * 60_000;
+			return original(options);
+		};
+		const result = await trial(
+			f,
+			"rh-long",
+			async (wrap) => ({ model: wrap(builder.model) }),
+			{ deadlineAt, now },
+		);
+		expect(result.failure).toBeNull();
+		expect(builder.calls()).toBe(3);
+		const t = await trace(f.logs);
+		expect(t.review.checks).toHaveLength(1);
+		expect(t.review.state.outcome).toBe("pass");
+		// The window became the runner's deadline (less the grader's two minutes).
+		expect(t.review.state.deadlineAt).toBe(deadlineAt - 120_000);
+	}, 120_000);
+
+	it("checks again once when the checker gives no verdict; the retry is not a round", async () => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
+		const { model, calls } = scriptedModel([
+			[
+				call("b1", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+			[
+				...text("k1", "I ran out of time before writing a verdict."),
+				finish(100, 10),
+			],
+			[...text("k2", verdict(true)), finish(100, 10)],
+		]);
+		const result = await trial(f, "rh-retry", async (wrap) => ({
+			model: wrap(model),
+		}));
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(4);
+		expect(result.reviewRounds).toBe(0);
+		const t = await trace(f.logs);
+		expect(t.review.checks).toHaveLength(2);
+		expect(
+			t.review.state.rounds.map(
+				(round: { decision: string }) => round.decision,
+			),
+		).toEqual(["retry", "pass"]);
+	}, 120_000);
+
+	it("hands the lead a sidekick's last message when its round stops at the token budget", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,roleModels.writer=claude-opus-5-5,roleModels.classifier=claude-sonnet-5-5@low",
+			// A cheap lead: the writer's tokens weigh 4x against the round budget,
+			// so the cap is reached well inside the writer's context window.
+			YTIMESY_HARBOR_MODEL: "claude-haiku-5-5",
+			YTIMESY_HARBOR_TOTAL_USD_CAP: "20",
+			YTIMESY_HARBOR_TRIAL_USD_CAP: "15",
+		});
+		const lead = scriptedModel([[...text("l1", "Done."), finish(100, 10)]]);
+		// The exploration round spends past its round budget in one step, gets
+		// the last-step notice, calls a tool anyway and is stopped.
+		const sidekick = scriptedModel([
+			[
+				...text("s1", "Progress: parser.py has the bug; fix not written yet."),
+				call("s1b", "bash", { command: "ls" }),
+				finish(400_000, 5, true),
+			],
+			[call("s2", "bash", { command: "ls" }), finish(400_000, 5, true)],
+			[...text("s3", "unreachable"), finish(50, 5)],
+		]);
+		const classifier = scriptedModel([
+			[
+				...text("c1", JSON.stringify({ decision: "on_track", reason: "ok" })),
+				finish(20, 2),
+			],
+		]);
+		const result = await trial(f, "rh-budget", async (wrap, model) => ({
+			// Room for the whole round: the budget stops it, not compaction.
+			contextWindow: 4_000_000,
+			model: wrap(
+				model?.modelId === "claude-opus-5-5"
+					? sidekick.model
+					: model?.modelId === "claude-sonnet-5-5"
+						? classifier.model
+						: lead.model,
+			),
+		}));
+		expect(result.failure).toBeNull();
+		expect(sidekick.calls()).toBe(2);
+		expect(JSON.stringify(sidekick.model.doStreamCalls[1].prompt)).toContain(
+			"Budget used",
+		);
+		expect(JSON.stringify(lead.model.doStreamCalls[0].prompt)).toContain(
+			"Progress: parser.py has the bug; fix not written yet.",
+		);
+		const t = await trace(f.logs);
+		expect(t.fusion.rounds[0]).toMatchObject({
+			kind: "explore",
+			outcome: "budget exhausted",
+		});
+	}, 120_000);
+
+	it("resamples a step cut at the 64K output cap once, with the smaller-steps note", async () => {
+		const f = await fixture();
+		const { model, calls } = scriptedModel([
+			// Reasoning ran to the cap: no text, no tool call.
+			[
+				{
+					type: "finish",
+					usage: usage(100, 64_000),
+					finishReason: { unified: "length", raw: "max_output_tokens" },
+				},
+			],
+			[
+				call("b1", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+		]);
+		const result = await trial(f, "rh-cap", async (wrap) => ({
+			model: wrap(model),
+			maxOutputTokens: 64_000,
+		}));
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(3);
+		expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(
+			"Continue the same work in smaller steps",
+		);
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+	}, 120_000);
+});
