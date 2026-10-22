@@ -150,8 +150,57 @@ type ConversationFork = {
 	/** Null only for a fresh fork of a chat that has no base branch on record. */
 	readonly branch: string | null;
 	readonly vm: WorkspaceId | null;
+	/** Its chat row was made before its VM (the VM's usage owner); recovery completes it. */
+	readonly reserved: boolean;
 	readonly destroy: () => Promise<void>;
 };
+
+/**
+ * Makes the fork's chat row before its VM is created: usage admission
+ * verifies a VM's owner from the chat that holds its slug, so a VM for a
+ * chat that does not exist yet has no owner and is refused. The row starts
+ * like a fork that has no VM yet; recovery binds the VM to it.
+ */
+async function reserveForkSession(
+	session: AgentSessionRecord,
+	id: string,
+	branch: string,
+) {
+	await database().query(
+		`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch)
+		 values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8,$8,$9)`,
+		[
+			id,
+			session.userId,
+			session.projectId,
+			session.workspaceId,
+			session.harness,
+			`${session.title} (fork)`.slice(0, 120),
+			session.listedModelId,
+			branch,
+			session.baseBranch ?? null,
+		],
+	);
+}
+
+/** Removes a fork's reserved chat row; it never held a turn or a VM. */
+async function releaseForkSession(userId: string, id: string) {
+	await database().query(
+		"delete from agent_session where id=$1 and user_id=$2 and provider_ref is null",
+		[id, userId],
+	);
+}
+
+/**
+ * A fork's VM that could not be deleted stays bound to its reserved chat,
+ * marked failed, so it keeps a verifiable owner and is cleaned up with it.
+ */
+async function keepFailedForkMachine(userId: string, id: string, vm: string) {
+	await database().query(
+		"update agent_session set provider_ref=$3,status='failed',updated_at=now() where id=$1 and user_id=$2 and provider_ref is null",
+		[id, userId, vm],
+	);
+}
 
 /**
  * The fork's VM is a copy of the source's (Freestyle fork: disk, ignored
@@ -189,6 +238,7 @@ async function prepareConversationFork(
 			id,
 			branch: session.baseBranch ? branch : null,
 			vm: null,
+			reserved: false,
 			destroy: none,
 		};
 	const scoped = machinesForAgentSession(machines, session);
@@ -224,12 +274,29 @@ async function prepareConversationFork(
 		{ machines: scoped, vm: source, cwd: code.cwd },
 		code,
 	);
-	const forked = await scoped.forkWorkspace(
-		source,
-		agentSessionMachineSlug(id),
-		await projectMachineSize(userId, session.projectId),
-	);
-	const destroy = () => scoped.destroy(forked.vm).catch(() => {});
+	const size = await projectMachineSize(userId, session.projectId);
+	await reserveForkSession(session, id, branch);
+	let forked: Awaited<ReturnType<typeof scoped.forkWorkspace>>;
+	try {
+		forked = await scoped.forkWorkspace(
+			source,
+			agentSessionMachineSlug(id),
+			size,
+		);
+	} catch (error) {
+		await releaseForkSession(userId, id).catch(() => {});
+		throw error;
+	}
+	const vm = forked.vm;
+	const destroy = async () => {
+		try {
+			await scoped.destroy(vm);
+		} catch {
+			await keepFailedForkMachine(userId, id, vm).catch(() => {});
+			return;
+		}
+		await releaseForkSession(userId, id).catch(() => {});
+	};
 	try {
 		const cwd = (
 			await scoped.readTextFile(forked.vm, PROJECT_CWD_PATH)
@@ -251,7 +318,7 @@ async function prepareConversationFork(
 		await destroy();
 		throw error;
 	}
-	return { id, branch, vm: forked.vm, destroy };
+	return { id, branch, vm: forked.vm, reserved: true, destroy };
 }
 
 /** Session locks exclude new turns and active descendants. A pre-restore Git point makes code replacement recoverable. */
@@ -342,28 +409,40 @@ async function recoverLocked(
 			id = fork.id;
 			// A fork has its own VM (copied at the message's code, or made at its
 			// first turn), its own branch off the source's base and fresh task
-			// ancestry; it cannot control source children.
-			await client.query(
-				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch,provider_ref)
+			// ancestry; it cannot control source children. A fork with a VM
+			// already has its row (made before the VM); it is completed here.
+			const values = [
+				id,
+				userId,
+				row.project_id,
+				row.workspace_id,
+				row.harness,
+				`${row.title} (fork)`.slice(0, 120),
+				row.listed_model_id,
+				fork.vm ? "ready" : "starting",
+				fork.branch ??
+					row.selected_branch ??
+					row.working_branch ??
+					row.task_branch,
+				fork.branch,
+				fork.branch ? row.base_branch : null,
+				fork.vm,
+			];
+			if (fork.reserved) {
+				const completed = await client.query(
+					`update agent_session set project_id=$3,workspace_id=$4,harness=$5,title=$6,listed_model_id=$7,status=$8,
+					 selected_branch=$9,working_branch=$10,base_branch=$11,provider_ref=$12,updated_at=now()
+					 where id=$1 and user_id=$2 and provider_ref is null and turn_status <> 'running' and parent_session_id is null`,
+					values,
+				);
+				if (completed.rowCount !== 1)
+					throw new Error("The fork changed while it was being prepared.");
+			} else
+				await client.query(
+					`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch,provider_ref)
         values($1,$2,$3,$4,$5,$6,$7,$8,'idle',$9,$10,$11,$12)`,
-				[
-					id,
-					userId,
-					row.project_id,
-					row.workspace_id,
-					row.harness,
-					`${row.title} (fork)`.slice(0, 120),
-					row.listed_model_id,
-					fork.vm ? "ready" : "starting",
-					fork.branch ??
-						row.selected_branch ??
-						row.working_branch ??
-						row.task_branch,
-					fork.branch,
-					fork.branch ? row.base_branch : null,
-					fork.vm,
-				],
-			);
+					values,
+				);
 		} else if (input.mode === "code" || input.mode === "both") {
 			if (!point.code || !ownsWritableCheckout(row))
 				throw new Error(

@@ -50,6 +50,9 @@ vi.mock("./agent-sessions", () => ({
 					id,
 					userId,
 					projectId: row.project_id,
+					workspaceId: row.workspace_id,
+					harness: row.harness,
+					listedModelId: row.listed_model_id,
 					title: row.title,
 					turnStatus: row.turn_status,
 					providerRef: row.provider_ref,
@@ -450,6 +453,45 @@ describe("forking at a message", () => {
 		expect(source.items).toHaveLength(2);
 		expect(code.restore).not.toHaveBeenCalled();
 		expect(calls.destroy).not.toHaveBeenCalled();
+	});
+
+	it("makes the fork's chat before its VM, so the VM's usage owner can be verified", async () => {
+		const { calls, machines: vms } = machines();
+		const owners: string[][] = [];
+		calls.forkWorkspace.mockImplementation(async (...args: unknown[]) => {
+			// Usage admission's owner lookup for an agent VM's slug.
+			const found = await db.query<{ user_id: string }>(
+				"select user_id from agent_session where 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1",
+				[args[1]],
+			);
+			owners.push(found.rows.map((row) => row.user_id));
+			return { vm: "vm-fork", forkMs: 5 };
+		});
+		const recovered = await recoverConversation(vms, "alice", forkInput);
+		expect(owners).toEqual([["alice"]]);
+		expect((await rows())[1]).toMatchObject({
+			id: recovered.id,
+			provider_ref: "vm-fork",
+			status: "ready",
+			title: "Original (fork)",
+		});
+	});
+
+	it("removes the reserved fork chat when its VM cannot be made, and keeps an undeletable VM owned", async () => {
+		const first = machines();
+		first.calls.forkWorkspace.mockRejectedValueOnce(new Error("no capacity"));
+		await expect(
+			recoverConversation(first.machines, "alice", forkInput),
+		).rejects.toThrow("no capacity");
+		expect(await rows()).toHaveLength(1);
+		const second = machines();
+		code.start.mockRejectedValueOnce(new Error("checkout failed"));
+		second.calls.destroy.mockRejectedValueOnce(new Error("provider down"));
+		await expect(
+			recoverConversation(second.machines, "alice", forkInput),
+		).rejects.toThrow("checkout failed");
+		const [, kept] = await rows();
+		expect(kept).toMatchObject({ provider_ref: "vm-fork", status: "failed" });
 	});
 
 	it("fails without copying a VM when the source no longer holds the checkpoint", async () => {
