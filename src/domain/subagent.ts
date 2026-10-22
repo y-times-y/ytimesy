@@ -272,6 +272,8 @@ export type SubagentOutcome = "finished" | "failed" | "budget exhausted";
 
 export function subagentReportHeader(input: {
 	readonly label: string;
+	/** What the chat calls it (helper-names.ts), for the lead's note to the user. */
+	readonly name?: string;
 	readonly role: SubagentRole;
 	readonly outcome: SubagentOutcome;
 	readonly steps: number;
@@ -293,7 +295,7 @@ export function subagentReportHeader(input: {
 			: input.costEstimated
 				? ` · ~$${input.costUsd.toFixed(2)} list-price est.`
 				: ` · $${input.costUsd.toFixed(2)}`;
-	return `[agent ${input.label} ${input.role} ${input.outcome}${input.round ? ` · ${input.round}` : ""} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
+	return `[agent ${input.label} ${input.role} ${input.outcome}${input.name ? ` · ${input.name}` : ""}${input.round ? ` · ${input.round}` : ""} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
 }
 
 export type WriterPatch = {

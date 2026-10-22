@@ -390,11 +390,14 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				},
 				workspace,
 			);
-			const label =
-				(await loadTree()).nodes.find((node) => node.id === childId)?.label ??
-				"?";
+			const node = (await loadTree()).nodes.find(
+				(entry) => entry.id === childId,
+			);
+			const label = node?.label ?? "?";
 			const started = {
 				id: label,
+				// The name the chat shows for it; use it when you tell the user.
+				...(node ? { name: node.name } : {}),
 				taskId: childId,
 				role,
 				vm: placement,
@@ -507,6 +510,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 			await deps.message(parent, target.id, text, randomUUID());
 			return {
 				id: target.label,
+				name: target.name,
 				status: input.stop ? "stopping" : "message queued",
 				delivery: "next step",
 			};
@@ -569,6 +573,7 @@ export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 				if (target.live)
 					return {
 						id: target.label,
+						name: target.name,
 						status:
 							"message queued: it is still working; its report arrives as a message",
 					};
@@ -582,6 +587,7 @@ export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 					? { id: target.label, ...report }
 					: {
 							id: target.label,
+							name: target.name,
 							note: "Still running; its report will arrive as a message.",
 						};
 			}
@@ -648,6 +654,7 @@ async function sendToSidekick(
 		if (status !== "stopping")
 			return {
 				id: target.label,
+				name: target.name,
 				status: "retired",
 				note: "A new writer becomes your next sidekick.",
 			};
@@ -697,6 +704,7 @@ async function sendToSidekick(
 	);
 	return {
 		id: target.label,
+		name: target.name,
 		status: `${sidekickRoundLabel(next)} started`,
 		checkout:
 			"it works in your checkout now; you wait for its report, then review its changes in place",

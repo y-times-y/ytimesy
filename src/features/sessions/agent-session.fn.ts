@@ -1,12 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
+import { z } from "zod";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { HELPER_MESSAGE_MAX, parseSteering } from "#/domain/agent-steering";
 import { agentTaskTree } from "#/domain/agent-task";
 import {
 	type AgentTaskActivity,
@@ -17,6 +19,7 @@ import {
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
+import type { ChatWaitingOn } from "#/domain/sidebar-chats";
 import { subagentTaskViews } from "#/domain/subagent-tree";
 import {
 	agentSessionForOwner,
@@ -24,7 +27,9 @@ import {
 	listAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { requireUser } from "#/server/auth/auth";
+import { requireSameOrigin } from "#/server/http";
 import {
 	deleteAgentSessionMachine,
 	openAgentSession,
@@ -41,6 +46,7 @@ type PublicAgentChat = {
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
+	readonly waitingOn?: ChatWaitingOn | null;
 };
 
 function runWithMachines<A>(
@@ -130,10 +136,21 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 			[root, ...descendants],
 			Date.now(),
 		);
+		const pending = await pendingSteeringMessages(
+			descendants
+				.filter((session) => session.turnStatus === "running")
+				.map((session) => session.id),
+		).catch(() => []);
 		return agentTaskTree(root.id, descendants).map((task) => {
 			const subagent = subagents.get(task.id);
+			const queuedSteering = pending.flatMap((row) => {
+				if (row.recipientId !== task.id) return [];
+				const steering = parseSteering(row.message);
+				return steering ? [{ id: row.id, ...steering }] : [];
+			});
 			return {
 				...task,
+				...(queuedSteering.length ? { queuedSteering } : {}),
 				items: childTaskPublicItems(
 					sessionItemsFromUnknown(byId.get(task.id)?.items),
 				),
@@ -141,6 +158,26 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 				...(subagent ? { subagent } : {}),
 			};
 		});
+	});
+
+const helperMessageInput = z.object({
+	projectId: z.uuid(),
+	rootSessionId: z.uuid(),
+	helperId: z.uuid(),
+	requestId: z.uuid(),
+	message: z.string().trim().min(1).max(HELPER_MESSAGE_MAX),
+});
+
+/** The user steers one of the chat's running helpers from the agents list. */
+export const sendHelperMessage = createServerFn({ method: "POST" })
+	.validator((data: unknown) => helperMessageInput.parse(data))
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const { sendUserMessageToHelper } = await import(
+			"#/server/services/helper-steering"
+		);
+		return sendUserMessageToHelper({ userId: user.id, ...data });
 	});
 
 export const deleteProjectAgentSession = createServerFn({ method: "POST" })

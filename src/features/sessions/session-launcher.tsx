@@ -10,9 +10,16 @@ import {
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
+	agentPanelRows,
+	type BackgroundRun,
+	helperIdentities,
+	LEAD_ROW_ID,
+} from "#/domain/agent-panel";
+import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import {
@@ -23,6 +30,7 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
+import { MAIN_NAME } from "#/domain/helper-names";
 import { SessionItemId } from "#/domain/ids";
 import {
 	composerModelIdForCatalog,
@@ -59,9 +67,12 @@ import type { PublicCodexSession } from "#/server/services/codex-workspace-sessi
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import { CloudUsageIndicator } from "../workspace/usage-windows";
+import { AgentIcon } from "./agent-icon";
+import { AgentPanel } from "./agent-panel";
 import {
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
+	sendHelperMessage,
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
 import { ContextUsage } from "./context-usage";
@@ -113,7 +124,10 @@ export function SessionLauncher({
 	onProjectPickerOpenChange,
 	memoryActions,
 	onRemoveQueued,
+	backgroundRuns,
 }: {
+	/** Background commands this chat started (their read model), shown as list rows. */
+	backgroundRuns?: readonly BackgroundRun[];
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
 	memoryActions?: MemoryMarkerActions;
 	/** Takes back a message still waiting behind the running turn. */
@@ -321,6 +335,101 @@ export function SessionLauncher({
 	);
 	const items = visibleSessionItems(session.items, optimisticItems);
 	const turnStatus = session.turnStatus;
+	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
+	const agents = agentPanelRows({
+		tasks: childTasks,
+		leadItems: items,
+		leadTurnStatus: turnStatus,
+		leadHarness: harnessId,
+		leadModelId: session.listedModelId,
+		background: backgroundRuns,
+	});
+	const identities = useMemo(() => helperIdentities(childTasks), [childTasks]);
+	const [selectedAgentId, setSelectedAgentId] = useState(LEAD_ROW_ID);
+	const selectedHelper = agents.helpers.find(
+		(row) => row.id === selectedAgentId,
+	);
+	const selectedTask = selectedHelper
+		? childTasks.find((task) => task.id === selectedHelper.id)
+		: undefined;
+	const sendToHelper = useServerFn(sendHelperMessage);
+	/** Messages the user sent a helper that its list does not show yet. */
+	const [helperOutbox, setHelperOutbox] = useState<
+		readonly {
+			readonly id: string;
+			readonly helperId: string;
+			readonly text: string;
+			readonly sentAt: number;
+		}[]
+	>([]);
+	const [helperError, setHelperError] = useState<string | null>(null);
+	useEffect(() => {
+		setHelperOutbox((current) => {
+			const next = current.filter((sent) => {
+				const task = childTasks.find((entry) => entry.id === sent.helperId);
+				if (!task || Date.now() - sent.sentAt > 30_000) return false;
+				const listed =
+					task.queuedSteering?.some(
+						(message) => message.from === "user" && message.text === sent.text,
+					) ||
+					task.items.some(
+						(item) =>
+							item.kind === "userMessage" &&
+							parseSteering(item.text)?.text === sent.text,
+					);
+				return !listed;
+			});
+			return next.length === current.length ? current : next;
+		});
+	}, [childTasks]);
+	function openAgent(id: string) {
+		setHelperError(null);
+		setSelectedAgentId((current) =>
+			current === id && id !== LEAD_ROW_ID ? LEAD_ROW_ID : id,
+		);
+	}
+	function sendDraftToHelper() {
+		const text = draft.trim();
+		if (!selectedHelper || !text || !selectedProject || !session.agentSessionId)
+			return;
+		if (!selectedHelper.messageable) {
+			setHelperError(`“${selectedHelper.name}” has finished.`);
+			return;
+		}
+		const id = crypto.randomUUID();
+		const helperId = selectedHelper.id;
+		setHelperError(null);
+		setDraft("");
+		setHelperOutbox((current) => [
+			...current,
+			{ id, helperId, text, sentAt: Date.now() },
+		]);
+		sendToHelper({
+			data: {
+				projectId: selectedProject.id,
+				rootSessionId: session.agentSessionId,
+				helperId,
+				requestId: id,
+				message: text,
+			},
+		}).then(
+			() => queryClient.invalidateQueries({ queryKey: ["agent-tasks"] }),
+			(cause: unknown) => {
+				setHelperOutbox((current) => current.filter((sent) => sent.id !== id));
+				setDraft((current) => (current.trim() ? current : text));
+				setHelperError(
+					cause instanceof Error
+						? cause.message
+						: "Could not send the message.",
+				);
+			},
+		);
+	}
+	const parentName = (parentId: string) =>
+		parentId === session.agentSessionId
+			? MAIN_NAME
+			: (identities.get(parentId)?.name ?? MAIN_NAME);
+	const helperLines = { identities, onSelect: openAgent };
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items,
@@ -599,69 +708,128 @@ export function SessionLauncher({
 			<h1 id="session-title" className="sr-only">
 				Session
 			</h1>
-			<SessionTimeline
-				recoveryControls={
-					onRecovered && selectedProject && session.agentSessionId
-						? (messageId) => {
-								const point = recoveryPoints.data?.find(
-									(point) => point.messageId === messageId,
-								);
-								if (!point) return null;
-								return (
-									<ConversationRecovery
-										codeAvailable={point.codeAvailable}
-										busy={busy || session.turnStatus === "running"}
-										onRecover={async (mode) => {
-											if (!session.agentSessionId)
-												throw new Error("Session is unavailable.");
-											const recovered = await recoverPoint({
-												data: {
-													projectId: selectedProject.id,
-													sessionId: session.agentSessionId,
-													messageId,
-													mode,
-												},
-											});
-											await onRecovered(recovered.id, recovered.prompt);
-											if (recovered.prompt) setDraft(recovered.prompt);
-											await recoveryPoints.refetch();
-										}}
-									/>
-								);
-							}
-						: undefined
-				}
-				tasks={childTasks}
-				evidence={chatEvidence.data?.evidence}
-				memoryActions={memoryActions}
-				items={items}
-				turnStatus={turnStatus}
-				fill={followUpLayout}
-				onOpenFile={onOpenFile}
-				secretActions={
-					selectedProject
-						? {
-								disabled: busy || turnStatus === "running",
-								onSave: async ({ name, value, kind }) => {
-									await saveProjectSecret({
-										data: { projectId: selectedProject.id, name, value, kind },
-									});
-									sendText(secretProvidedText(name));
-								},
-								onDecline: (name) => sendText(secretDeclinedText(name)),
-							}
-						: undefined
-				}
-				questionActions={{
-					disabled: busy || turnStatus === "running",
-					onAnswer: (text) => sendText(text),
-				}}
-				failoverActions={{
-					disabled: busy || turnStatus === "running",
-					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
-				}}
-				onRemoveQueued={onRemoveQueued}
-			/>
+			{selectedHelper && selectedTask ? (
+				<>
+					<div className="helper-view-header">
+						<AgentIcon
+							icon={selectedHelper.icon}
+							color={selectedHelper.color}
+						/>
+						<span className="helper-view-name">{selectedHelper.name}</span>
+						{selectedHelper.tag ? (
+							<span className="agent-row-tag">{selectedHelper.tag}</span>
+						) : null}
+						<button
+							type="button"
+							className="helper-view-back"
+							onClick={() => openAgent(LEAD_ROW_ID)}
+						>
+							Back to Main
+						</button>
+					</div>
+					<SessionTimeline
+						key={selectedTask.id}
+						items={selectedTask.items}
+						turnStatus={selectedTask.turnStatus}
+						tasks={childTasks}
+						taskParentId={selectedTask.id}
+						helperLines={helperLines}
+						senderName={parentName(selectedTask.parentSessionId)}
+						queuedSteering={[
+							...(selectedTask.queuedSteering ?? []).map((message) => ({
+								id: message.id,
+								from:
+									message.from === "user"
+										? "You"
+										: parentName(selectedTask.parentSessionId),
+								text: message.text,
+							})),
+							...helperOutbox
+								.filter(
+									(sent) =>
+										sent.helperId === selectedTask.id &&
+										!selectedTask.queuedSteering?.some(
+											(message) =>
+												message.from === "user" && message.text === sent.text,
+										),
+								)
+								.map((sent) => ({ id: sent.id, from: "You", text: sent.text })),
+						]}
+						fill={followUpLayout}
+						onOpenFile={onOpenFile}
+					/>
+				</>
+			) : (
+				<SessionTimeline
+					recoveryControls={
+						onRecovered && selectedProject && session.agentSessionId
+							? (messageId) => {
+									const point = recoveryPoints.data?.find(
+										(point) => point.messageId === messageId,
+									);
+									if (!point) return null;
+									return (
+										<ConversationRecovery
+											codeAvailable={point.codeAvailable}
+											busy={busy || session.turnStatus === "running"}
+											onRecover={async (mode) => {
+												if (!session.agentSessionId)
+													throw new Error("Session is unavailable.");
+												const recovered = await recoverPoint({
+													data: {
+														projectId: selectedProject.id,
+														sessionId: session.agentSessionId,
+														messageId,
+														mode,
+													},
+												});
+												await onRecovered(recovered.id, recovered.prompt);
+												if (recovered.prompt) setDraft(recovered.prompt);
+												await recoveryPoints.refetch();
+											}}
+										/>
+									);
+								}
+							: undefined
+					}
+					tasks={childTasks}
+					helperLines={helperLines}
+					evidence={chatEvidence.data?.evidence}
+					memoryActions={memoryActions}
+					items={items}
+					turnStatus={turnStatus}
+					fill={followUpLayout}
+					onOpenFile={onOpenFile}
+					secretActions={
+						selectedProject
+							? {
+									disabled: busy || turnStatus === "running",
+									onSave: async ({ name, value, kind }) => {
+										await saveProjectSecret({
+											data: {
+												projectId: selectedProject.id,
+												name,
+												value,
+												kind,
+											},
+										});
+										sendText(secretProvidedText(name));
+									},
+									onDecline: (name) => sendText(secretDeclinedText(name)),
+								}
+							: undefined
+					}
+					questionActions={{
+						disabled: busy || turnStatus === "running",
+						onAnswer: (text) => sendText(text),
+					}}
+					failoverActions={{
+						disabled: busy || turnStatus === "running",
+						onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
+					}}
+					onRemoveQueued={onRemoveQueued}
+				/>
+			)}
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (
 					<ProjectContext
@@ -696,15 +864,24 @@ export function SessionLauncher({
 
 						<TaskInput
 							value={draft}
-							onChange={setDraft}
-							onSubmit={sendDraft}
-							disabled={busy}
+							onChange={(value) => {
+								setDraft(value);
+								if (helperError) setHelperError(null);
+							}}
+							onSubmit={selectedHelper ? sendDraftToHelper : sendDraft}
+							disabled={busy && !selectedHelper}
 							placeholder={
-								followUpLayout
-									? "Follow up…"
-									: "What would you like to work on?"
+								selectedHelper
+									? `Message “${selectedHelper.name}”…`
+									: agents.lead.status === "free"
+										? "Ask Main anything while helpers work"
+										: followUpLayout
+											? "Follow up…"
+											: "What would you like to work on?"
 							}
-							onKeyDown={handleComposerKey}
+							onKeyDown={(event) =>
+								selectedHelper ? false : handleComposerKey(event)
+							}
 						/>
 						{attachments.length > 0 && (
 							<ul className="session-attachments" aria-label="Attached files">
@@ -728,6 +905,11 @@ export function SessionLauncher({
 								))}
 							</ul>
 						)}
+						{helperError ? (
+							<p className="session-attachment-error" role="alert">
+								{helperError}
+							</p>
+						) : null}
 						{attachmentError && (
 							<p className="session-attachment-error" role="alert">
 								{attachmentError}
@@ -823,9 +1005,26 @@ export function SessionLauncher({
 									</span>
 								</button>
 							) : null}
-							{turnStatus !== "running" ||
-							draft.trim() ||
-							attachments.length ? (
+							{selectedHelper ? (
+								<button
+									type="button"
+									className="session-send"
+									aria-label={`Send to “${selectedHelper.name}”`}
+									disabled={!draft.trim() || !selectedHelper.messageable}
+									title={
+										selectedHelper.messageable
+											? "Send; it reads it at its next step"
+											: "It has finished"
+									}
+									onClick={sendDraftToHelper}
+								>
+									<span className="send-face">
+										<ArrowUp className="size-4" />
+									</span>
+								</button>
+							) : turnStatus !== "running" ||
+								draft.trim() ||
+								attachments.length ? (
 								<button
 									type="button"
 									className="session-send"
@@ -871,6 +1070,13 @@ export function SessionLauncher({
 						) : null}
 					</div>
 				</div>
+				<AgentPanel
+					lead={agents.lead}
+					helpers={agents.helpers}
+					background={agents.background}
+					selectedId={selectedHelper ? selectedHelper.id : LEAD_ROW_ID}
+					onSelect={openAgent}
+				/>
 			</div>
 		</section>
 	);

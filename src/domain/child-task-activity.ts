@@ -7,6 +7,12 @@ export type AgentTaskActivity = AgentTask & {
 	readonly turnStatus: SessionTurnStatus;
 	/** Set for children started through the agent tool (subagents=on). */
 	readonly subagent?: SubagentTaskView;
+	/** Steering (agent_send, or the user from the agents list) its next step has not taken yet. */
+	readonly queuedSteering?: readonly {
+		readonly id: string;
+		readonly from: "parent" | "user";
+		readonly text: string;
+	}[];
 };
 
 const INTERNAL_EVENT_PREFIX = "\u2063ytimesy-child-event:";
