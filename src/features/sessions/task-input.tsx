@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useRef } from "react";
+import { type KeyboardEvent, type RefObject, useEffect, useRef } from "react";
 
 function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = "auto";
@@ -35,6 +35,8 @@ export function TaskInput({
 	placeholder = "What would you like to work on?",
 	label = "Task description",
 	onKeyDown,
+	onCaretChange,
+	textareaRef,
 }: {
 	value: string;
 	onChange: (value: string) => void;
@@ -43,6 +45,9 @@ export function TaskInput({
 	placeholder?: string;
 	label?: string;
 	onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
+	/** The caret moved: typing, clicks and arrow keys. */
+	onCaretChange?: (caret: number) => void;
+	textareaRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => {
@@ -66,7 +71,10 @@ export function TaskInput({
 	return (
 		<div className="composer-input">
 			<textarea
-				ref={inputRef}
+				ref={(node) => {
+					inputRef.current = node;
+					if (textareaRef) textareaRef.current = node;
+				}}
 				aria-label={label}
 				placeholder={placeholder}
 				rows={1}
@@ -74,7 +82,11 @@ export function TaskInput({
 				disabled={disabled}
 				onChange={(event) => {
 					onChange(event.currentTarget.value);
+					onCaretChange?.(event.currentTarget.selectionStart);
 				}}
+				onSelect={(event) =>
+					onCaretChange?.(event.currentTarget.selectionStart)
+				}
 				onKeyDown={(event) => {
 					if (onKeyDown?.(event)) return;
 					if (enterSubmits(event)) {
