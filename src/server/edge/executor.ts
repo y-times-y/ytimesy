@@ -18,7 +18,11 @@ import {
 	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
-import { ConversationRoom, routeRealtimeRequest } from "../../realtime/worker";
+import {
+	ConversationRoom,
+	isRealtimeRoute,
+	routeRealtimeRequest,
+} from "../../realtime/worker";
 import {
 	type ApiTurn,
 	cancelWaitingApiTurn,
@@ -67,6 +71,7 @@ import {
 	authorizeGitProxy,
 	claimGitProxyGrant,
 } from "./github-git-authorization";
+import { executorIngressRoute } from "./ingress-route";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
@@ -571,12 +576,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	async fetch(request: Request) {
 		const path = new URL(request.url).pathname;
-		if (
-			path === "/snapshot" ||
-			path === "/stream" ||
-			path === "/purge" ||
-			path.startsWith("/turn/")
-		) {
+		if (isRealtimeRoute(path)) {
 			const secret = process.env.YTIMESY_REALTIME_SECRET;
 			if (!secret || secret.length < 32)
 				return new Response(null, { status: 503 });
@@ -800,12 +800,9 @@ export default {
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;
-			if (
-				path === "/snapshot" ||
-				path === "/stream" ||
-				path === "/purge" ||
-				path.startsWith("/turn/")
-			) {
+			const route = executorIngressRoute(path);
+			// By exact name: /turn/start below is not the room's.
+			if (route === "room") {
 				const secret = process.env.YTIMESY_REALTIME_SECRET;
 				if (!secret || secret.length < 32)
 					return new Response(null, { status: 503 });
@@ -818,7 +815,7 @@ export default {
 			}
 			// The web Worker claimed a sent message's turn on its own database
 			// connection (turn-start.ts) and hands it to the chat's loop here.
-			if (path === "/turn/start") {
+			if (route === "turn-start") {
 				if (request.method !== "POST")
 					return new Response(null, { status: 404 });
 				const config = z
@@ -855,7 +852,7 @@ export default {
 					status: (await startClaimedTurn(env, turn.data)) ? 204 : 409,
 				});
 			}
-			if (new URL(request.url).pathname === "/jobs/start") {
+			if (route === "jobs-start") {
 				if (request.method !== "POST")
 					return new Response(null, { status: 404 });
 				const config = z

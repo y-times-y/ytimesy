@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import { modelConcurrencyLimits } from "./agent-capacity";
-import { claimApiTurn } from "./api-turns";
+import { claimApiTurn, releaseClaimedApiTurn } from "./api-turns";
 import {
 	backgroundAdmissionEndpoint,
 	hasInternalJobDispatcher,
@@ -38,14 +38,24 @@ export async function admitQueuedTurnsWith(start: StartClaimedTurn) {
 		);
 		if (!turn) break;
 		if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
-		if (
-			!(await start({
+		let started: boolean;
+		try {
+			started = await start({
 				userId: turn.user_id,
 				sessionId: turn.session_id,
 				turnId: turn.id,
 				leaseId: turn.lease_id,
-			}))
-		)
+			});
+		} catch (error) {
+			// The hand-off failed: queue the turn again so the caller's fallback
+			// (the admission job) or the next sweep starts it now, not after its
+			// lease runs out.
+			await releaseClaimedApiTurn(turn.id, turn.lease_id).catch(() =>
+				console.warn("A claimed turn could not be released."),
+			);
+			throw error;
+		}
+		if (!started)
 			console.warn(
 				"Chat could not queue this turn; lease expiry will fail it.",
 			);

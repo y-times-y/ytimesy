@@ -14,6 +14,7 @@ import {
 	finishApiTurn,
 	previousTurnMessages,
 	publishApiTurnProgress,
+	releaseClaimedApiTurn,
 	renewApiTurn,
 } from "../src/server/adapters/api-turns";
 import {
@@ -200,6 +201,28 @@ it("assigns one immutable executor when admitting a turn", async () => {
 	await expect(
 		query("update api_turn set executor='node' where id=$1", [turn?.id]),
 	).rejects.toThrow("cannot change executor");
+});
+
+it("queues a claimed turn again after a failed hand-off, fenced by the lease it was claimed with", async () => {
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	await submit();
+	const turn = await claimApiTurn(2, 8, "durable-object");
+	if (!turn?.lease_id) throw new Error("not claimed");
+	// A stale lease releases nothing.
+	expect(await releaseClaimedApiTurn(turn.id, randomUUID())).toBe(false);
+	expect(await releaseClaimedApiTurn(turn.id, turn.lease_id)).toBe(true);
+	expect(
+		(await query("select state,lease_id from api_turn where id=$1", [turn.id]))
+			.rows[0],
+	).toEqual({ state: "queued", lease_id: null });
+	// The next admission takes it again, under a new lease; the old one is dead.
+	const again = await claimApiTurn(2, 8, "durable-object");
+	expect(again?.id).toBe(turn.id);
+	expect(again?.lease_id).not.toBe(turn.lease_id);
+	expect(await releaseClaimedApiTurn(turn.id, turn.lease_id)).toBe(false);
+	expect(
+		await renewApiTurn({ ...turn, lease_id: turn.lease_id } as never),
+	).toBe(false);
 });
 
 it("does not let the Cloudflare dispatcher claim a legacy Node turn", async () => {

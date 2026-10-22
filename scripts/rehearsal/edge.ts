@@ -49,6 +49,7 @@ import { withDatabaseScope } from "../../src/server/adapters/database-scope";
 import { withExecutorBinding } from "../../src/server/adapters/executor-fetch";
 import { withConversationPublisher } from "../../src/server/adapters/realtime-delivery";
 import { turnStartRequest } from "../../src/server/adapters/turn-start";
+import { executorIngressRoute } from "../../src/server/edge/ingress-route";
 import {
 	executeModelStep,
 	type WorkflowStepClaim,
@@ -171,8 +172,18 @@ export class RehearsalEdge {
 		const secret = process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ?? "";
 		if (!(await verifyDeliveryRequest(secret, request, body)))
 			return new Response(null, { status: 401 });
-		const path = new URL(url).pathname;
-		if (path === "/turn/start") {
+		// The deployed executor's routing order: a path its room router would
+		// take never reaches the handlers below there, so not here either.
+		const route = executorIngressRoute(new URL(url).pathname);
+		// The web binding sends only the turn and job starts: anything routed
+		// elsewhere is a routing bug the deployed edge would answer with 404.
+		if (route !== "turn-start" && route !== "jobs-start") {
+			this.errors.push(
+				`executor binding: ${new URL(url).pathname} routed to ${route}`,
+			);
+			return new Response(null, { status: 404 });
+		}
+		if (route === "turn-start") {
 			const turn = turnStartRequest.parse(JSON.parse(body));
 			this.note(
 				"admit",
@@ -186,7 +197,7 @@ export class RehearsalEdge {
 			} as ApiTurn);
 			return new Response(null, { status: 204 });
 		}
-		if (path === "/jobs/start") {
+		if (route === "jobs-start") {
 			await this.invoke(() =>
 				this.dispatch(backgroundJob.parse(JSON.parse(body))),
 			);
