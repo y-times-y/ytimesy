@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
 	release: vi.fn(),
 	capture: vi.fn(),
 	dispatch: vi.fn(),
+	relay: vi.fn(),
+}));
+vi.mock("../jobs/conversation-delivery", () => ({
+	relayConversationDeliveriesOnce: mocks.relay,
 }));
 vi.mock("./background-job-dispatch", () => ({
 	dispatchBackgroundJob: mocks.dispatch,
@@ -31,6 +35,7 @@ vi.mock("./database", () => ({
 }));
 beforeEach(() => {
 	mocks.dispatch.mockReset().mockResolvedValue(true);
+	mocks.relay.mockReset().mockResolvedValue(undefined);
 	mocks.capture.mockReset();
 	mocks.query.mockReset();
 	mocks.release.mockReset();
@@ -208,7 +213,10 @@ describe("waking the durable executor for a queued turn", () => {
 		expect(mocks.dispatch).toHaveBeenCalledWith(
 			expect.objectContaining({ kind: "model-admission" }),
 		);
-		expect(deferred).toHaveLength(1);
+		// Beside the wake, the committed message and running turn go to the
+		// chat's progress stream.
+		expect(mocks.relay).toHaveBeenCalledWith("chat");
+		expect(deferred).toHaveLength(2);
 		woken();
 		await Promise.all(deferred);
 	});
@@ -239,6 +247,8 @@ describe("waking the durable executor for a queued turn", () => {
 		});
 		await enqueueApiTurn(input);
 		expect(woken).toBe(true);
+		// An executor's own step relays its progress.
+		expect(mocks.relay).not.toHaveBeenCalled();
 	});
 });
 

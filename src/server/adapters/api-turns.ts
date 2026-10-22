@@ -15,6 +15,7 @@ import {
 	configuredTurnExecutor,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
+import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
 	captureTurnFinished,
 	captureTurnStarted,
@@ -239,7 +240,14 @@ export async function enqueueApiTurn(input: {
 				);
 			}
 		};
-		if (!startAfterResponse(wake)) await wake();
+		if (!startAfterResponse(wake)) {
+			await wake();
+			return;
+		}
+		// The chat's progress stream shows the sent message and the running
+		// turn now, not when the executor's first step relays it (2-4 s later).
+		// A failed relay keeps its durable receipt for the step to deliver.
+		startAfterResponse(() => relayConversationDeliveriesOnce(input.sessionId));
 	}
 }
 
