@@ -2616,6 +2616,17 @@ button.helper-card:hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.helper-card-line code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	padding: 1px 4px;
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.08);
+}
+.helper-card-line strong {
+	color: #d4d4d4;
+	font-weight: 500;
+}
 .helper-view-header {
 	display: flex;
 	align-items: center;

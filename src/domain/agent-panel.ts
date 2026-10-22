@@ -22,6 +22,7 @@ import {
 	KIND_TAGS,
 	MAIN_NAME,
 } from "./helper-names";
+import { reportSummaryLine } from "./markdown-text";
 import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 import { splitReportHeader } from "./subagent";
@@ -706,7 +707,7 @@ export function helperFinishCard(
 	const line =
 		error?.kind === "error"
 			? firstLine(error.message, 240)
-			: firstLine(body, 240) || firstLine(lastAgentText(items), 240);
+			: reportSummaryLine(body) || reportSummaryLine(lastAgentText(items));
 	const metric = helperMetric(task);
 	const meta = task.summary ? splitReportHeader(task.summary).meta : null;
 	// The header's facts only; it repeats the outcome and the name.
