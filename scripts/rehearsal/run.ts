@@ -136,7 +136,7 @@ const results = await Promise.all(
 		// The tag leads: an exploration brief quotes the request's start.
 		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents !== "off")}`;
 		const sends = [Date.now()];
-		const sessionId = await edge.invoke(() =>
+		const sessionId = await edge.web(() =>
 			startTaskChat({
 				user,
 				vm,
@@ -193,9 +193,7 @@ const results = await Promise.all(
 			// Later user messages in the same chat, each after the last settled.
 			for (const [index, followUp] of (scenario.followUps ?? []).entries()) {
 				sends.push(Date.now());
-				await edge.invoke(() =>
-					sendFollowUp({ user, sessionId, text: followUp }),
-				);
+				await edge.web(() => sendFollowUp({ user, sessionId, text: followUp }));
 				console.log(
 					`rehearsal: ${scenario.id} follow-up ${index + 1} sent (${elapsed()})`,
 				);

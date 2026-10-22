@@ -159,7 +159,7 @@ export async function rehearseFork(input: {
 
 	// A turn in the fork runs on the fork's VM and sees the message's code.
 	const logStart = vms.log.length;
-	await edge.invoke(() =>
+	await edge.web(() =>
 		sendFollowUp({ user, sessionId: forkId as string, text: FORK_IN_FORK }),
 	);
 	let settled = "";

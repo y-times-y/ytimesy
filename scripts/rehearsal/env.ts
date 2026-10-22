@@ -54,5 +54,9 @@ export function applyRehearsalEnvironment(databaseUrl: string) {
 		YTIMESY_ENVIRONMENT_AUTO_REFRESH: "false",
 		// As the development edge was run for these runs: failures carry their cause.
 		YTIMESY_DEBUG_TURN_ERRORS: "1",
+		// Reached only through the in-process executor binding (edge.web);
+		// the .invalid name never resolves, so nothing leaves the machine.
+		YTIMESY_BACKGROUND_WORKFLOW_URL: "https://rehearsal-edge.invalid/",
+		YTIMESY_BACKGROUND_WORKFLOW_SECRET: randomBytes(32).toString("hex"),
 	});
 }

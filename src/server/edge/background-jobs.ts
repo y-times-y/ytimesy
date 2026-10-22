@@ -2,8 +2,6 @@ import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import { type BackgroundJob, backgroundJob } from "../../domain/background-job";
 import { modelConversationName } from "../../domain/model-conversation-routing";
-import { modelConcurrencyLimits } from "../adapters/agent-capacity";
-import { claimApiTurn } from "../adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
@@ -12,6 +10,10 @@ import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
+import {
+	admitQueuedTurnsWith,
+	type TurnStartRequest,
+} from "../adapters/turn-start";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -93,26 +95,19 @@ export function runBackgroundJob(
 export async function admitQueuedTurns(env: EdgeExecutorEnvironment) {
 	if (process.env.MODEL_EXECUTION_ENABLED !== "1")
 		throw new Error("Model execution is disabled.");
-	const limits = modelConcurrencyLimits();
-	for (let count = 0; count < 16; count++) {
-		const turn = await claimApiTurn(
-			limits.perUser,
-			limits.fleet,
-			"durable-object",
-		);
-		if (!turn) break;
-		if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
-		const scope = { userId: turn.user_id, sessionId: turn.session_id };
-		if (
-			!(await env.MODEL_CONVERSATIONS.getByName(
-				modelConversationName(scope),
-				durableObjectLocation(),
-			).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
-		)
-			console.warn(
-				"Chat could not queue this turn; lease expiry will fail it.",
-			);
-	}
+	await admitQueuedTurnsWith((turn) => startClaimedTurn(env, turn));
+}
+
+/** Hands a claimed turn to its chat's loop; idempotent for the same turn and lease. */
+export function startClaimedTurn(
+	env: EdgeExecutorEnvironment,
+	turn: TurnStartRequest,
+) {
+	const scope = { userId: turn.userId, sessionId: turn.sessionId };
+	return env.MODEL_CONVERSATIONS.getByName(
+		modelConversationName(scope),
+		durableObjectLocation(),
+	).startTurn(scope, { turnId: turn.turnId, leaseId: turn.leaseId });
 }
 
 /** Idempotent by job ID: admitting the same job again only reports its state. */

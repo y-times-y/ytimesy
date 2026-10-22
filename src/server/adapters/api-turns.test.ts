@@ -17,8 +17,10 @@ const mocks = vi.hoisted(() => ({
 	release: vi.fn(),
 	capture: vi.fn(),
 	dispatch: vi.fn(),
+	direct: vi.fn(),
 	relay: vi.fn(),
 }));
+vi.mock("./turn-start", () => ({ startQueuedTurnsDirectly: mocks.direct }));
 vi.mock("../jobs/conversation-delivery", () => ({
 	relayConversationDeliveriesOnce: mocks.relay,
 }));
@@ -35,6 +37,7 @@ vi.mock("./database", () => ({
 }));
 beforeEach(() => {
 	mocks.dispatch.mockReset().mockResolvedValue(true);
+	mocks.direct.mockReset().mockResolvedValue(false);
 	mocks.relay.mockReset().mockResolvedValue(undefined);
 	mocks.capture.mockReset();
 	mocks.query.mockReset();
@@ -244,6 +247,23 @@ describe("waking the durable executor for a queued turn", () => {
 		await Promise.all(deferred);
 		expect(warn).toHaveBeenCalledWith(
 			"Cloudflare turn wake deferred; queued turn awaits recovery.",
+		);
+		warn.mockRestore();
+	});
+
+	it("starts the turn from the web Worker directly, dispatching admission only when that fails", async () => {
+		mocks.direct.mockResolvedValue(true);
+		await enqueueApiTurn(input);
+		expect(mocks.direct).toHaveBeenCalledOnce();
+		expect(mocks.dispatch).not.toHaveBeenCalled();
+		mocks.direct.mockRejectedValue(new Error("binding unavailable"));
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await enqueueApiTurn(input);
+		expect(mocks.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "model-admission" }),
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Direct turn start failed; dispatching admission.",
 		);
 		warn.mockRestore();
 	});

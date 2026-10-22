@@ -36,6 +36,7 @@ import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
+import { startQueuedTurnsDirectly } from "./turn-start";
 
 export type ApiTurn = {
 	id: string;
@@ -234,6 +235,13 @@ export async function enqueueApiTurn(input: {
 		// sends it after responding; a lost wake is admitted by the next
 		// minute's admission sweep, like before.
 		const wake = async () => {
+			// From the web Worker: claim here and start the chat's loop through
+			// the executor binding (turn-start.ts); elsewhere, the admission job.
+			try {
+				if (await startQueuedTurnsDirectly()) return;
+			} catch {
+				console.warn("Direct turn start failed; dispatching admission.");
+			}
 			try {
 				if (
 					!(await dispatchBackgroundJob({
