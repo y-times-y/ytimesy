@@ -34,6 +34,8 @@ export type Scenario = {
 	readonly memory?: Readonly<Record<string, string>>;
 	/** Once every message settled: fork the chat at this user message (1-based). */
 	readonly forkAt?: number;
+	/** Q&A-only messages to fork at too, with the marker each fork must hold. */
+	readonly qaForks?: readonly { at: number; marker: string }[];
 };
 
 /** A standing rule in the user's memory (scope: always rides on every chat). */
@@ -1005,6 +1007,9 @@ function exploreCheckerScript(tag: string): AgentScript {
 export const FORK_MARKER = "fork-marker.txt";
 export const FORK_FOLLOW_UP =
 	"[rehearsal:fork-2] A second request: rewrite the marker.";
+/** Questions answered without tools: their turns take no code point. */
+export const FORK_QUESTION = (n: number) =>
+	`[rehearsal:fork-qa${n}] Just answer: what is the marker for?`;
 export const FORK_IN_FORK = "[rehearsal:fork-3] In the fork: show the marker.";
 
 function forkBuilderScript(tag: string): AgentScript {
@@ -1014,13 +1019,18 @@ function forkBuilderScript(tag: string): AgentScript {
 		reply: ({ userTexts, calls }) => {
 			const ran = (needle: string) =>
 				calls.some((call) => JSON.stringify(call.args).includes(needle));
-			const asked = (needle: string) =>
-				userTexts.some((text) => text.includes(needle));
-			if (asked("[rehearsal:fork-3]"))
+			// The newest request decides; earlier ones are history.
+			const latest =
+				[...userTexts]
+					.reverse()
+					.find((text) => text.includes("[rehearsal:fork")) ?? "";
+			if (latest.includes("[rehearsal:fork-3]"))
 				return ran(`cat ${FORK_MARKER}`)
 					? { text: "Marker shown in the fork." }
 					: bash(`cat ${FORK_MARKER}`);
-			if (asked("[rehearsal:fork-2]"))
+			if (latest.includes("[rehearsal:fork-qa"))
+				return { text: "It marks which turn's code this is." };
+			if (latest.includes("[rehearsal:fork-2]"))
 				return ran("fork two")
 					? { text: "Marker rewritten." }
 					: bash(`printf 'fork two\\n' > ${FORK_MARKER} && echo WROTE`);
@@ -1214,8 +1224,13 @@ export function scenarios(): Scenario[] {
 				"f. fork at a message: the fork's VM is a copy of the chat's at that message's code, on its own branch; the chat is unchanged",
 			variant: "codeMode=primary",
 			scripts: [forkBuilderScript("[rehearsal:fork]")],
-			followUps: [FORK_FOLLOW_UP],
-			forkAt: 2,
+			// 1 writes "fork one", 2 asks, 3 writes "fork two", 4 asks.
+			followUps: [FORK_QUESTION(1), FORK_FOLLOW_UP, FORK_QUESTION(2)],
+			forkAt: 3,
+			qaForks: [
+				{ at: 2, marker: "fork one\n" },
+				{ at: 4, marker: "fork two\n" },
+			],
 		},
 	];
 }

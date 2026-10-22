@@ -56,6 +56,7 @@ vi.mock("./agent-sessions", () => ({
 					parentSessionId: row.parent_session_id,
 					agentRole: row.agent_role,
 					baseBranch: row.base_branch,
+					items: row.items,
 					taskPlacement: null,
 				}
 			: null;
@@ -487,22 +488,98 @@ describe("forking at a message", () => {
 		).toEqual([]);
 	});
 
-	it("refuses a message without a code checkpoint in a chat that has its own checkout", async () => {
-		const { calls, machines: vms } = machines();
-		await db.query(
-			"update agent_task_command_receipt set response=response #- '{result,code}' where parent_session_id=$1",
-			[session],
-		);
-		await expect(recoverConversation(vms, "alice", forkInput)).rejects.toThrow(
-			"no code checkpoint",
-		);
-		expect(calls.forkWorkspace).not.toHaveBeenCalled();
-		expect(forkCodeStart({ ownsCheckout: false, hasCheckpoint: false })).toBe(
-			"fresh",
-		);
-		expect(forkCodeStart({ ownsCheckout: true, hasCheckpoint: true })).toBe(
-			"checkpoint",
-		);
+	describe("at a message whose turn never touched the workspace", () => {
+		const point = (id: string, code?: object) =>
+			db.query(
+				`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,created_at)
+				 values($1,$2,'done',$3::jsonb,now()+$4::interval)`,
+				[
+					session,
+					`conversation-point:${id}`,
+					JSON.stringify({
+						ok: true,
+						result: {
+							type: "conversation-point",
+							userMessageId: id,
+							prompt: id,
+							items: [],
+							messages: [],
+							...(code ? { code } : {}),
+						},
+					}),
+					`${id === "qa" ? 1 : 2} minutes`,
+				],
+			);
+		beforeEach(async () => {
+			// first (code turn) -> qa (no tools) -> later (code turn, maybe).
+			await db.query("update agent_session set items=$2 where id=$1", [
+				session,
+				JSON.stringify(
+					["first", "qa", "later"].map((id) => ({
+						kind: "userMessage",
+						id,
+						text: id,
+					})),
+				),
+			]);
+			await point("qa");
+			code.capture.mockReset().mockResolvedValue(snapshot("n"));
+		});
+		const qaFork = { ...forkInput, messageId: "qa" };
+
+		it("forks from the next turn's code point: the Q&A turn changed nothing", async () => {
+			await point("later", snapshot("b"));
+			const { calls, machines: vms } = machines();
+			await recoverConversation(vms, "alice", qaFork);
+			expect(code.start).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm-fork" }),
+				snapshot("b"),
+				expect.any(String),
+			);
+			expect(code.capture).not.toHaveBeenCalled();
+			expect(calls.forkWorkspace).toHaveBeenCalledTimes(1);
+		});
+
+		it("forks from the checkout as it is now when no later turn touched the workspace", async () => {
+			const { machines: vms } = machines();
+			await recoverConversation(vms, "alice", qaFork);
+			expect(code.capture).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm-1", cwd: "/workspace/repo" }),
+			);
+			expect(code.start).toHaveBeenCalledWith(
+				expect.anything(),
+				snapshot("n"),
+				expect.any(String),
+			);
+		});
+
+		it("refuses when code was restored after the message, and when the later checkpoint is gone", async () => {
+			await db.query(
+				`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,created_at)
+				 values($1,'conversation-backup:x','done',$2::jsonb,now()+interval '90 seconds')`,
+				[session, JSON.stringify({ result: { code: snapshot("r") } })],
+			);
+			await point("later", snapshot("b"));
+			const first = machines();
+			await expect(
+				recoverConversation(first.machines, "alice", qaFork),
+			).rejects.toThrow("Code was restored after this message");
+			expect(first.calls.forkWorkspace).not.toHaveBeenCalled();
+			await db.query(
+				"delete from agent_task_command_receipt where request_id='conversation-backup:x'",
+			);
+			code.present.mockRejectedValue(new Error("checkpoint is gone"));
+			const second = machines();
+			await expect(
+				recoverConversation(second.machines, "alice", qaFork),
+			).rejects.toThrow("checkpoint is gone");
+			expect(second.calls.forkWorkspace).not.toHaveBeenCalled();
+		});
+
+		it("starts a fresh checkout only for a chat without its own", () => {
+			expect(forkCodeStart({ ownsCheckout: false })).toBe("fresh");
+			expect(forkCodeStart({ ownsCheckout: true })).toBe("checkpoint");
+		});
 	});
 
 	it("gives a fork of a chat without a VM its own branch off the source's base, made at its first turn", async () => {

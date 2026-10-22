@@ -188,6 +188,7 @@ const results = await Promise.all(
 					user,
 					sessionId,
 					forkAt: scenario.forkAt,
+					qaForks: scenario.qaForks,
 					timeoutMs: Number(values.timeout) * 1000,
 				}).catch((error: Error) => [
 					{ name: "the fork step ran", ok: false, detail: error.message },

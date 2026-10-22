@@ -34,6 +34,8 @@ export async function rehearseFork(input: {
 	user: RehearsalUser;
 	sessionId: string;
 	forkAt: number;
+	/** Messages whose turns never touched the workspace, each with the marker its fork must hold. */
+	qaForks?: readonly { at: number; marker: string }[];
 	timeoutMs: number;
 }): Promise<Check[]> {
 	const { edge, machines, vms, vm, user, sessionId } = input;
@@ -91,6 +93,7 @@ export async function rehearseFork(input: {
 	const sourceBranch = await branchOf(vm);
 	const forksBefore = vms.forks.length;
 	let forkId: string | undefined;
+	const clicked = Date.now();
 	try {
 		forkId = (
 			await edge.invoke(() =>
@@ -107,6 +110,9 @@ export async function rehearseFork(input: {
 		return checks;
 	}
 	check("Fork conversation succeeded", true);
+	console.log(
+		`rehearsal: fork at message ${input.forkAt} ready in ${((Date.now() - clicked) / 1000).toFixed(1)}s (click to fork row and VM)`,
+	);
 	const fork = await sessionRow(forkId);
 	const copy = vms.forks.at(-1);
 	check(
@@ -199,6 +205,55 @@ export async function rehearseFork(input: {
 			vms.log.slice(logStart).some((entry) => entry.vm === fork.provider_ref),
 		settled || clip(JSON.stringify({ state: turn?.state, shown })),
 	);
+
+	// Q&A-only messages: no code point; the fork takes the code the next
+	// code turn started from, or the chat's checkout now when none followed.
+	// The lean tool surface prepares the workspace (and so takes a code
+	// point) on every turn's first step; a turn that never prepared it, as on
+	// a surface that prepares on the first tool call, leaves its point
+	// without code. The rehearsal drops the Q&A points' code to stand for that.
+	for (const qa of input.qaForks ?? []) {
+		const asked = messages[qa.at - 1];
+		const own = asked?.id
+			? await edge.invoke(async () => {
+					await database().query(
+						"update agent_task_command_receipt set response=response #- '{result,code}' where parent_session_id=$1 and request_id=$2",
+						[sessionId, `conversation-point:${asked.id}`],
+					);
+					return conversationPoint(user.userId, sessionId, asked.id as string);
+				})
+			: null;
+		const started = Date.now();
+		const result = await edge
+			.invoke(() =>
+				recoverConversation(machines, user.userId, {
+					projectId: user.projectId,
+					sessionId,
+					messageId: asked?.id as string,
+					mode: "fork",
+				}),
+			)
+			.then(
+				async ({ id }) => {
+					const row = await sessionRow(id);
+					return row?.provider_ref
+						? { marker: await marker(row.provider_ref) }
+						: { error: "no VM" };
+				},
+				(error: Error) => ({ error: error.message }),
+			);
+		console.log(
+			`rehearsal: fork at Q&A message ${qa.at} ready in ${((Date.now() - started) / 1000).toFixed(1)}s`,
+		);
+		check(
+			`a fork at Q&A message ${qa.at} (no code point) holds the code as it was then (${qa.marker.trim()})`,
+			Boolean(own) &&
+				!own?.code &&
+				"marker" in result &&
+				result.marker === qa.marker,
+			clip(JSON.stringify({ point: own ? Boolean(own.code) : null, result })),
+		);
+	}
 
 	// A checkpoint whose refs are gone refuses the fork before any VM is copied.
 	const ref = point.code.ref;
