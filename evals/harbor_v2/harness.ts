@@ -4,6 +4,7 @@ import {
 	CODE_MODE_TOOL,
 	type CodeModeResult,
 } from "../../src/domain/code-mode";
+import { fusionPairFor } from "../../src/domain/fusion-pairs";
 import type { HarnessVariant } from "../../src/domain/harness-variant";
 import type { ModelProvider } from "../../src/domain/model-connection";
 import { UNATTENDED_RUN_INSTRUCTIONS } from "../../src/domain/rigor";
@@ -35,6 +36,7 @@ import { dapDebuggerTools } from "../../src/server/services/dap-debugger";
 import type { ModelAgentInput } from "../../src/server/services/model-agent-loop";
 import { nodeDebuggerTools } from "../../src/server/services/node-debugger";
 import { repositoryGuidanceTool } from "../../src/server/services/repository-guidance";
+import { thinLeadTools } from "../../src/server/services/thin-lead-tools";
 import { bedrockWebSearchTools } from "./bedrock";
 
 /**
@@ -224,8 +226,17 @@ export async function harborHarness(input: {
 	let tools: ToolSet = { ...surface.tools, ...webSearch };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
 	// deferred tools here: the bridge offers no agent, plan or MCP tools.
+	// lead=fusion's thin lead (leadTools=thin): delegation, a capped read and
+	// a bounded inspection command only (thin-lead-tools.ts), as the product's.
+	const thinLead =
+		!input.subagent &&
+		variant.lead === "fusion" &&
+		variant.leadTools === "thin" &&
+		!!surface.lean;
 	const codeMode =
-		surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		surface.lean && variant.codeMode !== "off" && !thinLead
+			? variant.codeMode
+			: null;
 	if (codeMode) {
 		const journal = new Map<string, CodeModeResult>();
 		const runCode = codeModeTool({
@@ -249,6 +260,7 @@ export async function harborHarness(input: {
 					: { ...tools, [CODE_MODE_TOOL]: runCode };
 	}
 	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
+	if (thinLead) tools = thinLeadTools(tools);
 	const instructions = agentTurnInstructions({
 		session: input.subagent
 			? {
@@ -257,6 +269,14 @@ export async function harborHarness(input: {
 				}
 			: {},
 		lead: variant.lead,
+		// leadTools=full keeps the earlier bridge prompt unchanged (no pair tuning).
+		...(thinLead
+			? {
+					leadTools: "thin" as const,
+					leadBlocking: true,
+					fusionPair: fusionPairFor(input.modelId, variant.roleModels),
+				}
+			: {}),
 		rigor: variant.rigor === "on",
 		tools,
 		plugins: [],

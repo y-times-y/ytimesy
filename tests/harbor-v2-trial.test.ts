@@ -996,6 +996,143 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 		);
 	}, 120_000);
 
+	it("thin lead (the default for lead=fusion): the lead only delegates and inspects, the sidekick builds, the checker reviews", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,review=on,roleModels.writer=claude-sonnet-5-5,roleModels.classifier=claude-haiku-5-5@low",
+		});
+		const lead = scriptedModel([
+			// It tries to run the deliverable itself: refused, it is told to brief.
+			[
+				call("l0", "bash", { command: "python3 solution.py" }),
+				finish(100, 10, true),
+			],
+			[
+				call("l1", "agent_send", {
+					id: "rh-thin.1",
+					message:
+						"Goal: solution.py prints 42. Acceptance: python3 solution.py prints 42; paste the output.",
+				}),
+				finish(100, 10, true),
+			],
+			// Review: a bounded inspection of the round's changes.
+			[
+				call("l2", "bash", { command: "git status --short" }),
+				finish(100, 10, true),
+			],
+			[
+				...text("l3", "Done: solution.py prints 42 (writer ran it)."),
+				finish(100, 10),
+			],
+			ran("k0"),
+			[...text("k1", verdict(true)), finish(100, 10)],
+		]);
+		const sidekick = scriptedModel([
+			[...text("s1", "Explored: no solution.py yet."), finish(50, 5)],
+			[
+				call("s2", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(50, 5, true),
+			],
+			[
+				call("s3", "bash", { command: "python3 solution.py" }),
+				finish(50, 5, true),
+			],
+			[
+				...text("s4", "Wrote solution.py. python3 solution.py -> 42 (exit 0)"),
+				finish(50, 5),
+			],
+		]);
+		const classifier = scriptedModel([
+			[
+				...text("c1", JSON.stringify({ decision: "on_track", reason: "ok" })),
+				finish(20, 2),
+			],
+		]);
+		const result = await trial(f, "rh-thin", async (wrap, model) => ({
+			model: wrap(
+				model?.modelId === "claude-sonnet-5-5"
+					? sidekick.model
+					: model?.modelId === "claude-haiku-5-5"
+						? classifier.model
+						: lead.model,
+			),
+		}));
+		expect(result.failure).toBeNull();
+		expect([lead.calls(), sidekick.calls()]).toEqual([6, 4]);
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		const t = await trace(f.logs);
+		// The lead's effort is held at leadEffort=high; the bridge default is max.
+		expect([t.effort, t.leadEffort]).toEqual(["max", "high"]);
+		expect(t.fusion.rounds.map((r: { kind: string }) => r.kind)).toEqual([
+			"explore",
+			"build",
+		]);
+		const leadEvents = JSON.stringify(t.events);
+		expect(leadEvents).toContain("`python3` is not an inspection command");
+		// The lead never wrote: every file change is the sidekick's.
+		const sidekickEvents = JSON.stringify(
+			t.checkers.find((c: { sessionId: string }) => c.sessionId === "rh-thin.1")
+				.events,
+		);
+		expect(sidekickEvents).toContain("solution.py");
+		expect(leadEvents).not.toMatch(/"name":"(write|edit)"/);
+		// The checker ran after the lead's answer and passed it.
+		expect(t.review.checks).toHaveLength(1);
+		expect(t.review.state.outcome).toBe("pass");
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		const leadTools = trajectory.agent.tool_definitions.map(
+			(entry: { function: { name: string } }) => entry.function.name,
+		);
+		expect(leadTools.sort()).toEqual(["agent", "agent_send", "bash", "read"]);
+		expect(trajectory.steps[0].message).toContain(
+			"You decide; your writer does.",
+		);
+	}, 120_000);
+
+	it("leadTools=full restores the earlier lead: the whole builder surface beside the agent tools", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,leadTools=full,leadEffort=inherit,roleModels.writer=claude-sonnet-5-5,roleModels.classifier=claude-haiku-5-5@low",
+		});
+		const lead = scriptedModel([[...text("l1", "Done."), finish(100, 10)]]);
+		const sidekick = scriptedModel([
+			[...text("s1", "Explored."), finish(50, 5)],
+		]);
+		const classifier = scriptedModel([
+			[
+				...text("c1", JSON.stringify({ decision: "on_track", reason: "ok" })),
+				finish(20, 2),
+			],
+		]);
+		const result = await trial(f, "rh-full", async (wrap, model) => ({
+			model: wrap(
+				model?.modelId === "claude-sonnet-5-5"
+					? sidekick.model
+					: model?.modelId === "claude-haiku-5-5"
+						? classifier.model
+						: lead.model,
+			),
+		}));
+		expect(result.failure).toBeNull();
+		const t = await trace(f.logs);
+		expect(t.leadEffort).toBe("max");
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		expect(
+			trajectory.agent.tool_definitions.map(
+				(entry: { function: { name: string } }) => entry.function.name,
+			),
+		).toEqual(expect.arrayContaining(["write", "edit", "bash", "agent_send"]));
+		expect(trajectory.steps[0].message).not.toContain(
+			"You decide; your writer does.",
+		);
+	}, 120_000);
+
 	it("reviews a turn that changed nothing in the checkout", async () => {
 		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
 		const { model, calls } = scriptedModel([
