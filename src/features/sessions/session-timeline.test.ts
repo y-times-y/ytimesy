@@ -1,10 +1,15 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { SessionTimeline } from "./session-timeline";
+
+// Replies render through the real Markdown renderer (the app loads it lazily).
+vi.mock("./agent-markdown", async () => ({
+	AgentMarkdown: (await import("./agent-markdown-renderer")).AgentMarkdown,
+}));
 
 function readCall(
 	id: string,

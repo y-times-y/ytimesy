@@ -148,9 +148,32 @@ it("removes only the unbound new copy if resizing fails", async () => {
 	expect(provider.remove).toHaveBeenCalledOnce();
 });
 
-it("does not accept a leftover undersized copy after an uncertain resize failure", async () => {
+it("never uses a leftover undersized copy: it grows it to its tagged size first", async () => {
 	provider.existing = true;
 	provider.metadata = { machine_size: "large" };
+	await createFreestyleWorkspaceMachines("test").provisionSession(
+		"test-copy",
+		"sh-template",
+		"small",
+	);
+	expect(provider.resize).toHaveBeenCalledWith({
+		cpu: 4,
+		memory: 16384,
+		storage: 32768,
+	});
+	expect(provider.create).not.toHaveBeenCalled();
+	expect(provider.remove).not.toHaveBeenCalled();
+});
+
+it("does not accept a leftover undersized copy whose resize is refused", async () => {
+	provider.existing = true;
+	provider.metadata = { machine_size: "large" };
+	provider.resize.mockRejectedValueOnce(
+		new FreestyleApiError(400, {
+			code: "LIMIT_EXCEEDED",
+			message: "memory limit exceeded",
+		} as never),
+	);
 	await expect(
 		createFreestyleWorkspaceMachines("test").provisionSession(
 			"test-copy",
@@ -158,7 +181,6 @@ it("does not accept a leftover undersized copy after an uncertain resize failure
 			"small",
 		),
 	).rejects.toThrow();
-	expect(provider.resize).not.toHaveBeenCalled();
 	expect(provider.remove).not.toHaveBeenCalled();
 });
 

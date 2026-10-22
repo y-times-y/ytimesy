@@ -90,9 +90,22 @@ export function automaticRepositoryContext(input: {
 	 * guidance tool): at turn start when absent or changed, and after compaction.
 	 * Without it, guidance arrives as read_repository_guidance receipts.
 	 */
-	instructionMessages?: { turnStart: boolean };
+	instructionMessages?: {
+		/**
+		 * Read when the first step is prepared: a request sent before its
+		 * workspace is ready leaves the check to a later step.
+		 */
+		turnStart: boolean | (() => boolean);
+	};
 }) {
-	let instructionsChecked = !input.instructionMessages?.turnStart;
+	let instructionsChecked: boolean | undefined;
+	const turnStartCheckDue = () => {
+		const turnStart = input.instructionMessages?.turnStart;
+		instructionsChecked ??= !(typeof turnStart === "function"
+			? turnStart()
+			: turnStart);
+		return !instructionsChecked;
+	};
 	let history: ModelMessage[] = [];
 	let pending: ModelMessage[] = [];
 	let guidanceWork = Promise.resolve();
@@ -449,7 +462,7 @@ export function automaticRepositoryContext(input: {
 					);
 				}
 			}
-			if (!instructionsChecked) {
+			if (turnStartCheckDue()) {
 				input.signal.throwIfAborted();
 				messages = withRepositoryInstructions(
 					messages,

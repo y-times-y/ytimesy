@@ -165,3 +165,49 @@ export async function saveRecoveredConversation(
 		],
 	);
 }
+
+/**
+ * For a message whose turn never touched the workspace (no code point): the
+ * code point of the first later message that has one, and whether a code
+ * restore ran after the message (up to that point, or up to now when there is
+ * none), which would make the later code not the message's.
+ */
+export async function laterConversationCode(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+	laterMessageIds: readonly string[],
+): Promise<{
+	code: NonNullable<ConversationPoint["code"]> | null;
+	rewound: boolean;
+}> {
+	const ids = [messageId, ...laterMessageIds].map(
+		(id) => `conversation-point:${id}`,
+	);
+	const { rows } = await database().query(
+		`select r.request_id,r.created_at,r.response->'result'->'code' as code from agent_task_command_receipt r
+    join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id=any($3::text[]) and r.status='done' and r.response->>'ok'='true'`,
+		[userId, sessionId, ids],
+	);
+	const byId = new Map(
+		rows.map(
+			(row: {
+				request_id: string;
+				created_at: Date;
+				code: ConversationPoint["code"] | null;
+			}) => [row.request_id, row],
+		),
+	);
+	const own = byId.get(ids[0]);
+	if (!own) return { code: null, rewound: false };
+	const later = ids
+		.slice(1)
+		.map((id) => byId.get(id))
+		.find((row) => row?.code);
+	const restores = await database().query(
+		`select 1 from agent_task_command_receipt where parent_session_id=$1 and request_id like 'conversation-backup:%'
+    and response->'result'->'code' is not null and created_at>$2 and ($3::timestamptz is null or created_at<$3) limit 1`,
+		[sessionId, own.created_at, later?.created_at ?? null],
+	);
+	return { code: later?.code ?? null, rewound: restores.rows.length > 0 };
+}

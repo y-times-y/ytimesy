@@ -175,6 +175,27 @@ const results = await Promise.all(
 		} catch (error) {
 			settleError = (error as Error).message;
 		}
+		// Fork the settled chat at a message and check the fork (fork.ts).
+		const forkChecks: { name: string; ok: boolean; detail?: string }[] = [];
+		if (scenario.forkAt && !settleError) {
+			const { rehearseFork } = await import("./fork");
+			forkChecks.push(
+				...(await rehearseFork({
+					edge,
+					machines,
+					vms,
+					vm,
+					user,
+					sessionId,
+					forkAt: scenario.forkAt,
+					qaForks: scenario.qaForks,
+					timeoutMs: Number(values.timeout) * 1000,
+				}).catch((error: Error) => [
+					{ name: "the fork step ran", ok: false, detail: error.message },
+				])),
+			);
+			console.log(`rehearsal: ${scenario.id} forked (${elapsed()})`);
+		}
 		// Collecting retries: a loaded Docker host can time out one connection.
 		let data: Awaited<ReturnType<typeof collect>> | undefined;
 		let checks: { name: string; ok: boolean; detail?: string }[] = [];
@@ -206,6 +227,7 @@ const results = await Promise.all(
 				];
 			}
 		}
+		checks.push(...forkChecks);
 		await writeFile(
 			join(outDir, `${scenario.id}.json`),
 			JSON.stringify({ scenario: scenario.id, checks, data }, null, 2),

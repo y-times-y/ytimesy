@@ -118,6 +118,12 @@ import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
+import {
+	readPreparedCheckoutDirectory,
+	readSessionDerivedValue,
+	savePreparedCheckoutDirectory,
+	saveSessionDerivedValue,
+} from "../adapters/prepared-checkout";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -155,12 +161,21 @@ import {
 	loadedDeferredTools,
 } from "../services/deferred-tools";
 import {
+	FIRST_REQUEST_WORKSPACE_WAIT_MS,
+	type PromptCheck,
+	settlesWithin,
+	withPromptCheckGate,
+} from "../services/first-request-gate";
+import {
 	type FusionLeadGateInput,
 	fusionLeadGate,
 	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
-import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
+import {
+	harnessLifecycleHooks,
+	lifecycleHookConfig,
+} from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
@@ -183,6 +198,7 @@ import {
 } from "../services/project-secrets";
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
+import { hasRepositoryInstructions } from "../services/repository-instructions";
 import { createReviewLoop } from "../services/review-loop";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
@@ -210,7 +226,7 @@ import {
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
-import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
+import { forgetTurnMemo, setTurnMemo, turnMemo } from "../services/turn-memo";
 import {
 	subagentMemory,
 	type TurnMemory,
@@ -507,6 +523,11 @@ async function runApiTurnAttempt(
 				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
 				: Promise.resolve(false);
 		loadingMetadata.catch(() => {});
+		// Independent of the session row: read alongside it.
+		const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
+		const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+		loadingVariant.catch(() => {});
+		loadingRecordsRequests.catch(() => {});
 		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
@@ -521,7 +542,23 @@ async function runApiTurnAttempt(
 			throw new Error("This retired child task can no longer run.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		const variant = await turnHarnessVariant(turn.id, owner.userId);
+		// A project's secrets load while the turn's variant and route are read.
+		const loadingSecrets = owner.projectId
+			? timed("turn:secrets", () =>
+					turnMemo(`${turn.id}:project-secrets`, () =>
+						loadAgentProjectSecrets(
+							owner.userId,
+							owner.projectId as string,
+						).catch(() => ({
+							envFile: agentSecretsEnvFile([]),
+							redact: [],
+							names: [],
+						})),
+					),
+				)
+			: Promise.resolve(null);
+		loadingSecrets.catch(() => {});
+		const variant = await loadingVariant;
 		if (owner.agentRole) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
@@ -627,18 +664,7 @@ async function runApiTurnAttempt(
 		// between turns; within one, keeping it fixed also keeps the tools and the
 		// system prompt byte-stable for provider prompt caching. A restarted or
 		// evicted isolate (including a resumed step) simply loads it again.
-		const { projectId } = owner;
-		const projectSecrets = projectId
-			? await timed("turn:secrets", () =>
-					turnMemo(`${turn.id}:project-secrets`, () =>
-						loadAgentProjectSecrets(owner.userId, projectId).catch(() => ({
-							envFile: agentSecretsEnvFile([]),
-							redact: [],
-							names: [],
-						})),
-					),
-				)
-			: null;
+		const projectSecrets = await loadingSecrets;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		// Values every tool result is redacted of. The memory clone's token
@@ -653,8 +679,18 @@ async function runApiTurnAttempt(
 			workspaceReuse,
 		);
 		let codePoint: Promise<void> | undefined;
+		// A root builder's repository path lets its next turn (and a new chat in
+		// the same project) build its first request before its VM is ready.
+		const remembersDirectory =
+			writable && !owner.parentSessionId && !evaluation;
 		const workspace = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
+			if (remembersDirectory) {
+				const { cwd } = execution;
+				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
+					savePreparedCheckoutDirectory(owner.userId, owner.id, cwd),
+				).catch(() => {});
+			}
 			let secretsReady: Promise<void> | undefined;
 			if (projectSecrets && receivesSecrets) {
 				const { machines: vmMachines, vm } = execution;
@@ -736,10 +772,42 @@ async function runApiTurnAttempt(
 		// Durable steps start at 1; a resumed first step reuses the deduped notice.
 		const firstStep = step ? step.index === 1 : !continued;
 		// The first step's UserPromptSubmit check always prepares a writable
-		// workspace before the model is called; start it now so the VM work
-		// overlaps the remaining setup. It is the same memoized preparation, so a
-		// failure still surfaces where the workspace is awaited.
+		// workspace (before the model is called, unless the first request goes
+		// out early, below); start it now so the VM work overlaps the remaining
+		// setup. It is the same memoized preparation, so a failure still
+		// surfaces where the workspace is awaited.
 		if (firstStep && writable) void workspace().catch(() => {});
+		// A durable turn's first request need not wait for the workspace: a
+		// root builder on a lean surface whose VM is not ready within a short
+		// wait sends it with the repository path its chat (or project) last
+		// reported; tools still wait for the workspace, and the step ends
+		// only once the workspace and the UserPromptSubmit check are done.
+		const earlyFirstRequestEligible =
+			!!step &&
+			firstStep &&
+			!step.resumed &&
+			writable &&
+			!owner.parentSessionId &&
+			!owner.agentRole &&
+			!evaluation &&
+			variant.lead === "off" &&
+			attemptLimit(variant.attempts) <= 1 &&
+			variant.review !== "on";
+		/** Set when the first request goes out before the workspace is ready. */
+		let earlyPromptCheck: Promise<PromptCheck> | undefined;
+		// Repository instructions a first request went out without are
+		// checked by the next step (see automaticRepositoryContext).
+		const deferredInstructionsKey = `${turn.id}:instructions-deferred`;
+		const instructionsOwed =
+			!!step &&
+			step.index > 1 &&
+			(!hasRepositoryInstructions(messages) ||
+				(await turnMemo(
+					deferredInstructionsKey,
+					async () => false,
+					() => false,
+				)));
+		if (instructionsOwed) setTurnMemo(deferredInstructionsKey, false);
 		// A later durable step starts from items its predecessor just
 		// checkpointed (and delivered); republishing them is a wasted write and
 		// relay on every step.
@@ -784,7 +852,42 @@ async function runApiTurnAttempt(
 					() => readVerificationBaseline(owner.userId, owner.id, cwd),
 					(base) => base !== null,
 				),
-			configCache: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			// Read from a baseline commit, a configuration never changes: later
+			// turns read it from the chat's journal instead of the VM.
+			configCache: (key, load) =>
+				turnMemo(`${turn.id}:${key}`, async () => {
+					const saved = lifecycleHookConfig.safeParse(
+						await readSessionDerivedValue(owner.userId, owner.id, key).catch(
+							() => null,
+						),
+					);
+					if (saved.success) return saved.data;
+					const loaded = await load();
+					void saveSessionDerivedValue(
+						owner.userId,
+						owner.id,
+						key,
+						loaded,
+					).catch(() => {});
+					return loaded;
+				}),
+			// Without the workspace: the pinned baseline of the path the chat
+			// last reported, and the configuration journaled for it.
+			knownConfig: async () => {
+				if (!reportedDirectory) return null;
+				const base = await readVerificationBaseline(
+					owner.userId,
+					owner.id,
+					reportedDirectory,
+				);
+				return base && /^[a-f0-9]{40,64}$/.test(base)
+					? readSessionDerivedValue(
+							owner.userId,
+							owner.id,
+							`lifecycle-hooks:${reportedDirectory}:${base}`,
+						)
+					: null;
+			},
 			once: (id, run) =>
 				journaledToolOperation(
 					{
@@ -807,7 +910,14 @@ async function runApiTurnAttempt(
 			workspace,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
-			instructionMessages: { turnStart: step ? step.index === 1 : !continued },
+			instructionMessages: {
+				turnStart: () =>
+					step
+						? step.index === 1
+							? !earlyPromptCheck
+							: instructionsOwed
+						: !continued,
+			},
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
 				progress.offer(items);
@@ -834,17 +944,44 @@ async function runApiTurnAttempt(
 		});
 		const surfaceTools = surface.tools;
 		// A lean surface names the repository's absolute path in its system
-		// prompt (Claude Code's tools take absolute paths). The first step
-		// prepares the workspace before the model is called anyway; later steps
-		// reuse the memo, so the prompt stays byte-stable for caching.
+		// prompt (Claude Code's tools take absolute paths). Later steps reuse
+		// the memo, so the prompt stays byte-stable for caching. An early first
+		// request names the path the chat (or its project's latest chat) last
+		// reported; the workspace corrects it for later steps if it moved.
 		// Preparing the workspace here is a workspace failure, not a connection one.
 		failureStage = "workspace";
+		const leanDirectoryKey = `${turn.id}:lean-working-directory`;
+		let reportedDirectory: string | null = null;
+		if (
+			surface.lean &&
+			earlyFirstRequestEligible &&
+			!(await settlesWithin(workspace(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+		)
+			reportedDirectory = await timed("turn:checkoutDirectory", () =>
+				readPreparedCheckoutDirectory(
+					owner.userId,
+					owner.id,
+					owner.projectId ?? null,
+				),
+			).catch(() => null);
 		const leanWorkingDirectory = surface.lean
-			? await turnMemo(
-					`${turn.id}:lean-working-directory`,
-					async () => (await workspace()).cwd,
-				)
+			? (reportedDirectory ??
+				(await turnMemo(leanDirectoryKey, async () => (await workspace()).cwd)))
 			: undefined;
+		if (reportedDirectory) {
+			const named = reportedDirectory;
+			setTurnMemo(leanDirectoryKey, named);
+			workspace().then(
+				({ cwd }) => {
+					if (cwd === named) return;
+					console.warn(
+						"The early first request named a moved repository path.",
+					);
+					setTurnMemo(leanDirectoryKey, cwd);
+				},
+				() => {},
+			);
+		}
 		failureStage = "connection";
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
@@ -1077,7 +1214,25 @@ async function runApiTurnAttempt(
 		if (step && (step.limitReached || step.index > modelStepLimit()))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
-		if (firstStep) {
+		// A UserPromptSubmit hook can be a policy gate (refuse or redact a
+		// prompt), so a first request goes out before this check only when the
+		// chat's journaled configuration shows no such hook; unknown (a new
+		// chat, a first turn since the journal) waits as before. Its tools still
+		// wait for the check, and a late failure ends the turn.
+		if (
+			firstStep &&
+			reportedDirectory &&
+			(await hooks.promptSubmitConfigured()) === false
+		) {
+			earlyPromptCheck = timed("turn:promptHook", () =>
+				hooks.userPromptSubmit(
+					currentTask?.kind === "userMessage" ? currentTask.text : "",
+				),
+			);
+			earlyPromptCheck.catch(() => {});
+			void turnMemo(deferredInstructionsKey, async () => true);
+		}
+		if (firstStep && !earlyPromptCheck) {
 			const submitted = await timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
@@ -1117,7 +1272,7 @@ async function runApiTurnAttempt(
 				runModel(input) as Promise<Awaited<ReturnType<typeof runModel>>>
 			).finally(() => requestRecorder?.flush());
 		// Development evals record each request's system prompt and tool list.
-		const requestRecorder = (await turnRecordsRequests(turn.id, owner.userId))
+		const requestRecorder = (await loadingRecordsRequests)
 			? modelRequestRecorder({
 					sessionId: owner.id,
 					turnId: turn.id,
@@ -1252,7 +1407,9 @@ async function runApiTurnAttempt(
 				},
 				memory,
 			),
-			tools,
+			tools: earlyPromptCheck
+				? withPromptCheckGate(tools, earlyPromptCheck)
+				: tools,
 			signal: abort.signal,
 			isUserRequest: (message) => isUserRequestMessage(items, message),
 			compactionSnapshot: compactionStateSnapshot({
@@ -1537,6 +1694,26 @@ async function runApiTurnAttempt(
 			result = await timed("turn:runAgent", async () =>
 				runAgent({ ...agentInput, messages }),
 			);
+		}
+		// An early first request: the step ends only once its workspace is
+		// ready (a workspace failure fails the turn as before, and the turn's
+		// code point exists) and the UserPromptSubmit check passed. Feedback
+		// the check gave reaches the model in a next step.
+		if (earlyPromptCheck) {
+			failureStage = "workspace";
+			await workspace();
+			failureStage = "model";
+			const submitted = await earlyPromptCheck;
+			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
+			const withFeedback = hooks.drain(messages);
+			if (withFeedback !== messages) {
+				messages = withFeedback;
+				if (!Array.isArray(result) && result.outcome === "completed") {
+					await saveCheckpoint();
+					coordinated = false;
+					return "continue";
+				}
+			}
 		}
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);

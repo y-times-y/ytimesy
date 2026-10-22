@@ -34,6 +34,17 @@ export async function turnMemo<T>(
 	return value;
 }
 
+/** Replaces a memoized value (a later step must see the corrected one). */
+export function setTurnMemo<T>(key: string, value: T) {
+	entries.delete(key);
+	entries.set(key, { expiresAt: Date.now() + TTL_MS, value });
+	while (entries.size > MAX_ENTRIES) {
+		const oldest = entries.keys().next().value;
+		if (oldest === undefined) break;
+		entries.delete(oldest);
+	}
+}
+
 /** Drops a finished turn's entries (they may hold decrypted project secrets). */
 export function forgetTurnMemo(turnId: string) {
 	const prefix = `${turnId}:`;
