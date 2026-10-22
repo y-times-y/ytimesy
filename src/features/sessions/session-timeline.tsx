@@ -13,13 +13,13 @@ import {
 	MAIN_MENTION_ID,
 	type MentionAgent,
 	mentionAgents,
-	mentionSegments,
 } from "#/domain/agent-mentions";
 import {
 	finishLineAnchorId,
 	helperFinishCard,
 	helperKind,
 	helperStatus,
+	LEAD_ROW_ID,
 	steeringSender,
 } from "#/domain/agent-panel";
 import {
@@ -88,6 +88,12 @@ import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
+import {
+	AgentMentionContext,
+	type AgentMentions,
+	AgentNameText,
+	MentionText,
+} from "./agent-chip";
 import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
@@ -99,7 +105,6 @@ import {
 	MemoryRecallNote,
 	MemorySaveNote,
 } from "./memory-markers";
-import { MentionChip } from "./mention-popover";
 import {
 	answeredAfter,
 	type FailoverActions,
@@ -264,16 +269,8 @@ export function SessionTimeline({
 	return (
 		<MemoryMarkerProvider actions={memoryActions}>
 			<SenderContext.Provider value={senderName ?? null}>
-				<MentionContext.Provider
-					// A view's own agent is never a mention: it is the one written to.
-					value={
-						helperLines
-							? mentionAgents(
-									helperLines.identities,
-									taskParentId ?? MAIN_MENTION_ID,
-								)
-							: null
-					}
+				<AgentMentionContext.Provider
+					value={agentMentions(helperLines, taskParentId)}
 				>
 					<ol
 						ref={listRef}
@@ -428,7 +425,7 @@ export function SessionTimeline({
 							</li>
 						) : null}
 					</ol>
-				</MentionContext.Provider>
+				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
 		</MemoryMarkerProvider>
 	);
@@ -446,37 +443,25 @@ export type HelperLines = {
 /** A helper's view names who sent each message in its transcript. */
 const SenderContext = createContext<string | null>(null);
 
-/** The chat's agents, for the @mentions in the user's messages. */
-const MentionContext = createContext<readonly MentionAgent[] | null>(null);
-
-/** A user message's text, its @mentions of the chat's agents as chips. */
-function MentionText({ text }: { text: string }) {
-	const agents = useContext(MentionContext);
-	if (!agents?.length || !text.includes("@")) return <>{text}</>;
-	const byName = new Map(
-		agents.map((agent) => [agent.name.toLowerCase(), agent]),
-	);
-	return (
-		<>
-			{mentionSegments(text, (name) => byName.has(name.toLowerCase())).map(
-				(segment, index) => {
-					const agent =
-						segment.kind === "mention"
-							? byName.get(segment.name.toLowerCase())
-							: undefined;
-					return agent ? (
-						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-						<MentionChip key={index} agent={agent} />
-					) : (
-						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-						<Fragment key={index}>
-							{segment.kind === "text" ? segment.text : ""}
-						</Fragment>
-					);
-				},
-			)}
-		</>
-	);
+/**
+ * The agents a view's messages can name as chips: the chat's agents but the
+ * view's own (Main's, or the helper's), each opening its tab.
+ */
+function agentMentions(
+	lines: HelperLines | undefined,
+	viewAgentId: string | undefined,
+): AgentMentions | null {
+	if (!lines) return null;
+	const onSelect = lines.onSelect;
+	return {
+		agents: mentionAgents(lines.identities, viewAgentId ?? MAIN_MENTION_ID),
+		...(onSelect
+			? {
+					onOpen: (agent: MentionAgent) =>
+						onSelect(agent.id === MAIN_MENTION_ID ? LEAD_ROW_ID : agent.id),
+				}
+			: {}),
+	};
 }
 
 /** "build-1 started · Fix pricing rounding": one quiet line where it started. */
@@ -554,7 +539,11 @@ function HelperFinishCard({
 					<span className="helper-card-time">{card.duration}</span>
 				) : null}
 			</span>
-			{card.line ? <span className="helper-card-line">{card.line}</span> : null}
+			{card.line ? (
+				<span className="helper-card-line">
+					<AgentNameText text={card.line} open={false} />
+				</span>
+			) : null}
 		</>
 	);
 	return lines?.onSelect ? (

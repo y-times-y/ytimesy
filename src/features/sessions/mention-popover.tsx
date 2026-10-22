@@ -42,13 +42,3 @@ export function MentionPopover({
 		</div>
 	);
 }
-
-/** A mention in a sent message: the agent's icon in its colour, its name in plain text. */
-export function MentionChip({ agent }: { agent: MentionAgent }) {
-	return (
-		<span className="mention-chip" title={agent.task}>
-			<AgentIcon icon={agent.icon} color={agent.color} size={12} />
-			<span>{agent.name}</span>
-		</span>
-	);
-}

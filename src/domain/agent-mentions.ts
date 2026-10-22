@@ -176,3 +176,47 @@ export function mentionNote(
 		.map((mention) => `@${mention.name} = ${mention.is}`)
 		.join("; ")}]`;
 }
+
+const escapeRegExp = (text: string) =>
+	text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * An agent's reply split into prose and the known agent names it writes
+ * ("build-1", "@research-2", "Main"): exact, case-sensitive whole words,
+ * never part of a path, URL, address or longer name.
+ */
+export function agentNameSegments(
+	text: string,
+	names: ReadonlySet<string>,
+): MentionSegment[] {
+	if (!names.size) return [{ kind: "text", text }];
+	const pattern = new RegExp(
+		`(^|[^\\w@/.:-])(@?)(${[...names]
+			.sort((left, right) => right.length - left.length)
+			.map(escapeRegExp)
+			.join("|")})(?![\\w-]|[./:@]\\w)`,
+		"g",
+	);
+	const segments: MentionSegment[] = [];
+	let at = 0;
+	for (const match of text.matchAll(pattern)) {
+		const start = (match.index ?? 0) + (match[1] ?? "").length;
+		const name = match[3] ?? "";
+		if (start > at)
+			segments.push({ kind: "text", text: text.slice(at, start) });
+		segments.push({ kind: "mention", name });
+		at = start + (match[2] ?? "").length + name.length;
+	}
+	if (at === 0) return [{ kind: "text", text }];
+	if (at < text.length) segments.push({ kind: "text", text: text.slice(at) });
+	return segments;
+}
+
+/** Inline code that is exactly a known agent name ("build-1", "@build-1"). */
+export function agentNameInCode(
+	code: string,
+	names: ReadonlySet<string>,
+): string | null {
+	const name = code.trim().replace(/^@/, "");
+	return names.has(name) ? name : null;
+}
