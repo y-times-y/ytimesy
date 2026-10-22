@@ -186,6 +186,9 @@ describe("time and tokens", () => {
 			"1m 00s · 21k tokens",
 		);
 		expect(metricText({ startedAt: 0 }, 5_000)).toBe("5s");
+		// A helper starting has counted none yet: no "0 tokens".
+		const none = { ...metric.tokens, input: 0, output: 0 };
+		expect(metricText({ startedAt: 0, tokens: none }, 5_000)).toBe("5s");
 		expect(metricDetail(metric)).toBe("18k in · 3k out · $0.04");
 		expect(
 			metricDetail({ ...metric, tokens: { ...metric.tokens, cached: 12_000 } }),

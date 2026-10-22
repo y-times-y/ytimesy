@@ -634,8 +634,9 @@ export function formatTokens(count: number) {
 
 /** The right-hand metric: "2m 05s · 21k tokens"; time only without tokens. */
 export function metricText(metric: AgentMetric, now: number) {
+	// None counted yet (a helper starting) shows no "0 tokens".
 	const tokens = metric.tokens
-		? metric.tokens.input + metric.tokens.output
+		? metric.tokens.input + metric.tokens.output || null
 		: null;
 	if (metric.untimed)
 		return tokens === null ? "" : `${formatTokens(tokens)} tokens`;

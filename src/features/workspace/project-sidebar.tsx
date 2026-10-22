@@ -455,7 +455,8 @@ export function ProjectSidebar({
 	}
 
 	return (
-		<TooltipPrimitive.Provider delayDuration={300}>
+		// Status tooltips hold no controls: they close as the pointer leaves the row.
+		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
 			<div
 				className="project-sidebar-frame"
 				data-peek={!expanded && hovered}
