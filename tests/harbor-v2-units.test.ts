@@ -632,5 +632,10 @@ describe("harbor turn ids", () => {
 			expect(() => commandScopeRoot(harborTurnId(id))).not.toThrow();
 		expect(harborTurnId("harbor-checker-1")).toBe("harbor-checker-1-turn");
 		expect(harborTurnId("a__b.1")).not.toBe(harborTurnId("a__b"));
+		// A child's rounds: one scope each, the round kept for a long id too.
+		const long = `${"x".repeat(90)}__y.2`;
+		expect(harborTurnId(long, 2)).not.toBe(harborTurnId(long, 3));
+		expect(() => commandScopeRoot(harborTurnId(long, 12))).not.toThrow();
+		expect(harborTurnId("t.1", 2)).toBe("t-1-r2-turn");
 	});
 });
