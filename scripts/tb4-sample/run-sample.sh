@@ -20,7 +20,7 @@ export YTIMESY_BRIDGE_BUNDLE=$HOME/bridge.mjs
 export YTIMESY_HARNESS_COMMIT=$commit YTIMESY_HARNESS_VERSION=tb4-sample-${commit:0:12}
 cd ~/repo
 cp ~/stage/config-check.json "$R/" 2>/dev/null
-{ echo "{\"run\":\"$run\",\"commit\":\"$commit\",\"bundleSha256\":\"$(cat ~/bridge.sha256)\",\"startedAt\":\"$(date -u +%FT%TZ)\",\"host\":\"$(curl -s -m 2 http://169.254.169.254/latest/meta-data/instance-type || echo unknown)\",\"nproc\":$(nproc)}"; } > "$R/run-$(date -u +%Y%m%dT%H%M%S).json"
+{ echo "{\"run\":\"$run\",\"commit\":\"$commit\",\"bundleSha256\":\"$(cat ~/bridge.sha256)\",\"startedAt\":\"$(date -u +%FT%TZ)\",\"host\":\"$(t=$(curl -sf -m 2 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" http://169.254.169.254/latest/api/token) && curl -sf -m 2 -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/instance-type || echo unknown)\",\"nproc\":$(nproc)}"; } > "$R/run-$(date -u +%Y%m%dT%H%M%S).json"
 python3 ~/stage/spendwatch.py "$R" "${TB4S_HARD_USD:-40}" > "$R/logs/spendwatch.log" 2>&1 &
 watcher=$!
 pids=()
