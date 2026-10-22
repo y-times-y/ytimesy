@@ -1,0 +1,7 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "Budgets", "Effect": "Allow", "Action": ["budgets:ViewBudget", "budgets:ModifyBudget"], "Resource": "*"},
+    {"Sid": "CostRead", "Effect": "Allow", "Action": ["ce:GetCostAndUsage"], "Resource": "*"}
+  ]
+}

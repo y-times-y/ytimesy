@@ -8,6 +8,7 @@ import {
 } from "#/domain/api-turn-failure";
 import {
 	OUTPUT_LIMIT_CONTINUE_NOTE,
+	OUTPUT_LIMIT_SPLIT_NOTE,
 	overflowCompactionBudget,
 	runModelAgent,
 	runModelAgentStep,
@@ -18,7 +19,7 @@ const usage = {
 	outputTokens: { total: 2, text: 2, reasoning: 0 },
 };
 
-function textStream(text: string, finish: "stop" | "length") {
+function textStream(text: string, finish: "stop" | "length", outputTokens = 2) {
 	return {
 		stream: simulateReadableStream({
 			initialDelayInMs: null,
@@ -33,7 +34,10 @@ function textStream(text: string, finish: "stop" | "length") {
 					: []),
 				{
 					type: "finish" as const,
-					usage,
+					usage: {
+						...usage,
+						outputTokens: { total: outputTokens, text: 0, reasoning: 0 },
+					},
 					finishReason: { unified: finish, raw: finish },
 				},
 			],
@@ -141,6 +145,50 @@ it("treats a length stop without output as an exhausted context and retries once
 	expect(
 		result.messages.filter((message) => message.role === "assistant").at(-1),
 	).toMatchObject({ content: [{ type: "text", text: "Done" }] });
+});
+
+it("resamples a step that spent its output limit without an answer or tool call, never compacting", async () => {
+	// Luna at max effort on Bedrock: response.incomplete (max_output_tokens)
+	// after reasoning and a tool call cut mid-arguments. Treated as an
+	// exhausted context it compacted a small history and failed on an empty
+	// summary; the context was not full.
+	let calls = 0;
+	const model = new MockLanguageModelV4({
+		...summary,
+		doStream: async () =>
+			calls++ === 0
+				? textStream("", "length", 8192)
+				: textStream("Done", "stop"),
+	});
+	const messages = await runModelAgent(input([history[2]]), {
+		model,
+		contextWindow: 1_050_000,
+		maxOutputTokens: 8192,
+	});
+	expect(model.doGenerateCalls).toHaveLength(0);
+	expect(model.doStreamCalls).toHaveLength(2);
+	expect(messages).toEqual([
+		history[2],
+		{ role: "user", content: OUTPUT_LIMIT_SPLIT_NOTE },
+		expect.objectContaining({ role: "assistant" }),
+	]);
+	expect(messages.at(-1)).toMatchObject({
+		content: [{ type: "text", text: "Done" }],
+	});
+
+	const cutting = new MockLanguageModelV4({
+		...summary,
+		doStream: async () => textStream("", "length", 8192),
+	});
+	await expect(
+		runModelAgent(input([history[2]]), {
+			model: cutting,
+			contextWindow: 1_050_000,
+			maxOutputTokens: 8192,
+		}),
+	).rejects.toBeInstanceOf(IncompleteAgentTurn);
+	expect(cutting.doStreamCalls).toHaveLength(2);
+	expect(cutting.doGenerateCalls).toHaveLength(0);
 });
 
 it("continues an answer cut off at the output limit once, then gives up", async () => {

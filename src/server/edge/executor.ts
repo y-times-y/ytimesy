@@ -53,7 +53,11 @@ import {
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
-import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
+import {
+	admitQueuedTurns,
+	runBackgroundJob,
+	startBackgroundJob,
+} from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -302,8 +306,21 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			await this.room.alarm();
 		}
 		const turnAt = rows.find((row) => row.purpose === "turn")?.at;
-		if (turnAt !== undefined) await this.advanceTurn(now - turnAt);
+		// The turn's wake stays due while its step runs, so the room's lease
+		// writes during the step re-arm the alarm at once; that alarm can fire
+		// before the step ended and would resume it (rotating its lease) as if
+		// the object had restarted. The running step schedules the next one
+		// itself. After a real restart nothing runs here and the step resumes.
+		if (turnAt === undefined || this.stepping) return;
+		this.stepping = true;
+		try {
+			await this.advanceTurn(now - turnAt);
+		} finally {
+			this.stepping = false;
+		}
 	}
+	/** A step of this object's turn is running in this instance. */
+	private stepping = false;
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
 		this.history.clear();
@@ -832,6 +849,18 @@ export default {
 					env.ENVIRONMENT_EXECUTION_ENABLED !== "1"
 				)
 					return new Response(null, { status: 503 });
+				// A sent message's wake: claim and start its turn in this request.
+				// A job runner object would add a new object's first call and an
+				// alarm (1-2 s on the edge) before the claim; a repeated admission
+				// is harmless, since a claim takes a turn once.
+				if (parsed.data.kind === "model-admission") {
+					await withDatabaseScope(
+						env.HYPERDRIVE.connectionString,
+						() => admitQueuedTurns(env),
+						null,
+					);
+					return Response.json({ state: "done" }, { status: 202 });
+				}
 				// Re-admitting the same signed job is a no-op that reports its state.
 				return Response.json(
 					{ state: await startBackgroundJob(env, parsed.data) },

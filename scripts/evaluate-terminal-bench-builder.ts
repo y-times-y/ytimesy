@@ -39,6 +39,7 @@ import { nativeModelCompactor } from "../src/server/adapters/model-compaction";
 import { stopApiTurnCommands } from "../src/server/services/api-command-scope";
 import type { ModelAgentRuntime } from "../src/server/services/model-agent-loop";
 import { runModelAgent } from "../src/server/services/model-agent-loop";
+import { pinEvaluationContext } from "./terminal-bench/route-context";
 
 const [taskPath, outputPath, mode] = process.argv.slice(2);
 if (!taskPath || !outputPath || !["preflight", "run"].includes(mode))
@@ -244,10 +245,8 @@ try {
 							false,
 							workspace.sessionId,
 						);
-		// Same context as the API arm and Codex's public job (272K): the live
-		// subscription catalog raised Sol's default window on 2026-10-11.
-		runtime.contextWindow = 272_000;
-		runtime.autoCompactTokenLimit = undefined;
+		// Sol routes: Codex's public job's 272K; Claude keeps its own window.
+		pinEvaluationContext(route, runtime);
 		const model = runtime.model;
 		if (typeof model === "string")
 			throw new Error("Expected a concrete subscription transport.");

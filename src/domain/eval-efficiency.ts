@@ -17,7 +17,9 @@ export type SpendRole =
 	| "subagent"
 	| "checker"
 	| "checkerWorker"
-	| "judge";
+	| "judge"
+	/** Lead mode fusion's sidekick classifier (one call per round). */
+	| "classifier";
 const ROLE_ORDER: readonly SpendRole[] = [
 	"builder",
 	"sidekick",
@@ -25,6 +27,7 @@ const ROLE_ORDER: readonly SpendRole[] = [
 	"checker",
 	"checkerWorker",
 	"judge",
+	"classifier",
 ];
 
 /** One (role, model) pair's spend in one run. */
