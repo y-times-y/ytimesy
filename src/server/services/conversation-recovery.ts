@@ -4,6 +4,7 @@ import {
 	agentSessionMachineSlug,
 	copiedSessionScratchResetCommands,
 } from "#/domain/agent-session";
+import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
 import { WorkspaceId } from "#/domain/ids";
 import { jsonbText } from "#/domain/jsonb";
 import { sessionBranchName } from "#/domain/session-branch";
@@ -113,10 +114,12 @@ export async function forkCode(input: {
 	if (input.code) return input.code;
 	const index = input.userMessageIds.indexOf(input.messageId);
 	if (index < 0)
-		throw new Error("This message has no code checkpoint to fork from.");
+		throw new RecoveryRefused(
+			"This message has no code checkpoint to fork from.",
+		);
 	const later = await input.later(input.userMessageIds.slice(index + 1));
 	if (later.rewound)
-		throw new Error(
+		throw new RecoveryRefused(
 			"Code was restored after this message, so its code is unknown; fork from another message.",
 		);
 	return later.code ?? "now";
@@ -215,15 +218,16 @@ async function prepareConversationFork(
 	const id = randomUUID();
 	const session = await agentSessionForOwner(userId, input.sessionId);
 	if (!session || session.projectId !== input.projectId)
-		throw new Error("Session is unavailable.");
+		throw new RecoveryRefused("Session is unavailable.");
 	if (session.turnStatus === "running")
-		throw new Error("Stop the active turn before using recovery.");
+		throw new RecoveryRefused("Stop the active turn before using recovery.");
 	const point = await conversationPoint(
 		userId,
 		input.sessionId,
 		input.messageId,
 	);
-	if (!point) throw new Error("This message has no saved recovery point.");
+	if (!point)
+		throw new RecoveryRefused("This message has no saved recovery point.");
 	const start = forkCodeStart({
 		ownsCheckout: ownsWritableCheckout({
 			provider_ref: session.providerRef,
@@ -361,7 +365,7 @@ async function recoverLocked(
 		);
 		const row = selected.rows[0];
 		if (!row || row.turn_status === "running")
-			throw new Error("Stop the active turn before using recovery.");
+			throw new RecoveryRefused("Stop the active turn before using recovery.");
 		const active = await client.query(
 			`with recursive descendants as (
       select id from agent_session where user_id=$1 and parent_session_id=$2
@@ -370,7 +374,9 @@ async function recoverLocked(
 			[userId, input.sessionId],
 		);
 		if (active.rows.some((child) => child.turn_status === "running"))
-			throw new Error("Stop active child tasks before using recovery.");
+			throw new RecoveryRefused(
+				"Stop active child tasks before using recovery.",
+			);
 		// turn_status turns idle before a stopped turn's runner has fully settled.
 		if (input.mode !== "fork")
 			hold = await holdSettledConversationTurn(userId, input.sessionId);
@@ -380,7 +386,8 @@ async function recoverLocked(
 			input.messageId,
 			client,
 		);
-		if (!point) throw new Error("This message has no saved recovery point.");
+		if (!point)
+			throw new RecoveryRefused("This message has no saved recovery point.");
 		// Retain the current conversation before replacing it; no original API turn is deleted.
 		const current = await client.query(
 			`select messages,model_id,connection_revision from api_turn where session_id=$1 and user_id=$2 order by created_at desc limit 1`,
@@ -436,7 +443,9 @@ async function recoverLocked(
 					values,
 				);
 				if (completed.rowCount !== 1)
-					throw new Error("The fork changed while it was being prepared.");
+					throw new RecoveryRefused(
+						"The fork changed while it was being prepared.",
+					);
 			} else
 				await client.query(
 					`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch,provider_ref)
@@ -445,11 +454,11 @@ async function recoverLocked(
 				);
 		} else if (input.mode === "code" || input.mode === "both") {
 			if (!point.code || !ownsWritableCheckout(row))
-				throw new Error(
+				throw new RecoveryRefused(
 					"This message has no isolated writable code checkpoint.",
 				);
 			const session = await agentSessionForOwner(userId, input.sessionId);
-			if (!session) throw new Error("Session is unavailable.");
+			if (!session) throw new RecoveryRefused("Session is unavailable.");
 			const scoped = machinesForAgentSession(machines, session);
 			await scoped.ensureRunning(WorkspaceId(row.provider_ref));
 			workspace = {
@@ -478,7 +487,15 @@ async function recoverLocked(
 		hold?.assertHeld();
 		await hold?.release();
 		await client.query("commit");
-		return { id, prompt: input.mode === "code" ? null : point.prompt };
+		// The restored transcript lets the chat show it at once, without
+		// waiting on a full reload of the session.
+		return input.mode === "code"
+			? { id, prompt: null, items: null }
+			: {
+					id,
+					prompt: point.prompt,
+					items: sessionItemsFromUnknown(point.items),
+				};
 	} catch (error) {
 		// Never overwrite concurrent terminal edits during error handling. Git backup refs
 		// survive rollback and can be restored even if a remote response is uncertain.

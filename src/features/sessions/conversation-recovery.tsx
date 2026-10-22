@@ -1,5 +1,5 @@
-import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { FileCode2, GitFork, History, Undo2 } from "lucide-react";
+import type { QueryClient } from "@tanstack/react-query";
+import { FileCode2, GitFork, History, Undo2, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 
@@ -29,14 +29,12 @@ export function ConversationRecovery({
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState("");
-	const queryClient = useQueryClient();
 	async function recover(mode: "code" | "both" | "fork") {
 		setPending(true);
 		setError("");
 		try {
+			// The caller refreshes Files and Changes as soon as the server is done.
 			await onRecover(mode);
-			if (mode === "code" || mode === "both")
-				await refreshRecoveredWorkspace(queryClient);
 		} catch (cause) {
 			setError(
 				cause instanceof Error ? cause.message : "Recovery failed. Try again.",
@@ -48,7 +46,12 @@ export function ConversationRecovery({
 	const disabled = busy || pending;
 	return (
 		// Hidden until the message is hovered or focused (session-composer.css).
-		<div className="conversation-recovery" data-open={open || undefined}>
+		// A failure stays shown (data-error) until dismissed or the next action.
+		<div
+			className="conversation-recovery"
+			data-open={open || undefined}
+			data-error={error ? true : undefined}
+		>
 			<DropdownMenu.Root open={open} onOpenChange={setOpen}>
 				<DropdownMenu.Trigger asChild>
 					<button
@@ -102,7 +105,33 @@ export function ConversationRecovery({
 					</DropdownMenu.Content>
 				</DropdownMenu.Portal>
 			</DropdownMenu.Root>
-			{error ? <p role="alert">{error}</p> : null}
+			{error ? (
+				<RecoveryAlert message={error} onDismiss={() => setError("")} />
+			) : null}
 		</div>
+	);
+}
+
+/** A recovery failure, kept until the user dismisses it or acts again. */
+export function RecoveryAlert({
+	message,
+	onDismiss,
+}: {
+	message: string;
+	onDismiss: () => void;
+}) {
+	return (
+		<p className="conversation-recovery-error" role="alert">
+			<span>{message}</span>
+			<button
+				type="button"
+				className="conversation-recovery-dismiss"
+				aria-label="Dismiss"
+				title="Dismiss"
+				onClick={onDismiss}
+			>
+				<X size={12} aria-hidden="true" />
+			</button>
+		</p>
 	);
 }

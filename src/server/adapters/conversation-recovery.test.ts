@@ -154,6 +154,8 @@ it("forks into independent session ancestry and retains the original conversatio
 	);
 	expect(recovered.id).not.toBe(session);
 	expect(recovered.prompt).toBe("Implement");
+	// The restored transcript comes back so the chat can show it at once.
+	expect(recovered.items).toEqual([]);
 	const fork = (
 		await db.query<{
 			items: unknown;
@@ -187,9 +189,15 @@ it("rejects other owners, running turns, active children, and code-less recovery
 	await db.query("update agent_session set turn_status='running' where id=$1", [
 		session,
 	]);
+	// A refusal the user can act on is typed, so its words reach the browser.
 	await expect(
 		recoverConversation({} as WorkspaceMachines, "alice", input),
-	).rejects.toThrow("active turn");
+	).rejects.toThrow(
+		expect.objectContaining({
+			name: "RecoveryRefused",
+			message: expect.stringContaining("active turn"),
+		}),
+	);
 	await db.query("update agent_session set turn_status='idle' where id=$1", [
 		session,
 	]);
@@ -236,7 +244,7 @@ it("restores a builder-direct root chat's own checkout to its code point", async
 			mode: "code",
 		},
 	);
-	expect(recovered).toEqual({ id: session, prompt: null });
+	expect(recovered).toEqual({ id: session, prompt: null, items: null });
 	expect(ensureRunning).toHaveBeenCalledWith("vm-1");
 	expect(code.restore).toHaveBeenCalledWith(
 		expect.objectContaining({ vm: "vm-1", cwd: "/workspace/repo" }),

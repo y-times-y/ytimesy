@@ -350,6 +350,30 @@ function lastUserMessage(
 }
 
 /**
+ * The open chat right after a recovery the server confirmed. A restore of
+ * this chat shows the restored transcript at once (null: a code-only
+ * restore keeps it); another chat (a fork) is opened instead, so this is
+ * null and the caller switches chats.
+ */
+export function sessionViewAfterRecovery<
+	View extends {
+		readonly agentSessionId?: string | null;
+		readonly items: readonly SessionItem[];
+		readonly turnStatus: SessionTurnStatus;
+	},
+>(
+	current: View,
+	recovered: {
+		readonly id: string;
+		readonly items: readonly SessionItem[] | null;
+	},
+): View | null {
+	if (current.agentSessionId !== recovered.id) return null;
+	if (!recovered.items) return current;
+	return { ...current, items: recovered.items, turnStatus: "idle" };
+}
+
+/**
  * Whether a server view may replace the open chat while it shows a running turn.
  * A view from before the send landed must not erase the message just sent, so a
  * settled view counts only when it carries that same message (by id). An idle
