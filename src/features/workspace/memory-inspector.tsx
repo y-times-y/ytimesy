@@ -461,38 +461,39 @@ export function MemoryInspector({
 								{searching ? "No matches." : "Nothing here yet."}
 							</p>
 						)}
+						{/* Rarely used and destructive: quiet, at the end of the list. */}
+						<div className="memory-clear">
+							{confirmClear ? (
+								<>
+									<button
+										type="button"
+										className="memory-danger"
+										disabled={clear.isPending}
+										onClick={() => clear.mutate()}
+									>
+										Delete all memory
+									</button>
+									<button type="button" onClick={() => setConfirmClear(false)}>
+										Cancel
+									</button>
+								</>
+							) : (
+								<button
+									type="button"
+									className="memory-quiet"
+									aria-label="Clear memory"
+									disabled={!files?.length}
+									onClick={() => setConfirmClear(true)}
+								>
+									Clear all memory
+								</button>
+							)}
+						</div>
 					</div>
 				)}
 			</div>
 			<aside className="memory-side">
 				<MemoryDreams status={dreams.data} />
-				<div className="memory-clear">
-					{confirmClear ? (
-						<>
-							<button
-								type="button"
-								className="memory-danger"
-								disabled={clear.isPending}
-								onClick={() => clear.mutate()}
-							>
-								Delete all memory
-							</button>
-							<button type="button" onClick={() => setConfirmClear(false)}>
-								Cancel
-							</button>
-						</>
-					) : (
-						<button
-							type="button"
-							className="memory-quiet"
-							aria-label="Clear memory"
-							disabled={!files?.length}
-							onClick={() => setConfirmClear(true)}
-						>
-							Clear all
-						</button>
-					)}
-				</div>
 			</aside>
 		</section>
 	);
