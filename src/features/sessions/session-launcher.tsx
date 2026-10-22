@@ -128,7 +128,10 @@ export function SessionLauncher({
 	memoryActions,
 	onRemoveQueued,
 	backgroundRuns,
+	onDraftStarted,
 }: {
+	/** The draft went from empty to some text (a new chat starts its machine then). */
+	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
 	backgroundRuns?: readonly BackgroundRun[];
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
@@ -307,6 +310,12 @@ export function SessionLauncher({
 		},
 	});
 	const [draft, setDraft] = useState(initialDraft);
+	const drafting = draft.trim().length > 0;
+	const draftStarted = useRef(onDraftStarted);
+	draftStarted.current = onDraftStarted;
+	useEffect(() => {
+		if (drafting) draftStarted.current?.();
+	}, [drafting]);
 	const loadProjectCommands = useServerFn(listProjectCommandsFn);
 	const saveProjectSecret = useServerFn(saveProjectSecretFn);
 	const projectCommands = useQuery({

@@ -31,6 +31,7 @@ import {
 	wakeChatsForBackgroundCommands,
 } from "./background-command-notices";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
+import { sweepUnusedChatMachines } from "./machine-prewarm";
 import {
 	DREAM_IDLE_SECONDS,
 	runMemoryDream,
@@ -71,6 +72,8 @@ export async function deliverBackgroundJob(
 						wakeChatsForBackgroundCommands(machines),
 						// Writer subagents' forks, 30 minutes after their report.
 						teardownSubagentForks(machines),
+						// New chats' machines copied ahead, when nothing was sent.
+						sweepUnusedChatMachines(machines),
 					]);
 					const failed = sweeps.find((sweep) => sweep.status === "rejected");
 					if (failed) throw failed.reason;
