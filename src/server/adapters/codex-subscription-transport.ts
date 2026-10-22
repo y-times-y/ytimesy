@@ -24,6 +24,7 @@ import {
 } from "#/domain/owner-alerts";
 import { codexExternalTokens } from "../auth/codex-managed-auth";
 import { recordStepTiming, timed } from "../services/step-timing";
+import { markTurnPhase } from "../services/turn-timing";
 import { captureServerAnalytics } from "./analytics";
 import { trackInvocationTask } from "./invocation-tasks";
 import { alertOwner } from "./owner-alerts";
@@ -312,6 +313,8 @@ async function throughEgress(
 		deadlineMs: number;
 		signal?: AbortSignal | null;
 		replayable: boolean;
+		/** A model request: the step's timing line names the path that served it. */
+		inference?: boolean;
 	},
 	send: (
 		path: EgressPath,
@@ -340,6 +343,7 @@ async function throughEgress(
 					blocked,
 				});
 			recordStepTiming(`egress:${path.id}`, Date.now() - startedAt, startedAt);
+			if (options.inference) markTurnPhase(`egress:${path.id}`);
 			return attempt.response;
 		}
 		last = attempt;
@@ -460,6 +464,7 @@ export async function subscriptionFetch(
 					: firstByteDeadline.metadata,
 			signal: init?.signal,
 			replayable: init?.body == null || typeof init.body === "string",
+			inference: init?.method === "POST",
 		},
 		(egress, signal) => {
 			const token = first ? reuse : undefined;

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /**
  * One compact JSON log line per durable model step: when each phase of the
  * step was first reached, in ms from the step's start (its claim), so the
@@ -91,3 +93,55 @@ export function turnTiming(input: {
 }
 
 export type TurnTiming = ReturnType<typeof turnTiming>;
+
+/** The running durable step's mark function, for code below it that has no handle on the timing. */
+const activeMarks = new AsyncLocalStorage<(phase: string) => void>();
+
+/** Runs a step's work so model and egress code under it can mark phases (markTurnPhase). */
+export function withTurnTimingMarks<T>(
+	mark: (phase: string) => void,
+	run: () => Promise<T>,
+) {
+	return activeMarks.run(mark, run);
+}
+
+/** Marks a phase of the running durable step; a no-op outside one. */
+export function markTurnPhase(phase: string) {
+	activeMarks.getStore()?.(phase);
+}
+
+/**
+ * A model provider's fetch that marks, for the running durable step, when its
+ * first request started (modelFetchStarted), when response headers arrived
+ * (modelHeaders) and when the first body byte (the first SSE bytes) arrived
+ * (modelFirstByte). With firstToken, network time and model time separate.
+ * Outside a durable step it is the fetch it wraps, untouched.
+ */
+export function timedModelFetch(fetch: typeof globalThis.fetch) {
+	const timed: typeof globalThis.fetch = async (input, init) => {
+		const mark = activeMarks.getStore();
+		if (!mark) return fetch(input, init);
+		mark("modelFetchStarted");
+		const response = await fetch(input, init);
+		mark("modelHeaders");
+		if (!response.body) return response;
+		let seen = false;
+		const body = response.body.pipeThrough(
+			new TransformStream<Uint8Array, Uint8Array>({
+				transform(chunk, controller) {
+					if (!seen) {
+						seen = true;
+						mark("modelFirstByte");
+					}
+					controller.enqueue(chunk);
+				},
+			}),
+		);
+		return new Response(body, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	};
+	return timed;
+}

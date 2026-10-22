@@ -7,6 +7,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import type { ModelProvider } from "#/domain/model-connection";
+import { timedModelFetch } from "../services/turn-timing";
 import { openRouterCacheFetch } from "./api-prompt-cache";
 import { openRouterOfficialFetch } from "./openrouter-official";
 import {
@@ -24,8 +25,10 @@ export function connectedLanguageModel(
 		/** Faster maker endpoints; only OpenRouter keys reach them. */
 		speed?: ApiModelSpeedId;
 	},
-	fetch: typeof globalThis.fetch,
+	transport: typeof globalThis.fetch,
 ): LanguageModel {
+	// A durable step's line separates network time from model time.
+	const fetch = timedModelFetch(transport);
 	const options = { apiKey: input.apiKey, baseURL: input.baseUrl, fetch };
 	switch (input.provider) {
 		case "openai":
