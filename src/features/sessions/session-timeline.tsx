@@ -87,6 +87,7 @@ import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
+import { InlineMarkdown } from "./inline-markdown";
 import { LiveCollapsible } from "./live-collapsible";
 import {
 	type MemoryMarkerActions,
@@ -490,7 +491,11 @@ function HelperFinishCard({
 					<span className="helper-card-time">{card.duration}</span>
 				) : null}
 			</span>
-			{card.line ? <span className="helper-card-line">{card.line}</span> : null}
+			{card.line ? (
+				<span className="helper-card-line">
+					<InlineMarkdown text={card.line} />
+				</span>
+			) : null}
 		</>
 	);
 	return lines?.onSelect ? (

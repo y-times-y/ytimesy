@@ -689,7 +689,7 @@ describe("agents list rows", () => {
 			foldAgentRows([row("a", "done"), row("b", "working")]).folded,
 		).toEqual([]);
 	});
-	it("fills the finish card with name, outcome, task, time and the report's first line", () => {
+	it("fills the finish card with name, outcome, task, time and the report's first line past its heading", () => {
 		const done = task("d", {
 			title: "Fix pricing rounding",
 			status: "done",
@@ -708,7 +708,7 @@ describe("agents list rows", () => {
 			verb: "finished",
 			task: "Fix pricing rounding",
 			duration: "1m 12s",
-			line: "Rounding fixed",
+			line: "Totals now round half up.",
 			detail:
 				"## Rounding fixed\nTotals now round half up.\n\n12 steps · 1m · 362k tokens · $1.20",
 		});
