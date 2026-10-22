@@ -3,7 +3,8 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
-import type { SessionItem } from "#/domain/session-item";
+import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import { withStoppedNotice } from "#/domain/turn-end";
 import { SessionTimeline } from "./session-timeline";
 
 // Replies render through the real Markdown renderer (the app loads it lazily).
@@ -128,7 +129,9 @@ describe("session timeline live collapse", () => {
 		);
 		// The lead's chat shows a start line and a finish line, not the helper's transcript.
 		expect(html).toContain("Started “Fix branch picker”");
-		expect(html).toContain("“Fix branch picker” finished: Implemented");
+		expect(html).toContain(
+			'<span class="helper-line-text" title="Implemented">“Fix branch picker” finished</span>',
+		);
 		expect(html).not.toContain("child-task-card");
 		expect(html).not.toContain("Looking at the session timeline");
 		expect(html).not.toContain("Its final summary is below");
@@ -343,5 +346,141 @@ describe("session timeline live collapse", () => {
 		expect(response).toContain("file-type-icon");
 		expect(response).toContain('title="Open src/styles.css"');
 		expect(html).toContain("src/styles.css");
+	});
+});
+
+function render(
+	items: SessionItem[],
+	turnStatus: SessionTurnStatus,
+	tasks: AgentTaskActivity[] = [],
+) {
+	return renderToString(
+		createElement(SessionTimeline, { items, turnStatus, tasks }),
+	);
+}
+
+const user = (id: string, text = id): SessionItem => ({
+	kind: "userMessage",
+	id: SessionItemId(id),
+	text,
+});
+const answer = (id: string, text: string): SessionItem => ({
+	kind: "agentMessage",
+	id: SessionItemId(id),
+	text,
+});
+const spawn: SessionItem = {
+	kind: "dynamicToolCall",
+	id: SessionItemId("spawn"),
+	tool: "agent",
+	input: JSON.stringify({ role: "writer", title: "Fix the parser" }),
+	status: "completed",
+};
+
+/** The <details> "Worked" groups' inner HTML, and what shows outside them. */
+function split(html: string) {
+	const worked = [
+		...html.matchAll(/<details class="session-work">.*?<\/details>/g),
+	]
+		.map((match) => match[0])
+		.join("");
+	return { worked, outside: html.replace(/<details.*?<\/details>/g, "") };
+}
+
+describe("session timeline after a reload", () => {
+	it("keeps Main's answer outside Worked when a wake-up turn followed it", () => {
+		const html = render(
+			[
+				user("ask", "Add tests"),
+				spawn,
+				answer("a1", "This repo uses Vitest; a helper is writing the tests."),
+				user("e1", "⁣ytimesy-child-event:e1"),
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("check"),
+					tool: "bash",
+					status: "completed",
+				},
+				answer("a2", "The helper added 4 tests and they pass."),
+			],
+			"completed",
+		);
+		const { outside } = split(html);
+		expect(outside).toContain("This repo uses Vitest");
+		expect(outside).toContain("The helper added 4 tests");
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
+	it("shows a helper's finish as its name and finished, never the report header", () => {
+		const task = {
+			id: "h1",
+			parentSessionId: "root",
+			title: "Fix the parser",
+			label: "Task 1",
+			depth: 1,
+			status: "done",
+			prompt: "",
+			placement: "fresh",
+			access: "read_write",
+			summary:
+				"[agent 3 writer finished · Fix the parser · 12 steps · 6m · 362k tokens]\n\nParser fixed.",
+			harnessId: "api",
+			listedModelId: null,
+			createdAt: new Date(1_000).toISOString(),
+			updatedAt: new Date(2_000).toISOString(),
+			items: [],
+			turnStatus: "completed",
+		} as AgentTaskActivity;
+		const html = render(
+			[user("ask"), spawn, answer("a1", "Started a helper.")],
+			"completed",
+			[task],
+		);
+		expect(html).toContain("finished</span>");
+		expect(html).not.toContain("[agent 3");
+		expect(html).toContain("Parser fixed. · 12 steps · 6m · 362k tokens");
+	});
+
+	it("marks a stopped turn with a muted Stopped line", () => {
+		const html = render(
+			withStoppedNotice(
+				[
+					user("ask"),
+					{
+						kind: "dynamicToolCall",
+						id: SessionItemId("run"),
+						tool: "bash",
+						status: "completed",
+					},
+				],
+				"t1",
+			),
+			"idle",
+		);
+		expect(html).toContain('class="session-stopped"');
+		expect(split(html).outside).toContain(">Stopped</p>");
+	});
+
+	it("shows a question card's answer once, in the card", () => {
+		const html = render(
+			[
+				user("ask"),
+				{
+					kind: "userQuestion",
+					id: SessionItemId("q"),
+					questions: [
+						{
+							question: "Which database?",
+							options: [{ label: "Postgres" }, { label: "SQLite" }],
+						},
+					],
+				},
+				user("reply", "Database: Postgres"),
+				answer("a", "Using Postgres."),
+			],
+			"completed",
+		);
+		expect(html.match(/Database: Postgres/g)).toHaveLength(1);
+		expect(html).toContain("user-question-reply");
 	});
 });

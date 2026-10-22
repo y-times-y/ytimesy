@@ -25,6 +25,84 @@ function fileChange(id: string, path: string): SessionItem {
 	};
 }
 
+const user = (id: string, text = id): SessionItem => ({
+	kind: "userMessage",
+	id: SessionItemId(id),
+	text,
+});
+const answer = (id: string, text: string): SessionItem => ({
+	kind: "agentMessage",
+	id: SessionItemId(id),
+	text,
+});
+const call = (id: string): SessionItem => ({
+	kind: "dynamicToolCall",
+	id: SessionItemId(id),
+	tool: "bash",
+	status: "completed",
+});
+const wake = (id: string): SessionItem =>
+	user(id, `\u2063ytimesy-child-event:${id}`);
+
+describe("wake-up turns and question replies", () => {
+	it("keeps Main's answer in view when a wake-up turn follows it", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				call("spawn"),
+				answer("a1", "This repo uses Vitest. A helper is writing the tests."),
+				wake("e1"),
+				call("check"),
+				answer("a2", "The helper finished: 4 tests added."),
+			],
+			"completed",
+		);
+		expect(
+			rows.map((row) => (row.kind === "item" ? row.item.id : row.kind)),
+		).toEqual(["ask", "work", "a1", "work", "a2"]);
+		// The hidden wake-up message shows no bubble.
+		expect(
+			rows.some((row) => row.kind === "item" && row.item.id === "e1"),
+		).toBe(false);
+	});
+	it("ends the turn before a running wake-up turn", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				call("bg"),
+				answer("a1", "I'll let you know when the build finishes."),
+				wake("exit"),
+				call("read-log"),
+			],
+			"running",
+		);
+		expect(
+			rows.map((row) => (row.kind === "item" ? row.item.id : row.kind)),
+		).toEqual(["ask", "work", "a1", "read-log"]);
+	});
+	it("shows a question card's reply once, in the card", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				{
+					kind: "userQuestion",
+					id: SessionItemId("q"),
+					questions: [],
+				},
+				user("reply", "Use Postgres"),
+				answer("a", "Postgres it is."),
+			],
+			"completed",
+		);
+		const ids = rows.map((row) =>
+			row.kind === "item" ? row.item.id : row.kind,
+		);
+		expect(ids).toContain("q");
+		expect(ids).not.toContain("reply");
+		expect(ids).toContain("a");
+	});
+});
+
 describe("timeline activity grouping", () => {
 	it("keeps explicit commentary inside work when a turn fails without an answer", () => {
 		const rows = groupTimelineRows(

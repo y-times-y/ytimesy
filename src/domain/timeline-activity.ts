@@ -1,3 +1,4 @@
+import { isInternalChildTaskMessage } from "./child-task-activity";
 import { activityGlyphForToolName } from "./session-activity";
 import {
 	liveActivityStatus,
@@ -78,6 +79,11 @@ export function explorationGroupIsLive(items: readonly SessionItem[]): boolean {
 	return items.some((item) => liveActivityStatus(item) === "inProgress");
 }
 
+/**
+ * The timeline's rows: each finished turn folds its work under "Worked" and
+ * keeps its answer in view. `items` may hold the hidden messages that start
+ * wake-up turns; they split turns and are not shown.
+ */
 export function groupTimelineRows(
 	items: readonly SessionItem[],
 	turnStatus: SessionTurnStatus = "running",
@@ -155,13 +161,26 @@ export function groupTimelineRows(
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 	}
+	// The user's reply to a question card shows in the card, not again below it.
+	let questionOpen = false;
 	for (const item of items) {
+		const internal =
+			(item.kind === "userMessage" || item.kind === "agentMessage") &&
+			isInternalChildTaskMessage(item.text);
 		if (item.kind === "userMessage") {
 			flush(true);
 			turn = [];
 			timing = item.timing;
-			rows.push({ kind: "item", item });
-		} else turn.push(item);
+			// A wake-up turn (a helper's report, a command's exit) starts with a
+			// hidden message: it ends the turn before it, so that turn's answer
+			// stays in view, but shows no bubble of its own.
+			if (internal) continue;
+			if (!questionOpen) rows.push({ kind: "item", item });
+			questionOpen = false;
+		} else if (!internal) {
+			turn.push(item);
+			if (item.kind === "userQuestion") questionOpen = true;
+		}
 	}
 	flush(turnStatus !== "running");
 	return rows;

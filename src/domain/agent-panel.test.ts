@@ -11,7 +11,7 @@ import {
 	foldAgentRows,
 	formatElapsed,
 	formatTokens,
-	helperFinishedNote,
+	helperFinishedLine,
 	helperIdentities,
 	helperMetric,
 	leadMetric,
@@ -210,6 +210,83 @@ describe("time and tokens", () => {
 				estimated: true,
 			},
 		});
+	});
+	it("ends a finished helper's time at its turn's recorded end, not its row's later updates", () => {
+		const failed = task("f", {
+			status: "failed",
+			turnStatus: "failed",
+			createdAt: new Date(10_000).toISOString(),
+			updatedAt: new Date(68_000).toISOString(),
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("brief"),
+					text: "brief",
+					timing: { startedAt: 10_000, completedAt: 14_000 },
+				},
+			],
+		});
+		expect(helperMetric(failed)).toMatchObject({
+			startedAt: 10_000,
+			endedAt: 14_000,
+		});
+	});
+	it("stops Main's clock when its turn ended, also while helpers still work", () => {
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("ask"),
+				text: "ask",
+				timing: { startedAt: 1_000, completedAt: 61_000 },
+			},
+		];
+		const rows = agentPanelRows({
+			tasks: [task("sk")],
+			leadItems: items,
+			leadTurnStatus: "completed",
+		});
+		expect(rows.lead.status).toBe("free");
+		expect(rows.lead.metric).toMatchObject({
+			startedAt: 1_000,
+			endedAt: 61_000,
+		});
+		expect(metricText(rows.lead.metric as never, 10_000_000)).toBe("1m 00s");
+		// A wake-up turn since then ends it later.
+		const woken = leadMetric({
+			turnStatus: "completed",
+			items: [
+				...items,
+				{
+					kind: "userMessage",
+					id: SessionItemId("wake"),
+					text: "\u2063ytimesy-child-event:e1",
+					timing: { startedAt: 90_000, completedAt: 120_000 },
+				},
+			],
+		});
+		expect(woken).toMatchObject({ startedAt: 1_000, endedAt: 120_000 });
+	});
+	it("shows no running clock for a finished turn whose end was not recorded", () => {
+		const metric = leadMetric({
+			turnStatus: "completed",
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("old"),
+					text: "old",
+					timing: { startedAt: 1_000 },
+					apiUsage: {
+						inputTokens: 40_000,
+						outputTokens: 7_000,
+						uncachedInputTokens: null,
+						cacheReadTokens: null,
+						cacheWriteTokens: null,
+					},
+				},
+			],
+		});
+		expect(metric?.untimed).toBe(true);
+		expect(metricText(metric as never, 10_000_000)).toBe("47k tokens");
 	});
 	it("gives Main the latest request's time and tokens", () => {
 		const metric = leadMetric({
@@ -470,7 +547,30 @@ describe("agents list rows", () => {
 			leadItems: [],
 			leadTurnStatus: "completed",
 		});
-		expect(rows.lead).toMatchObject({ status: "free", statusLabel: "free" });
+		expect(rows.lead).toMatchObject({
+			status: "free",
+			statusLabel: "free",
+			doing: "free while helpers work",
+		});
+	});
+	it("says Main is free while commands run when only a background command works", () => {
+		const rows = agentPanelRows({
+			tasks: [],
+			leadItems: [],
+			leadTurnStatus: "completed",
+			background: [
+				{
+					id: "c1",
+					command: "pnpm test",
+					status: "running",
+					startedAt: 1,
+				},
+			],
+		});
+		expect(rows.lead).toMatchObject({
+			status: "free",
+			doing: "free while commands run",
+		});
 	});
 	it("lets the user message a sidekick resting between rounds, not a retired one", () => {
 		const resting = (retired: boolean) =>
@@ -530,21 +630,46 @@ describe("agents list rows", () => {
 			foldAgentRows([row("a", "done"), row("b", "working")]).folded,
 		).toEqual([]);
 	});
-	it("writes the finish note in one line", () => {
+	it("writes the finish line as name and outcome, with how it ended as detail", () => {
 		expect(
-			helperFinishedNote({
+			helperFinishedLine({
 				name: "Sidekick A",
 				status: "done",
 				doing: "tests pass, 3 files changed",
 			}),
-		).toBe("Sidekick A finished: tests pass, 3 files changed");
+		).toEqual({
+			text: "Sidekick A finished",
+			detail: "tests pass, 3 files changed",
+		});
 		expect(
-			helperFinishedNote({
+			helperFinishedLine({
 				name: "Checker",
 				status: "failed",
 				doing: "failed",
 			}),
-		).toBe("Checker failed");
+		).toEqual({ text: "Checker failed", detail: "" });
+	});
+	it("never shows a report's raw header line, only its facts as detail", () => {
+		const summary =
+			"[agent 3 writer finished · Fix the parser · 12 steps · 6m · 362k tokens · $1.20]\n\nParser fixed; 4 tests added.";
+		const doing = agentDoing({
+			status: "done",
+			items: [],
+			title: "",
+			summary,
+		});
+		expect(doing).toBe("Parser fixed; 4 tests added.");
+		const line = helperFinishedLine({
+			name: "Fix the parser",
+			status: "done",
+			doing,
+			summary,
+		});
+		expect(line.text).toBe("Fix the parser finished");
+		expect(line.text).not.toContain("[agent");
+		expect(line.detail).toBe(
+			"Parser fixed; 4 tests added. · 12 steps · 6m · 362k tokens · $1.20",
+		);
 	});
 	it("puts the finish line at the end of the turn it started in, before the answer", () => {
 		const items: SessionItem[] = [

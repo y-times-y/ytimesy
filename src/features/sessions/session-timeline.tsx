@@ -12,7 +12,7 @@ import { agentCall } from "#/domain/agent-call";
 import {
 	agentDoing,
 	finishLineAnchorId,
-	helperFinishedNote,
+	helperFinishedLine,
 	helperKind,
 	helperStatus,
 	steeringSender,
@@ -176,11 +176,13 @@ export function SessionTimeline({
 	const items = queued.length
 		? allItems.filter((item) => !isQueuedUserMessage(item))
 		: allItems;
-	const visible = compactTimelineItems(childTaskPublicItems(items));
+	// Hidden wake-up messages stay in for grouping: they end the turn before them.
+	const presented = compactTimelineItems(items);
+	const visible = childTaskPublicItems(presented);
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
-	const rows = groupTimelineRows(visible, turnStatus);
+	const rows = groupTimelineRows(presented, turnStatus);
 	const helperMarks = childTasks.map((task) => {
 		const start = childTaskAnchorId(task, visible);
 		return {
@@ -207,7 +209,7 @@ export function SessionTimeline({
 	const evidenceAt = evidenceAnchors(visible, evidence);
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
-	for (const item of visible) {
+	for (const item of presented) {
 		if (item.kind === "userMessage") currentTurnIds.clear();
 		else currentTurnIds.add(item.id);
 	}
@@ -403,7 +405,7 @@ export type HelperLines = {
 /** A helper's view names who sent each message in its transcript. */
 const SenderContext = createContext<string | null>(null);
 
-/** "Started Sidekick A: <title>" / "Sidekick A finished: <how>", one quiet line. */
+/** "Started Sidekick A" / "Sidekick A finished", one quiet line; how it ended on hover. */
 function HelperLine({
 	task,
 	lines,
@@ -417,8 +419,8 @@ function HelperLine({
 	const name = `“${identity?.name ?? helperName(task.title)}”`;
 	const kind = helperKind(task);
 	const status = helperStatus(task.status);
-	const text = finished
-		? helperFinishedNote({
+	const finish = finished
+		? helperFinishedLine({
 				name,
 				status,
 				doing: agentDoing({
@@ -427,8 +429,11 @@ function HelperLine({
 					title: "",
 					summary: task.summary,
 				}),
+				summary: task.summary,
 			})
-		: `Started ${name}`;
+		: null;
+	const text = finish?.text ?? `Started ${name}`;
+	const detail = finish?.detail || undefined;
 	const content = (
 		<>
 			<AgentIcon
@@ -436,7 +441,9 @@ function HelperLine({
 				color={identity?.color ?? agentColor(kind)}
 				size={14}
 			/>
-			<span className="helper-line-text">{text}</span>
+			<span className="helper-line-text" title={detail}>
+				{text}
+			</span>
 			<span className="agent-row-tag">{identity?.tag ?? KIND_TAGS[kind]}</span>
 		</>
 	);
@@ -1098,6 +1105,12 @@ function SessionItemView({
 				</div>
 			);
 		case "notice":
+			if (item.stopped)
+				return (
+					<p className="session-stopped" data-kind="stopped" role="status">
+						{item.message}
+					</p>
+				);
 			return (
 				<div
 					className="session-activity session-system-notice"
