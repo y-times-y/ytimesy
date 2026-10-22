@@ -26,7 +26,10 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
-import { wakeChatsForBackgroundCommands } from "./background-command-notices";
+import {
+	wakeChatForBackgroundCommands,
+	wakeChatsForBackgroundCommands,
+} from "./background-command-notices";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import {
 	DREAM_IDLE_SECONDS,
@@ -159,6 +162,18 @@ export async function deliverBackgroundJob(
 			break;
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
+			break;
+		case "background-wake":
+			// While the chat's turn runs, look again shortly (15 s, the job
+			// runner's retry); the turn usually closes the card itself first.
+			if (
+				(await wakeChatForBackgroundCommands(machines, {
+					userId: job.userId,
+					id: job.sessionId,
+					commandId: job.commandId,
+				})) === "busy"
+			)
+				return "pending";
 			break;
 		case "pr-evidence": {
 			const outcome = await runPullRequestEvidenceJob(machines, job);

@@ -80,6 +80,57 @@ describe("wake-up turns and question replies", () => {
 			rows.map((row) => (row.kind === "item" ? row.item.id : row.kind)),
 		).toEqual(["ask", "work", "a1", "read-log"]);
 	});
+	it("breaks an answer-only wake-up turn from the answer above it, and nothing else", () => {
+		const ids = (items: SessionItem[], status: "completed" | "running") =>
+			groupTimelineRows(items, status).map((row) =>
+				row.kind === "item"
+					? row.item.kind === "notice" && row.item.wake
+						? `break:${row.item.id}`
+						: row.item.id
+					: row.kind,
+			);
+		expect(
+			ids(
+				[
+					user("ask"),
+					answer("a1", "391 PINEAPPLE"),
+					wake("e1"),
+					answer("a2", "The build passed."),
+				],
+				"completed",
+			),
+		).toEqual(["ask", "a1", "break:e1", "a2"]);
+		// While it streams, too.
+		expect(
+			ids(
+				[user("ask"), answer("a1", "391"), wake("e1"), answer("a2", "The")],
+				"running",
+			),
+		).toEqual(["ask", "a1", "break:e1", "a2"]);
+		// Its work row already separates it; a first turn has nothing above.
+		expect(
+			ids(
+				[
+					user("ask"),
+					answer("a1", "x"),
+					wake("e1"),
+					call("c"),
+					answer("a2", "y"),
+				],
+				"completed",
+			),
+		).toEqual(["ask", "a1", "work", "a2"]);
+		expect(ids([wake("e1"), answer("a2", "y")], "completed")).toEqual(["a2"]);
+		// The break is a silent notice, never the hidden message's bubble.
+		const row = groupTimelineRows(
+			[user("ask"), answer("a1", "x"), wake("e1"), answer("a2", "y")],
+			"completed",
+		)[2];
+		expect(row).toMatchObject({
+			kind: "item",
+			item: { kind: "notice", wake: true, message: "" },
+		});
+	});
 	it("shows a question card's reply once, in the card", () => {
 		const rows = groupTimelineRows(
 			[

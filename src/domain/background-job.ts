@@ -57,6 +57,16 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		})
 		.strict(),
 	z.object({ ...identity, kind: z.literal("pr-repair") }).strict(),
+	// A background command's exit callback (background-exit-wake.ts): one per command.
+	z
+		.object({
+			...identity,
+			kind: z.literal("background-wake"),
+			userId: reference,
+			sessionId: z.uuid(),
+			commandId: z.uuid(),
+		})
+		.strict(),
 	// Pull request evidence (harness variant prEvidence), after a turn's draft handoff.
 	z
 		.object({

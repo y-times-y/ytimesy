@@ -9,6 +9,7 @@ import { agentOutputDirectory } from "./agent-output-artifacts";
 import { commandRoot } from "./api-agent-command-tools";
 import {
 	backgroundNoticeId,
+	wakeChatForBackgroundCommands,
 	wakeChatsForBackgroundCommands,
 	withBackgroundCommandNotices,
 } from "./background-command-notices";
@@ -292,5 +293,66 @@ describe("waking a chat between turns", () => {
 		expect(busy.exec).not.toHaveBeenCalled();
 		expect(stopped.exec).not.toHaveBeenCalled();
 		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("a command's exit callback wakes its chat once, even racing the cron's watcher", async () => {
+		const id = crypto.randomUUID();
+		const chat = await session([{ id, status: "0" }]);
+		const machines = hostMachines();
+		const notify = vi.fn(async () => undefined);
+		const dependencies = {
+			candidates: async () => [{ userId: "user", id: chat.sessionId }],
+			session: async () => record(chat.sessionId, chat.items),
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify,
+		};
+		const [callback, cron] = await Promise.all([
+			wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				dependencies,
+			),
+			wakeChatsForBackgroundCommands(machines, dependencies),
+		]);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect([callback === "woken", cron === 1].filter(Boolean)).toHaveLength(1);
+	});
+
+	it("a callback for a closed card costs no guest call, and waits while the chat's turn runs", async () => {
+		const id = crypto.randomUUID();
+		const chat = await session([{ id, status: "0" }]);
+		const machines = hostMachines();
+		const notify = vi.fn(async () => undefined);
+		const dependencies = {
+			candidates: async () => [],
+			session: async () => record(chat.sessionId, chat.items),
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify,
+		};
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: crypto.randomUUID() },
+				dependencies,
+			),
+		).toBe("idle");
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				{ ...dependencies, activeTurn: async () => true },
+			),
+		).toBe("busy");
+		expect(machines.exec).not.toHaveBeenCalled();
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				dependencies,
+			),
+		).toBe("woken");
+		expect(notify).toHaveBeenCalledTimes(1);
 	});
 });

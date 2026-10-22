@@ -137,6 +137,12 @@
 	color: #6f6f6f;
 	font-size: 12px;
 }
+/* A server-started turn (a helper's report, a command's exit) under the previous answer. */
+.session-turn-break {
+	margin: 10px 0 6px;
+	border: 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
 /* A turn the user stopped: a small muted marker under its last row. */
 .session-stopped {
 	margin: 2px 0;
