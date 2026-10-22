@@ -186,6 +186,9 @@ describe("time and tokens", () => {
 			"1m 00s · 21k tokens",
 		);
 		expect(metricText({ startedAt: 0 }, 5_000)).toBe("5s");
+		// A helper starting has counted none yet: no "0 tokens".
+		const none = { ...metric.tokens, input: 0, output: 0 };
+		expect(metricText({ startedAt: 0, tokens: none }, 5_000)).toBe("5s");
 		expect(metricDetail(metric)).toBe("18k in · 3k out · $0.04");
 		expect(
 			metricDetail({ ...metric, tokens: { ...metric.tokens, cached: 12_000 } }),
@@ -689,7 +692,7 @@ describe("agents list rows", () => {
 			foldAgentRows([row("a", "done"), row("b", "working")]).folded,
 		).toEqual([]);
 	});
-	it("fills the finish card with name, outcome, task, time and the report's first line", () => {
+	it("fills the finish card with name, outcome, task, time and the report's first line past its heading", () => {
 		const done = task("d", {
 			title: "Fix pricing rounding",
 			status: "done",
@@ -708,7 +711,7 @@ describe("agents list rows", () => {
 			verb: "finished",
 			task: "Fix pricing rounding",
 			duration: "1m 12s",
-			line: "Rounding fixed",
+			line: "Totals now round half up.",
 			detail:
 				"## Rounding fixed\nTotals now round half up.\n\n12 steps · 1m · 362k tokens · $1.20",
 		});

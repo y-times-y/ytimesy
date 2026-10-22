@@ -22,6 +22,7 @@ import {
 	KIND_TAGS,
 	MAIN_NAME,
 } from "./helper-names";
+import { reportSummaryLine } from "./markdown-text";
 import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 import { splitReportHeader } from "./subagent";
@@ -633,8 +634,9 @@ export function formatTokens(count: number) {
 
 /** The right-hand metric: "2m 05s · 21k tokens"; time only without tokens. */
 export function metricText(metric: AgentMetric, now: number) {
+	// None counted yet (a helper starting) shows no "0 tokens".
 	const tokens = metric.tokens
-		? metric.tokens.input + metric.tokens.output
+		? metric.tokens.input + metric.tokens.output || null
 		: null;
 	if (metric.untimed)
 		return tokens === null ? "" : `${formatTokens(tokens)} tokens`;
@@ -706,7 +708,7 @@ export function helperFinishCard(
 	const line =
 		error?.kind === "error"
 			? firstLine(error.message, 240)
-			: firstLine(body, 240) || firstLine(lastAgentText(items), 240);
+			: reportSummaryLine(body) || reportSummaryLine(lastAgentText(items));
 	const metric = helperMetric(task);
 	const meta = task.summary ? splitReportHeader(task.summary).meta : null;
 	// The header's facts only; it repeats the outcome and the name.

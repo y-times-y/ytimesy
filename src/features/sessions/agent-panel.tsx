@@ -58,7 +58,11 @@ export function AgentPanel({
 							<AgentIcon
 								key={row.id}
 								icon={row.icon}
-								color={row.color}
+								color={
+									row.status === "working" || row.id === selectedId
+										? row.color
+										: RESTING_ICON
+								}
 								size={12}
 							/>
 						))}

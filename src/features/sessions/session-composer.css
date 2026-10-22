@@ -1485,6 +1485,14 @@ details[open] > summary .session-activity-chevron {
 	margin-right: 8px;
 	white-space: nowrap;
 }
+.task-agent {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-right: 8px;
+	vertical-align: top;
+	white-space: nowrap;
+}
 .task-row-copy strong {
 	font-weight: 450;
 	color: #dedede;
@@ -2615,6 +2623,17 @@ button.helper-card:hover {
 	font-size: 13px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.helper-card-line code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	padding: 1px 4px;
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.08);
+}
+.helper-card-line strong {
+	color: #d4d4d4;
+	font-weight: 500;
 }
 .helper-view-header {
 	display: flex;
