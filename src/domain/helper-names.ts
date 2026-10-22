@@ -115,9 +115,16 @@ export function helperKindOf(
 
 const NAME_MAX = 36;
 
-/** A helper's name: its task title, cut cleanly at a word. */
+/** "package-research" or "build_helper": a slug, not a task. */
+const SLUG = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/i;
+
+/** A helper's name: its task title, cut cleanly at a word; a slug reads as words. */
 export function helperName(title: string) {
-	const words = title.replace(/\s+/g, " ").trim();
+	let words = title.replace(/\s+/g, " ").trim();
+	if (SLUG.test(words)) {
+		const spaced = words.replace(/[-_]+/g, " ").toLowerCase();
+		words = spaced.charAt(0).toUpperCase() + spaced.slice(1);
+	}
 	if (!words) return "Untitled task";
 	if (words.length <= NAME_MAX) return words;
 	const cut = words.slice(0, NAME_MAX - 1);
