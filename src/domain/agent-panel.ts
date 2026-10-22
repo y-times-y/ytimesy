@@ -22,6 +22,7 @@ import {
 } from "./helper-names";
 import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
+import { splitReportHeader } from "./subagent";
 import { toolActivity } from "./tool-detail";
 
 /**
@@ -47,6 +48,8 @@ export type AgentMetric = {
 	readonly startedAt: number;
 	/** Set once it ended: the time shown is then its total duration. */
 	readonly endedAt?: number;
+	/** It ended at a time nobody recorded: no time is shown, never a running clock. */
+	readonly untimed?: true;
 	readonly tokens?: {
 		readonly input: number;
 		readonly output: number;
@@ -219,6 +222,11 @@ function firstLine(text: string | null | undefined, max = 90) {
 	return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 }
 
+/** A helper's report without its "[agent 3 writer finished · …]" header line. */
+function reportBody(summary: string | null | undefined) {
+	return summary ? splitReportHeader(summary).body : summary;
+}
+
 function lastAgentText(items: readonly SessionItem[]) {
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
@@ -242,7 +250,9 @@ export function agentDoing(input: {
 	const items = childTaskPublicItems(input.items);
 	if (input.status === "done")
 		return (
-			firstLine(input.summary) || firstLine(lastAgentText(items)) || "finished"
+			firstLine(reportBody(input.summary)) ||
+			firstLine(lastAgentText(items)) ||
+			"finished"
 		);
 	if (input.status === "failed") {
 		const error = [...items].reverse().find((item) => item.kind === "error");
@@ -306,17 +316,35 @@ const STATUS_LABELS: Record<AgentPanelStatus, string> = {
 	idle: "idle",
 };
 
-/** A helper's time: its sidekick round, or its whole run. */
+/**
+ * When a finished agent's last turn ended, as its transcript records it; null
+ * for turns from before the end was recorded.
+ */
+function lastTurnEnd(items: readonly SessionItem[]): number | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage" && !item.queued)
+			return item.timing?.completedAt ?? null;
+	}
+	return null;
+}
+
+/**
+ * A helper's time: its sidekick round, or its whole run. A finished one's
+ * end is its last turn's recorded end; its row's update time moves on later
+ * (its report, its fork's cleanup), so it stands in only for older turns.
+ */
 export function helperMetric(task: AgentTaskActivity): AgentMetric {
 	const round = task.subagent?.budget?.sidekick?.roundStartedAt;
 	const startedAt = Date.parse(round ?? task.createdAt);
 	const ended = helperStatus(task.status) !== "working";
 	const spend = task.subagent?.spend;
+	const end = ended
+		? (lastTurnEnd(task.items) ?? Date.parse(task.updatedAt))
+		: null;
 	return {
 		startedAt,
-		...(ended
-			? { endedAt: Math.max(startedAt, Date.parse(task.updatedAt)) }
-			: {}),
+		...(end !== null ? { endedAt: Math.max(startedAt, end) } : {}),
 		...(spend
 			? {
 					tokens: {
@@ -342,12 +370,17 @@ export function leadMetric(input: {
 	const startedAt = prompt?.timing?.startedAt;
 	if (!prompt || startedAt === undefined) return undefined;
 	const usage = prompt.apiUsage;
-	const completedAt = prompt.timing?.completedAt;
+	// The request's last turn: its own, or a wake-up turn a report started since.
+	const completedAt = lastTurnEnd(input.items) ?? undefined;
+	const running = input.turnStatus === "running";
+	if (!running && !completedAt && !usage) return undefined;
 	return {
 		startedAt,
-		...(input.turnStatus !== "running" && completedAt
-			? { endedAt: completedAt }
-			: {}),
+		...(running
+			? {}
+			: completedAt
+				? { endedAt: Math.max(startedAt, completedAt) }
+				: { untimed: true as const }),
 		...(usage
 			? {
 					tokens: {
@@ -522,9 +555,9 @@ export function agentPanelRows(input: {
 			};
 		});
 	const background = backgroundRows(input.background ?? []);
-	const othersWork = [...helpers, ...background].some(
-		(row) => row.status === "working",
-	);
+	const helpersWork = helpers.some((row) => row.status === "working");
+	const othersWork =
+		helpersWork || background.some((row) => row.status === "working");
 	const turn = leadStatus(input.leadTurnStatus);
 	const status: AgentPanelStatus =
 		turn === "working" ? "working" : othersWork ? "free" : turn;
@@ -543,7 +576,7 @@ export function agentPanelRows(input: {
 					? agentDoing({ status, items: input.leadItems, title: "" }) ||
 						"thinking"
 					: status === "free"
-						? "free while helpers work"
+						? `free while ${helpersWork ? "helpers work" : "commands run"}`
 						: status === "failed"
 							? "failed"
 							: "waiting for you",
@@ -581,10 +614,12 @@ export function formatTokens(count: number) {
 
 /** The right-hand metric: "2m 05s · 21k tokens"; time only without tokens. */
 export function metricText(metric: AgentMetric, now: number) {
-	const time = formatElapsed((metric.endedAt ?? now) - metric.startedAt);
 	const tokens = metric.tokens
 		? metric.tokens.input + metric.tokens.output
 		: null;
+	if (metric.untimed)
+		return tokens === null ? "" : `${formatTokens(tokens)} tokens`;
+	const time = formatElapsed((metric.endedAt ?? now) - metric.startedAt);
 	return tokens === null ? time : `${time} · ${formatTokens(tokens)} tokens`;
 }
 
@@ -627,18 +662,35 @@ export function foldAgentRows(
 	return { shown: active, folded: finished };
 }
 
-/** "Build the CSV export finished: tests pass, 3 files changed". */
-export function helperFinishedNote(
-	row: Pick<AgentPanelRow, "name" | "status" | "doing">,
-) {
+/**
+ * A helper's finish line in its parent's chat: "Build the CSV export
+ * finished", with how it ended ("tests pass, 3 files changed") and its
+ * report's facts (steps, time, tokens) as the detail behind it.
+ */
+export function helperFinishedLine(
+	row: Pick<AgentPanelRow, "name" | "status" | "doing"> & {
+		readonly summary?: string | null;
+	},
+): { readonly text: string; readonly detail: string } {
 	const verb = row.status === "failed" ? "failed" : "finished";
-	const detail =
+	const how =
 		row.status === "failed"
 			? row.doing.replace(/^failed:?\s*/, "")
 			: row.doing === "finished"
 				? ""
 				: row.doing;
-	return detail ? `${row.name} ${verb}: ${detail}` : `${row.name} ${verb}`;
+	const meta = row.summary ? splitReportHeader(row.summary).meta : null;
+	// The header repeats the outcome and the name ("finished · Fix it · 14 steps · …").
+	const name = row.name.replace(/^“|”$/g, "");
+	const facts = (meta?.split(" · ") ?? []).filter(
+		(part, index) =>
+			!(index === 0 && /^(finished|failed|budget exhausted)$/.test(part)) &&
+			part !== name,
+	);
+	return {
+		text: `${row.name} ${verb}`,
+		detail: [how, ...facts].filter(Boolean).join(" · "),
+	};
 }
 
 /** Who sent a message in a helper's transcript: its parent's name, or "You". */

@@ -1,3 +1,4 @@
+import { isInternalChildTaskMessage } from "./child-task-activity";
 import type { SessionItem } from "./session-item";
 
 /**
@@ -108,6 +109,9 @@ export function userQuestionReply(
 	if (index < 0) return null;
 	const reply = items
 		.slice(index + 1)
-		.find((item) => item.kind === "userMessage");
+		.find(
+			(item) =>
+				item.kind === "userMessage" && !isInternalChildTaskMessage(item.text),
+		);
 	return reply?.kind === "userMessage" ? reply.text : null;
 }
