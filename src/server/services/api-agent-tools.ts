@@ -47,6 +47,11 @@ export function apiAgentTools(
 		readerCommands?: boolean;
 		/** Latest epoch ms a command wait may end (step budget or turn deadline minus a margin). */
 		waitDeadlineAt?: number;
+		/**
+		 * The checkout alone, for the repository guidance read (it reads only
+		 * the repository), when the workspace also waits for files outside it.
+		 */
+		repositoryWorkspace?: () => Promise<AgentToolWorkspace>;
 	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
 ): ToolSet {
 	const { machines, session, signal } = input;
@@ -110,7 +115,15 @@ export function apiAgentTools(
 				};
 			},
 		}),
-		read_repository_guidance: repositoryGuidanceTool({ workspace, signal }),
+		read_repository_guidance: repositoryGuidanceTool({
+			workspace: input.repositoryWorkspace
+				? async () => {
+						signal.throwIfAborted();
+						return (input.repositoryWorkspace as typeof workspace)();
+					}
+				: workspace,
+			signal,
+		}),
 		...apiAgentSearchTools({ workspace, signal, output }),
 		...agentContextArchiveTools({
 			userId: session.userId,

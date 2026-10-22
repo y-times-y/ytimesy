@@ -127,8 +127,15 @@ export type TurnMemory = {
 	mode: Exclude<MemoryMode, "off">;
 	/** Builder system-prompt addition; fixed for the chat. */
 	instructions: string;
-	/** Clone or refresh ~/memory on the VM with a fresh short-lived token. */
-	prepareVm(workspace: AgentToolWorkspace): Promise<void>;
+	/**
+	 * Clone or refresh ~/memory on the VM with a fresh short-lived token.
+	 * `beforeVm` gets the token before it reaches the VM, so whoever redacts
+	 * tool and hook output need not wait for the clone.
+	 */
+	prepareVm(
+		workspace: AgentToolWorkspace,
+		beforeVm?: (token: string) => void,
+	): Promise<void>;
 	/** Tokens prepareVm put on the VM, for tool-result redaction. */
 	vmTokens(): readonly string[];
 	/**
@@ -314,7 +321,7 @@ export async function turnMemory(
 			wording,
 			writer,
 		),
-		async prepareVm(workspace) {
+		async prepareVm(workspace, beforeVm) {
 			try {
 				const credentials = await repo.credentials(VM_TOKEN_TTL_SECONDS);
 				// Recorded before it reaches the VM, so any isolate can revoke it;
@@ -335,6 +342,7 @@ export async function turnMemory(
 				vmTokens.push(credentials.token);
 				if (credentials.tokenId)
 					minted.set(credentials.token, credentials.tokenId);
+				beforeVm?.(credentials.token);
 				const result = await workspace.machines.exec(
 					workspace.vm,
 					memoryCloneScript(credentials),
