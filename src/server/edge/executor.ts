@@ -306,8 +306,21 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			await this.room.alarm();
 		}
 		const turnAt = rows.find((row) => row.purpose === "turn")?.at;
-		if (turnAt !== undefined) await this.advanceTurn(now - turnAt);
+		// The turn's wake stays due while its step runs, so the room's lease
+		// writes during the step re-arm the alarm at once; that alarm can fire
+		// before the step ended and would resume it (rotating its lease) as if
+		// the object had restarted. The running step schedules the next one
+		// itself. After a real restart nothing runs here and the step resumes.
+		if (turnAt === undefined || this.stepping) return;
+		this.stepping = true;
+		try {
+			await this.advanceTurn(now - turnAt);
+		} finally {
+			this.stepping = false;
+		}
 	}
+	/** A step of this object's turn is running in this instance. */
+	private stepping = false;
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
 		this.history.clear();

@@ -87,6 +87,30 @@ it("runs steps one alarm at a time and admits the next turn when done", async ()
 	});
 });
 
+it("ignores an alarm that fires while this instance's step still runs, instead of resuming that step", async () => {
+	let finish = (_outcome: string) => {};
+	mocks.step.mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+	);
+	const { object, state, sql } = conversation();
+	await object.startTurn(scope, turn);
+	const running = object.alarm();
+	await vi.waitFor(() => expect(mocks.step).toHaveBeenCalledTimes(1));
+	// The room's lease write during the step re-armed the alarm; it fires early.
+	await object.alarm();
+	expect(mocks.step).toHaveBeenCalledTimes(1);
+	expect(sql.exec("select resumes from turn_loop").toArray()).toEqual([
+		{ resumes: 1 },
+	]);
+	finish("completed");
+	await running;
+	expect(sql.exec("select * from turn_loop").toArray()).toEqual([]);
+	expect(state.alarm.at).toBeNull();
+});
+
 it("resumes a step whose previous attempt was interrupted, then gives up after repeated interruptions", async () => {
 	mocks.step.mockResolvedValue("continue");
 	const { object, sql } = conversation();
