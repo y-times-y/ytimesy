@@ -75,7 +75,10 @@ import {
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
 import { ContextUsage } from "./context-usage";
-import { ConversationRecovery } from "./conversation-recovery";
+import {
+	ConversationRecovery,
+	refreshRecoveredWorkspace,
+} from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
 import type { MemoryMarkerActions } from "./memory-markers";
 import {
@@ -152,7 +155,11 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
-	onRecovered?: (sessionId: string, prompt: string | null) => Promise<void>;
+	onRecovered?: (
+		sessionId: string,
+		prompt: string | null,
+		items: readonly SessionItem[] | null,
+	) => Promise<void>;
 	initialDraft?: string;
 	childTasks?: readonly AgentTaskActivity[];
 	projects: Project[];
@@ -782,8 +789,16 @@ export function SessionLauncher({
 														mode,
 													},
 												});
-												await onRecovered(recovered.id, recovered.prompt);
+												// The server is done: the prompt and the restored
+												// code show now, not after the chat reloads.
 												if (recovered.prompt) setDraft(recovered.prompt);
+												if (mode === "code" || mode === "both")
+													void refreshRecoveredWorkspace(queryClient);
+												await onRecovered(
+													recovered.id,
+													recovered.prompt,
+													recovered.items,
+												);
 												await recoveryPoints.refetch();
 											}}
 										/>
