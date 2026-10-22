@@ -74,6 +74,7 @@ import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
 import { stableHistoryKeyOrder } from "./stable-history-key-order";
 import { timed } from "./step-timing";
+import { withWebSearchNotes } from "./web-search-notes";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
@@ -657,6 +658,11 @@ async function executeModelSteps(
 	const requestSettings =
 		runtime.requestSettings ??
 		((instructions: string) => ({ system: instructions }));
+	// OpenAI Responses with store:false drops hosted web searches from replayed
+	// history; keep each one as a short note instead (web-search-notes.ts).
+	const dropsHostedTools =
+		runtime.requestSettings?.(input.instructions).providerOptions?.openai
+			?.store === false;
 	let history = input.messages;
 	let pendingCompaction = forceCompaction;
 	let compactFirst = input.compactFirst === true;
@@ -1066,11 +1072,13 @@ async function executeModelSteps(
 				runSignal.throwIfAborted();
 				// Same bytes whether the history is in memory or reloaded from jsonb.
 				const order = input.toolOrder?.().filter((name) => name in tools);
+				const sent =
+					runtime.imageInput === false
+						? withImagePlaceholders(history)
+						: history;
 				return {
 					messages: stableHistoryKeyOrder(
-						runtime.imageInput === false
-							? withImagePlaceholders(history)
-							: history,
+						dropsHostedTools ? withWebSearchNotes(sent) : sent,
 					),
 					...(order ? { activeTools: order, toolOrder: order } : {}),
 				};
