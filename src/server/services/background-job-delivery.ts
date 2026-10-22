@@ -62,13 +62,20 @@ export async function deliverBackgroundJob(
 					await recoverStaleQueuedWorkspaces();
 					await alertAbandonedTurns(await expireApiTurnLeases());
 					break;
-				case "supervise":
-					await recoverChildTurnEvents(machines);
-					// Background commands that exited while their chat was between turns.
-					await wakeChatsForBackgroundCommands(machines);
-					// Writer subagents' forks, 30 minutes after their report.
-					await teardownSubagentForks(machines);
+				case "supervise": {
+					// Independent sweeps, side by side: a slow one never holds a
+					// background command's wake-up behind it.
+					const sweeps = await Promise.allSettled([
+						recoverChildTurnEvents(machines),
+						// Background commands that exited while their chat was between turns.
+						wakeChatsForBackgroundCommands(machines),
+						// Writer subagents' forks, 30 minutes after their report.
+						teardownSubagentForks(machines),
+					]);
+					const failed = sweeps.find((sweep) => sweep.status === "rejected");
+					if (failed) throw failed.reason;
 					break;
+				}
 				case "delivery":
 					await relayConversationDeliveriesOnce();
 					// Verification and password-reset mail queued by the web app.

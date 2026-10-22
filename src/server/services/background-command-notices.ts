@@ -273,28 +273,53 @@ const watchDependencies = (): BackgroundWatchDependencies => ({
 	},
 });
 
+/** Chats one watcher pass checks at once (each is a guest call of up to 15s). */
+export const BACKGROUND_WAKE_CONCURRENCY = 6;
+/** No new chat is started after this; the next tick picks up the rest. */
+export const BACKGROUND_WAKE_BUDGET_MS = 40_000;
+
 /**
  * The cron's watcher for chats between turns (maintenance "supervise"): a
  * background command that exited gets its card updated and its notice
  * delivered, which wakes the agent that started it the way a subagent's
  * report does (or reaches a turn that just started at its next step).
+ * Chats are checked a few at a time, never one after another: each check is
+ * a guest call, and a serial pass over many chats with long-running commands
+ * held the tick (and the newest chat's exit) for minutes.
  */
 export async function wakeChatsForBackgroundCommands(
 	machines: WorkspaceMachines,
 	dependencies: BackgroundWatchDependencies = watchDependencies(),
+	options: { concurrency?: number; budgetMs?: number; now?: () => number } = {},
 ) {
+	const concurrency = Math.max(
+		1,
+		options.concurrency ?? BACKGROUND_WAKE_CONCURRENCY,
+	);
+	const now = options.now ?? Date.now;
+	const deadline = now() + (options.budgetMs ?? BACKGROUND_WAKE_BUDGET_MS);
+	const candidates = [
+		...(await dependencies.candidates(backgroundCommandMaxSeconds())),
+	];
 	let woken = 0;
-	for (const candidate of await dependencies.candidates(
-		backgroundCommandMaxSeconds(),
-	))
-		if (
-			(await wakeChatForBackgroundCommands(
-				machines,
-				candidate,
-				dependencies,
-			)) === "woken"
-		)
-			woken += 1;
+	let next = 0;
+	const worker = async () => {
+		while (next < candidates.length && now() < deadline) {
+			const candidate = candidates[next];
+			next += 1;
+			if (
+				(await wakeChatForBackgroundCommands(
+					machines,
+					candidate,
+					dependencies,
+				)) === "woken"
+			)
+				woken += 1;
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(concurrency, candidates.length) }, worker),
+	);
 	return woken;
 }
 
