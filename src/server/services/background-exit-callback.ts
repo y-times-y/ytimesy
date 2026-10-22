@@ -8,10 +8,13 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
+export const BACKGROUND_EXIT_USER_AGENT = "ytimesy-exit/1";
+
 /**
  * Posts the exit callback once, retrying a network or server error twice,
  * then deletes the request. The token is read from the private file, never
- * from argv, so the VM's process list shows only the directory.
+ * from argv, so the VM's process list shows only the directory. It names its
+ * own User-Agent: Cloudflare refuses urllib's default (error 1010).
  */
 const EXIT_CALLBACK_SCRIPT = `import json, shutil, sys, time, urllib.error, urllib.request
 directory = sys.argv[1]
@@ -22,7 +25,7 @@ except (OSError, ValueError):
     sys.exit(0)
 for attempt in range(3):
     try:
-        urllib.request.urlopen(urllib.request.Request(request['url'], data=request['body'].encode(), method='POST', headers={'content-type': 'application/json', '${BACKGROUND_EXIT_TOKEN_HEADER}': request['token']}), timeout=15).close()
+        urllib.request.urlopen(urllib.request.Request(request['url'], data=request['body'].encode(), method='POST', headers={'content-type': 'application/json', 'user-agent': '${BACKGROUND_EXIT_USER_AGENT}', '${BACKGROUND_EXIT_TOKEN_HEADER}': request['token']}), timeout=15).close()
         break
     except urllib.error.HTTPError as error:
         if error.code < 500:

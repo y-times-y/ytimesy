@@ -10,7 +10,10 @@ import {
 	verifyBackgroundExitToken,
 } from "#/domain/background-exit-wake";
 import { WorkspaceId } from "#/domain/ids";
-import { prepareBackgroundExitCallback } from "./background-exit-callback";
+import {
+	BACKGROUND_EXIT_USER_AGENT,
+	prepareBackgroundExitCallback,
+} from "./background-exit-callback";
 
 const run = promisify(execFile);
 const secret = "k".repeat(48);
@@ -124,6 +127,8 @@ describe("a background command's exit callback", () => {
 		expect(received[0].headers[BACKGROUND_EXIT_TOKEN_HEADER]).toBe(
 			stored.token,
 		);
+		// Cloudflare refuses urllib's default User-Agent (error 1010).
+		expect(received[0].headers["user-agent"]).toBe(BACKGROUND_EXIT_USER_AGENT);
 		expect(JSON.parse(received[0].body)).toEqual(request);
 		// Used once, then deleted.
 		await expect(stat(directory)).rejects.toThrow();
