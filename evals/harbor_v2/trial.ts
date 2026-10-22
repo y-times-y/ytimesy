@@ -17,6 +17,7 @@ import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
 import { newSidekickState } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
+import { budgetTokenWeight } from "../../src/domain/subagent-usage";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
 import {
@@ -48,7 +49,8 @@ import {
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
 	type CheckerRun,
-	checkerStepGuard,
+	childBudgetUsed,
+	childStepGuard,
 	finalAnswer,
 	harborReviewDeps,
 	harborReviewLoop,
@@ -252,7 +254,7 @@ const sum = (usages: (ApiTokenUsage | null)[]) =>
 		null,
 	);
 
-function lastUsage(
+export function lastUsage(
 	events: readonly TimedEvent[],
 	from = 0,
 	to = events.length,
@@ -443,6 +445,18 @@ export async function runHarborTrial(
 			const onChildEvent = async (event: ApiAgentEvent) => {
 				session.events.push({ at: new Date(now()).toISOString(), event });
 			};
+			// The sidekick's state in its budget gives it the product's sidekick
+			// role block (no commit, stash, reset or branch switch: publishing
+			// stays the lead's) and the product's per-round token cap.
+			const childBudget: SubagentBudget =
+				session.role === "sidekick"
+					? {
+							...budget,
+							sidekick: newSidekickState(budget, session.startedAt, {
+								model: session.model.modelId,
+							}),
+						}
+					: budget;
 			const child = await harborHarness({
 				workspace: {
 					...workspace,
@@ -461,30 +475,23 @@ export async function runHarborTrial(
 				onEvent: onChildEvent,
 				subagent: {
 					role: session.role === "sidekick" ? "writer" : "checker",
-					// The sidekick's state in its budget gives it the product's
-					// sidekick role block (no commit, stash, reset or branch switch:
-					// publishing stays the lead's).
-					budget:
-						session.role === "sidekick"
-							? {
-									...budget,
-									sidekick: newSidekickState(budget, session.startedAt, {
-										model: session.model.modelId,
-									}),
-								}
-							: budget,
+					budget: childBudget,
 					readOnly: options.readOnly,
 				},
 				...(options.extraTools ? { extraTools: options.extraTools } : {}),
 			});
 			session.instructions = child.instructions;
 			session.tools = child.tools;
-			const stepGuard = checkerStepGuard({
-				budget,
+			const roundStart = session.events.length;
+			const stepGuard = childStepGuard({
+				role: session.role,
+				budget: childBudget,
 				startedAt: started,
-				usage: () => lastUsage(session.events),
+				events: session.events,
+				from: roundStart,
+				weight: budgetTokenWeight(session.model.modelId, config.modelId),
 			});
-			session.starts.push(session.events.length);
+			session.starts.push(roundStart);
 			try {
 				const messages = await runModelAgent(
 					{
@@ -517,6 +524,17 @@ export async function runHarborTrial(
 				session.reports.push(report);
 				return report;
 			} catch (error) {
+				const used = childBudgetUsed(error);
+				if (used) {
+					log(`${session.role} ${session.id} stopped: ${used.message}`);
+					const report = {
+						outcome: "failed" as const,
+						report: "",
+						budgetUsed: used.reason,
+					};
+					session.reports.push(report);
+					return report;
+				}
 				log(
 					`${session.role} ${session.id} failed: ${error instanceof Error ? error.message : String(error)}${providerDetail(error)}`,
 				);

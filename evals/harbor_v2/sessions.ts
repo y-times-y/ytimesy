@@ -19,6 +19,8 @@ export type TimedEvent = { at: string; event: ApiAgentEvent };
 export type ChildReport = {
 	readonly outcome: "completed" | "failed";
 	readonly report: string;
+	/** Set when the round stopped at its token budget: why (a failed round otherwise failed). */
+	readonly budgetUsed?: string;
 };
 
 export type ChildSession = {

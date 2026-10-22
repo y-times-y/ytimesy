@@ -254,9 +254,10 @@ export function latestUserRequestId(items: readonly SessionItem[]) {
 
 /**
  * The limits and use a step check compares. An ordinary agent's are its
- * budget and its whole life; a sidekick's steps and minutes count from the
- * round's start, and its tokens against the round's cap or what is left of
- * its lifetime tokens, whichever is less.
+ * budget and its whole life; a sidekick's steps, minutes and tokens count
+ * from the round's start, each round against its own cap. Its rounds are not
+ * capped together: SIDEKICK_MAX_ROUNDS per user request bounds them, and the
+ * user's usage limits bound the total.
  */
 export function subagentBudgetCheck(
 	budget: SubagentBudget,
@@ -287,10 +288,7 @@ export function subagentBudgetCheck(
 	return {
 		limits: {
 			...rest,
-			tokens: Math.max(
-				0,
-				Math.min(state.roundTokens, budget.tokens - state.roundStartTokens),
-			),
+			tokens: state.roundTokens,
 			...(stopAtStep === undefined
 				? {}
 				: { stopAtStep: Math.max(0, stopAtStep - state.roundStartSteps) }),

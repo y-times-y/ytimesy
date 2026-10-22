@@ -9,16 +9,18 @@ import { SessionItemId } from "../../src/domain/ids";
 import type { ModelBilling } from "../../src/domain/model-pricing";
 import type { ReviewLoopState } from "../../src/domain/review-loop";
 import type { SessionItem } from "../../src/domain/session-item";
+import { subagentBudgetCheck } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import { subagentWrapUpNotice } from "../../src/domain/subagent-instructions";
+import { usageTokens } from "../../src/domain/subagent-usage";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { captureConversationCode } from "../../src/server/services/conversation-code-checkpoint";
 import {
 	createReviewLoop,
 	type ReviewLoopDeps,
 } from "../../src/server/services/review-loop";
-import type { TrialSessions } from "./sessions";
-import { runsUsage } from "./trial";
+import type { TimedEvent, TrialRole, TrialSessions } from "./sessions";
+import { lastUsage, runsUsage } from "./trial";
 
 /**
  * review=on inside a Harbor trial: the product's review loop
@@ -253,41 +255,93 @@ export function finalAnswer(messages: readonly ModelMessage[]) {
 	return "";
 }
 
+/** A child's round stopped at its token budget (the product's SubagentBudgetExhausted). */
+export class ChildBudgetUsed extends Error {
+	constructor(
+		readonly role: TrialRole,
+		readonly reason: string,
+	) {
+		super(`${CHILD_ROLE_LABELS[role]} budget used (${reason}).`);
+		this.name = "ChildBudgetUsed";
+	}
+}
+
+const CHILD_ROLE_LABELS: Record<TrialRole, string> = {
+	sidekick: "Sidekick",
+	checker: "Checker",
+	checkerWorker: "Checker worker",
+	classifier: "Classifier",
+};
+
+/** The ChildBudgetUsed anywhere in an error's cause chain. */
+export function childBudgetUsed(error: unknown): ChildBudgetUsed | null {
+	for (let current = error, depth = 0; current && depth < 8; depth++) {
+		if (current instanceof ChildBudgetUsed) return current;
+		current = (current as { cause?: unknown }).cause;
+	}
+	return null;
+}
+
 /**
- * The checker's per-step budget checks, as the product's subagent guard
- * does: a wrap-up notice once 90% of its steps or minutes are used (the
- * minutes notice a minute earlier, so a verdict still fits), and a stop at
- * its token budget.
+ * A child's per-step budget checks in one round, as the product's subagent
+ * guard does: a wrap-up notice once 90% of its steps, minutes or tokens are
+ * used (the minutes notice a minute earlier, so a verdict still fits), and a
+ * stop at its token budget. Tokens are this round's own: usage events are
+ * cumulative within one model run, so the last one since the round's first
+ * event, never an earlier round's; weighted like the product's budget tokens.
+ * A sidekick's token cap is the product's per-round cap (subagentBudgetCheck),
+ * not its budget across rounds.
  */
-export function checkerStepGuard(input: {
+export function childStepGuard(input: {
+	role: TrialRole;
 	budget: SubagentBudget;
 	startedAt: number;
-	usage: () => ApiTokenUsage | null;
+	events: readonly TimedEvent[];
+	/** The round's first event index. */
+	from: number;
+	/** budgetTokenWeight of the child's model against the builder's. */
+	weight?: number;
 	now?: () => number;
 }) {
 	let steps = 0;
 	let warned = false;
+	const limit = subagentBudgetCheck(
+		input.budget,
+		{ steps: 0, tokens: 0, createdAt: new Date(input.startedAt).toISOString() },
+		input.startedAt,
+	).limits.tokens;
+	const prefix = input.budget.sidekick ? "this round, " : "";
+	const count = (value: number) => Math.round(value).toLocaleString("en-US");
 	return async (messages: ModelMessage[]): Promise<ModelMessage[]> => {
 		steps++;
 		const now = (input.now ?? Date.now)();
-		const usage = input.usage();
-		const tokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
-		if (tokens >= input.budget.tokens)
-			throw new Error(`Checker token budget used (${tokens}).`);
+		const tokens =
+			usageTokens(lastUsage(input.events, input.from)) * (input.weight ?? 1);
+		if (tokens >= limit)
+			throw new ChildBudgetUsed(
+				input.role,
+				`${prefix}tokens ${count(tokens)}/${count(limit)}`,
+			);
 		const elapsedMinutes = (now - input.startedAt) / 60_000;
 		const reason =
 			steps >= Math.ceil(input.budget.steps * 0.9)
 				? `${steps} of ${input.budget.steps} steps`
 				: elapsedMinutes >= input.budget.minutes * 0.9 - 1
 					? `${elapsedMinutes.toFixed(1)} of ${input.budget.minutes} minutes`
-					: tokens >= input.budget.tokens * 0.9
-						? `${tokens} of ${input.budget.tokens} tokens`
+					: tokens >= limit * 0.9
+						? `${count(tokens)} of ${count(limit)} tokens`
 						: null;
 		if (!reason || warned) return messages;
 		warned = true;
 		return [
 			...messages,
-			{ role: "user", content: subagentWrapUpNotice(reason, "checker") },
+			{
+				role: "user",
+				content: subagentWrapUpNotice(
+					`${prefix}${reason}`,
+					input.role === "sidekick" ? "writer" : "checker",
+				),
+			},
 		];
 	};
 }

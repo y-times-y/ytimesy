@@ -97,11 +97,18 @@ export function fusionLead(input: {
 		}
 		const report = await input.runRound(session, brief, { readOnly: false });
 		const files = await input.changedFiles().catch(() => []);
+		// The product's round outcomes: a round stopped at its budget is not a failure.
+		const outcome =
+			report.outcome === "completed"
+				? ("finished" as const)
+				: report.budgetUsed
+					? ("budget exhausted" as const)
+					: ("failed" as const);
 		input.trace.rounds.push({
 			sessionId: session.id,
 			n,
 			kind,
-			outcome: report.outcome,
+			outcome,
 		});
 		const canSwitch = !!input.escalation;
 		const summary = {
@@ -113,10 +120,7 @@ export function fusionLead(input: {
 			report: report.report,
 			commands: [],
 			diff: { files, added: 0, removed: 0 },
-			outcome:
-				report.outcome === "completed"
-					? ("completed" as const)
-					: ("failed" as const),
+			outcome,
 			signals: [],
 			canSwitch,
 		} as Parameters<typeof classifierMessage>[0];
@@ -173,8 +177,10 @@ export function fusionLead(input: {
 				: {}),
 		});
 		return [
-			`Sidekick ${session.id} round ${n} (${kind}) ${report.outcome === "completed" ? "reported" : "failed"}:`,
-			report.report || "(no report)",
+			report.budgetUsed
+				? `Sidekick ${session.id} round ${n} (${kind}) stopped: sidekick budget used (${report.budgetUsed}). Its edits so far are in your checkout; it wrote no report.`
+				: `Sidekick ${session.id} round ${n} (${kind}) ${report.outcome === "completed" ? "reported" : "failed"}:`,
+			report.budgetUsed ? "" : report.report || "(no report)",
 			files.length
 				? `Changed files in your checkout now:\n${files.join("\n")}`
 				: "",
@@ -276,7 +282,9 @@ export function checkerWorkerTool(input: {
 		const report = await input.runRound(worker, checkerWorkerBrief(brief), {
 			readOnly: true,
 		});
-		return `Worker ${worker.id} ${report.outcome}:\n${report.report || "(no report)"}`;
+		return report.budgetUsed
+			? `Worker ${worker.id} stopped: checker worker budget used (${report.budgetUsed}).`
+			: `Worker ${worker.id} ${report.outcome}:\n${report.report || "(no report)"}`;
 	};
 	return {
 		[CHECKER_WORKER_TOOL]: tool({
