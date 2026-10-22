@@ -667,7 +667,7 @@ describe("runHarborTrial with review=on", () => {
 				entry.event.type === "tool-result" && entry.event.name === "bash",
 		).event;
 		expect(JSON.stringify(bash.output)).toContain("round-2");
-		expect(JSON.stringify(bash.output)).not.toContain("130");
+		expect(bash.output.status).not.toBe(130);
 		expect(trace.fusion.decisions).toHaveLength(2);
 		expect(trace.fusion.decisions[1]).toMatchObject({
 			decision: "on_track",
