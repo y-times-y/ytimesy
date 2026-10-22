@@ -99,8 +99,8 @@ export function SignUp({
 				setIsCompromised(true);
 			}
 
-			form.setFieldValue("password", "");
-			form.setFieldValue("confirmPassword", "");
+			form.resetField("password");
+			form.resetField("confirmPassword");
 			resetFetchOptions();
 		},
 		onSuccess: (_data, { email }) => {
