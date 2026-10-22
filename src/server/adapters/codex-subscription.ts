@@ -111,21 +111,32 @@ export function subscriptionLimits(
 	return { updatedAt: now / 1000, limits: { rateLimitsByLimitId: buckets } };
 }
 
-async function subscriptionRequest(userId: string, path: string) {
+async function subscriptionRequest(
+	userId: string,
+	path: string,
+	/** A token read moments ago (sharedSubscriptionConnection); see subscriptionFetch. */
+	loaded?: { accessToken: string; chatgptAccountId: string },
+) {
 	// Room for one blocked egress path (6s to headers) and the next one.
 	const signal = AbortSignal.timeout(12_000);
 	let response: Response;
 	try {
-		response = await subscriptionFetch(userId, path, {
-			headers: {
-				Accept: "application/json",
-				"User-Agent": "ytimesy/1.0",
-				Connection: "close",
+		response = await subscriptionFetch(
+			userId,
+			path,
+			{
+				headers: {
+					Accept: "application/json",
+					"User-Agent": "ytimesy/1.0",
+					Connection: "close",
+				},
+				// Return redirects for bounded HTTP diagnostics; never forward credentials.
+				redirect: "manual",
+				signal,
 			},
-			// Return redirects for bounded HTTP diagnostics; never forward credentials.
-			redirect: "manual",
-			signal,
-		});
+			undefined,
+			loaded,
+		);
 	} catch (error) {
 		if (
 			error instanceof CodexReconnectRequired ||
@@ -193,16 +204,58 @@ const catalogs = new Map<
 	}
 >();
 
+/**
+ * A step reads the account's token once: the catalog read and the model
+ * runtime that follow within seconds share it (each read is a database round
+ * trip and an unseal). Codex tokens are handed out with at least five minutes
+ * left, and a revoked one is answered 401 and re-read (withRevokedTokenRetry),
+ * so a token this recent is as good as a new read. A failed read is not kept.
+ */
+const CONNECTION_REUSE_MS = 20_000;
+type SubscriptionConnection = Awaited<
+	ReturnType<typeof subscriptionConnection>
+>;
+const connections = new Map<
+	string,
+	{ at: number; promise: Promise<SubscriptionConnection> }
+>();
+
+function sharedSubscriptionConnection(userId: string) {
+	const now = Date.now();
+	const cached = connections.get(userId);
+	if (cached && now >= cached.at && now - cached.at < CONNECTION_REUSE_MS)
+		return cached;
+	if (connections.size >= 1000 && !cached)
+		connections.delete(connections.keys().next().value as string);
+	const entry = { at: now, promise: subscriptionConnection(userId) };
+	connections.set(userId, entry);
+	entry.promise.catch(() => {
+		if (connections.get(userId) === entry) connections.delete(userId);
+	});
+	return entry;
+}
+
+/** Test hook: forget shared token reads between cases. */
+export function forgetSubscriptionConnectionsForTests() {
+	connections.clear();
+}
+
 function loadCatalog(
 	userId: string,
 	previous?: { catalog: Catalog; until: number },
 ) {
 	if (catalogs.size >= 1000 && !catalogs.has(userId))
 		catalogs.delete(catalogs.keys().next().value as string);
-	const promise = subscriptionRequest(
-		userId,
-		`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
-	).then((value) => catalogSchema.parse(value));
+	const promise = sharedSubscriptionConnection(userId)
+		.promise.catch(() => undefined)
+		.then((connection) =>
+			subscriptionRequest(
+				userId,
+				`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
+				connection,
+			),
+		)
+		.then((value) => catalogSchema.parse(value));
 	const entry: {
 		expires: number;
 		promise: Promise<Catalog>;
@@ -252,6 +305,8 @@ async function subscriptionCatalog(userId: string) {
  */
 export function warmCodexSubscriptionCatalog(userId: string) {
 	subscriptionCatalog(userId).catch(() => {});
+	// The model runtime's token read, likewise (sharedSubscriptionConnection).
+	sharedSubscriptionConnection(userId).promise.catch(() => {});
 }
 
 export async function codexSubscriptionCatalog(
@@ -282,9 +337,10 @@ export async function codexSubscriptionModel(
 ) {
 	// The catalog and the account's token are independent reads; a catalog
 	// failure is still reported first.
+	const shared = sharedSubscriptionConnection(userId);
 	const [listed, connected] = await Promise.allSettled([
 		subscriptionCatalog(userId),
-		subscriptionConnection(userId),
+		shared.promise,
 	]);
 	if (listed.status === "rejected") throw listed.reason;
 	const catalog = listed.value;
@@ -312,7 +368,7 @@ export async function codexSubscriptionModel(
 	// five more minutes); later requests and a 401 retry read it again.
 	let loaded: { tokens: typeof tokens; at: number } | undefined = {
 		tokens,
-		at: Date.now(),
+		at: shared.at,
 	};
 	const cacheKey = promptCacheScopeKey({
 		userId,
