@@ -15,18 +15,50 @@ import {
  * they have no recorded acceptance or accepted an older version. The rest of
  * the app stays behind the dialog until they accept or sign out.
  */
-export function LegalAcceptancePrompt() {
+function useLegalAcceptance() {
 	const session = authClient.useSession();
 	const userId = session.data?.user.id;
-	const queryClient = useQueryClient();
 	const read = useServerFn(getLegalAcceptanceFn);
-	const accept = useServerFn(acceptLegalTermsFn);
 	const status = useQuery({
 		queryKey: ["legal-acceptance", userId],
 		queryFn: () => read(),
 		enabled: Boolean(userId),
 		staleTime: Number.POSITIVE_INFINITY,
 	});
+	return { session, userId, status };
+}
+
+/**
+ * Whether the Terms prompt is (or may be about to be) on screen, so other
+ * prompts wait their turn: one prompt at a time.
+ */
+export function legalPromptPending(input: {
+	readonly sessionPending: boolean;
+	readonly userId: string | undefined;
+	readonly statusPending: boolean;
+	readonly current: boolean | undefined;
+}): boolean {
+	if (input.sessionPending) return true;
+	if (!input.userId) return false;
+	if (input.statusPending) return true;
+	return input.current !== true;
+}
+
+export function useLegalPromptPending(): boolean {
+	const { session, userId, status } = useLegalAcceptance();
+	return legalPromptPending({
+		sessionPending: session.isPending,
+		userId,
+		statusPending: status.isPending,
+		// A failed read never shows the Terms prompt, so it holds nothing back.
+		current: status.isError ? true : status.data?.current,
+	});
+}
+
+export function LegalAcceptancePrompt() {
+	const { userId, status } = useLegalAcceptance();
+	const queryClient = useQueryClient();
+	const accept = useServerFn(acceptLegalTermsFn);
 	const save = useMutation({
 		mutationFn: () => accept({ data: CURRENT_LEGAL_VERSIONS }),
 		onSuccess: () =>
