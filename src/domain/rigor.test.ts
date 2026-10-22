@@ -75,6 +75,12 @@ describe("rigor", () => {
 		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
 			"run the deliverable as an outside user would",
 		);
+		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
+			"Reproduce it using only the existing calls a normal caller would make, and see it fail before your fix and pass after. A fix that needs callers to adopt a new method, protocol or extra calls does not fix that symptom",
+		);
+		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
+			"Never declare a reported symptom unresolvable while time remains.",
+		);
 	});
 
 	it("reads the last requirements block of a text, one clipped item per line", () => {

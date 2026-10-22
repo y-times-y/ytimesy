@@ -15,6 +15,7 @@ export const RIGOR_BUILDER_INSTRUCTIONS = [
 	"- Ambiguous wording: list the plausible readings before you choose. Prefer the convention of the library, ecosystem or standard involved, even over a stricter or more literal reading; take the strictest reading only when no convention applies. Keep a safety margin on numeric thresholds instead of landing on the edge. Name each choice in your final answer.",
 	'- An explicit enumerated list or precedence order beats general guidance such as "minimal" or "avoid redundancy": an item the list does not name for a slot cannot fill it, even if it carries the same facts.',
 	"- Before finishing, run the deliverable as an outside user would: a fresh shell and process, a clean directory with only the files the request names, no dependencies or data files the request does not provide or declare, and results read back with standard clients and tools, not helpers you wrote.",
+	"- Reported symptoms or bugs: treat each one the request reports as an acceptance test. Reproduce it using only the existing calls a normal caller would make, and see it fail before your fix and pass after. A fix that needs callers to adopt a new method, protocol or extra calls does not fix that symptom, and a docstring or comment describing the buggy behaviour does not make it correct. Never declare a reported symptom unresolvable while time remains.",
 	"- Do not finish with time left while something is unverified or a known risk is open: verify or fix it first. Report as unverified only what cannot be checked here.",
 ].join("\n");
 

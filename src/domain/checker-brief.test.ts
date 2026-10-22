@@ -123,13 +123,13 @@ describe("independentReviewBrief", () => {
 		expect(brief).not.toMatch(/mvcc|lsm|compaction|flush/i);
 	});
 
-	it("puts the public API, the spec over code comments, and output-changing readings in the brief", () => {
+	it("checks each stated symptom through the existing API first, over code comments, and fails output-changing readings", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(
-			"Hidden tests exercise the existing public API and entry points: a fix that works only through new methods, flags or caller opt-in does not fix the reported symptom.",
+			"1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them).",
 		);
 		expect(brief).toContain(
-			"Comments and docstrings in the code under repair may describe the buggy behaviour; the request and its spec or design docs win over them.",
+			"A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it.",
 		);
 		expect(brief).toContain(
 			"A credible alternative reading of a decision rule or spec that changes the output is a failure (both readings, the output each gives), not an assumption to note before passing.",
