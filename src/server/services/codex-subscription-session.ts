@@ -48,6 +48,7 @@ import {
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
 import { pinnedTurnFailover } from "./model-failover";
+import { commitChatBranchForSubmission } from "./session-branch";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
@@ -200,17 +201,27 @@ export async function sendSubscriptionTask(
 			harness: "codex",
 			firstMessage: input.text,
 		});
-		// Opening claimed the chat; a rejected send hands it back.
+		// Opening claimed the chat; a rejected send hands it back. Its branch
+		// is committed as for a send into an open chat, so the turn knows the
+		// commit its new branch starts from before its VM is ready.
+		const projectId = scope.projectId;
 		return releasingChatClaimOnFailure(
 			scope.userId,
 			opened.id,
 			input.text,
-			() =>
-				sendSubscriptionTask(
+			async () => {
+				await commitChatBranchForSubmission({
+					userId: scope.userId,
+					projectId,
+					sessionId: opened.id,
+					text: input.text,
+				});
+				return sendSubscriptionTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
-				),
+				);
+			},
 		);
 	}
 	const continuing = Boolean(input.continueOn);
