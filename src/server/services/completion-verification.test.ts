@@ -35,6 +35,10 @@ vi.mock("./api-command-scope", () => ({
 	stopApiTurnCommands: vi.fn(async () => {}),
 }));
 const run = promisify(execFile);
+
+// Every test builds and verifies real git repositories; slow under a loaded
+// full-suite run.
+vi.setConfig({ testTimeout: 30_000 });
 const roots: string[] = [];
 beforeEach(() => {
 	records.find.mockReset().mockResolvedValue(null);
