@@ -22,6 +22,7 @@ import {
 import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import { composerProjectNotice } from "#/domain/composer-project";
 import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
@@ -369,6 +370,7 @@ export function SessionLauncher({
 		}[]
 	>([]);
 	const [helperError, setHelperError] = useState<string | null>(null);
+	const [noProject, setNoProject] = useState<string | null>(null);
 	useEffect(() => {
 		setHelperOutbox((current) => {
 			const next = current.filter((sent) => {
@@ -553,6 +555,12 @@ export function SessionLauncher({
 
 	function sendText(typed: string, continueOn?: string) {
 		const text = sendableDraft(typed);
+		const projectNotice = text
+			? composerProjectNotice({ selectedProjectId: selectedProject?.id })
+			: null;
+		setNoProject(projectNotice);
+		// The text stays in the box; nothing is sent until there is a project.
+		if (projectNotice) return;
 		if (!composerCanSend(text, false) || attachmentError) return;
 		const files = attachments;
 		captureAnalytics("prompt_submitted", {
@@ -931,6 +939,18 @@ export function SessionLauncher({
 						{helperError ? (
 							<p className="session-attachment-error" role="alert">
 								{helperError}
+							</p>
+						) : null}
+						{noProject && !selectedProject ? (
+							<p className="session-attachment-error" role="alert">
+								{noProject}{" "}
+								<button
+									type="button"
+									className="session-inline-action"
+									onClick={() => onProjectPickerOpenChange?.(true)}
+								>
+									Connect GitHub
+								</button>
 							</p>
 						) : null}
 						{attachmentError && (
