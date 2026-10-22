@@ -592,6 +592,22 @@ export async function refreshWaitingApiTurns(
  * here. The chat reads idle only once no other turn of it is still running:
  * the active turn Stop also cancelled reports its own end when it finishes.
  */
+/**
+ * Puts a claimed durable turn whose hand-off to its chat failed back in the
+ * queue, so the next admission claims it again (with a new lease) instead of
+ * it waiting out its lease. Fenced by the lease it was claimed with: a chat
+ * that did receive it can no longer read or write it under that lease, so
+ * it still runs exactly once.
+ */
+export async function releaseClaimedApiTurn(turnId: string, leaseId: string) {
+	const result = await database().query(
+		`update api_turn set state='queued',lease_id=null,updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and executor='durable-object'`,
+		[turnId, leaseId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
 export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {
 	const result = await database().query<SettledTurnRow>(
 		`with saved as (update api_turn set state='cancelled',updated_at=now()
