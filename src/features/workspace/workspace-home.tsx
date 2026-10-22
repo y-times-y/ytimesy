@@ -54,7 +54,11 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
+	SEND_TIMEOUT_MESSAGE,
+	SEND_TIMEOUT_MS,
 	type SessionProgress,
+	sessionReadInterval,
+	withinTimeout,
 } from "#/domain/session-progress";
 import {
 	backgroundTurnPollChatIds,
@@ -342,6 +346,9 @@ export function WorkspaceHome({
 		[queryClient, selectedProject?.id],
 	);
 	const liveProgress = useRef<LiveProgressMark>(null);
+	/** The chat whose progress stream is open now (its view is then read rarely). */
+	const progressStreamOpen = useRef<string | null>(null);
+	const refetchOpenSession = useRef<() => unknown>(() => {});
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
@@ -760,9 +767,18 @@ export function WorkspaceHome({
 		enabled: Boolean(
 			activeProjectId && activeSessionId && !composerDraft && !composerBusy,
 		),
-		refetchInterval: pollSession ? RUNNING_TURN_POLL_MS : false,
+		// Progress arrives on the stream while it is open; polling stands in
+		// only while it is not.
+		refetchInterval: () =>
+			sessionReadInterval({
+				polling: pollSession,
+				streamOpen:
+					!!activeSessionId && progressStreamOpen.current === activeSessionId,
+				pollMs: RUNNING_TURN_POLL_MS,
+			}),
 		refetchIntervalInBackground: true,
 	});
+	refetchOpenSession.current = () => void sessionRead.refetch();
 	// The save hook commits shortly after a turn completes and records its
 	// marker on the chat; read the chat again so it shows without a reload.
 	const memoryInChat = session.items.some(
@@ -963,12 +979,22 @@ export function WorkspaceHome({
 					.catch(() => undefined);
 			}
 		});
+		source.onopen = () => {
+			progressStreamOpen.current = activeSessionId;
+		};
 		source.onerror = () => {
 			liveProgress.current = null;
+			// Polling stands in until the stream reconnects.
+			if (progressStreamOpen.current === activeSessionId) {
+				progressStreamOpen.current = null;
+				refetchOpenSession.current();
+			}
 		};
 		return () => {
 			source.close();
 			liveProgress.current = null;
+			if (progressStreamOpen.current === activeSessionId)
+				progressStreamOpen.current = null;
 		};
 	}, [activeProjectId, activeSessionId, session.turnStatus, harnessId]);
 
@@ -1310,13 +1336,19 @@ export function WorkspaceHome({
 		try {
 			// A new chat's first send has no chat id yet: the server finds the
 			// chat that queued this message id, if any.
-			const landed = await getCodexSession({
-				data: {
-					projectId: pending.scope.projectId,
-					harnessId: pending.scope.harnessId,
-					...(sessionId ? { sessionId } : { userMessageId: pending.messageId }),
-				},
-			});
+			const landed = await withinTimeout(
+				getCodexSession({
+					data: {
+						projectId: pending.scope.projectId,
+						harnessId: pending.scope.harnessId,
+						...(sessionId
+							? { sessionId }
+							: { userMessageId: pending.messageId }),
+					},
+				}),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			if (
 				!landed?.connection ||
 				!sendWasQueued(landed.items, pending.messageId)
@@ -1376,24 +1408,30 @@ export function WorkspaceHome({
 				);
 			}
 			requested = true;
-			const next = await sendTask({
-				data: {
-					...scope,
-					sessionId: scope.sessionId ?? view.agentSessionId ?? undefined,
-					text: pending.text,
-					modelId: resolvedModel,
-					userMessageId: pending.messageId,
-					...(pending.variant ? { variant: pending.variant } : {}),
-					...(pending.speed
-						? { speed: pending.speed, fast: pending.speed === "fast" }
-						: {}),
-					...(pending.approvesPlan ? { approvesPlan: true } : {}),
-					...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
-					...(pending.attachments?.length
-						? { attachments: [...pending.attachments] }
-						: {}),
-				},
-			});
+			// A send that hangs is reported (and checked for having landed)
+			// instead of leaving the message showing as sent.
+			const next = await withinTimeout(
+				sendTask({
+					data: {
+						...scope,
+						sessionId: scope.sessionId ?? view.agentSessionId ?? undefined,
+						text: pending.text,
+						modelId: resolvedModel,
+						userMessageId: pending.messageId,
+						...(pending.variant ? { variant: pending.variant } : {}),
+						...(pending.speed
+							? { speed: pending.speed, fast: pending.speed === "fast" }
+							: {}),
+						...(pending.approvesPlan ? { approvesPlan: true } : {}),
+						...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
+						...(pending.attachments?.length
+							? { attachments: [...pending.attachments] }
+							: {}),
+					},
+				}),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			// A refused request (an origin check, an expired session) has no view.
 			if (!next?.connection)
 				throw new Error("The message could not be sent. Retry.");
