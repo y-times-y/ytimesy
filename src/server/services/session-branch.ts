@@ -5,6 +5,7 @@ import {
 } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
+	type AgentSessionRecord,
 	agentSessionForOwner,
 	projectBranchHeldByOtherSession,
 	saveSessionWorkingBranch,
@@ -22,8 +23,13 @@ export async function commitChatBranchForSubmission(input: {
 	projectId: string;
 	sessionId: string;
 	text: string;
+	/** The chat as the caller just read it (by id, for this user), saving a read. */
+	session?: AgentSessionRecord | null;
 }) {
-	const session = await agentSessionForOwner(input.userId, input.sessionId);
+	const session =
+		input.session !== undefined && input.session?.id === input.sessionId
+			? input.session
+			: await agentSessionForOwner(input.userId, input.sessionId);
 	if (!session || session.projectId !== input.projectId)
 		throw new Error("This chat is not available.");
 	if (session.parentSessionId) return session;

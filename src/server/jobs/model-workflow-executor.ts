@@ -149,6 +149,7 @@ export async function executeModelStep(
 			]),
 			limitReached: step.index > MAX_WORKFLOW_MODEL_STEPS,
 			resumed: claim.resumed,
+			startedAt,
 			waitDeadlineAt: commandWaitDeadline(
 				startedAt,
 				claim.remainingMs,

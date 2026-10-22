@@ -7,6 +7,7 @@ const fake = vi.hoisted(() => ({
 	owner: vi.fn(),
 	send: vi.fn(),
 	select: vi.fn(),
+	commit: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -15,7 +16,7 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	selectAgentSessionHarness: fake.select,
 }));
 vi.mock("#/server/services/session-branch", () => ({
-	commitChatBranchForSubmission: vi.fn(async () => {}),
+	commitChatBranchForSubmission: fake.commit,
 }));
 vi.mock("#/server/services/codex-subscription-session", () => ({
 	sendSubscriptionTask: fake.send,
@@ -82,4 +83,33 @@ it("adds no envelope when the runtime does not change", async () => {
 	expect(input.runtimeText).toBe("next");
 	expect(input.runtimeHandoff).toBeUndefined();
 	expect(fake.select).not.toHaveBeenCalled();
+});
+
+it("sends from the chat it read and its branch commit wrote, reading it once", async () => {
+	const read = {
+		id: "session",
+		projectId: "project",
+		harness: "codex",
+		turnStatus: "idle",
+		items: [],
+	};
+	const committed = { ...read, workingBranch: "ytimesy/next-session" };
+	fake.owner.mockResolvedValue(read);
+	fake.commit.mockResolvedValue(committed);
+	await Effect.runPromise(
+		sendHarnessWorkspaceTask({} as WorkspaceMachines, scope, {
+			text: "next",
+			modelId: "gpt-5.5",
+		}),
+	);
+	expect(fake.owner).toHaveBeenCalledOnce();
+	expect(fake.commit).toHaveBeenCalledWith(
+		expect.objectContaining({ sessionId: "session", session: read }),
+	);
+	expect(fake.send).toHaveBeenCalledWith(
+		scope,
+		expect.objectContaining({ runtimeText: "next" }),
+		false,
+		committed,
+	);
 });

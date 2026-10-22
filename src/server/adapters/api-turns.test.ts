@@ -80,41 +80,58 @@ it("does not retry a rejected lease or an authentication error", async () => {
 	expect(mocks.query).toHaveBeenCalledOnce();
 });
 
-it("bounds admission in the actual transaction before acquiring its lock", async () => {
-	mocks.query.mockImplementation(async (sql: string) => ({
-		rows: sql.includes("pg_try_advisory")
-			? [{ acquired: true }]
-			: sql.startsWith("update api_turn")
-				? [{ id: "turn" }]
-				: [],
-	}));
+it("claims in one round trip that bounds its own transaction before its lock", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [], rows: [] },
+		{ fields: [], rows: [] },
+		{ fields: [], rows: [] },
+		{ fields: [{ name: "id" }], rows: [{ id: "turn" }] },
+		{ fields: [], rows: [] },
+	]);
 	expect(await claimApiTurn(2, 8)).toEqual({ id: "turn" });
-	expect(mocks.query.mock.calls.slice(0, 4).map(([sql]) => sql)).toEqual([
+	expect(mocks.query).toHaveBeenCalledOnce();
+	const [batch, params] = mocks.query.mock.calls[0];
+	expect(params).toBeUndefined();
+	const statements = batch.split(";\n").map((part: string) => part.trim());
+	expect(statements.slice(0, 3)).toEqual([
 		"begin",
 		"set local idle_in_transaction_session_timeout = '30s'",
 		"set local statement_timeout = '20s'",
-		"select pg_try_advisory_xact_lock(81738419) as acquired",
 	]);
-	expect(mocks.query).toHaveBeenLastCalledWith("commit");
+	expect(statements[3]).toMatch(
+		/^with admission as \(select pg_try_advisory_xact_lock\(81738419\) as acquired\)\s+update api_turn/,
+	);
+	// The queued turn is read (and row-locked) only once the lock is held.
+	expect(statements[3]).toContain(
+		"select q.id from api_turn q where (select acquired from admission)",
+	);
+	expect(statements.at(-1)).toBe("commit;");
 	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
-it("does not wait or claim a turn when another worker owns admission", async () => {
-	mocks.query.mockResolvedValue({ rows: [{ acquired: false }] });
+it("reports no claim when nothing was admitted", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [], rows: [] },
+		{ fields: [{ name: "id" }], rows: [] },
+	]);
 	expect(await claimApiTurn(2, 8)).toBeNull();
-	expect(
-		mocks.query.mock.calls.some(([sql]) => sql.startsWith("update api_turn")),
-	).toBe(false);
-	expect(mocks.query).toHaveBeenLastCalledWith("commit");
-	expect(mocks.release).toHaveBeenCalledWith(false);
+});
+
+it("refuses an executor or chat id that is not a known literal", async () => {
+	await expect(
+		claimApiTurn(2, 8, "node'; drop table api_turn; --" as never),
+	).rejects.toThrow("Unknown turn executor.");
+	await expect(claimApiTurn(2, 8, "node", "x' or '1'='1")).rejects.toThrow(
+		"Invalid chat id.",
+	);
+	expect(mocks.query).not.toHaveBeenCalled();
 });
 
 it("discards a connection whose rollback failed without hiding the claim error", async () => {
 	const failure = new Error("connection lost during claim");
 	mocks.query.mockImplementation(async (sql: string) => {
-		if (sql.includes("pg_try_advisory")) throw failure;
 		if (sql === "rollback") throw new Error("rollback unavailable");
-		return { rows: [] };
+		throw failure;
 	});
 	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
 	expect(mocks.release).toHaveBeenCalledWith(true);
@@ -123,8 +140,8 @@ it("discards a connection whose rollback failed without hiding the claim error",
 it("rolls back and releases a healthy connection after a claim failure", async () => {
 	const failure = new Error("statement timed out");
 	mocks.query.mockImplementation(async (sql: string) => {
-		if (sql.includes("pg_try_advisory")) throw failure;
-		return { rows: [] };
+		if (sql === "rollback") return { rows: [] };
+		throw failure;
 	});
 	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
 	expect(mocks.query).toHaveBeenLastCalledWith("rollback");
@@ -148,27 +165,27 @@ it("inherits same-model subscription settings through owner-scoped ancestors", a
 	).toBeNull();
 });
 
+/** The admission gate's answer: connected, the chat idle, nothing queued yet. */
+const queueable = async (sql: string) => ({
+	rows: sql.startsWith("with connection as")
+		? [{ connected: true, found: true, turn_status: "idle", existing: false }]
+		: [],
+});
+
 it("checks owner subscription and queues Codex without an API connection", async () => {
-	mocks.query.mockImplementation(async (sql: string) => ({
-		rows: sql.includes("agent_account")
-			? [{}]
-			: sql.startsWith("select id,turn_status")
-				? [{ id: "chat", turn_status: "idle" }]
-				: [],
-	}));
+	mocks.query.mockImplementation(queueable);
 	await enqueueApiTurn(input);
-	expect(mocks.query).toHaveBeenCalledWith(
-		expect.stringContaining("agent_account"),
-		["owner"],
+	const gate = mocks.query.mock.calls.find(([sql]) =>
+		sql.startsWith("with connection as"),
 	);
-	expect(mocks.query).not.toHaveBeenCalledWith(
-		expect.stringContaining("select id from model_connection"),
-		expect.anything(),
+	expect(gate?.[0]).toContain("from agent_account where user_id=$2");
+	expect(gate?.[0]).not.toContain("model_connection");
+	expect(gate?.[1]).toEqual(["chat", "owner", null]);
+	const queued = mocks.query.mock.calls.find(([sql]) =>
+		sql.startsWith("with queued as (insert into api_turn"),
 	);
-	expect(mocks.query).toHaveBeenCalledWith(
-		expect.stringContaining("set harness=$5"),
-		["chat", "owner", "model", "[]", "codex"],
-	);
+	expect(queued?.[0]).toContain("update agent_session set harness=$14");
+	expect(queued?.[1].slice(-2)).toEqual(["model", "codex"]);
 	expect(mocks.release).toHaveBeenCalled();
 	expect(mocks.capture).toHaveBeenCalledWith(
 		"owner",
@@ -181,13 +198,6 @@ it("checks owner subscription and queues Codex without an API connection", async
 });
 
 describe("waking the durable executor for a queued turn", () => {
-	const queueable = async (sql: string) => ({
-		rows: sql.includes("agent_account")
-			? [{}]
-			: sql.startsWith("select id,turn_status")
-				? [{ id: "chat", turn_status: "idle" }]
-				: [],
-	});
 	beforeEach(() => {
 		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
 		mocks.query.mockImplementation(queueable);

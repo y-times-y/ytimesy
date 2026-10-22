@@ -178,6 +178,8 @@ import {
 } from "../services/fusion-lead";
 import {
 	harnessLifecycleHooks,
+	LIFECYCLE_CONFIG_PATH,
+	lifecycleConfigFromFile,
 	lifecycleHookConfig,
 } from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -237,6 +239,11 @@ import {
 	turnMemory,
 } from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
+import {
+	type EarlyRequestReason,
+	type TurnTiming,
+	turnTiming,
+} from "../services/turn-timing";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
@@ -278,6 +285,8 @@ type ApiTurnStep = {
 	waitDeadlineAt?: number;
 	/** The same step is being re-run after its executor restarted mid-step. */
 	resumed?: boolean;
+	/** Epoch ms the executor started this step (its claim), for its timing line. */
+	startedAt?: number;
 };
 
 /**
@@ -308,15 +317,40 @@ export async function runApiTurn(
 	turn: ApiTurn,
 	step?: ApiTurnStep,
 ): Promise<ApiTurnStepOutcome> {
-	// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
-	for (let continued = false; ; continued = true) {
-		const outcome = await runApiTurnAttempt(machines, turn, step, continued);
-		if (typeof outcome === "string") {
-			if (outcome !== "continue") forgetTurnMemo(turn.id);
-			return outcome;
+	// A durable step logs where its time went (turn-timing.ts).
+	const timing = step
+		? turnTiming({
+				turnId: turn.id,
+				step: step.index,
+				startedAt: step.startedAt ?? Date.now(),
+				queuedAt: turn.queued_at_ms ?? undefined,
+			})
+		: undefined;
+	timing?.mark("turnStart");
+	let ended = "error";
+	try {
+		// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
+		for (let continued = false; ; continued = true) {
+			const outcome = await runApiTurnAttempt(
+				machines,
+				turn,
+				step,
+				continued,
+				timing,
+			);
+			if (typeof outcome === "string") {
+				if (outcome !== "continue") forgetTurnMemo(turn.id);
+				ended = outcome;
+				return outcome;
+			}
+			if (step) {
+				ended = "failed-over";
+				return "continue";
+			}
+			turn = outcome.failedOver;
 		}
-		if (step) return "continue";
-		turn = outcome.failedOver;
+	} finally {
+		timing?.write(ended);
 	}
 }
 
@@ -326,6 +360,7 @@ async function runApiTurnAttempt(
 	step: ApiTurnStep | undefined,
 	/** The local worker is continuing this turn on a fallback route. */
 	continued: boolean,
+	timing?: TurnTiming,
 ): Promise<ApiTurnStepOutcome | { failedOver: ApiTurn }> {
 	const abort = new AbortController();
 	// The executor's step budget and turn deadline abort with a TimeoutError.
@@ -448,6 +483,8 @@ async function runApiTurnAttempt(
 	// this step ends, however it ends.
 	let memoryLoading: Promise<TurnMemory | null> = Promise.resolve(null);
 	let memoryCloned: Promise<void> | undefined;
+	/** The clone once the workspace started it (settled with it). */
+	let memoryCloning: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -503,6 +540,29 @@ async function runApiTurnAttempt(
 				heartbeatBusy = false;
 			});
 	}, 1000);
+	// Reads no lease holder changes (the account's Codex sign-in, the model
+	// connection, the eval user's variant) start before the coordination
+	// lease is acquired; nothing uses them unless the turn then owns it.
+	const subscription = subscriptionTurnSettings(route.connectionRevision);
+	const checkingCodexAuth =
+		subscription && !route.connectionId
+			? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
+			: Promise.resolve(false);
+	const loadingConnection =
+		!subscription && route.connectionId
+			? timed("turn:connection", () =>
+					loadModelConnection(turn.user_id, route.connectionId as string),
+				)
+			: Promise.resolve(null);
+	const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
+	const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+	for (const loading of [
+		checkingCodexAuth,
+		loadingConnection,
+		loadingVariant,
+		loadingRecordsRequests,
+	])
+		loading.catch(() => {});
 	try {
 		failureStage = "coordination";
 		if (
@@ -513,31 +573,23 @@ async function runApiTurnAttempt(
 		)
 			throw new Error("The conversation is already running or was stopped.");
 		coordinated = true;
+		timing?.mark("leaseAcquired");
 		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
-		const subscription = subscriptionTurnSettings(route.connectionRevision);
-		// Read-only setup reads overlap the lease renewal; nothing uses them
-		// unless the renewal confirms this turn still owns its lease.
+		// The session row is read once the lease is held (a code restore that
+		// held it may have changed the row); it overlaps the lease renewal, and
+		// nothing uses it unless the renewal confirms this turn still owns it.
 		// The turn already carries the session's items (every write mirrors both).
 		const loadingMetadata = timed("turn:metadata", () =>
 			agentSessionMetadataForOwner(turn.user_id, turn.session_id),
 		);
-		const checkingCodexAuth =
-			subscription && !route.connectionId
-				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
-				: Promise.resolve(false);
 		loadingMetadata.catch(() => {});
-		// Independent of the session row: read alongside it.
-		const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
-		const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
-		loadingVariant.catch(() => {});
-		loadingRecordsRequests.catch(() => {});
-		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
 			abort.signal.throwIfAborted();
 		}
 		const metadata = await loadingMetadata;
+		timing?.mark("leaseRenewed");
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
 		// A child without a subagent role belongs to the retired lead/child
@@ -601,10 +653,7 @@ async function runApiTurnAttempt(
 			webSearch = nativeWebSearchTools("openai");
 		} else {
 			if (!route.connectionId) throw new Error("Model connection was removed.");
-			const connection = await loadModelConnection(
-				turn.user_id,
-				route.connectionId,
-			);
+			const connection = await loadingConnection;
 			if (connection?.revision !== route.connectionRevision)
 				throw new Error(
 					"The API connection changed after this turn was submitted.",
@@ -615,6 +664,7 @@ async function runApiTurnAttempt(
 			if (officialProviderEndpoint(connection))
 				webSearch = nativeWebSearchTools(connection.provider);
 		}
+		timing?.mark("settings");
 		failoverScope = {
 			evaluation: Boolean(evaluation),
 			child: Boolean(owner.parentSessionId),
@@ -694,20 +744,59 @@ async function runApiTurnAttempt(
 			variant.lead === "off" &&
 			attemptLimit(variant.attempts) <= 1 &&
 			variant.review !== "on";
+		// Why not, for the step's timing line (decided further below when eligible).
+		const earlyIneligible: EarlyRequestReason | null = earlyFirstRequestEligible
+			? null
+			: !firstStep
+				? "not-first-step"
+				: step?.resumed
+					? "resumed"
+					: !writable || owner.parentSessionId || owner.agentRole
+						? "not-root-builder"
+						: evaluation
+							? "evaluation"
+							: "harness-variant";
+		if (earlyIneligible) timing?.early(false, earlyIneligible);
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
 			abort.signal,
 			workspaceReuse,
-			{ pinNewChatBase: earlyFirstRequestEligible },
+			{
+				pinNewChatBase: earlyFirstRequestEligible,
+				onPhase: (phase) => timing?.mark(phase),
+			},
 		);
 		let codePoint: Promise<void> | undefined;
+		/** Set once the checkout (without ~/memory) is ready. */
+		let checkoutReady = false;
 		// A root builder's repository path lets its next turn (and a new chat in
 		// the same project) build its first request before its VM is ready.
 		const remembersDirectory =
 			writable && !owner.parentSessionId && !evaluation;
-		const workspace = async () => {
+		// ~/memory is cloned beside the checkout, never inside it. The memory
+		// token is added to the redaction list before it reaches the VM, so
+		// only what reads ~/memory (tools) waits for the clone.
+		const cloneMemory = (ready: AgentToolWorkspace) =>
+			memoryLoading.then((memory) => {
+				if (!memory) return;
+				const redacted = (token: string) => {
+					if (!redact.includes(token)) redact.push(token);
+				};
+				memoryCloned ??= memory.prepareVm(ready, redacted).then(() => {
+					for (const token of memory.vmTokens()) redacted(token);
+					timing?.mark("memoryCloned");
+				});
+				return memoryCloned;
+			});
+		/**
+		 * The checkout, its code point, attachments and secrets, without
+		 * waiting for ~/memory: the prompt check, repository instructions and
+		 * memory's own path check read only the checkout.
+		 */
+		const checkout = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
+			timing?.mark("workspacePrepared");
 			if (remembersDirectory) {
 				const { cwd } = execution;
 				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
@@ -738,15 +827,8 @@ async function runApiTurnAttempt(
 				console.warn("Attached files could not be restored.", error);
 			});
 			// ~/memory is outside the repository, so it overlaps the code point.
-			const ready = execution;
-			const cloning = memoryLoading.then((memory) => {
-				if (!memory) return;
-				memoryCloned ??= memory.prepareVm(ready).then(() => {
-					for (const token of memory.vmTokens())
-						if (!redact.includes(token)) redact.push(token);
-				});
-				return memoryCloned;
-			});
+			memoryCloning ??= cloneMemory(execution);
+			memoryCloning.catch(() => {});
 			// Attachments go to a directory outside the repository, so they
 			// overlap the code point (a capture of the repository) too.
 			// A shared writer (lead mode fusion's sidekick) works in its lead's
@@ -767,8 +849,15 @@ async function runApiTurnAttempt(
 			}
 			await attachmentsWritten;
 			await secretsReady;
-			await cloning;
+			checkoutReady = true;
+			timing?.mark("checkoutReady");
 			return execution;
+		};
+		/** The whole workspace: the checkout and ~/memory, for tools. */
+		const workspace = async () => {
+			const ready = await checkout();
+			await memoryCloning;
+			return ready;
 		};
 		// A message delivered mid-turn brings its files to a machine already prepared;
 		// a machine prepared later restores them from the transcript.
@@ -843,9 +932,12 @@ async function runApiTurnAttempt(
 			writable,
 			readerCommands: reader,
 			waitDeadlineAt: step?.waitDeadlineAt,
+			repositoryWorkspace: checkout,
 		});
 		const hooks = harnessLifecycleHooks({
-			workspace,
+			// Hooks run in the checkout; the memory token is redacted from
+			// their output before the clone puts it on the VM.
+			workspace: checkout,
 			turnId: turn.id,
 			readOnly: !writable,
 			continuationCount: () =>
@@ -883,7 +975,8 @@ async function runApiTurnAttempt(
 			// last reported, and the configuration journaled for it. A new chat
 			// has no baseline yet; when its checkout is pinned to a commit known
 			// now (pinNewChatBase), the configuration another chat of the same
-			// user's project read from that very commit answers for it. Hooks
+			// user's project read from that very commit answers for it, else that
+			// commit's file read from GitHub (still the VM's baseline). Hooks
 			// come only from the repository at the baseline (.ytimesy/hooks.json;
 			// plugin hooks are not run), so the commit names all of it.
 			knownConfig: async () => {
@@ -905,13 +998,22 @@ async function runApiTurnAttempt(
 							)
 						: null;
 				const pinned = await pinning;
-				return pinned && owner.projectId
-					? readProjectDerivedValue(
-							owner.userId,
-							owner.projectId,
-							`lifecycle-hooks:${reportedDirectory}:${pinned}`,
-						)
-					: null;
+				if (!pinned || !owner.projectId) return null;
+				const journaled = await readProjectDerivedValue(
+					owner.userId,
+					owner.projectId,
+					`lifecycle-hooks:${reportedDirectory}:${pinned}`,
+				);
+				if (journaled !== null) return journaled;
+				// No chat of the project read that commit's configuration yet
+				// (its base branch moved): the same file at the same commit,
+				// read from GitHub while the VM boots.
+				return lifecycleConfigFromFile(
+					(await prepareWorkspace.pinnedBaseFile?.(
+						pinned,
+						LIFECYCLE_CONFIG_PATH,
+					)) ?? null,
+				);
 			},
 			once: (id, run) =>
 				journaledToolOperation(
@@ -932,7 +1034,7 @@ async function runApiTurnAttempt(
 		const rootChat = !owner.parentSessionId && !evaluation;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
-			workspace,
+			workspace: checkout,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
 			instructionMessages: {
@@ -977,18 +1079,22 @@ async function runApiTurnAttempt(
 		failureStage = "workspace";
 		const leanDirectoryKey = `${turn.id}:lean-working-directory`;
 		let reportedDirectory: string | null = null;
-		if (
-			surface.lean &&
-			earlyFirstRequestEligible &&
-			!(await settlesWithin(workspace(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
-		)
-			reportedDirectory = await timed("turn:checkoutDirectory", () =>
-				readPreparedCheckoutDirectory(
-					owner.userId,
-					owner.id,
-					owner.projectId ?? null,
-				),
-			).catch(() => null);
+		if (earlyFirstRequestEligible && !surface.lean)
+			timing?.early(false, "not-lean-surface");
+		if (surface.lean && earlyFirstRequestEligible) {
+			if (await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+				timing?.early(false, "workspace-ready");
+			else {
+				reportedDirectory = await timed("turn:checkoutDirectory", () =>
+					readPreparedCheckoutDirectory(
+						owner.userId,
+						owner.id,
+						owner.projectId ?? null,
+					),
+				).catch(() => null);
+				if (!reportedDirectory) timing?.early(false, "no-reported-directory");
+			}
+		}
 		// Whether the chat's known hook configuration has a UserPromptSubmit
 		// hook: read-only, so it runs beside the MCP, plugin and memory setup
 		// below and is awaited where the first request is decided.
@@ -996,12 +1102,12 @@ async function runApiTurnAttempt(
 			firstStep && reportedDirectory ? hooks.promptSubmitConfigured() : null;
 		const leanWorkingDirectory = surface.lean
 			? (reportedDirectory ??
-				(await turnMemo(leanDirectoryKey, async () => (await workspace()).cwd)))
+				(await turnMemo(leanDirectoryKey, async () => (await checkout()).cwd)))
 			: undefined;
 		if (reportedDirectory) {
 			const named = reportedDirectory;
 			setTurnMemo(leanDirectoryKey, named);
-			workspace().then(
+			checkout().then(
 				({ cwd }) => {
 					if (cwd === named) return;
 					console.warn(
@@ -1068,6 +1174,7 @@ async function runApiTurnAttempt(
 			connecting,
 			loadingPlugins,
 		]);
+		timing?.mark("toolsLoaded");
 		if (connected.status === "fulfilled") closeMcp = connected.value.close;
 		if (published.status === "rejected") throw published.reason;
 		if (connected.status === "rejected") throw connected.reason;
@@ -1217,9 +1324,22 @@ async function runApiTurnAttempt(
 		// messages and the system prompt stay byte-stable for prompt caching.
 		const memory = await memoryLoading;
 		if (memory && firstStep) {
+			// Recalled paths the checkout no longer has are marked missing. A
+			// first request going out before its workspace (the same condition
+			// as below) does not wait for the VM for that: they go unmarked.
+			const memoryCheckout = async () => {
+				if (
+					!checkoutReady &&
+					promptSubmitKnown &&
+					(await promptSubmitKnown) === false
+				)
+					throw new Error("The checkout is not ready yet.");
+				return checkout();
+			};
 			const attached = await timed("turn:memoryAttach", () =>
-				memory.attach(messages, items, workspace),
+				memory.attach(messages, items, memoryCheckout),
 			);
+			timing?.mark("memoryAttached");
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
 			if (attached.recall) {
@@ -1249,13 +1369,26 @@ async function runApiTurnAttempt(
 		// chat's journaled configuration shows no such hook; unknown (a new
 		// chat, a first turn since the journal) waits as before. Its tools still
 		// wait for the check, and a late failure ends the turn.
-		if (firstStep && promptSubmitKnown && (await promptSubmitKnown) === false) {
+		const promptSubmit = promptSubmitKnown ? await promptSubmitKnown : null;
+		if (promptSubmitKnown)
+			timing?.early(
+				promptSubmit === false,
+				promptSubmit === false
+					? "early"
+					: promptSubmit
+						? "prompt-hook-configured"
+						: "hook-config-unknown",
+			);
+		if (firstStep && promptSubmitKnown && promptSubmit === false) {
 			earlyPromptCheck = timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
 				),
 			);
-			earlyPromptCheck.catch(() => {});
+			earlyPromptCheck.then(
+				() => timing?.mark("hookCheck"),
+				() => {},
+			);
 			void turnMemo(deferredInstructionsKey, async () => true);
 		}
 		if (firstStep && !earlyPromptCheck) {
@@ -1264,6 +1397,7 @@ async function runApiTurnAttempt(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
 				),
 			);
+			timing?.mark("hookCheck");
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
 			// The journaled hook replays its feedback; an interrupted attempt may have saved it already.
 			if (step?.resumed) {
@@ -1522,6 +1656,7 @@ async function runApiTurnAttempt(
 				);
 			},
 			beforeStep: async (history) => {
+				timing?.mark("promptBuilt");
 				failureStage = "budget";
 				assertApiContextFits(history);
 				abort.signal.throwIfAborted();
@@ -1538,6 +1673,7 @@ async function runApiTurnAttempt(
 						Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
 					);
 				failureStage = "model";
+				timing?.mark("modelRequestSent");
 			},
 			beforeCompaction: async (older) => {
 				failureStage = "budget";
@@ -1556,6 +1692,12 @@ async function runApiTurnAttempt(
 				failureStage = "model";
 			},
 			onEvent: async (event) => {
+				if (
+					event.type === "text-delta" ||
+					event.type === "reasoning-delta" ||
+					event.type === "tool-call"
+				)
+					timing?.mark("firstToken");
 				if (step && "id" in event)
 					event = { ...event, id: `step-${step.index}:${event.id}` };
 				if (step && event.type === "retract")
@@ -2271,6 +2413,9 @@ async function runApiTurnAttempt(
 		// The VM's memory token goes when the step ends (completed, failed,
 		// cancelled or continued in a later step) rather than at expiry, with
 		// any earlier step's; a later step clones with a new one.
+		// Tools wait for the clone; a step that called none may end while it
+		// runs, so it is awaited before its token is released.
+		await memoryCloning?.catch(() => {});
 		const cloned = memoryCloned;
 		const vm = execution;
 		await memoryLoading

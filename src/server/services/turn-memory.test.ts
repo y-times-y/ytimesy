@@ -888,7 +888,13 @@ describe("the VM's memory token", () => {
 			stderr: "",
 		}));
 		const vm = { machines: { exec }, vm: "vm-1" } as never;
-		await memory.prepareVm(vm);
+		const reported: string[] = [];
+		await memory.prepareVm(vm, (token) => {
+			// Known before the clone puts it on the VM.
+			expect(exec).not.toHaveBeenCalled();
+			reported.push(token);
+		});
+		expect(reported).toEqual(["art_vm_token_1"]);
 		// Shorter than the old hour: one durable step plus a few minutes.
 		expect(repo.credentials.mock.calls[0][0]).toBeLessThanOrEqual(35 * 60);
 		expect(memory.vmTokens()).toEqual(["art_vm_token_1"]);

@@ -9,6 +9,7 @@ const fake = vi.hoisted(() => ({
 	enqueue: vi.fn(async () => {}),
 	holding: vi.fn(async (): Promise<string | null> => null),
 	open: vi.fn(),
+	commitBranch: vi.fn(async (): Promise<unknown> => undefined),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -43,6 +44,9 @@ vi.mock("#/server/services/message-attachments", () => ({
 vi.mock("#/server/services/agent-session-machine", () => ({
 	openAgentSession: fake.open,
 }));
+vi.mock("#/server/services/session-branch", () => ({
+	commitChatBranchForSubmission: fake.commitBranch,
+}));
 vi.mock("#/server/services/cancel-server-turn", () => ({
 	cancelServerTurn: vi.fn(),
 }));
@@ -61,6 +65,7 @@ beforeEach(() => {
 	fake.enqueue.mockClear();
 	fake.holding.mockReset().mockResolvedValue(null);
 	fake.open.mockReset();
+	fake.commitBranch.mockReset().mockResolvedValue(undefined);
 	fake.owner.mockResolvedValue({
 		id: "s1",
 		projectId: "p1",
@@ -113,12 +118,25 @@ it("lands a resent first message in the chat it already opened", async () => {
 		"6ba7b810-9dad-11d1-80b4-00c04fd430c8",
 	);
 	expect(fake.open).not.toHaveBeenCalled();
+	expect(fake.commitBranch).not.toHaveBeenCalled();
 	expect(fake.enqueue).not.toHaveBeenCalled();
 	expect(view.agentSessionId).toBe("s1");
 });
 
-it("opens a chat for a first message that never landed", async () => {
-	fake.open.mockResolvedValue({ id: "s1" });
+it("opens a chat for a first message that never landed, committing its branch first", async () => {
+	const opened = {
+		id: "s1",
+		projectId: "p1",
+		items: [],
+		turnStatus: "idle",
+		harness: "api",
+	};
+	fake.open.mockResolvedValue(opened);
+	fake.owner.mockClear();
+	fake.commitBranch.mockImplementation(async () => {
+		expect(fake.enqueue).not.toHaveBeenCalled();
+		return opened;
+	});
 	await sendApiWorkspaceTask(
 		{ userId: "u1", projectId: "p1" },
 		{
@@ -128,5 +146,34 @@ it("opens a chat for a first message that never landed", async () => {
 		},
 	);
 	expect(fake.open).toHaveBeenCalledOnce();
+	expect(fake.commitBranch).toHaveBeenCalledWith({
+		userId: "u1",
+		projectId: "p1",
+		sessionId: "s1",
+		text: "start",
+		session: opened,
+	});
 	expect(fake.enqueue).toHaveBeenCalledOnce();
+	// The send continued from the commit's row and answers with it.
+	expect(fake.owner).not.toHaveBeenCalled();
+});
+
+it("answers a send with the committed chat, reading the chat once", async () => {
+	fake.owner.mockClear();
+	const view = await sendApiWorkspaceTask(scope, {
+		text: "continue",
+		modelId: routeId,
+		idempotencyKey: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+	});
+	expect(fake.owner).toHaveBeenCalledOnce();
+	expect(fake.enqueue).toHaveBeenCalledOnce();
+	const [{ items }] = fake.enqueue.mock.calls[0] as unknown as [
+		{ items: SessionItem[] },
+	];
+	expect(view).toMatchObject({
+		agentSessionId: "s1",
+		turnStatus: "running",
+		listedModelId: routeId,
+		items,
+	});
 });

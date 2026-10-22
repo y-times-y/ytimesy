@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => ({
 	checkout: vi.fn(),
 	baseline: vi.fn(async () => {}),
 	load: vi.fn(() => Effect.succeed({}) as Effect.Effect<object, Error>),
-	revision: vi.fn(async (): Promise<string | null> => null),
+	revision: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
+	fileAt: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 }));
 vi.mock("./verification-baseline", () => ({
 	establishVerificationBaselines: mocks.baseline,
@@ -38,7 +39,10 @@ vi.mock("./project-workspace", () => ({
 		mocks.checkout(checkout);
 		return Effect.void;
 	},
-	checkoutBaseRevision: mocks.revision,
+	checkoutGitHubReads: (checkout: unknown) => ({
+		baseRevision: () => mocks.revision(checkout),
+		fileAt: mocks.fileAt,
+	}),
 }));
 
 const root = {
@@ -358,6 +362,37 @@ describe("a new chat's pinned base", () => {
 		expect(await prepare.pinnedBase()).toBeNull();
 		expect(mocks.revision).not.toHaveBeenCalled();
 		expect(mocks.checkout).toHaveBeenCalledWith(planned);
+	});
+
+	it("reads a file from GitHub only at the pinned commit", async () => {
+		mocks.fileAt.mockResolvedValue({ present: false });
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		await prepare();
+		expect(await prepare.pinnedBaseFile("c".repeat(40), "a.json")).toBeNull();
+		expect(mocks.fileAt).not.toHaveBeenCalled();
+		expect(await prepare.pinnedBaseFile(sha, "a.json")).toEqual({
+			present: false,
+		});
+		expect(mocks.fileAt).toHaveBeenCalledWith(sha, "a.json");
+		mocks.fileAt.mockRejectedValue(new Error("GitHub unavailable"));
+		expect(await prepare.pinnedBaseFile(sha, "a.json")).toBeNull();
+	});
+
+	it("reads no file when nothing was pinned", async () => {
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+		);
+		await prepare();
+		expect(await prepare.pinnedBaseFile(sha, "a.json")).toBeNull();
+		expect(mocks.fileAt).not.toHaveBeenCalled();
 	});
 
 	it("is unknown, and the checkout unpinned, when GitHub cannot say", async () => {

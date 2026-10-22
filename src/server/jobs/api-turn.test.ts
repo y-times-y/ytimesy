@@ -5,6 +5,7 @@ import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
+import { loadModelConnection } from "../adapters/model-connections";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -38,6 +39,8 @@ const mocks = vi.hoisted(() => ({
 	lean: null as null | Record<string, unknown>,
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	/** The lifecycle hooks' input, for its live redaction list. */
+	hooksInput: { current: null as null | { redact?: readonly string[] } },
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	/** The turn's workspace preparation (ready at once unless a test holds it). */
 	workspace: vi.fn(),
@@ -50,6 +53,13 @@ const mocks = vi.hoisted(() => ({
 	pinnedBase: vi.fn(async (): Promise<string | null> => null),
 	projectHookConfig: vi.fn(
 		async (..._args: unknown[]): Promise<unknown> => null,
+	),
+	/** The pinned commit's hook file as GitHub has it (null: GitHub cannot say). */
+	pinnedBaseFile: vi.fn(
+		async (
+			..._args: unknown[]
+		): Promise<{ present: false } | { present: true; text: string } | null> =>
+			null,
 	),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
@@ -100,6 +110,7 @@ vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
 			input: Parameters<typeof actual.harnessLifecycleHooks>[0],
 		) => {
 			const hooks = actual.harnessLifecycleHooks(input);
+			mocks.hooksInput.current = input;
 			return {
 				...hooks,
 				userPromptSubmit: async (prompt: string) =>
@@ -181,6 +192,7 @@ beforeEach(() => {
 	mocks.hookConfig.mockReset().mockResolvedValue(null);
 	mocks.pinnedBase.mockReset().mockResolvedValue(null);
 	mocks.projectHookConfig.mockReset().mockResolvedValue(null);
+	mocks.pinnedBaseFile.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -345,7 +357,7 @@ vi.mock("../services/api-turn-workspace", () => ({
 				prepared ??= mocks.workspace();
 				return prepared;
 			},
-			{ pinnedBase: mocks.pinnedBase },
+			{ pinnedBase: mocks.pinnedBase, pinnedBaseFile: mocks.pinnedBaseFile },
 		);
 	},
 }));
@@ -750,6 +762,29 @@ const childTurn = {
 	items: [],
 	lease_id: "00000000-0000-4000-8000-000000000002",
 } as ApiTurn;
+
+it("reads the API connection while acquiring the lease, not after it", async () => {
+	const order: string[] = [];
+	vi.mocked(loadModelConnection).mockImplementationOnce(async () => {
+		order.push("connection");
+		return { revision: "revision" } as never;
+	});
+	vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+		if (action === "acquire") {
+			// The connection read is already under way.
+			await Promise.resolve();
+			order.push("acquired");
+		}
+		return true;
+	});
+	mocks.runtime.mockImplementation(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "reply", text: "ok" });
+		return { messages: input.messages, outcome: "completed" };
+	});
+	await runApiTurn({} as WorkspaceMachines, childTurn);
+	expect(order).toEqual(["connection", "acquired"]);
+	expect(loadModelConnection).toHaveBeenCalledWith("owner", "connection");
+});
 
 it("renews coordination while a database heartbeat is waiting", async () => {
 	vi.useFakeTimers();
@@ -1867,6 +1902,60 @@ describe("a builder's first request before its workspace is ready", () => {
 		);
 	});
 
+	it("logs one timing line per step, with why the first request went early or not", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const lines = () =>
+				log.mock.calls
+					.map(([line]) => String(line))
+					.filter((line) => line.includes('"turn-timing"'))
+					.map((line) => JSON.parse(line));
+			const workspace = heldWorkspace();
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				setTimeout(() => workspace.ready(), 5);
+				return { messages: input.messages, outcome: "completed" };
+			});
+			await runApiTurn({} as WorkspaceMachines, rootTurn, {
+				...firstStep(),
+				startedAt: Date.now() - 50,
+			});
+			expect(lines()).toHaveLength(1);
+			const [line] = lines();
+			expect(line).toMatchObject({
+				turn: "turn-early",
+				step: 1,
+				early: true,
+				earlyReason: "early",
+				outcome: "completed",
+			});
+			expect(line.phases.turnStart).toBeGreaterThanOrEqual(50);
+			for (const phase of ["leaseAcquired", "settings", "firstToken", "end"])
+				expect(line.phases[phase], phase).toBeTypeOf("number");
+			// Ids, numbers and codes only: nothing from the prompt or reply.
+			expect(JSON.stringify(line)).not.toMatch(/ananab|repo/);
+
+			log.mockClear();
+			mocks.workspace.mockResolvedValue({
+				machines: {},
+				vm: "vm",
+				cwd: "/repo",
+			});
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep());
+			expect(lines()[0]).toMatchObject({
+				early: false,
+				earlyReason: "workspace-ready",
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it("records the turn's code point while its attachments are still being restored", async () => {
 		mocks.workspace.mockResolvedValue({ machines: {}, vm: "vm", cwd: "/repo" });
 		const { ensureConversationCodePoint } = await import(
@@ -1892,6 +1981,159 @@ describe("a builder's first request before its workspace is ready", () => {
 		).toBe("completed");
 		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
 		expect(mocks.attachments).toHaveBeenCalledOnce();
+	});
+
+	describe("with memory on", () => {
+		/** Memory whose clone finishes only when the test says so. */
+		function heldClone() {
+			let done = () => {};
+			let cloned = false;
+			const clone = new Promise<void>((resolve) => {
+				done = () => {
+					cloned = true;
+					resolve();
+				};
+			});
+			const order: string[] = [];
+			const checkouts: string[] = [];
+			const memory = {
+				mode: "full",
+				instructions: "",
+				prepareVm: vi.fn(
+					async (_workspace: unknown, beforeVm?: (token: string) => void) => {
+						beforeVm?.("art_vm_token");
+						await clone;
+					},
+				),
+				vmTokens: () => ["art_vm_token"],
+				releaseVm: vi.fn(async () => {
+					order.push("release");
+				}),
+				attach: async (
+					messages: unknown,
+					_items: unknown,
+					checkout: () => Promise<unknown>,
+				) => {
+					checkouts.push(
+						await checkout().then(
+							() => "read",
+							() => "skipped",
+						),
+					);
+					return { messages, recall: null };
+				},
+				recordSaved: async (items: unknown) => items,
+				afterTurn: vi.fn(async () => {}),
+			};
+			mocks.turnMemory.mockResolvedValue(memory);
+			return {
+				memory,
+				order,
+				checkouts,
+				done: () => {
+					order.push("cloned");
+					done();
+				},
+				cloned: () => cloned,
+			};
+		}
+
+		it("calls the model without waiting for the ~/memory clone, its token already redacted", async () => {
+			const clone = heldClone();
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				expect(clone.cloned()).toBe(false);
+				expect(mocks.hooksInput.current?.redact).toContain("art_vm_token");
+				// Tools still wait for the clone; the guidance read does not.
+				await input.tools.repositoryWorkspace();
+				let toolReady = false;
+				const tool = input.tools.workspace().then(() => {
+					toolReady = true;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				expect(toolReady).toBe(false);
+				clone.done();
+				await tool;
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.checkouts).toEqual(["read"]);
+			expect(clone.order).toEqual(["cloned", "release"]);
+		});
+
+		it("releases the token only after a clone the step's tools never waited for", async () => {
+			const clone = heldClone();
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				setTimeout(() => clone.done(), 5);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.order).toEqual(["cloned", "release"]);
+			expect(clone.memory.releaseVm).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm" }),
+			);
+		});
+
+		it("does not hold an early first request for the VM to mark missing paths", async () => {
+			const clone = heldClone();
+			clone.done();
+			const workspace = heldWorkspace();
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const order: string[] = [];
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				order.push("model");
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				setTimeout(() => {
+					order.push("workspace");
+					workspace.ready();
+				}, 5);
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(order).toEqual(["model", "workspace"]);
+			expect(clone.checkouts).toEqual(["skipped"]);
+		});
+
+		it("marks missing paths from the checkout when the first request waits for it anyway", async () => {
+			const clone = heldClone();
+			clone.done();
+			knownHooks(["UserPromptSubmit"]);
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const workspace = heldWorkspace();
+			setTimeout(() => workspace.ready(), 600);
+			mocks.promptSubmit.mockResolvedValue({ block: false });
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.checkouts).toEqual(["read"]);
+		});
 	});
 
 	it("waits for the workspace as before when it is ready within the short wait", async () => {
@@ -2060,6 +2302,116 @@ describe("a builder's first request before its workspace is ready", () => {
 				).toBe("completed");
 			},
 		);
+
+		const hookFile = (events: string[]) => ({
+			present: true as const,
+			text: JSON.stringify({
+				version: 1,
+				hooks: events.map((event) => ({ event, command: "true" })),
+			}),
+		});
+		it.each([
+			["has no hook file", { present: false as const }],
+			["has a hook file without a UserPromptSubmit hook", hookFile(["Stop"])],
+		])(
+			"sends early when no chat read that commit yet and it %s on GitHub",
+			async (_case, file) => {
+				mocks.pinnedBaseFile.mockResolvedValue(file);
+				const workspace = heldWorkspace();
+				const order: string[] = [];
+				mocks.stepRuntime.mockImplementation(async (input) => {
+					order.push("model");
+					await input.onEvent({
+						type: "text-delta",
+						id: "reply",
+						text: "ananab",
+					});
+					setTimeout(() => {
+						order.push("workspace");
+						workspace.ready();
+					}, 5);
+					return { messages: input.messages, outcome: "completed" };
+				});
+				expect(
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+				).toBe("completed");
+				expect(order).toEqual(["model", "workspace"]);
+				expect(mocks.pinnedBaseFile).toHaveBeenCalledWith(
+					pinned,
+					".ytimesy/hooks.json",
+				);
+			},
+		);
+
+		it.each([
+			["has a UserPromptSubmit hook", hookFile(["UserPromptSubmit"])],
+			["cannot be read", null],
+			["is not JSON", { present: true as const, text: "{" }],
+			[
+				"is not a valid configuration",
+				{ present: true as const, text: '{"version":2,"hooks":[]}' },
+			],
+			[
+				"is longer than the baseline read accepts",
+				{
+					present: true as const,
+					text: `{"version":1,"hooks":[]}${" ".repeat(32000)}`,
+				},
+			],
+		])(
+			"waits for the workspace and the prompt check when the commit's file on GitHub %s",
+			async (_case, file) => {
+				mocks.pinnedBaseFile.mockResolvedValue(file);
+				const workspace = heldWorkspace();
+				const held = mocks.workspace();
+				setTimeout(() => workspace.ready(), 600);
+				let checked = false;
+				mocks.promptSubmit.mockImplementation(async () => {
+					await held;
+					checked = true;
+					return { block: false };
+				});
+				mocks.stepRuntime.mockImplementation(async (input) => {
+					expect(checked).toBe(true);
+					await input.onEvent({
+						type: "text-delta",
+						id: "reply",
+						text: "ananab",
+					});
+					return { messages: input.messages, outcome: "completed" };
+				});
+				expect(
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+				).toBe("completed");
+			},
+		);
+
+		it("prefers the project's journaled configuration over reading GitHub", async () => {
+			projectHooks({ [key]: ["UserPromptSubmit"] });
+			mocks.pinnedBaseFile.mockResolvedValue({ present: false });
+			const workspace = heldWorkspace();
+			const held = mocks.workspace();
+			setTimeout(() => workspace.ready(), 600);
+			let checked = false;
+			mocks.promptSubmit.mockImplementation(async () => {
+				await held;
+				checked = true;
+				return { block: false };
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				expect(checked).toBe(true);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(mocks.pinnedBaseFile).not.toHaveBeenCalled();
+		});
 
 		it("keeps using the chat's own configuration once it has a baseline", async () => {
 			knownHooks(["UserPromptSubmit"]);
