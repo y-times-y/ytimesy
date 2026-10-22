@@ -16,7 +16,26 @@ Scripts: `scripts/tb4-run/`. Scoring: `docs/tb4-scoring-rule.md`. Gate:
   `/opt/tb4/jobs/<attempt-id>/`. The bridge runs on the host; Bedrock calls go from there.
 - **Scheduling**: `nextLaunches` packs trials by task vCPU/memory onto healthy hosts
   (Docker NCPU = nproc, >= 100 GB free), GPU tasks first and only on the p5, at most one
-  GPU trial at a time; never more in flight than a task still needs.
+  GPU trial at a time; never more in flight than a task still needs. Per-host
+  concurrency follows the host CPU budget below.
+- **Host CPU budget** (`fitsCpu` in `lib.ts`, tested in `tests/tb4-run.test.ts`): each
+  trial keeps its full task CPU allocation. On every host,
+  `sum over in-flight trials of (task cpus + 1) <= host vCPU - 2`. Task cpus come from
+  each `task.toml` as `max([environment].cpus, [verifier.environment].cpus)` (a separate
+  verifier runs on the same host after the agent); the +1 per trial covers the Harbor
+  CLI, our bridge and agent loop and docker exec on the host; the 2 reserved vCPU cover
+  dockerd, sshd, backup and the watchdog. An idle host always takes one trial, so
+  `jax-speedrun-gpu` (16 cpus) still runs alone on the 16-vCPU p5. On an m7i.16xlarge
+  (64 vCPU) that is at most 20 two-cpu trials. Why: in the 2026-10-21 preflight,
+  `retro-console-soc` failed its oracle with ~32 tasks on one host and passed on an
+  idle host. That host's load (94 task cpus on 192 vCPU, 96 physical cores, plus 31
+  image pulls at once) was within this rule, so the rule removes CPU oversubscription
+  but does not by itself prove retro-console-soc is safe; rerun it when its host is
+  lightly loaded if it fails again.
+- **tasks.json**: `controller.ts tasks --run-dir <dir>` reads every `task.toml` from
+  Harbor's dataset cache (`~/.cache/harbor/tasks/packages/terminal-bench/<task>/<hash>/`,
+  the cache `preflight.ts` and `run-trial.sh` use; run `harbor download` or a preflight
+  first) or from `--dataset <dir>` (`<task>/task.toml`).
 - **Resume**: the journal records `launch` before the ssh launch. On restart `tick`
   replays it and, per unfinished attempt: result present -> collect; host unreachable ->
   wait; host rebooted since launch -> infra; unit still active -> adopt; unit gone with no

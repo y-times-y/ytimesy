@@ -34,6 +34,25 @@ export type Task = {
 	gpus: number;
 	separateVerifier: boolean;
 };
+/**
+ * A Task from a parsed task.toml. cpus and memory are the larger of the agent
+ * environment and a separate verifier environment, since the verifier runs on
+ * the same host after the agent.
+ */
+export function taskFromToml(name: string, toml: Record<string, unknown>): Task {
+	const env = (toml.environment ?? {}) as Record<string, unknown>;
+	const verifier = (toml.verifier ?? {}) as Record<string, unknown>;
+	const venv = (verifier.environment ?? {}) as Record<string, unknown>;
+	const separateVerifier = verifier.environment_mode === "separate" || env.environment_mode === "separate";
+	const num = (v: unknown) => Number(v ?? 0) || 0;
+	return {
+		name,
+		cpus: Math.max(num(env.cpus) || 1, separateVerifier ? num(venv.cpus) : 0),
+		memoryMb: Math.max(num(env.memory_mb), separateVerifier ? num(venv.memory_mb) : 0),
+		gpus: num(env.gpus),
+		separateVerifier,
+	};
+}
 export type Batch = { id: "b1" | "b2"; trialsPerTask: number };
 export const BATCHES: Batch[] = [
 	{ id: "b1", trialsPerTask: 1 },
@@ -214,16 +233,43 @@ export function hostLoad(state: RunState, tasks: Map<string, Task>, host: string
 	let vcpu = 0;
 	let memoryMb = 0;
 	let gpus = 0;
+	let trials = 0;
 	for (const a of state.attempts.values()) {
 		if (a.host !== host || a.status === "finished") continue;
 		const t = tasks.get(a.task);
 		if (!t) continue;
-		// A separate verifier container runs after the agent on the same host.
-		vcpu += t.cpus;
+		// A separate verifier container runs after the agent on the same host;
+		// `tasks` stores cpus as max(environment, verifier) so either phase fits.
+		vcpu += trialCpuCost(t);
 		memoryMb += t.memoryMb;
 		gpus += t.gpus;
+		trials++;
 	}
-	return { vcpu, memoryMb, gpus };
+	return { vcpu, memoryMb, gpus, trials };
+}
+
+/**
+ * Per-host trial concurrency (docs/tb4-run-controller.md, "Host CPU budget").
+ * Every in-flight trial keeps its full task.toml CPU allocation: the sum of the
+ * in-flight tasks' `cpus` plus a per-trial overhead for the processes that run on
+ * the host next to the container (Harbor CLI, our bridge and agent loop, docker
+ * exec) must fit in the host's vCPU minus a fixed reserve (dockerd, sshd,
+ * backup, watchdog). The one exception: an idle host always takes one trial, so a
+ * task as large as its host (jax-speedrun-gpu: 16 cpus on the 16-vCPU p5) still
+ * runs, alone.
+ */
+export const HOST_RESERVED_VCPU = 2;
+export const TRIAL_OVERHEAD_VCPU = 1;
+export function hostCpuBudget(host: Pick<Host, "vcpu">) {
+	return host.vcpu - HOST_RESERVED_VCPU;
+}
+export function trialCpuCost(task: Pick<Task, "cpus">) {
+	return task.cpus + TRIAL_OVERHEAD_VCPU;
+}
+/** Whether one more trial of `task` keeps every trial on `host` at full CPU. */
+export function fitsCpu(host: Pick<Host, "vcpu">, load: { vcpu: number; trials: number }, task: Pick<Task, "cpus">) {
+	if (load.trials === 0) return true;
+	return load.vcpu + trialCpuCost(task) <= hostCpuBudget(host);
 }
 
 export type LaunchDecision = {
@@ -268,13 +314,14 @@ export function nextLaunches(input: {
 					const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
 					return (
 						gpuFree &&
-						l.vcpu + task.cpus <= h.vcpu &&
+						fitsCpu(h, l, task) &&
 						l.memoryMb + task.memoryMb <= h.memoryMb * 0.9
 					);
 				});
 				if (!host) break;
 				const l = load.get(host.name)!;
-				l.vcpu += task.cpus;
+				l.vcpu += trialCpuCost(task);
+				l.trials++;
 				l.memoryMb += task.memoryMb;
 				l.gpus += task.gpus;
 				attempts++;
