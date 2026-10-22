@@ -145,6 +145,7 @@ function leanTurnInstructions(
 				: orchestratorInstructions({
 						codeMode,
 						force: !!input.forceDelegation && !input.session.agentRole,
+						root: !input.session.agentRole,
 						// A read-only subagent may start readers, never writers.
 						readOnly: readOnly || isReaderRole(input.session.agentRole),
 					})

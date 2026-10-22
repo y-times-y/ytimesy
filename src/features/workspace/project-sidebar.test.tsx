@@ -68,19 +68,86 @@ describe("left sidebar", () => {
 
 	it("groups by project by default, the most recently active project first", () => {
 		const html = render(null);
-		expect(html).toMatch(/aria-pressed="true"[^>]*>Projects</);
+		// One sort icon button (a menu) instead of a segmented control.
+		expect(html).toContain('aria-label="Sort chats: Projects"');
+		expect(html).not.toContain('sidebar-sort"');
 		expect(html.indexOf(">Beta<")).toBeLessThan(html.indexOf(">Alpha<"));
 		expect(html).not.toContain("sidebar-chat-project");
 	});
 
 	it("lists every chat newest first with its project in Recent mode", () => {
 		const html = render("recent");
-		expect(html).toMatch(/aria-pressed="true"[^>]*>Recent</);
+		expect(html).toContain('aria-label="Sort chats: Recent"');
 		expect(html.indexOf("Newest chat")).toBeLessThan(
 			html.indexOf("Older chat"),
 		);
-		expect(html).toContain('<span class="sidebar-chat-project">Beta</span>');
-		expect(html).toContain('<span class="sidebar-chat-project">Alpha</span>');
+		// The project shows as a thin colour bar, its name in the row's tooltip.
+		expect(html).toMatch(
+			/data-project-bar="true" style="--project-color:#[0-9a-f]{6}"/,
+		);
+		expect(html).toContain('title="Newest chat · Beta"');
+		expect(html).not.toContain("sidebar-chat-project");
 		expect(html).not.toContain("sidebar-folder-row");
+		// Neither waits on the user nor runs: both are Done, with a count.
+		expect(html).toMatch(
+			/<span>Done<\/span><span class="sidebar-status-count">2<\/span>/,
+		);
+		expect(html).not.toContain("Needs you");
+	});
+
+	it("puts chats waiting on the user first, then running ones, then the rest", () => {
+		const groups = [
+			{
+				project: alpha,
+				chats: [
+					{
+						id: "a1",
+						title: "Asks a question",
+						updatedAt: "2026-10-01T00:00:00Z",
+						waitingOn: "question" as const,
+					},
+					{
+						id: "a2",
+						title: "Busy chat",
+						updatedAt: "2026-10-02T00:00:00Z",
+						turnStatus: "running" as const,
+					},
+					...Array.from({ length: 10 }, (_, index) => ({
+						id: `d${index}`,
+						title: `Done chat ${index}`,
+						updatedAt: `2026-10-0${3 + (index % 6)}T00:00:00Z`,
+					})),
+				],
+			},
+		];
+		(globalThis as { window?: unknown }).window = {
+			localStorage: {
+				getItem: (key: string) => (key === SIDEBAR_SORT_KEY ? "recent" : null),
+				setItem: () => undefined,
+			},
+		};
+		const html = renderToStaticMarkup(
+			<ProjectSidebar
+				projects={[alpha]}
+				projectsLoading={false}
+				selectedProjectId="alpha"
+				onSelectProject={() => undefined}
+				expanded
+				onToggle={() => undefined}
+				onAddProject={() => undefined}
+				chats={groups[0].chats}
+				onNewChat={() => undefined}
+				projectChats={groups}
+			/>,
+		);
+		const needs = html.indexOf("Needs you");
+		const working = html.indexOf("Working");
+		const done = html.indexOf(">Done<");
+		expect(needs).toBeGreaterThan(-1);
+		expect(needs).toBeLessThan(working);
+		expect(working).toBeLessThan(done);
+		expect(html).toContain('data-activity="needs-you"');
+		expect(html).toContain('data-activity="running"');
+		expect(html).toContain("Show 2 more");
 	});
 });

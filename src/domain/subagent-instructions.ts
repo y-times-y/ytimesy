@@ -20,9 +20,11 @@ export function orchestratorInstructions(
 		readOnly?: boolean;
 		/** Harness variant subagents=force (the root builder only). */
 		force?: boolean;
+		/** The chat's own agent (no parent): it talks to the user. */
+		root?: boolean;
 	} = {},
 ) {
-	const { codeMode, readOnly, force } = options;
+	const { codeMode, readOnly, force, root } = options;
 	const parallel = readOnly
 		? 'await Promise.all([tools.agent({ role: "researcher", title: "Map the parser", brief: "…" }), tools.agent({ role: "researcher", title: "Map the cache", brief: "…" })])'
 		: 'await Promise.all([tools.agent({ role: "writer", title: "Fix pricing rounding", brief: "…" }), tools.agent({ role: "writer", title: "Build the release bundle", brief: "…" })])';
@@ -53,7 +55,8 @@ export function orchestratorInstructions(
 			: [
 					"Coordinate shared resources: give each writer a disjoint file set and each process its own port. Never run two writers on the same files at once; run them one after another.",
 				]),
-		"Keep working while agents run. Steer with agent_send when a report shows drift; stop one that is no longer needed.",
+		"Keep working while agents run. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed.",
+		...(root ? [ROOT_HELPER_UPDATES] : []),
 		readOnly
 			? "Verify before relying on an agent: a report is a claim, not a fact; spot-check its findings before you report them."
 			: "Verify before relying on an agent: a report is a claim, not a fact. Review a writer's patch (`git diff <base> <ref>`), apply it with `git apply -3`, rerun its checks yourself; spot-check a reader's findings before they drive edits.",
@@ -61,6 +64,13 @@ export function orchestratorInstructions(
 		...(force ? [FORCED_DELEGATION] : []),
 	].join("\n");
 }
+
+/**
+ * The root's duty to keep the user posted: the chat lists its agents, and
+ * the user may write to one directly (the lead gets a notice of it).
+ */
+export const ROOT_HELPER_UPDATES =
+	'When an agent\'s report arrives, first tell the user in one line what it finished (e.g. "Writer 2 finished: tests pass, 3 files changed"), then continue. The user can also message your agents directly; a notice tells you what they sent.';
 
 /** subagents=force: delegation is required, its shape is the builder's choice. */
 export const FORCED_DELEGATION =
@@ -98,6 +108,7 @@ export function fusionLeadInstructions(options: {
 		"- Each build round's changes stay uncommitted in your working tree; its report lists the files and the exact diff command for the round (`git diff <start> <end>`). Review that diff and the evidence, and rerun the key check yourself: a report is a claim, not a fact. Revert what you reject (`git checkout -- <file>`) before the next round; the turn's usual commit publishes what you keep.",
 		`- Wrong or incomplete: send specific feedback with \`${AGENT_SEND_TOOL}\` (what fails, where, what done looks like) for another round instead of fixing it yourself.`,
 		`- A runtime notice tells you when the sidekick looks stuck (the same check failing again, the same error, no file changes, its budget used): re-brief it more prescriptively, or take over and edit yourself${edit ? ` (${edit})` : ""}. Take over also when it is clearly out of its depth.`,
+		`- Its reports arrive on their own and wake you: message it only to change its course or stop it, never to ask for progress or to hurry it. ${ROOT_HELPER_UPDATES}`,
 		`- Your final answer comes after its last report. Researchers and reviewers read your VM read-only when a separate investigation or a second look helps. Stop the sidekick (\`${AGENT_SEND_TOOL}\` with stop: true) only when this chat no longer needs it. A refused spawn means do the work yourself.`,
 	].join("\n");
 }
