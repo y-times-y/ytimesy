@@ -3,7 +3,8 @@ import { isDevelopmentEnvironment } from "#/domain/development-environment";
 
 /**
  * Development diagnostics (YTIMESY_DEBUG_STEP_TIMING=1, development only): one log line per
- * durable model step with the wall time spent in each named phase. Spans may
+ * durable model step (and per chat send and its turn's wake on the web Worker)
+ * with the wall time spent in each named phase. Spans may
  * overlap (parallel queries, provider calls inside a tool), so their sums are
  * attribution, not a partition of the step. Disabled, every helper is a pass-through.
  */

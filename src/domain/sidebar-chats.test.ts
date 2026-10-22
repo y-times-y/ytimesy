@@ -25,6 +25,7 @@ import {
 	togglePinnedChatIds,
 	unsentSendReturnsHere,
 	withBusyChat,
+	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
 	withProjectExpanded,
@@ -178,6 +179,29 @@ describe("parallel chat busy", () => {
 				openTurnStatus: "idle",
 			}),
 		).toBe(false);
+	});
+
+	it("names an untitled chat after the message sent to it, before the send lands", () => {
+		expect(
+			withChatSent(
+				[
+					{ id: "a", title: "New session", turnStatus: "idle" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				"a",
+				"fix login\nthen run the tests",
+			),
+		).toEqual([
+			{ id: "a", title: "fix login", turnStatus: "running" },
+			{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+		]);
+		expect(
+			withChatSent(
+				[{ id: "a", title: "fix login", turnStatus: "idle" }],
+				"a",
+				"and the signup page",
+			),
+		).toEqual([{ id: "a", title: "fix login", turnStatus: "running" }]);
 	});
 
 	it("marks only that chat running in the listed rows", () => {
