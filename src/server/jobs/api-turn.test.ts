@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
 	lean: null as null | Record<string, unknown>,
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	/** The lifecycle hooks' input, for its live redaction list. */
+	hooksInput: { current: null as null | { redact?: readonly string[] } },
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	/** The turn's workspace preparation (ready at once unless a test holds it). */
 	workspace: vi.fn(),
@@ -107,6 +109,7 @@ vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
 			input: Parameters<typeof actual.harnessLifecycleHooks>[0],
 		) => {
 			const hooks = actual.harnessLifecycleHooks(input);
+			mocks.hooksInput.current = input;
 			return {
 				...hooks,
 				userPromptSubmit: async (prompt: string) =>
@@ -1900,6 +1903,111 @@ describe("a builder's first request before its workspace is ready", () => {
 		).toBe("completed");
 		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
 		expect(mocks.attachments).toHaveBeenCalledOnce();
+	});
+
+	describe("with memory on", () => {
+		/** Memory whose clone finishes only when the test says so. */
+		function heldClone() {
+			let done = () => {};
+			let cloned = false;
+			const clone = new Promise<void>((resolve) => {
+				done = () => {
+					cloned = true;
+					resolve();
+				};
+			});
+			const order: string[] = [];
+			const checkouts: string[] = [];
+			const memory = {
+				mode: "full",
+				instructions: "",
+				prepareVm: vi.fn(
+					async (_workspace: unknown, beforeVm?: (token: string) => void) => {
+						beforeVm?.("art_vm_token");
+						await clone;
+					},
+				),
+				vmTokens: () => ["art_vm_token"],
+				releaseVm: vi.fn(async () => {
+					order.push("release");
+				}),
+				attach: async (
+					messages: unknown,
+					_items: unknown,
+					checkout: () => Promise<unknown>,
+				) => {
+					checkouts.push(
+						await checkout().then(
+							() => "read",
+							() => "skipped",
+						),
+					);
+					return { messages, recall: null };
+				},
+				recordSaved: async (items: unknown) => items,
+				afterTurn: vi.fn(async () => {}),
+			};
+			mocks.turnMemory.mockResolvedValue(memory);
+			return {
+				memory,
+				order,
+				checkouts,
+				done: () => {
+					order.push("cloned");
+					done();
+				},
+				cloned: () => cloned,
+			};
+		}
+
+		it("calls the model without waiting for the ~/memory clone, its token already redacted", async () => {
+			const clone = heldClone();
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				expect(clone.cloned()).toBe(false);
+				expect(mocks.hooksInput.current?.redact).toContain("art_vm_token");
+				// Tools still wait for the clone; the guidance read does not.
+				await input.tools.repositoryWorkspace();
+				let toolReady = false;
+				const tool = input.tools.workspace().then(() => {
+					toolReady = true;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				expect(toolReady).toBe(false);
+				clone.done();
+				await tool;
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.checkouts).toEqual(["read"]);
+			expect(clone.order).toEqual(["cloned", "release"]);
+		});
+
+		it("releases the token only after a clone the step's tools never waited for", async () => {
+			const clone = heldClone();
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				setTimeout(() => clone.done(), 5);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.order).toEqual(["cloned", "release"]);
+			expect(clone.memory.releaseVm).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm" }),
+			);
+		});
 	});
 
 	it("waits for the workspace as before when it is ready within the short wait", async () => {

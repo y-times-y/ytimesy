@@ -447,6 +447,8 @@ async function runApiTurnAttempt(
 	// this step ends, however it ends.
 	let memoryLoading: Promise<TurnMemory | null> = Promise.resolve(null);
 	let memoryCloned: Promise<void> | undefined;
+	/** The clone once the workspace started it (settled with it). */
+	let memoryCloning: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -705,7 +707,26 @@ async function runApiTurnAttempt(
 		// the same project) build its first request before its VM is ready.
 		const remembersDirectory =
 			writable && !owner.parentSessionId && !evaluation;
-		const workspace = async () => {
+		// ~/memory is cloned beside the checkout, never inside it. The memory
+		// token is added to the redaction list before it reaches the VM, so
+		// only what reads ~/memory (tools) waits for the clone.
+		const cloneMemory = (ready: AgentToolWorkspace) =>
+			memoryLoading.then((memory) => {
+				if (!memory) return;
+				const redacted = (token: string) => {
+					if (!redact.includes(token)) redact.push(token);
+				};
+				memoryCloned ??= memory.prepareVm(ready, redacted).then(() => {
+					for (const token of memory.vmTokens()) redacted(token);
+				});
+				return memoryCloned;
+			});
+		/**
+		 * The checkout, its code point, attachments and secrets, without
+		 * waiting for ~/memory: the prompt check, repository instructions and
+		 * memory's own path check read only the checkout.
+		 */
+		const checkout = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
 			if (remembersDirectory) {
 				const { cwd } = execution;
@@ -737,15 +758,8 @@ async function runApiTurnAttempt(
 				console.warn("Attached files could not be restored.", error);
 			});
 			// ~/memory is outside the repository, so it overlaps the code point.
-			const ready = execution;
-			const cloning = memoryLoading.then((memory) => {
-				if (!memory) return;
-				memoryCloned ??= memory.prepareVm(ready).then(() => {
-					for (const token of memory.vmTokens())
-						if (!redact.includes(token)) redact.push(token);
-				});
-				return memoryCloned;
-			});
+			memoryCloning ??= cloneMemory(execution);
+			memoryCloning.catch(() => {});
 			// Attachments go to a directory outside the repository, so they
 			// overlap the code point (a capture of the repository) too.
 			// A shared writer (lead mode fusion's sidekick) works in its lead's
@@ -766,8 +780,13 @@ async function runApiTurnAttempt(
 			}
 			await attachmentsWritten;
 			await secretsReady;
-			await cloning;
 			return execution;
+		};
+		/** The whole workspace: the checkout and ~/memory, for tools. */
+		const workspace = async () => {
+			const ready = await checkout();
+			await memoryCloning;
+			return ready;
 		};
 		// A message delivered mid-turn brings its files to a machine already prepared;
 		// a machine prepared later restores them from the transcript.
@@ -842,9 +861,12 @@ async function runApiTurnAttempt(
 			writable,
 			readerCommands: reader,
 			waitDeadlineAt: step?.waitDeadlineAt,
+			repositoryWorkspace: checkout,
 		});
 		const hooks = harnessLifecycleHooks({
-			workspace,
+			// Hooks run in the checkout; the memory token is redacted from
+			// their output before the clone puts it on the VM.
+			workspace: checkout,
 			turnId: turn.id,
 			readOnly: !writable,
 			continuationCount: () =>
@@ -941,7 +963,7 @@ async function runApiTurnAttempt(
 		const rootChat = !owner.parentSessionId && !evaluation;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
-			workspace,
+			workspace: checkout,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
 			instructionMessages: {
@@ -989,7 +1011,7 @@ async function runApiTurnAttempt(
 		if (
 			surface.lean &&
 			earlyFirstRequestEligible &&
-			!(await settlesWithin(workspace(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+			!(await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
 		)
 			reportedDirectory = await timed("turn:checkoutDirectory", () =>
 				readPreparedCheckoutDirectory(
@@ -1005,12 +1027,12 @@ async function runApiTurnAttempt(
 			firstStep && reportedDirectory ? hooks.promptSubmitConfigured() : null;
 		const leanWorkingDirectory = surface.lean
 			? (reportedDirectory ??
-				(await turnMemo(leanDirectoryKey, async () => (await workspace()).cwd)))
+				(await turnMemo(leanDirectoryKey, async () => (await checkout()).cwd)))
 			: undefined;
 		if (reportedDirectory) {
 			const named = reportedDirectory;
 			setTurnMemo(leanDirectoryKey, named);
-			workspace().then(
+			checkout().then(
 				({ cwd }) => {
 					if (cwd === named) return;
 					console.warn(
@@ -1227,7 +1249,7 @@ async function runApiTurnAttempt(
 		const memory = await memoryLoading;
 		if (memory && firstStep) {
 			const attached = await timed("turn:memoryAttach", () =>
-				memory.attach(messages, items, workspace),
+				memory.attach(messages, items, checkout),
 			);
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
@@ -2280,6 +2302,9 @@ async function runApiTurnAttempt(
 		// The VM's memory token goes when the step ends (completed, failed,
 		// cancelled or continued in a later step) rather than at expiry, with
 		// any earlier step's; a later step clones with a new one.
+		// Tools wait for the clone; a step that called none may end while it
+		// runs, so it is awaited before its token is released.
+		await memoryCloning?.catch(() => {});
 		const cloned = memoryCloned;
 		const vm = execution;
 		await memoryLoading
