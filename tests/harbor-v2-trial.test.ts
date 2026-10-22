@@ -15,8 +15,9 @@ import {
 	harborMachines,
 } from "../evals/harbor_v2/harbor-machines";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
-import { runHarborTrial } from "../evals/harbor_v2/trial";
+import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
+import { commandScopeRoot } from "../src/server/services/api-command-scope";
 import { localHarnessWorkspace } from "./helpers/local-harness-workspace";
 
 /**
@@ -591,6 +592,11 @@ describe("runHarborTrial with review=on", () => {
 		]);
 		const sidekick = scriptedModel([
 			[...text("s1", "Explored: no solution.py yet."), finish(50, 5)],
+			// Round 2 runs a command after round 1's end stopped round 1's commands.
+			[
+				call("s2b", "bash", { command: "echo round-$((1 + 1))" }),
+				finish(50, 5, true),
+			],
 			[
 				call("s2", "write", { path: "solution.py", content: "print(42)\n" }),
 				finish(50, 5, true),
@@ -601,6 +607,12 @@ describe("runHarborTrial with review=on", () => {
 			],
 		]);
 		const classifier = scriptedModel([[...text("c1", onTrack), finish(20, 2)]]);
+		// Command scopes outlive a run on this machine: start the rounds' afresh.
+		for (const round of [1, 2, 3])
+			await rm(commandScopeRoot(harborTurnId("trial-fusion.1", round)), {
+				recursive: true,
+				force: true,
+			});
 		const runtimes: (string | null)[] = [];
 		const result = await runHarborTrial({
 			config: f.config,
@@ -633,7 +645,7 @@ describe("runHarborTrial with review=on", () => {
 		});
 		expect(result.failure).toBeNull();
 		expect([lead.calls(), sidekick.calls(), classifier.calls()]).toEqual([
-			2, 3, 2,
+			2, 4, 2,
 		]);
 		// The sidekick wrote the lead's own checkout.
 		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
@@ -646,6 +658,16 @@ describe("runHarborTrial with review=on", () => {
 			"explore",
 			"build",
 		]);
+		// Each round has its own command scope: round 2's command ran, not exit 130.
+		const sidekickEvents = trace.checkers.find(
+			(child: { sessionId: string }) => child.sessionId === "trial-fusion.1",
+		).events;
+		const bash = sidekickEvents.find(
+			(entry: { event: { type: string; name?: string } }) =>
+				entry.event.type === "tool-result" && entry.event.name === "bash",
+		).event;
+		expect(JSON.stringify(bash.output)).toContain("round-2");
+		expect(JSON.stringify(bash.output)).not.toContain("130");
 		expect(trace.fusion.decisions).toHaveLength(2);
 		expect(trace.fusion.decisions[1]).toMatchObject({
 			decision: "on_track",
@@ -679,7 +701,7 @@ describe("runHarborTrial with review=on", () => {
 			]),
 		).toEqual([
 			["builder", "claude-opus-5-5", 2],
-			["sidekick", "claude-sonnet-5-5", 3],
+			["sidekick", "claude-sonnet-5-5", 4],
 			["classifier", "claude-haiku-5-5", 2],
 		]);
 	}, 120_000);

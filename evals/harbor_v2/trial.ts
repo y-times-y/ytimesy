@@ -441,6 +441,10 @@ export async function runHarborTrial(
 			]);
 			session.stop = () => stop.abort(new Error("Stopped by its parent."));
 			session.briefs.push(brief);
+			// Each round runs under its own command scope: the round's end stops
+			// its scope for good, so a scope shared by rounds would make every
+			// later round's command exit 130 at once.
+			const turnId = harborTurnId(session.id, session.briefs.length);
 			const started = now();
 			const onChildEvent = async (event: ApiAgentEvent) => {
 				session.events.push({ at: new Date(now()).toISOString(), event });
@@ -463,7 +467,7 @@ export async function runHarborTrial(
 					cwd: options.cwd ?? input.cwd,
 					signal: childSignal,
 					sessionId: session.id,
-					turnId: harborTurnId(session.id),
+					turnId,
 				},
 				userId: input.userId,
 				modelId: session.model.modelId,
@@ -548,7 +552,7 @@ export async function runHarborTrial(
 						vm: workspace.vm,
 						cwd: options.cwd ?? input.cwd,
 					},
-					harborTurnId(session.id),
+					turnId,
 				).catch(() => {});
 			}
 		};
@@ -944,8 +948,9 @@ export async function runHarborTrial(
  * underscores (session-window-debug__MVgXW8D) and child ids a dot (.1);
  * used raw, every bash call failed with "Invalid command scope".
  */
-export function harborTurnId(id: string) {
-	return `${id.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 75)}-turn`;
+export function harborTurnId(id: string, round?: number) {
+	const suffix = `${round === undefined ? "" : `-r${round}`}-turn`;
+	return `${id.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 80 - suffix.length)}${suffix}`;
 }
 
 /**
