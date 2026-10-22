@@ -478,10 +478,13 @@ export function chatHeaderTitle(
 }
 
 /** A chat's title from its first message: the first line, shortened. */
+/** A chat's title until its first message names it. */
+export const UNTITLED_SESSION_TITLE = "New session";
+
 export function sessionTitleFromText(text: string): string {
-	if (!text) return "New session";
+	if (!text) return UNTITLED_SESSION_TITLE;
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
-	if (!line) return "New session";
+	if (!line) return UNTITLED_SESSION_TITLE;
 	return line.length > 48 ? `${line.slice(0, 47)}…` : line;
 }
 

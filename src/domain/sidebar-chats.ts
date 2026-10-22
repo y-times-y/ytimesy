@@ -4,6 +4,8 @@ import {
 	isTurnRunning,
 	type SessionItem,
 	type SessionTurnStatus,
+	sessionTitleFromText,
+	UNTITLED_SESSION_TITLE,
 } from "./session-item";
 import {
 	type SidebarPullRequest,
@@ -293,6 +295,30 @@ export function withChatTurnStatus(
 	if (!chatId) return [...chats];
 	return chats.map((chat) =>
 		chat.id === chatId ? { ...chat, turnStatus } : chat,
+	);
+}
+
+/**
+ * A chat just sent to, as the server will list it once the send lands: running,
+ * and named after its first message when it was untitled (claimChatForSend).
+ */
+export function withChatSent(
+	chats: readonly SidebarChat[],
+	chatId: string | undefined,
+	text: string,
+): SidebarChat[] {
+	if (!chatId) return [...chats];
+	return chats.map((chat) =>
+		chat.id === chatId
+			? {
+					...chat,
+					turnStatus: "running",
+					title:
+						chat.title === UNTITLED_SESSION_TITLE
+							? sessionTitleFromText(text)
+							: chat.title,
+				}
+			: chat,
 	);
 }
 
