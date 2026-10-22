@@ -51,6 +51,13 @@ const mocks = vi.hoisted(() => ({
 	projectHookConfig: vi.fn(
 		async (..._args: unknown[]): Promise<unknown> => null,
 	),
+	/** The pinned commit's hook file as GitHub has it (null: GitHub cannot say). */
+	pinnedBaseFile: vi.fn(
+		async (
+			..._args: unknown[]
+		): Promise<{ present: false } | { present: true; text: string } | null> =>
+			null,
+	),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
 	readPreparedCheckoutDirectory: mocks.preparedDirectory,
@@ -181,6 +188,7 @@ beforeEach(() => {
 	mocks.hookConfig.mockReset().mockResolvedValue(null);
 	mocks.pinnedBase.mockReset().mockResolvedValue(null);
 	mocks.projectHookConfig.mockReset().mockResolvedValue(null);
+	mocks.pinnedBaseFile.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -345,7 +353,7 @@ vi.mock("../services/api-turn-workspace", () => ({
 				prepared ??= mocks.workspace();
 				return prepared;
 			},
-			{ pinnedBase: mocks.pinnedBase },
+			{ pinnedBase: mocks.pinnedBase, pinnedBaseFile: mocks.pinnedBaseFile },
 		);
 	},
 }));
@@ -2060,6 +2068,116 @@ describe("a builder's first request before its workspace is ready", () => {
 				).toBe("completed");
 			},
 		);
+
+		const hookFile = (events: string[]) => ({
+			present: true as const,
+			text: JSON.stringify({
+				version: 1,
+				hooks: events.map((event) => ({ event, command: "true" })),
+			}),
+		});
+		it.each([
+			["has no hook file", { present: false as const }],
+			["has a hook file without a UserPromptSubmit hook", hookFile(["Stop"])],
+		])(
+			"sends early when no chat read that commit yet and it %s on GitHub",
+			async (_case, file) => {
+				mocks.pinnedBaseFile.mockResolvedValue(file);
+				const workspace = heldWorkspace();
+				const order: string[] = [];
+				mocks.stepRuntime.mockImplementation(async (input) => {
+					order.push("model");
+					await input.onEvent({
+						type: "text-delta",
+						id: "reply",
+						text: "ananab",
+					});
+					setTimeout(() => {
+						order.push("workspace");
+						workspace.ready();
+					}, 5);
+					return { messages: input.messages, outcome: "completed" };
+				});
+				expect(
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+				).toBe("completed");
+				expect(order).toEqual(["model", "workspace"]);
+				expect(mocks.pinnedBaseFile).toHaveBeenCalledWith(
+					pinned,
+					".ytimesy/hooks.json",
+				);
+			},
+		);
+
+		it.each([
+			["has a UserPromptSubmit hook", hookFile(["UserPromptSubmit"])],
+			["cannot be read", null],
+			["is not JSON", { present: true as const, text: "{" }],
+			[
+				"is not a valid configuration",
+				{ present: true as const, text: '{"version":2,"hooks":[]}' },
+			],
+			[
+				"is longer than the baseline read accepts",
+				{
+					present: true as const,
+					text: `{"version":1,"hooks":[]}${" ".repeat(32000)}`,
+				},
+			],
+		])(
+			"waits for the workspace and the prompt check when the commit's file on GitHub %s",
+			async (_case, file) => {
+				mocks.pinnedBaseFile.mockResolvedValue(file);
+				const workspace = heldWorkspace();
+				const held = mocks.workspace();
+				setTimeout(() => workspace.ready(), 600);
+				let checked = false;
+				mocks.promptSubmit.mockImplementation(async () => {
+					await held;
+					checked = true;
+					return { block: false };
+				});
+				mocks.stepRuntime.mockImplementation(async (input) => {
+					expect(checked).toBe(true);
+					await input.onEvent({
+						type: "text-delta",
+						id: "reply",
+						text: "ananab",
+					});
+					return { messages: input.messages, outcome: "completed" };
+				});
+				expect(
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+				).toBe("completed");
+			},
+		);
+
+		it("prefers the project's journaled configuration over reading GitHub", async () => {
+			projectHooks({ [key]: ["UserPromptSubmit"] });
+			mocks.pinnedBaseFile.mockResolvedValue({ present: false });
+			const workspace = heldWorkspace();
+			const held = mocks.workspace();
+			setTimeout(() => workspace.ready(), 600);
+			let checked = false;
+			mocks.promptSubmit.mockImplementation(async () => {
+				await held;
+				checked = true;
+				return { block: false };
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				expect(checked).toBe(true);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(mocks.pinnedBaseFile).not.toHaveBeenCalled();
+		});
 
 		it("keeps using the chat's own configuration once it has a baseline", async () => {
 			knownHooks(["UserPromptSubmit"]);

@@ -175,6 +175,8 @@ import {
 } from "../services/fusion-lead";
 import {
 	harnessLifecycleHooks,
+	LIFECYCLE_CONFIG_PATH,
+	lifecycleConfigFromFile,
 	lifecycleHookConfig,
 } from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -880,7 +882,8 @@ async function runApiTurnAttempt(
 			// last reported, and the configuration journaled for it. A new chat
 			// has no baseline yet; when its checkout is pinned to a commit known
 			// now (pinNewChatBase), the configuration another chat of the same
-			// user's project read from that very commit answers for it. Hooks
+			// user's project read from that very commit answers for it, else that
+			// commit's file read from GitHub (still the VM's baseline). Hooks
 			// come only from the repository at the baseline (.ytimesy/hooks.json;
 			// plugin hooks are not run), so the commit names all of it.
 			knownConfig: async () => {
@@ -902,13 +905,22 @@ async function runApiTurnAttempt(
 							)
 						: null;
 				const pinned = await pinning;
-				return pinned && owner.projectId
-					? readProjectDerivedValue(
-							owner.userId,
-							owner.projectId,
-							`lifecycle-hooks:${reportedDirectory}:${pinned}`,
-						)
-					: null;
+				if (!pinned || !owner.projectId) return null;
+				const journaled = await readProjectDerivedValue(
+					owner.userId,
+					owner.projectId,
+					`lifecycle-hooks:${reportedDirectory}:${pinned}`,
+				);
+				if (journaled !== null) return journaled;
+				// No chat of the project read that commit's configuration yet
+				// (its base branch moved): the same file at the same commit,
+				// read from GitHub while the VM boots.
+				return lifecycleConfigFromFile(
+					(await prepareWorkspace.pinnedBaseFile?.(
+						pinned,
+						LIFECYCLE_CONFIG_PATH,
+					)) ?? null,
+				);
 			},
 			once: (id, run) =>
 				journaledToolOperation(
