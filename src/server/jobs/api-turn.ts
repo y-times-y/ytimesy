@@ -504,6 +504,29 @@ async function runApiTurnAttempt(
 				heartbeatBusy = false;
 			});
 	}, 1000);
+	// Reads no lease holder changes (the account's Codex sign-in, the model
+	// connection, the eval user's variant) start before the coordination
+	// lease is acquired; nothing uses them unless the turn then owns it.
+	const subscription = subscriptionTurnSettings(route.connectionRevision);
+	const checkingCodexAuth =
+		subscription && !route.connectionId
+			? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
+			: Promise.resolve(false);
+	const loadingConnection =
+		!subscription && route.connectionId
+			? timed("turn:connection", () =>
+					loadModelConnection(turn.user_id, route.connectionId as string),
+				)
+			: Promise.resolve(null);
+	const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
+	const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+	for (const loading of [
+		checkingCodexAuth,
+		loadingConnection,
+		loadingVariant,
+		loadingRecordsRequests,
+	])
+		loading.catch(() => {});
 	try {
 		failureStage = "coordination";
 		if (
@@ -516,24 +539,14 @@ async function runApiTurnAttempt(
 		coordinated = true;
 		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
-		const subscription = subscriptionTurnSettings(route.connectionRevision);
-		// Read-only setup reads overlap the lease renewal; nothing uses them
-		// unless the renewal confirms this turn still owns its lease.
+		// The session row is read once the lease is held (a code restore that
+		// held it may have changed the row); it overlaps the lease renewal, and
+		// nothing uses it unless the renewal confirms this turn still owns it.
 		// The turn already carries the session's items (every write mirrors both).
 		const loadingMetadata = timed("turn:metadata", () =>
 			agentSessionMetadataForOwner(turn.user_id, turn.session_id),
 		);
-		const checkingCodexAuth =
-			subscription && !route.connectionId
-				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
-				: Promise.resolve(false);
 		loadingMetadata.catch(() => {});
-		// Independent of the session row: read alongside it.
-		const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
-		const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
-		loadingVariant.catch(() => {});
-		loadingRecordsRequests.catch(() => {});
-		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
 			abort.signal.throwIfAborted();
@@ -602,10 +615,7 @@ async function runApiTurnAttempt(
 			webSearch = nativeWebSearchTools("openai");
 		} else {
 			if (!route.connectionId) throw new Error("Model connection was removed.");
-			const connection = await loadModelConnection(
-				turn.user_id,
-				route.connectionId,
-			);
+			const connection = await loadingConnection;
 			if (connection?.revision !== route.connectionRevision)
 				throw new Error(
 					"The API connection changed after this turn was submitted.",
