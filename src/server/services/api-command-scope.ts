@@ -71,6 +71,23 @@ export function commandScopeRoot(turnId: string) {
 		throw new Error("Invalid command scope.");
 	return `${COMMAND_SCOPES_DIRECTORY}/${turnId}`;
 }
+/**
+ * The scope of a session's background commands: unlike a turn's scope it is
+ * not stopped when a turn ends, so they keep running until they exit, are
+ * stopped, the machine stops, or their own time limit ends them.
+ */
+export function backgroundCommandScope(sessionId: string) {
+	return `bg-${sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
+}
+
+/** The longest a background command runs: YTIMESY_BACKGROUND_COMMAND_MAX_SECONDS, default six hours. */
+export function backgroundCommandMaxSeconds() {
+	const configured = Number(process.env.YTIMESY_BACKGROUND_COMMAND_MAX_SECONDS);
+	return Number.isFinite(configured) && configured > 0
+		? Math.min(86_400, Math.max(600, Math.round(configured)))
+		: 6 * 60 * 60;
+}
+
 export function scopedShellCommand(input: {
 	turnId: string;
 	cwd: string;

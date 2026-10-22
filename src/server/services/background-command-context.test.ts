@@ -34,6 +34,22 @@ it("retains yielded Browser Use command ids for cancellation and completion acro
 	).toEqual([commandId]);
 });
 
+it("leaves background commands out: they run past the turn and announce their own exit", async () => {
+	const { pendingAgentCommandIds } = await import(
+		"./background-command-context"
+	);
+	const card = receipt({ id: commandId, status: "running", background: true });
+	expect(pendingAgentCommandIds([card])).toEqual([]);
+	expect(
+		pendingAgentCommandIds([
+			{
+				...receipt({ id: commandId, status: "running" }),
+				background: { id: commandId, label: "npm run dev", startedAt: 0 },
+			},
+		]),
+	).toEqual([]);
+});
+
 it("does not resolve a workspace or checkpoint without valid pending commands", async () => {
 	const workspace = vi.fn();
 	const checkpoint = vi.fn();

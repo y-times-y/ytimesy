@@ -85,6 +85,11 @@ export type ReviewLoopDeps = Omit<
 		turnId: string,
 	) => Promise<ReviewLoopState | null>;
 	readonly save: (sessionId: string, state: ReviewLoopState) => Promise<void>;
+	/**
+	 * The session's latest loop state (any turn): a handed-off one is
+	 * continued by the turn its writer's report wakes.
+	 */
+	readonly latest?: (sessionId: string) => Promise<ReviewLoopState | null>;
 	/** checkerMode=pair: the judge's workers (its child sessions). */
 	readonly workers: (
 		checkerSessionId: string,
@@ -122,6 +127,13 @@ export type ReviewLoopInput = {
 	 * the workers' spend counts as the checker's.
 	 */
 	readonly pair?: boolean;
+	/**
+	 * lead=fusion: Main's writer is still in a build round as Main's turn
+	 * ends. Its work is not done, so the turn hands the loop off (no check);
+	 * the turn the writer's report wakes continues it from this turn's
+	 * checkpoint and checks the work then.
+	 */
+	readonly handedOff?: () => boolean;
 };
 
 type StepInput = {
@@ -267,24 +279,56 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		),
 	});
 
-	/** Step 1: the checkpoint, before the builder changes anything. */
+	/**
+	 * Whether this turn still answers the handed-off turn's request: a turn
+	 * woken by its writer's report (it carries no request of its own, or the
+	 * same one), not a new user request.
+	 */
+	const continues = (carried: ReviewLoopState["carried"]) =>
+		!!carried && (!input.taskText() || input.taskText() === carried.taskText);
+
+	/** The request the loop checks: this turn's, else the handed-off turn's. */
+	const requestText = (state: ReviewLoopState) =>
+		input.taskText() || state.carried?.taskText || "";
+
+	/** rigor=on: the builder's latest list this turn, else the handed-off turn's. */
+	const requirementsOf = (state: ReviewLoopState, items: SessionItem[]) =>
+		builderRequirements(items) ??
+		(continues(state.carried) ? (state.carried?.requirements ?? null) : null);
+
+	/**
+	 * Step 1: the checkpoint, before the builder changes anything. A turn
+	 * woken by the report of a writer a handed-off turn left working keeps
+	 * that turn's checkpoint, request and list, so the check covers the
+	 * writer's work; a new user request starts its own.
+	 */
 	async function begin() {
 		const workspace = await input.workspace();
 		const now = deps.now();
 		const runner = await deps.runnerDeadline(sessionId).catch(() => null);
-		const checkpoint = await deps.capture(workspace, reviewRef(turnId, "base"));
+		const previous = await deps.latest?.(sessionId).catch(() => null);
+		const continued =
+			previous?.phase === "handed-off" &&
+			previous.turnId !== turnId &&
+			continues(previous.carried)
+				? previous
+				: null;
+		const checkpoint =
+			continued?.checkpoint ??
+			(await deps.capture(workspace, reviewRef(turnId, "base")));
 		return save({
 			version: 1,
 			kind: "review",
 			turnId,
 			phase: "building",
-			startedAt: now,
+			startedAt: continued?.startedAt ?? now,
 			deadlineAt: Math.min(
 				now + REVIEW_LOOP_LIMITS.loopMinutes * 60_000,
 				runner ?? Number.POSITIVE_INFINITY,
 			),
 			checkpoint,
 			rounds: [],
+			...(continued?.carried ? { carried: continued.carried } : {}),
 		});
 	}
 
@@ -360,7 +404,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				UNVERIFIED_SEND_BACK_TIME_LEFT
 				? admittedUnverified(attemptReport(step.items))
 				: [];
-		const requirements = input.rigor ? builderRequirements(step.items) : null;
+		const requirements = input.rigor ? requirementsOf(state, step.items) : null;
 		const directory = `${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
 		const prepared = await deps.vm(checkerDirectoryCommand(directory), 20_000);
 		if (prepared.exitCode !== 0)
@@ -378,7 +422,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				title: `Review ${n} of ${REVIEW_LOOP_LIMITS.maxRounds}`,
 				...(input.pair ? { pair: true } : {}),
 				brief: independentReviewBrief({
-					taskText: input.taskText(),
+					taskText: requestText(state),
 					checkout: workspace.cwd,
 					changedFiles,
 					scratch: directory,
@@ -609,6 +653,22 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			if (!state || state.phase === "done")
 				return { kind: "finished", messages: step.messages, items: step.items };
 			if (state.phase === "checking") return awaitChecker(state, step);
+			if (
+				(state.phase === "building" || state.phase === "handed-off") &&
+				input.handedOff?.()
+			) {
+				const list = input.rigor ? requirementsOf(state, step.items) : null;
+				await save({
+					...state,
+					phase: "handed-off",
+					carried: {
+						turnId: state.carried?.turnId ?? turnId,
+						taskText: requestText(state),
+						...(list ? { requirements: list } : {}),
+					},
+				});
+				return { kind: "finished", messages: step.messages, items: step.items };
+			}
 			if (state.phase === "fixing") {
 				const round = state.rounds.at(-1) as ReviewRound;
 				const fix = round.fix;

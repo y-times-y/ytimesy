@@ -145,7 +145,16 @@ const results = await Promise.all(
 						"select count(*)::int as n from api_turn where session_id=$1 and state in ('completed','failed','cancelled')",
 						[sessionId],
 					);
-					return live.rows[0].n === 0 && root.rows[0].n >= turns;
+					// A finished round's report not yet delivered wakes Main again.
+					const reports = await database().query(
+						"select count(*)::int as n from agent_task_event where parent_session_id = any($1::uuid[]) and status in ('pending','delivering')",
+						[tree],
+					);
+					return (
+						live.rows[0].n === 0 &&
+						reports.rows[0].n === 0 &&
+						root.rows[0].n >= turns
+					);
 				},
 				Number(values.timeout) * 1000,
 				`${scenario.id} to settle`,

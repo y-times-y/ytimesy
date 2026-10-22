@@ -20,11 +20,14 @@ export function orchestratorInstructions(
 		readOnly?: boolean;
 		/** Harness variant subagents=force (the root builder only). */
 		force?: boolean;
-		/** The chat's own agent (no parent): it talks to the user. */
-		root?: boolean;
+		/**
+		 * The chat's own agent (Main): it talks to the user, posts each helper's
+		 * finish, and hands off and ends its turn instead of waiting.
+		 */
+		main?: boolean;
 	} = {},
 ) {
-	const { codeMode, readOnly, force, root } = options;
+	const { codeMode, readOnly, force, main } = options;
 	const parallel = readOnly
 		? 'await Promise.all([tools.agent({ role: "researcher", title: "Map the parser", brief: "…" }), tools.agent({ role: "researcher", title: "Map the cache", brief: "…" })])'
 		: 'await Promise.all([tools.agent({ role: "writer", title: "Fix pricing rounding", brief: "…" }), tools.agent({ role: "writer", title: "Build the release bundle", brief: "…" })])';
@@ -55,8 +58,10 @@ export function orchestratorInstructions(
 			: [
 					"Coordinate shared resources: give each writer a disjoint file set and each process its own port. Never run two writers on the same files at once; run them one after another.",
 				]),
-		"Keep working while agents run. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed.",
-		...(root ? [ROOT_HELPER_UPDATES] : []),
+		main
+			? "Keep working on what does not depend on them. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed."
+			: "Keep working while agents run. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed.",
+		...(main ? [ROOT_HELPER_UPDATES, HANDOFF_INSTRUCTIONS] : []),
 		readOnly
 			? "Verify before relying on an agent: a report is a claim, not a fact; spot-check its findings before you report them."
 			: "Verify before relying on an agent: a report is a claim, not a fact. Review a writer's patch (`git diff <base> <ref>`), apply it with `git apply -3`, rerun its checks yourself; spot-check a reader's findings before they drive edits.",
@@ -66,25 +71,34 @@ export function orchestratorInstructions(
 }
 
 /**
- * The root's duty to keep the user posted: the chat lists its agents, and
- * the user may write to one directly (the lead gets a notice of it).
+ * Main's duty to keep the user posted: the chat lists its agents by task, and
+ * the user may write to one directly (Main gets a notice of it).
  */
 export const ROOT_HELPER_UPDATES =
-	'When an agent\'s report arrives, first tell the user in one line what it finished (e.g. "Writer 2 finished: tests pass, 3 files changed"), then continue. The user can also message your agents directly; a notice tells you what they sent.';
+	'When an agent\'s report arrives, first tell the user in one line what it finished, naming it by its task (e.g. "Fix pricing rounding finished: tests pass, 3 files changed"), then continue. The user can also message your agents directly; a notice tells you what they sent.';
+
+/**
+ * Hand-off (every agent that starts helpers or background commands): never
+ * wait for them in a turn; tell the user where things stand and end it.
+ */
+export const HANDOFF_INSTRUCTIONS =
+	"When only waiting is left, do not wait or poll: give the user a full status (what you started and why, what each one is doing, what happens next) and end your turn. Reports and background command exits arrive as messages and wake you; then continue, and when you tell the user about the results, give a full report: what was done, the results, the evidence (commands and their exit status) and the next steps.";
 
 /** subagents=force: delegation is required, its shape is the builder's choice. */
 export const FORCED_DELEGATION =
 	"For this task, delegation is required: start at least one subagent before you finish. Choose what fits: researchers mapping code or data in parallel while you start, writers for independent parts, or a reviewer checking your fix while you run the tests. Integrate and verify their results yourself.";
 
 /**
- * The lead's block (harness variant lead=fusion, after the fusion pattern): it
- * replaces the orchestration block for the root builder. The lead talks to
- * the user, plans, briefs and reviews; a persistent sidekick explores the
- * code first (the harness starts that round from the user's request) and
- * returns snippets the lead plans from, then implements, tests and fixes in
- * the lead's own checkout while the lead waits. `editTools` and `readTool`
- * are the surface's own names; `pair` tunes brief style, pushback and
- * exploration (src/domain/fusion-pairs.ts).
+ * Main's block (harness variant lead=fusion, after the fusion pattern): it
+ * replaces the orchestration block for the root builder. Main talks to the
+ * user, plans, briefs and reviews; a persistent writer explores the code
+ * first (the harness starts that round from the user's request and Main
+ * waits for it) and returns snippets Main plans from, then implements,
+ * tests and fixes in Main's own checkout. During a build round Main is
+ * free but cannot edit or run commands. `editTools` and `readTool` are the
+ * surface's own names; `pair` tunes brief style, pushback and exploration
+ * (src/domain/fusion-pairs.ts). Model-facing text says "Main" and "your
+ * writer", never lead or sidekick.
  */
 export function fusionLeadInstructions(options: {
 	readonly editTools: readonly string[];
@@ -96,20 +110,21 @@ export function fusionLeadInstructions(options: {
 	const pair = options.pair;
 	const explores = pair?.sidekickExplores ?? true;
 	return [
-		`Subagents: you are the lead. You talk to the user, plan, brief and review, and rarely edit; a persistent sidekick (a writer agent, usually on a cheaper model) explores the code, implements, tests and fixes. It works directly in your checkout, one writer at a time: while it works you wait (the runtime makes no model call for you until its report arrives), then you review its changes in place. \`${AGENT_SEND_TOOL}\` sends it the next brief or feedback, or stops it; its reports arrive as messages.`,
+		`Helpers: you are Main. You talk to the user, plan, brief and review, and rarely edit; your writer (a persistent writer agent, usually on a cheaper model) explores the code, implements, tests and fixes. It works directly in your checkout, one writer at a time: while its round runs your edits and commands are refused, so read, plan or answer the user meanwhile. \`${AGENT_SEND_TOOL}\` sends it the next brief or feedback, or stops it; its reports arrive as messages.`,
 		explores
-			? `- Each user request starts with the sidekick's exploration: the runtime gives it the request before your first step, and its report (file paths with line ranges, the key snippets, the check commands and what the request touches) arrives with the request. Plan from those snippets; read a file yourself${read} only to fill a specific gap they leave, or send \`${AGENT_SEND_TOOL}\` with explore: true for another exploration round.`
-			: `- Explore only enough to plan (researchers can explore for you), then hand implementation and testing to the sidekick early: \`${AGENT_TOOL}\` with role writer starts it.`,
+			? `- Each user request starts with your writer's exploration: the runtime gives it the request before your first step, and its report (file paths with line ranges, the key snippets, the check commands and what the request touches) arrives with the request. Plan from those snippets; read a file yourself${read} only to fill a specific gap they leave, or send \`${AGENT_SEND_TOOL}\` with explore: true for another exploration round.`
+			: `- Explore only enough to plan (researchers can explore for you), then hand implementation and testing to your writer early: \`${AGENT_TOOL}\` with role writer starts it.`,
 		"- Short or trivial changes (one obvious edit): make them yourself; a round costs more than it saves there.",
-		`- Your sidekick lives for this chat: it keeps its context from round to round and across the user's messages. Send it each next brief with \`${AGENT_SEND_TOOL}\` (id from its report); it sees only your messages, never this conversation. When none is running, \`${AGENT_TOOL}\` with role writer starts one.`,
+		`- Your writer lives for this chat: it keeps its context from round to round and across the user's messages. Send it each next brief with \`${AGENT_SEND_TOOL}\` (id from its report); it sees only your messages, never this conversation. When none is running, \`${AGENT_TOOL}\` with role writer starts one.`,
 		pair?.briefStyle === "prescriptive"
 			? "- Brief prescriptively: the exact files and functions to change, the change itself step by step, the edge cases, and the commands that must pass. It follows the brief as written; it does not redesign."
 			: `- Brief by outcome: the goal; constraints; the files and areas involved; edge cases; and the definition of done as concrete checks or commands that must pass.${pair?.pushback ? " It may push back on your approach with evidence; weigh that before you insist." : ""}`,
+		`- After you hand a round off, do not wait for it: give the user a full status (what your writer is doing, why, what comes next) and end your turn. Its report wakes you.`,
 		"- Each build round's changes stay uncommitted in your working tree; its report lists the files and the exact diff command for the round (`git diff <start> <end>`). Review that diff and the evidence, and rerun the key check yourself: a report is a claim, not a fact. Revert what you reject (`git checkout -- <file>`) before the next round; the turn's usual commit publishes what you keep.",
 		`- Wrong or incomplete: send specific feedback with \`${AGENT_SEND_TOOL}\` (what fails, where, what done looks like) for another round instead of fixing it yourself.`,
-		`- A runtime notice tells you when the sidekick looks stuck (the same check failing again, the same error, no file changes, its budget used): re-brief it more prescriptively, or take over and edit yourself${edit ? ` (${edit})` : ""}. Take over also when it is clearly out of its depth.`,
+		`- A runtime notice tells you when your writer looks stuck (the same check failing again, the same error, no file changes, its budget used): re-brief it more prescriptively, or take over and edit yourself${edit ? ` (${edit})` : ""}. Take over also when it is clearly out of its depth.`,
 		`- Its reports arrive on their own and wake you: message it only to change its course or stop it, never to ask for progress or to hurry it. ${ROOT_HELPER_UPDATES}`,
-		`- Your final answer comes after its last report. Researchers and reviewers read your VM read-only when a separate investigation or a second look helps. Stop the sidekick (\`${AGENT_SEND_TOOL}\` with stop: true) only when this chat no longer needs it. A refused spawn means do the work yourself.`,
+		`- When the work is done, your answer to the user is a full report: what was done, the results, the evidence (commands and their exit status) and the next steps. Researchers and reviewers read your VM read-only when a separate investigation or a second look helps. Stop your writer (\`${AGENT_SEND_TOOL}\` with stop: true) only when this chat no longer needs it. A refused spawn means do the work yourself.`,
 	].join("\n");
 }
 
@@ -118,15 +133,15 @@ export function sidekickRoleInstructions(budget: SubagentBudget) {
 	const state = budget.sidekick;
 	const pair = state?.pair;
 	return [
-		"You are the lead's sidekick: a persistent writer agent working directly in the lead's checkout on its VM. You explore the code, implement, test and fix what each brief asks; the lead plans from your findings, reviews your work in place and answers in this conversation with feedback or the next brief, each one a new round. The lead does not edit while you work.",
+		"You are Main's writer: a persistent writer agent working directly in Main's checkout on its VM. You explore the code, implement, test and fix what each brief asks; Main plans from your findings, reviews your work in place and answers in this conversation with feedback or the next brief, each one a new round. Main does not edit while you work.",
 		"In an exploration round change no files: return the relevant file paths with line ranges, the key snippets quoted with line numbers (only what a plan needs), the commands that build and check the project and what they print now, and your open questions.",
 		pair?.pushback
 			? 'When a brief\'s approach looks wrong, say so in your report in a paragraph that starts with "Pushback:", with the evidence and what you would do instead, and still do the part that stands.'
 			: "Follow each brief as written. When it is wrong or impossible, do what you can and say exactly why in your report instead of redesigning.",
-		"Leave your changes uncommitted in the working tree: do not commit, stash, reset, switch branches or discard changes you did not make. The lead reviews each round's changes with git diff, and between rounds it may keep, change or revert them; each round starts from the checkout as the lead left it.",
-		"Do the work yourself; you start no agents. You see only the lead's messages, not its conversation; do not ask it questions you can settle yourself.",
+		"Leave your changes uncommitted in the working tree: do not commit, stash, reset, switch branches or discard changes you did not make. Main reviews each round's changes with git diff, and between rounds it may keep, change or revert them; each round starts from the checkout as Main left it.",
+		"Do the work yourself; you start no agents. You see only Main's messages, not its conversation; do not ask it questions you can settle yourself.",
 		`Your budget per round: ${budget.steps} steps, ${budget.minutes} minutes${state ? `, ${state.roundTokens.toLocaleString("en-US")} tokens; ${state.maxRounds} rounds at most per user request` : ""}. Near the end of a round you are told to wrap up; at the limit the round stops and whatever you have is reported.`,
-		"Your final message each round is your report to the lead: what you found or changed, the exact commands you ran with their exit status, and what is unverified. The lead will check it, so claim only what you verified.",
+		"Your final message each round is your full report to Main: what you found or changed, the results, the exact commands you ran with their exit status, what is unverified and what you would do next. Main will check it, so claim only what you verified.",
 	].join(" ");
 }
 

@@ -135,8 +135,8 @@ describe("sidekick rounds", () => {
 			maxRounds: 6,
 			message: "  Fix the parser. ",
 		});
-		expect(message).toMatch(/^Round 3\/6 from your lead\./);
-		expect(message).toContain("You work in the lead's checkout as it is now");
+		expect(message).toMatch(/^Round 3\/6 from Main\./);
+		expect(message).toContain("You work in Main's checkout as it is now");
 		expect(message.endsWith("\n\nFix the parser.")).toBe(true);
 		expect(
 			sidekickRoundMessage({

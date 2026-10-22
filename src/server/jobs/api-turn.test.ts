@@ -32,10 +32,9 @@ const mocks = vi.hoisted(() => ({
 	reviewLoop: vi.fn(),
 	beforeModel: vi.fn(),
 	afterAttempt: vi.fn(),
-	leadGate: vi.fn(async (): Promise<"ready" | "wait"> => "ready"),
+	leadGate: vi.fn(async (): Promise<"ready" | "busy" | "wait"> => "ready"),
 	/** A lean surface (lead mode needs one); off by default. */
 	lean: null as null | Record<string, unknown>,
-	roundOpen: vi.fn(async () => false),
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
@@ -61,7 +60,6 @@ vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
 vi.mock("../services/fusion-lead", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../services/fusion-lead")>()),
 	fusionLeadGate: mocks.leadGate,
-	fusionRoundOpen: mocks.roundOpen,
 }));
 vi.mock("../services/review-loop", () => ({
 	createReviewLoop: mocks.reviewLoop,
@@ -256,6 +254,7 @@ vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: mocks.result,
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: mocks.enqueue }));
@@ -1483,7 +1482,7 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			return { messages: input.messages, outcome: "completed" };
 		});
 
-	it("lead=fusion: a round still open at completion continues the turn once; the next step completes", async () => {
+	it("lead=fusion: Main is released during a build round: the turn completes while it runs", async () => {
 		mocks.variant.mockReturnValue({
 			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
 			lead: "fusion",
@@ -1496,35 +1495,17 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			waitHint: () => "",
 			saveHistory: async () => null,
 		};
-		mocks.leadGate.mockClear();
-		mocks.roundOpen.mockReset().mockResolvedValueOnce(true);
-		const before = Date.now();
+		mocks.leadGate.mockReset().mockResolvedValueOnce("busy");
 		expect(
 			await runApiTurn(
 				{} as WorkspaceMachines,
 				{ ...rootTurn, id: "turn-lead" },
 				durable(),
 			),
-		).toBe("continue");
-		expect(mocks.leadGate).toHaveBeenCalledOnce();
-		// Bounded by this step's gate: only a round started since then holds it.
-		const [owner, since] = mocks.roundOpen.mock.calls[0] as unknown as [
-			{ id: string },
-			number,
-		];
-		expect(owner.id).toBe("session");
-		expect(since).toBeGreaterThanOrEqual(before);
-		expect(mocks.commit).not.toHaveBeenCalled();
-		mocks.roundOpen.mockResolvedValue(false);
-		expect(
-			await runApiTurn(
-				{} as WorkspaceMachines,
-				{ ...rootTurn, id: "turn-lead" },
-				{ index: 3, signal: new AbortController().signal },
-			),
 		).toBe("completed");
-		expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+		expect(mocks.leadGate).toHaveBeenCalledOnce();
 		expect(mocks.commit).toHaveBeenCalledOnce();
+		mocks.leadGate.mockResolvedValue("ready");
 		mocks.lean = null;
 	});
 

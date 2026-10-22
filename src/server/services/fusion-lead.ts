@@ -34,17 +34,16 @@ import {
 
 /**
  * Lead mode fusion's turn rules (src/domain/sidekick.ts), checked before
- * each of the lead's model calls:
+ * each of Main's model calls:
  *
  * - A new user request without an exploration round gets one, started by
- *   the harness from the request itself, so the lead's first model call
- *   already carries the sidekick's files and snippets.
- * - One writer at a time in the shared checkout: while the sidekick is in a
- *   round the lead makes no model call (its turn waits, across durable
- *   steps), and its report is put in the lead's mailbox the moment it
- *   exists, so the next model call carries it.
- * - So the lead's turn cannot complete while a round runs: its final
- *   answer comes after the last round's report.
+ *   the harness from the request itself, and Main's first model call waits
+ *   for it, so it already carries the writer's files and snippets.
+ * - Build rounds release Main: it may read, plan and talk to the user while
+ *   its writer works, but its own edits and commands are refused while a
+ *   round is open (one writer at a time in the shared checkout). Main's turn
+ *   may end while a round runs; the round's report reaches Main as any
+ *   helper report does (agent-task-event-delivery.ts), after Main's turn.
  */
 
 /** A round with no live sidekick and no report for this long is given up. */
@@ -149,7 +148,10 @@ async function roundsInProgress(
 ) {
 	const now = deps.now();
 	const iso = new Date(now).toISOString();
-	const pending: { readonly startedAt: string }[] = [];
+	const pending: {
+		readonly startedAt: string;
+		readonly kind?: "explore" | "build";
+	}[] = [];
 	for (const sidekick of sidekicks) {
 		const round = currentSidekickRound(sidekick.state);
 		if (!round) continue;
@@ -158,7 +160,9 @@ async function roundsInProgress(
 			round.startedAt,
 		);
 		if (events.length) {
-			if (options.stage)
+			// Only an exploration's report is Main's input mid-turn; a build
+			// round's report is delivered after Main's turn ends.
+			if (options.stage && round.kind === "explore")
 				for (const event of events.filter((entry) => entry.pending))
 					await deps.stage(
 						lead.id,
@@ -205,7 +209,7 @@ async function roundsInProgress(
 			await deps.stage(
 				lead.id,
 				`sidekick-stalled:${sidekick.session.id}:${round.n}`,
-				`Runtime notice: your sidekick's round ${round.n} did not run or report, so it is retired. Its changes, if any, are in your checkout (git status). Start a new writer for the brief, or do it yourself.`,
+				`Runtime notice: your writer's round ${round.n} did not run or report, so it is retired. Its changes, if any, are in your checkout (git status). Start a new writer for the brief, or do it yourself.`,
 			);
 			continue;
 		}
@@ -229,14 +233,15 @@ export type FusionLeadGateInput = {
 };
 
 /**
- * Before a lead's model call: starts the request's exploration when it has
- * none, then waits while the sidekick works. "ready": the model may be
- * called (any report is in the lead's mailbox); "wait": the round still
- * runs at `waitUntil`, so the step ends and the next one waits on.
+ * Before Main's model call: starts the request's exploration when it has
+ * none and waits for it. "ready": no round is open (Main may write);
+ * "busy": a build round is open, Main is called but its writes refuse;
+ * "wait": an exploration still runs at `waitUntil`, so the step ends and
+ * the next one waits on.
  */
 export async function fusionLeadGate(
 	input: FusionLeadGateInput,
-): Promise<"ready" | "wait"> {
+): Promise<"ready" | "busy" | "wait"> {
 	const deps = { ...defaultDeps, ...input.deps };
 	const lead = input.context.parent;
 	const signal = input.context.signal;
@@ -283,33 +288,15 @@ export async function fusionLeadGate(
 				if (started) sidekicks = await leadSidekicks(deps, lead);
 			}
 		}
-		if (
-			!(await roundsInProgress(deps, lead, sidekicks, { stage: true })).length
-		)
-			return "ready";
+		const open = await roundsInProgress(deps, lead, sidekicks, {
+			stage: true,
+		});
+		if (!open.length) return "ready";
+		if (!open.some((round) => round.kind === "explore")) return "busy";
 		const left = input.waitUntil - deps.now();
 		if (left <= 0) return "wait";
 		await deps.sleep(Math.min(POLL_MS, left), signal);
 	}
-}
-
-/**
- * The completion check: whether a round started since `since` (the start
- * of this step's gate) is still in progress, by the gate's own rule. Only
- * this step's handoffs can start one, so a round the gate already waited
- * out (or one left inconsistent) never keeps the turn from completing.
- */
-export async function fusionRoundOpen(
-	lead: AgentSessionRecord,
-	since: number,
-	deps: Partial<FusionLeadDeps> = {},
-) {
-	const all = { ...defaultDeps, ...deps };
-	return (
-		await roundsInProgress(all, lead, await leadSidekicks(all, lead), {
-			stage: false,
-		})
-	).some((round) => Date.parse(round.startedAt) >= since);
 }
 
 /** The tools that write the checkout or run commands in it. */
@@ -318,7 +305,7 @@ const WRITING_TOOLS = new Set<string>(
 );
 
 export const LEAD_WAITS_NOTICE =
-	"Your sidekick is working in your checkout this round, so you do not edit files or run commands now: the runtime holds your next step until its report arrives, then review its changes in place.";
+	"Your writer is working in your checkout this round, so you do not edit files or run commands until its report arrives. Meanwhile read, plan or answer the user; when nothing else is left, give the user a full status (what is running, why, what comes next) and end your turn: the report wakes you, then review its changes in place.";
 
 /**
  * The lead's writes within one step: whether a sidekick round started
@@ -359,9 +346,9 @@ export function leadWriteTracker() {
 export type LeadWriteTracker = ReturnType<typeof leadWriteTracker>;
 
 /**
- * The lead's writing tools (edits, commands, stdin to a running command)
- * refuse while a round it just started runs (a call in the same batch as
- * the handoff); from the next step on the gate keeps the lead waiting.
+ * Main's writing tools (edits, commands, stdin to a running command)
+ * refuse while a round is open: one it just started (a call in the same
+ * batch as the handoff) or one the gate found running ("busy").
  */
 export function withSidekickWriteGuard(
 	tools: ToolSet,

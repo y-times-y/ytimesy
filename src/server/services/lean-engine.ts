@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Tool, ToolSet } from "ai";
+import { backgroundCommandLabel } from "#/domain/background-command";
 import { MEMORY_DIRECTORY } from "#/domain/memory-repo";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { agentOutputDirectory } from "./agent-output-artifacts";
@@ -68,6 +69,8 @@ export type LeanCommandResult = {
 	truncationNote?: string;
 	wallSeconds: number;
 	note?: string;
+	/** Started with the background option: runs on after the turn and notifies its agent when it exits. */
+	background?: true;
 };
 
 type FileRead =
@@ -89,8 +92,10 @@ type FileRead =
 			cut: boolean;
 	  };
 
-/** The longest a lean command runs, and the longest a call waits for one. */
+/** The longest a foreground lean command runs, and the longest a call waits for one. */
 export const LEAN_COMMAND_MAX_SECONDS = 600;
+/** A foreground command's default time limit. */
+export const LEAN_COMMAND_DEFAULT_SECONDS = 120;
 /** The longest a command call waits before returning a still-running command's id. */
 export const LEAN_YIELD_MAX_SECONDS = 30;
 /** Workspace exec timeout for the engine's own file and search helpers. */
@@ -258,6 +263,13 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 				yieldSeconds: number;
 				waitSeconds?: number;
 				maxBytes?: number;
+				/**
+				 * Start it in the background: it returns at once with the command's id,
+				 * runs until it exits or is stopped (bounded only by the long background
+				 * cap, backgroundCommandMaxSeconds), and survives the turn; its agent is
+				 * told when it exits. `maxSeconds`, `yieldSeconds` and `waitSeconds` are ignored.
+				 */
+				background?: boolean;
 			},
 			options: ExecuteOptions,
 		): Promise<LeanCommandResult> {
@@ -266,6 +278,29 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 			const command = input.workdir
 				? `cd ${quote(input.workdir)} && ${input.command}`
 				: input.command;
+			if (input.background) {
+				const page = await call(
+					"execute_command",
+					{
+						command,
+						maxSeconds: LEAN_COMMAND_MAX_SECONDS,
+						yieldSeconds: 0,
+						background: { label: backgroundCommandLabel(input.command) },
+					},
+					options,
+				);
+				return {
+					...(await settle(
+						workspace,
+						input.command,
+						page,
+						0,
+						started,
+						input.maxBytes,
+					)),
+					background: true,
+				};
+			}
 			let page = await call(
 				"execute_command",
 				{

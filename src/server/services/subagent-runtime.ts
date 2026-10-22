@@ -339,7 +339,7 @@ export async function subagentReport(input: {
 				),
 			).catch(() => {});
 			parts.push(
-				`Sidekick ${label} ran on a fork from before the shared checkout, so it is retired after this report: review and apply its patch yourself. Your next writer becomes a sidekick that works in your checkout.`,
+				`Writer ${label} ran on a fork from before the shared checkout, so it is retired after this report: review and apply its patch yourself. Your next writer works in your checkout.`,
 			);
 		}
 	}
@@ -353,11 +353,11 @@ export function sidekickChangesBlock(
 	changes: SidekickRoundChanges | null,
 ) {
 	if (!changes || !base)
-		return `Sidekick ${label} worked in your checkout; its changes are uncommitted in your working tree. Review them in place with \`git status\` and \`git diff\` (this round's exact changes could not be listed).`;
+		return `Writer ${label} worked in your checkout; its changes are uncommitted in your working tree. Review them in place with \`git status\` and \`git diff\` (this round's exact changes could not be listed).`;
 	if (!changes.files.length)
-		return `Sidekick ${label} changed no files in your checkout this round.`;
+		return `Writer ${label} changed no files in your checkout this round.`;
 	return [
-		`Sidekick ${label} worked in your checkout: this round changed ${changes.files.length} file${changes.files.length === 1 ? "" : "s"}, uncommitted in your working tree. Review them in place: \`git diff ${base.slice(0, 12)} ${changes.end.slice(0, 12)}\` is this round alone (\`git diff\` and \`git status\` show all uncommitted work).`,
+		`Writer ${label} worked in your checkout: this round changed ${changes.files.length} file${changes.files.length === 1 ? "" : "s"}, uncommitted in your working tree. Review them in place: \`git diff ${base.slice(0, 12)} ${changes.end.slice(0, 12)}\` is this round alone (\`git diff\` and \`git status\` show all uncommitted work).`,
 		`\`\`\`\n${changes.stat}\n\`\`\``,
 	].join("\n");
 }
@@ -529,13 +529,13 @@ async function endSidekickRoundAndReport(input: {
 	});
 	if (ended.retired)
 		return [
-			`Sidekick ${input.label} is retired (${ended.retired.reason}). Start a new writer for more work.`,
+			`Writer ${input.label} is retired (${ended.retired.reason}). Start a new writer for more work.`,
 			notice,
 		]
 			.filter(Boolean)
 			.join("\n\n");
 	return [
-		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); it works in your checkout as it is then, so keep or revert its changes first.`,
+		`Writer ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); it works in your checkout as it is then, so keep or revert its changes first.`,
 		notice,
 	]
 		.filter(Boolean)
