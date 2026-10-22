@@ -88,11 +88,12 @@ export async function harborRuntime(input: {
 
 /**
  * OpenAI models in Amazon Bedrock (bedrock.ts): the product's OpenAI
- * Responses runtime pointed at bedrock-runtime, every request SigV4-signed
+ * Responses runtime pointed at bedrock-mantle (or bedrock-runtime), every request SigV4-signed
  * from the operator's AWS credentials. The OpenAI client is given the bare
  * model id (gpt-6-luna) so it treats the model exactly as on the openai-api
  * route (reasoning effort, developer instructions, catalog context window);
- * the signer sends the inference profile id (global.openai.gpt-6-luna) in
+ * the signer sends the Bedrock id (openai.gpt-6-luna on mantle,
+ * global.openai.gpt-6-luna on bedrock-runtime) in
  * its place. Prompt caching keys requests to the trial's cache scope as the
  * openai-api route does.
  */
@@ -123,6 +124,7 @@ async function bedrockRuntime(input: {
 		fetch: bedrockSigningFetch({
 			credentials,
 			region: bedrock.region,
+			endpoint: bedrock.endpoint,
 			fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
 			model: { client: clientModel, profile: config.modelId },
 		}),

@@ -1,6 +1,7 @@
 /**
- * Paid smoke for the bridge's bedrock route: exactly one streamed request
- * per model (Sol, then Luna), each offered one tool and asked to call it.
+ * Paid smoke for the bridge's bedrock route: one streamed call per model
+ * (Sol, then Luna), each offered Bedrock Web Search (when on) and one function
+ * tool, and asked to search and then call the tool.
  * Prints only status, tokens and the list-price estimate; never credentials.
  * Run only with the operator's approval:
  *
@@ -13,7 +14,12 @@
 import { jsonSchema, streamText, tool } from "ai";
 import { usageCostUsd } from "../../src/domain/model-pricing";
 import { apiTokenUsage } from "../../src/server/adapters/api-token-usage";
-import { bedrockModelId } from "./bedrock";
+import {
+	BEDROCK_WEB_SEARCH_USD,
+	bedrockModelId,
+	bedrockWebSearchTools,
+	webSearchQueries,
+} from "./bedrock";
 import { harborBridgeConfig } from "./config";
 import { harborRuntime } from "./runtime";
 import { guardedLanguageModel, trialSpendGuard } from "./spend";
@@ -24,7 +30,7 @@ const base = harborBridgeConfig(process.env);
 if (!base.bedrock) throw new Error("Set YTIMESY_HARBOR_ROUTE=bedrock.");
 let spent = 0;
 for (const model of MODELS) {
-	const modelId = bedrockModelId(model, base.bedrock.profile);
+	const modelId = bedrockModelId(model, base.bedrock);
 	const config = harborBridgeConfig({
 		...process.env,
 		YTIMESY_HARBOR_MODEL: modelId,
@@ -45,13 +51,17 @@ for (const model of MODELS) {
 	const started = Date.now();
 	let status = "ok";
 	let toolCalls = 0;
+	let searches = 0;
 	let chunks = 0;
 	let usage = null as ReturnType<typeof apiTokenUsage> | null;
 	try {
 		const result = streamText({
 			model: runtime.model,
-			prompt: "Call the ping tool once with text 'hi'. Do not answer in prose.",
+			prompt: config.webSearch
+				? "Use web search to find the latest released version of the Python package 'requests' on PyPI, then call the ping tool once with that version as text. Do not answer in prose."
+				: "Call the ping tool once with text 'hi'. Do not answer in prose.",
 			tools: {
+				...(config.webSearch ? bedrockWebSearchTools() : {}),
 				ping: tool({
 					description: "Echo a short text.",
 					inputSchema: jsonSchema<{ text: string }>({
@@ -68,7 +78,9 @@ for (const model of MODELS) {
 		});
 		for await (const part of result.fullStream) {
 			chunks++;
-			if (part.type === "tool-call") toolCalls++;
+			if (part.type === "tool-call" && part.toolName === "ping") toolCalls++;
+			if (part.type === "tool-result" && part.toolName === "web_search")
+				searches += webSearchQueries(part.output);
 			if (part.type === "error")
 				status = `error: ${String(part.error).slice(0, 200)}`;
 		}
@@ -76,8 +88,10 @@ for (const model of MODELS) {
 	} catch (error) {
 		status = `failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`;
 	}
-	const cost = usage ? usageCostUsd(usage, config.billing) : 0;
-	spent += cost ?? 0;
+	const searchUsd = searches * BEDROCK_WEB_SEARCH_USD;
+	const cost =
+		(usage ? (usageCostUsd(usage, config.billing) ?? 0) : 0) + searchUsd;
+	spent += cost;
 	console.log(
 		JSON.stringify({
 			model: config.modelId,
@@ -85,6 +99,8 @@ for (const model of MODELS) {
 			ms: Date.now() - started,
 			streamParts: chunks,
 			toolCalls,
+			searches,
+			searchUsd,
 			inputTokens: usage?.inputTokens ?? null,
 			cacheReadTokens: usage?.cacheReadTokens ?? null,
 			cacheWriteTokens: usage?.cacheWriteTokens ?? null,

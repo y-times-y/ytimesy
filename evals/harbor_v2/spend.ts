@@ -63,6 +63,8 @@ export function trialSpendGuard(input: {
 	 * priced at its own model: a checker on roleModels.checker costs its price.
 	 */
 	parts: () => readonly SpendPart[];
+	/** Dollars billed outside token usage (Bedrock Web Search queries). */
+	extraUsd?: () => number;
 }): TrialSpendGuard {
 	let requests = 0;
 	let stopped: string | null = null;
@@ -71,7 +73,7 @@ export function trialSpendGuard(input: {
 			.parts()
 			.reduce(
 				(total, part) => total + estimatedUsd(part.usage, part.billing),
-				0,
+				input.extraUsd?.() ?? 0,
 			);
 	const refuse = (reason: string) => {
 		stopped = reason;

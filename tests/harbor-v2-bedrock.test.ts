@@ -5,11 +5,14 @@ import {
 	bedrockCredentials,
 	bedrockModelId,
 	bedrockSigningFetch,
+	bedrockWebSearchTools,
+	bedrockWebSearchUsd,
 	parseCredentialsFile,
 	signAwsRequest,
 } from "../evals/harbor_v2/bedrock";
 import { harborBridgeConfig, routeProvider } from "../evals/harbor_v2/config";
 import { harborRuntime } from "../evals/harbor_v2/runtime";
+import { trialSpendGuard } from "../evals/harbor_v2/spend";
 import { usageCostUsd } from "../src/domain/model-pricing";
 
 vi.mock("../src/server/adapters/browse-models", () => ({
@@ -32,19 +35,41 @@ const bedrock = {
 };
 
 describe("bedrock route config", () => {
-	it("defaults to Sol on the global profile in us-east-1, without web search", () => {
+	it("defaults to Sol on mantle in us-east-1, with Bedrock web search", () => {
 		const config = harborBridgeConfig(bedrock);
 		expect(config).toMatchObject({
 			route: "bedrock",
-			modelId: "global.openai.gpt-6.1-sol",
-			webSearch: false,
+			modelId: "openai.gpt-6.1-sol",
+			webSearch: true,
 			keyFile: null,
 			keyEnv: null,
 			trialUsdCap: 0.5,
 			total: { capUsd: 1 },
 			bedrock: {
 				region: "us-east-1",
+				endpoint: "mantle",
 				profile: "global",
+				baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+			},
+		});
+		// In-Region on mantle: priced 10% above list until the bill says otherwise.
+		expect(config.billing.price?.input).toBeCloseTo(2.2, 10);
+		expect(config.billing.price?.cacheRead).toBeCloseTo(0.11, 10);
+		expect(config.billing.price?.cacheWrite).toBeCloseTo(2.75, 10);
+		expect(config.billing.price?.output).toBeCloseTo(11, 10);
+		expect(routeProvider("bedrock")).toBe("openai");
+	});
+
+	it("keeps bedrock-runtime on the global profile at list price, without web search", () => {
+		const config = harborBridgeConfig({
+			...bedrock,
+			YTIMESY_HARBOR_BEDROCK_ENDPOINT: "runtime",
+		});
+		expect(config).toMatchObject({
+			modelId: "global.openai.gpt-6.1-sol",
+			webSearch: false,
+			bedrock: {
+				endpoint: "runtime",
 				baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
 			},
 		});
@@ -54,7 +79,6 @@ describe("bedrock route config", () => {
 			cacheWrite: 2.5,
 			output: 10,
 		});
-		expect(routeProvider("bedrock")).toBe("openai");
 	});
 
 	it("runs Sol as lead and checker judge, Luna as sidekick, checker worker and classifier", () => {
@@ -64,25 +88,25 @@ describe("bedrock route config", () => {
 			YTIMESY_HARBOR_VARIANT:
 				"lead=fusion,review=on,checkerMode=pair,roleModels.checker=bedrock:openai.gpt-6.1-sol@high,roleModels.writer=bedrock:openai.gpt-6-luna,roleModels.checkerWorker=bedrock:openai.gpt-6-luna,roleModels.classifier=openai.gpt-6-luna@low",
 		});
-		expect(config.modelId).toBe("global.openai.gpt-6.1-sol");
+		expect(config.modelId).toBe("openai.gpt-6.1-sol");
 		expect(config.checker).toMatchObject({
-			modelId: "global.openai.gpt-6.1-sol",
+			modelId: "openai.gpt-6.1-sol",
 			effort: "high",
 		});
 		for (const role of ["writer", "checkerWorker", "classifier"] as const)
-			expect(config.roles[role]?.modelId).toBe("global.openai.gpt-6-luna");
+			expect(config.roles[role]?.modelId).toBe("openai.gpt-6-luna");
 		expect(config.roles.classifier?.effort).toBe("low");
-		expect(config.roles.writer?.billing.price).toMatchObject({
-			input: 0.1,
-			cacheRead: 0.01,
-			cacheWrite: 0.125,
-			output: 0.5,
-		});
+		const luna = config.roles.writer?.billing.price;
+		expect(luna?.input).toBeCloseTo(0.11, 10);
+		expect(luna?.cacheRead).toBeCloseTo(0.011, 10);
+		expect(luna?.cacheWrite).toBeCloseTo(0.1375, 10);
+		expect(luna?.output).toBeCloseTo(0.55, 10);
 	});
 
 	it("prices the regional profile 10% above list", () => {
 		const config = harborBridgeConfig({
 			...bedrock,
+			YTIMESY_HARBOR_BEDROCK_ENDPOINT: "runtime",
 			YTIMESY_HARBOR_BEDROCK_PROFILE: "us",
 			YTIMESY_HARBOR_BEDROCK_REGION: "us-west-2",
 		});
@@ -106,8 +130,31 @@ describe("bedrock route config", () => {
 			}),
 		).toThrow(/needs a total cap/);
 		expect(() =>
-			harborBridgeConfig({ ...bedrock, YTIMESY_HARBOR_WEB_SEARCH: "on" }),
+			harborBridgeConfig({
+				...bedrock,
+				YTIMESY_HARBOR_BEDROCK_ENDPOINT: "runtime",
+				YTIMESY_HARBOR_WEB_SEARCH: "on",
+			}),
 		).toThrow(/no hosted web search/);
+		expect(() =>
+			harborBridgeConfig({
+				...bedrock,
+				YTIMESY_HARBOR_BEDROCK_REGION: "eu-west-1",
+			}),
+		).toThrow(/Web Search runs only in us-east-1, us-east-2, us-west-2/);
+		expect(
+			harborBridgeConfig({
+				...bedrock,
+				YTIMESY_HARBOR_BEDROCK_REGION: "eu-west-1",
+				YTIMESY_HARBOR_WEB_SEARCH: "off",
+			}).webSearch,
+		).toBe(false);
+		expect(() =>
+			harborBridgeConfig({
+				...bedrock,
+				YTIMESY_HARBOR_BEDROCK_ENDPOINT: "converse",
+			}),
+		).toThrow(/must be one of mantle, runtime/);
 		expect(() =>
 			harborBridgeConfig({ ...bedrock, YTIMESY_HARBOR_BEDROCK_PROFILE: "eu" }),
 		).toThrow(/must be one of global, us/);
@@ -131,12 +178,20 @@ describe("bedrock route config", () => {
 		).toThrow(/needs YTIMESY_HARBOR_ROUTE=bedrock/);
 	});
 
-	it("maps foundation ids onto inference profiles", () => {
-		expect(bedrockModelId("openai.gpt-6-luna", "us")).toBe(
+	it("maps foundation ids onto inference profiles on bedrock-runtime and back on mantle", () => {
+		const runtime = { endpoint: "runtime", profile: "us" } as const;
+		const mantle = { endpoint: "mantle", profile: "global" } as const;
+		expect(bedrockModelId("openai.gpt-6-luna", runtime)).toBe(
 			"us.openai.gpt-6-luna",
 		);
-		expect(bedrockModelId("global.openai.gpt-6-luna", "us")).toBe(
+		expect(bedrockModelId("global.openai.gpt-6-luna", runtime)).toBe(
 			"global.openai.gpt-6-luna",
+		);
+		expect(bedrockModelId("openai.gpt-6-luna", mantle)).toBe(
+			"openai.gpt-6-luna",
+		);
+		expect(bedrockModelId("global.openai.gpt-6-luna", mantle)).toBe(
+			"openai.gpt-6-luna",
 		);
 	});
 });
@@ -242,6 +297,7 @@ describe("SigV4 signing", () => {
 				sessionToken: "session",
 			},
 			region: "us-east-1",
+			endpoint: "runtime",
 			fetch: async (url, init) => {
 				sent.push({ url: String(url), headers: new Headers(init?.headers) });
 				return new Response("{}");
@@ -262,6 +318,33 @@ describe("SigV4 signing", () => {
 		await expect(
 			signed("https://api.openai.com/v1/responses", { body: "{}" }),
 		).rejects.toThrow(/only sends requests to/);
+		const mantle = bedrockSigningFetch({
+			credentials: { accessKeyId: FAKE_KEY, secretAccessKey: FAKE_SECRET },
+			region: "us-east-1",
+			endpoint: "mantle",
+			fetch: async (url, init) => {
+				sent.push({ url: String(url), headers: new Headers(init?.headers) });
+				return new Response("{}");
+			},
+		});
+		await mantle(
+			"https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses",
+			{
+				method: "POST",
+				body: "{}",
+			},
+		);
+		expect(sent[1].headers.get("authorization")).toMatch(
+			/\/us-east-1\/bedrock-mantle\/aws4_request, /,
+		);
+		await expect(
+			mantle(
+				"https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses",
+				{
+					body: "{}",
+				},
+			),
+		).rejects.toThrow(/only sends requests to bedrock-mantle/);
 	});
 });
 
@@ -310,6 +393,7 @@ describe("bedrock runtime request", () => {
 		};
 		const config = harborBridgeConfig({
 			...bedrock,
+			YTIMESY_HARBOR_BEDROCK_ENDPOINT: "runtime",
 			YTIMESY_HARBOR_MODEL: "openai.gpt-6-luna",
 			YTIMESY_HARBOR_EFFORT: "high",
 		});
@@ -364,6 +448,53 @@ describe("bedrock runtime request", () => {
 				config.billing,
 			),
 		).toBeCloseTo((100 * 0.1 + 600 * 0.01 + 300 * 0.125 + 50 * 0.5) / 1e6, 12);
+	});
+});
+
+describe("bedrock web search", () => {
+	it("offers OpenAI's web_search tool kept inside Bedrock's index and cache", () => {
+		const tools = bedrockWebSearchTools();
+		expect(Object.keys(tools)).toEqual(["web_search"]);
+		expect(tools.web_search).toMatchObject({
+			type: "provider",
+			id: "openai.web_search",
+			args: { searchContextSize: "medium", externalWebAccess: false },
+		});
+	});
+
+	it("prices each query at $0.012 and counts it against the trial cap", () => {
+		const events = [
+			{ type: "tool-call", id: "ws_1", name: "web_search" },
+			{
+				type: "tool-result",
+				id: "ws_1",
+				name: "web_search",
+				output: { action: { type: "search", queries: ["a", "b"] } },
+			},
+			{
+				type: "tool-result",
+				id: "ws_2",
+				name: "web_search",
+				output: { action: { type: "openPage", url: "https://x" } },
+			},
+			// The loop's synthetic citation entry is not a billed search.
+			{
+				type: "tool-result",
+				id: "cited-search-0",
+				name: "web_search",
+				output: {},
+			},
+			{ type: "tool-result", id: "c1", name: "bash", output: {} },
+		];
+		expect(bedrockWebSearchUsd(events)).toBeCloseTo(3 * 0.012, 12);
+		const guard = trialSpendGuard({
+			capUsd: 0.03,
+			requestLimit: 10,
+			parts: () => [],
+			extraUsd: () => bedrockWebSearchUsd(events),
+		});
+		expect(guard.spentUsd()).toBeCloseTo(0.036, 12);
+		expect(() => guard.beforeRequest()).toThrow(/spending cap reached/);
 	});
 });
 
