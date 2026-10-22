@@ -23,6 +23,7 @@ import {
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
 import {
+	type AgentSessionRecord,
 	agentSessionForOwner,
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
@@ -102,6 +103,8 @@ export async function sendApiWorkspaceTask(
 		continueOn?: string;
 	},
 	preparedTask = false,
+	/** The chat as the caller just read or wrote it (by id, for this user). */
+	read?: AgentSessionRecord,
 ): ReturnType<typeof readApiWorkspaceSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
@@ -134,25 +137,25 @@ export async function sendApiWorkspaceTask(
 			scope.userId,
 			opened.id,
 			input.text,
-			async () => {
-				await commitChatBranchForSubmission({
-					userId: scope.userId,
-					projectId,
-					sessionId: opened.id,
-					text: input.text,
-				});
-				return sendApiWorkspaceTask(
+			async () =>
+				sendApiWorkspaceTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
-				);
-			},
+					await commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId,
+						sessionId: opened.id,
+						text: input.text,
+						session: opened,
+					}),
+				),
 		);
 	}
-	const session = await agentSessionForOwner(
-		scope.userId,
-		scope.sessionId as string,
-	);
+	const session =
+		read?.id === scope.sessionId
+			? read
+			: await agentSessionForOwner(scope.userId, scope.sessionId as string);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
 	const selected = parseModelRouteId(input.modelId);

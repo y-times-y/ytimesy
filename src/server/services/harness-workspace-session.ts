@@ -149,13 +149,17 @@ export function sendHarnessWorkspaceTask(
 			claimed = yield* Effect.tryPromise(() =>
 				claimChatForSend(scope.userId, scope.sessionId as string, input.text),
 			);
+			// The chat as read above (the claim only titled it), then as each
+			// write below leaves it: the send reads it no further.
+			let current = previous;
 			if (scope.projectId)
-				yield* Effect.tryPromise(() =>
+				current = yield* Effect.tryPromise(() =>
 					commitChatBranchForSubmission({
 						userId: scope.userId,
 						projectId: scope.projectId as string,
 						sessionId: scope.sessionId as string,
 						text: input.text,
+						session: previous,
 					}),
 				);
 			// The envelope repeats the transcript; the send uses it only when the
@@ -167,7 +171,7 @@ export function sendHarnessWorkspaceTask(
 					)
 				: undefined;
 			if (switching)
-				yield* Effect.tryPromise(() =>
+				current = yield* Effect.tryPromise(() =>
 					selectAgentSessionHarness(
 						scope.userId,
 						previous.projectId,
@@ -175,11 +179,19 @@ export function sendHarnessWorkspaceTask(
 						scope.harnessId,
 					),
 				);
-			return yield* sendHarnessWorkspaceTask(_machines, scope, {
-				...input,
-				runtimeText: input.text,
-				...(runtimeHandoff ? { runtimeHandoff } : {}),
-			});
+			const read = current ?? undefined;
+			return yield* Effect.promise(() =>
+				sendSubscriptionTask(
+					scope,
+					{
+						...input,
+						runtimeText: input.text,
+						...(runtimeHandoff ? { runtimeHandoff } : {}),
+					},
+					false,
+					read,
+				),
+			);
 		}).pipe(
 			// A rejected first send hands its chat back for New chat to reuse.
 			Effect.tapErrorCause(() =>
@@ -209,16 +221,21 @@ export function sendHarnessWorkspaceTask(
 		return Effect.promise(async () => {
 			const sessionId = scope.sessionId;
 			if (!sessionId) return sendApiWorkspaceTask(scope, input);
-			const send = async () => {
-				if (scope.projectId)
-					await commitChatBranchForSubmission({
-						userId: scope.userId,
-						projectId: scope.projectId,
-						sessionId,
-						text: input.text,
-					});
-				return sendApiWorkspaceTask(scope, input);
-			};
+			// The send continues from the chat the branch commit read (or wrote).
+			const send = async () =>
+				sendApiWorkspaceTask(
+					scope,
+					input,
+					false,
+					scope.projectId
+						? await commitChatBranchForSubmission({
+								userId: scope.userId,
+								projectId: scope.projectId,
+								sessionId,
+								text: input.text,
+							})
+						: undefined,
+				);
 			return (await claimChatForSend(scope.userId, sessionId, input.text))
 				? releasingChatClaimOnFailure(scope.userId, sessionId, input.text, send)
 				: send();
