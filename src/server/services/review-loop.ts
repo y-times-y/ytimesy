@@ -409,6 +409,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			deadlineAt: state.deadlineAt,
 			expectedCheckMs: expectedCheckMs(state),
 			...(input.pair ? { pair: true } : {}),
+			...(input.unattended ? { unattended: true } : {}),
 		});
 		if (decision.kind === "finish")
 			return finish(
@@ -637,6 +638,8 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				rounds: state.rounds,
 				now,
 				deadlineAt: state.deadlineAt,
+				...(input.pair ? { pair: true } : {}),
+				...(input.unattended ? { unattended: true } : {}),
 			});
 		const updated = withRound(state, round.n, (current) => ({
 			...current,

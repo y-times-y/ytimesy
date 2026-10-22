@@ -24,7 +24,7 @@ describe("independentReviewBrief", () => {
 		const rigor = independentReviewBrief({ ...input, rigor: true });
 		for (const check of [
 			"look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states",
-			"the reading the convention of the library, ecosystem or standard involved gives (else the strictest reading)",
+			"the reading the convention of the library, ecosystem or standard involved gives (the strictest reading only when no convention applies)",
 			"Run it once as an outside user would: a fresh shell in a clean directory holding only the files the request names",
 			"never helpers the builder wrote",
 			"A deliverable that itself admits unverified, failing or skipped parts (in its files, notes or output) is fail",
@@ -133,6 +133,28 @@ describe("independentReviewBrief", () => {
 		);
 		expect(brief).toContain(
 			"A credible alternative reading of a decision rule or spec that changes the output is a failure (both readings, the output each gives), not an assumption to note before passing.",
+		);
+	});
+
+	it("has the checker re-derive key outputs before reading the deliverable's rationale, and fail a departure from the convention", () => {
+		const brief = independentReviewBrief(input);
+		expect(brief).toContain(
+			"First derive each key output yourself from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved), before reading any rationale or assumptions the deliverable states, and diff your result against the deliverable. Only then read its reasoning: a mismatch it does not refute from the source text is a failure.",
+		);
+		expect(brief).toContain(
+			'An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy".',
+		);
+		expect(brief).toContain(
+			"When one of the two readings is the convention of the library, ecosystem or standard involved and the deliverable does not follow it, fail and say to switch to the convention; having no oracle or test to settle it is not grounds to pass.",
+		);
+		// The request and the deliverable come before any claim of the builder's.
+		const rigor = independentReviewBrief({
+			...input,
+			rigor: true,
+			builderRequirements: ["x"],
+		});
+		expect(rigor.indexOf("<request>")).toBeLessThan(
+			rigor.indexOf("<builder_requirements>"),
 		);
 	});
 
