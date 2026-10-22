@@ -82,9 +82,11 @@ def attempt(job_dir, commit):
         if trace.get("effort") != EXPECT["effort"]:
             a["problems"].append(f"effort {trace.get('effort')}")
         variant = str(trace.get("variant") or "")
-        for part in EXPECT["variant_parts"]:
-            if part not in variant:
-                a["problems"].append(f"variant lacks {part} ({variant[:120]})")
+        # The label lists only changes from the commit's defaults, so a missing part may be
+        # a default; the full parsed variant is in <run-dir>/config-check.json.
+        missing = [part for part in EXPECT["variant_parts"] if part not in variant]
+        if missing:
+            a["notes"].append(f"variant label lacks {missing} (check config-check.json)")
         roles = trace.get("roleModels") or {}
         for role, model in EXPECT["roles"].items():
             if (roles.get(role) or {}).get("model") != model:

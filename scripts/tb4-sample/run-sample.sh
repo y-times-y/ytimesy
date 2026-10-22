@@ -19,6 +19,7 @@ export YTIMESY_HARBOR_PREFLIGHT=$HOME/stage/preflight.json
 export YTIMESY_BRIDGE_BUNDLE=$HOME/bridge.mjs
 export YTIMESY_HARNESS_COMMIT=$commit YTIMESY_HARNESS_VERSION=tb4-sample-${commit:0:12}
 cd ~/repo
+cp ~/stage/config-check.json "$R/" 2>/dev/null
 { echo "{\"run\":\"$run\",\"commit\":\"$commit\",\"bundleSha256\":\"$(cat ~/bridge.sha256)\",\"startedAt\":\"$(date -u +%FT%TZ)\",\"host\":\"$(curl -s -m 2 http://169.254.169.254/latest/meta-data/instance-type || echo unknown)\",\"nproc\":$(nproc)}"; } > "$R/run-$(date -u +%Y%m%dT%H%M%S).json"
 python3 ~/stage/spendwatch.py "$R" "${TB4S_HARD_USD:-40}" > "$R/logs/spendwatch.log" 2>&1 &
 watcher=$!
