@@ -703,6 +703,8 @@ async function runApiTurnAttempt(
 			{ pinNewChatBase: earlyFirstRequestEligible },
 		);
 		let codePoint: Promise<void> | undefined;
+		/** Set once the checkout (without ~/memory) is ready. */
+		let checkoutReady = false;
 		// A root builder's repository path lets its next turn (and a new chat in
 		// the same project) build its first request before its VM is ready.
 		const remembersDirectory =
@@ -780,6 +782,7 @@ async function runApiTurnAttempt(
 			}
 			await attachmentsWritten;
 			await secretsReady;
+			checkoutReady = true;
 			return execution;
 		};
 		/** The whole workspace: the checkout and ~/memory, for tools. */
@@ -1248,8 +1251,20 @@ async function runApiTurnAttempt(
 		// messages and the system prompt stay byte-stable for prompt caching.
 		const memory = await memoryLoading;
 		if (memory && firstStep) {
+			// Recalled paths the checkout no longer has are marked missing. A
+			// first request going out before its workspace (the same condition
+			// as below) does not wait for the VM for that: they go unmarked.
+			const memoryCheckout = async () => {
+				if (
+					!checkoutReady &&
+					promptSubmitKnown &&
+					(await promptSubmitKnown) === false
+				)
+					throw new Error("The checkout is not ready yet.");
+				return checkout();
+			};
 			const attached = await timed("turn:memoryAttach", () =>
-				memory.attach(messages, items, checkout),
+				memory.attach(messages, items, memoryCheckout),
 			);
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
