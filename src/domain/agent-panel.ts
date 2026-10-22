@@ -4,8 +4,10 @@ import type { RunningBackgroundCommand } from "./background-command";
 import {
 	type AgentTaskActivity,
 	childTaskPromptId,
-	childTaskPublicItems,
 	isInternalChildTaskMessage,
+	isWakeTurnStart,
+	turnStartTiming,
+	withoutWakeTurnStarts,
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
 import { fileChangeActivity } from "./file-change-copy";
@@ -247,7 +249,7 @@ export function agentDoing(input: {
 	readonly title: string;
 	readonly summary?: string | null;
 }): string {
-	const items = childTaskPublicItems(input.items);
+	const items = withoutWakeTurnStarts(input.items);
 	if (input.status === "done")
 		return (
 			firstLine(reportBody(input.summary)) ||
@@ -323,6 +325,9 @@ const STATUS_LABELS: Record<AgentPanelStatus, string> = {
 function lastTurnEnd(items: readonly SessionItem[]): number | null {
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
+		// A wake-up turn's start counts: Main's clock runs to its end.
+		if (item && isWakeTurnStart(item))
+			return turnStartTiming(item)?.completedAt ?? null;
 		if (item?.kind === "userMessage" && !item.queued)
 			return item.timing?.completedAt ?? null;
 	}

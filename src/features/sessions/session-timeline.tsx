@@ -27,6 +27,8 @@ import {
 	type AgentTaskActivity,
 	childTaskAnchorId,
 	childTaskPublicItems,
+	startsTurn,
+	withoutWakeTurnStarts,
 } from "#/domain/child-task-activity";
 import {
 	codeModeCallItems,
@@ -176,9 +178,9 @@ export function SessionTimeline({
 	const items = queued.length
 		? allItems.filter((item) => !isQueuedUserMessage(item))
 		: allItems;
-	// Hidden wake-up messages stay in for grouping: they end the turn before them.
-	const presented = compactTimelineItems(items);
-	const visible = childTaskPublicItems(presented);
+	// Wake-up turn starts stay in for grouping: they end the turn before them.
+	const presented = childTaskPublicItems(compactTimelineItems(items));
+	const visible = withoutWakeTurnStarts(presented);
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
@@ -210,7 +212,7 @@ export function SessionTimeline({
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
 	for (const item of presented) {
-		if (item.kind === "userMessage") currentTurnIds.clear();
+		if (startsTurn(item)) currentTurnIds.clear();
 		else currentTurnIds.add(item.id);
 	}
 

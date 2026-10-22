@@ -1,3 +1,4 @@
+import { startsTurn } from "./child-task-activity";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 
 /** When the live progress stream last delivered this chat's turn. */
@@ -56,9 +57,12 @@ export function progressRevivesStoppedTurn(input: {
 	readonly nextStatus: SessionTurnStatus;
 }): boolean {
 	if (!input.stopRequested || input.nextStatus !== "running") return false;
-	const users = (items: readonly SessionItem[]) =>
-		items.filter((item) => item.kind === "userMessage" && !item.queued).length;
-	return users(input.next) <= users(input.current);
+	const starts = (items: readonly SessionItem[]) =>
+		items.filter(
+			(item) =>
+				startsTurn(item) && !(item.kind === "userMessage" && item.queued),
+		).length;
+	return starts(input.next) <= starts(input.current);
 }
 
 /**

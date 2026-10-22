@@ -1,10 +1,20 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import { withBackgroundCommandExits } from "#/domain/background-command";
+import {
+	type AgentTaskActivity,
+	childTaskEventQueueText,
+	childTaskPublicItems,
+} from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
-import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
-import { withStoppedNotice } from "#/domain/turn-end";
+import {
+	type SessionItem,
+	type SessionTurnStatus,
+	sessionItemsFromUnknown,
+	sessionItemsQueuedWithUser,
+} from "#/domain/session-item";
+import { settledTurnItems, withStoppedNotice } from "#/domain/turn-end";
 import { SessionTimeline } from "./session-timeline";
 
 // Replies render through the real Markdown renderer (the app loads it lazily).
@@ -377,14 +387,30 @@ const spawn: SessionItem = {
 	status: "completed",
 };
 
-/** The <details> "Worked" groups' inner HTML, and what shows outside them. */
+/** The "Worked" groups' HTML (nested <details> included), and what shows outside them. */
 function split(html: string) {
-	const worked = [
-		...html.matchAll(/<details class="session-work">.*?<\/details>/g),
-	]
-		.map((match) => match[0])
-		.join("");
-	return { worked, outside: html.replace(/<details.*?<\/details>/g, "") };
+	let worked = "";
+	let outside = "";
+	let at = 0;
+	for (;;) {
+		const start = html.indexOf('<details class="session-work">', at);
+		if (start < 0) break;
+		outside += html.slice(at, start);
+		const tag = /<details\b|<\/details>/g;
+		tag.lastIndex = start;
+		let depth = 0;
+		let end = html.length;
+		for (let match = tag.exec(html); match; match = tag.exec(html)) {
+			depth += match[0] === "</details>" ? -1 : 1;
+			if (depth === 0) {
+				end = tag.lastIndex;
+				break;
+			}
+		}
+		worked += html.slice(start, end);
+		at = end;
+	}
+	return { worked, outside: outside + html.slice(at) };
 }
 
 describe("session timeline after a reload", () => {
@@ -482,5 +508,112 @@ describe("session timeline after a reload", () => {
 		);
 		expect(html.match(/Database: Postgres/g)).toHaveLength(1);
 		expect(html).toContain("user-question-reply");
+	});
+});
+
+/**
+ * Wake-up turns as the browser really gets them: the server stores the
+ * hidden child-event message (deliverParentTaskNotification through
+ * sessionItemsQueuedWithUser), and every read the browser makes (reload,
+ * live progress snapshot) projects the stored items with childTaskPublicItems.
+ */
+describe("session timeline with server-started wake-up turns", () => {
+	const stored = (items: readonly SessionItem[]) =>
+		childTaskPublicItems(
+			sessionItemsFromUnknown(JSON.parse(JSON.stringify(items))),
+		);
+	const done = (items: readonly SessionItem[], at: number) =>
+		settledTurnItems(items, at);
+	const helperChat = () => {
+		let items: SessionItem[] = sessionItemsQueuedWithUser(
+			[],
+			"Start a slow build helper",
+			"m1",
+		);
+		items = done(
+			[...items, spawn, answer("a1", "Started the build helper.")],
+			Date.now(),
+		);
+		items = sessionItemsQueuedWithUser(items, "What is 391 plus fruit?", "m2");
+		items = done([...items, answer("a2", "391 PINEAPPLE")], Date.now());
+		return sessionItemsQueuedWithUser(
+			items,
+			childTaskEventQueueText("6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d7e10"),
+		);
+	};
+	const check: SessionItem = {
+		kind: "dynamicToolCall",
+		id: SessionItemId("check"),
+		tool: "bash",
+		status: "completed",
+	};
+
+	it("keeps Main's answer outside Worked while a helper's report turn runs", () => {
+		const html = render(stored([...helperChat(), check]), "running");
+		const { worked, outside } = split(html);
+		expect(outside).toContain("391 PINEAPPLE");
+		expect(worked).not.toContain("391 PINEAPPLE");
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
+	it("keeps it there after the report turn ends and on reload", () => {
+		const html = render(
+			stored(
+				done(
+					[...helperChat(), check, answer("a3", "The build passed.")],
+					Date.now(),
+				),
+			),
+			"completed",
+		);
+		const { worked, outside } = split(html);
+		expect(outside).toContain("391 PINEAPPLE");
+		expect(outside).toContain("The build passed.");
+		expect(worked).not.toContain("391 PINEAPPLE");
+	});
+
+	it("keeps Main's Started message outside Worked when a command's exit wakes it", () => {
+		const startedAt = Date.now() - 60_000;
+		const background: SessionItem = {
+			kind: "dynamicToolCall",
+			id: SessionItemId("bg"),
+			tool: "bash",
+			input: JSON.stringify({ command: "pnpm build", background: true }),
+			status: "completed",
+			background: { id: "cmd1", label: "pnpm build", startedAt },
+		};
+		let items: SessionItem[] = sessionItemsQueuedWithUser(
+			[],
+			"Run the build in the background",
+			"m1",
+		);
+		items = done(
+			[...items, background, answer("a1", "Started pnpm build.")],
+			Date.now(),
+		);
+		items = withBackgroundCommandExits(items, [
+			{
+				id: "cmd1",
+				label: "pnpm build",
+				startedAt,
+				endedAt: Date.now(),
+				exitCode: 0,
+				outputPath: "/tmp/ytimesy-detached/cmd1/output",
+				lastLines: "done",
+				announced: true,
+			},
+		]);
+		items = sessionItemsQueuedWithUser(
+			items,
+			childTaskEventQueueText("bg:cmd1"),
+		);
+		const html = render(
+			stored([...items, check, answer("a2", "The build finished cleanly.")]),
+			"completed",
+		);
+		const { worked, outside } = split(html);
+		expect(outside).toContain("Started pnpm build.");
+		expect(worked).not.toContain("Started pnpm build.");
+		expect(outside).toContain("The build finished cleanly.");
 	});
 });
