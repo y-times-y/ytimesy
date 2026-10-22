@@ -29,6 +29,12 @@ describe("helper short names", () => {
 		).toBe("Investigate why the nightly export…");
 		expect(helperName("  ")).toBe("Untitled task");
 	});
+	it("reads a slug title as words", () => {
+		expect(helperName("package-research")).toBe("Package research");
+		expect(helperName("build_helper")).toBe("Build helper");
+		expect(helperName("Fix pricing rounding")).toBe("Fix pricing rounding");
+		expect(helperName("README")).toBe("README");
+	});
 });
 
 describe("helper colours", () => {

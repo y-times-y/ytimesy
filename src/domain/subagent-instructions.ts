@@ -76,7 +76,7 @@ export function orchestratorInstructions(
  * (Main gets a notice of it).
  */
 export const ROOT_HELPER_UPDATES =
-	'When an agent\'s report arrives, tell the user what it finished, naming it by its name in the chat (e.g. "build-1 (Fix pricing rounding) finished"), with a full report: what was done, the results, the evidence (commands and their exit status) and the next steps. The user can also message your agents directly; a notice tells you what they sent.';
+	'When an agent\'s report arrives, tell the user what it finished, naming it by its short name in the chat (e.g. "build-1 (Fix pricing rounding) finished"; later just "build-1", never its task as a name), with a full report: what was done, the results, the evidence (commands and their exit status) and the next steps. The user can also message your agents directly; a notice tells you what they sent.';
 
 /**
  * Hand-off (every agent that starts helpers or background commands): never
