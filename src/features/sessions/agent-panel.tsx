@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
-import { type CSSProperties, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
 	type AgentPanelRow,
 	foldAgentRows,
@@ -119,6 +119,9 @@ function useNow(live: boolean) {
 	return now;
 }
 
+/** A resting agent's icon: dim, so the working and the open one stand out. */
+const RESTING_ICON = "#6d6d6d";
+
 function AgentRow({
 	row,
 	now,
@@ -133,21 +136,26 @@ function AgentRow({
 	const detail = row.metric ? metricDetail(row.metric) : null;
 	const content = (
 		<>
-			<AgentIcon icon={row.icon} color={row.color} />
+			{/* Its status dot: bright while it works or is open, dim otherwise. */}
+			<AgentIcon
+				icon={row.icon}
+				color={row.status === "working" || selected ? row.color : RESTING_ICON}
+			/>
 			<span className="agent-row-name" title={row.title || row.name}>
 				{row.name}
 			</span>
 			{row.tag ? <span className="agent-row-tag">{row.tag}</span> : null}
 			{/* Keyed on the line: a new activity fades in instead of flickering. */}
-			<span key={row.doing} className="agent-row-doing" title={row.doing}>
+			<span
+				key={row.doing}
+				className="agent-row-doing"
+				title={row.doingDetail ?? row.doing}
+			>
 				{row.doing}
 			</span>
 			{row.queued ? (
 				<span className="agent-row-queued">{row.queued} queued</span>
 			) : null}
-			<span className="agent-row-status" data-status={row.status}>
-				{row.statusLabel}
-			</span>
 			{row.metric && metricText(row.metric, now) ? (
 				detail ? (
 					<TooltipPrimitive.Root>
@@ -187,7 +195,6 @@ function AgentRow({
 			data-kind={row.kind}
 			data-status={row.status}
 			aria-current={selected ? "true" : undefined}
-			style={{ "--agent-accent": row.color } as CSSProperties}
 			title={row.id === LEAD_ROW_ID ? "Back to the chat" : undefined}
 			onClick={onSelect}
 		>

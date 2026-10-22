@@ -95,10 +95,13 @@ export type AgentPanelRow = {
 	/** A CSS colour for its icon and accents (helper-names.ts agentColor). */
 	readonly color: string;
 	readonly status: AgentPanelStatus;
-	/** The short status word on the right ("working", "exited 0"). */
-	readonly statusLabel: string;
-	/** One line: what it does now, or how it ended. */
+	/**
+	 * One sentence-case line that carries the state: what it does now
+	 * ("Reading app.ts"), or its state ("Done", "Waiting for you", "Exited 0").
+	 */
 	readonly doing: string;
+	/** More on the line, on hover: a finished helper's report line, a command. */
+	readonly doingDetail?: string;
 	readonly queued: number;
 	readonly title: string;
 	readonly metric?: AgentMetric;
@@ -309,13 +312,25 @@ export function queuedSteeringFor(task: AgentTaskActivity) {
 	return task.queuedSteering ?? [];
 }
 
-const STATUS_LABELS: Record<AgentPanelStatus, string> = {
-	working: "working",
-	free: "free",
-	done: "done",
-	failed: "failed",
-	idle: "idle",
-};
+/** "reading app.ts" -> "Reading app.ts". */
+export function sentenceCase(text: string) {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * A helper row's line: what it does while it works, else its state once.
+ * A finished helper's report line moves behind the hover.
+ */
+export function helperRowLine(
+	status: AgentPanelStatus,
+	doing: string,
+): { readonly doing: string; readonly doingDetail?: string } {
+	if (status === "done")
+		return doing && doing !== "finished"
+			? { doing: "Done", doingDetail: doing }
+			: { doing: "Done" };
+	return { doing: sentenceCase(doing) };
+}
 
 /**
  * A helper's time: its sidekick round, or its whole run. A finished one's
@@ -477,13 +492,14 @@ export function backgroundRows(
 			icon: KIND_ICONS.background,
 			color: agentColor("background", kindShade(index)),
 			status,
-			statusLabel:
+			// Running: the command is what it does; ended: how it ended, once.
+			doing:
 				run.status === "running"
-					? "running"
+					? run.command
 					: run.status === "failed"
-						? "failed"
-						: `exited ${run.exitCode ?? 0}`,
-			doing: run.command,
+						? "Failed"
+						: `Exited ${run.exitCode ?? 0}`,
+			...(run.status === "running" ? {} : { doingDetail: run.command }),
 			queued: 0,
 			title: run.command,
 			metric: {
@@ -529,14 +545,16 @@ export function agentPanelRows(input: {
 				icon: KIND_ICONS[kind],
 				color: identity?.color ?? agentColor(kind),
 				status,
-				statusLabel: STATUS_LABELS[status],
-				// The name is the task, so the line starts at "starting".
-				doing: agentDoing({
+				// The name is the task, so the line starts at "Starting".
+				...helperRowLine(
 					status,
-					items: task.items,
-					title: "",
-					summary: task.summary,
-				}),
+					agentDoing({
+						status,
+						items: task.items,
+						title: "",
+						summary: task.summary,
+					}),
+				),
 				queued: queuedSteeringFor(task).length,
 				title: task.title,
 				metric: helperMetric(task),
@@ -559,16 +577,17 @@ export function agentPanelRows(input: {
 			icon: KIND_ICONS.main,
 			color: agentColor("main"),
 			status,
-			statusLabel: STATUS_LABELS[status],
 			doing:
 				status === "working"
-					? agentDoing({ status, items: input.leadItems, title: "" }) ||
-						"thinking"
+					? sentenceCase(
+							agentDoing({ status, items: input.leadItems, title: "" }) ||
+								"thinking",
+						)
 					: status === "free"
-						? `free while ${helpersWork ? "helpers work" : "commands run"}`
+						? `Free while ${helpersWork ? "helpers work" : "commands run"}`
 						: status === "failed"
-							? "failed"
-							: "waiting for you",
+							? "Failed"
+							: "Waiting for you",
 			queued: 0,
 			title: input.leadTitle ?? "",
 			metric: leadMetric({
