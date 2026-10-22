@@ -9,6 +9,7 @@ const fake = vi.hoisted(() => ({
 	enqueue: vi.fn(async () => {}),
 	holding: vi.fn(async (): Promise<string | null> => null),
 	open: vi.fn(),
+	commitBranch: vi.fn(async () => {}),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -43,6 +44,9 @@ vi.mock("#/server/services/message-attachments", () => ({
 vi.mock("#/server/services/agent-session-machine", () => ({
 	openAgentSession: fake.open,
 }));
+vi.mock("#/server/services/session-branch", () => ({
+	commitChatBranchForSubmission: fake.commitBranch,
+}));
 vi.mock("#/server/services/cancel-server-turn", () => ({
 	cancelServerTurn: vi.fn(),
 }));
@@ -61,6 +65,7 @@ beforeEach(() => {
 	fake.enqueue.mockClear();
 	fake.holding.mockReset().mockResolvedValue(null);
 	fake.open.mockReset();
+	fake.commitBranch.mockReset().mockResolvedValue(undefined);
 	fake.owner.mockResolvedValue({
 		id: "s1",
 		projectId: "p1",
@@ -113,12 +118,16 @@ it("lands a resent first message in the chat it already opened", async () => {
 		"6ba7b810-9dad-11d1-80b4-00c04fd430c8",
 	);
 	expect(fake.open).not.toHaveBeenCalled();
+	expect(fake.commitBranch).not.toHaveBeenCalled();
 	expect(fake.enqueue).not.toHaveBeenCalled();
 	expect(view.agentSessionId).toBe("s1");
 });
 
-it("opens a chat for a first message that never landed", async () => {
+it("opens a chat for a first message that never landed, committing its branch first", async () => {
 	fake.open.mockResolvedValue({ id: "s1" });
+	fake.commitBranch.mockImplementation(async () => {
+		expect(fake.enqueue).not.toHaveBeenCalled();
+	});
 	await sendApiWorkspaceTask(
 		{ userId: "u1", projectId: "p1" },
 		{
@@ -128,5 +137,11 @@ it("opens a chat for a first message that never landed", async () => {
 		},
 	);
 	expect(fake.open).toHaveBeenCalledOnce();
+	expect(fake.commitBranch).toHaveBeenCalledWith({
+		userId: "u1",
+		projectId: "p1",
+		sessionId: "s1",
+		text: "start",
+	});
 	expect(fake.enqueue).toHaveBeenCalledOnce();
 });

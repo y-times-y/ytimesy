@@ -45,6 +45,7 @@ import {
 import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
 import { pinnedTurnFailover } from "./model-failover";
+import { commitChatBranchForSubmission } from "./session-branch";
 
 export async function apiModelCatalog(userId: string) {
 	return availableApiModelRoutes(await listModelConnections(userId));
@@ -125,17 +126,27 @@ export async function sendApiWorkspaceTask(
 			harness: "api",
 			firstMessage: input.text,
 		});
-		// Opening claimed the chat; a rejected send hands it back.
+		// Opening claimed the chat; a rejected send hands it back. Its branch
+		// is committed as for a send into an open chat, so the turn knows the
+		// commit its new branch starts from before its VM is ready.
+		const projectId = scope.projectId;
 		return releasingChatClaimOnFailure(
 			scope.userId,
 			opened.id,
 			input.text,
-			() =>
-				sendApiWorkspaceTask(
+			async () => {
+				await commitChatBranchForSubmission({
+					userId: scope.userId,
+					projectId,
+					sessionId: opened.id,
+					text: input.text,
+				});
+				return sendApiWorkspaceTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
-				),
+				);
+			},
 		);
 	}
 	const session = await agentSessionForOwner(
