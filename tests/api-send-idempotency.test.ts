@@ -154,6 +154,26 @@ it("opens a chat for a first message that never landed, committing its branch fi
 		session: opened,
 	});
 	expect(fake.enqueue).toHaveBeenCalledOnce();
-	// Read once, for the response only (the send continued from the commit's).
+	// The send continued from the commit's row and answers with it.
+	expect(fake.owner).not.toHaveBeenCalled();
+});
+
+it("answers a send with the committed chat, reading the chat once", async () => {
+	fake.owner.mockClear();
+	const view = await sendApiWorkspaceTask(scope, {
+		text: "continue",
+		modelId: routeId,
+		idempotencyKey: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+	});
 	expect(fake.owner).toHaveBeenCalledOnce();
+	expect(fake.enqueue).toHaveBeenCalledOnce();
+	const [{ items }] = fake.enqueue.mock.calls[0] as unknown as [
+		{ items: SessionItem[] },
+	];
+	expect(view).toMatchObject({
+		agentSessionId: "s1",
+		turnStatus: "running",
+		listedModelId: routeId,
+		items,
+	});
 });
