@@ -2,7 +2,7 @@
 // at that user message through the real recovery path (the menu's "Fork
 // conversation"), then check the fork's VM, branch and transcript, the
 // source's, a turn run in the fork, and that a checkpoint whose refs are gone
-// refuses the fork without copying a VM.
+// fails the fork's workspace without leaving a VM copy.
 import { agentSessionMachineSlug } from "../../src/domain/agent-session";
 import { WorkspaceId } from "../../src/domain/ids";
 import { posixShellQuoted } from "../../src/domain/posix-command";
@@ -283,7 +283,8 @@ export async function rehearseFork(input: {
 		);
 	}
 
-	// A checkpoint whose refs are gone refuses the fork before any VM is copied.
+	// A checkpoint whose refs are gone: the fork's chat opens, then shows
+	// the refusal in place of a workspace, and no VM copy is left behind.
 	const ref = point.code.ref;
 	await machines.exec(
 		WorkspaceId(vm),
@@ -301,13 +302,13 @@ export async function rehearseFork(input: {
 			}),
 		)
 		.then(
-			() => "forked",
+			async ({ id }) => JSON.stringify(await forkCopied(id)),
 			(error: Error) => error.message,
 		);
 	check(
-		"a checkpoint whose refs are gone refuses the fork, copying no VM",
+		"a checkpoint whose refs are gone fails the fork's workspace, copying no VM",
 		/checkpoint is gone/.test(refused) && chatForks().length === forksNow,
-		refused,
+		clip(refused),
 	);
 	return checks;
 }
