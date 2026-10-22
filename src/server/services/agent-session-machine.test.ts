@@ -81,6 +81,36 @@ describe("executeSessionMachinePlan", () => {
 		expect(saved).toEqual(["agent-vm"]);
 	});
 
+	it("names the new copy on the chat while its scratch files are cleared", async () => {
+		const runtime = machines({ copied: "agent-vm" });
+		const events: string[] = [];
+		let saved = () => {};
+		const exec = runtime.api.exec;
+		runtime.api.exec = async (id: string, command: string) => {
+			events.push("reset");
+			return exec(id, command);
+		};
+		const result = executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			saveTemplateSnapshot: async () => {},
+			saveSessionProviderRef: () =>
+				new Promise<void>((resolve) => {
+					events.push("save");
+					saved = resolve;
+				}),
+		});
+		// The reset ran before the row was saved.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(events).toEqual(["save", "reset"]);
+		saved();
+		expect((await result).providerRef).toBe("agent-vm");
+	});
+
 	it("copies from the snapshot when the unused template VM is gone", async () => {
 		const runtime = machines({ copied: "agent-vm" });
 		const result = await executeSessionMachinePlan({

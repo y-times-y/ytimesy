@@ -204,3 +204,40 @@ it("says the provider rejected the size instead of reporting a full plan", async
 	expect(provider.remove).toHaveBeenCalledOnce();
 	expect(provider.create).toHaveBeenCalledOnce();
 });
+
+it("polls a resize the provider reported as failed soon at first, then every 2 s, for a minute", async () => {
+	const { resizeLands } = await import("./workspace-machines");
+	let clock = 0;
+	const pauses: number[] = [];
+	const wait = async (ms: number) => {
+		pauses.push(ms);
+		clock += ms;
+	};
+	const target = { cpu: 4, memory: 16384, storage: 32768 };
+	let reads = 0;
+	const growing = {
+		data: async () => {
+			reads++;
+			return {
+				resources:
+					reads >= 3 ? target : { cpu: 2, memory: 4096, storage: 16384 },
+			};
+		},
+	};
+	expect(await resizeLands(growing as never, target, wait, () => clock)).toBe(
+		true,
+	);
+	expect(pauses).toEqual([200, 300]);
+	pauses.length = 0;
+	clock = 0;
+	const stuck = {
+		data: async () => ({ resources: { cpu: 2, memory: 4096, storage: 16384 } }),
+	};
+	expect(await resizeLands(stuck as never, target, wait, () => clock)).toBe(
+		false,
+	);
+	expect(pauses.slice(0, 6)).toEqual([200, 300, 450, 675, 1013, 1520]);
+	expect(Math.max(...pauses)).toBe(2_000);
+	expect(clock).toBeLessThanOrEqual(60_000);
+	expect(clock).toBeGreaterThan(57_000);
+});
