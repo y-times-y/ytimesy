@@ -201,7 +201,9 @@ describe("timeline cards for harness items", () => {
 			"running",
 		);
 		expect(html).toContain('data-kind="agentCall"');
-		expect(html).toContain("Reviewer");
+		// Named by its task with a kind tag (helper-names.ts), not its role.
+		expect(html).toContain('<span class="agent-row-tag">Review</span>');
+		expect(html).not.toContain("Reviewer");
 		expect(html).toContain("Review the diff");
 		expect(html).toContain("Claude Fable 5");
 		expect(html).toContain("Finished");
