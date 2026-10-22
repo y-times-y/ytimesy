@@ -285,6 +285,55 @@ it("still requires the baseline for a writer subagent", async () => {
 	).rejects.toThrow("not pristine");
 });
 
+it("hands out the checked-out workspace before its baselines are set, then the whole preparation", async () => {
+	let baselined = () => {};
+	mocks.baseline.mockImplementationOnce(
+		() =>
+			new Promise<void>((resolve) => {
+				baselined = resolve;
+			}),
+	);
+	const prepare = deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	);
+	const early = await prepare.checkedOut();
+	expect(early).toEqual({
+		machines,
+		vm: "vm-root",
+		cwd: "/workspace/repo",
+	});
+	// The metadata block already ran; the baselines are still being set.
+	expect(vi.mocked(machines.exec)).toHaveBeenCalledWith(
+		expect.anything(),
+		guestMetadataBlockCommand(),
+		30_000,
+	);
+	let whole = false;
+	const prepared = prepare().then((value) => {
+		whole = true;
+		return value;
+	});
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(whole).toBe(false);
+	baselined();
+	expect(await prepared).toEqual(early);
+	// A later step's reuse (or a later call) answers at once.
+	expect(await prepare.checkedOut()).toEqual(early);
+});
+
+it("fails the early checkout with the preparation's failure before the checkout exists", async () => {
+	mocks.root.mockRejectedValueOnce(new Error("no capacity"));
+	await expect(
+		deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+		).checkedOut(),
+	).rejects.toThrow("no capacity");
+});
+
 describe("a new chat's pinned base", () => {
 	const fresh = {
 		owner: "acme",

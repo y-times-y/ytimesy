@@ -49,6 +49,11 @@ export function deferredApiTurnWorkspace(
 	} = {},
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
+	// The checkout and its path, known before the baselines are set.
+	let checkedOut: ((ready: AgentToolWorkspace) => void) | undefined;
+	const checkedOutEarly = new Promise<AgentToolWorkspace>((resolve) => {
+		checkedOut = resolve;
+	});
 	let pinnedBase: Promise<string | null> = Promise.resolve(null);
 	let pinnedReads: ReturnType<typeof checkoutGitHubReads> | null = null;
 	const workspace = () => {
@@ -57,6 +62,20 @@ export function deferredApiTurnWorkspace(
 		return prepared;
 	};
 	return Object.assign(workspace, {
+		/**
+		 * The checked-out workspace as soon as its repository and path are
+		 * ready (the guest's metadata already blocked), before the step's
+		 * verification baselines are set; the whole preparation's failure
+		 * otherwise. Work that neither changes the repository's HEAD, index or
+		 * files nor depends on the baseline (the conversation's code point,
+		 * attachments and secrets outside the repository, ~/memory) starts
+		 * here, beside the baselines.
+		 */
+		checkedOut: (): Promise<AgentToolWorkspace> => {
+			const whole = workspace();
+			whole.then(checkedOut, () => {});
+			return Promise.race([checkedOutEarly, whole]);
+		},
 		/**
 		 * The commit this preparation's checkout and baseline will be, known
 		 * before the VM is ready; null unless it was pinned (see pinNewChatBase).
@@ -184,6 +203,7 @@ export function deferredApiTurnWorkspace(
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("Prepared repository path is unavailable.");
+		checkedOut?.({ machines: scoped, vm, cwd });
 		const baselines = () =>
 			establishVerificationBaselines({
 				machines: scoped,
