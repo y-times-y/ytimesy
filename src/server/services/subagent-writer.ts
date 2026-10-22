@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import { publicationCommitAuthor } from "#/domain/publication";
 import {
 	excludedFilesNote,
 	type WriterPatch,
@@ -26,11 +27,19 @@ const GIT =
 /** A bundle larger than this is not copied; the patch still is. */
 const MAX_BUNDLE_BASE64 = 24_000_000;
 
-/** Run in the fresh fork: commit what the parent had (uncommitted work included). */
+/**
+ * Run in the fresh fork: commit what the parent had (uncommitted work
+ * included). The fork's checkout gets the identity the builder's turn commits
+ * use (automaticTurnCommitArgv), unless the repository already names one, so
+ * the writer's own `git commit` does not fail for want of an author.
+ */
 export function forkBaseScript(cwd: string) {
+	const author = publicationCommitAuthor({});
 	return [
 		"set -e",
 		`cd ${quote(cwd)}`,
+		`git config user.email >/dev/null || git config user.email ${quote(author.email)}`,
+		`git config user.name >/dev/null || git config user.name ${quote(author.name)}`,
 		"parent_head=$(git rev-parse HEAD)",
 		"git add -A",
 		`${GIT} commit -q --no-verify --allow-empty -m "ytimesy fork base"`,
