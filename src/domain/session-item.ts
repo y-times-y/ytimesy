@@ -180,6 +180,8 @@ export type NoticeSessionItem = {
 	readonly message: string;
 	/** A background command's exit (background-command.ts). */
 	readonly background?: true;
+	/** The user stopped the turn (turn-end.ts). */
+	readonly stopped?: true;
 };
 
 export type UnknownSessionItem = {
