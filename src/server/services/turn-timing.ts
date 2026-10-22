@@ -21,6 +21,12 @@ export type EarlyRequestReason =
 	| "workspace-ready"
 	| "no-reported-directory"
 	| "hook-config-unknown"
+	/** The chat's baseline is known but no step journaled its configuration. */
+	| "hook-config-unjournaled"
+	/** A new chat whose checkout commit is not pinned before its VM is ready. */
+	| "hook-config-no-pinned-base"
+	/** The pinned commit's configuration could not be read from GitHub. */
+	| "hook-config-unreadable"
 	| "prompt-hook-configured";
 
 export type TurnTimingRecord = {

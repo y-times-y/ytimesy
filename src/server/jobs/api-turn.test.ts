@@ -2341,6 +2341,57 @@ describe("a builder's first request before its workspace is ready", () => {
 			},
 		);
 
+		it.each([
+			[
+				"hook-config-no-pinned-base",
+				() => {
+					mocks.pinnedBase.mockResolvedValue(null);
+				},
+			],
+			[
+				"hook-config-unreadable",
+				() => {
+					projectHooks({});
+					mocks.pinnedBaseFile.mockResolvedValue(null);
+				},
+			],
+			[
+				"hook-config-unjournaled",
+				() => {
+					mocks.baseline.mockResolvedValue("a".repeat(40));
+					mocks.hookConfig.mockResolvedValue(null);
+				},
+			],
+		])(
+			"names why the configuration was unknown: %s",
+			async (reason, arrange) => {
+				arrange();
+				const log = vi.spyOn(console, "log").mockImplementation(() => {});
+				try {
+					const workspace = heldWorkspace();
+					setTimeout(() => workspace.ready(), 600);
+					mocks.stepRuntime.mockImplementation(async (input) => {
+						await input.onEvent({
+							type: "text-delta",
+							id: "reply",
+							text: "ananab",
+						});
+						return { messages: input.messages, outcome: "completed" };
+					});
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep());
+					const line = log.mock.calls
+						.map(([text]) => String(text))
+						.find((text) => text.includes('"turn-timing"'));
+					expect(JSON.parse(line as string)).toMatchObject({
+						early: false,
+						earlyReason: reason,
+					});
+				} finally {
+					log.mockRestore();
+				}
+			},
+		);
+
 		const hookFile = (events: string[]) => ({
 			present: true as const,
 			text: JSON.stringify({
