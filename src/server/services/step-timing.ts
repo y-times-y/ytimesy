@@ -14,6 +14,8 @@ type Trace = {
 	spans: Map<string, Span>;
 	/** The first individual provider calls, in start order: [at, ms, label]. */
 	calls: [number, number, string][];
+	/** Spans started and not yet ended, by name. */
+	open: Map<string, number>;
 };
 
 const traces = new AsyncLocalStorage<Trace>();
@@ -41,27 +43,45 @@ export async function withStepTrace<T>(
 	run: () => Promise<T>,
 ): Promise<T> {
 	if (!stepTimingEnabled()) return run();
-	const trace: Trace = { startedAt: Date.now(), spans: new Map(), calls: [] };
+	const trace: Trace = {
+		startedAt: Date.now(),
+		spans: new Map(),
+		calls: [],
+		open: new Map(),
+	};
+	const line = (extra: Record<string, unknown>) =>
+		JSON.stringify({
+			...meta,
+			...extra,
+			totalMs: Date.now() - trace.startedAt,
+			spans: Object.fromEntries(
+				[...trace.spans].map(([name, span]) => [
+					name,
+					[span.count, span.ms, span.maxMs, span.firstAt],
+				]),
+			),
+			calls: trace.calls,
+		});
+	// A run still going after a while logs what it finished and what is
+	// still in flight (calls with -1 ms), so a hang names its call.
+	const slow = setTimeout(
+		() =>
+			console.log(
+				"step-timing",
+				line({ pending: Object.fromEntries(trace.open) }),
+			),
+		STEP_TRACE_SLOW_MS,
+	);
 	try {
 		return await traces.run(trace, run);
 	} finally {
-		console.log(
-			"step-timing",
-			JSON.stringify({
-				...meta,
-				colo: await isolateColo(),
-				totalMs: Date.now() - trace.startedAt,
-				spans: Object.fromEntries(
-					[...trace.spans].map(([name, span]) => [
-						name,
-						[span.count, span.ms, span.maxMs, span.firstAt],
-					]),
-				),
-				calls: trace.calls,
-			}),
-		);
+		clearTimeout(slow);
+		console.log("step-timing", line({ colo: await isolateColo() }));
 	}
 }
+
+/** When a traced run is logged before it ends (withStepTrace). */
+const STEP_TRACE_SLOW_MS = 15_000;
 
 /** Records a duration measured elsewhere (a model call, a tool) in the current trace. */
 export function recordStepTiming(name: string, ms: number, startedAt?: number) {
@@ -77,11 +97,16 @@ export function recordStepTiming(name: string, ms: number, startedAt?: number) {
 }
 
 export async function timed<T>(name: string, run: () => Promise<T>) {
-	if (!traces.getStore()) return run();
+	const trace = traces.getStore();
+	if (!trace) return run();
 	const startedAt = Date.now();
+	trace.open.set(name, (trace.open.get(name) ?? 0) + 1);
 	try {
 		return await run();
 	} finally {
+		const left = (trace.open.get(name) ?? 1) - 1;
+		if (left) trace.open.set(name, left);
+		else trace.open.delete(name);
 		recordStepTiming(name, Date.now() - startedAt, startedAt);
 	}
 }
@@ -94,15 +119,20 @@ export async function timedCall<T>(
 ) {
 	const trace = traces.getStore();
 	const startedAt = Date.now();
+	// Listed at its start (-1 ms while in flight), so a hang shows its call.
+	const call: [number, number, string] | undefined =
+		trace && trace.calls.length < 80
+			? [
+					startedAt - trace.startedAt,
+					-1,
+					label.replace(/\s+/g, " ").slice(0, 70),
+				]
+			: undefined;
+	if (call) trace?.calls.push(call);
 	try {
 		return await timed(name, run);
 	} finally {
-		if (trace && trace.calls.length < 80)
-			trace.calls.push([
-				startedAt - trace.startedAt,
-				Date.now() - startedAt,
-				label.replace(/\s+/g, " ").slice(0, 70),
-			]);
+		if (call) call[1] = Date.now() - startedAt;
 	}
 }
 
