@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	activeMention,
+	agentNameInCode,
+	agentNameSegments,
 	insertMention,
 	MAIN_MENTION_ID,
 	mentionAgents,
@@ -137,5 +139,40 @@ describe("the lead's mention note", () => {
 		expect(text).not.toContain("@mentions");
 		expect(runtimeText).toContain(note);
 		expect(parseSteering(runtimeText)?.text).toBe("ask @Main");
+	});
+});
+
+describe("agent names in replies", () => {
+	const names = new Set(["build-1", "research-1", "Main"]);
+	it("finds exact whole names, with or without @", () => {
+		expect(
+			agentNameSegments("build-1 and @research-1, then Main.", names),
+		).toEqual([
+			{ kind: "mention", name: "build-1" },
+			{ kind: "text", text: " and " },
+			{ kind: "mention", name: "research-1" },
+			{ kind: "text", text: ", then " },
+			{ kind: "mention", name: "Main" },
+			{ kind: "text", text: "." },
+		]);
+	});
+	it("skips longer names, paths, URLs, addresses and other case", () => {
+		for (const text of [
+			"build-10",
+			"rebuild-1",
+			"docs/build-1.md",
+			"x.dev/build-1",
+			"me@build-1",
+			"build-1.ts",
+			"the main branch",
+		])
+			expect(agentNameSegments(text, names), text).toEqual([
+				{ kind: "text", text },
+			]);
+	});
+	it("reads inline code that is exactly a name", () => {
+		expect(agentNameInCode("build-1", names)).toBe("build-1");
+		expect(agentNameInCode("@research-1", names)).toBe("research-1");
+		expect(agentNameInCode("build-1 --fix", names)).toBeNull();
 	});
 });
