@@ -895,7 +895,9 @@ export function SessionLauncher({
 								selectedHelper
 									? `Message “${selectedHelper.name}”…`
 									: agents.lead.status === "free"
-										? "Ask Main anything while helpers work"
+										? agents.helpers.some((row) => row.status === "working")
+											? "Ask Main anything while helpers work"
+											: "Ask Main anything while commands run"
 										: followUpLayout
 											? "Follow up…"
 											: "What would you like to work on?"

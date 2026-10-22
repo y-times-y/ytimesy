@@ -1,5 +1,5 @@
 import type { DynamicToolCallItem } from "./session-item";
-import { AGENT_SEND_TOOL, AGENT_TOOL } from "./subagent";
+import { AGENT_SEND_TOOL, AGENT_TOOL, splitReportHeader } from "./subagent";
 
 /** An agent or agent_send call as its card shows it: who, what, on which model, and how it went. */
 export type AgentCall = {
@@ -52,9 +52,7 @@ export function agentCall(item: DynamicToolCallItem): AgentCall | null {
 				: undefined;
 	};
 	const rawReport = text(output, "report");
-	const header = rawReport
-		? /^\[agent \S+ \S+ ([^\]]+)\]\s*/.exec(rawReport)
-		: null;
+	const header = rawReport ? splitReportHeader(rawReport) : null;
 	const budget = output.budget as
 		| { steps?: number; minutes?: number }
 		| undefined;
@@ -71,8 +69,8 @@ export function agentCall(item: DynamicToolCallItem): AgentCall | null {
 		stop: input.stop === true,
 		sidekick: Boolean(text(output, "sidekick")),
 		status: text(output, "status") ?? text(output, "outcome"),
-		report: header && rawReport ? rawReport.slice(header[0].length) : rawReport,
-		reportMeta: header?.[1],
+		report: header ? header.body : rawReport,
+		reportMeta: header?.meta ?? undefined,
 		budget:
 			budget && typeof budget.steps === "number"
 				? `${budget.steps} steps · ${budget.minutes ?? "?"} min budget`

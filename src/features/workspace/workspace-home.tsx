@@ -56,10 +56,13 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
+	progressRevivesStoppedTurn,
+	progressStreamWanted,
 	SEND_TIMEOUT_MESSAGE,
 	SEND_TIMEOUT_MS,
 	type SessionProgress,
 	sessionReadInterval,
+	WAKE_WATCH_MS,
 	withinTimeout,
 } from "#/domain/session-progress";
 import {
@@ -505,6 +508,45 @@ export function WorkspaceHome({
 	const backgroundRuns = backgroundRunsFromReadModel(
 		backgroundCommands.data ?? {},
 	);
+	// A helper's report or a background command's exit starts Main's next turn
+	// on the server; the open chat listens for it (progressStreamWanted), and
+	// for a stopped turn's settled transcript.
+	const helpersWorking = (agentTasks.data ?? []).some(
+		(task) => task.status === "working" || task.status === "waiting",
+	);
+	const backgroundRunning = backgroundRuns.some(
+		(run) => run.status === "running",
+	);
+	const [wakeWatch, setWakeWatch] = useState<{
+		readonly sessionId: string;
+		readonly since: number;
+	} | null>(null);
+	const sideWork = useRef<{
+		readonly sessionId: string | undefined;
+		readonly active: boolean;
+	}>({ sessionId: undefined, active: false });
+	useEffect(() => {
+		const active = helpersWorking || backgroundRunning;
+		const previous = sideWork.current;
+		sideWork.current = { sessionId: activeSessionId, active };
+		if (
+			activeSessionId &&
+			previous.sessionId === activeSessionId &&
+			previous.active &&
+			!active
+		)
+			setWakeWatch({ sessionId: activeSessionId, since: Date.now() });
+	}, [activeSessionId, helpersWorking, backgroundRunning]);
+	useEffect(() => {
+		if (!wakeWatch) return;
+		const timer = window.setTimeout(() => setWakeWatch(null), WAKE_WATCH_MS);
+		return () => window.clearTimeout(timer);
+	}, [wakeWatch]);
+	const listenForProgress = progressStreamWanted({
+		turnRunning: session.turnStatus === "running",
+		helpersWorking,
+		watchingForWake: !!wakeWatch && wakeWatch.sessionId === activeSessionId,
+	});
 	useEffect(() => {
 		if (
 			activeSessionId &&
@@ -920,12 +962,7 @@ export function WorkspaceHome({
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	useEffect(() => {
-		if (
-			!activeProjectId ||
-			!activeSessionId ||
-			session.turnStatus !== "running"
-		)
-			return;
+		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
 		const source = new EventSource(
 			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId })}`,
@@ -950,6 +987,15 @@ export function WorkspaceHome({
 			)
 				return;
 			if (!progressMatchesTurn(currentSessionRef.current.items, progress.items))
+				return;
+			if (
+				progressRevivesStoppedTurn({
+					stopRequested: stopRequestedFor.current === activeSessionId,
+					current: currentSessionRef.current.items,
+					next: progress.items,
+					nextStatus: progress.turnStatus,
+				})
+			)
 				return;
 			lastRevision = event.lastEventId;
 			liveProgress.current = {
@@ -998,7 +1044,7 @@ export function WorkspaceHome({
 			if (progressStreamOpen.current === activeSessionId)
 				progressStreamOpen.current = null;
 		};
-	}, [activeProjectId, activeSessionId, session.turnStatus, harnessId]);
+	}, [activeProjectId, activeSessionId, listenForProgress, harnessId]);
 
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
@@ -1841,6 +1887,10 @@ export function WorkspaceHome({
 									// The stopped turn ends idle; accept that view even if the
 									// live progress stream never reports the stop.
 									stopRequestedFor.current = chatId ?? null;
+									// The turn settles on the server after this answers; keep
+									// listening so its "Stopped" marker shows without a reload.
+									if (chatId)
+										setWakeWatch({ sessionId: chatId, since: Date.now() });
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
