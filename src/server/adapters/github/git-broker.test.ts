@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -105,6 +112,11 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 				mode: "clone",
 			}),
 		).toBe("updated");
+		// The checkout keeps the VM's umask (only the bundle is 0600), so a
+		// read-only helper running as another Linux user can read it.
+		expect((await stat(join(guest, "file"))).mode & 0o777).toBe(
+			0o666 & ~process.umask(),
+		);
 		await writeFile(join(guest, "file"), "changed");
 		await execute("git", ["-C", guest, "add", "."]);
 		await execute("git", [

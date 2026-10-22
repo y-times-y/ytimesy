@@ -1,5 +1,9 @@
 import type { AgentProviderId } from "./agent-provider";
-import { type AgentTaskStatus, agentTaskTree } from "./agent-task";
+import {
+	type AgentTaskStatus,
+	agentTaskTree,
+	taskStatusFromTurn,
+} from "./agent-task";
 import { helperKindOf, helperReference } from "./helper-names";
 import { sessionBilling } from "./model-pricing";
 import {
@@ -24,6 +28,7 @@ import {
 	subtreeSpends,
 	totalSpend,
 } from "./subagent-usage";
+import { lastTurnEnd } from "./turn-end";
 
 /** The session fields the tree reads (AgentSessionRecord satisfies it). */
 export type SubagentTreeSession = {
@@ -72,15 +77,37 @@ export type SubagentTree = {
 	readonly builder: AgentSpend;
 };
 
+/**
+ * When a finished agent stopped: its last turn's recorded end, or for turns
+ * from before ends were recorded its row's update time. Null while it works.
+ * A finished helper's clock and VM minutes stop here, not at now.
+ */
+function finishedAt(
+	session: SubagentTreeSession,
+	items: readonly SessionItem[],
+) {
+	const status = taskStatusFromTurn(session.turnStatus, session.taskState);
+	if (status === "working" || status === "waiting") return null;
+	const end = lastTurnEnd(items) ?? Date.parse(session.updatedAt);
+	return Number.isFinite(end) ? end : null;
+}
+
 function sessionSpend(
 	session: SubagentTreeSession,
 	now: number,
 	basisModelId: string | null,
 ) {
+	const items = sessionItemsFromUnknown(
+		session.items,
+	) as readonly SessionItem[];
 	return agentSpend({
-		items: sessionItemsFromUnknown(session.items) as readonly SessionItem[],
+		items,
 		billing: sessionBilling(session),
-		vmMinutes: forkVmMinutes(session.agentFork ?? null, now),
+		vmMinutes: forkVmMinutes(
+			session.agentFork ?? null,
+			now,
+			finishedAt(session, items),
+		),
 		budgetWeight: budgetTokenWeight(session.listedModelId, basisModelId),
 	});
 }
@@ -117,7 +144,14 @@ export function subagentTree(
 	for (const task of tasks) {
 		const session = byId.get(task.id);
 		if (!session?.agentRole) continue;
-		const minutes = Math.max(0, (now - Date.parse(session.createdAt)) / 60_000);
+		const end = Math.min(
+			now,
+			finishedAt(
+				session,
+				sessionItemsFromUnknown(session.items) as readonly SessionItem[],
+			) ?? now,
+		);
+		const minutes = Math.max(0, (end - Date.parse(session.createdAt)) / 60_000);
 		nodes.push({
 			id: task.id,
 			parentId: task.parentSessionId,

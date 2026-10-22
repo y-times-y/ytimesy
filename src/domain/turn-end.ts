@@ -1,3 +1,4 @@
+import { isWakeTurnStart, turnStartTiming } from "./child-task-activity";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 
@@ -34,6 +35,22 @@ export function settledTurnItems(
 		};
 	}
 	return next;
+}
+
+/**
+ * When a finished agent's last turn ended, as its transcript records it; null
+ * for turns from before the end was recorded.
+ */
+export function lastTurnEnd(items: readonly SessionItem[]): number | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		// A wake-up turn's start counts: Main's clock runs to its end.
+		if (item && isWakeTurnStart(item))
+			return turnStartTiming(item)?.completedAt ?? null;
+		if (item?.kind === "userMessage" && !item.queued)
+			return item.timing?.completedAt ?? null;
+	}
+	return null;
 }
 
 /** A turn the user stopped closes with a "Stopped" notice, once. */
