@@ -120,7 +120,8 @@ describe("sidekick rounds", () => {
 		expect(check.limits).toMatchObject({
 			steps: 100,
 			minutes: 30,
-			tokens: 400_000,
+			// Its own round's cap, though 600k of its 1M were used before the round.
+			tokens: 500_000,
 			stopAtStep: 5,
 		});
 		expect(check.reasonPrefix).toBe("round 2, ");

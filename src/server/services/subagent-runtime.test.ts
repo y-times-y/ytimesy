@@ -398,15 +398,16 @@ describe("sidekick (lead mode fusion)", () => {
 		);
 	});
 
-	it("caps one round's tokens and the sidekick's lifetime tokens", async () => {
+	it("caps each round's tokens, not the sidekick's rounds together", async () => {
 		// Round cap 500k: 300k before the round plus 520k now is 520k in the round.
 		await expect(step(round2, 100, { items: used(820_000) })).rejects.toThrow(
 			"round 2, tokens",
 		);
-		// Lifetime 1M: 900k before the round leaves 100k for it.
+		// 900k of its 1M before the round: the round still gets its own 500k.
 		const late = sidekickState({ ...round2, roundStartTokens: 900_000 });
-		await expect(step(late, 100, { items: used(1_000_000) })).rejects.toThrow(
-			"Budget exhausted (round 2, tokens 100,000/100,000).",
+		expect(await step(late, 100, { items: used(1_000_000) })).toBe(messages);
+		await expect(step(late, 100, { items: used(1_400_000) })).rejects.toThrow(
+			"Budget exhausted (round 2, tokens 500,000/500,000).",
 		);
 	});
 

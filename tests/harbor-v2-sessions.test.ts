@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { type FusionTrace, fusionLead } from "../evals/harbor_v2/children";
 import type { HarborModel } from "../evals/harbor_v2/config";
-import { trialSessions } from "../evals/harbor_v2/sessions";
+import {
+	ChildBudgetUsed,
+	childBudgetUsed,
+	childStepGuard,
+} from "../evals/harbor_v2/review";
+import { type TimedEvent, trialSessions } from "../evals/harbor_v2/sessions";
+import { newSidekickState } from "../src/domain/sidekick";
 
 const model = {
 	modelId: "m",
@@ -48,5 +55,101 @@ describe("trialSessions", () => {
 				id: "harbor-checker-1",
 			}),
 		).toThrow(/already exists/);
+	});
+});
+
+describe("child budgets", () => {
+	const usage = (tokens: number): TimedEvent => ({
+		at: "2026-10-21T00:00:00.000Z",
+		event: {
+			type: "usage",
+			usage: { inputTokens: tokens, outputTokens: 0 },
+		} as TimedEvent["event"],
+	});
+	const budget = { steps: 60, minutes: 15, tokens: 1_500_000 };
+	const sidekickBudget = {
+		...budget,
+		sidekick: newSidekickState(budget, new Date(0).toISOString()),
+	};
+
+	it("counts a sidekick's tokens per round, against the product's round cap", async () => {
+		// Round 1 ended at 1.6M (usage is cumulative within a model run).
+		const events = [usage(400_000), usage(1_600_000)];
+		const guard = childStepGuard({
+			role: "sidekick",
+			budget: sidekickBudget,
+			startedAt: Date.now(),
+			events,
+			from: events.length,
+		});
+		// Round 2's first step: round 1's tokens are not this round's.
+		expect(await guard([])).toEqual([]);
+		events.push(usage(760_000));
+		const error = await guard([]).catch((caught) => caught);
+		expect(error).toBeInstanceOf(ChildBudgetUsed);
+		expect(childBudgetUsed(error)?.message).toBe(
+			"Sidekick budget used (this round, tokens 760,000/750,000).",
+		);
+	});
+
+	it("weighs a cheaper child's tokens as the product does, and names the role", async () => {
+		const events = [usage(1_000_000)];
+		const sidekick = childStepGuard({
+			role: "sidekick",
+			budget: sidekickBudget,
+			startedAt: Date.now(),
+			events,
+			from: 0,
+			weight: 0.25,
+		});
+		expect(await sidekick([])).toEqual([]);
+		const checker = childStepGuard({
+			role: "checker",
+			budget,
+			startedAt: Date.now(),
+			events: [usage(1_500_000)],
+			from: 0,
+		});
+		await expect(checker([])).rejects.toThrow(
+			"Checker budget used (tokens 1,500,000/1,500,000).",
+		);
+	});
+
+	it("tells the sidekick to wrap up as a writer, not with a checker's JSON", async () => {
+		const guard = childStepGuard({
+			role: "sidekick",
+			budget: sidekickBudget,
+			startedAt: Date.now(),
+			events: [usage(700_000)],
+			from: 0,
+		});
+		const [notice] = await guard([]);
+		expect(notice.content).toContain("Budget nearly used (this round, ");
+		expect(notice.content).toContain("write your report");
+	});
+
+	it("shows the lead a round stopped at its budget as sidekick budget used", async () => {
+		const store = trialSessions(() => 0);
+		const trace: FusionTrace = { decisions: [], rounds: [], refused: [] };
+		const lead = fusionLead({
+			parentId: "t",
+			sessions: store,
+			model: () => model,
+			escalation: null,
+			runRound: async () => ({
+				outcome: "failed",
+				report: "",
+				budgetUsed: "this round, tokens 760,000/750,000",
+			}),
+			callOnce: async () => ({ text: "", usage: null }),
+			changedFiles: async () => [" M app.py"],
+			trace,
+		});
+		const text = await lead.explore("Fix the bug.");
+		expect(text).toMatch(
+			/^Sidekick t\.1 round 1 \(explore\) stopped: sidekick budget used \(this round, tokens 760,000\/750,000\)\./,
+		);
+		expect(text).not.toMatch(/failed/);
+		expect(trace.rounds[0].outcome).toBe("budget exhausted");
 	});
 });
