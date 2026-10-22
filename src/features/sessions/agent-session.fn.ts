@@ -250,3 +250,40 @@ export const restoreConversationPoint = createServerFn({ method: "POST" })
 			(machines) => recoverConversation(machines, user.id, data),
 		);
 	});
+
+const forkedChat = z.object({ projectId: z.uuid(), sessionId: z.uuid() });
+
+/** A forked chat's VM copy: preparing, failed (with retry), or null when ready. */
+export const getConversationForkStatus = createServerFn({ method: "GET" })
+	.validator((data: { projectId: string; sessionId: string }) =>
+		forkedChat.parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { conversationForkState } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return conversationForkState(user.id, data.projectId, data.sessionId);
+	});
+
+export const retryConversationForkFn = createServerFn({ method: "POST" })
+	.validator((data: { projectId: string; sessionId: string }) =>
+		forkedChat.parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { retryConversationFork } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return runWithMachines(
+			"Fork retry",
+			(error) => publicRecoveryFailure(error, "fork"),
+			(machines) =>
+				retryConversationFork(
+					machines,
+					user.id,
+					data.projectId,
+					data.sessionId,
+				),
+		);
+	});

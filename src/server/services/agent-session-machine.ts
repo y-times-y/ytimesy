@@ -43,6 +43,7 @@ import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
+import { conversationForkPending } from "../adapters/conversation-fork";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { cancelServerTurn } from "./cancel-server-turn";
 import { restoreSessionWorkspace } from "./session-checkpoint";
@@ -266,6 +267,9 @@ export async function bindAgentSessionMachine(
 		: undefined;
 	policy?.catch(() => {});
 	const { session, workspace } = await resolveAgentSessionRecord(input);
+	// A fork's VM is still being copied: a VM made here would take its slug.
+	if (!session.providerRef && (await conversationForkPending(session.id)))
+		throw new Error("This chat's workspace is still being prepared.");
 	const selectedSession =
 		session.harness === input.harness
 			? session
