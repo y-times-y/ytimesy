@@ -711,6 +711,47 @@ ${TASK}
 		expect(h.state()?.outcome).toBe("pass");
 	});
 
+	it("unattended, a build past the loop's hour is still reviewed: the window runs to the runner's deadline, else from the first check", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		// A trial with 8 hours: the build took 90 minutes.
+		const trialEnd = 1_000_000 + 8 * 60 * 60_000;
+		const h = harness({
+			reports: [PASS],
+			unattended: true,
+			deadlineAt: trialEnd,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(90 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(1);
+		expect(h.state()?.outcome).toBe("pass");
+		expect(h.state()?.deadlineAt).toBe(trialEnd);
+		// Without a runner's deadline: the loop's minutes from the first check.
+		const g = harness({ reports: [PASS], unattended: true });
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(90 * 60_000);
+		const checkAt = g.now();
+		await g.loop.afterAttempt(g.step(1, "Done."));
+		expect(g.started).toHaveLength(1);
+		expect(g.state()?.deadlineAt).toBe(checkAt + 60 * 60_000);
+		// The product keeps its hour from the turn's start.
+		const p = harness({ reports: [PASS], deadlineAt: trialEnd });
+		await p.loop.beforeModel(p.step(0, ""));
+		p.setTree("t-1");
+		p.advance(90 * 60_000);
+		await p.loop.afterAttempt(p.step(1, "Done."));
+		expect(p.started).toHaveLength(0);
+		expect(p.state()?.outcome).toBe("time");
+	});
+
 	it("checks the same tree again once when a check gives no verdict with ample time left", async () => {
 		const PASS = verdict({
 			verdict: "pass",

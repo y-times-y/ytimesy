@@ -6,7 +6,11 @@ import { codexSubscriptionModel } from "../../src/server/adapters/codex-subscrip
 import { nativeModelCompactor } from "../../src/server/adapters/model-compaction";
 import { apiModelRuntime } from "../../src/server/services/api-agent-runtime";
 import type { ModelAgentRuntime } from "../../src/server/services/model-agent-loop";
-import { bedrockCredentials, bedrockSigningFetch } from "./bedrock";
+import {
+	bedrockCredentials,
+	bedrockSigningFetch,
+	responseTimeLimitFetch,
+} from "./bedrock";
 import { API_ENDPOINTS, type HarborBridgeConfig } from "./config";
 
 const KEY_SHAPES: Record<keyof typeof API_ENDPOINTS, RegExp> = {
@@ -86,6 +90,9 @@ export async function harborRuntime(input: {
 	});
 }
 
+/** The bedrock route's output cap per response. */
+export const BEDROCK_MAX_OUTPUT_TOKENS = 64_000;
+
 /**
  * OpenAI models in Amazon Bedrock (bedrock.ts): the product's OpenAI
  * Responses runtime pointed at bedrock-mantle (or bedrock-runtime), every request SigV4-signed
@@ -125,7 +132,10 @@ async function bedrockRuntime(input: {
 			credentials,
 			region: bedrock.region,
 			endpoint: bedrock.endpoint,
-			fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
+			// One request's wall time is bounded (responseTimeLimitFetch).
+			fetch: responseTimeLimitFetch(
+				input.fetch ?? globalThis.fetch.bind(globalThis),
+			),
 			model: { client: clientModel, profile: config.modelId },
 		}),
 		wrapModel: input.wrapModel,
@@ -136,10 +146,12 @@ async function bedrockRuntime(input: {
 	const requestSettings = runtime.requestSettings;
 	return {
 		...runtime,
-		// No output cap, as Codex and the subscription route send none. The API
-		// default (8K) cut Luna at max effort mid tool call: a sidekick lost
-		// three steps in a row to response.incomplete (max_output_tokens).
-		maxOutputTokens: undefined,
+		// A large but finite output cap. The API default (8K) cut Luna at max
+		// effort mid tool call (a sidekick lost three steps in a row to
+		// response.incomplete); with no cap one response ran away for 30
+		// minutes (1.6 MB). A step cut at this cap is resampled once with a
+		// note to work in smaller steps (model-agent-loop's outputLimitCut).
+		maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
 		requestSettings: requestSettings
 			? (instructions) => {
 					const settings = requestSettings(instructions);

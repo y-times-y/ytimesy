@@ -360,3 +360,119 @@ export function bedrockSigningFetch(input: {
 		return input.fetch(url, { ...init, method, headers, body });
 	};
 }
+
+/** A response stream stopped at its wall-clock or idle limit (network-shaped, so the loop resamples the step). */
+export class ResponseTimeLimit extends Error {
+	readonly code = "ETIMEDOUT";
+	constructor(reason: string) {
+		super(`Model response stopped: ${reason} (ETIMEDOUT).`);
+		this.name = "ResponseTimeLimit";
+	}
+}
+
+const duration = (ms: number) =>
+	ms >= 60_000
+		? `${Math.round(ms / 60_000)} minutes`
+		: `${Math.round(ms / 1000)} s`;
+
+/** Per model request on the bedrock route: one response's whole stream, and the longest silence in it. */
+export const BEDROCK_RESPONSE_LIMITS = {
+	totalMs: 20 * 60_000,
+	idleMs: 10 * 60_000,
+} as const;
+
+/**
+ * Bounds one request's wall time: the whole response (headers and body) gets
+ * `totalMs`, and no more than `idleMs` may pass without a byte. A Bedrock
+ * response once streamed for 30 minutes (1.6 MB) and would have run to the
+ * trial's timeout. At a limit the request is aborted and its body fails with
+ * an ETIMEDOUT error, which the model loop treats as an interrupted stream:
+ * the step is resampled from the history before it (a few times, with
+ * backoff), then the turn fails.
+ */
+export function responseTimeLimitFetch(
+	fetch: typeof globalThis.fetch,
+	limits: {
+		readonly totalMs: number;
+		readonly idleMs: number;
+	} = BEDROCK_RESPONSE_LIMITS,
+	now: () => number = Date.now,
+): typeof globalThis.fetch {
+	return async (request, init) => {
+		const startedAt = now();
+		const aborter = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stopped: ResponseTimeLimit | undefined;
+		let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const clear = () => clearTimeout(timer);
+		const arm = () => {
+			clear();
+			const total = startedAt + limits.totalMs - now();
+			const ms = Math.max(0, Math.min(total, limits.idleMs));
+			timer = setTimeout(() => {
+				stopped = new ResponseTimeLimit(
+					total <= limits.idleMs
+						? `the response ran past ${duration(limits.totalMs)}`
+						: `no data for ${duration(limits.idleMs)}`,
+				);
+				aborter.abort(stopped);
+				try {
+					body?.error(stopped);
+				} catch {
+					/* Already closed. */
+				}
+			}, ms);
+		};
+		arm();
+		let response: Response;
+		try {
+			response = await fetch(request, {
+				...init,
+				signal: init?.signal
+					? AbortSignal.any([init.signal, aborter.signal])
+					: aborter.signal,
+			});
+		} catch (error) {
+			clear();
+			throw stopped ?? error;
+		}
+		if (!response.body) {
+			clear();
+			return response;
+		}
+		const reader = response.body.getReader();
+		arm();
+		return new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					body = controller;
+				},
+				async pull(controller) {
+					try {
+						const { done, value } = await reader.read();
+						if (stopped) return;
+						if (done) {
+							clear();
+							controller.close();
+							return;
+						}
+						arm();
+						controller.enqueue(value);
+					} catch (error) {
+						clear();
+						if (!stopped) controller.error(error);
+					}
+				},
+				cancel(reason) {
+					clear();
+					return reader.cancel(reason);
+				},
+			}),
+			{
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			},
+		);
+	};
+}
