@@ -354,10 +354,12 @@ describe("background commands", () => {
 				endedAt: 1_000,
 			},
 		]);
-		expect(rows.map((row) => [row.name, row.statusLabel, row.tag])).toEqual([
-			["dev server", "running", "Background"],
-			["test suite", "exited 0", "Background"],
-			["seed.sh", "failed", "Background"],
+		expect(
+			rows.map((row) => [row.name, row.doing, row.doingDetail, row.tag]),
+		).toEqual([
+			["dev server", "pnpm dev --port 3000", undefined, "Background"],
+			["test suite", "Exited 0", "pnpm vitest run", "Background"],
+			["seed.sh", "Failed", "./scripts/seed.sh", "Background"],
 		]);
 		expect(rows[0]?.metric?.tokens).toBeUndefined();
 		expect(rows[0]?.messageable).toBe(false);
@@ -542,6 +544,45 @@ describe("agents list rows", () => {
 			messageable: false,
 		});
 	});
+	it("says each row's state once, sentence-cased, in its line", () => {
+		const done = task("d", {
+			status: "done",
+			turnStatus: "completed",
+			summary: "Parser fixed; 4 tests added.",
+		});
+		const bare = task("b", { status: "done", turnStatus: "completed" });
+		const failed = task("f", { status: "failed", turnStatus: "failed" });
+		const working = task("w", {
+			items: [tool("r", "read", { path: "docs/api.md" }, "inProgress")],
+		});
+		const rows = agentPanelRows({
+			tasks: [done, bare, failed, working],
+			leadItems: [],
+			leadTurnStatus: "completed",
+		});
+		expect(rows.lead.doing).toBe("Free while helpers work");
+		expect(
+			rows.helpers.map((row) => [row.name, row.doing, row.doingDetail]),
+		).toEqual([
+			["Task d", "Done", "Parser fixed; 4 tests added."],
+			["Task b", "Done", undefined],
+			["Task f", "Failed", undefined],
+			["Task w", "Reading api.md", undefined],
+		]);
+		const idle = agentPanelRows({
+			tasks: [],
+			leadItems: [],
+			leadTurnStatus: "completed",
+		});
+		expect(idle.lead).toMatchObject({
+			status: "done",
+			doing: "Waiting for you",
+		});
+		expect(
+			agentPanelRows({ tasks: [], leadItems: [], leadTurnStatus: "failed" })
+				.lead.doing,
+		).toBe("Failed");
+	});
 	it("shows Main as free while its helpers work after its turn ended", () => {
 		const rows = agentPanelRows({
 			tasks: [task("sk", { sidekick: true })],
@@ -550,8 +591,7 @@ describe("agents list rows", () => {
 		});
 		expect(rows.lead).toMatchObject({
 			status: "free",
-			statusLabel: "free",
-			doing: "free while helpers work",
+			doing: "Free while helpers work",
 		});
 	});
 	it("says Main is free while commands run when only a background command works", () => {
@@ -570,7 +610,7 @@ describe("agents list rows", () => {
 		});
 		expect(rows.lead).toMatchObject({
 			status: "free",
-			doing: "free while commands run",
+			doing: "Free while commands run",
 		});
 	});
 	it("lets the user message a sidekick resting between rounds, not a retired one", () => {
@@ -612,7 +652,6 @@ describe("agents list rows", () => {
 				icon: "hammer",
 				color: "",
 				status,
-				statusLabel: status,
 				doing: "",
 				queued: 0,
 				title: "",
