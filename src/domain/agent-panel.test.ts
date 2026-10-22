@@ -22,6 +22,7 @@ import {
 import { parseSteering, steeringTexts } from "./agent-steering";
 import type { AgentTaskActivity } from "./child-task-activity";
 import {
+	helperCallLabel,
 	helperName,
 	helperReference,
 	KIND_COLORS,
@@ -584,6 +585,24 @@ describe("steering messages", () => {
 		expect(steeringSender("Explore the parser", "Lead")).toEqual({
 			from: "Lead",
 			text: "Explore the parser",
+		});
+	});
+});
+
+describe("an agent call in the timeline", () => {
+	it("names the helper by its task with a kind tag, never a role word", () => {
+		expect(
+			helperCallLabel({ title: "Fix pricing rounding", role: "writer" }),
+		).toEqual({ name: "Fix pricing rounding", tag: "Build" });
+		expect(
+			helperCallLabel({ title: "Build it", role: "writer", sidekick: true }),
+		).toEqual({ name: "Build it", tag: "Build" });
+		expect(
+			helperCallLabel({ title: "Map the parser", role: "researcher" }).tag,
+		).toBe("Research");
+		expect(helperCallLabel({ title: "", role: "nope" })).toEqual({
+			name: "Untitled task",
+			tag: null,
 		});
 	});
 });

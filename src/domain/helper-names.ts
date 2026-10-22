@@ -1,4 +1,8 @@
-import type { SubagentBudget, SubagentRole } from "./subagent";
+import {
+	isSubagentRole,
+	type SubagentBudget,
+	type SubagentRole,
+} from "./subagent";
 
 /**
  * How the chat shows its agents, everywhere: the agents list, the start and
@@ -114,6 +118,27 @@ export function helperName(title: string) {
 /** How the lead names a helper to the user: its task, then its kind. */
 export function helperReference(title: string, kind: HelperKind) {
 	return `${helperName(title)} (${KIND_TAGS[kind]})`;
+}
+
+/**
+ * An agent call's helper as the timeline shows it: its task, with its kind
+ * tag ("Fix pricing rounding" · Build), never its role word. Null tag for an
+ * unknown role.
+ */
+export function helperCallLabel(call: {
+	readonly title?: string;
+	readonly role?: string;
+	readonly sidekick?: boolean;
+}): { readonly name: string; readonly tag: string | null } {
+	const kind: HelperKind | null = call.sidekick
+		? "sidekick"
+		: isSubagentRole(call.role)
+			? call.role
+			: null;
+	return {
+		name: helperName(call.title ?? ""),
+		tag: kind ? KIND_TAGS[kind] : null,
+	};
 }
 
 export type HelperIdentity = {

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { AgentCall } from "#/domain/agent-call";
 import type { CheckSummary } from "#/domain/check-summary";
+import { helperCallLabel } from "#/domain/helper-names";
 import type { DynamicToolCallItem } from "#/domain/session-item";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
@@ -198,20 +199,20 @@ export function AgentCallView({
 	live?: boolean;
 	onOpenFile?: (path: string) => void;
 }) {
-	const role = call.role;
+	// A helper goes by its task and a kind tag (helper-names.ts), not its role.
+	const helper =
+		call.tool === "agent" && !call.explore ? helperCallLabel(call) : null;
 	const verb =
 		call.tool === "agent"
 			? call.explore
 				? "Explore round"
-				: role
-					? capitalized(role)
-					: "Subagent"
+				: "Started"
 			: call.stop
 				? "Stopped agent"
 				: call.explore
 					? "Explore round for agent"
 					: "Messaged agent";
-	const target = call.tool === "agent" ? call.title : call.id;
+	const target = call.tool === "agent" ? (helper?.name ?? call.title) : call.id;
 	// The subagent card below the call shows its live status; the call row only
 	// adds what it alone knows: a failure, a waited reader's outcome, a round.
 	const status =
@@ -243,6 +244,9 @@ export function AgentCallView({
 						<span className="session-tool-note">{call.model}</span>
 					) : null}
 				</span>
+				{helper?.tag ? (
+					<span className="agent-row-tag">{helper.tag}</span>
+				) : null}
 				<ChevronRight size={12} className="session-activity-chevron" />
 				{status ? (
 					<span className="session-activity-status">{status}</span>
