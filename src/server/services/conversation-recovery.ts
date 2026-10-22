@@ -1,18 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import {
+	agentSessionMachineSlug,
+	copiedSessionScratchResetCommands,
+} from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import { jsonbText } from "#/domain/jsonb";
+import { sessionBranchName } from "#/domain/session-branch";
+import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { type SubagentRole, writesOwnCheckout } from "#/domain/subagent";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
 import {
+	type AgentSessionRecord,
+	agentSessionForOwner,
+	projectBranchHeldByOtherSession,
+} from "../adapters/agent-sessions";
+import {
+	type ConversationPoint,
 	conversationPoint,
+	laterConversationCode,
 	saveRecoveredConversation,
 } from "../adapters/conversation-recovery";
 import { database } from "../adapters/database";
+import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { projectMachineSize } from "../adapters/project-machine-size";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
+	assertConversationCodePresent,
 	captureConversationCode,
 	restoreConversationCode,
+	startCheckoutFromConversationCode,
 } from "./conversation-code-checkpoint";
 import {
 	holdSettledConversationTurn,
@@ -68,6 +84,176 @@ export function ownsWritableCheckout(row: {
 	);
 }
 
+/**
+ * Where a fork's code starts: a copy of the source VM at the message's code,
+ * or (when the source never had a checkout of its own, so its code never
+ * moved) a fresh checkout made at its first turn.
+ */
+export function forkCodeStart(input: {
+	ownsCheckout: boolean;
+}): "checkpoint" | "fresh" {
+	return input.ownsCheckout ? "checkpoint" : "fresh";
+}
+
+/**
+ * A message's code. A turn that never touched the workspace has no code
+ * point and changed nothing, so its code is what the next turn that did
+ * found at its start (its code point), or, with no such turn yet, the
+ * checkout as it is now (captured as a new point). A code restore in
+ * between makes that later code not the message's, so the fork is refused.
+ */
+export async function forkCode(input: {
+	readonly messageId: string;
+	readonly code: ConversationPoint["code"] | undefined;
+	readonly userMessageIds: readonly string[];
+	readonly later: (
+		laterIds: readonly string[],
+	) => ReturnType<typeof laterConversationCode>;
+}): Promise<NonNullable<ConversationPoint["code"]> | "now"> {
+	if (input.code) return input.code;
+	const index = input.userMessageIds.indexOf(input.messageId);
+	if (index < 0)
+		throw new Error("This message has no code checkpoint to fork from.");
+	const later = await input.later(input.userMessageIds.slice(index + 1));
+	if (later.rewound)
+		throw new Error(
+			"Code was restored after this message, so its code is unknown; fork from another message.",
+		);
+	return later.code ?? "now";
+}
+
+const FORK_BRANCH_ATTEMPTS = 6;
+
+/** The fork's own `ytimesy/` branch; it never works on the source's branch. */
+async function forkBranchName(
+	session: Pick<AgentSessionRecord, "userId" | "projectId" | "title">,
+	forkId: string,
+) {
+	let name = sessionBranchName({ title: session.title, id: forkId });
+	for (let attempt = 0; attempt < FORK_BRANCH_ATTEMPTS; attempt++) {
+		name = sessionBranchName({ title: session.title, id: forkId, attempt });
+		if (
+			!(await projectBranchHeldByOtherSession(
+				session.userId,
+				session.projectId,
+				forkId,
+				name,
+			))
+		)
+			return name;
+	}
+	return name;
+}
+
+type ConversationFork = {
+	readonly id: string;
+	/** Null only for a fresh fork of a chat that has no base branch on record. */
+	readonly branch: string | null;
+	readonly vm: WorkspaceId | null;
+	readonly destroy: () => Promise<void>;
+};
+
+/**
+ * The fork's VM is a copy of the source's (Freestyle fork: disk, ignored
+ * dependencies and the never-pushed checkpoint refs), put on the fork's own
+ * branch at the message's checkpoint. The source VM is only read.
+ */
+async function prepareConversationFork(
+	machines: WorkspaceMachines,
+	userId: string,
+	input: z.infer<typeof conversationRecoveryRequest>,
+): Promise<ConversationFork> {
+	const id = randomUUID();
+	const session = await agentSessionForOwner(userId, input.sessionId);
+	if (!session || session.projectId !== input.projectId)
+		throw new Error("Session is unavailable.");
+	if (session.turnStatus === "running")
+		throw new Error("Stop the active turn before using recovery.");
+	const point = await conversationPoint(
+		userId,
+		input.sessionId,
+		input.messageId,
+	);
+	if (!point) throw new Error("This message has no saved recovery point.");
+	const start = forkCodeStart({
+		ownsCheckout: ownsWritableCheckout({
+			provider_ref: session.providerRef,
+			parent_session_id: session.parentSessionId,
+			agent_role: session.agentRole,
+		}),
+	});
+	const branch = await forkBranchName(session, id);
+	const none = async () => {};
+	if (start === "fresh" || !session.providerRef)
+		return {
+			id,
+			branch: session.baseBranch ? branch : null,
+			vm: null,
+			destroy: none,
+		};
+	const scoped = machinesForAgentSession(machines, session);
+	if (!scoped.forkWorkspace)
+		throw new Error("This workspace provider cannot fork a chat's machine.");
+	const resolved = await forkCode({
+		messageId: input.messageId,
+		code: point.code,
+		userMessageIds: sessionItemsFromUnknown(session.items)
+			.filter((item) => item.kind === "userMessage")
+			.map((item) => item.id),
+		later: (laterIds) =>
+			laterConversationCode(userId, input.sessionId, input.messageId, laterIds),
+	});
+	const source = WorkspaceId(session.providerRef);
+	await scoped.ensureRunning(source);
+	const sourceCwd = (
+		await scoped.readTextFile(source, PROJECT_CWD_PATH)
+	)?.trim();
+	if (!sourceCwd?.startsWith("/"))
+		throw new Error("The chat's repository path is unavailable.");
+	const code =
+		resolved === "now"
+			? await captureConversationCode({
+					machines: scoped,
+					vm: source,
+					cwd: sourceCwd,
+				})
+			: resolved;
+	if (sourceCwd !== code.cwd)
+		throw new Error("Recovery point belongs to a different checkout.");
+	await assertConversationCodePresent(
+		{ machines: scoped, vm: source, cwd: code.cwd },
+		code,
+	);
+	const forked = await scoped.forkWorkspace(
+		source,
+		agentSessionMachineSlug(id),
+		await projectMachineSize(userId, session.projectId),
+	);
+	const destroy = () => scoped.destroy(forked.vm).catch(() => {});
+	try {
+		const cwd = (
+			await scoped.readTextFile(forked.vm, PROJECT_CWD_PATH)
+		)?.trim();
+		if (!cwd?.startsWith("/"))
+			throw new Error("The fork has no prepared repository path.");
+		// As a copied session VM: the source's runtime scratch is not the fork's.
+		await Promise.all(
+			copiedSessionScratchResetCommands().map((command) =>
+				scoped.exec(forked.vm, command, 15_000),
+			),
+		);
+		await startCheckoutFromConversationCode(
+			{ machines: scoped, vm: forked.vm, cwd },
+			code,
+			branch,
+		);
+	} catch (error) {
+		await destroy();
+		throw error;
+	}
+	return { id, branch, vm: forked.vm, destroy };
+}
+
 /** Session locks exclude new turns and active descendants. A pre-restore Git point makes code replacement recoverable. */
 export async function recoverConversation(
 	machines: WorkspaceMachines,
@@ -75,6 +261,26 @@ export async function recoverConversation(
 	request: z.infer<typeof conversationRecoveryRequest>,
 ) {
 	const input = conversationRecoveryRequest.parse(request);
+	// The fork's VM is copied before the session lock: a copy can outlast
+	// the lock transaction's idle limit, and it changes nothing in the source.
+	const fork =
+		input.mode === "fork"
+			? await prepareConversationFork(machines, userId, input)
+			: undefined;
+	try {
+		return await recoverLocked(machines, userId, input, fork);
+	} catch (error) {
+		await fork?.destroy();
+		throw error;
+	}
+}
+
+async function recoverLocked(
+	machines: WorkspaceMachines,
+	userId: string,
+	input: z.infer<typeof conversationRecoveryRequest>,
+	fork: ConversationFork | undefined,
+) {
 	const client = await database().connect();
 	let workspace: AgentToolWorkspace | undefined;
 	let backup: Awaited<ReturnType<typeof captureConversationCode>> | undefined;
@@ -132,12 +338,14 @@ export async function recoverConversation(
 			],
 		);
 		let id = input.sessionId;
-		if (input.mode === "fork") {
-			id = randomUUID();
-			// A fork has an independent lazy workspace and fresh task ancestry; it cannot control source children.
+		if (fork) {
+			id = fork.id;
+			// A fork has its own VM (copied at the message's code, or made at its
+			// first turn), its own branch off the source's base and fresh task
+			// ancestry; it cannot control source children.
 			await client.query(
-				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch)
-        values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8)`,
+				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch,provider_ref)
+        values($1,$2,$3,$4,$5,$6,$7,$8,'idle',$9,$10,$11,$12)`,
 				[
 					id,
 					userId,
@@ -146,7 +354,14 @@ export async function recoverConversation(
 					row.harness,
 					`${row.title} (fork)`.slice(0, 120),
 					row.listed_model_id,
-					row.selected_branch ?? row.working_branch ?? row.task_branch,
+					fork.vm ? "ready" : "starting",
+					fork.branch ??
+						row.selected_branch ??
+						row.working_branch ??
+						row.task_branch,
+					fork.branch,
+					fork.branch ? row.base_branch : null,
+					fork.vm,
 				],
 			);
 		} else if (input.mode === "code" || input.mode === "both") {

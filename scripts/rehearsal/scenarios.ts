@@ -18,7 +18,8 @@ export type ScenarioId =
 	| "fusion-handback"
 	| "fusion-classifier-fail"
 	| "subagents"
-	| "rigor";
+	| "rigor"
+	| "fork";
 
 export type Scenario = {
 	readonly id: ScenarioId;
@@ -31,6 +32,10 @@ export type Scenario = {
 	readonly followUps?: readonly string[];
 	/** Memory on (full mode) for the scenario's user, with this repo content. */
 	readonly memory?: Readonly<Record<string, string>>;
+	/** Once every message settled: fork the chat at this user message (1-based). */
+	readonly forkAt?: number;
+	/** Q&A-only messages to fork at too, with the marker each fork must hold. */
+	readonly qaForks?: readonly { at: number; marker: string }[];
 };
 
 /** A standing rule in the user's memory (scope: always rides on every chat). */
@@ -992,6 +997,50 @@ function exploreCheckerScript(tag: string): AgentScript {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// f. fork at a message: turn 1 writes a marker file, turn 2 rewrites it; the
+// chat is forked at message 2, whose code point holds turn 1's marker. The
+// fork's own VM (a copy of the chat's) must show turn 1's marker on the
+// fork's branch while the chat keeps turn 2's, and a turn in the fork reads
+// turn 1's marker.
+
+export const FORK_MARKER = "fork-marker.txt";
+export const FORK_FOLLOW_UP =
+	"[rehearsal:fork-2] A second request: rewrite the marker.";
+/** Questions answered without tools: their turns take no code point. */
+export const FORK_QUESTION = (n: number) =>
+	`[rehearsal:fork-qa${n}] Just answer: what is the marker for?`;
+export const FORK_IN_FORK = "[rehearsal:fork-3] In the fork: show the marker.";
+
+function forkBuilderScript(tag: string): AgentScript {
+	return {
+		name: "fork-builder",
+		match: (first) => first.includes(tag) && !isChecker(first),
+		reply: ({ userTexts, calls }) => {
+			const ran = (needle: string) =>
+				calls.some((call) => JSON.stringify(call.args).includes(needle));
+			// The newest request decides; earlier ones are history.
+			const latest =
+				[...userTexts]
+					.reverse()
+					.find((text) => text.includes("[rehearsal:fork")) ?? "";
+			if (latest.includes("[rehearsal:fork-3]"))
+				return ran(`cat ${FORK_MARKER}`)
+					? { text: "Marker shown in the fork." }
+					: bash(`cat ${FORK_MARKER}`);
+			if (latest.includes("[rehearsal:fork-qa"))
+				return { text: "It marks which turn's code this is." };
+			if (latest.includes("[rehearsal:fork-2]"))
+				return ran("fork two")
+					? { text: "Marker rewritten." }
+					: bash(`printf 'fork two\\n' > ${FORK_MARKER} && echo WROTE`);
+			return ran("fork one")
+				? { text: "Marker written." }
+				: bash(`printf 'fork one\\n' > ${FORK_MARKER} && echo WROTE`);
+		},
+	};
+}
+
 export function scenarios(): Scenario[] {
 	return [
 		{
@@ -1167,6 +1216,20 @@ export function scenarios(): Scenario[] {
 			scripts: [
 				rigorBuilderScript("[rehearsal:rigor]"),
 				rigorCheckerScript("[rehearsal:rigor]"),
+			],
+		},
+		{
+			id: "fork",
+			title:
+				"f. fork at a message: the fork's VM is a copy of the chat's at that message's code, on its own branch; the chat is unchanged",
+			variant: "codeMode=primary",
+			scripts: [forkBuilderScript("[rehearsal:fork]")],
+			// 1 writes "fork one", 2 asks, 3 writes "fork two", 4 asks.
+			followUps: [FORK_QUESTION(1), FORK_FOLLOW_UP, FORK_QUESTION(2)],
+			forkAt: 3,
+			qaForks: [
+				{ at: 2, marker: "fork one\n" },
+				{ at: 4, marker: "fork two\n" },
 			],
 		},
 	];

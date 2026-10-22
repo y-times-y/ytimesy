@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
 import { ATTEMPT_CHECK_TOOL, REVIEW_CHECK_TOOL } from "#/domain/check-summary";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
@@ -28,6 +28,11 @@ import { CODE_MODE_DEFERRED_TOOLS } from "#/server/services/deferred-tools";
 import { pluginSkillTools } from "#/server/services/plugin-skill-tools";
 import { secretRequestTools } from "#/server/services/secret-request-tool";
 import { SessionTimeline } from "./session-timeline";
+
+// Replies render through the real Markdown renderer (the app loads it lazily).
+vi.mock("./agent-markdown", async () => ({
+	AgentMarkdown: (await import("./agent-markdown-renderer")).AgentMarkdown,
+}));
 
 /**
  * Every tool name the harness can write into a chat, from the lists and

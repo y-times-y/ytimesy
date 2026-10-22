@@ -139,6 +139,11 @@ function guidanceMessages(messages: readonly ModelMessage[]) {
 	);
 }
 
+/** Whether repository instructions were ever delivered in this history. */
+export function hasRepositoryInstructions(messages: readonly ModelMessage[]) {
+	return guidanceMessages(messages).length > 0;
+}
+
 /** Before any model step: only the runtime's own preflight reads precede the task. */
 function freshHistory(messages: readonly ModelMessage[]) {
 	return messages.every(
