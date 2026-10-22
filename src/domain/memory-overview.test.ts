@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+	memoryChangeSummary,
 	memoryRows,
-	memoryTopics,
-	RULES_TOPIC,
+	memoryScopes,
+	PERSONAL_SCOPE,
 	recentMemoryRows,
+	rowsByTopic,
+	scopeRows,
 	searchMemoryRows,
-	topicRows,
 } from "./memory-overview";
+import { memoryTokens } from "./memory-ranking";
 
 const CHAT = "22222222-2222-4222-8222-222222222222";
 const files = {
@@ -37,30 +40,6 @@ describe("memory overview", () => {
 		expect(replaced).toMatchObject({ replaced: true });
 	});
 
-	it("pins the project rules first, then topics by newest entry, the index last", () => {
-		expect(
-			memoryTopics(files, today).map((topic) => [
-				topic.id,
-				topic.title,
-				topic.count,
-				topic.updated,
-			]),
-		).toEqual([
-			[RULES_TOPIC, "Project rules", 1, "2026-10-02"],
-			["api.md", "API", 1, "2026-10-16"],
-			["tooling.md", "Tooling", 2, "2026-10-12"],
-			["notes.md", "notes", 1, undefined],
-			["MEMORY.md", "Index", 1, undefined],
-		]);
-	});
-
-	it("lists a topic's rows, the rules topic across files", () => {
-		expect(topicRows(rows, RULES_TOPIC).map((row) => row.text)).toEqual([
-			"Use pnpm, never npm",
-		]);
-		expect(topicRows(rows, "tooling.md")).toHaveLength(3);
-	});
-
 	it("feeds the newest dated entries in use, newest first", () => {
 		expect(recentMemoryRows(rows).map((row) => row.added)).toEqual([
 			"2026-10-16",
@@ -78,16 +57,103 @@ describe("memory overview", () => {
 	});
 });
 
-it("names a topic file titled like the pinned rules by its file name", () => {
-	const topics = memoryTopics(
-		{
-			"project-rules.md":
-				"# Project rules\n\n- Use pnpm [scope: always; added: 2026-10-02]\n",
-		},
-		"2026-10-20",
-	);
-	expect(topics.map((topic) => topic.title)).toEqual([
-		"Project rules",
-		"project-rules",
-	]);
+describe("memory scopes", () => {
+	const scoped = {
+		"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]] package managers\n",
+		"tooling.md":
+			"# Tooling\n\n- Use pnpm [scope: always; added: 2026-10-02]\n- Runs vitest [project: Acme/Web; added: 2026-10-12]\n- Old note [project: acme/web; superseded-by: x]\n",
+		"api.md":
+			"# API\n\n- Errors are problem+json [project: acme/web; added: 2026-10-16]\n- Billing uses cents [project: billing; added: 2026-10-01]\n",
+	};
+	const rows = memoryRows(scoped, "2026-10-20");
+
+	it("puts untagged lines in Personal and each project in its own scope, without case", () => {
+		expect(memoryScopes(rows)).toEqual([
+			{
+				id: PERSONAL_SCOPE,
+				project: null,
+				count: 1,
+				rules: 1,
+				updated: "2026-10-02",
+			},
+			{
+				id: "project:acme/web",
+				project: "Acme/Web",
+				count: 2,
+				rules: 0,
+				updated: "2026-10-16",
+			},
+			{
+				id: "project:billing",
+				project: "billing",
+				count: 1,
+				rules: 0,
+				updated: "2026-10-01",
+			},
+		]);
+		expect(memoryScopes([])).toEqual([
+			{ id: PERSONAL_SCOPE, project: null, count: 0, rules: 0 },
+		]);
+	});
+
+	it("lists a scope's lines without the index's topic links, grouped by topic with rules first", () => {
+		expect(scopeRows(rows, PERSONAL_SCOPE).map((row) => row.text)).toEqual([
+			"Use pnpm",
+		]);
+		expect(scopeRows(rows, "project:acme/web").map((row) => row.text)).toEqual([
+			"Runs vitest",
+			"Old note",
+			"Errors are problem+json",
+		]);
+		const groups = rowsByTopic(scopeRows(rows, null), scoped);
+		expect(groups.map((group) => group.title)).toEqual(["API", "Tooling"]);
+		expect(groups[1].rows.map((row) => row.text)).toEqual([
+			"Use pnpm",
+			"Runs vitest",
+			"Old note",
+		]);
+	});
+});
+
+describe("what a dream changed", () => {
+	const before = {
+		"api.md":
+			"# API\n\n- Errors use problem+json bodies [added: 2026-10-01]\n- Errors are RFC 9457 problem+json [added: 2026-10-05]\n- Webhooks go to v1 [added: 2026-10-02]\n- Beta flag on [expires: 2026-10-10]\n- Old cursor note [superseded-by: /?chat=b]\n- Uses tabs [added: 2026-09-01]\n",
+	};
+	const after = {
+		"api.md":
+			"# API\n\n- Errors use RFC 9457 problem+json bodies [added: 2026-10-05]\n- Webhooks go to v1 [superseded-by: /?chat=c; added: 2026-10-02]\n- Timestamps are UTC [added: 2026-10-18]\n",
+	};
+
+	it("reads merges, retired lines, resolved conflicts, removals and additions", () => {
+		expect(
+			memoryChangeSummary(before, after, "2026-10-20", memoryTokens),
+		).toEqual({
+			added: ["Timestamps are UTC"],
+			merged: [
+				{
+					into: "Errors use RFC 9457 problem+json bodies",
+					from: [
+						"Errors use problem+json bodies",
+						"Errors are RFC 9457 problem+json",
+					],
+				},
+			],
+			expired: ["Beta flag on"],
+			resolved: ["Webhooks go to v1", "Old cursor note"],
+			removed: ["Uses tabs"],
+		});
+	});
+
+	it("reports nothing when nothing changed", () => {
+		expect(
+			memoryChangeSummary(before, before, "2026-10-20", memoryTokens),
+		).toEqual({
+			added: [],
+			merged: [],
+			expired: [],
+			resolved: [],
+			removed: [],
+		});
+	});
 });

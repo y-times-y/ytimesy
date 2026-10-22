@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Blocks, Bot, Folder, Plug, Shield, User, X } from "lucide-react";
+import {
+	Blocks,
+	BookMarked,
+	Bot,
+	Folder,
+	Plug,
+	Shield,
+	User,
+	X,
+} from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -42,6 +51,7 @@ import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { MachineSizeSettings } from "./machine-size-settings";
+import { MemorySettings } from "./memory-settings";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
@@ -66,6 +76,7 @@ type AccountView = {
 const sectionIcon = {
 	account: User,
 	privacy: Shield,
+	memory: BookMarked,
 	github: GithubMark,
 	project: Folder,
 	agents: Bot,
@@ -185,6 +196,7 @@ export function ProjectSettings({
 									</>
 								) : null}
 								{section === "privacy" ? <TrainingConsentSettings /> : null}
+								{section === "memory" ? <MemorySettings /> : null}
 								{section === "github" ? (
 									<GithubSection
 										loading={account.isPending}

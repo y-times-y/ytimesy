@@ -81,6 +81,8 @@ export type MemoryRepo = {
 	): Promise<
 		(MemoryCommit & { before: string | null; after: string | null })[]
 	>;
+	/** The newest commits on main, newest first, each with its first parent. */
+	log?(limit: number): Promise<(MemoryCommit & { parent: string | null })[]>;
 	destroy(): Promise<void>;
 };
 
@@ -319,6 +321,22 @@ function artifactsMemoryRepo(
 					}
 					return out;
 				})) ?? []
+			);
+		},
+		async log(limit) {
+			return (
+				(await withRepo(async (repo) =>
+					(
+						await repo
+							.log({ ref: "main", limit: Math.min(Math.max(limit, 1), 200) })
+							.catch(() => [] as ArtifactsCommit[])
+					).map((commit) => ({
+						hash: commit.hash,
+						message: commit.message,
+						committedAt: epochMs(commit.committedAt),
+						parent: commit.parents[0] ?? null,
+					})),
+				)) ?? []
 			);
 		},
 		async destroy() {
