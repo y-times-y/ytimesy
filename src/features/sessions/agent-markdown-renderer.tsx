@@ -7,6 +7,7 @@ import {
 	defaultUrlTransform,
 	Streamdown,
 } from "streamdown";
+import { withoutDanglingMarker } from "#/domain/markdown-text";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { workspaceFileMention } from "#/domain/workspace-file-mention";
 import { codeHighlighter } from "./code-highlighter";
@@ -100,7 +101,7 @@ export function AgentMarkdown({
 			skipHtml
 			urlTransform={defaultUrlTransform}
 		>
-			{text}
+			{streaming ? withoutDanglingMarker(text) : text}
 		</Streamdown>
 	);
 }
