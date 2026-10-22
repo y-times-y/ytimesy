@@ -1,6 +1,9 @@
-import type { Vm } from "freestyle";
+import { FreestyleApiError, type Vm } from "freestyle";
 import { afterEach, expect, it, vi } from "vitest";
-import { waitUntilVmRunning } from "./wait-until-running";
+import {
+	waitUntilGuestAnswers,
+	waitUntilVmRunning,
+} from "./wait-until-running";
 
 afterEach(() => vi.useRealTimers());
 it("returns immediately for a running VM", async () => {
@@ -82,4 +85,56 @@ it("stops polling when its caller cancels", async () => {
 	const count = data.mock.calls.length;
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(data).toHaveBeenCalledTimes(count);
+});
+
+it("retries a just-started guest's probe until it answers", async () => {
+	const exec = vi
+		.fn()
+		.mockRejectedValueOnce(new TypeError("fetch failed"))
+		.mockRejectedValueOnce(
+			new FreestyleApiError(
+				504,
+				{ code: "UNKNOWN_ERROR", message: "Request Timeout" },
+				"/v5/background-requests/req-1",
+			),
+		)
+		.mockResolvedValue({ statusCode: 0 });
+	await waitUntilGuestAnswers({ id: "vm-test", exec }, "Test", [0, 0, 0]);
+	expect(exec).toHaveBeenCalledTimes(3);
+	expect(exec).toHaveBeenCalledWith({ command: "true", timeoutMs: 10_000 });
+});
+it("abandons a probe that hangs and tries again", async () => {
+	vi.useFakeTimers();
+	const exec = vi
+		.fn()
+		.mockReturnValueOnce(new Promise(() => {}))
+		.mockResolvedValue({ statusCode: 0 });
+	const waiting = waitUntilGuestAnswers(
+		{ id: "vm-test", exec },
+		"Test",
+		[1_000],
+		20_000,
+	);
+	await vi.advanceTimersByTimeAsync(21_000);
+	await waiting;
+	expect(exec).toHaveBeenCalledTimes(2);
+});
+it("says plainly that a guest never answered, and rethrows other failures at once", async () => {
+	const failing = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+	await expect(
+		waitUntilGuestAnswers({ id: "vm-test", exec: failing }, "Test VM", [0, 0]),
+	).rejects.toThrow(
+		"Test VM started but is not answering yet. Try again in a minute.",
+	);
+	expect(failing).toHaveBeenCalledTimes(3);
+	const conflict = new FreestyleApiError(
+		409,
+		{ code: "CONFLICT", message: "used its total runtime budget" },
+		"/v5/vms/x/exec-await",
+	);
+	const refused = vi.fn().mockRejectedValue(conflict);
+	await expect(
+		waitUntilGuestAnswers({ id: "vm-test", exec: refused }, "Test", [0, 0]),
+	).rejects.toBe(conflict);
+	expect(refused).toHaveBeenCalledTimes(1);
 });
