@@ -334,27 +334,57 @@ export async function claimApiTurn(
 		fleetLimit > 10_000
 	)
 		throw new Error("Turn admission limits must be positive bounded integers.");
-	// One statement, one round trip, its own transaction: the admission lock
-	// (serialized across workers; model/tool work never holds it) is taken
-	// first and held until the claim commits with the statement. Without it
-	// the queued turn is never read or locked, so another worker's claim
-	// order is unchanged. Nothing waits on a lock (try-lock, skip locked)
-	// and nothing is left idle in a transaction, even when a worker
-	// disappears mid-claim; the pool's statement timeout still applies.
-	const result = await database().query<ApiTurn>(
-		`with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
-		 update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now(),executor=$4
-		 where id=(select q.id from api_turn q where (select acquired from admission)
-		 and q.state='queued' and q.executor=$4 and not q.cancel_requested
-		 and ($5::uuid is null or q.session_id=$5::uuid)
-		 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
-		 and (select count(*) from api_turn r where r.state='running')<$3
-		 order by q.created_at for update skip locked limit 1)
-		 returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"}`,
-		[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
-	);
-	return result.rows[0] ?? null;
+	if (executor !== "node" && executor !== "durable-object")
+		throw new Error("Unknown turn executor.");
+	if (sessionId !== undefined && !UUID.test(sessionId))
+		throw new Error("Invalid chat id.");
+	const lease = randomUUID();
+	// One round trip: the whole transaction goes as one simple-protocol batch,
+	// so its values are validated literals above (no parameters). Poolers may
+	// ignore startup settings, so the bounds are set inside the transaction,
+	// covering a worker that disappears after claiming but before committing.
+	// The admission lock (serialized across workers; model/tool work never
+	// holds it) is taken first and held until the commit; without it the
+	// queued turn is never read or locked, so another worker's claim order
+	// is unchanged.
+	const batch = `begin;
+set local idle_in_transaction_session_timeout = '30s';
+set local statement_timeout = '20s';
+with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
+ update api_turn set state='running',lease_id='${lease}',heartbeat_at=now(),updated_at=now(),executor='${executor}'
+ where id=(select q.id from api_turn q where (select acquired from admission)
+ and q.state='queued' and q.executor='${executor}' and not q.cancel_requested
+ ${sessionId ? `and q.session_id='${sessionId}'::uuid` : ""}
+ and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
+ and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
+ order by q.created_at for update skip locked limit 1)
+ returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"};
+commit;`;
+	const client = await database().connect();
+	let discardConnection = false;
+	try {
+		type Result = { fields?: readonly unknown[]; rows: ApiTurn[] };
+		const results = (await client.query(batch)) as unknown as Result[] | Result;
+		// The only statement with a result shape is the claim (its returning).
+		const claimed = (Array.isArray(results) ? results : [results]).find(
+			(result) => result.fields?.length,
+		);
+		return claimed?.rows[0] ?? null;
+	} catch (error) {
+		// A failed statement leaves the batch's transaction aborted on this
+		// connection; it is rolled back, or the connection is discarded.
+		try {
+			await client.query("rollback");
+		} catch {
+			discardConnection = true;
+		}
+		throw error;
+	} finally {
+		client.release(discardConnection);
+	}
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * SQL: the turn aliased `alias` has passed its eval runner's hard deadline
