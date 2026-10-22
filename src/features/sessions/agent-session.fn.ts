@@ -14,6 +14,7 @@ import {
 	type AgentTaskActivity,
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
+import { publicRecoveryFailure } from "#/domain/conversation-recovery-failure";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type SessionTurnStatus,
@@ -30,6 +31,7 @@ import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
+import { withPublicFailure } from "#/server/public-failure";
 import {
 	deleteAgentSessionMachine,
 	openAgentSession,
@@ -49,14 +51,23 @@ type PublicAgentChat = {
 	readonly waitingOn?: ChatWaitingOn | null;
 };
 
+/**
+ * Runs with the workspace machines. A failure reaches the user only as
+ * `publicFailure` words it; the real error is logged on the server.
+ */
 function runWithMachines<A>(
+	operation: string,
+	publicFailure: (error: unknown) => string,
 	run: (machines: WorkspaceMachines) => Promise<A>,
 ): Promise<A> {
-	return Effect.runPromise(
-		Effect.gen(function* () {
-			const machines = yield* WorkspaceMachineService;
-			return yield* Effect.tryPromise(() => run(machines));
-		}).pipe(Effect.provide(FreestyleWorkspaceMachinesLive)),
+	return withPublicFailure(operation, publicFailure, async () =>
+		run(
+			await Effect.runPromise(
+				WorkspaceMachineService.pipe(
+					Effect.provide(FreestyleWorkspaceMachinesLive),
+				),
+			),
+		),
 	);
 }
 
@@ -191,7 +202,7 @@ export const deleteProjectAgentSession = createServerFn({ method: "POST" })
 	})
 	.handler(async ({ data }): Promise<{ id: string }> => {
 		const user = await requireUser(getRequest().headers);
-		await runWithMachines((machines) =>
+		await runWithMachines("Chat deletion", publicFailureMessage, (machines) =>
 			deleteAgentSessionMachine(machines, {
 				userId: user.id,
 				projectId: data.projectId,
@@ -232,7 +243,9 @@ export const restoreConversationPoint = createServerFn({ method: "POST" })
 		const { recoverConversation } = await import(
 			"#/server/services/conversation-recovery"
 		);
-		return runWithMachines((machines) =>
-			recoverConversation(machines, user.id, data),
+		return runWithMachines(
+			"Conversation recovery",
+			(error) => publicRecoveryFailure(error, data.mode),
+			(machines) => recoverConversation(machines, user.id, data),
 		);
 	});
