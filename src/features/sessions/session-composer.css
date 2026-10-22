@@ -1485,6 +1485,14 @@ details[open] > summary .session-activity-chevron {
 	margin-right: 8px;
 	white-space: nowrap;
 }
+.task-agent {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-right: 8px;
+	vertical-align: top;
+	white-space: nowrap;
+}
 .task-row-copy strong {
 	font-weight: 450;
 	color: #dedede;
