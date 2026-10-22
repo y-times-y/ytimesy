@@ -1,0 +1,2676 @@
+{
+  "version": 1,
+  "dataset": "terminal-bench/terminal-bench@4.0.0",
+  "environment": "docker",
+  "harbor": "uvx --from harbor==0.24.0 harbor",
+  "at": "2026-10-21T23:41:34.100Z",
+  "tasks": {
+    "biped-contact-dynamics": {
+      "task": "biped-contact-dynamics",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-biped-contact-dynamics-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-biped-contact-dynamics-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "cad-model": {
+      "task": "cad-model",
+      "passed": false,
+      "reason": "oracle scored 0 (needs 1)",
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-cad-model-oracle-20261021T235121",
+          "reward": 0,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-cad-model-nop-20261021T235121",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "coq-block-bound": {
+      "task": "coq-block-bound",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-coq-block-bound-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-coq-block-bound-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "ctr-optimization": {
+      "task": "ctr-optimization",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-ctr-optimization-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-ctr-optimization-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "distributed-dedup": {
+      "task": "distributed-dedup",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-distributed-dedup-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-distributed-dedup-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "fin-saccr-rwa": {
+      "task": "fin-saccr-rwa",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-fin-saccr-rwa-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-fin-saccr-rwa-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "formal-crypto": {
+      "task": "formal-crypto",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-formal-crypto-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-formal-crypto-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "freecad-platform-drawing": {
+      "task": "freecad-platform-drawing",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-freecad-platform-drawing-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-freecad-platform-drawing-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "freight-dispatch-shift": {
+      "task": "freight-dispatch-shift",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-freight-dispatch-shift-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-freight-dispatch-shift-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "glycan-ms2-elucidation": {
+      "task": "glycan-ms2-elucidation",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-glycan-ms2-elucidation-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-glycan-ms2-elucidation-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "heat-pump-warranty": {
+      "task": "heat-pump-warranty",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-heat-pump-warranty-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-heat-pump-warranty-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "hof-topology-interpenetration": {
+      "task": "hof-topology-interpenetration",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-hof-topology-interpenetration-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-hof-topology-interpenetration-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "interleaved-vigenere": {
+      "task": "interleaved-vigenere",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-interleaved-vigenere-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-interleaved-vigenere-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "lake-temp-glm": {
+      "task": "lake-temp-glm",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-lake-temp-glm-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-lake-temp-glm-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "layout-config-recreation2": {
+      "task": "layout-config-recreation2",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-layout-config-recreation2-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-layout-config-recreation2-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "legacy-utility-triage": {
+      "task": "legacy-utility-triage",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-legacy-utility-triage-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-legacy-utility-triage-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "music-harmony": {
+      "task": "music-harmony",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-music-harmony-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-music-harmony-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "nextjs-performance": {
+      "task": "nextjs-performance",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-nextjs-performance-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-nextjs-performance-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "ontology-kg-querying": {
+      "task": "ontology-kg-querying",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-ontology-kg-querying-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-ontology-kg-querying-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "payments-pipeline-fix": {
+      "task": "payments-pipeline-fix",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-payments-pipeline-fix-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-payments-pipeline-fix-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "pretrain-shard-corruption": {
+      "task": "pretrain-shard-corruption",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-pretrain-shard-corruption-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-pretrain-shard-corruption-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "protein-autointerp-disulfide": {
+      "task": "protein-autointerp-disulfide",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-protein-autointerp-disulfide-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-protein-autointerp-disulfide-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "retro-console-soc": {
+      "task": "retro-console-soc",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-retro-console-soc-oracle-20261021T235121",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-retro-console-soc-nop-20261021T235121",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "roy-polymorph-cn": {
+      "task": "roy-polymorph-cn",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-roy-polymorph-cn-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-roy-polymorph-cn-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "satb-audio-transcription": {
+      "task": "satb-audio-transcription",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-satb-audio-transcription-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-satb-audio-transcription-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "sglang-qwen-burst": {
+      "task": "sglang-qwen-burst",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-sglang-qwen-burst-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-sglang-qwen-burst-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "sound-change-cascade": {
+      "task": "sound-change-cascade",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-sound-change-cascade-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-sound-change-cascade-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "telecom-entity-resolution": {
+      "task": "telecom-entity-resolution",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-telecom-entity-resolution-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-telecom-entity-resolution-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "vba-userform-port": {
+      "task": "vba-userform-port",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-vba-userform-port-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-vba-userform-port-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "vllm-deepseek-streaming": {
+      "task": "vllm-deepseek-streaming",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-vllm-deepseek-streaming-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-vllm-deepseek-streaming-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "wal-recovery-ordering": {
+      "task": "wal-recovery-ordering",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-wal-recovery-ordering-oracle-20261021T233941",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-wal-recovery-ordering-nop-20261021T233941",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "atrx-vep-crispr": {
+      "task": "atrx-vep-crispr",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-atrx-vep-crispr-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-atrx-vep-crispr-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "batched-eval-parity": {
+      "task": "batched-eval-parity",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-batched-eval-parity-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-batched-eval-parity-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "bun-sourcemap-leak": {
+      "task": "bun-sourcemap-leak",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-bun-sourcemap-leak-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-bun-sourcemap-leak-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "cargo-flight-dispatch": {
+      "task": "cargo-flight-dispatch",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-cargo-flight-dispatch-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-cargo-flight-dispatch-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "cumulative-layout-shift": {
+      "task": "cumulative-layout-shift",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-cumulative-layout-shift-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-cumulative-layout-shift-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "data-anonymization": {
+      "task": "data-anonymization",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-data-anonymization-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-data-anonymization-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "embedding-drift-monitor": {
+      "task": "embedding-drift-monitor",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-embedding-drift-monitor-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-embedding-drift-monitor-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "foodstuff-beta-activity": {
+      "task": "foodstuff-beta-activity",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-foodstuff-beta-activity-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-foodstuff-beta-activity-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "freecad-impeller": {
+      "task": "freecad-impeller",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-freecad-impeller-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-freecad-impeller-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "freecad-spring-clip": {
+      "task": "freecad-spring-clip",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-freecad-spring-clip-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-freecad-spring-clip-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "gsea-proteomics": {
+      "task": "gsea-proteomics",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-gsea-proteomics-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-gsea-proteomics-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "html-js-filter": {
+      "task": "html-js-filter",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-html-js-filter-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-html-js-filter-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "intrastat-meldung": {
+      "task": "intrastat-meldung",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-intrastat-meldung-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-intrastat-meldung-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "ks-solver-cpp": {
+      "task": "ks-solver-cpp",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-ks-solver-cpp-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-ks-solver-cpp-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "kv-live-surgery": {
+      "task": "kv-live-surgery",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-kv-live-surgery-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-kv-live-surgery-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "layout-config-recreation": {
+      "task": "layout-config-recreation",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-layout-config-recreation-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-layout-config-recreation-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "live-database-cutover": {
+      "task": "live-database-cutover",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-live-database-cutover-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-live-database-cutover-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "medical-claims-processing": {
+      "task": "medical-claims-processing",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-medical-claims-processing-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-medical-claims-processing-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "mp-checkpoint-consolidation": {
+      "task": "mp-checkpoint-consolidation",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-mp-checkpoint-consolidation-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-mp-checkpoint-consolidation-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "mvcc-lsm-compaction": {
+      "task": "mvcc-lsm-compaction",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-mvcc-lsm-compaction-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-mvcc-lsm-compaction-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "photonic-waveguide-routing": {
+      "task": "photonic-waveguide-routing",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-photonic-waveguide-routing-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-photonic-waveguide-routing-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "production-planning": {
+      "task": "production-planning",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-production-planning-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-production-planning-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "react-lead-form": {
+      "task": "react-lead-form",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-react-lead-form-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-react-lead-form-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "risk-scorer-replay": {
+      "task": "risk-scorer-replay",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-risk-scorer-replay-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-risk-scorer-replay-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "rs-archive-clone": {
+      "task": "rs-archive-clone",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-rs-archive-clone-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-rs-archive-clone-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "session-window-debug": {
+      "task": "session-window-debug",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-session-window-debug-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-session-window-debug-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "shadow-relay": {
+      "task": "shadow-relay",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-shadow-relay-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-shadow-relay-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "takens-embedding-lean": {
+      "task": "takens-embedding-lean",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-takens-embedding-lean-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-takens-embedding-lean-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "uefi-bootkit": {
+      "task": "uefi-bootkit",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-uefi-bootkit-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-uefi-bootkit-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "vf2-speedup-networkx": {
+      "task": "vf2-speedup-networkx",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-vf2-speedup-networkx-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-vf2-speedup-networkx-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    },
+    "vpp-loss-divergence": {
+      "task": "vpp-loss-divergence",
+      "passed": false,
+      "reason": "oracle raised VerifierTimeoutError: Verifier execution timed out after 900.0 seconds; nop raised VerifierTimeoutError: Verifier execution timed out after 900.0 seconds",
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-vpp-loss-divergence-oracle-20261021T234134",
+          "reward": null,
+          "exception": "VerifierTimeoutError: Verifier execution timed out after 900.0 seconds"
+        },
+        {
+          "arm": "nop",
+          "job": "pf-vpp-loss-divergence-nop-20261021T234134",
+          "reward": null,
+          "exception": "VerifierTimeoutError: Verifier execution timed out after 900.0 seconds"
+        }
+      ]
+    },
+    "wdm-design": {
+      "task": "wdm-design",
+      "passed": true,
+      "reason": null,
+      "arms": [
+        {
+          "arm": "oracle",
+          "job": "pf-wdm-design-oracle-20261021T234134",
+          "reward": 1,
+          "exception": null
+        },
+        {
+          "arm": "nop",
+          "job": "pf-wdm-design-nop-20261021T234134",
+          "reward": 0,
+          "exception": null
+        }
+      ]
+    }
+  },
+  "metrics": {
+    "biped-contact-dynamics": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 151,
+      "arms": {
+        "oracle": {
+          "job": "pf-biped-contact-dynamics-oracle-20261021T233941",
+          "envSetupSec": 64.9,
+          "agentSec": 1.2,
+          "verifierSec": 33.1,
+          "trialSec": 112.9
+        },
+        "nop": {
+          "job": "pf-biped-contact-dynamics-nop-20261021T233941",
+          "envSetupSec": 1.4,
+          "agentSec": 0.0,
+          "verifierSec": 14.4,
+          "trialSec": 28.2
+        }
+      },
+      "imagesGb": 1.98,
+      "jobsMb": 0.4
+    },
+    "cad-model": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 187,
+      "arms": {
+        "oracle": {
+          "job": "pf-cad-model-oracle-20261021T233941",
+          "envSetupSec": 63.6,
+          "agentSec": 55.2,
+          "verifierSec": 18.3,
+          "trialSec": 149.3
+        },
+        "nop": {
+          "job": "pf-cad-model-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 15.1,
+          "trialSec": 27.7
+        }
+      },
+      "imagesGb": 0.83,
+      "jobsMb": 0.1,
+      "firstRun": {
+        "task": "cad-model",
+        "passed": false,
+        "reason": "oracle scored 0 (needs 1)",
+        "arms": [
+          {
+            "arm": "oracle",
+            "job": "pf-cad-model-oracle-20261021T233941",
+            "reward": 0,
+            "exception": null
+          },
+          {
+            "arm": "nop",
+            "job": "pf-cad-model-nop-20261021T233941",
+            "reward": 0,
+            "exception": null
+          }
+        ]
+      },
+      "rerunWallSec": 108
+    },
+    "coq-block-bound": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 151,
+      "arms": {
+        "oracle": {
+          "job": "pf-coq-block-bound-oracle-20261021T233941",
+          "envSetupSec": 65.1,
+          "agentSec": 1.8,
+          "verifierSec": 33.3,
+          "trialSec": 113.4
+        },
+        "nop": {
+          "job": "pf-coq-block-bound-nop-20261021T233941",
+          "envSetupSec": 1.7,
+          "agentSec": 0.0,
+          "verifierSec": 14.6,
+          "trialSec": 27.7
+        }
+      },
+      "imagesGb": 12.07,
+      "jobsMb": 0.6
+    },
+    "ctr-optimization": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 623,
+      "arms": {
+        "oracle": {
+          "job": "pf-ctr-optimization-oracle-20261021T233941",
+          "envSetupSec": 70.8,
+          "agentSec": 482.3,
+          "verifierSec": 16.5,
+          "trialSec": 582.5
+        },
+        "nop": {
+          "job": "pf-ctr-optimization-nop-20261021T233941",
+          "envSetupSec": 6.7,
+          "agentSec": 0.0,
+          "verifierSec": 13.6,
+          "trialSec": 31.9
+        }
+      },
+      "imagesGb": 1.76,
+      "jobsMb": 0.0
+    },
+    "distributed-dedup": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 984,
+      "arms": {
+        "nop": {
+          "job": "pf-distributed-dedup-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 369.0,
+          "trialSec": 381.3
+        },
+        "oracle": {
+          "job": "pf-distributed-dedup-oracle-20261021T233941",
+          "envSetupSec": 64.6,
+          "agentSec": 9.4,
+          "verifierSec": 502.0,
+          "trialSec": 594.1
+        }
+      },
+      "imagesGb": 3.53,
+      "jobsMb": 0.1
+    },
+    "fin-saccr-rwa": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 139,
+      "arms": {
+        "nop": {
+          "job": "pf-fin-saccr-rwa-nop-20261021T233941",
+          "envSetupSec": 1.7,
+          "agentSec": 0.0,
+          "verifierSec": 13.7,
+          "trialSec": 27.6
+        },
+        "oracle": {
+          "job": "pf-fin-saccr-rwa-oracle-20261021T233941",
+          "envSetupSec": 64.7,
+          "agentSec": 2.4,
+          "verifierSec": 19.3,
+          "trialSec": 99.0
+        }
+      },
+      "imagesGb": 0.4,
+      "jobsMb": 0.1
+    },
+    "formal-crypto": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 1470,
+      "arms": {
+        "oracle": {
+          "job": "pf-formal-crypto-oracle-20261021T233941",
+          "envSetupSec": 64.8,
+          "agentSec": 0.4,
+          "verifierSec": 668.1,
+          "trialSec": 745.5
+        },
+        "nop": {
+          "job": "pf-formal-crypto-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 703.5,
+          "trialSec": 715.9
+        }
+      },
+      "imagesGb": 17.75,
+      "jobsMb": 0.2
+    },
+    "freecad-platform-drawing": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 172,
+      "arms": {
+        "oracle": {
+          "job": "pf-freecad-platform-drawing-oracle-20261021T233941",
+          "envSetupSec": 64.9,
+          "agentSec": 0.6,
+          "verifierSec": 57.3,
+          "trialSec": 135.3
+        },
+        "nop": {
+          "job": "pf-freecad-platform-drawing-nop-20261021T233941",
+          "envSetupSec": 1.4,
+          "agentSec": 0.0,
+          "verifierSec": 12.4,
+          "trialSec": 25.4
+        }
+      },
+      "imagesGb": 9.64,
+      "jobsMb": 0.1
+    },
+    "freight-dispatch-shift": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 173,
+      "arms": {
+        "oracle": {
+          "job": "pf-freight-dispatch-shift-oracle-20261021T233941",
+          "envSetupSec": 69.4,
+          "agentSec": 0.8,
+          "verifierSec": 23.8,
+          "trialSec": 121.5
+        },
+        "nop": {
+          "job": "pf-freight-dispatch-shift-nop-20261021T233941",
+          "envSetupSec": 6.7,
+          "agentSec": 0.0,
+          "verifierSec": 12.7,
+          "trialSec": 41.3
+        }
+      },
+      "imagesGb": 1.36,
+      "jobsMb": 0.1
+    },
+    "glycan-ms2-elucidation": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 141,
+      "arms": {
+        "oracle": {
+          "job": "pf-glycan-ms2-elucidation-oracle-20261021T233941",
+          "envSetupSec": 64.8,
+          "agentSec": 1.8,
+          "verifierSec": 22.3,
+          "trialSec": 102.0
+        },
+        "nop": {
+          "job": "pf-glycan-ms2-elucidation-nop-20261021T233941",
+          "envSetupSec": 1.4,
+          "agentSec": 0.0,
+          "verifierSec": 15.3,
+          "trialSec": 28.6
+        }
+      },
+      "imagesGb": 0.72,
+      "jobsMb": 1.9
+    },
+    "heat-pump-warranty": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 175,
+      "arms": {
+        "oracle": {
+          "job": "pf-heat-pump-warranty-oracle-20261021T233941",
+          "envSetupSec": 71.6,
+          "agentSec": 9.9,
+          "verifierSec": 13.9,
+          "trialSec": 121.9
+        },
+        "nop": {
+          "job": "pf-heat-pump-warranty-nop-20261021T233941",
+          "envSetupSec": 7.7,
+          "agentSec": 0.0,
+          "verifierSec": 12.6,
+          "trialSec": 42.6
+        }
+      },
+      "imagesGb": 1.57,
+      "jobsMb": 0.1
+    },
+    "hof-topology-interpenetration": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 155,
+      "arms": {
+        "oracle": {
+          "job": "pf-hof-topology-interpenetration-oracle-20261021T233941",
+          "envSetupSec": 63.5,
+          "agentSec": 25.7,
+          "verifierSec": 14.8,
+          "trialSec": 119.0
+        },
+        "nop": {
+          "job": "pf-hof-topology-interpenetration-nop-20261021T233941",
+          "envSetupSec": 1.6,
+          "agentSec": 0.0,
+          "verifierSec": 12.7,
+          "trialSec": 25.7
+        }
+      },
+      "imagesGb": 0.48,
+      "jobsMb": 0.1
+    },
+    "interleaved-vigenere": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 154,
+      "arms": {
+        "oracle": {
+          "job": "pf-interleaved-vigenere-oracle-20261021T233941",
+          "envSetupSec": 64.9,
+          "agentSec": 0.4,
+          "verifierSec": 39.1,
+          "trialSec": 117.7
+        },
+        "nop": {
+          "job": "pf-interleaved-vigenere-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 12.9,
+          "trialSec": 26.3
+        }
+      },
+      "imagesGb": 0.4,
+      "jobsMb": 0.1
+    },
+    "lake-temp-glm": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 317,
+      "arms": {
+        "oracle": {
+          "job": "pf-lake-temp-glm-oracle-20261021T233941",
+          "envSetupSec": 65.3,
+          "agentSec": 170.2,
+          "verifierSec": 30.8,
+          "trialSec": 277.9
+        },
+        "nop": {
+          "job": "pf-lake-temp-glm-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 17.4,
+          "trialSec": 29.8
+        }
+      },
+      "imagesGb": 4.13,
+      "jobsMb": 0.1
+    },
+    "layout-config-recreation2": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 147,
+      "arms": {
+        "oracle": {
+          "job": "pf-layout-config-recreation2-oracle-20261021T233941",
+          "envSetupSec": 64.4,
+          "agentSec": 3.9,
+          "verifierSec": 29.1,
+          "trialSec": 110.0
+        },
+        "nop": {
+          "job": "pf-layout-config-recreation2-nop-20261021T233941",
+          "envSetupSec": 1.8,
+          "agentSec": 0.0,
+          "verifierSec": 13.3,
+          "trialSec": 26.7
+        }
+      },
+      "imagesGb": 3.52,
+      "jobsMb": 0.1
+    },
+    "legacy-utility-triage": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 332,
+      "arms": {
+        "oracle": {
+          "job": "pf-legacy-utility-triage-oracle-20261021T233941",
+          "envSetupSec": 75.3,
+          "agentSec": 167.1,
+          "verifierSec": 12.8,
+          "trialSec": 277.0
+        },
+        "nop": {
+          "job": "pf-legacy-utility-triage-nop-20261021T233941",
+          "envSetupSec": 12.1,
+          "agentSec": 0.0,
+          "verifierSec": 12.3,
+          "trialSec": 45.9
+        }
+      },
+      "imagesGb": 4.56,
+      "jobsMb": 0.0
+    },
+    "music-harmony": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 153,
+      "arms": {
+        "nop": {
+          "job": "pf-music-harmony-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 12.4,
+          "trialSec": 25.4
+        },
+        "oracle": {
+          "job": "pf-music-harmony-oracle-20261021T233941",
+          "envSetupSec": 64.6,
+          "agentSec": 16.5,
+          "verifierSec": 20.5,
+          "trialSec": 118.0
+        }
+      },
+      "imagesGb": 0.77,
+      "jobsMb": 0.0
+    },
+    "nextjs-performance": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 234,
+      "arms": {
+        "nop": {
+          "job": "pf-nextjs-performance-nop-20261021T233941",
+          "envSetupSec": 6.8,
+          "agentSec": 0.0,
+          "verifierSec": 49.2,
+          "trialSec": 68.9
+        },
+        "oracle": {
+          "job": "pf-nextjs-performance-oracle-20261021T233941",
+          "envSetupSec": 70.7,
+          "agentSec": 0.4,
+          "verifierSec": 71.3,
+          "trialSec": 156.0
+        }
+      },
+      "imagesGb": 6.25,
+      "jobsMb": 0.2
+    },
+    "ontology-kg-querying": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 161,
+      "arms": {
+        "nop": {
+          "job": "pf-ontology-kg-querying-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 15.1,
+          "trialSec": 30.9
+        },
+        "oracle": {
+          "job": "pf-ontology-kg-querying-oracle-20261021T233941",
+          "envSetupSec": 64.2,
+          "agentSec": 1.0,
+          "verifierSec": 40.1,
+          "trialSec": 120.6
+        }
+      },
+      "imagesGb": 0.4,
+      "jobsMb": 0.8
+    },
+    "payments-pipeline-fix": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 394,
+      "arms": {
+        "nop": {
+          "job": "pf-payments-pipeline-fix-nop-20261021T233941",
+          "envSetupSec": 24.7,
+          "agentSec": 0.0,
+          "verifierSec": 111.5,
+          "trialSec": 162.9
+        },
+        "oracle": {
+          "job": "pf-payments-pipeline-fix-oracle-20261021T233941",
+          "envSetupSec": 88.6,
+          "agentSec": 13.4,
+          "verifierSec": 90.8,
+          "trialSec": 222.4
+        }
+      },
+      "imagesGb": 1.43,
+      "jobsMb": 144.4
+    },
+    "pretrain-shard-corruption": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 404,
+      "arms": {
+        "nop": {
+          "job": "pf-pretrain-shard-corruption-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 19.9,
+          "trialSec": 36.5
+        },
+        "oracle": {
+          "job": "pf-pretrain-shard-corruption-oracle-20261021T233941",
+          "envSetupSec": 64.9,
+          "agentSec": 132.2,
+          "verifierSec": 144.9,
+          "trialSec": 357.4
+        }
+      },
+      "imagesGb": 2.98,
+      "jobsMb": 24.4
+    },
+    "protein-autointerp-disulfide": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 177,
+      "arms": {
+        "nop": {
+          "job": "pf-protein-autointerp-disulfide-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 13.1,
+          "trialSec": 25.7
+        },
+        "oracle": {
+          "job": "pf-protein-autointerp-disulfide-oracle-20261021T233941",
+          "envSetupSec": 64.2,
+          "agentSec": 51.1,
+          "verifierSec": 14.8,
+          "trialSec": 141.7
+        }
+      },
+      "imagesGb": 0.6,
+      "jobsMb": 0.0
+    },
+    "retro-console-soc": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 536,
+      "arms": {
+        "nop": {
+          "job": "pf-retro-console-soc-nop-20261021T233941",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 12.7,
+          "trialSec": 25.0
+        },
+        "oracle": {
+          "job": "pf-retro-console-soc-oracle-20261021T233941",
+          "envSetupSec": 65.1,
+          "agentSec": 0.4,
+          "verifierSec": 424.3,
+          "trialSec": 502.6
+        }
+      },
+      "imagesGb": 4.21,
+      "jobsMb": 0.3,
+      "firstRun": {
+        "task": "retro-console-soc",
+        "passed": false,
+        "reason": "oracle scored 0 (needs 1)",
+        "arms": [
+          {
+            "arm": "oracle",
+            "job": "pf-retro-console-soc-oracle-20261021T233941",
+            "reward": 0,
+            "exception": null
+          },
+          {
+            "arm": "nop",
+            "job": "pf-retro-console-soc-nop-20261021T233941",
+            "reward": 0,
+            "exception": null
+          }
+        ]
+      },
+      "rerunWallSec": 324
+    },
+    "roy-polymorph-cn": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 150,
+      "arms": {
+        "nop": {
+          "job": "pf-roy-polymorph-cn-nop-20261021T233941",
+          "envSetupSec": 2.2,
+          "agentSec": 0.0,
+          "verifierSec": 14.9,
+          "trialSec": 28.8
+        },
+        "oracle": {
+          "job": "pf-roy-polymorph-cn-oracle-20261021T233941",
+          "envSetupSec": 65.3,
+          "agentSec": 3.3,
+          "verifierSec": 30.3,
+          "trialSec": 111.6
+        }
+      },
+      "imagesGb": 1.67,
+      "jobsMb": 0.1
+    },
+    "satb-audio-transcription": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 248,
+      "arms": {
+        "nop": {
+          "job": "pf-satb-audio-transcription-nop-20261021T233941",
+          "envSetupSec": 1.3,
+          "agentSec": 0.0,
+          "verifierSec": 14.7,
+          "trialSec": 27.3
+        },
+        "oracle": {
+          "job": "pf-satb-audio-transcription-oracle-20261021T233941",
+          "envSetupSec": 65.0,
+          "agentSec": 120.8,
+          "verifierSec": 14.6,
+          "trialSec": 211.8
+        }
+      },
+      "imagesGb": 1.16,
+      "jobsMb": 0.5
+    },
+    "sglang-qwen-burst": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 165,
+      "arms": {
+        "oracle": {
+          "job": "pf-sglang-qwen-burst-oracle-20261021T233941",
+          "envSetupSec": 65.2,
+          "agentSec": 0.5,
+          "verifierSec": 34.5,
+          "trialSec": 112.6
+        },
+        "nop": {
+          "job": "pf-sglang-qwen-burst-nop-20261021T233941",
+          "envSetupSec": 1.5,
+          "agentSec": 0.0,
+          "verifierSec": 29.3,
+          "trialSec": 42.5
+        }
+      },
+      "imagesGb": 2.22,
+      "jobsMb": 1.5
+    },
+    "sound-change-cascade": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 139,
+      "arms": {
+        "nop": {
+          "job": "pf-sound-change-cascade-nop-20261021T233941",
+          "envSetupSec": 1.7,
+          "agentSec": 0.0,
+          "verifierSec": 13.7,
+          "trialSec": 27.7
+        },
+        "oracle": {
+          "job": "pf-sound-change-cascade-oracle-20261021T233941",
+          "envSetupSec": 65.1,
+          "agentSec": 0.5,
+          "verifierSec": 20.0,
+          "trialSec": 97.7
+        }
+      },
+      "imagesGb": 0.61,
+      "jobsMb": 0.1
+    },
+    "telecom-entity-resolution": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 172,
+      "arms": {
+        "nop": {
+          "job": "pf-telecom-entity-resolution-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 14.9,
+          "trialSec": 27.6
+        },
+        "oracle": {
+          "job": "pf-telecom-entity-resolution-oracle-20261021T233941",
+          "envSetupSec": 64.8,
+          "agentSec": 37.0,
+          "verifierSec": 20.9,
+          "trialSec": 134.4
+        }
+      },
+      "imagesGb": 0.92,
+      "jobsMb": 10.0
+    },
+    "vba-userform-port": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 185,
+      "arms": {
+        "nop": {
+          "job": "pf-vba-userform-port-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 13.7,
+          "trialSec": 26.4
+        },
+        "oracle": {
+          "job": "pf-vba-userform-port-oracle-20261021T233941",
+          "envSetupSec": 64.7,
+          "agentSec": 0.4,
+          "verifierSec": 70.4,
+          "trialSec": 148.0
+        }
+      },
+      "imagesGb": 2.45,
+      "jobsMb": 0.2
+    },
+    "vllm-deepseek-streaming": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 191,
+      "arms": {
+        "oracle": {
+          "job": "pf-vllm-deepseek-streaming-oracle-20261021T233941",
+          "envSetupSec": 65.1,
+          "agentSec": 21.9,
+          "verifierSec": 38.3,
+          "trialSec": 137.3
+        },
+        "nop": {
+          "job": "pf-vllm-deepseek-streaming-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 31.2,
+          "trialSec": 43.8
+        }
+      },
+      "imagesGb": 11.07,
+      "jobsMb": 0.4
+    },
+    "wal-recovery-ordering": {
+      "host": "aws-us-east-1 c7i.48xlarge #1",
+      "wallSec": 372,
+      "arms": {
+        "nop": {
+          "job": "pf-wal-recovery-ordering-nop-20261021T233941",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 76.4,
+          "trialSec": 88.9
+        },
+        "oracle": {
+          "job": "pf-wal-recovery-ordering-oracle-20261021T233941",
+          "envSetupSec": 64.7,
+          "agentSec": 0.5,
+          "verifierSec": 195.2,
+          "trialSec": 273.6
+        }
+      },
+      "imagesGb": 0.4,
+      "jobsMb": 0.6
+    },
+    "atrx-vep-crispr": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 178,
+      "arms": {
+        "nop": {
+          "job": "pf-atrx-vep-crispr-nop-20261021T234134",
+          "envSetupSec": 1.4,
+          "agentSec": 0.0,
+          "verifierSec": 13.9,
+          "trialSec": 27.1
+        },
+        "oracle": {
+          "job": "pf-atrx-vep-crispr-oracle-20261021T234134",
+          "envSetupSec": 89.0,
+          "agentSec": 1.1,
+          "verifierSec": 36.2,
+          "trialSec": 139.1
+        }
+      },
+      "imagesGb": 4.89,
+      "jobsMb": 0.1
+    },
+    "batched-eval-parity": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 324,
+      "arms": {
+        "nop": {
+          "job": "pf-batched-eval-parity-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 46.1,
+          "trialSec": 58.5
+        },
+        "oracle": {
+          "job": "pf-batched-eval-parity-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 0.6,
+          "verifierSec": 152.8,
+          "trialSec": 256.5
+        }
+      },
+      "imagesGb": 0.78,
+      "jobsMb": 0.3
+    },
+    "bun-sourcemap-leak": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 168,
+      "arms": {
+        "oracle": {
+          "job": "pf-bun-sourcemap-leak-oracle-20261021T234134",
+          "envSetupSec": 90.9,
+          "agentSec": 0.4,
+          "verifierSec": 23.2,
+          "trialSec": 127.9
+        },
+        "nop": {
+          "job": "pf-bun-sourcemap-leak-nop-20261021T234134",
+          "envSetupSec": 1.5,
+          "agentSec": 0.0,
+          "verifierSec": 15.5,
+          "trialSec": 29.3
+        }
+      },
+      "imagesGb": 0.86,
+      "jobsMb": 0.2
+    },
+    "cargo-flight-dispatch": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 166,
+      "arms": {
+        "nop": {
+          "job": "pf-cargo-flight-dispatch-nop-20261021T234134",
+          "envSetupSec": 1.5,
+          "agentSec": 0.0,
+          "verifierSec": 14.7,
+          "trialSec": 28.7
+        },
+        "oracle": {
+          "job": "pf-cargo-flight-dispatch-oracle-20261021T234134",
+          "envSetupSec": 90.9,
+          "agentSec": 0.6,
+          "verifierSec": 22.5,
+          "trialSec": 127.6
+        }
+      },
+      "imagesGb": 0.46,
+      "jobsMb": 0.1
+    },
+    "cumulative-layout-shift": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 725,
+      "arms": {
+        "nop": {
+          "job": "pf-cumulative-layout-shift-nop-20261021T234134",
+          "envSetupSec": 8.3,
+          "agentSec": 0.0,
+          "verifierSec": 301.6,
+          "trialSec": 322.1
+        },
+        "oracle": {
+          "job": "pf-cumulative-layout-shift-oracle-20261021T234134",
+          "envSetupSec": 97.9,
+          "agentSec": 0.3,
+          "verifierSec": 281.1,
+          "trialSec": 394.1
+        }
+      },
+      "imagesGb": 10.07,
+      "jobsMb": 0.1
+    },
+    "data-anonymization": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 851,
+      "arms": {
+        "oracle": {
+          "job": "pf-data-anonymization-oracle-20261021T234134",
+          "envSetupSec": 90.9,
+          "agentSec": 0.5,
+          "verifierSec": 713.8,
+          "trialSec": 817.6
+        },
+        "nop": {
+          "job": "pf-data-anonymization-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 12.7,
+          "trialSec": 25.1
+        }
+      },
+      "imagesGb": 2.44,
+      "jobsMb": 0.1
+    },
+    "embedding-drift-monitor": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 286,
+      "arms": {
+        "nop": {
+          "job": "pf-embedding-drift-monitor-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 110.2,
+          "trialSec": 123.0
+        },
+        "oracle": {
+          "job": "pf-embedding-drift-monitor-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 0.5,
+          "verifierSec": 49.2,
+          "trialSec": 153.5
+        }
+      },
+      "imagesGb": 0.94,
+      "jobsMb": 1.7
+    },
+    "foodstuff-beta-activity": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 165,
+      "arms": {
+        "oracle": {
+          "job": "pf-foodstuff-beta-activity-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 4.5,
+          "verifierSec": 18.6,
+          "trialSec": 126.8
+        },
+        "nop": {
+          "job": "pf-foodstuff-beta-activity-nop-20261021T234134",
+          "envSetupSec": 2.2,
+          "agentSec": 0.0,
+          "verifierSec": 14.1,
+          "trialSec": 28.1
+        }
+      },
+      "imagesGb": 0.55,
+      "jobsMb": 0.1
+    },
+    "freecad-impeller": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 210,
+      "arms": {
+        "nop": {
+          "job": "pf-freecad-impeller-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 12.6,
+          "trialSec": 25.8
+        },
+        "oracle": {
+          "job": "pf-freecad-impeller-oracle-20261021T234134",
+          "envSetupSec": 90.7,
+          "agentSec": 3.8,
+          "verifierSec": 66.2,
+          "trialSec": 174.2
+        }
+      },
+      "imagesGb": 9.64,
+      "jobsMb": 0.7
+    },
+    "freecad-spring-clip": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 207,
+      "arms": {
+        "nop": {
+          "job": "pf-freecad-spring-clip-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 12.3,
+          "trialSec": 25.4
+        },
+        "oracle": {
+          "job": "pf-freecad-spring-clip-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 0.6,
+          "verifierSec": 67.2,
+          "trialSec": 171.8
+        }
+      },
+      "imagesGb": 9.64,
+      "jobsMb": 0.1
+    },
+    "gsea-proteomics": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 205,
+      "arms": {
+        "nop": {
+          "job": "pf-gsea-proteomics-nop-20261021T234134",
+          "envSetupSec": 1.5,
+          "agentSec": 0.0,
+          "verifierSec": 13.2,
+          "trialSec": 26.7
+        },
+        "oracle": {
+          "job": "pf-gsea-proteomics-oracle-20261021T234134",
+          "envSetupSec": 89.6,
+          "agentSec": 49.2,
+          "verifierSec": 15.4,
+          "trialSec": 167.5
+        }
+      },
+      "imagesGb": 1.4,
+      "jobsMb": 0.1
+    },
+    "html-js-filter": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 303,
+      "arms": {
+        "nop": {
+          "job": "pf-html-js-filter-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 12.5,
+          "trialSec": 25.1
+        },
+        "oracle": {
+          "job": "pf-html-js-filter-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 0.5,
+          "verifierSec": 166.3,
+          "trialSec": 269.7
+        }
+      },
+      "imagesGb": 4.01,
+      "jobsMb": 0.0
+    },
+    "intrastat-meldung": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 228,
+      "arms": {
+        "oracle": {
+          "job": "pf-intrastat-meldung-oracle-20261021T234134",
+          "envSetupSec": 102.0,
+          "agentSec": 6.2,
+          "verifierSec": 16.0,
+          "trialSec": 159.5
+        },
+        "nop": {
+          "job": "pf-intrastat-meldung-nop-20261021T234134",
+          "envSetupSec": 12.3,
+          "agentSec": 0.0,
+          "verifierSec": 13.3,
+          "trialSec": 58.4
+        }
+      },
+      "imagesGb": 1.87,
+      "jobsMb": 0.3
+    },
+    "ks-solver-cpp": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 198,
+      "arms": {
+        "oracle": {
+          "job": "pf-ks-solver-cpp-oracle-20261021T234134",
+          "envSetupSec": 90.3,
+          "agentSec": 0.5,
+          "verifierSec": 58.5,
+          "trialSec": 161.1
+        },
+        "nop": {
+          "job": "pf-ks-solver-cpp-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 14.6,
+          "trialSec": 27.1
+        }
+      },
+      "imagesGb": 1.39,
+      "jobsMb": 0.1
+    },
+    "kv-live-surgery": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 258,
+      "arms": {
+        "oracle": {
+          "job": "pf-kv-live-surgery-oracle-20261021T234134",
+          "envSetupSec": 115.8,
+          "agentSec": 36.0,
+          "verifierSec": 13.5,
+          "trialSec": 187.6
+        },
+        "nop": {
+          "job": "pf-kv-live-surgery-nop-20261021T234134",
+          "envSetupSec": 26.5,
+          "agentSec": 0.0,
+          "verifierSec": 12.7,
+          "trialSec": 61.6
+        }
+      },
+      "imagesGb": 1.2,
+      "jobsMb": 0.0
+    },
+    "layout-config-recreation": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 202,
+      "arms": {
+        "nop": {
+          "job": "pf-layout-config-recreation-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 15.5,
+          "trialSec": 28.5
+        },
+        "oracle": {
+          "job": "pf-layout-config-recreation-oracle-20261021T234134",
+          "envSetupSec": 90.9,
+          "agentSec": 15.0,
+          "verifierSec": 46.7,
+          "trialSec": 164.7
+        }
+      },
+      "imagesGb": 14.19,
+      "jobsMb": 0.1
+    },
+    "live-database-cutover": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 426,
+      "arms": {
+        "nop": {
+          "job": "pf-live-database-cutover-nop-20261021T234134",
+          "envSetupSec": 18.5,
+          "agentSec": 0.0,
+          "verifierSec": 105.4,
+          "trialSec": 154.9
+        },
+        "oracle": {
+          "job": "pf-live-database-cutover-oracle-20261021T234134",
+          "envSetupSec": 106.2,
+          "agentSec": 85.0,
+          "verifierSec": 32.9,
+          "trialSec": 261.0
+        }
+      },
+      "imagesGb": 5.13,
+      "jobsMb": 27.7
+    },
+    "medical-claims-processing": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 236,
+      "arms": {
+        "nop": {
+          "job": "pf-medical-claims-processing-nop-20261021T234134",
+          "envSetupSec": 18.6,
+          "agentSec": 0.0,
+          "verifierSec": 13.0,
+          "trialSec": 43.7
+        },
+        "oracle": {
+          "job": "pf-medical-claims-processing-oracle-20261021T234134",
+          "envSetupSec": 107.8,
+          "agentSec": 48.7,
+          "verifierSec": 14.0,
+          "trialSec": 182.6
+        }
+      },
+      "imagesGb": 6.26,
+      "jobsMb": 2.0
+    },
+    "mp-checkpoint-consolidation": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 211,
+      "arms": {
+        "nop": {
+          "job": "pf-mp-checkpoint-consolidation-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 14.1,
+          "trialSec": 26.7
+        },
+        "oracle": {
+          "job": "pf-mp-checkpoint-consolidation-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 11.2,
+          "verifierSec": 61.4,
+          "trialSec": 175.5
+        }
+      },
+      "imagesGb": 3.72,
+      "jobsMb": 186.8
+    },
+    "mvcc-lsm-compaction": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 839,
+      "arms": {
+        "nop": {
+          "job": "pf-mvcc-lsm-compaction-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 326.3,
+          "trialSec": 340.7
+        },
+        "oracle": {
+          "job": "pf-mvcc-lsm-compaction-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 9.9,
+          "verifierSec": 375.1,
+          "trialSec": 490.3
+        }
+      },
+      "imagesGb": 1.21,
+      "jobsMb": 0.2
+    },
+    "photonic-waveguide-routing": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 303,
+      "arms": {
+        "nop": {
+          "job": "pf-photonic-waveguide-routing-nop-20261021T234134",
+          "envSetupSec": 1.3,
+          "agentSec": 0.0,
+          "verifierSec": 13.3,
+          "trialSec": 26.2
+        },
+        "oracle": {
+          "job": "pf-photonic-waveguide-routing-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 49.6,
+          "verifierSec": 114.8,
+          "trialSec": 267.7
+        }
+      },
+      "imagesGb": 0.93,
+      "jobsMb": 0.3
+    },
+    "production-planning": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 173,
+      "arms": {
+        "nop": {
+          "job": "pf-production-planning-nop-20261021T234134",
+          "envSetupSec": 3.8,
+          "agentSec": 0.0,
+          "verifierSec": 14.4,
+          "trialSec": 30.5
+        },
+        "oracle": {
+          "job": "pf-production-planning-oracle-20261021T234134",
+          "envSetupSec": 91.2,
+          "agentSec": 10.6,
+          "verifierSec": 19.6,
+          "trialSec": 133.5
+        }
+      },
+      "imagesGb": 0.48,
+      "jobsMb": 0.1
+    },
+    "react-lead-form": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 434,
+      "arms": {
+        "oracle": {
+          "job": "pf-react-lead-form-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 1.1,
+          "verifierSec": 155.3,
+          "trialSec": 260.8
+        },
+        "nop": {
+          "job": "pf-react-lead-form-nop-20261021T234134",
+          "envSetupSec": 1.5,
+          "agentSec": 0.0,
+          "verifierSec": 150.4,
+          "trialSec": 164.5
+        }
+      },
+      "imagesGb": 1.04,
+      "jobsMb": 0.4
+    },
+    "risk-scorer-replay": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 165,
+      "arms": {
+        "nop": {
+          "job": "pf-risk-scorer-replay-nop-20261021T234134",
+          "envSetupSec": 1.9,
+          "agentSec": 0.0,
+          "verifierSec": 14.7,
+          "trialSec": 28.3
+        },
+        "oracle": {
+          "job": "pf-risk-scorer-replay-oracle-20261021T234134",
+          "envSetupSec": 90.8,
+          "agentSec": 0.7,
+          "verifierSec": 23.2,
+          "trialSec": 127.2
+        }
+      },
+      "imagesGb": 0.67,
+      "jobsMb": 0.1
+    },
+    "rs-archive-clone": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 206,
+      "arms": {
+        "oracle": {
+          "job": "pf-rs-archive-clone-oracle-20261021T234134",
+          "envSetupSec": 91.0,
+          "agentSec": 13.3,
+          "verifierSec": 51.4,
+          "trialSec": 168.1
+        },
+        "nop": {
+          "job": "pf-rs-archive-clone-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 16.0,
+          "trialSec": 28.7
+        }
+      },
+      "imagesGb": 0.84,
+      "jobsMb": 1.5
+    },
+    "session-window-debug": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 160,
+      "arms": {
+        "oracle": {
+          "job": "pf-session-window-debug-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 0.4,
+          "verifierSec": 16.7,
+          "trialSec": 119.8
+        },
+        "nop": {
+          "job": "pf-session-window-debug-nop-20261021T234134",
+          "envSetupSec": 1.8,
+          "agentSec": 0.0,
+          "verifierSec": 13.7,
+          "trialSec": 29.2
+        }
+      },
+      "imagesGb": 0.48,
+      "jobsMb": 0.1
+    },
+    "shadow-relay": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 164,
+      "arms": {
+        "nop": {
+          "job": "pf-shadow-relay-nop-20261021T234134",
+          "envSetupSec": 2.6,
+          "agentSec": 0.0,
+          "verifierSec": 13.5,
+          "trialSec": 28.2
+        },
+        "oracle": {
+          "job": "pf-shadow-relay-oracle-20261021T234134",
+          "envSetupSec": 90.8,
+          "agentSec": 0.5,
+          "verifierSec": 22.0,
+          "trialSec": 126.1
+        }
+      },
+      "imagesGb": 0.72,
+      "jobsMb": 0.1
+    },
+    "takens-embedding-lean": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 479,
+      "arms": {
+        "nop": {
+          "job": "pf-takens-embedding-lean-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 34.3,
+          "trialSec": 46.7
+        },
+        "oracle": {
+          "job": "pf-takens-embedding-lean-oracle-20261021T234134",
+          "envSetupSec": 90.6,
+          "agentSec": 113.4,
+          "verifierSec": 207.9,
+          "trialSec": 423.3
+        }
+      },
+      "imagesGb": 29.37,
+      "jobsMb": 1.1
+    },
+    "uefi-bootkit": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 262,
+      "arms": {
+        "nop": {
+          "job": "pf-uefi-bootkit-nop-20261021T234134",
+          "envSetupSec": 1.3,
+          "agentSec": 0.0,
+          "verifierSec": 63.0,
+          "trialSec": 76.2
+        },
+        "oracle": {
+          "job": "pf-uefi-bootkit-oracle-20261021T234134",
+          "envSetupSec": 90.2,
+          "agentSec": 2.2,
+          "verifierSec": 70.5,
+          "trialSec": 175.9
+        }
+      },
+      "imagesGb": 0.85,
+      "jobsMb": 71.9
+    },
+    "vf2-speedup-networkx": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 201,
+      "arms": {
+        "nop": {
+          "job": "pf-vf2-speedup-networkx-nop-20261021T234134",
+          "envSetupSec": 1.2,
+          "agentSec": 0.0,
+          "verifierSec": 16.7,
+          "trialSec": 29.3
+        },
+        "oracle": {
+          "job": "pf-vf2-speedup-networkx-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 2.9,
+          "verifierSec": 56.5,
+          "trialSec": 162.8
+        }
+      },
+      "imagesGb": 3.07,
+      "jobsMb": 2.3
+    },
+    "vpp-loss-divergence": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 2891,
+      "arms": {
+        "oracle": {
+          "job": "pf-vpp-loss-divergence-oracle-20261021T234134",
+          "envSetupSec": 91.2,
+          "agentSec": 874.2,
+          "verifierSec": 976.7,
+          "trialSec": 1954.3
+        },
+        "nop": {
+          "job": "pf-vpp-loss-divergence-nop-20261021T234134",
+          "envSetupSec": 1.1,
+          "agentSec": 0.0,
+          "verifierSec": 915.3,
+          "trialSec": 928.5
+        }
+      },
+      "imagesGb": 22.87,
+      "jobsMb": 2.0
+    },
+    "wdm-design": {
+      "host": "aws-us-east-1 c7i.48xlarge #2",
+      "wallSec": 131,
+      "arms": {
+        "nop": {
+          "job": "pf-wdm-design-nop-20261021T234134",
+          "envSetupSec": 2.0,
+          "agentSec": 0.0,
+          "verifierSec": 5.8,
+          "trialSec": 10.2
+        },
+        "oracle": {
+          "job": "pf-wdm-design-oracle-20261021T234134",
+          "envSetupSec": 91.1,
+          "agentSec": 0.5,
+          "verifierSec": 12.4,
+          "trialSec": 105.8
+        }
+      },
+      "imagesGb": 3.72,
+      "jobsMb": 0.2
+    }
+  },
+  "pending": {
+    "fp8-rmsnorm-gemm": {
+      "reason": "GPU task: no p5.4xlarge capacity (InsufficientInstanceCapacity in every us-east-1 and us-west-2 zone, us-east-2 P quota 0) on 2026-10-21 16:36-17:19 PDT",
+      "command": "cd ../cloud-bridge2 && node --import tsx evals/harbor_v2/preflight.ts --tasks fp8-rmsnorm-gemm --env docker --jobs-dir .ytimesy/harbor-v2/preflight --out <results.json>  # on a p5.4xlarge (1 H100) Docker host"
+    },
+    "jax-speedrun-gpu": {
+      "reason": "GPU task: no p5.4xlarge capacity (InsufficientInstanceCapacity in every us-east-1 and us-west-2 zone, us-east-2 P quota 0) on 2026-10-21 16:36-17:19 PDT",
+      "command": "cd ../cloud-bridge2 && node --import tsx evals/harbor_v2/preflight.ts --tasks jax-speedrun-gpu --env docker --jobs-dir .ytimesy/harbor-v2/preflight --out <results.json>  # on a p5.4xlarge (1 H100) Docker host"
+    },
+    "math-eval-grader": {
+      "reason": "GPU task: no p5.4xlarge capacity (InsufficientInstanceCapacity in every us-east-1 and us-west-2 zone, us-east-2 P quota 0) on 2026-10-21 16:36-17:19 PDT",
+      "command": "cd ../cloud-bridge2 && node --import tsx evals/harbor_v2/preflight.ts --tasks math-eval-grader --env docker --jobs-dir .ytimesy/harbor-v2/preflight --out <results.json>  # on a p5.4xlarge (1 H100) Docker host"
+    }
+  },
+  "gpuLaunchAttempts": {
+    "us-east-1": {
+      "quota_vcpu": 80.0,
+      "zones": {
+        "us-east-1d": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-east-1a": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-east-1c": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-east-1e": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-east-1f": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-east-1b": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have "
+      }
+    },
+    "us-east-2": {
+      "quota_vcpu": 0.0,
+      "zones": {},
+      "skipped": "quota below 16 vCPU"
+    },
+    "us-west-2": {
+      "quota_vcpu": 16.0,
+      "zones": {
+        "us-west-2d": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-west-2c": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-west-2b": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have ",
+        "us-west-2a": "InsufficientInstanceCapacity: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 1): We currently do not have "
+      }
+    }
+  },
+  "notes": "Harbor 0.24.0 -e docker on two AWS c7i.48xlarge hosts (192 vCPU, 371 GiB, 2 TB gp3), 31-32 tasks concurrently per host (split by Docker Hub 100 pulls/h/IP). bridge evals/harbor_v2/preflight.ts run once per task. metrics: wallSec = oracle+nop preflight wall; envSetupSec includes image pull; imagesGb = pulled image sizes of the task."
+}
