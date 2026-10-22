@@ -373,7 +373,7 @@ export function PullRequestInspector({
 			<DropdownMenu.Trigger asChild>
 				<button type="button" className="pr-ghost">
 					{open.length} open
-					<ChevronDown size={12} />
+					<ChevronDown size={14} />
 				</button>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Portal>

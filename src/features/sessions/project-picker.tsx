@@ -215,7 +215,7 @@ export function ProjectPicker({
 									onClick={() => void repositories.refetch()}
 								>
 									<RefreshCw
-										size={12}
+										size={14}
 										data-spinning={repositories.isFetching || undefined}
 									/>
 								</button>

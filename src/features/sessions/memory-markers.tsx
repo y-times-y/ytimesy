@@ -132,7 +132,7 @@ function MemorySummary({
 			<span className="memory-marker-title">{label}</span>
 			{note ? <span className="memory-marker-note">{note}</span> : null}
 			<ChevronRight
-				size={12}
+				size={14}
 				className="session-activity-chevron"
 				aria-hidden="true"
 			/>

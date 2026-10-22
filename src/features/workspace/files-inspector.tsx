@@ -395,7 +395,7 @@ function FileTreeNodes({
 					{node.kind === "dir" ? (
 						<details className="file-tree-dir" open>
 							<summary style={{ paddingLeft: 8 + depth * 12 }}>
-								<ChevronRight size={12} className="session-activity-chevron" />
+								<ChevronRight size={14} className="session-activity-chevron" />
 								<span className="file-tree-name">{node.name}</span>
 							</summary>
 							<FileTreeNodes
