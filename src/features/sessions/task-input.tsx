@@ -12,6 +12,21 @@ function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = `${input.scrollHeight}px`;
 }
 
+/**
+ * Enter sends; Shift+Enter is a newline. An Enter that confirms an input
+ * method (IME) candidate belongs to the IME, not the composer.
+ */
+export function enterSubmits(event: {
+	readonly key: string;
+	readonly shiftKey: boolean;
+	readonly keyCode?: number;
+	readonly nativeEvent?: { readonly isComposing?: boolean };
+}) {
+	if (event.key !== "Enter" || event.shiftKey) return false;
+	// Safari reports the composition-ending Enter as keyCode 229 only.
+	return !event.nativeEvent?.isComposing && event.keyCode !== 229;
+}
+
 export function TaskInput({
 	value,
 	onChange,
@@ -62,7 +77,7 @@ export function TaskInput({
 				}}
 				onKeyDown={(event) => {
 					if (onKeyDown?.(event)) return;
-					if (event.key === "Enter" && !event.shiftKey) {
+					if (enterSubmits(event)) {
 						event.preventDefault();
 						onSubmit();
 					}
