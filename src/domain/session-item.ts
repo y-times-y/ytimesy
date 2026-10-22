@@ -182,6 +182,13 @@ export type NoticeSessionItem = {
 	readonly background?: true;
 	/** The user stopped the turn (turn-end.ts). */
 	readonly stopped?: true;
+	/**
+	 * The silent start of a wake-up turn the server began (a helper's report,
+	 * a background command's exit), standing in for its hidden message
+	 * (childTaskPublicItems). It shows nothing; it ends the turn before it.
+	 */
+	readonly wake?: true;
+	readonly timing?: UserMessageItem["timing"];
 };
 
 export type UnknownSessionItem = {

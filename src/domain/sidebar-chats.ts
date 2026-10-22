@@ -1,4 +1,5 @@
 import type { AgentProviderId } from "./agent-provider";
+import { startsTurn } from "./child-task-activity";
 import {
 	isTurnRunning,
 	type SessionItem,
@@ -433,7 +434,7 @@ export function chatWaitingOn(
 	if (turnStatus === "running") return null;
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
-		if (!item || item.kind === "userMessage") break;
+		if (!item || startsTurn(item)) break;
 		if (item.kind === "userQuestion") return "question";
 		if (item.kind === "secretRequest") return "secret";
 		if (item.kind === "planProposal") return "plan";

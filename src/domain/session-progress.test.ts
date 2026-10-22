@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+	childTaskEventQueueText,
+	childTaskPublicItems,
+} from "./child-task-activity";
 import { SessionItemId } from "./ids";
 import {
 	LIVE_STREAM_RECONCILE_MS,
@@ -81,6 +85,28 @@ describe("progressRevivesStoppedTurn", () => {
 		expect(progressRevivesStoppedTurn({ ...input, stopRequested: false })).toBe(
 			false,
 		);
+	});
+	it("lets a wake-up turn through as the browser gets it (a silent start)", () => {
+		const next = childTaskPublicItems([
+			user,
+			{
+				kind: "userMessage",
+				id: SessionItemId("wake"),
+				text: childTaskEventQueueText("e1"),
+				timing: { startedAt: 1 },
+			},
+		]);
+		expect(
+			next.some((item) => item.kind === "userMessage" && item.id === "wake"),
+		).toBe(false);
+		expect(
+			progressRevivesStoppedTurn({
+				stopRequested: true,
+				current: [user],
+				next,
+				nextStatus: "running",
+			}),
+		).toBe(false);
 	});
 });
 

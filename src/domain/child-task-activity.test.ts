@@ -4,9 +4,12 @@ import {
 	childTaskEventQueueText,
 	childTaskPromptId,
 	childTaskPublicItems,
+	isWakeTurnStart,
+	withoutWakeTurnStarts,
 } from "./child-task-activity";
 import { SessionItemId } from "./ids";
-import type { SessionItem } from "./session-item";
+import { type SessionItem, sessionItemsQueuedWithUser } from "./session-item";
+import { settledTurnItems } from "./turn-end";
 
 it("hides internal wakeups and historical forwarded results without hiding ordinary chat", () => {
 	const items: SessionItem[] = [
@@ -36,10 +39,38 @@ it("hides internal wakeups and historical forwarded results without hiding ordin
 			text: "I reviewed the implementation and its tests.",
 		},
 	];
-	expect(childTaskPublicItems(items).map((item) => item.id)).toEqual([
+	// Each hidden turn start becomes a silent wake notice: no user bubble, but
+	// the timeline still sees where the turn before it ended.
+	expect(
+		childTaskPublicItems(items).map((item) => [item.id, item.kind]),
+	).toEqual([
+		["ask", "userMessage"],
+		["event", "notice"],
+		["native", "notice"],
+		["legacy", "notice"],
+		["answer", "agentMessage"],
+	]);
+	expect(
+		childTaskPublicItems(items)
+			.filter(isWakeTurnStart)
+			.map((item) => item.id),
+	).toEqual(["event", "native", "legacy"]);
+	expect(withoutWakeTurnStarts(items).map((item) => item.id)).toEqual([
 		"ask",
 		"answer",
 	]);
+	expect(JSON.stringify(childTaskPublicItems(items))).not.toContain(
+		"ytimesy-child-event",
+	);
+});
+
+it("keeps a wake-up turn's timing on its silent start", () => {
+	const items = sessionItemsQueuedWithUser([], childTaskEventQueueText("e1"));
+	const [start] = childTaskPublicItems(settledTurnItems(items, Date.now()));
+	expect(start).toMatchObject({ kind: "notice", wake: true, message: "" });
+	expect(start?.kind === "notice" && start.timing?.completedAt).toBeTypeOf(
+		"number",
+	);
 });
 
 it("keeps a child attached to the prompt that started it after a follow-up", () => {

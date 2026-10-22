@@ -1,4 +1,8 @@
-import { isInternalChildTaskMessage } from "./child-task-activity";
+import {
+	isInternalChildTaskMessage,
+	isWakeTurnStart,
+	turnStartTiming,
+} from "./child-task-activity";
 import { activityGlyphForToolName } from "./session-activity";
 import {
 	liveActivityStatus,
@@ -164,17 +168,22 @@ export function groupTimelineRows(
 	// The user's reply to a question card shows in the card, not again below it.
 	let questionOpen = false;
 	for (const item of items) {
+		// A wake-up turn (a helper's report, a command's exit) starts silently:
+		// with a wake notice as the browser gets it (childTaskPublicItems), or
+		// the stored hidden message. It ends the turn before it, so that turn's
+		// answer stays in view, but shows no bubble of its own.
+		if (isWakeTurnStart(item)) {
+			flush(true);
+			turn = [];
+			timing = turnStartTiming(item);
+			continue;
+		}
 		const internal =
-			(item.kind === "userMessage" || item.kind === "agentMessage") &&
-			isInternalChildTaskMessage(item.text);
+			item.kind === "agentMessage" && isInternalChildTaskMessage(item.text);
 		if (item.kind === "userMessage") {
 			flush(true);
 			turn = [];
 			timing = item.timing;
-			// A wake-up turn (a helper's report, a command's exit) starts with a
-			// hidden message: it ends the turn before it, so that turn's answer
-			// stays in view, but shows no bubble of its own.
-			if (internal) continue;
 			if (!questionOpen) rows.push({ kind: "item", item });
 			questionOpen = false;
 		} else if (!internal) {
