@@ -10,6 +10,7 @@ import {
 	mentionMatches,
 	mentionNote,
 	mentionSegments,
+	mentionTokenBefore,
 	withoutMentionNote,
 } from "./agent-mentions";
 import { parseSteering, steeringTexts } from "./agent-steering";
@@ -174,5 +175,19 @@ describe("agent names in replies", () => {
 		expect(agentNameInCode("build-1", names)).toBe("build-1");
 		expect(agentNameInCode("@research-1", names)).toBe("research-1");
 		expect(agentNameInCode("build-1 --fix", names)).toBeNull();
+	});
+});
+
+describe("Backspace after a mention", () => {
+	const known = (name: string) => name === "build-1";
+	it("finds a known mention ending at the caret", () => {
+		expect(mentionTokenBefore("ask @build-1", 12, known)).toBe(4);
+		expect(mentionTokenBefore("@build-1", 8, known)).toBe(0);
+	});
+	it("leaves other text to a plain Backspace", () => {
+		expect(mentionTokenBefore("ask @build-1 ", 13, known)).toBeNull();
+		expect(mentionTokenBefore("ask @build-", 11, known)).toBeNull();
+		expect(mentionTokenBefore("ask @nobody", 11, known)).toBeNull();
+		expect(mentionTokenBefore("me@build-1", 10, known)).toBeNull();
 	});
 });
