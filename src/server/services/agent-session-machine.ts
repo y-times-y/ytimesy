@@ -260,6 +260,11 @@ export async function bindAgentSessionMachine(
 		readonly sourceSnapshotId?: string;
 	},
 ) {
+	// The project's network policy is read beside the machine's binding.
+	const policy = machines.applyNetworkPolicy
+		? projectNetworkPolicy(input.userId, input.projectId)
+		: undefined;
+	policy?.catch(() => {});
 	const { session, workspace } = await resolveAgentSessionRecord(input);
 	const selectedSession =
 		session.harness === input.harness
@@ -278,7 +283,7 @@ export async function bindAgentSessionMachine(
 		);
 		if (recovered) {
 			await machines.ensureRunning(WorkspaceId(recovered));
-			await applyProjectNetworkPolicy(machines, input, recovered);
+			await applyProjectNetworkPolicy(machines, policy, recovered);
 			return {
 				session: { ...selectedSession, providerRef: recovered },
 				providerRef: recovered,
@@ -327,7 +332,7 @@ export async function bindAgentSessionMachine(
 				() => undefined,
 			),
 	});
-	await applyProjectNetworkPolicy(machines, input, executed.providerRef);
+	await applyProjectNetworkPolicy(machines, policy, executed.providerRef);
 	return {
 		session: { ...selectedSession, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,
@@ -340,14 +345,11 @@ export async function bindAgentSessionMachine(
  */
 async function applyProjectNetworkPolicy(
 	machines: WorkspaceMachines,
-	input: { readonly userId: string; readonly projectId: string },
+	policy: ReturnType<typeof projectNetworkPolicy> | undefined,
 	providerRef: string,
 ) {
-	if (!machines.applyNetworkPolicy) return;
-	await machines.applyNetworkPolicy(
-		WorkspaceId(providerRef),
-		await projectNetworkPolicy(input.userId, input.projectId),
-	);
+	if (!machines.applyNetworkPolicy || !policy) return;
+	await machines.applyNetworkPolicy(WorkspaceId(providerRef), await policy);
 }
 
 /**
@@ -573,8 +575,12 @@ export async function executeSessionMachinePlan(input: {
 		throw new Error("Could not copy the project snapshot.");
 	}
 	const copied = await copyAgentSessionFromTemplate(input, plan.snapshotId);
-	await input.saveSessionProviderRef(copied);
-	await resetCopiedSessionScratch(input.machines, copied);
+	// Independent: the chat's row names its copy while the copy's scratch
+	// files are cleared (the copy is slug-keyed, so a retry finds it either way).
+	await Promise.all([
+		input.saveSessionProviderRef(copied),
+		resetCopiedSessionScratch(input.machines, copied),
+	]);
 	return { providerRef: copied, planKind: plan.kind };
 }
 

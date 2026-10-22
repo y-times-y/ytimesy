@@ -1,4 +1,3 @@
-import { applyVmNetworkPolicy } from "./vm-network";
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
@@ -58,6 +57,7 @@ import {
 	infrastructureAdmissionEnabled,
 	recentAdmissionCovers,
 } from "./usage-admission";
+import { applyVmNetworkPolicy } from "./vm-network";
 import { waitUntilVmRunning } from "./wait-until-running";
 import { restoreRetainedWorkspace } from "./workspace-retention";
 
@@ -414,8 +414,10 @@ export function createFreestyleWorkspaceMachines(
 									: { maxRunTotalSeconds: cap, automaticRestart: false }),
 							});
 							try {
-								await waitUntilVmRunning(created.vm, "Agent session VM");
-								const current = (await created.vm.data()).resources;
+								// The running read already carries the copy's resources.
+								const current = (
+									await waitUntilVmRunning(created.vm, "Agent session VM")
+								).resources;
 								const target = effectiveMachineResources(
 									current,
 									requestedResources,
@@ -518,12 +520,22 @@ export function createFreestyleWorkspaceMachines(
 }
 
 /** A failed resize must not become a silently undersized workspace on retry. Legacy VMs keep their existing shape. */
-/** Polls for up to a minute for a resize the provider reported as failed. */
-async function resizeLands(
-	vm: ReturnType<Freestyle["vms"]["ref"]>,
+/**
+ * Polls for up to a minute for a resize the provider reported as failed:
+ * soon at first (the resize is usually finishing as the gateway gives up),
+ * then every 2 s.
+ */
+export async function resizeLands(
+	vm: Pick<ReturnType<Freestyle["vms"]["ref"]>, "data">,
 	target: { cpu: number; memory: number; storage: number },
+	wait = (ms: number) =>
+		new Promise<void>((resolve) => {
+			setTimeout(resolve, ms);
+		}),
+	now = () => Date.now(),
 ) {
-	for (let attempt = 0; attempt < 30; attempt++) {
+	const deadline = now() + RESIZE_LAND_WAIT_MS;
+	for (let pause = 200; ; pause = Math.min(Math.round(pause * 1.5), 2_000)) {
 		const resources = (await vm.data().catch(() => null))?.resources;
 		if (
 			resources &&
@@ -532,10 +544,11 @@ async function resizeLands(
 			resources.storage >= target.storage
 		)
 			return true;
-		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		if (now() + pause > deadline) return false;
+		await wait(pause);
 	}
-	return false;
 }
+const RESIZE_LAND_WAIT_MS = 60_000;
 
 /**
  * A chat's copy found by its slug before it was bound: one an earlier attempt

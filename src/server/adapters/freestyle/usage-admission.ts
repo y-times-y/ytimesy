@@ -508,7 +508,24 @@ export async function admitVmCreate(
 ) {
 	if (!infrastructureAdmissionEnabled()) return create();
 	const bootsBaseResources = await isBaseSizedImage(snapshotId);
-	const cap = await lockedVm(slug, async (connection) => {
+	// The snapshot's resources are provider reads that do not need the VM's
+	// lock: they run while it is taken, and are used under it as before.
+	const sourceRead = bootsBaseResources
+		? undefined
+		: settle(
+				client.vms.snapshots.get(snapshotId).then(async (snapshot) => ({
+					snapshot,
+					source: snapshot.sourceVmId
+						? await settle(
+								client.vms
+									.ref(snapshot.sourceVmId)
+									.data()
+									.then((data) => data.resources),
+							)
+						: undefined,
+				})),
+			);
+	const admission = await lockedVm(slug, async (connection) => {
 		const prior = await connection.query<Admission>(
 			"select * from infrastructure_vm_admission where slug=$1",
 			[slug],
@@ -530,16 +547,16 @@ export async function admitVmCreate(
 			}
 		}
 		let resources: VmResources;
-		if (bootsBaseResources) resources = { ...CHEAP_BASE_RESOURCES };
+		if (bootsBaseResources || !sourceRead)
+			resources = { ...CHEAP_BASE_RESOURCES };
 		else {
-			const snapshot = await client.vms.snapshots.get(snapshotId);
-			if (!snapshot.sourceVmId)
+			const { snapshot, source } = unsettle(await sourceRead);
+			if (!snapshot.sourceVmId || !source)
 				throw new Error(
 					"Snapshot resources cannot be verified before spending.",
 				);
 			try {
-				resources = (await client.vms.ref(snapshot.sourceVmId).data())
-					.resources;
+				resources = unsettle(source);
 			} catch (error) {
 				if (
 					!(error instanceof FreestyleApiError && error.status === 404) ||
@@ -572,14 +589,34 @@ export async function admitVmCreate(
 			false,
 			context,
 		);
-		return admitted.cap;
+		return { cap: admitted.cap, at: Date.now() };
 	});
-	const vmId = await create(cap);
+	const vmId = await create(admission.cap);
+	// The new machine runs under the cap just bought for it, like a resumed
+	// one under its admission: its first guest operations need no second one.
+	recentAdmissions.set(vmId, {
+		cap: admission.cap,
+		usedSeconds: 0,
+		at: admission.at,
+	});
 	await database().query(
 		"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and vm_id is null",
 		[slug, vmId],
 	);
 	return vmId;
+}
+
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+/** A read started early whose failure is only reported where it is used. */
+function settle<T>(promise: Promise<T>): Promise<Settled<T>> {
+	return promise.then(
+		(value) => ({ ok: true, value }),
+		(error) => ({ ok: false, error }),
+	);
+}
+function unsettle<T>(settled: Settled<T>): T {
+	if (!settled.ok) throw settled.error;
+	return settled.value;
 }
 
 /** Revoke future prepaid execution before refunding unused runtime. An uncertain provider response retains its hold. */
