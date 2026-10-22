@@ -46,7 +46,7 @@ same tasks: 5.8. Host CPU budget: sum(cpus + 1) = 50 <= 62.
   (image pull/build, Docker, environment start or agent setup timeout, host fault) may be
   rerun once per task, at most 2 reruns in the sample. Any harness error, or the $40 stop
   firing, is NO-GO: fix it and rerun the sample.
-- **G2 score.** Our passes >= 7 (Codex's expected passes on the sample, rounded).
+- **G2 score.** Our passes >= 8 (Codex's expected passes on the sample, 7.0, plus one).
 - **G3 no harness-caused regression.** Every failure on a Codex 5/5 task gets a one-line cause
   from its trajectory before the verdict. If any is harness-caused (stopped early with budget
   left, checker or review loop, tool or transport failure), NO-GO whatever the score.
@@ -57,7 +57,11 @@ same tasks: 5.8. Host CPU budget: sum(cpus + 1) = 50 <= 62.
 GO means: run every CPU task that passes preflight (61 of 63; cad-model and
 vpp-loss-divergence excluded) once, same commit and settings.
 
-## Why 7, not E + 1 = 8
+## Why 8 (E + 1), not 7
+
+Set to 8 on 2026-10-21 before any run. The user's condition for the full run is confidence that we beat Codex, not parity: at 7 a harness equal to Codex gets GO 65% of the time; at 8, 35%, and a v13-like harness 4%. The cost is that a harness at our target (+5.8 points) is held back 40% of the time; a held-back run is reported, not lost. The analysis below was written for 7 and is kept for the record.
+
+## Original reasoning for 7
 
 Passes on 12 tasks are a sum of Bernoulli trials. Under Codex's own per-task rates the sd is
 1.26 passes. Probability of meeting each threshold (a logit shift of the per-task rates; shift
