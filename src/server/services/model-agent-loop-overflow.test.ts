@@ -12,6 +12,8 @@ import {
 	overflowCompactionBudget,
 	runModelAgent,
 	runModelAgentStep,
+	SUMMARY_MAX_OUTPUT_TOKENS,
+	summaryRequestSettings,
 } from "./model-agent-loop";
 
 const usage = {
@@ -269,4 +271,57 @@ it("gives a text-only model placeholders for images and no image tool", async ()
 	expect(JSON.stringify(sighted.doStreamCalls[0].prompt)).toContain(
 		"image/png",
 	);
+});
+
+it("asks for a context summary at low effort with room to reason before the text", async () => {
+	// atrx-vep-crispr (s3): Luna at max effort spent a 2048-token summary
+	// cap reasoning and returned no text.
+	let calls = 0;
+	const model = new MockLanguageModelV4({
+		...summary,
+		doStream: async () => {
+			if (calls++ === 0) throw anthropicOverflow();
+			return textStream("Done", "stop");
+		},
+	});
+	const result = await runModelAgentStep(input(), {
+		model,
+		contextWindow: 200_000,
+		maxOutputTokens: 64_000,
+		requestSettings: () => ({
+			providerOptions: {
+				openai: { instructions: "Work", reasoningEffort: "max" },
+			},
+		}),
+	});
+	expect(result.outcome).toBe("completed");
+	expect(model.doGenerateCalls).toHaveLength(1);
+	const call = model.doGenerateCalls[0];
+	expect(call.maxOutputTokens).toBe(SUMMARY_MAX_OUTPUT_TOKENS);
+	expect(call.providerOptions?.openai).toMatchObject({
+		reasoningEffort: "low",
+	});
+	// The run's own steps keep their effort.
+	expect(model.doStreamCalls[1].providerOptions?.openai).toMatchObject({
+		reasoningEffort: "max",
+	});
+});
+
+it("lowers only the effort a request names, per provider", () => {
+	expect(
+		summaryRequestSettings({
+			providerOptions: {
+				anthropic: { effort: "max" },
+				openrouter: { reasoning: { effort: "high" } },
+			},
+		}),
+	).toEqual({
+		providerOptions: {
+			anthropic: { effort: "low" },
+			openrouter: { reasoning: { effort: "low" } },
+		},
+	});
+	const plain = { providerOptions: { openai: { store: false } } };
+	expect(summaryRequestSettings(plain)).toEqual(plain);
+	expect(summaryRequestSettings({})).toEqual({});
 });

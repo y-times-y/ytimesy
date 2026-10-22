@@ -6,6 +6,10 @@ import { atifTrajectory, type TimedEvent } from "../evals/harbor_v2/atif";
 import { harborBridgeConfig } from "../evals/harbor_v2/config";
 import { jobRuns } from "../evals/harbor_v2/efficiency";
 import {
+	harborMachines,
+	WRITE_CHUNK_CHARS,
+} from "../evals/harbor_v2/harbor-machines";
+import {
 	committedUsd,
 	ledgerSummary,
 	reserveTrial,
@@ -14,9 +18,11 @@ import {
 	trialSpendGuard,
 } from "../evals/harbor_v2/spend";
 import {
+	DegenerateOutput,
 	guardedFetch,
 	streamKind,
 	terminalEvent,
+	whitespaceRun,
 } from "../evals/harbor_v2/transport-guard";
 import { harborTurnId } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
@@ -473,6 +479,102 @@ describe("transport guard", () => {
 		}
 	});
 
+	it("counts a whitespace run across deltas, escaped newlines in tool-call arguments included", () => {
+		const run = whitespaceRun();
+		expect(run('{"code":"const x = 1;')).toBe(0);
+		expect(run(" \\n  \\n")).toBe(7);
+		expect(run("\\t\\t ")).toBe(12);
+		expect(run("return x;  ")).toBe(2);
+	});
+
+	it("cuts a response whose tool-call arguments degenerate into whitespace, and resends it", async () => {
+		// atrx-vep-crispr (s3): Luna streamed 64K tokens of blank lines inside
+		// one run_code call, 15-17 MB over 6-8.5 minutes, until max_output_tokens.
+		const directory = await mkdtemp(join(tmpdir(), "harbor-guard-"));
+		try {
+			const log = join(directory, "transport.log");
+			const delta = (text: string) =>
+				JSON.stringify({
+					type: "response.function_call_arguments.delta",
+					item_id: "fc_1",
+					output_index: 0,
+					delta: text,
+				});
+			const blank = sse([
+				'{"type":"response.created"}',
+				delta('{"code":"const r = await tools.bash({command:`ls'),
+				...Array.from({ length: 400 }, () => delta(" \\n  \\n")),
+				'{"type":"response.incomplete","response":{"status":"incomplete"}}',
+			]);
+			const complete = sse([
+				'{"type":"response.created"}',
+				delta('{"code":"return 1;"}'),
+				'{"type":"response.completed","response":{"status":"completed"}}',
+			]);
+			const bodies = [blank, complete];
+			let calls = 0;
+			const fetch = guardedFetch(
+				async () => new Response(streamOf(bodies[calls++]), { status: 200 }),
+				{ delayMs: () => 0, logPath: log, degenerateRunChars: 1000 },
+			);
+			const response = await fetch("https://api.openai.com/v1/responses", {
+				method: "POST",
+				body: '{"stream":true,"input":[]}',
+			});
+			expect(calls).toBe(2);
+			expect(await response.text()).toBe(complete);
+			const entries = (await readFile(log, "utf8"))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			expect(entries.map((entry) => entry.phase)).toEqual([
+				"degenerate",
+				"stream",
+			]);
+			expect(entries[0].errors[0].message).toContain("unbroken whitespace");
+
+			// Every attempt degenerate: the loop gets an error it resamples
+			// as an interrupted stream ("terminated").
+			const always = guardedFetch(
+				async () => new Response(streamOf(blank), { status: 200 }),
+				{ delayMs: () => 0, degenerateRunChars: 1000, maxAttempts: 2 },
+			);
+			const last = await always("https://api.openai.com/v1/responses", {
+				method: "POST",
+				body: '{"stream":true,"input":[]}',
+			});
+			const error = await last.text().catch((caught: unknown) => caught);
+			expect(error).toBeInstanceOf(DegenerateOutput);
+			expect(String(error)).toMatch(/\bterminated\b/);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves a response with ordinary whitespace in its output alone", async () => {
+		const body = sse([
+			JSON.stringify({
+				type: "response.output_text.delta",
+				delta: `${"text\n\n    ".repeat(500)}`,
+			}),
+			'{"type":"response.completed","response":{"status":"completed"}}',
+		]);
+		let calls = 0;
+		const fetch = guardedFetch(
+			async () => {
+				calls++;
+				return new Response(streamOf(body), { status: 200 });
+			},
+			{ delayMs: () => 0, degenerateRunChars: 1000 },
+		);
+		const response = await fetch("https://api.openai.com/v1/responses", {
+			method: "POST",
+			body: '{"stream":true}',
+		});
+		expect(await response.text()).toBe(body);
+		expect(calls).toBe(1);
+	});
+
 	it("leaves error responses and non-streamed requests alone", async () => {
 		let calls = 0;
 		const fetch = guardedFetch(async () => {
@@ -486,6 +588,48 @@ describe("transport guard", () => {
 		expect(failed.status).toBe(529);
 		await fetch("https://api.anthropic.com/v1/models/claude-opus-5-5");
 		expect(calls).toBe(2);
+	});
+});
+
+describe("harbor machines", () => {
+	it("writes a file larger than one command argument may be, in pieces", async () => {
+		// Linux caps one argument at 128 KiB; a 423 KB report failed every edit.
+		const directory = await mkdtemp(join(tmpdir(), "harbor-machines-"));
+		try {
+			const { execFile } = await import("node:child_process");
+			const commands: string[] = [];
+			const machines = harborMachines(async (command) => {
+				commands.push(command);
+				if (command.length > 131_072)
+					return { id: 0, exitCode: 126, stderr: "Argument list too long" };
+				return await new Promise((resolve) =>
+					execFile("/bin/sh", ["-c", command], (error, stdout, stderr) =>
+						resolve({
+							id: 0,
+							exitCode: error ? Number(error.code) || 1 : 0,
+							stdout,
+							stderr,
+						}),
+					),
+				);
+			});
+			const path = join(directory, "out", "report.json");
+			const contents = `{"rows":[${Array.from({ length: 9000 }, (_, i) => `"row ${i} ${"é".repeat(20)}"`).join(",")}]}`;
+			expect(Buffer.byteLength(contents)).toBeGreaterThan(400_000);
+			await machines.writeTextFile("vm" as never, path, contents);
+			expect(await readFile(path, "utf8")).toBe(contents);
+			expect(commands.length).toBeGreaterThan(2);
+			expect(
+				Math.max(...commands.map((command) => command.length)),
+			).toBeLessThan(WRITE_CHUNK_CHARS + 1000);
+			// A small file is still one command.
+			commands.length = 0;
+			await machines.writeTextFile("vm" as never, path, "small");
+			expect(await readFile(path, "utf8")).toBe("small");
+			expect(commands).toHaveLength(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });
 

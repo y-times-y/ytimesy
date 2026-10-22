@@ -523,6 +523,34 @@ describe("bedrock response time limit", () => {
 		expect(String(totalError)).toContain("ran past");
 	});
 
+	it("waits for headers up to the total limit: the transport guard holds them until the whole stream arrived", async () => {
+		// The bridge's guard sits beneath this fetch and drains a response
+		// before handing it back, so a response streaming for longer than
+		// idleMs arrives late but complete.
+		const fetch = responseTimeLimitFetch(
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 120));
+				return new Response("data: done\n\n");
+			},
+			{ totalMs: 2000, idleMs: 40 },
+		);
+		expect(await readAll(await fetch("https://x/"))).toBe("data: done\n\n");
+		const late = responseTimeLimitFetch(
+			async (_request, init) =>
+				await new Promise<Response>((resolve, reject) => {
+					const timer = setTimeout(() => resolve(new Response("late")), 1000);
+					init?.signal?.addEventListener("abort", () => {
+						clearTimeout(timer);
+						reject(init.signal?.reason);
+					});
+				}),
+			{ totalMs: 80, idleMs: 40 },
+		);
+		const error = await late("https://x/").catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(ResponseTimeLimit);
+		expect(String(error)).toContain("ran past");
+	});
+
 	it("reaches the model loop mid-response as a network interruption (ETIMEDOUT in the stream error's chain)", async () => {
 		const response = {
 			id: "resp_1",
