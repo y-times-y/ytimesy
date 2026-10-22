@@ -77,6 +77,7 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { withStoppedNotice } from "#/domain/turn-end";
 import { ASK_USER_TOOL } from "#/domain/user-question";
 import {
 	type AgentSessionRecord,
@@ -2347,15 +2348,16 @@ async function runApiTurnAttempt(
 			abort.signal.reason instanceof ApiTurnCancelled ||
 			(abort.signal.aborted &&
 				(await apiTurnCancelRequested(turn).catch(() => false)));
-		if (!userCancelled)
-			items = [
-				...items,
-				paused ?? {
-					kind: "error",
-					id: SessionItemId(`${turn.id}:error`),
-					message: failureMessage,
-				},
-			];
+		items = userCancelled
+			? withStoppedNotice(items, turn.id)
+			: [
+					...items,
+					paused ?? {
+						kind: "error",
+						id: SessionItemId(`${turn.id}:error`),
+						message: failureMessage,
+					},
+				];
 		items = applyApiProgress(items, turn.id, {
 			type: "finish",
 			inputTokens: null,
