@@ -394,7 +394,7 @@ export function SessionTimeline({
 					childTasks.some((task) => task.turnStatus === "running") ? (
 						<li data-kind="waiting-for-children">
 							<p className="session-working" role="status">
-								Waiting for subagents
+								Waiting for helpers
 							</p>
 						</li>
 					) : null}
