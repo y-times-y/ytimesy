@@ -796,17 +796,14 @@ async function runApiTurnAttempt(
 		 * memory's own path check read only the checkout.
 		 */
 		const checkout = async () => {
-			execution = await timed("turn:workspace", prepareWorkspace);
-			timing?.mark("workspacePrepared");
-			if (remembersDirectory) {
-				const { cwd } = execution;
-				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
-					savePreparedCheckoutDirectory(owner.userId, owner.id, cwd),
-				).catch(() => {});
-			}
+			const preparing = timed("turn:workspace", prepareWorkspace);
+			preparing.catch(() => {});
+			// The code point, attachments, secrets and ~/memory need only the
+			// checked-out repository, so they run beside its baselines.
+			const ready = await (prepareWorkspace.checkedOut?.() ?? preparing);
 			let secretsReady: Promise<void> | undefined;
 			if (projectSecrets && receivesSecrets) {
-				const { machines: vmMachines, vm } = execution;
+				const { machines: vmMachines, vm } = ready;
 				// The env file stays on the VM's disk across steps; a new VM gets it written.
 				secretsWritten ??= turnMemo(
 					`${turn.id}:project-secrets-written:${vm}`,
@@ -818,8 +815,8 @@ async function runApiTurnAttempt(
 				secretsReady.catch(() => {});
 			}
 			attachmentsWritten ??= materializeMessageAttachments(
-				execution.machines,
-				execution.vm,
+				ready.machines,
+				ready.vm,
 				owner.userId,
 				owner.id,
 				sessionAttachments(items),
@@ -828,7 +825,7 @@ async function runApiTurnAttempt(
 				console.warn("Attached files could not be restored.", error);
 			});
 			// ~/memory is outside the repository, so it overlaps the code point.
-			memoryCloning ??= cloneMemory(execution);
+			memoryCloning ??= cloneMemory(ready);
 			memoryCloning.catch(() => {});
 			// Attachments go to a directory outside the repository, so they
 			// overlap the code point (a capture of the repository) too.
@@ -839,15 +836,27 @@ async function runApiTurnAttempt(
 					.reverse()
 					.find((item) => item.kind === "userMessage");
 				if (prompt) {
+					// It captures the files without moving HEAD or the index
+					// (a temporary index and its own ref), so the baselines'
+					// pristine check beside it reads the same checkout.
 					codePoint ??= ensureConversationCodePoint(
 						owner.userId,
 						owner.id,
 						prompt.id,
-						execution,
+						ready,
 					);
-					await codePoint;
+					codePoint.catch(() => {});
 				}
 			}
+			execution = await preparing;
+			timing?.mark("workspacePrepared");
+			if (remembersDirectory) {
+				const { cwd } = execution;
+				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
+					savePreparedCheckoutDirectory(owner.userId, owner.id, cwd),
+				).catch(() => {});
+			}
+			await codePoint;
 			await attachmentsWritten;
 			await secretsReady;
 			checkoutReady = true;

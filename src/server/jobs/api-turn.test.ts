@@ -44,6 +44,8 @@ const mocks = vi.hoisted(() => ({
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	/** The turn's workspace preparation (ready at once unless a test holds it). */
 	workspace: vi.fn(),
+	/** The checked-out workspace before baselines; undefined: the whole preparation. */
+	checkedOut: vi.fn((): Promise<unknown> | undefined => undefined),
 	/** The repository path the chat last reported (none unless a test sets one). */
 	preparedDirectory: vi.fn(),
 	/** The chat's pinned baseline and its journaled hook configuration. */
@@ -187,6 +189,7 @@ beforeEach(() => {
 	mocks.workspace
 		.mockReset()
 		.mockImplementation(async () => ({ machines: {}, vm: "vm", cwd: "/repo" }));
+	mocks.checkedOut.mockReset().mockReturnValue(undefined);
 	mocks.preparedDirectory.mockReset().mockResolvedValue(null);
 	mocks.baseline.mockReset().mockResolvedValue(null);
 	mocks.hookConfig.mockReset().mockResolvedValue(null);
@@ -357,7 +360,11 @@ vi.mock("../services/api-turn-workspace", () => ({
 				prepared ??= mocks.workspace();
 				return prepared;
 			},
-			{ pinnedBase: mocks.pinnedBase, pinnedBaseFile: mocks.pinnedBaseFile },
+			{
+				pinnedBase: mocks.pinnedBase,
+				pinnedBaseFile: mocks.pinnedBaseFile,
+				checkedOut: () => mocks.checkedOut(),
+			},
 		);
 	},
 }));
@@ -1981,6 +1988,37 @@ describe("a builder's first request before its workspace is ready", () => {
 		).toBe("completed");
 		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
 		expect(mocks.attachments).toHaveBeenCalledOnce();
+	});
+
+	it("records the turn's code point while the checkout's baselines are still being set", async () => {
+		const ready = { machines: {}, vm: "vm", cwd: "/repo" };
+		let baselined = () => {};
+		mocks.workspace.mockReturnValue(
+			new Promise((resolve) => {
+				baselined = () => resolve(ready);
+			}),
+		);
+		mocks.checkedOut.mockReturnValue(Promise.resolve(ready));
+		const { ensureConversationCodePoint } = await import(
+			"../services/conversation-recovery"
+		);
+		vi.mocked(ensureConversationCodePoint).mockImplementationOnce(async () => {
+			// The capture starts before the baselines finish; it never waits on them.
+			baselined();
+		});
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(ensureConversationCodePoint).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.anything(),
+			ready,
+		);
 	});
 
 	describe("with memory on", () => {
