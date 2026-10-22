@@ -525,7 +525,7 @@ export async function admitVmCreate(
 						: undefined,
 				})),
 			);
-	const admission = await lockedVm(slug, async (connection) => {
+	const cap = await lockedVm(slug, async (connection) => {
 		const prior = await connection.query<Admission>(
 			"select * from infrastructure_vm_admission where slug=$1",
 			[slug],
@@ -589,16 +589,9 @@ export async function admitVmCreate(
 			false,
 			context,
 		);
-		return { cap: admitted.cap, at: Date.now() };
+		return admitted.cap;
 	});
-	const vmId = await create(admission.cap);
-	// The new machine runs under the cap just bought for it, like a resumed
-	// one under its admission: its first guest operations need no second one.
-	recentAdmissions.set(vmId, {
-		cap: admission.cap,
-		usedSeconds: 0,
-		at: admission.at,
-	});
+	const vmId = await create(cap);
 	await database().query(
 		"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and vm_id is null",
 		[slug, vmId],
