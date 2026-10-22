@@ -199,7 +199,7 @@ export function AgentCallView({
 	live?: boolean;
 	onOpenFile?: (path: string) => void;
 }) {
-	// A helper goes by its task and a kind tag (helper-names.ts), not its role.
+	// The call names its helper by task and kind tag (helper-names.ts), not its role.
 	const helper =
 		call.tool === "agent" && !call.explore ? helperCallLabel(call) : null;
 	const verb =

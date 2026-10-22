@@ -84,7 +84,7 @@ describe("the user steering a helper", () => {
 			}),
 		]);
 		await expect(sendUserMessageToHelper(input, fake)).resolves.toMatchObject({
-			name: "Build the export (Build)",
+			name: 'build-1 ("Build the export")',
 			status: "queued",
 			delivery: "next step",
 		});
@@ -101,7 +101,7 @@ describe("the user steering a helper", () => {
 		expect(fake.notifyLead).toHaveBeenCalledWith(
 			"root",
 			"user-steer:req-1",
-			"The user sent Build the export (Build): Skip the docs",
+			'The user sent build-1 ("Build the export"): Skip the docs',
 		);
 	});
 	it("reaches a nested helper through its own parent", async () => {

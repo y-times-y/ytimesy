@@ -11,7 +11,7 @@ import {
 	foldAgentRows,
 	formatElapsed,
 	formatTokens,
-	helperFinishedLine,
+	helperFinishCard,
 	helperIdentities,
 	helperMetric,
 	leadMetric,
@@ -21,13 +21,7 @@ import {
 } from "./agent-panel";
 import { parseSteering, steeringTexts } from "./agent-steering";
 import type { AgentTaskActivity } from "./child-task-activity";
-import {
-	helperCallLabel,
-	helperName,
-	helperReference,
-	KIND_COLORS,
-	kindShade,
-} from "./helper-names";
+import { helperCallLabel } from "./helper-names";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 
@@ -89,8 +83,8 @@ const tool = (
 	status,
 });
 
-describe("helper names, tags, icons and colours", () => {
-	it("names a helper by its task, tags its kind, and shades repeats of a kind", () => {
+describe("helper names, icons and colours", () => {
+	it("names each helper by its kind and number, coloured in start order", () => {
 		const ids = helperIdentities([
 			task("w2", {
 				title: "Write the release notes",
@@ -110,35 +104,60 @@ describe("helper names, tags, icons and colours", () => {
 				title: "Trace dashboard totals",
 				createdAt: "2026-10-21T10:02:00Z",
 			}),
+			task("v", {
+				role: "checker",
+				title: "Verify the export",
+				createdAt: "2026-10-21T10:04:00Z",
+			}),
+			task("r2", {
+				role: "researcher",
+				title: "Read the docs",
+				createdAt: "2026-10-21T10:05:00Z",
+			}),
 		]);
 		expect(ids.get("s")).toMatchObject({
-			name: "Build the CSV export",
-			tag: "Build",
+			name: "build-1",
+			task: "Build the CSV export",
 			icon: "hammer",
-			color: "var(--agent-sidekick)",
+			color: "#F43F5E",
 		});
-		expect(ids.get("w1")).toMatchObject({
-			tag: "Build",
-			color: "var(--agent-build)",
+		// A sidekick and a writer are both Build helpers, numbered together.
+		expect(ids.get("w1")).toMatchObject({ name: "build-2", color: "#A3E635" });
+		expect(ids.get("r")).toMatchObject({
+			name: "research-1",
+			icon: "search",
+			color: "#60A5FA",
 		});
-		expect(ids.get("w2")?.color).toBe(
-			"color-mix(in oklab, var(--agent-build), white 12%)",
-		);
-		expect(ids.get("r")).toMatchObject({ tag: "Research", icon: "search" });
+		expect(ids.get("w2")).toMatchObject({ name: "build-3", color: "#F97316" });
+		expect(ids.get("v")).toMatchObject({
+			name: "verify-1",
+			icon: "circle-check",
+			color: "#FACC15",
+		});
+		// The palette cycles after five.
+		expect(ids.get("r2")).toMatchObject({
+			name: "research-2",
+			color: "#F43F5E",
+		});
 	});
-	it("cuts a long task title cleanly at a word", () => {
-		expect(
-			helperName(
-				"Investigate why the nightly export job drops rows with null customer ids",
-			),
-		).toBe("Investigate why the nightly export…");
-		expect(helperReference("Review the patch", "reviewer")).toBe(
-			"Review the patch (Review)",
-		);
-		expect(kindShade(0)).toBe(0);
-		expect(kindShade(2)).toBeCloseTo(0.24);
-		expect(kindShade(9)).toBeCloseTo(0.36);
-		expect(KIND_COLORS.sidekick).toBe("#7AA2F7");
+	it("keeps a helper's name and colour when another finishes or starts", () => {
+		const first = task("a", { createdAt: "2026-10-21T10:00:00Z" });
+		const second = task("b", {
+			role: "reviewer",
+			createdAt: "2026-10-21T10:01:00Z",
+		});
+		const before = helperIdentities([first, second]).get("b");
+		const after = helperIdentities([
+			task("a", {
+				createdAt: "2026-10-21T10:00:00Z",
+				status: "done",
+				turnStatus: "completed",
+			}),
+			second,
+			task("c", { createdAt: "2026-10-21T10:02:00Z" }),
+		]).get("b");
+		expect(after).toEqual(before);
+		expect(after).toMatchObject({ name: "review-1", color: "#A3E635" });
 	});
 });
 
@@ -528,19 +547,19 @@ describe("agents list rows", () => {
 			leadTurnStatus: "running",
 		});
 		expect(rows.lead).toMatchObject({ name: "Main", status: "working" });
-		expect(rows.helpers.map((row) => row.name)).toEqual([
-			"Task sk",
-			"Task now",
+		expect(rows.helpers.map((row) => [row.name, row.task])).toEqual([
+			["build-2", "Task sk"],
+			["research-1", "Task now"],
 		]);
 		expect(rows.helpers[0]).toMatchObject({
 			status: "working",
 			queued: 1,
-			tag: "Build",
+			tag: null,
 			messageable: true,
 		});
 		expect(rows.helpers[1]).toMatchObject({
 			status: "done",
-			tag: "Research",
+			tag: null,
 			messageable: false,
 		});
 	});
@@ -564,10 +583,10 @@ describe("agents list rows", () => {
 		expect(
 			rows.helpers.map((row) => [row.name, row.doing, row.doingDetail]),
 		).toEqual([
-			["Task d", "Done", "Parser fixed; 4 tests added."],
-			["Task b", "Done", undefined],
-			["Task f", "Failed", undefined],
-			["Task w", "Reading api.md", undefined],
+			["build-1", "Done", undefined],
+			["build-2", "Done", "Parser fixed; 4 tests added."],
+			["build-3", "Failed", undefined],
+			["build-4", "Reading api.md", undefined],
 		]);
 		const idle = agentPanelRows({
 			tasks: [],
@@ -670,46 +689,52 @@ describe("agents list rows", () => {
 			foldAgentRows([row("a", "done"), row("b", "working")]).folded,
 		).toEqual([]);
 	});
-	it("writes the finish line as name and outcome, with how it ended as detail", () => {
-		expect(
-			helperFinishedLine({
-				name: "Sidekick A",
-				status: "done",
-				doing: "tests pass, 3 files changed",
-			}),
-		).toEqual({
-			text: "Sidekick A finished",
-			detail: "tests pass, 3 files changed",
+	it("fills the finish card with name, outcome, task, time and the report's first line", () => {
+		const done = task("d", {
+			title: "Fix pricing rounding",
+			status: "done",
+			turnStatus: "completed",
+			createdAt: new Date(0).toISOString(),
+			updatedAt: new Date(72_000).toISOString(),
+			summary:
+				'[agent 3 writer finished · build-1 ("Fix pricing rounding") · 12 steps · 1m · 362k tokens · $1.20]\n\n## Rounding fixed\nTotals now round half up.',
 		});
-		expect(
-			helperFinishedLine({
-				name: "Checker",
-				status: "failed",
-				doing: "failed",
-			}),
-		).toEqual({ text: "Checker failed", detail: "" });
+		const card = helperFinishCard(done, {
+			name: "build-1",
+			task: "Fix pricing rounding",
+		});
+		expect(card).toEqual({
+			name: "build-1",
+			verb: "finished",
+			task: "Fix pricing rounding",
+			duration: "1m 12s",
+			line: "Rounding fixed",
+			detail:
+				"## Rounding fixed\nTotals now round half up.\n\n12 steps · 1m · 362k tokens · $1.20",
+		});
+		expect(card.detail).not.toContain("[agent");
 	});
-	it("never shows a report's raw header line, only its facts as detail", () => {
-		const summary =
-			"[agent 3 writer finished · Fix the parser · 12 steps · 6m · 362k tokens · $1.20]\n\nParser fixed; 4 tests added.";
-		const doing = agentDoing({
-			status: "done",
-			items: [],
-			title: "",
-			summary,
+	it("says failed on a failed helper's card, with its error as the line", () => {
+		const failed = task("f", {
+			status: "failed",
+			turnStatus: "failed",
+			createdAt: new Date(0).toISOString(),
+			updatedAt: new Date(5_000).toISOString(),
+			items: [
+				{
+					kind: "error",
+					id: SessionItemId("e"),
+					message: "The model refused the request",
+				} as SessionItem,
+			],
 		});
-		expect(doing).toBe("Parser fixed; 4 tests added.");
-		const line = helperFinishedLine({
-			name: "Fix the parser",
-			status: "done",
-			doing,
-			summary,
+		expect(
+			helperFinishCard(failed, { name: "build-1", task: "Task f" }),
+		).toMatchObject({
+			verb: "failed",
+			line: "The model refused the request",
+			duration: "5s",
 		});
-		expect(line.text).toBe("Fix the parser finished");
-		expect(line.text).not.toContain("[agent");
-		expect(line.detail).toBe(
-			"Parser fixed; 4 tests added. · 12 steps · 6m · 362k tokens · $1.20",
-		);
 	});
 	it("puts the finish line at the end of the turn it started in, before the answer", () => {
 		const items: SessionItem[] = [

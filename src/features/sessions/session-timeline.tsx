@@ -10,9 +10,8 @@ import {
 } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
-	agentDoing,
 	finishLineAnchorId,
-	helperFinishedLine,
+	helperFinishCard,
 	helperKind,
 	helperStatus,
 	steeringSender,
@@ -44,6 +43,7 @@ import {
 import { fileBasename } from "#/domain/file-kind";
 import {
 	agentColor,
+	HELPER_COLORS,
 	type HelperIdentity,
 	helperName,
 	KIND_ICONS,
@@ -334,7 +334,7 @@ export function SessionTimeline({
 									.filter((mark) => rowHas(row, mark.finish))
 									.map(({ task }) => (
 										<li key={`finish:${task.id}`} data-kind="helper-finish">
-											<HelperLine task={task} lines={helperLines} finished />
+											<HelperFinishCard task={task} lines={helperLines} />
 										</li>
 									))}
 								{(row.kind === "item"
@@ -361,7 +361,7 @@ export function SessionTimeline({
 						.filter((mark) => mark.finish === null)
 						.map(({ task }) => (
 							<li key={`finish:${task.id}`} data-kind="helper-finish">
-								<HelperLine task={task} lines={helperLines} finished />
+								<HelperFinishCard task={task} lines={helperLines} />
 							</li>
 						))}
 					{evidenceAt.trailing.map((record) => (
@@ -411,11 +411,11 @@ export function SessionTimeline({
 	);
 }
 
-/** Names and colours of a chat's helpers, and how to open one. */
+/** Short names, tasks and colours of a chat's helpers, and how to open one. */
 export type HelperLines = {
 	readonly identities: ReadonlyMap<
 		string,
-		Pick<HelperIdentity, "name" | "color" | "icon" | "tag">
+		Pick<HelperIdentity, "name" | "task" | "color" | "icon">
 	>;
 	readonly onSelect?: (helperId: string) => void;
 };
@@ -423,67 +423,102 @@ export type HelperLines = {
 /** A helper's view names who sent each message in its transcript. */
 const SenderContext = createContext<string | null>(null);
 
-/** "Started Sidekick A" / "Sidekick A finished", one quiet line; how it ended on hover. */
+/** "build-1 started · Fix pricing rounding": one quiet line where it started. */
 function HelperLine({
 	task,
 	lines,
-	finished = false,
 }: {
 	task: AgentTaskActivity;
 	lines?: HelperLines;
-	finished?: boolean;
 }) {
 	const identity = lines?.identities.get(task.id);
-	const name = `“${identity?.name ?? helperName(task.title)}”`;
+	const name = identity?.name ?? helperName(task.title);
 	const kind = helperKind(task);
-	const status = helperStatus(task.status);
-	const finish = finished
-		? helperFinishedLine({
-				name,
-				status,
-				doing: agentDoing({
-					status,
-					items: task.items,
-					title: "",
-					summary: task.summary,
-				}),
-				summary: task.summary,
-			})
-		: null;
-	const text = finish?.text ?? `Started ${name}`;
-	const detail = finish?.detail || undefined;
 	const content = (
 		<>
 			<AgentIcon
 				icon={identity?.icon ?? KIND_ICONS[kind]}
-				color={identity?.color ?? agentColor(kind)}
+				color={identity?.color ?? HELPER_COLORS[0]}
 				size={14}
 			/>
-			<span className="helper-line-text" title={detail}>
-				{text}
+			<span className="helper-line-name">{name}</span>
+			<span className="helper-line-text" title={task.title}>
+				started · {identity?.task ?? helperName(task.title)}
 			</span>
-			<span className="agent-row-tag">{identity?.tag ?? KIND_TAGS[kind]}</span>
 		</>
 	);
 	return lines?.onSelect ? (
 		<button
 			type="button"
 			className="helper-line"
-			data-finished={finished ? "true" : undefined}
-			data-status={status}
+			data-status={helperStatus(task.status)}
 			title={`Open ${name}`}
 			onClick={() => lines.onSelect?.(task.id)}
 		>
 			{content}
 		</button>
 	) : (
-		<p
-			className="helper-line"
-			data-finished={finished ? "true" : undefined}
-			data-status={status}
-		>
+		<p className="helper-line" data-status={helperStatus(task.status)}>
 			{content}
 		</p>
+	);
+}
+
+/**
+ * A finished helper in its parent's chat: an outlined card with its name,
+ * outcome, task and time over its report's first line. The full report is
+ * its hover; a click opens the helper, as its agents-list row does.
+ */
+function HelperFinishCard({
+	task,
+	lines,
+}: {
+	task: AgentTaskActivity;
+	lines?: HelperLines;
+}) {
+	const identity = lines?.identities.get(task.id);
+	const card = helperFinishCard(task, identity);
+	const kind = helperKind(task);
+	const content = (
+		<>
+			<span className="helper-card-head">
+				<AgentIcon
+					icon={identity?.icon ?? KIND_ICONS[kind]}
+					color={identity?.color ?? HELPER_COLORS[0]}
+					size={14}
+				/>
+				<span className="helper-card-name">{card.name}</span>
+				<span className="helper-card-task">
+					<span className="helper-card-verb" data-verb={card.verb}>
+						{card.verb}
+					</span>
+					{` · ${card.task}`}
+				</span>
+				{card.duration ? (
+					<span className="helper-card-time">{card.duration}</span>
+				) : null}
+			</span>
+			{card.line ? <span className="helper-card-line">{card.line}</span> : null}
+		</>
+	);
+	return lines?.onSelect ? (
+		<button
+			type="button"
+			className="helper-card"
+			data-status={card.verb}
+			title={card.detail || `Open ${card.name}`}
+			onClick={() => lines.onSelect?.(task.id)}
+		>
+			{content}
+		</button>
+	) : (
+		<div
+			className="helper-card"
+			data-status={card.verb}
+			title={card.detail || undefined}
+		>
+			{content}
+		</div>
 	);
 }
 

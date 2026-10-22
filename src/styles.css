@@ -19,13 +19,8 @@
 	color-scheme: dark;
 	--text-muted: #939393;
 	--accent-blue: #3b82f6;
-	/* One colour per agent role (src/domain/helper-names.ts). */
+	/* Main's and background commands' colours; helpers have their own (src/domain/helper-names.ts). */
 	--agent-main: #e5e5e5;
-	--agent-build: #d9a066;
-	--agent-sidekick: #7aa2f7;
-	--agent-research: #5fb3b3;
-	--agent-review: #b48ef0;
-	--agent-verify: #7fc08a;
 	--agent-background: #8a8f98;
 	--border: oklch(0.922 0 0);
 	--surface: #141414;

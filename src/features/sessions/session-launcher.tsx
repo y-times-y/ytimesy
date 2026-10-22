@@ -401,7 +401,7 @@ export function SessionLauncher({
 		if (!selectedHelper || !text || !selectedProject || !session.agentSessionId)
 			return;
 		if (!selectedHelper.messageable) {
-			setHelperError(`“${selectedHelper.name}” has finished.`);
+			setHelperError(`${selectedHelper.name} has finished.`);
 			return;
 		}
 		const id = crypto.randomUUID();
@@ -730,8 +730,10 @@ export function SessionLauncher({
 							color={selectedHelper.color}
 						/>
 						<span className="helper-view-name">{selectedHelper.name}</span>
-						{selectedHelper.tag ? (
-							<span className="agent-row-tag">{selectedHelper.tag}</span>
+						{selectedHelper.task ? (
+							<span className="helper-view-task" title={selectedHelper.title}>
+								{selectedHelper.task}
+							</span>
 						) : null}
 						<button
 							type="button"
@@ -901,7 +903,7 @@ export function SessionLauncher({
 							disabled={busy && !selectedHelper}
 							placeholder={
 								selectedHelper
-									? `Message “${selectedHelper.name}”…`
+									? `Message ${selectedHelper.name}…`
 									: agents.lead.status === "free"
 										? agents.helpers.some((row) => row.status === "working")
 											? "Ask Main anything while helpers work"
@@ -1038,7 +1040,7 @@ export function SessionLauncher({
 								<button
 									type="button"
 									className="session-send"
-									aria-label={`Send to “${selectedHelper.name}”`}
+									aria-label={`Send to ${selectedHelper.name}`}
 									disabled={!draft.trim() || !selectedHelper.messageable}
 									title={
 										selectedHelper.messageable
