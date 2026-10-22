@@ -643,6 +643,63 @@ it("runs a background command in the session's background scope with the long ca
 	expect(launched[1]).not.toContain('"label"');
 });
 
+it("a background command posts its exit callback after its status is written; foreground ones do not", async () => {
+	vi.stubEnv("YTIMESY_GIT_PROXY_URL", "https://edge.example");
+	vi.stubEnv("YTIMESY_GIT_PROXY_SECRET", "k".repeat(48));
+	try {
+		const launched: string[] = [];
+		const written: string[] = [];
+		const tools = apiAgentCommandTools({
+			machines: {
+				exec: async (_vm: unknown, command: string) => {
+					launched.push(command);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({ status: "running", stdout: "" }),
+						stderr: "",
+					};
+				},
+				writeTextFile: async (_vm: unknown, path: string) => {
+					written.push(path);
+				},
+			} as unknown as WorkspaceMachines,
+			vm: WorkspaceId("test"),
+			cwd: "/repo",
+			sessionId: crypto.randomUUID(),
+			userId: "user",
+			turnId: crypto.randomUUID(),
+			readOnly: false,
+			signal: new AbortController().signal,
+			once: (_id, execute) => execute(),
+		});
+		const execute = tools.execute_command as {
+			execute: (args: object, options: object) => Promise<unknown>;
+		};
+		await execute.execute(
+			{
+				command: "npm run dev",
+				maxSeconds: 600,
+				yieldSeconds: 0,
+				background: { label: "npm run dev" },
+			},
+			{ toolCallId: "background" },
+		);
+		expect(written).toHaveLength(1);
+		expect(written[0]).toMatch(/\.exit\/request\.json$/);
+		const job = launchedJob(launched.at(-1) ?? "");
+		const directory = written[0].slice(0, -"/request.json".length);
+		expect(job.indexOf(directory)).toBeGreaterThan(job.indexOf(".status"));
+		await execute.execute(
+			{ command: "make test", maxSeconds: 600, yieldSeconds: 10 },
+			{ toolCallId: "foreground" },
+		);
+		expect(written).toHaveLength(1);
+		expect(launchedJob(launched.at(-1) ?? "")).not.toContain("request.json");
+	} finally {
+		vi.unstubAllEnvs();
+	}
+});
+
 it("records that the agent saw a background command finish, so it gets no notice", async () => {
 	const { tools } = await fixture();
 	const sessionRoot = commandRoots.at(-1) as string;
