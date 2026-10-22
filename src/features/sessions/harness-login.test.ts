@@ -54,3 +54,41 @@ it("renders nothing once Codex is connected", () => {
 		}),
 	).toBe("");
 });
+
+it("shows the sign-in card above the composer for an expired or pending login, not when ready", async () => {
+	const { ComposerSignIn } = await import("./harness-login");
+	const card = (connection: AgentConnection, harnessReady = false) =>
+		renderToStaticMarkup(
+			createElement(ComposerSignIn, {
+				harnessReady,
+				harnessId: "codex",
+				connection,
+				busy: false,
+				onConnect: () => {},
+			}),
+		);
+	expect(
+		card({ status: "expired", provider: "codex", message: "Reconnect." }),
+	).toContain("Codex sign-in expired");
+	expect(
+		card({
+			status: "awaiting_device_code",
+			provider: "codex",
+			loginId: "login",
+			verificationUrl: "https://auth.openai.com/codex/device",
+			userCode: "QK7M-4HTP",
+		}),
+	).toContain("QK7M-4HTP");
+	expect(
+		card(
+			{
+				status: "authenticated",
+				provider: "codex",
+				authMode: "chatgpt",
+				planType: null,
+				email: null,
+			},
+			true,
+		),
+	).toBe("");
+});
