@@ -30,6 +30,7 @@ import {
 	wakeChatForBackgroundCommands,
 	wakeChatsForBackgroundCommands,
 } from "./background-command-notices";
+import { prepareForkWorkspace } from "./conversation-recovery";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import {
 	DREAM_IDLE_SECONDS,
@@ -181,6 +182,15 @@ export async function deliverBackgroundJob(
 				})) === "busy"
 			)
 				return "pending";
+			break;
+		case "conversation-fork":
+			// A failure is kept on the fork's journal for its chat to show.
+			await prepareForkWorkspace(
+				machines,
+				job.userId,
+				job.sessionId,
+				job.attempt,
+			);
 			break;
 		case "pr-evidence": {
 			const outcome = await runPullRequestEvidenceJob(machines, job);

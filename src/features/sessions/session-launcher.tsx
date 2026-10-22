@@ -70,8 +70,10 @@ import { CloudUsageIndicator } from "../workspace/usage-windows";
 import { AgentIcon } from "./agent-icon";
 import { AgentPanel } from "./agent-panel";
 import {
+	getConversationForkStatus,
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
+	retryConversationForkFn,
 	sendHelperMessage,
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
@@ -278,6 +280,69 @@ export function SessionLauncher({
 			});
 		},
 	});
+	const loadForkStatus = useServerFn(getConversationForkStatus);
+	const retryFork = useServerFn(retryConversationForkFn);
+	const [forkRetrying, setForkRetrying] = useState(false);
+	// A forked chat opens before its VM copy is ready: a message sent meanwhile
+	// waits queued. Only a chat without a VM can be one.
+	const forkStatus = useQuery({
+		queryKey: [
+			"conversation-fork",
+			selectedProject?.id,
+			session.agentSessionId,
+		],
+		enabled:
+			!!selectedProject?.id && !!session.agentSessionId && !session.workspaceId,
+		queryFn: () =>
+			selectedProject && session.agentSessionId
+				? loadForkStatus({
+						data: {
+							projectId: selectedProject.id,
+							sessionId: session.agentSessionId,
+						},
+					})
+				: null,
+		refetchInterval: (query) =>
+			query.state.data?.state === "preparing" ? 2_000 : false,
+	});
+	const forkPreparing = forkStatus.data?.state === "preparing";
+	const wasForkPreparing = useRef(false);
+	useEffect(() => {
+		// The copy is bound: Files and Changes now have a workspace to show.
+		if (wasForkPreparing.current && !forkStatus.data)
+			void refreshRecoveredWorkspace(queryClient);
+		wasForkPreparing.current = forkPreparing;
+	}, [forkPreparing, forkStatus.data, queryClient]);
+	async function retryForkCopy() {
+		if (!selectedProject || !session.agentSessionId) return;
+		const key = [
+			"conversation-fork",
+			selectedProject.id,
+			session.agentSessionId,
+		];
+		setForkRetrying(true);
+		try {
+			queryClient.setQueryData(
+				key,
+				await retryFork({
+					data: {
+						projectId: selectedProject.id,
+						sessionId: session.agentSessionId,
+					},
+				}),
+			);
+		} catch (cause) {
+			queryClient.setQueryData(key, {
+				state: "failed",
+				message:
+					cause instanceof Error
+						? cause.message
+						: "Couldn't fork this chat. Try again.",
+			});
+		} finally {
+			setForkRetrying(false);
+		}
+	}
 	const loadEvidence = useServerFn(listChatEvidence);
 	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
 	const chatEvidence = useQuery({
@@ -938,6 +1003,21 @@ export function SessionLauncher({
 								))}
 							</ul>
 						)}
+						{forkPreparing ? (
+							<p className="model-provider-notice">Preparing workspace</p>
+						) : forkStatus.data?.state === "failed" ? (
+							<p className="session-attachment-error" role="alert">
+								{forkStatus.data.message}{" "}
+								<button
+									type="button"
+									className="session-inline-action"
+									disabled={forkRetrying}
+									onClick={() => void retryForkCopy()}
+								>
+									Retry
+								</button>
+							</p>
+						) : null}
 						{helperError ? (
 							<p className="session-attachment-error" role="alert">
 								{helperError}

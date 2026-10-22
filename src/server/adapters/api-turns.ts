@@ -6,6 +6,7 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { CONVERSATION_FORK_REQUEST_ID } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
 import type { TurnFailover } from "#/domain/model-failover";
 import { continuedTurnHistory } from "#/domain/runtime-handoff";
@@ -358,6 +359,8 @@ export async function claimApiTurn(
 	// holds it) is taken first and held until the commit; without it the
 	// queued turn is never read or locked, so another worker's claim order
 	// is unchanged.
+	// A forked chat's turn waits queued until its VM copy is bound
+	// (conversation-fork.ts journal).
 	const batch = `begin;
 set local idle_in_transaction_session_timeout = '30s';
 set local statement_timeout = '20s';
@@ -366,6 +369,7 @@ with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
  where id=(select q.id from api_turn q where (select acquired from admission)
  and q.state='queued' and q.executor='${executor}' and not q.cancel_requested
  ${sessionId ? `and q.session_id='${sessionId}'::uuid` : ""}
+ and not exists(select 1 from agent_task_command_receipt f where f.parent_session_id=q.session_id and f.request_id='${CONVERSATION_FORK_REQUEST_ID}')
  and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
  and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
  order by q.created_at for update skip locked limit 1)
