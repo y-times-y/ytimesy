@@ -456,11 +456,7 @@ export function WorkspaceHome({
 			workingBranch: chat.workingBranch,
 			pullRequests: listedPullRequests,
 		});
-		return {
-			...chat,
-			prUrl: mark?.url ?? null,
-			prNeed: mark?.need ?? null,
-		};
+		return { ...chat, pr: mark?.pr ?? null };
 	});
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
