@@ -152,7 +152,13 @@ export const writeFile = (
 
 /** How to follow a command left running in the background (ytimesy-job). */
 export const backgroundHint = (result: LeanCommandResult) =>
-	`Output is being written to ${result.outputPath}. Check it with \`ytimesy-job status ${result.id}\`, wait for it with \`ytimesy-job wait ${result.id}\`, stop it with \`ytimesy-job stop ${result.id}\`.`;
+	result.background
+		? `Output is being written to ${result.outputPath}. You will be told when it exits; do not poll it. Stop it with \`ytimesy-job stop ${result.id}\`.`
+		: `Output is being written to ${result.outputPath}. Check it with \`ytimesy-job status ${result.id}\`, wait for it with \`ytimesy-job wait ${result.id}\`, stop it with \`ytimesy-job stop ${result.id}\`.`;
+
+/** The background option's description, shared by the shapes that add one. */
+export const BACKGROUND_OPTION_DESCRIPTION =
+	"Start it in the background (servers, watchers, long jobs) and return its ID at once. It runs until it exits or is stopped; you are told when it finishes, so do not poll it.";
 
 /** Output a still-running command printed so far, as a trailing paragraph. */
 export const outputSoFar = (result: LeanCommandResult) =>

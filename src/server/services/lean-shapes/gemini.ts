@@ -47,7 +47,7 @@ export function geminiTools(engine: LeanEngine, qwen: boolean): ToolSet {
 	return {
 		[names.command]: tool({
 			description:
-				"Executes a shell command as `bash -c <command>` in the workspace and returns its output and exit code. dir_path runs it in that directory (default: the repository root). is_background starts a long-running process (a server, a watcher) and returns its ID and output file instead of waiting.",
+				"Executes a shell command as `bash -c <command>` in the workspace and returns its output and exit code. dir_path runs it in that directory (default: the repository root). is_background starts servers, watchers and long jobs and returns their ID and output file at once; you are told when they finish, so do not poll them.",
 			inputSchema: z.object({
 				command: z
 					.string()
@@ -75,6 +75,7 @@ export function geminiTools(engine: LeanEngine, qwen: boolean): ToolSet {
 								workdir: dir_path,
 								maxSeconds: LEAN_COMMAND_MAX_SECONDS,
 								yieldSeconds: 0,
+								background: true,
 							}
 						: {
 								command,

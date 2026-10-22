@@ -471,3 +471,42 @@ it("redacts runtime secret values, and their encodings, from hook messages and r
 		await fixture.cleanup();
 	}
 });
+
+it("tells whether a UserPromptSubmit hook is configured without the workspace", async () => {
+	const workspace = vi.fn(async () => {
+		throw new Error("no workspace");
+	});
+	const hooks = (knownConfig: () => Promise<unknown>, readOnly = false) =>
+		harnessLifecycleHooks({
+			workspace,
+			turnId: "turn",
+			readOnly,
+			signal: new AbortController().signal,
+			baseline: async () => null,
+			once: (_id, run) => run(),
+			knownConfig,
+		});
+	const config = (event: string) => ({
+		version: 1,
+		hooks: [{ event, command: "true" }],
+	});
+	expect(
+		await hooks(async () =>
+			config("UserPromptSubmit"),
+		).promptSubmitConfigured(),
+	).toBe(true);
+	expect(await hooks(async () => config("Stop")).promptSubmitConfigured()).toBe(
+		false,
+	);
+	// Unknown without the workspace: the caller decides.
+	expect(await hooks(async () => null).promptSubmitConfigured()).toBeNull();
+	expect(
+		await hooks(async () => {
+			throw new Error("database");
+		}).promptSubmitConfigured(),
+	).toBeNull();
+	expect(await hooks(async () => null, true).promptSubmitConfigured()).toBe(
+		false,
+	);
+	expect(workspace).not.toHaveBeenCalled();
+});

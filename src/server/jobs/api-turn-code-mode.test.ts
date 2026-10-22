@@ -118,6 +118,7 @@ vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: mocks.result,
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: mocks.enqueue }));
@@ -217,8 +218,9 @@ it("offers run_code and the agent tool side by side when subagents are on", asyn
 	expect(Object.keys(input.tools)).toContain("run_code");
 	// agent is an ordinary visible tool in every code mode; only code mode
 	// primary defers anything (MCP search/call), so nothing is listed here.
-	expect(input.toolOrder?.()).toContain("run_code");
-	expect(input.toolOrder?.()).toContain("agent");
+	// Nothing is deferred here, so the tool set is sent as it is.
+	expect(input.toolOrder).toBeUndefined();
+	expect(Object.keys(input.tools)).toContain("agent");
 	expect(input.instructions).toContain("run_code runs one JavaScript program");
 	expect(input.instructions).not.toContain("searchTools");
 });

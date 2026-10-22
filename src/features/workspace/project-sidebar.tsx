@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import {
 	Archive,
+	ArrowUpDown,
 	BookMarked,
+	Check,
 	ChevronRight,
 	CircleAlert,
 	Clock3,
-	Folder,
 	GitCompareArrows,
 	GitMerge,
 	GitPullRequest,
@@ -15,13 +16,22 @@ import {
 	Pin,
 	Plus,
 	ShieldX,
+	Waypoints,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { DropdownMenu } from "radix-ui";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
 	CHAT_SEEN_STORAGE_KEY,
 	chatsWithPinnedFirst,
+	chatWaitingOnLabel,
 	collapsedProjectStorageValue,
 	compactRelativeAge,
 	newChatIsActive,
@@ -31,6 +41,7 @@ import {
 	parseSeenChatKeys,
 	parseSidebarSort,
 	pinnedChatStorageValue,
+	projectColor,
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
 	recentSidebarChats,
@@ -39,12 +50,14 @@ import {
 	SIDEBAR_SORT_KEY,
 	type SidebarChat,
 	type SidebarSort,
+	type SidebarStatusGroup,
 	seenChatStorageValue,
-	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
 	sidebarHasAttentionChat,
+	sidebarStatusGroup,
+	sidebarStatusSections,
 	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
 	withProjectExpanded,
@@ -83,6 +96,9 @@ interface ProjectSidebarProps {
 	onSelectChatInProject?: (projectId: string, chatId: string) => void;
 	/** Opens the full-page Memory view. */
 	onOpenMemory?: () => void;
+	/** Opens the full-page Memory graph. */
+	onOpenMemoryGraph?: () => void;
+	memoryGraphActive?: boolean;
 	memoryActive?: boolean;
 }
 
@@ -107,6 +123,8 @@ export function ProjectSidebar({
 	projectChats = [],
 	onSelectChatInProject,
 	onOpenMemory,
+	onOpenMemoryGraph,
+	memoryGraphActive = false,
 	memoryActive = false,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
@@ -150,6 +168,7 @@ export function ProjectSidebar({
 						?.chats ?? []),
 	}));
 	const recentChats = recentSidebarChats(groups, pinnedChatIds);
+	const [doneExpanded, setDoneExpanded] = useState(false);
 	const orderedProjects = projectsByRecentActivity(projects, groups);
 	function chooseSort(next: SidebarSort) {
 		setSort(next);
@@ -248,31 +267,52 @@ export function ProjectSidebar({
 		});
 	}
 
-	function chatAttention(chat: SidebarChat) {
-		const turnStatus =
-			chat.id === selectedChatId ? openTurnStatus : chat.turnStatus;
-		const running = sidebarChatIsRunning({
+	function chatRunning(chat: SidebarChat) {
+		return sidebarChatIsRunning({
 			chatId: chat.id,
-			turnStatus,
+			turnStatus: chat.id === selectedChatId ? openTurnStatus : chat.turnStatus,
 			busyChatIds,
 			openChatId: selectedChatId,
 			openTurnStatus,
 		});
-		return sidebarChatAttention({
-			running,
-			turnStatus,
-			selected: chat.id === selectedChatId,
-			seen: seenKeys.includes(
-				sidebarChatSeenKey({
-					...chat,
-					turnStatus,
-				}),
-			),
-		});
+	}
+
+	function chatStatus(chat: SidebarChat): SidebarStatusGroup {
+		const running = chatRunning(chat);
+		// The open chat's own turn is fresher than the listed one.
+		const waitingOn =
+			chat.id === selectedChatId && openTurnStatus === "running"
+				? null
+				: chat.waitingOn;
+		return sidebarStatusGroup({ running, waitingOn });
+	}
+
+	function statusSection(
+		group: SidebarStatusGroup,
+		label: string,
+		rows: readonly { chat: SidebarChat; project: Project }[],
+		total: number,
+	) {
+		if (!total) return null;
+		return (
+			<li key={group} className="sidebar-status-group" data-group={group}>
+				<h3 className="sidebar-status-heading">
+					<span>{label}</span>
+					<span className="sidebar-status-count">{total}</span>
+				</h3>
+				<ul className="sidebar-chats">
+					{rows.map(({ chat, project }) => chatRow(chat, project))}
+				</ul>
+			</li>
+		);
 	}
 
 	function chatRow(chat: SidebarChat, project?: Project) {
-		const attention = chatAttention(chat);
+		const status = chatStatus(chat);
+		const waiting =
+			status === "needs-you" && chat.waitingOn
+				? chatWaitingOnLabel(chat.waitingOn)
+				: null;
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = pinnedChatIds.includes(chat.id);
 		return (
@@ -281,12 +321,31 @@ export function ProjectSidebar({
 				className="sidebar-chat-row"
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
+				data-project-bar={project ? "true" : undefined}
+				style={
+					project
+						? ({ "--project-color": projectColor(project.id) } as CSSProperties)
+						: undefined
+				}
 			>
 				<button
 					type="button"
 					className="sidebar-chat"
 					data-selected={chat.id === selectedChatId}
-					data-activity={attention}
+					data-activity={
+						status === "needs-you"
+							? "needs-you"
+							: status === "working"
+								? "running"
+								: undefined
+					}
+					title={[
+						chat.title,
+						project ? projectDisplayName(project) : null,
+						waiting,
+					]
+						.filter(Boolean)
+						.join(" · ")}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
@@ -297,15 +356,11 @@ export function ProjectSidebar({
 					<span className="sidebar-chat-dot" aria-hidden="true" />
 					<span className="sidebar-chat-title">{chat.title}</span>
 					{project ? (
-						<span className="sidebar-chat-project">
-							{projectDisplayName(project)}
-						</span>
+						<span className="sr-only">{projectDisplayName(project)}</span>
 					) : null}
-					{attention === "running" ? (
+					{waiting ? <span className="sr-only">{waiting}</span> : null}
+					{status === "working" ? (
 						<span className="sr-only">Running</span>
-					) : null}
-					{attention === "attention" ? (
-						<span className="sr-only">Needs attention</span>
 					) : null}
 				</button>
 				<div className="sidebar-chat-trailing">
@@ -322,7 +377,7 @@ export function ProjectSidebar({
 						}}
 					>
 						<Pin
-							size={13}
+							size={14}
 							strokeWidth={1.5}
 							fill={pinned ? "currentColor" : "none"}
 						/>
@@ -338,7 +393,7 @@ export function ProjectSidebar({
 								onDeleteChat(chat.id);
 							}}
 						>
-							<Archive size={13} strokeWidth={1.5} />
+							<Archive size={14} strokeWidth={1.5} />
 						</button>
 					) : null}
 					{chat.prNeed ? (
@@ -391,7 +446,7 @@ export function ProjectSidebar({
 				aria-controls="project-sidebar"
 				onClick={toggleProjects}
 			>
-				<PanelLeft size={18} />
+				<PanelLeft size={16} strokeWidth={1.5} />
 			</button>
 			<button
 				type="button"
@@ -434,7 +489,7 @@ export function ProjectSidebar({
 						aria-controls="project-sidebar"
 						onClick={toggleProjects}
 					>
-						<PanelLeft size={18} />
+						<PanelLeft size={16} strokeWidth={1.5} />
 					</button>
 				</div>
 				<div className="sidebar-toolbar">
@@ -443,7 +498,7 @@ export function ProjectSidebar({
 						className="sidebar-new-project"
 						onClick={onAddProject}
 					>
-						<Plus size={16} />
+						<Plus size={16} strokeWidth={1.5} />
 						New project
 					</button>
 				</div>
@@ -458,34 +513,72 @@ export function ProjectSidebar({
 							<BookMarked size={16} strokeWidth={1.5} />
 							Memory
 						</button>
+						{onOpenMemoryGraph ? (
+							<button
+								type="button"
+								className="sidebar-nav-item"
+								aria-current={memoryGraphActive ? "page" : undefined}
+								onClick={onOpenMemoryGraph}
+							>
+								<Waypoints size={16} strokeWidth={1.5} />
+								Memory graph
+							</button>
+						) : null}
 					</nav>
 				) : null}
 				{projects.length ? (
 					<div className="sidebar-list-header">
 						<span>Chats</span>
-						<fieldset className="sidebar-sort" aria-label="Sort chats">
-							<button
-								type="button"
-								aria-pressed={sort === "recent"}
-								onClick={() => chooseSort("recent")}
-							>
-								Recent
-							</button>
-							<button
-								type="button"
-								aria-pressed={sort === "projects"}
-								onClick={() => chooseSort("projects")}
-							>
-								Projects
-							</button>
-						</fieldset>
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger asChild>
+								<button
+									type="button"
+									className="sidebar-sort-button"
+									aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
+									title="Sort chats"
+								>
+									<ArrowUpDown size={14} strokeWidth={1.5} />
+								</button>
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Portal>
+								<DropdownMenu.Content
+									className="recovery-menu sidebar-sort-menu"
+									align="end"
+									sideOffset={4}
+								>
+									<DropdownMenu.RadioGroup
+										value={sort}
+										onValueChange={(value) =>
+											chooseSort(value === "recent" ? "recent" : "projects")
+										}
+									>
+										{(["recent", "projects"] as const).map((value) => (
+											<DropdownMenu.RadioItem key={value} value={value}>
+												<span className="sidebar-sort-check">
+													<DropdownMenu.ItemIndicator>
+														<Check size={14} strokeWidth={1.5} />
+													</DropdownMenu.ItemIndicator>
+												</span>
+												{value === "recent" ? "Recent" : "Projects"}
+											</DropdownMenu.RadioItem>
+										))}
+									</DropdownMenu.RadioGroup>
+								</DropdownMenu.Content>
+							</DropdownMenu.Portal>
+						</DropdownMenu.Root>
 					</div>
 				) : null}
 				{projects.length && sort === "recent" ? (
 					recentChats.length ? (
-						<ul className="sidebar-chats sidebar-recent">
-							{recentChats.map(({ chat, project }) => chatRow(chat, project))}
-						</ul>
+						<RecentSections
+							sections={sidebarStatusSections(
+								recentChats,
+								(row) => chatStatus(row.chat),
+								doneExpanded,
+							)}
+							render={statusSection}
+							onShowMore={() => setDoneExpanded(true)}
+						/>
 					) : (
 						<p className="sidebar-empty">{emptyCopy}</p>
 					)
@@ -516,7 +609,7 @@ export function ProjectSidebar({
 											aria-expanded={open}
 											onClick={() => toggleProjectFolder(project.id)}
 										>
-											<ChevronRight size={14} />
+											<ChevronRight size={14} strokeWidth={1.5} />
 										</button>
 										<button
 											type="button"
@@ -529,7 +622,11 @@ export function ProjectSidebar({
 													: openProject(project.id)
 											}
 										>
-											<Folder size={16} />
+											<span
+												className="sidebar-project-dot"
+												style={{ background: projectColor(project.id) }}
+												aria-hidden="true"
+											/>
 											<span>{projectDisplayName(project)}</span>
 										</button>
 										<div className="sidebar-folder-actions">
@@ -544,7 +641,7 @@ export function ProjectSidebar({
 														onDeleteProject(project.id);
 													}}
 												>
-													<Archive size={13} strokeWidth={1.5} />
+													<Archive size={14} strokeWidth={1.5} />
 												</button>
 											) : null}
 											<button
@@ -627,7 +724,7 @@ export function ProjectSidebar({
 					data-active={newChatActive}
 					onClick={() => onNewChat()}
 				>
-					<Plus size={16} />
+					<Plus size={16} strokeWidth={1.5} />
 				</button>
 				{onOpenMemory ? (
 					<button
@@ -641,8 +738,64 @@ export function ProjectSidebar({
 						<BookMarked size={16} strokeWidth={1.5} />
 					</button>
 				) : null}
+				{onOpenMemoryGraph ? (
+					<button
+						type="button"
+						className="panel-toggle"
+						aria-label="Memory graph"
+						title="Memory graph"
+						data-active={memoryGraphActive}
+						onClick={onOpenMemoryGraph}
+					>
+						<Waypoints size={16} strokeWidth={1.5} />
+					</button>
+				) : null}
 			</nav>
 		</div>
+	);
+}
+
+type StatusSections = ReturnType<
+	typeof sidebarStatusSections<{ chat: SidebarChat; project: Project }>
+>;
+
+/** The Recent list by status: Needs you, Working, then Done (folded after a few). */
+function RecentSections({
+	sections,
+	render,
+	onShowMore,
+}: {
+	sections: StatusSections;
+	render: (
+		group: SidebarStatusGroup,
+		label: string,
+		rows: StatusSections["done"],
+		total: number,
+	) => ReactNode;
+	onShowMore: () => void;
+}) {
+	return (
+		<ul className="sidebar-recent sidebar-status-groups">
+			{render(
+				"needs-you",
+				"Needs you",
+				sections.needsYou,
+				sections.needsYou.length,
+			)}
+			{render("working", "Working", sections.working, sections.working.length)}
+			{render("done", "Done", sections.done, sections.doneTotal)}
+			{sections.doneHidden ? (
+				<li>
+					<button
+						type="button"
+						className="sidebar-show-more"
+						onClick={onShowMore}
+					>
+						Show {sections.doneHidden} more
+					</button>
+				</li>
+			) : null}
+		</ul>
 	);
 }
 
@@ -684,15 +837,15 @@ function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
 }
 
 function SidebarChatPrIcon({ need }: { need: SidebarChatPrNeed }) {
-	if (need === "ready") return <GitPullRequest size={13} strokeWidth={1.5} />;
-	if (need === "merged") return <GitMerge size={13} strokeWidth={1.5} />;
-	if (need === "pending") return <Clock3 size={13} strokeWidth={1.5} />;
+	if (need === "ready") return <GitPullRequest size={14} strokeWidth={1.5} />;
+	if (need === "merged") return <GitMerge size={14} strokeWidth={1.5} />;
+	if (need === "pending") return <Clock3 size={14} strokeWidth={1.5} />;
 	if (need === "conflict")
-		return <GitCompareArrows size={13} strokeWidth={1.5} />;
-	if (need === "blocked") return <ShieldX size={13} strokeWidth={1.5} />;
+		return <GitCompareArrows size={14} strokeWidth={1.5} />;
+	if (need === "blocked") return <ShieldX size={14} strokeWidth={1.5} />;
 	if (need === "checks_failed")
-		return <CircleAlert size={13} strokeWidth={1.5} />;
+		return <CircleAlert size={14} strokeWidth={1.5} />;
 	if (need === "draft")
-		return <GitPullRequestDraft size={13} strokeWidth={1.5} />;
-	return <GitPullRequestClosed size={13} strokeWidth={1.5} />;
+		return <GitPullRequestDraft size={14} strokeWidth={1.5} />;
+	return <GitPullRequestClosed size={14} strokeWidth={1.5} />;
 }

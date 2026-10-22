@@ -6,7 +6,10 @@ import {
 	fusionPairProfile,
 } from "#/domain/fusion-pairs";
 import { beginSidekickRound, newSidekickState } from "#/domain/sidekick";
-import { FORCED_DELEGATION } from "#/domain/subagent-instructions";
+import {
+	FORCED_DELEGATION,
+	ROOT_HELPER_UPDATES,
+} from "#/domain/subagent-instructions";
 import { agentTurnInstructions } from "./agent-turn-instructions";
 
 const stub = tool({
@@ -70,8 +73,7 @@ describe("rigor instructions", () => {
 describe("rigor requirements list", () => {
 	const list =
 		"- Requirements: before you start, write the request's requirements";
-	const lead =
-		"- As the lead, write the list right after the exploration report";
+	const lead = "- As Main, write the list right after the exploration report";
 	it("asks the root builder (a fusion lead included) for the list, never a writer or sidekick", () => {
 		const tools = { bash: stub, agent: stub, run_code: stub };
 		const root = agentTurnInstructions({
@@ -194,6 +196,18 @@ describe("subagent instructions", () => {
 		expect(withAgent).toContain("disjoint file set");
 		expect(withAgent).toContain("a report is a claim, not a fact");
 		expect(withAgent).toContain("git apply -3");
+		// Reports wake the builder; no progress pings; the root posts each finish.
+		expect(withAgent).toContain(
+			"Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it.",
+		);
+		expect(withAgent).toContain(ROOT_HELPER_UPDATES);
+		const writer = agentTurnInstructions({
+			...base,
+			session: { agentRole: "writer" },
+			tools: { bash: stub, agent: stub },
+		});
+		expect(writer).toContain("Their reports arrive on their own and wake you");
+		expect(writer).not.toContain(ROOT_HELPER_UPDATES);
 	});
 
 	it("in code mode primary, teaches run_code as the main tool and sends only deferred MCP tools through it", () => {
@@ -318,16 +332,24 @@ describe("lead mode fusion instructions", () => {
 			},
 			"fusion",
 		);
-		expect(fusion).toContain("Subagents: you are the lead.");
+		expect(fusion).toContain("Helpers: you are Main.");
 		expect(fusion).toContain(
 			"Short or trivial changes (one obvious edit): make them yourself",
 		);
-		// Shared checkout, one writer at a time: the lead waits and reviews in place.
+		// Shared checkout, one writer at a time: Main is free but cannot write during a round.
 		expect(fusion).toContain(
-			"It works directly in your checkout, one writer at a time: while it works you wait",
+			"It works directly in your checkout, one writer at a time: while its round runs your edits and commands are refused",
 		);
+		expect(fusion).toContain(
+			"After you hand a round off, do not wait for it: give the user a full status",
+		);
+		expect(fusion).not.toMatch(/\b[Ll]ead\b|[Ss]idekick/);
 		expect(fusion).toContain("`git diff <start> <end>`");
-		expect(fusion).toContain("Your final answer comes after its last report.");
+		expect(fusion).toContain("your answer to the user is a full report");
+		expect(fusion).toContain(
+			"message it only to change its course or stop it, never to ask for progress or to hurry it.",
+		);
+		expect(fusion).toContain(ROOT_HELPER_UPDATES);
 		expect(fusion).not.toContain("git apply");
 		expect(fusion).toContain(
 			"the definition of done as concrete checks or commands that must pass",
@@ -340,7 +362,7 @@ describe("lead mode fusion instructions", () => {
 		);
 		// Exploration first, started by the runtime: the lead plans from its snippets.
 		expect(fusion).toContain(
-			"Each user request starts with the sidekick's exploration: the runtime gives it the request before your first step",
+			"Each user request starts with your writer's exploration: the runtime gives it the request before your first step",
 		);
 		expect(fusion).toContain(
 			"read a file yourself (`read`) only to fill a specific gap they leave,",
@@ -353,7 +375,7 @@ describe("lead mode fusion instructions", () => {
 		);
 		const off = lead("core", { bash: stub, edit: stub, agent: stub }, "off");
 		expect(off).toContain("Delegate when it saves wall-clock time");
-		expect(off).not.toContain("you are the lead");
+		expect(off).not.toContain("you are Main");
 	});
 
 	it("shapes briefs, pushback and exploration by the pair's profile", () => {
@@ -380,7 +402,7 @@ describe("lead mode fusion instructions", () => {
 			pushback: false,
 			sidekickExplores: false,
 		});
-		expect(noExplore).not.toContain("starts with the sidekick's exploration");
+		expect(noExplore).not.toContain("starts with your writer's exploration");
 		expect(noExplore).not.toContain("push back");
 	});
 
@@ -415,8 +437,8 @@ describe("lead mode fusion instructions", () => {
 			tools: { bash: stub, edit: stub },
 			lead: "fusion",
 		});
-		expect(sidekick).toContain("You are the lead's sidekick");
-		expect(sidekick).toContain("working directly in the lead's checkout");
+		expect(sidekick).toContain("You are Main's writer");
+		expect(sidekick).toContain("working directly in Main's checkout");
 		expect(sidekick).toContain(
 			"Leave your changes uncommitted in the working tree",
 		);
@@ -427,7 +449,7 @@ describe("lead mode fusion instructions", () => {
 		expect(sidekick).toContain("In an exploration round change no files");
 		// No pair recorded: the sidekick follows briefs (no pushback).
 		expect(sidekick).toContain("Follow each brief as written.");
-		expect(sidekick).not.toContain("you are the lead");
+		expect(sidekick).not.toContain("you are Main");
 		// Static across rounds: the round's state never enters the prompt.
 		const later = agentTurnInstructions({
 			...base,

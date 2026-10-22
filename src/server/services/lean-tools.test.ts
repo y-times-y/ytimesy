@@ -176,7 +176,13 @@ describe("each family's tool names and argument shapes", () => {
 			"view_image",
 		]);
 		expect(await schemaOf(tools, "exec_command")).toEqual({
-			properties: ["cmd", "workdir", "yield_time_ms", "max_output_tokens"],
+			properties: [
+				"cmd",
+				"workdir",
+				"yield_time_ms",
+				"max_output_tokens",
+				"background",
+			],
 			required: ["cmd"],
 		});
 		expect(await schemaOf(tools, "write_stdin")).toEqual({
@@ -321,7 +327,7 @@ describe("each family's tool names and argument shapes", () => {
 		]);
 		expect(editItem.required).toEqual(["old_string", "new_string"]);
 		expect(await schemaOf(tools, "bash")).toEqual({
-			properties: ["command", "timeout"],
+			properties: ["command", "timeout", "background"],
 			required: ["command"],
 		});
 	});
@@ -477,12 +483,84 @@ describe("commands run on the shared runner", () => {
 			command: "npm run dev",
 			maxSeconds: 600,
 			yieldSeconds: 0,
+			background: { label: "npm run dev" },
 		});
-		// Background tracking reads the raw result's id and status.
-		expect(result).toMatchObject({ id, status: "running" });
+		// The timeline's card and background tracking read the raw result's id, status and flag.
+		expect(result).toMatchObject({ id, status: "running", background: true });
 		const text = await modelText(tools, "Bash", {}, result);
 		expect(text).toContain(`${outputs}/${id}.stdout`);
 		expect(text).toContain(`ytimesy-job stop ${id}`);
+		expect(text).toContain("You will be told when it exits; do not poll it.");
+	});
+
+	it("core bash: foreground commands keep their own limit (default 120 s, at most 600 s); background ones skip it", async () => {
+		const runner = commandRunner({
+			execute_command: [
+				{ id, status: 0, stdout: "ok\n", start: 0, nextStart: null },
+				{ id, status: 0, stdout: "ok\n", start: 0, nextStart: null },
+				{ id, status: "running", stdout: "", start: 0, nextStart: 0 },
+			],
+		});
+		const tools = lean("core", runner.tools);
+		await run(tools, "bash", { command: "make" });
+		await run(tools, "bash", { command: "make all", timeout: 600 });
+		const background = (await run(tools, "bash", {
+			command: "cd web && npm run dev -- --port 3000",
+			background: true,
+		})) as LeanCommandResult;
+		expect(runner.calls.map((call) => call.args)).toEqual([
+			{ command: "make", maxSeconds: 120, yieldSeconds: 30 },
+			{ command: "make all", maxSeconds: 600, yieldSeconds: 30 },
+			{
+				command: "cd web && npm run dev -- --port 3000",
+				maxSeconds: 600,
+				yieldSeconds: 0,
+				background: { label: "npm run dev -- --port 3000" },
+			},
+		]);
+		expect(background).toMatchObject({
+			id,
+			status: "running",
+			background: true,
+		});
+		const text = await modelText(tools, "bash", {}, background);
+		expect(text).toContain(`Started in the background (ID ${id}).`);
+		expect(text).toContain("You will be told when it exits; do not poll it.");
+	});
+
+	it("Codex exec_command and Gemini run_shell_command take the background option", async () => {
+		const runner = commandRunner({
+			execute_command: [
+				{ id, status: "running", stdout: "", start: 0, nextStart: 0 },
+				{ id, status: "running", stdout: "", start: 0, nextStart: 0 },
+			],
+		});
+		const codex = lean("codex", runner.tools);
+		const started = (await run(codex, "exec_command", {
+			cmd: "pnpm test --watch",
+			background: true,
+		})) as LeanCommandResult;
+		await run(lean("gemini", runner.tools), "run_shell_command", {
+			command: "sleep 900; echo done",
+			is_background: true,
+		});
+		expect(runner.calls.map((call) => call.args)).toEqual([
+			{
+				command: "pnpm test --watch",
+				maxSeconds: 600,
+				yieldSeconds: 0,
+				background: { label: "pnpm test --watch" },
+			},
+			{
+				command: "sleep 900; echo done",
+				maxSeconds: 600,
+				yieldSeconds: 0,
+				background: { label: "sleep 900; echo done" },
+			},
+		]);
+		expect(await modelText(codex, "exec_command", {}, started)).toContain(
+			"you are told when it exits",
+		);
 	});
 
 	it("keeps the tail of long output and points at the full file", async () => {

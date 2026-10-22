@@ -95,3 +95,80 @@ print('restored')`;
 			"Code rewind failed; the pre-restore backup remains available.",
 		);
 }
+
+/** The fork's error when the source VM no longer holds the message's checkpoint refs. */
+export const FORK_CHECKPOINT_GONE =
+	"This message's code checkpoint is gone, so the chat was not forked.";
+
+const CHECKPOINT_PRESENT_CHECK = `def rev(spec):
+ try:return git('rev-parse','-q','--verify',spec).decode().strip()
+ except subprocess.CalledProcessError:return ''
+if rev(ref+'^{tree}')!=tree or rev(ref+'-index^{tree}')!=index or rev(ref+'^1')!=head:
+ print('checkpoint-missing');sys.exit(3)`;
+
+/**
+ * Checks, without changing anything, that the checkout still holds the
+ * point's refs, so a fork fails before a VM is copied for it.
+ */
+export async function assertConversationCodePresent(
+	workspace: AgentToolWorkspace,
+	point: NonNullable<ConversationPoint["code"]>,
+) {
+	const saved = snapshot.parse(point);
+	if (saved.cwd !== workspace.cwd)
+		throw new Error("Recovery point belongs to a different checkout.");
+	const script = `import pathlib,subprocess,sys
+root,ref,tree,index,head=sys.argv[1:6]
+root=str(pathlib.Path(root).resolve(strict=True))
+def git(*args):return subprocess.check_output(['git','-C',root,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',*args],stderr=subprocess.DEVNULL)
+${CHECKPOINT_PRESENT_CHECK}
+print('present')`;
+	const result = await workspace.machines.exec(
+		workspace.vm,
+		`python3 -c ${posixShellQuoted(script)} ${[saved.cwd, saved.ref, saved.tree, saved.indexTree, saved.head].map(posixShellQuoted).join(" ")}`,
+		25_000,
+	);
+	if (result.stdout.includes("checkpoint-missing"))
+		throw new Error(FORK_CHECKPOINT_GONE);
+	if (result.exitCode || !result.stdout.includes("present"))
+		throw new Error("The chat's code checkpoint could not be read; retry.");
+}
+
+/**
+ * Runs in a copy of the source VM: puts the checkout on its own new branch at
+ * the commit the point was taken on, with the point's files and index, as
+ * Restore code would leave them. Ignored files (dependencies, .env) stay.
+ */
+export async function startCheckoutFromConversationCode(
+	workspace: AgentToolWorkspace,
+	point: NonNullable<ConversationPoint["code"]>,
+	branch: string,
+) {
+	const saved = snapshot.parse(point);
+	const script = `import fcntl,hashlib,pathlib,subprocess,sys
+root,ref,tree,index,head,branch=sys.argv[1:7]
+root=str(pathlib.Path(root).resolve(strict=True))
+lock=open('/tmp/ytimesy-edit-lock-'+hashlib.sha256(root.encode()).hexdigest(),'a');fcntl.flock(lock,fcntl.LOCK_EX)
+def git(*args):return subprocess.check_output(['git','-C',root,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',*args],stderr=subprocess.DEVNULL)
+${CHECKPOINT_PRESENT_CHECK}
+git('check-ref-format','--branch',branch)
+git('checkout','-q','-f','-B',branch,head)
+for name in git('ls-files','--others','--exclude-standard','-z').decode().split('\\0'):
+ if not name:continue
+ path=pathlib.Path(root)/name
+ if path.is_file() or path.is_symlink():path.unlink()
+git('restore','--source='+tree,'--staged','--worktree','--','.')
+git('read-tree',index)
+print('forked')`;
+	const result = await workspace.machines.exec(
+		workspace.vm,
+		`python3 -c ${posixShellQuoted(script)} ${[workspace.cwd, saved.ref, saved.tree, saved.indexTree, saved.head, branch].map(posixShellQuoted).join(" ")}`,
+		60_000,
+	);
+	if (result.stdout.includes("checkpoint-missing"))
+		throw new Error(FORK_CHECKPOINT_GONE);
+	if (result.exitCode || !result.stdout.includes("forked"))
+		throw new Error(
+			"The fork could not start from this message's code; the source chat is unchanged.",
+		);
+}

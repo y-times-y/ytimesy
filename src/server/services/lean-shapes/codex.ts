@@ -9,6 +9,7 @@ import {
 } from "../lean-engine";
 import { LEAN_MAX_BYTES } from "../lean-output";
 import {
+	BACKGROUND_OPTION_DESCRIPTION,
 	COMMAND_MAX_CHARACTERS,
 	directoryArgument,
 	exitText,
@@ -26,11 +27,13 @@ export function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 		withNote(
 			[
 				`Wall time: ${result.wallSeconds} seconds`,
-				result.status === "running"
-					? `Process running with session ID ${result.id}`
-					: result.status === "interrupted"
-						? "Process was interrupted"
-						: `Process exited with code ${exitText(result)}`,
+				result.status === "running" && result.background
+					? `Process running in the background with session ID ${result.id}; you are told when it exits, so do not poll it`
+					: result.status === "running"
+						? `Process running with session ID ${result.id}`
+						: result.status === "interrupted"
+							? "Process was interrupted"
+							: `Process exited with code ${exitText(result)}`,
 				"Output:",
 				result.output,
 			].join("\n"),
@@ -73,8 +76,15 @@ export function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 					.describe(
 						"Maximum number of tokens to return. Excess output will be truncated.",
 					),
+				background: z
+					.boolean()
+					.optional()
+					.describe(BACKGROUND_OPTION_DESCRIPTION),
 			}),
-			execute: ({ cmd, workdir, yield_time_ms, max_output_tokens }, options) =>
+			execute: (
+				{ cmd, workdir, yield_time_ms, max_output_tokens, background },
+				options,
+			) =>
 				engine.run(
 					{
 						command: cmd,
@@ -82,6 +92,7 @@ export function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 						maxSeconds: LEAN_COMMAND_MAX_SECONDS,
 						yieldSeconds: (yield_time_ms ?? 10_000) / 1000,
 						maxBytes: tokensToBytes(max_output_tokens),
+						background,
 					},
 					options,
 				),

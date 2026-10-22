@@ -1,17 +1,27 @@
-import {
-	Check,
-	ChevronRight,
-	CircleAlert,
-	Clock3,
-	ImageIcon,
-	Paperclip,
-	X,
-} from "lucide-react";
+import { ChevronRight, Clock3, ImageIcon, Paperclip, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { Fragment, type UIEvent, useEffect, useRef } from "react";
-import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import {
+	createContext,
+	Fragment,
+	type UIEvent,
+	useContext,
+	useEffect,
+	useRef,
+} from "react";
 import { agentCall } from "#/domain/agent-call";
-import { pendingPlanId, planOutcome } from "#/domain/agent-plan";
+import {
+	agentDoing,
+	finishLineAnchorId,
+	helperFinishedNote,
+	helperKind,
+	helperStatus,
+	steeringSender,
+} from "#/domain/agent-panel";
+import {
+	type BackgroundCommandRecord,
+	backgroundCommandStateText,
+	backgroundCommandStatus,
+} from "#/domain/background-command";
 import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
@@ -30,8 +40,13 @@ import {
 	fileChangeActivityTitle,
 } from "#/domain/file-change-copy";
 import { fileBasename } from "#/domain/file-kind";
-import { listedModelDisplayName } from "#/domain/listed-model";
-import { parseModelRouteId } from "#/domain/model-connection";
+import {
+	agentColor,
+	type HelperIdentity,
+	helperName,
+	KIND_ICONS,
+	KIND_TAGS,
+} from "#/domain/helper-names";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
@@ -47,7 +62,6 @@ import {
 	showTurnWorking,
 	type UserMessageItem,
 } from "#/domain/session-item";
-import { subagentLabelFromTaskLabel } from "#/domain/subagent";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
 	explorationGroupIsLive,
@@ -62,9 +76,11 @@ import {
 	toolDetailTitle,
 	toolOutputText,
 } from "#/domain/tool-detail";
+import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
+import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
@@ -80,7 +96,6 @@ import {
 	type FailoverActions,
 	ModelSwitchCard,
 } from "./model-switch-card";
-import { type PlanActions, PlanProposalCard } from "./plan-proposal-card";
 import {
 	type SecretRequestActions,
 	SecretRequestCard,
@@ -93,6 +108,10 @@ import {
 	RequirementsList,
 	ToolInputFields,
 } from "./tool-cards";
+import {
+	type UserQuestionActions,
+	UserQuestionCard,
+} from "./user-question-card";
 
 export function SessionTimeline({
 	items: allItems,
@@ -104,13 +123,30 @@ export function SessionTimeline({
 	autoScroll = true,
 	collapseInstructions = false,
 	recoveryControls,
-	planActions,
 	secretActions,
+	questionActions,
 	failoverActions,
 	memoryActions,
 	onRemoveQueued,
 	evidence = [],
+	helperLines,
+	senderName,
+	queuedSteering = [],
 }: {
+	/**
+	 * The chat's helpers by session id, with their agents-list names and
+	 * colours: a thin line marks where each started and where it finished;
+	 * clicking one opens its conversation.
+	 */
+	helperLines?: HelperLines;
+	/** A helper's own view: messages in its transcript come from this sender (or the user). */
+	senderName?: string;
+	/** A helper's own view: steering its next step has not taken yet. */
+	queuedSteering?: readonly {
+		readonly id: string;
+		readonly from: string;
+		readonly text: string;
+	}[];
 	/** Pull request evidence captured for this chat's turns (prEvidence). */
 	evidence?: readonly EvidenceRecord[];
 	/** Takes back a message still waiting behind the running turn. */
@@ -119,8 +155,8 @@ export function SessionTimeline({
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
 	secretActions?: SecretRequestActions;
-	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
-	planActions?: PlanActions;
+	/** Answer the agent's question card; omitted where nobody can answer. */
+	questionActions?: UserQuestionActions;
 	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
 	failoverActions?: FailoverActions;
 	recoveryControls?: (messageId: string) => ReactNode;
@@ -145,6 +181,29 @@ export function SessionTimeline({
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(visible, turnStatus);
+	const helperMarks = childTasks.map((task) => {
+		const start = childTaskAnchorId(task, visible);
+		return {
+			task,
+			start,
+			finish:
+				task.status === "done" || task.status === "failed"
+					? (finishLineAnchorId(visible, start) ?? null)
+					: undefined,
+		};
+	});
+	// A helper's start line stands in for the agent call that started it.
+	const startsHelper = (row: TimelineRow) =>
+		!!helperLines &&
+		row.kind === "item" &&
+		row.item.kind === "dynamicToolCall" &&
+		row.item.tool === "agent" &&
+		helperMarks.some((mark) => mark.start === row.item.id);
+	const rowHas = (row: TimelineRow, id: SessionItem["id"] | null | undefined) =>
+		!!id &&
+		(row.kind === "item"
+			? row.item.id === id
+			: row.items.some((item) => item.id === id));
 	const evidenceAt = evidenceAnchors(visible, evidence);
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
@@ -177,131 +236,229 @@ export function SessionTimeline({
 
 	return (
 		<MemoryMarkerProvider actions={memoryActions}>
-			<ol
-				ref={listRef}
-				className="session-timeline"
-				aria-label="Session"
-				onScroll={rememberScrollPin}
-			>
-				{rows.map((row) => {
-					const rowId = row.kind === "item" ? row.item.id : row.id;
-					return (
-						<Fragment
-							key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
-						>
-							<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
-								{row.kind === "item" && row.item.kind === "planProposal" ? (
-									<PlanProposalCard
-										item={row.item}
-										outcome={planOutcome(items, row.item.id)}
-										actions={
-											row.item.id === pendingPlanId(items)
-												? planActions
-												: undefined
-										}
-										onOpenFile={onOpenFile}
-									/>
-								) : row.kind === "item" && row.item.kind === "secretRequest" ? (
-									<SecretRequestCard
-										item={row.item}
-										outcome={secretRequestOutcome(items, row.item.id)}
-										actions={secretActions}
-									/>
-								) : row.kind === "item" &&
-									row.item.kind === "modelSwitch" &&
-									row.item.state === "awaitingApproval" ? (
-									<ModelSwitchCard
-										item={row.item}
-										answered={answeredAfter(items, row.item.id)}
-										actions={failoverActions}
-									/>
-								) : (
-									<TimelineRowView
-										row={row}
-										collapseInstructions={collapseInstructions}
-										turnRunning={
-											turnStatus === "running" && currentTurnIds.has(rowId)
-										}
-										isLastItem={
-											(row.kind === "item"
-												? row.item.id
-												: row.items.at(-1)?.id) === visible.at(-1)?.id
-										}
-										fileChanges={fileChanges}
-										onOpenFile={onOpenFile}
-									/>
+			<SenderContext.Provider value={senderName ?? null}>
+				<ol
+					ref={listRef}
+					className="session-timeline"
+					aria-label="Session"
+					onScroll={rememberScrollPin}
+				>
+					{rows.map((row) => {
+						const rowId = row.kind === "item" ? row.item.id : row.id;
+						return (
+							<Fragment
+								key={
+									row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`
+								}
+							>
+								{startsHelper(row) ? null : (
+									<li
+										data-kind={row.kind === "item" ? row.item.kind : row.kind}
+									>
+										{row.kind === "item" && row.item.kind === "planProposal" ? (
+											<PlanMessage
+												text={row.item.text}
+												onOpenFile={onOpenFile}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "userQuestion" ? (
+											<UserQuestionCard
+												item={row.item}
+												reply={userQuestionReply(items, row.item.id)}
+												actions={questionActions}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "secretRequest" ? (
+											<SecretRequestCard
+												item={row.item}
+												outcome={secretRequestOutcome(items, row.item.id)}
+												actions={secretActions}
+											/>
+										) : row.kind === "item" &&
+											row.item.kind === "modelSwitch" &&
+											row.item.state === "awaitingApproval" ? (
+											<ModelSwitchCard
+												item={row.item}
+												answered={answeredAfter(items, row.item.id)}
+												actions={failoverActions}
+											/>
+										) : (
+											<TimelineRowView
+												row={row}
+												collapseInstructions={collapseInstructions}
+												turnRunning={
+													turnStatus === "running" && currentTurnIds.has(rowId)
+												}
+												isLastItem={
+													(row.kind === "item"
+														? row.item.id
+														: row.items.at(-1)?.id) === visible.at(-1)?.id
+												}
+												fileChanges={fileChanges}
+												onOpenFile={onOpenFile}
+											/>
+										)}
+										{row.kind === "item" && row.item.kind === "userMessage"
+											? recoveryControls?.(row.item.id)
+											: null}
+									</li>
 								)}
-								{row.kind === "item" && row.item.kind === "userMessage"
-									? recoveryControls?.(row.item.id)
-									: null}
-							</li>
-							{childTasks
-								.filter((task) => {
-									const anchor = childTaskAnchorId(task, visible);
-									return row.kind === "item"
-										? anchor === row.item.id
-										: row.items.some((item) => item.id === anchor);
-								})
-								.map((task) => (
-									<li key={`child:${task.id}`} data-kind="child-task">
-										<ChildTaskCard
-											task={task}
-											tasks={tasks}
-											onOpenFile={onOpenFile}
-										/>
+								{helperMarks
+									.filter((mark) => rowHas(row, mark.start))
+									.map(({ task }) => (
+										<li key={`start:${task.id}`} data-kind="helper-start">
+											<HelperLine task={task} lines={helperLines} />
+										</li>
+									))}
+								{helperMarks
+									.filter((mark) => rowHas(row, mark.finish))
+									.map(({ task }) => (
+										<li key={`finish:${task.id}`} data-kind="helper-finish">
+											<HelperLine task={task} lines={helperLines} finished />
+										</li>
+									))}
+								{(row.kind === "item"
+									? (evidenceAt.anchored.get(row.item.id) ?? [])
+									: row.items.flatMap(
+											(item) => evidenceAt.anchored.get(item.id) ?? [],
+										)
+								).map((record) => (
+									<li key={`evidence:${record.id}`} data-kind="evidence">
+										<EvidenceCard evidence={record} />
 									</li>
 								))}
-							{(row.kind === "item"
-								? (evidenceAt.anchored.get(row.item.id) ?? [])
-								: row.items.flatMap(
-										(item) => evidenceAt.anchored.get(item.id) ?? [],
-									)
-							).map((record) => (
-								<li key={`evidence:${record.id}`} data-kind="evidence">
-									<EvidenceCard evidence={record} />
-								</li>
-							))}
-						</Fragment>
-					);
-				})}
-				{childTasks
-					.filter((task) => !childTaskAnchorId(task, visible))
-					.map((task) => (
-						<li key={`child:${task.id}`} data-kind="child-task">
-							<ChildTaskCard
-								task={task}
-								tasks={tasks}
-								onOpenFile={onOpenFile}
-							/>
+							</Fragment>
+						);
+					})}
+					{helperMarks
+						.filter((mark) => !mark.start)
+						.map(({ task }) => (
+							<li key={`start:${task.id}`} data-kind="helper-start">
+								<HelperLine task={task} lines={helperLines} />
+							</li>
+						))}
+					{helperMarks
+						.filter((mark) => mark.finish === null)
+						.map(({ task }) => (
+							<li key={`finish:${task.id}`} data-kind="helper-finish">
+								<HelperLine task={task} lines={helperLines} finished />
+							</li>
+						))}
+					{evidenceAt.trailing.map((record) => (
+						<li key={`evidence:${record.id}`} data-kind="evidence">
+							<EvidenceCard evidence={record} />
 						</li>
 					))}
-				{evidenceAt.trailing.map((record) => (
-					<li key={`evidence:${record.id}`} data-kind="evidence">
-						<EvidenceCard evidence={record} />
-					</li>
-				))}
-				{showTurnWorking(items, turnStatus) ? (
-					<li data-kind="working">
-						<p className="session-working session-shimmer">
-							{compactingContext(items) ? "Compacting context" : "Thinking"}
-						</p>
-					</li>
-				) : null}
-				{queued.map((item) => (
-					<li key={item.id} data-kind="userMessage" data-queued="true">
-						<QueuedMessage item={item} onRemove={onRemoveQueued} />
-					</li>
-				))}
-				{turnStatus !== "running" &&
-				childTasks.some((task) => task.turnStatus === "running") ? (
-					<li data-kind="waiting-for-children">
-						<p className="session-working" role="status">
-							Waiting for subagents
-						</p>
-					</li>
-				) : null}
-			</ol>
+					{showTurnWorking(items, turnStatus) ? (
+						<li data-kind="working">
+							<p className="session-working session-shimmer">
+								{compactingContext(items) ? "Compacting context" : "Thinking"}
+							</p>
+						</li>
+					) : null}
+					{queued.map((item) => (
+						<li key={item.id} data-kind="userMessage" data-queued="true">
+							<QueuedMessage item={item} onRemove={onRemoveQueued} />
+						</li>
+					))}
+					{queuedSteering.map((message) => (
+						<li key={message.id} data-kind="userMessage" data-queued="true">
+							<div
+								className="session-message"
+								data-role="user"
+								data-queued="true"
+								data-sender="true"
+							>
+								<span className="session-message-sender">
+									{message.from}
+									<span className="session-queued-badge">Queued</span>
+								</span>
+								<p>{message.text}</p>
+							</div>
+						</li>
+					))}
+					{turnStatus !== "running" &&
+					childTasks.some((task) => task.turnStatus === "running") ? (
+						<li data-kind="waiting-for-children">
+							<p className="session-working" role="status">
+								Waiting for subagents
+							</p>
+						</li>
+					) : null}
+				</ol>
+			</SenderContext.Provider>
 		</MemoryMarkerProvider>
+	);
+}
+
+/** Names and colours of a chat's helpers, and how to open one. */
+export type HelperLines = {
+	readonly identities: ReadonlyMap<
+		string,
+		Pick<HelperIdentity, "name" | "color" | "icon" | "tag">
+	>;
+	readonly onSelect?: (helperId: string) => void;
+};
+
+/** A helper's view names who sent each message in its transcript. */
+const SenderContext = createContext<string | null>(null);
+
+/** "Started Sidekick A: <title>" / "Sidekick A finished: <how>", one quiet line. */
+function HelperLine({
+	task,
+	lines,
+	finished = false,
+}: {
+	task: AgentTaskActivity;
+	lines?: HelperLines;
+	finished?: boolean;
+}) {
+	const identity = lines?.identities.get(task.id);
+	const name = `“${identity?.name ?? helperName(task.title)}”`;
+	const kind = helperKind(task);
+	const status = helperStatus(task.status);
+	const text = finished
+		? helperFinishedNote({
+				name,
+				status,
+				doing: agentDoing({
+					status,
+					items: task.items,
+					title: "",
+					summary: task.summary,
+				}),
+			})
+		: `Started ${name}`;
+	const content = (
+		<>
+			<AgentIcon
+				icon={identity?.icon ?? KIND_ICONS[kind]}
+				color={identity?.color ?? agentColor(kind)}
+				size={14}
+			/>
+			<span className="helper-line-text">{text}</span>
+			<span className="agent-row-tag">{identity?.tag ?? KIND_TAGS[kind]}</span>
+		</>
+	);
+	return lines?.onSelect ? (
+		<button
+			type="button"
+			className="helper-line"
+			data-finished={finished ? "true" : undefined}
+			data-status={status}
+			title={`Open ${name}`}
+			onClick={() => lines.onSelect?.(task.id)}
+		>
+			{content}
+		</button>
+	) : (
+		<p
+			className="helper-line"
+			data-finished={finished ? "true" : undefined}
+			data-status={status}
+		>
+			{content}
+		</p>
 	);
 }
 
@@ -320,9 +477,9 @@ function QueuedMessage({
 					{item.attachments.map((attachment) => (
 						<li key={attachment.id} title={attachment.name}>
 							{attachment.mediaType.startsWith("image/") ? (
-								<ImageIcon size={13} aria-hidden="true" />
+								<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
 							) : (
-								<Paperclip size={13} aria-hidden="true" />
+								<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
 							)}
 							<span>{attachment.name}</span>
 						</li>
@@ -330,7 +487,7 @@ function QueuedMessage({
 				</ul>
 			) : null}
 			<p className="session-queued-note" role="status">
-				<Clock3 size={12} aria-hidden="true" />
+				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Queued for the agent's next step</span>
 				{onRemove ? (
 					<button
@@ -339,96 +496,11 @@ function QueuedMessage({
 						title="Remove this message before it is delivered"
 						onClick={() => onRemove(item.id)}
 					>
-						<X size={12} aria-hidden="true" />
+						<X size={14} strokeWidth={1.5} aria-hidden="true" />
 					</button>
 				) : null}
 			</p>
 		</div>
-	);
-}
-
-function ChildTaskCard({
-	task,
-	tasks,
-	onOpenFile,
-}: {
-	task: AgentTaskActivity;
-	tasks: readonly AgentTaskActivity[];
-	onOpenFile?: (path: string) => void;
-}) {
-	const children = tasks.filter((child) => child.parentSessionId === task.id);
-	const busy = task.status === "working" || task.status === "waiting";
-	const status =
-		task.status === "done"
-			? "Completed"
-			: task.status === "failed"
-				? "Failed"
-				: task.status === "draft"
-					? "Starting"
-					: busy
-						? "Working"
-						: "Idle";
-	const activity = childTaskPublicItems(task.items);
-	const role = task.subagent?.role;
-	const who = `${role ? role.charAt(0).toUpperCase() + role.slice(1) : "Agent"} ${subagentLabelFromTaskLabel(task.label)}`;
-	return (
-		<details className="child-task-card" data-status={task.status}>
-			<summary>
-				{busy ? (
-					<MatrixDotLoader />
-				) : (
-					<span className="child-task-card-icon" aria-hidden="true">
-						{task.status === "done" ? (
-							<Check size={14} />
-						) : task.status === "failed" ? (
-							<CircleAlert size={14} />
-						) : (
-							<Clock3 size={14} />
-						)}
-					</span>
-				)}
-				<span className="child-task-card-copy">
-					<strong>{task.title}</strong>
-					<small>
-						{who}
-						{task.listedModelId
-							? ` · ${listedModelDisplayName(parseModelRouteId(task.listedModelId)?.modelId ?? task.listedModelId)}`
-							: ""}
-					</small>
-				</span>
-				<span className="child-task-card-status">{status}</span>
-				<ChevronRight
-					className="child-task-card-chevron"
-					size={14}
-					aria-hidden="true"
-				/>
-			</summary>
-			<div className="child-task-card-content">
-				{activity.length ? (
-					<SessionTimeline
-						items={activity}
-						turnStatus={task.turnStatus}
-						onOpenFile={onOpenFile}
-						autoScroll={false}
-						collapseInstructions
-					/>
-				) : task.summary ? (
-					<AgentMarkdown text={task.summary} onOpenFile={onOpenFile} />
-				) : (
-					<p className="child-task-card-empty">
-						{busy ? "Waiting for the first activity…" : "No activity yet."}
-					</p>
-				)}
-				{children.map((child) => (
-					<ChildTaskCard
-						key={child.id}
-						task={child}
-						tasks={tasks}
-						onOpenFile={onOpenFile}
-					/>
-				))}
-			</div>
-		</details>
 	);
 }
 
@@ -454,7 +526,11 @@ function TimelineRowView({
 					<span title="Elapsed time from dispatch to observed completion">
 						{row.label}
 					</span>
-					<ChevronRight size={12} className="session-activity-chevron" />
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+					/>
 				</summary>
 				<div className="session-work-items">
 					{groupExplorationRows(row.items).map((child) => (
@@ -489,7 +565,11 @@ function TimelineRowView({
 					>
 						{explorationLabel(row.counts)}
 					</span>
-					<ChevronRight size={12} className="session-activity-chevron" />
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+					/>
 				</summary>
 				{row.items.map((item) => (
 					<SessionItemView
@@ -533,18 +613,48 @@ function SessionItemView({
 	fileChanges: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
+	const sender = useContext(SenderContext);
 	const live = activityTitleIsLive(item, turnRunning, thoughtInProgress);
 	const titleClass = live
 		? "session-activity-title session-shimmer"
 		: "session-activity-title";
 	switch (item.kind) {
 		case "userMessage":
+			if (sender !== null) {
+				const message = steeringSender(item.text, sender);
+				return (
+					<div className="session-message" data-role="user" data-sender="true">
+						<span className="session-message-sender">{message.from}</span>
+						{message.text.length > 600 ? (
+							<details className="session-work child-task-instructions">
+								<summary>
+									<span>{firstWords(message.text)}</span>
+									<ChevronRight
+										size={14}
+										strokeWidth={1.5}
+										className="session-activity-chevron"
+									/>
+								</summary>
+								<div className="session-work-items">
+									<AgentMarkdown text={message.text} onOpenFile={onOpenFile} />
+								</div>
+							</details>
+						) : (
+							<p>{message.text}</p>
+						)}
+					</div>
+				);
+			}
 			if (collapseInstructions) {
 				return (
 					<details className="session-work child-task-instructions">
 						<summary>
 							<span>Brief</span>
-							<ChevronRight size={12} className="session-activity-chevron" />
+							<ChevronRight
+								size={14}
+								strokeWidth={1.5}
+								className="session-activity-chevron"
+							/>
 						</summary>
 						<div className="session-work-items">
 							<AgentMarkdown text={item.text} onOpenFile={onOpenFile} />
@@ -563,9 +673,9 @@ function SessionItemView({
 							{item.attachments.map((attachment) => (
 								<li key={attachment.id} title={attachment.name}>
 									{attachment.mediaType.startsWith("image/") ? (
-										<ImageIcon size={13} aria-hidden="true" />
+										<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
 									) : (
-										<Paperclip size={13} aria-hidden="true" />
+										<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
 									)}
 									<span>{attachment.name}</span>
 								</li>
@@ -636,7 +746,11 @@ function SessionItemView({
 							{summaries[0]?.split("\n")[0].replace(/^#+\s*|\*\*/g, "") ||
 								title}
 						</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					{summaries.map((summary) => (
 						<p key={`${item.id}:${summary}`}>{summary}</p>
@@ -651,21 +765,21 @@ function SessionItemView({
 					<summary>
 						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					<p>{item.text || "Planning…"}</p>
 				</details>
 			);
+		case "userQuestion":
+			return <UserQuestionCard item={item} reply={null} />;
 		case "secretRequest":
 			return <SecretRequestCard item={item} outcome="answered" />;
 		case "planProposal":
-			return (
-				<PlanProposalCard
-					item={item}
-					outcome="pending"
-					onOpenFile={onOpenFile}
-				/>
-			);
+			return <PlanMessage text={item.text} onOpenFile={onOpenFile} />;
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
@@ -682,7 +796,11 @@ function SessionItemView({
 						{status ? (
 							<span className="session-activity-status">{status}</span>
 						) : null}
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 					</summary>
 					<div className="session-command-detail">
 						<ShellCommandCode command={item.command} />
@@ -755,7 +873,11 @@ function SessionItemView({
 						<ActivityIcon glyph="edit" />
 						<span className={titleClass}>{title}</span>
 						{counts}
-						<ChevronRight size={12} className="session-activity-chevron" />
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
 						{progress}
 					</summary>
 					{item.changes.map((change) => (
@@ -820,15 +942,23 @@ function SessionItemView({
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
+					data-background={activity.background ? "true" : undefined}
 				>
 					<summary>
-						<ActivityIcon
-							glyph={
-								item.status === "failed"
-									? "error"
-									: (activity.glyph ?? activityGlyphForToolName(item.tool))
-							}
-						/>
+						{activity.background ? (
+							<AgentIcon
+								icon={KIND_ICONS.background}
+								color={agentColor("background")}
+							/>
+						) : (
+							<ActivityIcon
+								glyph={
+									item.status === "failed"
+										? "error"
+										: (activity.glyph ?? activityGlyphForToolName(item.tool))
+								}
+							/>
+						)}
 						<span className={titleClass} title={toolDetailTitle(item)}>
 							<span className="session-tool-verb">{activity.verb}</span>
 							{activity.target ? (
@@ -848,8 +978,15 @@ function SessionItemView({
 								<span className="session-tool-note">{activity.note}</span>
 							) : null}
 						</span>
-						<ChevronRight size={12} className="session-activity-chevron" />
-						{activityStatus(item.status)}
+						{activity.background ? (
+							<BackgroundCommandTag record={item.background} />
+						) : null}
+						<ChevronRight
+							size={14}
+							strokeWidth={1.5}
+							className="session-activity-chevron"
+						/>
+						{item.background ? null : activityStatus(item.status)}
 					</summary>
 					{item.input &&
 						(program !== null ? (
@@ -859,7 +996,8 @@ function SessionItemView({
 										{programLinesLabel(program)}
 									</span>
 									<ChevronRight
-										size={12}
+										size={14}
+										strokeWidth={1.5}
 										className="session-activity-chevron"
 									/>
 								</summary>
@@ -964,10 +1102,18 @@ function SessionItemView({
 				<div
 					className="session-activity session-system-notice"
 					data-kind="notice"
+					data-background={item.background ? "true" : undefined}
 					role="status"
 				>
 					<p>
-						<ActivityIcon glyph="notice" />
+						{item.background ? (
+							<AgentIcon
+								icon={KIND_ICONS.background}
+								color={agentColor("background")}
+							/>
+						) : (
+							<ActivityIcon glyph="notice" />
+						)}
 						<span className="session-activity-title" title={item.message}>
 							{item.message}
 						</span>
@@ -988,6 +1134,31 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+/**
+ * A background command's kind tag (the agents list's, helper-names.ts) and,
+ * when the command is recorded, its live state: "running 3m", "exited 0",
+ * "failed (exit 2)".
+ */
+function BackgroundCommandTag({
+	record,
+}: {
+	record: BackgroundCommandRecord | undefined;
+}) {
+	return (
+		<span
+			className="session-background-tag"
+			data-state={record ? backgroundCommandStatus(record) : undefined}
+		>
+			<span className="agent-row-tag">{KIND_TAGS.background}</span>
+			{record ? (
+				<span className="session-background-state">
+					{backgroundCommandStateText(record, Date.now())}
+				</span>
+			) : null}
+		</span>
+	);
 }
 
 /** The running turn is compacting its context (the latest request's usage says so). */
@@ -1027,4 +1198,25 @@ function activityStatusLabel(status: string): string | null {
 function programLinesLabel(program: string): string {
 	const lines = program.split("\n").length;
 	return `Program · ${lines} ${lines === 1 ? "line" : "lines"}`;
+}
+
+/** A proposed plan reads as the agent's reply; the user answers it in the chat. */
+function PlanMessage({
+	text,
+	onOpenFile,
+}: {
+	text: string;
+	onOpenFile?: (path: string) => void;
+}) {
+	return (
+		<div className="session-message" data-role="assistant" data-plan="true">
+			<AgentMarkdown text={text} onOpenFile={onOpenFile} />
+		</div>
+	);
+}
+
+/** The opening words of a long brief, for its folded summary. */
+function firstWords(text: string) {
+	const line = text.trim().split("\n")[0] ?? "";
+	return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }

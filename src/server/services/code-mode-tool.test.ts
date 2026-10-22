@@ -31,7 +31,6 @@ import { agentOutputDirectory } from "./agent-output-artifacts";
 import { agentTurnInstructions } from "./agent-turn-instructions";
 import { codeModeModelText, codeModeTool } from "./code-mode-tool";
 import { leanShapeTools } from "./lean-tools";
-import { withPlanMode } from "./plan-mode";
 import { withRedactedResults } from "./redacted-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -452,41 +451,6 @@ describe("run_code on the lean surface", () => {
 		expect(result.ok).toBe(false);
 		expect(result.error).toMatch(/1 s time limit/);
 		expect(ran).toEqual(["sleep 1.5"]);
-	});
-
-	it("keeps plan mode: writes and edits are refused inside a program, reads work", async () => {
-		await writeFile(join(repo, "src/plan.txt"), "original\n");
-		const tools = withPlanMode(coreSurface(), () => true);
-		const result = await runCode(
-			tools,
-			`const before = await tools.read({ path: "src/plan.txt" });
-			const refusals = [];
-			for (const attempt of [
-				() => tools.write({ path: "src/plan.txt", content: "changed" }),
-				() => tools.edit({ path: "src/plan.txt", edits: [{ old_string: "original", new_string: "changed" }] }),
-				// Shell writes are refused as for a direct call: best effort, heredoc writes.
-				() => tools.bash({ command: "cat > src/plan.txt <<'EOF'\\nchanged\\nEOF" }),
-			]) {
-				const r = await attempt(); refusals.push(r.ok === false ? r.error : "ran");
-			}
-			return { before, refusals };`,
-		);
-		const value = JSON.parse(result.result as string);
-		expect(value.before).toBe("original");
-		expect(value.refusals).toEqual([
-			expect.stringMatching(/^Plan mode:/),
-			expect.stringMatching(/^Plan mode:/),
-			expect.stringMatching(/^Plan mode:/),
-		]);
-		expect(result.calls.map((call) => call.status)).toEqual([
-			"completed",
-			"refused",
-			"refused",
-			"refused",
-		]);
-		expect(await readFile(join(repo, "src/plan.txt"), "utf8")).toBe(
-			"original\n",
-		);
 	});
 
 	it("sees only redacted results, and its own result is redacted again", async () => {

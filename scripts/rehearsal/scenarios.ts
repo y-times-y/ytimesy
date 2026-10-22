@@ -18,7 +18,8 @@ export type ScenarioId =
 	| "fusion-handback"
 	| "fusion-classifier-fail"
 	| "subagents"
-	| "rigor";
+	| "rigor"
+	| "fork";
 
 export type Scenario = {
 	readonly id: ScenarioId;
@@ -31,6 +32,10 @@ export type Scenario = {
 	readonly followUps?: readonly string[];
 	/** Memory on (full mode) for the scenario's user, with this repo content. */
 	readonly memory?: Readonly<Record<string, string>>;
+	/** Once every message settled: fork the chat at this user message (1-based). */
+	readonly forkAt?: number;
+	/** Q&A-only messages to fork at too, with the marker each fork must hold. */
+	readonly qaForks?: readonly { at: number; marker: string }[];
 };
 
 /** A standing rule in the user's memory (scope: always rides on every chat). */
@@ -121,7 +126,7 @@ const NOTICE = "independent checker reviewed your work";
 export const REQUIREMENTS_INSTRUCTION =
 	"- Requirements: before you start, write the request's requirements";
 export const LEAD_REQUIREMENTS_INSTRUCTION =
-	"- As the lead, write the list right after the exploration report";
+	"- As Main, write the list right after the exploration report";
 /** The checker brief's label for the builder's list. */
 export const BUILDER_LIST_LABEL =
 	"The builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):";
@@ -420,8 +425,9 @@ return JSON.stringify(apply);`);
 			}
 			if (applied >= 1)
 				return { text: `Rehearsal lead finished: ${applied} patches applied.` };
-			// Waiting for the writer's report: keep the turn alive.
-			return bash("sleep 15; echo waiting-for-report");
+			// Waiting for the writer's report: Main hands off and ends its turn;
+			// the report wakes it in a new turn, which applies the patch.
+			return handOff();
 		},
 	};
 }
@@ -496,8 +502,12 @@ function reviewInPlace(report: string): Reply {
 return JSON.stringify(review);`);
 }
 
-/** A lead that would have to poll is a deviation: the harness holds it while the sidekick works. */
-const leadDidNotWait = () => bash("echo LEAD_DID_NOT_WAIT");
+/** Main's hand-off text while its writer works: a status that ends its turn (the report wakes it). */
+export const MAIN_HANDOFF = "MAIN_HANDOFF";
+/** Main is free during a build round: it tells the user where things stand and ends its turn. */
+const handOff = (): Reply => ({
+	text: `${MAIN_HANDOFF}: my writer is working on the brief in my checkout; I review its report when it arrives.`,
+});
 
 /** A round that adds `// <marker>` above the first line of `path`. */
 const markFile = (path: string, marker: string, before = "") =>
@@ -618,7 +628,7 @@ function fusionLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends)
 				return send({
 					id: "1",
@@ -663,7 +673,7 @@ function exploreLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends) {
 				// The plan quotes the sidekick's snippet: the lead never read the file.
 				const snippet =
@@ -703,7 +713,7 @@ function multiturnLeadScript(tag: string): AgentScript {
 			);
 			// Rounds so far: one exploration per request, one build per send.
 			const expected = (second ? 2 : 1) + builds;
-			if (reportsIn.length < expected) return leadDidNotWait();
+			if (reportsIn.length < expected) return handOff();
 			if (reviewCount(context) < builds)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			if (!second)
@@ -734,7 +744,7 @@ function stuckLeadScript(tag: string): AgentScript {
 			const reportsIn = writerReports(context);
 			const sends = count(context, "agent_send");
 			const reviews = reviewCount(context);
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (reviews < sends) return reviewInPlace(reportsIn.at(-1) as string);
 			if (sends === 0)
 				return send({
@@ -787,7 +797,7 @@ function handbackLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends)
 				return send({
 					id: "1",
@@ -796,7 +806,7 @@ function handbackLeadScript(tag: string): AgentScript {
 			if (reviewCount(context) < sends)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			const handedBack = context.userTexts.some((text) =>
-				text.includes("Runtime notice: sidekick 1 needs you"),
+				text.includes("Runtime notice: writer 1 needs you"),
 			);
 			if (!handedBack) return { text: "NO_HANDBACK_NOTICE" };
 			if (!leadEdited(context))
@@ -826,7 +836,7 @@ function classifierFailLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (reviewCount(context) < sends)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			if (sends === 0)
@@ -987,6 +997,50 @@ function exploreCheckerScript(tag: string): AgentScript {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// f. fork at a message: turn 1 writes a marker file, turn 2 rewrites it; the
+// chat is forked at message 2, whose code point holds turn 1's marker. The
+// fork's own VM (a copy of the chat's) must show turn 1's marker on the
+// fork's branch while the chat keeps turn 2's, and a turn in the fork reads
+// turn 1's marker.
+
+export const FORK_MARKER = "fork-marker.txt";
+export const FORK_FOLLOW_UP =
+	"[rehearsal:fork-2] A second request: rewrite the marker.";
+/** Questions answered without tools: their turns take no code point. */
+export const FORK_QUESTION = (n: number) =>
+	`[rehearsal:fork-qa${n}] Just answer: what is the marker for?`;
+export const FORK_IN_FORK = "[rehearsal:fork-3] In the fork: show the marker.";
+
+function forkBuilderScript(tag: string): AgentScript {
+	return {
+		name: "fork-builder",
+		match: (first) => first.includes(tag) && !isChecker(first),
+		reply: ({ userTexts, calls }) => {
+			const ran = (needle: string) =>
+				calls.some((call) => JSON.stringify(call.args).includes(needle));
+			// The newest request decides; earlier ones are history.
+			const latest =
+				[...userTexts]
+					.reverse()
+					.find((text) => text.includes("[rehearsal:fork")) ?? "";
+			if (latest.includes("[rehearsal:fork-3]"))
+				return ran(`cat ${FORK_MARKER}`)
+					? { text: "Marker shown in the fork." }
+					: bash(`cat ${FORK_MARKER}`);
+			if (latest.includes("[rehearsal:fork-qa"))
+				return { text: "It marks which turn's code this is." };
+			if (latest.includes("[rehearsal:fork-2]"))
+				return ran("fork two")
+					? { text: "Marker rewritten." }
+					: bash(`printf 'fork two\\n' > ${FORK_MARKER} && echo WROTE`);
+			return ran("fork one")
+				? { text: "Marker written." }
+				: bash(`printf 'fork one\\n' > ${FORK_MARKER} && echo WROTE`);
+		},
+	};
+}
+
 export function scenarios(): Scenario[] {
 	return [
 		{
@@ -1023,7 +1077,7 @@ export function scenarios(): Scenario[] {
 		{
 			id: "fusion",
 			title:
-				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, the lead waits and reviews in place",
+				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, Main hands off and reviews in place",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
@@ -1162,6 +1216,20 @@ export function scenarios(): Scenario[] {
 			scripts: [
 				rigorBuilderScript("[rehearsal:rigor]"),
 				rigorCheckerScript("[rehearsal:rigor]"),
+			],
+		},
+		{
+			id: "fork",
+			title:
+				"f. fork at a message: the fork's VM is a copy of the chat's at that message's code, on its own branch; the chat is unchanged",
+			variant: "codeMode=primary",
+			scripts: [forkBuilderScript("[rehearsal:fork]")],
+			// 1 writes "fork one", 2 asks, 3 writes "fork two", 4 asks.
+			followUps: [FORK_QUESTION(1), FORK_FOLLOW_UP, FORK_QUESTION(2)],
+			forkAt: 3,
+			qaForks: [
+				{ at: 2, marker: "fork one\n" },
+				{ at: 4, marker: "fork two\n" },
 			],
 		},
 	];

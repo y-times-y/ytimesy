@@ -197,6 +197,7 @@ describe("agent tool", () => {
 		});
 		expect(result).toEqual({
 			id: "1",
+			name: "Add the flag (Build)",
 			taskId: "child-1",
 			role: "writer",
 			vm: "fork",
@@ -422,6 +423,7 @@ describe("agent_send", () => {
 			await call("agent_send", { id: "1", message: "Use port 4001." }),
 		).toEqual({
 			id: "1",
+			name: "w (Build)",
 			status: "message queued",
 			delivery: "next step",
 		});
@@ -721,10 +723,10 @@ describe("lead mode fusion: the persistent sidekick", () => {
 			vm: "shared-writer",
 		});
 		expect(started.sidekick).toContain(
-			"Your persistent sidekick for this chat: up to 6 rounds per user request",
+			"Your persistent writer for this chat: up to 6 rounds per user request",
 		);
 		expect(started.sidekick).toContain(
-			"It works in your checkout; you wait while it works",
+			"It works in your checkout; while it works your edits and commands are refused",
 		);
 		// A writer on the lead's machine, not a fork.
 		expect(deps.openTask).toHaveBeenCalledWith(
@@ -750,7 +752,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		});
 		expect(child?.agentBudget?.sidekick?.rounds[0]?.base).toMatch(/^start-1/);
 		await expect(call("agent", { ...brief, title: "Another" })).rejects.toThrow(
-			"Your sidekick 1 is still available (working): send it the next brief or feedback with agent_send (id 1)",
+			"Your writer 1 is still available (working): send it the next brief or feedback with agent_send (id 1)",
 		);
 		// Readers are still fine beside it.
 		await call("agent", {
@@ -808,7 +810,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		const [, recipient, text] = vi.mocked(deps.message).mock.calls[0] ?? [];
 		expect(recipient).toBe("s");
 		expect(text).toMatch(
-			/^Round 2\/6 from your lead\. You work in the lead's checkout as it is now/,
+			/^Round 2\/6 from Main\. You work in Main's checkout as it is now/,
 		);
 		expect(text).toContain("The --json output misses the exit code");
 		// The snapshot comes before delivery.
@@ -863,21 +865,21 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		await expect(
 			full.call("agent_send", { id: "1", message: "again" }),
 		).rejects.toThrow(
-			"Sidekick 1 has used all 6 rounds. Take over, or stop it and start a new writer.",
+			"Writer 1 has used all 6 rounds. Take over, or stop it and start a new writer.",
 		);
 		expect(full.deps.markRoundStart).not.toHaveBeenCalled();
 		const retired = harness({
 			sessions: [
 				row("root", null),
 				idleSidekick({
-					retired: { at: at(-1), reason: "stopped by the lead" },
+					retired: { at: at(-1), reason: "stopped by Main" },
 				}),
 			],
 			lead: "fusion",
 		});
 		await expect(
 			retired.call("agent_send", { id: "1", message: "again" }),
-		).rejects.toThrow("Sidekick 1 is retired (stopped by the lead)");
+		).rejects.toThrow("Writer 1 is retired (stopped by Main)");
 		// A retired sidekick no longer blocks a new writer, which becomes the next sidekick.
 		const next = await retired.call("agent", brief);
 		expect(next.sidekick).toBeDefined();
@@ -896,7 +898,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		expect(idle.deps.retireSidekick).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.objectContaining({ id: "s" }),
-			"stopped by the lead",
+			"stopped by Main",
 		);
 		expect(idle.deps.message).not.toHaveBeenCalled();
 		const working = harness({
@@ -938,7 +940,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 				brief: "b",
 				explore: true,
 			}),
-		).rejects.toThrow("explore applies only to your sidekick");
+		).rejects.toThrow("explore applies only to your writer");
 	});
 
 	it("serves the chat's next user request with a fresh round count", async () => {
@@ -963,7 +965,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		expect(state.rounds.at(-1)).toMatchObject({ n: 7, kind: "explore" });
 		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
 		expect(text).toMatch(
-			/^Round 7 from your lead \(1\/6 for the user's new request\)\./,
+			/^Round 7 from Main \(1\/6 for the user's new request\)\./,
 		);
 		expect(text).toContain(SIDEKICK_EXPLORE_NOTE);
 		// The same session takes it: no new writer.
@@ -1083,7 +1085,7 @@ describe("lead mode fusion: the harness-started exploration", () => {
 		expect(state.rounds.at(-1)).toMatchObject({ n: 2, kind: "explore" });
 		const text = vi.mocked(deps.message).mock.calls[0]?.[2] ?? "";
 		expect(text).toMatch(
-			/^Round 2 from your lead \(1\/6 for the user's new request\)\./,
+			/^Round 2 from Main \(1\/6 for the user's new request\)\./,
 		);
 		expect(text).toContain(HARNESS_EXPLORE_HEADING);
 		expect(text).toContain("Add a --json flag");
@@ -1216,7 +1218,7 @@ describe("lead mode fusion: sidekicks from before the shared checkout, and the l
 		expect(result.backgroundCommands).toContain("still running");
 		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
 		expect(text).toContain(
-			"The lead has background commands still running in this checkout (job-7)",
+			"Main has background commands still running in this checkout (job-7)",
 		);
 	});
 });
@@ -1327,6 +1329,7 @@ describe("checkerMode=pair: the checker's judge and worker", () => {
 			await call({ id: "1.1", brief: "Run tests/edge.sh as well." }),
 		).toEqual({
 			id: "1.1",
+			name: "Checker worker (Research)",
 			status:
 				"message queued: it is still working; its report arrives as a message",
 		});

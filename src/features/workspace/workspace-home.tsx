@@ -5,6 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
+	backgroundPollMs,
+	backgroundReadChatIds,
+	backgroundRunsFromReadModel,
+} from "#/domain/agent-panel";
+import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
@@ -49,7 +54,11 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
+	SEND_TIMEOUT_MESSAGE,
+	SEND_TIMEOUT_MS,
 	type SessionProgress,
+	sessionReadInterval,
+	withinTimeout,
 } from "#/domain/session-progress";
 import {
 	backgroundTurnPollChatIds,
@@ -93,6 +102,7 @@ import {
 	listProjectAgentTasks,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
+import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
 	getCodexSession,
@@ -120,6 +130,7 @@ import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
+import { MemoryGraphPage } from "./memory-graph-page";
 import { MemoryInspector } from "./memory-inspector";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -250,7 +261,8 @@ export function WorkspaceHome({
 		chats: projectChatLists[index]?.data ?? [],
 	}));
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
-	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
+	const [memoryPage, setMemoryPage] = useState<"list" | "graph" | null>(null);
+	const memoryPageOpen = memoryPage !== null;
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
@@ -334,6 +346,9 @@ export function WorkspaceHome({
 		[queryClient, selectedProject?.id],
 	);
 	const liveProgress = useRef<LiveProgressMark>(null);
+	/** The chat whose progress stream is open now (its view is then read rarely). */
+	const progressStreamOpen = useRef<string | null>(null);
+	const refetchOpenSession = useRef<() => unknown>(() => {});
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
@@ -459,12 +474,42 @@ export function WorkspaceHome({
 				? 2_500
 				: false,
 	});
+	// Background commands of the chat and its helpers, for the agents list.
+	const backgroundChatIds = backgroundReadChatIds(
+		activeSessionId,
+		agentTasks.data ?? [],
+	);
+	const agentsWorking = shouldPollSubagents(
+		session.turnStatus,
+		agentTasks.data ?? [],
+	);
+	const backgroundCommands = useQuery({
+		queryKey: ["background-commands", activeSessionId, backgroundChatIds],
+		queryFn: () =>
+			readBackgroundCommandsFn({ data: { sessionIds: backgroundChatIds } }),
+		enabled: Boolean(activeProjectId && backgroundChatIds.length),
+		// A new helper changes the key; keep this chat's rows until it reads.
+		placeholderData: (previous, previousQuery) =>
+			previousQuery?.queryKey[1] === activeSessionId ? previous : undefined,
+		refetchInterval: (query) =>
+			backgroundPollMs({
+				agentsWorking,
+				running: Object.values(query.state.data ?? {}).reduce(
+					(count, commands) => count + commands.length,
+					0,
+				),
+			}),
+	});
+	const backgroundRuns = backgroundRunsFromReadModel(
+		backgroundCommands.data ?? {},
+	);
 	useEffect(() => {
 		if (
 			activeSessionId &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
+			void backgroundCommands.refetch();
 			void refetchPullRequests();
 			void chats.refetch();
 		}
@@ -472,6 +517,7 @@ export function WorkspaceHome({
 		activeSessionId,
 		session.turnStatus,
 		agentTasks.refetch,
+		backgroundCommands.refetch,
 		refetchPullRequests,
 		chats.refetch,
 	]);
@@ -721,9 +767,18 @@ export function WorkspaceHome({
 		enabled: Boolean(
 			activeProjectId && activeSessionId && !composerDraft && !composerBusy,
 		),
-		refetchInterval: pollSession ? RUNNING_TURN_POLL_MS : false,
+		// Progress arrives on the stream while it is open; polling stands in
+		// only while it is not.
+		refetchInterval: () =>
+			sessionReadInterval({
+				polling: pollSession,
+				streamOpen:
+					!!activeSessionId && progressStreamOpen.current === activeSessionId,
+				pollMs: RUNNING_TURN_POLL_MS,
+			}),
 		refetchIntervalInBackground: true,
 	});
+	refetchOpenSession.current = () => void sessionRead.refetch();
 	// The save hook commits shortly after a turn completes and records its
 	// marker on the chat; read the chat again so it shows without a reload.
 	const memoryInChat = session.items.some(
@@ -924,12 +979,22 @@ export function WorkspaceHome({
 					.catch(() => undefined);
 			}
 		});
+		source.onopen = () => {
+			progressStreamOpen.current = activeSessionId;
+		};
 		source.onerror = () => {
 			liveProgress.current = null;
+			// Polling stands in until the stream reconnects.
+			if (progressStreamOpen.current === activeSessionId) {
+				progressStreamOpen.current = null;
+				refetchOpenSession.current();
+			}
 		};
 		return () => {
 			source.close();
 			liveProgress.current = null;
+			if (progressStreamOpen.current === activeSessionId)
+				progressStreamOpen.current = null;
 		};
 	}, [activeProjectId, activeSessionId, session.turnStatus, harnessId]);
 
@@ -989,7 +1054,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		bumpSessionEpoch();
@@ -1022,7 +1087,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -1186,7 +1251,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1271,13 +1336,19 @@ export function WorkspaceHome({
 		try {
 			// A new chat's first send has no chat id yet: the server finds the
 			// chat that queued this message id, if any.
-			const landed = await getCodexSession({
-				data: {
-					projectId: pending.scope.projectId,
-					harnessId: pending.scope.harnessId,
-					...(sessionId ? { sessionId } : { userMessageId: pending.messageId }),
-				},
-			});
+			const landed = await withinTimeout(
+				getCodexSession({
+					data: {
+						projectId: pending.scope.projectId,
+						harnessId: pending.scope.harnessId,
+						...(sessionId
+							? { sessionId }
+							: { userMessageId: pending.messageId }),
+					},
+				}),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			if (
 				!landed?.connection ||
 				!sendWasQueued(landed.items, pending.messageId)
@@ -1337,24 +1408,30 @@ export function WorkspaceHome({
 				);
 			}
 			requested = true;
-			const next = await sendTask({
-				data: {
-					...scope,
-					sessionId: scope.sessionId ?? view.agentSessionId ?? undefined,
-					text: pending.text,
-					modelId: resolvedModel,
-					userMessageId: pending.messageId,
-					...(pending.variant ? { variant: pending.variant } : {}),
-					...(pending.speed
-						? { speed: pending.speed, fast: pending.speed === "fast" }
-						: {}),
-					...(pending.approvesPlan ? { approvesPlan: true } : {}),
-					...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
-					...(pending.attachments?.length
-						? { attachments: [...pending.attachments] }
-						: {}),
-				},
-			});
+			// A send that hangs is reported (and checked for having landed)
+			// instead of leaving the message showing as sent.
+			const next = await withinTimeout(
+				sendTask({
+					data: {
+						...scope,
+						sessionId: scope.sessionId ?? view.agentSessionId ?? undefined,
+						text: pending.text,
+						modelId: resolvedModel,
+						userMessageId: pending.messageId,
+						...(pending.variant ? { variant: pending.variant } : {}),
+						...(pending.speed
+							? { speed: pending.speed, fast: pending.speed === "fast" }
+							: {}),
+						...(pending.approvesPlan ? { approvesPlan: true } : {}),
+						...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
+						...(pending.attachments?.length
+							? { attachments: [...pending.attachments] }
+							: {}),
+					},
+				}),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			// A refused request (an origin check, an expired session) has no view.
 			if (!next?.connection)
 				throw new Error("The message could not be sent. Retry.");
@@ -1437,6 +1514,17 @@ export function WorkspaceHome({
 		(pr) => Boolean(activeHead) && pr.head === activeHead,
 	);
 	const sessionPullRequest = sessionPullRequests[0];
+	/** A memory's source chat, opened in its project; false when it is not listed. */
+	function openMemoryChat(chatId: string) {
+		const listed = projectChats.find((group) =>
+			group.chats.some((chat) => chat.id === chatId),
+		);
+		if (!listed) return false;
+		selectProject(listed.project.id);
+		openChat(chatId);
+		return true;
+	}
+
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -1466,10 +1554,15 @@ export function WorkspaceHome({
 					openChat(chatId);
 				}}
 				onOpenMemory={() => {
-					setMemoryPageOpen(true);
+					setMemoryPage("list");
 					if (compact) setProjectsOpen(false);
 				}}
-				memoryActive={memoryPageOpen}
+				memoryActive={memoryPage === "list"}
+				onOpenMemoryGraph={() => {
+					setMemoryPage("graph");
+					if (compact) setProjectsOpen(false);
+				}}
+				memoryGraphActive={memoryPage === "graph"}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1529,27 +1622,29 @@ export function WorkspaceHome({
 				>
 					<PanelRight size={18} />
 				</button>
-				{memoryPageOpen ? (
+				{memoryPage === "graph" ? (
+					<section
+						className="memory-page"
+						data-view="graph"
+						aria-label="Memory graph"
+					>
+						<MemoryGraphPage
+							active
+							projects={projects.data}
+							onOpenChat={openMemoryChat}
+						/>
+					</section>
+				) : memoryPage === "list" ? (
 					<section className="memory-page" aria-label="Memory page">
 						<header className="memory-page-header">
 							<h1>Memory</h1>
-							<p>
-								What the agent remembers across your chats: standing project
-								rules, preferences and decisions.
-							</p>
+							<p>What the agent remembers across chats.</p>
 						</header>
 						<MemoryInspector
 							active
 							layout="page"
-							onOpenChat={(chatId) => {
-								const listed = projectChats.find((group) =>
-									group.chats.some((chat) => chat.id === chatId),
-								);
-								if (!listed) return false;
-								selectProject(listed.project.id);
-								openChat(chatId);
-								return true;
-							}}
+							projects={projects.data}
+							onOpenChat={openMemoryChat}
 						/>
 					</section>
 				) : null}
@@ -1626,6 +1721,7 @@ export function WorkspaceHome({
 									await agentTasks.refetch();
 								}}
 								childTasks={agentTasks.data ?? []}
+								backgroundRuns={backgroundRuns}
 								memoryActions={memoryActions}
 								key={session.agentSessionId ?? "new"}
 								session={session}

@@ -94,7 +94,7 @@ describe("sidekick classifier", () => {
 				reason: "the brief is ambiguous.",
 			}),
 		).toBe(
-			"Runtime notice: sidekick 1 needs you (the brief is ambiguous). Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), or take over and do it yourself.",
+			"Runtime notice: writer 1 needs you (the brief is ambiguous). Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), or take over and do it yourself.",
 		);
 		const switching = sidekickDecisionNotice({
 			label: "1",
@@ -103,9 +103,9 @@ describe("sidekick classifier", () => {
 			switchTo: "codex:gpt-6.1-sol",
 		});
 		expect(switching).toContain(
-			"sidekick 1 looks stuck (it repeats make test). The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
+			"writer 1 looks stuck (it repeats make test). The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
 		);
-		expect(switching).toContain("the same sidekick (session, label 1)");
+		expect(switching).toContain("the same writer (session, label 1)");
 	});
 
 	it("offers an escalation only to another model", () => {

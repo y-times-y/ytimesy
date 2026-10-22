@@ -1,59 +1,54 @@
 import {
-	AppWindow,
-	ArrowLeftRight,
-	BookOpen,
-	Bot,
 	Brain,
 	FilePenLine,
-	Files,
 	FileText,
-	FlaskConical,
 	Globe,
-	History,
-	Hourglass,
-	Image,
 	Info,
-	KeyRound,
-	ListChecks,
-	MessageSquare,
-	Plug,
-	Search,
-	ShieldCheck,
-	Square,
-	SquareCode,
+	type LucideIcon,
+	Split,
 	SquareTerminal,
-	TriangleAlert,
-	Wrench,
 } from "lucide-react";
 import type { SessionActivityGlyph } from "#/domain/session-activity";
 
+/**
+ * One icon per kind of activity, not per tool: think, read, edit, run, web,
+ * agents, notices. Status shows by brightness (CSS), never by a new shape.
+ */
+const think = Brain;
+const read = FileText;
+const edit = FilePenLine;
+const run = SquareTerminal;
+const web = Globe;
+const agent = Split;
+const notice = Info;
+
 const icons = {
-	thinking: Brain,
-	plan: ListChecks,
-	shell: SquareTerminal,
-	search: Search,
-	read: FileText,
-	edit: FilePenLine,
-	files: Files,
-	web: Globe,
-	mcp: Plug,
-	error: TriangleAlert,
-	tool: Wrench,
-	wait: Hourglass,
-	message: MessageSquare,
-	image: Image,
-	guide: BookOpen,
-	stop: Square,
-	test: FlaskConical,
-	switch: ArrowLeftRight,
-	agent: Bot,
-	browser: AppWindow,
-	code: SquareCode,
-	review: ShieldCheck,
-	history: History,
-	secret: KeyRound,
-	notice: Info,
-} as const satisfies Record<SessionActivityGlyph, unknown>;
+	thinking: think,
+	plan: think,
+	read,
+	files: read,
+	search: read,
+	guide: read,
+	history: read,
+	image: read,
+	edit,
+	code: edit,
+	shell: run,
+	test: run,
+	stop: run,
+	wait: run,
+	browser: run,
+	tool: run,
+	web,
+	mcp: web,
+	agent,
+	message: agent,
+	switch: agent,
+	review: agent,
+	notice,
+	secret: notice,
+	error: notice,
+} as const satisfies Record<SessionActivityGlyph, LucideIcon>;
 
 export function ActivityIcon({ glyph }: { glyph: SessionActivityGlyph }) {
 	const Icon = icons[glyph];

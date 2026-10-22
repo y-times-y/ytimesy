@@ -2,7 +2,21 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
-import { type MEMORY_MODES, memoryPath } from "#/domain/memory-repo";
+import {
+	type MemoryDreamStatus,
+	memoryDreamSchedule,
+} from "#/domain/memory-dream-schedule";
+import {
+	MEMORY_EDIT_TEXT_MAX,
+	MEMORY_PROJECT_MAX,
+	type MemoryEdit,
+} from "#/domain/memory-edit";
+import type { DreamInput } from "#/domain/memory-lanes";
+import {
+	type MEMORY_MODES,
+	memoryPath,
+	memoryToday,
+} from "#/domain/memory-repo";
 import {
 	memoryRepo,
 	memoryRepoName,
@@ -10,12 +24,24 @@ import {
 } from "#/server/adapters/memory-repos";
 import {
 	forgetMemoryEmbeddings,
+	lastMemoryDreamRun,
+	lastMemoryReview,
 	markMemoryDreamed,
+	memoryLastActivity,
 	memorySettings,
 	saveMemoryMode,
 } from "#/server/adapters/memory-settings";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
+import {
+	commitMemoryEdit,
+	dreamHistory,
+	lastDreamChange,
+} from "#/server/services/memory-edit";
+import {
+	DREAM_IDLE_SECONDS,
+	DREAM_REVIEW_DAYS,
+} from "#/server/services/memory-jobs";
 import { removeMemoryLine } from "#/server/services/memory-undo";
 
 export type MemoryOverview = {
@@ -125,3 +151,108 @@ export const undoMemoryLineFn = createServerFn({ method: "POST" })
 		if (!repo) throw new Error("Memory is unavailable.");
 		return removeMemoryLine(repo, { path, text: data.text });
 	});
+
+const lineRef = z.object({
+	path: z.string().max(512),
+	line: z.number().int().min(1).max(100_000),
+	text: z.string().min(1).max(2000),
+});
+const editText = z
+	.string()
+	.min(1)
+	.max(MEMORY_EDIT_TEXT_MAX * 2);
+const projectName = z.string().min(1).max(MEMORY_PROJECT_MAX).nullable();
+const memoryEdit = z.discriminatedUnion("op", [
+	z.object({
+		op: z.literal("add"),
+		text: editText,
+		project: projectName,
+		always: z.boolean(),
+		topic: z.string().max(200).nullable().optional(),
+	}),
+	z.object({
+		op: z.literal("update"),
+		ref: lineRef,
+		text: editText.optional(),
+		project: projectName.optional(),
+		always: z.boolean().optional(),
+	}),
+	z.object({ op: z.literal("delete"), ref: lineRef }),
+]);
+
+/**
+ * A manual edit from the Memory view (add, change text, move between
+ * Personal and a project, pin as an always-on rule, delete) as one commit.
+ * Invalid input comes back as `error`, for the form to show.
+ */
+export const editMemoryFn = createServerFn({ method: "POST" })
+	.validator((data: unknown): MemoryEdit => memoryEdit.parse(data))
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		if (data.op !== "add" && !memoryPath(data.ref.path))
+			throw new Error("Invalid memory path.");
+		const { repo } = await userRepo(user.id);
+		if (!repo) throw new Error("Memory is unavailable.");
+		return commitMemoryEdit(repo, data, memoryToday());
+	});
+
+/**
+ * Dreaming at a glance: when it last ran, when it runs next, the next
+ * weekly review, and what the newest dream commit changed.
+ */
+export const readMemoryDreamsFn = createServerFn({ method: "GET" }).handler(
+	async (): Promise<MemoryDreamStatus | null> => {
+		const user = await requireUser(getRequest().headers);
+		if (!memoryReposAvailable()) return null;
+		const { settings, repo } = await userRepo(user.id);
+		const [lastRun, lastReview, lastActivity, lastChange] = await Promise.all([
+			lastMemoryDreamRun(user.id),
+			lastMemoryReview(user.id),
+			memoryLastActivity(user.id),
+			repo
+				? lastDreamChange(repo, memoryToday()).catch(() => null)
+				: Promise.resolve(null),
+		]);
+		return {
+			...memoryDreamSchedule({
+				now: new Date(),
+				off: settings.mode === "off",
+				lastActivity,
+				dreamedThrough: settings.dreamedThrough,
+				lastReview,
+				idleMs: DREAM_IDLE_SECONDS * 1000,
+				// The maintenance job looks for idle users every 5 minutes.
+				tickMs: 5 * 60_000,
+				reviewDays: DREAM_REVIEW_DAYS,
+			}),
+			lastRunAt: lastRun?.toISOString() ?? null,
+			lastReviewAt: lastReview?.toISOString() ?? null,
+			lastChange,
+		};
+	},
+);
+
+/** Whether memory is on, for the Settings switch, without reading the repo. */
+export const readMemoryModeFn = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const user = await requireUser(getRequest().headers);
+		if (!memoryReposAvailable())
+			return { available: false, mode: "off" as const };
+		const settings = await memorySettings(user.id);
+		return { available: true, mode: settings.mode };
+	},
+);
+
+/** The memory lanes' history: recent dreams and the lines each merged. */
+export const readMemoryGraphFn = createServerFn({ method: "GET" }).handler(
+	async (): Promise<{ dreams: DreamInput[] }> => {
+		const user = await requireUser(getRequest().headers);
+		if (!memoryReposAvailable()) return { dreams: [] };
+		const { repo } = await userRepo(user.id);
+		if (!repo) return { dreams: [] };
+		return {
+			dreams: await dreamHistory(repo, memoryToday()).catch(() => []),
+		};
+	},
+);

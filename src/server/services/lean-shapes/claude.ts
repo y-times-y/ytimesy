@@ -31,7 +31,7 @@ export function claudeTools(engine: LeanEngine): ToolSet {
 	const names = LEAN_SHAPE_TOOLS.claude;
 	return {
 		[names.command]: tool({
-			description: `Executes a bash command in the workspace and returns its output. Each call starts in the repository root; the filesystem persists. timeout is in milliseconds (default 120000, max ${LEAN_COMMAND_MAX_SECONDS * 1000}). Set run_in_background to start a long-running process (a dev server, a watcher) and get its ID and output file instead of waiting.`,
+			description: `Executes a bash command in the workspace and returns its output. Each call starts in the repository root; the filesystem persists. timeout is in milliseconds (default 120000, max ${LEAN_COMMAND_MAX_SECONDS * 1000}). Set run_in_background to start servers, watchers and long jobs and get their ID and output file at once; you are told when they finish, so do not poll them.`,
 			inputSchema: z.object({
 				command: z
 					.string()
@@ -63,7 +63,12 @@ export function claudeTools(engine: LeanEngine): ToolSet {
 				const seconds = (timeout ?? 120_000) / 1000;
 				return engine.run(
 					run_in_background
-						? { command, maxSeconds: LEAN_COMMAND_MAX_SECONDS, yieldSeconds: 0 }
+						? {
+								command,
+								maxSeconds: LEAN_COMMAND_MAX_SECONDS,
+								yieldSeconds: 0,
+								background: true,
+							}
 						: {
 								command,
 								maxSeconds: seconds,

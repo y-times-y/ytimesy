@@ -1773,37 +1773,101 @@ details[open] > summary .session-activity-chevron {
 }
 
 .conversation-recovery {
+	display: flex;
+	justify-content: flex-end;
 	color: var(--muted-foreground);
 	font-size: 12px;
-	margin-top: 6px;
+	margin-top: 2px;
+	/* Only the icon takes the pointer, so the empty width beside it never
+	   counts as hovering. */
+	pointer-events: none;
+	/* Shown while the pointer is on the message bubble or the icon, while the
+	   menu is open, or when the icon has keyboard focus. */
+	opacity: 0;
+	transition: opacity 0.12s;
 }
-.conversation-recovery button {
+.conversation-recovery-trigger {
+	pointer-events: auto;
+}
+li:has(> .session-message:hover) > .conversation-recovery,
+li:has(.session-message[data-role="user"]:hover) > .conversation-recovery,
+.conversation-recovery:has(.conversation-recovery-trigger:hover),
+.conversation-recovery:has(.conversation-recovery-trigger:focus-visible),
+.conversation-recovery[data-open] {
+	opacity: 1;
+}
+@media (hover: none) {
+	.conversation-recovery {
+		opacity: 1;
+	}
+}
+.conversation-recovery-trigger {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
-	padding: 4px 7px;
-	border-radius: 5px;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 6px;
+	color: var(--muted-foreground);
 }
-.conversation-recovery button:hover:not(:disabled) {
+.conversation-recovery-trigger:hover:not(:disabled),
+.conversation-recovery[data-open] .conversation-recovery-trigger {
 	background: var(--muted);
 	color: var(--foreground);
 }
-.conversation-recovery button:disabled {
+.conversation-recovery-trigger:disabled {
 	opacity: 0.5;
 }
-.conversation-recovery-options {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px;
-	padding: 8px;
-	margin-top: 5px;
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	max-width: 440px;
+.conversation-recovery [role="alert"] {
+	margin: 4px 0 0;
 }
-.conversation-recovery-explanation {
-	flex-basis: 100%;
-	margin: 0 0 4px;
+.recovery-menu {
+	z-index: 100;
+	min-width: 248px;
+	padding: 6px;
+	border: 1px solid #2c2c2c;
+	border-radius: 10px;
+	background: #161616;
+	color: #e5e5e5;
+	box-shadow:
+		0 16px 40px #000a,
+		0 1px 0 #ffffff08 inset;
+}
+.recovery-menu-label {
+	padding: 6px 10px 8px;
+	color: #8a8a8a;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+}
+.recovery-menu [role="menuitem"] {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px;
+	border-radius: 6px;
+	font-size: 13px;
+	outline: none;
+	cursor: pointer;
+}
+.recovery-menu [role="menuitem"] svg {
+	flex: none;
+	color: #9a9a9a;
+}
+.recovery-menu [data-highlighted] {
+	background: #ffffff10;
+}
+.recovery-menu [data-highlighted] svg {
+	color: #e5e5e5;
+}
+.recovery-menu [data-disabled] {
+	opacity: 0.45;
+	cursor: default;
+}
+.recovery-menu [role="separator"] {
+	height: 1px;
+	margin: 6px 4px;
+	background: #2a2a2a;
 }
 
 /* Tool rows read as a sentence: verb, monospace target, diff stats, note. */
@@ -2085,4 +2149,443 @@ code.session-tool-target {
 	cursor: default;
 	color: rgba(255, 255, 255, 0.4);
 	text-decoration: none;
+}
+
+/* The agent's question card (ask_user): choices as rows, then the user's own answer. */
+.user-question {
+	display: grid;
+	gap: 14px;
+	padding: 14px;
+	border: 1px solid #ffffff14;
+	border-radius: 12px;
+	background: #141414;
+}
+.user-question[data-answered] {
+	gap: 8px;
+	padding: 10px 14px;
+	background: none;
+}
+.user-question-block {
+	display: grid;
+	gap: 10px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.user-question-title {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 0;
+	color: #ededed;
+	font-size: 14px;
+	line-height: 1.45;
+}
+.user-question-title svg {
+	flex: none;
+	align-self: center;
+	color: #8a8a8a;
+}
+.user-question-chip {
+	padding: 1px 7px;
+	border: 1px solid #ffffff1a;
+	border-radius: 999px;
+	color: #a3a3a3;
+	font-size: 11px;
+	font-weight: 500;
+}
+.user-question-options {
+	display: grid;
+	gap: 6px;
+}
+.user-question-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	width: 100%;
+	padding: 9px 11px;
+	border: 1px solid #ffffff12;
+	border-radius: 8px;
+	background: #ffffff05;
+	color: #e5e5e5;
+	text-align: left;
+	transition:
+		border-color 0.12s,
+		background 0.12s;
+}
+.user-question-option:hover:not(:disabled) {
+	border-color: #ffffff26;
+	background: #ffffff0a;
+}
+.user-question-option[data-selected] {
+	border-color: #ffffff59;
+	background: #ffffff10;
+}
+.user-question-option:focus-visible {
+	outline: 2px solid #ffffff59;
+	outline-offset: 1px;
+}
+.user-question-mark {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	margin-top: 1px;
+	border: 1px solid #ffffff38;
+	border-radius: 50%;
+	color: #0a0a0a;
+}
+.user-question-option[data-multi] .user-question-mark {
+	border-radius: 4px;
+}
+.user-question-option[data-selected] .user-question-mark {
+	border-color: #ededed;
+	background: #ededed;
+}
+.user-question-option-text {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.user-question-label {
+	font-size: 13px;
+	font-weight: 500;
+}
+.user-question-description {
+	color: #8f8f8f;
+	font-size: 12px;
+	line-height: 1.4;
+}
+.user-question-other {
+	width: 100%;
+	padding: 8px 11px;
+	border: 1px solid #ffffff12;
+	border-radius: 8px;
+	background: transparent;
+	color: #e5e5e5;
+	font-size: 13px;
+}
+.user-question-other:focus {
+	border-color: #ffffff38;
+	outline: none;
+}
+.user-question-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+.user-question-send {
+	padding: 7px 14px;
+	border-radius: 7px;
+	background: #ededed;
+	color: #0a0a0a;
+	font-size: 13px;
+	font-weight: 500;
+}
+.user-question-send:disabled {
+	opacity: 0.4;
+}
+.user-question-reply {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0;
+	color: #a3a3a3;
+	font-size: 13px;
+	white-space: pre-line;
+}
+.user-question-reply svg {
+	flex: none;
+	margin-top: 3px;
+}
+
+/* Agents list under the composer: Main, this request's helpers, background runs. */
+.agent-icon {
+	flex: 0 0 auto;
+}
+.agent-panel {
+	margin: 6px 0 2px;
+	padding: 0;
+}
+.agent-panel-summary {
+	display: none;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #bdbdbd;
+	font-size: 12px;
+	text-align: left;
+}
+.agent-panel-summary:hover {
+	background: #ffffff08;
+}
+.agent-panel-icons {
+	display: inline-flex;
+	gap: 4px;
+}
+.agent-panel-summary-meta {
+	color: #7a7a7a;
+}
+.agent-panel-chevron {
+	margin-left: auto;
+	color: #7a7a7a;
+	transition: transform 120ms ease-out;
+}
+.agent-panel[data-expanded="true"] .agent-panel-chevron {
+	transform: rotate(90deg);
+}
+.agent-panel-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.agent-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #d6d6d6;
+	font-size: 12px;
+	line-height: 16px;
+	text-align: left;
+}
+.agent-row:hover {
+	background: #ffffff08;
+}
+.agent-row[aria-current="true"] {
+	background: #ffffff0d;
+	box-shadow: inset 2px 0 0 var(--agent-accent, #e5e5e5);
+	color: #f2f2f2;
+}
+div.agent-row {
+	cursor: default;
+}
+div.agent-row:hover {
+	background: transparent;
+}
+.agent-row-tag {
+	flex: 0 0 auto;
+	padding: 0 5px;
+	border-radius: 4px;
+	background: #ffffff0a;
+	color: #8a8a8a;
+	font-size: 10.5px;
+	line-height: 16px;
+}
+.agent-row-metric {
+	flex: 0 0 auto;
+	color: #8a8a8a;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.agent-metric-tooltip {
+	z-index: 120;
+	padding: 6px 9px;
+	border: 1px solid #2c2c2c;
+	border-radius: 7px;
+	background: #161616;
+	color: #d6d6d6;
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
+	box-shadow: 0 8px 24px #000a;
+}
+.agent-row-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 42%;
+	overflow: hidden;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.agent-row-doing {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	color: #858585;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	animation: agent-row-doing-in 180ms ease-out;
+}
+@keyframes agent-row-doing-in {
+	from {
+		opacity: 0.25;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.agent-row-queued {
+	flex: 0 0 auto;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: #ffffff0f;
+	color: #bdbdbd;
+	font-size: 11px;
+}
+.agent-row-status {
+	flex: 0 0 auto;
+	color: #7a7a7a;
+	font-size: 11px;
+	text-align: right;
+}
+.agent-row-status[data-status="free"] {
+	color: #6d6d6d;
+}
+.agent-row-status[data-status="working"] {
+	color: #bdbdbd;
+}
+.agent-row-status[data-status="failed"] {
+	color: #f87171;
+}
+.agent-row[data-status="done"] .agent-row-name,
+.agent-row[data-status="idle"] .agent-row-name {
+	color: #a8a8a8;
+}
+.agent-panel-more {
+	min-height: 26px;
+	padding: 0 10px 0 25px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #7a7a7a;
+	font-size: 12px;
+}
+.agent-panel-more:hover {
+	color: #d4d4d4;
+}
+@media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
+	.agent-panel-summary {
+		display: flex;
+	}
+	.agent-panel:not([data-expanded="true"]) .agent-panel-list {
+		display: none;
+	}
+	.agent-row {
+		min-height: 36px;
+	}
+	.agent-row-doing,
+	.agent-row-status {
+		display: none;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.agent-row-doing {
+		animation: none;
+	}
+}
+
+/* A helper's start and finish in its parent's chat: one quiet line. */
+.helper-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	margin: 2px 0;
+	padding: 2px 0;
+	border: 0;
+	background: transparent;
+	color: #858585;
+	font-size: 12px;
+	line-height: 18px;
+	text-align: left;
+}
+button.helper-line:hover {
+	color: #d4d4d4;
+}
+.helper-line-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.helper-line[data-finished="true"][data-status="failed"] .helper-line-text {
+	color: #f87171;
+}
+.helper-view-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 32px;
+	padding: 4px 0 8px;
+	border-bottom: 1px solid #ffffff0d;
+	color: #e5e5e5;
+	font-size: 13px;
+}
+.helper-view-name {
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.helper-view-back {
+	margin-left: auto;
+	padding: 3px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #8a8a8a;
+	font-size: 12px;
+}
+.helper-view-back:hover {
+	background: #ffffff0c;
+	color: #e5e5e5;
+}
+
+/* A helper's view: who sent each message, and steering still waiting. */
+.session-message-sender {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 4px 2px;
+	color: #858585;
+	font-size: 11px;
+	font-weight: 500;
+}
+.session-queued-badge {
+	padding: 0 6px;
+	border-radius: 999px;
+	background: #ffffff10;
+	color: #bdbdbd;
+	font-size: 10px;
+	font-weight: 500;
+	line-height: 16px;
+}
+
+/* A command left running in the background: its own lane, tagged. */
+.session-activity[data-background="true"] {
+	border-left: 2px solid
+		color-mix(in oklab, var(--agent-background), transparent 45%);
+	padding-left: 8px;
+}
+.session-activity[data-background="true"] > summary .session-tool-verb {
+	color: #8a8f98;
+}
+
+/* Status by brightness: finished agents dim, working ones stay bright. */
+.agent-row[data-status="done"] .agent-icon,
+.agent-row[data-status="failed"] .agent-icon {
+	opacity: 0.5;
+}
+.agent-row[data-status="done"] .agent-row-name {
+	color: #9a9a9a;
 }

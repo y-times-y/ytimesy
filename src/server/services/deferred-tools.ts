@@ -1,5 +1,4 @@
 import type { ModelMessage, ToolSet } from "ai";
-import { PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
 import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
@@ -9,14 +8,13 @@ import type { SessionItem } from "#/domain/session-item";
 /**
  * Deferred tools (docs/parallel-evals.md, codeMode): tools that exist for
  * the turn but are not in the request's tool list. Only two kinds remain;
- * every other workflow tool (agent, agent_send, enter_plan_mode,
+ * every other workflow tool (agent, agent_send, ask_user,
  * request_project_secret) is an ordinary always-visible tool.
  *
  * - Code mode primary: a large MCP setup's search_mcp_tools/call_mcp_tool
  *   are called only from run_code (searchTools(query) there returns their
  *   declarations). The per-server tool-name listing stays in the prompt.
- * - propose_plan (code mode primary, or subagents=on on a lean surface) is
- *   offered only while plan mode is on, since it ends the turn.
+ * - Force-loaded tools: offered regardless of earlier discovery.
  *
  * The tool list stays byte-stable for the provider prompt cache: the
  * always-on tools keep their order and never change within a chat; a tool
@@ -111,12 +109,11 @@ export function deferredToolSurface(input: {
 	/** Added earlier in this chat, in order. */
 	readonly loaded: readonly string[];
 	/**
-	 * Offered regardless (propose_plan while plan mode is on), appended like
-	 * an earlier addition: a list at setup, or a function read on every
-	 * request (plan mode can turn on mid-turn).
+	 * Offered regardless, appended like an earlier addition: a list at
+	 * setup, or a function read on every request.
 	 */
 	readonly forceLoaded?: readonly string[] | (() => readonly string[]);
-	/** Deferred tools left out of the prompt's list (offered only when forced, e.g. propose_plan). */
+	/** Deferred tools left out of the prompt's list (offered only when forced). */
 	readonly unlisted?: readonly string[];
 }): DeferredToolSurface {
 	const deferred = new Set(
@@ -166,9 +163,6 @@ export const CODE_MODE_DEFERRED_TOOLS: readonly string[] = [
 	SEARCH_MCP_TOOLS_TOOL,
 	CALL_MCP_TOOL_TOOL,
 ];
-
-/** Offered only while plan mode is on, never callable from a program (it ends the turn). */
-export const PLAN_ONLY_TOOLS: readonly string[] = [PROPOSE_PLAN_TOOL];
 
 /**
  * The deferred tools a chat has added, in order: its recorded calls (every

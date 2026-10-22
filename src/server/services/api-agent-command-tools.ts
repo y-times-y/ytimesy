@@ -13,7 +13,12 @@ import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
-import { scopedShellCommand, stopApiCommand } from "./api-command-scope";
+import {
+	backgroundCommandMaxSeconds,
+	backgroundCommandScope,
+	scopedShellCommand,
+	stopApiCommand,
+} from "./api-command-scope";
 import {
 	COMMAND_WAIT_DEFAULT_SECONDS,
 	COMMAND_WAIT_MAX_SECONDS,
@@ -161,6 +166,15 @@ if pathlib.Path(status).exists():
             state = int(raw)
 elif subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', session], capture_output=True).returncode == 0:
     state = 'running'
+if state != 'running':
+    # A background command the agent saw finish needs no completion notice (background-command-notices.ts).
+    base = status[:-len('.status')]
+    if os.path.exists(base + '.background'):
+        try:
+            os.close(os.open(base + '.notified', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            pathlib.Path(base + '.notified').write_text('agent')
+        except FileExistsError:
+            pass
 if len(sys.argv) > 6 and pathlib.Path(sys.argv[6]).exists():
     output = sys.argv[6]
 if seconds > 0 and state == 'running' and not (len(sys.argv)>7 and sys.argv[7]=='live'):
@@ -219,13 +233,18 @@ export function apiAgentCommandTools(
 		command: string,
 		maxSeconds: number,
 		observeSeconds?: number,
+		/** A background command: its own scope (not stopped with the turn), the long cap, a notice when it exits. */
+		background?: { label: string },
 	) => {
 		signal.throwIfAborted();
 		const { machines, vm, cwd } = await resolveToolWorkspace(input);
 		const id = randomUUID();
 		const path = paths(id);
+		if (background) maxSeconds = backgroundCommandMaxSeconds();
 		const scoped = scopedShellCommand({
-			turnId: input.turnId,
+			turnId: background
+				? backgroundCommandScope(input.sessionId)
+				: input.turnId,
 			cwd,
 			command,
 			seconds: maxSeconds,
@@ -241,9 +260,12 @@ export function apiAgentCommandTools(
 		// tmux rejects commands over ~16 KB ("command too long"), so the job is
 		// written to a script file first and tmux only runs that file.
 		const script = `${root}/${id}.sh`;
+		const marker = background
+			? ` && printf '%s' ${quote(JSON.stringify({ label: background.label, startedAt: Date.now() }))} >${quote(`${root}/${id}.background`)}`
+			: "";
 		const result = await machines.exec(
 			vm,
-			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)} && tmux -L ${COMMAND_TMUX_SOCKET} new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
+			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)}${marker} && tmux -L ${COMMAND_TMUX_SOCKET} new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
 			15000 + (observeSeconds ?? 0) * 1000,
 		);
 		if (result.exitCode)
@@ -256,6 +278,7 @@ export function apiAgentCommandTools(
 				? { status: "running" }
 				: JSON.parse(result.stdout)),
 			...(input.output ? { reference: id } : {}),
+			...(background ? { background: true } : {}),
 		};
 	};
 	const tools: ToolSet = {
@@ -498,9 +521,15 @@ export function apiAgentCommandTools(
 				if (ownership.exitCode)
 					throw new Error("Command was not found in this agent session.");
 				await stopApiCommand(workspace, input.turnId, id);
+				await stopApiCommand(
+					workspace,
+					backgroundCommandScope(input.sessionId),
+					id,
+				);
+				// Stopped by the agent: no completion notice.
 				const result = await machines.exec(
 					vm,
-					`test -f ${quote(path.output)} || exit 2; tmux -L ${COMMAND_TMUX_SOCKET} kill-session -t ${quote(path.session)} 2>/dev/null || true; test -f ${quote(path.status)} || printf '${STOPPED_COMMAND_STATUS}\\n' >${quote(path.status)}`,
+					`test -f ${quote(path.output)} || exit 2; test -f ${quote(`${root}/${id}.notified`)} || printf agent >${quote(`${root}/${id}.notified`)}; tmux -L ${COMMAND_TMUX_SOCKET} kill-session -t ${quote(path.session)} 2>/dev/null || true; test -f ${quote(path.status)} || printf '${STOPPED_COMMAND_STATUS}\\n' >${quote(path.status)}`,
 					15_000,
 				);
 				if (result.exitCode)
@@ -518,13 +547,19 @@ export function apiAgentCommandTools(
 			// every slower check cost an extra continue_command model step.
 			yieldSeconds: z.number().int().min(0).max(30).default(10),
 		}),
-		execute: async (
-			{ command, maxSeconds = 300, yieldSeconds = 10 },
-			options,
-		) =>
-			once(options.toolCallId, () =>
-				launchCommand(command, maxSeconds, yieldSeconds),
-			),
+		// `background` is internal (the lean surfaces' background option); the schema drops it from model calls.
+		execute: async (arguments_, options) => {
+			const { command, maxSeconds = 300, yieldSeconds = 10 } = arguments_;
+			const { background } = arguments_ as { background?: { label: string } };
+			return once(options.toolCallId, () =>
+				launchCommand(
+					command,
+					maxSeconds,
+					yieldSeconds,
+					background?.label ? { label: background.label } : undefined,
+				),
+			);
+		},
 	});
 	tools.continue_command = tool({
 		description:

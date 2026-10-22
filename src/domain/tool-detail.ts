@@ -120,6 +120,8 @@ type ToolActivity = {
 	glyph?: SessionActivityGlyph;
 	/** No case knows this tool: the label is its name in words. */
 	fallback?: true;
+	/** A command left running in the background (ytimesy-job). */
+	background?: true;
 };
 
 /** What a command mostly does, for its icon. */
@@ -228,12 +230,23 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			const command = text("command") ?? text("cmd");
 			if (!command) return { verb: "Ran command" };
 			const display = displayCommand(command);
-			return {
-				verb: "Ran",
-				target: display,
-				code: true,
-				glyph: commandGlyph(display),
-			};
+			// One rule for the timeline: a recorded background command
+			// (background-command.ts), or another harness's background start.
+			const background =
+				item.background !== undefined ||
+				input.background === true ||
+				input.run_in_background === true ||
+				input.is_background === true ||
+				output?.status === "running" ||
+				/\bin background with ID\b/.test(item.output ?? "");
+			return background
+				? { verb: "Started", target: display, code: true, background: true }
+				: {
+						verb: "Ran",
+						target: display,
+						code: true,
+						glyph: commandGlyph(display),
+					};
 		}
 		case "continue_command":
 		case "read_command":
@@ -549,6 +562,8 @@ function harnessToolActivity(
 			};
 		case "propose_plan":
 			return { verb: "Proposed a plan" };
+		case "ask_user":
+			return { verb: "Asked you to choose" };
 		case "request_project_secret":
 			return { verb: "Asked for secret", target: text("name"), code: true };
 		case "search_mcp_tools":

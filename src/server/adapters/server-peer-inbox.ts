@@ -1,4 +1,6 @@
 import type { ModelMessage } from "ai";
+import { parseSteering } from "#/domain/agent-steering";
+import { SessionItemId } from "#/domain/ids";
 import type { UserMessageItem } from "#/domain/session-item";
 import { database } from "./database";
 import {
@@ -92,8 +94,12 @@ export async function injectServerPeerMessages(
 			!injected.some(
 				(message) => message.role === "user" && message.content === row.message,
 			)
-		)
+		) {
 			injected.push({ role: "user", content: row.message });
+			// Steering shows in the subagent's transcript where it arrived.
+			const steering = steeringTimelineItem(row.id, row.message);
+			if (steering && !delivered(steering.id)) users.push(steering);
+		}
 	}
 	await checkpoint(injected, users);
 	await database().query(
@@ -101,4 +107,45 @@ export async function injectServerPeerMessages(
 		[recipientId, result.rows.map((row) => row.id)],
 	);
 	return injected;
+}
+
+/** A delivered steering message as its recipient's timeline item; null for other notices. */
+export function steeringTimelineItem(
+	inboxId: string,
+	message: string,
+): UserMessageItem | null {
+	return parseSteering(message)
+		? {
+				kind: "userMessage",
+				id: SessionItemId(`steer:${inboxId}`),
+				text: message,
+			}
+		: null;
+}
+
+/** A steering message waiting in a subagent's mailbox. */
+export type PendingSteering = {
+	readonly id: string;
+	readonly recipientId: string;
+	readonly message: string;
+};
+
+/** Steering staged for these subagents that no model step has taken yet, oldest first. */
+export async function pendingSteeringMessages(
+	recipientIds: readonly string[],
+): Promise<PendingSteering[]> {
+	if (!recipientIds.length) return [];
+	const result = await database().query<{
+		id: string;
+		recipient_id: string;
+		message: string;
+	}>(
+		"select id,recipient_id,message from agent_peer_inbox where recipient_id=any($1::uuid[]) and not accepted and queued_send is null and message like 'Message from %' order by created_at,id",
+		[recipientIds],
+	);
+	return result.rows.map((row) => ({
+		id: row.id,
+		recipientId: row.recipient_id,
+		message: row.message,
+	}));
 }

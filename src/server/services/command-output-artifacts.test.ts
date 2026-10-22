@@ -17,6 +17,7 @@ import type { WorkspaceMachines } from "./workspace-machines";
 vi.mock("./api-command-scope", () => ({
 	scopedShellCommand: ({ command }: { command: string }) => command,
 	stopApiCommand: async () => {},
+	backgroundCommandScope: (sessionId: string) => `bg-${sessionId}`,
 }));
 const run = promisify(execFile);
 const roots: string[] = [];

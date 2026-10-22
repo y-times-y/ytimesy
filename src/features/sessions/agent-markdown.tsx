@@ -1,122 +1,34 @@
-import { Children, isValidElement, type ReactNode, useMemo } from "react";
-import "streamdown/styles.css";
-import {
-	CodeBlock,
-	type Components,
-	defaultRehypePlugins,
-	defaultUrlTransform,
-	Streamdown,
-} from "streamdown";
-import type { FileChangeEntry } from "#/domain/session-item";
-import { workspaceFileMention } from "#/domain/workspace-file-mention";
-import { codeHighlighter } from "./code-highlighter";
-import { FileMentionButton, mentionedFileChange } from "./file-mention";
+import { type ComponentProps, lazy, Suspense } from "react";
+import type { AgentMarkdown as Renderer } from "./agent-markdown-renderer";
 
-// Workspace-relative links use our IDE handler; keep sanitization and apply
-// the link/image policy below instead of harden's web-only URL resolution.
-const markdownPlugins = [
-	defaultRehypePlugins.raw,
-	defaultRehypePlugins.sanitize,
-];
+/**
+ * The Markdown renderer (Streamdown with its parsers, Mermaid, KaTeX and
+ * code highlighting, about 0.5 MB) is its own chunk, so it stays out of the
+ * home route's first load. It loads once the page is idle; until then a
+ * reply shows as plain text.
+ */
+const loadRenderer = () => import("./agent-markdown-renderer");
+const LazyRenderer = lazy(() =>
+	loadRenderer().then((module) => ({ default: module.AgentMarkdown })),
+);
 
-export function AgentMarkdown({
-	text,
-	streaming = false,
-	fileChanges = [],
-	onOpenFile,
-	fileMentions = true,
-}: {
-	text: string;
-	streaming?: boolean;
-	fileChanges?: readonly FileChangeEntry[];
-	onOpenFile?: (path: string) => void;
-	/** Off for text that is not about this workspace, such as GitHub comments. */
-	fileMentions?: boolean;
-}) {
-	const components = useMemo<Components>(() => {
-		function fileLink(path: string, label: string) {
-			const change = mentionedFileChange(path, fileChanges);
-			return (
-				<FileMentionButton
-					path={change?.path ?? path}
-					name={label}
-					onOpenFile={onOpenFile}
-				/>
-			);
-		}
-		return {
-			a: ({ href, children }) => {
-				const file = fileMentions && workspaceFileMention(href ?? "");
-				if (file)
-					return fileLink(file, typeof children === "string" ? children : file);
-				const safe = safeExternalLink(href);
-				return safe ? (
-					<a href={safe} target="_blank" rel="noopener noreferrer">
-						{children}
-					</a>
-				) : (
-					<span>{children}</span>
-				);
-			},
-			code: (props) => {
-				const { children, className } = props;
-				const text = markdownChildText(children);
-				if (!("data-block" in props)) {
-					const file = fileMentions && workspaceFileMention(text);
-					return file ? fileLink(file, text) : <code>{children}</code>;
-				}
-				return (
-					<CodeBlock
-						code={text}
-						lineNumbers={false}
-						language={className?.replace(/^language-/, "") ?? "text"}
-					/>
-				);
-			},
-			img: ({ src, alt }) => {
-				const safe = safeExternalLink(
-					typeof src === "string" ? src : undefined,
-				);
-				return safe ? (
-					<a href={safe} target="_blank" rel="noopener noreferrer">
-						{alt || "View image"}
-					</a>
-				) : (
-					<span>{alt || "Image"}</span>
-				);
-			},
-		};
-	}, [fileChanges, onOpenFile, fileMentions]);
+if (typeof window !== "undefined") {
+	const idle =
+		window.requestIdleCallback ??
+		((run: () => void) => window.setTimeout(run, 1_000));
+	idle(() => {
+		void loadRenderer().catch(() => {});
+	});
+}
+
+export function AgentMarkdown(props: ComponentProps<typeof Renderer>) {
 	return (
-		<Streamdown
-			className="session-markdown"
-			mode={streaming ? "streaming" : "static"}
-			isAnimating={streaming}
-			animated={streaming}
-			components={components}
-			plugins={{ code: codeHighlighter }}
-			rehypePlugins={markdownPlugins}
-			controls={false}
-			skipHtml
-			urlTransform={defaultUrlTransform}
-		>
-			{text}
-		</Streamdown>
+		<Suspense fallback={<PlainMarkdown text={props.text} />}>
+			<LazyRenderer {...props} />
+		</Suspense>
 	);
 }
 
-function safeExternalLink(href: string | undefined) {
-	return href && /^(https?:\/\/|mailto:|#)/i.test(href) ? href : null;
-}
-
-function markdownChildText(children: ReactNode): string {
-	return Children.toArray(children)
-		.map((child) =>
-			typeof child === "string" || typeof child === "number"
-				? String(child)
-				: isValidElement<{ children?: ReactNode }>(child)
-					? markdownChildText(child.props.children)
-					: "",
-		)
-		.join("");
+function PlainMarkdown({ text }: { text: string }) {
+	return <div className="whitespace-pre-wrap break-words">{text}</div>;
 }

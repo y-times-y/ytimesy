@@ -32,13 +32,25 @@ const mocks = vi.hoisted(() => ({
 	reviewLoop: vi.fn(),
 	beforeModel: vi.fn(),
 	afterAttempt: vi.fn(),
-	leadGate: vi.fn(async (): Promise<"ready" | "wait"> => "ready"),
+	leadGate: vi.fn(async (): Promise<"ready" | "busy" | "wait"> => "ready"),
 	/** A lean surface (lead mode needs one); off by default. */
 	lean: null as null | Record<string, unknown>,
-	roundOpen: vi.fn(async () => false),
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	/** The turn's workspace preparation (ready at once unless a test holds it). */
+	workspace: vi.fn(),
+	/** The repository path the chat last reported (none unless a test sets one). */
+	preparedDirectory: vi.fn(),
+	/** The chat's pinned baseline and its journaled hook configuration. */
+	baseline: vi.fn(),
+	hookConfig: vi.fn(),
+}));
+vi.mock("../adapters/prepared-checkout", () => ({
+	readPreparedCheckoutDirectory: mocks.preparedDirectory,
+	savePreparedCheckoutDirectory: vi.fn(async () => {}),
+	readSessionDerivedValue: mocks.hookConfig,
+	saveSessionDerivedValue: vi.fn(async () => {}),
 }));
 // Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
 vi.mock("../services/turn-memory", () => ({
@@ -61,7 +73,6 @@ vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
 vi.mock("../services/fusion-lead", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../services/fusion-lead")>()),
 	fusionLeadGate: mocks.leadGate,
-	fusionRoundOpen: mocks.roundOpen,
 }));
 vi.mock("../services/review-loop", () => ({
 	createReviewLoop: mocks.reviewLoop,
@@ -155,6 +166,12 @@ beforeEach(() => {
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
 	mocks.lean = null;
+	mocks.workspace
+		.mockReset()
+		.mockImplementation(async () => ({ machines: {}, vm: "vm", cwd: "/repo" }));
+	mocks.preparedDirectory.mockReset().mockResolvedValue(null);
+	mocks.baseline.mockReset().mockResolvedValue(null);
+	mocks.hookConfig.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -256,6 +273,7 @@ vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: mocks.result,
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: mocks.enqueue }));
@@ -268,7 +286,7 @@ vi.mock("../services/conversation-recovery", () => ({
 	ensureConversationCodePoint: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/turn-verification", () => ({
-	readVerificationBaseline: vi.fn(async () => null),
+	readVerificationBaseline: mocks.baseline,
 }));
 vi.mock("../auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: mocks.auth,
@@ -306,11 +324,13 @@ vi.mock("../services/project-secrets", () => ({
 	writeAgentProjectSecrets: vi.fn(async () => undefined),
 }));
 vi.mock("../services/api-turn-workspace", () => ({
-	deferredApiTurnWorkspace: () => async () => ({
-		machines: {},
-		vm: "vm",
-		cwd: "/repo",
-	}),
+	deferredApiTurnWorkspace: () => {
+		let prepared: Promise<unknown> | undefined;
+		return () => {
+			prepared ??= mocks.workspace();
+			return prepared;
+		};
+	},
 }));
 vi.mock("../services/session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
@@ -464,29 +484,10 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 		);
 	});
 
-	it("commits nothing for a subagent or a turn that ends in plan mode", async () => {
+	it("commits nothing for a subagent", async () => {
 		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
 		answering();
 		await runApiTurn({} as WorkspaceMachines, subscriptionTurn());
-		codexOwner();
-		await runApiTurn(
-			{} as WorkspaceMachines,
-			subscriptionTurn({
-				items: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("user"),
-						text: "Plan branches",
-					},
-					{
-						kind: "dynamicToolCall",
-						id: SessionItemId("enter"),
-						tool: "enter_plan_mode",
-						status: "completed",
-					},
-				],
-			} as Partial<ApiTurn>),
-		);
 		expect(mocks.commit).not.toHaveBeenCalled();
 	});
 });
@@ -1277,45 +1278,6 @@ it("runs the UserPromptSubmit hook on a durable turn's first step only", async (
 	expect(mocks.promptSubmit).not.toHaveBeenCalled();
 });
 
-it.each([
-	["planning", "enter_plan_mode", "Plan mode is still on"],
-	["proposed", "planProposal", "replied to your proposed plan"],
-])(
-	"tells a %s agent it is still in plan mode on the durable turn's first step",
-	async (_state, marker, notice) => {
-		mocks.stepRuntime.mockImplementation(async (input) => ({
-			messages: input.messages,
-			outcome: "continue",
-		}));
-		const items =
-			marker === "planProposal"
-				? [{ kind: "planProposal", id: SessionItemId("plan"), plan: "Plan" }]
-				: [
-						{
-							kind: "dynamicToolCall",
-							id: SessionItemId("enter"),
-							tool: marker,
-							status: "completed",
-						},
-					];
-		const turn = {
-			...childTurn,
-			items,
-			messages: [{ role: "user", content: "Go" }],
-		} as ApiTurn;
-		for (const index of [1, 2])
-			await runApiTurn({} as WorkspaceMachines, turn, {
-				index,
-				signal: new AbortController().signal,
-			});
-		const [first, second] = mocks.stepRuntime.mock.calls.map(([input]) =>
-			JSON.stringify(input.messages),
-		);
-		expect(first).toContain(notice);
-		expect(second).not.toContain(notice);
-	},
-);
-
 function hangUntilAborted(input: { signal: AbortSignal }) {
 	return new Promise((_resolve, reject) =>
 		input.signal.addEventListener("abort", () => reject(input.signal.reason)),
@@ -1541,7 +1503,7 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			return { messages: input.messages, outcome: "completed" };
 		});
 
-	it("lead=fusion: a round still open at completion continues the turn once; the next step completes", async () => {
+	it("lead=fusion: Main is released during a build round: the turn completes while it runs", async () => {
 		mocks.variant.mockReturnValue({
 			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
 			lead: "fusion",
@@ -1554,35 +1516,17 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			waitHint: () => "",
 			saveHistory: async () => null,
 		};
-		mocks.leadGate.mockClear();
-		mocks.roundOpen.mockReset().mockResolvedValueOnce(true);
-		const before = Date.now();
+		mocks.leadGate.mockReset().mockResolvedValueOnce("busy");
 		expect(
 			await runApiTurn(
 				{} as WorkspaceMachines,
 				{ ...rootTurn, id: "turn-lead" },
 				durable(),
 			),
-		).toBe("continue");
-		expect(mocks.leadGate).toHaveBeenCalledOnce();
-		// Bounded by this step's gate: only a round started since then holds it.
-		const [owner, since] = mocks.roundOpen.mock.calls[0] as unknown as [
-			{ id: string },
-			number,
-		];
-		expect(owner.id).toBe("session");
-		expect(since).toBeGreaterThanOrEqual(before);
-		expect(mocks.commit).not.toHaveBeenCalled();
-		mocks.roundOpen.mockResolvedValue(false);
-		expect(
-			await runApiTurn(
-				{} as WorkspaceMachines,
-				{ ...rootTurn, id: "turn-lead" },
-				{ index: 3, signal: new AbortController().signal },
-			),
 		).toBe("completed");
-		expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+		expect(mocks.leadGate).toHaveBeenCalledOnce();
 		expect(mocks.commit).toHaveBeenCalledOnce();
+		mocks.leadGate.mockResolvedValue("ready");
 		mocks.lean = null;
 	});
 
@@ -1594,26 +1538,6 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(mocks.loop).not.toHaveBeenCalled();
 		expect(mocks.reviewLoop).not.toHaveBeenCalled();
 		expect(mocks.commit).toHaveBeenCalledOnce();
-	});
-
-	it("commits and pushes nothing for a root turn that ends in plan mode", async () => {
-		finishing();
-		const planning = {
-			...rootTurn,
-			items: [
-				...rootTurn.items,
-				{
-					kind: "dynamicToolCall",
-					id: SessionItemId("enter"),
-					tool: "enter_plan_mode",
-					status: "completed",
-				},
-			],
-		} as ApiTurn;
-		expect(await runApiTurn({} as WorkspaceMachines, planning, durable())).toBe(
-			"completed",
-		);
-		expect(mocks.commit).not.toHaveBeenCalled();
 	});
 
 	it("shows why a root chat's changes were not pushed, and still completes", async () => {
@@ -1844,5 +1768,208 @@ describe("the VM's memory token is released however a step ends", () => {
 		);
 		expect(memory.prepareVm).not.toHaveBeenCalled();
 		expect(memory.releaseVm).toHaveBeenCalledWith(undefined);
+	});
+});
+
+describe("a builder's first request before its workspace is ready", () => {
+	const rootTurn = {
+		id: "turn-early",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [{ role: "user", content: "Reply with ananab" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("user"),
+				text: "Reply with ananab",
+			},
+		],
+		lease_id: "lease",
+	} as ApiTurn;
+	const firstStep = () => ({ index: 1, signal: new AbortController().signal });
+	const lean = {
+		shape: "core",
+		readOnly: false,
+		commandReader: "read_command",
+		waitHint: () => "",
+		saveHistory: async () => null,
+	};
+	/** A workspace that becomes ready only when the test says so. */
+	function heldWorkspace() {
+		let ready = () => {};
+		let fail = (_error: Error) => {};
+		const held = new Promise((resolve, reject) => {
+			ready = () => resolve({ machines: {}, vm: "vm", cwd: "/repo" });
+			fail = reject;
+		});
+		held.catch(() => {});
+		mocks.workspace.mockReturnValue(held);
+		return { ready: () => ready(), fail: (error: Error) => fail(error) };
+	}
+	/** The chat's journaled configuration at its pinned baseline. */
+	function knownHooks(events: string[]) {
+		mocks.baseline.mockResolvedValue("a".repeat(40));
+		mocks.hookConfig.mockResolvedValue({
+			version: 1,
+			hooks: events.map((event) => ({ event, command: "true" })),
+		});
+	}
+	beforeEach(() => {
+		mocks.lean = lean;
+		knownHooks([]);
+	});
+
+	it("calls the model before the VM is ready, naming the path the chat reported", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		const order: string[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			order.push("model");
+			expect(input.instructions).toContain("/repo");
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			setTimeout(() => {
+				order.push("workspace");
+				workspace.ready();
+			}, 5);
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		// The step still ended on a prepared workspace: committed from it.
+		expect(order).toEqual(["model", "workspace"]);
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		expect(mocks.preparedDirectory).toHaveBeenCalledWith(
+			"owner",
+			"session",
+			"project",
+		);
+	});
+
+	it("waits for the workspace as before when it is ready within the short wait", async () => {
+		mocks.preparedDirectory.mockResolvedValue("/elsewhere");
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			expect(input.instructions).toContain("/repo");
+			expect(input.instructions).not.toContain("/elsewhere");
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["unknown (a new chat)", null],
+		["a configured UserPromptSubmit hook", ["UserPromptSubmit"]],
+	])(
+		"waits for the workspace and the prompt check when the hook configuration is %s",
+		async (_case, events) => {
+			if (events) knownHooks(events);
+			else {
+				mocks.baseline.mockResolvedValue(null);
+				mocks.hookConfig.mockResolvedValue(null);
+			}
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const workspace = heldWorkspace();
+			const held = mocks.workspace();
+			setTimeout(() => workspace.ready(), 600);
+			// Like the real check, it needs the workspace.
+			let checked = false;
+			mocks.promptSubmit.mockImplementation(async () => {
+				await held;
+				checked = true;
+				return { block: false };
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				// The prompt reached the model only after its check passed.
+				expect(checked).toBe(true);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+		},
+	);
+
+	it("waits for the workspace when no chat of the project reported a path", async () => {
+		const workspace = heldWorkspace();
+		let ready = false;
+		setTimeout(() => {
+			ready = true;
+			workspace.ready();
+		}, 600);
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			expect(ready).toBe(true);
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+	});
+
+	it("fails the turn at the workspace stage when the VM fails after the request went out", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			workspace.fail(new Error("Workspace sizing did not complete."));
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("failed");
+		expect(mocks.commit).not.toHaveBeenCalled();
+		const items = mocks.finalize.mock.lastCall?.[2] as { kind: string }[];
+		expect(items.some((item) => item.kind === "error")).toBe(true);
+	});
+
+	it("ends the turn with the refusal when the UserPromptSubmit check refuses it late", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.promptSubmit.mockResolvedValue({
+			block: true,
+			reason: "Name the ticket.",
+		});
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			workspace.ready();
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("failed");
+		expect(mocks.stepRuntime).toHaveBeenCalledOnce();
+		expect(JSON.stringify(mocks.finalize.mock.lastCall?.[2])).toContain(
+			"Name the ticket.",
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("is not used by a durable turn's later steps", async () => {
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.stepRuntime.mockImplementation(async (input) => ({
+			messages: input.messages,
+			outcome: "continue",
+		}));
+		mocks.workspace.mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 450));
+			return { machines: {}, vm: "vm", cwd: "/repo" };
+		});
+		await runApiTurn({} as WorkspaceMachines, rootTurn, {
+			index: 2,
+			signal: new AbortController().signal,
+		});
+		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
 	});
 });

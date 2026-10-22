@@ -498,7 +498,7 @@ export const SIDEKICK_EXPLORE_NOTE =
 
 /** Opens the exploration brief the harness writes from the user's request. */
 export const HARNESS_EXPLORE_HEADING =
-	"Exploration round for your lead, started by the harness before the lead plans.";
+	"Exploration round for Main, started by the harness before Main plans.";
 /** The longest part of the user's request an exploration brief quotes. */
 const EXPLORE_REQUEST_MAX = 5_000;
 
@@ -515,7 +515,7 @@ export function harnessExplorationBrief(requestText: string) {
 	return [
 		HARNESS_EXPLORE_HEADING,
 		`The user's request:\n<request>\n${quoted}\n</request>`,
-		"Find the code this request touches so the lead can plan without reading it: the relevant files, the key snippets with their line ranges, how to build and run the checks (and what they print now), what the change will touch, and what is still open.",
+		"Find the code this request touches so Main can plan without reading it: the relevant files, the key snippets with their line ranges, how to build and run the checks (and what they print now), what the change will touch, and what is still open.",
 		SIDEKICK_EXPLORE_NOTE,
 	].join("\n\n");
 }
@@ -532,9 +532,9 @@ export function sidekickRoundMessage(input: {
 	const first = input.turnFirstRound ?? 1;
 	const heading =
 		first <= 1
-			? `Round ${input.round}/${input.maxRounds} from your lead.`
-			: `Round ${input.round} from your lead (${input.round - first + 1}/${input.maxRounds} for the user's new request).`;
-	return `${heading} You work in the lead's checkout as it is now (the lead may have changed or reverted your earlier work); the lead waits while you work and reviews this round's changes in place.\n\n${input.message.trim()}${input.kind === "explore" ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`;
+			? `Round ${input.round}/${input.maxRounds} from Main.`
+			: `Round ${input.round} from Main (${input.round - first + 1}/${input.maxRounds} for the user's new request).`;
+	return `${heading} You work in Main's checkout as it is now (Main may have changed or reverted your earlier work); Main does not edit while you work and reviews this round's changes in place.\n\n${input.message.trim()}${input.kind === "explore" ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`;
 }
 
 /* ------------------------------------------------------------------ */

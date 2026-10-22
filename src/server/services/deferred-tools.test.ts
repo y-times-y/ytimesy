@@ -17,7 +17,6 @@ import {
 	loadedDeferredToolsFromItems,
 	loadedDeferredToolsFromMessages,
 	oneLineDescription,
-	PLAN_ONLY_TOOLS,
 } from "./deferred-tools";
 import { runModelAgentStep } from "./model-agent-loop";
 
@@ -42,6 +41,8 @@ const turnTools = (): ToolSet => ({
 });
 
 /** What api-turn defers in code mode primary. */
+/** A tool offered only when forced (the retired propose_plan worked this way). */
+const PLAN_ONLY_TOOLS = ["propose_plan"];
 const PRIMARY = [...CODE_MODE_DEFERRED_TOOLS, ...PLAN_ONLY_TOOLS];
 
 describe("deferred tool surface", () => {

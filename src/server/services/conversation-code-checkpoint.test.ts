@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { localHarnessWorkspace } from "../../../tests/helpers/local-harness-workspace";
 import {
+	assertConversationCodePresent,
 	captureConversationCode,
+	FORK_CHECKPOINT_GONE,
 	restoreConversationCode,
+	startCheckoutFromConversationCode,
 } from "./conversation-code-checkpoint";
 import { reviewRef } from "./review-loop";
 
@@ -132,3 +135,82 @@ it("captures the review loop's refs (refs/ytimesy/review/...) as well as the att
 		await fixture.cleanup();
 	}
 });
+
+it("starts a copied checkout on its own branch at a message's code, leaving the source as it is", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		const { root, workspace, run } = fixture;
+		const git = async (dir: string, ...args: string[]) =>
+			(await run("git", ["-C", dir, ...args])).stdout.trim();
+		// The message's code: a staged edit, an unstaged one and an untracked file.
+		await writeFile(join(root, "source.txt"), "staged\n");
+		await git(root, "add", "source.txt");
+		await writeFile(join(root, "source.txt"), "at the message\n");
+		await writeFile(join(root, "notes.txt"), "untracked\n");
+		const atMessage = await captureConversationCode(workspace);
+		const index = await git(root, "write-tree");
+		// Later turns commit and change more on the source's branch.
+		await writeFile(join(root, "source.txt"), "later\n");
+		await writeFile(join(root, "later.txt"), "later\n");
+		await git(root, "add", "-A");
+		await git(root, "commit", "-qm", "later turn");
+		await writeFile(join(root, "scratch.txt"), "uncommitted later\n");
+		const sourceBranch = await git(root, "branch", "--show-current");
+		const sourceHead = await git(root, "rev-parse", "HEAD");
+		await assertConversationCodePresent(workspace, atMessage);
+		// A VM fork is a disk copy: ignored files and local refs come along.
+		await mkdir(join(root, "node_modules"));
+		await writeFile(join(root, "node_modules/keep"), "dependency");
+		const copy = `${root}-fork`;
+		await run("cp", ["-a", root, copy]);
+		await startCheckoutFromConversationCode(
+			{ ...workspace, cwd: copy },
+			atMessage,
+			"ytimesy/fork-abc123",
+		);
+		expect(await git(copy, "branch", "--show-current")).toBe(
+			"ytimesy/fork-abc123",
+		);
+		expect(await git(copy, "rev-parse", "HEAD")).toBe(atMessage.head);
+		expect(await git(copy, "write-tree")).toBe(index);
+		expect(await readFile(join(copy, "source.txt"), "utf8")).toBe(
+			"at the message\n",
+		);
+		expect(await readFile(join(copy, "notes.txt"), "utf8")).toBe("untracked\n");
+		await expect(readFile(join(copy, "later.txt"))).rejects.toThrow();
+		await expect(readFile(join(copy, "scratch.txt"))).rejects.toThrow();
+		expect(await readFile(join(copy, "node_modules/keep"), "utf8")).toBe(
+			"dependency",
+		);
+		// The source keeps its branch, commits and uncommitted work.
+		expect(await git(root, "branch", "--show-current")).toBe(sourceBranch);
+		expect(await git(root, "rev-parse", "HEAD")).toBe(sourceHead);
+		expect(await readFile(join(root, "scratch.txt"), "utf8")).toBe(
+			"uncommitted later\n",
+		);
+		expect(await readFile(join(root, "source.txt"), "utf8")).toBe("later\n");
+		// A checkpoint whose refs are gone fails with the fork's error, changing nothing.
+		await git(root, "update-ref", "-d", atMessage.ref);
+		await expect(
+			assertConversationCodePresent(workspace, atMessage),
+		).rejects.toThrow(FORK_CHECKPOINT_GONE);
+		await git(copy, "update-ref", "-d", `${atMessage.ref}-index`);
+		await writeFile(join(copy, "source.txt"), "fork edit\n");
+		await expect(
+			startCheckoutFromConversationCode(
+				{ ...workspace, cwd: copy },
+				atMessage,
+				"ytimesy/fork-other",
+			),
+		).rejects.toThrow(FORK_CHECKPOINT_GONE);
+		expect(await git(copy, "branch", "--show-current")).toBe(
+			"ytimesy/fork-abc123",
+		);
+		expect(await readFile(join(copy, "source.txt"), "utf8")).toBe(
+			"fork edit\n",
+		);
+		await run("rm", ["-rf", copy]);
+	} finally {
+		await fixture.cleanup();
+	}
+}, 30_000);

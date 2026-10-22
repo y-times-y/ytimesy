@@ -20,6 +20,7 @@ import {
 	captureTurnStarted,
 	type TurnAnalyticsSession,
 } from "../services/turn-analytics";
+import { startAfterResponse } from "./after-response";
 import { modelConcurrencyLimits } from "./agent-capacity";
 import { TURN_DEADLINE_REQUEST_ID } from "./attempt-loop-store";
 import { dispatchBackgroundJob } from "./background-job-dispatch";
@@ -217,21 +218,28 @@ export async function enqueueApiTurn(input: {
 		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) ===
 		"durable-object"
 	) {
-		try {
-			if (
-				!(await dispatchBackgroundJob({
-					id: randomUUID(),
-					kind: "model-admission",
-				}))
-			)
+		// The turn is committed; waking its executor (an admission claim and the
+		// chat's startTurn) need not hold the sender's response. A web request
+		// sends it after responding; a lost wake is admitted by the next
+		// minute's admission sweep, like before.
+		const wake = async () => {
+			try {
+				if (
+					!(await dispatchBackgroundJob({
+						id: randomUUID(),
+						kind: "model-admission",
+					}))
+				)
+					console.warn(
+						"Cloudflare turn wake is unavailable; queued turn awaits recovery.",
+					);
+			} catch {
 				console.warn(
-					"Cloudflare turn wake is unavailable; queued turn awaits recovery.",
+					"Cloudflare turn wake deferred; queued turn awaits recovery.",
 				);
-		} catch {
-			console.warn(
-				"Cloudflare turn wake deferred; queued turn awaits recovery.",
-			);
-		}
+			}
+		};
+		if (!startAfterResponse(wake)) await wake();
 	}
 }
 
