@@ -24,7 +24,7 @@ export function ProviderConfirmation({
 				<strong>Confirm 18+</strong>
 				<small>For Muse Spark · once in OpenRouter</small>
 			</span>
-			<ArrowUpRight size={13} aria-hidden="true" />
+			<ArrowUpRight size={14} aria-hidden="true" />
 		</a>
 	);
 }

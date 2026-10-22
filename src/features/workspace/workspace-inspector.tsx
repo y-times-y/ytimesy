@@ -150,7 +150,7 @@ export function WorkspaceInspector({
 									if (activeView === view) onActiveViewChange("overview");
 								}}
 							>
-								<X size={13} />
+								<X size={14} />
 							</button>
 						</div>
 					))}

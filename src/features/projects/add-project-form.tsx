@@ -194,7 +194,7 @@ export function AddProjectForm({
 											{checked ? (
 												<Check
 													className="project-create-selected"
-													size={15}
+													size={16}
 													aria-hidden="true"
 												/>
 											) : null}

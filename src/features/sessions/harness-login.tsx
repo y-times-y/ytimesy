@@ -41,7 +41,7 @@ export function HarnessLogin({
 	return (
 		<section className="harness-login" aria-label={title}>
 			<span className="harness-login-mark" aria-hidden="true">
-				<AgentProviderMark provider={harnessId} size={15} />
+				<AgentProviderMark provider={harnessId} size={16} />
 			</span>
 			<div className="harness-login-text">
 				<strong>{title}</strong>
@@ -58,7 +58,7 @@ export function HarnessLogin({
 					rel="noreferrer"
 				>
 					{access.subscriptionActionLabel ?? "Open"}
-					<ArrowUpRight size={13} aria-hidden="true" />
+					<ArrowUpRight size={14} aria-hidden="true" />
 				</a>
 			) : access.subscriptionActionLabel ? (
 				<button

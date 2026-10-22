@@ -189,7 +189,7 @@ export function Plugins() {
 											disabled={busy}
 											onClick={() => uninstallMutation.mutate(row.id)}
 										>
-											<Trash2 size={15} />
+											<Trash2 size={16} />
 										</button>
 									</div>
 								</li>

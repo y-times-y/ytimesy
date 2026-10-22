@@ -119,18 +119,19 @@ export function WorkspaceOverview({
 						type="button"
 						onClick={() => onOpen(card.view)}
 					>
-						<card.icon size={19} />
+						<card.icon size={16} />
 						<span>
 							<strong>{card.title}</strong>
 							<small>{card.detail}</small>
 						</span>
-						{card.view === "diff" ? (
+						{card.view === "diff" &&
+						(totals.additions > 0 || totals.deletions > 0) ? (
 							<span className="overview-diff-counts">
 								<span>+{totals.additions}</span>{" "}
 								<span>−{totals.deletions}</span>
 							</span>
 						) : null}
-						<ChevronRight size={15} />
+						<ChevronRight size={14} />
 					</button>
 				))}
 			</div>
