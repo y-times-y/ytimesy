@@ -5,6 +5,7 @@ import type { UserAgentAccount } from "./user-agent-account";
 export type SettingsSection =
 	| "account"
 	| "privacy"
+	| "memory"
 	| "github"
 	| "project"
 	| "agents"
@@ -18,6 +19,7 @@ export function settingsNavItems(): readonly {
 	return [
 		{ id: "account", label: "Account" },
 		{ id: "privacy", label: "Privacy" },
+		{ id: "memory", label: "Memory" },
 		{ id: "github", label: "GitHub" },
 		{ id: "project", label: "Project" },
 		{ id: "agents", label: "Agents" },
