@@ -80,8 +80,9 @@
 }
 .memory-clear {
 	display: flex;
-	justify-content: flex-end;
+	justify-content: flex-start;
 	gap: 4px;
+	margin-top: 24px;
 }
 @container (min-width: 860px) {
 	.memory-inspector {
