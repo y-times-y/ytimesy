@@ -278,3 +278,36 @@ it("probes every path for a scheduled health check and restores recovered paths"
 		expect(relays).not.toHaveBeenCalled();
 	});
 });
+
+it("lets the VPC egress keep its connections but closes them on a direct (Node) path", async () => {
+	vi.stubEnv("YTIMESY_CODEX_RELAY_URL", "");
+	vi.stubEnv("YTIMESY_CODEX_RELAY_SECRET", "");
+	vi.stubEnv("YTIMESY_CODEX_RELAY_URL_2", "");
+	vi.stubEnv("YTIMESY_CODEX_RELAY_SECRET_2", "");
+	const request = () =>
+		subscriptionFetch(
+			"owner",
+			"codex/responses",
+			{
+				method: "POST",
+				body: "{}",
+				headers: { Connection: "close", "session-id": "a".repeat(64) },
+			},
+			"owner-account",
+		);
+	const vpc = vi
+		.fn<typeof fetch>()
+		.mockResolvedValue(new Response("data: ok\n\n"));
+	await withCodexSubscriptionEgress(vpc, request);
+	const sent = new Headers(vpc.mock.calls[0][1]?.headers);
+	expect(sent.get("connection")).toBeNull();
+	expect(sent.get("session-id")).toBe("a".repeat(64));
+	expect(sent.get("authorization")).toBe("Bearer owner-token");
+	const direct = vi
+		.spyOn(globalThis, "fetch")
+		.mockResolvedValue(new Response("data: ok\n\n"));
+	await request();
+	expect(new Headers(direct.mock.calls[0][1]?.headers).get("connection")).toBe(
+		"close",
+	);
+});

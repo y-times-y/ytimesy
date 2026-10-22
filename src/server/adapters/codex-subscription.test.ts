@@ -13,8 +13,10 @@ import { runModelAgentStep } from "../services/model-agent-loop";
 import {
 	codexSubscriptionCatalog,
 	codexSubscriptionModel,
+	forgetSubscriptionConnectionsForTests,
 	readCodexSubscriptionUsage,
 	subscriptionLimits,
+	warmCodexSubscriptionCatalog,
 } from "./codex-subscription";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), connected: vi.fn() }));
@@ -29,6 +31,7 @@ beforeEach(() => {
 		chatgptAccountId: `account-${userId}`,
 	}));
 	mocks.connected.mockReset().mockResolvedValue(true);
+	forgetSubscriptionConnectionsForTests();
 });
 
 it("reports bounded catalog HTTP diagnostics without exposing provider bodies", async () => {
@@ -620,4 +623,42 @@ it("answers from the last catalog past a minute while it refreshes, and loads ag
 	} finally {
 		vi.useRealTimers();
 	}
+});
+
+it("reads a step's token once for its catalog and model runtime, and again once it is not recent", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		const fetch = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(
+				async () =>
+					new Response(JSON.stringify({ models: [{ slug: "shared-model" }] })),
+			);
+		const owner = "shared-token-owner";
+		warmCodexSubscriptionCatalog(owner);
+		const runtime = await codexSubscriptionModel(owner, "shared-model", "low");
+		expect(runtime.contextWindow).toBeUndefined();
+		// One read served the catalog request and the runtime.
+		expect(mocks.auth).toHaveBeenCalledTimes(1);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(
+			new Headers(fetch.mock.calls[0][1]?.headers).get("authorization"),
+		).toBe(`Bearer token-${owner}`);
+		vi.setSystemTime(Date.now() + 21_000);
+		await codexSubscriptionModel(owner, "shared-model", "low");
+		expect(mocks.auth).toHaveBeenCalledTimes(2);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("does not keep a failed token read", async () => {
+	vi.spyOn(globalThis, "fetch").mockImplementation(
+		async () => new Response(JSON.stringify({ models: [{ slug: "m" }] })),
+	);
+	const owner = "failed-token-owner";
+	mocks.auth.mockRejectedValueOnce(new Error("database unavailable"));
+	await expect(codexSubscriptionModel(owner, "m", "low")).rejects.toThrow();
+	const runtime = await codexSubscriptionModel(owner, "m", "low");
+	expect(runtime.model).toBeDefined();
 });

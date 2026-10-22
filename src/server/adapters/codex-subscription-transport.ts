@@ -428,6 +428,11 @@ function sendOverPath(
 		if (accountId && accountId !== tokens.chatgptAccountId)
 			throw new Error("Subscription account changed; restart this turn.");
 		const headers = new Headers(init?.headers);
+		// `Connection: close` keeps Node's HTTP/1 pool from holding idle sockets
+		// across long model steps. The edge's VPC binding has no such pool of
+		// ours; there it would only force a new connection (TCP and TLS) to
+		// chatgpt.com through the egress for every request.
+		if (path.id === "vpc") headers.delete("Connection");
 		headers.set("Authorization", `Bearer ${tokens.accessToken}`);
 		headers.set("ChatGPT-Account-ID", tokens.chatgptAccountId);
 		headers.set("User-Agent", "ytimesy/1.0");
