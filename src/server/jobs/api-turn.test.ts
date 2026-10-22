@@ -38,6 +38,16 @@ const mocks = vi.hoisted(() => ({
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
 	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	/** The turn's workspace preparation (ready at once unless a test holds it). */
+	workspace: vi.fn(),
+	/** The repository path the chat last reported (none unless a test sets one). */
+	preparedDirectory: vi.fn(),
+}));
+vi.mock("../adapters/prepared-checkout", () => ({
+	readPreparedCheckoutDirectory: mocks.preparedDirectory,
+	savePreparedCheckoutDirectory: vi.fn(async () => {}),
+	readSessionDerivedValue: vi.fn(async () => null),
+	saveSessionDerivedValue: vi.fn(async () => {}),
 }));
 // Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
 vi.mock("../services/turn-memory", () => ({
@@ -153,6 +163,10 @@ beforeEach(() => {
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
 	mocks.lean = null;
+	mocks.workspace
+		.mockReset()
+		.mockImplementation(async () => ({ machines: {}, vm: "vm", cwd: "/repo" }));
+	mocks.preparedDirectory.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -305,11 +319,13 @@ vi.mock("../services/project-secrets", () => ({
 	writeAgentProjectSecrets: vi.fn(async () => undefined),
 }));
 vi.mock("../services/api-turn-workspace", () => ({
-	deferredApiTurnWorkspace: () => async () => ({
-		machines: {},
-		vm: "vm",
-		cwd: "/repo",
-	}),
+	deferredApiTurnWorkspace: () => {
+		let prepared: Promise<unknown> | undefined;
+		return () => {
+			prepared ??= mocks.workspace();
+			return prepared;
+		};
+	},
 }));
 vi.mock("../services/session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
@@ -1747,5 +1763,161 @@ describe("the VM's memory token is released however a step ends", () => {
 		);
 		expect(memory.prepareVm).not.toHaveBeenCalled();
 		expect(memory.releaseVm).toHaveBeenCalledWith(undefined);
+	});
+});
+
+describe("a builder's first request before its workspace is ready", () => {
+	const rootTurn = {
+		id: "turn-early",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [{ role: "user", content: "Reply with ananab" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("user"),
+				text: "Reply with ananab",
+			},
+		],
+		lease_id: "lease",
+	} as ApiTurn;
+	const firstStep = () => ({ index: 1, signal: new AbortController().signal });
+	const lean = {
+		shape: "core",
+		readOnly: false,
+		commandReader: "read_command",
+		waitHint: () => "",
+		saveHistory: async () => null,
+	};
+	/** A workspace that becomes ready only when the test says so. */
+	function heldWorkspace() {
+		let ready = () => {};
+		let fail = (_error: Error) => {};
+		const held = new Promise((resolve, reject) => {
+			ready = () => resolve({ machines: {}, vm: "vm", cwd: "/repo" });
+			fail = reject;
+		});
+		held.catch(() => {});
+		mocks.workspace.mockReturnValue(held);
+		return { ready: () => ready(), fail: (error: Error) => fail(error) };
+	}
+	beforeEach(() => {
+		mocks.lean = lean;
+	});
+
+	it("calls the model before the VM is ready, naming the path the chat reported", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		const order: string[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			order.push("model");
+			expect(input.instructions).toContain("/repo");
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			setTimeout(() => {
+				order.push("workspace");
+				workspace.ready();
+			}, 5);
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		// The step still ended on a prepared workspace: committed from it.
+		expect(order).toEqual(["model", "workspace"]);
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		expect(mocks.preparedDirectory).toHaveBeenCalledWith(
+			"owner",
+			"session",
+			"project",
+		);
+	});
+
+	it("waits for the workspace as before when it is ready within the short wait", async () => {
+		mocks.preparedDirectory.mockResolvedValue("/elsewhere");
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			expect(input.instructions).toContain("/repo");
+			expect(input.instructions).not.toContain("/elsewhere");
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
+	});
+
+	it("waits for the workspace when no chat of the project reported a path", async () => {
+		const workspace = heldWorkspace();
+		let ready = false;
+		setTimeout(() => {
+			ready = true;
+			workspace.ready();
+		}, 600);
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			expect(ready).toBe(true);
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+	});
+
+	it("fails the turn at the workspace stage when the VM fails after the request went out", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			workspace.fail(new Error("Workspace sizing did not complete."));
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("failed");
+		expect(mocks.commit).not.toHaveBeenCalled();
+		const items = mocks.finalize.mock.lastCall?.[2] as { kind: string }[];
+		expect(items.some((item) => item.kind === "error")).toBe(true);
+	});
+
+	it("ends the turn with the refusal when the UserPromptSubmit check refuses it late", async () => {
+		const workspace = heldWorkspace();
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.promptSubmit.mockResolvedValue({
+			block: true,
+			reason: "Name the ticket.",
+		});
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			workspace.ready();
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("failed");
+		expect(mocks.stepRuntime).toHaveBeenCalledOnce();
+		expect(JSON.stringify(mocks.finalize.mock.lastCall?.[2])).toContain(
+			"Name the ticket.",
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("is not used by a durable turn's later steps", async () => {
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		mocks.stepRuntime.mockImplementation(async (input) => ({
+			messages: input.messages,
+			outcome: "continue",
+		}));
+		mocks.workspace.mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 450));
+			return { machines: {}, vm: "vm", cwd: "/repo" };
+		});
+		await runApiTurn({} as WorkspaceMachines, rootTurn, {
+			index: 2,
+			signal: new AbortController().signal,
+		});
+		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
 	});
 });
