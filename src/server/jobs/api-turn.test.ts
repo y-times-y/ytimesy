@@ -42,11 +42,14 @@ const mocks = vi.hoisted(() => ({
 	workspace: vi.fn(),
 	/** The repository path the chat last reported (none unless a test sets one). */
 	preparedDirectory: vi.fn(),
+	/** The chat's pinned baseline and its journaled hook configuration. */
+	baseline: vi.fn(),
+	hookConfig: vi.fn(),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
 	readPreparedCheckoutDirectory: mocks.preparedDirectory,
 	savePreparedCheckoutDirectory: vi.fn(async () => {}),
-	readSessionDerivedValue: vi.fn(async () => null),
+	readSessionDerivedValue: mocks.hookConfig,
 	saveSessionDerivedValue: vi.fn(async () => {}),
 }));
 // Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
@@ -167,6 +170,8 @@ beforeEach(() => {
 		.mockReset()
 		.mockImplementation(async () => ({ machines: {}, vm: "vm", cwd: "/repo" }));
 	mocks.preparedDirectory.mockReset().mockResolvedValue(null);
+	mocks.baseline.mockReset().mockResolvedValue(null);
+	mocks.hookConfig.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -281,7 +286,7 @@ vi.mock("../services/conversation-recovery", () => ({
 	ensureConversationCodePoint: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/turn-verification", () => ({
-	readVerificationBaseline: vi.fn(async () => null),
+	readVerificationBaseline: mocks.baseline,
 }));
 vi.mock("../auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: mocks.auth,
@@ -1805,8 +1810,17 @@ describe("a builder's first request before its workspace is ready", () => {
 		mocks.workspace.mockReturnValue(held);
 		return { ready: () => ready(), fail: (error: Error) => fail(error) };
 	}
+	/** The chat's journaled configuration at its pinned baseline. */
+	function knownHooks(events: string[]) {
+		mocks.baseline.mockResolvedValue("a".repeat(40));
+		mocks.hookConfig.mockResolvedValue({
+			version: 1,
+			hooks: events.map((event) => ({ event, command: "true" })),
+		});
+	}
 	beforeEach(() => {
 		mocks.lean = lean;
+		knownHooks([]);
 	});
 
 	it("calls the model before the VM is ready, naming the path the chat reported", async () => {
@@ -1849,6 +1863,44 @@ describe("a builder's first request before its workspace is ready", () => {
 		).toBe("completed");
 		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
 	});
+
+	it.each([
+		["unknown (a new chat)", null],
+		["a configured UserPromptSubmit hook", ["UserPromptSubmit"]],
+	])(
+		"waits for the workspace and the prompt check when the hook configuration is %s",
+		async (_case, events) => {
+			if (events) knownHooks(events);
+			else {
+				mocks.baseline.mockResolvedValue(null);
+				mocks.hookConfig.mockResolvedValue(null);
+			}
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const workspace = heldWorkspace();
+			const held = mocks.workspace();
+			setTimeout(() => workspace.ready(), 600);
+			// Like the real check, it needs the workspace.
+			let checked = false;
+			mocks.promptSubmit.mockImplementation(async () => {
+				await held;
+				checked = true;
+				return { block: false };
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				// The prompt reached the model only after its check passed.
+				expect(checked).toBe(true);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+		},
+	);
 
 	it("waits for the workspace when no chat of the project reported a path", async () => {
 		const workspace = heldWorkspace();
