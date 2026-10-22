@@ -2265,6 +2265,12 @@ a.session-title-meta:focus-visible {
 	color: #8f8f8f;
 	font-size: 14px;
 }
+.auth-page-link {
+	color: #ececec;
+	font-size: 14px;
+	text-decoration: underline;
+	text-underline-offset: 4px;
+}
 .auth-page [role="alert"]:not([data-slot="field-error"]) {
 	width: 100%;
 	margin: 0;
