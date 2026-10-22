@@ -98,8 +98,8 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
 		"",
 		"Review in four parts:",
-		`1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them). A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it. Then list every other requirement in the files the request points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.${claimed.length ? RIGOR_COMPARE : ""}`,
-		`2. Assumptions. First derive each key output yourself from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved), before reading any rationale or assumptions the deliverable states, and diff your result against the deliverable. Only then read its reasoning: a mismatch it does not refute from the source text is a failure. An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy". Then list the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, work out the alternative reading and test it, and say which one the request and its files support. A credible alternative reading of a decision rule or spec that changes the output is a failure (both readings, the output each gives), not an assumption to note before passing. When one of the two readings is the convention of the library, ecosystem or standard involved and the deliverable does not follow it, fail and say to switch to the convention; having no oracle or test to settle it is not grounds to pass.${rigor ? RIGOR_ASSUMPTIONS : ""}`,
+		`1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them). A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it. Then list every other requirement in the files the request points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, run a command that shows it is met or not (a file and line too: grep -n, not reading). A requirement you could not check is not met.${claimed.length ? RIGOR_COMPARE : ""}`,
+		`2. Assumptions. Before reading any rationale the deliverable states, write and run a script under ${input.scratch}/tests that derives each key output from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved) and diffs it against the deliverable's. A mismatch that script shows, and the deliverable's reasoning does not refute from the source text, is a failure. An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy". Then list the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, run the deliverable or a script under the alternative reading. A credible alternative reading that the run shows changes the output is a failure (both readings, the output each gives), and so is a departure from the convention of the library, ecosystem or standard involved (say to switch to it); having no oracle is not grounds to pass.${rigor ? RIGOR_ASSUMPTIONS : ""}`,
 		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
 		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed. Mark a test "probe": true when it goes beyond what the request and its files state (inputs, sizes, cases or guarantees they do not ask for); a failed probe is a note, not a failure.${rigor ? RIGOR_OUTSIDE_RUN : ""}`,
 		...(claimed.length
@@ -119,8 +119,8 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 			: []),
 		"",
 		"Answer with only this JSON:",
-		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "probe": false, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
-		`"tests" lists only the tests and probes you wrote, each run. pass when every stated requirement is met with evidence and your non-probe tests and the existing checks pass; a pass without new tests of your own counts as unsure. fail only when the deliverable breaks something the request or its files state, shown by a failing test or command: name each in failures, most important first, with that evidence. Your own re-derivation of an answer is not evidence by itself: before failing on a disagreement, check it against the request's own files, examples and tools; if you cannot settle which is right, put it in notes (a credible alternative reading of the spec that changes the output, a mismatch with an explicit list or precedence order, or a departure from the convention is a failure, part 2). Probe failures, style and robustness beyond the request go in notes. unsure only when you genuinely could not run what matters; say why in notes.${rigor ? RIGOR_ADMITTED : ""}`,
+		'{ "verdict": "pass" | "fail" | "unsure", "failures": [{ "failure": "<requirement or assumption>: <what is wrong>", "command": "<the command you ran that shows it>", "output": "<what it printed>" }], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "probe": false, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "command": "<the command you ran to check it>", "output": "<what it printed>" }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
+		`Verify by running, never by reading or reasoning alone: reproductions through the existing API, the deliverable itself, scripts that recompute expected outputs. Each failure and requirement cites the exact command or script you ran and what it printed; these are matched against the commands you actually ran, and a claim you did not execute is a note, not a finding. "tests" lists only the tests and probes you wrote, each run. pass when a command you ran shows each stated requirement met and your non-probe tests and the existing checks pass; a pass without new tests of your own counts as unsure. fail only when a command you ran shows the deliverable breaking something the request or its files state: list each in failures, most important first. Probe failures, style and robustness beyond the request go in notes. unsure only when you genuinely could not run what matters; say why in notes.${rigor ? RIGOR_ADMITTED : ""}`,
 	].join("\n");
 }
 
@@ -169,7 +169,16 @@ export function reviewBriefRequest(brief: string): string | null {
 export type ReviewRequirement = {
 	readonly requirement: string;
 	readonly met: boolean | null;
+	/** What the check printed (the answer's "output"; older answers: "evidence"). */
 	readonly evidence: string;
+	/** The command the checker cites for it. */
+	readonly command?: string;
+};
+
+/** The command a failure cites and what it printed ("" when it cites none). */
+export type ReviewFailureEvidence = {
+	readonly command: string;
+	readonly output: string;
 };
 
 export type ReviewAssumption = {
@@ -183,7 +192,53 @@ export type ReviewVerdict = CheckerVerdict & {
 	readonly assumptions: readonly ReviewAssumption[];
 	/** The checker said pass without a test of its own (counted as unsure). */
 	readonly untested?: boolean;
+	/** Per failure, in the same order: the command it cites and its output. */
+	readonly failureEvidence?: readonly ReviewFailureEvidence[];
+	/**
+	 * The review loop's check of the evidence (checker-evidence.ts): findings
+	 * no command the checker ran shows, set aside as notes.
+	 */
+	readonly downgraded?: readonly string[];
+	/** A pass (or a fail left without findings) that no command the checker ran verified: no verdict. */
+	readonly ungrounded?: true;
 };
+
+/** A requirement as a finding: what, what the check printed, the command. */
+export function requirementText(entry: ReviewRequirement) {
+	return [
+		entry.requirement,
+		entry.evidence ? `: ${entry.evidence}` : "",
+		entry.command ? ` (ran \`${entry.command}\`)` : "",
+	].join("");
+}
+
+/** A failure the checker listed, as text, and the evidence it cites. */
+function failureEntry(
+	entry: unknown,
+): { text: string; evidence: ReviewFailureEvidence } | null {
+	if (typeof entry === "string") {
+		const text = clip(entry, 600);
+		return text ? { text, evidence: { command: "", output: "" } } : null;
+	}
+	if (!entry || typeof entry !== "object") return null;
+	const value = entry as Record<string, unknown>;
+	const what =
+		clip(value.failure, 600) ||
+		clip(value.finding, 600) ||
+		clip(value.requirement, 600);
+	if (!what) return null;
+	const command = clip(value.command, 2000);
+	const output = clip(value.output, 600) || clip(value.evidence, 600);
+	return {
+		text: [
+			what,
+			command ? ` (ran \`${command.slice(0, 300)}\`` : "",
+			command && output ? ` -> ${output})` : command ? ")" : "",
+			!command && output ? `: ${output}` : "",
+		].join(""),
+		evidence: { command, output },
+	};
+}
 
 export { UNTESTED_PASS_NOTE };
 
@@ -207,11 +262,13 @@ export function parseReviewVerdict(report: string): ReviewVerdict {
 				const value = entry as Record<string, unknown>;
 				const requirement = clip(value.requirement, 400);
 				if (!requirement) return [];
+				const command = clip(value.command, 2000);
 				return [
 					{
 						requirement,
 						met: typeof value.met === "boolean" ? value.met : null,
-						evidence: clip(value.evidence, 800),
+						evidence: clip(value.output, 800) || clip(value.evidence, 800),
+						...(command ? { command } : {}),
 					},
 				];
 			})
@@ -231,17 +288,39 @@ export function parseReviewVerdict(report: string): ReviewVerdict {
 				];
 			})
 		: [];
-	// Unmet requirements count as failures when the checker listed none.
-	const failures = base.failures.length
-		? base.failures
-		: requirements
-				.filter((entry) => entry.met === false)
-				.map((entry) =>
-					entry.evidence
-						? `${entry.requirement}: ${entry.evidence}`
-						: entry.requirement,
-				)
-				.slice(0, 20);
+	// The failures it listed, else its failing tests, else (when it listed
+	// none) its unmet requirements, each with the evidence it cites.
+	const listed = Array.isArray(record?.failures)
+		? record.failures.flatMap((entry) => failureEntry(entry) ?? [])
+		: [];
+	const failing = base.tests
+		.filter((test) => !test.passed && !test.probe)
+		.map((test) => {
+			const output = test.evidence ?? test.output;
+			return {
+				text: output ? `${test.name}: ${output}` : test.name,
+				evidence: { command: test.command ?? "", output: output ?? "" },
+			};
+		});
+	const unmet = requirements
+		.filter((entry) => entry.met === false)
+		.map((entry) => ({
+			text: requirementText(entry),
+			evidence: { command: entry.command ?? "", output: entry.evidence },
+		}));
+	const entries = (
+		!base.parsed
+			? base.failures.map((text) => ({
+					text,
+					evidence: { command: "", output: "" },
+				}))
+			: listed.length
+				? listed
+				: failing.length
+					? failing
+					: unmet
+	).slice(0, 20);
+	const failures = entries.map((entry) => entry.text);
 	// Re-running the existing tests is not enough for a pass (see the brief).
 	const untested =
 		base.verdict === "pass" && !failures.length && !base.tests.length;
@@ -252,6 +331,7 @@ export function parseReviewVerdict(report: string): ReviewVerdict {
 				? "unsure"
 				: base.verdict,
 		failures,
+		failureEvidence: entries.map((entry) => entry.evidence),
 		requirements,
 		assumptions,
 		...(untested
@@ -274,5 +354,5 @@ export function checkerWrapUpLeadMs(budgetMs: number) {
 
 /** The runtime notice near a checker's time limit: answer now, with the JSON. */
 export function checkerDeadlineNotice(secondsLeft: number) {
-	return `Runtime notice, not a new request: about ${Math.max(0, Math.round(secondsLeft))} seconds are left for this check. Stop investigating now and answer with only the JSON your brief asks for, listing the tests you wrote and ran; a requirement you could not check is not met (say so in its evidence).`;
+	return `Runtime notice, not a new request: about ${Math.max(0, Math.round(secondsLeft))} seconds are left for this check. Stop investigating now and answer with only the JSON your brief asks for, listing the tests you wrote and ran; a requirement you could not check is not met (say so in its output).`;
 }

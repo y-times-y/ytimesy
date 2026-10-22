@@ -198,15 +198,21 @@ export function commandItems(
 ): SessionItem[] {
 	return events.flatMap(({ event }, index) => {
 		if (event.type !== "tool-call") return [];
-		const input = event.input as { command?: unknown; code?: unknown } | null;
+		const input = event.input as {
+			command?: unknown;
+			cmd?: unknown;
+			code?: unknown;
+		} | null;
 		const text =
 			typeof input?.command === "string"
 				? input.command
-				: typeof input?.code === "string"
-					? input.code
-					: typeof event.input === "string"
-						? event.input
-						: JSON.stringify(event.input ?? "");
+				: typeof input?.cmd === "string"
+					? input.cmd
+					: typeof input?.code === "string"
+						? input.code
+						: typeof event.input === "string"
+							? event.input
+							: JSON.stringify(event.input ?? "");
 		return [
 			{
 				kind: "dynamicToolCall" as const,

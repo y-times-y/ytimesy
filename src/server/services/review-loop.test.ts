@@ -27,6 +27,8 @@ function harness(options: {
 	unattended?: boolean;
 	/** checkerMode=pair, with each judge's workers. */
 	pair?: boolean;
+	/** The commands each checker ran (its bash calls); default RAN. */
+	ran?: readonly string[];
 	workers?: (checkerSessionId: string) => LoopWorker[];
 }) {
 	let now = 1_000_000;
@@ -72,6 +74,13 @@ function harness(options: {
 			return { outcome: "completed", report };
 		},
 		childItems: async () => [
+			...(options.ran ?? RAN).map((command, index) => ({
+				kind: "dynamicToolCall",
+				id: `ran-${index}`,
+				tool: "bash",
+				input: JSON.stringify({ command }, null, 2),
+				status: "completed",
+			})),
 			{
 				kind: "userMessage",
 				id: "u",
@@ -152,27 +161,43 @@ function harness(options: {
 	};
 }
 
+const T1 = "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py";
+const T2 = "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t2.py";
+/** What the scripted checkers ran: the commands their answers cite. */
+const RAN = [T1, T2, "true", "c", "make test"];
+
 const verdict = (value: Record<string, unknown>) =>
 	`[agent 1 checker finished]\n${JSON.stringify(value)}`;
 
 const FAIL = verdict({
 	verdict: "fail",
-	failures: ["ordering: a newer tombstone hides an older live version"],
+	failures: [
+		{
+			failure: "ordering: a newer tombstone hides an older live version",
+			command: T1,
+		},
+	],
 	tests: [
 		{
 			name: "a tombstone over a live version, then compaction",
-			command: "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py",
+			command: T1,
 			passed: false,
 			output: "AssertionError: get(k) returned None\nexpected v1",
 		},
 		{ name: "empty store compacts", command: "true", passed: true },
 	],
 	requirements: [
-		{ requirement: "regression test", met: true, evidence: "make test ok" },
+		{
+			requirement: "regression test",
+			met: true,
+			command: "make test",
+			output: "ok",
+		},
 		{
 			requirement: "compaction keeps obsolete versions bounded",
 			met: false,
-			evidence: "versions grow 3x after 1000 writes",
+			command: T2,
+			output: "versions grow 3x after 1000 writes",
 		},
 	],
 	assumptions: [
@@ -278,6 +303,8 @@ describe("review loop", () => {
 		const PROBE = "python3 /tmp/ytimesy-attempts/turn/review-2/tests/t2.py";
 		const h = harness({
 			pair: true,
+			// The judge runs nothing itself: its workers do.
+			ran: [],
 			reports: [
 				FAIL,
 				verdict({
@@ -615,7 +642,10 @@ ${TASK}
 
 	it("unattended, runs up to four rounds while time remains", async () => {
 		const failing = (n: number) =>
-			verdict({ verdict: "fail", failures: [`case ${n}: wrong output`] });
+			verdict({
+				verdict: "fail",
+				failures: [`case ${n}: wrong output from \`make test\``],
+			});
 		const h = harness({
 			reports: [failing(1), failing(2), failing(3), failing(4)],
 			unattended: true,
@@ -820,6 +850,50 @@ ${TASK}
 		await g.loop.afterAttempt(g.step(1, "Done."));
 		expect(g.started).toHaveLength(2);
 		expect(g.state()?.outcome).toBe("unsure");
+	});
+
+	it("checks a pass that nothing the checker ran verified again once, as no verdict", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: [PASS, PASS], ran: ["ls"] });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(2);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"unsure",
+		]);
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "unsure",
+			ungrounded: true,
+		});
+	});
+
+	it("sets aside findings no command the checker ran shows, and counts them", async () => {
+		// It ran only its passing test: both findings and the failing test are unrun.
+		const h = harness({ reports: [FAIL], ran: ["true"] });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const done = await h.loop.afterAttempt(h.step(1, "Done."));
+		expect(done.kind).toBe("finished");
+		const round = h.state()?.rounds[0];
+		expect(round?.verdict?.verdict).toBe("pass");
+		expect(round?.findings).toEqual([]);
+		expect(round?.verdict?.downgraded).toHaveLength(2);
+		expect(round?.verdict?.notes).toContain("Set aside");
+		expect(h.state()?.outcome).toBe("pass");
+		if (done.kind !== "finished") throw new Error();
+		const summary = done.items.at(-1);
+		if (summary?.kind !== "dynamicToolCall") throw new Error();
+		expect(summary.output).toContain("2 not run, set aside");
 	});
 
 	it("respects a runner's deadline: no check without time for a check and a fix", async () => {
