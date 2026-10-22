@@ -151,3 +151,38 @@ decides what a failure counts as.
   report format the scored run will publish, with cost per trial matching the ledger.
 - **Evidence**: `.ytimesy/tb4-readiness/dry-run/report.*` plus the job dirs.
 - **Script**: PASS when a dry-run report exists there, else MANUAL.
+
+## Evidence
+
+### Item 1 preflight, 2026-10-21 (oracle and nop only, no model calls)
+
+File: `.ytimesy/tb4-preflight/20261021T2339Z/results.json` (bridge `PreflightFile` format,
+`at` 2026-10-21T23:41:34Z; pass it to `scripts/tb4-readiness.ts --preflight` or set it as
+`YTIMESY_HARBOR_PREFLIGHT`). Extra keys: `metrics` (per task host, wall, Harbor phase
+times, image size, first run of reruns), `pending` (GPU tasks with the exact command),
+`gpuLaunchAttempts`.
+
+Setup: Harbor 0.24.0 `-e docker`, `evals/harbor_v2/preflight.ts` (cloud-bridge2) run
+once per task, on two AWS us-east-1 c7i.48xlarge hosts (192 vCPU, 371 GiB, 2 TB gp3,
+Deep Learning Base OSS Nvidia Ubuntu 24.04 AMI), 31-32 tasks at once per host. Two hosts
+because Docker Hub allows 100 anonymous pulls per hour per IP and the CPU tasks pull 153
+distinct pinned images (split 76/77). All resources tagged `Project=ytimesy-tb4-preflight`
+and deleted afterwards (instances, volumes, security groups, key pairs in us-east-1 and
+us-west-2).
+
+Result: **61 of 63 CPU tasks pass** (oracle exactly 1, nop exactly 0, no exception);
+3 GPU tasks pending. Gate item 1 is still FAIL (2 failed, 3 missing).
+
+| Task | Outcome | Cause |
+|---|---|---|
+| cad-model | FAIL twice (also rerun alone) | the reference solution exits 1 with `ModuleNotFoundError: No module named 'OCP.collections'` (dependency drift in what it installs at run time); it writes no `/app/out.step`, so the verifier scores 0. A dataset/image issue, not infra. |
+| vpp-loss-divergence | FAIL | the verifier hits its 900 s `timeout_sec` for both oracle and nop (`VerifierTimeoutError`). It was CPU-bound at its 2-vCPU limit (2 python processes at 100%) with the host idle, so it is too slow for the declared limit on c7i, not hung. Needs a faster host or a verifier timeout multiplier. |
+| retro-console-soc | PASS on rerun | first run (31 tasks at once) oracle 0 with 7/8 verifier tests passing; rerun with 3 tasks on the host: oracle 1, nop 0. Load-sensitive: run it on a lightly loaded host. |
+| fp8-rmsnorm-gemm, jax-speedrun-gpu, math-eval-grader | PENDING | no p5.4xlarge capacity: `InsufficientInstanceCapacity` in all 6 us-east-1 zones (quota 80 vCPU) and all 4 us-west-2 zones (quota 16) between 16:36 and 17:19 PDT; us-east-2 P quota is 0. Command per task in `pending`. |
+
+Wall time per task (oracle + nop, including image pull): median 202 s, p90 623 s, max
+2891 s (vpp, two verifier timeouts); longest passing: formal-crypto 1470 s,
+distributed-dedup 984 s. Oracle environment setup (first pull) 64-116 s. Largest task
+images: takens-embedding-lean 29.4 GB, vpp-loss-divergence 22.9 GB, formal-crypto 17.8 GB;
+peak host disk 125 GB of 1.9 TB. AWS cost: about $13 (two c7i.48xlarge for 0.53 h and
+0.89 h at $8.568/h plus gp3).
