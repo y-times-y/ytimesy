@@ -44,7 +44,21 @@ by the bridge.
 - **Evidence**: the preflight JSON path and `at`; per-task oracle/nop job names; for
   jax, `/app` size, transfer manifest status and verifier reward.
 - **Script**: dataset count, task classes (GPU / MCP / sidecar / large disk from
-  `task.toml` and `environment/docker-compose.yaml`), preflight coverage and age.
+  `task.toml` and `environment/docker-compose.yaml`), preflight coverage and age. A task
+  on the known dataset defect list below counts as "dataset defect", not FAIL, but only
+  while its preflight `reason` is exactly the recorded one; any other failure, a missing
+  record or a stale file still FAILs.
+
+#### Known dataset defects
+
+The list lives in `scripts/tb4-known-defects.ts` (`KNOWN_DATASET_DEFECTS`, tested in
+`tests/tb4-known-defects.test.ts`). An entry needs the oracle log line that proves the
+published task is broken and the preflight file that recorded it. Such a task is still
+run and scored like any other; the defect only stops it from blocking the gate.
+
+| Task | Recorded reason | Evidence | Source |
+|---|---|---|---|
+| cad-model | `oracle scored 0 (needs 1)` | `ModuleNotFoundError: No module named 'OCP.collections'` (the reference solution's run-time dependency drifted; it exits 1 and writes no `/app/out.step`) | `.ytimesy/tb4-preflight/20261021T2339Z/results.json`, failed twice incl. a rerun alone |
 
 ### 2. Our harness on the real container, per task class
 
@@ -186,3 +200,35 @@ distributed-dedup 984 s. Oracle environment setup (first pull) 64-116 s. Largest
 images: takens-embedding-lean 29.4 GB, vpp-loss-divergence 22.9 GB, formal-crypto 17.8 GB;
 peak host disk 125 GB of 1.9 TB. AWS cost: about $13 (two c7i.48xlarge for 0.53 h and
 0.89 h at $8.568/h plus gp3).
+
+### vpp-loss-divergence host check, 2026-10-21 (oracle only, one idle host each, us-east-1)
+
+Harbor 0.24.0 `-e docker`, `harbor run ... -i terminal-bench/vpp-loss-divergence -a oracle`,
+same AMI and setup as the preflight. Every run: reward 1, no exception, 5/5 verifier tests.
+
+| Host | vCPU | Verifier wall | Oracle agent |
+|---|---|---|---|
+| m8azn.3xlarge (AMD EPYC 9R05, 5.0 GHz, highest EC2 single-thread clock) | 12 | 102 s | 13 s |
+| c7i.4xlarge (Intel 8488C, 3.2 GHz, same CPU as the preflight host) | 16 | 127 s | n/a |
+| m7i.16xlarge (scored CPU fleet type) | 64 | 295 s | 112 s |
+| c7i.48xlarge, preflight, ~31 other tasks | 192 | > 900 s (timeout) | 874 s |
+
+A faster CPU is not what fixes it: the same c7i CPU passes in 127 s on a small idle host.
+The time grows with host vCPU count, which fits the task's PyTorch/Megatron code sizing its
+thread pools from the host's CPU count while Docker caps it at 2 CPUs (quota throttling),
+made worse by load. On the m7i.16xlarge fleet it passes with 3x margin when idle; the host
+CPU budget in the controller keeps it from being oversubscribed. Rerun its preflight on a
+fleet host to close item 1 for it. Cost of the check: about $1 of EC2; all instances,
+volumes, security groups and key pairs (tag `Project=ytimesy-tb4-vpp`) deleted.
+
+### GPU Capacity Block prices, 2026-10-21 (describe only, nothing booked)
+
+`ec2.describe_capacity_block_offerings`, 1 instance, start within 7 days:
+
+| Region | Type | Duration | Offerings | Zone | Start (PDT) | Upfront |
+|---|---|---|---|---|---|---|
+| us-west-2 | p5.4xlarge | 24 h | 1 | us-west-2b | 2026-10-23 04:30 | $143.28 |
+| us-west-2 | p5.4xlarge | 48 h | 1 | us-west-2b | 2026-10-23 04:30 | $286.56 |
+| us-east-1 | p5.4xlarge, p5.48xlarge | 24 h, 48 h | 0 | | | |
+| us-east-2 | p5.4xlarge, p5.48xlarge | 24 h, 48 h | 0 | | | |
+| us-west-2 | p5.48xlarge | 24 h, 48 h | 0 | | | |

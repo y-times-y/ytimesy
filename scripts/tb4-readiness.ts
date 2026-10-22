@@ -23,6 +23,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { parse as parseYaml } from "yaml";
+import {
+	KNOWN_DATASET_DEFECTS,
+	preflightVerdict,
+} from "./tb4-known-defects.ts";
 
 type Status = "PASS" | "FAIL" | "MANUAL";
 type Check = {
@@ -211,19 +215,21 @@ try {
 	};
 	const maxAgeMs = Number(flags["preflight-max-age-days"]) * 86_400_000;
 	const ageMs = Date.now() - Date.parse(file.at);
-	const passed = tasks.filter((t) => file.tasks[t.name]?.passed);
-	const failed = tasks.filter(
-		(t) => file.tasks[t.name] && !file.tasks[t.name].passed,
-	);
-	const missing = tasks.filter((t) => !file.tasks[t.name]);
+	const verdict = (t: TaskInfo) => preflightVerdict(t.name, file.tasks[t.name]);
+	const passed = tasks.filter((t) => verdict(t) === "passed");
+	const defects = tasks.filter((t) => verdict(t) === "dataset-defect");
+	const failed = tasks.filter((t) => verdict(t) === "failed");
+	const missing = tasks.filter((t) => verdict(t) === "missing");
 	add({
 		item: "1",
 		name: "oracle=1 / nop=0 preflight per task (bridge preflight.json)",
 		status:
-			passed.length === tasks.length && tasks.length > 0 && ageMs <= maxAgeMs
+			passed.length + defects.length === tasks.length &&
+			tasks.length > 0 &&
+			ageMs <= maxAgeMs
 				? "PASS"
 				: "FAIL",
-		evidence: `${passed.length}/${tasks.length} passed, ${failed.length} failed${failed.length ? ` [${failed.map((t) => t.name).join(", ")}]` : ""}, ${missing.length} missing; file written ${file.at} (${(ageMs / 86_400_000).toFixed(1)} d ago, max ${flags["preflight-max-age-days"]} d), env ${file.environment}, harbor "${file.harbor}"`,
+		evidence: `${passed.length}/${tasks.length} passed, ${defects.length} dataset defect${defects.length ? ` [${defects.map((t) => `${t.name}: ${KNOWN_DATASET_DEFECTS.find((d) => d.task === t.name)?.evidence}`).join("; ")}]` : ""}, ${failed.length} failed${failed.length ? ` [${failed.map((t) => t.name).join(", ")}]` : ""}, ${missing.length} missing; file written ${file.at} (${(ageMs / 86_400_000).toFixed(1)} d ago, max ${flags["preflight-max-age-days"]} d), env ${file.environment}, harbor "${file.harbor}"`,
 		command: missing.length
 			? `cd ${BRIDGE} && node --import tsx evals/harbor_v2/preflight.ts --env <docker|daytona> --jobs-dir .ytimesy/harbor-v2/preflight --tasks ${missing
 					.slice(0, 4)
