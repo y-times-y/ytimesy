@@ -42,6 +42,29 @@ const verdict = z
 	})
 	.strict();
 const NOTICE = "Runtime lifecycle feedback (not a user instruction): ";
+/** The only hook source: this file at the chat's baseline commit. */
+export const LIFECYCLE_CONFIG_PATH = ".ytimesy/hooks.json";
+const LIFECYCLE_CONFIG_MAX_LENGTH = 32000;
+
+/**
+ * The configuration as the baseline read below would load it, from the
+ * same file at the same commit read elsewhere (GitHub, before the VM is
+ * ready): no file is no hooks; anything the baseline read would refuse
+ * (too long, not JSON) is unknown (null), and an invalid configuration is
+ * returned for its reader's own validation to refuse.
+ */
+export function lifecycleConfigFromFile(
+	file: { present: false } | { present: true; text: string } | null,
+): unknown {
+	if (!file) return null;
+	if (!file.present) return { version: 1, hooks: [] };
+	if (file.text.length > LIFECYCLE_CONFIG_MAX_LENGTH) return null;
+	try {
+		return JSON.parse(file.text);
+	} catch {
+		return null;
+	}
+}
 
 /** Baseline-pinned repository workflows use the existing fenced executor and replay journal. PreToolUse can refuse a call before it runs. */
 export function harnessLifecycleHooks(input: {
@@ -99,13 +122,13 @@ export function harnessLifecycleHooks(input: {
 		const repository = `git -C ${posixShellQuoted(workspace.cwd)}`;
 		const result = await workspace.machines.exec(
 			workspace.vm,
-			`listed=$(${repository} ls-tree ${posixShellQuoted(base)} -- .ytimesy/hooks.json) || exit 90; [ -n "$listed" ] || exit 91; exec ${repository} show ${posixShellQuoted(`${base}:.ytimesy/hooks.json`)}`,
+			`listed=$(${repository} ls-tree ${posixShellQuoted(base)} -- ${LIFECYCLE_CONFIG_PATH}) || exit 90; [ -n "$listed" ] || exit 91; exec ${repository} show ${posixShellQuoted(`${base}:${LIFECYCLE_CONFIG_PATH}`)}`,
 			10_000,
 		);
 		if (result.exitCode === 91) return { version: 1 as const, hooks: [] };
 		if (result.exitCode)
 			throw new Error("Could not load baseline lifecycle hooks.");
-		if (result.stdout.length > 32000)
+		if (result.stdout.length > LIFECYCLE_CONFIG_MAX_LENGTH)
 			throw new Error("Lifecycle configuration exceeds its limit.");
 		return lifecycleHookConfig.parse(JSON.parse(result.stdout));
 	}

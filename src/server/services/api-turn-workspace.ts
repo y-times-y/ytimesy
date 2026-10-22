@@ -15,7 +15,7 @@ import {
 } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
-	checkoutBaseRevision,
+	checkoutGitHubReads,
 	ensureProjectCheckout,
 	loadTenantProjectCheckout,
 } from "./project-workspace";
@@ -42,6 +42,7 @@ export function deferredApiTurnWorkspace(
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
 	let pinnedBase: Promise<string | null> = Promise.resolve(null);
+	let pinnedReads: ReturnType<typeof checkoutGitHubReads> | null = null;
 	const workspace = () => {
 		signal.throwIfAborted();
 		prepared ??= reusedOrPrepared();
@@ -54,6 +55,16 @@ export function deferredApiTurnWorkspace(
 		 * Read after the workspace was started.
 		 */
 		pinnedBase: () => pinnedBase,
+		/**
+		 * A file of the repository at the pinned base, read from GitHub before
+		 * the VM is ready; null unless `revision` is that pinned base, or when
+		 * GitHub cannot say. See repositoryFileAtCommit.
+		 */
+		pinnedBaseFile: async (revision: string, path: string) => {
+			const reads = pinnedReads;
+			if (!reads || revision !== (await pinnedBase)) return null;
+			return reads.fileAt(revision, path).catch(() => null);
+		},
 	});
 	async function reusedOrPrepared(): Promise<AgentToolWorkspace> {
 		const earlier = reuse?.read();
@@ -97,13 +108,17 @@ export function deferredApiTurnWorkspace(
 			!owner.parentSessionId
 		) {
 			pinnedBase = earlyCheckout
-				.then((planned) =>
-					Either.isRight(planned) &&
-					planned.right &&
-					startsNewChatBranch(planned.right)
-						? checkoutBaseRevision(planned.right)
-						: null,
-				)
+				.then((planned) => {
+					if (
+						!Either.isRight(planned) ||
+						!planned.right ||
+						!startsNewChatBranch(planned.right)
+					)
+						return null;
+					const reads = checkoutGitHubReads(planned.right);
+					pinnedReads = reads;
+					return reads.baseRevision();
+				})
 				.catch(() => null);
 		}
 		const pinning = pinnedBase;

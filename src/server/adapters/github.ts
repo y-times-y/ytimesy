@@ -214,6 +214,56 @@ export async function repositoryBranchSha(
 	}
 }
 
+/**
+ * A file's content at a commit, as `git show <commit>:<path>` prints it:
+ * absent when the commit has no such path, null when GitHub cannot say (or
+ * the path is not a regular file: a directory, symlink or submodule).
+ */
+export async function repositoryFileAtCommit(
+	token: string,
+	fullName: string,
+	commit: string,
+	path: string,
+): Promise<{ present: false } | { present: true; text: string } | null> {
+	if (!/^[a-f0-9]{40,64}$/.test(commit)) return null;
+	const { owner, repo } = repositoryOwnerName(fullName);
+	try {
+		const { data } = await githubClient(token).repos.getContent({
+			owner,
+			repo,
+			path,
+			ref: commit,
+		});
+		// GitHub answers a symlink to a file with the target's content (and
+		// path); git shows the link itself, so that is not this file.
+		if (
+			Array.isArray(data) ||
+			data.type !== "file" ||
+			data.path !== path ||
+			!("encoding" in data) ||
+			data.encoding !== "base64"
+		)
+			return null;
+		return {
+			present: true,
+			text: Buffer.from(data.content, "base64").toString("utf8"),
+		};
+	} catch (error) {
+		// Only GitHub's plain "Not Found" means the commit has no such path; a
+		// missing commit or repository answers otherwise (or is unknown).
+		const failure = error as {
+			status?: unknown;
+			response?: { data?: { message?: unknown } };
+		};
+		if (
+			Number(failure?.status) === 404 &&
+			failure.response?.data?.message === "Not Found"
+		)
+			return { present: false };
+		return null;
+	}
+}
+
 function repositoryOwnerName(fullName: string) {
 	const [owner, repo] = fullName.split("/");
 	if (!owner || !repo) throw new Error("Repository name is invalid.");
