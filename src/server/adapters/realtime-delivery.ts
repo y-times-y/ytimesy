@@ -104,7 +104,28 @@ export async function subscribeConversationSnapshot(
 			headers: await signDeliveryRequest(config.secret, "GET", url),
 			signal,
 		});
-	let response = await subscribe();
+	// One round trip: the subscription carries the snapshot just read from
+	// Postgres, so a room without it (a new chat, a restarted object) is seeded
+	// instead of answering a miss. An executor that predates this answers 404
+	// and is subscribed the old way below.
+	const body = JSON.stringify(snapshot);
+	let response =
+		Buffer.byteLength(body) <= MAX_DELIVERY_BYTES
+			? await executorFetch(url, {
+					method: "POST",
+					headers: {
+						...(await signDeliveryRequest(config.secret, "POST", url, body)),
+						"Content-Type": "application/json",
+					},
+					body,
+					signal,
+				})
+			: await subscribe();
+	if (response.ok) return response;
+	if (response.status === 404 || response.status === 405) {
+		await response.body?.cancel();
+		response = await subscribe();
+	}
 	if (response.status === 404 || response.status === 409) {
 		await response.body?.cancel();
 		// Recover an absent/stale room from PG; never rerun inference to rebuild a stream.

@@ -35,6 +35,7 @@ import {
 } from "#/domain/subagent";
 import {
 	fusionLeadInstructions,
+	HANDOFF_INSTRUCTIONS,
 	orchestratorInstructions,
 	sidekickRoleInstructions,
 	subagentRoleInstructions,
@@ -145,10 +146,14 @@ function leanTurnInstructions(
 				: orchestratorInstructions({
 						codeMode,
 						force: !!input.forceDelegation && !input.session.agentRole,
+						main: !input.session.agentRole,
 						// A read-only subagent may start readers, never writers.
 						readOnly: readOnly || isReaderRole(input.session.agentRole),
 					})
-			: "",
+			: // Main without helpers still hands off its background commands.
+				input.session.agentRole
+				? ""
+				: HANDOFF_INSTRUCTIONS,
 		rigorApplies(input) ? rigorBlock(input) : "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
 		readOnly

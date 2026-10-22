@@ -45,6 +45,7 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 			senderId: reference,
 			recipientId: reference,
 			message: z.string().min(1).max(8000),
+			fromUser: z.literal(true).optional(),
 		})
 		.strict(),
 	z

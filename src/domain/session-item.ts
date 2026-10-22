@@ -1,6 +1,7 @@
 import { pendingPlanId } from "./agent-plan";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
+import type { BackgroundCommandRecord } from "./background-command";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
@@ -12,6 +13,7 @@ import {
 	fileChangesFromShellCommand,
 	remainingShellCommandAfterWrites,
 } from "./shell-file-change";
+import type { UserQuestion } from "./user-question";
 
 export type SessionTurnStatus = "idle" | "running" | "completed" | "failed";
 
@@ -79,6 +81,13 @@ export type SecretRequestItem = {
 	readonly reason: string;
 };
 
+/** Questions the agent asked with ask_user; the turn ended to wait for the user's choice. */
+export type UserQuestionItem = {
+	readonly kind: "userQuestion";
+	readonly id: SessionItemId;
+	readonly questions: readonly UserQuestion[];
+};
+
 /** Memory lines this turn added: by the agent's own commits or the save hook after it. */
 export type MemorySaveItem = {
 	readonly kind: "memorySave";
@@ -126,6 +135,8 @@ export type DynamicToolCallItem = {
 	readonly input?: string;
 	readonly output?: string;
 	readonly status: Exclude<ToolActivityStatus, "declined">;
+	/** Set when the call started a background command (background-command.ts). */
+	readonly background?: BackgroundCommandRecord;
 };
 
 export type WebSearchItem = {
@@ -167,6 +178,8 @@ export type NoticeSessionItem = {
 	readonly kind: "notice";
 	readonly id: SessionItemId;
 	readonly message: string;
+	/** A background command's exit (background-command.ts). */
+	readonly background?: true;
 };
 
 export type UnknownSessionItem = {
@@ -182,6 +195,7 @@ export type SessionItem =
 	| PlanItem
 	| PlanProposalItem
 	| SecretRequestItem
+	| UserQuestionItem
 	| MemorySaveItem
 	| CommandExecutionItem
 	| FileChangeItem

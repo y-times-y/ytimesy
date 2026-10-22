@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
 import { ATTEMPT_CHECK_TOOL, REVIEW_CHECK_TOOL } from "#/domain/check-summary";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
@@ -24,14 +24,15 @@ import { AGENT_SEND_TOOL, AGENT_TOOL } from "#/domain/subagent";
 import { toolActivity } from "#/domain/tool-detail";
 import { nativeWebSearchTools } from "#/server/adapters/native-web-search";
 import { BUILDER_SHELL_TOOLS } from "#/server/services/builder-shell-surface";
-import {
-	CODE_MODE_DEFERRED_TOOLS,
-	PLAN_ONLY_TOOLS,
-} from "#/server/services/deferred-tools";
-import { PlanLock, planTools } from "#/server/services/plan-mode";
+import { CODE_MODE_DEFERRED_TOOLS } from "#/server/services/deferred-tools";
 import { pluginSkillTools } from "#/server/services/plugin-skill-tools";
 import { secretRequestTools } from "#/server/services/secret-request-tool";
 import { SessionTimeline } from "./session-timeline";
+
+// Replies render through the real Markdown renderer (the app loads it lazily).
+vi.mock("./agent-markdown", async () => ({
+	AgentMarkdown: (await import("./agent-markdown-renderer")).AgentMarkdown,
+}));
 
 /**
  * Every tool name the harness can write into a chat, from the lists and
@@ -60,7 +61,6 @@ function harnessToolNames(): string[] {
 					},
 				] as never),
 			),
-			...Object.keys(planTools(new PlanLock({ kind: "none" } as never))),
 			...Object.keys(secretRequestTools([])),
 			ENTER_PLAN_MODE_TOOL,
 			PROPOSE_PLAN_TOOL,
@@ -68,7 +68,6 @@ function harnessToolNames(): string[] {
 			SEARCH_MCP_TOOLS_TOOL,
 			CALL_MCP_TOOL_TOOL,
 			...CODE_MODE_DEFERRED_TOOLS,
-			...PLAN_ONLY_TOOLS,
 			...IMAGE_VIEWING_TOOLS,
 			AGENT_TOOL,
 			AGENT_SEND_TOOL,
@@ -207,7 +206,9 @@ describe("timeline cards for harness items", () => {
 			"running",
 		);
 		expect(html).toContain('data-kind="agentCall"');
-		expect(html).toContain("Reviewer");
+		// Named by its task with a kind tag (helper-names.ts), not its role.
+		expect(html).toContain('<span class="agent-row-tag">Review</span>');
+		expect(html).not.toContain("Reviewer");
 		expect(html).toContain("Review the diff");
 		expect(html).toContain("Claude Fable 5");
 		expect(html).toContain("Finished");

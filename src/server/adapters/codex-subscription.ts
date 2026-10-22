@@ -179,10 +179,55 @@ const catalogSchema = z.object({
 		}),
 	),
 });
+type Catalog = z.infer<typeof catalogSchema>;
+/** Fresh for a minute; past that, served while a refresh runs (plans rarely change). */
+const CATALOG_FRESH_MS = 60_000;
+const CATALOG_STALE_MS = 10 * 60_000;
 const catalogs = new Map<
 	string,
-	{ expires: number; promise: Promise<z.infer<typeof catalogSchema>> }
+	{
+		expires: number;
+		promise: Promise<Catalog>;
+		/** The last catalog read, kept as plain data (never a pending request). */
+		value?: { catalog: Catalog; until: number };
+	}
 >();
+
+function loadCatalog(
+	userId: string,
+	previous?: { catalog: Catalog; until: number },
+) {
+	if (catalogs.size >= 1000 && !catalogs.has(userId))
+		catalogs.delete(catalogs.keys().next().value as string);
+	const promise = subscriptionRequest(
+		userId,
+		`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
+	).then((value) => catalogSchema.parse(value));
+	const entry: {
+		expires: number;
+		promise: Promise<Catalog>;
+		value?: { catalog: Catalog; until: number };
+	} = {
+		expires: Date.now() + CATALOG_FRESH_MS,
+		promise,
+		...(previous ? { value: previous } : {}),
+	};
+	catalogs.set(userId, entry);
+	promise.then(
+		(catalog) => {
+			entry.value = { catalog, until: Date.now() + CATALOG_STALE_MS };
+		},
+		() => {
+			// A failed refresh keeps a still-valid earlier catalog; otherwise the
+			// next read loads again.
+			if (catalogs.get(userId) !== entry) return;
+			if (previous && previous.until > Date.now())
+				catalogs.set(userId, { expires: 0, promise, value: previous });
+			else catalogs.delete(userId);
+		},
+	);
+	return promise;
+}
 
 async function subscriptionCatalog(userId: string) {
 	if (!(await hasManagedCodexAuth(userId))) {
@@ -191,19 +236,13 @@ async function subscriptionCatalog(userId: string) {
 	}
 	const cached = catalogs.get(userId);
 	if (cached && cached.expires > Date.now()) return cached.promise;
-	if (catalogs.size >= 1000)
-		catalogs.delete(catalogs.keys().next().value as string);
-	const promise = subscriptionRequest(
-		userId,
-		`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
-	).then((value) => catalogSchema.parse(value));
-	catalogs.set(userId, { expires: Date.now() + 60_000, promise });
-	try {
-		return await promise;
-	} catch (error) {
-		catalogs.delete(userId);
-		throw error;
+	// Past a minute: answer from the last catalog and refresh it alongside.
+	const stale = cached?.value;
+	if (stale && stale.until > Date.now()) {
+		loadCatalog(userId, stale).catch(() => {});
+		return stale.catalog;
 	}
+	return loadCatalog(userId);
 }
 
 /**

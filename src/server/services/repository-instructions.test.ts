@@ -291,3 +291,53 @@ it.each([
 		}
 	},
 );
+
+it("a first request sent before its workspace was ready gets the instructions at the next step", async () => {
+	const fixture = await fixtureRepository();
+	try {
+		const task: ModelMessage = { role: "user", content: "Fix the API" };
+		const workspace = vi.fn(async () => fixture.workspace);
+		let early = true;
+		const first = automaticRepositoryContext({
+			tools: {},
+			workspace,
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			// Read when the step is prepared, after the turn decided.
+			instructionMessages: { turnStart: () => !early },
+		});
+		early = true;
+		const sent = await first.prepare([task]);
+		expect(sent).toEqual([task]);
+		expect(workspace).not.toHaveBeenCalled();
+		const afterTools: ModelMessage[] = [
+			...sent,
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool-call", toolCallId: "c1", toolName: "bash", input: {} },
+				],
+			},
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "c1",
+						toolName: "bash",
+						output: { type: "text", value: "ok" },
+					},
+				],
+			},
+		];
+		// The next step owes them: appended after the step's results, never
+		// rewriting the history the first request sent.
+		const next = await builderContext(fixture.workspace, true).prepare(
+			afterTools,
+		);
+		expect(next.slice(0, afterTools.length)).toEqual(afterTools);
+		expect(text(next.at(-1))).toMatch(/^# Repository instructions\n/);
+	} finally {
+		await fixture.cleanup();
+	}
+});

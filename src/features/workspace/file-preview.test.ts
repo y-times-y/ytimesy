@@ -1,7 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FilePreview, PreviewModeSwitch } from "./file-preview";
+
+// Markdown renders through the real renderer (the app loads it lazily).
+vi.mock("../sessions/agent-markdown", async () => ({
+	AgentMarkdown: (await import("../sessions/agent-markdown-renderer"))
+		.AgentMarkdown,
+}));
 
 describe("file previews", () => {
 	it("renders Markdown with the existing renderer and no executable HTML", () => {

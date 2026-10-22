@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import {
-	agentPlanState,
-	ENTER_PLAN_MODE_TOOL,
-	PROPOSE_PLAN_TOOL,
-} from "#/domain/agent-plan";
-import {
 	assertApiContextFits,
 	isUserRequestMessage,
 } from "#/domain/api-conversation";
@@ -83,12 +78,16 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { ASK_USER_TOOL } from "#/domain/user-question";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
-import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
+import {
+	releaseHeldAgentTaskEvents,
+	saveAgentTaskResultAndEvent,
+} from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	type ApiTurn,
@@ -119,6 +118,12 @@ import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
+import {
+	readPreparedCheckoutDirectory,
+	readSessionDerivedValue,
+	savePreparedCheckoutDirectory,
+	saveSessionDerivedValue,
+} from "../adapters/prepared-checkout";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -129,6 +134,10 @@ import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import {
+	ASK_USER_END_TURN_TOOLS,
+	askUserTools,
+} from "../services/ask-user-tool";
 import { createAttemptLoop } from "../services/attempt-loop";
 import { attemptLoopDeps, reviewLoopDeps } from "../services/attempt-loop-deps";
 import { automaticRepositoryContext } from "../services/automatic-repository-context";
@@ -136,6 +145,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
+import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
@@ -149,16 +159,23 @@ import {
 	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
-	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
+import {
+	FIRST_REQUEST_WORKSPACE_WAIT_MS,
+	type PromptCheck,
+	settlesWithin,
+	withPromptCheckGate,
+} from "../services/first-request-gate";
 import {
 	type FusionLeadGateInput,
 	fusionLeadGate,
-	fusionRoundOpen,
 	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
-import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
+import {
+	harnessLifecycleHooks,
+	lifecycleHookConfig,
+} from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
@@ -173,15 +190,6 @@ import {
 } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
-import {
-	PLAN_CONTINUE_NOTICE,
-	PLAN_END_TURN_TOOLS,
-	PLAN_REVISION_NOTICE,
-	PlanLock,
-	planTools,
-	withPlanMode,
-	withPlanModeNotice,
-} from "../services/plan-mode";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
@@ -190,6 +198,7 @@ import {
 } from "../services/project-secrets";
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
+import { hasRepositoryInstructions } from "../services/repository-instructions";
 import { createReviewLoop } from "../services/review-loop";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
@@ -217,7 +226,7 @@ import {
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
-import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
+import { forgetTurnMemo, setTurnMemo, turnMemo } from "../services/turn-memo";
 import {
 	subagentMemory,
 	type TurnMemory,
@@ -272,6 +281,24 @@ type ApiTurnStep = {
  * the local worker. A turn that failed over keeps its lease: in step mode its
  * next step runs on the fallback; the local worker continues it here.
  */
+/**
+ * A chat's turn ended: helper reports and other notices held while it ran
+ * are delivered now (after any queued user message's turn, which holds
+ * them again until it ends).
+ */
+async function deliverHeldReports(
+	sessionId: string,
+	parentSessionId: string | null | undefined,
+) {
+	if (parentSessionId) return;
+	try {
+		if (await releaseHeldAgentTaskEvents(sessionId))
+			await enqueueAgentTaskEvent();
+	} catch {
+		// The task-event sweep delivers them once their retry is due.
+	}
+}
+
 export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
@@ -356,8 +383,6 @@ async function runApiTurnAttempt(
 	let fusionRoleModels: RoleModels | undefined;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
-	/** Lead mode fusion: when this step's gate began (the completion check's bound). */
-	let leadGateAt = Date.now();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -498,6 +523,11 @@ async function runApiTurnAttempt(
 				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
 				: Promise.resolve(false);
 		loadingMetadata.catch(() => {});
+		// Independent of the session row: read alongside it.
+		const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
+		const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+		loadingVariant.catch(() => {});
+		loadingRecordsRequests.catch(() => {});
 		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
@@ -512,7 +542,23 @@ async function runApiTurnAttempt(
 			throw new Error("This retired child task can no longer run.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		const variant = await turnHarnessVariant(turn.id, owner.userId);
+		// A project's secrets load while the turn's variant and route are read.
+		const loadingSecrets = owner.projectId
+			? timed("turn:secrets", () =>
+					turnMemo(`${turn.id}:project-secrets`, () =>
+						loadAgentProjectSecrets(
+							owner.userId,
+							owner.projectId as string,
+						).catch(() => ({
+							envFile: agentSecretsEnvFile([]),
+							redact: [],
+							names: [],
+						})),
+					),
+				)
+			: Promise.resolve(null);
+		loadingSecrets.catch(() => {});
+		const variant = await loadingVariant;
 		if (owner.agentRole) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
@@ -618,18 +664,7 @@ async function runApiTurnAttempt(
 		// between turns; within one, keeping it fixed also keeps the tools and the
 		// system prompt byte-stable for provider prompt caching. A restarted or
 		// evicted isolate (including a resumed step) simply loads it again.
-		const { projectId } = owner;
-		const projectSecrets = projectId
-			? await timed("turn:secrets", () =>
-					turnMemo(`${turn.id}:project-secrets`, () =>
-						loadAgentProjectSecrets(owner.userId, projectId).catch(() => ({
-							envFile: agentSecretsEnvFile([]),
-							redact: [],
-							names: [],
-						})),
-					),
-				)
-			: null;
+		const projectSecrets = await loadingSecrets;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		// Values every tool result is redacted of. The memory clone's token
@@ -644,8 +679,18 @@ async function runApiTurnAttempt(
 			workspaceReuse,
 		);
 		let codePoint: Promise<void> | undefined;
+		// A root builder's repository path lets its next turn (and a new chat in
+		// the same project) build its first request before its VM is ready.
+		const remembersDirectory =
+			writable && !owner.parentSessionId && !evaluation;
 		const workspace = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
+			if (remembersDirectory) {
+				const { cwd } = execution;
+				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
+					savePreparedCheckoutDirectory(owner.userId, owner.id, cwd),
+				).catch(() => {});
+			}
 			let secretsReady: Promise<void> | undefined;
 			if (projectSecrets && receivesSecrets) {
 				const { machines: vmMachines, vm } = execution;
@@ -727,10 +772,42 @@ async function runApiTurnAttempt(
 		// Durable steps start at 1; a resumed first step reuses the deduped notice.
 		const firstStep = step ? step.index === 1 : !continued;
 		// The first step's UserPromptSubmit check always prepares a writable
-		// workspace before the model is called; start it now so the VM work
-		// overlaps the remaining setup. It is the same memoized preparation, so a
-		// failure still surfaces where the workspace is awaited.
+		// workspace (before the model is called, unless the first request goes
+		// out early, below); start it now so the VM work overlaps the remaining
+		// setup. It is the same memoized preparation, so a failure still
+		// surfaces where the workspace is awaited.
 		if (firstStep && writable) void workspace().catch(() => {});
+		// A durable turn's first request need not wait for the workspace: a
+		// root builder on a lean surface whose VM is not ready within a short
+		// wait sends it with the repository path its chat (or project) last
+		// reported; tools still wait for the workspace, and the step ends
+		// only once the workspace and the UserPromptSubmit check are done.
+		const earlyFirstRequestEligible =
+			!!step &&
+			firstStep &&
+			!step.resumed &&
+			writable &&
+			!owner.parentSessionId &&
+			!owner.agentRole &&
+			!evaluation &&
+			variant.lead === "off" &&
+			attemptLimit(variant.attempts) <= 1 &&
+			variant.review !== "on";
+		/** Set when the first request goes out before the workspace is ready. */
+		let earlyPromptCheck: Promise<PromptCheck> | undefined;
+		// Repository instructions a first request went out without are
+		// checked by the next step (see automaticRepositoryContext).
+		const deferredInstructionsKey = `${turn.id}:instructions-deferred`;
+		const instructionsOwed =
+			!!step &&
+			step.index > 1 &&
+			(!hasRepositoryInstructions(messages) ||
+				(await turnMemo(
+					deferredInstructionsKey,
+					async () => false,
+					() => false,
+				)));
+		if (instructionsOwed) setTurnMemo(deferredInstructionsKey, false);
 		// A later durable step starts from items its predecessor just
 		// checkpointed (and delivered); republishing them is a wasted write and
 		// relay on every step.
@@ -775,8 +852,43 @@ async function runApiTurnAttempt(
 					() => readVerificationBaseline(owner.userId, owner.id, cwd),
 					(base) => base !== null,
 				),
-			configCache: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			// Read from a baseline commit, a configuration never changes: later
+			// turns read it from the chat's journal instead of the VM.
+			configCache: (key, load) =>
+				turnMemo(`${turn.id}:${key}`, async () => {
+					const saved = lifecycleHookConfig.safeParse(
+						await readSessionDerivedValue(owner.userId, owner.id, key).catch(
+							() => null,
+						),
+					);
+					if (saved.success) return saved.data;
+					const loaded = await load();
+					void saveSessionDerivedValue(
+						owner.userId,
+						owner.id,
+						key,
+						loaded,
+					).catch(() => {});
+					return loaded;
+				}),
 			redact,
+			// Without the workspace: the pinned baseline of the path the chat
+			// last reported, and the configuration journaled for it.
+			knownConfig: async () => {
+				if (!reportedDirectory) return null;
+				const base = await readVerificationBaseline(
+					owner.userId,
+					owner.id,
+					reportedDirectory,
+				);
+				return base && /^[a-f0-9]{40,64}$/.test(base)
+					? readSessionDerivedValue(
+							owner.userId,
+							owner.id,
+							`lifecycle-hooks:${reportedDirectory}:${base}`,
+						)
+					: null;
+			},
 			once: (id, run) =>
 				journaledToolOperation(
 					{
@@ -791,17 +903,22 @@ async function runApiTurnAttempt(
 		const currentTask = [...items]
 			.reverse()
 			.find((item) => item.kind === "userMessage");
-		// Root chats with a person to approve: the agent decides when to plan.
-		// Benchmarks and child agents have no one to approve, so they never plan.
-		const planState = agentPlanState(items);
-		const planLock =
-			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
+		// A root chat has a person who can answer cards (a project secret);
+		// benchmarks and child agents have no one to answer.
+		const rootChat = !owner.parentSessionId && !evaluation;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
-			instructionMessages: { turnStart: step ? step.index === 1 : !continued },
+			instructionMessages: {
+				turnStart: () =>
+					step
+						? step.index === 1
+							? !earlyPromptCheck
+							: instructionsOwed
+						: !continued,
+			},
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
 				progress.offer(items);
@@ -828,17 +945,44 @@ async function runApiTurnAttempt(
 		});
 		const surfaceTools = surface.tools;
 		// A lean surface names the repository's absolute path in its system
-		// prompt (Claude Code's tools take absolute paths). The first step
-		// prepares the workspace before the model is called anyway; later steps
-		// reuse the memo, so the prompt stays byte-stable for caching.
+		// prompt (Claude Code's tools take absolute paths). Later steps reuse
+		// the memo, so the prompt stays byte-stable for caching. An early first
+		// request names the path the chat (or its project's latest chat) last
+		// reported; the workspace corrects it for later steps if it moved.
 		// Preparing the workspace here is a workspace failure, not a connection one.
 		failureStage = "workspace";
+		const leanDirectoryKey = `${turn.id}:lean-working-directory`;
+		let reportedDirectory: string | null = null;
+		if (
+			surface.lean &&
+			earlyFirstRequestEligible &&
+			!(await settlesWithin(workspace(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+		)
+			reportedDirectory = await timed("turn:checkoutDirectory", () =>
+				readPreparedCheckoutDirectory(
+					owner.userId,
+					owner.id,
+					owner.projectId ?? null,
+				),
+			).catch(() => null);
 		const leanWorkingDirectory = surface.lean
-			? await turnMemo(
-					`${turn.id}:lean-working-directory`,
-					async () => (await workspace()).cwd,
-				)
+			? (reportedDirectory ??
+				(await turnMemo(leanDirectoryKey, async () => (await workspace()).cwd)))
 			: undefined;
+		if (reportedDirectory) {
+			const named = reportedDirectory;
+			setTurnMemo(leanDirectoryKey, named);
+			workspace().then(
+				({ cwd }) => {
+					if (cwd === named) return;
+					console.warn(
+						"The early first request named a moved repository path.",
+					);
+					setTurnMemo(leanDirectoryKey, cwd);
+				},
+				() => {},
+			);
+		}
 		failureStage = "connection";
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
@@ -946,8 +1090,8 @@ async function runApiTurnAttempt(
 				? withRedactedResults(checkerWorkerTools(subagentContext), redact)
 				: {};
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
-		// starts the request's exploration, and the lead waits while its
-		// sidekick works in the shared checkout.
+		// starts the request's exploration and Main waits for it; during build
+		// rounds Main is free but its writes refuse.
 		const leadGate =
 			fusionLead && delegates
 				? (waitUntil: number) =>
@@ -959,6 +1103,7 @@ async function runApiTurnAttempt(
 							waitUntil,
 						} satisfies FusionLeadGateInput).then((ready) => {
 							if (ready === "ready") leadWrites.clear();
+							else if (ready === "busy") leadWrites.start();
 							return ready;
 						})
 				: null;
@@ -982,7 +1127,7 @@ async function runApiTurnAttempt(
 			plugins,
 			webSearch,
 			hooks,
-			planLock,
+			rootChat,
 			projectSecrets,
 			redact,
 		});
@@ -991,15 +1136,11 @@ async function runApiTurnAttempt(
 			...delegation,
 		};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
-		// call tools (run_code only), and propose_plan, offered only while
-		// planning (it ends the turn). agent, agent_send, enter_plan_mode and
+		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
 		// earlier requests' tool lists stay a cached prefix.
 		const deferredNames = [
 			...(codeMode === "primary" ? CODE_MODE_DEFERRED_TOOLS : []),
-			...(codeMode === "primary" || (subagentsOn && surface.lean)
-				? PLAN_ONLY_TOOLS
-				: []),
 		];
 		// Harness variant outputCap: each result the model reads keeps its
 		// head and tail within the cap (tool-output-cap.ts).
@@ -1035,19 +1176,9 @@ async function runApiTurnAttempt(
 					tools: orderedTools,
 					deferred: deferredNames,
 					loaded: loadedDeferredTools(items, messages, deferredNames),
-					// Plan mode can start mid-turn; propose_plan must then be offered.
-					forceLoaded: () => (planLock?.planning ? PLAN_ONLY_TOOLS : []),
-					unlisted: PLAN_ONLY_TOOLS,
 				})
 			: null;
 		const tools = deferral?.tools ?? orderedTools;
-		if (planLock?.planning && firstStep)
-			messages = withPlanModeNotice(
-				messages,
-				planState.kind === "proposed"
-					? PLAN_REVISION_NOTICE
-					: PLAN_CONTINUE_NOTICE,
-			);
 		if (mcp.unavailable.length) {
 			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
 			if (!messages.some((message) => message.content === notice))
@@ -1084,7 +1215,25 @@ async function runApiTurnAttempt(
 		if (step && (step.limitReached || step.index > modelStepLimit()))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
-		if (firstStep) {
+		// A UserPromptSubmit hook can be a policy gate (refuse or redact a
+		// prompt), so a first request goes out before this check only when the
+		// chat's journaled configuration shows no such hook; unknown (a new
+		// chat, a first turn since the journal) waits as before. Its tools still
+		// wait for the check, and a late failure ends the turn.
+		if (
+			firstStep &&
+			reportedDirectory &&
+			(await hooks.promptSubmitConfigured()) === false
+		) {
+			earlyPromptCheck = timed("turn:promptHook", () =>
+				hooks.userPromptSubmit(
+					currentTask?.kind === "userMessage" ? currentTask.text : "",
+				),
+			);
+			earlyPromptCheck.catch(() => {});
+			void turnMemo(deferredInstructionsKey, async () => true);
+		}
+		if (firstStep && !earlyPromptCheck) {
 			const submitted = await timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
@@ -1124,7 +1273,7 @@ async function runApiTurnAttempt(
 				runModel(input) as Promise<Awaited<ReturnType<typeof runModel>>>
 			).finally(() => requestRecorder?.flush());
 		// Development evals record each request's system prompt and tool list.
-		const requestRecorder = (await turnRecordsRequests(turn.id, owner.userId))
+		const requestRecorder = (await loadingRecordsRequests)
 			? modelRequestRecorder({
 					sessionId: owner.id,
 					turnId: turn.id,
@@ -1148,11 +1297,11 @@ async function runApiTurnAttempt(
 			reasoning: turnReasoning,
 			speed: apiSettings.speed,
 			...(deferral ? { toolOrder: deferral.order } : {}),
-			...(planLock
+			...(rootChat
 				? {
 						endTurnTools: [
-							...PLAN_END_TURN_TOOLS,
 							...SECRET_REQUEST_END_TURN_TOOLS,
+							...ASK_USER_END_TURN_TOOLS,
 						],
 					}
 				: {}),
@@ -1259,7 +1408,9 @@ async function runApiTurnAttempt(
 				},
 				memory,
 			),
-			tools,
+			tools: earlyPromptCheck
+				? withPromptCheckGate(tools, earlyPromptCheck)
+				: tools,
 			signal: abort.signal,
 			isUserRequest: (message) => isUserRequestMessage(items, message),
 			compactionSnapshot: compactionStateSnapshot({
@@ -1309,6 +1460,22 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
+				// Background commands that exited since the last step: their cards and notices.
+				const background = await withBackgroundCommandNotices({
+					workspace,
+					sessionId: owner.id,
+					items,
+					messages: history,
+				}).catch((error: unknown) => {
+					console.warn("Background commands were not observed.", error);
+					return null;
+				});
+				if (background?.changed) {
+					items = background.items;
+					history = messages = background.messages;
+					await saveCheckpoint();
+					await publishProgress?.("running");
+				}
 				return injectServerPeerMessages(
 					owner.id,
 					history,
@@ -1415,11 +1582,7 @@ async function runApiTurnAttempt(
 		// completion boundary, its findings back into the same run.
 		const attemptsMax = attemptLimit(variant.attempts);
 		const loopEligible =
-			!!step &&
-			writable &&
-			!owner.parentSessionId &&
-			!owner.agentRole &&
-			!planLock?.planning;
+			!!step && writable && !owner.parentSessionId && !owner.agentRole;
 		const loopBilling = modelBilling({
 			harness: subscription ? "codex" : "api",
 			modelId: route.modelId,
@@ -1469,6 +1632,9 @@ async function runApiTurnAttempt(
 							}),
 							rigor: variant.rigor === "on",
 							pair: variant.checkerMode === "pair",
+							// Lead mode fusion: a turn that ends while the writer's
+							// round runs hands the check to the turn its report wakes.
+							...(leadGate ? { handedOff: leadWrites.busy } : {}),
 						})
 					: null;
 		const attemptWaitUntil = () =>
@@ -1477,11 +1643,10 @@ async function runApiTurnAttempt(
 				Date.now() + 10 * 60_000,
 			);
 		let result: Awaited<ReturnType<typeof runAgent>>;
-		// Lead mode fusion: no model call while the sidekick works in the shared
-		// checkout; a round still running at the step's deadline continues the
-		// wait in the next step. Its report is in the mailbox once it is ready.
+		// Lead mode fusion: no model call while the request's exploration runs;
+		// one still running at the step's deadline continues the wait in the
+		// next step. Its report is in the mailbox once it is ready.
 		if (step && leadGate) {
-			leadGateAt = Date.now();
 			const gate = await timed("turn:fusionLead", () =>
 				leadGate(attemptWaitUntil()),
 			);
@@ -1531,6 +1696,26 @@ async function runApiTurnAttempt(
 				runAgent({ ...agentInput, messages }),
 			);
 		}
+		// An early first request: the step ends only once its workspace is
+		// ready (a workspace failure fails the turn as before, and the turn's
+		// code point exists) and the UserPromptSubmit check passed. Feedback
+		// the check gave reaches the model in a next step.
+		if (earlyPromptCheck) {
+			failureStage = "workspace";
+			await workspace();
+			failureStage = "model";
+			const submitted = await earlyPromptCheck;
+			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
+			const withFeedback = hooks.drain(messages);
+			if (withFeedback !== messages) {
+				messages = withFeedback;
+				if (!Array.isArray(result) && result.outcome === "completed") {
+					await saveCheckpoint();
+					coordinated = false;
+					return "continue";
+				}
+			}
+		}
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
@@ -1557,6 +1742,15 @@ async function runApiTurnAttempt(
 			coordinated = false;
 			return "continue";
 		}
+		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
+		const background = await withBackgroundCommandNotices({
+			workspace,
+			sessionId: owner.id,
+			items,
+			messages,
+			claim: false,
+		}).catch(() => null);
+		if (background?.changed) items = background.items;
 		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
 		const historyBeforeCompletion = messages;
 		const finalHistory = await withBackgroundCommandContext({
@@ -1590,17 +1784,6 @@ async function runApiTurnAttempt(
 			}
 			throw new IncompleteAgentTurn("background-command-review-required");
 		}
-		// Lead mode fusion: the turn does not complete while a sidekick round
-		// runs; the next step waits for its report and the lead answers after it.
-		if (
-			step &&
-			leadGate &&
-			(await fusionRoundOpen(owner as AgentSessionRecord, leadGateAt))
-		) {
-			await saveCheckpoint();
-			coordinated = false;
-			return "continue";
-		}
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;
 		if (
@@ -1609,7 +1792,8 @@ async function runApiTurnAttempt(
 					(item.kind === "agentMessage" && item.text.trim()) ||
 					// A proposed plan or a secret request is the turn's result; it waits for the user.
 					item.kind === "planProposal" ||
-					item.kind === "secretRequest",
+					item.kind === "secretRequest" ||
+					item.kind === "userQuestion",
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
@@ -1645,37 +1829,35 @@ async function runApiTurnAttempt(
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
-		// patch and ref), never as a commit or a published branch. A turn that
-		// ends in plan mode commits and pushes nothing.
-		const committed =
-			!owner.agentRole && !planLock?.planning
-				? await timed("turn:commit", () =>
-						commitCompletedSessionTurn(
-							{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-							items,
-							{
-								exec: (providerRef, argv, _env, timeout) =>
-									(execution?.machines ?? machines).exec(
-										WorkspaceId(providerRef),
-										posixShellCommand(argv),
-										timeout,
-									),
-								writeTextFile: (providerRef, path, contents) =>
-									(execution?.machines ?? machines).writeTextFile(
-										WorkspaceId(providerRef),
-										path,
-										contents,
-									),
-								readTextFile: (providerRef, path) =>
-									(execution?.machines ?? machines).readTextFile(
-										WorkspaceId(providerRef),
-										path,
-									),
-							},
-							abort.signal,
-						),
-					)
-				: undefined;
+		// patch and ref), never as a commit or a published branch.
+		const committed = !owner.agentRole
+			? await timed("turn:commit", () =>
+					commitCompletedSessionTurn(
+						{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+						items,
+						{
+							exec: (providerRef, argv, _env, timeout) =>
+								(execution?.machines ?? machines).exec(
+									WorkspaceId(providerRef),
+									posixShellCommand(argv),
+									timeout,
+								),
+							writeTextFile: (providerRef, path, contents) =>
+								(execution?.machines ?? machines).writeTextFile(
+									WorkspaceId(providerRef),
+									path,
+									contents,
+								),
+							readTextFile: (providerRef, path) =>
+								(execution?.machines ?? machines).readTextFile(
+									WorkspaceId(providerRef),
+									path,
+								),
+						},
+						abort.signal,
+					),
+				)
+			: undefined;
 		if (committed?.notice)
 			items = [
 				...items.filter((item) => item.id !== `${turn.id}:publication`),
@@ -1703,16 +1885,9 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
-		// The sidekick lives as long as the chat: an idle one waits for the
-		// next message (until its idle TTL); one still working is stopped.
-		if (fusionLead)
-			await retireLeadSidekicks(
-				unscopedMachines,
-				fusionLead,
-				"the lead's turn ended while it worked",
-				undefined,
-				{ keepIdle: true },
-			).catch(() => {});
+		// The writer lives as long as the chat: an idle one waits for the next
+		// message (until its idle TTL); one still working finishes its round
+		// and its report wakes Main.
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
@@ -1756,6 +1931,7 @@ async function runApiTurnAttempt(
 		await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
 			() => {},
 		);
+		await deliverHeldReports(owner.id, owner.parentSessionId);
 		return "completed";
 	} catch (error) {
 		workspaceReuse?.forget();
@@ -2019,9 +2195,7 @@ async function runApiTurnAttempt(
 			await retireLeadSidekicks(
 				unscopedMachines,
 				fusionLead,
-				saved === "cancelled"
-					? "the lead was stopped"
-					: "the lead's turn ended",
+				saved === "cancelled" ? "Main was stopped" : "Main's turn failed",
 			).catch(() => {});
 		if (saved === "failed") {
 			// A subagent still reports: what it said so far and, for a writer,
@@ -2057,10 +2231,15 @@ async function runApiTurnAttempt(
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
 		// Messages sent during the turn outlive its stop or failure: the first starts the next turn.
-		if (saved)
+		if (saved) {
 			await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
 				() => {},
 			);
+			await deliverHeldReports(
+				turn.session_id,
+				subagentSession?.parentSessionId,
+			);
+		}
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
@@ -2109,7 +2288,7 @@ function turnHarnessVariant(turnId: string, userId: string) {
 /**
  * The tools a turn offers: its surface's tools, the user's MCP servers,
  * plugin skills and hosted web search, wrapped in lifecycle hooks, secret
- * redaction and (in root chats) plan mode.
+ * redaction and (in root chats) the project-secret request.
  */
 function turnTools(input: {
 	surfaceTools: ToolSet;
@@ -2117,11 +2296,11 @@ function turnTools(input: {
 	plugins: Awaited<ReturnType<typeof enabledPluginComponents>>;
 	webSearch: ToolSet;
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
-	planLock: PlanLock | null;
+	rootChat: boolean;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
 	redact: readonly string[];
 }) {
-	const { mcp, hooks, planLock, projectSecrets, redact } = input;
+	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
 		...input.surfaceTools,
 		...mcp.tools,
@@ -2130,23 +2309,19 @@ function turnTools(input: {
 	};
 	// Only a person in a root chat can paste a secret into the card.
 	const secretTools =
-		planLock && projectSecrets
+		rootChat && projectSecrets
 			? secretRequestTools(projectSecrets.names.map(({ name }) => name))
 			: {};
+	const questionTools = rootChat ? askUserTools() : {};
 	// Large MCP setups are searched and called through two fixed tools; the
-	// real tools they run keep their hooks, plan mode and redaction.
+	// real tools they run keep their hooks and redaction.
 	return mcpToolSurface({
-		tools: planLock
-			? withPlanMode(
-					hooks.wrap(
-						withRedactedResults(
-							{ ...withMcp, ...planTools(planLock), ...secretTools },
-							redact,
-						),
-					),
-					() => planLock.planning,
-				)
-			: hooks.wrap(withRedactedResults(withMcp, redact)),
+		tools: hooks.wrap(
+			withRedactedResults(
+				{ ...withMcp, ...secretTools, ...questionTools },
+				redact,
+			),
+		),
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
 	});
@@ -2155,8 +2330,8 @@ function turnTools(input: {
 /**
  * A lean builder's tool list in a fixed order, so it is byte-stable within
  * a chat: run_code first in code mode primary, the surface's own tools, the
- * workflow tools (agent, agent_send, enter_plan_mode, propose_plan when not
- * deferred), web search, request_project_secret, then the rest (MCP,
+ * workflow tools (agent, agent_send), web search, request_project_secret,
+ * then the rest (MCP,
  * plugins, run_code in code mode on) in insertion order.
  */
 function inLeanToolOrder(
@@ -2172,10 +2347,9 @@ function inLeanToolOrder(
 		...groups.surface,
 		AGENT_TOOL,
 		AGENT_SEND_TOOL,
-		ENTER_PLAN_MODE_TOOL,
-		PROPOSE_PLAN_TOOL,
 		...groups.webSearch,
 		REQUEST_PROJECT_SECRET_TOOL,
+		ASK_USER_TOOL,
 	].filter((name) => name in tools);
 	const names = [
 		...new Set([
@@ -2188,8 +2362,8 @@ function inLeanToolOrder(
 
 /**
  * Adds run_code (code mode) to a lean builder's final tool set. Its programs
- * call the tools above as they are, already wrapped in hooks, redaction and
- * plan mode, so every inner call is checked like a direct one; run_code's
+ * call the tools above as they are, already wrapped in hooks and redaction,
+ * so every inner call is checked like a direct one; run_code's
  * own result is redacted again on the way out.
  */
 function withCodeMode(

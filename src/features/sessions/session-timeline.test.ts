@@ -1,10 +1,15 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { SessionTimeline } from "./session-timeline";
+
+// Replies render through the real Markdown renderer (the app loads it lazily).
+vi.mock("./agent-markdown", async () => ({
+	AgentMarkdown: (await import("./agent-markdown-renderer")).AgentMarkdown,
+}));
 
 function readCall(
 	id: string,
@@ -56,7 +61,7 @@ describe("session timeline live collapse", () => {
 		expect(html).toContain("pnpm test");
 		expect(html).toContain("3 tests passed");
 	});
-	it("renders one expandable child card with its own activity, not an internal handoff bubble", () => {
+	it("marks a helper's start and finish in the lead's chat, not an internal handoff bubble", () => {
 		const child: AgentTaskActivity = {
 			id: "child",
 			parentSessionId: "root",
@@ -92,6 +97,20 @@ describe("session timeline live collapse", () => {
 			createElement(SessionTimeline, {
 				turnStatus: "completed",
 				tasks: [child],
+				helperLines: {
+					identities: new Map([
+						[
+							"child",
+							{
+								name: "Fix branch picker",
+								color: "var(--agent-build)",
+								icon: "hammer" as const,
+								tag: "Build",
+							},
+						],
+					]),
+					onSelect: () => {},
+				},
 				items: [
 					{
 						kind: "userMessage",
@@ -107,17 +126,11 @@ describe("session timeline live collapse", () => {
 				],
 			}),
 		);
-		expect(html.match(/class="child-task-card"/g)).toHaveLength(1);
-		expect(html).toContain("<details");
-		expect(html).toContain("Fix branch picker");
-		expect(html).toContain('data-streamdown="strong">Verified</span>');
-		expect(html).toContain(
-			'<details class="session-work child-task-instructions">',
-		);
-		expect(html).toContain(">Brief<");
-		expect(html).toContain("Agent 1");
-		expect(html).toContain("Looking at the session timeline");
-		expect(html).toContain("read file");
+		// The lead's chat shows a start line and a finish line, not the helper's transcript.
+		expect(html).toContain("Started “Fix branch picker”");
+		expect(html).toContain("“Fix branch picker” finished: Implemented");
+		expect(html).not.toContain("child-task-card");
+		expect(html).not.toContain("Looking at the session timeline");
 		expect(html).not.toContain("Its final summary is below");
 		expect(html).not.toContain("Inspect its evidence and diff");
 		const waiting = renderToString(
@@ -129,6 +142,33 @@ describe("session timeline live collapse", () => {
 		);
 		expect(waiting).toContain("Waiting for subagents");
 		expect(waiting).not.toContain(">Thinking<");
+	});
+	it("shows a helper's own conversation with senders and steering still queued", () => {
+		const html = renderToString(
+			createElement(SessionTimeline, {
+				turnStatus: "running",
+				senderName: "Main",
+				queuedSteering: [{ id: "q", from: "Main", text: "Use the v2 API" }],
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("brief"),
+						text: "Fix the export",
+					},
+					{
+						kind: "userMessage",
+						id: SessionItemId("steer:job"),
+						text: "Message from the user, sent directly from the chat:\n\nSkip the docs\n\nCoordination message ID: job\n\nThis is the user steering you directly.",
+					},
+				],
+			}),
+		);
+		expect(html).toContain('<span class="session-message-sender">Main</span>');
+		expect(html).toContain('<span class="session-message-sender">You</span>');
+		expect(html).toContain("<p>Skip the docs</p>");
+		expect(html).not.toContain("Coordination message ID");
+		expect(html).toContain("Queued</span>");
+		expect(html).toContain("Use the v2 API");
 	});
 	it("shows a persisted failure reason in the chat", () => {
 		const html = renderTimeline(

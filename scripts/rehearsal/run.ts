@@ -145,7 +145,16 @@ const results = await Promise.all(
 						"select count(*)::int as n from api_turn where session_id=$1 and state in ('completed','failed','cancelled')",
 						[sessionId],
 					);
-					return live.rows[0].n === 0 && root.rows[0].n >= turns;
+					// A finished round's report not yet delivered wakes Main again.
+					const reports = await database().query(
+						"select count(*)::int as n from agent_task_event where parent_session_id = any($1::uuid[]) and status in ('pending','delivering')",
+						[tree],
+					);
+					return (
+						live.rows[0].n === 0 &&
+						reports.rows[0].n === 0 &&
+						root.rows[0].n >= turns
+					);
 				},
 				Number(values.timeout) * 1000,
 				`${scenario.id} to settle`,
@@ -165,6 +174,27 @@ const results = await Promise.all(
 			}
 		} catch (error) {
 			settleError = (error as Error).message;
+		}
+		// Fork the settled chat at a message and check the fork (fork.ts).
+		const forkChecks: { name: string; ok: boolean; detail?: string }[] = [];
+		if (scenario.forkAt && !settleError) {
+			const { rehearseFork } = await import("./fork");
+			forkChecks.push(
+				...(await rehearseFork({
+					edge,
+					machines,
+					vms,
+					vm,
+					user,
+					sessionId,
+					forkAt: scenario.forkAt,
+					qaForks: scenario.qaForks,
+					timeoutMs: Number(values.timeout) * 1000,
+				}).catch((error: Error) => [
+					{ name: "the fork step ran", ok: false, detail: error.message },
+				])),
+			);
+			console.log(`rehearsal: ${scenario.id} forked (${elapsed()})`);
 		}
 		// Collecting retries: a loaded Docker host can time out one connection.
 		let data: Awaited<ReturnType<typeof collect>> | undefined;
@@ -197,6 +227,7 @@ const results = await Promise.all(
 				];
 			}
 		}
+		checks.push(...forkChecks);
 		await writeFile(
 			join(outDir, `${scenario.id}.json`),
 			JSON.stringify({ scenario: scenario.id, checks, data }, null, 2),

@@ -10,7 +10,6 @@ import { agentTurnInstructions } from "./agent-turn-instructions";
 import { apiAgentTools } from "./api-agent-tools";
 import { builderToolSurface } from "./builder-shell-surface";
 import { type ModelAgentRuntime, runModelAgentStep } from "./model-agent-loop";
-import { PlanLock, planTools } from "./plan-mode";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 // Provider prompt caches reuse a request's longest byte-identical prefix
@@ -63,7 +62,6 @@ function stepSetup(step: number) {
 	});
 	const tools: ToolSet = {
 		...surface.tools,
-		...planTools(new PlanLock({ kind: "none" })),
 		...nativeWebSearchTools("openai"),
 	};
 	return {

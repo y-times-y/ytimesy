@@ -1,5 +1,6 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { GitFork, RotateCcw } from "lucide-react";
+import { FileCode2, GitFork, History, Undo2 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 
 /**
@@ -29,12 +30,11 @@ export function ConversationRecovery({
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState("");
 	const queryClient = useQueryClient();
-	async function recover(mode: "conversation" | "code" | "both" | "fork") {
+	async function recover(mode: "code" | "both" | "fork") {
 		setPending(true);
 		setError("");
 		try {
 			await onRecover(mode);
-			setOpen(false);
 			if (mode === "code" || mode === "both")
 				await refreshRecoveredWorkspace(queryClient);
 		} catch (cause) {
@@ -45,61 +45,63 @@ export function ConversationRecovery({
 			setPending(false);
 		}
 	}
+	const disabled = busy || pending;
 	return (
-		<div className="conversation-recovery">
-			<button
-				type="button"
-				disabled={busy || pending}
-				aria-expanded={open}
-				onClick={() => setOpen((value) => !value)}
-			>
-				<RotateCcw size={12} /> Recover from here
-			</button>
-			{open ? (
-				<div className="conversation-recovery-options">
-					<p className="conversation-recovery-explanation">
-						Return to before this message. Previous conversation history is
-						retained.
-					</p>
+		// Hidden until the message is hovered or focused (session-composer.css).
+		<div className="conversation-recovery" data-open={open || undefined}>
+			<DropdownMenu.Root open={open} onOpenChange={setOpen}>
+				<DropdownMenu.Trigger asChild>
 					<button
 						type="button"
-						disabled={pending || busy}
-						onClick={() => void recover("conversation")}
+						className="conversation-recovery-trigger"
+						disabled={disabled}
+						aria-label="Restore or fork from here"
+						title="Restore or fork from here"
 					>
-						Restore conversation
+						<History size={14} aria-hidden="true" />
 					</button>
-					{codeAvailable ? (
-						<>
-							<p className="conversation-recovery-explanation">
-								Restoring code replaces later tracked and nonignored edits. A
-								backup is saved first. Ignored files and external actions stay
-								unchanged.
-							</p>
-							<button
-								type="button"
-								disabled={pending || busy}
-								onClick={() => void recover("code")}
-							>
-								Restore code
-							</button>
-							<button
-								type="button"
-								disabled={pending || busy}
-								onClick={() => void recover("both")}
-							>
-								Restore code and conversation
-							</button>
-						</>
-					) : null}
-					<button
-						type="button"
-						disabled={pending || busy}
-						onClick={() => void recover("fork")}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content
+						className="recovery-menu"
+						sideOffset={6}
+						align="end"
+						// Focus returning to the icon would keep it showing after the
+						// pointer leaves; keyboard users reach it again with Tab.
+						onCloseAutoFocus={(event) => event.preventDefault()}
 					>
-						<GitFork size={12} /> Fork conversation
-					</button>
-				</div>
-			) : null}
+						<DropdownMenu.Label className="recovery-menu-label">
+							From this message
+						</DropdownMenu.Label>
+						{codeAvailable ? (
+							<>
+								<DropdownMenu.Item
+									disabled={disabled}
+									onSelect={() => void recover("code")}
+								>
+									<FileCode2 size={15} aria-hidden="true" />
+									Restore code
+								</DropdownMenu.Item>
+								<DropdownMenu.Item
+									disabled={disabled}
+									onSelect={() => void recover("both")}
+								>
+									<Undo2 size={15} aria-hidden="true" />
+									Restore code and conversation
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
+							</>
+						) : null}
+						<DropdownMenu.Item
+							disabled={disabled}
+							onSelect={() => void recover("fork")}
+						>
+							<GitFork size={15} aria-hidden="true" />
+							Fork conversation
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
 			{error ? <p role="alert">{error}</p> : null}
 		</div>
 	);

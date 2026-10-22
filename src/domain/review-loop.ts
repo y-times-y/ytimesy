@@ -359,7 +359,17 @@ export type ReviewWorker = {
 	readonly usage: ApiTokenUsage | null;
 };
 
-export type ReviewLoopPhase = "building" | "checking" | "fixing" | "done";
+/**
+ * "handed-off": the turn ended while Main's writer still worked on the
+ * request (lead=fusion build round); the turn its report wakes continues the
+ * loop from this checkpoint, request and requirements list.
+ */
+export type ReviewLoopPhase =
+	| "building"
+	| "checking"
+	| "fixing"
+	| "handed-off"
+	| "done";
 
 export type ReviewLoopState = {
 	readonly version: 1;
@@ -371,6 +381,16 @@ export type ReviewLoopState = {
 	/** The working tree before the builder's first step (the diff's base). */
 	readonly checkpoint: AttemptSnapshot;
 	readonly rounds: readonly ReviewRound[];
+	/**
+	 * Carried from a handed-off turn into the turn its writer's report woke
+	 * (which has no user request of its own): the request and the builder's
+	 * requirements list.
+	 */
+	readonly carried?: {
+		readonly turnId: string;
+		readonly taskText: string;
+		readonly requirements?: readonly string[];
+	};
 	readonly outcome?: ReviewOutcome;
 	/** Why no (further) check ran. */
 	readonly note?: string;

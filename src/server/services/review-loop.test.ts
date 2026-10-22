@@ -472,6 +472,97 @@ ${TASK}
 		expect(off.state()?.rounds[0].builderRequirements).toBeUndefined();
 	});
 
+	it("hands the check off when a turn ends while Main's writer works; the turn its report wakes checks the work against the first turn's request, checkpoint and list", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: [PASS], rigor: true });
+		const states = new Map<string, ReviewLoopState>();
+		const deps: ReviewLoopDeps = {
+			...h.deps,
+			load: async (_session, turnId) => states.get(turnId) ?? null,
+			save: async (_session, next) => {
+				states.set(next.turnId, structuredClone(next));
+			},
+			latest: async () => [...states.values()].at(-1) ?? null,
+		};
+		const workspace: AgentToolWorkspace = {
+			machines: {} as AgentToolWorkspace["machines"],
+			vm: WorkspaceId("vm"),
+			cwd: "/home/ubuntu/app",
+		};
+		let writerWorking = true;
+		const loop = (turnId: string, taskText: string) =>
+			createReviewLoop({
+				sessionId: "session",
+				turnId,
+				workspace: async () => workspace,
+				signal: new AbortController().signal,
+				billing: {
+					kind: "plan",
+					price: { input: 2, output: 10, cacheRead: 0.25 },
+				},
+				taskText: () => taskText,
+				deps,
+				rigor: true,
+				handedOff: () => writerWorking,
+			});
+		const list =
+			"<requirements>\n- compaction keeps the newest version per key\n</requirements>";
+		// Turn 1: Main writes its list, briefs its writer and hands off.
+		const first = loop("turn-1", TASK);
+		await first.beforeModel(h.step(0, ""));
+		const handOff = h.step(1, list);
+		expect(await first.afterAttempt(handOff)).toMatchObject({
+			kind: "finished",
+		});
+		expect(h.started).toHaveLength(0);
+		expect(states.get("turn-1")).toMatchObject({
+			phase: "handed-off",
+			carried: {
+				turnId: "turn-1",
+				taskText: TASK,
+				requirements: ["compaction keeps the newest version per key"],
+			},
+		});
+		// The writer changes the checkout between the turns.
+		h.setTree("t-writer");
+		writerWorking = false;
+		h.advance(4 * 60_000);
+		// Turn 2: woken by the report (it answers the same request).
+		const wake = loop("turn-2", TASK);
+		await wake.beforeModel(h.step(0, ""));
+		expect(states.get("turn-2")?.checkpoint.tree).toBe("t-base");
+		const woke: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("wake"),
+				text: "\u2063ytimesy-child-event:e1",
+			},
+			{ kind: "agentMessage", id: SessionItemId("done"), text: "Done." },
+		];
+		await wake.afterAttempt({
+			messages: [],
+			items: woke,
+			waitUntil: h.now() + 600_000,
+		});
+		expect(h.started).toHaveLength(1);
+		expect(h.started[0].brief).toContain(TASK);
+		expect(h.started[0].brief).toContain(
+			"- compaction keeps the newest version per key",
+		);
+		expect(states.get("turn-2")?.rounds[0].builderRequirements).toEqual([
+			"compaction keeps the newest version per key",
+		]);
+		// A new user request after a hand-off starts its own checkpoint.
+		const next = loop("turn-3", "Another request.");
+		await next.beforeModel(h.step(0, ""));
+		expect(states.get("turn-3")?.checkpoint.tree).toBe("t-writer");
+		expect(states.get("turn-3")?.carried).toBeUndefined();
+	});
+
 	it("without rigor, or with under half the time left, a passed turn finishes despite admitted gaps", async () => {
 		const PASS = verdict({
 			verdict: "pass",

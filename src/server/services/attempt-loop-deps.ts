@@ -6,6 +6,7 @@ import {
 } from "../adapters/agent-sessions";
 import {
 	attemptLoopDeadline,
+	latestReviewLoopState,
 	loadAttemptLoopState,
 	loadReviewLoopState,
 	loopSubagentStatus,
@@ -109,6 +110,7 @@ export function reviewLoopDeps(
 		...shared,
 		load: loadReviewLoopState,
 		save: saveReviewLoopState,
+		latest: latestReviewLoopState,
 		workers: async (checkerSessionId) =>
 			(
 				await descendantAgentSessions(input.parent.userId, checkerSessionId)

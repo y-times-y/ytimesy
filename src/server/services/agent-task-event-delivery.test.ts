@@ -5,6 +5,7 @@ import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	deliverAgentTaskEvents,
 	deliverParentTaskNotification,
+	REPORT_HELD_FOR_TURN,
 	subagentReportMessage,
 } from "./agent-task-event-delivery";
 
@@ -57,9 +58,42 @@ const parent = {
 	harness: "codex",
 	listedModelId: "model",
 	turnStatus: "running",
+	parentSessionId: "main",
 } as AgentSessionRecord;
 
-it("injects notifications into an active parent without launching a second turn", async () => {
+it("holds a report to a chat whose turn runs: no mid-turn injection, no second turn", async () => {
+	await expect(
+		deliverParentTaskNotification(
+			{} as never,
+			{ ...parent, parentSessionId: null },
+			"event-1",
+			"Child finished",
+		),
+	).rejects.toThrow(REPORT_HELD_FOR_TURN);
+	expect(mocks.stage).not.toHaveBeenCalled();
+	expect(mocks.send).not.toHaveBeenCalled();
+});
+it("a held report deferred by its own delivery job is not an error: the turn's end releases it", async () => {
+	const event = {
+		id: "event-1",
+		userId: "owner",
+		parentSessionId: "main",
+		childSessionId: "child",
+		eventType: "completed",
+		payload: { message: "Child finished" },
+	} as unknown as AgentTaskEvent;
+	mocks.claim.mockResolvedValueOnce(event);
+	mocks.session.mockImplementation(async (_user: string, id: string) =>
+		id === "main"
+			? { ...parent, id: "main", parentSessionId: null }
+			: { ...parent, id: "child", agentRole: "writer" },
+	);
+	await expect(deliverAgentTaskEvents({} as never, "event-1")).resolves.toBe(0);
+	expect(mocks.defer).toHaveBeenCalledWith("event-1", REPORT_HELD_FOR_TURN);
+	expect(mocks.delivered).not.toHaveBeenCalled();
+	expect(mocks.send).not.toHaveBeenCalled();
+});
+it("injects notifications into an active subagent parent without launching a second turn", async () => {
 	await expect(
 		deliverParentTaskNotification(
 			{} as never,
@@ -128,6 +162,7 @@ describe("subagent report messages", () => {
 		const message = subagentReportMessage(event("completed"));
 		expect(message).toContain("Evidence here");
 		expect(message).toContain("Treat it as a claim");
+		expect(message).toContain("give a full report");
 		expect(subagentReportMessage(event("blocked"))).toContain("Evidence here");
 	});
 });

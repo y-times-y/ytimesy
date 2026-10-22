@@ -243,7 +243,7 @@ async function retireForkedSidekick(
 function backgroundNote(context: SubagentToolContext) {
 	const ids = context.leadBackgroundCommands?.() ?? [];
 	return ids.length
-		? `The lead has background commands still running in this checkout (${ids.join(", ")}); they may write files while you work.`
+		? `Main has background commands still running in this checkout (${ids.join(", ")}); they may write files while you work.`
 		: "";
 }
 
@@ -251,7 +251,7 @@ const ROLE_TEXT =
 	"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
 /** Lead mode fusion: the writer is the sidekick, in the lead's own checkout. */
 const LEAD_ROLE_TEXT =
-	"writer: your sidekick, which works in your own checkout while you wait (its changes stay uncommitted in your working tree for you to review); researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
+	"writer: your writer, which works in your own checkout while your edits and commands are paused (its changes stay uncommitted in your working tree for you to review); researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
 
 const agentInput = z.object({
 	role: z.enum(SUBAGENT_ROLES).describe(ROLE_TEXT),
@@ -276,7 +276,7 @@ const exploreField = z
 	.boolean()
 	.optional()
 	.describe(
-		"Writer (your sidekick) only: an exploration round. It changes no files and returns the relevant file paths, key snippets with line ranges, the check commands and open questions for you to plan from.",
+		"Writer only: an exploration round. It changes no files and returns the relevant file paths, key snippets with line ranges, the check commands and open questions for you to plan from.",
 	);
 
 const sendInput = z.object({
@@ -315,7 +315,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 		latestUserRequestId(sessionItemsFromUnknown(parent.items));
 	const agent = tool({
 		description: isLead
-			? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer is your sidekick: it works directly in your checkout, you wait while it works (the runtime holds your turn until its report), and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
+			? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer persists for this chat and works directly in your checkout: while it works your edits and commands are refused, its report wakes you, and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
 			: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
 		inputSchema: isLead
 			? agentInput.extend({
@@ -344,7 +344,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					"A read-only agent cannot start a writer; report what should change instead.",
 				);
 			if (input.explore && !(isLead && role === "writer"))
-				throw new Error("explore applies only to your sidekick (a writer).");
+				throw new Error("explore applies only to your writer.");
 			// Lead mode fusion: the root's writer is its one persistent sidekick.
 			const sidekick = isLead && role === "writer";
 			if (sidekick) {
@@ -366,7 +366,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					));
 				if (alive && !replaced)
 					throw new Error(
-						`Your sidekick ${alive.label} is still available (${alive.live ? "working" : "idle"}): send it the next brief or feedback with ${AGENT_SEND_TOOL} (id ${alive.label}) instead of starting another writer. To replace it, stop it first (${AGENT_SEND_TOOL} with stop: true).`,
+						`Your writer ${alive.label} is still available (${alive.live ? "working" : "idle"}): send it the next brief or feedback with ${AGENT_SEND_TOOL} (id ${alive.label}) instead of starting another writer. To replace it, stop it first (${AGENT_SEND_TOOL} with stop: true).`,
 					);
 			}
 			const workspace = await context.workspace();
@@ -393,11 +393,14 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				},
 				workspace,
 			);
-			const label =
-				(await loadTree()).nodes.find((node) => node.id === childId)?.label ??
-				"?";
+			const node = (await loadTree()).nodes.find(
+				(entry) => entry.id === childId,
+			);
+			const label = node?.label ?? "?";
 			const started = {
 				id: label,
+				// The name the chat shows for it; use it when you tell the user.
+				...(node ? { name: node.name } : {}),
 				taskId: childId,
 				role,
 				vm: placement,
@@ -406,7 +409,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				...(notice ? { modelNotice: notice } : {}),
 				...(budget.sidekick
 					? {
-							sidekick: `Your persistent sidekick for this chat: up to ${budget.sidekick.maxRounds} rounds per user request, steps and minutes per round. It works in your checkout; you wait while it works and review its changes in place after its report. Then send feedback or the next brief with ${AGENT_SEND_TOOL} (also on the user's later messages); it keeps its context.`,
+							sidekick: `Your persistent writer for this chat: up to ${budget.sidekick.maxRounds} rounds per user request, steps and minutes per round. It works in your checkout; while it works your edits and commands are refused, so tell the user where things stand and end your turn. Its report wakes you; review its changes in place. Then send feedback or the next brief with ${AGENT_SEND_TOOL} (also on the user's later messages); it keeps its context.`,
 						}
 					: {}),
 			};
@@ -423,7 +426,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 
 	const agentSend = tool({
 		description: isLead
-			? "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A message to your idle sidekick starts its next round in your checkout; you wait for its report. A finished reader resumes with the message."
+			? "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A message to your idle writer starts its next round in your checkout; its report wakes you. A finished reader resumes with the message."
 			: "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
 		inputSchema: isLead
 			? sendInput.extend({ explore: exploreField })
@@ -510,6 +513,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 			await deps.message(parent, target.id, text, randomUUID());
 			return {
 				id: target.label,
+				name: target.name,
 				status: input.stop ? "stopping" : "message queued",
 				delivery: "next step",
 			};
@@ -597,6 +601,7 @@ export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 				if (target.live)
 					return {
 						id: target.label,
+						name: target.name,
 						status:
 							"message queued: it is still working; its report arrives as a message",
 					};
@@ -610,6 +615,7 @@ export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
 					? { id: target.label, ...report }
 					: {
 							id: target.label,
+							name: target.name,
 							note: "Still running; its report will arrive as a message.",
 						};
 			}
@@ -704,24 +710,25 @@ async function sendToSidekick(
 		const status = await deps.retireSidekick(
 			context.machines,
 			session,
-			"stopped by the lead",
+			"stopped by Main",
 		);
 		if (status !== "stopping")
 			return {
 				id: target.label,
+				name: target.name,
 				status: "retired",
-				note: "A new writer becomes your next sidekick.",
+				note: "A new writer becomes your next writer for this chat.",
 			};
 		return null;
 	}
 	if (state.retired)
 		throw new Error(
-			`Sidekick ${target.label} is retired (${state.retired.reason}). Start a new writer, or do this yourself.`,
+			`Writer ${target.label} is retired (${state.retired.reason}). Start a new writer, or do this yourself.`,
 		);
 	if (target.live) return null;
 	if (!sidekickRoundsLeft(state, input.requestKey))
 		throw new Error(
-			`Sidekick ${target.label} has used all ${state.maxRounds} rounds. Take over, or stop it and start a new writer.`,
+			`Writer ${target.label} has used all ${state.maxRounds} rounds. Take over, or stop it and start a new writer.`,
 		);
 	const round = state.round + 1;
 	// The runtime's heading goes in front; delivery takes 8,000 characters.
@@ -733,7 +740,7 @@ async function sendToSidekick(
 	}).length;
 	if (note + (input.message ?? "").trim().length > PEER_MESSAGE_MAX)
 		throw new Error(
-			`A sidekick round's message takes at most ${PEER_MESSAGE_MAX - note} characters; shorten it or point to a file in your checkout (the sidekick works in it).`,
+			`A writer round's message takes at most ${PEER_MESSAGE_MAX - note} characters; shorten it or point to a file in your checkout (the writer works in it).`,
 		);
 	const next = await beginRound(context, deps, {
 		target,
@@ -758,6 +765,7 @@ async function sendToSidekick(
 	);
 	return {
 		id: target.label,
+		name: target.name,
 		status: `${sidekickRoundLabel(next)} started`,
 		checkout:
 			"it works in your checkout now; you wait for its report, then review its changes in place",

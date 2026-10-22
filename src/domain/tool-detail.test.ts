@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { publicToolDetail, toolOutputText } from "./tool-detail";
+import { SessionItemId } from "./ids";
+import { publicToolDetail, toolActivity, toolOutputText } from "./tool-detail";
 
 it("redacts credentials while preserving inspectable tool evidence", () => {
 	const detail = publicToolDetail({
@@ -32,4 +33,39 @@ it("renders captured shell results as readable output, not escaped JSON", () => 
 	expect(
 		toolOutputText(JSON.stringify({ type: "text", value: "file contents" })),
 	).toBe("file contents");
+});
+
+it("marks a command left running as a background start", () => {
+	const call = (input: object, output?: string) =>
+		toolActivity({
+			kind: "dynamicToolCall",
+			id: SessionItemId("c"),
+			tool: "bash",
+			input: JSON.stringify(input),
+			...(output ? { output } : {}),
+			status: "completed",
+		});
+	expect(call({ command: "pnpm dev", run_in_background: true })).toMatchObject({
+		verb: "Started",
+		background: true,
+	});
+	expect(
+		call(
+			{ command: "pnpm build" },
+			"Still running after 120 seconds. Command running in background with ID: 3.",
+		),
+	).toMatchObject({ background: true });
+	expect(call({ command: "ls" }).background).toBeUndefined();
+	// The lean command tool's background start, and a recorded command.
+	expect(call({ command: "pnpm dev", background: true }).background).toBe(true);
+	expect(
+		toolActivity({
+			kind: "dynamicToolCall",
+			id: SessionItemId("d"),
+			tool: "bash",
+			input: JSON.stringify({ command: "pnpm dev" }),
+			status: "completed",
+			background: { id: "b1", label: "pnpm dev", startedAt: 0 },
+		}).background,
+	).toBe(true);
 });

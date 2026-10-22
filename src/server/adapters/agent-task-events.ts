@@ -114,6 +114,19 @@ export async function markAgentTaskEventDelivered(eventId: string) {
 }
 
 /**
+ * A chat's turn ended: the reports held back while it ran (deferred by
+ * deliverParentTaskNotification) are due now. Returns how many.
+ */
+export async function releaseHeldAgentTaskEvents(parentSessionId: string) {
+	const result = await database().query(
+		`update agent_task_event set available_at=now()
+		 where parent_session_id=$1 and status='pending' and available_at > now()`,
+		[parentSessionId],
+	);
+	return result.rowCount ?? 0;
+}
+
+/**
  * Puts a claimed event back for a later try. False when a waiter took it
  * meanwhile (takeSubagentReport, the attempt loop): a taken report is never
  * resurrected, and the caller retracts what it staged.

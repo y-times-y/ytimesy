@@ -2,6 +2,7 @@ import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { clip } from "#/domain/clip";
+import { DREAM_COMMIT_PREFIX } from "#/domain/memory-dream-schedule";
 import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
 import { lexicalScores, memoryMatchScores } from "#/domain/memory-ranking";
 import {
@@ -785,7 +786,7 @@ export async function runMemoryDream(
 		const outcome = await repo.commit(
 			snapshot,
 			changes,
-			`Dream: ${String(message).slice(0, 200)}`,
+			`${DREAM_COMMIT_PREFIX}${String(message).slice(0, 200)}`,
 		);
 		if (!outcome.ok) return "conflict";
 		await deps

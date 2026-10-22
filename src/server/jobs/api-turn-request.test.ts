@@ -101,7 +101,6 @@ vi.mock("../services/subagent-runtime", async (importOriginal) => ({
 vi.mock("../services/fusion-lead", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../services/fusion-lead")>()),
 	fusionLeadGate: (...args: unknown[]) => mocks.leadGate(...(args as [])),
-	fusionRoundOpen: async () => false,
 }));
 // run_code's run journal: every run is new (no database).
 vi.mock("../adapters/agent-task-command-receipts", async (importOriginal) => ({
@@ -170,6 +169,7 @@ vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: vi.fn(async () => "event"),
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: vi.fn(async () => "job") }));
@@ -409,13 +409,13 @@ it.each([
 		);
 		// The workflow tools are there from the first step, never loaded later.
 		expect(first.names).toEqual(
-			expect.arrayContaining(["agent", "agent_send", "enter_plan_mode"]),
+			expect.arrayContaining(["agent", "agent_send"]),
 		);
 		expect(first.names).not.toContain("find_tools");
 	},
 );
 
-it("lead=fusion: no model call while the sidekick works; the step ends to wait on", async () => {
+it("lead=fusion: no model call while the exploration runs; the step ends to wait on", async () => {
 	mocks.leadGate.mockClear();
 	mocks.leadGate.mockResolvedValueOnce("wait");
 	await expect(
@@ -427,7 +427,7 @@ it("lead=fusion: no model call while the sidekick works; the step ends to wait o
 		{ codeMode: "primary", subagents: "off", lead: "fusion" },
 		{ step: 2 },
 	);
-	expect(next.body.instructions).toContain("Subagents: you are the lead.");
+	expect(next.body.instructions).toContain("Helpers: you are Main.");
 	expect(mocks.leadGate).toHaveBeenCalledTimes(2);
 	// Never for a builder without lead mode.
 	await sentRequest({ codeMode: "primary", subagents: "on", lead: "off" });
@@ -668,11 +668,12 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 				level < 3 &&
 				(role !== "builder" || subagents === "on" || lead === "fusion");
 			expect(available.has("agent")).toBe(delegates);
-			expect(body.instructions.includes("Subagents:")).toBe(delegates);
-			expect(body.instructions.includes("you are the lead")).toBe(
-				delegates && role === "builder" && lead === "fusion",
-			);
-			expect(body.instructions.includes("You are the lead's sidekick")).toBe(
+			const main = delegates && role === "builder" && lead === "fusion";
+			expect(
+				body.instructions.includes(main ? "Helpers:" : "Subagents:"),
+			).toBe(delegates);
+			expect(body.instructions.includes("you are Main")).toBe(main);
+			expect(body.instructions.includes("You are Main's writer")).toBe(
 				role === "sidekick",
 			);
 			// The workflow tools are ordinary tools: in the request's tool list,
@@ -686,14 +687,11 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 					names.indexOf("web_search"),
 				);
 			}
-			// A root chat (a person can approve a plan) always offers plan mode.
-			if (role === "builder") {
-				expect(names).toContain("enter_plan_mode");
-				expect(names.indexOf("enter_plan_mode")).toBeLessThan(
-					names.indexOf("web_search"),
-				);
-				expect(names).toContain("request_project_secret");
-			} else expect(names).not.toContain("enter_plan_mode");
+			// Plan mode is gone: the agent asks in words when something is unclear.
+			expect(names).not.toContain("enter_plan_mode");
+			expect(names).not.toContain("propose_plan");
+			// A root chat (a person can answer the card) offers the secret request.
+			if (role === "builder") expect(names).toContain("request_project_secret");
 			if (codeMode === "primary") expect(names[0]).toBe("run_code");
 			// Readers share the parent's VM read-only: nothing that changes files.
 			if (role !== "builder" && role !== "writer" && role !== "sidekick")

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agentSessionMachineSlug } from "#/domain/agent-session";
 import { SessionItemId } from "#/domain/ids";
 import {
+	forkCodeStart,
 	ownsWritableCheckout,
 	recoverConversation,
 } from "../services/conversation-recovery";
@@ -19,20 +21,47 @@ vi.mock("./database", () => ({ database: () => holder }));
 const code = vi.hoisted(() => ({
 	capture: vi.fn(),
 	restore: vi.fn(),
+	present: vi.fn(),
+	start: vi.fn(),
 }));
 vi.mock("../services/conversation-code-checkpoint", () => ({
 	captureConversationCode: code.capture,
 	restoreConversationCode: code.restore,
+	assertConversationCodePresent: code.present,
+	startCheckoutFromConversationCode: code.start,
+}));
+vi.mock("./project-machine-size", () => ({
+	projectMachineSize: async () => undefined,
 }));
 const coordinate = vi.hoisted(() => vi.fn(async (_action: string) => true));
 vi.mock("./conversation-turn-control", () => ({
 	coordinateConversationTurn: coordinate,
 }));
 vi.mock("./agent-sessions", () => ({
-	agentSessionForOwner: async (_userId: string, id: string) => ({
-		id,
-		taskPlacement: null,
-	}),
+	agentSessionForOwner: async (userId: string, id: string) => {
+		const row = (
+			await holder.query(
+				"select * from agent_session where id=$1 and user_id=$2",
+				[id, userId],
+			)
+		).rows[0];
+		return row
+			? {
+					id,
+					userId,
+					projectId: row.project_id,
+					title: row.title,
+					turnStatus: row.turn_status,
+					providerRef: row.provider_ref,
+					parentSessionId: row.parent_session_id,
+					agentRole: row.agent_role,
+					baseBranch: row.base_branch,
+					items: row.items,
+					taskPlacement: null,
+				}
+			: null;
+	},
+	projectBranchHeldByOtherSession: async () => false,
 }));
 let db: PGlite;
 const session = randomUUID(),
@@ -40,7 +69,7 @@ const session = randomUUID(),
 beforeEach(async () => {
 	coordinate.mockReset().mockResolvedValue(true);
 	db = new PGlite();
-	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,title text,listed_model_id text,status text,turn_status text,task_access text,selected_branch text,working_branch text,task_branch text,parent_session_id uuid,provider_ref text,task_placement text,items jsonb default '[]',task_summary text,task_review_state text,updated_at timestamptz default now());
+	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,title text,listed_model_id text,status text,turn_status text,task_access text,selected_branch text,working_branch text,base_branch text,task_branch text,agent_role text,parent_session_id uuid,provider_ref text,task_placement text,items jsonb default '[]',task_summary text,task_review_state text,updated_at timestamptz default now());
  create table agent_task_command_receipt(parent_session_id uuid references agent_session(id),request_id text,status text,response jsonb,created_at timestamptz default now(),completed_at timestamptz,updated_at timestamptz default now(),primary key(parent_session_id,request_id));
  create table api_turn(session_id uuid,user_id text,messages jsonb,model_id text,connection_revision text,created_at timestamptz default now());`);
 	await db.query(
@@ -334,4 +363,240 @@ it("only rewinds checkouts a session owns", () => {
 				agent_role,
 			}),
 		).toBe(false);
+});
+
+describe("forking at a message", () => {
+	const snapshot = (tree: string) => ({
+		cwd: "/workspace/repo",
+		tree: tree.repeat(40),
+		indexTree: tree.repeat(40),
+		head: "c".repeat(40),
+		ref: `refs/ytimesy/recovery/${tree}`,
+	});
+	const forkInput = {
+		projectId: project,
+		sessionId: session,
+		messageId: "first",
+		mode: "fork" as const,
+	};
+	const rows = async () =>
+		(
+			await db.query<Record<string, unknown>>(
+				"select * from agent_session where user_id='alice' order by id=$1 desc",
+				[session],
+			)
+		).rows;
+	const machines = () => {
+		const calls = {
+			ensureRunning: vi.fn(async (vm: string) => vm),
+			readTextFile: vi.fn(async () => "/workspace/repo\n"),
+			forkWorkspace: vi.fn(async () => ({ vm: "vm-fork", forkMs: 5 })),
+			exec: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+			destroy: vi.fn(async () => {}),
+		};
+		return { calls, machines: calls as unknown as WorkspaceMachines };
+	};
+	beforeEach(async () => {
+		code.present.mockReset().mockResolvedValue(undefined);
+		code.start.mockReset().mockResolvedValue(undefined);
+		code.restore.mockReset();
+		await db.query(
+			"update agent_task_command_receipt set response=jsonb_set(response,'{result,code}',$2::jsonb) where parent_session_id=$1",
+			[session, JSON.stringify(snapshot("a"))],
+		);
+		await db.query(
+			"update agent_session set provider_ref='vm-1',selected_branch='ytimesy/original-111111',working_branch='ytimesy/original-111111',base_branch='main' where id=$1",
+			[session],
+		);
+	});
+
+	it("copies the source VM and starts the copy at the message's code on the fork's own branch", async () => {
+		const { calls, machines: vms } = machines();
+		const recovered = await recoverConversation(vms, "alice", forkInput);
+		expect(recovered.prompt).toBe("Implement");
+		expect(calls.ensureRunning).toHaveBeenCalledWith("vm-1");
+		expect(code.present).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm-1", cwd: "/workspace/repo" }),
+			snapshot("a"),
+		);
+		expect(calls.forkWorkspace).toHaveBeenCalledWith(
+			"vm-1",
+			agentSessionMachineSlug(recovered.id),
+			undefined,
+		);
+		const [source, fork] = await rows();
+		const branch = fork.working_branch as string;
+		expect(branch).toMatch(/^ytimesy\/original-[a-f0-9]{6}$/);
+		expect(branch).not.toBe(source.working_branch);
+		expect(code.start).toHaveBeenCalledWith(
+			expect.objectContaining({ vm: "vm-fork", cwd: "/workspace/repo" }),
+			snapshot("a"),
+			branch,
+		);
+		expect(fork).toMatchObject({
+			id: recovered.id,
+			provider_ref: "vm-fork",
+			status: "ready",
+			selected_branch: branch,
+			base_branch: "main",
+			parent_session_id: null,
+			items: [],
+		});
+		// The source keeps its VM, branch, transcript and code.
+		expect(source).toMatchObject({
+			provider_ref: "vm-1",
+			working_branch: "ytimesy/original-111111",
+		});
+		expect(source.items).toHaveLength(2);
+		expect(code.restore).not.toHaveBeenCalled();
+		expect(calls.destroy).not.toHaveBeenCalled();
+	});
+
+	it("fails without copying a VM when the source no longer holds the checkpoint", async () => {
+		const { calls, machines: vms } = machines();
+		code.present.mockRejectedValue(
+			new Error(
+				"This message's code checkpoint is gone, so the chat was not forked.",
+			),
+		);
+		await expect(recoverConversation(vms, "alice", forkInput)).rejects.toThrow(
+			"checkpoint is gone",
+		);
+		expect(calls.forkWorkspace).not.toHaveBeenCalled();
+		expect(await rows()).toHaveLength(1);
+	});
+
+	it("removes the copied VM when the copy cannot start at the checkpoint or the fork is refused", async () => {
+		const first = machines();
+		code.start.mockRejectedValueOnce(new Error("checkout failed"));
+		await expect(
+			recoverConversation(first.machines, "alice", forkInput),
+		).rejects.toThrow("checkout failed");
+		expect(first.calls.destroy).toHaveBeenCalledWith("vm-fork");
+		// A child task started while the VM was copied: the locked check refuses it.
+		const second = machines();
+		await db.query(
+			"insert into agent_session(id,user_id,parent_session_id,turn_status)values($1,'alice',$2,'running')",
+			[randomUUID(), session],
+		);
+		await expect(
+			recoverConversation(second.machines, "alice", forkInput),
+		).rejects.toThrow("child tasks");
+		expect(second.calls.destroy).toHaveBeenCalledWith("vm-fork");
+		expect(
+			(await rows()).filter((row) => row.provider_ref === "vm-fork"),
+		).toEqual([]);
+	});
+
+	describe("at a message whose turn never touched the workspace", () => {
+		const point = (id: string, code?: object) =>
+			db.query(
+				`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,created_at)
+				 values($1,$2,'done',$3::jsonb,now()+$4::interval)`,
+				[
+					session,
+					`conversation-point:${id}`,
+					JSON.stringify({
+						ok: true,
+						result: {
+							type: "conversation-point",
+							userMessageId: id,
+							prompt: id,
+							items: [],
+							messages: [],
+							...(code ? { code } : {}),
+						},
+					}),
+					`${id === "qa" ? 1 : 2} minutes`,
+				],
+			);
+		beforeEach(async () => {
+			// first (code turn) -> qa (no tools) -> later (code turn, maybe).
+			await db.query("update agent_session set items=$2 where id=$1", [
+				session,
+				JSON.stringify(
+					["first", "qa", "later"].map((id) => ({
+						kind: "userMessage",
+						id,
+						text: id,
+					})),
+				),
+			]);
+			await point("qa");
+			code.capture.mockReset().mockResolvedValue(snapshot("n"));
+		});
+		const qaFork = { ...forkInput, messageId: "qa" };
+
+		it("forks from the next turn's code point: the Q&A turn changed nothing", async () => {
+			await point("later", snapshot("b"));
+			const { calls, machines: vms } = machines();
+			await recoverConversation(vms, "alice", qaFork);
+			expect(code.start).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm-fork" }),
+				snapshot("b"),
+				expect.any(String),
+			);
+			expect(code.capture).not.toHaveBeenCalled();
+			expect(calls.forkWorkspace).toHaveBeenCalledTimes(1);
+		});
+
+		it("forks from the checkout as it is now when no later turn touched the workspace", async () => {
+			const { machines: vms } = machines();
+			await recoverConversation(vms, "alice", qaFork);
+			expect(code.capture).toHaveBeenCalledWith(
+				expect.objectContaining({ vm: "vm-1", cwd: "/workspace/repo" }),
+			);
+			expect(code.start).toHaveBeenCalledWith(
+				expect.anything(),
+				snapshot("n"),
+				expect.any(String),
+			);
+		});
+
+		it("refuses when code was restored after the message, and when the later checkpoint is gone", async () => {
+			await db.query(
+				`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,created_at)
+				 values($1,'conversation-backup:x','done',$2::jsonb,now()+interval '90 seconds')`,
+				[session, JSON.stringify({ result: { code: snapshot("r") } })],
+			);
+			await point("later", snapshot("b"));
+			const first = machines();
+			await expect(
+				recoverConversation(first.machines, "alice", qaFork),
+			).rejects.toThrow("Code was restored after this message");
+			expect(first.calls.forkWorkspace).not.toHaveBeenCalled();
+			await db.query(
+				"delete from agent_task_command_receipt where request_id='conversation-backup:x'",
+			);
+			code.present.mockRejectedValue(new Error("checkpoint is gone"));
+			const second = machines();
+			await expect(
+				recoverConversation(second.machines, "alice", qaFork),
+			).rejects.toThrow("checkpoint is gone");
+			expect(second.calls.forkWorkspace).not.toHaveBeenCalled();
+		});
+
+		it("starts a fresh checkout only for a chat without its own", () => {
+			expect(forkCodeStart({ ownsCheckout: false })).toBe("fresh");
+			expect(forkCodeStart({ ownsCheckout: true })).toBe("checkpoint");
+		});
+	});
+
+	it("gives a fork of a chat without a VM its own branch off the source's base, made at its first turn", async () => {
+		await db.query("update agent_session set provider_ref=null where id=$1", [
+			session,
+		]);
+		const { calls, machines: vms } = machines();
+		const recovered = await recoverConversation(vms, "alice", forkInput);
+		expect(calls.forkWorkspace).not.toHaveBeenCalled();
+		const fork = (await rows())[1];
+		expect(fork).toMatchObject({
+			id: recovered.id,
+			provider_ref: null,
+			status: "starting",
+			base_branch: "main",
+		});
+		expect(fork.working_branch).toMatch(/^ytimesy\/original-/);
+		expect(fork.selected_branch).toBe(fork.working_branch);
+	});
 });
