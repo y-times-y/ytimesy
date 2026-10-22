@@ -51,6 +51,8 @@ export type ApiTurn = {
 	settings?: unknown;
 	/** The fallback route serving the rest of this turn after a failover (TurnFailover). */
 	failover?: unknown;
+	/** Epoch ms the turn was queued, when its loader read it (timing only). */
+	queued_at_ms?: number | null;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */

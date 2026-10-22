@@ -236,6 +236,11 @@ import {
 	turnMemory,
 } from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
+import {
+	type EarlyRequestReason,
+	type TurnTiming,
+	turnTiming,
+} from "../services/turn-timing";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
@@ -277,6 +282,8 @@ type ApiTurnStep = {
 	waitDeadlineAt?: number;
 	/** The same step is being re-run after its executor restarted mid-step. */
 	resumed?: boolean;
+	/** Epoch ms the executor started this step (its claim), for its timing line. */
+	startedAt?: number;
 };
 
 /**
@@ -307,15 +314,40 @@ export async function runApiTurn(
 	turn: ApiTurn,
 	step?: ApiTurnStep,
 ): Promise<ApiTurnStepOutcome> {
-	// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
-	for (let continued = false; ; continued = true) {
-		const outcome = await runApiTurnAttempt(machines, turn, step, continued);
-		if (typeof outcome === "string") {
-			if (outcome !== "continue") forgetTurnMemo(turn.id);
-			return outcome;
+	// A durable step logs where its time went (turn-timing.ts).
+	const timing = step
+		? turnTiming({
+				turnId: turn.id,
+				step: step.index,
+				startedAt: step.startedAt ?? Date.now(),
+				queuedAt: turn.queued_at_ms ?? undefined,
+			})
+		: undefined;
+	timing?.mark("turnStart");
+	let ended = "error";
+	try {
+		// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
+		for (let continued = false; ; continued = true) {
+			const outcome = await runApiTurnAttempt(
+				machines,
+				turn,
+				step,
+				continued,
+				timing,
+			);
+			if (typeof outcome === "string") {
+				if (outcome !== "continue") forgetTurnMemo(turn.id);
+				ended = outcome;
+				return outcome;
+			}
+			if (step) {
+				ended = "failed-over";
+				return "continue";
+			}
+			turn = outcome.failedOver;
 		}
-		if (step) return "continue";
-		turn = outcome.failedOver;
+	} finally {
+		timing?.write(ended);
 	}
 }
 
@@ -325,6 +357,7 @@ async function runApiTurnAttempt(
 	step: ApiTurnStep | undefined,
 	/** The local worker is continuing this turn on a fallback route. */
 	continued: boolean,
+	timing?: TurnTiming,
 ): Promise<ApiTurnStepOutcome | { failedOver: ApiTurn }> {
 	const abort = new AbortController();
 	// The executor's step budget and turn deadline abort with a TimeoutError.
@@ -537,6 +570,7 @@ async function runApiTurnAttempt(
 		)
 			throw new Error("The conversation is already running or was stopped.");
 		coordinated = true;
+		timing?.mark("leaseAcquired");
 		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
 		// The session row is read once the lease is held (a code restore that
@@ -552,6 +586,7 @@ async function runApiTurnAttempt(
 			abort.signal.throwIfAborted();
 		}
 		const metadata = await loadingMetadata;
+		timing?.mark("leaseRenewed");
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
 		// A child without a subagent role belongs to the retired lead/child
@@ -626,6 +661,7 @@ async function runApiTurnAttempt(
 			if (officialProviderEndpoint(connection))
 				webSearch = nativeWebSearchTools(connection.provider);
 		}
+		timing?.mark("settings");
 		failoverScope = {
 			evaluation: Boolean(evaluation),
 			child: Boolean(owner.parentSessionId),
@@ -705,12 +741,28 @@ async function runApiTurnAttempt(
 			variant.lead === "off" &&
 			attemptLimit(variant.attempts) <= 1 &&
 			variant.review !== "on";
+		// Why not, for the step's timing line (decided further below when eligible).
+		const earlyIneligible: EarlyRequestReason | null = earlyFirstRequestEligible
+			? null
+			: !firstStep
+				? "not-first-step"
+				: step?.resumed
+					? "resumed"
+					: !writable || owner.parentSessionId || owner.agentRole
+						? "not-root-builder"
+						: evaluation
+							? "evaluation"
+							: "harness-variant";
+		if (earlyIneligible) timing?.early(false, earlyIneligible);
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
 			abort.signal,
 			workspaceReuse,
-			{ pinNewChatBase: earlyFirstRequestEligible },
+			{
+				pinNewChatBase: earlyFirstRequestEligible,
+				onPhase: (phase) => timing?.mark(phase),
+			},
 		);
 		let codePoint: Promise<void> | undefined;
 		/** Set once the checkout (without ~/memory) is ready. */
@@ -730,6 +782,7 @@ async function runApiTurnAttempt(
 				};
 				memoryCloned ??= memory.prepareVm(ready, redacted).then(() => {
 					for (const token of memory.vmTokens()) redacted(token);
+					timing?.mark("memoryCloned");
 				});
 				return memoryCloned;
 			});
@@ -740,6 +793,7 @@ async function runApiTurnAttempt(
 		 */
 		const checkout = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
+			timing?.mark("workspacePrepared");
 			if (remembersDirectory) {
 				const { cwd } = execution;
 				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
@@ -793,6 +847,7 @@ async function runApiTurnAttempt(
 			await attachmentsWritten;
 			await secretsReady;
 			checkoutReady = true;
+			timing?.mark("checkoutReady");
 			return execution;
 		};
 		/** The whole workspace: the checkout and ~/memory, for tools. */
@@ -1021,18 +1076,22 @@ async function runApiTurnAttempt(
 		failureStage = "workspace";
 		const leanDirectoryKey = `${turn.id}:lean-working-directory`;
 		let reportedDirectory: string | null = null;
-		if (
-			surface.lean &&
-			earlyFirstRequestEligible &&
-			!(await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
-		)
-			reportedDirectory = await timed("turn:checkoutDirectory", () =>
-				readPreparedCheckoutDirectory(
-					owner.userId,
-					owner.id,
-					owner.projectId ?? null,
-				),
-			).catch(() => null);
+		if (earlyFirstRequestEligible && !surface.lean)
+			timing?.early(false, "not-lean-surface");
+		if (surface.lean && earlyFirstRequestEligible) {
+			if (await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+				timing?.early(false, "workspace-ready");
+			else {
+				reportedDirectory = await timed("turn:checkoutDirectory", () =>
+					readPreparedCheckoutDirectory(
+						owner.userId,
+						owner.id,
+						owner.projectId ?? null,
+					),
+				).catch(() => null);
+				if (!reportedDirectory) timing?.early(false, "no-reported-directory");
+			}
+		}
 		// Whether the chat's known hook configuration has a UserPromptSubmit
 		// hook: read-only, so it runs beside the MCP, plugin and memory setup
 		// below and is awaited where the first request is decided.
@@ -1112,6 +1171,7 @@ async function runApiTurnAttempt(
 			connecting,
 			loadingPlugins,
 		]);
+		timing?.mark("toolsLoaded");
 		if (connected.status === "fulfilled") closeMcp = connected.value.close;
 		if (published.status === "rejected") throw published.reason;
 		if (connected.status === "rejected") throw connected.reason;
@@ -1276,6 +1336,7 @@ async function runApiTurnAttempt(
 			const attached = await timed("turn:memoryAttach", () =>
 				memory.attach(messages, items, memoryCheckout),
 			);
+			timing?.mark("memoryAttached");
 			messages = attached.messages;
 			// The chat shows what was recalled; the model sees only the parts above.
 			if (attached.recall) {
@@ -1305,13 +1366,26 @@ async function runApiTurnAttempt(
 		// chat's journaled configuration shows no such hook; unknown (a new
 		// chat, a first turn since the journal) waits as before. Its tools still
 		// wait for the check, and a late failure ends the turn.
-		if (firstStep && promptSubmitKnown && (await promptSubmitKnown) === false) {
+		const promptSubmit = promptSubmitKnown ? await promptSubmitKnown : null;
+		if (promptSubmitKnown)
+			timing?.early(
+				promptSubmit === false,
+				promptSubmit === false
+					? "early"
+					: promptSubmit
+						? "prompt-hook-configured"
+						: "hook-config-unknown",
+			);
+		if (firstStep && promptSubmitKnown && promptSubmit === false) {
 			earlyPromptCheck = timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
 				),
 			);
-			earlyPromptCheck.catch(() => {});
+			earlyPromptCheck.then(
+				() => timing?.mark("hookCheck"),
+				() => {},
+			);
 			void turnMemo(deferredInstructionsKey, async () => true);
 		}
 		if (firstStep && !earlyPromptCheck) {
@@ -1320,6 +1394,7 @@ async function runApiTurnAttempt(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
 				),
 			);
+			timing?.mark("hookCheck");
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
 			// The journaled hook replays its feedback; an interrupted attempt may have saved it already.
 			if (step?.resumed) {
@@ -1578,6 +1653,7 @@ async function runApiTurnAttempt(
 				);
 			},
 			beforeStep: async (history) => {
+				timing?.mark("promptBuilt");
 				failureStage = "budget";
 				assertApiContextFits(history);
 				abort.signal.throwIfAborted();
@@ -1594,6 +1670,7 @@ async function runApiTurnAttempt(
 						Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
 					);
 				failureStage = "model";
+				timing?.mark("modelRequestSent");
 			},
 			beforeCompaction: async (older) => {
 				failureStage = "budget";
@@ -1612,6 +1689,12 @@ async function runApiTurnAttempt(
 				failureStage = "model";
 			},
 			onEvent: async (event) => {
+				if (
+					event.type === "text-delta" ||
+					event.type === "reasoning-delta" ||
+					event.type === "tool-call"
+				)
+					timing?.mark("firstToken");
 				if (step && "id" in event)
 					event = { ...event, id: `step-${step.index}:${event.id}` };
 				if (step && event.type === "retract")
