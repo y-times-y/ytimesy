@@ -252,7 +252,7 @@ export function codeModeJournal(input: {
  * The program runs server-side in QuickJS (code-mode-sandbox.ts) and calls
  * the SAME tool executors the model could call directly: `tools` is the
  * turn's final tool set, already wrapped with lifecycle hooks, secret
- * redaction and plan mode, and each inner call gets its own derived call id
+ * redaction, and each inner call gets its own derived call id
  * (`<id>:code:<n>`), so the per-call journal, background tracking ids and
  * cancellation behave as for a direct call.
  */
@@ -378,7 +378,7 @@ export function codeModeTool(input: {
 						Symbol.asyncIterator in result
 					)
 						throw new InnerToolError(`${name} streams; call it directly.`);
-					// Plan mode and PreToolUse hooks refuse with { blocked, error }.
+					// PreToolUse hooks refuse with { blocked, error }.
 					const blocked = result as { blocked?: unknown; error?: unknown };
 					if (blocked && blocked.blocked === true) {
 						const message =

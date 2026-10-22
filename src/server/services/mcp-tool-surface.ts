@@ -265,7 +265,7 @@ const isMcpError = (output: unknown) =>
  * Larger ones get a fixed pair, search_mcp_tools and call_mcp_tool, so no
  * per-tool schema is sent and the tool list never changes mid-turn (adding
  * discovered tools would change the cached tools prefix). A call runs the
- * real tool from `tools`, already wrapped with hooks, plan mode and
+ * real tool from `tools`, already wrapped with hooks and
  * redaction, under its own MCP name.
  */
 export function mcpToolSurface(input: {

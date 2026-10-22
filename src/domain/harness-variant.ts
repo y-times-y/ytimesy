@@ -54,7 +54,7 @@ export const HARNESS_VARIANT_VALUES = {
 	 * run_code the main way to work (its description and instructions teach
 	 * batching) and a large MCP setup's search and call tools callable only
 	 * from inside run_code (searchTools(query) for their declarations);
-	 * agent, agent_send and enter_plan_mode stay in the tool list. off
+	 * agent, agent_send and ask_user stay in the tool list. off
 	 * offers the surface unchanged (the default).
 	 */
 	codeMode: ["off", "on", "primary"],
