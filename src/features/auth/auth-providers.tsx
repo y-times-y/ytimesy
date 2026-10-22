@@ -64,6 +64,12 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 					localization={{
 						auth: {
 							emailPlaceholder: "you@email.com",
+							// Sentence case, like the rest of the app.
+							signIn: "Sign in",
+							signOut: "Sign out",
+							signUp: "Sign up",
+							forgotPassword: "Forgot password",
+							resetPassword: "Reset password",
 						},
 					}}
 					navigate={({ to, replace }) =>
