@@ -37,6 +37,15 @@ import {
 
 let db: PGlite;
 const query = async (sql: string, values: unknown[] = []) => {
+	// A parameterless batch of statements goes as one simple query, like
+	// node-postgres sends it: one result per statement.
+	if (!values.length && sql.trim().split(/;\s*\n/).length > 1)
+		return (await db.exec(sql)).map((result) => ({
+			...result,
+			rowCount: result.affectedRows ?? result.rows.length,
+		})) as unknown as Awaited<ReturnType<typeof db.query>> & {
+			rowCount: number;
+		};
 	const result = await db.query(sql, values);
 	return { ...result, rowCount: result.affectedRows ?? result.rows.length };
 };

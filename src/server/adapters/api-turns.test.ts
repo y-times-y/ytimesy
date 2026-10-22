@@ -80,29 +80,72 @@ it("does not retry a rejected lease or an authentication error", async () => {
 	expect(mocks.query).toHaveBeenCalledOnce();
 });
 
-it("claims in one statement whose admission lock gates reading the queue", async () => {
-	mocks.query.mockResolvedValue({ rows: [{ id: "turn" }] });
+it("claims in one round trip that bounds its own transaction before its lock", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [], rows: [] },
+		{ fields: [], rows: [] },
+		{ fields: [], rows: [] },
+		{ fields: [{ name: "id" }], rows: [{ id: "turn" }] },
+		{ fields: [], rows: [] },
+	]);
 	expect(await claimApiTurn(2, 8)).toEqual({ id: "turn" });
 	expect(mocks.query).toHaveBeenCalledOnce();
-	const [sql, params] = mocks.query.mock.calls[0];
-	expect(sql).toMatch(
+	const [batch, params] = mocks.query.mock.calls[0];
+	expect(params).toBeUndefined();
+	const statements = batch.split(";\n").map((part: string) => part.trim());
+	expect(statements.slice(0, 3)).toEqual([
+		"begin",
+		"set local idle_in_transaction_session_timeout = '30s'",
+		"set local statement_timeout = '20s'",
+	]);
+	expect(statements[3]).toMatch(
 		/^with admission as \(select pg_try_advisory_xact_lock\(81738419\) as acquired\)\s+update api_turn/,
 	);
 	// The queued turn is read (and row-locked) only once the lock is held.
-	expect(sql).toContain(
+	expect(statements[3]).toContain(
 		"select q.id from api_turn q where (select acquired from admission)",
 	);
-	expect(sql).toContain("for update skip locked limit 1");
-	expect(params.slice(1)).toEqual([2, 8, "node", null]);
-	expect(mocks.release).not.toHaveBeenCalled();
+	expect(statements.at(-1)).toBe("commit;");
+	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
-it("reports no claim and surfaces a failed claim as is", async () => {
-	mocks.query.mockResolvedValueOnce({ rows: [] });
+it("reports no claim when nothing was admitted", async () => {
+	mocks.query.mockResolvedValue([
+		{ fields: [], rows: [] },
+		{ fields: [{ name: "id" }], rows: [] },
+	]);
 	expect(await claimApiTurn(2, 8)).toBeNull();
-	const failure = new Error("statement timed out");
-	mocks.query.mockRejectedValueOnce(failure);
+});
+
+it("refuses an executor or chat id that is not a known literal", async () => {
+	await expect(
+		claimApiTurn(2, 8, "node'; drop table api_turn; --" as never),
+	).rejects.toThrow("Unknown turn executor.");
+	await expect(claimApiTurn(2, 8, "node", "x' or '1'='1")).rejects.toThrow(
+		"Invalid chat id.",
+	);
+	expect(mocks.query).not.toHaveBeenCalled();
+});
+
+it("discards a connection whose rollback failed without hiding the claim error", async () => {
+	const failure = new Error("connection lost during claim");
+	mocks.query.mockImplementation(async (sql: string) => {
+		if (sql === "rollback") throw new Error("rollback unavailable");
+		throw failure;
+	});
 	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
+	expect(mocks.release).toHaveBeenCalledWith(true);
+});
+
+it("rolls back and releases a healthy connection after a claim failure", async () => {
+	const failure = new Error("statement timed out");
+	mocks.query.mockImplementation(async (sql: string) => {
+		if (sql === "rollback") return { rows: [] };
+		throw failure;
+	});
+	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
+	expect(mocks.query).toHaveBeenLastCalledWith("rollback");
+	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
 it("inherits same-model subscription settings through owner-scoped ancestors", async () => {
