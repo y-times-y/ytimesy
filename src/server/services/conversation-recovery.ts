@@ -4,17 +4,37 @@ import {
 	agentSessionMachineSlug,
 	copiedSessionScratchResetCommands,
 } from "#/domain/agent-session";
-import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
+import {
+	type ConversationForkJournal,
+	conversationForkStatus,
+} from "#/domain/conversation-fork";
+import {
+	publicRecoveryFailure,
+	RecoveryRefused,
+} from "#/domain/conversation-recovery-failure";
 import { WorkspaceId } from "#/domain/ids";
 import { jsonbText } from "#/domain/jsonb";
 import { sessionBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { type SubagentRole, writesOwnCheckout } from "#/domain/subagent";
+import { configuredTurnExecutor } from "#/domain/turn-executor";
+import { startAfterResponse } from "../adapters/after-response";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	projectBranchHeldByOtherSession,
 } from "../adapters/agent-sessions";
+import {
+	backgroundJobId,
+	dispatchBackgroundJob,
+} from "../adapters/background-job-dispatch";
+import {
+	bindConversationForkVm,
+	conversationForkJournal,
+	failConversationFork,
+	openConversationForkJournal,
+	retryConversationForkJournal,
+} from "../adapters/conversation-fork";
 import {
 	type ConversationPoint,
 	conversationPoint,
@@ -152,65 +172,18 @@ type ConversationFork = {
 	readonly id: string;
 	/** Null only for a fresh fork of a chat that has no base branch on record. */
 	readonly branch: string | null;
-	readonly vm: WorkspaceId | null;
-	/** Its chat row was made before its VM (the VM's usage owner); recovery completes it. */
-	readonly reserved: boolean;
-	readonly destroy: () => Promise<void>;
+	/** The VM copy still to make after the chat opens; null for a fresh fork. */
+	readonly journal: ConversationForkJournal | null;
 };
 
 /**
- * Makes the fork's chat row before its VM is created: usage admission
- * verifies a VM's owner from the chat that holds its slug, so a VM for a
- * chat that does not exist yet has no owner and is refused. The row starts
- * like a fork that has no VM yet; recovery binds the VM to it.
+ * Plans a fork from what the database knows, so its chat opens at once: a
+ * fork of a chat with its own checkout gets a copy of that chat's VM, made
+ * after the chat opens (prepareForkWorkspace); a fork of one without gets a
+ * fresh checkout at its first turn. A code restore after the message is
+ * refused here, before any chat is made.
  */
-async function reserveForkSession(
-	session: AgentSessionRecord,
-	id: string,
-	branch: string,
-) {
-	await database().query(
-		`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch)
-		 values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8,$8,$9)`,
-		[
-			id,
-			session.userId,
-			session.projectId,
-			session.workspaceId,
-			session.harness,
-			`${session.title} (fork)`.slice(0, 120),
-			session.listedModelId,
-			branch,
-			session.baseBranch ?? null,
-		],
-	);
-}
-
-/** Removes a fork's reserved chat row; it never held a turn or a VM. */
-async function releaseForkSession(userId: string, id: string) {
-	await database().query(
-		"delete from agent_session where id=$1 and user_id=$2 and provider_ref is null",
-		[id, userId],
-	);
-}
-
-/**
- * A fork's VM that could not be deleted stays bound to its reserved chat,
- * marked failed, so it keeps a verifiable owner and is cleaned up with it.
- */
-async function keepFailedForkMachine(userId: string, id: string, vm: string) {
-	await database().query(
-		"update agent_session set provider_ref=$3,status='failed',updated_at=now() where id=$1 and user_id=$2 and provider_ref is null",
-		[id, userId, vm],
-	);
-}
-
-/**
- * The fork's VM is a copy of the source's (Freestyle fork: disk, ignored
- * dependencies and the never-pushed checkpoint refs), put on the fork's own
- * branch at the message's checkpoint. The source VM is only read.
- */
-async function prepareConversationFork(
+async function planConversationFork(
 	machines: WorkspaceMachines,
 	userId: string,
 	input: z.infer<typeof conversationRecoveryRequest>,
@@ -236,93 +209,239 @@ async function prepareConversationFork(
 		}),
 	});
 	const branch = await forkBranchName(session, id);
-	const none = async () => {};
 	if (start === "fresh" || !session.providerRef)
 		return {
 			id,
 			branch: session.baseBranch ? branch : null,
-			vm: null,
-			reserved: false,
-			destroy: none,
+			journal: null,
 		};
-	const scoped = machinesForAgentSession(machines, session);
-	if (!scoped.forkWorkspace)
+	if (!machinesForAgentSession(machines, session).forkWorkspace)
 		throw new Error("This workspace provider cannot fork a chat's machine.");
-	const resolved = await forkCode({
-		messageId: input.messageId,
+	await resolveForkCode(userId, session, input.messageId, point);
+	return {
+		id,
+		branch,
+		journal: {
+			state: "preparing",
+			sourceSessionId: session.id,
+			messageId: input.messageId,
+			branch,
+			attempt: 1,
+		},
+	};
+}
+
+function resolveForkCode(
+	userId: string,
+	session: Pick<AgentSessionRecord, "id" | "items">,
+	messageId: string,
+	point: ConversationPoint,
+) {
+	return forkCode({
+		messageId,
 		code: point.code,
 		userMessageIds: sessionItemsFromUnknown(session.items)
 			.filter((item) => item.kind === "userMessage")
 			.map((item) => item.id),
 		later: (laterIds) =>
-			laterConversationCode(userId, input.sessionId, input.messageId, laterIds),
+			laterConversationCode(userId, session.id, messageId, laterIds),
 	});
-	const source = WorkspaceId(session.providerRef);
-	await scoped.ensureRunning(source);
-	const sourceCwd = (
-		await scoped.readTextFile(source, PROJECT_CWD_PATH)
-	)?.trim();
-	if (!sourceCwd?.startsWith("/"))
-		throw new Error("The chat's repository path is unavailable.");
-	const code =
-		resolved === "now"
-			? await captureConversationCode({
-					machines: scoped,
-					vm: source,
-					cwd: sourceCwd,
-				})
-			: resolved;
-	if (sourceCwd !== code.cwd)
-		throw new Error("Recovery point belongs to a different checkout.");
-	await assertConversationCodePresent(
-		{ machines: scoped, vm: source, cwd: code.cwd },
-		code,
-	);
-	const size = await projectMachineSize(userId, session.projectId);
-	await reserveForkSession(session, id, branch);
-	let forked: Awaited<ReturnType<typeof scoped.forkWorkspace>>;
+}
+
+/**
+ * Starts copying the fork's VM without holding the caller: as a background
+ * job, else after the response, else (no request around it) right here.
+ */
+async function startForkWorkspace(
+	machines: WorkspaceMachines,
+	userId: string,
+	sessionId: string,
+	attempt: number,
+) {
+	const run = () => prepareForkWorkspace(machines, userId, sessionId, attempt);
 	try {
-		forked = await scoped.forkWorkspace(
-			source,
-			agentSessionMachineSlug(id),
-			size,
-		);
-	} catch (error) {
-		await releaseForkSession(userId, id).catch(() => {});
-		throw error;
-	}
-	const vm = forked.vm;
-	const destroy = async () => {
-		try {
-			await scoped.destroy(vm);
-		} catch {
-			await keepFailedForkMachine(userId, id, vm).catch(() => {});
+		if (
+			await dispatchBackgroundJob({
+				id: backgroundJobId(`conversation-fork:${sessionId}:${attempt}`),
+				kind: "conversation-fork",
+				userId,
+				sessionId,
+				attempt,
+			})
+		)
 			return;
-		}
-		await releaseForkSession(userId, id).catch(() => {});
-	};
+	} catch {
+		console.warn("Fork job dispatch failed; preparing the fork here.");
+	}
+	if (!startAfterResponse(run)) await run();
+}
+
+/**
+ * The fork's VM is a copy of the source's (Freestyle fork: disk, ignored
+ * dependencies and the never-pushed checkpoint refs), put on the fork's own
+ * branch at the message's checkpoint, then bound to the fork's chat, which
+ * lets its queued turn start. The source VM is only read. A failure is kept
+ * on the fork's journal for its chat to show, with a retry.
+ */
+export async function prepareForkWorkspace(
+	machines: WorkspaceMachines,
+	userId: string,
+	sessionId: string,
+	attempt: number,
+) {
+	const pending = await conversationForkJournal(userId, sessionId);
+	const journal = pending?.journal;
+	if (journal?.state !== "preparing" || journal.attempt !== attempt) return;
+	let scoped: WorkspaceMachines | undefined;
+	let vm: WorkspaceId | undefined;
 	try {
-		const cwd = (
-			await scoped.readTextFile(forked.vm, PROJECT_CWD_PATH)
+		const session = await agentSessionForOwner(userId, journal.sourceSessionId);
+		if (!session?.providerRef)
+			throw new RecoveryRefused("The original chat is no longer available.");
+		scoped = machinesForAgentSession(machines, session);
+		if (!scoped.forkWorkspace)
+			throw new Error("This workspace provider cannot fork a chat's machine.");
+		if (journal.leftoverVm)
+			await scoped.destroy(WorkspaceId(journal.leftoverVm)).catch(() => {});
+		const point = await conversationPoint(
+			userId,
+			session.id,
+			journal.messageId,
+		);
+		if (!point)
+			throw new RecoveryRefused("This message has no saved recovery point.");
+		const resolved = await resolveForkCode(
+			userId,
+			session,
+			journal.messageId,
+			point,
+		);
+		if (resolved === "now" && session.turnStatus === "running")
+			throw new RecoveryRefused(
+				"The original chat is running a turn. Try again when it stops.",
+			);
+		const source = WorkspaceId(session.providerRef);
+		await scoped.ensureRunning(source);
+		const sourceCwd = (
+			await scoped.readTextFile(source, PROJECT_CWD_PATH)
 		)?.trim();
+		if (!sourceCwd?.startsWith("/"))
+			throw new Error("The chat's repository path is unavailable.");
+		const code =
+			resolved === "now"
+				? await captureConversationCode({
+						machines: scoped,
+						vm: source,
+						cwd: sourceCwd,
+					})
+				: resolved;
+		if (sourceCwd !== code.cwd)
+			throw new Error("Recovery point belongs to a different checkout.");
+		await assertConversationCodePresent(
+			{ machines: scoped, vm: source, cwd: code.cwd },
+			code,
+		);
+		const size = await projectMachineSize(userId, session.projectId);
+		// The fork's chat row already holds the slug: usage admission verifies
+		// a VM's owner from the chat that holds it.
+		vm = (
+			await scoped.forkWorkspace(
+				source,
+				agentSessionMachineSlug(sessionId),
+				size,
+			)
+		).vm;
+		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("The fork has no prepared repository path.");
 		// As a copied session VM: the source's runtime scratch is not the fork's.
+		const copy = vm;
 		await Promise.all(
 			copiedSessionScratchResetCommands().map((command) =>
-				scoped.exec(forked.vm, command, 15_000),
+				scoped?.exec(copy, command, 15_000),
 			),
 		);
 		await startCheckoutFromConversationCode(
-			{ machines: scoped, vm: forked.vm, cwd },
+			{ machines: scoped, vm, cwd },
 			code,
-			branch,
+			journal.branch,
 		);
+		if (!(await bindConversationForkVm(userId, sessionId, attempt, vm))) {
+			// A retry reuses the VM (it is found by its slug); only a deleted
+			// chat's copy is removed.
+			if (!(await agentSessionForOwner(userId, sessionId)))
+				await scoped.destroy(vm).catch(() => {});
+			return;
+		}
 	} catch (error) {
-		await destroy();
-		throw error;
+		console.warn("Preparing a forked chat failed.", {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		let leftoverVm: string | undefined;
+		if (vm && scoped)
+			try {
+				await scoped.destroy(vm);
+			} catch {
+				leftoverVm = vm;
+			}
+		await failConversationFork(userId, sessionId, journal, {
+			message: publicRecoveryFailure(error, "fork"),
+			...(leftoverVm ? { leftoverVm } : {}),
+		});
+		return;
 	}
-	return { id, branch, vm: forked.vm, reserved: true, destroy };
+	await admitForkTurns();
+}
+
+/** A message sent while the fork was preparing waits queued; start it now. */
+async function admitForkTurns() {
+	if (
+		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) !==
+		"durable-object"
+	)
+		return;
+	try {
+		if (
+			!(await dispatchBackgroundJob({
+				id: randomUUID(),
+				kind: "model-admission",
+			}))
+		)
+			console.warn("Fork turn wake is unavailable; admission sweep starts it.");
+	} catch {
+		console.warn("Fork turn wake deferred; admission sweep starts it.");
+	}
+}
+
+/** The fork's VM copy as its chat shows it: null when there is none pending. */
+export async function conversationForkState(
+	userId: string,
+	projectId: string,
+	sessionId: string,
+) {
+	const pending = await conversationForkJournal(userId, sessionId, projectId);
+	return conversationForkStatus(
+		pending?.journal ?? null,
+		pending?.updatedAt ?? null,
+		Date.now(),
+	);
+}
+
+/** Retries a failed (or interrupted) VM copy; its queued turn stays queued meanwhile. */
+export async function retryConversationFork(
+	machines: WorkspaceMachines,
+	userId: string,
+	projectId: string,
+	sessionId: string,
+) {
+	const attempt = await retryConversationForkJournal(
+		userId,
+		projectId,
+		sessionId,
+	);
+	if (attempt !== null)
+		await startForkWorkspace(machines, userId, sessionId, attempt);
+	return conversationForkState(userId, projectId, sessionId);
 }
 
 /** Session locks exclude new turns and active descendants. A pre-restore Git point makes code replacement recoverable. */
@@ -332,18 +451,17 @@ export async function recoverConversation(
 	request: z.infer<typeof conversationRecoveryRequest>,
 ) {
 	const input = conversationRecoveryRequest.parse(request);
-	// The fork's VM is copied before the session lock: a copy can outlast
-	// the lock transaction's idle limit, and it changes nothing in the source.
+	// A fork's chat opens with its transcript now; its VM is copied after,
+	// outside the session lock (a copy can outlast the lock's idle limit, and
+	// it changes nothing in the source).
 	const fork =
 		input.mode === "fork"
-			? await prepareConversationFork(machines, userId, input)
+			? await planConversationFork(machines, userId, input)
 			: undefined;
-	try {
-		return await recoverLocked(machines, userId, input, fork);
-	} catch (error) {
-		await fork?.destroy();
-		throw error;
-	}
+	const recovered = await recoverLocked(machines, userId, input, fork);
+	if (fork?.journal)
+		await startForkWorkspace(machines, userId, fork.id, fork.journal.attempt);
+	return recovered;
 }
 
 async function recoverLocked(
@@ -414,44 +532,32 @@ async function recoverLocked(
 		let id = input.sessionId;
 		if (fork) {
 			id = fork.id;
-			// A fork has its own VM (copied at the message's code, or made at its
-			// first turn), its own branch off the source's base and fresh task
-			// ancestry; it cannot control source children. A fork with a VM
-			// already has its row (made before the VM); it is completed here.
-			const values = [
-				id,
-				userId,
-				row.project_id,
-				row.workspace_id,
-				row.harness,
-				`${row.title} (fork)`.slice(0, 120),
-				row.listed_model_id,
-				fork.vm ? "ready" : "starting",
-				fork.branch ??
-					row.selected_branch ??
-					row.working_branch ??
-					row.task_branch,
-				fork.branch,
-				fork.branch ? row.base_branch : null,
-				fork.vm,
-			];
-			if (fork.reserved) {
-				const completed = await client.query(
-					`update agent_session set project_id=$3,workspace_id=$4,harness=$5,title=$6,listed_model_id=$7,status=$8,
-					 selected_branch=$9,working_branch=$10,base_branch=$11,provider_ref=$12,updated_at=now()
-					 where id=$1 and user_id=$2 and provider_ref is null and turn_status <> 'running' and parent_session_id is null`,
-					values,
-				);
-				if (completed.rowCount !== 1)
-					throw new RecoveryRefused(
-						"The fork changed while it was being prepared.",
-					);
-			} else
-				await client.query(
-					`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch,provider_ref)
-        values($1,$2,$3,$4,$5,$6,$7,$8,'idle',$9,$10,$11,$12)`,
-					values,
-				);
+			// A fork has its own VM (copied at the message's code after this
+			// commit, or made at its first turn), its own branch off the source's
+			// base and fresh task ancestry; it cannot control source children.
+			// Its row starts without a VM; a pending copy's journal holds the
+			// fork's turns back until the copy is bound.
+			await client.query(
+				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch,working_branch,base_branch)
+        values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8,$9,$10)`,
+				[
+					id,
+					userId,
+					row.project_id,
+					row.workspace_id,
+					row.harness,
+					`${row.title} (fork)`.slice(0, 120),
+					row.listed_model_id,
+					fork.branch ??
+						row.selected_branch ??
+						row.working_branch ??
+						row.task_branch,
+					fork.branch,
+					fork.branch ? row.base_branch : null,
+				],
+			);
+			if (fork.journal)
+				await openConversationForkJournal(client, id, fork.journal);
 		} else if (input.mode === "code" || input.mode === "both") {
 			if (!point.code || !ownsWritableCheckout(row))
 				throw new RecoveryRefused(
