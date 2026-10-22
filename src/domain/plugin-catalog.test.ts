@@ -22,3 +22,12 @@ it("pins every reviewed plugin to a full commit with a safe source and unique id
 		}),
 	]);
 });
+
+it("describes plugins in ytimesy's words, not another agent's", () => {
+	for (const entry of PLUGIN_CATALOG) {
+		expect(entry.description).not.toMatch(
+			/\bClaude\b|\bCodex CLI\b|\bCursor\b/,
+		);
+		expect(entry.description).not.toMatch(/…$/);
+	}
+});
