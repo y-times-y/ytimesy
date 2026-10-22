@@ -1,4 +1,11 @@
-import { Children, isValidElement, type ReactNode, useMemo } from "react";
+import {
+	Children,
+	type ComponentProps,
+	isValidElement,
+	type ReactNode,
+	useContext,
+	useMemo,
+} from "react";
 import "streamdown/styles.css";
 import {
 	CodeBlock,
@@ -7,9 +14,15 @@ import {
 	defaultUrlTransform,
 	Streamdown,
 } from "streamdown";
+import {
+	agentNameInCode,
+	agentNameSegments,
+	type MentionAgent,
+} from "#/domain/agent-mentions";
 import { withoutDanglingMarker } from "#/domain/markdown-text";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { workspaceFileMention } from "#/domain/workspace-file-mention";
+import { AgentChip, AgentMentionContext } from "./agent-chip";
 import { codeHighlighter } from "./code-highlighter";
 import { FileMentionButton, mentionedFileChange } from "./file-mention";
 
@@ -19,6 +32,55 @@ const markdownPlugins = [
 	defaultRehypePlugins.raw,
 	defaultRehypePlugins.sanitize,
 ];
+
+type RehypePlugins = NonNullable<
+	ComponentProps<typeof Streamdown>["rehypePlugins"]
+>;
+
+/** The attribute that marks an agent name in prose (agentNamePlugin). */
+const AGENT_NAME = "data-agent-name";
+
+type HastNode = {
+	type: string;
+	tagName?: string;
+	value?: string;
+	properties?: Record<string, unknown>;
+	children?: HastNode[];
+};
+
+/**
+ * After sanitizing: the view's other agents' names in prose ("build-1",
+ * "@research-2") become marked spans, drawn as chips. Code, links and
+ * buttons keep their text. Streamdown caches processors by plugin name and
+ * options, so the names go in as options.
+ */
+function rehypeAgentNames(options: { readonly names: readonly string[] }) {
+	const names = new Set(options.names);
+	const skip = new Set(["code", "pre", "a", "button"]);
+	const visit = (node: HastNode) => {
+		if (!node.children) return;
+		node.children = node.children.flatMap((child): HastNode[] => {
+			if (child.type === "element") {
+				if (!skip.has(child.tagName ?? "")) visit(child);
+				return [child];
+			}
+			if (child.type !== "text" || !child.value) return [child];
+			const segments = agentNameSegments(child.value, names);
+			if (segments.length === 1 && segments[0]?.kind === "text") return [child];
+			return segments.map((segment) =>
+				segment.kind === "text"
+					? { type: "text", value: segment.text }
+					: {
+							type: "element",
+							tagName: "span",
+							properties: { dataAgentName: segment.name },
+							children: [{ type: "text", value: segment.name }],
+						},
+			);
+		});
+	};
+	return (tree: HastNode) => visit(tree);
+}
 
 export function AgentMarkdown({
 	text,
@@ -34,7 +96,31 @@ export function AgentMarkdown({
 	/** Off for text that is not about this workspace, such as GitHub comments. */
 	fileMentions?: boolean;
 }) {
+	const mentions = useContext(AgentMentionContext);
+	const agents = mentions?.agents;
+	const onOpenAgent = mentions?.onOpen;
+	const agentNames = useMemo(
+		() => new Set(agents?.map((agent) => agent.name) ?? []),
+		[agents],
+	);
+	const rehypePlugins = useMemo<RehypePlugins>(
+		() =>
+			agentNames.size
+				? [
+						...markdownPlugins,
+						[rehypeAgentNames, { names: [...agentNames].sort() }],
+					]
+				: markdownPlugins,
+		[agentNames],
+	);
 	const components = useMemo<Components>(() => {
+		const agentByName = new Map<string, MentionAgent>(
+			agents?.map((agent) => [agent.name, agent]) ?? [],
+		);
+		function agentChip(name: string) {
+			const agent = agentByName.get(name);
+			return agent ? <AgentChip agent={agent} onOpen={onOpenAgent} /> : null;
+		}
 		function fileLink(path: string, label: string) {
 			const change = mentionedFileChange(path, fileChanges);
 			return (
@@ -64,7 +150,9 @@ export function AgentMarkdown({
 				const text = markdownChildText(children);
 				if (!("data-block" in props)) {
 					const file = fileMentions && workspaceFileMention(text);
-					return file ? fileLink(file, text) : <code>{children}</code>;
+					if (file) return fileLink(file, text);
+					const agent = agentNameInCode(text, agentNames);
+					return (agent && agentChip(agent)) || <code>{children}</code>;
 				}
 				return (
 					<CodeBlock
@@ -72,6 +160,12 @@ export function AgentMarkdown({
 						lineNumbers={false}
 						language={className?.replace(/^language-/, "") ?? "text"}
 					/>
+				);
+			},
+			span: ({ node: _node, ...props }) => {
+				const name = (props as Record<string, unknown>)[AGENT_NAME];
+				return (
+					(typeof name === "string" && agentChip(name)) || <span {...props} />
 				);
 			},
 			img: ({ src, alt }) => {
@@ -87,7 +181,7 @@ export function AgentMarkdown({
 				);
 			},
 		};
-	}, [fileChanges, onOpenFile, fileMentions]);
+	}, [fileChanges, onOpenFile, fileMentions, agents, agentNames, onOpenAgent]);
 	return (
 		<Streamdown
 			className="session-markdown"
@@ -96,7 +190,7 @@ export function AgentMarkdown({
 			animated={streaming}
 			components={components}
 			plugins={{ code: codeHighlighter }}
-			rehypePlugins={markdownPlugins}
+			rehypePlugins={rehypePlugins}
 			controls={false}
 			skipHtml
 			urlTransform={defaultUrlTransform}

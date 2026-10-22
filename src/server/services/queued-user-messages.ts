@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
+import type { UserMessageItem } from "#/domain/session-item";
 import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
@@ -16,6 +17,7 @@ import {
 	restoreQueuedUserMessage,
 	takeNextQueuedUserMessage,
 } from "../adapters/queued-user-messages";
+import { mentionNoteFor } from "./agent-mentions";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import {
 	type HarnessSessionScope,
@@ -96,7 +98,7 @@ async function queueBehindRunningTurn(
 	if (item?.kind !== "userMessage") return {};
 	const outcome = await queueUserMessageWhileRunning(scope.userId, session.id, {
 		item,
-		message: withAttachmentNote(item.text, item.attachments),
+		message: await queuedModelText(scope.userId, session.id, item),
 		harnessId: scope.harnessId,
 		modelId: input.modelId,
 		...(input.variant ? { variant: input.variant } : {}),
@@ -106,6 +108,19 @@ async function queueBehindRunningTurn(
 	// The turn ended meanwhile: this send starts the next one with the stored files.
 	if (outcome === "not-running") return { storedAttachments: attachments };
 	return { view: await publicSessionView(scope) };
+}
+
+/** What the model reads for a queued message: its text, files and mention note. */
+async function queuedModelText(
+	userId: string,
+	sessionId: string,
+	item: UserMessageItem,
+) {
+	const text = withAttachmentNote(item.text, item.attachments);
+	const note = await mentionNoteFor(userId, sessionId, item.text).catch(
+		() => null,
+	);
+	return note ? `${text}\n\n${note}` : text;
 }
 
 /**

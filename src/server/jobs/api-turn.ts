@@ -129,6 +129,7 @@ import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
+import { withMentionNote } from "../services/agent-mentions";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
 import { agentTurnInstructions } from "../services/agent-turn-instructions";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
@@ -1341,6 +1342,14 @@ async function runApiTurnAttempt(
 			if (!messages.some((message) => message.content === notice))
 				messages = [...messages, { role: "user", content: notice }];
 		}
+		// A request that @mentions helpers: the lead reads which ones are meant.
+		if (firstStep)
+			messages = await withMentionNote({
+				userId: turn.user_id,
+				session: owner,
+				items,
+				messages,
+			}).catch(() => messages);
 		// Memory rides on the current request as extra parts, so earlier
 		// messages and the system prompt stay byte-stable for prompt caching.
 		const memory = await memoryLoading;

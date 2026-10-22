@@ -10,10 +10,16 @@ import {
 } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
+	MAIN_MENTION_ID,
+	type MentionAgent,
+	mentionAgents,
+} from "#/domain/agent-mentions";
+import {
 	helperFinishCard,
 	helperKind,
 	helperMetric,
 	helperStatus,
+	LEAD_ROW_ID,
 	steeringSender,
 } from "#/domain/agent-panel";
 import {
@@ -83,6 +89,12 @@ import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
+import {
+	AgentMentionContext,
+	type AgentMentions,
+	AgentNameText,
+	MentionText,
+} from "./agent-chip";
 import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
@@ -250,155 +262,163 @@ export function SessionTimeline({
 	return (
 		<MemoryMarkerProvider actions={memoryActions}>
 			<SenderContext.Provider value={senderName ?? null}>
-				<ol
-					ref={listRef}
-					className="session-timeline"
-					aria-label="Session"
-					onScroll={rememberScrollPin}
+				<AgentMentionContext.Provider
+					value={agentMentions(helperLines, taskParentId)}
 				>
-					{rows.map((row) => {
-						const rowId = row.kind === "item" ? row.item.id : row.id;
-						return (
-							<Fragment
-								key={
-									row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`
-								}
-							>
-								{startsHelper(row) ? null : (
-									<li
-										data-kind={row.kind === "item" ? row.item.kind : row.kind}
-									>
-										{row.kind === "item" && row.item.kind === "planProposal" ? (
-											<PlanMessage
-												text={row.item.text}
-												onOpenFile={onOpenFile}
-											/>
-										) : row.kind === "item" &&
-											row.item.kind === "userQuestion" ? (
-											<UserQuestionCard
-												item={row.item}
-												reply={userQuestionReply(items, row.item.id)}
-												actions={questionActions}
-											/>
-										) : row.kind === "item" &&
-											row.item.kind === "secretRequest" ? (
-											<SecretRequestCard
-												item={row.item}
-												outcome={secretRequestOutcome(items, row.item.id)}
-												actions={secretActions}
-											/>
-										) : row.kind === "item" &&
-											row.item.kind === "modelSwitch" &&
-											row.item.state === "awaitingApproval" ? (
-											<ModelSwitchCard
-												item={row.item}
-												answered={answeredAfter(items, row.item.id)}
-												actions={failoverActions}
-											/>
-										) : (
-											<TimelineRowView
-												row={row}
-												collapseInstructions={collapseInstructions}
-												turnRunning={
-													turnStatus === "running" && currentTurnIds.has(rowId)
-												}
-												isLastItem={
-													(row.kind === "item"
-														? row.item.id
-														: row.items.at(-1)?.id) === visible.at(-1)?.id
-												}
-												fileChanges={fileChanges}
-												onOpenFile={onOpenFile}
-											/>
-										)}
-										{row.kind === "item" && row.item.kind === "userMessage"
-											? recoveryControls?.(row.item.id)
-											: null}
-									</li>
-								)}
-								{helperMarks
-									.filter((mark) => rowHas(row, mark.start))
-									.map(({ task }) => (
-										<li key={`start:${task.id}`} data-kind="helper-start">
-											<HelperLine task={task} lines={helperLines} />
+					<ol
+						ref={listRef}
+						className="session-timeline"
+						aria-label="Session"
+						onScroll={rememberScrollPin}
+					>
+						{rows.map((row) => {
+							const rowId = row.kind === "item" ? row.item.id : row.id;
+							return (
+								<Fragment
+									key={
+										row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`
+									}
+								>
+									{startsHelper(row) ? null : (
+										<li
+											data-kind={row.kind === "item" ? row.item.kind : row.kind}
+										>
+											{row.kind === "item" &&
+											row.item.kind === "planProposal" ? (
+												<PlanMessage
+													text={row.item.text}
+													onOpenFile={onOpenFile}
+												/>
+											) : row.kind === "item" &&
+												row.item.kind === "userQuestion" ? (
+												<UserQuestionCard
+													item={row.item}
+													reply={userQuestionReply(items, row.item.id)}
+													actions={questionActions}
+												/>
+											) : row.kind === "item" &&
+												row.item.kind === "secretRequest" ? (
+												<SecretRequestCard
+													item={row.item}
+													outcome={secretRequestOutcome(items, row.item.id)}
+													actions={secretActions}
+												/>
+											) : row.kind === "item" &&
+												row.item.kind === "modelSwitch" &&
+												row.item.state === "awaitingApproval" ? (
+												<ModelSwitchCard
+													item={row.item}
+													answered={answeredAfter(items, row.item.id)}
+													actions={failoverActions}
+												/>
+											) : (
+												<TimelineRowView
+													row={row}
+													collapseInstructions={collapseInstructions}
+													turnRunning={
+														turnStatus === "running" &&
+														currentTurnIds.has(rowId)
+													}
+													isLastItem={
+														(row.kind === "item"
+															? row.item.id
+															: row.items.at(-1)?.id) === visible.at(-1)?.id
+													}
+													fileChanges={fileChanges}
+													onOpenFile={onOpenFile}
+												/>
+											)}
+											{row.kind === "item" && row.item.kind === "userMessage"
+												? recoveryControls?.(row.item.id)
+												: null}
+										</li>
+									)}
+									{helperMarks
+										.filter((mark) => rowHas(row, mark.start))
+										.map(({ task }) => (
+											<li key={`start:${task.id}`} data-kind="helper-start">
+												<HelperLine task={task} lines={helperLines} />
+											</li>
+										))}
+									{helperMarks
+										.filter((mark) => rowHas(row, mark.finish))
+										.map(({ task }) => (
+											<li key={`finish:${task.id}`} data-kind="helper-finish">
+												<HelperFinishCard task={task} lines={helperLines} />
+											</li>
+										))}
+									{(row.kind === "item"
+										? (evidenceAt.anchored.get(row.item.id) ?? [])
+										: row.items.flatMap(
+												(item) => evidenceAt.anchored.get(item.id) ?? [],
+											)
+									).map((record) => (
+										<li key={`evidence:${record.id}`} data-kind="evidence">
+											<EvidenceCard evidence={record} />
 										</li>
 									))}
-								{helperMarks
-									.filter((mark) => rowHas(row, mark.finish))
-									.map(({ task }) => (
-										<li key={`finish:${task.id}`} data-kind="helper-finish">
-											<HelperFinishCard task={task} lines={helperLines} />
-										</li>
-									))}
-								{(row.kind === "item"
-									? (evidenceAt.anchored.get(row.item.id) ?? [])
-									: row.items.flatMap(
-											(item) => evidenceAt.anchored.get(item.id) ?? [],
-										)
-								).map((record) => (
-									<li key={`evidence:${record.id}`} data-kind="evidence">
-										<EvidenceCard evidence={record} />
-									</li>
-								))}
-							</Fragment>
-						);
-					})}
-					{helperMarks
-						.filter((mark) => !mark.start)
-						.map(({ task }) => (
-							<li key={`start:${task.id}`} data-kind="helper-start">
-								<HelperLine task={task} lines={helperLines} />
+								</Fragment>
+							);
+						})}
+						{helperMarks
+							.filter((mark) => !mark.start)
+							.map(({ task }) => (
+								<li key={`start:${task.id}`} data-kind="helper-start">
+									<HelperLine task={task} lines={helperLines} />
+								</li>
+							))}
+						{helperMarks
+							.filter((mark) => mark.finish === null)
+							.map(({ task }) => (
+								<li key={`finish:${task.id}`} data-kind="helper-finish">
+									<HelperFinishCard task={task} lines={helperLines} />
+								</li>
+							))}
+						{evidenceAt.trailing.map((record) => (
+							<li key={`evidence:${record.id}`} data-kind="evidence">
+								<EvidenceCard evidence={record} />
 							</li>
 						))}
-					{helperMarks
-						.filter((mark) => mark.finish === null)
-						.map(({ task }) => (
-							<li key={`finish:${task.id}`} data-kind="helper-finish">
-								<HelperFinishCard task={task} lines={helperLines} />
+						{showTurnWorking(items, turnStatus) ? (
+							<li data-kind="working">
+								<p className="session-working session-shimmer">
+									{compactingContext(items) ? "Compacting context" : "Thinking"}
+								</p>
+							</li>
+						) : null}
+						{queued.map((item) => (
+							<li key={item.id} data-kind="userMessage" data-queued="true">
+								<QueuedMessage item={item} onRemove={onRemoveQueued} />
 							</li>
 						))}
-					{evidenceAt.trailing.map((record) => (
-						<li key={`evidence:${record.id}`} data-kind="evidence">
-							<EvidenceCard evidence={record} />
-						</li>
-					))}
-					{showTurnWorking(items, turnStatus) ? (
-						<li data-kind="working">
-							<p className="session-working session-shimmer">
-								{compactingContext(items) ? "Compacting context" : "Thinking"}
-							</p>
-						</li>
-					) : null}
-					{queued.map((item) => (
-						<li key={item.id} data-kind="userMessage" data-queued="true">
-							<QueuedMessage item={item} onRemove={onRemoveQueued} />
-						</li>
-					))}
-					{queuedSteering.map((message) => (
-						<li key={message.id} data-kind="userMessage" data-queued="true">
-							<div
-								className="session-message"
-								data-role="user"
-								data-queued="true"
-								data-sender="true"
-							>
-								<span className="session-message-sender">
-									{message.from}
-									<span className="session-queued-badge">Queued</span>
-								</span>
-								<p>{message.text}</p>
-							</div>
-						</li>
-					))}
-					{turnStatus !== "running" &&
-					childTasks.some((task) => task.turnStatus === "running") ? (
-						<li data-kind="waiting-for-children">
-							<p className="session-working" role="status">
-								Waiting for helpers
-							</p>
-						</li>
-					) : null}
-				</ol>
+						{queuedSteering.map((message) => (
+							<li key={message.id} data-kind="userMessage" data-queued="true">
+								<div
+									className="session-message"
+									data-role="user"
+									data-queued="true"
+									data-sender="true"
+								>
+									<span className="session-message-sender">
+										{message.from}
+										<span className="session-queued-badge">Queued</span>
+									</span>
+									<p>
+										<MentionText text={message.text} />
+									</p>
+								</div>
+							</li>
+						))}
+						{turnStatus !== "running" &&
+						childTasks.some((task) => task.turnStatus === "running") ? (
+							<li data-kind="waiting-for-children">
+								<p className="session-working" role="status">
+									Waiting for helpers
+								</p>
+							</li>
+						) : null}
+					</ol>
+				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
 		</MemoryMarkerProvider>
 	);
@@ -415,6 +435,27 @@ export type HelperLines = {
 
 /** A helper's view names who sent each message in its transcript. */
 const SenderContext = createContext<string | null>(null);
+
+/**
+ * The agents a view's messages can name as chips: the chat's agents but the
+ * view's own (Main's, or the helper's), each opening its tab.
+ */
+function agentMentions(
+	lines: HelperLines | undefined,
+	viewAgentId: string | undefined,
+): AgentMentions | null {
+	if (!lines) return null;
+	const onSelect = lines.onSelect;
+	return {
+		agents: mentionAgents(lines.identities, viewAgentId ?? MAIN_MENTION_ID),
+		...(onSelect
+			? {
+					onOpen: (agent: MentionAgent) =>
+						onSelect(agent.id === MAIN_MENTION_ID ? LEAD_ROW_ID : agent.id),
+				}
+			: {}),
+	};
+}
 
 /** "build-1 started · Fix pricing rounding": one quiet line where it started. */
 function HelperLine({
@@ -493,7 +534,10 @@ function HelperFinishCard({
 			</span>
 			{card.line ? (
 				<span className="helper-card-line">
-					<InlineMarkdown text={card.line} />
+					<InlineMarkdown
+						text={card.line}
+						renderText={(text) => <AgentNameText text={text} open={false} />}
+					/>
 				</span>
 			) : null}
 		</>
@@ -528,7 +572,9 @@ function QueuedMessage({
 }) {
 	return (
 		<div className="session-message" data-role="user" data-queued="true">
-			<p>{item.text}</p>
+			<p>
+				<MentionText text={item.text} />
+			</p>
 			{item.attachments?.length ? (
 				<ul className="session-message-attachments" aria-label="Attached files">
 					{item.attachments.map((attachment) => (
@@ -697,7 +743,9 @@ function SessionItemView({
 								</div>
 							</details>
 						) : (
-							<p>{message.text}</p>
+							<p>
+								<MentionText text={message.text} />
+							</p>
 						)}
 					</div>
 				);
@@ -721,7 +769,9 @@ function SessionItemView({
 			}
 			return (
 				<div className="session-message" data-role="user">
-					<p>{item.text}</p>
+					<p>
+						<MentionText text={item.text} />
+					</p>
 					{item.attachments?.length ? (
 						<ul
 							className="session-message-attachments"

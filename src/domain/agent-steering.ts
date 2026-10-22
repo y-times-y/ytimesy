@@ -23,6 +23,8 @@ export function steeringTexts(input: {
 	readonly sender: SteeringSender;
 	readonly message: string;
 	readonly messageId: string;
+	/** What the model reads after the message alone (a mention note). */
+	readonly context?: string;
 }) {
 	const from =
 		input.sender.kind === "user"
@@ -31,7 +33,7 @@ export function steeringTexts(input: {
 	const text = `Message from ${from}:\n\n${input.message}\n\nCoordination message ID: ${input.messageId}`;
 	return {
 		text,
-		runtimeText: `${text}\n\n${input.sender.kind === "user" ? USER_NOTE : PARENT_NOTE}`,
+		runtimeText: `${text}\n\n${input.context ? `${input.context}\n\n` : ""}${input.sender.kind === "user" ? USER_NOTE : PARENT_NOTE}`,
 	};
 }
 
