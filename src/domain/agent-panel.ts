@@ -1,5 +1,6 @@
 import { parseSteering } from "./agent-steering";
 import type { AgentTaskStatus } from "./agent-task";
+import type { RunningBackgroundCommand } from "./background-command";
 import {
 	type AgentTaskActivity,
 	childTaskPromptId,
@@ -59,11 +60,12 @@ export type AgentMetric = {
 };
 
 /**
- * A background command the chat started (ytimesy-job), as its read model
- * gives it; adapted into a "Loop" row.
+ * A background command the chat or one of its helpers started, as its read
+ * model gives it (backgroundRunsFromReadModel); adapted into a Background row.
  */
 export type BackgroundRun = {
 	readonly id: string;
+	/** The command, or its short label (backgroundCommandLabel). */
 	readonly command: string;
 	readonly status: "running" | "exited" | "failed";
 	readonly exitCode?: number | null;
@@ -380,6 +382,58 @@ export function backgroundLabel(command: string) {
 	if (/\b(lint|biome|eslint)\b/.test(text)) return "lint";
 	const program = text.split(" ")[0]?.split("/").at(-1) ?? "";
 	return program || "command";
+}
+
+/**
+ * The background commands read model (readBackgroundCommandsFn: running
+ * commands by chat id, for the chat and its helpers) as list input: each
+ * command once, oldest first.
+ */
+export function backgroundRunsFromReadModel(
+	byChat: Readonly<Record<string, readonly RunningBackgroundCommand[]>>,
+): BackgroundRun[] {
+	const runs = new Map<string, BackgroundRun>();
+	for (const commands of Object.values(byChat))
+		for (const command of commands)
+			runs.set(command.id, {
+				id: command.id,
+				command: command.label,
+				status: command.status,
+				startedAt: command.startedAt,
+			});
+	return [...runs.values()].sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** At most this many chats per read (readBackgroundCommandsFn's limit). */
+export const BACKGROUND_READ_MAX_CHATS = 20;
+
+/** The chats whose background commands the list reads: the chat, then its newest helpers. */
+export function backgroundReadChatIds(
+	chatId: string | undefined,
+	helpers: readonly { readonly id: string; readonly createdAt: string }[],
+): string[] {
+	if (!chatId) return [];
+	const newest = [...helpers].sort((left, right) =>
+		right.createdAt.localeCompare(left.createdAt),
+	);
+	return [...new Set([chatId, ...newest.map((helper) => helper.id)])].slice(
+		0,
+		BACKGROUND_READ_MAX_CHATS,
+	);
+}
+
+/**
+ * How often the list rereads background commands: quickly while the chat or
+ * its helpers work (a step records a start or an exit), slower while only
+ * commands run (an exit reaches the timeline within a minute between
+ * turns), and not at all when nothing runs.
+ */
+export function backgroundPollMs(input: {
+	readonly agentsWorking: boolean;
+	readonly running: number;
+}): number | false {
+	if (input.agentsWorking) return 5_000;
+	return input.running > 0 ? 15_000 : false;
 }
 
 /** Background commands as rows, named by what they run. */

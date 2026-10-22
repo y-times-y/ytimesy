@@ -3,7 +3,10 @@ import {
 	activityPhrase,
 	agentDoing,
 	agentPanelRows,
+	backgroundPollMs,
+	backgroundReadChatIds,
 	backgroundRows,
+	backgroundRunsFromReadModel,
 	finishLineAnchorId,
 	foldAgentRows,
 	formatElapsed,
@@ -280,6 +283,64 @@ describe("background commands", () => {
 		]);
 		expect(rows[0]?.metric?.tokens).toBeUndefined();
 		expect(rows[0]?.messageable).toBe(false);
+	});
+});
+
+describe("the background commands read model", () => {
+	it("lists each running command once, oldest first, named by what it runs", () => {
+		const runs = backgroundRunsFromReadModel({
+			main: [
+				{
+					id: "b",
+					label: "pnpm vitest --watch",
+					startedAt: 20,
+					status: "running",
+				},
+			],
+			helper: [
+				{
+					id: "a",
+					label: "pnpm dev --port 3000",
+					startedAt: 10,
+					status: "running",
+				},
+				{
+					id: "b",
+					label: "pnpm vitest --watch",
+					startedAt: 20,
+					status: "running",
+				},
+			],
+		});
+		expect(runs.map((run) => run.id)).toEqual(["a", "b"]);
+		expect(
+			agentPanelRows({
+				tasks: [],
+				leadItems: [],
+				leadTurnStatus: "completed",
+				background: runs,
+			}).background.map((row) => [row.name, row.tag, row.status]),
+		).toEqual([
+			["dev server", "Background", "working"],
+			["test suite", "Background", "working"],
+		]);
+	});
+
+	it("reads the chat and its newest helpers, at most 20", () => {
+		expect(backgroundReadChatIds(undefined, [])).toEqual([]);
+		const helpers = Array.from({ length: 25 }, (_, index) => ({
+			id: `h${index}`,
+			createdAt: new Date(index * 1000).toISOString(),
+		}));
+		const ids = backgroundReadChatIds("main", helpers);
+		expect(ids).toHaveLength(20);
+		expect(ids.slice(0, 2)).toEqual(["main", "h24"]);
+	});
+
+	it("polls fast while agents work, slower while only commands run", () => {
+		expect(backgroundPollMs({ agentsWorking: true, running: 0 })).toBe(5_000);
+		expect(backgroundPollMs({ agentsWorking: false, running: 1 })).toBe(15_000);
+		expect(backgroundPollMs({ agentsWorking: false, running: 0 })).toBe(false);
 	});
 });
 
