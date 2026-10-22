@@ -10,9 +10,9 @@ import {
 } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
-	finishLineAnchorId,
 	helperFinishCard,
 	helperKind,
+	helperMetric,
 	helperStatus,
 	steeringSender,
 } from "#/domain/agent-panel";
@@ -41,6 +41,7 @@ import {
 	fileChangeActivityTitle,
 } from "#/domain/file-change-copy";
 import { fileBasename } from "#/domain/file-kind";
+import { helperFinishAnchors } from "#/domain/helper-finish-placement";
 import {
 	agentColor,
 	HELPER_COLORS,
@@ -185,33 +186,24 @@ export function SessionTimeline({
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(presented, turnStatus);
-	const rowIds = new Set(
-		rows.flatMap((row) =>
-			row.kind === "item" ? [row.item.id] : row.items.map((item) => item.id),
-		),
-	);
-	const helperMarks = childTasks.map((task) => {
-		const start = childTaskAnchorId(task, visible);
-		// Wake-up turn starts stay in: a report's turn holds its finish line.
-		const finish =
-			task.status === "done" || task.status === "failed"
-				? finishLineAnchorId(presented, start, Date.parse(task.updatedAt))
-				: undefined;
-		return {
-			task,
-			start,
-			// An anchor with no row of its own (a wake-up turn with nothing
-			// shown yet) puts the line last, where that turn will show.
-			finish:
-				finish === undefined
-					? task.status === "done" || task.status === "failed"
-						? null
-						: undefined
-					: rowIds.has(finish)
-						? finish
-						: null,
-		};
+	const finishes = helperFinishAnchors({
+		items: presented,
+		rows,
+		reportsWake: !taskParentId,
+		helpers: childTasks
+			.filter((task) => task.status === "done" || task.status === "failed")
+			.map((task) => ({
+				id: task.id,
+				start: childTaskAnchorId(task, visible),
+				finishedAt: helperMetric(task).endedAt,
+			})),
 	});
+	const helperMarks = childTasks.map((task) => ({
+		task,
+		start: childTaskAnchorId(task, visible),
+		// null: last, where the report's wake-up turn will show.
+		finish: finishes.get(task.id),
+	}));
 	// A helper's start line stands in for the agent call that started it.
 	const startsHelper = (row: TimelineRow) =>
 		!!helperLines &&
