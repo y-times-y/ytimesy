@@ -9,6 +9,7 @@ import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
 const mocks = vi.hoisted(() => ({
+	attachments: vi.fn(async (..._args: unknown[]) => {}),
 	renew: vi.fn(),
 	finalize: vi.fn(),
 	stop: vi.fn(),
@@ -289,6 +290,11 @@ vi.mock("../adapters/server-peer-inbox", () => ({
 	injectServerPeerMessages: vi.fn(),
 }));
 vi.mock("../adapters/api-usage-budget", () => ({ reserveApiTokens: vi.fn() }));
+vi.mock("../services/message-attachments", async (original) => ({
+	...(await original<typeof import("../services/message-attachments")>()),
+	materializeMessageAttachments: (...args: unknown[]) =>
+		mocks.attachments(...args),
+}));
 // Root chats are builders: each turn records a code point before it edits.
 vi.mock("../services/conversation-recovery", () => ({
 	ensureConversationCodePoint: vi.fn(async () => {}),
@@ -1859,6 +1865,33 @@ describe("a builder's first request before its workspace is ready", () => {
 			"session",
 			"project",
 		);
+	});
+
+	it("records the turn's code point while its attachments are still being restored", async () => {
+		mocks.workspace.mockResolvedValue({ machines: {}, vm: "vm", cwd: "/repo" });
+		const { ensureConversationCodePoint } = await import(
+			"../services/conversation-recovery"
+		);
+		let restored = () => {};
+		mocks.attachments.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					restored = resolve;
+				}),
+		);
+		vi.mocked(ensureConversationCodePoint).mockImplementationOnce(async () => {
+			// The repository capture starts before the files outside it are written.
+			restored();
+		});
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
+		expect(mocks.attachments).toHaveBeenCalledOnce();
 	});
 
 	it("waits for the workspace as before when it is ready within the short wait", async () => {

@@ -744,7 +744,8 @@ async function runApiTurnAttempt(
 				});
 				return memoryCloned;
 			});
-			await attachmentsWritten;
+			// Attachments go to a directory outside the repository, so they
+			// overlap the code point (a capture of the repository) too.
 			// A shared writer (lead mode fusion's sidekick) works in its lead's
 			// checkout, whose code points are the lead's.
 			if (writable && owner.taskPlacement !== "shared") {
@@ -761,6 +762,7 @@ async function runApiTurnAttempt(
 					await codePoint;
 				}
 			}
+			await attachmentsWritten;
 			await secretsReady;
 			await cloning;
 			return execution;
@@ -883,6 +885,9 @@ async function runApiTurnAttempt(
 			// plugin hooks are not run), so the commit names all of it.
 			knownConfig: async () => {
 				if (!reportedDirectory) return null;
+				// Both reads; the pinned base (a new chat's) is already in flight.
+				const pinning = prepareWorkspace.pinnedBase?.();
+				pinning?.catch(() => {});
 				const base = await readVerificationBaseline(
 					owner.userId,
 					owner.id,
@@ -896,7 +901,7 @@ async function runApiTurnAttempt(
 								`lifecycle-hooks:${reportedDirectory}:${base}`,
 							)
 						: null;
-				const pinned = await prepareWorkspace.pinnedBase?.();
+				const pinned = await pinning;
 				return pinned && owner.projectId
 					? readProjectDerivedValue(
 							owner.userId,
@@ -981,6 +986,11 @@ async function runApiTurnAttempt(
 					owner.projectId ?? null,
 				),
 			).catch(() => null);
+		// Whether the chat's known hook configuration has a UserPromptSubmit
+		// hook: read-only, so it runs beside the MCP, plugin and memory setup
+		// below and is awaited where the first request is decided.
+		const promptSubmitKnown =
+			firstStep && reportedDirectory ? hooks.promptSubmitConfigured() : null;
 		const leanWorkingDirectory = surface.lean
 			? (reportedDirectory ??
 				(await turnMemo(leanDirectoryKey, async () => (await workspace()).cwd)))
@@ -1236,11 +1246,7 @@ async function runApiTurnAttempt(
 		// chat's journaled configuration shows no such hook; unknown (a new
 		// chat, a first turn since the journal) waits as before. Its tools still
 		// wait for the check, and a late failure ends the turn.
-		if (
-			firstStep &&
-			reportedDirectory &&
-			(await hooks.promptSubmitConfigured()) === false
-		) {
+		if (firstStep && promptSubmitKnown && (await promptSubmitKnown) === false) {
 			earlyPromptCheck = timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
 					currentTask?.kind === "userMessage" ? currentTask.text : "",
