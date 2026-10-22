@@ -1,8 +1,8 @@
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
 import {
-	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
 	harnessVariantFromUnknown,
+	PRODUCT_HARNESS_VARIANT,
 } from "#/domain/harness-variant";
 import { database } from "./database";
 
@@ -68,13 +68,13 @@ export async function isDevEvalUser(userId: string): Promise<boolean> {
 	return Boolean(await evalUserRow(userId));
 }
 
-/** The eval user's harness variant; the default for everyone else. */
+/** The eval user's harness variant; the product's for everyone else. */
 export async function harnessVariantForUser(
 	userId: string,
 ): Promise<HarnessVariant> {
-	if (!devEvalUsersEnabled()) return DEFAULT_HARNESS_VARIANT;
+	if (!devEvalUsersEnabled()) return PRODUCT_HARNESS_VARIANT;
 	const row = await evalUserRow(userId);
 	return row
 		? harnessVariantFromUnknown(row.harness_variant)
-		: DEFAULT_HARNESS_VARIANT;
+		: PRODUCT_HARNESS_VARIANT;
 }

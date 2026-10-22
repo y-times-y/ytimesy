@@ -25,8 +25,8 @@ import {
 } from "#/domain/conversation-turn-control";
 import { fusionPairFor } from "#/domain/fusion-pairs";
 import {
-	DEFAULT_HARNESS_VARIANT,
 	outputCapCharacters,
+	PRODUCT_HARNESS_VARIANT,
 	promptCacheScopeId,
 } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
@@ -2474,7 +2474,7 @@ function turnRecordsRequests(turnId: string, userId: string) {
 function turnHarnessVariant(turnId: string, userId: string) {
 	return devEvalUsersEnabled()
 		? turnMemo(`${turnId}:harness-variant`, () => harnessVariantForUser(userId))
-		: Promise.resolve(DEFAULT_HARNESS_VARIANT);
+		: Promise.resolve(PRODUCT_HARNESS_VARIANT);
 }
 
 /**
