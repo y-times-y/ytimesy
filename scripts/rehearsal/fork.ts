@@ -91,7 +91,10 @@ export async function rehearseFork(input: {
 	);
 	if (!message?.id || !point?.code) return checks;
 	const sourceBranch = await branchOf(vm);
-	const forksBefore = vms.forks.length;
+	// Copies of this chat's VM only: scenarios run side by side, and another
+	// scenario's writer fork can land while this one forks.
+	const chatForks = () => vms.forks.filter((fork) => fork.source === vm);
+	const forksBefore = chatForks().length;
 	let forkId: string | undefined;
 	const clicked = Date.now();
 	try {
@@ -114,10 +117,10 @@ export async function rehearseFork(input: {
 		`rehearsal: fork at message ${input.forkAt} ready in ${((Date.now() - clicked) / 1000).toFixed(1)}s (click to fork row and VM)`,
 	);
 	const fork = await sessionRow(forkId);
-	const copy = vms.forks.at(-1);
+	const copy = chatForks().at(-1);
 	check(
 		"the fork's VM is a copy of the chat's, made for the fork",
-		vms.forks.length === forksBefore + 1 &&
+		chatForks().length === forksBefore + 1 &&
 			copy?.source === vm &&
 			copy.slug === agentSessionMachineSlug(forkId) &&
 			fork?.provider_ref === copy.vm &&
@@ -262,7 +265,7 @@ export async function rehearseFork(input: {
 		`git -C ${posixShellQuoted(point.code.cwd)} update-ref -d ${posixShellQuoted(ref)}`,
 		30_000,
 	);
-	const forksNow = vms.forks.length;
+	const forksNow = chatForks().length;
 	const refused = await edge
 		.invoke(() =>
 			recoverConversation(machines, user.userId, {
@@ -278,7 +281,7 @@ export async function rehearseFork(input: {
 		);
 	check(
 		"a checkpoint whose refs are gone refuses the fork, copying no VM",
-		/checkpoint is gone/.test(refused) && vms.forks.length === forksNow,
+		/checkpoint is gone/.test(refused) && chatForks().length === forksNow,
 		refused,
 	);
 	return checks;
