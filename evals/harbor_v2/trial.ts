@@ -16,7 +16,10 @@ import {
 	type SpendSession,
 	treeModelSpend,
 } from "../../src/domain/eval-efficiency";
-import { harnessVariantLabel } from "../../src/domain/harness-variant";
+import {
+	harnessVariantLabel,
+	leadReasoningEffort,
+} from "../../src/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
 import { newSidekickState } from "../../src/domain/sidekick";
@@ -356,7 +359,18 @@ export async function runHarborTrial(
 	const notices: TimedNotice[] = [];
 	const sessions = trialSessions(now);
 	const readerCopies: { sessionId: string; copy: string; ok: boolean }[] = [];
-	const fusionTrace: FusionTrace = { decisions: [], rounds: [], refused: [] };
+	const fusionTrace: FusionTrace = {
+		decisions: [],
+		rounds: [],
+		refused: [],
+		restarts: [],
+	};
+	// lead=fusion: the lead's own calls at most at leadEffort (its sidekick keeps its own).
+	const builderEffort =
+		config.variant.lead === "fusion"
+			? (leadReasoningEffort(config.effort, config.variant.leadEffort) ??
+				config.effort)
+			: config.effort;
 	const builderModel: HarborModel = {
 		modelId: config.modelId,
 		effort: config.effort,
@@ -768,6 +782,7 @@ export async function runHarborTrial(
 							return status.stdout.split("\n").filter(Boolean).slice(0, 40);
 						},
 						trace: fusionTrace,
+						thin: config.variant.leadTools === "thin",
 						now,
 					})
 				: null;
@@ -795,7 +810,7 @@ export async function runHarborTrial(
 				{
 					userId: input.userId,
 					modelId: config.modelId,
-					reasoning: config.effort,
+					reasoning: builderEffort,
 					toolSurface: "implementation",
 					cacheScopeId: input.trialId,
 					...harness.input,
@@ -924,6 +939,7 @@ export async function runHarborTrial(
 		route: config.route,
 		model: config.modelId,
 		effort: config.effort,
+		...(config.variant.lead === "fusion" ? { leadEffort: builderEffort } : {}),
 		checkerModel: config.checker
 			? { model: config.checker.modelId, effort: config.checker.effort }
 			: null,

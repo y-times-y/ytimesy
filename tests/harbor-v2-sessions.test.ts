@@ -181,7 +181,12 @@ describe("child budgets", () => {
 
 	it("shows the lead a round stopped at its budget as sidekick budget used", async () => {
 		const store = trialSessions(() => 0);
-		const trace: FusionTrace = { decisions: [], rounds: [], refused: [] };
+		const trace: FusionTrace = {
+			decisions: [],
+			rounds: [],
+			refused: [],
+			restarts: [],
+		};
 		const lead = fusionLead({
 			parentId: "t",
 			sessions: store,
@@ -218,11 +223,90 @@ describe("child budgets", () => {
 			}),
 			callOnce: async () => ({ text: "", usage: null }),
 			changedFiles: async () => [],
-			trace: { decisions: [], rounds: [], refused: [] },
+			trace: { decisions: [], rounds: [], refused: [], restarts: [] },
 		});
 		const text = await lead.explore("Fix the bug.");
 		expect(text).toContain(
 			"Its edits so far are in your checkout; its last message:\n\nFixed parser.py; tests not run yet.",
 		);
+	});
+
+	it("thin lead: a failed round points to a restart; restart starts a fresh sidekick with a handoff, capped", async () => {
+		const store = trialSessions(() => 0);
+		const trace: FusionTrace = {
+			decisions: [],
+			rounds: [],
+			refused: [],
+			restarts: [],
+		};
+		const briefs: { id: string; brief: string }[] = [];
+		const lead = fusionLead({
+			parentId: "t",
+			sessions: store,
+			model: () => model,
+			escalation: null,
+			runRound: async (session, brief) => {
+				briefs.push({ id: session.id, brief });
+				session.briefs.push(brief);
+				const report =
+					session.id === "t.1"
+						? {
+								outcome: "failed" as const,
+								report: "Half of parser.py done.",
+								budgetUsed: "this round, steps 60/60",
+							}
+						: {
+								outcome: "completed" as const,
+								report: "Done; pytest -q -> 3 passed",
+							};
+				session.reports.push(report);
+				return report;
+			},
+			callOnce: async () => ({ text: "", usage: null }),
+			changedFiles: async () => [" M parser.py"],
+			trace,
+			thin: true,
+		});
+		const failed = await lead.explore("Fix the bug.");
+		expect(failed).toContain("Runtime notice: this round failed (budget used");
+		expect(failed).toContain("restart: true");
+		expect(failed).not.toContain("do it yourself");
+		const send = lead.tools().agent_send?.execute;
+		const restarted = await send?.(
+			{
+				id: "t.1",
+				message: "Finish parser.py; run pytest -q.",
+				restart: true,
+			} as never,
+			{ toolCallId: "x", messages: [] } as never,
+		);
+		expect(restarted).toMatch(/^Sidekick t\.2 round 1 \(build\) reported:/);
+		expect(trace.restarts).toEqual([
+			{
+				from: "t.1",
+				to: "t.2",
+				reason: "budget used: this round, steps 60/60",
+			},
+		]);
+		const handoff = briefs.at(-1) as { id: string; brief: string };
+		expect(handoff.id).toBe("t.2");
+		expect(handoff.brief).toContain("Handoff: you replace writer t.1");
+		expect(handoff.brief).toContain(
+			"Its last message:\nHalf of parser.py done.",
+		);
+		expect(handoff.brief).toContain("M parser.py");
+		expect(handoff.brief).toContain("Main's brief for you:\nFinish parser.py");
+		// The cap: two restarts, then a refusal that never says "do it yourself".
+		await send?.(
+			{ id: "t.2", message: "Again.", restart: true } as never,
+			{ toolCallId: "y", messages: [] } as never,
+		);
+		const refused = await send?.(
+			{ id: "t.3", message: "Again.", restart: true } as never,
+			{ toolCallId: "z", messages: [] } as never,
+		);
+		expect(refused).toContain("all 2 restarts are used");
+		expect(refused).toContain("Brief your writer instead.");
+		expect(trace.restarts).toHaveLength(2);
 	});
 });
