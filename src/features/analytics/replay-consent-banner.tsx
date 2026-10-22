@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
+import { useLegalPromptPending } from "../auth/legal-acceptance-prompt";
 import { loadAnalytics } from "./client";
 import {
 	onReplayConsentChange,
@@ -32,10 +33,14 @@ export function chooseReplay(choice: ReplayConsent) {
 	if (choice === "accepted") loadAnalytics();
 }
 
-/** Asked once per browser; nothing is recorded until "Accept". */
+/**
+ * Asked once per browser; nothing is recorded until "Accept". Waits until a
+ * signed-in user has accepted the Terms, so only one prompt shows at a time.
+ */
 export function ReplayConsentBanner() {
 	const choice = useReplayConsent();
-	if (choice !== null || !replayPossible()) return null;
+	const termsPending = useLegalPromptPending();
+	if (choice !== null || !replayPossible() || termsPending) return null;
 	return <ReplayConsentPrompt onChoose={chooseReplay} />;
 }
 

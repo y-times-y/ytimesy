@@ -2265,7 +2265,13 @@ a.session-title-meta:focus-visible {
 	color: #8f8f8f;
 	font-size: 14px;
 }
-.auth-page [role="alert"] {
+.auth-page-link {
+	color: #ececec;
+	font-size: 14px;
+	text-decoration: underline;
+	text-underline-offset: 4px;
+}
+.auth-page [role="alert"]:not([data-slot="field-error"]) {
 	width: 100%;
 	margin: 0;
 	color: #ccc;
@@ -4220,4 +4226,43 @@ a.session-title-meta:focus-visible {
 	background: transparent;
 	color: inherit;
 	resize: vertical;
+}
+
+/* Settings errors: one quiet line in the panel's type, never body-size text. */
+.settings-body [role="alert"] {
+	margin: 8px 0 0;
+	color: #e5928a;
+	font-size: 12px;
+	line-height: 17px;
+}
+.settings-inline-error {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.settings-inline-error [role="alert"] {
+	margin: 0;
+}
+
+/* Narrow screens: the section list becomes one scrolling row above the body.
+   Placed last so it wins over the desktop two-column rules above. */
+@media (max-width: 640px) {
+	.settings-shell {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	.settings-nav {
+		flex-direction: row;
+		overflow-x: auto;
+		border-right: 0;
+		border-bottom: 1px solid #ffffff12;
+		scrollbar-width: none;
+	}
+	.settings-nav button {
+		flex-shrink: 0;
+		white-space: nowrap;
+	}
+	.settings-body {
+		padding: 18px 16px 32px;
+	}
 }

@@ -99,7 +99,7 @@ export function useMemoryScopeNames(
 				id.slice("project:".length));
 	/** Where a line can live: Personal, then every known project. */
 	const choices: MemoryMenuChoice[] = [
-		{ value: null, label: "Personal", hint: "every project" },
+		{ value: null, label: "Personal" },
 		...[...names.values()]
 			.sort((a, b) => a.label.localeCompare(b.label))
 			.map((name) => ({ value: name.value, label: name.label })),
@@ -183,7 +183,7 @@ export function MemoryInspector({
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["memory"] });
 	const clear = useMutation({
-		mutationFn: () => clearMemory(),
+		mutationFn: () => clearMemory({ data: {} }),
 		onSuccess: () => {
 			setConfirmClear(false);
 			setScope(null);
@@ -461,38 +461,39 @@ export function MemoryInspector({
 								{searching ? "No matches." : "Nothing here yet."}
 							</p>
 						)}
+						{/* Rarely used and destructive: quiet, at the end of the list. */}
+						<div className="memory-clear">
+							{confirmClear ? (
+								<>
+									<button
+										type="button"
+										className="memory-danger"
+										disabled={clear.isPending}
+										onClick={() => clear.mutate()}
+									>
+										Delete all memory
+									</button>
+									<button type="button" onClick={() => setConfirmClear(false)}>
+										Cancel
+									</button>
+								</>
+							) : (
+								<button
+									type="button"
+									className="memory-quiet"
+									aria-label="Clear memory"
+									disabled={!files?.length}
+									onClick={() => setConfirmClear(true)}
+								>
+									Clear all memory
+								</button>
+							)}
+						</div>
 					</div>
 				)}
 			</div>
 			<aside className="memory-side">
 				<MemoryDreams status={dreams.data} />
-				<div className="memory-clear">
-					{confirmClear ? (
-						<>
-							<button
-								type="button"
-								className="memory-danger"
-								disabled={clear.isPending}
-								onClick={() => clear.mutate()}
-							>
-								Delete all memory
-							</button>
-							<button type="button" onClick={() => setConfirmClear(false)}>
-								Cancel
-							</button>
-						</>
-					) : (
-						<button
-							type="button"
-							className="memory-quiet"
-							aria-label="Clear memory"
-							disabled={!files?.length}
-							onClick={() => setConfirmClear(true)}
-						>
-							Clear all
-						</button>
-					)}
-				</div>
 			</aside>
 		</section>
 	);

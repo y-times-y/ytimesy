@@ -430,6 +430,20 @@ export function sessionTitleFromItems(items: readonly SessionItem[]): string {
 	return sessionTitleFromText(lastUserMessageText(items) ?? "");
 }
 
+/**
+ * The open chat's header: the title the sidebar lists (set from the first
+ * message), so both name the chat the same way; until the list has one, the
+ * title from the latest message.
+ */
+export function chatHeaderTitle(
+	listedTitle: string | undefined,
+	fromItems: string,
+): string {
+	return listedTitle?.trim() && listedTitle !== "New session"
+		? listedTitle
+		: fromItems;
+}
+
 /** A chat's title from its first message: the first line, shortened. */
 export function sessionTitleFromText(text: string): string {
 	if (!text) return "New session";

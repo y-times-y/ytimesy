@@ -171,11 +171,8 @@ export function InfrastructureUsage() {
 			<header className="settings-section-head">
 				<div>
 					<h3>Cloud usage</h3>
-					<p>
-						Machine time your agents use, over a rolling 5-hour and a rolling
-						weekly limit. Larger machines use it faster. At a limit, work
-						already running finishes and new work waits until it refills. Model
-						usage is billed by your model provider.
+					<p title="Larger machines use it faster. At a limit, work already running finishes and new work waits until it refills. Model usage is billed by your model provider.">
+						Machine time, over a rolling 5-hour and weekly limit.
 					</p>
 				</div>
 			</header>
@@ -183,7 +180,17 @@ export function InfrastructureUsage() {
 				<p className="settings-copy">Checking usage…</p>
 			) : null}
 			{usage.error ? (
-				<p role="alert">Cloud usage is unavailable. Please retry.</p>
+				<div className="settings-inline-error">
+					<p role="alert">Cloud usage is unavailable.</p>
+					<button
+						type="button"
+						className="settings-secondary"
+						disabled={usage.isFetching}
+						onClick={() => void usage.refetch()}
+					>
+						{usage.isFetching ? "Retrying…" : "Retry"}
+					</button>
+				</div>
 			) : null}
 			{usage.data ? <UsageSummary usage={usage.data} /> : null}
 			{usage.data?.admin ? (

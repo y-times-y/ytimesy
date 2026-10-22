@@ -53,9 +53,9 @@ export function SlashCommandPalette({
 							}}
 						>
 							<Icon size={16} />
+							{/* The description is the row's tooltip, not a second line. */}
 							<span className="slash-palette-copy">
 								<span>{command.label}</span>
-								<small>{command.description}</small>
 							</span>
 							<code className="slash-command-trigger">
 								{command.argumentHint

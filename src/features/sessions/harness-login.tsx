@@ -4,7 +4,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { harnessAccess } from "#/domain/harness-access";
+import { harnessAccess, harnessLoginShouldShow } from "#/domain/harness-access";
 import { AgentProviderMark } from "./agent-provider-mark";
 
 export function HarnessLogin({
@@ -41,7 +41,7 @@ export function HarnessLogin({
 	return (
 		<section className="harness-login" aria-label={title}>
 			<span className="harness-login-mark" aria-hidden="true">
-				<AgentProviderMark provider={harnessId} size={15} />
+				<AgentProviderMark provider={harnessId} size={16} />
 			</span>
 			<div className="harness-login-text">
 				<strong>{title}</strong>
@@ -58,7 +58,7 @@ export function HarnessLogin({
 					rel="noreferrer"
 				>
 					{access.subscriptionActionLabel ?? "Open"}
-					<ArrowUpRight size={13} aria-hidden="true" />
+					<ArrowUpRight size={14} aria-hidden="true" />
 				</a>
 			) : access.subscriptionActionLabel ? (
 				<button
@@ -71,5 +71,35 @@ export function HarnessLogin({
 				</button>
 			) : null}
 		</section>
+	);
+}
+
+/**
+ * The sign-in card above the composer, outside the model picker: a send with
+ * an expired or pending login starts sign-in and keeps the message, so the
+ * card (with the device code) must be visible without opening a menu.
+ */
+export function ComposerSignIn(props: {
+	harnessReady: boolean;
+	harnessId: AgentProviderId;
+	connection: AgentConnection;
+	busy: boolean;
+	onConnect: () => void;
+}) {
+	if (
+		!harnessLoginShouldShow({
+			harnessReady: props.harnessReady,
+			harnessId: props.harnessId,
+			connection: props.connection,
+		})
+	)
+		return null;
+	return (
+		<HarnessLogin
+			harnessId={props.harnessId}
+			connection={props.connection}
+			busy={props.busy}
+			onConnect={props.onConnect}
+		/>
 	);
 }

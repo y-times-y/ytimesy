@@ -34,7 +34,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "github",
 		displayName: "GitHub",
 		description:
-			"Official GitHub MCP server for repository management. Create issues, manage pull requests, review code, search repositories, and interact with GitHub's full\u2026",
+			"Issues, pull requests, code review and repository search on GitHub.",
 		owner: "anthropics",
 		repo: "claude-plugins-official",
 		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
@@ -52,7 +52,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "gitlab",
 		displayName: "GitLab",
 		description:
-			"GitLab DevOps platform integration. Manage repositories, merge requests, CI/CD pipelines, issues, and wikis. Full access to GitLab's comprehensive DevOps\u2026",
+			"Repositories, merge requests, CI/CD pipelines, issues and wikis on GitLab.",
 		owner: "anthropics",
 		repo: "claude-plugins-official",
 		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
@@ -61,8 +61,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "linear",
 		displayName: "Linear",
-		description:
-			"Linear issue tracking integration. Create issues, manage projects, update statuses, search across workspaces, and streamline your software development\u2026",
+		description: "Create and update Linear issues, projects and statuses.",
 		owner: "anthropics",
 		repo: "claude-plugins-official",
 		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
@@ -71,8 +70,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "sentry",
 		displayName: "Sentry",
-		description:
-			"Sentry error monitoring integration. Access error reports, analyze stack traces, search issues by fingerprint, and debug production errors directly from\u2026",
+		description: "Sentry error reports, stack traces and issue search.",
 		owner: "getsentry",
 		repo: "plugin-claude",
 		sha: "73e53541d7af21672e27428c7067f4264b8a3d65",
@@ -82,7 +80,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "notion",
 		displayName: "Notion",
 		description:
-			"Notion workspace integration. Search pages, create and update documents, manage databases, and access your team's knowledge base directly from Claude Code\u2026",
+			"Notion workspace integration. Search pages, create and update documents, manage databases, and access your team's knowledge base.",
 		owner: "makenotion",
 		repo: "claude-code-notion-plugin",
 		sha: "9847f2aa1a15f25df35ed1fb7b4557dbb60cd651",
@@ -91,8 +89,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "atlassian",
 		displayName: "Atlassian (Jira & Confluence)",
-		description:
-			"Connect to Atlassian products including Jira and Confluence. Search and create issues, access documentation, manage sprints, and integrate your development\u2026",
+		description: "Jira issues and sprints, and Confluence docs.",
 		owner: "atlassian",
 		repo: "atlassian-mcp-server",
 		sha: "eb9a5956a7ac6380c731c725a8382da53ad6d980",
@@ -101,8 +98,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "slack",
 		displayName: "Slack",
-		description:
-			"Slack workspace integration. Search messages, access channels, read threads, and stay connected with your team's communications while coding. Find relevant\u2026",
+		description: "Search Slack messages, channels and threads.",
 		owner: "slackapi",
 		repo: "slack-mcp-plugin",
 		sha: "b073ebc2fc500b52e781f5fd17ebb9ad462363dc",
@@ -111,8 +107,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "vercel",
 		displayName: "Vercel",
-		description:
-			"Vercel deployment platform integration. Manage deployments, check build status, access logs, configure domains, and control your frontend infrastructure\u2026",
+		description: "Vercel deployments, build status, logs and domains.",
 		owner: "vercel",
 		repo: "vercel-plugin",
 		sha: "882e66c2698689324c341b7bb8fd8beb92c27bf6",
@@ -121,7 +116,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "stripe",
 		displayName: "Stripe",
-		description: "Stripe development plugin for Claude",
+		description: "Stripe payments, customers and API docs for development.",
 		owner: "stripe",
 		repo: "ai",
 		sha: "97b2164821c378f246c3903852057b36a8bd0296",
@@ -140,8 +135,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "supabase",
 		displayName: "Supabase",
-		description:
-			"Supabase MCP integration for database operations, authentication, storage, and real-time subscriptions. Manage your Supabase projects, run SQL queries, and\u2026",
+		description: "Supabase projects, SQL, auth, storage and realtime.",
 		owner: "supabase-community",
 		repo: "supabase-plugin",
 		sha: "f3f332e0164c34a8392772811737fda0cb972d06",
@@ -150,8 +144,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "figma",
 		displayName: "Figma",
-		description:
-			"Figma design platform integration. Access design files, extract component information, read design tokens, and translate designs into code. Bridge the gap\u2026",
+		description: "Read Figma files, components and design tokens.",
 		owner: "figma",
 		repo: "mcp-server-guide",
 		sha: "f0493295acf5f7cbdebcbcc483c06de814420cb1",
@@ -161,7 +154,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "posthog",
 		displayName: "PostHog",
 		description:
-			"Access PostHog analytics, feature flags, experiments, error tracking, and insights directly from Claude Code.",
+			"Access PostHog analytics, feature flags, experiments, error tracking, and insights.",
 		owner: "PostHog",
 		repo: "ai-plugin",
 		sha: "e0fbf5e742fb4242c4ea509b395b2e343642f0b7",
@@ -193,8 +186,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "context7",
 		displayName: "Context7",
-		description:
-			"Upstash Context7 MCP server for up-to-date documentation lookup. Connects to Context7's hosted remote MCP server (https://mcp.context7.com/mcp) \u2014 no local\u2026",
+		description: "Up-to-date library docs from Context7's hosted MCP server.",
 		owner: "anthropics",
 		repo: "claude-plugins-official",
 		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
@@ -203,8 +195,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "pagerduty",
 		displayName: "PagerDuty",
-		description:
-			"Enhance code quality and security through PagerDuty risk scoring and incident correlation. Score pre-commit diffs against historical incident data and\u2026",
+		description: "PagerDuty risk scores and incident history for your changes.",
 		owner: "PagerDuty",
 		repo: "claude-code-plugins",
 		sha: "761cba75bd50fd561405c3b173ecf36084432089",
@@ -222,7 +213,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "datadog",
 		displayName: "Datadog",
 		description:
-			"Use Datadog directly in Claude Code through a preconfigured Datadog MCP server. Query logs, metrics, traces, dashboards, and more through natural\u2026",
+			"Query Datadog logs, metrics, traces and dashboards through a preconfigured Datadog MCP server.",
 		owner: "datadog-labs",
 		repo: "claude-code-plugin",
 		sha: "195f570c002beab3d7bd342739034d0019aa4863",
@@ -256,7 +247,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		id: "planetscale",
 		displayName: "PlanetScale",
 		description:
-			"An authenticated hosted MCP server that accesses your PlanetScale organizations, databases, branches, schema, and Insights data. Query against your data,\u2026",
+			"PlanetScale organizations, databases, branches, schema and Insights.",
 		owner: "planetscale",
 		repo: "claude-plugin",
 		sha: "95c80f9f391be9b1b6172bf82d4191e1ec11b637",

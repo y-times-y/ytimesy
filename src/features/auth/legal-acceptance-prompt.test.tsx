@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it } from "vitest";
-import { LegalAcceptanceDialog } from "./legal-acceptance-prompt";
+import { describe, expect, it } from "vitest";
+import {
+	LegalAcceptanceDialog,
+	legalPromptPending,
+} from "./legal-acceptance-prompt";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, "");
 
@@ -29,4 +32,22 @@ it("tells returning users the documents changed", () => {
 		/>,
 	);
 	expect(text(html)).toContain("We updated our Terms and Privacy Policy");
+});
+
+describe("legalPromptPending", () => {
+	const base = {
+		sessionPending: false,
+		userId: "u1",
+		statusPending: false,
+		current: true,
+	};
+	it("holds other prompts while the Terms prompt shows or may show", () => {
+		expect(legalPromptPending({ ...base, current: false })).toBe(true);
+		expect(legalPromptPending({ ...base, statusPending: true })).toBe(true);
+		expect(legalPromptPending({ ...base, sessionPending: true })).toBe(true);
+	});
+	it("releases them once Terms are accepted, or for signed-out visitors", () => {
+		expect(legalPromptPending(base)).toBe(false);
+		expect(legalPromptPending({ ...base, userId: undefined })).toBe(false);
+	});
 });

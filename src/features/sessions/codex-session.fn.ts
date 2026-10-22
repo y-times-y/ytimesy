@@ -187,13 +187,14 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 );
 
 /** Advances a pending ChatGPT sign-in; the composer polls this while it waits. */
-export const pollCodexLogin = createServerFn({ method: "POST" }).handler(
-	async () => {
+export const pollCodexLogin = createServerFn({ method: "POST" })
+	// An empty object, so the call has the JSON body requireSameOrigin needs.
+	.validator((data: unknown) => z.object({}).strict().parse(data))
+	.handler(async () => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
 		return advanceCodexDeviceLogin(user.id);
-	},
-);
+	});
 
 export const connectCodexSession = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)

@@ -96,10 +96,8 @@ export function ModelConnections() {
 			<header className="settings-section-head">
 				<div>
 					<h3>API keys</h3>
-					<p>
-						Use your own model provider account. Keys are encrypted and never
-						shown again. A key stands in for a subscription only during an
-						outage, when automatic failover (below) is on.
+					<p title="Keys are encrypted and never shown again. A key stands in for a subscription only during an outage, when automatic failover (below) is on.">
+						Use your own model provider account.
 					</p>
 				</div>
 				{formOpen ? null : (

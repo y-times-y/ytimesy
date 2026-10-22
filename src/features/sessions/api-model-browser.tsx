@@ -291,7 +291,7 @@ export function ApiModelBrowser({
 							? model.label
 							: `${AUTHOR_LABELS[model.author] ?? model.author} · ${model.label}`}
 					</span>
-					<LockKeyhole size={13} />
+					<LockKeyhole size={14} />
 				</button>
 			))}
 			{connections.isError ? (

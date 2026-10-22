@@ -2,6 +2,7 @@ import { viewPaths } from "@better-auth-ui/core";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { Auth } from "#/components/auth/auth";
 import { authCallbackErrorMessage } from "#/domain/auth-callback";
+import { emailViewUnavailableMessage } from "#/domain/auth-email-views";
 import { safeReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { OnboardingShell } from "#/features/auth/onboarding-shell";
@@ -46,7 +47,14 @@ function AuthPage() {
 						Loading sign-in options…
 					</p>
 				) : emailUnavailable ? (
-					<Auth view="signIn" />
+					<>
+						<p className="auth-page-status" role="status">
+							{emailViewUnavailableMessage(path)}
+						</p>
+						<a className="auth-page-link" href="/auth/sign-in">
+							Back to sign in
+						</a>
+					</>
 				) : (
 					<Auth path={path} />
 				)}

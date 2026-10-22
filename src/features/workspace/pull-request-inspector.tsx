@@ -331,7 +331,7 @@ function Checks({ checks }: { checks: readonly PullRequestCheck[] }) {
 							rel="noreferrer"
 							aria-label={`Open ${check.name}`}
 						>
-							<ExternalLink size={13} />
+							<ExternalLink size={14} />
 						</a>
 					) : null}
 				</li>
@@ -373,7 +373,7 @@ export function PullRequestInspector({
 			<DropdownMenu.Trigger asChild>
 				<button type="button" className="pr-ghost">
 					{open.length} open
-					<ChevronDown size={12} />
+					<ChevronDown size={14} />
 				</button>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Portal>
@@ -395,7 +395,7 @@ export function PullRequestInspector({
 									{pr.draft ? " · Draft" : ""}
 								</span>
 							</span>
-							{pr.number === number ? <Check size={13} /> : null}
+							{pr.number === number ? <Check size={14} /> : null}
 						</DropdownMenu.Item>
 					))}
 				</DropdownMenu.Content>
@@ -556,7 +556,7 @@ function PullRequestReview({
 							disabled={!canMerge}
 							onClick={() => setConfirmMerge(true)}
 						>
-							<GitMerge size={13} />
+							<GitMerge size={14} />
 							Squash and merge
 						</button>
 					)}
@@ -607,7 +607,7 @@ function PullRequestReview({
 						aria-label="Open on GitHub"
 						title="Open on GitHub"
 					>
-						<ExternalLink size={13} />
+						<ExternalLink size={14} />
 					</a>
 				</div>
 				<h2 className="pr-title">{pr.title}</h2>

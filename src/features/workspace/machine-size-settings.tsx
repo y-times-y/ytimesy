@@ -27,9 +27,11 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 				<h3 id="machine-size-heading">Machine size</h3>
 				<span>Per project</span>
 			</div>
-			<p className="settings-copy">
-				Choose the resources for new chat machines. Existing machines keep their
-				size.
+			<p
+				className="settings-copy"
+				title="Existing machines keep their size. Larger sizes use your compute allowance faster. A copy of a larger environment snapshot cannot be reduced below that snapshot’s size."
+			>
+				Resources for new chat machines.
 			</p>
 			{preference.data ? (
 				<RadioGroup.Root
@@ -75,10 +77,6 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 			) : preference.isPending ? (
 				<p className="settings-copy">Reading machine preference…</p>
 			) : null}
-			<p className="machine-size-note">
-				Larger sizes use your compute allowance faster. A copy of a larger
-				environment snapshot cannot be reduced below that snapshot’s size.
-			</p>
 			{save.isPending ? (
 				<p role="status" className="settings-copy">
 					Saving preference…
