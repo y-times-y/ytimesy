@@ -59,6 +59,11 @@ export function harnessLifecycleHooks(input: {
 		key: string,
 		load: () => Promise<z.infer<typeof lifecycleHookConfig>>,
 	) => Promise<z.infer<typeof lifecycleHookConfig>>;
+	/**
+	 * The configuration as known without the workspace (a cached read of the
+	 * chat's pinned baseline), or null when only the workspace can tell.
+	 */
+	knownConfig?: () => Promise<unknown>;
 }) {
 	let configured: Promise<z.infer<typeof lifecycleHookConfig>> | undefined;
 	let pending: string[] = [];
@@ -258,6 +263,23 @@ export function harnessLifecycleHooks(input: {
 					];
 				}),
 			) as ToolSet,
+		/**
+		 * Whether a UserPromptSubmit hook is configured, answered without the
+		 * workspace; null when that needs the workspace.
+		 */
+		promptSubmitConfigured: async (): Promise<boolean | null> => {
+			if (input.readOnly) return false;
+			try {
+				const known = lifecycleHookConfig.safeParse(
+					await input.knownConfig?.(),
+				);
+				return known.success
+					? known.data.hooks.some((hook) => hook.event === "UserPromptSubmit")
+					: null;
+			} catch {
+				return null;
+			}
+		},
 		/** Before the turn's first model request; a block ends the turn unsent. */
 		userPromptSubmit: async (prompt: string) => {
 			if (
