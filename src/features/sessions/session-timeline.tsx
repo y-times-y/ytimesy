@@ -185,15 +185,31 @@ export function SessionTimeline({
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(presented, turnStatus);
+	const rowIds = new Set(
+		rows.flatMap((row) =>
+			row.kind === "item" ? [row.item.id] : row.items.map((item) => item.id),
+		),
+	);
 	const helperMarks = childTasks.map((task) => {
 		const start = childTaskAnchorId(task, visible);
+		// Wake-up turn starts stay in: a report's turn holds its finish line.
+		const finish =
+			task.status === "done" || task.status === "failed"
+				? finishLineAnchorId(presented, start, Date.parse(task.updatedAt))
+				: undefined;
 		return {
 			task,
 			start,
+			// An anchor with no row of its own (a wake-up turn with nothing
+			// shown yet) puts the line last, where that turn will show.
 			finish:
-				task.status === "done" || task.status === "failed"
-					? (finishLineAnchorId(visible, start) ?? null)
-					: undefined,
+				finish === undefined
+					? task.status === "done" || task.status === "failed"
+						? null
+						: undefined
+					: rowIds.has(finish)
+						? finish
+						: null,
 		};
 	});
 	// A helper's start line stands in for the agent call that started it.
