@@ -387,7 +387,7 @@ export async function runHarborTrial(
 		cwd: input.cwd,
 		signal,
 		sessionId: input.trialId,
-		turnId: `${input.trialId}-turn`,
+		turnId: harborTurnId(input.trialId),
 	};
 	let failure: string | null = null;
 	let instructions = "";
@@ -449,7 +449,7 @@ export async function runHarborTrial(
 					cwd: options.cwd ?? input.cwd,
 					signal: childSignal,
 					sessionId: session.id,
-					turnId: `${session.id}-turn`,
+					turnId: harborTurnId(session.id),
 				},
 				userId: input.userId,
 				modelId: session.model.modelId,
@@ -530,7 +530,7 @@ export async function runHarborTrial(
 						vm: workspace.vm,
 						cwd: options.cwd ?? input.cwd,
 					},
-					`${session.id}-turn`,
+					harborTurnId(session.id),
 				).catch(() => {});
 			}
 		};
@@ -918,6 +918,16 @@ export async function runHarborTrial(
 		reviewRounds,
 		efficiency,
 	};
+}
+
+/**
+ * A turn id the product's command runner accepts (letters, digits and
+ * hyphens, at most 80: api-command-scope.ts). Harbor trial ids carry
+ * underscores (session-window-debug__MVgXW8D) and child ids a dot (.1);
+ * used raw, every bash call failed with "Invalid command scope".
+ */
+export function harborTurnId(id: string) {
+	return `${id.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 75)}-turn`;
 }
 
 /**
