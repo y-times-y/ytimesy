@@ -1312,6 +1312,35 @@ it("sends the requested reasoning effort to Anthropic models instead of their de
 	expect(model.doStreamCalls[0]?.providerOptions?.anthropic).toMatchObject({
 		effort: "max",
 	});
+	// Max-effort thinking needs room: Claude's API route defaults to 64K, not 8K.
+	expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(64_000);
+});
+
+it("keeps the 8K output default on non-Claude API routes", async () => {
+	mocks.load.mockResolvedValue({
+		id: "connection",
+		provider: "openai",
+		revision: "revision",
+		baseUrl: "https://api.openai.com/v1",
+		sealedCredential: "sealed",
+		models: [{ id: "gpt-6.1-sol", toolStreamingVerified: true }],
+	});
+	const model = new MockLanguageModelV4({
+		doStream: async () => stream([finish]),
+	});
+	mocks.model.mockReturnValue(model);
+	await runApiAgent({
+		userId: "alice",
+		connectionId: "connection",
+		modelId: "gpt-6.1-sol",
+		messages: [{ role: "user", content: "Test" }],
+		instructions: "Test instructions",
+		tools: {},
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+		onStep: async () => {},
+	});
+	expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(8192);
 });
 
 it("keeps sampling after a commentary progress note until the final answer", async () => {

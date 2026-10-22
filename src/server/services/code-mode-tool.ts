@@ -507,3 +507,35 @@ function primaryDescription(direct: readonly string[], hasDeferred: boolean) {
 		`The return value (JSON-serializable, same size limit as a file read) and text(...) output (printed as the program goes, kept if it later throws) come back with one line per tool call. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.`,
 	].join("\n");
 }
+
+/** The command tool's line in code mode primary: what it is still for. */
+export const PRIMARY_COMMAND_NOTE =
+	"Use it for one command, or a long-running or interactive process; for several known steps use run_code.";
+
+/**
+ * codeMode=primary's tool list: run_code listed first, as the system prompt
+ * names it first, and the command tool's description saying it is for one
+ * command. Both depend only on the surface, so the list stays byte-stable
+ * across steps. Shared by the product turn (api-turn.ts) and the Harbor
+ * bridge (evals/harbor_v2/harness.ts).
+ */
+export function primaryCodeModeTools(
+	runCode: ToolSet,
+	tools: ToolSet,
+): ToolSet {
+	return {
+		...runCode,
+		...Object.fromEntries(
+			Object.entries(tools).map(([name, definition]) => [
+				name,
+				leanToolRole(name) === "command"
+					? ({
+							...definition,
+							description:
+								`${definition.description ?? ""} ${PRIMARY_COMMAND_NOTE}`.trim(),
+						} as typeof definition)
+					: definition,
+			]),
+		),
+	};
+}
