@@ -25,7 +25,7 @@ import { subagentTaskViews } from "#/domain/subagent-tree";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
-	listAgentSessions,
+	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
@@ -49,6 +49,7 @@ type PublicAgentChat = {
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
 	readonly waitingOn?: ChatWaitingOn | null;
+	readonly workingSince?: string | null;
 };
 
 /**
@@ -79,7 +80,7 @@ export const listProjectAgentSessions = createServerFn({ method: "GET" })
 		if (!data.projectId) return [];
 		try {
 			const user = await requireUser(getRequest().headers);
-			const sessions = await listAgentSessions(user.id, data.projectId);
+			const sessions = await listSidebarAgentSessions(user.id, data.projectId);
 			return chatsFromAgentSessions(sessions);
 		} catch {
 			return [];

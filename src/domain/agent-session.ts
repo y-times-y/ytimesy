@@ -77,6 +77,8 @@ export function chatsFromAgentSessions(
 		readonly taskBranch?: string | null;
 		/** The chat's history: only what it waits on from the user is listed. */
 		readonly items?: unknown;
+		/** When Main's or a helper's active turn started, if one runs. */
+		readonly workingSince?: string | null;
 	}[],
 ) {
 	return sessions
@@ -89,6 +91,7 @@ export function chatsFromAgentSessions(
 			harnessId: session.harness ?? null,
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
+			...(session.workingSince ? { workingSince: session.workingSince } : {}),
 			...(session.items === undefined
 				? {}
 				: {

@@ -158,6 +158,13 @@ describe("sidebarChatPrMarkForWorkspace", () => {
 			need: "conflict",
 			url: "https://github.com/y-times-y/ytimesy/pull/12",
 			label: "Has merge conflicts",
+			pr: {
+				number: 12,
+				url: "https://github.com/y-times-y/ytimesy/pull/12",
+				state: "open",
+				checks: null,
+				failedChecks: 0,
+			},
 		});
 		expect(
 			sidebarChatPrMarkForWorkspace({
