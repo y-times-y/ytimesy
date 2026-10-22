@@ -7,11 +7,13 @@ import {
 	findingResponses,
 	hasConcreteFindings,
 	isRunnableFile,
+	maxReviewRounds,
 	REVIEW_LOOP_LIMITS,
 	retryCheck,
 	reviewEligibility,
 	reviewFindings,
 	reviewNotice,
+	sameFindings,
 } from "./review-loop";
 
 const review = (value: Record<string, unknown>) =>
@@ -255,6 +257,75 @@ describe("review gating and time", () => {
 			kind: "finish",
 			reason: "rounds",
 		});
+	});
+
+	it("allows more rounds unattended while time remains; the product keeps two", () => {
+		const base = { now: 0, expectedCheckMs: 150_000, deadlineAt: 1e9 };
+		expect(maxReviewRounds({})).toBe(2);
+		expect(maxReviewRounds({ unattended: true })).toBe(4);
+		for (const checksDone of [2, 3])
+			expect(decideCheck({ ...base, checksDone, unattended: true }).kind).toBe(
+				"check",
+			);
+		expect(decideCheck({ ...base, checksDone: 4, unattended: true })).toEqual({
+			kind: "finish",
+			reason: "rounds",
+		});
+		expect(
+			decideCheck({
+				...base,
+				checksDone: 3,
+				unattended: true,
+				deadlineAt: 200_000,
+			}),
+		).toEqual({ kind: "finish", reason: "time" });
+	});
+
+	it("unattended, stops when a check repeats the previous findings unchanged", () => {
+		const fail = review({
+			verdict: "fail",
+			failures: ["x: wrong", "y: missing"],
+			assumptions: [{ assumption: "a" }],
+		});
+		const findings = reviewFindings(fail);
+		const reworded = reviewFindings(
+			review({
+				verdict: "fail",
+				failures: ["Y:  missing", "x: wrong"],
+				assumptions: [{ assumption: "b" }],
+			}),
+		);
+		expect(sameFindings(findings, reworded)).toBe(true);
+		expect(
+			sameFindings(
+				findings,
+				reviewFindings(review({ verdict: "fail", failures: ["x: wrong"] })),
+			),
+		).toBe(false);
+		expect(
+			sameFindings(
+				findings,
+				reviewFindings(
+					review({ verdict: "fail", failures: ["x: wrong", "y: still"] }),
+				),
+			),
+		).toBe(false);
+		const base = { verdict: fail, findings, now: 0, deadlineAt: 1e9 };
+		expect(
+			decideAfterVerdict({
+				...base,
+				unattended: true,
+				previousFindings: reworded,
+			}),
+		).toEqual({ kind: "finish", reason: "no-progress" });
+		// The first check, or a changed finding, still gets a fix.
+		expect(decideAfterVerdict({ ...base, unattended: true })).toEqual({
+			kind: "fix",
+		});
+		// The product is unchanged: its second check's findings get a fix.
+		expect(decideAfterVerdict({ ...base, previousFindings: reworded })).toEqual(
+			{ kind: "fix" },
+		);
 	});
 
 	it("fixes only concrete findings with time left", () => {

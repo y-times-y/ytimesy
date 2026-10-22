@@ -23,6 +23,7 @@ import {
 	expectedCheckMs,
 	failingTests,
 	findingResponses,
+	maxReviewRounds,
 	REVIEW_LOOP_LIMITS,
 	type ReviewLoopState,
 	type ReviewOutcome,
@@ -241,6 +242,7 @@ function summaryItem(
 	state: ReviewLoopState,
 	billing: ModelBilling,
 	id: string,
+	maxRounds: number,
 	findingsOf?: ReviewRound,
 ): SessionItem {
 	const spend = reviewLoopSpend(state, billing);
@@ -250,7 +252,7 @@ function summaryItem(
 		kind: "dynamicToolCall",
 		id: SessionItemId(id),
 		tool: REVIEW_CHECK_TOOL,
-		input: `independent review ${state.rounds.length} of up to ${REVIEW_LOOP_LIMITS.maxRounds}`,
+		input: `independent review ${state.rounds.length} of up to ${maxRounds}`,
 		output: [
 			reviewLoopSummary(state),
 			...(findingsOf?.findings.length
@@ -273,6 +275,7 @@ function summaryItem(
 
 export function createReviewLoop(input: ReviewLoopInput) {
 	const { deps, sessionId, turnId } = input;
+	const maxRounds = maxReviewRounds({ unattended: input.unattended });
 
 	const save = async (state: ReviewLoopState) => {
 		await deps.save(sessionId, state);
@@ -373,7 +376,12 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			items: saved.rounds.length
 				? [
 						...step.items,
-						summaryItem(saved, input.billing, `review-loop:${turnId}:final`),
+						summaryItem(
+							saved,
+							input.billing,
+							`review-loop:${turnId}:final`,
+							maxRounds,
+						),
 					]
 				: step.items,
 		};
@@ -469,7 +477,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		try {
 			const checker = await deps.startSubagent({
 				role: "checker",
-				title: `Review ${n} of ${REVIEW_LOOP_LIMITS.maxRounds}`,
+				title: `Review ${n} of ${maxRounds}`,
 				...(input.pair ? { pair: true } : {}),
 				brief: independentReviewBrief({
 					taskText: requestText(state),
@@ -628,6 +636,15 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					findings,
 					now,
 					deadlineAt: state.deadlineAt,
+					...(input.unattended
+						? {
+								unattended: true,
+								previousFindings: state.rounds
+									.slice(0, -1)
+									.filter((earlier) => earlier.decision !== "retry")
+									.at(-1)?.findings,
+							}
+						: {}),
 				})
 			: ({ kind: "finish", reason: "check-failed" } as const);
 		// No verdict (timed out, or no verdict JSON) with ample time left: check the same tree again once.
@@ -686,7 +703,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					role: "user",
 					content: reviewNotice({
 						round: round.n,
-						maxRounds: REVIEW_LOOP_LIMITS.maxRounds,
+						maxRounds,
 						findings,
 						failingTests: failingTests(verdict),
 					}),
@@ -698,6 +715,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					fixing,
 					input.billing,
 					`review-loop:${turnId}:${round.n}`,
+					maxRounds,
 					fixingRound,
 				),
 			],
