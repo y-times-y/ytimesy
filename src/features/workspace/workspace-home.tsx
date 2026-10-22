@@ -48,6 +48,7 @@ import {
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewAfterRecovery,
 	sessionViewShouldReplaceOpenTurn,
 	sessionWithoutFailedSend,
 } from "#/domain/session-item";
@@ -1707,21 +1708,33 @@ export function WorkspaceHome({
 										? recoveryDraft.prompt
 										: ""
 								}
-								onRecovered={async (id, prompt) => {
+								onRecovered={async (id, prompt, items) => {
 									const projectId = selectedProject?.id;
 									if (!projectId) return;
 									setRecoveryDraft({ id, prompt: prompt ?? "" });
 									sessionViews.current.delete(id);
-									openChat(id);
+									// A restore of this chat shows its transcript now; the
+									// full reload below can take a while (it reconnects).
+									const restored = sessionViewAfterRecovery(
+										currentSessionRef.current,
+										{ id, items },
+									);
+									if (restored) setSession(restored);
+									else openChat(id);
 									const epoch = sessionEpoch.current;
-									const next = await getCodexSession({
-										data: { projectId, sessionId: id, harnessId },
-									});
-									if (epoch !== sessionEpoch.current) return;
-									rememberSessionView(next);
-									setSession(next);
-									await chats.refetch();
-									await agentTasks.refetch();
+									try {
+										const next = await getCodexSession({
+											data: { projectId, sessionId: id, harnessId },
+										});
+										if (epoch !== sessionEpoch.current) return;
+										rememberSessionView(next);
+										setSession(next);
+										await chats.refetch();
+										await agentTasks.refetch();
+									} catch (cause) {
+										// The recovery itself is done; live updates catch up.
+										console.warn("Reloading the recovered chat failed.", cause);
+									}
 								}}
 								childTasks={agentTasks.data ?? []}
 								backgroundRuns={backgroundRuns}
