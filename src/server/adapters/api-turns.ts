@@ -326,45 +326,26 @@ export async function claimApiTurn(
 		fleetLimit > 10_000
 	)
 		throw new Error("Turn admission limits must be positive bounded integers.");
-	const client = await database().connect();
-	let discardConnection = false;
-	try {
-		await client.query("begin");
-		// Admission is short and serialized across workers; model/tool work never holds this lock.
-		// Poolers may ignore startup settings. Enforce the bounds inside this transaction,
-		// including when a worker disappears after claiming a turn but before committing.
-		await client.query("set local idle_in_transaction_session_timeout = '30s'");
-		await client.query("set local statement_timeout = '20s'");
-		const admission = await client.query<{ acquired: boolean }>(
-			"select pg_try_advisory_xact_lock(81738419) as acquired",
-		);
-		if (!admission.rows[0]?.acquired) {
-			await client.query("commit");
-			return null;
-		}
-		const result = await client.query<ApiTurn>(
-			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now(),executor=$4
-			 where id=(select q.id from api_turn q where q.state='queued' and q.executor=$4 and not q.cancel_requested
-			 and ($5::uuid is null or q.session_id=$5::uuid)
-			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
-			 and (select count(*) from api_turn r where r.state='running')<$3
-			 order by q.created_at for update skip locked limit 1)
-			 returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"}`,
-			[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
-		);
-		await client.query("commit");
-		return result.rows[0] ?? null;
-	} catch (error) {
-		try {
-			await client.query("rollback");
-		} catch {
-			// Never return an uncertain transaction to the pool, or hide its original failure.
-			discardConnection = true;
-		}
-		throw error;
-	} finally {
-		client.release(discardConnection);
-	}
+	// One statement, one round trip, its own transaction: the admission lock
+	// (serialized across workers; model/tool work never holds it) is taken
+	// first and held until the claim commits with the statement. Without it
+	// the queued turn is never read or locked, so another worker's claim
+	// order is unchanged. Nothing waits on a lock (try-lock, skip locked)
+	// and nothing is left idle in a transaction, even when a worker
+	// disappears mid-claim; the pool's statement timeout still applies.
+	const result = await database().query<ApiTurn>(
+		`with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
+		 update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now(),executor=$4
+		 where id=(select q.id from api_turn q where (select acquired from admission)
+		 and q.state='queued' and q.executor=$4 and not q.cancel_requested
+		 and ($5::uuid is null or q.session_id=$5::uuid)
+		 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
+		 and (select count(*) from api_turn r where r.state='running')<$3
+		 order by q.created_at for update skip locked limit 1)
+		 returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"}`,
+		[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
+	);
+	return result.rows[0] ?? null;
 }
 
 /**
