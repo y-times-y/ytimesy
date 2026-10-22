@@ -12,7 +12,8 @@ import type { SessionItem } from "./session-item";
 /** The builder's rigor block (root builder and writers; readers never get it). */
 export const RIGOR_BUILDER_INSTRUCTIONS = [
 	"Rigor:",
-	"- Ambiguous wording: list the plausible readings before you choose. Prefer the convention of the library, ecosystem or standard involved; otherwise the strictest reading. Keep a safety margin on numeric thresholds instead of landing on the edge. Name each choice in your final answer.",
+	"- Ambiguous wording: list the plausible readings before you choose. Prefer the convention of the library, ecosystem or standard involved, even over a stricter or more literal reading; take the strictest reading only when no convention applies. Keep a safety margin on numeric thresholds instead of landing on the edge. Name each choice in your final answer.",
+	'- An explicit enumerated list or precedence order beats general guidance such as "minimal" or "avoid redundancy": an item the list does not name for a slot cannot fill it, even if it carries the same facts.',
 	"- Before finishing, run the deliverable as an outside user would: a fresh shell and process, a clean directory with only the files the request names, no dependencies or data files the request does not provide or declare, and results read back with standard clients and tools, not helpers you wrote.",
 	"- Do not finish with time left while something is unverified or a known risk is open: verify or fix it first. Report as unverified only what cannot be checked here.",
 ].join("\n");
@@ -122,7 +123,7 @@ export const UNVERIFIED_SEND_BACK_TIME_LEFT = 0.5;
  * or approves a plan before the work is graded. Given to the root builder.
  */
 export const UNATTENDED_RUN_INSTRUCTIONS =
-	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer.";
+	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer. Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish verifying first and re-check the planned payload against the rules.";
 
 /** Phrases that ask the user to act, or admit the deliverable is missing or unfinished. */
 const UNFINISHED =

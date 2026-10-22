@@ -193,6 +193,28 @@ describe("review gating and time", () => {
 				deadlineAt: 10 * 60_000,
 			}),
 		).toBe(false);
+		// Unattended: the retry needs a whole unattended check and a fix.
+		const unattendedFit =
+			REVIEW_LOOP_LIMITS.unattendedCheckerMinutes * 60_000 +
+			REVIEW_LOOP_LIMITS.minFixMs;
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: unattendedFit - 1,
+				unattended: true,
+			}),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: unattendedFit,
+				unattended: true,
+			}),
+		).toBe(true);
 	});
 
 	it("checks only when a check and a fix fit, and gives the check the rest", () => {
@@ -221,6 +243,14 @@ describe("review gating and time", () => {
 			kind: "check",
 			checkMs: 240_000,
 		});
+		// Unattended (an eval trial): a longer single check than the product's.
+		expect(decideCheck({ ...base, deadlineAt: 1e9, unattended: true })).toEqual(
+			{
+				kind: "check",
+				checkMs: REVIEW_LOOP_LIMITS.unattendedCheckerMinutes * 60_000,
+			},
+		);
+		expect(REVIEW_LOOP_LIMITS.unattendedCheckerMinutes).toBe(15);
 		expect(decideCheck({ ...base, checksDone: 2, deadlineAt: 1e9 })).toEqual({
 			kind: "finish",
 			reason: "rounds",

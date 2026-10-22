@@ -26,6 +26,11 @@ export const REVIEW_LOOP_LIMITS = {
 	 * establish); still bounded by the loop's deadline less a fix.
 	 */
 	pairCheckerMinutes: 14,
+	/**
+	 * Unattended (an eval trial): a single checker gets more time than in the
+	 * product, where a person waits; checks there ran into 10 minutes.
+	 */
+	unattendedCheckerMinutes: 15,
 	/** What a check is expected to take before one has been timed in this turn. */
 	expectedCheckMs: 150_000,
 	/** The least time a fix needs after its check. */
@@ -267,6 +272,8 @@ export function decideCheck(input: {
 	readonly expectedCheckMs: number;
 	/** checkerMode=pair: the check may use pairCheckerMinutes. */
 	readonly pair?: boolean;
+	/** An unattended run: the check may use unattendedCheckerMinutes. */
+	readonly unattended?: boolean;
 }): ReviewDecision {
 	if (input.checksDone >= REVIEW_LOOP_LIMITS.maxRounds)
 		return { kind: "finish", reason: "rounds" };
@@ -276,12 +283,24 @@ export function decideCheck(input: {
 	return {
 		kind: "check",
 		checkMs: Math.min(
-			(input.pair
-				? REVIEW_LOOP_LIMITS.pairCheckerMinutes
-				: REVIEW_LOOP_LIMITS.checker.minutes) * 60_000,
+			checkerMs(input),
 			available - REVIEW_LOOP_LIMITS.minFixMs,
 		),
 	};
+}
+
+/** A whole check's time limit: the product's, more for a pair or an unattended run. */
+export function checkerMs(input: {
+	readonly pair?: boolean;
+	readonly unattended?: boolean;
+}) {
+	return (
+		Math.max(
+			REVIEW_LOOP_LIMITS.checker.minutes,
+			input.pair ? REVIEW_LOOP_LIMITS.pairCheckerMinutes : 0,
+			input.unattended ? REVIEW_LOOP_LIMITS.unattendedCheckerMinutes : 0,
+		) * 60_000
+	);
 }
 
 /**
@@ -294,13 +313,15 @@ export function retryCheck(input: {
 	readonly rounds: readonly ReviewRound[];
 	readonly now: number;
 	readonly deadlineAt: number;
+	readonly pair?: boolean;
+	readonly unattended?: boolean;
 }) {
 	const noVerdict = !input.verdict || input.verdict.parsed === false;
 	return (
 		noVerdict &&
 		!input.rounds.some((round) => round.decision === "retry") &&
 		input.deadlineAt - input.now >=
-			REVIEW_LOOP_LIMITS.checker.minutes * 60_000 + REVIEW_LOOP_LIMITS.minFixMs
+			checkerMs(input) + REVIEW_LOOP_LIMITS.minFixMs
 	);
 }
 
