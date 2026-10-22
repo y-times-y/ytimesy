@@ -263,7 +263,14 @@ export async function previousTurnMessages(
 	revision: string,
 ) {
 	const next = { modelId, connectionRevision: revision };
-	const recovered = await recoveredConversation(userId, sessionId);
+	// Both reads at once; the latest turn is used only without a restored point.
+	const [recovered, result] = await Promise.all([
+		recoveredConversation(userId, sessionId),
+		database().query<ApiTurn>(
+			"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+			[userId, sessionId],
+		),
+	]);
 	if (recovered !== null)
 		return continuedTurnHistory(
 			{
@@ -275,10 +282,6 @@ export async function previousTurnMessages(
 			},
 			next,
 		);
-	const result = await database().query<ApiTurn>(
-		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
-		[userId, sessionId],
-	);
 	const previous = result.rows[0];
 	if (
 		!previous ||

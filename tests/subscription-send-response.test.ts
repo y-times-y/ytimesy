@@ -1,0 +1,123 @@
+import { beforeEach, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	session: vi.fn(),
+	title: vi.fn(),
+	enqueue: vi.fn(),
+	previous: vi.fn(),
+	inherited: vi.fn(),
+	catalog: vi.fn(),
+	auth: vi.fn(),
+	account: vi.fn(),
+}));
+vi.mock("#/server/adapters/agent-sessions", () => ({
+	agentSessionForOwner: mocks.session,
+	chatHoldingSend: vi.fn(),
+	releasingChatClaimOnFailure: vi.fn(),
+	titleUntitledAgentSession: mocks.title,
+}));
+vi.mock("#/server/adapters/api-turns", () => ({
+	enqueueApiTurn: mocks.enqueue,
+	inheritedSubscriptionSettings: mocks.inherited,
+	previousTurnMessages: mocks.previous,
+}));
+vi.mock("#/server/adapters/codex-subscription", () => ({
+	codexSubscriptionCatalog: mocks.catalog,
+}));
+vi.mock("#/server/auth/agent-account", () => ({
+	loadAgentAccount: mocks.account,
+}));
+vi.mock("#/server/auth/codex-managed-auth", () => ({
+	hasManagedCodexAuth: mocks.auth,
+}));
+vi.mock("#/server/auth/codex-device-login", () => ({
+	readCodexDeviceLogin: vi.fn(),
+	startCodexDeviceLogin: vi.fn(),
+}));
+vi.mock("#/server/services/agent-session-machine", () => ({
+	openAgentSession: vi.fn(),
+}));
+vi.mock("#/server/services/cancel-server-turn", () => ({
+	cancelServerTurn: vi.fn(),
+}));
+vi.mock("#/server/services/message-attachments", () => ({
+	storeMessageAttachments: vi.fn(async () => []),
+}));
+vi.mock("#/server/services/model-failover", () => ({
+	pinnedTurnFailover: vi.fn(),
+}));
+
+import { withAfterResponse } from "#/server/adapters/after-response";
+import { sendSubscriptionTask } from "#/server/services/codex-subscription-session";
+
+const scope = { userId: "u", projectId: "p", sessionId: "s" };
+beforeEach(() => {
+	vi.clearAllMocks();
+	mocks.session.mockResolvedValue({
+		id: "s",
+		projectId: "p",
+		harness: "codex",
+		listedModelId: "old",
+		turnStatus: "completed",
+		items: [{ kind: "agentMessage", id: "a1", text: "earlier" }],
+	});
+	mocks.auth.mockResolvedValue(true);
+	mocks.catalog.mockResolvedValue([{ id: "model", label: "model" }]);
+	mocks.account.mockResolvedValue({
+		status: "connected",
+		planType: "plus",
+		email: null,
+	});
+	mocks.inherited.mockResolvedValue(null);
+	mocks.previous.mockResolvedValue(null);
+	mocks.enqueue.mockResolvedValue(undefined);
+	mocks.title.mockResolvedValue(undefined);
+});
+
+it("answers a send with the committed chat, without reading the chat again", async () => {
+	const view = await sendSubscriptionTask(scope, {
+		text: "hello",
+		modelId: "model",
+		idempotencyKey: "00000000-0000-4000-8000-000000000009",
+	});
+	expect(mocks.session).toHaveBeenCalledOnce();
+	expect(mocks.account).toHaveBeenCalledOnce();
+	expect(view).toMatchObject({
+		agentSessionId: "s",
+		turnStatus: "running",
+		listedModelId: "model",
+		canSend: true,
+		items: [
+			{ kind: "agentMessage", text: "earlier" },
+			{
+				kind: "userMessage",
+				id: "00000000-0000-4000-8000-000000000009",
+				text: "hello",
+			},
+		],
+	});
+	expect(mocks.enqueue.mock.calls[0][0].items).toEqual(view.items);
+});
+
+it("titles an untitled chat after a web send's response", async () => {
+	const deferred: Promise<unknown>[] = [];
+	await withAfterResponse(
+		(work) => {
+			deferred.push(work);
+		},
+		() => sendSubscriptionTask(scope, { text: "hello", modelId: "model" }),
+	);
+	expect(deferred).toHaveLength(1);
+	await Promise.all(deferred);
+	expect(mocks.title).toHaveBeenCalledWith("u", "s", expect.any(String));
+});
+
+it("refuses a chat from another project before queueing anything", async () => {
+	await expect(
+		sendSubscriptionTask(
+			{ ...scope, projectId: "other" },
+			{ text: "hello", modelId: "model" },
+		),
+	).rejects.toThrow("Session is not in this project.");
+	expect(mocks.enqueue).not.toHaveBeenCalled();
+});
