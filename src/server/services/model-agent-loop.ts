@@ -186,6 +186,17 @@ export type ModelSwitchTarget = {
 	readonly trigger: "pending" | "compaction";
 };
 
+/** Budget stops thrown from a step's preparation (product subagents, the eval bridge's children). */
+const BUDGET_STOPS = new Set(["SubagentBudgetExhausted", "ChildBudgetUsed"]);
+
+function isBudgetStop(error: unknown): error is Error {
+	for (let current = error, depth = 0; current && depth < 8; depth++) {
+		if (current instanceof Error && BUDGET_STOPS.has(current.name)) return true;
+		current = (current as { cause?: unknown }).cause;
+	}
+	return false;
+}
+
 /** Ends a run whose history was just compacted for a model switch; it is saved already. */
 export class ModelSwitchAtCompaction extends Error {
 	constructor(
@@ -1078,6 +1089,11 @@ async function executeModelSteps(
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
 				if (error instanceof ModelSwitchAtCompaction) return;
+				// A subagent stopped at its budget is the runtime's stop, not the provider's.
+				if (isBudgetStop(error)) {
+					console.warn("Agent budget stop", error.message);
+					return;
+				}
 				console.warn(
 					error instanceof InitialAgentReadFailure
 						? "Agent preparation failed"

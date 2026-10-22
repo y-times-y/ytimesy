@@ -53,12 +53,17 @@ export type ReviewEligibility =
 /**
  * Product gating for a finished turn: only a turn that changed files, and
  * either ran long enough to be real work or delivered something runnable.
- * (Plan mode, subagents and read-only turns never get a loop at all.)
+ * (Plan mode, subagents and read-only turns never get a loop at all.) An
+ * unattended run (an eval trial) is always reviewed: its deliverable may lie
+ * outside the checkout, and a turn that stopped without one has nobody to
+ * notice but the checker.
  */
 export function reviewEligibility(input: {
 	readonly changedFiles: readonly string[];
 	readonly turnMs: number;
+	readonly unattended?: boolean;
 }): ReviewEligibility {
+	if (input.unattended) return { review: true };
 	if (!input.changedFiles.length)
 		return { review: false, reason: "no files changed" };
 	if (
@@ -81,8 +86,8 @@ export type ReviewFinding = {
 };
 
 /** rigor=on: the finding for a final answer that admits unverified work with time left. */
-function unverifiedText(admitted: readonly string[]) {
-	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.`;
+function unverifiedText(admitted: readonly string[], unattended?: boolean) {
+	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.${unattended ? " Nobody will answer a question in this run: on an apparent contradiction or missing input, deliver the best-supported result at the paths the request names and state the assumption." : ""}`;
 }
 
 const RUNTIME_FAILURES = new Set([
@@ -103,6 +108,7 @@ export function reviewFindings(
 	verdict: ReviewVerdict,
 	/** rigor=on: lines of the builder's final answer that admit unverified work. */
 	admitted: readonly string[] = [],
+	options: { readonly unattended?: boolean } = {},
 ): ReviewFinding[] {
 	const failures = verdict.failures.filter(
 		(failure) => !RUNTIME_FAILURES.has(failure),
@@ -123,7 +129,12 @@ export function reviewFindings(
 		);
 	const concrete = [
 		...(admitted.length
-			? [{ kind: "unverified" as const, text: unverifiedText(admitted) }]
+			? [
+					{
+						kind: "unverified" as const,
+						text: unverifiedText(admitted, options.unattended),
+					},
+				]
 			: []),
 		...failures.map((text) => ({ kind: "failure" as const, text })),
 		...unmet.map((text) => ({ kind: "requirement" as const, text })),
@@ -273,6 +284,30 @@ export function decideCheck(input: {
 	};
 }
 
+/**
+ * After a check that gave no verdict (it timed out or wrote no verdict JSON):
+ * check again, once per turn, when a whole checker budget and a fix still
+ * fit. A retry does not count as one of the turn's rounds.
+ */
+export function retryCheck(input: {
+	readonly verdict: ReviewVerdict | null;
+	readonly rounds: readonly ReviewRound[];
+	readonly now: number;
+	readonly deadlineAt: number;
+}) {
+	const noVerdict = !input.verdict || input.verdict.parsed === false;
+	return (
+		noVerdict &&
+		!input.rounds.some((round) => round.decision === "retry") &&
+		input.deadlineAt - input.now >=
+			REVIEW_LOOP_LIMITS.checker.minutes * 60_000 + REVIEW_LOOP_LIMITS.minFixMs
+	);
+}
+
+/** Checks that count against maxRounds (a retried check does not). */
+export const countedChecks = (rounds: readonly ReviewRound[]) =>
+	rounds.filter((round) => round.decision !== "retry").length;
+
 export type ReviewOutcome =
 	| "pass"
 	| "no-findings"
@@ -341,8 +376,8 @@ export type ReviewRound = {
 	/** rigor=on: the builder's requirements list the checker got as a claim. */
 	readonly builderRequirements?: readonly string[];
 	readonly findings: readonly ReviewFinding[];
-	/** What followed the verdict. */
-	readonly decision?: "fix" | ReviewOutcome;
+	/** What followed the verdict; retry: no verdict, so the same tree was checked again. */
+	readonly decision?: "fix" | "retry" | ReviewOutcome;
 	readonly fix?: {
 		readonly startedAt: number;
 		readonly usageAtStart: ApiTokenUsage | null;
@@ -424,7 +459,9 @@ export function reviewLoopSummary(state: ReviewLoopState) {
 				? responses
 					? ` · fixed ${responses.fixed.length}, rejected ${responses.rejected.length}${responses.unanswered.length ? `, unanswered ${responses.unanswered.length}` : ""}`
 					: " · fixing"
-				: "";
+				: round.decision === "retry"
+					? " · checking again"
+					: "";
 		return `Review ${round.n}: ${verdict}${fix}`;
 	});
 	if (state.outcome && state.outcome !== "pass")

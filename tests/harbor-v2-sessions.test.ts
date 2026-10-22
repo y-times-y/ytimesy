@@ -5,6 +5,7 @@ import {
 	ChildBudgetUsed,
 	childBudgetUsed,
 	childStepGuard,
+	lastChildText,
 } from "../evals/harbor_v2/review";
 import { type TimedEvent, trialSessions } from "../evals/harbor_v2/sessions";
 import { newSidekickState } from "../src/domain/sidekick";
@@ -85,6 +86,11 @@ describe("child budgets", () => {
 		// Round 2's first step: round 1's tokens are not this round's.
 		expect(await guard([])).toEqual([]);
 		events.push(usage(760_000));
+		// At the cap: one last step to write the report, then the stop.
+		const [last] = await guard([]);
+		expect(last.content).toMatch(
+			/^Budget used \(this round, tokens 760,000\/750,000\)\. Call no more tools: reply now with your report/,
+		);
 		const error = await guard([]).catch((caught) => caught);
 		expect(error).toBeInstanceOf(ChildBudgetUsed);
 		expect(childBudgetUsed(error)?.message).toBe(
@@ -110,9 +116,54 @@ describe("child budgets", () => {
 			events: [usage(1_500_000)],
 			from: 0,
 		});
+		await checker([]);
 		await expect(checker([])).rejects.toThrow(
 			"Checker budget used (tokens 1,500,000/1,500,000).",
 		);
+	});
+
+	it("counts cache reads at their price share, so a long cached round fits", async () => {
+		// 30 steps of a ~30k-token history: 900k input, 800k of it cache reads.
+		const events: TimedEvent[] = [
+			{
+				at: "2026-10-21T00:00:00.000Z",
+				event: {
+					type: "usage",
+					usage: {
+						inputTokens: 900_000,
+						cacheReadTokens: 800_000,
+						outputTokens: 20_000,
+					},
+				} as TimedEvent["event"],
+			},
+		];
+		const guard = childStepGuard({
+			role: "sidekick",
+			budget: sidekickBudget,
+			startedAt: Date.now(),
+			events,
+			from: 0,
+		});
+		// 100k uncached + 80k (reads at 10%) + 20k output = 200k of 750k.
+		expect(await guard([])).toEqual([]);
+	});
+
+	it("passes a stopped round's last message to its parent", () => {
+		const text = (id: string, value: string): TimedEvent => ({
+			at: "2026-10-21T00:00:00.000Z",
+			event: { type: "text-delta", id, text: value },
+		});
+		const events = [
+			text("a", "earlier round"),
+			usage(10),
+			text("b", "Fixed parser.py; "),
+			text("b", "tests not run yet."),
+			usage(20),
+		];
+		expect(lastChildText(events, 1)).toBe(
+			"Fixed parser.py; tests not run yet.",
+		);
+		expect(lastChildText(events, 5)).toBe("");
 	});
 
 	it("tells the sidekick to wrap up as a writer, not with a checker's JSON", async () => {
@@ -151,5 +202,27 @@ describe("child budgets", () => {
 		);
 		expect(text).not.toMatch(/failed/);
 		expect(trace.rounds[0].outcome).toBe("budget exhausted");
+		expect(text).toContain("it wrote no report.");
+	});
+
+	it("hands the lead a stopped round's last message", async () => {
+		const lead = fusionLead({
+			parentId: "t",
+			sessions: trialSessions(() => 0),
+			model: () => model,
+			escalation: null,
+			runRound: async () => ({
+				outcome: "failed",
+				report: "Fixed parser.py; tests not run yet.",
+				budgetUsed: "this round, tokens 760,000/750,000",
+			}),
+			callOnce: async () => ({ text: "", usage: null }),
+			changedFiles: async () => [],
+			trace: { decisions: [], rounds: [], refused: [] },
+		});
+		const text = await lead.explore("Fix the bug.");
+		expect(text).toContain(
+			"Its edits so far are in your checkout; its last message:\n\nFixed parser.py; tests not run yet.",
+		);
 	});
 });

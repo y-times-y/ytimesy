@@ -47,8 +47,8 @@ import { subagentTree } from "#/domain/subagent-tree";
 import {
 	agentSpend,
 	budgetTokenWeight,
+	budgetUsageTokens,
 	sessionTokenUsage,
-	usageTokens,
 } from "#/domain/subagent-usage";
 import {
 	type AgentSessionRecord,
@@ -120,7 +120,7 @@ export async function guardSubagentStep(input: {
 	).reduce(
 		(total, child) =>
 			total +
-			usageTokens(sessionTokenUsage(child.items as SessionItem[])) *
+			budgetUsageTokens(sessionTokenUsage(child.items as SessionItem[])) *
 				weight(child.listedModelId),
 		0,
 	);
@@ -131,7 +131,7 @@ export async function guardSubagentStep(input: {
 		{
 			steps,
 			tokens:
-				usageTokens(sessionTokenUsage(input.items)) *
+				budgetUsageTokens(sessionTokenUsage(input.items)) *
 					weight(input.session.listedModelId) +
 				childTokens,
 			createdAt: input.session.createdAt,

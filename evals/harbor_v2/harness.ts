@@ -6,6 +6,7 @@ import {
 } from "../../src/domain/code-mode";
 import type { HarnessVariant } from "../../src/domain/harness-variant";
 import type { ModelProvider } from "../../src/domain/model-connection";
+import { UNATTENDED_RUN_INSTRUCTIONS } from "../../src/domain/rigor";
 import type { SubagentBudget, SubagentRole } from "../../src/domain/subagent";
 import {
 	archiveModelContext,
@@ -267,7 +268,8 @@ export async function harborHarness(input: {
 	});
 	return {
 		tools,
-		instructions: `${instructions}${input.mcpNote ?? ""}`,
+		// The root builder of a trial: nobody answers its questions.
+		instructions: `${instructions}${input.subagent ? "" : `\n${UNATTENDED_RUN_INSTRUCTIONS}`}${input.mcpNote ?? ""}`,
 		leanShape: surface.lean?.shape ?? null,
 		input: {
 			prepareMessages: repositoryContext.prepare,

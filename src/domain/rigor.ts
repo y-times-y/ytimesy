@@ -116,3 +116,34 @@ export function admittedUnverified(answer: string): string[] {
 
 /** Share of the review loop's time that must be left for an admission to be sent back. */
 export const UNVERIFIED_SEND_BACK_TIME_LEFT = 0.5;
+
+/**
+ * An unattended run (an eval or benchmark trial): nobody answers a question
+ * or approves a plan before the work is graded. Given to the root builder.
+ */
+export const UNATTENDED_RUN_INSTRUCTIONS =
+	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer.";
+
+/** Phrases that ask the user to act, or admit the deliverable is missing or unfinished. */
+const UNFINISHED =
+	/\b(please (?:provide|confirm|clarify|advise|let me know)|(?:could|can|would) you (?:provide|confirm|clarify|share|send|check)|let me know (?:if|whether|which|how)|before I (?:can )?(?:proceed|continue)|(?:cannot|can't|could not|couldn't|unable to) (?:proceed|continue|complete|finish|produce|generate)|(?:was|were|is|are|has been|have been) not (?:yet )?(?:created|written|produced|generated|delivered)|did ?n[o']t (?:create|write|produce|generate)|contradict(?:s|ory|ion|ions)?|inconsistent (?:inputs?|data|requirements?))\b/i;
+
+/** A line that rules the above out ("no contradictions found"). */
+const NOTHING_UNFINISHED =
+	/\bno (?:contradictions?|inconsistenc(?:y|ies))\b|\bnothing (?:is )?(?:missing|left)\b/i;
+
+/**
+ * Unattended runs: the lines of a final answer that ask the user to resolve
+ * something or admit a missing or unfinished deliverable (at most three,
+ * each clipped); empty when it has none.
+ */
+export function admittedUnfinished(answer: string): string[] {
+	return answer
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(
+			(line) => line && UNFINISHED.test(line) && !NOTHING_UNFINISHED.test(line),
+		)
+		.slice(0, 3)
+		.map((line) => (line.length > 300 ? `${line.slice(0, 297)}...` : line));
+}
