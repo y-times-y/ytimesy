@@ -53,6 +53,8 @@ import { agentSpend, totalSpend } from "./subagent-usage";
 
 /** Rounds one sidekick may run per user request (its first brief included). */
 export const SIDEKICK_MAX_ROUNDS = 6;
+/** Restarts of a failed writer per user request, each a fresh session with a handoff. */
+export const SIDEKICK_MAX_RESTARTS = 2;
 /** Rounds kept in the state (metrics across a chat's turns). */
 const KEPT_ROUNDS = 24;
 /** Minutes an idle sidekick waits for the lead's next brief. */
@@ -912,4 +914,68 @@ export function fusionMetricsMeans(list: readonly FusionTurnMetrics[]) {
 
 export function fusionMeansLine(means: ReturnType<typeof fusionMetricsMeans>) {
 	return `${means.runs} run(s), per run: handoffs ${means.handoffs.toFixed(1)} · rounds ${means.sidekickRounds.toFixed(1)} · lead edits ${means.leadEdits.toFixed(1)} · patches applied ${means.patchesApplied.toFixed(1)} · lead ${usd(means.leadUsd)} · sidekick ${usd(means.sidekickUsd)} · sidekick busy ${means.sidekickBusyMinutes.toFixed(1)}m · explore ${means.explorationHandoffs.toFixed(1)} · lead reads ${means.leadReads.toFixed(1)} · signals ${means.signals.toFixed(1)} · lead edit rate ${Math.round(means.leadEditRate * 100)}% · rework ${means.reworkRounds.toFixed(1)} · failures ${means.sidekickFailures.toFixed(1)} · pushback ${means.pushbacks.toFixed(1)} · hand_back ${means.handBacks.toFixed(1)} · switches ${means.switches.toFixed(1)} · classifier fallbacks ${means.classifierFallbacks.toFixed(1)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Restart with a handoff (lead=fusion)                                */
+/* ------------------------------------------------------------------ */
+
+/** The most characters of each part a handoff quotes. */
+const HANDOFF_PART_MAX = 3_000;
+
+const clip = (text: string) => {
+	const trimmed = text.trim();
+	return trimmed.length > HANDOFF_PART_MAX
+		? `[...cut...]\n${trimmed.slice(-HANDOFF_PART_MAX)}`
+		: trimmed;
+};
+
+/** The last thing an agent said in its session (its report or progress note). */
+export function lastAgentText(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "agentMessage" && item.text.trim()) return item.text;
+	}
+	return "";
+}
+
+/**
+ * The brief a restarted writer gets: a fresh session, so it carries what
+ * the failed one was asked, what it last said and where its changes are,
+ * then the lead's new message. Kept short: the new writer reads the
+ * checkout itself.
+ */
+export function sidekickHandoffBrief(input: {
+	readonly previous: string;
+	readonly reason: string;
+	readonly lastBrief?: string;
+	readonly lastReport?: string;
+	/** `git status --short` lines, or a diff command for its changes. */
+	readonly changes?: string;
+	readonly message: string;
+}) {
+	return [
+		`Handoff: you replace writer ${input.previous}, which stopped (${input.reason}). Its work so far is in the checkout; build on it, do not start over unless it is wrong.`,
+		input.lastBrief?.trim() ? `Its last brief:\n${clip(input.lastBrief)}` : "",
+		input.lastReport?.trim()
+			? `Its last message:\n${clip(input.lastReport)}`
+			: "It left no report.",
+		input.changes?.trim()
+			? `Changes in the checkout:\n${clip(input.changes)}`
+			: "",
+		`Main's brief for you:\n${input.message.trim()}`,
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
+/** Sidekicks retired while serving `requestKey` (restarts already used for it). */
+export function sidekickRestartsUsed(
+	states: readonly SidekickState[],
+	requestKey: string | undefined,
+) {
+	return requestKey
+		? states.filter((state) => state.retired && state.requestKey === requestKey)
+				.length
+		: 0;
 }

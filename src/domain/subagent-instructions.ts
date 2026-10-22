@@ -1,4 +1,5 @@
 import type { FusionPairProfile } from "./fusion-pairs";
+import { SIDEKICK_MAX_RESTARTS } from "./sidekick";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -128,6 +129,42 @@ export function fusionLeadInstructions(options: {
 	].join("\n");
 }
 
+/**
+ * Main's block for the thin lead (lead=fusion, leadTools=thin): it plans,
+ * briefs, reviews and answers; it has no edit tools and its command tool
+ * only inspects. Every exploration, edit, build and test run is the
+ * writer's. `inspect` and `read` are the surface's own tool names.
+ */
+export function fusionThinLeadInstructions(options: {
+	readonly inspect?: string;
+	readonly read?: string;
+	readonly pair?: FusionPairProfile;
+	/** Harbor bridge: agent and agent_send block until the round's report (no turn to end). */
+	readonly blocking?: boolean;
+}) {
+	const pair = options.pair;
+	const tools = [options.inspect, options.read]
+		.filter(Boolean)
+		.map((name) => `\`${name}\``)
+		.join(" and ");
+	return [
+		`Helpers: you are Main, the lead. You decide; your writer does. You plan, brief, review and answer the user; your writer (a persistent agent on a cheaper model, working in your checkout) explores the code, edits, builds and runs every test. You cannot edit files or run programs: ${tools || "your read tools"} only inspect (git status, git diff --stat, a bounded diff, small files), output capped. Do not re-derive what your writer already found.`,
+		...(pair?.sidekickExplores === false
+			? []
+			: [
+					"- Each user request starts with your writer's exploration: its report (files with line ranges, key snippets, the check commands and what they print) arrives with the request. Plan from it; for another look, send an exploration round (explore: true), not your own reading.",
+				]),
+		`- Brief concretely, in this order: Goal; Files (paths, functions); Constraints (what not to touch, interfaces to keep); Steps${pair?.briefStyle === "prescriptive" ? " (the exact change, step by step; it follows the brief as written)" : ""}; Acceptance checks (the exact commands that must pass and what output proves it). Start it with \`${AGENT_TOOL}\` role writer, then send each next brief or feedback with \`${AGENT_SEND_TOOL}\`; it keeps its context across rounds and sees only your messages.`,
+		"- Ask for evidence, not claims: every report must list the commands it ran with exit status and the key output lines, the files changed, and what is unverified. When evidence is missing, ask your writer to run the check and paste the output; do not rerun it yourself.",
+		`- Review cheaply: git diff --stat, then the parts of the diff that matter, against the brief and the user's request. Wrong, incomplete or unproven: send specific feedback (what fails, where, what done looks like) with \`${AGENT_SEND_TOOL}\`.`,
+		`- If your writer fails (its budget ran out, it errored, its output is garbled, or it is stuck on the same failure), re-brief it more narrowly, or restart it (${options.blocking ? `\`${AGENT_SEND_TOOL}\` restart: true` : `stop it with \`${AGENT_SEND_TOOL}\` stop: true, then \`${AGENT_TOOL}\` role writer`}): a fresh writer gets a handoff (its last brief and message, the changed files) plus your brief. Up to ${SIDEKICK_MAX_RESTARTS} restarts per request; never take the work over yourself.`,
+		options.blocking
+			? `- \`${AGENT_TOOL}\` and \`${AGENT_SEND_TOOL}\` wait for the round and return its report.`
+			: `- After a handoff, give the user a short status and end your turn; the report wakes you. Message a working writer only to change its course or stop it. ${ROOT_HELPER_UPDATES}`,
+		"- Keep your own messages short. When the work is done and the evidence shows the acceptance checks pass, your answer to the user is the report: what was done, the evidence (commands and exit status), what is unverified, next steps. Feedback after your answer goes to your writer as another round.",
+	].join("\n");
+}
+
 /** A sidekick's role, per-round budget and report contract (lead mode fusion). */
 export function sidekickRoleInstructions(budget: SubagentBudget) {
 	const state = budget.sidekick;
@@ -141,7 +178,7 @@ export function sidekickRoleInstructions(budget: SubagentBudget) {
 		"Leave your changes uncommitted in the working tree: do not commit, stash, reset, switch branches or discard changes you did not make. Main reviews each round's changes with git diff, and between rounds it may keep, change or revert them; each round starts from the checkout as Main left it.",
 		"Do the work yourself; you start no agents. You see only Main's messages, not its conversation; do not ask it questions you can settle yourself.",
 		`Your budget per round: ${budget.steps} steps, ${budget.minutes} minutes${state ? `, ${state.roundTokens.toLocaleString("en-US")} tokens; ${state.maxRounds} rounds at most per user request` : ""}. Near the end of a round you are told to wrap up; at the limit the round stops and whatever you have is reported.`,
-		"Your final message each round is your full report to Main: what you found or changed, the results, the exact commands you ran with their exit status, what is unverified and what you would do next. Main will check it, so claim only what you verified.",
+		"Your final message each round is your report to Main: what you found or changed, the results, the exact commands you ran with their exit status and the key output lines, what is unverified and what you would do next. Keep it a summary with evidence, not a transcript; Main reviews from it and does not rerun your checks, so claim only what you verified.",
 	].join(" ");
 }
 

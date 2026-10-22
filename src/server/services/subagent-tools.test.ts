@@ -885,6 +885,49 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		expect(next.sidekick).toBeDefined();
 	});
 
+	it("restarts a retired sidekick with a handoff, at most SIDEKICK_MAX_RESTARTS times per request", async () => {
+		const failed = (label: string, id: string) =>
+			({
+				...idleSidekick({
+					requestKey: "u1",
+					retired: { at: at(-1), reason: "round 2 did not run or report" },
+				}),
+				id,
+				title: label,
+				items: [
+					{
+						kind: "agentMessage",
+						id: `${id}-m`,
+						text: "Half of --json done; npm test not run.",
+					},
+				],
+			}) as never;
+		const once = harness({
+			sessions: [row("root", null, { items: userTask }), failed("1", "s")],
+			lead: "fusion",
+		});
+		await once.call("agent", brief);
+		const prompt = String(
+			JSON.stringify(vi.mocked(once.deps.openTask).mock.calls.at(-1)),
+		);
+		expect(prompt).toContain("Handoff: you replace writer");
+		expect(prompt).toContain("(round 2 did not run or report)");
+		expect(prompt).toContain("Half of --json done; npm test not run.");
+		expect(prompt).toContain(`Main's brief for you:\\n${brief.brief}`);
+		const capped = harness({
+			sessions: [
+				row("root", null, { items: userTask }),
+				failed("1", "s1"),
+				failed("2", "s2"),
+				failed("3", "s3"),
+			],
+			lead: "fusion",
+		});
+		await expect(capped.call("agent", brief)).rejects.toThrow(
+			"restarted 2 times for this request",
+		);
+	});
+
 	it("retires an idle sidekick on stop and stops a working one", async () => {
 		const idle = harness({
 			sessions: [row("root", null), idleSidekick()],

@@ -32,12 +32,17 @@ import {
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	beginSidekickRound,
+	currentSidekickRound,
 	harnessExplorationBrief,
 	isActiveSidekick,
+	lastAgentText,
 	latestUserRequestId,
 	newSidekickState,
 	SIDEKICK_EXPLORE_NOTE,
+	SIDEKICK_MAX_RESTARTS,
 	type SidekickState,
+	sidekickHandoffBrief,
+	sidekickRestartsUsed,
 	sidekickRoundLabel,
 	sidekickRoundMessage,
 	sidekickRoundsLeft,
@@ -347,6 +352,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				throw new Error("explore applies only to your writer.");
 			// Lead mode fusion: the root's writer is its one persistent sidekick.
 			const sidekick = isLead && role === "writer";
+			let handoff = (brief: string) => brief;
 			if (sidekick) {
 				const tree = await loadTree();
 				const alive = tree.nodes.find(
@@ -368,6 +374,46 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					throw new Error(
 						`Your writer ${alive.label} is still available (${alive.live ? "working" : "idle"}): send it the next brief or feedback with ${AGENT_SEND_TOOL} (id ${alive.label}) instead of starting another writer. To replace it, stop it first (${AGENT_SEND_TOOL} with stop: true).`,
 					);
+				// A restart: the fresh writer gets a handoff from the last retired one.
+				const key = requestKey();
+				const retired = tree.nodes.flatMap((node) => {
+					const session = tree.sessions.find((entry) => entry.id === node.id);
+					const state = sidekickState(session);
+					return node.parentId === parent.id && state?.retired && session
+						? [{ node, session, state }]
+						: [];
+				});
+				if (
+					sidekickRestartsUsed(
+						retired.map((entry) => entry.state),
+						key,
+					) > SIDEKICK_MAX_RESTARTS
+				)
+					throw new Error(
+						`Your writer was restarted ${SIDEKICK_MAX_RESTARTS} times for this request. Tell the user what is blocked and what you would try next.`,
+					);
+				const last = retired
+					.filter((entry) => entry.state.requestKey === key)
+					.sort((a, b) =>
+						(a.state.retired?.at ?? "").localeCompare(
+							b.state.retired?.at ?? "",
+						),
+					)
+					.at(-1);
+				if (last && input.brief?.trim()) {
+					const items = sessionItemsFromUnknown(last.session.items);
+					const round = currentSidekickRound(last.state);
+					handoff = (brief) =>
+						sidekickHandoffBrief({
+							previous: last.node.label,
+							reason: last.state.retired?.reason ?? "retired",
+							lastReport: lastAgentText(items),
+							changes: round?.base
+								? `git diff ${round.base} shows its last round's changes`
+								: "git status shows them",
+							message: brief,
+						});
+				}
 			}
 			const workspace = await context.workspace();
 			const { childId, budget, placement, model, notice } = await spawnSubagent(
@@ -389,7 +435,9 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					brief: async (tree) =>
 						role === "checker"
 							? await checkerBriefFor(context, tree.root, workspace)
-							: `${(input.brief as string).trim()}${input.explore ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`,
+							: handoff(
+									`${(input.brief as string).trim()}${input.explore ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`,
+								),
 				},
 				workspace,
 			);

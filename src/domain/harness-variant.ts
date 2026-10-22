@@ -134,6 +134,23 @@ export const HARNESS_VARIANT_VALUES = {
 	 */
 	lead: ["off", "fusion"],
 	/**
+	 * The fusion lead's own tools (lead=fusion only; src/server/services/
+	 * thin-lead-tools.ts): thin = it plans, briefs and reviews: agent,
+	 * agent_send, a capped read and a bounded read-only inspection command
+	 * (git status/diff/log, ls, head and the like), no edits, no general
+	 * shell, no run_code (the default); full = the builder's whole surface
+	 * beside its writer, as before (kept for comparison).
+	 */
+	leadTools: ["thin", "full"],
+	/**
+	 * The fusion lead's reasoning effort (lead=fusion only): a ceiling on
+	 * the turn's effort for the lead's own model calls; its writer and the
+	 * checker keep their own. high (the default): the lead plans and reviews,
+	 * it does not solve, and at max its reasoning was most of its output.
+	 * inherit = the turn's effort unchanged.
+	 */
+	leadEffort: ["high", "inherit", "low", "medium", "xhigh", "max"],
+	/**
 	 * Rigor (src/domain/rigor.ts): on adds the builder's rigor block
 	 * (ambiguity resolved by convention, else the strictest reading, with a
 	 * margin on numeric thresholds; no finishing with time left and something
@@ -175,6 +192,8 @@ export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
 export type CheckerMode = HarnessVariant["checkerMode"];
 export type LeadMode = HarnessVariant["lead"];
+export type LeadTools = HarnessVariant["leadTools"];
+export type LeadEffort = HarnessVariant["leadEffort"];
 export type RigorMode = HarnessVariant["rigor"];
 export type OutputCap = HarnessVariant["outputCap"];
 
@@ -191,6 +210,8 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	review: "off",
 	checkerMode: "single",
 	lead: "off",
+	leadTools: "thin",
+	leadEffort: "high",
 	rigor: "off",
 	outputCap: "off",
 	roleModels: {},
@@ -199,6 +220,22 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 /** The outputCap variant's limit in characters; undefined when off. */
 export function outputCapCharacters(cap: OutputCap) {
 	return cap === "off" ? undefined : Number(cap);
+}
+
+/** Effort levels from least to most; a route's other names (none, minimal) rank below low. */
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The fusion lead's effort: the turn's effort held at or below leadEffort
+ * (inherit, or an unknown or lower turn effort, keeps the turn's).
+ */
+export function leadReasoningEffort<Effort extends string>(
+	turn: Effort | undefined,
+	cap: LeadEffort,
+): Effort | undefined {
+	if (cap === "inherit" || turn === undefined) return turn;
+	const rank = EFFORT_ORDER.indexOf(turn);
+	return rank > EFFORT_ORDER.indexOf(cap) ? (cap as Effort) : turn;
 }
 
 /**
