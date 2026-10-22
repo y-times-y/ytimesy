@@ -1745,7 +1745,7 @@ async function runApiTurnAttempt(
 					progress.offer(items);
 					if (event.type === "finish") await progress.drain();
 					flushedAt = Date.now();
-				}
+				} else progress.offerLater(items, flushedAt + 250 - Date.now());
 			},
 			onStep: async (history) => {
 				failureStage = "saving";
