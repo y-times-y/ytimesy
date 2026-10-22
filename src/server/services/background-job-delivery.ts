@@ -13,6 +13,7 @@ import {
 	deliverAuthEmails,
 } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
+import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
@@ -101,6 +102,7 @@ export async function deliverBackgroundJob(
 				case "infrastructure": {
 					const client = new Freestyle({
 						apiKey: Effect.runSync(readFreestyleApiKey()),
+						fetch: boundedFreestyleFetch(),
 					});
 					await reconcileInfrastructureVms(client);
 					await observeFleetCosts(client);

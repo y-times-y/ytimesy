@@ -25,6 +25,7 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
+import { boundedFreestyleFetch } from "./bounded-fetch";
 import {
 	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
@@ -44,7 +45,11 @@ import {
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
-import { retryTransientProviderFailure } from "./provider-retry";
+import {
+	isTransientProviderFailure,
+	PROVIDER_UNAVAILABLE_MESSAGE,
+	retryTransientProviderFailure,
+} from "./provider-retry";
 import {
 	forgetRunningGuest,
 	recentlyRunningGuest,
@@ -58,7 +63,11 @@ import {
 	recentAdmissionCovers,
 } from "./usage-admission";
 import { applyVmNetworkPolicy } from "./vm-network";
-import { waitUntilVmRunning } from "./wait-until-running";
+import {
+	waitUntilGuestAnswers,
+	waitUntilGuestReady,
+	waitUntilVmRunning,
+} from "./wait-until-running";
 import { restoreRetainedWorkspace } from "./workspace-retention";
 
 /** The provider refused the machine shape itself, e.g. above the plan's per-VM vCPU cap. */
@@ -73,6 +82,7 @@ class MachineSizeRejected extends Error {
 
 function providerMessage(cause: unknown): string {
 	if (cause instanceof MachineSizeRejected) return cause.message;
+	if (isTransientProviderFailure(cause)) return PROVIDER_UNAVAILABLE_MESSAGE;
 	return publicFailureMessage(
 		cause instanceof FreestyleApiError || cause instanceof Error
 			? cause
@@ -84,7 +94,7 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const transport = globalThis.fetch.bind(globalThis);
+	const transport = boundedFreestyleFetch();
 	const freestyle = new Freestyle({
 		apiKey,
 		...(options.signal
@@ -121,7 +131,7 @@ export function createFreestyleWorkspaceMachines(
 						snapshotId: options.snapshotId,
 					}),
 				);
-				const running = await waitUntilVmRunning(created.vm, "Proof VM");
+				const running = await waitUntilGuestReady(created.vm, "Proof VM");
 				return {
 					workspaceId: WorkspaceId(created.vmId),
 					state: running.state,
@@ -187,11 +197,11 @@ export function createFreestyleWorkspaceMachines(
 			contents: string,
 		): Promise<void> {
 			try {
-				await onReadyGuest(
-					freestyle.vms.ref(workspaceId),
-					"writeFile",
-					60,
-					() => freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents),
+				// Writing the same contents again is harmless.
+				await retryTransientProviderFailure(() =>
+					onReadyGuest(freestyle.vms.ref(workspaceId), "writeFile", 60, () =>
+						freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents),
+					),
 				);
 			} catch (cause) {
 				if (cause instanceof WorkspaceCommandError) throw cause;
@@ -208,7 +218,9 @@ export function createFreestyleWorkspaceMachines(
 			path: string,
 		): Promise<string | null> {
 			try {
-				return await freestyle.vms.ref(workspaceId).fs.readTextFile(path);
+				return await retryTransientProviderFailure(() =>
+					freestyle.vms.ref(workspaceId).fs.readTextFile(path),
+				);
 			} catch (cause) {
 				if (
 					cause instanceof FreestyleApiError &&
@@ -391,9 +403,13 @@ export function createFreestyleWorkspaceMachines(
 				const existing = await findVmBySlug(freestyle, slug);
 				if (existing) {
 					await completeCopiedMachineSize(freestyle.vms.ref(existing));
+					// An earlier attempt made it; its guest may never have answered.
 					await resumeProductVm(
 						freestyle.vms.ref(existing),
 						"Agent session VM",
+						60,
+						undefined,
+						true,
 					);
 					return WorkspaceId(existing);
 				}
@@ -472,9 +488,11 @@ export function createFreestyleWorkspaceMachines(
 										? {}
 										: { maxRunTotalSeconds: cap, automaticRestart: false }),
 								});
-								await waitUntilVmRunning(fallback.vm, "Agent session VM");
+								await waitUntilGuestReady(fallback.vm, "Agent session VM");
 								return fallback.vmId;
 							}
+							// After any resize: the copy's first command must find a guest that answers.
+							await waitUntilGuestAnswers(created.vm, "Agent session VM");
 							return created.vmId;
 						},
 						300,
@@ -493,6 +511,9 @@ export function createFreestyleWorkspaceMachines(
 						await resumeProductVm(
 							freestyle.vms.ref(recovered),
 							"Agent session VM",
+							60,
+							undefined,
+							true,
 						);
 						return WorkspaceId(recovered);
 					}
@@ -595,6 +616,8 @@ async function resumeProductVm(
 	requiredSeconds = 60,
 	/** A read made just before; the admission re-reads under its lease anyway. */
 	read?: VmData,
+	/** Probe the guest even if it already reads as running. */
+	probeGuest = false,
 ) {
 	const data = read ?? (await vm.data());
 	await admitVmResume(vm, data, requiredSeconds);
@@ -606,7 +629,10 @@ async function resumeProductVm(
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}
-	return waitUntilVmRunning(vm, label);
+	// A machine that was not running yet has a guest that may not answer yet.
+	return probeGuest || data.state !== "running"
+		? waitUntilGuestReady(vm, label)
+		: waitUntilVmRunning(vm, label);
 }
 
 /** A running VM whose recent admission still covers the operation needs no new admission. */
@@ -644,6 +670,8 @@ async function readyForGuestOperation(
 			providerWorkspaceId: WorkspaceId(vm.id),
 		});
 	}
+	// Still booting (admission off): its guest may not answer the first call yet.
+	if (data.state !== "running") return waitUntilGuestReady(vm, "Workspace VM");
 	return data;
 }
 

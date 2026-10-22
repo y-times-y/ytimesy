@@ -1,6 +1,11 @@
 import { Effect } from "effect";
 import type { Vm } from "freestyle";
 import { WorkspaceProvisionError } from "#/server/services/errors";
+import { providerTimeoutError } from "./bounded-fetch";
+import {
+	isTransientProviderFailure,
+	retryTransientProviderFailure,
+} from "./provider-retry";
 
 class VmStillStarting extends Error {}
 
@@ -72,4 +77,63 @@ export async function waitUntilVmRunning(
 		message: `${label} did not become running`,
 		providerWorkspaceId: vm.id,
 	});
+}
+
+/** Backoff between probes of a guest that just started (about 15 s in all). */
+export const GUEST_PROBE_RETRY_DELAYS_MS = [
+	1_000, 2_000, 4_000, 8_000,
+] as const;
+/** A probe is `true`; one that takes this long hit a guest that is not answering. */
+const GUEST_PROBE_MS = 20_000;
+
+/**
+ * A just-started VM reads as running before its guest answers: the first
+ * exec could fail with "fetch failed" or hang until the provider gave up. A
+ * harmless command (repeating it cannot matter) is retried until the guest
+ * answers, so the caller's own first command, which is never repeated, runs
+ * on a guest known to answer.
+ */
+export async function waitUntilGuestAnswers(
+	vm: Pick<Vm, "id" | "exec">,
+	label: string,
+	delaysMs: readonly number[] = GUEST_PROBE_RETRY_DELAYS_MS,
+	probeMs = GUEST_PROBE_MS,
+) {
+	try {
+		await retryTransientProviderFailure(async () => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				// An abandoned probe keeps polling only until the client's own bound.
+				await Promise.race([
+					vm.exec({ command: "true", timeoutMs: 10_000 }),
+					new Promise<never>((_, reject) => {
+						timer = setTimeout(
+							() => reject(providerTimeoutError("exec probe")),
+							probeMs,
+						);
+					}),
+				]);
+			} finally {
+				clearTimeout(timer);
+			}
+		}, delaysMs);
+	} catch (cause) {
+		if (!isTransientProviderFailure(cause)) throw cause;
+		throw new WorkspaceProvisionError({
+			operation: "create",
+			message: `${label} started but is not answering yet. Try again in a minute.`,
+			providerWorkspaceId: vm.id,
+		});
+	}
+}
+
+/** Waits until the VM is running and its guest answers a command. */
+export async function waitUntilGuestReady(
+	vm: Vm,
+	label: string,
+	signal?: AbortSignal,
+) {
+	const data = await waitUntilVmRunning(vm, label, signal);
+	await waitUntilGuestAnswers(vm, label);
+	return data;
 }
