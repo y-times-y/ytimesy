@@ -523,6 +523,11 @@ async function runApiTurnAttempt(
 				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
 				: Promise.resolve(false);
 		loadingMetadata.catch(() => {});
+		// Independent of the session row: read alongside it.
+		const loadingVariant = turnHarnessVariant(turn.id, turn.user_id);
+		const loadingRecordsRequests = turnRecordsRequests(turn.id, turn.user_id);
+		loadingVariant.catch(() => {});
+		loadingRecordsRequests.catch(() => {});
 		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
@@ -537,7 +542,23 @@ async function runApiTurnAttempt(
 			throw new Error("This retired child task can no longer run.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		const variant = await turnHarnessVariant(turn.id, owner.userId);
+		// A project's secrets load while the turn's variant and route are read.
+		const loadingSecrets = owner.projectId
+			? timed("turn:secrets", () =>
+					turnMemo(`${turn.id}:project-secrets`, () =>
+						loadAgentProjectSecrets(
+							owner.userId,
+							owner.projectId as string,
+						).catch(() => ({
+							envFile: agentSecretsEnvFile([]),
+							redact: [],
+							names: [],
+						})),
+					),
+				)
+			: Promise.resolve(null);
+		loadingSecrets.catch(() => {});
+		const variant = await loadingVariant;
 		if (owner.agentRole) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
@@ -643,18 +664,7 @@ async function runApiTurnAttempt(
 		// between turns; within one, keeping it fixed also keeps the tools and the
 		// system prompt byte-stable for provider prompt caching. A restarted or
 		// evicted isolate (including a resumed step) simply loads it again.
-		const { projectId } = owner;
-		const projectSecrets = projectId
-			? await timed("turn:secrets", () =>
-					turnMemo(`${turn.id}:project-secrets`, () =>
-						loadAgentProjectSecrets(owner.userId, projectId).catch(() => ({
-							envFile: agentSecretsEnvFile([]),
-							redact: [],
-							names: [],
-						})),
-					),
-				)
-			: null;
+		const projectSecrets = await loadingSecrets;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		// Values every tool result is redacted of. The memory clone's token
@@ -1260,7 +1270,7 @@ async function runApiTurnAttempt(
 				runModel(input) as Promise<Awaited<ReturnType<typeof runModel>>>
 			).finally(() => requestRecorder?.flush());
 		// Development evals record each request's system prompt and tool list.
-		const requestRecorder = (await turnRecordsRequests(turn.id, owner.userId))
+		const requestRecorder = (await loadingRecordsRequests)
 			? modelRequestRecorder({
 					sessionId: owner.id,
 					turnId: turn.id,

@@ -590,3 +590,34 @@ it("sends a step's first request with the token read while building it, and read
 	await expect(send()).rejects.toThrow("fixture-stop");
 	expect(mocks.auth.mock.calls.length).toBe(reads + 1);
 });
+
+it("answers from the last catalog past a minute while it refreshes, and loads again once it is too old", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		const catalog = (slug: string) =>
+			new Response(JSON.stringify({ models: [{ slug }] }));
+		const fetch = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(catalog("first"))
+			.mockResolvedValueOnce(catalog("second"))
+			.mockResolvedValueOnce(catalog("third"));
+		const owner = "stale-catalog-owner";
+		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
+		// Fresh: no request.
+		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		// Stale: answered at once from the last read, refreshed alongside.
+		vi.setSystemTime(Date.now() + 90_000);
+		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("first");
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		await vi.waitFor(async () =>
+			expect((await codexSubscriptionCatalog(owner))[0].id).toBe("second"),
+		);
+		// Too old to serve: loaded before answering.
+		vi.setSystemTime(Date.now() + 11 * 60_000);
+		expect((await codexSubscriptionCatalog(owner))[0].id).toBe("third");
+		expect(fetch).toHaveBeenCalledTimes(3);
+	} finally {
+		vi.useRealTimers();
+	}
+});
