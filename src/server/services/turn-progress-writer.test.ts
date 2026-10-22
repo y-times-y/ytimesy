@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { turnProgressWriter } from "./turn-progress-writer";
@@ -80,4 +80,49 @@ it("drops a waiting snapshot a checkpoint supersedes, but finishes the write in 
 	writer.offer(snapshot("after"));
 	await writer.drain();
 	expect(write).toHaveBeenCalledTimes(2);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+it("writes a throttled snapshot when its window ends, keeping only the newest", async () => {
+	vi.useFakeTimers();
+	const write = vi.fn().mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	writer.offerLater(snapshot("first"), 200);
+	writer.offerLater(snapshot("newest"), 50);
+	await vi.advanceTimersByTimeAsync(199);
+	expect(write).not.toHaveBeenCalled();
+	await vi.advanceTimersByTimeAsync(1);
+	expect(write.mock.calls.map((call) => call[0][0].text)).toEqual(["newest"]);
+});
+
+it("drops a throttled snapshot once a newer offer, a supersede or a drain comes", async () => {
+	vi.useFakeTimers();
+	const write = vi.fn().mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	writer.offerLater(snapshot("throttled"), 100);
+	writer.offer(snapshot("finish"));
+	writer.offerLater(snapshot("superseded"), 100);
+	writer.supersede();
+	writer.offerLater(snapshot("drained"), 100);
+	await writer.drain();
+	await vi.advanceTimersByTimeAsync(500);
+	expect(write.mock.calls.map((call) => call[0][0].text)).toEqual(["finish"]);
+});
+
+it("never writes a throttled snapshot after a storage failure", async () => {
+	vi.useFakeTimers();
+	const error = new Error("Lease lost");
+	const write = vi.fn().mockRejectedValue(error);
+	const failure = vi.fn();
+	const writer = turnProgressWriter(write, failure);
+	writer.offer(snapshot("first"));
+	writer.offerLater(snapshot("throttled"), 100);
+	await vi.advanceTimersByTimeAsync(0);
+	await vi.advanceTimersByTimeAsync(500);
+	expect(write).toHaveBeenCalledTimes(1);
+	expect(failure).toHaveBeenCalledExactlyOnceWith(error);
+	expect(() => writer.offerLater(snapshot("later"), 100)).toThrow(error);
 });
