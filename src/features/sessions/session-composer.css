@@ -2406,9 +2406,9 @@ code.session-tool-target {
 .agent-row:hover {
 	background: #ffffff08;
 }
+/* The open agent: a soft fill and bright text, no edge bar (it bends on the rounded corners). */
 .agent-row[aria-current="true"] {
-	background: #ffffff0d;
-	box-shadow: inset 2px 0 0 var(--agent-accent, #e5e5e5);
+	background: #ffffff12;
 	color: #f2f2f2;
 }
 div.agent-row {
@@ -2478,23 +2478,11 @@ div.agent-row:hover {
 	color: #bdbdbd;
 	font-size: 11px;
 }
-.agent-row-status {
-	flex: 0 0 auto;
-	color: #7a7a7a;
-	font-size: 11px;
-	text-align: right;
-}
-.agent-row-status[data-status="free"] {
-	color: #6d6d6d;
-}
-.agent-row-status[data-status="working"] {
-	color: #bdbdbd;
-}
-.agent-row-status[data-status="failed"] {
+.agent-row[data-status="failed"] .agent-row-doing {
 	color: #f87171;
 }
-.agent-row[data-status="done"] .agent-row-name,
-.agent-row[data-status="idle"] .agent-row-name {
+.agent-row[data-status="done"]:not([aria-current="true"]) .agent-row-name,
+.agent-row[data-status="idle"]:not([aria-current="true"]) .agent-row-name {
 	color: #a8a8a8;
 }
 .agent-panel-more {
@@ -2519,8 +2507,7 @@ div.agent-row:hover {
 	.agent-row {
 		min-height: 36px;
 	}
-	.agent-row-doing,
-	.agent-row-status {
+	.agent-row-doing {
 		display: none;
 	}
 }
@@ -2619,10 +2606,6 @@ button.helper-line:hover {
 }
 
 /* Status by brightness: finished agents dim, working ones stay bright. */
-.agent-row[data-status="done"] .agent-icon,
-.agent-row[data-status="failed"] .agent-icon {
-	opacity: 0.5;
-}
-.agent-row[data-status="done"] .agent-row-name {
+.agent-row[data-status="done"]:not([aria-current="true"]) .agent-row-name {
 	color: #9a9a9a;
 }
