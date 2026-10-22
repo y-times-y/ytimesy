@@ -683,6 +683,44 @@ describe("agents list rows", () => {
 		expect(finishLineAnchorId(items, SessionItemId("spawn"))).toBe("t");
 		expect(finishLineAnchorId(items, undefined)).toBeUndefined();
 	});
+	it("puts the finish line in the report's wake-up turn live as it ends up, never above Main's earlier answer", () => {
+		const main: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("p1"),
+				text: "p1",
+				timing: { startedAt: 1, completedAt: 100 },
+			},
+			tool("spawn", "agent", {}, "completed"),
+			tool("t", "bash", { command: "ls" }, "completed"),
+			{ kind: "agentMessage", id: SessionItemId("answer"), text: "Main" },
+		];
+		const wake: SessionItem = {
+			kind: "notice",
+			id: SessionItemId("wake"),
+			message: "",
+			wake: true,
+		};
+		const spawn = SessionItemId("spawn");
+		// Finished after Main answered, its wake-up turn not in yet: last.
+		expect(finishLineAnchorId(main, spawn, 200)).toBeUndefined();
+		// Finished during Main's turn (Main waited for it): before the answer.
+		expect(finishLineAnchorId(main, spawn, 50)).toBe("t");
+		// The wake-up turn started, nothing in it yet or only its answer
+		// streaming: at the turn's start, below Main's answer.
+		expect(finishLineAnchorId([...main, wake], spawn, 200)).toBe("wake");
+		const reply: SessionItem = {
+			kind: "agentMessage",
+			id: SessionItemId("reply"),
+			text: "From the report",
+		};
+		expect(finishLineAnchorId([...main, wake, reply], spawn, 200)).toBe("wake");
+		// Ended with work: after that work, before the wake-up turn's answer.
+		const read = tool("read", "bash", { command: "cat r" }, "completed");
+		expect(finishLineAnchorId([...main, wake, read, reply], spawn, 200)).toBe(
+			"read",
+		);
+	});
 });
 
 describe("steering messages", () => {

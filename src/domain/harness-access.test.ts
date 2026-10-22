@@ -10,7 +10,9 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 	sendAfterConnect,
+	sendReplyOutcome,
 } from "./harness-access";
+import { SessionItemId } from "./ids";
 
 const codexSignedIn = {
 	status: "authenticated" as const,
@@ -225,5 +227,70 @@ describe("sending before sign-in", () => {
 			}),
 		).toBe("abandon");
 		expect(sendAfterConnect({ status: "disconnected" })).toBe("abandon");
+	});
+});
+
+describe("the server's answer to a send", () => {
+	const id = "11111111-1111-4111-8111-111111111111";
+	const sent = {
+		kind: "userMessage" as const,
+		id: SessionItemId(id),
+		text: "hi",
+	};
+	it("counts as sent only when the chat holds the message or runs a turn", () => {
+		expect(
+			sendReplyOutcome(
+				{ connection: codexSignedIn, items: [sent], turnStatus: "running" },
+				id,
+			),
+		).toEqual({ kind: "sent" });
+		// Queued behind a run: the message is there, the turn is the old one.
+		expect(
+			sendReplyOutcome(
+				{ connection: codexSignedIn, items: [sent], turnStatus: "idle" },
+				id,
+			),
+		).toEqual({ kind: "sent" });
+	});
+	it("reports an answer with no turn behind it instead of leaving Thinking", () => {
+		// The lost first send: the server answered with the chat as it was.
+		expect(
+			sendReplyOutcome(
+				{ connection: codexSignedIn, items: [], turnStatus: "idle" },
+				id,
+			),
+		).toEqual({
+			kind: "failed",
+			message: "The message didn't reach the chat. Retry.",
+		});
+		expect(sendReplyOutcome(undefined, id).kind).toBe("failed");
+		expect(
+			sendReplyOutcome(
+				{
+					connection: { status: "failed", provider: "codex", message: "No." },
+					items: [],
+					turnStatus: "idle",
+				},
+				id,
+			),
+		).toEqual({ kind: "failed", message: "No." });
+	});
+	it("holds the message while a device code waits", () => {
+		expect(
+			sendReplyOutcome(
+				{
+					connection: {
+						status: "awaiting_device_code",
+						provider: "codex",
+						loginId: "l1",
+						verificationUrl: "https://auth.openai.com/codex/device",
+						userCode: "ABCD-EFGH",
+					},
+					items: [],
+					turnStatus: "idle",
+				},
+				id,
+			),
+		).toEqual({ kind: "await_sign_in" });
 	});
 });
