@@ -409,6 +409,8 @@ describe("bedrock runtime request", () => {
 			fetch,
 		});
 		expect(runtime.contextWindow).toBe(400_000);
+		// No max_output_tokens: the 8K API default cut max-effort steps.
+		expect(runtime.maxOutputTokens).toBeUndefined();
 		const result = streamText({
 			model: runtime.model,
 			prompt: "hi",
