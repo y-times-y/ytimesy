@@ -613,6 +613,47 @@ ${TASK}
 		expect(h.started).toHaveLength(2);
 	});
 
+	it("unattended, runs up to four rounds while time remains", async () => {
+		const failing = (n: number) =>
+			verdict({ verdict: "fail", failures: [`case ${n}: wrong output`] });
+		const h = harness({
+			reports: [failing(1), failing(2), failing(3), failing(4)],
+			unattended: true,
+			deadlineAt: 1_000_000 + 8 * 3_600_000,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		for (let round = 1; round <= 4; round++) {
+			h.setTree(`t-${round}`);
+			expect((await h.loop.afterAttempt(h.step(round, "F1: fixed"))).kind).toBe(
+				"run",
+			);
+		}
+		h.setTree("t-5");
+		expect((await h.loop.afterAttempt(h.step(5, "F1: fixed"))).kind).toBe(
+			"finished",
+		);
+		expect(h.state()?.outcome).toBe("rounds");
+		expect(h.started).toHaveLength(4);
+		expect(h.started[3].title).toBe("Review 4 of 4");
+	});
+
+	it("unattended, stops when a check repeats the previous findings unchanged", async () => {
+		const h = harness({
+			reports: [FAIL, FAIL],
+			unattended: true,
+			deadlineAt: 1_000_000 + 8 * 3_600_000,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe("run");
+		h.setTree("t-2");
+		expect((await h.loop.afterAttempt(h.step(2, "F1: fixed"))).kind).toBe(
+			"finished",
+		);
+		expect(h.state()?.outcome).toBe("no-progress");
+		expect(h.started).toHaveLength(2);
+	});
+
 	it("finishes on unsure without concrete findings, and on a fix that changed nothing", async () => {
 		const h = harness({
 			reports: [
