@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
+	chatHeaderTitle,
 	compactTimelineItems,
 	fileChangesFromSessionItems,
 	isQueuedUserMessage,
@@ -501,5 +502,20 @@ describe("queued user messages", () => {
 		expect(
 			markedQueuedSend([delivered], "a").filter(isQueuedUserMessage),
 		).toHaveLength(1);
+	});
+});
+
+describe("chatHeaderTitle", () => {
+	it("names the chat as the sidebar does once it has a title", () => {
+		expect(chatHeaderTitle("Fix the login loop", "Now add tests")).toBe(
+			"Fix the login loop",
+		);
+	});
+	it("falls back to the latest message before the list has a title", () => {
+		expect(chatHeaderTitle(undefined, "Fix the login loop")).toBe(
+			"Fix the login loop",
+		);
+		expect(chatHeaderTitle("New session", "Fix it")).toBe("Fix it");
+		expect(chatHeaderTitle("  ", "Fix it")).toBe("Fix it");
 	});
 });

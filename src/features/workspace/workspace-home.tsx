@@ -38,6 +38,7 @@ import {
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
 import {
+	chatHeaderTitle,
 	fileChangesFromSessionItems,
 	isTurnRunning,
 	lastUserMessageText,
@@ -1620,7 +1621,7 @@ export function WorkspaceHome({
 					aria-controls="workspace-inspector"
 					onClick={() => setInspectorOpen((open) => !open)}
 				>
-					<PanelRight size={18} />
+					<PanelRight size={16} />
 				</button>
 				{memoryPage === "graph" ? (
 					<section
@@ -1667,7 +1668,9 @@ export function WorkspaceHome({
 						{followUpLayout ? (
 							<div className="session-title-row">
 								<div className="session-title-copy">
-									<span className="session-title">{sessionTitle}</span>
+									<span className="session-title">
+										{chatHeaderTitle(listedTitle, sessionTitle)}
+									</span>
 									{activeChat?.workingBranch && (
 										<span
 											className="session-title-meta"
