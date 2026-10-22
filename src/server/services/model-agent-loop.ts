@@ -27,6 +27,11 @@ import {
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import {
+	DEGENERATE_RUN_CHARS,
+	DegenerateOutput,
+	whitespaceRun,
+} from "#/domain/degenerate-output";
+import {
 	harnessModelFamily,
 	harnessModelToolInstructions,
 	isShellSurface,
@@ -427,6 +432,7 @@ const INTERRUPTED_STREAM =
 
 /** Network-level interruption anywhere in the failure chain, not a provider rejection. */
 function interruptedStream(error: unknown) {
+	if (error instanceof DegenerateOutput) return true;
 	for (let current = error, depth = 0; current && depth < 8; depth++) {
 		if (typeof current !== "object") break;
 		const record = current as {
@@ -1303,11 +1309,23 @@ async function executeModelSteps(
 		let searchCalled = false;
 		let citedSources: { url: string; title?: string }[] = [];
 		let searchStep = 0;
+		// A response whose answer text or tool-call arguments degenerate into
+		// whitespace would run to the output cap: cut it as an interrupted
+		// stream ("terminated"), which resamples the step before any tool ran.
+		let whitespace = whitespaceRun();
+		const degenerate = (delta: string) => {
+			const run = whitespace(delta);
+			if (run >= DEGENERATE_RUN_CHARS) throw new DegenerateOutput(run);
+		};
 		for await (const part of result.fullStream) {
 			switch (part.type) {
 				case "start-step":
 					searchCalled = false;
 					citedSources = [];
+					whitespace = whitespaceRun();
+					break;
+				case "tool-input-delta":
+					degenerate(part.delta);
 					break;
 				case "source":
 					if (
@@ -1354,6 +1372,7 @@ async function executeModelSteps(
 					break;
 				case "text-delta":
 				case "reasoning-delta":
+					if (part.type === "text-delta") degenerate(part.text);
 					await input.onEvent({
 						type: part.type,
 						id: part.id,

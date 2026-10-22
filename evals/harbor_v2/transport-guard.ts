@@ -1,4 +1,11 @@
 import { appendFileSync, writeFileSync } from "node:fs";
+import {
+	DEGENERATE_RUN_CHARS,
+	DegenerateOutput,
+	whitespaceRun,
+} from "#/domain/degenerate-output";
+
+export { DEGENERATE_RUN_CHARS, DegenerateOutput, whitespaceRun };
 
 /**
  * Provider-neutral transport guard for Harbor bridge v2 (successor of the
@@ -25,7 +32,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
  * (a tool call's arguments or answer text; Luna on Bedrock once streamed 64K
  * tokens of blank lines inside one run_code call, 15-17 MB over 6-8.5
  * minutes, until max_output_tokens) is cut as soon as the run passes
- * `degenerateRunChars` and resent like a cut stream.
+ * `degenerateRunChars` and resent like a cut stream (the detection is
+ * shared with the product's model loop: src/domain/degenerate-output.ts).
  *
  * Cost note: a retried cut request was already billed by the provider; its
  * usage never reaches the harness, so the trial's estimate undercounts it.
@@ -105,19 +113,6 @@ export function terminalEvent(
 	return finish ? { type: "finish", status: finish.finishReason } : null;
 }
 
-/** Characters of unbroken whitespace in streamed output that count as degenerate sampling. */
-export const DEGENERATE_RUN_CHARS = 8_000;
-
-/** A response cut because its output became a whitespace run ("terminated": the loop resamples it as an interrupted stream). */
-export class DegenerateOutput extends Error {
-	constructor(readonly runChars: number) {
-		super(
-			`Model response terminated: its output became ${runChars} characters of unbroken whitespace (degenerate sampling).`,
-		);
-		this.name = "DegenerateOutput";
-	}
-}
-
 /** The output text one SSE data payload streams (answer text or tool-call arguments), if any. */
 export function outputDelta(kind: StreamKind, data: string): string | null {
 	if (kind === "google" || !/delta/.test(data)) return null;
@@ -144,24 +139,6 @@ export function outputDelta(kind: StreamKind, data: string): string | null {
 		: typeof delta.partial_json === "string"
 			? delta.partial_json
 			: null;
-}
-
-/**
- * Tracks the current run of whitespace across output deltas. Tool-call
- * arguments are JSON text, so an escaped newline, tab or carriage return (a
- * backslash and n, t or r) counts as whitespace too.
- */
-export function whitespaceRun() {
-	let run = 0;
-	return (delta: string) => {
-		const plain = delta.replace(/\\[nrt]/g, " ");
-		if (!plain.trim()) run += delta.length;
-		else {
-			const tail = /\s*$/.exec(plain)?.[0].length ?? 0;
-			run = tail;
-		}
-		return run;
-	};
 }
 
 type Drained = {
