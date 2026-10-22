@@ -581,3 +581,77 @@ it("launches long commands from a script file so tmux's 16 KB limit cannot rejec
 	expect(tmux).toMatch(/new-session -d -s '[^']+' bash '[^']+\.sh'/);
 	expect(tmux.split(" && python3")[0].length).toBeLessThan(300);
 });
+
+/** The job script a launch writes (base64 after WRITE_JOB_SCRIPT's path). */
+function launchedJob(command: string) {
+	const encoded = /\.sh' ([A-Za-z0-9+/=]+) /.exec(command)?.[1];
+	if (!encoded) throw new Error("No job script in the launch.");
+	return Buffer.from(encoded, "base64").toString("utf8");
+}
+
+it("runs a background command in the session's background scope with the long cap; foreground commands keep the turn scope and their limit", async () => {
+	const launched: string[] = [];
+	const sessionId = crypto.randomUUID();
+	const turnId = crypto.randomUUID();
+	const tools = apiAgentCommandTools({
+		machines: {
+			exec: async (_vm: unknown, command: string) => {
+				launched.push(command);
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ status: "running", stdout: "" }),
+					stderr: "",
+				};
+			},
+		} as unknown as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId,
+		turnId,
+		readOnly: false,
+		signal: new AbortController().signal,
+		once: (_id, execute) => execute(),
+	});
+	const execute = tools.execute_command as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	const background = await execute.execute(
+		{
+			command: "npm run dev",
+			maxSeconds: 600,
+			yieldSeconds: 0,
+			background: { label: "npm run dev" },
+		},
+		{ toolCallId: "background" },
+	);
+	expect(background).toMatchObject({ status: "running", background: true });
+	const job = launchedJob(launched[0]);
+	expect(job).toContain(`/tmp/ytimesy-api-command-scopes/bg-${sessionId}`);
+	expect(job).not.toContain(`/tmp/ytimesy-api-command-scopes/${turnId}`);
+	// Six hours, not the foreground 600 s.
+	expect(job).toContain("'21600'");
+	expect(launched[0]).toContain('"label":"npm run dev"');
+
+	await execute.execute(
+		{ command: "make test", maxSeconds: 600, yieldSeconds: 10 },
+		{ toolCallId: "foreground" },
+	);
+	const foreground = launchedJob(launched[1]);
+	expect(foreground).toContain(`/tmp/ytimesy-api-command-scopes/${turnId}`);
+	expect(foreground).toContain("'600'");
+	expect(foreground).not.toContain("21600");
+	expect(launched[1]).not.toContain('"label"');
+});
+
+it("records that the agent saw a background command finish, so it gets no notice", async () => {
+	const { tools } = await fixture();
+	const sessionRoot = commandRoots.at(-1) as string;
+	const id = crypto.randomUUID();
+	await run("bash", [
+		"-c",
+		`mkdir -p '${sessionRoot}' && printf 'done\\n' >'${sessionRoot}/${id}.output' && printf '0\\n' >'${sessionRoot}/${id}.status' && printf '{}' >'${sessionRoot}/${id}.background'`,
+	]);
+	expect(await call(tools.read_command, { id })).toMatchObject({ status: 0 });
+	const notified = await run("cat", [`${sessionRoot}/${id}.notified`]);
+	expect(notified.stdout).toBe("agent");
+});

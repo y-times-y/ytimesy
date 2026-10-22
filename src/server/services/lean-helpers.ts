@@ -121,11 +121,14 @@ status_file=${quote(root)}/"$id".status
 output_file=${quote(outputs)}/"$id".stdout
 [ -f "$output_file" ] || output_file=${quote(root)}/"$id".output
 if [ ! -f ${quote(root)}/"$id".output ]; then echo "$id is not a command of this session" >&2; exit 2; fi
+notified_file=${quote(root)}/"$id".notified
 running() { tmux -L ${COMMAND_TMUX_SOCKET} has-session -t "$session" 2>/dev/null; }
+# Seen to finish (or stopped) here: its completion notice is not needed.
+seen() { [ -f "$notified_file" ] || printf agent >"$notified_file"; }
 report() {
-  if [ -f "$status_file" ]; then echo "exited: $(cat "$status_file")"
+  if [ -f "$status_file" ]; then echo "exited: $(cat "$status_file")"; seen
   elif running; then echo "running"
-  else echo "interrupted (no exit status recorded)"; fi
+  else echo "interrupted (no exit status recorded)"; seen; fi
   if [ -f "$output_file" ]; then echo "output ($output_file), last 100 lines:"; tail -n 100 "$output_file"; fi
 }
 case "$action" in
@@ -135,10 +138,11 @@ case "$action" in
     while [ ! -f "$status_file" ] && running && [ "$waited" -lt "$limit" ]; do sleep 1; waited=$((waited + 1)); done
     report ;;
   stop)
-    if [ -f "$status_file" ]; then echo "$id already exited: $(cat "$status_file")"; exit 0; fi
+    if [ -f "$status_file" ]; then seen; echo "$id already exited: $(cat "$status_file")"; exit 0; fi
     for scope in ${COMMAND_SCOPES_DIRECTORY}/*/; do
       [ -f "$scope$id.json" ] && python3 "$HOME/.ytimesy/lib/ytimesy-command-stop.py" "\${scope%/}" "$id"
     done
+    seen
     tmux -L ${COMMAND_TMUX_SOCKET} kill-session -t "$session" 2>/dev/null
     [ -f "$status_file" ] || printf '${STOPPED_COMMAND_STATUS}\\n' >"$status_file"
     echo "stopped $id (exit $(cat "$status_file"))" ;;

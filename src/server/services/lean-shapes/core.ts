@@ -3,12 +3,14 @@ import { z } from "zod";
 import { LEAN_SHAPE_TOOLS } from "#/domain/harness-model-profile";
 import { applyLeanEdits } from "../lean-edit";
 import {
+	LEAN_COMMAND_DEFAULT_SECONDS,
 	LEAN_COMMAND_MAX_SECONDS,
 	LEAN_YIELD_MAX_SECONDS,
 	type LeanCommandResult,
 	type LeanEngine,
 } from "../lean-engine";
 import {
+	BACKGROUND_OPTION_DESCRIPTION,
 	backgroundHint,
 	COMMAND_MAX_CHARACTERS,
 	EDIT_TEXT_MAX_CHARACTERS,
@@ -99,7 +101,7 @@ export function coreTools(engine: LeanEngine): ToolSet {
 				}),
 		}),
 		[names.command]: tool({
-			description: `Run a bash command from the repository root and wait for it to finish. You get stdout and stderr together; past 2000 lines or 50 KB only the end is shown and the rest is kept in a file. timeout stops the command after that many seconds (at most ${LEAN_COMMAND_MAX_SECONDS}).`,
+			description: `Run a bash command from the repository root and wait for it to finish. You get stdout and stderr together; past 2000 lines or 50 KB only the end is shown and the rest is kept in a file. timeout stops the command after that many seconds (default ${LEAN_COMMAND_DEFAULT_SECONDS}, at most ${LEAN_COMMAND_MAX_SECONDS}). Set background to start servers, watchers and long jobs; you are told when they finish.`,
 			inputSchema: z.object({
 				command: z
 					.string()
@@ -112,24 +114,32 @@ export function coreTools(engine: LeanEngine): ToolSet {
 					.max(LEAN_COMMAND_MAX_SECONDS)
 					.optional()
 					.describe(
-						`Seconds before the command is stopped (at most ${LEAN_COMMAND_MAX_SECONDS})`,
+						`Seconds before the command is stopped (default ${LEAN_COMMAND_DEFAULT_SECONDS}, at most ${LEAN_COMMAND_MAX_SECONDS})`,
 					),
+				background: z
+					.boolean()
+					.optional()
+					.describe(BACKGROUND_OPTION_DESCRIPTION),
 			}),
-			execute: ({ command, timeout }, options) =>
-				engine.run(
+			execute: ({ command, timeout, background }, options) => {
+				const seconds = timeout ?? LEAN_COMMAND_DEFAULT_SECONDS;
+				return engine.run(
 					{
 						command,
-						maxSeconds: timeout ?? LEAN_COMMAND_MAX_SECONDS,
-						yieldSeconds: Math.min(
-							LEAN_YIELD_MAX_SECONDS,
-							timeout ?? LEAN_YIELD_MAX_SECONDS,
-						),
-						waitSeconds: timeout ?? LEAN_COMMAND_MAX_SECONDS,
+						maxSeconds: seconds,
+						yieldSeconds: Math.min(LEAN_YIELD_MAX_SECONDS, seconds),
+						waitSeconds: seconds,
+						background,
 					},
 					options,
-				),
+				);
+			},
 			toModelOutput: ({ output }) => {
 				const result = output as LeanCommandResult;
+				if (result.status === "running" && result.background)
+					return textOutput(
+						`Started in the background (ID ${result.id}). ${backgroundHint(result)}${outputSoFar(result)}`,
+					);
 				if (result.status === "running")
 					return textOutput(
 						`Still running after ${result.wallSeconds} seconds (ID ${result.id}). ${backgroundHint(result)}${outputSoFar(result)}`,

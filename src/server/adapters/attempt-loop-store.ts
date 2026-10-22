@@ -84,6 +84,21 @@ export async function saveReviewLoopState(
 	);
 }
 
+/** The session's most recent review loop (of any turn). */
+export async function latestReviewLoopState(
+	sessionId: string,
+): Promise<ReviewLoopState | null> {
+	const { rows } = await database().query(
+		`select response from agent_task_command_receipt
+		 where parent_session_id=$1 and request_id like 'review-loop:%' and status='done'
+		 order by created_at desc
+		 limit 1`,
+		[sessionId],
+	);
+	const state = rows[0]?.response as ReviewLoopState | undefined;
+	return state?.version === 1 && state.kind === "review" ? state : null;
+}
+
 /** Every review loop of a session, oldest first (the hard-set runner's record). */
 export async function reviewLoopStates(
 	sessionId: string,

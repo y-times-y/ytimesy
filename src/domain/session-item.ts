@@ -1,6 +1,7 @@
 import { pendingPlanId } from "./agent-plan";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
+import type { BackgroundCommandRecord } from "./background-command";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
@@ -134,6 +135,8 @@ export type DynamicToolCallItem = {
 	readonly input?: string;
 	readonly output?: string;
 	readonly status: Exclude<ToolActivityStatus, "declined">;
+	/** Set when the call started a background command (background-command.ts). */
+	readonly background?: BackgroundCommandRecord;
 };
 
 export type WebSearchItem = {
@@ -175,6 +178,8 @@ export type NoticeSessionItem = {
 	readonly kind: "notice";
 	readonly id: SessionItemId;
 	readonly message: string;
+	/** A background command's exit (background-command.ts). */
+	readonly background?: true;
 };
 
 export type UnknownSessionItem = {

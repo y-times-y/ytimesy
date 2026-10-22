@@ -17,6 +17,12 @@ import {
 	helperStatus,
 	steeringSender,
 } from "#/domain/agent-panel";
+import {
+	BACKGROUND_COMMAND_KIND_TAG,
+	type BackgroundCommandRecord,
+	backgroundCommandStateText,
+	backgroundCommandStatus,
+} from "#/domain/background-command";
 import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
@@ -937,10 +943,12 @@ function SessionItemView({
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
-					data-background={activity.background ? "true" : undefined}
+					data-background={
+						item.background || activity.background ? "true" : undefined
+					}
 				>
 					<summary>
-						{activity.background ? (
+						{item.background || activity.background ? (
 							<AgentIcon
 								icon={KIND_ICONS.background}
 								color={agentColor("background")}
@@ -973,7 +981,9 @@ function SessionItemView({
 								<span className="session-tool-note">{activity.note}</span>
 							) : null}
 						</span>
-						{activity.background ? (
+						{item.background ? (
+							<BackgroundCommandTag record={item.background} />
+						) : activity.background ? (
 							<span className="agent-row-tag">{KIND_TAGS.background}</span>
 						) : null}
 						<ChevronRight
@@ -981,7 +991,7 @@ function SessionItemView({
 							strokeWidth={1.5}
 							className="session-activity-chevron"
 						/>
-						{activityStatus(item.status)}
+						{item.background ? null : activityStatus(item.status)}
 					</summary>
 					{item.input &&
 						(program !== null ? (
@@ -1097,10 +1107,18 @@ function SessionItemView({
 				<div
 					className="session-activity session-system-notice"
 					data-kind="notice"
+					data-background={item.background ? "true" : undefined}
 					role="status"
 				>
 					<p>
-						<ActivityIcon glyph="notice" />
+						{item.background ? (
+							<AgentIcon
+								icon={KIND_ICONS.background}
+								color={agentColor("background")}
+							/>
+						) : (
+							<ActivityIcon glyph="notice" />
+						)}
 						<span className="session-activity-title" title={item.message}>
 							{item.message}
 						</span>
@@ -1121,6 +1139,21 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+/** A background command's tag and live state: "Background · running 3m", "exited 0", "failed (exit 2)". */
+function BackgroundCommandTag({ record }: { record: BackgroundCommandRecord }) {
+	return (
+		<span
+			className="session-background-tag"
+			data-state={backgroundCommandStatus(record)}
+		>
+			{BACKGROUND_COMMAND_KIND_TAG}
+			<span className="session-background-state">
+				{backgroundCommandStateText(record, Date.now())}
+			</span>
+		</span>
+	);
 }
 
 /** The running turn is compacting its context (the latest request's usage says so). */

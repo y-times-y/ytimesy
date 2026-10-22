@@ -30,7 +30,7 @@ export const RIGOR_REQUIREMENTS_INSTRUCTIONS = `- Requirements: before you start
 
 /** Lead mode fusion: when the lead writes the list and what the sidekick gets. */
 export const RIGOR_LEAD_REQUIREMENTS =
-	"- As the lead, write the list right after the exploration report, before your first brief, and put the items a brief covers into that brief.";
+	"- As Main, write the list right after the exploration report, before your first brief, and put the items a brief covers into that brief.";
 
 const REQUIREMENTS_BLOCK = /<requirements>([\s\S]*?)<\/requirements>/gi;
 

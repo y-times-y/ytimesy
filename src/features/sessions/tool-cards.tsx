@@ -198,7 +198,7 @@ export function AgentCallView({
 	live?: boolean;
 	onOpenFile?: (path: string) => void;
 }) {
-	const role = call.sidekick && call.role === "writer" ? "sidekick" : call.role;
+	const role = call.role;
 	const verb =
 		call.tool === "agent"
 			? call.explore

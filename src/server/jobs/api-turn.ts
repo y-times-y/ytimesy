@@ -60,7 +60,6 @@ import {
 import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
-import { ASK_USER_TOOL } from "#/domain/user-question";
 import type {
 	ModelSwitchItem,
 	SessionItem,
@@ -79,12 +78,16 @@ import {
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { ASK_USER_TOOL } from "#/domain/user-question";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
-import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
+import {
+	releaseHeldAgentTaskEvents,
+	saveAgentTaskResultAndEvent,
+} from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	type ApiTurn,
@@ -125,6 +128,10 @@ import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import {
+	ASK_USER_END_TURN_TOOLS,
+	askUserTools,
+} from "../services/ask-user-tool";
 import { createAttemptLoop } from "../services/attempt-loop";
 import { attemptLoopDeps, reviewLoopDeps } from "../services/attempt-loop-deps";
 import { automaticRepositoryContext } from "../services/automatic-repository-context";
@@ -132,6 +139,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
+import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
@@ -149,7 +157,6 @@ import {
 import {
 	type FusionLeadGateInput,
 	fusionLeadGate,
-	fusionRoundOpen,
 	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
@@ -177,10 +184,6 @@ import {
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { createReviewLoop } from "../services/review-loop";
-import {
-	ASK_USER_END_TURN_TOOLS,
-	askUserTools,
-} from "../services/ask-user-tool";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
 	secretRequestTools,
@@ -262,6 +265,24 @@ type ApiTurnStep = {
  * the local worker. A turn that failed over keeps its lease: in step mode its
  * next step runs on the fallback; the local worker continues it here.
  */
+/**
+ * A chat's turn ended: helper reports and other notices held while it ran
+ * are delivered now (after any queued user message's turn, which holds
+ * them again until it ends).
+ */
+async function deliverHeldReports(
+	sessionId: string,
+	parentSessionId: string | null | undefined,
+) {
+	if (parentSessionId) return;
+	try {
+		if (await releaseHeldAgentTaskEvents(sessionId))
+			await enqueueAgentTaskEvent();
+	} catch {
+		// The task-event sweep delivers them once their retry is due.
+	}
+}
+
 export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
@@ -346,8 +367,6 @@ async function runApiTurnAttempt(
 	let fusionRoleModels: RoleModels | undefined;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
-	/** Lead mode fusion: when this step's gate began (the completion check's bound). */
-	let leadGateAt = Date.now();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -933,8 +952,8 @@ async function runApiTurnAttempt(
 				? withRedactedResults(checkerWorkerTools(subagentContext), redact)
 				: {};
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
-		// starts the request's exploration, and the lead waits while its
-		// sidekick works in the shared checkout.
+		// starts the request's exploration and Main waits for it; during build
+		// rounds Main is free but its writes refuse.
 		const leadGate =
 			fusionLead && delegates
 				? (waitUntil: number) =>
@@ -946,6 +965,7 @@ async function runApiTurnAttempt(
 							waitUntil,
 						} satisfies FusionLeadGateInput).then((ready) => {
 							if (ready === "ready") leadWrites.clear();
+							else if (ready === "busy") leadWrites.start();
 							return ready;
 						})
 				: null;
@@ -1282,6 +1302,22 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
+				// Background commands that exited since the last step: their cards and notices.
+				const background = await withBackgroundCommandNotices({
+					workspace,
+					sessionId: owner.id,
+					items,
+					messages: history,
+				}).catch((error: unknown) => {
+					console.warn("Background commands were not observed.", error);
+					return null;
+				});
+				if (background?.changed) {
+					items = background.items;
+					history = messages = background.messages;
+					await saveCheckpoint();
+					await publishProgress?.("running");
+				}
 				return injectServerPeerMessages(
 					owner.id,
 					history,
@@ -1438,6 +1474,9 @@ async function runApiTurnAttempt(
 							}),
 							rigor: variant.rigor === "on",
 							pair: variant.checkerMode === "pair",
+							// Lead mode fusion: a turn that ends while the writer's
+							// round runs hands the check to the turn its report wakes.
+							...(leadGate ? { handedOff: leadWrites.busy } : {}),
 						})
 					: null;
 		const attemptWaitUntil = () =>
@@ -1446,11 +1485,10 @@ async function runApiTurnAttempt(
 				Date.now() + 10 * 60_000,
 			);
 		let result: Awaited<ReturnType<typeof runAgent>>;
-		// Lead mode fusion: no model call while the sidekick works in the shared
-		// checkout; a round still running at the step's deadline continues the
-		// wait in the next step. Its report is in the mailbox once it is ready.
+		// Lead mode fusion: no model call while the request's exploration runs;
+		// one still running at the step's deadline continues the wait in the
+		// next step. Its report is in the mailbox once it is ready.
 		if (step && leadGate) {
-			leadGateAt = Date.now();
 			const gate = await timed("turn:fusionLead", () =>
 				leadGate(attemptWaitUntil()),
 			);
@@ -1526,6 +1564,15 @@ async function runApiTurnAttempt(
 			coordinated = false;
 			return "continue";
 		}
+		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
+		const background = await withBackgroundCommandNotices({
+			workspace,
+			sessionId: owner.id,
+			items,
+			messages,
+			claim: false,
+		}).catch(() => null);
+		if (background?.changed) items = background.items;
 		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
 		const historyBeforeCompletion = messages;
 		const finalHistory = await withBackgroundCommandContext({
@@ -1558,17 +1605,6 @@ async function runApiTurnAttempt(
 				return "continue";
 			}
 			throw new IncompleteAgentTurn("background-command-review-required");
-		}
-		// Lead mode fusion: the turn does not complete while a sidekick round
-		// runs; the next step waits for its report and the lead answers after it.
-		if (
-			step &&
-			leadGate &&
-			(await fusionRoundOpen(owner as AgentSessionRecord, leadGateAt))
-		) {
-			await saveCheckpoint();
-			coordinated = false;
-			return "continue";
 		}
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;
@@ -1671,16 +1707,9 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
-		// The sidekick lives as long as the chat: an idle one waits for the
-		// next message (until its idle TTL); one still working is stopped.
-		if (fusionLead)
-			await retireLeadSidekicks(
-				unscopedMachines,
-				fusionLead,
-				"the lead's turn ended while it worked",
-				undefined,
-				{ keepIdle: true },
-			).catch(() => {});
+		// The writer lives as long as the chat: an idle one waits for the next
+		// message (until its idle TTL); one still working finishes its round
+		// and its report wakes Main.
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
@@ -1724,6 +1753,7 @@ async function runApiTurnAttempt(
 		await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
 			() => {},
 		);
+		await deliverHeldReports(owner.id, owner.parentSessionId);
 		return "completed";
 	} catch (error) {
 		workspaceReuse?.forget();
@@ -1987,9 +2017,7 @@ async function runApiTurnAttempt(
 			await retireLeadSidekicks(
 				unscopedMachines,
 				fusionLead,
-				saved === "cancelled"
-					? "the lead was stopped"
-					: "the lead's turn ended",
+				saved === "cancelled" ? "Main was stopped" : "Main's turn failed",
 			).catch(() => {});
 		if (saved === "failed") {
 			// A subagent still reports: what it said so far and, for a writer,
@@ -2025,10 +2053,15 @@ async function runApiTurnAttempt(
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
 		// Messages sent during the turn outlive its stop or failure: the first starts the next turn.
-		if (saved)
+		if (saved) {
 			await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
 				() => {},
 			);
+			await deliverHeldReports(
+				turn.session_id,
+				subagentSession?.parentSessionId,
+			);
+		}
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {

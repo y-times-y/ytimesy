@@ -118,6 +118,7 @@ vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: mocks.result,
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: mocks.enqueue }));
