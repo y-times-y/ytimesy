@@ -2,29 +2,97 @@ import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { openai } from "@ai-sdk/openai";
+import type { ToolSet } from "ai";
 
 /**
  * OpenAI models in Amazon Bedrock for the Harbor bridge (route `bedrock`).
  *
- * Transport: the OpenAI Responses API on the bedrock-runtime endpoint
- * (https://bedrock-runtime.<region>.amazonaws.com/openai/v1/responses),
- * AWS's recommended endpoint for these models. It speaks the same request
- * and stream format as api.openai.com, so the product's OpenAI Responses
- * transport (apiModelRuntime, provider "openai") runs unchanged: function
- * tools, streaming, reasoning effort, encrypted reasoning with store=false
- * and prompt caching. It has no server-side tools (no hosted web search) and
- * needs an inference profile as the model: `global.openai.<model>` (list
- * price) or a geographic one such as `us.openai.<model>` (+10%).
+ * Transport: the OpenAI Responses API, by default on the bedrock-mantle
+ * endpoint (https://bedrock-mantle.<region>.api.aws/openai/v1/responses).
+ * It speaks the same request and stream format as api.openai.com, so the
+ * product's OpenAI Responses transport (apiModelRuntime, provider "openai")
+ * runs unchanged: function tools, streaming, reasoning effort, encrypted
+ * reasoning with store=false and prompt caching. Mantle also runs Bedrock's
+ * hosted Web Search (tool type web_search, the same tool Codex uses on
+ * Bedrock); it serves the foundation id (`openai.<model>`) in the Region.
+ * The bedrock-runtime endpoint
+ * (https://bedrock-runtime.<region>.amazonaws.com/openai/v1) remains as an
+ * option: no server-side tools, and the model is an inference profile,
+ * `global.openai.<model>` (list price) or a geographic one such as
+ * `us.openai.<model>` (+10%).
  *
  * Auth: each request is signed with AWS Signature Version 4 (service
- * `bedrock`) from the operator's AWS credentials: an AWS profile from the
- * shared credentials file, or the standard AWS_* environment variables. No
- * key is written to a file or logged.
+ * `bedrock-mantle` or `bedrock`) from the operator's AWS credentials: an AWS
+ * profile from the shared credentials file, or the standard AWS_* environment
+ * variables. No key is written to a file or logged.
  */
 
 export const BEDROCK_DEFAULT_REGION = "us-east-1";
 export const BEDROCK_DEFAULT_PROFILE_NAME = "harbor";
 export const BEDROCK_DEFAULT_MODEL = "openai.gpt-6.1-sol";
+
+export const BEDROCK_ENDPOINTS = ["mantle", "runtime"] as const;
+export type BedrockEndpoint = (typeof BEDROCK_ENDPOINTS)[number];
+
+/**
+ * Bedrock Web Search: $12.00 per 1,000 queries (AWS price list, usage type
+ * USE1-Bedrock-Websearch-Queries, checked 2026-10-21).
+ */
+export const BEDROCK_WEB_SEARCH_USD = 0.012;
+/** The commercial Regions Bedrock Web Search runs in. */
+export const BEDROCK_WEB_SEARCH_REGIONS: readonly string[] = [
+	"us-east-1",
+	"us-east-2",
+	"us-west-2",
+];
+
+/**
+ * Bedrock Web Search on mantle: OpenAI's web_search tool shape, with Fetch
+ * kept to Bedrock's index and cache (external_web_access false), as Codex
+ * sets it on Bedrock. The same context size as the product's OpenAI search.
+ */
+export function bedrockWebSearchTools(): ToolSet {
+	return {
+		web_search: openai.tools.webSearch({
+			searchContextSize: "medium",
+			externalWebAccess: false,
+		}),
+	};
+}
+
+/** Searches in one web_search result: each query of a search, else one. */
+export function webSearchQueries(result: unknown) {
+	const action = (result as { action?: { type?: string; queries?: unknown } })
+		?.action;
+	if (action?.type === "search" && Array.isArray(action.queries))
+		return Math.max(1, action.queries.length);
+	return 1;
+}
+
+/**
+ * Dollars for the Bedrock Web Search queries in a run's events: every
+ * web_search result the provider returned (not the loop's synthetic
+ * cited-search entries), each query at the list price.
+ */
+export function bedrockWebSearchUsd(
+	events: readonly {
+		type: string;
+		id?: string;
+		name?: string;
+		output?: unknown;
+	}[],
+) {
+	let queries = 0;
+	for (const event of events)
+		if (
+			event.type === "tool-result" &&
+			event.name === "web_search" &&
+			!event.id?.startsWith("cited-search-")
+		)
+			queries += webSearchQueries(event.output);
+	return queries * BEDROCK_WEB_SEARCH_USD;
+}
 
 export const BEDROCK_INFERENCE_PROFILES = ["global", "us"] as const;
 export type BedrockInferenceProfile =
@@ -34,23 +102,41 @@ const PROFILED_OPENAI =
 	/^(?:global|us|us-gov|eu|apac|jp|au|ca)\.openai\.gpt-[\w.-]+$/;
 const FOUNDATION_OPENAI = /^openai\.gpt-[\w.-]+$/;
 
-export function bedrockBaseUrl(region: string) {
+export function bedrockBaseUrl(
+	region: string,
+	endpoint: BedrockEndpoint = "mantle",
+) {
 	if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region))
 		throw new Error(`"${region}" is not an AWS Region.`);
-	return `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`;
+	return endpoint === "mantle"
+		? `https://bedrock-mantle.${region}.api.aws/openai/v1`
+		: `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`;
+}
+
+/** The SigV4 service name an endpoint's requests are signed for. */
+export function bedrockSigningService(endpoint: BedrockEndpoint) {
+	return endpoint === "mantle" ? "bedrock-mantle" : "bedrock";
 }
 
 /**
- * The inference profile a Bedrock OpenAI model is requested through:
- * `openai.gpt-6-luna` on the global profile is `global.openai.gpt-6-luna`.
- * An id that already names a profile keeps it.
+ * The id a Bedrock OpenAI model is requested by. Mantle serves the
+ * foundation id in the Region (`openai.gpt-6-luna`; a profile prefix is
+ * dropped). bedrock-runtime needs an inference profile: `openai.gpt-6-luna`
+ * on the global profile is `global.openai.gpt-6-luna`, and an id that
+ * already names a profile keeps it.
  */
 export function bedrockModelId(
 	modelId: string,
-	profile: BedrockInferenceProfile,
+	route: { endpoint: BedrockEndpoint; profile: BedrockInferenceProfile },
 ) {
-	if (PROFILED_OPENAI.test(modelId)) return modelId;
-	if (FOUNDATION_OPENAI.test(modelId)) return `${profile}.${modelId}`;
+	if (route.endpoint === "mantle") {
+		if (PROFILED_OPENAI.test(modelId))
+			return modelId.slice(modelId.indexOf(".") + 1);
+		if (FOUNDATION_OPENAI.test(modelId)) return modelId;
+	} else {
+		if (PROFILED_OPENAI.test(modelId)) return modelId;
+		if (FOUNDATION_OPENAI.test(modelId)) return `${route.profile}.${modelId}`;
+	}
 	throw new Error(
 		`"${modelId}" is not a Bedrock OpenAI model id; use openai.<model> (for example openai.gpt-6.1-sol) or an inference profile id (global.openai.<model>).`,
 	);
@@ -227,15 +313,16 @@ export function signAwsRequest(input: {
 export function bedrockSigningFetch(input: {
 	credentials: AwsCredentials;
 	region: string;
+	endpoint: BedrockEndpoint;
 	fetch: typeof globalThis.fetch;
 	/**
-	 * The client's model id and the inference profile sent in its place
+	 * The client's model id and the Bedrock id sent in its place
 	 * (see bedrockRuntime in runtime.ts); unset leaves bodies unchanged.
 	 */
 	model?: { client: string; profile: string };
 	now?: () => Date;
 }): typeof globalThis.fetch {
-	const host = new URL(bedrockBaseUrl(input.region)).host;
+	const host = new URL(bedrockBaseUrl(input.region, input.endpoint)).host;
 	return async (request, init) => {
 		const url =
 			typeof request === "string"
@@ -265,7 +352,7 @@ export function bedrockSigningFetch(input: {
 				body,
 				credentials: input.credentials,
 				region: input.region,
-				service: "bedrock",
+				service: bedrockSigningService(input.endpoint),
 				now: input.now?.(),
 			}),
 		))

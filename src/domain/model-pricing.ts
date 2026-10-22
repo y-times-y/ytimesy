@@ -181,9 +181,12 @@ function priceAt(id: string, at: number): ModelPrice | null {
  * Amazon Bedrock bills OpenAI models at OpenAI's list price through a global
  * inference profile (`global.openai.gpt-…`) and 10% above it through a
  * geographic one (`us.openai.gpt-…`); cache writes are billed at the listed
- * cache-write price.
+ * cache-write price. The foundation id (`openai.gpt-…`, in-Region on the
+ * bedrock-mantle endpoint) is priced as geographic too: AWS prices global
+ * below in-Region for these models and publishes no exact in-Region premium.
  */
-const BEDROCK_REGIONAL_OPENAI = /^(?:us|us-gov|eu|apac|jp|au|ca)\.openai\.gpt-/;
+const BEDROCK_REGIONAL_OPENAI =
+	/^(?:(?:us|us-gov|eu|apac|jp|au|ca)\.)?openai\.gpt-/;
 export const BEDROCK_REGIONAL_PREMIUM = 1.1;
 
 function scaledTokenPrices<T extends TokenPrices>(price: T, factor: number): T {

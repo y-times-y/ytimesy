@@ -31,6 +31,7 @@ import {
 	type TimedEvent,
 	type TimedNotice,
 } from "./atif";
+import { bedrockWebSearchUsd } from "./bedrock";
 import {
 	checkerWorkerTool,
 	type FusionTrace,
@@ -367,10 +368,16 @@ export async function runHarborTrial(
 			billing: child.model.billing,
 		})),
 	];
+	// Bedrock bills each Web Search query on top of tokens (builder only).
+	const searchUsd = () =>
+		config.route === "bedrock"
+			? bedrockWebSearchUsd(events.map((entry) => entry.event))
+			: 0;
 	const guard = trialSpendGuard({
 		capUsd: config.trialUsdCap,
 		requestLimit: config.requestLimit,
 		parts: spendParts,
+		extraUsd: searchUsd,
 	});
 	const remainingMs = Math.max(1000, input.deadlineAt - now());
 	const signal = AbortSignal.timeout(remainingMs);
@@ -650,6 +657,7 @@ export async function runHarborTrial(
 			provider,
 			variant: config.variant,
 			webSearch: config.webSearch,
+			bedrock: config.route === "bedrock",
 			instruction: input.instruction,
 			storage: input.storage,
 			onEvent,
@@ -773,7 +781,7 @@ export async function runHarborTrial(
 		if (!part.usage) return total;
 		const cost = usageCostUsd(part.usage, part.billing);
 		return cost === null ? null : total + cost;
-	}, 0);
+	}, searchUsd());
 	const efficiency = trialEfficiency({
 		rootId: input.trialId,
 		harness: config.route === "codex-subscription" ? "codex" : "api",

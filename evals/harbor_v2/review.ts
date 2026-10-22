@@ -13,12 +13,12 @@ import type { SubagentBudget } from "../../src/domain/subagent";
 import { subagentWrapUpNotice } from "../../src/domain/subagent-instructions";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { captureConversationCode } from "../../src/server/services/conversation-code-checkpoint";
-import type { TrialSessions } from "./sessions";
-import { runsUsage } from "./trial";
 import {
 	createReviewLoop,
 	type ReviewLoopDeps,
 } from "../../src/server/services/review-loop";
+import type { TrialSessions } from "./sessions";
+import { runsUsage } from "./trial";
 
 /**
  * review=on inside a Harbor trial: the product's review loop

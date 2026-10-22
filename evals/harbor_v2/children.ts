@@ -1,10 +1,13 @@
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
+import type { ApiTokenUsage } from "../../src/domain/api-token-usage";
 import {
 	CHECKER_WORKER_TOOL,
 	checkerWorkerBrief,
 	MAX_LIVE_CHECKER_WORKERS,
 } from "../../src/domain/checker-pair";
+import { usageCostUsd } from "../../src/domain/model-pricing";
+import { harnessExplorationBrief } from "../../src/domain/sidekick";
 import {
 	applicableDecision,
 	CLASSIFIER_INSTRUCTIONS,
@@ -14,11 +17,8 @@ import {
 	type SidekickDecisionRecord,
 	sidekickDecisionNotice,
 } from "../../src/domain/sidekick-classifier";
-import { harnessExplorationBrief } from "../../src/domain/sidekick";
-import type { ApiTokenUsage } from "../../src/domain/api-token-usage";
-import { usageCostUsd } from "../../src/domain/model-pricing";
-import { usageTokens } from "../../src/domain/subagent-usage";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "../../src/domain/subagent";
+import { usageTokens } from "../../src/domain/subagent-usage";
 import type { BridgeRole, HarborModel } from "./config";
 import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
 

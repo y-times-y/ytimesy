@@ -15,7 +15,10 @@ import type { ModelRole } from "../../src/domain/role-models";
 import {
 	BEDROCK_DEFAULT_MODEL,
 	BEDROCK_DEFAULT_REGION,
+	BEDROCK_ENDPOINTS,
 	BEDROCK_INFERENCE_PROFILES,
+	BEDROCK_WEB_SEARCH_REGIONS,
+	type BedrockEndpoint,
 	type BedrockInferenceProfile,
 	bedrockBaseUrl,
 	bedrockModelId,
@@ -151,7 +154,7 @@ export type HarborBridgeConfig = {
 	total: { ledger: string; capUsd: number } | null;
 	/** Model requests per trial (builder and checker together). */
 	requestLimit: number;
-	/** The provider's hosted web search, as the product offers it. */
+	/** The provider's hosted web search, as the product offers it (bedrock: Bedrock Web Search on mantle). */
 	webSearch: boolean;
 	/** Where the key is read from (API routes). */
 	keyFile: string | null;
@@ -159,6 +162,7 @@ export type HarborBridgeConfig = {
 	/** The bedrock route's Region, endpoint and inference profile; null elsewhere. */
 	bedrock: {
 		region: string;
+		endpoint: BedrockEndpoint;
 		baseUrl: string;
 		profile: BedrockInferenceProfile;
 	} | null;
@@ -194,9 +198,9 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		env.YTIMESY_HARBOR_MODEL ||
 		endpoint?.defaultModel ||
 		(bedrock ? BEDROCK_DEFAULT_MODEL : "gpt-6.1-sol");
-	// Bedrock serves these models through an inference profile, priced by it.
+	// Mantle serves the foundation id; bedrock-runtime an inference profile.
 	const modelId = bedrock
-		? bedrockModelId(requestedModel, bedrock.profile)
+		? bedrockModelId(requestedModel, bedrock)
 		: requestedModel;
 	const effort = (env.YTIMESY_HARBOR_EFFORT || "max") as HarborEffort;
 	if (!EFFORTS.includes(effort))
@@ -248,7 +252,7 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 			variant,
 			role,
 			effort,
-			bedrock?.profile,
+			bedrock ?? undefined,
 		);
 		if (!model) continue;
 		if (paid && !model.billing.price)
@@ -289,11 +293,21 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 	if (!(Number.isInteger(requestLimit) && requestLimit > 0))
 		throw new Error("YTIMESY_HARBOR_REQUEST_LIMIT must be a positive integer.");
 	// bedrock-runtime has no server-side tools: no hosted web search there.
+	const runtimeEndpoint = bedrock?.endpoint === "runtime";
 	const webSearch =
-		(env.YTIMESY_HARBOR_WEB_SEARCH || (bedrock ? "off" : "on")) !== "off";
-	if (bedrock && webSearch)
+		(env.YTIMESY_HARBOR_WEB_SEARCH || (runtimeEndpoint ? "off" : "on")) !==
+		"off";
+	if (runtimeEndpoint && webSearch)
 		throw new Error(
-			"The bedrock route has no hosted web search (bedrock-runtime offers no server-side tools); unset YTIMESY_HARBOR_WEB_SEARCH or set it to off.",
+			"bedrock-runtime has no hosted web search (no server-side tools); use YTIMESY_HARBOR_BEDROCK_ENDPOINT=mantle, or set YTIMESY_HARBOR_WEB_SEARCH=off.",
+		);
+	if (
+		bedrock &&
+		webSearch &&
+		!BEDROCK_WEB_SEARCH_REGIONS.includes(bedrock.region)
+	)
+		throw new Error(
+			`Bedrock Web Search runs only in ${BEDROCK_WEB_SEARCH_REGIONS.join(", ")}; set YTIMESY_HARBOR_BEDROCK_REGION to one of them, or YTIMESY_HARBOR_WEB_SEARCH=off.`,
 		);
 	return {
 		route,
@@ -324,8 +338,24 @@ function bedrockSettings(env: Env) {
 		throw new Error(
 			`YTIMESY_HARBOR_BEDROCK_PROFILE must be one of ${BEDROCK_INFERENCE_PROFILES.join(", ")}.`,
 		);
-	return { region, baseUrl: bedrockBaseUrl(region), profile };
+	const endpoint = (env.YTIMESY_HARBOR_BEDROCK_ENDPOINT ||
+		"mantle") as BedrockEndpoint;
+	if (!BEDROCK_ENDPOINTS.includes(endpoint))
+		throw new Error(
+			`YTIMESY_HARBOR_BEDROCK_ENDPOINT must be one of ${BEDROCK_ENDPOINTS.join(", ")}.`,
+		);
+	return {
+		region,
+		endpoint,
+		baseUrl: bedrockBaseUrl(region, endpoint),
+		profile,
+	};
 }
+
+type BedrockRouteIds = {
+	endpoint: BedrockEndpoint;
+	profile: BedrockInferenceProfile;
+};
 
 /**
  * roleModels.checker on the bridge: a model on the builder's route (one
@@ -341,15 +371,9 @@ export function checkerModel(
 	variant: HarnessVariant,
 	/** The builder's effort, used when the entry names none. */
 	builderEffort: HarborEffort,
-	bedrockProfile?: BedrockInferenceProfile,
+	bedrock?: BedrockRouteIds,
 ): HarborModel | null {
-	return roleModelOnRoute(
-		route,
-		variant,
-		"checker",
-		builderEffort,
-		bedrockProfile,
-	);
+	return roleModelOnRoute(route, variant, "checker", builderEffort, bedrock);
 }
 
 /** roleModels.<role> on the trial's route, by checkerModel's rules. */
@@ -358,8 +382,8 @@ export function roleModelOnRoute(
 	variant: HarnessVariant,
 	role: BridgeRole,
 	builderEffort: HarborEffort,
-	/** The bedrock route's inference profile (default global). */
-	bedrockProfile: BedrockInferenceProfile = "global",
+	/** The bedrock route's endpoint and inference profile (default mantle). */
+	bedrock: BedrockRouteIds = { endpoint: "mantle", profile: "global" },
 ): HarborModel | null {
 	const entry = variant.roleModels[role];
 	if (!entry) return null;
@@ -383,8 +407,7 @@ export function roleModelOnRoute(
 		throw new Error(
 			`roleModels.${role} "${entry.model}" needs an API route; this trial runs on the Codex subscription.`,
 		);
-	const modelId =
-		route === "bedrock" ? bedrockModelId(named, bedrockProfile) : named;
+	const modelId = route === "bedrock" ? bedrockModelId(named, bedrock) : named;
 	const effort = (entry.effort ?? builderEffort) as HarborEffort;
 	if (!EFFORTS.includes(effort))
 		throw new Error(

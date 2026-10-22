@@ -52,8 +52,9 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
 | `YTIMESY_HARBOR_WEB_SEARCH` | `off` removes the provider's hosted web search (default on, as in the product; bedrock: off, and `on` is refused) |
-| `YTIMESY_HARBOR_BEDROCK_REGION` | bedrock: the bedrock-runtime Region (default `us-east-1`) |
-| `YTIMESY_HARBOR_BEDROCK_PROFILE` | bedrock: `global` (default, list price) or `us` (geographic, +10%) inference profile |
+| `YTIMESY_HARBOR_BEDROCK_REGION` | bedrock: the Region (default `us-east-1`; web search needs us-east-1, us-east-2 or us-west-2) |
+| `YTIMESY_HARBOR_BEDROCK_ENDPOINT` | bedrock: `mantle` (default, with Bedrock Web Search) or `runtime` (bedrock-runtime, no web search) |
+| `YTIMESY_HARBOR_BEDROCK_PROFILE` | bedrock on `runtime` only: `global` (default, list price) or `us` (geographic, +10%) inference profile |
 | `YTIMESY_HARBOR_AWS_PROFILE` | bedrock: AWS profile in `~/.aws/credentials` (else `AWS_PROFILE`; else `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` when set; else `harbor`) |
 | `YTIMESY_HARBOR_PREFLIGHT` | the preflight file (`preflight.ts` output), or `skip` |
 | `YTIMESY_HARBOR_KEY_FILE` | key file; default `.secrets/openai-api-key`, `.secrets/anthropic-api-key`, `.secrets/gemini-api-key`. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` win when set. |
@@ -70,33 +71,42 @@ repository checkout on the host), holding only the access token.
 
 ## Amazon Bedrock (route `bedrock`)
 
-OpenAI models in Amazon Bedrock through the **OpenAI Responses API on bedrock-runtime**
-(`https://bedrock-runtime.<region>.amazonaws.com/openai/v1/responses`), AWS's recommended
-endpoint for these models (docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html).
+OpenAI models in Amazon Bedrock through the **OpenAI Responses API on bedrock-mantle**
+(`https://bedrock-mantle.<region>.api.aws/openai/v1/responses`), the endpoint that runs
+Bedrock's hosted **Web Search** (docs.aws.amazon.com/bedrock/latest/userguide/web-search.html).
 It is the same request and stream format as api.openai.com, so the product's OpenAI
 Responses transport (`apiModelRuntime`, provider `openai`) runs unchanged: function tools,
 streaming, reasoning effort, `store: false` with encrypted reasoning carried forward, and
 `prompt_cache_key` (keyed to the trial's cache scope). Converse was not used: it would need a
-new transport and loses the Responses-shaped reasoning items the loop relies on. Mantle
-(`bedrock-mantle`) was not used: no global profile there; its one extra (hosted web search)
-is the only thing this route lacks.
+new transport and loses the Responses-shaped reasoning items the loop relies on.
+`YTIMESY_HARBOR_BEDROCK_ENDPOINT=runtime` switches to bedrock-runtime
+(`https://bedrock-runtime.<region>.amazonaws.com/openai/v1`): global profile at list price,
+but no server-side tools, so no web search.
 
-- **Models**: give foundation ids (`openai.gpt-6.1-sol`, `openai.gpt-6-luna`); the bridge
+- **Web search** (mantle, on by default): the builder gets OpenAI's `web_search` tool with
+  `searchContextSize: medium` and `externalWebAccess: false`, so Search uses Bedrock's web
+  index and Fetch its cache and nothing leaves AWS; this is how Codex runs search on Bedrock.
+  Sidekicks and checkers get none, as on the other routes. Needs
+  `bedrock-websearch:InvokeSearch` and `InvokeFetch` (in `AmazonBedrockFullAccess`).
+  $12 per 1,000 queries (AWS price list, `USE1-Bedrock-Websearch-Queries`): the spend guard
+  and the trial cost add $0.012 per query (each query of a search, each page open counted as
+  one, an overcount when Bedrock bills opens as part of the search).
+- **Models**: give foundation ids (`openai.gpt-6.1-sol`, `openai.gpt-6-luna`). Mantle serves
+  them in the Region by that id (a `global.` prefix is dropped). On `runtime` the bridge
   requests them through the inference profile `global.openai.<model>` (or `us.` with
-  `YTIMESY_HARBOR_BEDROCK_PROFILE=us`). bedrock-runtime only serves these models through a
-  profile. There is no silent fallback: if the global profile is refused, rerun with
-  `YTIMESY_HARBOR_BEDROCK_PROFILE=us` (and the Region where the model is enabled).
+  `YTIMESY_HARBOR_BEDROCK_PROFILE=us`); there is no silent fallback.
   The OpenAI client is given the bare id (`gpt-6-luna`) so it treats the model exactly as on
   `openai-api` (reasoning model, developer instructions, catalog context window); the signer
-  puts the profile id in the request body before signing.
+  puts the Bedrock id in the request body before signing.
 - **roleModels**: `bedrock:<model>`, `api:<model>` or a bare `<model>` on this route, e.g.
   `lead=fusion,review=on,checkerMode=pair,roleModels.checker=bedrock:openai.gpt-6.1-sol,roleModels.writer=bedrock:openai.gpt-6-luna,roleModels.checkerWorker=bedrock:openai.gpt-6-luna,roleModels.classifier=bedrock:openai.gpt-6-luna@low`.
   `bedrock:` on another route, or `codex:` here, is refused.
-- **Auth**: every request is signed with AWS SigV4 (service `bedrock`) from the operator's AWS
-  credentials (see `YTIMESY_HARBOR_AWS_PROFILE`); nothing is written to a file or logged. The
-  signer refuses any host but the configured bedrock-runtime one. Needs
-  `bedrock:InvokeModel`/`InvokeModelWithResponseStream` on the profile and the default project.
-- **Prices** (`src/domain/model-pricing.ts`): a global profile is billed at OpenAI's list price
+- **Auth**: every request is signed with AWS SigV4 (service `bedrock-mantle`, or `bedrock` on
+  runtime) from the operator's AWS credentials (see `YTIMESY_HARBOR_AWS_PROFILE`); nothing is
+  written to a file or logged. The signer refuses any host but the configured endpoint's.
+- **Prices** (`src/domain/model-pricing.ts`): mantle's in-Region foundation id is priced like a
+  geographic profile (+10%): AWS prices global below in-Region for these models and publishes
+  no exact premium; confirm against the bill. A global profile is billed at OpenAI's list price
   (Sol $2 / $0.10 cached / $2.50 cache write / $10 out, above 272K input $4 / $0.20 / $5 / $15;
   Luna $0.10 / $0.01 / $0.125 / $0.50, above 272K $0.20 / $0.02 / $0.25 / $0.75); a
   geographic profile at +10%. Bedrock bills cache writes: they are priced from
@@ -106,7 +116,8 @@ is the only thing this route lacks.
 - **Spending**: the same guard and ledger as other paid routes (`YTIMESY_HARBOR_APPROVED=bedrock`,
   per-trial and total caps). Request ids (`x-amzn-requestid`) appear in the transport log; the
   transport guard covers these streams as OpenAI Responses streams.
-- **Smoke** (two paid requests, one per model, tool call + stream + cache stats):
+- **Smoke** (two paid requests, one per model: web search, then a tool call; stream + cache
+  stats; about $0.05, measured 2026-10-21):
   `YTIMESY_HARBOR_ROUTE=bedrock YTIMESY_HARBOR_APPROVED=bedrock YTIMESY_HARBOR_TOTAL_USD_CAP=0.05 YTIMESY_HARBOR_TRIAL_USD_CAP=0.05 YTIMESY_HARBOR_SPEND_LEDGER=.ytimesy/harbor-v2/bedrock-smoke.jsonl YTIMESY_HARBOR_EFFORT=low pnpm exec tsx evals/harbor_v2/bedrock-smoke.ts`
 
 ## Checker model (roleModels.checker)

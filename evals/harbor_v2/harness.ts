@@ -34,6 +34,7 @@ import { dapDebuggerTools } from "../../src/server/services/dap-debugger";
 import type { ModelAgentInput } from "../../src/server/services/model-agent-loop";
 import { nodeDebuggerTools } from "../../src/server/services/node-debugger";
 import { repositoryGuidanceTool } from "../../src/server/services/repository-guidance";
+import { bedrockWebSearchTools } from "./bedrock";
 
 /**
  * The product builder's turn setup (src/server/jobs/api-turn.ts) rebuilt
@@ -152,6 +153,8 @@ export async function harborHarness(input: {
 	provider: ModelProvider | "codex-subscription";
 	variant: HarnessVariant;
 	webSearch: boolean;
+	/** Web search is Bedrock's (mantle), kept inside AWS's index and cache. */
+	bedrock?: boolean;
 	instruction: string;
 	storage: ContextArchiveStorage;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
@@ -211,9 +214,11 @@ export async function harborHarness(input: {
 	});
 	const webSearch =
 		input.webSearch && !input.subagent
-			? nativeWebSearchTools(
-					input.provider === "codex-subscription" ? "openai" : input.provider,
-				)
+			? input.bedrock
+				? bedrockWebSearchTools()
+				: nativeWebSearchTools(
+						input.provider === "codex-subscription" ? "openai" : input.provider,
+					)
 			: {};
 	let tools: ToolSet = { ...surface.tools, ...webSearch };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
