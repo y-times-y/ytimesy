@@ -103,7 +103,7 @@ it("puts the finish card above Main's reply to the report, with the report's fir
 							name: "research-1",
 							task: "Research the parser",
 							icon: "search" as const,
-							color: "#F43F5E",
+							color: "#FF8F96",
 						},
 					],
 				]),

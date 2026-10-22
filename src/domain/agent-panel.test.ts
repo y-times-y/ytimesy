@@ -119,25 +119,25 @@ describe("helper names, icons and colours", () => {
 			name: "build-1",
 			task: "Build the CSV export",
 			icon: "hammer",
-			color: "#F43F5E",
+			color: "#FF8F96",
 		});
 		// A sidekick and a writer are both Build helpers, numbered together.
-		expect(ids.get("w1")).toMatchObject({ name: "build-2", color: "#A3E635" });
+		expect(ids.get("w1")).toMatchObject({ name: "build-2", color: "#9CD242" });
 		expect(ids.get("r")).toMatchObject({
 			name: "research-1",
 			icon: "search",
-			color: "#60A5FA",
+			color: "#83C1FF",
 		});
-		expect(ids.get("w2")).toMatchObject({ name: "build-3", color: "#F97316" });
+		expect(ids.get("w2")).toMatchObject({ name: "build-3", color: "#FF9D62" });
 		expect(ids.get("v")).toMatchObject({
 			name: "verify-1",
 			icon: "circle-check",
-			color: "#FACC15",
+			color: "#E0BA31",
 		});
-		// The palette cycles after five.
+		// The sixth takes a paler red, not the first's.
 		expect(ids.get("r2")).toMatchObject({
 			name: "research-2",
-			color: "#F43F5E",
+			color: "#FFC1C5",
 		});
 	});
 	it("keeps a helper's name and colour when another finishes or starts", () => {
@@ -157,7 +157,7 @@ describe("helper names, icons and colours", () => {
 			task("c", { createdAt: "2026-10-21T10:02:00Z" }),
 		]).get("b");
 		expect(after).toEqual(before);
-		expect(after).toMatchObject({ name: "review-1", color: "#A3E635" });
+		expect(after).toMatchObject({ name: "review-1", color: "#9CD242" });
 	});
 });
 

@@ -63,13 +63,23 @@ export function agentColor(kind: keyof typeof AGENT_COLOR_TOKENS) {
 	return `var(${AGENT_COLOR_TOKENS[kind]})`;
 }
 
-/** Each helper's icon colour, in the order the chat started them, cycling. */
+/**
+ * Each helper's icon colour, in the order the chat started them: red, green,
+ * blue, orange, gold, at an even brightness on the dark background. Helpers
+ * six to ten take paler versions of the same five, so no two look alike;
+ * after ten the ten repeat.
+ */
 export const HELPER_COLORS = [
-	"#F43F5E",
-	"#A3E635",
-	"#60A5FA",
-	"#F97316",
-	"#FACC15",
+	"#FF8F96",
+	"#9CD242",
+	"#83C1FF",
+	"#FF9D62",
+	"#E0BA31",
+	"#FFC1C5",
+	"#C9E697",
+	"#BBDDFF",
+	"#FFC9A9",
+	"#EED98E",
 ] as const;
 
 /** The colour of the chat's nth helper (0-based, in start order). */

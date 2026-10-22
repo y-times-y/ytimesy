@@ -115,7 +115,7 @@ describe("session timeline live collapse", () => {
 							{
 								name: "build-1",
 								task: "Fix branch picker",
-								color: "#F43F5E",
+								color: "#FF8F96",
 								icon: "hammer" as const,
 							},
 						],
@@ -142,7 +142,7 @@ describe("session timeline live collapse", () => {
 		expect(html).toContain(
 			'<span class="helper-line-name">build-1</span><span class="helper-line-text" title="Fix branch picker">started · <!-- -->Fix branch picker</span>',
 		);
-		expect(html).toContain('style="color:#F43F5E"');
+		expect(html).toContain('style="color:#FF8F96"');
 		// The finish is an outlined card that opens the helper; its report's
 		// first line under it, the full report on hover.
 		expect(html).toMatch(
