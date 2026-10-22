@@ -24,7 +24,6 @@ import {
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
 import { fusionPairFor } from "#/domain/fusion-pairs";
-import { leanToolRole } from "#/domain/harness-model-profile";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	outputCapCharacters,
@@ -149,7 +148,11 @@ import {
 import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
-import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
+import {
+	CODE_MODE_TOOL,
+	codeModeTool,
+	primaryCodeModeTools,
+} from "../services/code-mode-tool";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -2408,29 +2411,8 @@ function withCodeMode(
 		codeMode.redact,
 	);
 	if (codeMode.mode !== "primary") return { ...tools, ...offered };
-	// primary: run_code is listed first, as the system prompt names it first,
-	// and the command tool says it is for one command. Both depend only on the
-	// surface, so the tool list stays byte-stable across steps.
-	return {
-		...offered,
-		...Object.fromEntries(
-			Object.entries(tools).map(([name, definition]) => [
-				name,
-				leanToolRole(name) === "command"
-					? ({
-							...definition,
-							description:
-								`${definition.description ?? ""} ${PRIMARY_COMMAND_NOTE}`.trim(),
-						} as typeof definition)
-					: definition,
-			]),
-		),
-	};
+	return primaryCodeModeTools(offered, tools);
 }
-
-/** The command tool's line in code mode primary: what it is still for. */
-const PRIMARY_COMMAND_NOTE =
-	"Use it for one command, or a long-running or interactive process; for several known steps use run_code.";
 
 /** The system prompt: the builder's instructions, then memory's. */
 function turnInstructions(

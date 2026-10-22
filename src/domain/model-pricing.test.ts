@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { addApiTokenUsage, requestTokenUsage } from "./api-token-usage";
 import {
+	KNOWN_MODEL_PRICES,
 	longContextThreshold,
 	modelBilling,
 	modelPrice,
+	pricedModelId,
 	referenceTokenPrice,
 	usageCostUsd,
 } from "./model-pricing";
@@ -12,6 +14,73 @@ import {
 	BUDGET_WEIGHT_MIN,
 	budgetTokenWeight,
 } from "./subagent-usage";
+
+describe("pricedModelId", () => {
+	it("maps Claude's direct and Bedrock ids onto the catalog id", () => {
+		expect(pricedModelId("claude-opus-5-5")).toBe("claude-opus-5.5");
+		expect(pricedModelId("claude-sonnet-5-5")).toBe("claude-sonnet-5.5");
+		expect(pricedModelId("anthropic.claude-opus-5-5")).toBe("claude-opus-5.5");
+		expect(pricedModelId("us.anthropic.claude-opus-5-5-v1:0")).toBe(
+			"claude-opus-5.5",
+		);
+	});
+
+	it("leaves other ids as they were", () => {
+		expect(pricedModelId("gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("codex:gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("anthropic/claude-opus-5.5")).toBe(
+			"anthropic/claude-opus-5.5",
+		);
+		expect(pricedModelId("google/gemini-3.8-flash:free")).toBe(
+			"google/gemini-3.8-flash",
+		);
+		// A dated snapshot is a different id, never guessed onto a price.
+		expect(pricedModelId("claude-sonnet-4-5-20250929")).toBe(
+			"claude-sonnet-4-5-20250929",
+		);
+	});
+});
+
+describe("modelBilling", () => {
+	it("prices Claude's direct API ids", () => {
+		for (const [id, catalog] of [
+			["claude-opus-5-5", "anthropic/claude-opus-5.5"],
+			["claude-sonnet-5-5", "anthropic/claude-sonnet-5.5"],
+			["anthropic.claude-opus-5-5", "anthropic/claude-opus-5.5"],
+		] as const)
+			expect(modelBilling({ harness: "api", modelId: id })).toEqual({
+				kind: "tokens",
+				price: KNOWN_MODEL_PRICES[catalog],
+			});
+	});
+
+	it("gives a dollar cost for a direct Claude usage record", () => {
+		const cost = usageCostUsd(
+			{
+				inputTokens: 1_000_000,
+				outputTokens: 100_000,
+				uncachedInputTokens: 200_000,
+				cacheReadTokens: 700_000,
+				cacheWriteTokens: 100_000,
+			},
+			modelBilling({ harness: "api", modelId: "claude-opus-5-5" }),
+		);
+		// 0.2M x $4 + 0.7M x $0.20 + 0.1M x $5 + 0.1M x $20
+		expect(cost).toBeCloseTo(0.8 + 0.14 + 0.5 + 2, 6);
+	});
+
+	it("prices Gemini's direct API id", () => {
+		expect(
+			modelBilling({ harness: "api", modelId: "gemini-3.8-flash" }).price,
+		).toEqual(KNOWN_MODEL_PRICES["google/gemini-3.8-flash"]);
+	});
+
+	it("still has no price for an unknown model", () => {
+		expect(
+			modelBilling({ harness: "api", modelId: "claude-opus-9-9" }).price,
+		).toBeNull();
+	});
+});
 
 const request = (input: number, cached: number, output: number) => ({
 	inputTokens: input,
@@ -130,5 +199,65 @@ describe("budget weights", () => {
 			BUDGET_WEIGHT_MIN,
 		);
 		expect(budgetTokenWeight("gpt-6-luna", undefined)).toBe(1);
+	});
+});
+
+describe("Bedrock OpenAI prices", () => {
+	const million = (fields: Record<string, number>) => ({
+		inputTokens: null,
+		outputTokens: null,
+		uncachedInputTokens: null,
+		cacheReadTokens: null,
+		cacheWriteTokens: null,
+		...fields,
+	});
+
+	it("maps foundation ids and inference profiles onto the catalog id", () => {
+		expect(pricedModelId("openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("global.openai.gpt-6-luna")).toBe("gpt-6-luna");
+		expect(pricedModelId("us.openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+		expect(pricedModelId("us-gov.openai.gpt-6.1-sol")).toBe("gpt-6.1-sol");
+	});
+
+	it("bills the global profile at list price and a regional one 10% above it", () => {
+		expect(modelPrice("global.openai.gpt-6.1-sol")).toEqual(
+			KNOWN_MODEL_PRICES["openai/gpt-6.1-sol"],
+		);
+		const regional = modelPrice("us.openai.gpt-6-luna");
+		expect(regional?.input).toBeCloseTo(0.11, 10);
+		expect(regional?.cacheRead).toBeCloseTo(0.011, 10);
+		expect(regional?.cacheWrite).toBeCloseTo(0.1375, 10);
+		expect(regional?.output).toBeCloseTo(0.55, 10);
+		expect(regional?.longContext?.aboveInputTokens).toBe(272_000);
+		expect(regional?.longContext?.input).toBeCloseTo(0.22, 10);
+	});
+
+	it("prices cache writes and the long-context tier for Sol", () => {
+		const billing = modelBilling({
+			harness: "api",
+			modelId: "global.openai.gpt-6.1-sol",
+		});
+		// 1M uncached + 1M cache reads + 1M cache writes + 1M output, base tier.
+		const base = million({
+			inputTokens: 3_000_000,
+			outputTokens: 1_000_000,
+			cacheReadTokens: 1_000_000,
+			cacheWriteTokens: 1_000_000,
+		});
+		expect(usageCostUsd(base, billing)).toBeCloseTo(2 + 0.1 + 2.5 + 10, 10);
+		// One 300K-input request above 272K: the whole request at the long tier.
+		const long = requestTokenUsage(
+			million({
+				inputTokens: 300_000,
+				outputTokens: 10_000,
+				cacheReadTokens: 200_000,
+				cacheWriteTokens: 50_000,
+			}),
+			longContextThreshold("global.openai.gpt-6.1-sol"),
+		);
+		expect(usageCostUsd(long, billing)).toBeCloseTo(
+			(50_000 * 4 + 200_000 * 0.2 + 50_000 * 5 + 10_000 * 15) / 1_000_000,
+			10,
+		);
 	});
 });

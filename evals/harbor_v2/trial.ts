@@ -1,0 +1,978 @@
+import { access, mkdir, writeFile } from "node:fs/promises";
+import type { LanguageModel, ModelMessage } from "ai";
+import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
+import {
+	type ApiTokenUsage,
+	addApiTokenUsage,
+} from "../../src/domain/api-token-usage";
+import {
+	type EfficiencySummary,
+	efficiencySummary,
+	type ModelSpendRow,
+	type SpendSession,
+	treeModelSpend,
+} from "../../src/domain/eval-efficiency";
+import { harnessVariantLabel } from "../../src/domain/harness-variant";
+import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
+import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
+import { newSidekickState } from "../../src/domain/sidekick";
+import type { SubagentBudget } from "../../src/domain/subagent";
+import { budgetTokenWeight } from "../../src/domain/subagent-usage";
+import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
+import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
+import {
+	type ModelAgentRuntime,
+	runModelAgent,
+} from "../../src/server/services/model-agent-loop";
+import type { WorkspaceMachines } from "../../src/server/services/workspace-machines";
+import {
+	type AtifTrajectory,
+	atifToolDefinitions,
+	atifTrajectory,
+	type TimedEvent,
+	type TimedNotice,
+} from "./atif";
+import { bedrockWebSearchUsd } from "./bedrock";
+import {
+	checkerWorkerTool,
+	type FusionTrace,
+	fusionLead,
+	type RunRound,
+	roundMessages,
+} from "./children";
+import {
+	type BridgeRole,
+	type HarborBridgeConfig,
+	type HarborModel,
+	routeProvider,
+} from "./config";
+import { type HarborWorkspace, harborHarness } from "./harness";
+import {
+	type CheckerRun,
+	childBudgetUsed,
+	childStepGuard,
+	finalAnswer,
+	harborReviewDeps,
+	harborReviewLoop,
+	type ReviewTrace,
+	reviewItems,
+} from "./review";
+import { type TrialRole, trialSessions } from "./sessions";
+import {
+	guardedLanguageModel,
+	reserveTrial,
+	SpendCapReached,
+	settleTrial,
+	trialSpendGuard,
+} from "./spend";
+
+/**
+ * One Harbor trial of the current harness (docs/harbor-bridge-v2.md): spend
+ * reservation, the product builder's tools and prompt, the model run, the
+ * optional review loop, then the trace, the ATIF trajectory and the spend
+ * settlement. Everything the outside world provides (the task container,
+ * the model runtime, archive storage) is passed in, so the whole trial runs
+ * offline in tests against a mock model and a fake container.
+ */
+
+export type HarborTrialInput = {
+	config: HarborBridgeConfig;
+	trialId: string;
+	instruction: string;
+	cwd: string;
+	logsDir: string;
+	/** When Harbor stops the agent (epoch ms), if known. */
+	deadlineAt: number;
+	machines: WorkspaceMachines;
+	userId: string;
+	storage: ContextArchiveStorage;
+	/**
+	 * Builds the route's runtime with every model request passed through
+	 * `wrapModel`: the builder's model, or `model` (the checker's own,
+	 * roleModels.checker) on the same route.
+	 */
+	runtime: (
+		wrapModel: (model: LanguageModel) => LanguageModel,
+		model?: HarborModel,
+	) => Promise<ModelAgentRuntime>;
+	mcpServers?: readonly string[];
+	harness: {
+		name: string;
+		version: string;
+		commit: string | null;
+		bundleSha256: string | null;
+	};
+	log?: (line: string) => void;
+	now?: () => number;
+};
+
+export type HarborTrialResult = {
+	/** Refused before any inference (a cap or the ledger's stop file). */
+	refused: string | null;
+	failure: string | null;
+	usage: ApiTokenUsage | null;
+	costUsd: number | null;
+	requests: number;
+	reviewRounds: number;
+	/** AA-style cost block (src/domain/eval-efficiency.ts); null when refused. */
+	efficiency: TrialEfficiency | null;
+};
+
+/**
+ * The trial's cost block, from the shared eval-efficiency summary (the one
+ * the hard-set runner prints): cost, tokens, model calls and cache hit rate,
+ * split per role and model. Whether the task was solved is the grader's
+ * call, so `solved` is not known here; aggregate trials with
+ * evals/harbor_v2/efficiency.ts, which joins the verifier's reward.
+ */
+export type TrialEfficiency = Omit<
+	EfficiencySummary,
+	"solved" | "perSolvedUsd"
+> & { readonly modelRows: readonly ModelSpendRow[] };
+
+/** One usage record as a session's items, for treeModelSpend. */
+function usageSession(
+	session: Omit<SpendSession, "items">,
+	usage: ApiTokenUsage | null,
+): SpendSession {
+	return {
+		...session,
+		items: usage
+			? [
+					{
+						kind: "userMessage",
+						id: SessionItemId(`${session.id}-usage`),
+						text: "",
+						apiUsage: usage,
+					},
+				]
+			: [],
+	};
+}
+
+/** The sidekick classifier's calls, one row per model (not a session in the product's tree). */
+function classifierRows(input: {
+	harness: "codex" | "api";
+	children: readonly {
+		role: TrialRole;
+		modelId: string;
+		usage: ApiTokenUsage | null;
+	}[];
+}): ModelSpendRow[] {
+	const byModel = new Map<
+		string,
+		{ usage: ApiTokenUsage | null; agents: number }
+	>();
+	for (const child of input.children.filter(
+		(entry) => entry.role === "classifier",
+	)) {
+		const row = byModel.get(child.modelId) ?? { usage: null, agents: 0 };
+		row.usage = child.usage
+			? addApiTokenUsage(row.usage, child.usage)
+			: row.usage;
+		row.agents++;
+		byModel.set(child.modelId, row);
+	}
+	return [...byModel].map(([model, row]) => {
+		const billing = modelBilling({ harness: input.harness, modelId: model });
+		return {
+			role: "classifier",
+			model,
+			agents: row.agents,
+			requests: row.usage?.requests ?? 0,
+			inputTokens: row.usage?.inputTokens ?? 0,
+			outputTokens: row.usage?.outputTokens ?? 0,
+			cacheReadTokens: row.usage?.cacheReadTokens ?? 0,
+			costUsd: usageCostUsd(row.usage, billing),
+			estimated: billing.kind === "plan",
+		};
+	});
+}
+
+export function trialEfficiency(input: {
+	rootId: string;
+	harness: "codex" | "api";
+	builder: { modelId: string; usage: ApiTokenUsage | null };
+	children: readonly {
+		sessionId: string;
+		role: TrialRole;
+		modelId: string;
+		usage: ApiTokenUsage | null;
+	}[];
+	seconds: number;
+}): TrialEfficiency {
+	const modelRows = treeModelSpend({
+		rootId: input.rootId,
+		sessions: [
+			usageSession(
+				{
+					id: input.rootId,
+					harness: input.harness,
+					listedModelId: input.builder.modelId,
+				},
+				input.builder.usage,
+			),
+			...input.children
+				.filter((child) => child.role !== "classifier")
+				.map((child) =>
+					usageSession(
+						{
+							id: child.sessionId,
+							harness: input.harness,
+							listedModelId: child.modelId,
+							// Each role as the product's tree marks it (eval-efficiency.ts).
+							agentRole: child.role === "sidekick" ? "writer" : "checker",
+							...(child.role === "sidekick"
+								? { agentBudget: { sidekick: {} } as unknown as SubagentBudget }
+								: child.role === "checkerWorker"
+									? {
+											agentRole: "writer" as const,
+											agentBudget: {
+												checkerPair: "worker",
+											} as unknown as SubagentBudget,
+										}
+									: {}),
+						},
+						child.usage,
+					),
+				),
+		],
+	}).concat(classifierRows(input));
+	const {
+		solved: _solved,
+		perSolvedUsd: _perSolved,
+		...summary
+	} = efficiencySummary([
+		{ solved: false, seconds: input.seconds, models: modelRows },
+	]);
+	return { ...summary, modelRows };
+}
+
+const sum = (usages: (ApiTokenUsage | null)[]) =>
+	usages.reduce<ApiTokenUsage | null>(
+		(total, usage) => (usage ? addApiTokenUsage(total, usage) : total),
+		null,
+	);
+
+export function lastUsage(
+	events: readonly TimedEvent[],
+	from = 0,
+	to = events.length,
+): ApiTokenUsage | null {
+	for (let index = to - 1; index >= from; index--) {
+		const { event } = events[index];
+		if (event.type === "usage") return event.usage;
+	}
+	return null;
+}
+
+/**
+ * Usage events are cumulative within one model run; each review fix is a
+ * new run whose counters start at zero. `starts` are the event indexes where
+ * runs began.
+ */
+export function runsUsage(
+	events: readonly TimedEvent[],
+	starts: readonly number[],
+): ApiTokenUsage | null {
+	const bounds = starts.length ? starts : [0];
+	return sum(
+		bounds.map((start, index) =>
+			lastUsage(events, start, bounds[index + 1] ?? events.length),
+		),
+	);
+}
+
+/** Where a reader's copy of the checkout goes (outside the checkout). */
+export function readerCopyPath(trialId: string, sessionId: string) {
+	const safe = (value: string) => value.replaceAll(/[^a-zA-Z0-9.-]/g, "");
+	return `/tmp/ytimesy-readers/${safe(trialId)}/${safe(sessionId)}/checkout`;
+}
+
+/** Copies the checkout (with .git and the review refs) for a reader. */
+export function readerCopyCommand(cwd: string, copy: string) {
+	const q = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	return `rm -rf ${q(copy)} && mkdir -p "$(dirname ${q(copy)})" && cp -a ${q(cwd)} ${q(copy)}`;
+}
+
+function mcpNoteFor(servers: readonly string[] | undefined) {
+	return servers?.length
+		? ` MCP servers are available in this environment: ${servers.join(", ")}. Use them through a shell command: \`mcp-call <server> list\` lists a server's tools and arguments; \`mcp-call <server> call <tool> '<json arguments>'\` calls one. Each server keeps one session, so state such as an open browser page persists between calls.`
+		: "";
+}
+
+export async function runHarborTrial(
+	input: HarborTrialInput,
+): Promise<HarborTrialResult> {
+	const { config } = input;
+	const now = input.now ?? Date.now;
+	const log = input.log ?? (() => {});
+	await mkdir(input.logsDir, { recursive: true });
+	const tracePath = `${input.logsDir}/ytimesy-trace.json`;
+	// A trace from another run in this directory would be mistaken for this trial's.
+	if (
+		await access(tracePath).then(
+			() => true,
+			() => false,
+		)
+	)
+		throw new Error(
+			`${tracePath} already exists; refusing to overwrite another trial's trace.`,
+		);
+	const startedAt = new Date(now()).toISOString();
+	if (config.total) {
+		try {
+			const reserved = await reserveTrial({
+				ledger: config.total.ledger,
+				totalCapUsd: config.total.capUsd,
+				trial: input.trialId,
+				trialCapUsd: config.trialUsdCap ?? config.total.capUsd,
+			});
+			for (const warning of reserved.warnings) log(`warning: ${warning}`);
+		} catch (error) {
+			if (error instanceof SpendCapReached)
+				return {
+					refused: error.message,
+					failure: null,
+					usage: null,
+					costUsd: 0,
+					requests: 0,
+					reviewRounds: 0,
+					efficiency: null,
+				};
+			throw error;
+		}
+	}
+	const events: TimedEvent[] = [];
+	// Event indexes where each builder run began (a review fix is a new run).
+	const builderStarts: number[] = [];
+	const notices: TimedNotice[] = [];
+	const sessions = trialSessions(now);
+	const readerCopies: { sessionId: string; copy: string; ok: boolean }[] = [];
+	const fusionTrace: FusionTrace = { decisions: [], rounds: [], refused: [] };
+	const builderModel: HarborModel = {
+		modelId: config.modelId,
+		effort: config.effort,
+		billing: config.billing,
+	};
+	// roleModels.checker: the checker's own model on the route; else the builder's.
+	const checkerModel = config.checker ?? builderModel;
+	const totalUsage = () =>
+		sum([
+			runsUsage(events, builderStarts),
+			...sessions.all().map((child) => runsUsage(child.events, child.starts)),
+		]);
+	// Each run at its own model's price (a cheaper checker counts less).
+	const spendParts = () => [
+		{ usage: runsUsage(events, builderStarts), billing: config.billing },
+		...sessions.all().map((child) => ({
+			usage: runsUsage(child.events, child.starts),
+			billing: child.model.billing,
+		})),
+	];
+	// Bedrock bills each Web Search query on top of tokens (builder only).
+	const searchUsd = () =>
+		config.route === "bedrock"
+			? bedrockWebSearchUsd(events.map((entry) => entry.event))
+			: 0;
+	const guard = trialSpendGuard({
+		capUsd: config.trialUsdCap,
+		requestLimit: config.requestLimit,
+		parts: spendParts,
+		extraUsd: searchUsd,
+	});
+	const remainingMs = Math.max(1000, input.deadlineAt - now());
+	const signal = AbortSignal.timeout(remainingMs);
+	const workspace: HarborWorkspace = {
+		machines: input.machines,
+		vm: WorkspaceId("harbor"),
+		cwd: input.cwd,
+		signal,
+		sessionId: input.trialId,
+		turnId: harborTurnId(input.trialId),
+	};
+	let failure: string | null = null;
+	let instructions = "";
+	let tools = {};
+	const reviewTrace: ReviewTrace = { checks: [] };
+	let reviewRounds = 0;
+	let reviewSummary: unknown = null;
+	try {
+		const wrapModel = (model: LanguageModel) =>
+			guardedLanguageModel(model, guard, signal);
+		const runtime = await input.runtime(wrapModel);
+		const provider = routeProvider(config.route);
+		const onEvent = async (event: ApiAgentEvent) => {
+			events.push({ at: new Date(now()).toISOString(), event });
+			if (event.type === "tool-call")
+				log(`tool ${event.name} ${JSON.stringify(event.input).slice(0, 160)}`);
+			if (event.type === "usage")
+				log(
+					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${guard.spentUsd().toFixed(4)}`,
+				);
+		};
+		const runtimes = new Map<string, Promise<ModelAgentRuntime>>();
+		const runtimeFor = (model: HarborModel) => {
+			if (model.modelId === config.modelId && model.effort === config.effort)
+				return Promise.resolve(runtime);
+			const key = `${model.modelId}@${model.effort}`;
+			let ready = runtimes.get(key);
+			if (!ready) {
+				ready = input.runtime(wrapModel, model);
+				runtimes.set(key, ready);
+			}
+			return ready;
+		};
+		const roleModel = (role: BridgeRole) =>
+			config.roles[role] ?? (role === "checker" ? checkerModel : builderModel);
+		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		// One round of a child session (sidekick, checker, worker) in process,
+		// on the same container: its harness, the product's role prompt.
+		const runRound: RunRound = async (session, brief, options) => {
+			const stop = new AbortController();
+			const budget =
+				session.role === "checker" || session.role === "checkerWorker"
+					? (checkerBudgets.get(session.id) ?? CHILD_BUDGET)
+					: CHILD_BUDGET;
+			const childSignal = AbortSignal.any([
+				signal,
+				stop.signal,
+				AbortSignal.timeout(budget.minutes * 60_000),
+			]);
+			session.stop = () => stop.abort(new Error("Stopped by its parent."));
+			session.briefs.push(brief);
+			// Each round runs under its own command scope: the round's end stops
+			// its scope for good, so a scope shared by rounds would make every
+			// later round's command exit 130 at once.
+			const turnId = harborTurnId(session.id, session.briefs.length);
+			const started = now();
+			const onChildEvent = async (event: ApiAgentEvent) => {
+				session.events.push({ at: new Date(now()).toISOString(), event });
+			};
+			// The sidekick's state in its budget gives it the product's sidekick
+			// role block (no commit, stash, reset or branch switch: publishing
+			// stays the lead's) and the product's per-round token cap.
+			const childBudget: SubagentBudget =
+				session.role === "sidekick"
+					? {
+							...budget,
+							sidekick: newSidekickState(budget, session.startedAt, {
+								model: session.model.modelId,
+							}),
+						}
+					: budget;
+			const child = await harborHarness({
+				workspace: {
+					...workspace,
+					cwd: options.cwd ?? input.cwd,
+					signal: childSignal,
+					sessionId: session.id,
+					turnId,
+				},
+				userId: input.userId,
+				modelId: session.model.modelId,
+				provider,
+				variant: config.variant,
+				webSearch: false,
+				instruction: brief,
+				storage: input.storage,
+				onEvent: onChildEvent,
+				subagent: {
+					role: session.role === "sidekick" ? "writer" : "checker",
+					budget: childBudget,
+					readOnly: options.readOnly,
+				},
+				...(options.extraTools ? { extraTools: options.extraTools } : {}),
+			});
+			session.instructions = child.instructions;
+			session.tools = child.tools;
+			const roundStart = session.events.length;
+			const stepGuard = childStepGuard({
+				role: session.role,
+				budget: childBudget,
+				startedAt: started,
+				events: session.events,
+				from: roundStart,
+				weight: budgetTokenWeight(session.model.modelId, config.modelId),
+			});
+			session.starts.push(roundStart);
+			try {
+				const messages = await runModelAgent(
+					{
+						userId: input.userId,
+						modelId: session.model.modelId,
+						reasoning: session.model.effort,
+						toolSurface: "implementation",
+						cacheScopeId: session.id,
+						...child.input,
+						prepareMessages: async (history) =>
+							stepGuard(
+								(await child.input.prepareMessages?.(history)) ?? history,
+							),
+						tools: child.tools,
+						instructions: child.instructions,
+						signal: childSignal,
+						maxSteps: budget.steps,
+						turnTimeoutMs: budget.minutes * 60_000,
+						messages: roundMessages(session, brief),
+						onEvent: onChildEvent,
+						onStep: async () => {},
+					},
+					await runtimeFor(session.model),
+				);
+				session.messages = messages;
+				const report = {
+					outcome: "completed" as const,
+					report: finalAnswer(messages),
+				};
+				session.reports.push(report);
+				return report;
+			} catch (error) {
+				const used = childBudgetUsed(error);
+				if (used) {
+					log(`${session.role} ${session.id} stopped: ${used.message}`);
+					const report = {
+						outcome: "failed" as const,
+						report: "",
+						budgetUsed: used.reason,
+					};
+					session.reports.push(report);
+					return report;
+				}
+				log(
+					`${session.role} ${session.id} failed: ${error instanceof Error ? error.message : String(error)}${providerDetail(error)}`,
+				);
+				const report = { outcome: "failed" as const, report: "" };
+				session.reports.push(report);
+				return report;
+			} finally {
+				await stopApiTurnCommands(
+					{
+						machines: input.machines,
+						vm: workspace.vm,
+						cwd: options.cwd ?? input.cwd,
+					},
+					turnId,
+				).catch(() => {});
+			}
+		};
+		const checkerBudgets = new Map<
+			string,
+			{ steps: number; minutes: number; tokens: number }
+		>();
+		const startChecker = (spec: {
+			sessionId: string;
+			brief: string;
+			budget: { steps: number; minutes: number; tokens: number };
+		}): CheckerRun => {
+			const session = sessions.add({
+				role: "checker",
+				parentId: input.trialId,
+				id: spec.sessionId,
+				model: checkerModel,
+			});
+			checkerBudgets.set(session.id, spec.budget);
+			const pair = config.variant.checkerMode === "pair";
+			// Readers never touch the checkout: the checker (and a pair judge's
+			// workers) work in their own copy of it, the brief's paths moved there.
+			const copy = readerCopyPath(input.trialId, session.id);
+			const done = (async () => {
+				const made = await input.machines.exec(
+					workspace.vm,
+					readerCopyCommand(input.cwd, copy),
+					120_000,
+				);
+				readerCopies.push({
+					sessionId: session.id,
+					copy,
+					ok: made.exitCode === 0,
+				});
+				if (made.exitCode !== 0) {
+					log(
+						`checker ${session.id}: no read copy (${made.stderr.slice(0, 200)})`,
+					);
+					const failed = { outcome: "failed" as const, report: "" };
+					session.reports.push(failed);
+					return failed;
+				}
+				return runRound(session, spec.brief.split(input.cwd).join(copy), {
+					readOnly: true,
+					cwd: copy,
+					...(pair
+						? {
+								extraTools: () =>
+									checkerWorkerTool({
+										judge: session,
+										sessions,
+										model: (strong) =>
+											strong ? checkerModel : roleModel("checkerWorker"),
+										runRound: (worker, brief, options) => {
+											checkerBudgets.set(worker.id, spec.budget);
+											return runRound(worker, brief, { ...options, cwd: copy });
+										},
+									}),
+							}
+						: {}),
+				});
+			})();
+			return {
+				done,
+				usage: () => lastUsage(session.events),
+				stop: () => session.stop(),
+			};
+		};
+		// lead=fusion: the builder is the lead, with one sidekick in its checkout.
+		const lead =
+			config.variant.lead === "fusion"
+				? fusionLead({
+						parentId: input.trialId,
+						sessions,
+						model: roleModel,
+						escalation: config.roles.writerEscalation ?? null,
+						runRound,
+						callOnce: async (session, system, message) => {
+							session.starts.push(session.events.length);
+							const out = await runModelAgent(
+								{
+									userId: input.userId,
+									modelId: session.model.modelId,
+									reasoning: session.model.effort,
+									toolSurface: "implementation",
+									cacheScopeId: session.id,
+									tools: {},
+									instructions: system,
+									signal,
+									maxSteps: 1,
+									turnTimeoutMs: 60_000,
+									messages: [{ role: "user", content: message }],
+									onEvent: async (event) => {
+										session.events.push({
+											at: new Date(now()).toISOString(),
+											event,
+										});
+									},
+									onStep: async () => {},
+								},
+								await runtimeFor(session.model),
+							);
+							return {
+								text: finalAnswer(out),
+								usage: runsUsage(session.events, session.starts),
+							};
+						},
+						changedFiles: async () => {
+							const status = await input.machines.exec(
+								workspace.vm,
+								`git -C ${JSON.stringify(input.cwd)} status --short`,
+								20_000,
+							);
+							return status.stdout.split("\n").filter(Boolean).slice(0, 40);
+						},
+						trace: fusionTrace,
+						now,
+					})
+				: null;
+		const harness = await harborHarness({
+			workspace,
+			userId: input.userId,
+			modelId: config.modelId,
+			provider,
+			variant: config.variant,
+			webSearch: config.webSearch,
+			bedrock: config.route === "bedrock",
+			instruction: input.instruction,
+			storage: input.storage,
+			onEvent,
+			mcpNote: mcpNoteFor(input.mcpServers),
+			...(config.variant.lead === "fusion"
+				? { extraTools: () => lead?.tools() ?? {} }
+				: {}),
+		});
+		instructions = harness.instructions;
+		tools = harness.tools;
+		const runBuilder = (messages: ModelMessage[]) => {
+			builderStarts.push(events.length);
+			return runModelAgent(
+				{
+					userId: input.userId,
+					modelId: config.modelId,
+					reasoning: config.effort,
+					toolSurface: "implementation",
+					cacheScopeId: input.trialId,
+					...harness.input,
+					tools: harness.tools,
+					instructions: harness.instructions,
+					signal,
+					maxSteps: config.requestLimit,
+					turnTimeoutMs: remainingMs,
+					messages,
+					onEvent,
+					onStep: async () => {},
+				},
+				runtime,
+			);
+		};
+		let messages: ModelMessage[] = [
+			{ role: "user", content: input.instruction },
+		];
+		// The request's exploration round, before the lead's first model call.
+		if (lead)
+			messages.push({
+				role: "user",
+				content: await lead.explore(input.instruction),
+			});
+		if (config.variant.review === "on") {
+			const loop = harborReviewLoop({
+				sessionId: input.trialId,
+				turnId: workspace.turnId,
+				workspace,
+				signal,
+				billing: config.billing,
+				instruction: input.instruction,
+				rigor: config.variant.rigor === "on",
+				pair: config.variant.checkerMode === "pair",
+				deps: harborReviewDeps({
+					workspace,
+					// Leave the grader's side two minutes.
+					deadlineAt: input.deadlineAt - 120_000,
+					startChecker,
+					trace: reviewTrace,
+					sessions,
+					...(config.checker
+						? {
+								checkerModel: {
+									harness:
+										config.route === "codex-subscription" ? "codex" : "api",
+									modelId: config.checker.modelId,
+									reasoning: config.checker.effort,
+								},
+							}
+						: {}),
+					now,
+				}),
+			});
+			const step = () => ({
+				messages,
+				items: reviewItems({
+					instruction: input.instruction,
+					usage: runsUsage(events, builderStarts),
+					messages,
+				}),
+				waitUntil: input.deadlineAt - 120_000,
+			});
+			await loop.beforeModel(step());
+			for (;;) {
+				messages = await runBuilder(messages);
+				const outcome = await loop.afterAttempt(step());
+				if (outcome.kind !== "run" || !outcome.messages) {
+					reviewSummary =
+						outcome.kind === "finished" ? outcome.items.at(-1) : null;
+					break;
+				}
+				reviewRounds++;
+				const notice = outcome.messages.at(-1);
+				notices.push({
+					at: new Date(now()).toISOString(),
+					afterEvent: events.length,
+					text:
+						typeof notice?.content === "string"
+							? notice.content
+							: JSON.stringify(notice?.content),
+				});
+				messages = outcome.messages;
+				log(`review round ${reviewRounds}: findings returned to the builder`);
+			}
+		} else messages = await runBuilder(messages);
+	} catch (error) {
+		// A guard refusal surfaces from the model loop as a generic provider failure.
+		failure =
+			guard.stopReason() ??
+			(error instanceof Error ? error.message : "Builder failed");
+		log(`builder stopped: ${failure}`);
+	} finally {
+		await stopApiTurnCommands(
+			{ machines: input.machines, vm: workspace.vm, cwd: input.cwd },
+			workspace.turnId,
+		).catch(() => {});
+		for (const child of sessions.all()) child.stop();
+	}
+	const usage = totalUsage();
+	// Each run at its own model's price; unknown when any price is unknown.
+	const costUsd = spendParts().reduce<number | null>((total, part) => {
+		if (total === null) return null;
+		if (!part.usage) return total;
+		const cost = usageCostUsd(part.usage, part.billing);
+		return cost === null ? null : total + cost;
+	}, searchUsd());
+	const efficiency = trialEfficiency({
+		rootId: input.trialId,
+		harness: config.route === "codex-subscription" ? "codex" : "api",
+		builder: {
+			modelId: config.modelId,
+			usage: runsUsage(events, builderStarts),
+		},
+		children: sessions.all().map((child) => ({
+			sessionId: child.id,
+			role: child.role,
+			modelId: child.model.modelId,
+			usage: runsUsage(child.events, child.starts),
+		})),
+		seconds: (now() - Date.parse(startedAt)) / 1000,
+	});
+	const fingerprint = {
+		trial: input.trialId,
+		harness: input.harness,
+		route: config.route,
+		model: config.modelId,
+		effort: config.effort,
+		checkerModel: config.checker
+			? { model: config.checker.modelId, effort: config.checker.effort }
+			: null,
+		variant: harnessVariantLabel(config.variant),
+		billing: config.billing.kind,
+		trialUsdCap: config.trialUsdCap,
+		totalUsdCap: config.total?.capUsd ?? null,
+		requestLimit: config.requestLimit,
+		webSearch: config.webSearch,
+	};
+	await writeFile(
+		tracePath,
+		JSON.stringify({
+			...fingerprint,
+			startedAt,
+			failure,
+			requests: guard.requests(),
+			usage,
+			costUsd,
+			efficiency,
+			review: {
+				rounds: reviewRounds,
+				checks: reviewTrace.checks,
+				readerCopies,
+				state: reviewTrace.state ?? null,
+				summary: reviewSummary,
+			},
+			events,
+			notices,
+			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
+			roleModels: Object.fromEntries(
+				Object.entries(config.roles).map(([role, model]) => [
+					role,
+					{ model: model.modelId, effort: model.effort },
+				]),
+			),
+			checkers: sessions.all().map((child) => ({
+				sessionId: child.id,
+				role: child.role,
+				parentId: child.parentId,
+				model: child.model.modelId,
+				effort: child.model.effort,
+				brief: child.briefs[0] ?? "",
+				briefs: child.briefs,
+				events: child.events,
+			})),
+		}),
+	);
+	const toolDefinitions = await atifToolDefinitions(tools).catch(() => []);
+	const subagents: AtifTrajectory[] = await Promise.all(
+		sessions.all().map(async (checker) =>
+			atifTrajectory({
+				sessionId: input.trialId,
+				trajectoryId: checker.id,
+				agent: {
+					name: `${input.harness.name}-${checker.role}`,
+					version: input.harness.version,
+				},
+				modelName: checker.model.modelId,
+				effort: checker.model.effort,
+				billing: checker.model.billing,
+				systemPrompt: checker.instructions || `(${checker.role})`,
+				instruction: checker.briefs[0] ?? "",
+				startedAt: checker.startedAt,
+				events: checker.events,
+				toolDefinitions: await atifToolDefinitions(checker.tools).catch(
+					() => [],
+				),
+			}),
+		),
+	);
+	const trajectory = atifTrajectory({
+		sessionId: input.trialId,
+		agent: {
+			name: input.harness.name,
+			version: input.harness.version,
+			extra: fingerprint,
+		},
+		modelName: config.modelId,
+		effort: config.effort,
+		billing: config.billing,
+		systemPrompt: instructions || "(not built)",
+		instruction: input.instruction,
+		startedAt,
+		events,
+		runStarts: builderStarts,
+		notices,
+		toolDefinitions,
+		subagents,
+		metricsExtra: { efficiency },
+		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
+	});
+	await writeFile(
+		`${input.logsDir}/trajectory.json`,
+		JSON.stringify(trajectory, null, 2),
+	);
+	if (config.total)
+		for (const warning of (
+			await settleTrial({
+				ledger: config.total.ledger,
+				trial: input.trialId,
+				usd: costUsd ?? Number.NaN,
+				totalCapUsd: config.total.capUsd,
+			})
+		).warnings)
+			log(`warning: ${warning}`);
+	return {
+		refused: null,
+		failure,
+		usage,
+		costUsd,
+		requests: guard.requests(),
+		reviewRounds,
+		efficiency,
+	};
+}
+
+/**
+ * A turn id the product's command runner accepts (letters, digits and
+ * hyphens, at most 80: api-command-scope.ts). Harbor trial ids carry
+ * underscores (session-window-debug__MVgXW8D) and child ids a dot (.1);
+ * used raw, every bash call failed with "Invalid command scope".
+ */
+export function harborTurnId(id: string, round?: number) {
+	const suffix = `${round === undefined ? "" : `-r${round}`}-turn`;
+	return `${id.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 80 - suffix.length)}${suffix}`;
+}
+
+/**
+ * The underlying provider error a SafeApiModelFailure keeps for operators
+ * (its message is a generic classification), for the bridge log only:
+ * name, message and cause chain, with AWS key ids and signatures redacted.
+ */
+export function providerDetail(error: unknown) {
+	let inner = (error as { providerError?: unknown } | null)?.providerError;
+	if (inner === undefined) return "";
+	const parts: string[] = [];
+	for (let depth = 0; depth < 4 && inner; depth++) {
+		parts.push(
+			inner instanceof Error
+				? `${inner.name}: ${inner.message}`
+				: (JSON.stringify(inner)?.slice(0, 400) ?? String(inner)),
+		);
+		inner = (inner as { cause?: unknown }).cause;
+	}
+	return ` [provider: ${parts
+		.join(" <- ")
+		.replace(/\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b/g, "<key>")
+		.replace(/Signature=[0-9a-f]+/g, "Signature=<redacted>")
+		.slice(0, 1200)}]`;
+}
