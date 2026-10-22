@@ -519,6 +519,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			>(
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
 			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,
+			 (extract(epoch from t.created_at)*1000)::float8 as queued_at_ms,
 			 heartbeat_at>=now()-interval '45 seconds' as fresh,
 			 ${turnPastDeadlineSql("t")} as past_deadline,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy

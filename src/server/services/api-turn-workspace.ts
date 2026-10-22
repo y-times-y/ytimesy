@@ -38,6 +38,14 @@ export function deferredApiTurnWorkspace(
 		 * request can decide on that commit's hook configuration.
 		 */
 		pinNewChatBase?: boolean;
+		/** Reports each preparation phase as it is reached (the step's timing line). */
+		onPhase?: (
+			phase:
+				| "workspaceBound"
+				| "workspaceRunning"
+				| "checkoutPrepared"
+				| "baselinesSet",
+		) => void;
 	} = {},
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
@@ -138,10 +146,12 @@ export function deferredApiTurnWorkspace(
 					sessionId: owner.id,
 					harness: owner.harness,
 				});
+		options.onPhase?.("workspaceBound");
 		const scoped = machinesForAgentSession(machines, bound.session);
 		const vm = WorkspaceId(bound.providerRef);
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
+		options.onPhase?.("workspaceRunning");
 		signal.throwIfAborted();
 		// Cloud metadata is refused for every user on the VM, re-applied each
 		// turn (a cold boot drops the rules); it overlaps the checkout.
@@ -169,6 +179,7 @@ export function deferredApiTurnWorkspace(
 			}),
 		);
 		await metadataBlocked;
+		options.onPhase?.("checkoutPrepared");
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
@@ -203,6 +214,7 @@ export function deferredApiTurnWorkspace(
 						error instanceof Error ? error.message.slice(0, 200) : "unknown",
 				});
 			});
+		options.onPhase?.("baselinesSet");
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
 	/**

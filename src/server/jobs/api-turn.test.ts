@@ -1902,6 +1902,60 @@ describe("a builder's first request before its workspace is ready", () => {
 		);
 	});
 
+	it("logs one timing line per step, with why the first request went early or not", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const lines = () =>
+				log.mock.calls
+					.map(([line]) => String(line))
+					.filter((line) => line.includes('"turn-timing"'))
+					.map((line) => JSON.parse(line));
+			const workspace = heldWorkspace();
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				setTimeout(() => workspace.ready(), 5);
+				return { messages: input.messages, outcome: "completed" };
+			});
+			await runApiTurn({} as WorkspaceMachines, rootTurn, {
+				...firstStep(),
+				startedAt: Date.now() - 50,
+			});
+			expect(lines()).toHaveLength(1);
+			const [line] = lines();
+			expect(line).toMatchObject({
+				turn: "turn-early",
+				step: 1,
+				early: true,
+				earlyReason: "early",
+				outcome: "completed",
+			});
+			expect(line.phases.turnStart).toBeGreaterThanOrEqual(50);
+			for (const phase of ["leaseAcquired", "settings", "firstToken", "end"])
+				expect(line.phases[phase], phase).toBeTypeOf("number");
+			// Ids, numbers and codes only: nothing from the prompt or reply.
+			expect(JSON.stringify(line)).not.toMatch(/ananab|repo/);
+
+			log.mockClear();
+			mocks.workspace.mockResolvedValue({
+				machines: {},
+				vm: "vm",
+				cwd: "/repo",
+			});
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep());
+			expect(lines()[0]).toMatchObject({
+				early: false,
+				earlyReason: "workspace-ready",
+			});
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it("records the turn's code point while its attachments are still being restored", async () => {
 		mocks.workspace.mockResolvedValue({ machines: {}, vm: "vm", cwd: "/repo" });
 		const { ensureConversationCodePoint } = await import(
