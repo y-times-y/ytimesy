@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { parseReviewVerdict } from "./checker-brief";
+import { findingsFileVerdict, parseReviewVerdict } from "./checker-brief";
 import {
 	commandWasRun,
+	defaultPassVerdict,
 	executedCommands,
 	groundReviewVerdict,
+	harnessCommands,
+	harnessGrounded,
+	NOT_VERIFIED_NOTE,
 	UNGROUNDED_PASS_NOTE,
 } from "./checker-evidence";
 import { SessionItemId } from "./ids";
@@ -127,9 +131,9 @@ describe("execution-grounded verdicts", () => {
 		expect(verdict.verdict).toBe("pass");
 		expect(verdict.ungrounded).toBeUndefined();
 		expect(reviewFindings(verdict)).toEqual([]);
-		// A fail shown by nothing it ran: no verdict, retried.
+		// A fail shown by nothing it ran: an ungrounded pass, never unsure.
 		const none = groundReviewVerdict(review(FAIL), []);
-		expect(none.verdict).toBe("unsure");
+		expect(none.verdict).toBe("pass");
 		expect(none.ungrounded).toBe(true);
 	});
 
@@ -167,7 +171,7 @@ describe("execution-grounded verdicts", () => {
 		expect(verdict.downgraded).toEqual([]);
 	});
 
-	it("a pass with no executed verification is no verdict, and the loop checks again once", () => {
+	it("a pass with no executed verification is ungrounded, and the loop checks again once", () => {
 		const claimed = review({
 			verdict: "pass",
 			failures: [],
@@ -176,7 +180,7 @@ describe("execution-grounded verdicts", () => {
 		});
 		expect(claimed.verdict).toBe("pass");
 		const ungrounded = groundReviewVerdict(claimed, ["ls /app"]);
-		expect(ungrounded).toMatchObject({ verdict: "unsure", ungrounded: true });
+		expect(ungrounded).toMatchObject({ verdict: "pass", ungrounded: true });
 		expect(ungrounded.notes).toContain(UNGROUNDED_PASS_NOTE);
 		expect(ungrounded.tests[0].unrun).toBe(true);
 		const at = { now: 0, deadlineAt: 3_600_000 };
@@ -207,5 +211,147 @@ describe("execution-grounded verdicts", () => {
 		expect(reviewLoopSummary(state)).toBe(
 			"Review 1: fail (1 finding) · 2 not run, set aside",
 		);
+	});
+
+	it("the loop runs the checker's run.sh, tests and named checks to ground a pass", () => {
+		const claimed = groundReviewVerdict(
+			review({
+				verdict: "pass",
+				failures: [],
+				tests: [
+					{ name: "edge", command: REPRO, passed: true },
+					{
+						name: "huge",
+						command: "python3 /tmp/x/probe.py",
+						passed: true,
+						probe: true,
+					},
+				],
+				requirements: [
+					{ requirement: "r", met: true, command: "make -C /app test" },
+					{ requirement: "s", met: false, command: "ls /nope" },
+				],
+			}),
+			[],
+		);
+		expect(claimed.ungrounded).toBe(true);
+		expect(harnessCommands(claimed, "/tmp/check")).toEqual([
+			{
+				command:
+					"test -f /tmp/check/tests/run.sh && bash /tmp/check/tests/run.sh",
+				test: true,
+			},
+			{ command: REPRO, test: true },
+			{ command: "make -C /app test", test: false },
+		]);
+		const absent = {
+			command:
+				"test -f /tmp/check/tests/run.sh && bash /tmp/check/tests/run.sh",
+			exitCode: 1,
+			output: "",
+			test: true,
+		};
+		// Its test passes when the loop runs it: a grounded pass.
+		const passed = harnessGrounded(claimed, [
+			absent,
+			{ command: REPRO, exitCode: 0, output: "ok", test: true },
+		]);
+		expect(passed).toMatchObject({ verdict: "pass", via: "harness-grounded" });
+		expect(passed.ungrounded).toBeUndefined();
+		expect(passed.harnessRuns).toHaveLength(2);
+		// Its test fails when the loop runs it: a fail with that evidence.
+		const failed = harnessGrounded(claimed, [
+			{
+				command: REPRO,
+				exitCode: 1,
+				output: "AssertionError: 2 != 3",
+				test: true,
+			},
+		]);
+		expect(failed.verdict).toBe("fail");
+		expect(failed.failures[0]).toContain("AssertionError: 2 != 3");
+		expect(reviewFindings(failed)).toHaveLength(1);
+		// Nothing ran (run.sh absent, nothing else): still ungrounded.
+		const nothing = harnessGrounded(claimed, [absent]);
+		expect(nothing.ungrounded).toBe(true);
+		expect(nothing.via).toBeUndefined();
+	});
+
+	it("ungrounded after a retry: pass with the note, never unsure", () => {
+		const ungrounded = groundReviewVerdict(
+			review({ verdict: "pass", failures: [] }),
+			[],
+		);
+		const verdict = defaultPassVerdict(ungrounded);
+		expect(verdict).toMatchObject({
+			verdict: "pass",
+			via: "default-pass",
+			parsed: true,
+			failures: [],
+		});
+		expect(verdict.ungrounded).toBeUndefined();
+		expect(verdict.notes.startsWith(NOT_VERIFIED_NOTE)).toBe(true);
+		expect(defaultPassVerdict(null)).toMatchObject({
+			verdict: "pass",
+			notes: NOT_VERIFIED_NOTE,
+		});
+		const state = {
+			rounds: [{ n: 1, verdict, findings: [], checker: {} }],
+		} as unknown as ReviewLoopState;
+		expect(reviewLoopSummary(state)).toBe(
+			"Review 1: pass · not verified by running",
+		);
+	});
+
+	it("a findings file is a verdict, grounded like an answer; its own appends are not runs", () => {
+		const file = [
+			JSON.stringify({
+				requirement: "get returns the newest",
+				met: true,
+				command: REPRO,
+				output: "ok",
+			}),
+			"not json",
+			JSON.stringify({
+				failure: "units: ms, not seconds",
+				command: RECOMPUTE,
+				output: "1500",
+			}),
+			JSON.stringify({
+				requirement: "writes /app/out.json",
+				met: false,
+				command: "ls /app/out.json",
+				output: "No such file",
+			}),
+		].join("\n");
+		const verdict = findingsFileVerdict(file);
+		expect(verdict?.verdict).toBe("fail");
+		expect(verdict?.failures).toHaveLength(2);
+		expect(findingsFileVerdict("")).toBeNull();
+		expect(findingsFileVerdict("garbage\n{}")).toBeNull();
+		// Appending a finding cites its command; only the real run counts.
+		const appended = `echo '{"failure":"units","command":"${RECOMPUTE}"}' >> /tmp/check/findings.jsonl`;
+		const executed = executedCommands([
+			{
+				kind: "commandExecution",
+				id: SessionItemId("a"),
+				command: appended,
+				status: "completed",
+			} as SessionItem,
+		]);
+		expect(executed).toEqual([]);
+		const grounded = groundReviewVerdict(
+			verdict as NonNullable<typeof verdict>,
+			[REPRO, RECOMPUTE],
+		);
+		expect(grounded.verdict).toBe("fail");
+		expect(grounded.failures).toEqual([
+			"units: ms, not seconds (ran `python3 /tmp/check/tests/recompute.py` -> 1500)",
+		]);
+		expect(
+			findingsFileVerdict(
+				JSON.stringify({ requirement: "r", met: true, command: REPRO }),
+			)?.verdict,
+		).toBe("pass");
 	});
 });

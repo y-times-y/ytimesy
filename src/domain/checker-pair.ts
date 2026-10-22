@@ -48,7 +48,7 @@ export function checkerJudgeSection(input: {
 		"- Ask for compact evidence, not narration: each command as run with its exit status and the output lines that matter, file:line excerpts (only the lines that settle a point), and for each test its file, the one command that runs it and its result.",
 		`- Independent requirement groups can go to up to ${MAX_LIVE_CHECKER_WORKERS} workers at once: pass \`workers\` (one self-contained brief each) and the call waits for all of them. Give each its own subdirectory (${input.scratch}/w1, ${input.scratch}/w2, ...) for its copy, tests and inputs so they never clobber each other; they share the worker token budget. \`id\` sends a follow-up to a worker that already reported (it keeps its context): to rerun, extend or settle something its evidence leaves open.`,
 		`- \`model: "strong"\` runs one worker on your own (stronger) model, for one hard investigation the cheap worker failed at or cannot do (at most ${MAX_STRONG_CHECKER_WORKERS} per check); default to the cheap worker.`,
-		'- No requirement stays unsettled while time remains: for every point a worker reports it could not establish, send a targeted follow-up (with `id`, or a new worker) naming the exact command to run, the path to read and how to run it, or settle it yourself, before you conclude. "unsure" is only for when time runs out or the thing truly cannot run on this machine; then say which requirement and why.',
+		"- No requirement stays unsettled while time remains: for every point a worker reports it could not establish, send a targeted follow-up (with `id`, or a new worker) naming the exact command to run, the path to read and how to run it, or settle it yourself, before you conclude. When something truly cannot run on this machine, have a worker build the closest runnable stand-in (smaller input, a stub of the service, the entry point on sample data) and verify against that.",
 		"- Read a specific file or run a short command yourself only to settle a point the evidence leaves open; heavy reading and test runs go to the worker.",
 		'- The verdict is yours alone: a worker\'s report is evidence, not a verdict; check that its tests test what you asked for. Tests the worker wrote and ran at your direction count as your own new tests; list them in "tests" with the commands exactly as they were run.',
 		"</checker_pair>",
@@ -158,7 +158,7 @@ export function testWasRun(test: CheckerTest, ran: string) {
  * The pair's verdict: the judge's JSON as parsed, each listed test marked
  * with who ran it (the worker, or the judge itself), and the untested-pass
  * rule applied to tests actually run: a pass none of whose listed tests
- * either session ran counts as unsure.
+ * either session ran is untested (grounding decides, checker-evidence.ts).
  */
 export function pairReviewVerdict(
 	verdict: ReviewVerdict,
@@ -180,7 +180,6 @@ export function pairReviewVerdict(
 		tests,
 		...(untested
 			? {
-					verdict: "unsure",
 					untested: true,
 					notes: verdict.untested
 						? verdict.notes

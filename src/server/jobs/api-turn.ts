@@ -17,6 +17,10 @@ import {
 } from "#/domain/api-turn-failure";
 import type { ApiTurnSettings } from "#/domain/api-turn-settings";
 import { attemptLimit } from "#/domain/attempt-loop";
+import {
+	CHECKER_FORCED_FINAL_MARK,
+	hasCheckerFinalNotice,
+} from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import {
 	CoordinationFailure,
@@ -1460,6 +1464,8 @@ async function runApiTurnAttempt(
 				})
 			: null;
 		const previousContext = recordedContextUsage(items)?.context;
+		// A checker's forced final step (guardSubagentStep): tools off for it.
+		let checkerFinal = false;
 		const agentInput: ModelAgentInput = {
 			previousContext:
 				previousContext?.modelContextWindow && previousContext.last.totalTokens
@@ -1476,6 +1482,9 @@ async function runApiTurnAttempt(
 			reasoning: turnReasoning,
 			speed: apiSettings.speed,
 			...(deferral ? { toolOrder: deferral.order } : {}),
+			...(owner.agentRole === "checker"
+				? { toolsOff: () => checkerFinal }
+				: {}),
 			...(rootChat
 				? {
 						endTurnTools: [
@@ -1622,6 +1631,9 @@ async function runApiTurnAttempt(
 						session: owner,
 						items,
 						messages: history,
+						onFinalStep: () => {
+							checkerFinal = true;
+						},
 					});
 					failureStage = "model";
 				}
@@ -2097,7 +2109,11 @@ async function runApiTurnAttempt(
 					session: owner as AgentSessionRecord,
 					items,
 					outcome: "finished",
-					text: finalText.slice(-9000) || "(no final report)",
+					text: `${finalText.slice(-9000) || "(no final report)"}${
+						owner.agentRole === "checker" && hasCheckerFinalNotice(messages)
+							? `\n${CHECKER_FORCED_FINAL_MARK}`
+							: ""
+					}`,
 					roleModels: fusionRoleModels,
 					...(evaluation
 						? {

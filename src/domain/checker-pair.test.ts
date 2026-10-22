@@ -93,7 +93,7 @@ describe("the checker pair's brief", () => {
 });
 
 describe("the judge's follow-ups, parallel and strong workers", () => {
-	it("tells the judge to follow up before unsure, run parallel workers in their own subdirectories, and use one strong worker", () => {
+	it("tells the judge to follow up and build stand-ins, run parallel workers in their own subdirectories, and use one strong worker", () => {
 		const pair = independentReviewBrief({ ...BRIEF, pair: true });
 		expect(pair).toContain(
 			"for every point a worker reports it could not establish, send a targeted follow-up",
@@ -102,7 +102,7 @@ describe("the judge's follow-ups, parallel and strong workers", () => {
 			"the exact command to run, the path to read and how to run it",
 		);
 		expect(pair).toContain(
-			'"unsure" is only for when time runs out or the thing truly cannot run on this machine; then say which requirement and why.',
+			"When something truly cannot run on this machine, have a worker build the closest runnable stand-in (smaller input, a stub of the service, the entry point on sample data) and verify against that.",
 		);
 		expect(pair).toContain("up to 3 workers at once: pass `workers`");
 		expect(pair).toContain(
@@ -251,7 +251,7 @@ describe("the pair's verdict", () => {
 		]);
 	});
 
-	it("counts a pass none of whose tests either session ran as unsure", () => {
+	it("flags a pass none of whose tests either session ran as untested (grounding decides)", () => {
 		const pass = parseReviewVerdict(
 			report({
 				verdict: "pass",
@@ -265,7 +265,7 @@ describe("the pair's verdict", () => {
 			judge: "",
 		});
 		expect(verdict).toMatchObject({
-			verdict: "unsure",
+			verdict: "pass",
 			untested: true,
 			notes: `${UNTESTED_PASS_NOTE} looks fine`,
 		});
@@ -275,7 +275,7 @@ describe("the pair's verdict", () => {
 		});
 		expect(ran.verdict).toBe("pass");
 		expect(ran.untested).toBeUndefined();
-		// A pass with no tests at all was already unsure; the note is not doubled.
+		// A pass with no tests at all was already untested; the note is not doubled.
 		const bare = parseReviewVerdict(
 			report({ verdict: "pass", failures: [], tests: [], notes: "ok" }),
 		);

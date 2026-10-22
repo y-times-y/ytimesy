@@ -30,6 +30,10 @@ function harness(options: {
 	/** The commands each checker ran (its bash calls); default RAN. */
 	ran?: readonly string[];
 	workers?: (checkerSessionId: string) => LoopWorker[];
+	/** Other VM commands' results (findings file, the loop's re-runs); default exit 0, no output. */
+	exec?: (command: string) => { exitCode: number; stdout: string } | undefined;
+	/** checkerExec: the loop's re-runs with the checker's access. */
+	checkerExec?: ReviewLoopDeps["checkerExec"];
 }) {
 	let now = 1_000_000;
 	let tree = "t-base";
@@ -100,8 +104,9 @@ function harness(options: {
 			vm.push(command);
 			if (command.includes("diff --name-only"))
 				return { exitCode: 0, stdout: options.changed ?? "compaction.py\n" };
-			return { exitCode: 0, stdout: "" };
+			return options.exec?.(command) ?? { exitCode: 0, stdout: "" };
 		},
+		...(options.checkerExec ? { checkerExec: options.checkerExec } : {}),
 	};
 	const workspace: AgentToolWorkspace = {
 		machines: {} as AgentToolWorkspace["machines"],
@@ -684,10 +689,15 @@ ${TASK}
 		expect(h.started).toHaveLength(2);
 	});
 
-	it("finishes on unsure without concrete findings, and on a fix that changed nothing", async () => {
+	it("reads an older unsure without findings as pass, and finishes on a fix that changed nothing", async () => {
 		const h = harness({
 			reports: [
-				verdict({ verdict: "unsure", failures: [], notes: "could not run it" }),
+				verdict({
+					verdict: "unsure",
+					failures: [],
+					tests: [{ name: "edge", command: "c", passed: true }],
+					notes: "could not run it",
+				}),
 			],
 		});
 		await h.loop.beforeModel(h.step(0, ""));
@@ -696,7 +706,11 @@ ${TASK}
 		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
 			"finished",
 		);
-		expect(h.state()?.outcome).toBe("unsure");
+		expect(h.state()?.outcome).toBe("pass");
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "pass",
+			via: "normal",
+		});
 
 		const g = harness({ reports: [FAIL] });
 		await g.loop.beforeModel(g.step(0, ""));
@@ -842,23 +856,39 @@ ${TASK}
 			"pass",
 		]);
 		expect(h.state()?.outcome).toBe("pass");
-		// Only once per turn: two silent checks end the loop.
+		expect(h.state()?.rounds[1].verdict?.via).toBe("retry");
+		// Only once per turn: two silent checks pass with the note.
 		const g = harness({ reports: ["no json", "no json either"] });
 		await g.loop.beforeModel(g.step(0, ""));
 		g.setTree("t-1");
 		g.advance(4 * 60_000);
 		await g.loop.afterAttempt(g.step(1, "Done."));
 		expect(g.started).toHaveLength(2);
-		expect(g.state()?.outcome).toBe("unsure");
+		expect(g.state()).toMatchObject({
+			outcome: "pass",
+			note: "not verified by running",
+		});
+		expect(g.state()?.rounds[1].verdict).toMatchObject({
+			verdict: "pass",
+			via: "default-pass",
+		});
 	});
 
-	it("checks a pass that nothing the checker ran verified again once, as no verdict", async () => {
+	it("an ungrounded pass the loop cannot run either is checked again once, then passes with a note", async () => {
 		const PASS = verdict({
 			verdict: "pass",
 			failures: [],
 			tests: [{ name: "edge", command: "c", passed: true }],
 		});
-		const h = harness({ reports: [PASS, PASS], ran: ["ls"] });
+		// Nothing the loop re-runs can start (command not found).
+		const h = harness({
+			reports: [PASS, PASS],
+			ran: ["ls"],
+			exec: (command) =>
+				command.startsWith("cd '/tmp/ytimesy-attempts/turn/review-")
+					? { exitCode: 127, stdout: "c: not found" }
+					: undefined,
+		});
 		await h.loop.beforeModel(h.step(0, ""));
 		h.setTree("t-1");
 		h.advance(4 * 60_000);
@@ -868,11 +898,137 @@ ${TASK}
 		expect(h.started).toHaveLength(2);
 		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
 			"retry",
-			"unsure",
+			"pass",
 		]);
 		expect(h.state()?.rounds[0].verdict).toMatchObject({
-			verdict: "unsure",
+			verdict: "pass",
 			ungrounded: true,
+		});
+		expect(h.state()?.rounds[1].verdict).toMatchObject({
+			verdict: "pass",
+			via: "default-pass",
+		});
+		expect(h.state()?.rounds[1].verdict?.notes).toContain(
+			"(Pass, not verified by running.)",
+		);
+		expect(JSON.stringify(h.state())).not.toContain("unsure");
+	});
+
+	it("grounds an unshown pass by running the checker's tests itself, with its access", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: T1, passed: true }],
+		});
+		const runs: string[] = [];
+		const h = harness({
+			reports: [PASS],
+			ran: ["ls"],
+			checkerExec: async (id, command) => {
+				runs.push(`${id}: ${command}`);
+				return command.includes("run.sh")
+					? { exitCode: 1, stdout: "" }
+					: { exitCode: 0, stdout: "1 passed" };
+			},
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(1);
+		expect(runs).toEqual([
+			"child-1: cd '/tmp/ytimesy-attempts/turn/review-1' 2>/dev/null; test -f /tmp/ytimesy-attempts/turn/review-1/tests/run.sh && bash /tmp/ytimesy-attempts/turn/review-1/tests/run.sh",
+			`child-1: cd '/tmp/ytimesy-attempts/turn/review-1' 2>/dev/null; ${T1}`,
+		]);
+		const round = h.state()?.rounds[0];
+		expect(round?.verdict).toMatchObject({
+			verdict: "pass",
+			via: "harness-grounded",
+		});
+		expect(round?.verdict?.harnessRuns?.[1]).toEqual({
+			command: T1,
+			exitCode: 0,
+			output: "1 passed",
+			test: true,
+		});
+		expect(h.state()?.outcome).toBe("pass");
+		// Its test fails when the loop runs it: a fail, handed to the builder.
+		const g = harness({
+			reports: [PASS],
+			ran: ["ls"],
+			exec: (command) =>
+				command.includes(T1)
+					? { exitCode: 1, stdout: "AssertionError: expected v1" }
+					: command.includes("run.sh")
+						? { exitCode: 1, stdout: "" }
+						: undefined,
+		});
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(4 * 60_000);
+		expect((await g.loop.afterAttempt(g.step(1, "Done."))).kind).toBe("run");
+		expect(g.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "fail",
+			via: "harness-grounded",
+		});
+		expect(g.state()?.rounds[0].findings[0].text).toContain(
+			"AssertionError: expected v1",
+		);
+	});
+
+	it("a checker cut off with a findings file: the verdict comes from the file", async () => {
+		const findings = [
+			JSON.stringify({
+				requirement: "regression test",
+				met: true,
+				command: "make test",
+				output: "ok",
+			}),
+			JSON.stringify({
+				failure: "ordering: a newer tombstone hides an older live version",
+				command: T1,
+				output: "get(k) returned None",
+			}),
+		].join("\n");
+		const h = harness({
+			reports: [null],
+			exec: (command) =>
+				command.includes("/tmp/ytimesy-attempts/turn/review-1/findings.jsonl")
+					? { exitCode: 0, stdout: findings }
+					: undefined,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const out = await h.loop.afterAttempt({
+			...h.step(1, "Done."),
+			waitUntil: h.now() + 60 * 60_000,
+		});
+		expect(out.kind).toBe("run");
+		expect(h.started).toHaveLength(1);
+		const round = h.state()?.rounds[0];
+		expect(round?.timedOut).toBe(true);
+		expect(round?.verdict).toMatchObject({
+			verdict: "fail",
+			via: "findings-file",
+		});
+		expect(round?.findings[0].text).toContain("ordering: a newer tombstone");
+		expect(round?.decision).toBe("fix");
+	});
+
+	it("records a verdict from the checker's forced final step", async () => {
+		const h = harness({
+			reports: [`${FAIL}\n(verdict from the forced final step)`],
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe("run");
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "fail",
+			via: "forced-final",
 		});
 	});
 
@@ -933,12 +1089,18 @@ ${TASK}
 			waitUntil: h.now() + 60 * 60_000,
 		});
 		expect(h.deps.stopChild).toHaveBeenCalledWith("child-1");
+		// No answer and no findings file: checked again once, then pass with the note.
 		expect(resumed.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
 		expect(h.state()).toMatchObject({
-			outcome: "check-failed",
-			note: "the checker gave no verdict in time",
+			outcome: "pass",
+			note: "not verified by running; the checker gave no verdict in time",
 		});
 		expect(h.state()?.rounds[0].timedOut).toBe(true);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"pass",
+		]);
 	});
 
 	it("salvages a verdict cut off at the checker's limit", async () => {

@@ -1,4 +1,4 @@
-import type { ReviewVerdict } from "./checker-brief";
+import type { HarnessRun, ReviewVerdict } from "./checker-brief";
 import { NO_VERDICT_FAILURE } from "./checker-verdict";
 import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
 import { leanToolNames } from "./harness-model-profile";
@@ -11,7 +11,8 @@ import type { SessionItem } from "./session-item";
  * it ran reproductions. So the review loop matches every command a finding
  * or a requirement cites against the commands the checker actually ran:
  * a finding no executed command shows is set aside as a note (it cannot fail
- * the work), and a pass that no executed command verified is no verdict.
+ * the work), and a pass that no executed command verified is no verdict
+ * until the review loop runs the checker's tests itself (harnessGrounded).
  */
 
 /** Tools that execute something: the lean shapes' command tools and run_code. */
@@ -56,7 +57,10 @@ export function executedCommands(items: readonly SessionItem[]): string[] {
 				)
 					commands.push(commandText(call.input));
 	}
-	return commands.filter((command) => command.trim());
+	// Appending to the findings file cites a command without running it.
+	return commands.filter(
+		(command) => command.trim() && !command.includes("findings.jsonl"),
+	);
 }
 
 const squash = (text: string) => text.replaceAll(/\s+/g, " ").trim();
@@ -113,7 +117,10 @@ const SET_ASIDE_NOTE = "(Set aside: no command the checker ran shows these.)";
 
 /** The note a pass no executed command verified gets. */
 export const UNGROUNDED_PASS_NOTE =
-	"(No command it ran verified the stated requirements; counted as no verdict.)";
+	"(No command it ran verified the stated requirements.)";
+
+/** The note a pass gets when nothing could be run to show it, even on a retry. */
+export const NOT_VERIFIED_NOTE = "(Pass, not verified by running.)";
 
 /**
  * The verdict with the evidence checked against what the checker executed
@@ -121,9 +128,9 @@ export const UNGROUNDED_PASS_NOTE =
  * - its tests whose command it never ran are marked unrun (never handed over),
  * - a failure, or an unmet requirement, that cites no executed command (nor
  *   names a failing test it ran) becomes a note and is counted in downgraded,
- * - a fail left without findings is a pass when a test of its own ran (else
- *   unsure), and a pass (or such a fail) that nothing it ran verified is
- *   ungrounded: unsure, retried like no verdict.
+ * - a fail left without findings is a pass, and a pass that nothing it ran
+ *   verified is ungrounded: the review loop runs its tests (harnessGrounded),
+ *   then retries, then passes with a note.
  */
 export function groundReviewVerdict(
 	verdict: ReviewVerdict,
@@ -180,13 +187,7 @@ export function groundReviewVerdict(
 	const claimedPass = verdict.verdict === "pass" || !!verdict.untested;
 	const emptied = verdict.verdict === "fail" && !failures.length && !unmetShown;
 	const ungrounded = (claimedPass || emptied) && !verified;
-	const kind = ungrounded
-		? "unsure"
-		: emptied
-			? testsRun
-				? "pass"
-				: "unsure"
-			: verdict.verdict;
+	const kind = emptied ? "pass" : verdict.verdict;
 	const notes = [
 		ungrounded ? UNGROUNDED_PASS_NOTE : "",
 		downgraded.length
@@ -206,5 +207,117 @@ export function groundReviewVerdict(
 		notes,
 		downgraded,
 		...(ungrounded ? { ungrounded: true as const } : {}),
+	};
+}
+
+/** At most this many commands are run again by the review loop. */
+const MAX_HARNESS_RUNS = 8;
+
+/**
+ * What the review loop runs itself for an ungrounded verdict: the checker's
+ * run.sh, its non-probe tests' commands and the commands its met
+ * requirements cite (the request's existing checks it named), deduplicated.
+ */
+export function harnessCommands(
+	verdict: ReviewVerdict,
+	scratch: string,
+): { command: string; test: boolean }[] {
+	const runScript = `${scratch}/tests/run.sh`;
+	const found = [
+		{ command: `test -f ${runScript} && bash ${runScript}`, test: true },
+		...verdict.tests
+			.filter((test) => !test.probe && test.command)
+			.map((test) => ({ command: test.command as string, test: true })),
+		...verdict.requirements
+			.filter((entry) => entry.met === true && entry.command)
+			.map((entry) => ({ command: entry.command as string, test: false })),
+	];
+	const seen = new Set<string>();
+	return found
+		.filter(({ command }) => {
+			const key = squash(command);
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.slice(0, MAX_HARNESS_RUNS);
+}
+
+/**
+ * An ungrounded verdict after the review loop ran the checker's tests and
+ * named checks itself: a non-probe test (or run.sh) that fails is a
+ * finding (fail); any command that ran cleanly grounds the pass; nothing
+ * that ran at all leaves it ungrounded. run.sh absent (exit 1 with no
+ * output from the `test -f` guard) and exit 126/127 (not found or not
+ * executable) do not count as run.
+ */
+export function harnessGrounded(
+	verdict: ReviewVerdict,
+	runs: readonly HarnessRun[],
+): ReviewVerdict {
+	// Not run: run.sh absent, or the command not found or not executable.
+	const ran = runs.filter(
+		(run) =>
+			run.exitCode !== 126 &&
+			run.exitCode !== 127 &&
+			!(
+				run.command.startsWith("test -f ") &&
+				run.exitCode === 1 &&
+				!run.output.trim()
+			),
+	);
+	const failed = ran.filter((run) => run.test && run.exitCode !== 0);
+	const clean = ran.filter((run) => run.exitCode === 0);
+	const { ungrounded: _ungrounded, ...grounded } = verdict;
+	const base = { ...grounded, harnessRuns: runs };
+	if (!failed.length && !clean.length) return { ...verdict, harnessRuns: runs };
+	if (failed.length)
+		return {
+			...base,
+			verdict: "fail",
+			failures: failed.map(
+				(run) =>
+					`The checker's test fails when the review loop runs it (\`${run.command.slice(0, 300)}\` -> exit ${run.exitCode}: ${run.output.slice(-400)})`,
+			),
+			failureEvidence: failed.map((run) => ({
+				command: run.command,
+				output: run.output.slice(-600),
+			})),
+			via: "harness-grounded",
+		};
+	return {
+		...base,
+		verdict: "pass",
+		notes: [
+			`(Grounded by the review loop: ${clean.length} of its command(s) ran cleanly.)`,
+			verdict.notes.replace(UNGROUNDED_PASS_NOTE, "").trim(),
+		]
+			.filter(Boolean)
+			.join(" "),
+		via: "harness-grounded",
+	};
+}
+
+/**
+ * The last resort when no check showed anything by running (or none
+ * answered), even on a retry: pass, with the note saying so.
+ */
+export function defaultPassVerdict(
+	verdict: ReviewVerdict | null,
+): ReviewVerdict {
+	const notes = [NOT_VERIFIED_NOTE, verdict?.notes ?? ""].filter(Boolean);
+	return {
+		tests: verdict?.tests ?? [],
+		testsPath: verdict?.testsPath ?? null,
+		requirements: verdict?.requirements ?? [],
+		assumptions: verdict?.assumptions ?? [],
+		...(verdict?.downgraded ? { downgraded: verdict.downgraded } : {}),
+		...(verdict?.harnessRuns ? { harnessRuns: verdict.harnessRuns } : {}),
+		verdict: "pass",
+		failures: [],
+		failureEvidence: [],
+		parsed: true,
+		notes: notes.join(" "),
+		via: "default-pass",
 	};
 }

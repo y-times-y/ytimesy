@@ -8,13 +8,21 @@ import {
 } from "#/domain/attempt-loop";
 import { REVIEW_CHECK_TOOL } from "#/domain/check-summary";
 import {
+	CHECKER_FORCED_FINAL_MARK,
+	checkerFindingsPath,
+	findingsFileVerdict,
+	type HarnessRun,
 	independentReviewBrief,
 	parseReviewVerdict,
 	type ReviewVerdict,
+	type VerdictVia,
 } from "#/domain/checker-brief";
 import {
+	defaultPassVerdict,
 	executedCommands,
 	groundReviewVerdict,
+	harnessCommands,
+	harnessGrounded,
 } from "#/domain/checker-evidence";
 import { pairReviewVerdict, ranCommandsText } from "#/domain/checker-pair";
 import { SessionItemId } from "#/domain/ids";
@@ -58,6 +66,7 @@ import {
 	checkerDirectoryCommand,
 	childBilling,
 	loopChildModel,
+	type ShellResult,
 	turnUsage,
 } from "./attempt-loop";
 
@@ -74,12 +83,15 @@ import {
  *    check plus a minimal fix still fit, the tree is captured and a checker
  *    gets the shared brief: the request verbatim, the changed files and the
  *    diff command.
- * 3. Decide: pass finishes. Fail or unsure with concrete findings and time
- *    left adds one runtime notice with the findings to the same run and the
- *    builder continues; nothing is reset. Up to two rounds per turn.
- *    Anything else finishes. With rigor=on, a final answer that admitted
- *    unverified work while over half the time was left is a finding too,
- *    and is sent back even after a pass.
+ * 3. Decide: the verdict is pass or fail, never unsure. A checker cut off
+ *    at its limit gets a tool-less final step (its runtime's step guard),
+ *    else its findings file is the verdict; a pass nothing it ran shows is
+ *    grounded by running its tests here; still nothing: one retry, then pass
+ *    with a note. Pass finishes. Fail with concrete findings and time left
+ *    adds one runtime notice with the findings to the same run and the
+ *    builder continues; nothing is reset. Anything else finishes. With
+ *    rigor=on, a final answer that admitted unverified work while over half
+ *    the time was left is a finding too, and is sent back even after a pass.
  *
  * Waiting for the checker spans durable steps like the attempt loop.
  */
@@ -102,6 +114,15 @@ export type ReviewLoopDeps = Omit<
 	readonly workers: (
 		checkerSessionId: string,
 	) => Promise<readonly LoopWorker[]>;
+	/**
+	 * Runs a command with the checker's own access (the product: as its
+	 * reader user), for the loop to re-run its tests; default: vm.
+	 */
+	readonly checkerExec?: (
+		checkerSessionId: string,
+		command: string,
+		timeoutMs: number,
+	) => Promise<ShellResult>;
 };
 
 /** A pair judge's worker session as the loop reads it. */
@@ -166,8 +187,15 @@ type Taken = {
 };
 
 const GIT = "git -c core.hooksPath=/dev/null -c core.fsmonitor=false";
-/** After its budget, a checker gets this long to report before the loop stops waiting. */
-const REPORT_GRACE_MS = 60_000;
+/** After its budget, a checker gets this long to report (its forced final step) before the loop stops waiting. */
+const REPORT_GRACE_MS = 90_000;
+/** The loop's own re-runs of an ungrounded check's tests: per command, and in all. */
+const HARNESS_RUN_MS = 90_000;
+const HARNESS_TOTAL_MS = 4 * 60_000;
+
+/** A round's checker scratch directory (its tests, findings file). */
+export const reviewDirectory = (turnId: string, n: number) =>
+	`${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
 
 export function reviewRef(turnId: string, label: string) {
 	const safe = turnId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64);
@@ -307,6 +335,55 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			round.n === n ? update(round) : round,
 		),
 	});
+
+	/** A round's findings file ("" when there is none). */
+	const findingsOf = async (n: number) => {
+		const path = checkerFindingsPath(reviewDirectory(turnId, n));
+		const read = await deps
+			.vm(`tail -c 200000 ${quote(path)} 2>/dev/null || true`, 20_000)
+			.catch(() => null);
+		return read?.stdout ?? "";
+	};
+
+	/**
+	 * The checker's tests and named checks, run by the loop itself with the
+	 * checker's access, within HARNESS_TOTAL_MS and the loop's time less a fix.
+	 */
+	async function harnessRuns(
+		verdict: ReviewVerdict,
+		round: ReviewRound,
+		deadlineAt: number,
+	): Promise<HarnessRun[]> {
+		const directory = reviewDirectory(turnId, round.n);
+		const until = Math.min(
+			deps.now() + HARNESS_TOTAL_MS,
+			deadlineAt - REVIEW_LOOP_LIMITS.minFixMs,
+		);
+		const runs: HarnessRun[] = [];
+		for (const { command, test } of harnessCommands(verdict, directory)) {
+			const left = until - deps.now();
+			if (left < 5_000 || input.signal.aborted) break;
+			const wrapped = `cd ${quote(directory)} 2>/dev/null; ${command}`;
+			const timeoutMs = Math.min(HARNESS_RUN_MS, left);
+			const result = await (deps.checkerExec
+				? deps.checkerExec(round.checker.sessionId, wrapped, timeoutMs)
+				: deps.vm(wrapped, timeoutMs)
+			).catch((error: unknown) => ({
+				exitCode: -1,
+				stdout: "",
+				stderr: error instanceof Error ? error.message : String(error),
+			}));
+			// A run that could not start is not evidence either way.
+			if (result.exitCode < 0) continue;
+			runs.push({
+				command,
+				exitCode: result.exitCode,
+				output: `${result.stdout}${result.stderr ?? ""}`.trim().slice(-800),
+				test,
+			});
+		}
+		return runs;
+	}
 
 	/**
 	 * Whether this turn still answers the handed-off turn's request: a turn
@@ -467,7 +544,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				? admittedLines(attemptReport(step.items))
 				: [];
 		const requirements = input.rigor ? requirementsOf(state, step.items) : null;
-		const directory = `${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
+		const directory = reviewDirectory(turnId, n);
 		const prepared = await deps.vm(checkerDirectoryCommand(directory), 20_000);
 		if (prepared.exitCode !== 0)
 			return finish(
@@ -623,16 +700,25 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		const parsed: ReviewVerdict | null = taken.timedOut
 			? null
 			: parseReviewVerdict(taken.report);
+		// No answer (cut off, or no verdict JSON): the findings file it kept.
+		let answered = parsed?.parsed ? parsed : null;
+		let via: VerdictVia = taken.report.includes(CHECKER_FORCED_FINAL_MARK)
+			? "forced-final"
+			: "normal";
+		if (!answered) {
+			answered = findingsFileVerdict(await findingsOf(round.n));
+			if (answered) via = "findings-file";
+		}
 		// checkerMode=pair: the judge's verdict, its tests marked with who ran them.
 		const paired =
-			parsed && workers
-				? pairReviewVerdict(parsed, {
+			answered && workers
+				? pairReviewVerdict(answered, {
 						worker: workers.map((worker) => worker.ran).join("\n"),
 						judge: ranCommandsText(judgeItems),
 					})
-				: parsed;
-		// Findings no command it (or its workers) ran shows are notes; an unshown pass is no verdict.
-		const verdict = paired
+				: answered;
+		// Findings no command it (or its workers) ran shows are notes; an unshown pass is no verdict yet.
+		let grounded = paired
 			? groundReviewVerdict(
 					paired,
 					judgeLog === null
@@ -643,39 +729,58 @@ export function createReviewLoop(input: ReviewLoopInput) {
 							],
 				)
 			: null;
-		const findings = verdict
-			? reviewFindings(verdict, round.admitted, {
-					unattended: input.unattended,
-				})
-			: [];
-		const decision = verdict
-			? decideAfterVerdict({
-					verdict,
-					findings,
-					now,
-					deadlineAt: state.deadlineAt,
-					...(input.unattended
-						? {
-								unattended: true,
-								previousFindings: state.rounds
-									.slice(0, -1)
-									.filter((earlier) => earlier.decision !== "retry")
-									.at(-1)?.findings,
-							}
-						: {}),
-				})
-			: ({ kind: "finish", reason: "check-failed" } as const);
-		// No verdict (timed out, or no verdict JSON) with ample time left: check the same tree again once.
+		// Ungrounded: the loop runs the checker's tests and named checks itself.
+		if (grounded?.ungrounded)
+			grounded = harnessGrounded(
+				grounded,
+				await harnessRuns(grounded, round, state.deadlineAt),
+			);
+		const retried = state.rounds.at(-2)?.decision === "retry";
+		const checked: ReviewVerdict | null = grounded
+			? {
+					...grounded,
+					via: grounded.via ?? (via === "normal" && retried ? "retry" : via),
+				}
+			: parsed;
+		const noVerdict =
+			!checked || checked.parsed === false || checked.ungrounded === true;
+		// No verdict with ample time left: check the same tree again once.
 		const retry =
-			decision.kind === "finish" &&
+			noVerdict &&
 			retryCheck({
-				verdict,
+				verdict: checked,
 				rounds: state.rounds,
 				now,
 				deadlineAt: state.deadlineAt,
 				...(input.pair ? { pair: true } : {}),
 				...(input.unattended ? { unattended: true } : {}),
 			});
+		// Still nothing run to show it (or no time to retry): pass, with the note.
+		const verdict = noVerdict && !retry ? defaultPassVerdict(checked) : checked;
+		const findings =
+			verdict && !retry
+				? reviewFindings(verdict, round.admitted, {
+						unattended: input.unattended,
+					})
+				: [];
+		const decision =
+			verdict && !retry
+				? decideAfterVerdict({
+						verdict,
+						findings,
+						now,
+						deadlineAt: state.deadlineAt,
+						...(input.unattended
+							? {
+									unattended: true,
+									previousFindings: state.rounds
+										.slice(0, -1)
+										.filter((earlier) => earlier.decision !== "retry")
+										.at(-1)?.findings,
+								}
+							: {}),
+					})
+				: ({ kind: "finish", reason: "check-failed" } as const);
 		const updated = withRound(state, round.n, (current) => ({
 			...current,
 			verdict,
@@ -705,7 +810,9 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				updated,
 				step,
 				decision.reason,
-				taken.timedOut ? "the checker gave no verdict in time" : undefined,
+				verdict?.via === "default-pass"
+					? `not verified by running${taken.timedOut ? "; the checker gave no verdict in time" : ""}`
+					: undefined,
 			);
 		const fixing = await save({
 			...withRound(updated, round.n, (current) => ({

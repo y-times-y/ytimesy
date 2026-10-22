@@ -36,7 +36,7 @@ export type HardSetReviewRound = {
 		/** checkerMode=pair: which of the pair ran its command (absent: neither, or a single checker). */
 		ranBy?: "worker" | "judge";
 	}[];
-	/** It said pass without a test of its own (parsed as unsure). */
+	/** It said pass without a test of its own (flagged untested). */
 	untested?: boolean;
 	/** rigor=on: the builder's requirements list the checker got (absent before 2026-10-20). */
 	builderRequirements?: string[];

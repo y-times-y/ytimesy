@@ -164,7 +164,8 @@ export async function harborHarness(input: {
 	/**
 	 * A runtime subagent: the review loop's checker or a pair worker (read
 	 * only), or lead=fusion's sidekick (role writer: it writes the lead's
-	 * checkout). No web search.
+	 * checkout). Web search as the trial passes it (the checker gets the
+	 * builder's).
 	 */
 	subagent?: { role: SubagentRole; budget: SubagentBudget; readOnly: boolean };
 	/**
@@ -213,14 +214,13 @@ export async function harborHarness(input: {
 			memo,
 		},
 	});
-	const webSearch =
-		input.webSearch && !input.subagent
-			? input.bedrock
-				? bedrockWebSearchTools()
-				: nativeWebSearchTools(
-						input.provider === "codex-subscription" ? "openai" : input.provider,
-					)
-			: {};
+	const webSearch = input.webSearch
+		? input.bedrock
+			? bedrockWebSearchTools()
+			: nativeWebSearchTools(
+					input.provider === "codex-subscription" ? "openai" : input.provider,
+				)
+		: {};
 	let tools: ToolSet = { ...surface.tools, ...webSearch };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
 	// deferred tools here: the bridge offers no agent, plan or MCP tools.

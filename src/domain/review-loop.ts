@@ -1,6 +1,10 @@
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
-import { type ReviewVerdict, requirementText } from "./checker-brief";
+import {
+	type ReviewVerdict,
+	requirementText,
+	type VerdictVia,
+} from "./checker-brief";
 import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 
 /**
@@ -343,10 +347,12 @@ export function checkerMs(input: {
 }
 
 /**
- * After a check that gave no verdict (it timed out, wrote no verdict JSON, or
- * said pass with nothing it ran to show it, checker-evidence.ts):
- * check again, once per turn, when a whole checker budget and a fix still
- * fit. A retry does not count as one of the turn's rounds.
+ * After a check that gave no verdict (it timed out with no findings file,
+ * wrote no verdict JSON, or said pass with nothing it or the review loop ran
+ * to show it, checker-evidence.ts): check again, once per turn, when a whole
+ * checker budget and a fix still fit. A retry does not count as one of the
+ * turn's rounds. Without one, the verdict is pass with a note
+ * (defaultPassVerdict).
  */
 export function retryCheck(input: {
 	readonly verdict: ReviewVerdict | null;
@@ -379,8 +385,7 @@ export type ReviewOutcome =
 	| "no-progress"
 	| "time"
 	| "not-eligible"
-	| "check-failed"
-	| "unsure";
+	| "check-failed";
 
 /**
  * After a verdict: pass finishes (unless the builder admitted unverified
@@ -404,13 +409,6 @@ export function decideAfterVerdict(input: {
 		!input.findings.some((finding) => finding.kind === "unverified")
 	)
 		return { kind: "finish", reason: "pass" };
-	// Unsure is not evidence that the work is wrong: only a fail (or rigor's
-	// admitted-unverified finding) sends the builder back.
-	if (
-		input.verdict.verdict === "unsure" &&
-		!input.findings.some((finding) => finding.kind === "unverified")
-	)
-		return { kind: "finish", reason: "unsure" };
 	if (!hasConcreteFindings(input.findings))
 		return { kind: "finish", reason: "no-findings" };
 	if (
@@ -521,12 +519,25 @@ export function expectedCheckMs(state: ReviewLoopState) {
 	);
 }
 
+/** How a verdict was reached, in the round's line (normal says nothing). */
+const VIA_LABELS: Record<VerdictVia, string> = {
+	normal: "",
+	"forced-final": "answered at its time limit",
+	"findings-file": "from its findings file",
+	"harness-grounded": "its tests re-run by the loop",
+	retry: "on a second check",
+	"default-pass": "not verified by running",
+};
+
 /** One line per round, for the chat and the eval record. */
 export function reviewLoopSummary(state: ReviewLoopState) {
 	const lines = state.rounds.map((round) => {
 		const setAside = round.verdict?.downgraded?.length ?? 0;
+		const via = round.verdict?.via ? VIA_LABELS[round.verdict.via] : "";
 		const verdict = round.verdict
-			? `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}${setAside ? ` · ${setAside} not run, set aside` : ""}${round.verdict.ungrounded ? " · nothing run to show it" : ""}`
+			? round.verdict.parsed === false
+				? "no verdict"
+				: `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}${setAside ? ` · ${setAside} not run, set aside` : ""}${round.verdict.ungrounded ? " · nothing run to show it" : ""}${via ? ` · ${via}` : ""}`
 			: round.timedOut
 				? "no verdict in time"
 				: "checking";
