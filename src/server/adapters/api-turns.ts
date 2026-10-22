@@ -17,6 +17,7 @@ import {
 	type TurnExecutor,
 } from "#/domain/turn-executor";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
+import { withStepTrace } from "../services/step-timing";
 import {
 	captureTurnFinished,
 	captureTurnStarted,
@@ -259,8 +260,10 @@ export async function enqueueApiTurn(input: {
 				);
 			}
 		};
-		if (!startAfterResponse(wake)) {
-			await wake();
+		const traced = () =>
+			withStepTrace({ wake: input.sessionId.slice(0, 8) }, wake);
+		if (!startAfterResponse(traced)) {
+			await traced();
 			return;
 		}
 		// The chat's progress stream shows the sent message and the running

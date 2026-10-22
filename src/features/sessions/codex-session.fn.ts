@@ -30,6 +30,7 @@ import {
 	stopTurnKeepingQueue,
 	withQueuedMessages,
 } from "#/server/services/queued-user-messages";
+import { timed, withStepTrace } from "#/server/services/step-timing";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 /** A fallback route's key: the connection ("codex" or a connection id), then the model. */
@@ -273,20 +274,27 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			};
 		},
 	)
-	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(
-			data.projectId,
-			data.harnessId,
-			data.sessionId,
-			data.createNew,
-		);
-		await consumeUserAction(scope.userId, "chat-send");
-		return withQueuedMessages(
-			await runWithMachines((machines) =>
-				sendComposerMessage(machines, scope, data),
-			),
-		);
-	});
+	.handler(
+		async ({ data }): Promise<PublicCodexSession> =>
+			// Development diagnostics: one timing line per send (step-timing.ts).
+			withStepTrace({ send: data.sessionId ? "chat" : "new" }, async () => {
+				const scope = await timed("send:auth", () =>
+					requireScope(
+						data.projectId,
+						data.harnessId,
+						data.sessionId,
+						data.createNew,
+					),
+				);
+				await timed("send:rate", () =>
+					consumeUserAction(scope.userId, "chat-send"),
+				);
+				const sent = await runWithMachines((machines) =>
+					sendComposerMessage(machines, scope, data),
+				);
+				return timed("send:queued", () => withQueuedMessages(sent));
+			}),
+	);
 
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)

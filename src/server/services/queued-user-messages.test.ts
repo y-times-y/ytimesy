@@ -136,6 +136,8 @@ it("starts a turn with the stored files when the turn ended before the send queu
 			attachments: undefined,
 			storedAttachments: [attachment],
 		}),
+		// The row read while the turn ran is stale now: the send reads it again.
+		undefined,
 	);
 	expect(mocks.store).toHaveBeenCalledOnce();
 });
@@ -207,6 +209,8 @@ it("starts the next turn with the oldest waiting message and its settings", asyn
 			idempotencyKey: messageId,
 			storedAttachments: [attachment],
 		},
+		// The idle chat as the queue check read it, so the send skips that read.
+		expect.objectContaining({ id: "chat", turnStatus: "idle" }),
 	);
 	expect(mocks.restore).not.toHaveBeenCalled();
 });
