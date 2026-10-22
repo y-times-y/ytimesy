@@ -6,6 +6,7 @@ import {
 	authEmailDeliveryConfigured,
 	persistAuthEmail,
 } from "../adapters/email";
+import { trackInvocationTask } from "../adapters/invocation-tasks";
 import { recordLegalAcceptance } from "../adapters/legal-acceptance";
 import { serverConfig } from "../config";
 import {
@@ -13,7 +14,6 @@ import {
 	requestAllowsLocalQaIdentity,
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
-import { trackInvocationTask } from "../adapters/invocation-tasks";
 import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
 
 /**
@@ -154,9 +154,18 @@ export function authOptions() {
 			errorURL: `${config.APP_URL}/auth/sign-in`,
 		},
 		verification: { modelName: "auth_verification" },
-		// Cloudflare sets cf-connecting-ip to the visitor's address and clients
-		// cannot spoof it; rate limits are per visitor rather than one shared bucket.
-		advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } },
+		advanced: {
+			// Cloudflare sets cf-connecting-ip to the visitor's address and clients
+			// cannot spoof it; rate limits are per visitor rather than one shared bucket.
+			ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
+			// Better Auth checks the tables once per instance, and on Workers each
+			// request has its own (see auth()): two introspection queries, about
+			// 150 ms, before every signed-in request. Migrations own the schema;
+			// the Node server still checks it once.
+			database: {
+				validateSchema: process.env.YTIMESY_DATABASE_VIA_HYPERDRIVE !== "1",
+			},
+		},
 		rateLimit: {
 			enabled: true,
 			storage: "database" as const,
