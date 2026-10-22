@@ -9,7 +9,10 @@
  * request already is; nothing is dropped.
  */
 const FRESH_MS = 1_500;
-const observations = new Map<string, { at: number; pending: boolean }>();
+const observations = new Map<
+	string,
+	{ at: number; pending: boolean; written?: true }
+>();
 
 export function observePeerInbox(
 	sessionId: string,
@@ -17,7 +20,10 @@ export function observePeerInbox(
 	pending: boolean,
 ) {
 	const previous = observations.get(sessionId);
-	if (previous && previous.at > at) return;
+	// A heartbeat that started no later than this isolate's own write may
+	// not have seen it: its answer must not hide that write.
+	if (previous && (previous.at > at || (previous.written && previous.at >= at)))
+		return;
 	observations.set(sessionId, { at, pending });
 	if (observations.size > 1_000)
 		for (const [id, seen] of observations)
@@ -33,8 +39,15 @@ export function peerInboxMayHaveMessages(sessionId: string, now = Date.now()) {
 
 /**
  * A write to the inbox from this isolate voids its own observation at once
- * (writes from other isolates wait for the next heartbeat or step).
+ * (writes from other isolates wait for the next heartbeat or step). It is
+ * kept as a write mark, not deleted: a heartbeat already in flight answers
+ * from before the write (lead mode fusion: the gate stages the exploration
+ * report just before Main's model call, while a heartbeat that saw an empty
+ * inbox is still returning), and only a heartbeat started after it counts.
  */
-export function forgetPeerInboxObservation(sessionId: string) {
-	observations.delete(sessionId);
+export function forgetPeerInboxObservation(
+	sessionId: string,
+	now = Date.now(),
+) {
+	observations.set(sessionId, { at: now, pending: true, written: true });
 }
