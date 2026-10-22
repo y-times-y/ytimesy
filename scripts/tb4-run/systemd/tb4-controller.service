@@ -1,0 +1,14 @@
+[Unit]
+Description=TB4 run controller (one owner; journal /opt/tb4/run/journal.jsonl)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/tb4/ytimesy
+ExecStart=/usr/bin/node --import tsx scripts/tb4-run/controller.ts loop --run-dir /opt/tb4/run
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

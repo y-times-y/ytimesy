@@ -1,0 +1,7 @@
+[Unit]
+Description=TB4 results second copy to R2
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/opt/tb4/backup.sh
