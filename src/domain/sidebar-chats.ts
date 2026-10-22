@@ -5,7 +5,10 @@ import {
 	type SessionItem,
 	type SessionTurnStatus,
 } from "./session-item";
-import type { SidebarChatPrNeed } from "./sidebar-pr";
+import {
+	type SidebarPullRequest,
+	sidebarChatUnread,
+} from "./sidebar-chat-status";
 
 export type SidebarChat = {
 	readonly id: string;
@@ -16,15 +19,26 @@ export type SidebarChat = {
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
-	readonly prUrl?: string | null;
-	readonly prNeed?: SidebarChatPrNeed | null;
+	/** The chat's pull request, when the project's PR list has one for its branch. */
+	readonly pr?: SidebarPullRequest | null;
 	/** What the chat waits on from the user, if anything (chatWaitingOn). */
 	readonly waitingOn?: ChatWaitingOn | null;
+	/** When Main's or a helper's active turn started, if one runs. */
+	readonly workingSince?: string | null;
 };
 
 type SidebarChatAttention = "running" | "attention" | "idle";
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
+/** When this browser started tracking seen chats: older replies count as read. */
+export const CHAT_SEEN_SINCE_STORAGE_KEY = "ytimesy-chat-seen-since";
+/** Seen keys kept in storage; older ones fall off. */
+const CHAT_SEEN_KEYS_KEPT = 500;
+
+export function parseSeenSince(raw: string | null): number | null {
+	const value = raw ? Number(raw) : Number.NaN;
+	return Number.isFinite(value) && value > 0 ? value : null;
+}
 
 export function compactRelativeAge(
 	from: string | null | undefined,
@@ -69,6 +83,11 @@ export function seenChatStorageValue(keys: readonly string[]) {
 	return JSON.stringify([...new Set(keys)]);
 }
 
+/** Seen chat keys to store: unique, newest last, the oldest dropped past a cap. */
+export function trimmedSeenChatKeys(keys: readonly string[]): string[] {
+	return [...new Set(keys)].slice(-CHAT_SEEN_KEYS_KEPT);
+}
+
 export function sidebarChatAttention(input: {
 	readonly running: boolean;
 	readonly turnStatus?: SessionTurnStatus;
@@ -89,6 +108,8 @@ export function sidebarHasAttentionChat(input: {
 	readonly seenKeys: readonly string[];
 	readonly busyChatIds?: readonly string[];
 	readonly openTurnStatus?: SessionTurnStatus;
+	/** Replies older than this count as read; undefined keeps every reply. */
+	readonly seenSinceMs?: number | null;
 }): boolean {
 	const seen = new Set(input.seenKeys);
 	return input.chats.some((chat) => {
@@ -99,13 +120,25 @@ export function sidebarHasAttentionChat(input: {
 			openChatId: input.selectedChatId,
 			openTurnStatus: input.openTurnStatus,
 		});
-		return (
+		const attention =
 			sidebarChatAttention({
 				running,
 				turnStatus: chat.turnStatus,
 				selected: chat.id === input.selectedChatId,
 				seen: seen.has(sidebarChatSeenKey(chat)),
-			}) === "attention"
+			}) === "attention";
+		if (!attention || input.seenSinceMs === undefined) return attention;
+		// A failed turn stays attention; a completed one only while unread.
+		return (
+			chat.turnStatus === "failed" ||
+			sidebarChatUnread({
+				selected: false,
+				running,
+				turnStatus: chat.turnStatus,
+				updatedAt: chat.updatedAt,
+				seen: false,
+				seenSinceMs: input.seenSinceMs,
+			})
 		);
 	});
 }
