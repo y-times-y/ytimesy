@@ -3,6 +3,7 @@ import {
 	readPreparedCheckoutDirectory,
 	readProjectDerivedValue,
 	savePreparedCheckoutDirectory,
+	templateCheckoutCommit,
 } from "./prepared-checkout";
 
 const query = vi.fn();
@@ -61,4 +62,30 @@ it("reads a derived value only from the same user's root chats in the same proje
 	expect(params).toEqual(["owner", "project", key]);
 	query.mockResolvedValueOnce({ rows: [] });
 	expect(await readProjectDerivedValue("owner", "project", key)).toBeNull();
+});
+
+it("reads the template commit of the snapshot a chat's copy comes from", async () => {
+	const commit = "a".repeat(40);
+	query.mockResolvedValueOnce({ rows: [{ commit }] });
+	expect(
+		await templateCheckoutCommit("owner", "chat", "acme/app", "main"),
+	).toBe(commit);
+	const [sql, params] = query.mock.calls[0];
+	// A machine copied ahead of the turn names its snapshot; else the template.
+	expect(sql).toContain("w.template_snapshot_id)");
+	expect(params).toEqual([
+		"chat",
+		"owner",
+		"acme/app",
+		"main",
+		"machine-prewarm",
+	]);
+	query.mockResolvedValueOnce({ rows: [] });
+	expect(
+		await templateCheckoutCommit("owner", "chat", "acme/app", "feature"),
+	).toBeNull();
+	query.mockResolvedValueOnce({ rows: [{ commit: "not-a-sha" }] });
+	expect(
+		await templateCheckoutCommit("owner", "chat", "acme/app", "main"),
+	).toBeNull();
 });

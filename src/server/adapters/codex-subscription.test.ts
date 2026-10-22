@@ -18,6 +18,7 @@ import {
 	subscriptionLimits,
 	warmCodexSubscriptionCatalog,
 } from "./codex-subscription";
+import { withDatabaseScope } from "./database-scope";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), connected: vi.fn() }));
 vi.mock("../auth/codex-managed-auth", () => ({
@@ -661,4 +662,32 @@ it("does not keep a failed token read", async () => {
 	await expect(codexSubscriptionModel(owner, "m", "low")).rejects.toThrow();
 	const runtime = await codexSubscriptionModel(owner, "m", "low");
 	expect(runtime.model).toBeDefined();
+});
+
+it("never waits on another invocation's pending catalog read", async () => {
+	// On Workers that read's I/O belongs to its request; if the request ends
+	// first, awaiting it hangs the send that shares it.
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementationOnce(() => new Promise<Response>(() => {}))
+		.mockImplementation(
+			async () => new Response(JSON.stringify({ models: [{ slug: "own" }] })),
+		);
+	const owner = "cross-invocation-owner";
+	const url = "postgres://user:pass@127.0.0.1:1/none";
+	await withDatabaseScope(
+		url,
+		async () => {
+			warmCodexSubscriptionCatalog(owner);
+			await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		},
+		null,
+	);
+	const models = await withDatabaseScope(
+		url,
+		() => codexSubscriptionCatalog(owner),
+		null,
+	);
+	expect(models[0].id).toBe("own");
+	expect(fetch).toHaveBeenCalledTimes(2);
 });
