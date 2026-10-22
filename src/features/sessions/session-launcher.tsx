@@ -12,6 +12,7 @@ import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	activeMention,
 	insertMention,
+	MAIN_MENTION_ID,
 	type MentionAgent,
 	mentionAgents,
 	mentionMatches,
@@ -366,13 +367,18 @@ export function SessionLauncher({
 	const [caret, setCaret] = useState(0);
 	const [mentionIndex, setMentionIndex] = useState(0);
 	const [mentionDismissed, setMentionDismissed] = useState<string | null>(null);
-	const mentionList = useMemo(() => mentionAgents(identities), [identities]);
 	const selectedHelper = agents.helpers.find(
 		(row) => row.id === selectedAgentId,
 	);
 	const selectedTask = selectedHelper
 		? childTasks.find((task) => task.id === selectedHelper.id)
 		: undefined;
+	// The agent whose composer this is never appears: it is the one written to.
+	const mentionSelf = selectedHelper?.id ?? MAIN_MENTION_ID;
+	const mentionList = useMemo(
+		() => mentionAgents(identities, mentionSelf),
+		[identities, mentionSelf],
+	);
 	const sendToHelper = useServerFn(sendHelperMessage);
 	/** Messages the user sent a helper that its list does not show yet. */
 	const [helperOutbox, setHelperOutbox] = useState<
@@ -510,11 +516,9 @@ export function SessionLauncher({
 			? slashMenuCommands(slashDraft, allSlashCommands)
 			: [];
 
-	// "@" in Main's composer: the chat's agents, filtered by what follows it.
+	// "@": the chat's other agents, filtered by what follows it.
 	const mention =
-		!selectedHelper && mentionDismissed !== draft
-			? activeMention(draft, caret)
-			: null;
+		mentionDismissed !== draft ? activeMention(draft, caret) : null;
 	const visibleMentions = mention
 		? mentionMatches(mentionList, mention.query)
 		: [];
@@ -984,9 +988,8 @@ export function SessionLauncher({
 											: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
-								selectedHelper
-									? false
-									: handleMentionKey(event) || handleComposerKey(event)
+								handleMentionKey(event) ||
+								(!selectedHelper && handleComposerKey(event))
 							}
 						/>
 						{attachments.length > 0 && (

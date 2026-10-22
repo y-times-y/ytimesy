@@ -2,10 +2,12 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
+import { subagentTree } from "#/domain/subagent-tree";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	type MentionDeps,
 	mentionNoteFor,
+	mentionNoteFromTree,
 	withMentionNote,
 } from "./agent-mentions";
 
@@ -71,6 +73,20 @@ describe("a message that @mentions helpers", () => {
 		).toBe(
 			`[@mentions in the user's message: @research-1 = agent 2 (researcher, done, "Find the export API"); @build-1 = agent 1 (writer, working, "Fix pricing rounding")]`,
 		);
+	});
+
+	it("tells a helper who Main and the other helpers are, never itself", () => {
+		const nodes = subagentTree("root", chat, Date.now()).nodes;
+		expect(
+			mentionNoteFromTree(
+				"@Main asked; @build-1 check @research-1",
+				nodes,
+				"w",
+			),
+		).toBe(
+			`[@mentions in the user's message: @Main = the lead agent; @research-1 = agent 2 (researcher, done, "Find the export API")]`,
+		);
+		expect(mentionNoteFromTree("@build-1 go", nodes, "w")).toBeNull();
 	});
 
 	it("reads nothing without a helper mention", async () => {

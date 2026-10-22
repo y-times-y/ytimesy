@@ -9,9 +9,11 @@ import {
 
 /**
  * @mentions in the composer: the user types "@" and picks one of the chat's
- * agents (Main or a helper by its short name, "@build-1"). The sent message
- * shows each mention as a chip, and the lead reads which helper is meant
- * (mentionNote). Pure rules; the popover is mention-popover.tsx.
+ * other agents (Main or a helper by its short name, "@build-1"); the agent
+ * whose composer it is never appears, as it is the one being written to.
+ * The sent message shows each mention as a chip, and its recipient reads
+ * which agent is meant (mentionNote). Pure rules; the popover is
+ * mention-popover.tsx.
  */
 
 export type MentionAgent = {
@@ -26,14 +28,19 @@ export type MentionAgent = {
 
 export const MAIN_MENTION_ID = "main";
 
-/** Main, then every helper of the chat in start order (helperIdentitiesOf). */
+/**
+ * The agents one can mention while writing to `self` (MAIN_MENTION_ID or a
+ * helper's id): Main, then the chat's helpers in start order
+ * (helperIdentitiesOf), never `self`.
+ */
 export function mentionAgents(
 	identities: ReadonlyMap<
 		string,
 		Pick<HelperIdentity, "name" | "task" | "icon" | "color">
 	>,
+	self: string,
 ): MentionAgent[] {
-	return [
+	const agents: MentionAgent[] = [
 		{
 			id: MAIN_MENTION_ID,
 			name: MAIN_NAME,
@@ -48,6 +55,7 @@ export function mentionAgents(
 			color: identity.color,
 		})),
 	];
+	return agents.filter((agent) => agent.id !== self);
 }
 
 /** The "@query" being typed at the caret: where its "@" is and what follows. */
@@ -134,11 +142,12 @@ export function mentionSegments(
 	return segments;
 }
 
-/** The helper short names a message mentions, once each, in order. */
-export function mentionedHelperNames(text: string): string[] {
-	const names = mentionSegments(text, (name) =>
-		HELPER_NAME.test(name.toLowerCase()),
-	).flatMap((segment) =>
+/** The agent names a message mentions ("main", "build-1"), lowercased, once each, in order. */
+export function mentionedAgentNames(text: string): string[] {
+	const names = mentionSegments(text, (name) => {
+		const lower = name.toLowerCase();
+		return lower === MAIN_MENTION_ID || HELPER_NAME.test(lower);
+	}).flatMap((segment) =>
 		segment.kind === "mention" ? [segment.name.toLowerCase()] : [],
 	);
 	return [...new Set(names)];
@@ -155,24 +164,15 @@ export function withoutMentionNote(text: string) {
 }
 
 /**
- * What the lead reads beside a message that mentions helpers: each one's
- * agent id (the id agent_send takes), role, state and task. Null when no
- * mention names a helper of the chat.
+ * What an agent reads beside a message that mentions others: who each one
+ * is ("agent 1 (writer, working, \"Fix pricing rounding\")", "the lead").
+ * Null when no mention names another agent of the chat.
  */
 export function mentionNote(
-	mentions: readonly {
-		readonly name: string;
-		readonly id: string;
-		readonly role: string;
-		readonly state: string;
-		readonly task: string;
-	}[],
+	mentions: readonly { readonly name: string; readonly is: string }[],
 ): string | null {
 	if (!mentions.length) return null;
 	return `${NOTE_OPEN}${mentions
-		.map(
-			(mention) =>
-				`@${mention.name} = agent ${mention.id} (${mention.role}, ${mention.state}, "${mention.task}")`,
-		)
+		.map((mention) => `@${mention.name} = ${mention.is}`)
 		.join("; ")}]`;
 }
