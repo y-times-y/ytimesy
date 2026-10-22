@@ -70,7 +70,7 @@ type TaskSession = {
 	readonly taskSummary?: string | null;
 };
 
-function taskStatusFromTurn(
+export function taskStatusFromTurn(
 	turnStatus: SessionTurnStatus,
 	storedStatus?: AgentTaskStatus | null,
 ): AgentTaskStatus {

@@ -129,14 +129,24 @@ export function totalSpend(spends: readonly AgentSpend[]): AgentSpend {
 	);
 }
 
-/** A forked VM's minutes from boot to deletion (or now while it lives). */
+/**
+ * A forked VM's minutes from boot to deletion (or now while it lives),
+ * stopped at `endedAt` once its writer finished: the fork is kept a while
+ * for a follow-up (teardownSubagentForks) but pauses itself when idle
+ * (PRODUCT_IDLE_TIMEOUT_SECONDS) and the provider meters only running
+ * time, so the wait for deletion is not counted.
+ */
 export function forkVmMinutes(
 	fork: { readonly bootedAt?: string; readonly deletedAt?: string } | null,
 	now: number,
+	endedAt?: number | null,
 ) {
 	if (!fork?.bootedAt) return 0;
 	const start = Date.parse(fork.bootedAt);
-	const end = fork.deletedAt ? Date.parse(fork.deletedAt) : now;
+	const end = Math.min(
+		fork.deletedAt ? Date.parse(fork.deletedAt) : now,
+		endedAt ?? Number.POSITIVE_INFINITY,
+	);
 	return Number.isFinite(start) && Number.isFinite(end) && end > start
 		? (end - start) / 60_000
 		: 0;
