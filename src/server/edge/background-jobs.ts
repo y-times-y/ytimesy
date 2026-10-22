@@ -40,31 +40,7 @@ export function runBackgroundJob(
 				},
 				async () => {
 					if (job.kind === "model-admission") {
-						if (process.env.MODEL_EXECUTION_ENABLED !== "1")
-							throw new Error("Model execution is disabled.");
-						const limits = modelConcurrencyLimits();
-						for (let count = 0; count < 16; count++) {
-							const turn = await claimApiTurn(
-								limits.perUser,
-								limits.fleet,
-								"durable-object",
-							);
-							if (!turn) break;
-							if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
-							const scope = {
-								userId: turn.user_id,
-								sessionId: turn.session_id,
-							};
-							if (
-								!(await env.MODEL_CONVERSATIONS.getByName(
-									modelConversationName(scope),
-									durableObjectLocation(),
-								).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
-							)
-								console.warn(
-									"Chat could not queue this turn; lease expiry will fail it.",
-								);
-						}
+						await admitQueuedTurns(env);
 						return "delivered";
 					}
 					if (job.kind === "prepare") {
@@ -107,6 +83,36 @@ export function runBackgroundJob(
 			),
 		null,
 	);
+}
+
+/**
+ * Claims queued chat turns (within the concurrency limits) and starts each in
+ * its chat's ModelConversation. Safe to repeat: a claim takes a turn once, so
+ * a second pass finds nothing. Runs inside a database scope.
+ */
+export async function admitQueuedTurns(env: EdgeExecutorEnvironment) {
+	if (process.env.MODEL_EXECUTION_ENABLED !== "1")
+		throw new Error("Model execution is disabled.");
+	const limits = modelConcurrencyLimits();
+	for (let count = 0; count < 16; count++) {
+		const turn = await claimApiTurn(
+			limits.perUser,
+			limits.fleet,
+			"durable-object",
+		);
+		if (!turn) break;
+		if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
+		const scope = { userId: turn.user_id, sessionId: turn.session_id };
+		if (
+			!(await env.MODEL_CONVERSATIONS.getByName(
+				modelConversationName(scope),
+				durableObjectLocation(),
+			).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
+		)
+			console.warn(
+				"Chat could not queue this turn; lease expiry will fail it.",
+			);
+	}
 }
 
 /** Idempotent by job ID: admitting the same job again only reports its state. */

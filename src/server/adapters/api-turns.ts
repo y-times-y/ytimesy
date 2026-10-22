@@ -15,6 +15,7 @@ import {
 	configuredTurnExecutor,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
+import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
 	captureTurnFinished,
 	captureTurnStarted,
@@ -239,7 +240,14 @@ export async function enqueueApiTurn(input: {
 				);
 			}
 		};
-		if (!startAfterResponse(wake)) await wake();
+		if (!startAfterResponse(wake)) {
+			await wake();
+			return;
+		}
+		// The chat's progress stream shows the sent message and the running
+		// turn now, not when the executor's first step relays it (2-4 s later).
+		// A failed relay keeps its durable receipt for the step to deliver.
+		startAfterResponse(() => relayConversationDeliveriesOnce(input.sessionId));
 	}
 }
 
@@ -255,7 +263,14 @@ export async function previousTurnMessages(
 	revision: string,
 ) {
 	const next = { modelId, connectionRevision: revision };
-	const recovered = await recoveredConversation(userId, sessionId);
+	// Both reads at once; the latest turn is used only without a restored point.
+	const [recovered, result] = await Promise.all([
+		recoveredConversation(userId, sessionId),
+		database().query<ApiTurn>(
+			"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+			[userId, sessionId],
+		),
+	]);
 	if (recovered !== null)
 		return continuedTurnHistory(
 			{
@@ -267,10 +282,6 @@ export async function previousTurnMessages(
 			},
 			next,
 		);
-	const result = await database().query<ApiTurn>(
-		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
-		[userId, sessionId],
-	);
 	const previous = result.rows[0];
 	if (
 		!previous ||

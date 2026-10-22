@@ -478,6 +478,9 @@ function continuedAfterTruncation(messages: readonly ModelMessage[]) {
 	);
 }
 
+export const OUTPUT_LIMIT_SPLIT_NOTE =
+	"Your previous response reached the output length limit before it finished an answer or a tool call, so nothing from it was kept. Continue the same work in smaller steps: split large edits, files or scripts across several tool calls. This is a runtime notice, not a new user request.";
+
 function exhaustedContext(step: {
 	finishReason: string;
 	text: string;
@@ -487,6 +490,30 @@ function exhaustedContext(step: {
 		step.finishReason === "length" &&
 		!step.toolCalls.length &&
 		!step.text.trim()
+	);
+}
+
+/**
+ * A length stop without a complete answer or tool call that spent the output
+ * limit (reasoning, or a tool call cut mid-arguments: OpenAI's
+ * response.incomplete with max_output_tokens). The context was not full, so
+ * compacting cannot help; the step is resampled with a note to work in
+ * smaller steps.
+ */
+function outputLimitCut(
+	step: {
+		finishReason: string;
+		text: string;
+		toolCalls: readonly unknown[];
+		usage: { outputTokens?: number };
+	},
+	maxOutputTokens: number | undefined,
+) {
+	return (
+		exhaustedContext(step) &&
+		maxOutputTokens !== undefined &&
+		step.usage.outputTokens !== undefined &&
+		step.usage.outputTokens >= maxOutputTokens * 0.9
 	);
 }
 
@@ -655,6 +682,8 @@ async function executeModelSteps(
 			}),
 		});
 	const accumulated = { usage: null as ApiTokenUsage | null };
+	/** The history before the last step, when that step was an output-limit cut. */
+	let cutBefore: ModelMessage[] | undefined;
 	/** Rehydrate exact instructions, then describe current state from the runtime, not from memory. */
 	const afterCompaction = async (
 		compacted: ModelMessage[],
@@ -1162,6 +1191,9 @@ async function executeModelSteps(
 				onStepFinished?.(
 					step.finishReason !== "error" && !exhaustedContext(step),
 				);
+				cutBefore = outputLimitCut(step, runtime.maxOutputTokens)
+					? history
+					: undefined;
 				await recordUsage(step.usage);
 				if (
 					runtime.contextWindow &&
@@ -1315,6 +1347,17 @@ async function executeModelSteps(
 				(reason === "stop" && endsWithCommentary(history)))
 		)
 			return { messages: history, outcome: "continue" };
+		if (reason === "length" && !ended && cutBefore) {
+			// Resampled once with the note; a second cut in a row gives up.
+			if (cutBefore.at(-1)?.content === OUTPUT_LIMIT_SPLIT_NOTE)
+				throw new IncompleteAgentTurn(reason);
+			history = [
+				...cutBefore,
+				{ role: "user", content: OUTPUT_LIMIT_SPLIT_NOTE },
+			];
+			await input.onStep(history);
+			return { messages: history, outcome: "continue" };
+		}
 		if (reason === "length" && !ended) {
 			if (!truncatedAnswer(history)) throw new ContextWindowExhausted();
 			// An answer cut off at the output limit continues once from where it stopped.

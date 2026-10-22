@@ -90,6 +90,33 @@ const outDir = join(
 	new Date().toISOString().replaceAll(":", "-"),
 );
 await mkdir(outDir, { recursive: true });
+/**
+ * Per user send of a scenario's chat: send → the turn's admission (when the
+ * chat shows it running on the edge) and admission → its first model request.
+ */
+function sendTimings(sessionId: string, tag: string, sends: number[]) {
+	return sends.map((sentAt, index) => {
+		const before = sends[index + 1] ?? Number.POSITIVE_INFINITY;
+		const admitted = edge.events.find(
+			(event) =>
+				event.kind === "admit" &&
+				event.detail.startsWith(sessionId.slice(0, 8)) &&
+				event.at >= sentAt &&
+				event.at < before,
+		)?.at;
+		const asked = admitted
+			? fake.requests.find(
+					(request) =>
+						request.at >= admitted &&
+						request.users.some((user) => user.includes(`[rehearsal:${tag}]`)),
+				)?.at
+			: undefined;
+		return {
+			admitMs: admitted ? admitted - sentAt : null,
+			firstModelMs: admitted && asked ? asked - admitted : null,
+		};
+	});
+}
 let failed = 0;
 const results = await Promise.all(
 	selected.map(async (scenario) => {
@@ -108,6 +135,7 @@ const results = await Promise.all(
 		);
 		// The tag leads: an exploration brief quotes the request's start.
 		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents !== "off")}`;
+		const sends = [Date.now()];
 		const sessionId = await edge.invoke(() =>
 			startTaskChat({
 				user,
@@ -164,6 +192,7 @@ const results = await Promise.all(
 			await settle(1);
 			// Later user messages in the same chat, each after the last settled.
 			for (const [index, followUp] of (scenario.followUps ?? []).entries()) {
+				sends.push(Date.now());
 				await edge.invoke(() =>
 					sendFollowUp({ user, sessionId, text: followUp }),
 				);
@@ -228,9 +257,13 @@ const results = await Promise.all(
 			}
 		}
 		checks.push(...forkChecks);
+		const timings = sendTimings(sessionId, scenario.id, sends);
+		console.log(
+			`rehearsal: ${scenario.id} timings ${timings.map((turn) => `send→admit ${turn.admitMs ?? "?"} ms, admit→first model call ${turn.firstModelMs ?? "?"} ms`).join("; ")}`,
+		);
 		await writeFile(
 			join(outDir, `${scenario.id}.json`),
-			JSON.stringify({ scenario: scenario.id, checks, data }, null, 2),
+			JSON.stringify({ scenario: scenario.id, checks, timings, data }, null, 2),
 		);
 		return { scenario, checks };
 	}),

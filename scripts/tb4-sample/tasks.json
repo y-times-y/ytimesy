@@ -1,0 +1,20 @@
+{
+  "rule": "Pre-registered 2026-10-21, before any sample run. From the 63 CPU tasks drop cad-model and vpp-loss-divergence (failed the 2026-10-21 oracle/nop preflight), retro-console-soc (load-sensitive oracle) and any task whose Codex or v13 median wall time exceeds 90 min. Then take the shortest tasks (by Codex median) in each Codex bucket: 3 of 5/5, 2 of 4/5, 2 of 3/5, 2 of 2/5, 2 of 1/5, 1 of 0/5. Codex expected passes = sum of rates = 7.0 of 12 (58.3%, vs 58.6% public pass@1).",
+  "expectedCodexPasses": 7.0,
+  "expectedV13Passes": 5.8,
+  "hostCpuBudget": "sum(cpus + 1) = 50 <= 64 - 2 on m7i.16xlarge (scripts/tb4-run/lib.ts fitsCpu)",
+  "tasks": [
+    { "task": "shadow-relay", "codex": 5, "cpus": 8 },
+    { "task": "mvcc-lsm-compaction", "codex": 5, "cpus": 2 },
+    { "task": "heat-pump-warranty", "codex": 5, "cpus": 2 },
+    { "task": "session-window-debug", "codex": 4, "cpus": 2 },
+    { "task": "payments-pipeline-fix", "codex": 4, "cpus": 6 },
+    { "task": "interleaved-vigenere", "codex": 3, "cpus": 4 },
+    { "task": "vf2-speedup-networkx", "codex": 3, "cpus": 2 },
+    { "task": "freecad-spring-clip", "codex": 2, "cpus": 2 },
+    { "task": "batched-eval-parity", "codex": 2, "cpus": 2 },
+    { "task": "atrx-vep-crispr", "codex": 1, "cpus": 2 },
+    { "task": "protein-autointerp-disulfide", "codex": 1, "cpus": 4 },
+    { "task": "roy-polymorph-cn", "codex": 0, "cpus": 2 }
+  ]
+}

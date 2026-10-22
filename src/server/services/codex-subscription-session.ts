@@ -24,6 +24,7 @@ import {
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
+import { startAfterResponse } from "../adapters/after-response";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import {
 	enqueueApiTurn,
@@ -54,12 +55,17 @@ async function readSubscriptionSession(
 	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
 	tolerateCatalogOutage = false,
 ): Promise<PublicCodexSession> {
-	const session = scope.sessionId
-		? await agentSessionForOwner(scope.userId, scope.sessionId)
-		: null;
+	// Independent reads; the account is read last below only for its status
+	// after a catalog refresh may have expired it.
+	const [session, managed] = await Promise.all([
+		scope.sessionId
+			? agentSessionForOwner(scope.userId, scope.sessionId)
+			: null,
+		hasManagedCodexAuth(scope.userId),
+	]);
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
-	let connected = await hasManagedCodexAuth(scope.userId);
+	let connected = managed;
 	let models: Awaited<ReturnType<typeof codexSubscriptionCatalog>> = [];
 	try {
 		if (connected) models = await codexSubscriptionCatalog(scope.userId);
@@ -207,25 +213,23 @@ export async function sendSubscriptionTask(
 				),
 		);
 	}
-	const task = await agentSessionForOwner(
-		scope.userId,
-		scope.sessionId as string,
-	);
-	if (!task || task.projectId !== scope.projectId)
-		throw new Error("Session is not available.");
 	const continuing = Boolean(input.continueOn);
-	const view = await readSubscriptionSession(scope, continuing);
-	// Continuing on a fallback during an outage: the fallback route is checked below.
-	if (!continuing && !view.models.some((model) => model.id === input.modelId))
-		throw new Error("Selected subscription model is unavailable.");
-	const inherited =
+	// The chat view (its row, the account and catalog) and the settings the
+	// turn inherits are independent reads.
+	const [view, inherited] = await Promise.all([
+		readSubscriptionSession(scope, continuing),
 		input.variant === undefined && input.fast === undefined
-			? await inheritedSubscriptionSettings(
+			? inheritedSubscriptionSettings(
 					scope.userId,
 					scope.sessionId as string,
 					input.modelId,
 				)
-			: null;
+			: null,
+	]);
+	if (!view.agentSessionId) throw new Error("Session is not available.");
+	// Continuing on a fallback during an outage: the fallback route is checked below.
+	if (!continuing && !view.models.some((model) => model.id === input.modelId))
+		throw new Error("Selected subscription model is unavailable.");
 	const revision = subscriptionTurnRevision(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
@@ -246,25 +250,27 @@ export async function sendSubscriptionTask(
 		: undefined;
 	if (input.approvesPlan && !pendingPlanId(view.items))
 		throw new Error("That plan was already answered.");
-	const attachments = input.storedAttachments
-		? [...input.storedAttachments]
-		: await storeMessageAttachments(
-				scope.userId,
-				scope.sessionId as string,
-				input.attachments,
-			);
+	const [attachments, previous] = await Promise.all([
+		input.storedAttachments
+			? [...input.storedAttachments]
+			: storeMessageAttachments(
+					scope.userId,
+					scope.sessionId as string,
+					input.attachments,
+				),
+		previousTurnMessages(
+			scope.userId,
+			scope.sessionId as string,
+			input.modelId,
+			revision,
+		),
+	]);
 	const items = sessionItemsQueuedWithUser(
 		view.items,
 		input.text,
 		input.idempotencyKey,
 		input.approvesPlan,
 		attachments,
-	);
-	const previous = await previousTurnMessages(
-		scope.userId,
-		scope.sessionId as string,
-		input.modelId,
-		revision,
 	);
 	let messages = nextTurnMessages({
 		previous,
@@ -293,13 +299,27 @@ export async function sendSubscriptionTask(
 		idempotencyKey: input.idempotencyKey,
 		failover,
 	});
-	// The sidebar shows the stored title; name the chat after its first message.
-	await titleUntitledAgentSession(
-		scope.userId,
-		scope.sessionId as string,
-		sessionTitleFromItems(items),
-	).catch(() => undefined);
-	return readSubscriptionSession(scope, continuing);
+	// The sidebar shows the stored title; name the chat after its first
+	// message. A composer send already titled it when it claimed the chat, so
+	// this is a fallback and need not hold the response.
+	const title = () =>
+		titleUntitledAgentSession(
+			scope.userId,
+			scope.sessionId as string,
+			sessionTitleFromItems(items),
+		).catch(() => undefined);
+	if (!startAfterResponse(title)) await title();
+	// The chat as just committed: its transcript with the sent message and a
+	// running turn on the model it was sent to. Re-reading it would repeat
+	// the chat, account and catalog reads above.
+	const visible = childTaskPublicItems(items);
+	return {
+		...view,
+		items: visible,
+		usage: recordedContextUsage(visible),
+		listedModelId: input.modelId,
+		turnStatus: "running",
+	};
 }
 
 export async function stopSubscriptionTask(scope: CodexSessionScope) {

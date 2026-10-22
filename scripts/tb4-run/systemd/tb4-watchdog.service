@@ -1,0 +1,9 @@
+[Unit]
+Description=TB4 watchdog (progress, stalls, hosts, Bedrock errors, spend)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/tb4/ytimesy
+EnvironmentFile=/opt/tb4/watchdog.env
+ExecStart=/usr/bin/node --import tsx scripts/tb4-run/watchdog.ts --run-dir /opt/tb4/run

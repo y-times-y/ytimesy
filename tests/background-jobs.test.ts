@@ -20,6 +20,7 @@ vi.mock("../src/server/services/background-job-delivery", () => ({
 }));
 
 import {
+	admitQueuedTurns,
 	BackgroundJobRunner,
 	runBackgroundJob,
 } from "../src/server/edge/background-jobs";
@@ -165,4 +166,33 @@ it("claims only Cloudflare turns and dispatches their persisted lease identities
 			turn: { turnId: id, leaseId: "00000000-0000-4000-8000-000000000002" },
 		}),
 	]);
+});
+
+it("admits a sent message's turn directly, and a repeated admission finds nothing to start", async () => {
+	vi.stubEnv("MODEL_EXECUTION_ENABLED", "1");
+	handlers.claim
+		.mockResolvedValueOnce({
+			id,
+			lease_id: "00000000-0000-4000-8000-000000000002",
+			user_id: "u",
+			session_id: "s",
+		})
+		.mockResolvedValue(null);
+	const { env, createBatch } = environment();
+	await admitQueuedTurns(env);
+	await admitQueuedTurns(env);
+	expect(createBatch).toHaveBeenCalledTimes(1);
+	expect(createBatch).toHaveBeenCalledWith([
+		expect.objectContaining({
+			turn: { turnId: id, leaseId: "00000000-0000-4000-8000-000000000002" },
+		}),
+	]);
+});
+
+it("refuses to admit turns while model execution is disabled", async () => {
+	vi.stubEnv("MODEL_EXECUTION_ENABLED", "0");
+	await expect(admitQueuedTurns(environment().env)).rejects.toThrow(
+		"Model execution is disabled.",
+	);
+	expect(handlers.claim).not.toHaveBeenCalled();
 });
