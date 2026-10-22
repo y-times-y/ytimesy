@@ -1107,6 +1107,10 @@ function SessionItemView({
 				</div>
 			);
 		case "notice":
+			// A wake-up turn's silent start, where its answer would run on from
+			// the previous one (groupTimelineRows): a quiet turn break.
+			if (item.wake)
+				return <hr className="session-turn-break" data-kind="wake" />;
 			if (item.stopped)
 				return (
 					<p className="session-stopped" data-kind="stopped" role="status">
