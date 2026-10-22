@@ -99,7 +99,7 @@ export function useMemoryScopeNames(
 				id.slice("project:".length));
 	/** Where a line can live: Personal, then every known project. */
 	const choices: MemoryMenuChoice[] = [
-		{ value: null, label: "Personal", hint: "every project" },
+		{ value: null, label: "Personal" },
 		...[...names.values()]
 			.sort((a, b) => a.label.localeCompare(b.label))
 			.map((name) => ({ value: name.value, label: name.label })),

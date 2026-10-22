@@ -242,7 +242,8 @@ export function ProjectPicker({
 										? "No repositories match."
 										: repositories.data
 											? "Every repository is already a project."
-											: "Connect GitHub to see repositories."}
+											: (repositories.error?.message ??
+												"Connect GitHub to see repositories.")}
 								</p>
 							) : null}
 						</div>
@@ -272,7 +273,7 @@ export function ProjectPicker({
 						<div className="project-picker-actions">
 							{creating ? null : (
 								<button type="button" onClick={() => setCreating(true)}>
-									<Plus size={13} />
+									<Plus size={14} />
 									New repo
 								</button>
 							)}
@@ -282,7 +283,7 @@ export function ProjectPicker({
 									target="_blank"
 									rel="noreferrer"
 								>
-									<ExternalLink size={13} />
+									<ExternalLink size={14} />
 									Add from GitHub
 								</a>
 							) : (
@@ -291,26 +292,25 @@ export function ProjectPicker({
 									disabled={connection.isPending}
 									onClick={() => connection.mutate()}
 								>
-									<ExternalLink size={13} />
+									<ExternalLink size={14} />
 									{connection.isPending ? "Opening GitHub…" : "Connect GitHub"}
 								</button>
 							)}
 							<button type="button" onClick={() => setAddingProject(true)}>
-								<Layers size={13} />
+								<Layers size={14} />
 								Multi-repo
 							</button>
 						</div>
+						{/* A failed repository list explains itself in the list above. */}
 						{save.error ||
 						create.error ||
 						connection.error ||
-						connectionNotice ||
-						repositories.error ? (
+						connectionNotice ? (
 							<p className="project-picker-error" role="alert">
 								{save.error?.message ||
 									create.error?.message ||
 									connection.error?.message ||
-									connectionNotice ||
-									repositories.error?.message}
+									connectionNotice}
 							</p>
 						) : null}
 					</>
