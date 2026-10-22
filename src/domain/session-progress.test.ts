@@ -4,6 +4,8 @@ import {
 	LIVE_STREAM_RECONCILE_MS,
 	progressIsFresh,
 	progressMatchesTurn,
+	progressRevivesStoppedTurn,
+	progressStreamWanted,
 	SEND_TIMEOUT_MESSAGE,
 	sessionReadInterval,
 	withinTimeout,
@@ -28,6 +30,58 @@ const user = {
 it("rejects a previous turn even when the user repeats the same prompt", () => {
 	expect(progressMatchesTurn([user, user], [user])).toBe(false);
 	expect(progressMatchesTurn([user], [user])).toBe(true);
+});
+
+it("accepts a server-started wake-up turn after the open chat's last message", () => {
+	const wake = {
+		kind: "userMessage" as const,
+		id: SessionItemId("wake"),
+		text: "\u2063ytimesy-child-event:e1",
+	};
+	expect(progressMatchesTurn([user], [user, wake])).toBe(true);
+	// A snapshot from before the open chat's own send still never erases it.
+	const sent = { ...user, id: SessionItemId("sent"), text: "next" };
+	expect(progressMatchesTurn([user, sent], [user, wake])).toBe(false);
+});
+
+describe("progressStreamWanted", () => {
+	it("listens while the turn runs, helpers work, or a wake-up may follow", () => {
+		const idle = {
+			turnRunning: false,
+			helpersWorking: false,
+			watchingForWake: false,
+		};
+		expect(progressStreamWanted(idle)).toBe(false);
+		expect(progressStreamWanted({ ...idle, turnRunning: true })).toBe(true);
+		expect(progressStreamWanted({ ...idle, helpersWorking: true })).toBe(true);
+		expect(progressStreamWanted({ ...idle, watchingForWake: true })).toBe(true);
+	});
+});
+
+describe("progressRevivesStoppedTurn", () => {
+	it("ignores a stale running snapshot of a stopped turn, not a wake-up after it", () => {
+		const wake = {
+			kind: "userMessage" as const,
+			id: SessionItemId("wake"),
+			text: "\u2063ytimesy-child-event:e1",
+		};
+		const input = {
+			stopRequested: true,
+			current: [user],
+			next: [user],
+			nextStatus: "running" as const,
+		};
+		expect(progressRevivesStoppedTurn(input)).toBe(true);
+		expect(progressRevivesStoppedTurn({ ...input, nextStatus: "idle" })).toBe(
+			false,
+		);
+		expect(progressRevivesStoppedTurn({ ...input, next: [user, wake] })).toBe(
+			false,
+		);
+		expect(progressRevivesStoppedTurn({ ...input, stopRequested: false })).toBe(
+			false,
+		);
+	});
 });
 
 describe("sessionReadInterval", () => {
