@@ -11,6 +11,7 @@ import type { TurnFailover } from "#/domain/model-failover";
 import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { settledTurnItems } from "#/domain/turn-end";
 import {
 	configuredTurnExecutor,
 	type TurnExecutor,
@@ -527,9 +528,11 @@ export async function finishApiTurn(
 export async function finalizeApiTurn(
 	turn: ApiTurn,
 	state: "completed" | "failed" | "cancelled",
-	items: readonly SessionItem[],
+	settled: readonly SessionItem[],
 	messages?: readonly ModelMessage[],
 ) {
+	// Its messages record when it ended (turn-end.ts).
+	const items = settledTurnItems(settled, Date.now());
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(

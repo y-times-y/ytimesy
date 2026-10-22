@@ -300,6 +300,21 @@ export function subagentReportHeader(input: {
 	return `[agent ${input.label} ${input.role} ${input.outcome}${input.name ? ` · ${input.name}` : ""}${input.round ? ` · ${input.round}` : ""} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
 }
 
+/**
+ * A report's header line split from its text: the header's facts after the
+ * agent's id and role ("finished · 14 steps · 3m · 120k tokens"), or null
+ * when the text has none.
+ */
+export function splitReportHeader(text: string): {
+	readonly meta: string | null;
+	readonly body: string;
+} {
+	const header = /^\[agent \S+ \S+ ([^\]\n]+)\]\s*/.exec(text);
+	return header
+		? { meta: header[1] ?? null, body: text.slice(header[0].length) }
+		: { meta: null, body: text };
+}
+
 export type WriterPatch = {
 	/** Where the patch lies in the parent's VM. */
 	readonly path: string;

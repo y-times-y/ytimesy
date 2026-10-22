@@ -148,7 +148,7 @@ function AgentRow({
 			<span className="agent-row-status" data-status={row.status}>
 				{row.statusLabel}
 			</span>
-			{row.metric ? (
+			{row.metric && metricText(row.metric, now) ? (
 				detail ? (
 					<TooltipPrimitive.Root>
 						<TooltipPrimitive.Trigger asChild>

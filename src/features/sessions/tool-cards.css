@@ -137,6 +137,13 @@
 	color: #6f6f6f;
 	font-size: 12px;
 }
+/* A turn the user stopped: a small muted marker under its last row. */
+.session-stopped {
+	margin: 2px 0;
+	color: #6f6f6f;
+	font-size: 12px;
+	line-height: 18px;
+}
 .session-agent-meta {
 	padding: 2px 0 6px 20px;
 }
