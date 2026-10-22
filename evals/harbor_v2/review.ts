@@ -342,8 +342,16 @@ export function childStepGuard(input: {
 				exhausted: tokens >= limit || steps >= input.budget.steps,
 				hadFinal: hasCheckerFinalNotice(messages),
 			});
+			// The stop names the used-up limit, as the product's guard does.
 			if (final === "stop")
-				throw new ChildBudgetUsed(input.role, "final step taken");
+				throw new ChildBudgetUsed(
+					input.role,
+					steps >= input.budget.steps
+						? `${prefix}steps ${count(steps)}/${count(input.budget.steps)}`
+						: tokens >= limit
+							? `${prefix}tokens ${count(tokens)}/${count(limit)}`
+							: "final step taken",
+				);
 			if (final === "final") {
 				lastCall = true;
 				input.onFinalStep?.();

@@ -210,6 +210,8 @@ export async function subagentReport(input: {
 	readonly deps?: SidekickRuntimeDeps;
 	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
 	readonly roleModels?: RoleModels;
+	/** Lead mode fusion with leadTools=thin: the lead restarts a failed writer, never takes over. */
+	readonly thinLead?: boolean;
 	/**
 	 * Stops the round's classifier early. Not the finished turn's own signal:
 	 * the report is written after the turn ended, when that signal is spent.
@@ -297,6 +299,7 @@ export async function subagentReport(input: {
 				items: input.items,
 				model: session.listedModelId ?? null,
 				roleModels: input.roleModels,
+				thinLead: input.thinLead,
 				signal: input.signal,
 				now,
 				deps: input.deps,
@@ -458,6 +461,7 @@ async function endSidekickRoundAndReport(input: {
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
 	readonly roleModels?: RoleModels;
+	readonly thinLead?: boolean;
 	readonly signal?: AbortSignal;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
@@ -554,6 +558,7 @@ async function endSidekickRoundAndReport(input: {
 				: answer.decision,
 		reason: answer.reason,
 		...(switching ? { switchTo: escalation } : {}),
+		thin: input.thinLead,
 	});
 	if (ended.retired)
 		return [
