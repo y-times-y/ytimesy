@@ -849,7 +849,7 @@ export function WorkspaceHome({
 	const handledLogin = useRef<object | null>(null);
 	const codexLogin = useQuery({
 		queryKey: ["codex-device-login"],
-		queryFn: () => pollLogin(),
+		queryFn: () => pollLogin({ data: {} }),
 		enabled:
 			session.connection.status === "awaiting_device_code" &&
 			session.connection.provider === "codex",

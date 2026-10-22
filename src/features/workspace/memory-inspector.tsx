@@ -183,7 +183,7 @@ export function MemoryInspector({
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["memory"] });
 	const clear = useMutation({
-		mutationFn: () => clearMemory(),
+		mutationFn: () => clearMemory({ data: {} }),
 		onSuccess: () => {
 			setConfirmClear(false);
 			setScope(null);
