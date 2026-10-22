@@ -384,7 +384,7 @@ export function createFreestyleWorkspaceMachines(
 			const provision = async () => {
 				const existing = await findVmBySlug(freestyle, slug);
 				if (existing) {
-					await verifyCopiedMachineSize(freestyle.vms.ref(existing));
+					await completeCopiedMachineSize(freestyle.vms.ref(existing));
 					await resumeProductVm(
 						freestyle.vms.ref(existing),
 						"Agent session VM",
@@ -481,7 +481,7 @@ export function createFreestyleWorkspaceMachines(
 				if (cause instanceof FreestyleApiError && cause.status === 409) {
 					const recovered = await findVmBySlug(freestyle, slug);
 					if (recovered) {
-						await verifyCopiedMachineSize(freestyle.vms.ref(recovered));
+						await completeCopiedMachineSize(freestyle.vms.ref(recovered));
 						await resumeProductVm(
 							freestyle.vms.ref(recovered),
 							"Agent session VM",
@@ -531,7 +531,15 @@ async function resizeLands(
 	return false;
 }
 
-async function verifyCopiedMachineSize(
+/**
+ * A chat's copy found by its slug before it was bound: one an earlier attempt
+ * made. Tagged with the size it was made for but still smaller, its create or
+ * resize answered with an error although the provider made it (seen on dev:
+ * a create that failed in 166 ms left a copy behind), or its step was
+ * interrupted while it grew. It holds no work yet, so it is grown to that
+ * size now; it is never used undersized.
+ */
+async function completeCopiedMachineSize(
 	vm: ReturnType<Freestyle["vms"]["ref"]>,
 ) {
 	const data = await vm.data();
@@ -539,14 +547,27 @@ async function verifyCopiedMachineSize(
 	const requested = machineSize(
 		machineSizeId.parse(data.metadata.machine_size),
 	);
-	if (
-		data.resources.cpu < requested.cpu ||
-		data.resources.memory < requested.memory ||
-		data.resources.storage < requested.storage
-	)
+	const sized = (resources: typeof data.resources) =>
+		resources.cpu >= requested.cpu &&
+		resources.memory >= requested.memory &&
+		resources.storage >= requested.storage;
+	if (sized(data.resources)) return;
+	const target = effectiveMachineResources(data.resources, requested);
+	const grown = await vm.resize(target).then(
+		() => true,
+		// As at create: a 5xx often means the resize is still finishing.
+		(error) =>
+			error instanceof FreestyleApiError && error.status >= 500
+				? resizeLands(vm, target)
+				: false,
+	);
+	if (!grown)
 		throw new Error(
 			"Workspace sizing did not complete. The unbound machine needs recovery before it can be used.",
 		);
+	console.warn("Finished sizing a chat's unbound machine copy.", {
+		requested: requested.id,
+	});
 }
 
 async function resumeProductVm(
