@@ -398,6 +398,11 @@ export function userMessageBudget(budget: ContextBudget) {
  */
 export type ArchivedHistory = string | { file: string };
 
+const MAX_SUMMARY_CHARACTERS = 16_000;
+
+export const EMPTY_SUMMARY_NOTICE =
+	"No summary could be written for the earlier part of this conversation. Its messages are archived (below); the user's requests are listed above. Before relying on earlier work, check the current state of the workspace and search the archive for earlier findings.";
+
 export async function compactApiHistory(
 	messages: ModelMessage[],
 	summarize: (older: ModelMessage[]) => Promise<string>,
@@ -423,11 +428,20 @@ export async function compactApiHistory(
 		throw new Error(
 			"Recent task activity exceeds the model context safety limit. Start a focused follow-up task.",
 		);
-	const summary = (await summarize(readableHistory(older))).trim();
-	if (!summary || summary.length > 16_000)
-		throw new Error(
-			"Context summary was empty or too large; the conversation was not truncated.",
-		);
+	let summary = (await summarize(readableHistory(older))).trim();
+	// An oversized summary keeps its head; the archive holds the rest.
+	if (summary.length > MAX_SUMMARY_CHARACTERS)
+		summary = `${summary.slice(0, MAX_SUMMARY_CHARACTERS - 200)}\n[The rest of this summary was cut by the runtime at ${MAX_SUMMARY_CHARACTERS} characters.]`;
+	// No summary text (a model can spend its whole output cap reasoning):
+	// without an archive the earlier history would be lost, so nothing is
+	// truncated; with one, the history is replaced by a notice pointing there.
+	if (!summary) {
+		if (!archive)
+			throw new Error(
+				"Context summary was empty; the conversation was not truncated.",
+			);
+		summary = EMPTY_SUMMARY_NOTICE;
+	}
 	const compacted: ModelMessage[] = [
 		...retainedUserMessages(
 			older,
@@ -447,6 +461,10 @@ export async function compactApiHistory(
 		);
 	if (archive) {
 		const reference = await archive(messages);
+		if (reference === null && summary === EMPTY_SUMMARY_NOTICE)
+			throw new Error(
+				"Context summary was empty and the archive failed; the conversation was not truncated.",
+			);
 		const first = compacted.find((message) => message.role === "assistant");
 		if (reference !== null && first && typeof first.content === "string")
 			first.content +=

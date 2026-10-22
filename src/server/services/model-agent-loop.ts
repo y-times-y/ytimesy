@@ -220,6 +220,41 @@ export function withoutToolSettings<T extends object>(settings: T): T {
 	return { ...settings, providerOptions: { ...options, openai: rest } };
 }
 
+/**
+ * A text context summary's output cap (reasoning included). It was 2048: Luna
+ * at max effort on Bedrock spent all of it reasoning over a 415K-token
+ * history and returned no text, so a sidekick's round failed on "Context
+ * summary was empty". The summary's own length is bounded by
+ * compactApiHistory.
+ */
+export const SUMMARY_MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Settings for a context summary request: the run's settings at low reasoning
+ * effort. Writing a summary needs little reasoning, and a run's high effort
+ * can spend the summary's whole output cap before any text.
+ */
+export function summaryRequestSettings<T extends object>(settings: T): T {
+	const options = (
+		settings as { providerOptions?: Record<string, Record<string, unknown>> }
+	).providerOptions;
+	if (!options) return settings;
+	const lowered = { ...options };
+	if (options.openai && "reasoningEffort" in options.openai)
+		lowered.openai = { ...options.openai, reasoningEffort: "low" };
+	if (options.anthropic && "effort" in options.anthropic)
+		lowered.anthropic = { ...options.anthropic, effort: "low" };
+	const reasoning = options.openrouter?.reasoning as
+		| Record<string, unknown>
+		| undefined;
+	if (reasoning && "effort" in reasoning)
+		lowered.openrouter = {
+			...options.openrouter,
+			reasoning: { ...reasoning, effort: "low" },
+		};
+	return { ...settings, providerOptions: lowered };
+}
+
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
 export async function runModelAgent(
 	input: ModelAgentInput,
@@ -889,11 +924,13 @@ async function executeModelSteps(
 								...cacheSettings,
 								model,
 								...withoutToolSettings(
-									requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+									summaryRequestSettings(
+										requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+									),
 								),
 								prompt: JSON.stringify(older),
 								maxRetries: 1,
-								maxOutputTokens: 2048,
+								maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
 								abortSignal: runSignal,
 								onError: () => {},
 							});
@@ -973,11 +1010,18 @@ async function executeModelSteps(
 						const summary = await generateText({
 							...cacheSettings,
 							model,
-							...requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+							...summaryRequestSettings(
+								requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+							),
 							prompt: JSON.stringify(older),
 							maxRetries: 1,
 							maxOutputTokens:
-								runtime.maxOutputTokens === undefined ? undefined : 2048,
+								runtime.maxOutputTokens === undefined
+									? undefined
+									: Math.min(
+											runtime.maxOutputTokens,
+											SUMMARY_MAX_OUTPUT_TOKENS,
+										),
 							abortSignal: runSignal,
 						});
 						await recordUsage(summary.usage);

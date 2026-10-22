@@ -14,6 +14,9 @@ import type { WorkspaceMachines } from "../../src/server/services/workspace-mach
  */
 export const HARBOR_REQUEST = "@@YTIMESY_HARBOR@@";
 
+/** Base64 characters per write command: well under Linux's 128 KiB per argument, a multiple of 4. */
+export const WRITE_CHUNK_CHARS = 64_000;
+
 export type HarborReply = {
 	id: number;
 	exitCode: number;
@@ -89,12 +92,46 @@ export function harborMachines(
 				? null
 				: Buffer.from((reply.stdout ?? "").trim(), "base64").toString("utf8");
 		},
+		// The file travels inside the command, and Linux caps one argument at
+		// 128 KiB (MAX_ARG_STRLEN): a 423 KB report (563 KB of base64) failed
+		// every edit with "Could not write". Larger files go in pieces
+		// appended to a side file, then moved into place.
 		writeTextFile: async (_vm: WorkspaceId, path: string, contents: string) => {
-			const reply = await exec(
-				`mkdir -p "$(dirname ${quote(path)})" && printf %s ${Buffer.from(contents).toString("base64")} | base64 -d > ${quote(path)}`,
-				30_000,
-			);
-			if (reply.exitCode) throw new Error(`Could not write ${path}.`);
+			const encoded = Buffer.from(contents).toString("base64");
+			const fail = (reply: HarborReply) => {
+				if (reply.exitCode)
+					throw new Error(
+						`Could not write ${path}: ${(reply.stderr ?? "").slice(-300)}`.trim(),
+					);
+			};
+			const mkdir = `mkdir -p "$(dirname ${quote(path)})"`;
+			if (encoded.length <= WRITE_CHUNK_CHARS) {
+				fail(
+					await exec(
+						`${mkdir} && printf %s ${encoded} | base64 -d > ${quote(path)}`,
+						30_000,
+					),
+				);
+				return;
+			}
+			const part = `${path}.ytimesy-part-${process.pid}-${Date.now()}`;
+			try {
+				for (let at = 0; at < encoded.length; at += WRITE_CHUNK_CHARS) {
+					const piece = encoded.slice(at, at + WRITE_CHUNK_CHARS);
+					fail(
+						await exec(
+							at === 0
+								? `${mkdir} && printf %s ${piece} | base64 -d > ${quote(part)}`
+								: `printf %s ${piece} | base64 -d >> ${quote(part)}`,
+							30_000,
+						),
+					);
+				}
+				fail(await exec(`mv -f ${quote(part)} ${quote(path)}`, 30_000));
+			} catch (error) {
+				await exec(`rm -f ${quote(part)}`, 30_000).catch(() => {});
+				throw error;
+			}
 		},
 	} as unknown as WorkspaceMachines;
 }

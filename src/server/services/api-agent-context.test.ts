@@ -5,6 +5,7 @@ import {
 	compactApiHistory,
 	contextMeasurement,
 	contextTokenPressure,
+	EMPTY_SUMMARY_NOTICE,
 	estimateContextTokens,
 	modelContextBudget,
 	retainedUserMessages,
@@ -489,4 +490,47 @@ it("asks for a structured, model-neutral continuation record", () => {
 	expect(CONTEXT_SUMMARY_INSTRUCTIONS).not.toMatch(
 		/claude|gpt|gemini|openai|anthropic/i,
 	);
+});
+
+it("replaces the history with a notice pointing at the archive when the summary is empty, and clips an oversized one", async () => {
+	// atrx-vep-crispr (s3): Luna at max effort spent the summary's output cap
+	// reasoning and returned no text; the sidekick's round failed.
+	const messages: ModelMessage[] = [
+		{ role: "user", content: "Earlier request" },
+		{ role: "assistant", content: "Investigation ".repeat(8_000) },
+		{ role: "user", content: "Current request" },
+	];
+	const archive = vi.fn(async () => "context-empty-summary");
+	const empty = await compactApiHistory(
+		messages,
+		async () => "  ",
+		undefined,
+		archive,
+	);
+	expect(empty.compacted).toBe(true);
+	const text = JSON.stringify(empty.messages);
+	expect(text).toContain(EMPTY_SUMMARY_NOTICE);
+	expect(text).toContain("context-empty-summary");
+	expect(text).toContain("Current request");
+	expect(text).not.toContain("Investigation Investigation");
+	// Without an archive nothing is dropped.
+	await expect(compactApiHistory(messages, async () => "")).rejects.toThrow(
+		"Context summary was empty",
+	);
+	// Nor when the archive could not be saved.
+	await expect(
+		compactApiHistory(
+			messages,
+			async () => "",
+			undefined,
+			async () => null,
+		),
+	).rejects.toThrow("archive failed");
+	const long = await compactApiHistory(messages, async () =>
+		"s".repeat(30_000),
+	);
+	expect(long.compacted).toBe(true);
+	const summary = long.messages.find((message) => message.role === "assistant");
+	expect(String(summary?.content).length).toBeLessThan(17_000);
+	expect(String(summary?.content)).toContain("cut by the runtime");
 });

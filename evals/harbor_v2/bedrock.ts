@@ -383,7 +383,8 @@ export const BEDROCK_RESPONSE_LIMITS = {
 
 /**
  * Bounds one request's wall time: the whole response (headers and body) gets
- * `totalMs`, and no more than `idleMs` may pass without a byte. A Bedrock
+ * `totalMs`, and once its body streams no more than `idleMs` may pass
+ * without a byte. A Bedrock
  * response once streamed for 30 minutes (1.6 MB) and would have run to the
  * trial's timeout. At a limit the request is aborted and its body fails with
  * an ETIMEDOUT error, which the model loop treats as an interrupted stream:
@@ -405,13 +406,18 @@ export function responseTimeLimitFetch(
 		let stopped: ResponseTimeLimit | undefined;
 		let body: ReadableStreamDefaultController<Uint8Array> | undefined;
 		const clear = () => clearTimeout(timer);
-		const arm = () => {
+		// Until the headers arrive only the total limit applies: the bridge's
+		// transport guard (beneath this fetch) holds a response's headers until
+		// its whole stream has arrived, so the idle limit there would cut every
+		// streaming response at idleMs however steadily it streamed (a 514 s
+		// response came within 86 s of it).
+		const arm = (idle = true) => {
 			clear();
 			const total = startedAt + limits.totalMs - now();
-			const ms = Math.max(0, Math.min(total, limits.idleMs));
+			const ms = Math.max(0, idle ? Math.min(total, limits.idleMs) : total);
 			timer = setTimeout(() => {
 				stopped = new ResponseTimeLimit(
-					total <= limits.idleMs
+					!idle || total <= limits.idleMs
 						? `the response ran past ${duration(limits.totalMs)}`
 						: `no data for ${duration(limits.idleMs)}`,
 				);
@@ -423,7 +429,7 @@ export function responseTimeLimitFetch(
 				}
 			}, ms);
 		};
-		arm();
+		arm(false);
 		let response: Response;
 		try {
 			response = await fetch(request, {
