@@ -56,7 +56,7 @@ export function MemorySettingsView(props: {
 						</label>
 						<span className="settings-row-meta">
 							{props.available
-								? "When off, nothing is recalled into chats and nothing new is saved."
+								? "When off, chats don't read or save memory. Your own edits still save."
 								: "No memory storage on this server."}
 						</span>
 					</div>
