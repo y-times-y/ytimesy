@@ -9,7 +9,7 @@ const fake = vi.hoisted(() => ({
 	enqueue: vi.fn(async () => {}),
 	holding: vi.fn(async (): Promise<string | null> => null),
 	open: vi.fn(),
-	commitBranch: vi.fn(async () => {}),
+	commitBranch: vi.fn(async (): Promise<unknown> => undefined),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -124,9 +124,18 @@ it("lands a resent first message in the chat it already opened", async () => {
 });
 
 it("opens a chat for a first message that never landed, committing its branch first", async () => {
-	fake.open.mockResolvedValue({ id: "s1" });
+	const opened = {
+		id: "s1",
+		projectId: "p1",
+		items: [],
+		turnStatus: "idle",
+		harness: "api",
+	};
+	fake.open.mockResolvedValue(opened);
+	fake.owner.mockClear();
 	fake.commitBranch.mockImplementation(async () => {
 		expect(fake.enqueue).not.toHaveBeenCalled();
+		return opened;
 	});
 	await sendApiWorkspaceTask(
 		{ userId: "u1", projectId: "p1" },
@@ -142,6 +151,9 @@ it("opens a chat for a first message that never landed, committing its branch fi
 		projectId: "p1",
 		sessionId: "s1",
 		text: "start",
+		session: opened,
 	});
 	expect(fake.enqueue).toHaveBeenCalledOnce();
+	// Read once, for the response only (the send continued from the commit's).
+	expect(fake.owner).toHaveBeenCalledOnce();
 });

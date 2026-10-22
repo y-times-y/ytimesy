@@ -20,6 +20,7 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
+	type AgentSessionRecord,
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
@@ -55,12 +56,16 @@ async function readSubscriptionSession(
 	scope: CodexSessionScope,
 	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
 	tolerateCatalogOutage = false,
+	/** The chat as the caller just read or wrote it, instead of reading it again. */
+	read?: AgentSessionRecord,
 ): Promise<PublicCodexSession> {
 	// Independent reads; the account is read last below only for its status
 	// after a catalog refresh may have expired it.
 	const [session, managed] = await Promise.all([
 		scope.sessionId
-			? agentSessionForOwner(scope.userId, scope.sessionId)
+			? read?.id === scope.sessionId
+				? read
+				: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		hasManagedCodexAuth(scope.userId),
 	]);
@@ -177,6 +182,8 @@ export async function sendSubscriptionTask(
 		continueOn?: string;
 	},
 	preparedTask = false,
+	/** The chat as the caller just read or wrote it (by id, for this user). */
+	read?: AgentSessionRecord,
 ): ReturnType<typeof readSubscriptionSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
@@ -209,26 +216,26 @@ export async function sendSubscriptionTask(
 			scope.userId,
 			opened.id,
 			input.text,
-			async () => {
-				await commitChatBranchForSubmission({
-					userId: scope.userId,
-					projectId,
-					sessionId: opened.id,
-					text: input.text,
-				});
-				return sendSubscriptionTask(
+			async () =>
+				sendSubscriptionTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
-				);
-			},
+					await commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId,
+						sessionId: opened.id,
+						text: input.text,
+						session: opened,
+					}),
+				),
 		);
 	}
 	const continuing = Boolean(input.continueOn);
 	// The chat view (its row, the account and catalog) and the settings the
 	// turn inherits are independent reads.
 	const [view, inherited] = await Promise.all([
-		readSubscriptionSession(scope, continuing),
+		readSubscriptionSession(scope, continuing, read),
 		input.variant === undefined && input.fast === undefined
 			? inheritedSubscriptionSettings(
 					scope.userId,

@@ -130,9 +130,11 @@ it("refuses a chat from another project before queueing anything", async () => {
 });
 
 it("commits a composer draft's new chat branch before queueing its turn", async () => {
-	mocks.open.mockResolvedValue({ id: "s" });
+	const opened = { id: "s", projectId: "p", harness: "codex", items: [] };
+	mocks.open.mockResolvedValue(opened);
 	mocks.commitBranch.mockImplementation(async () => {
 		expect(mocks.enqueue).not.toHaveBeenCalled();
+		return { ...opened, workingBranch: "ytimesy/hello-s" };
 	});
 	const view = await sendSubscriptionTask(
 		{ userId: "u", projectId: "p" },
@@ -146,7 +148,13 @@ it("commits a composer draft's new chat branch before queueing its turn", async 
 		projectId: "p",
 		sessionId: "s",
 		text: "hello",
+		session: opened,
 	});
 	expect(mocks.enqueue).toHaveBeenCalledOnce();
-	expect(view.agentSessionId).toBe("s");
+	// The chat as opened, then as its branch commit left it: never read again.
+	expect(mocks.session).not.toHaveBeenCalled();
+	expect(view).toMatchObject({
+		agentSessionId: "s",
+		selectedBranch: "ytimesy/hello-s",
+	});
 });
