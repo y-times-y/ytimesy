@@ -136,6 +136,10 @@ async function bedrockRuntime(input: {
 	const requestSettings = runtime.requestSettings;
 	return {
 		...runtime,
+		// No output cap, as Codex and the subscription route send none. The API
+		// default (8K) cut Luna at max effort mid tool call: a sidekick lost
+		// three steps in a row to response.incomplete (max_output_tokens).
+		maxOutputTokens: undefined,
 		requestSettings: requestSettings
 			? (instructions) => {
 					const settings = requestSettings(instructions);
