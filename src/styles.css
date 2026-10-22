@@ -3709,6 +3709,19 @@ a.session-title-meta:focus-visible {
 	color: #8f8f8f;
 	font-size: 12px;
 }
+.settings-info-trigger {
+	display: inline-flex;
+	vertical-align: -2px;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: #8f8f8f;
+	cursor: help;
+}
+.settings-info-trigger:hover,
+.settings-info-trigger:focus-visible {
+	color: #ececec;
+}
 .settings-row-icon {
 	width: 18px;
 	height: 18px;
