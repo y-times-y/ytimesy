@@ -18,6 +18,7 @@ import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
 	sendAfterConnect,
+	sendReplyOutcome,
 } from "#/domain/harness-access";
 import {
 	inspectorPaneIsWide,
@@ -1340,14 +1341,17 @@ export function WorkspaceHome({
 	function abandonSend(pending: PendingSend, message: string | null) {
 		if (pendingSendRef.current === pending) pendingSendRef.current = null;
 		if (message) toast.error(message);
+		// Keyed by the message id, so it only touches a view that still shows
+		// this send: its "Thinking" never outlives the send, even if the chat
+		// was reselected meanwhile.
+		setSession((current) =>
+			sessionWithoutFailedSend(
+				current,
+				pending.messageId,
+				pending.previousTurnStatus,
+			),
+		);
 		if (pending.epoch === sessionEpoch.current) {
-			setSession((current) =>
-				sessionWithoutFailedSend(
-					current,
-					pending.messageId,
-					pending.previousTurnStatus,
-				),
-			);
 			// A first message that made no chat returns to the new-chat draft.
 			if (pending.startsNewChat && !selectedSessionIdRef.current) {
 				pendingNewChatRef.current = false;
@@ -1480,13 +1484,11 @@ export function WorkspaceHome({
 				SEND_TIMEOUT_MS,
 				SEND_TIMEOUT_MESSAGE,
 			);
-			// A refused request (an origin check, an expired session) has no view.
-			if (!next?.connection)
-				throw new Error("The message could not be sent. Retry.");
-			// The server refused the send; it reports why in place of the chat.
-			if (next.connection.status === "failed")
-				throw new Error(next.connection.message);
-			if (sendAfterConnect(next.connection) === "await_sign_in") {
+			// A reply that holds neither the message nor a running turn means
+			// no turn is behind the "Thinking": report it, never leave it.
+			const outcome = sendReplyOutcome(next, pending.messageId);
+			if (outcome.kind === "failed") throw new Error(outcome.message);
+			if (outcome.kind === "await_sign_in") {
 				// The saved sign-in was gone: show the code, send once it is entered.
 				if (epoch === sessionEpoch.current)
 					setSession((current) => ({
@@ -1521,7 +1523,12 @@ export function WorkspaceHome({
 		setBusyChatIds((ids) => withBusyChat(ids, chatId));
 		let next: PublicCodexSession;
 		try {
-			next = await connect({ data: pending.scope });
+			// A connect that hangs returns the message instead of holding it.
+			next = await withinTimeout(
+				connect({ data: pending.scope }),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			if (!next?.connection) throw new Error("Could not connect. Retry.");
 		} catch (cause) {
 			if (epoch === sessionEpoch.current)
