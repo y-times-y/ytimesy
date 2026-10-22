@@ -24,10 +24,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { dockerRegistryMirrorScript } from "../src/domain/docker-registry-mirror";
 import { WorkspaceId } from "../src/domain/ids";
 import { MACHINE_SIZES } from "../src/domain/machine-size";
-import { computeHourlyMicroUsd } from "../src/server/adapters/freestyle/usage-admission";
 import { insertAgentSession } from "../src/server/adapters/agent-sessions";
+import { computeHourlyMicroUsd } from "../src/server/adapters/freestyle/usage-admission";
 import { sh, taskVms } from "./hard-set/vm";
 import { createEvalUser, type EvalUser } from "./smoke/eval-user";
 
@@ -241,8 +242,8 @@ npm install -g --force --loglevel=error pnpm@${pnpmVersion}
 sudo -u ubuntu -H bash -c 'curl -fsSL https://bun.sh/install | bash -s bun-v${bunVersion}' >/dev/null
 command -v docker >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null)
 # Docker Hub rate-limits the shared VM IPs (429): pull through Google's mirror, Docker Hub as fallback.
-mkdir -p /etc/docker && echo '{"registry-mirrors":["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
-systemctl restart docker 2>/dev/null || systemctl start docker 2>/dev/null || true
+${dockerRegistryMirrorScript()}
+systemctl start docker 2>/dev/null || true
 usermod -aG docker ubuntu
 for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
 # The database image straight from the mirror, in case a pull skips it.

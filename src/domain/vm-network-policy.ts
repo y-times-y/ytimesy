@@ -72,6 +72,8 @@ export const DEFAULT_ALLOWED_DOMAINS: readonly string[] = [
 	"auth.docker.io",
 	"production.cloudflare.docker.com",
 	"index.docker.io",
+	// Docker Hub mirror in each VM's daemon.json (docker-registry-mirror.ts)
+	"mirror.gcr.io",
 	// Ubuntu / Debian packages
 	"archive.ubuntu.com",
 	"security.ubuntu.com",
