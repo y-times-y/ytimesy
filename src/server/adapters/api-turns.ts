@@ -132,40 +132,54 @@ export async function enqueueApiTurn(input: {
 		const subscription = subscriptionTurnSettings(input.revision);
 		if (subscription && input.connectionId !== null)
 			throw new Error("Subscription turns cannot use an API connection.");
-		const connection = subscription
-			? await client.query(
-					"select 1 from agent_account where user_id=$1 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share",
-					[input.userId],
-				)
-			: await client.query(
-					"select id from model_connection where id=$1 and user_id=$2 and revision=$3 for share",
-					[input.connectionId, input.userId, input.revision],
-				);
-		if (!connection.rows.length)
+		// One statement: the connection (or Codex sign-in) is share-locked,
+		// the chat row locked for update, and a turn this send already queued
+		// looked up, instead of three round trips.
+		const gate = await client.query<{
+			connected: boolean;
+			found: boolean;
+			turn_status: string | null;
+			parent_session_id: string | null;
+			task_state: string | null;
+			task_access: string | null;
+			existing: boolean;
+		}>(
+			`with connection as (${
+				subscription
+					? "select 1 from agent_account where user_id=$2 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share"
+					: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
+			}),
+			 chat as (select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update)
+			 select exists(select 1 from connection) as connected,chat.id is not null as found,
+			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,
+			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
+			 from (select 1) one left join chat on true`,
+			subscription
+				? [input.sessionId, input.userId, input.idempotencyKey ?? null]
+				: [
+						input.sessionId,
+						input.userId,
+						input.idempotencyKey ?? null,
+						input.connectionId,
+						input.revision,
+					],
+		);
+		const checked = gate.rows[0];
+		if (!checked?.connected)
 			throw new Error(
 				"The model connection changed or is no longer available.",
 			);
-		const session = await client.query(
-			"select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update",
-			[input.sessionId, input.userId],
-		);
-		if (input.idempotencyKey) {
-			const existing = await client.query(
-				"select id from api_turn where session_id=$1 and user_id=$2 and idempotency_key=$3",
-				[input.sessionId, input.userId, input.idempotencyKey],
-			);
-			if (existing.rows.length) {
-				await client.query("commit");
-				return;
-			}
+		if (checked.existing) {
+			await client.query("commit");
+			return;
 		}
 		if (
-			!session.rows[0] ||
-			(session.rows[0].turn_status === "running" &&
+			!checked.found ||
+			(checked.turn_status === "running" &&
 				!(
 					input.preparedTask &&
-					session.rows[0].parent_session_id &&
-					session.rows[0].task_state === "working"
+					checked.parent_session_id &&
+					checked.task_state === "working"
 				))
 		)
 			throw new Error(
@@ -176,12 +190,14 @@ export async function enqueueApiTurn(input: {
 		started = {
 			userId: input.userId,
 			harness: subscription ? "codex" : "api",
-			parentSessionId: session.rows[0].parent_session_id ?? null,
-			taskAccess: session.rows[0].task_access ?? null,
+			parentSessionId: checked.parent_session_id ?? null,
+			taskAccess: checked.task_access ?? null,
 		};
+		// The turn and the chat's running state in one statement.
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")})`,
+			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			 update agent_session set harness=$14,listed_model_id=$13,items=$8,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
 				input.sessionId,
@@ -195,15 +211,7 @@ export async function enqueueApiTurn(input: {
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 				JSON.stringify(input.settings ?? {}),
 				input.failover ? JSON.stringify(input.failover) : null,
-			],
-		);
-		await client.query(
-			`update agent_session set harness=$5,listed_model_id=$3,items=$4,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$1 and user_id=$2`,
-			[
-				input.sessionId,
-				input.userId,
 				input.routeId,
-				jsonbText(input.items),
 				subscription ? "codex" : "api",
 			],
 		);

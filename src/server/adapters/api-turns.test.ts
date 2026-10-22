@@ -122,27 +122,27 @@ it("inherits same-model subscription settings through owner-scoped ancestors", a
 	).toBeNull();
 });
 
+/** The admission gate's answer: connected, the chat idle, nothing queued yet. */
+const queueable = async (sql: string) => ({
+	rows: sql.startsWith("with connection as")
+		? [{ connected: true, found: true, turn_status: "idle", existing: false }]
+		: [],
+});
+
 it("checks owner subscription and queues Codex without an API connection", async () => {
-	mocks.query.mockImplementation(async (sql: string) => ({
-		rows: sql.includes("agent_account")
-			? [{}]
-			: sql.startsWith("select id,turn_status")
-				? [{ id: "chat", turn_status: "idle" }]
-				: [],
-	}));
+	mocks.query.mockImplementation(queueable);
 	await enqueueApiTurn(input);
-	expect(mocks.query).toHaveBeenCalledWith(
-		expect.stringContaining("agent_account"),
-		["owner"],
+	const gate = mocks.query.mock.calls.find(([sql]) =>
+		sql.startsWith("with connection as"),
 	);
-	expect(mocks.query).not.toHaveBeenCalledWith(
-		expect.stringContaining("select id from model_connection"),
-		expect.anything(),
+	expect(gate?.[0]).toContain("from agent_account where user_id=$2");
+	expect(gate?.[0]).not.toContain("model_connection");
+	expect(gate?.[1]).toEqual(["chat", "owner", null]);
+	const queued = mocks.query.mock.calls.find(([sql]) =>
+		sql.startsWith("with queued as (insert into api_turn"),
 	);
-	expect(mocks.query).toHaveBeenCalledWith(
-		expect.stringContaining("set harness=$5"),
-		["chat", "owner", "model", "[]", "codex"],
-	);
+	expect(queued?.[0]).toContain("update agent_session set harness=$14");
+	expect(queued?.[1].slice(-2)).toEqual(["model", "codex"]);
 	expect(mocks.release).toHaveBeenCalled();
 	expect(mocks.capture).toHaveBeenCalledWith(
 		"owner",
@@ -155,13 +155,6 @@ it("checks owner subscription and queues Codex without an API connection", async
 });
 
 describe("waking the durable executor for a queued turn", () => {
-	const queueable = async (sql: string) => ({
-		rows: sql.includes("agent_account")
-			? [{}]
-			: sql.startsWith("select id,turn_status")
-				? [{ id: "chat", turn_status: "idle" }]
-				: [],
-	});
 	beforeEach(() => {
 		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
 		mocks.query.mockImplementation(queueable);
