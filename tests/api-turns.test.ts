@@ -465,6 +465,50 @@ it("switches runtime on the same session and freezes the model on the queued tur
 	expect(await claimApiTurn()).toBeNull();
 	await expect(submit()).rejects.toThrow("Finish or stop");
 });
+it("answers a replayed send to a running chat without queueing it again", async () => {
+	const send = () =>
+		enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "test" }],
+			items: [],
+			idempotencyKey: "replayed-send",
+		});
+	await send();
+	// The chat now runs that turn; the same send is answered, not refused.
+	await send();
+	expect((await db.query("select id from api_turn")).rows).toHaveLength(1);
+});
+
+it("queues a prepared subagent's first turn while its row already shows it working", async () => {
+	const child = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,parent_session_id,harness,turn_status,task_state) values($1,'alice',$2,'api','running','working')",
+		[child, sessionId],
+	);
+	const queue = (preparedTask: boolean) =>
+		enqueueApiTurn({
+			sessionId: child,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "brief" }],
+			items: [],
+			preparedTask,
+		});
+	await expect(queue(false)).rejects.toThrow("Finish or stop");
+	await queue(true);
+	expect((await db.query("select session_id from api_turn")).rows).toEqual([
+		{ session_id: child },
+	]);
+});
+
 it("rejects another owner's session", async () => {
 	await expect(submit("bob")).rejects.toThrow();
 	expect(await claimApiTurn()).toBeNull();
