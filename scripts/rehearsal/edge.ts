@@ -14,14 +14,21 @@
 // - The cron's periodic jobs (admission, reconcile, supervise, delivery,
 //   task events) run every few seconds instead of every minute.
 // - The Codex egress is the scripted model (fake-codex.ts).
+// - User sends run as the web Worker runs them (web()): no job dispatcher
+//   of their own, and the executor service binding reaches this edge's
+//   /turn/start and /jobs/start routes, signed as on the deployed edge.
 import { randomUUID } from "node:crypto";
-import type { BackgroundJob } from "../../src/domain/background-job";
+import {
+	type BackgroundJob,
+	backgroundJob,
+} from "../../src/domain/background-job";
 import {
 	type ConversationStepStorage,
 	claimConversationStep,
 	type StepReceipt,
 } from "../../src/domain/conversation-step-receipts";
 import type { TurnControl } from "../../src/domain/conversation-turn-control";
+import { verifyDeliveryRequest } from "../../src/domain/delivery-auth";
 import type {
 	WorkflowStep,
 	WorkflowStepOutcome,
@@ -39,7 +46,9 @@ import { withCodexSubscriptionEgress } from "../../src/server/adapters/codex-sub
 import { withConversationTurnCoordinator } from "../../src/server/adapters/conversation-turn-control";
 import { database } from "../../src/server/adapters/database";
 import { withDatabaseScope } from "../../src/server/adapters/database-scope";
+import { withExecutorBinding } from "../../src/server/adapters/executor-fetch";
 import { withConversationPublisher } from "../../src/server/adapters/realtime-delivery";
+import { turnStartRequest } from "../../src/server/adapters/turn-start";
 import {
 	executeModelStep,
 	type WorkflowStepClaim,
@@ -138,6 +147,52 @@ export class RehearsalEdge {
 				),
 			null,
 		);
+	}
+
+	/**
+	 * Runs `work` the way the web Worker runs a request: its own pool, the
+	 * executor service binding (this edge's routes) and no job dispatcher.
+	 */
+	web<T>(work: () => Promise<T>): Promise<T> {
+		return withDatabaseScope(
+			this.input.databaseUrl,
+			() =>
+				withCodexSubscriptionEgress(this.input.egress, () =>
+					withExecutorBinding((url, init) => this.route(url, init), work),
+				),
+			null,
+		);
+	}
+
+	/** The edge executor's signed /turn/start and /jobs/start (executor.ts). */
+	private async route(url: string, init?: RequestInit) {
+		const request = new Request(url, init);
+		const body = await request.clone().text();
+		const secret = process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ?? "";
+		if (!(await verifyDeliveryRequest(secret, request, body)))
+			return new Response(null, { status: 401 });
+		const path = new URL(url).pathname;
+		if (path === "/turn/start") {
+			const turn = turnStartRequest.parse(JSON.parse(body));
+			this.note(
+				"admit",
+				`${turn.sessionId.slice(0, 8)} turn ${turn.turnId.slice(0, 8)}`,
+			);
+			this.startTurn({
+				id: turn.turnId,
+				session_id: turn.sessionId,
+				user_id: turn.userId,
+				lease_id: turn.leaseId,
+			} as ApiTurn);
+			return new Response(null, { status: 204 });
+		}
+		if (path === "/jobs/start") {
+			await this.invoke(() =>
+				this.dispatch(backgroundJob.parse(JSON.parse(body))),
+			);
+			return Response.json({ state: "queued" }, { status: 202 });
+		}
+		return new Response(null, { status: 404 });
 	}
 
 	private coordinate(

@@ -23,17 +23,21 @@ export function withBackgroundJobDispatcher<T>(
 	return binding.run(dispatch, run);
 }
 
-export async function dispatchBackgroundJob(
-	value: BackgroundJob,
-): Promise<boolean> {
-	const job = backgroundJob.parse(value);
-	const internal = binding.getStore();
-	if (internal) {
-		await internal(job);
-		return true;
-	}
+/** Inside an edge invocation (or the rehearsal's edge): jobs go to its binding. */
+export function hasInternalJobDispatcher() {
+	return binding.getStore() !== undefined;
+}
+
+/**
+ * The edge executor's admission origin and signing key, or null when none is
+ * configured. A misconfigured one throws: it must never be silently skipped.
+ */
+export function backgroundAdmissionEndpoint(): {
+	origin: URL;
+	secret: string;
+} | null {
 	const endpoint = process.env.YTIMESY_BACKGROUND_WORKFLOW_URL;
-	if (!endpoint) return false;
+	if (!endpoint) return null;
 	const origin = new URL(endpoint);
 	const root = process.env.BETTER_AUTH_SECRET;
 	const secret =
@@ -56,6 +60,21 @@ export async function dispatchBackgroundJob(
 		throw new Error(
 			"Background job admission requires an HTTPS origin and signing secret.",
 		);
+	return { origin, secret };
+}
+
+export async function dispatchBackgroundJob(
+	value: BackgroundJob,
+): Promise<boolean> {
+	const job = backgroundJob.parse(value);
+	const internal = binding.getStore();
+	if (internal) {
+		await internal(job);
+		return true;
+	}
+	const endpoint = backgroundAdmissionEndpoint();
+	if (!endpoint) return false;
+	const { origin, secret } = endpoint;
 	const url = new URL("/jobs/start", origin).href;
 	const body = JSON.stringify(job);
 	for (let attempt = 0; attempt < 2; attempt++) {

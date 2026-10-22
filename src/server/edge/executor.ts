@@ -44,6 +44,7 @@ import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
+import { turnStartRequest } from "../adapters/turn-start";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
 	executeModelStep,
@@ -57,6 +58,7 @@ import {
 	admitQueuedTurns,
 	runBackgroundJob,
 	startBackgroundJob,
+	startClaimedTurn,
 } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
@@ -528,6 +530,12 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			)
 		).rows[0];
 		if (!row || row.legacy) return { kind: "unavailable" };
+		// Only this chat's own turn runs here, however it was handed in.
+		if (
+			active &&
+			(row.session_id !== active.sessionId || row.user_id !== active.userId)
+		)
+			return { kind: "unavailable" };
 		if (
 			row.state === "completed" ||
 			row.state === "failed" ||
@@ -807,6 +815,45 @@ export default {
 						durableObjectLocation(),
 					).fetch(authenticated),
 				);
+			}
+			// The web Worker claimed a sent message's turn on its own database
+			// connection (turn-start.ts) and hands it to the chat's loop here.
+			if (path === "/turn/start") {
+				if (request.method !== "POST")
+					return new Response(null, { status: 404 });
+				const config = z
+					.object({
+						BACKGROUND_EXECUTION_ENABLED: z.literal("1"),
+						BACKGROUND_WORKFLOW_SECRET: z.string().min(32),
+					})
+					.safeParse(env);
+				if (!config.success || process.env.MODEL_EXECUTION_ENABLED !== "1")
+					return new Response(null, { status: 503 });
+				let body: string;
+				try {
+					body = await readBoundedRequestBody(request, 4_000);
+				} catch {
+					return new Response(null, { status: 413 });
+				}
+				if (
+					!(await verifyDeliveryRequest(
+						config.data.BACKGROUND_WORKFLOW_SECRET,
+						request,
+						body,
+					))
+				)
+					return new Response(null, { status: 401 });
+				let value: unknown;
+				try {
+					value = JSON.parse(body);
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+				const turn = turnStartRequest.safeParse(value);
+				if (!turn.success) return new Response(null, { status: 400 });
+				return new Response(null, {
+					status: (await startClaimedTurn(env, turn.data)) ? 204 : 409,
+				});
 			}
 			if (new URL(request.url).pathname === "/jobs/start") {
 				if (request.method !== "POST")
