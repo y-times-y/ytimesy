@@ -66,9 +66,12 @@ export async function establishVerificationBaselines(
 			);
 			continue;
 		}
+		// No optional locks: the status check must not refresh (and so lock)
+		// the index while the turn's code point (git write-tree, which needs
+		// that lock) runs beside it; the answer is the same without the refresh.
 		const script = `import subprocess,sys
 root=sys.argv[1]
-def git(*args): return subprocess.check_output(['git','-C',root,*args],text=True).strip()
+def git(*args): return subprocess.check_output(['git','--no-optional-locks','-C',root,*args],text=True).strip()
 base=git('rev-parse','--verify','refs/ytimesy/base^{commit}')
 if git('rev-parse','HEAD') != base or git('status','--porcelain','--untracked-files=all'): raise ValueError('Initial verification baseline is not pristine')
 print(base)`;

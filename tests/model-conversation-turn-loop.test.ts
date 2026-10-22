@@ -150,6 +150,8 @@ it("renews the lease and chat coordination before resuming", async () => {
 			rows: [
 				{
 					id: turn.turnId,
+					session_id: scope.sessionId,
+					user_id: scope.userId,
 					state: "running",
 					fresh: true,
 					legacy: false,
@@ -199,6 +201,8 @@ it("cancels a turn between steps once its runner deadline has passed", async () 
 			rows: [
 				{
 					id: turn.turnId,
+					session_id: scope.sessionId,
+					user_id: scope.userId,
 					state: "running",
 					fresh: true,
 					legacy: false,
@@ -230,6 +234,38 @@ it("cancels a turn between steps once its runner deadline has passed", async () 
 	expect(mocks.query.mock.calls[1][0]).toContain("set cancel_requested=true");
 	expect(mocks.query.mock.calls[1][1]).toEqual([turn.turnId, turn.leaseId]);
 	expect(kind).toBe("cancelled");
+});
+
+it("refuses to run another chat's turn handed to this chat", async () => {
+	mocks.query.mockResolvedValueOnce({
+		rowCount: 1,
+		rows: [
+			{
+				id: turn.turnId,
+				session_id: "00000000-0000-4000-8000-000000000009",
+				user_id: scope.userId,
+				state: "running",
+				fresh: true,
+				legacy: false,
+				cancel_requested: false,
+				version: "v1",
+			},
+		],
+	});
+	let kind = "";
+	mocks.step.mockImplementation(
+		async (step, _machines, receipts, _signal, resume) => {
+			kind = (await receipts.claim(step, resume)).kind;
+			return "unavailable";
+		},
+	);
+	const { object, state } = conversation();
+	await object.startTurn(scope, turn);
+	await state.ctx.storage.put("identity", scope);
+	await object.alarm();
+	expect(kind).toBe("unavailable");
+	// Its history was never read.
+	expect(mocks.query).toHaveBeenCalledTimes(1);
 });
 
 it("shares the alarm between the turn loop and the room lease", async () => {

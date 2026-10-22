@@ -69,7 +69,7 @@ const running = (cap: number) =>
 		totalRunSeconds: 2,
 	}) as VmData;
 
-it("reads the snapshot's resources while the VM's lock is taken, and lets the new copy's first guest operations use its admission", async () => {
+it("reads the snapshot's resources while the VM's lock is taken, and leaves the new copy's first guest operation to its own admission", async () => {
 	let cap: number | undefined;
 	const vmId = await admitVmCreate(
 		provider(async () => ({ resources })),
@@ -84,12 +84,9 @@ it("reads the snapshot's resources while the VM's lock is taken, and lets the ne
 	// The provider read was started before the lease insert.
 	expect(mocks.order.slice(0, 2)).toEqual(["snapshot", "lease"]);
 	expect(cap).toBeGreaterThan(75);
-	expect(recentAdmissionCovers(running(cap as number), 60)).toBe(true);
-	// Only the cap it was created with, on a running VM, counts.
-	expect(recentAdmissionCovers(running((cap as number) + 1), 60)).toBe(false);
-	expect(
-		recentAdmissionCovers({ ...running(cap as number), state: "paused" }, 60),
-	).toBe(false);
+	// A create admission is never reused: the first guest operation runs the
+	// full path (its retention touch included).
+	expect(recentAdmissionCovers(running(cap as number), 60)).toBe(false);
 	expect(mocks.query).toHaveBeenCalledWith(
 		"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and vm_id is null",
 		["copy", "vm-new"],
