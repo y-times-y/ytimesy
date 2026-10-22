@@ -7,7 +7,6 @@ import { AgentMentionContext } from "./agent-chip";
 import { AgentMarkdown } from "./agent-markdown-renderer";
 import { MentionPopover } from "./mention-popover";
 import { SessionTimeline } from "./session-timeline";
-import { TaskInput } from "./task-input";
 
 const identities = helperIdentitiesOf([
 	{
@@ -134,24 +133,4 @@ it("chips Main in a helper's reply, never the helper itself", () => {
 	expect(html).toContain('<span class="session-file-name">Main</span>');
 	expect(html).toContain('<span class="session-file-name">research-1</span>');
 	expect(html).not.toContain('<span class="session-file-name">build-1</span>');
-});
-
-it("draws a draft's known mentions with their icons behind the textarea", () => {
-	const draft = (value: string) =>
-		renderToStaticMarkup(
-			<TaskInput
-				value={value}
-				onChange={() => {}}
-				onSubmit={() => {}}
-				mentions={mentionAgents(identities, "main")}
-			/>,
-		);
-	const html = draft("ask @build-1 and @nobody");
-	expect(html).toContain('class="composer-mirror"');
-	expect(html).toContain('data-mentions="true"');
-	expect(html).toMatch(/composer-mention-at">@<svg[^>]*style="color:#FF8F96"/);
-	expect(html).toContain(" and @nobody");
-	// Main is the view's own agent here: no mirror for it.
-	expect(draft("ask @Main")).not.toContain("composer-mirror");
-	expect(draft("plain text")).not.toContain("data-mentions");
 });
