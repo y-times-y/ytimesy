@@ -214,10 +214,15 @@ export function sidekickDecisionNotice(input: {
 	readonly reason: string;
 	/** Set for switch_model: the model the sidekick continues on. */
 	readonly switchTo?: string;
+	/** A thin lead (leadTools=thin) cannot take over: it restarts the writer instead. */
+	readonly thin?: boolean;
 }) {
 	if (input.decision === "on_track") return "";
+	const fallback = input.thin
+		? "or restart it with a handoff"
+		: "or take over and do it yourself";
 	const reason = input.reason.replace(/[.\s]+$/, "");
 	if (input.decision === "switch_model" && input.switchTo)
-		return `Runtime notice: writer ${input.label} looks stuck (${reason}). The runtime switches it to ${input.switchTo} at its next context compaction: its next round starts by compacting its context, and the same writer (session, label ${input.label}) continues on ${input.switchTo} from that summary. Send that round a prescriptive brief (the exact change, file and line, and the command that must pass), or take over and do it yourself.`;
-	return `Runtime notice: writer ${input.label} needs you (${reason}). Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), or take over and do it yourself.`;
+		return `Runtime notice: writer ${input.label} looks stuck (${reason}). The runtime switches it to ${input.switchTo} at its next context compaction: its next round starts by compacting its context, and the same writer (session, label ${input.label}) continues on ${input.switchTo} from that summary. Send that round a prescriptive brief (the exact change, file and line, and the command that must pass), ${fallback}.`;
+	return `Runtime notice: writer ${input.label} needs you (${reason}). Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), ${fallback}.`;
 }

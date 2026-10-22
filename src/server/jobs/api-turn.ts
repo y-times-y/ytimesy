@@ -30,6 +30,7 @@ import {
 import { fusionPairFor } from "#/domain/fusion-pairs";
 import {
 	DEFAULT_HARNESS_VARIANT,
+	leadReasoningEffort,
 	outputCapCharacters,
 	promptCacheScopeId,
 } from "#/domain/harness-variant";
@@ -233,6 +234,7 @@ import {
 	type SubagentToolContext,
 	subagentTools,
 } from "../services/subagent-tools";
+import { thinLeadTools } from "../services/thin-lead-tools";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
@@ -1252,6 +1254,8 @@ async function runApiTurnAttempt(
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
 		// starts the request's exploration and Main waits for it; during build
 		// rounds Main is free but its writes refuse.
+		// leadTools=thin: the lead only plans, briefs and reviews (thin-lead-tools.ts).
+		const thinLead = !!fusionLead && delegates && variant.leadTools === "thin";
 		const leadGate =
 			fusionLead && delegates
 				? (waitUntil: number) =>
@@ -1280,7 +1284,9 @@ async function runApiTurnAttempt(
 		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
 		// MCP setup's search and call tools are callable only from inside it.
 		const codeMode =
-			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+			surface.lean && variant.codeMode !== "off" && !thinLead
+				? variant.codeMode
+				: null;
 		const ownTools = turnTools({
 			surfaceTools,
 			mcp,
@@ -1291,10 +1297,15 @@ async function runApiTurnAttempt(
 			projectSecrets,
 			redact,
 		});
-		const baseTools: ToolSet = {
-			...(leadGate ? withSidekickWriteGuard(ownTools, leadWrites) : ownTools),
-			...delegation,
-		};
+		// The thin lead only inspects, so a round needs no write guard.
+		const baseTools: ToolSet = thinLead
+			? thinLeadTools({ ...ownTools, ...delegation })
+			: {
+					...(leadGate
+						? withSidekickWriteGuard(ownTools, leadWrites)
+						: ownTools),
+					...delegation,
+				};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
@@ -1479,7 +1490,10 @@ async function runApiTurnAttempt(
 			userId: turn.user_id,
 			connectionId: route.connectionId ?? undefined,
 			connectionRevision: route.connectionRevision,
-			reasoning: turnReasoning,
+			// A fusion lead's own calls at most at leadEffort; its writer inherits turnReasoning.
+			reasoning: fusionLead
+				? leadReasoningEffort(turnReasoning, variant.leadEffort)
+				: turnReasoning,
 			speed: apiSettings.speed,
 			...(deferral ? { toolOrder: deferral.order } : {}),
 			...(owner.agentRole === "checker"
@@ -1587,6 +1601,7 @@ async function runApiTurnAttempt(
 					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
 					lead: variant.lead,
+					leadTools: thinLead ? "thin" : "full",
 					rigor: variant.rigor === "on",
 					forceDelegation: variant.subagents === "force",
 					fusionPair:

@@ -11,7 +11,7 @@ import {
 	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
 } from "#/domain/harness-model-profile";
-import type { LeadMode } from "#/domain/harness-variant";
+import type { LeadMode, LeadTools } from "#/domain/harness-variant";
 import {
 	codeModeInstructions,
 	leanToolInstructions,
@@ -35,6 +35,7 @@ import {
 } from "#/domain/subagent";
 import {
 	fusionLeadInstructions,
+	fusionThinLeadInstructions,
 	HANDOFF_INSTRUCTIONS,
 	orchestratorInstructions,
 	sidekickRoleInstructions,
@@ -71,6 +72,10 @@ export function agentTurnInstructions(input: {
 	prEvidence?: boolean;
 	/** Harness variant lead: fusion gives the root builder the lead's block. */
 	lead?: LeadMode;
+	/** Harness variant leadTools: thin gives the lead the thin block (callers pass the variant's). */
+	leadTools?: LeadTools;
+	/** The Harbor bridge: the lead's agent calls block until the round's report. */
+	leadBlocking?: boolean;
 	/** Lead mode fusion: the lead/sidekick pair's tuning (src/domain/fusion-pairs.ts). */
 	fusionPair?: FusionPairProfile;
 	/** Harness variant rigor=on: the rigor block for agents that change files. */
@@ -120,9 +125,17 @@ function leanTurnInstructions(
 				: true
 			: false;
 	const readOnly = !!input.leanReadOnly;
+	// The thin fusion lead's block names its few tools; the workspace commands are its writer's.
+	const thinLead =
+		input.lead === "fusion" &&
+		!input.session.agentRole &&
+		input.leadTools === "thin" &&
+		AGENT_TOOL in input.tools;
 	return [
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, AGENT_TOOL in input.tools)}`,
-		leanToolInstructions(input.leanShape, { readOnly, codeMode }),
+		thinLead
+			? ""
+			: leanToolInstructions(input.leanShape, { readOnly, codeMode }),
 		codeMode === "primary"
 			? primaryCodeModeInstructions(input.leanShape, { readOnly })
 			: codeMode
@@ -133,30 +146,41 @@ function leanTurnInstructions(
 			? deferredToolsInstructions(input.deferredTools ?? [])
 			: "",
 		AGENT_TOOL in input.tools
-			? input.lead === "fusion" && !input.session.agentRole
-				? fusionLeadInstructions({
-						editTools: leanEditTools(input.leanShape, input.tools),
-						readTool: (
+			? thinLead
+				? fusionThinLeadInstructions({
+						inspect: LEAN_SHAPE_TOOLS[input.leanShape].command,
+						read: (
 							LEAN_SHAPE_TOOLS[input.leanShape] as Partial<
 								Record<string, string>
 							>
 						).read,
 						pair: input.fusionPair,
+						blocking: input.leadBlocking,
 					})
-				: orchestratorInstructions({
-						codeMode,
-						force: !!input.forceDelegation && !input.session.agentRole,
-						main: !input.session.agentRole,
-						// A read-only subagent may start readers, never writers.
-						readOnly: readOnly || isReaderRole(input.session.agentRole),
-					})
+				: input.lead === "fusion" && !input.session.agentRole
+					? fusionLeadInstructions({
+							editTools: leanEditTools(input.leanShape, input.tools),
+							readTool: (
+								LEAN_SHAPE_TOOLS[input.leanShape] as Partial<
+									Record<string, string>
+								>
+							).read,
+							pair: input.fusionPair,
+						})
+					: orchestratorInstructions({
+							codeMode,
+							force: !!input.forceDelegation && !input.session.agentRole,
+							main: !input.session.agentRole,
+							// A read-only subagent may start readers, never writers.
+							readOnly: readOnly || isReaderRole(input.session.agentRole),
+						})
 			: // Main without helpers still hands off its background commands.
 				input.session.agentRole
 				? ""
 				: HANDOFF_INSTRUCTIONS,
 		rigorApplies(input) ? rigorBlock(input) : "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
-		readOnly
+		readOnly || thinLead
 			? ""
 			: leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
 					prEvidence: input.prEvidence,
