@@ -5,6 +5,11 @@ import type {
 	AttemptSnapshot,
 	LoopChildModel,
 } from "../../src/domain/attempt-loop";
+import {
+	CHECKER_FINAL_NOTICE,
+	checkerFinalStep,
+	hasCheckerFinalNotice,
+} from "../../src/domain/checker-brief";
 import { SessionItemId } from "../../src/domain/ids";
 import type { ModelBilling } from "../../src/domain/model-pricing";
 import type { ReviewLoopState } from "../../src/domain/review-loop";
@@ -298,7 +303,9 @@ export function childBudgetUsed(error: unknown): ChildBudgetUsed | null {
  * share) and weighted like the product's budget tokens. A sidekick's token
  * cap is the product's per-round cap (subagentBudgetCheck), not its budget
  * across rounds. At the cap the child gets one last step to write its
- * report (a notice); a step after that stops the round.
+ * report (a notice); a step after that stops the round. A checker's last
+ * step, at its token cap or within a minute of its time, is the product's
+ * forced final step: the final notice with tools off (onFinalStep).
  */
 export function childStepGuard(input: {
 	role: TrialRole;
@@ -309,6 +316,8 @@ export function childStepGuard(input: {
 	from: number;
 	/** budgetTokenWeight of the child's model against the builder's. */
 	weight?: number;
+	/** A checker's final step: the caller turns its tools off for it. */
+	onFinalStep?: () => void;
 	now?: () => number;
 }) {
 	let steps = 0;
@@ -327,6 +336,20 @@ export function childStepGuard(input: {
 		const tokens =
 			budgetUsageTokens(lastUsage(input.events, input.from)) *
 			(input.weight ?? 1);
+		if (input.role === "checker") {
+			const final = checkerFinalStep({
+				msLeft: input.startedAt + input.budget.minutes * 60_000 - now,
+				exhausted: tokens >= limit || steps >= input.budget.steps,
+				hadFinal: hasCheckerFinalNotice(messages),
+			});
+			if (final === "stop")
+				throw new ChildBudgetUsed(input.role, "final step taken");
+			if (final === "final") {
+				lastCall = true;
+				input.onFinalStep?.();
+				return [...messages, { role: "user", content: CHECKER_FINAL_NOTICE }];
+			}
+		}
 		if (tokens >= limit) {
 			if (lastCall)
 				throw new ChildBudgetUsed(
@@ -421,4 +444,37 @@ export function harborReviewLoop(input: {
 		// No one answers a trial's builder: every finished turn is checked.
 		unattended: true,
 	});
+}
+
+/**
+ * A round's tool calls with what each returned, for a cut-off checker's
+ * final call: `$ <command>` then its output (clipped), in order.
+ */
+export function ranTranscript(events: readonly TimedEvent[], from: number) {
+	const outputs = new Map<string, string>();
+	for (let index = from; index < events.length; index++) {
+		const { event } = events[index];
+		if (event.type === "tool-result")
+			outputs.set(
+				event.id,
+				(typeof event.output === "string"
+					? event.output
+					: JSON.stringify(event.output ?? "")
+				).slice(-1500),
+			);
+	}
+	const lines: string[] = [];
+	for (const item of commandItems("final", events.slice(from))) {
+		const index = Number(item.id.split("-call-")[1]);
+		const event = events[from + index]?.event;
+		const output = event?.type === "tool-call" ? outputs.get(event.id) : "";
+		if (item.kind === "dynamicToolCall")
+			lines.push(`$ ${item.input}`, output || "(no output recorded)");
+	}
+	return lines.join("\n");
+}
+
+/** The findings file a checker's brief names, or null. */
+export function briefFindingsPath(brief: string) {
+	return /(\/\S+\/findings\.jsonl)/.exec(brief)?.[1] ?? null;
 }

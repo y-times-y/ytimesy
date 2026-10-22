@@ -50,8 +50,8 @@ export function orchestratorInstructions(
 				]),
 		"Every agent re-reads the code it needs and spends its own tokens: small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
 		readOnly
-			? "Roles: researcher and reviewer read your VM and cannot change it; checker gets only the user's task and the current work and returns pass, fail or unsure."
-			: "Roles: writer edits on a fork of your VM (your uncommitted work included) and returns a patch and git ref; researcher and reviewer read your VM and cannot change it; checker gets only the user's task and your current work and returns pass, fail or unsure.",
+			? "Roles: researcher and reviewer read your VM and cannot change it; checker gets only the user's task and the current work and returns pass or fail."
+			: "Roles: writer edits on a fork of your VM (your uncommitted work included) and returns a patch and git ref; researcher and reviewer read your VM and cannot change it; checker gets only the user's task and your current work and returns pass or fail.",
 		`Every brief is self-contained: the goal; the context it needs (paths, findings, commands that work); constraints; what not to touch (files owned by others, shared ports, the dev server); and the report format.${readOnly ? "" : " Writers report what changed, how it was verified and what is unverified."}`,
 		...(readOnly
 			? []

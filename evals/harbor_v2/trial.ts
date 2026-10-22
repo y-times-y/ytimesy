@@ -6,6 +6,10 @@ import {
 	addApiTokenUsage,
 } from "../../src/domain/api-token-usage";
 import {
+	CHECKER_FORCED_FINAL_MARK,
+	checkerFinalPrompt,
+} from "../../src/domain/checker-brief";
+import {
 	type EfficiencySummary,
 	efficiencySummary,
 	type ModelSpendRow,
@@ -48,6 +52,7 @@ import {
 } from "./config";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
+	briefFindingsPath,
 	type CheckerRun,
 	childBudgetUsed,
 	childStepGuard,
@@ -56,6 +61,7 @@ import {
 	harborReviewLoop,
 	lastChildText,
 	type ReviewTrace,
+	ranTranscript,
 	reviewItems,
 } from "./review";
 import { type TrialRole, trialSessions } from "./sessions";
@@ -371,10 +377,14 @@ export async function runHarborTrial(
 			billing: child.model.billing,
 		})),
 	];
-	// Bedrock bills each Web Search query on top of tokens (builder only).
+	// Bedrock bills each Web Search query on top of tokens (builder and checkers).
 	const searchUsd = () =>
 		config.route === "bedrock"
-			? bedrockWebSearchUsd(events.map((entry) => entry.event))
+			? bedrockWebSearchUsd(
+					[events, ...sessions.all().map((child) => child.events)].flatMap(
+						(list) => list.map((entry) => entry.event),
+					),
+				)
 			: 0;
 	const guard = trialSpendGuard({
 		capUsd: config.trialUsdCap,
@@ -427,6 +437,63 @@ export async function runHarborTrial(
 		const roleModel = (role: BridgeRole) =>
 			config.roles[role] ?? (role === "checker" ? checkerModel : builderModel);
 		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
+		const checkerLastWord = async (
+			session: Parameters<RunRound>[0],
+			brief: string,
+			from: number,
+		) => {
+			const path = briefFindingsPath(brief);
+			const findings = path
+				? await input.machines
+						.exec(
+							workspace.vm,
+							`tail -c 20000 '${path}' 2>/dev/null || true`,
+							20_000,
+						)
+						.then((result) => result.stdout)
+						.catch(() => "")
+				: "";
+			try {
+				session.starts.push(session.events.length);
+				const out = await runModelAgent(
+					{
+						userId: input.userId,
+						modelId: session.model.modelId,
+						reasoning: session.model.effort,
+						toolSurface: "implementation",
+						cacheScopeId: session.id,
+						tools: {},
+						instructions:
+							"You are an independent checker whose time ran out. Give your verdict now.",
+						signal: AbortSignal.any([signal, AbortSignal.timeout(75_000)]),
+						maxSteps: 1,
+						turnTimeoutMs: 75_000,
+						messages: [
+							{
+								role: "user",
+								content: checkerFinalPrompt({
+									brief,
+									ran: ranTranscript(session.events, from),
+									findings,
+								}),
+							},
+						],
+						onEvent: async (event) => {
+							session.events.push({ at: new Date(now()).toISOString(), event });
+						},
+						onStep: async () => {},
+					},
+					await runtimeFor(session.model),
+				);
+				return finalAnswer(out);
+			} catch (error) {
+				log(
+					`checker ${session.id}: no forced final answer (${error instanceof Error ? error.message.slice(0, 160) : String(error)})`,
+				);
+				return lastChildText(session.events, from);
+			}
+		};
 		// One round of a child session (sidekick, checker, worker) in process,
 		// on the same container: its harness, the product's role prompt.
 		const runRound: RunRound = async (session, brief, options) => {
@@ -447,6 +514,10 @@ export async function runHarborTrial(
 			// later round's command exit 130 at once.
 			const turnId = harborTurnId(session.id, session.briefs.length);
 			const started = now();
+			const checkerRole =
+				session.role === "checker" || session.role === "checkerWorker";
+			// The checker's forced final step (childStepGuard): tools off for it.
+			let finalStep = false;
 			const onChildEvent = async (event: ApiAgentEvent) => {
 				session.events.push({ at: new Date(now()).toISOString(), event });
 			};
@@ -474,7 +545,10 @@ export async function runHarborTrial(
 				modelId: session.model.modelId,
 				provider,
 				variant: config.variant,
-				webSearch: false,
+				// A checker has the builder's execution access: web search and MCP too.
+				webSearch: config.webSearch && checkerRole,
+				bedrock: config.route === "bedrock",
+				...(checkerRole ? { mcpNote: mcpNoteFor(input.mcpServers) } : {}),
 				instruction: brief,
 				storage: input.storage,
 				onEvent: onChildEvent,
@@ -495,6 +569,9 @@ export async function runHarborTrial(
 				events: session.events,
 				from: roundStart,
 				weight: budgetTokenWeight(session.model.modelId, config.modelId),
+				onFinalStep: () => {
+					finalStep = true;
+				},
 			});
 			session.starts.push(roundStart);
 			try {
@@ -515,6 +592,9 @@ export async function runHarborTrial(
 						signal: childSignal,
 						maxSteps: budget.steps,
 						turnTimeoutMs: budget.minutes * 60_000,
+						...(session.role === "checker"
+							? { toolsOff: () => finalStep }
+							: {}),
 						messages: roundMessages(session, brief),
 						onEvent: onChildEvent,
 						onStep: async () => {},
@@ -524,11 +604,27 @@ export async function runHarborTrial(
 				session.messages = messages;
 				const report = {
 					outcome: "completed" as const,
-					report: finalAnswer(messages),
+					report: `${finalAnswer(messages)}${finalStep ? `\n${CHECKER_FORCED_FINAL_MARK}` : ""}`,
 				};
 				session.reports.push(report);
 				return report;
 			} catch (error) {
+				// A checker cut off (time, stop, budget) before its answer: one
+				// call without tools for the verdict from what it ran.
+				if (session.role === "checker" && !signal.aborted) {
+					const last = finalStep
+						? lastChildText(session.events, roundStart)
+						: "";
+					const report = {
+						outcome: "completed" as const,
+						report: `${last || (await checkerLastWord(session, brief, roundStart))}\n${CHECKER_FORCED_FINAL_MARK}`,
+					};
+					log(
+						`checker ${session.id} cut off (${error instanceof Error ? error.message.slice(0, 120) : String(error)}); forced final answer`,
+					);
+					session.reports.push(report);
+					return report;
+				}
 				const used = childBudgetUsed(error);
 				if (used) {
 					log(`${session.role} ${session.id} stopped: ${used.message}`);
@@ -619,7 +715,8 @@ export async function runHarborTrial(
 			})();
 			return {
 				done,
-				usage: () => lastUsage(session.events),
+				// Its rounds plus a forced final call, each a run of its own.
+				usage: () => runsUsage(session.events, session.starts),
 				stop: () => session.stop(),
 			};
 		};

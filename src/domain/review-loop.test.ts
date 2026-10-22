@@ -350,7 +350,9 @@ describe("review gating and time", () => {
 				deadlineAt: 1e9,
 			}),
 		).toEqual({ kind: "finish", reason: "pass" });
+		// An older "unsure" answer maps to pass or fail: no unsure outcome.
 		const unsure = review({ verdict: "unsure", failures: [] });
+		expect(unsure.verdict).toBe("pass");
 		expect(
 			decideAfterVerdict({
 				verdict: unsure,
@@ -358,8 +360,8 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "unsure" });
-		// Unsure with findings still finishes: only a fail sends the builder back.
+		).toEqual({ kind: "finish", reason: "pass" });
+		// With failures it is a fail: the builder gets them.
 		expect(
 			decideAfterVerdict({
 				verdict: review({ verdict: "unsure", failures: ["x: maybe wrong"] }),
@@ -367,6 +369,6 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "unsure" });
+		).toEqual({ kind: "fix" });
 	});
 });

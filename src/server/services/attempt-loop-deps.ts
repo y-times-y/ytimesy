@@ -1,5 +1,6 @@
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
+import { readerCommand } from "#/domain/subagent-reader";
 import {
 	type AgentSessionRecord,
 	descendantAgentSessions,
@@ -111,6 +112,9 @@ export function reviewLoopDeps(
 		load: loadReviewLoopState,
 		save: saveReviewLoopState,
 		latest: latestReviewLoopState,
+		// The loop re-runs a checker's tests with its access: as the reader user.
+		checkerExec: (checkerSessionId, command, timeoutMs) =>
+			shared.vm(readerCommand(checkerSessionId, command), timeoutMs),
 		workers: async (checkerSessionId) =>
 			(
 				await descendantAgentSessions(input.parent.userId, checkerSessionId)

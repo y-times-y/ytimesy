@@ -14,6 +14,7 @@ import {
 	harborChannel,
 	harborMachines,
 } from "../evals/harbor_v2/harbor-machines";
+import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
@@ -1115,6 +1116,44 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 		).toEqual(["retry", "pass"]);
 	}, 120_000);
 
+	it("gives a checker at its limit a final step with tools off; its verdict is recorded as forced-final", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "review=on",
+			YTIMESY_HARBOR_TOTAL_USD_CAP: "20",
+			YTIMESY_HARBOR_TRIAL_USD_CAP: "15",
+		});
+		const { model, calls } = scriptedModel([
+			[
+				call("b1", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+			// The checker's step spends past its 800K-token budget.
+			[
+				call("k1", "bash", { command: "python3 solution.py" }),
+				finish(900_000, 5, true),
+			],
+			[...text("k2", verdict(true)), finish(100, 10)],
+		]);
+		const result = await trial(f, "rh-final", async (wrap) => ({
+			contextWindow: 4_000_000,
+			model: wrap(model),
+		}));
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(4);
+		const final = model.doStreamCalls[3];
+		expect(JSON.stringify(final.prompt)).toContain(
+			"Final step, runtime notice: your time is up and tools are off.",
+		);
+		expect(final.tools ?? []).toEqual([]);
+		const t = await trace(f.logs);
+		expect(t.review.state.rounds[0].verdict).toMatchObject({
+			verdict: "pass",
+			via: "forced-final",
+		});
+		expect(JSON.stringify(t.review.state)).not.toContain("unsure");
+	}, 120_000);
+
 	it("hands the lead a sidekick's last message when its round stops at the token budget", async () => {
 		const f = await fixture({
 			YTIMESY_HARBOR_VARIANT:
@@ -1199,4 +1238,50 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 			"print(42)\n",
 		);
 	}, 120_000);
+});
+
+describe("a cut-off checker's last word (bridge)", () => {
+	it("finds the brief's findings file and lists what the checker ran with its output", () => {
+		expect(
+			briefFindingsPath(
+				"append it as one JSON line to /tmp/ytimesy-attempts/t/review-1/findings.jsonl: {...}",
+			),
+		).toBe("/tmp/ytimesy-attempts/t/review-1/findings.jsonl");
+		expect(briefFindingsPath("no file")).toBeNull();
+		const at = new Date(0).toISOString();
+		const events = [
+			{ at, event: { type: "text-delta", id: "x", text: "hi" } },
+			{
+				at,
+				event: {
+					type: "tool-call",
+					id: "c1",
+					name: "bash",
+					input: { command: "python3 /tmp/t.py" },
+				},
+			},
+			{
+				at,
+				event: {
+					type: "tool-result",
+					id: "c1",
+					name: "bash",
+					output: "2 passed",
+				},
+			},
+			{
+				at,
+				event: {
+					type: "tool-call",
+					id: "c2",
+					name: "bash",
+					input: { command: "sleep 999" },
+				},
+			},
+		] as never;
+		expect(ranTranscript(events, 0)).toBe(
+			"$ python3 /tmp/t.py\n2 passed\n$ sleep 999\n(no output recorded)",
+		);
+		expect(ranTranscript(events, 3)).toBe("$ sleep 999\n(no output recorded)");
+	});
 });

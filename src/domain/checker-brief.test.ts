@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { truncatedVerdictJson } from "./attempt-loop";
 import {
+	CHECKER_FINAL_NOTICE,
 	checkerDeadlineNotice,
+	checkerFinalPrompt,
+	checkerFinalStep,
 	checkerStandingRules,
 	checkerWrapUpLeadMs,
 	independentReviewBrief,
@@ -82,7 +85,8 @@ describe("independentReviewBrief", () => {
 			"4. Test it yourself.",
 		])
 			expect(brief).toContain(part);
-		expect(brief).toContain('"verdict": "pass" | "fail" | "unsure"');
+		expect(brief).toContain('"verdict": "pass" | "fail",');
+		expect(brief).not.toMatch(/unsure/i);
 	});
 
 	it("requires new tests of its own: existing tests are necessary, not sufficient", () => {
@@ -109,17 +113,19 @@ describe("independentReviewBrief", () => {
 			"fail only when a command you ran shows the deliverable breaking something the request or its files state",
 		);
 		expect(brief).toContain("a failed probe is a note, not a failure");
+		expect(brief).toContain("a pass needs new tests of your own");
 		expect(brief).toContain(
-			"a pass without new tests of your own counts as unsure",
+			"The verdict is pass or fail, never anything else.",
 		);
+		// The loop runs the checker's tests again after it.
 		expect(brief).toContain(
-			"unsure only when you genuinely could not run what matters; say why in notes",
+			"Keep `/tmp/check/tests/run.sh` running all your non-probe tests (non-zero exit on a failure); the review loop runs it again after you.",
 		);
 		// Generic: nothing about a task or a domain beyond the request itself.
 		expect(brief).not.toMatch(/mvcc|lsm|compaction|flush/i);
 	});
 
-	it("checks each stated symptom through the existing API first, over code comments, and fails output-changing readings", () => {
+	it("checks each stated symptom through the existing API first, over code comments, and settles ambiguous readings in a fixed order", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(
 			"1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them).",
@@ -128,11 +134,29 @@ describe("independentReviewBrief", () => {
 			"A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it.",
 		);
 		expect(brief).toContain(
-			"Where a result hinges on one, run the deliverable or a script under the alternative reading. A credible alternative reading that the run shows changes the output is a failure (both readings, the output each gives)",
+			"Where a result hinges on one, run the deliverable or a script under each plausible reading. Equal outputs: not a finding. Different outputs: decide, in this order, by the request's own examples, sample data and existing tests (run the deliverable on them), then the convention of the library or standard involved, then the reading more consistent with the rest of the files; the losing reading is a failure only when a run shows the deliverable takes it (both readings, the output each gives). Still tied: not a failure; name both readings in notes.",
+		);
+		const order = [
+			"the request's own examples",
+			"then the convention of the library",
+			"then the reading more consistent",
+		].map((phrase) => brief.indexOf(phrase));
+		expect(
+			order.every((at, index) => at > 0 && (!index || at > order[index - 1])),
+		).toBe(true);
+	});
+
+	it("records findings as it goes and builds a stand-in for what cannot run", () => {
+		const brief = independentReviewBrief(input);
+		expect(brief).toContain(
+			'As you verify each point, append it as one JSON line to /tmp/check/findings.jsonl: {"failure" or "requirement": "...", "met": true|false, "command": "<what you ran>", "output": "<what it printed>"}. If your time runs out, your verdict is built from this file.',
+		);
+		expect(brief).toContain(
+			"When the real thing cannot run here (a missing service, GPU, data or network), build the closest runnable stand-in (a smaller input, a stub of the external service, the deliverable's own entry point on sample data) and verify against that. Never answer without running something.",
 		);
 	});
 
-	it("has the checker re-derive key outputs before reading the deliverable's rationale, and fail a departure from the convention", () => {
+	it("has the checker re-derive key outputs before reading the deliverable's rationale", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(
 			"Before reading any rationale the deliverable states, write and run a script under /tmp/check/tests that derives each key output from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved) and diffs it against the deliverable's. A mismatch that script shows, and the deliverable's reasoning does not refute from the source text, is a failure.",
@@ -140,9 +164,7 @@ describe("independentReviewBrief", () => {
 		expect(brief).toContain(
 			'An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy".',
 		);
-		expect(brief).toContain(
-			"and so is a departure from the convention of the library, ecosystem or standard involved (say to switch to it); having no oracle is not grounds to pass.",
-		);
+		expect(brief).not.toContain("having no oracle is not grounds to pass");
 		// The request and the deliverable come before any claim of the builder's.
 		const rigor = independentReviewBrief({
 			...input,
@@ -198,7 +220,7 @@ describe("parseReviewVerdict", () => {
 		expect(verdict.assumptions[0].alternative).toBe("exclusive");
 	});
 
-	it("turns unmet requirements into failures and a pass with them into unsure", () => {
+	it("turns unmet requirements into failures and a pass with them into fail", () => {
 		const verdict = parseReviewVerdict(
 			JSON.stringify({
 				verdict: "pass",
@@ -208,11 +230,11 @@ describe("parseReviewVerdict", () => {
 				],
 			}),
 		);
-		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.verdict).toBe("fail");
 		expect(verdict.failures).toEqual(["total exact: 9"]);
 	});
 
-	it("keeps a clean pass and treats a missing answer as unsure", () => {
+	it("keeps a clean pass and treats a missing answer as no verdict (parsed false)", () => {
 		expect(
 			parseReviewVerdict(
 				JSON.stringify({
@@ -224,7 +246,7 @@ describe("parseReviewVerdict", () => {
 			).verdict,
 		).toBe("pass");
 		const missing = parseReviewVerdict("I ran out of time.");
-		expect(missing.verdict).toBe("unsure");
+		expect(missing.verdict).toBe("fail");
 		expect(missing.parsed).toBe(false);
 		expect(missing.requirements).toEqual([]);
 	});
@@ -260,7 +282,7 @@ describe("the checker's own tests", () => {
 		expect(verdict.untested).toBeUndefined();
 	});
 
-	it("counts a pass without any new test as unsure, and flags it", () => {
+	it("flags a pass without any new test (grounding decides), and maps an older unsure", () => {
 		const verdict = parseReviewVerdict(
 			JSON.stringify({
 				verdict: "pass",
@@ -271,17 +293,21 @@ describe("the checker's own tests", () => {
 				notes: "existing tests pass",
 			}),
 		);
-		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.verdict).toBe("pass");
 		expect(verdict.untested).toBe(true);
 		expect(verdict.notes).toBe(`${UNTESTED_PASS_NOTE} existing tests pass`);
-		// A fail or unsure without tests stays as it is.
-		for (const kind of ["fail", "unsure"] as const) {
+		// An older "unsure" (or a fail) with failures is a fail, without them a pass.
+		for (const kind of ["fail", "unsure"]) {
 			const other = parseReviewVerdict(
 				JSON.stringify({ verdict: kind, failures: ["x: y"] }),
 			);
-			expect(other.verdict).toBe(kind);
+			expect(other.verdict).toBe("fail");
 			expect(other.untested).toBeUndefined();
 		}
+		expect(
+			parseReviewVerdict(JSON.stringify({ verdict: "unsure", failures: [] }))
+				.verdict,
+		).toBe("pass");
 	});
 
 	it("never passes when one of its own tests failed, and reports it as a failure", () => {
@@ -294,7 +320,7 @@ describe("the checker's own tests", () => {
 				],
 			}),
 		);
-		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.verdict).toBe("fail");
 		expect(verdict.failures).toEqual(["b: boom"]);
 	});
 
@@ -331,7 +357,7 @@ describe("a checker answer cut off or wrapped", () => {
 		const verdict = parseReviewVerdict(`Report:\n${cut}`);
 		expect(verdict.parsed).toBe(true);
 		expect(verdict.truncated).toBe(true);
-		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.verdict).toBe("fail");
 		expect(verdict.failures).toEqual(full.failures);
 		expect(verdict.requirements.map((entry) => entry.requirement)).toEqual([
 			"importable package",
@@ -342,13 +368,13 @@ describe("a checker answer cut off or wrapped", () => {
 		expect(truncatedVerdictJson('{"verdict": "fa')).toBeNull();
 	});
 
-	it("never trusts a pass that was cut off", () => {
+	it("reads a pass cut off with an unmet requirement as fail", () => {
 		const text = JSON.stringify({ ...full, verdict: "pass", failures: [] });
 		const verdict = parseReviewVerdict(
 			text.slice(0, text.indexOf("assumptions")),
 		);
 		expect(verdict.truncated).toBe(true);
-		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.verdict).toBe("fail");
 	});
 
 	it("reads fenced JSON and prefers a complete verdict over a cut-off one", () => {
@@ -399,5 +425,37 @@ describe("the project's remembered rules for a checker", () => {
 			input.taskText,
 		);
 		expect(reviewBriefRequest("Find the export code")).toBeNull();
+	});
+});
+
+describe("the checker's forced final step", () => {
+	it("is due within a minute of its time or at another limit, once", () => {
+		const step = (msLeft: number, exhausted = false, hadFinal = false) =>
+			checkerFinalStep({ msLeft, exhausted, hadFinal });
+		expect(step(5 * 60_000)).toBe("go");
+		expect(step(60_000)).toBe("final");
+		expect(step(-1)).toBe("final");
+		expect(step(5 * 60_000, true)).toBe("final");
+		expect(step(30_000, false, true)).toBe("stop");
+		expect(step(5 * 60_000, false, true)).toBe("go");
+	});
+
+	it("asks a cut-off checker for pass or fail from what it ran and its findings file", () => {
+		const brief = independentReviewBrief(input);
+		const prompt = checkerFinalPrompt({
+			brief,
+			ran: "$ python3 /tmp/check/tests/t.py\nok",
+			findings: '{"requirement":"r","met":true}',
+		});
+		expect(prompt.startsWith(brief)).toBe(true);
+		expect(prompt).toContain(
+			"<what_you_ran>\n$ python3 /tmp/check/tests/t.py\nok\n</what_you_ran>",
+		);
+		expect(prompt).toContain('<findings_file>\n{"requirement":"r","met":true}');
+		expect(prompt.endsWith(CHECKER_FINAL_NOTICE)).toBe(true);
+		expect(CHECKER_FINAL_NOTICE).toContain("pass or fail");
+		expect(
+			checkerFinalPrompt({ brief: "b", ran: "", findings: " " }),
+		).not.toContain("<findings_file>");
 	});
 });

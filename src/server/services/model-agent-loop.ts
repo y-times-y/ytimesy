@@ -108,6 +108,8 @@ export type ModelAgentInput = {
 	 * callable until they appear here. Read before every step.
 	 */
 	toolOrder?: () => readonly string[];
+	/** True for a step offered no tools (a checker's forced final step). */
+	toolsOff?: () => boolean;
 	/** Retired and ignored: every turn uses the implementation surface; frozen benchmark runners still pass it. */
 	toolSurface?: "implementation";
 	/** Harness variant `instructions`; unset or default = the family's profile. */
@@ -1121,7 +1123,9 @@ async function executeModelSteps(
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
 				// Same bytes whether the history is in memory or reloaded from jsonb.
-				const order = input.toolOrder?.().filter((name) => name in tools);
+				const order = input.toolsOff?.()
+					? []
+					: input.toolOrder?.().filter((name) => name in tools);
 				const sent =
 					runtime.imageInput === false
 						? withImagePlaceholders(history)
