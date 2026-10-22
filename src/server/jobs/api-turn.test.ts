@@ -5,6 +5,7 @@ import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
+import { loadModelConnection } from "../adapters/model-connections";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -761,6 +762,29 @@ const childTurn = {
 	items: [],
 	lease_id: "00000000-0000-4000-8000-000000000002",
 } as ApiTurn;
+
+it("reads the API connection while acquiring the lease, not after it", async () => {
+	const order: string[] = [];
+	vi.mocked(loadModelConnection).mockImplementationOnce(async () => {
+		order.push("connection");
+		return { revision: "revision" } as never;
+	});
+	vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+		if (action === "acquire") {
+			// The connection read is already under way.
+			await Promise.resolve();
+			order.push("acquired");
+		}
+		return true;
+	});
+	mocks.runtime.mockImplementation(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "reply", text: "ok" });
+		return { messages: input.messages, outcome: "completed" };
+	});
+	await runApiTurn({} as WorkspaceMachines, childTurn);
+	expect(order).toEqual(["connection", "acquired"]);
+	expect(loadModelConnection).toHaveBeenCalledWith("owner", "connection");
+});
 
 it("renews coordination while a database heartbeat is waiting", async () => {
 	vi.useFakeTimers();
