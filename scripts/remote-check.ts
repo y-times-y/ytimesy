@@ -1,6 +1,3 @@
-# Docker Hub rate-limits the shared VM IPs (429): pull through Google's mirror, Docker Hub as fallback.
-mkdir -p /etc/docker && echo '{"registry-mirrors":["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
-systemctl restart docker 2>/dev/null || systemctl start docker 2>/dev/null || true
 // Full verification of a commit on a Freestyle development VM instead of the
 // laptop: install, typecheck, the full vitest suite and the offline
 // rehearsal (scripts/rehearsal, which needs only Docker; the VM has it).
