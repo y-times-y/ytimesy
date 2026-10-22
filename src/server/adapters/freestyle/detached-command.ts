@@ -31,7 +31,10 @@ export async function runDetachedCommand(
 	if (!/^[a-f0-9]{16,64}$/.test(id)) throw new Error("Invalid command id.");
 	const directory = `${DETACHED_COMMAND_ROOT}/${id}`;
 	const seconds = Math.ceil(timeoutMs / 1000);
-	// Secrets go in a 0600 script that is deleted as soon as the command exits.
+	// Secrets go in a 0600 script, in a 0700 directory, deleted as soon as the
+	// command exits. Only those are made under umask 077: the command itself
+	// keeps the VM's umask, or a checkout it writes is 0600 and a read-only
+	// helper (another Linux user) cannot read it.
 	const script = [
 		...Object.entries(env).map(
 			([name, value]) => `export ${name}=${quote(value)}`,
@@ -40,7 +43,7 @@ export async function runDetachedCommand(
 	].join("\n");
 	const started = await exec(
 		// Only the launch is backgrounded; setup must finish before "started" is read.
-		`d=${quote(directory)}; if [ ! -f "$d/started" ]; then umask 077; mkdir -p "$d" && printf '%s' ${quote(Buffer.from(script, "utf8").toString("base64"))} | base64 -d >"$d/run.sh" || exit 1; setsid nohup bash -c 'bash "$1/run.sh" >"$1/out" 2>&1; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"; rm -f "$1/run.sh"' _ "$d" </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; fi; cat "$d/started"`,
+		`d=${quote(directory)}; if [ ! -f "$d/started" ]; then (umask 077; mkdir -p "$d" && printf '%s' ${quote(Buffer.from(script, "utf8").toString("base64"))} | base64 -d >"$d/run.sh") || exit 1; setsid nohup bash -c 'bash "$1/run.sh" >"$1/out" 2>&1; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"; rm -f "$1/run.sh"' _ "$d" </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; fi; cat "$d/started"`,
 	);
 	const startedAt = Number(started.stdout.trim()) * 1000;
 	if (started.exitCode !== 0 || !Number.isFinite(startedAt) || !startedAt)

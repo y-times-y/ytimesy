@@ -5,8 +5,6 @@ import {
 	type AgentTaskActivity,
 	childTaskPromptId,
 	isInternalChildTaskMessage,
-	isWakeTurnStart,
-	turnStartTiming,
 	withoutWakeTurnStarts,
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
@@ -26,6 +24,7 @@ import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 import { splitReportHeader } from "./subagent";
 import { toolActivity } from "./tool-detail";
+import { lastTurnEnd } from "./turn-end";
 
 /**
  * The chat's agents list under the composer: the lead (the chat's own
@@ -317,22 +316,6 @@ const STATUS_LABELS: Record<AgentPanelStatus, string> = {
 	failed: "failed",
 	idle: "idle",
 };
-
-/**
- * When a finished agent's last turn ended, as its transcript records it; null
- * for turns from before the end was recorded.
- */
-function lastTurnEnd(items: readonly SessionItem[]): number | null {
-	for (let index = items.length - 1; index >= 0; index--) {
-		const item = items[index];
-		// A wake-up turn's start counts: Main's clock runs to its end.
-		if (item && isWakeTurnStart(item))
-			return turnStartTiming(item)?.completedAt ?? null;
-		if (item?.kind === "userMessage" && !item.queued)
-			return item.timing?.completedAt ?? null;
-	}
-	return null;
-}
 
 /**
  * A helper's time: its sidekick round, or its whole run. A finished one's

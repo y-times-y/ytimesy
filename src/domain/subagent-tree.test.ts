@@ -101,6 +101,65 @@ describe("subagent tree", () => {
 		expect(tree.builder.tokens).toBe(1_100_000);
 	});
 
+	it("stops a finished helper's minutes and VM minutes at its last turn's end", () => {
+		const ended = (endedMinutesAgo: number): SessionItem[] => [
+			{
+				kind: "userMessage",
+				id: SessionItemId("u-done"),
+				text: "go",
+				timing: {
+					startedAt: NOW - 10 * 60_000,
+					completedAt: NOW - endedMinutesAgo * 60_000,
+				},
+			},
+		];
+		const tree = subagentTree(
+			"root",
+			[
+				session("root", null),
+				// Finished 6 minutes ago after 4; its row was updated since.
+				session("r", "root", {
+					agentRole: "researcher",
+					turnStatus: "completed",
+					taskState: "done",
+					createdAt: minutesAgo(10),
+					updatedAt: minutesAgo(1),
+					agentBudget: { steps: 75, minutes: 30, tokens: 1_000_000 },
+					items: ended(6),
+				}),
+				// Its fork waits for deletion (30 minutes after its report).
+				session("w", "root", {
+					agentRole: "writer",
+					turnStatus: "completed",
+					taskState: "done",
+					createdAt: minutesAgo(10),
+					agentFork: {
+						vmId: "vm-fork",
+						sourceVmId: "vm-root",
+						bootedAt: minutesAgo(9),
+						reportedAt: minutesAgo(7),
+					},
+					items: ended(7),
+				}),
+				// Older turns without a recorded end: the row's update time.
+				session("old", "root", {
+					agentRole: "researcher",
+					turnStatus: "completed",
+					taskState: "done",
+					createdAt: minutesAgo(10),
+					updatedAt: minutesAgo(8),
+					items: [],
+				}),
+			],
+			NOW,
+		);
+		const byId = new Map(tree.nodes.map((node) => [node.id, node]));
+		expect(byId.get("r")?.minutes).toBeCloseTo(4);
+		expect(byId.get("w")?.minutes).toBeCloseTo(3);
+		expect(byId.get("w")?.spend.vmMinutes).toBeCloseTo(2);
+		expect(byId.get("old")?.minutes).toBeCloseTo(2);
+	});
+
 	it("counts a node's subtree tokens against its remaining budget", () => {
 		const [writer] = subagentTree("root", sessions(), NOW).nodes;
 		expect(writer && subagentNodeRemaining(writer)).toMatchObject({

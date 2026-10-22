@@ -71,7 +71,8 @@ export const SHARED_RUNTIME_PARENTS = [
  * Prepares the shared VM for one reader, run as the builder's user (who has
  * passwordless sudo). The home directory gets traverse-only access for
  * others (no listing), so the reader reaches the checkout by path; secrets
- * stay 0700; dotenv files in the checkout lose their world bits.
+ * stay 0700; the checkout is made readable to the reader
+ * ({@link readerCheckoutAccessScript}), dotenv files excepted.
  */
 export function readerPreparationScript(input: {
 	readonly sessionId: string;
@@ -89,18 +90,44 @@ export function readerPreparationScript(input: {
 		),
 		'chmod o-rw,o+x "$HOME"',
 		`if [ -d ${AGENT_SECRETS_DIRECTORY} ]; then chmod 0700 ${AGENT_SECRETS_DIRECTORY}; fi`,
-		...(input.checkout
-			? [
-					`find ${shellQuote(input.checkout)} -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} + 2>/dev/null || true`,
-					// The Git transfer writes HEAD, the index and objects under umask
-					// 077, so without this git sees no repository for the reader.
-					// .git holds no credential (the proxy's lives in its own /tmp).
-					// Files another user owns (root after a restore, sudo installs) need
-					// sudo; if neither works the reader still starts, without git.
-					`if [ -d ${shellQuote(`${input.checkout}/.git`)} ]; then sudo -n chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || chmod -R go+rX ${shellQuote(`${input.checkout}/.git`)} 2>/dev/null || true; fi`,
-				]
-			: []),
+		...(input.checkout ? [readerCheckoutAccessScript(input.checkout)] : []),
 	].join("\n");
+}
+
+/** Checkout files a reader never reads, whatever their mode or ACL says. */
+const READER_PRIVATE_CHECKOUT_FILES = `\\( -name '.env*' -o -name .git-credentials -o -name .netrc \\)`;
+
+/**
+ * Lets the reader read (never write) the checkout. Setup that ran under
+ * umask 077 (a Git transfer, a detached setup command, a restore) leaves
+ * files 0600 and directories 0700, and every read the reader tried failed.
+ * Where setfacl exists the grant is a POSIX ACL for the reader user alone,
+ * with a default ACL on each directory so files created later inherit it
+ * whatever the creator's umask; otherwise "other" gets r and X (the modes
+ * umask 022 would have produced). Symbolic links are never followed, so a
+ * link in the checkout cannot grant anything outside it. Dotenv and
+ * credential files then lose the grant and their world bits. Files another
+ * user owns (root after a restore, sudo installs) need sudo; if neither
+ * works the reader still starts, and reads what it can.
+ */
+export function readerCheckoutAccessScript(checkout: string) {
+	const c = shellQuote(checkout);
+	const u = READER_LINUX_USER;
+	return `ytimesy_reader_grant() {
+  if command -v setfacl >/dev/null 2>&1; then
+    $1 find ${c} -type d -exec setfacl -m u:${u}:rX,d:u:${u}:rX {} + && $1 find ${c} -type f -exec setfacl -m u:${u}:rX {} +
+  else
+    $1 find ${c} \\( -type d -o -type f \\) -exec chmod o+rX {} +
+  fi
+}
+ytimesy_reader_revoke() {
+  $1 find ${c} -type f ${READER_PRIVATE_CHECKOUT_FILES} -exec chmod o-rwx {} + || return 1
+  if command -v setfacl >/dev/null 2>&1; then $1 find ${c} -type f ${READER_PRIVATE_CHECKOUT_FILES} -exec setfacl -x u:${u} {} +; fi
+}
+if [ -d ${c} ]; then
+  ytimesy_reader_grant "sudo -n" 2>/dev/null || ytimesy_reader_grant "" 2>/dev/null || true
+  ytimesy_reader_revoke "sudo -n" 2>/dev/null || ytimesy_reader_revoke "" 2>/dev/null || true
+fi`;
 }
 
 function shellQuote(value: string) {
