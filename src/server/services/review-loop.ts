@@ -379,12 +379,30 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		};
 	}
 
+	/**
+	 * Unattended (an eval trial), the loop's window is not counted from the
+	 * turn's start: a build that ran past the product's hour would get no
+	 * review in a trial with hours left. At the first check it becomes the
+	 * runner's deadline (the trial's remaining time, less the grader's
+	 * margin), else the loop's minutes from now. The product keeps its hour
+	 * from the turn's start: a person is waiting there.
+	 */
+	async function unattendedWindow(state: ReviewLoopState, now: number) {
+		if (!input.unattended || state.rounds.length) return state;
+		const runner = await deps.runnerDeadline(sessionId).catch(() => null);
+		const deadlineAt = runner ?? now + REVIEW_LOOP_LIMITS.loopMinutes * 60_000;
+		return deadlineAt === state.deadlineAt
+			? state
+			: save({ ...state, deadlineAt });
+	}
+
 	/** Step 2: capture the delivered tree and start its checker (or finish). */
 	async function startCheck(
-		state: ReviewLoopState,
+		current: ReviewLoopState,
 		step: StepInput,
 	): Promise<AttemptLoopOutcome> {
 		const now = deps.now();
+		const state = await unattendedWindow(current, now);
 		const decision = decideCheck({
 			checksDone: countedChecks(state.rounds),
 			now,

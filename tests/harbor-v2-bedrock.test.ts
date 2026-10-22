@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +9,8 @@ import {
 	bedrockWebSearchTools,
 	bedrockWebSearchUsd,
 	parseCredentialsFile,
+	ResponseTimeLimit,
+	responseTimeLimitFetch,
 	signAwsRequest,
 } from "../evals/harbor_v2/bedrock";
 import { harborBridgeConfig, routeProvider } from "../evals/harbor_v2/config";
@@ -409,8 +412,8 @@ describe("bedrock runtime request", () => {
 			fetch,
 		});
 		expect(runtime.contextWindow).toBe(400_000);
-		// No max_output_tokens: the 8K API default cut max-effort steps.
-		expect(runtime.maxOutputTokens).toBeUndefined();
+		// Above the 8K API default that cut max-effort steps, but finite.
+		expect(runtime.maxOutputTokens).toBe(64_000);
 		const result = streamText({
 			model: runtime.model,
 			prompt: "hi",
@@ -450,6 +453,142 @@ describe("bedrock runtime request", () => {
 				config.billing,
 			),
 		).toBeCloseTo((100 * 0.1 + 600 * 0.01 + 300 * 0.125 + 50 * 0.5) / 1e6, 12);
+	});
+});
+
+describe("bedrock response time limit", () => {
+	/** A stream that sends `chunks` (one per `everyMs`), then stays open without data. */
+	const stalling = (chunks: string[], everyMs = 5) =>
+		(async (_request: RequestInfo | URL, init?: RequestInit) => {
+			let sent = 0;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const body = new ReadableStream<Uint8Array>({
+				pull: (controller) =>
+					new Promise<void>((resolve) => {
+						if (sent >= chunks.length) return; // open and silent
+						timer = setTimeout(() => {
+							controller.enqueue(new TextEncoder().encode(chunks[sent++]));
+							resolve();
+						}, everyMs);
+					}),
+				cancel: () => clearTimeout(timer),
+			});
+			init?.signal?.addEventListener("abort", () => clearTimeout(timer));
+			return new Response(body, {
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as typeof globalThis.fetch;
+
+	const readAll = async (response: Response) => {
+		const reader = response.body?.getReader();
+		let text = "";
+		for (;;) {
+			const { done, value } = (await reader?.read()) ?? { done: true };
+			if (done) return text;
+			text += new TextDecoder().decode(value);
+		}
+	};
+
+	it("passes a response through that ends within its limits", async () => {
+		const fetch = responseTimeLimitFetch(
+			async () => new Response("data: done\n\n"),
+			{ totalMs: 1000, idleMs: 200 },
+		);
+		expect(await readAll(await fetch("https://x/"))).toBe("data: done\n\n");
+	});
+
+	it("fails a silent stream after the idle limit, and a long one at the total limit, as ETIMEDOUT", async () => {
+		const idle = responseTimeLimitFetch(stalling(["a", "b"]), {
+			totalMs: 5000,
+			idleMs: 60,
+		});
+		const idleError = await readAll(await idle("https://x/")).catch(
+			(error: unknown) => error,
+		);
+		expect(idleError).toBeInstanceOf(ResponseTimeLimit);
+		expect(idleError).toMatchObject({ code: "ETIMEDOUT" });
+		expect(String(idleError)).toContain("no data for");
+		// Data keeps arriving, but the whole response is bounded.
+		const total = responseTimeLimitFetch(
+			stalling(
+				Array.from({ length: 1000 }, () => "x"),
+				10,
+			),
+			{ totalMs: 120, idleMs: 60 },
+		);
+		const totalError = await readAll(await total("https://x/")).catch(
+			(error: unknown) => error,
+		);
+		expect(totalError).toBeInstanceOf(ResponseTimeLimit);
+		expect(String(totalError)).toContain("ran past");
+	});
+
+	it("reaches the model loop mid-response as a network interruption (ETIMEDOUT in the stream error's chain)", async () => {
+		const response = {
+			id: "resp_1",
+			object: "response",
+			created_at: 1,
+			model: "gpt-6-luna",
+			status: "in_progress",
+			output: [],
+			usage: null,
+		};
+		const events = [
+			{ type: "response.created", sequence_number: 0, response },
+			{
+				type: "response.output_item.added",
+				sequence_number: 1,
+				output_index: 0,
+				item: {
+					type: "message",
+					id: "msg_1",
+					status: "in_progress",
+					role: "assistant",
+					content: [],
+				},
+			},
+			{
+				type: "response.output_text.delta",
+				sequence_number: 2,
+				item_id: "msg_1",
+				output_index: 0,
+				content_index: 0,
+				delta: "Working",
+			},
+		];
+		const provider = createOpenAI({
+			apiKey: "test",
+			fetch: responseTimeLimitFetch(
+				stalling(events.map((event) => `data: ${JSON.stringify(event)}\n\n`)),
+				{ totalMs: 5000, idleMs: 60 },
+			),
+		});
+		const result = streamText({
+			model: provider.responses("gpt-6-luna"),
+			prompt: "hi",
+			maxRetries: 0,
+			onError: () => {},
+		});
+		let failure: unknown;
+		const parts: string[] = [];
+		try {
+			for await (const part of result.fullStream) {
+				parts.push(part.type);
+				if (part.type === "error") failure = part.error;
+			}
+		} catch (error) {
+			failure = error;
+		}
+		expect(parts).toContain("text-delta");
+		const codes: unknown[] = [];
+		for (
+			let current = failure as { code?: unknown; cause?: unknown } | undefined,
+				depth = 0;
+			current && depth < 8;
+			depth++, current = current.cause as typeof current
+		)
+			codes.push(current.code);
+		expect(codes).toContain("ETIMEDOUT");
 	});
 });
 
