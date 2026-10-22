@@ -1350,9 +1350,12 @@ async function executeModelSteps(
 					});
 					break;
 				case "error":
+					// A budget stop is the runtime's, not the provider's: its caller
+					// recognizes it (and hands the child's last message on) only unwrapped.
 					if (
 						part.error instanceof InitialAgentReadFailure ||
-						part.error instanceof ModelSwitchAtCompaction
+						part.error instanceof ModelSwitchAtCompaction ||
+						isBudgetStop(part.error)
 					)
 						throw part.error;
 					throw new SafeApiModelFailure(part.error);

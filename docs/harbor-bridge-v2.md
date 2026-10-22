@@ -294,6 +294,14 @@ no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
   the copy, findings reach the builder, the fix passes, the worker's test is `ranBy: worker`;
   rows builder/checker/checkerWorker. The single-checker test: the checker's stray file never
   reaches the checkout.
+- `tests/harbor-v2-trial.test.ts`, rehearsal of the unattended review and child budgets:
+  lead=fusion + review=on (sidekick builds, the checker reviews the lead's turn); a turn
+  with no checkout changes is still checked; with rigor=on an answer asking the user a
+  question is sent back; a build past the product's hour is checked in the trial's time;
+  a check without a verdict is retried once (not a round); a sidekick stopped at its round
+  budget gets the last-step notice and the lead gets its last message; a step cut at the
+  64K output cap is resampled with the smaller-steps note. The Bedrock request time limits
+  are in `tests/harbor-v2-bedrock.test.ts`.
 - `tests/harbor-v2-sessions.test.ts`: the in-memory session store.
 - `tests/harbor-v2-units.test.ts`: config validation, guard, ledger (incl. concurrency and
   stop file), transport guard (Anthropic/OpenAI/Gemini terminal events, resend after a
