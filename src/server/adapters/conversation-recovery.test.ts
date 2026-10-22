@@ -2,13 +2,17 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
+import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
 import { SessionItemId } from "#/domain/ids";
 import {
+	conversationForkState,
 	forkCodeStart,
 	ownsWritableCheckout,
 	recoverConversation,
+	retryConversationFork,
 } from "../services/conversation-recovery";
 import type { WorkspaceMachines } from "../services/workspace-machines";
+import { withAfterResponse } from "./after-response";
 import {
 	conversationPoint,
 	recordConversationPoint,
@@ -485,56 +489,139 @@ describe("forking at a message", () => {
 		});
 	});
 
-	it("removes the reserved fork chat when its VM cannot be made, and keeps an undeletable VM owned", async () => {
-		const first = machines();
-		first.calls.forkWorkspace.mockRejectedValueOnce(new Error("no capacity"));
-		await expect(
-			recoverConversation(first.machines, "alice", forkInput),
-		).rejects.toThrow("no capacity");
-		expect(await rows()).toHaveLength(1);
-		const second = machines();
-		code.start.mockRejectedValueOnce(new Error("checkout failed"));
-		second.calls.destroy.mockRejectedValueOnce(new Error("provider down"));
-		await expect(
-			recoverConversation(second.machines, "alice", forkInput),
-		).rejects.toThrow("checkout failed");
-		const [, kept] = await rows();
-		expect(kept).toMatchObject({ provider_ref: "vm-fork", status: "failed" });
+	const forkState = (id: string) => conversationForkState("alice", project, id);
+
+	it("opens the fork's chat with its transcript before its VM is copied", async () => {
+		const { calls, machines: vms } = machines();
+		let release = () => {};
+		calls.forkWorkspace.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					release = () => resolve({ vm: "vm-fork", forkMs: 5 });
+				}),
+		);
+		const deferred: Promise<unknown>[] = [];
+		const recovered = await withAfterResponse(
+			(work) => deferred.push(work),
+			() => recoverConversation(vms, "alice", forkInput),
+		);
+		// The response goes out now: the chat exists with its copied transcript
+		// and no VM, and shows it is preparing.
+		expect(recovered.prompt).toBe("Implement");
+		expect(deferred).toHaveLength(1);
+		expect((await rows())[1]).toMatchObject({
+			id: recovered.id,
+			provider_ref: null,
+			status: "starting",
+			title: "Original (fork)",
+		});
+		expect(await forkState(recovered.id)).toEqual({ state: "preparing" });
+		await vi.waitFor(() => expect(calls.forkWorkspace).toHaveBeenCalled());
+		release();
+		await Promise.all(deferred);
+		expect((await rows())[1]).toMatchObject({
+			provider_ref: "vm-fork",
+			status: "ready",
+		});
+		expect(await forkState(recovered.id)).toBeNull();
 	});
 
-	it("fails without copying a VM when the source no longer holds the checkpoint", async () => {
+	it("keeps the fork's chat with a failure and a retry when its VM cannot be made", async () => {
+		const first = machines();
+		first.calls.forkWorkspace.mockRejectedValueOnce(new Error("no capacity"));
+		const recovered = await recoverConversation(
+			first.machines,
+			"alice",
+			forkInput,
+		);
+		expect((await rows())[1]).toMatchObject({
+			id: recovered.id,
+			provider_ref: null,
+		});
+		// Provider details stay on the server.
+		expect(await forkState(recovered.id)).toEqual({
+			state: "failed",
+			message: "Couldn't fork this chat. Try again.",
+		});
+		const second = machines();
+		expect(
+			await retryConversationFork(
+				second.machines,
+				"alice",
+				project,
+				recovered.id,
+			),
+		).toBeNull();
+		expect((await rows())[1]).toMatchObject({
+			provider_ref: "vm-fork",
+			status: "ready",
+		});
+		// Nothing left to retry once the VM is bound.
+		expect(
+			await retryConversationFork(
+				second.machines,
+				"alice",
+				project,
+				recovered.id,
+			),
+		).toBeNull();
+		expect(second.calls.forkWorkspace).toHaveBeenCalledTimes(1);
+	});
+
+	it("removes a copy that could not start at the checkpoint; an undeletable one is removed by the retry", async () => {
+		const first = machines();
+		code.start.mockRejectedValueOnce(new Error("checkout failed"));
+		first.calls.destroy.mockRejectedValueOnce(new Error("provider down"));
+		const recovered = await recoverConversation(
+			first.machines,
+			"alice",
+			forkInput,
+		);
+		expect(first.calls.destroy).toHaveBeenCalledWith("vm-fork");
+		expect((await rows())[1]).toMatchObject({ provider_ref: null });
+		expect((await forkState(recovered.id))?.state).toBe("failed");
+		const second = machines();
+		await retryConversationFork(
+			second.machines,
+			"alice",
+			project,
+			recovered.id,
+		);
+		expect(second.calls.destroy).toHaveBeenCalledWith("vm-fork");
+		expect(second.calls.destroy.mock.invocationCallOrder[0]).toBeLessThan(
+			second.calls.forkWorkspace.mock.invocationCallOrder[0],
+		);
+		expect(await forkState(recovered.id)).toBeNull();
+	});
+
+	it("fails the fork's copy without making a VM when the source no longer holds the checkpoint", async () => {
 		const { calls, machines: vms } = machines();
 		code.present.mockRejectedValue(
-			new Error(
+			new RecoveryRefused(
 				"This message's code checkpoint is gone, so the chat was not forked.",
 			),
 		);
-		await expect(recoverConversation(vms, "alice", forkInput)).rejects.toThrow(
-			"checkpoint is gone",
-		);
+		const recovered = await recoverConversation(vms, "alice", forkInput);
 		expect(calls.forkWorkspace).not.toHaveBeenCalled();
-		expect(await rows()).toHaveLength(1);
+		expect(await forkState(recovered.id)).toEqual({
+			state: "failed",
+			message:
+				"This message's code checkpoint is gone, so the chat was not forked.",
+		});
 	});
 
-	it("removes the copied VM when the copy cannot start at the checkpoint or the fork is refused", async () => {
-		const first = machines();
-		code.start.mockRejectedValueOnce(new Error("checkout failed"));
-		await expect(
-			recoverConversation(first.machines, "alice", forkInput),
-		).rejects.toThrow("checkout failed");
-		expect(first.calls.destroy).toHaveBeenCalledWith("vm-fork");
-		// A child task started while the VM was copied: the locked check refuses it.
-		const second = machines();
+	it("refuses before making a chat or a VM while a child task runs", async () => {
+		const { calls, machines: vms } = machines();
 		await db.query(
 			"insert into agent_session(id,user_id,parent_session_id,turn_status)values($1,'alice',$2,'running')",
 			[randomUUID(), session],
 		);
-		await expect(
-			recoverConversation(second.machines, "alice", forkInput),
-		).rejects.toThrow("child tasks");
-		expect(second.calls.destroy).toHaveBeenCalledWith("vm-fork");
+		await expect(recoverConversation(vms, "alice", forkInput)).rejects.toThrow(
+			"child tasks",
+		);
+		expect(calls.forkWorkspace).not.toHaveBeenCalled();
 		expect(
-			(await rows()).filter((row) => row.provider_ref === "vm-fork"),
+			(await rows()).filter((row) => row.title === "Original (fork)"),
 		).toEqual([]);
 	});
 
@@ -618,11 +705,17 @@ describe("forking at a message", () => {
 			await db.query(
 				"delete from agent_task_command_receipt where request_id='conversation-backup:x'",
 			);
-			code.present.mockRejectedValue(new Error("checkpoint is gone"));
+			code.present.mockRejectedValue(new RecoveryRefused("checkpoint is gone"));
 			const second = machines();
-			await expect(
-				recoverConversation(second.machines, "alice", qaFork),
-			).rejects.toThrow("checkpoint is gone");
+			const recovered = await recoverConversation(
+				second.machines,
+				"alice",
+				qaFork,
+			);
+			expect(await forkState(recovered.id)).toEqual({
+				state: "failed",
+				message: "checkpoint is gone",
+			});
 			expect(second.calls.forkWorkspace).not.toHaveBeenCalled();
 		});
 

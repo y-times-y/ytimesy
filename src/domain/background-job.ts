@@ -67,6 +67,16 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 			commandId: z.uuid(),
 		})
 		.strict(),
+	// A forked chat's VM, copied after its chat opened (conversation-recovery.ts).
+	z
+		.object({
+			...identity,
+			kind: z.literal("conversation-fork"),
+			userId: reference,
+			sessionId: z.uuid(),
+			attempt: z.number().int().positive().max(1000),
+		})
+		.strict(),
 	// Pull request evidence (harness variant prEvidence), after a turn's draft handoff.
 	z
 		.object({
