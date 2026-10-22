@@ -1,6 +1,7 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import { withAfterResponse } from "./after-response";
 import {
 	type ApiTurn,
 	checkpointApiTurn,
@@ -15,6 +16,10 @@ const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
 	release: vi.fn(),
 	capture: vi.fn(),
+	dispatch: vi.fn(),
+}));
+vi.mock("./background-job-dispatch", () => ({
+	dispatchBackgroundJob: mocks.dispatch,
 }));
 vi.mock("./analytics", () => ({ captureServerAnalytics: mocks.capture }));
 vi.mock("./turn-history-mirror", () => ({ mirrorTurnHistory: vi.fn() }));
@@ -25,6 +30,7 @@ vi.mock("./database", () => ({
 	database: () => ({ connect: async () => mocks, query: mocks.query }),
 }));
 beforeEach(() => {
+	mocks.dispatch.mockReset().mockResolvedValue(true);
 	mocks.capture.mockReset();
 	mocks.query.mockReset();
 	mocks.release.mockReset();
@@ -167,6 +173,73 @@ it("checks owner subscription and queues Codex without an API connection", async
 			key: expect.stringMatching(/^turn:.+:started$/),
 		}),
 	);
+});
+
+describe("waking the durable executor for a queued turn", () => {
+	const queueable = async (sql: string) => ({
+		rows: sql.includes("agent_account")
+			? [{}]
+			: sql.startsWith("select id,turn_status")
+				? [{ id: "chat", turn_status: "idle" }]
+				: [],
+	});
+	beforeEach(() => {
+		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+		mocks.query.mockImplementation(queueable);
+	});
+	afterEach(() => vi.unstubAllEnvs());
+
+	it("returns from a web request once the turn is committed, waking after the response", async () => {
+		let woken = () => {};
+		mocks.dispatch.mockReturnValue(
+			new Promise<boolean>((resolve) => {
+				woken = () => resolve(true);
+			}),
+		);
+		const deferred: Promise<unknown>[] = [];
+		await withAfterResponse(
+			(work) => {
+				deferred.push(work);
+			},
+			() => enqueueApiTurn(input),
+		);
+		// Committed and returned while the wake is still in flight.
+		expect(mocks.query).toHaveBeenCalledWith("commit");
+		expect(mocks.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "model-admission" }),
+		);
+		expect(deferred).toHaveLength(1);
+		woken();
+		await Promise.all(deferred);
+	});
+
+	it("keeps a lost wake for the admission sweep without failing the send", async () => {
+		mocks.dispatch.mockRejectedValue(new Error("executor unreachable"));
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const deferred: Promise<unknown>[] = [];
+		await withAfterResponse(
+			(work) => {
+				deferred.push(work);
+			},
+			() => enqueueApiTurn(input),
+		);
+		await Promise.all(deferred);
+		expect(warn).toHaveBeenCalledWith(
+			"Cloudflare turn wake deferred; queued turn awaits recovery.",
+		);
+		warn.mockRestore();
+	});
+
+	it("awaits the wake outside a web request (an executor enqueueing a turn)", async () => {
+		let woken = false;
+		mocks.dispatch.mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			woken = true;
+			return true;
+		});
+		await enqueueApiTurn(input);
+		expect(woken).toBe(true);
+	});
 });
 
 it("never turns a removed API connection into subscription billing", async () => {
