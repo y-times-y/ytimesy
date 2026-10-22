@@ -28,7 +28,7 @@ export type AgentTaskReviewState = "pending" | "reviewed" | "rejected";
  * pushes its own branch and keeps a draft PR open; its task_access is not
  * consulted (root chats carry the legacy 'read_only' label). Subagents never
  * publish: their work reaches the parent as a report or patch. Machine-less
- * sessions publish nothing. Plan-mode turns are excluded by the caller.
+ * sessions publish nothing.
  */
 export function turnPublicationRole(session: {
 	readonly providerRef: string | null;

@@ -31,8 +31,7 @@ export type TurnCommitOutcome = {
 
 /**
  * Commits and hands off a draft before completed status and task review
- * events become visible. Plan-mode turns are not committed (the caller skips
- * them): nothing a plan turn did is pushed.
+ * events become visible.
  */
 export async function commitCompletedSessionTurn(
 	session: AgentSessionRecord,
