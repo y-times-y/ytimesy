@@ -75,7 +75,7 @@ export function orchestratorInstructions(
  * the user may write to one directly (Main gets a notice of it).
  */
 export const ROOT_HELPER_UPDATES =
-	'When an agent\'s report arrives, first tell the user in one line what it finished, naming it by its task (e.g. "Fix pricing rounding finished: tests pass, 3 files changed"), then continue. The user can also message your agents directly; a notice tells you what they sent.';
+	'When an agent\'s report arrives, tell the user what it finished, naming it by its task (e.g. "Fix pricing rounding finished"), with a full report: what was done, the results, the evidence (commands and their exit status) and the next steps. The user can also message your agents directly; a notice tells you what they sent.';
 
 /**
  * Hand-off (every agent that starts helpers or background commands): never
