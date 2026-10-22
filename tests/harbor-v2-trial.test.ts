@@ -679,15 +679,16 @@ describe("runHarborTrial with review=on", () => {
 		const trajectory = JSON.parse(
 			await readFile(join(f.logs, "trajectory.json"), "utf8"),
 		);
-		// The sidekick gets the product's sidekick block: publishing stays the lead's.
+		// The sidekick gets the product's sidekick block (model-facing text says
+		// "Main's writer"): publishing stays the lead's.
 		const sidekickPrompt = trajectory.subagent_trajectories.find(
 			(entry: { trajectory_id: string }) =>
 				entry.trajectory_id === "trial-fusion.1",
 		).steps[0].message;
-		expect(sidekickPrompt).toContain("You are the lead's sidekick");
+		expect(sidekickPrompt).toContain("You are Main's writer");
 		expect(sidekickPrompt).toContain("do not commit, stash, reset");
-		// The lead's prompt is the product's fusion lead block, with the rigor block.
-		expect(trajectory.steps[0].message).toContain("you are the lead");
+		// The lead's prompt is the product's fusion lead block ("you are Main"), with the rigor block.
+		expect(trajectory.steps[0].message).toContain("you are Main");
 		expect(
 			trajectory.agent.tool_definitions.map(
 				(entry: { function: { name: string } }) => entry.function.name,
