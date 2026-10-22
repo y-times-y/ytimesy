@@ -23,6 +23,7 @@ import {
 import {
 	authorizedRepository,
 	repositoryBranchSha,
+	repositoryFileAtCommit,
 } from "#/server/adapters/github";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
@@ -192,26 +193,46 @@ export function loadTenantProjectCheckout(scope: {
 }
 
 /**
- * The commit a chat's new branch starts from, read from GitHub before its VM
- * is ready: the head of the base branch the checkout fetches. Pinned on the
- * checkout (pinnedRevision), it is also the chat's baseline.
+ * GitHub reads of a checkout before its VM is ready, sharing one read-only
+ * installation token.
  */
-export async function checkoutBaseRevision(
+export function checkoutGitHubReads(
 	checkout: Pick<
 		ProjectCheckout,
 		"installationId" | "name" | "fullName" | "branch"
 	>,
-): Promise<string | null> {
-	const token = await githubInstallationAccessToken(checkout.installationId, {
-		repositoryNames: [checkout.name],
-		contents: "read",
-	});
-	const sha = await repositoryBranchSha(
-		token,
-		checkout.fullName,
-		checkout.branch,
-	);
-	return sha && /^[a-f0-9]{40,64}$/.test(sha) ? sha : null;
+) {
+	let token: Promise<string> | undefined;
+	const readToken = () => {
+		token ??= githubInstallationAccessToken(checkout.installationId, {
+			repositoryNames: [checkout.name],
+			contents: "read",
+		});
+		return token;
+	};
+	return {
+		/**
+		 * The commit a chat's new branch starts from: the head of the base
+		 * branch the checkout fetches. Pinned on the checkout
+		 * (pinnedRevision), it is also the chat's baseline.
+		 */
+		baseRevision: async (): Promise<string | null> => {
+			const sha = await repositoryBranchSha(
+				await readToken(),
+				checkout.fullName,
+				checkout.branch,
+			);
+			return sha && /^[a-f0-9]{40,64}$/.test(sha) ? sha : null;
+		},
+		/** A file of the checkout's repository at a commit; see repositoryFileAtCommit. */
+		fileAt: async (revision: string, path: string) =>
+			repositoryFileAtCommit(
+				await readToken(),
+				checkout.fullName,
+				revision,
+				path,
+			),
+	};
 }
 
 async function checkoutForProject(

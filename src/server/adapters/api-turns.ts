@@ -51,6 +51,8 @@ export type ApiTurn = {
 	settings?: unknown;
 	/** The fallback route serving the rest of this turn after a failover (TurnFailover). */
 	failover?: unknown;
+	/** Epoch ms the turn was queued, when its loader read it (timing only). */
+	queued_at_ms?: number | null;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */
@@ -132,40 +134,54 @@ export async function enqueueApiTurn(input: {
 		const subscription = subscriptionTurnSettings(input.revision);
 		if (subscription && input.connectionId !== null)
 			throw new Error("Subscription turns cannot use an API connection.");
-		const connection = subscription
-			? await client.query(
-					"select 1 from agent_account where user_id=$1 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share",
-					[input.userId],
-				)
-			: await client.query(
-					"select id from model_connection where id=$1 and user_id=$2 and revision=$3 for share",
-					[input.connectionId, input.userId, input.revision],
-				);
-		if (!connection.rows.length)
+		// One statement: the connection (or Codex sign-in) is share-locked,
+		// the chat row locked for update, and a turn this send already queued
+		// looked up, instead of three round trips.
+		const gate = await client.query<{
+			connected: boolean;
+			found: boolean;
+			turn_status: string | null;
+			parent_session_id: string | null;
+			task_state: string | null;
+			task_access: string | null;
+			existing: boolean;
+		}>(
+			`with connection as (${
+				subscription
+					? "select 1 from agent_account where user_id=$2 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share"
+					: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
+			}),
+			 chat as (select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update)
+			 select exists(select 1 from connection) as connected,chat.id is not null as found,
+			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,
+			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
+			 from (select 1) one left join chat on true`,
+			subscription
+				? [input.sessionId, input.userId, input.idempotencyKey ?? null]
+				: [
+						input.sessionId,
+						input.userId,
+						input.idempotencyKey ?? null,
+						input.connectionId,
+						input.revision,
+					],
+		);
+		const checked = gate.rows[0];
+		if (!checked?.connected)
 			throw new Error(
 				"The model connection changed or is no longer available.",
 			);
-		const session = await client.query(
-			"select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update",
-			[input.sessionId, input.userId],
-		);
-		if (input.idempotencyKey) {
-			const existing = await client.query(
-				"select id from api_turn where session_id=$1 and user_id=$2 and idempotency_key=$3",
-				[input.sessionId, input.userId, input.idempotencyKey],
-			);
-			if (existing.rows.length) {
-				await client.query("commit");
-				return;
-			}
+		if (checked.existing) {
+			await client.query("commit");
+			return;
 		}
 		if (
-			!session.rows[0] ||
-			(session.rows[0].turn_status === "running" &&
+			!checked.found ||
+			(checked.turn_status === "running" &&
 				!(
 					input.preparedTask &&
-					session.rows[0].parent_session_id &&
-					session.rows[0].task_state === "working"
+					checked.parent_session_id &&
+					checked.task_state === "working"
 				))
 		)
 			throw new Error(
@@ -176,12 +192,14 @@ export async function enqueueApiTurn(input: {
 		started = {
 			userId: input.userId,
 			harness: subscription ? "codex" : "api",
-			parentSessionId: session.rows[0].parent_session_id ?? null,
-			taskAccess: session.rows[0].task_access ?? null,
+			parentSessionId: checked.parent_session_id ?? null,
+			taskAccess: checked.task_access ?? null,
 		};
+		// The turn and the chat's running state in one statement.
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")})`,
+			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			 update agent_session set harness=$14,listed_model_id=$13,items=$8,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
 				input.sessionId,
@@ -195,15 +213,7 @@ export async function enqueueApiTurn(input: {
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 				JSON.stringify(input.settings ?? {}),
 				input.failover ? JSON.stringify(input.failover) : null,
-			],
-		);
-		await client.query(
-			`update agent_session set harness=$5,listed_model_id=$3,items=$4,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$1 and user_id=$2`,
-			[
-				input.sessionId,
-				input.userId,
 				input.routeId,
-				jsonbText(input.items),
 				subscription ? "codex" : "api",
 			],
 		);
@@ -326,39 +336,48 @@ export async function claimApiTurn(
 		fleetLimit > 10_000
 	)
 		throw new Error("Turn admission limits must be positive bounded integers.");
+	if (executor !== "node" && executor !== "durable-object")
+		throw new Error("Unknown turn executor.");
+	if (sessionId !== undefined && !UUID.test(sessionId))
+		throw new Error("Invalid chat id.");
+	const lease = randomUUID();
+	// One round trip: the whole transaction goes as one simple-protocol batch,
+	// so its values are validated literals above (no parameters). Poolers may
+	// ignore startup settings, so the bounds are set inside the transaction,
+	// covering a worker that disappears after claiming but before committing.
+	// The admission lock (serialized across workers; model/tool work never
+	// holds it) is taken first and held until the commit; without it the
+	// queued turn is never read or locked, so another worker's claim order
+	// is unchanged.
+	const batch = `begin;
+set local idle_in_transaction_session_timeout = '30s';
+set local statement_timeout = '20s';
+with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
+ update api_turn set state='running',lease_id='${lease}',heartbeat_at=now(),updated_at=now(),executor='${executor}'
+ where id=(select q.id from api_turn q where (select acquired from admission)
+ and q.state='queued' and q.executor='${executor}' and not q.cancel_requested
+ ${sessionId ? `and q.session_id='${sessionId}'::uuid` : ""}
+ and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
+ and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
+ order by q.created_at for update skip locked limit 1)
+ returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"};
+commit;`;
 	const client = await database().connect();
 	let discardConnection = false;
 	try {
-		await client.query("begin");
-		// Admission is short and serialized across workers; model/tool work never holds this lock.
-		// Poolers may ignore startup settings. Enforce the bounds inside this transaction,
-		// including when a worker disappears after claiming a turn but before committing.
-		await client.query("set local idle_in_transaction_session_timeout = '30s'");
-		await client.query("set local statement_timeout = '20s'");
-		const admission = await client.query<{ acquired: boolean }>(
-			"select pg_try_advisory_xact_lock(81738419) as acquired",
+		type Result = { fields?: readonly unknown[]; rows: ApiTurn[] };
+		const results = (await client.query(batch)) as unknown as Result[] | Result;
+		// The only statement with a result shape is the claim (its returning).
+		const claimed = (Array.isArray(results) ? results : [results]).find(
+			(result) => result.fields?.length,
 		);
-		if (!admission.rows[0]?.acquired) {
-			await client.query("commit");
-			return null;
-		}
-		const result = await client.query<ApiTurn>(
-			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now(),executor=$4
-			 where id=(select q.id from api_turn q where q.state='queued' and q.executor=$4 and not q.cancel_requested
-			 and ($5::uuid is null or q.session_id=$5::uuid)
-			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
-			 and (select count(*) from api_turn r where r.state='running')<$3
-			 order by q.created_at for update skip locked limit 1)
-			 returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"}`,
-			[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
-		);
-		await client.query("commit");
-		return result.rows[0] ?? null;
+		return claimed?.rows[0] ?? null;
 	} catch (error) {
+		// A failed statement leaves the batch's transaction aborted on this
+		// connection; it is rolled back, or the connection is discarded.
 		try {
 			await client.query("rollback");
 		} catch {
-			// Never return an uncertain transaction to the pool, or hide its original failure.
 			discardConnection = true;
 		}
 		throw error;
@@ -366,6 +385,8 @@ export async function claimApiTurn(
 		client.release(discardConnection);
 	}
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * SQL: the turn aliased `alias` has passed its eval runner's hard deadline

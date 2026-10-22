@@ -22,7 +22,9 @@ import {
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
+import { startAfterResponse } from "../adapters/after-response";
 import {
+	type AgentSessionRecord,
 	agentSessionForOwner,
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
@@ -45,6 +47,7 @@ import {
 import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
 import { pinnedTurnFailover } from "./model-failover";
+import { commitChatBranchForSubmission } from "./session-branch";
 
 export async function apiModelCatalog(userId: string) {
 	return availableApiModelRoutes(await listModelConnections(userId));
@@ -58,7 +61,24 @@ export async function readApiWorkspaceSession(
 		: null;
 	if (session && session.projectId !== scope.projectId)
 		throw new Error("Session is not in this project.");
-	const models = await apiModelCatalog(scope.userId);
+	return apiWorkspaceView(session, await apiModelCatalog(scope.userId));
+}
+
+function apiWorkspaceView(
+	session: Pick<
+		AgentSessionRecord,
+		| "id"
+		| "selectedBranch"
+		| "workingBranch"
+		| "taskBranch"
+		| "providerRef"
+		| "items"
+		| "turnStatus"
+		| "harness"
+		| "listedModelId"
+	> | null,
+	models: Awaited<ReturnType<typeof apiModelCatalog>>,
+): PublicCodexSession {
 	return {
 		...emptyCodexSession(),
 		models,
@@ -101,6 +121,8 @@ export async function sendApiWorkspaceTask(
 		continueOn?: string;
 	},
 	preparedTask = false,
+	/** The chat as the caller just read or wrote it (by id, for this user). */
+	read?: AgentSessionRecord,
 ): ReturnType<typeof readApiWorkspaceSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
@@ -125,31 +147,54 @@ export async function sendApiWorkspaceTask(
 			harness: "api",
 			firstMessage: input.text,
 		});
-		// Opening claimed the chat; a rejected send hands it back.
+		// Opening claimed the chat; a rejected send hands it back. Its branch
+		// is committed as for a send into an open chat, so the turn knows the
+		// commit its new branch starts from before its VM is ready.
+		const projectId = scope.projectId;
 		return releasingChatClaimOnFailure(
 			scope.userId,
 			opened.id,
 			input.text,
-			() =>
+			async () =>
 				sendApiWorkspaceTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
+					await commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId,
+						sessionId: opened.id,
+						text: input.text,
+						session: opened,
+					}),
 				),
 		);
 	}
-	const session = await agentSessionForOwner(
-		scope.userId,
-		scope.sessionId as string,
-	);
+	const sessionId = scope.sessionId;
+	const selected = parseModelRouteId(input.modelId);
+	const inheritsSettings =
+		input.speed === undefined && input.variant === undefined;
+	// The chat, its connection, the settings it inherits and the catalog the
+	// response shows are independent reads; each is checked in order below.
+	const catalog = apiModelCatalog(scope.userId);
+	catalog.catch(() => {});
+	const [session, connection, inherited] = await Promise.all([
+		read?.id === sessionId
+			? read
+			: agentSessionForOwner(scope.userId, sessionId),
+		selected ? loadModelConnection(scope.userId, selected.connectionId) : null,
+		selected && inheritsSettings
+			? inheritedApiTurnSettings(
+					scope.userId,
+					sessionId,
+					selected.modelId,
+					selected.connectionId,
+				)
+			: null,
+	]);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
-	const selected = parseModelRouteId(input.modelId);
 	if (!selected) throw new Error("Select an API connection and model.");
-	const connection = await loadModelConnection(
-		scope.userId,
-		selected.connectionId,
-	);
 	if (
 		!connection ||
 		!(await availableApiModelRoutes([connection])).some(
@@ -159,20 +204,14 @@ export async function sendApiWorkspaceTask(
 		throw new Error(
 			"The selected model is no longer available on this connection.",
 		);
-	const settings =
-		input.speed === undefined && input.variant === undefined
-			? await inheritedApiTurnSettings(
-					scope.userId,
-					session.id,
-					selected.modelId,
-					connection.id,
-				)
-			: {
-					...(input.variant ? { reasoning: input.variant } : {}),
-					...(input.speed && input.speed !== "standard"
-						? { speed: input.speed }
-						: {}),
-				};
+	const settings = inheritsSettings
+		? (inherited ?? {})
+		: {
+				...(input.variant ? { reasoning: input.variant } : {}),
+				...(input.speed && input.speed !== "standard"
+					? { speed: input.speed }
+					: {}),
+			};
 	if (
 		settings.speed &&
 		(connection.provider !== "openrouter" ||
@@ -201,25 +240,23 @@ export async function sendApiWorkspaceTask(
 		: undefined;
 	if (input.approvesPlan && !pendingPlanId(current))
 		throw new Error("That plan was already answered.");
-	const attachments = input.storedAttachments
-		? [...input.storedAttachments]
-		: await storeMessageAttachments(
-				scope.userId,
-				session.id,
-				input.attachments,
-			);
+	const [attachments, previous] = await Promise.all([
+		input.storedAttachments
+			? [...input.storedAttachments]
+			: storeMessageAttachments(scope.userId, session.id, input.attachments),
+		previousTurnMessages(
+			scope.userId,
+			session.id,
+			selected.modelId,
+			connection.revision,
+		),
+	]);
 	const items = sessionItemsQueuedWithUser(
 		current,
 		input.text,
 		input.idempotencyKey,
 		input.approvesPlan,
 		attachments,
-	);
-	const previous = await previousTurnMessages(
-		scope.userId,
-		session.id,
-		selected.modelId,
-		connection.revision,
 	);
 	let messages = nextTurnMessages({
 		previous,
@@ -248,13 +285,29 @@ export async function sendApiWorkspaceTask(
 		settings,
 		failover,
 	});
-	// The sidebar shows the stored title; name the chat after its first message.
-	await titleUntitledAgentSession(
-		scope.userId,
-		session.id,
-		sessionTitleFromItems(items),
-	).catch(() => undefined);
-	return readApiWorkspaceSession(scope);
+	// The sidebar shows the stored title; name the chat after its first
+	// message. A composer send already titled it when it claimed the chat, so
+	// this is a fallback and need not hold the response.
+	const title = () =>
+		titleUntitledAgentSession(
+			scope.userId,
+			session.id,
+			sessionTitleFromItems(items),
+		).catch(() => undefined);
+	if (!startAfterResponse(title)) await title();
+	// The chat as just committed: its transcript with the sent message and a
+	// running turn on the route it was sent to. Re-reading it would repeat
+	// the chat and catalog reads above.
+	return apiWorkspaceView(
+		{
+			...session,
+			items,
+			turnStatus: "running",
+			harness: "api",
+			listedModelId: input.modelId,
+		},
+		await catalog,
+	);
 }
 
 export async function stopApiWorkspaceTask(scope: CodexSessionScope) {

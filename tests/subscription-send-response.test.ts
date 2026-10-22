@@ -9,11 +9,15 @@ const mocks = vi.hoisted(() => ({
 	catalog: vi.fn(),
 	auth: vi.fn(),
 	account: vi.fn(),
+	open: vi.fn(),
+	commitBranch: vi.fn(),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
 	chatHoldingSend: vi.fn(),
-	releasingChatClaimOnFailure: vi.fn(),
+	releasingChatClaimOnFailure: vi.fn(
+		(_user: string, _id: string, _text: string, send: () => unknown) => send(),
+	),
 	titleUntitledAgentSession: mocks.title,
 }));
 vi.mock("#/server/adapters/api-turns", () => ({
@@ -35,7 +39,10 @@ vi.mock("#/server/auth/codex-device-login", () => ({
 	startCodexDeviceLogin: vi.fn(),
 }));
 vi.mock("#/server/services/agent-session-machine", () => ({
-	openAgentSession: vi.fn(),
+	openAgentSession: mocks.open,
+}));
+vi.mock("#/server/services/session-branch", () => ({
+	commitChatBranchForSubmission: mocks.commitBranch,
 }));
 vi.mock("#/server/services/cancel-server-turn", () => ({
 	cancelServerTurn: vi.fn(),
@@ -120,4 +127,34 @@ it("refuses a chat from another project before queueing anything", async () => {
 		),
 	).rejects.toThrow("Session is not in this project.");
 	expect(mocks.enqueue).not.toHaveBeenCalled();
+});
+
+it("commits a composer draft's new chat branch before queueing its turn", async () => {
+	const opened = { id: "s", projectId: "p", harness: "codex", items: [] };
+	mocks.open.mockResolvedValue(opened);
+	mocks.commitBranch.mockImplementation(async () => {
+		expect(mocks.enqueue).not.toHaveBeenCalled();
+		return { ...opened, workingBranch: "ytimesy/hello-s" };
+	});
+	const view = await sendSubscriptionTask(
+		{ userId: "u", projectId: "p" },
+		{ text: "hello", modelId: "model" },
+	);
+	expect(mocks.open).toHaveBeenCalledWith(
+		expect.objectContaining({ userId: "u", projectId: "p", harness: "codex" }),
+	);
+	expect(mocks.commitBranch).toHaveBeenCalledWith({
+		userId: "u",
+		projectId: "p",
+		sessionId: "s",
+		text: "hello",
+		session: opened,
+	});
+	expect(mocks.enqueue).toHaveBeenCalledOnce();
+	// The chat as opened, then as its branch commit left it: never read again.
+	expect(mocks.session).not.toHaveBeenCalled();
+	expect(view).toMatchObject({
+		agentSessionId: "s",
+		selectedBranch: "ytimesy/hello-s",
+	});
 });

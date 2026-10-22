@@ -20,6 +20,7 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
+	type AgentSessionRecord,
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
@@ -48,18 +49,23 @@ import {
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
 import { pinnedTurnFailover } from "./model-failover";
+import { commitChatBranchForSubmission } from "./session-branch";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
 	scope: CodexSessionScope,
 	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
 	tolerateCatalogOutage = false,
+	/** The chat as the caller just read or wrote it, instead of reading it again. */
+	read?: AgentSessionRecord,
 ): Promise<PublicCodexSession> {
 	// Independent reads; the account is read last below only for its status
 	// after a catalog refresh may have expired it.
 	const [session, managed] = await Promise.all([
 		scope.sessionId
-			? agentSessionForOwner(scope.userId, scope.sessionId)
+			? read?.id === scope.sessionId
+				? read
+				: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		hasManagedCodexAuth(scope.userId),
 	]);
@@ -176,6 +182,8 @@ export async function sendSubscriptionTask(
 		continueOn?: string;
 	},
 	preparedTask = false,
+	/** The chat as the caller just read or wrote it (by id, for this user). */
+	read?: AgentSessionRecord,
 ): ReturnType<typeof readSubscriptionSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
@@ -200,16 +208,26 @@ export async function sendSubscriptionTask(
 			harness: "codex",
 			firstMessage: input.text,
 		});
-		// Opening claimed the chat; a rejected send hands it back.
+		// Opening claimed the chat; a rejected send hands it back. Its branch
+		// is committed as for a send into an open chat, so the turn knows the
+		// commit its new branch starts from before its VM is ready.
+		const projectId = scope.projectId;
 		return releasingChatClaimOnFailure(
 			scope.userId,
 			opened.id,
 			input.text,
-			() =>
+			async () =>
 				sendSubscriptionTask(
 					{ ...scope, sessionId: opened.id },
 					input,
 					preparedTask,
+					await commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId,
+						sessionId: opened.id,
+						text: input.text,
+						session: opened,
+					}),
 				),
 		);
 	}
@@ -217,7 +235,7 @@ export async function sendSubscriptionTask(
 	// The chat view (its row, the account and catalog) and the settings the
 	// turn inherits are independent reads.
 	const [view, inherited] = await Promise.all([
-		readSubscriptionSession(scope, continuing),
+		readSubscriptionSession(scope, continuing, read),
 		input.variant === undefined && input.fast === undefined
 			? inheritedSubscriptionSettings(
 					scope.userId,

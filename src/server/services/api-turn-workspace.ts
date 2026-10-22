@@ -15,7 +15,7 @@ import {
 } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
-	checkoutBaseRevision,
+	checkoutGitHubReads,
 	ensureProjectCheckout,
 	loadTenantProjectCheckout,
 } from "./project-workspace";
@@ -38,10 +38,19 @@ export function deferredApiTurnWorkspace(
 		 * request can decide on that commit's hook configuration.
 		 */
 		pinNewChatBase?: boolean;
+		/** Reports each preparation phase as it is reached (the step's timing line). */
+		onPhase?: (
+			phase:
+				| "workspaceBound"
+				| "workspaceRunning"
+				| "checkoutPrepared"
+				| "baselinesSet",
+		) => void;
 	} = {},
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
 	let pinnedBase: Promise<string | null> = Promise.resolve(null);
+	let pinnedReads: ReturnType<typeof checkoutGitHubReads> | null = null;
 	const workspace = () => {
 		signal.throwIfAborted();
 		prepared ??= reusedOrPrepared();
@@ -54,6 +63,16 @@ export function deferredApiTurnWorkspace(
 		 * Read after the workspace was started.
 		 */
 		pinnedBase: () => pinnedBase,
+		/**
+		 * A file of the repository at the pinned base, read from GitHub before
+		 * the VM is ready; null unless `revision` is that pinned base, or when
+		 * GitHub cannot say. See repositoryFileAtCommit.
+		 */
+		pinnedBaseFile: async (revision: string, path: string) => {
+			const reads = pinnedReads;
+			if (!reads || revision !== (await pinnedBase)) return null;
+			return reads.fileAt(revision, path).catch(() => null);
+		},
 	});
 	async function reusedOrPrepared(): Promise<AgentToolWorkspace> {
 		const earlier = reuse?.read();
@@ -97,13 +116,17 @@ export function deferredApiTurnWorkspace(
 			!owner.parentSessionId
 		) {
 			pinnedBase = earlyCheckout
-				.then((planned) =>
-					Either.isRight(planned) &&
-					planned.right &&
-					startsNewChatBranch(planned.right)
-						? checkoutBaseRevision(planned.right)
-						: null,
-				)
+				.then((planned) => {
+					if (
+						!Either.isRight(planned) ||
+						!planned.right ||
+						!startsNewChatBranch(planned.right)
+					)
+						return null;
+					const reads = checkoutGitHubReads(planned.right);
+					pinnedReads = reads;
+					return reads.baseRevision();
+				})
 				.catch(() => null);
 		}
 		const pinning = pinnedBase;
@@ -123,10 +146,12 @@ export function deferredApiTurnWorkspace(
 					sessionId: owner.id,
 					harness: owner.harness,
 				});
+		options.onPhase?.("workspaceBound");
 		const scoped = machinesForAgentSession(machines, bound.session);
 		const vm = WorkspaceId(bound.providerRef);
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
+		options.onPhase?.("workspaceRunning");
 		signal.throwIfAborted();
 		// Cloud metadata is refused for every user on the VM, re-applied each
 		// turn (a cold boot drops the rules); it overlaps the checkout.
@@ -154,6 +179,7 @@ export function deferredApiTurnWorkspace(
 			}),
 		);
 		await metadataBlocked;
+		options.onPhase?.("checkoutPrepared");
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
@@ -188,6 +214,7 @@ export function deferredApiTurnWorkspace(
 						error instanceof Error ? error.message.slice(0, 200) : "unknown",
 				});
 			});
+		options.onPhase?.("baselinesSet");
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
 	/**
