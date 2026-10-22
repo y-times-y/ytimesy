@@ -131,56 +131,20 @@ export class ConversationRoom {
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
 		if (request.method === "POST") {
 			const incoming = conversationSnapshotSchema.parse(await request.json());
-			if (incoming.sessionId !== incoming.progress.sessionId)
-				return new Response(null, { status: 400 });
-			if (
-				this.latest &&
-				(this.latest.userId !== incoming.userId ||
-					this.latest.sessionId !== incoming.sessionId)
-			)
-				return new Response(null, { status: 403 });
-			if (
-				!this.latest ||
-				BigInt(incoming.revision) > BigInt(this.latest.revision)
-			) {
-				const written = await this.state.storage.transaction(
-					async (transaction) => {
-						// A purge that ran while this request awaited wins.
-						if (this.purged) return false;
-						const current = await transaction.get<SnapshotHead>("head");
-						if (
-							!current ||
-							BigInt(incoming.revision) > BigInt(current.revision)
-						) {
-							const text = JSON.stringify(incoming);
-							const chunks = Math.ceil(text.length / 128_000);
-							const entries: Record<string, unknown> = {
-								head: { revision: incoming.revision, chunks },
-							};
-							// Each entry stays below the platform's 2 MiB key/value limit.
-							for (let index = 0; index < chunks; index++)
-								entries[`snapshot:${index}`] = text.slice(
-									index * 128_000,
-									(index + 1) * 128_000,
-								);
-							await transaction.put(entries);
-							for (let index = chunks; index < (current?.chunks ?? 0); index++)
-								await transaction.delete(`snapshot:${index}`);
-						}
-						return true;
-					},
+			if (url.pathname !== "/stream")
+				return (
+					(await this.adopt(incoming)) ?? new Response(null, { status: 204 })
 				);
-				if (!written) return new Response(null, { status: 410 });
-				// Storage awaits permit interleaving: never regress the in-memory broadcast either.
-				if (
-					!this.latest ||
-					BigInt(incoming.revision) > BigInt(this.latest.revision)
-				) {
-					this.latest = incoming;
-					for (const send of this.subscribers) send(incoming);
-				}
-			}
-			return new Response(null, { status: 204 });
+			// A subscription that brings the chat's snapshot from Postgres: a
+			// room without it (a new chat, a restarted object) is seeded in the
+			// same round trip instead of a miss, a publish and a resubscribe.
+			if (
+				incoming.userId !== url.searchParams.get("userId") ||
+				incoming.sessionId !== url.searchParams.get("sessionId")
+			)
+				return new Response(null, { status: 400 });
+			const refused = await this.adopt(incoming);
+			if (refused) return refused;
 		}
 		if (
 			!this.latest ||
@@ -245,6 +209,61 @@ export class ConversationRoom {
 				"Cache-Control": "no-store, no-transform",
 			},
 		});
+	}
+	/** Keeps a newer snapshot and broadcasts it; a refusal's response otherwise. */
+	private async adopt(
+		incoming: ConversationSnapshot,
+	): Promise<Response | null> {
+		if (incoming.sessionId !== incoming.progress.sessionId)
+			return new Response(null, { status: 400 });
+		if (
+			this.latest &&
+			(this.latest.userId !== incoming.userId ||
+				this.latest.sessionId !== incoming.sessionId)
+		)
+			return new Response(null, { status: 403 });
+		if (
+			!this.latest ||
+			BigInt(incoming.revision) > BigInt(this.latest.revision)
+		) {
+			const written = await this.state.storage.transaction(
+				async (transaction) => {
+					// A purge that ran while this request awaited wins.
+					if (this.purged) return false;
+					const current = await transaction.get<SnapshotHead>("head");
+					if (
+						!current ||
+						BigInt(incoming.revision) > BigInt(current.revision)
+					) {
+						const text = JSON.stringify(incoming);
+						const chunks = Math.ceil(text.length / 128_000);
+						const entries: Record<string, unknown> = {
+							head: { revision: incoming.revision, chunks },
+						};
+						// Each entry stays below the platform's 2 MiB key/value limit.
+						for (let index = 0; index < chunks; index++)
+							entries[`snapshot:${index}`] = text.slice(
+								index * 128_000,
+								(index + 1) * 128_000,
+							);
+						await transaction.put(entries);
+						for (let index = chunks; index < (current?.chunks ?? 0); index++)
+							await transaction.delete(`snapshot:${index}`);
+					}
+					return true;
+				},
+			);
+			if (!written) return new Response(null, { status: 410 });
+			// Storage awaits permit interleaving: never regress the in-memory broadcast either.
+			if (
+				!this.latest ||
+				BigInt(incoming.revision) > BigInt(this.latest.revision)
+			) {
+				this.latest = incoming;
+				for (const send of this.subscribers) send(incoming);
+			}
+		}
+		return null;
 	}
 	private async controlTurn(request: Request) {
 		const input = turnControlSchema.parse(await request.json());
@@ -393,6 +412,7 @@ export async function routeRealtimeRequest(
 			!(
 				(request.method === "POST" &&
 					(url.pathname === "/snapshot" ||
+						url.pathname === "/stream" ||
 						url.pathname === "/purge" ||
 						/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
 				(request.method === "GET" && url.pathname === "/stream")
@@ -404,7 +424,7 @@ export async function routeRealtimeRequest(
 			return new Response(null, { status: 401 });
 		const scope =
 			request.method === "POST"
-				? (url.pathname === "/snapshot"
+				? (url.pathname === "/snapshot" || url.pathname === "/stream"
 						? conversationSnapshotSchema
 						: url.pathname === "/purge"
 							? conversationPurgeSchema
