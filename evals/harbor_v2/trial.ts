@@ -54,6 +54,7 @@ import {
 	finalAnswer,
 	harborReviewDeps,
 	harborReviewLoop,
+	lastChildText,
 	type ReviewTrace,
 	reviewItems,
 } from "./review";
@@ -531,9 +532,10 @@ export async function runHarborTrial(
 				const used = childBudgetUsed(error);
 				if (used) {
 					log(`${session.role} ${session.id} stopped: ${used.message}`);
+					// Its last text (a partial report or progress note) still reaches its parent.
 					const report = {
 						outcome: "failed" as const,
-						report: "",
+						report: lastChildText(session.events, roundStart),
 						budgetUsed: used.reason,
 					};
 					session.reports.push(report);

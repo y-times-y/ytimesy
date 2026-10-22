@@ -123,6 +123,19 @@ describe("independentReviewBrief", () => {
 		expect(brief).not.toMatch(/mvcc|lsm|compaction|flush/i);
 	});
 
+	it("puts the public API, the spec over code comments, and output-changing readings in the brief", () => {
+		const brief = independentReviewBrief(input);
+		expect(brief).toContain(
+			"Hidden tests exercise the existing public API and entry points: a fix that works only through new methods, flags or caller opt-in does not fix the reported symptom.",
+		);
+		expect(brief).toContain(
+			"Comments and docstrings in the code under repair may describe the buggy behaviour; the request and its spec or design docs win over them.",
+		);
+		expect(brief).toContain(
+			"A credible alternative reading of a decision rule or spec that changes the output is a failure (both readings, the output each gives), not an assumption to note before passing.",
+		);
+	});
+
 	it("says when no changed files were recorded and caps long lists", () => {
 		expect(
 			independentReviewBrief({ ...input, changedFiles: [], outsideFiles: [] }),

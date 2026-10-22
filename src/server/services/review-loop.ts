@@ -17,6 +17,7 @@ import { SessionItemId } from "#/domain/ids";
 import { type ModelBilling, usageCostUsd } from "#/domain/model-pricing";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import {
+	countedChecks,
 	decideAfterVerdict,
 	decideCheck,
 	expectedCheckMs,
@@ -27,12 +28,14 @@ import {
 	type ReviewOutcome,
 	type ReviewRound,
 	type ReviewWorker,
+	retryCheck,
 	reviewEligibility,
 	reviewFindings,
 	reviewLoopSummary,
 	reviewNotice,
 } from "#/domain/review-loop";
 import {
+	admittedUnfinished,
 	admittedUnverified,
 	builderRequirements,
 	UNVERIFIED_SEND_BACK_TIME_LEFT,
@@ -134,6 +137,14 @@ export type ReviewLoopInput = {
 	 * checkpoint and checks the work then.
 	 */
 	readonly handedOff?: () => boolean;
+	/**
+	 * An unattended run (the eval bridge): nobody answers the builder. Every
+	 * finished turn is checked, also without changed files in the checkout,
+	 * and with rigor=on a final answer that asks the user to resolve
+	 * something or admits a missing deliverable is sent back like unverified
+	 * work.
+	 */
+	readonly unattended?: boolean;
 };
 
 type StepInput = {
@@ -268,6 +279,17 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		return state;
 	};
 
+	/** rigor=on: the answer's admissions; unattended, also its questions to the user and missing deliverables first. */
+	const admittedLines = (answer: string) =>
+		input.unattended
+			? [
+					...new Set([
+						...admittedUnfinished(answer),
+						...admittedUnverified(answer),
+					]),
+				].slice(0, 3)
+			: admittedUnverified(answer);
+
 	const withRound = (
 		state: ReviewLoopState,
 		n: number,
@@ -364,7 +386,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 	): Promise<AttemptLoopOutcome> {
 		const now = deps.now();
 		const decision = decideCheck({
-			checksDone: state.rounds.length,
+			checksDone: countedChecks(state.rounds),
 			now,
 			deadlineAt: state.deadlineAt,
 			expectedCheckMs: expectedCheckMs(state),
@@ -386,7 +408,14 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			reviewRef(turnId, `r${n}`),
 		);
 		const previous = state.rounds.at(-1);
-		if (previous && previous.snapshot.tree === snapshot.tree)
+		// Unattended with nothing changed in the checkout, the deliverable is
+		// outside it (or missing): an unchanged tree does not show the fix did nothing.
+		if (
+			previous &&
+			previous.decision !== "retry" &&
+			previous.snapshot.tree === snapshot.tree &&
+			!(input.unattended && previous.changedFiles === 0)
+		)
 			return finish(state, step, "no-findings", "the fix changed no file");
 		const changed = await deps.vm(
 			`${GIT} -C ${quote(workspace.cwd)} diff --name-only ${quote(state.checkpoint.ref)} ${quote(snapshot.ref)}`,
@@ -396,6 +425,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		const eligible = reviewEligibility({
 			changedFiles,
 			turnMs: now - state.startedAt,
+			...(input.unattended ? { unattended: true } : {}),
 		});
 		if (!eligible.review)
 			return finish(state, step, "not-eligible", eligible.reason);
@@ -403,7 +433,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			input.rigor &&
 			(state.deadlineAt - now) / (state.deadlineAt - state.startedAt) >
 				UNVERIFIED_SEND_BACK_TIME_LEFT
-				? admittedUnverified(attemptReport(step.items))
+				? admittedLines(attemptReport(step.items))
 				: [];
 		const requirements = input.rigor ? requirementsOf(state, step.items) : null;
 		const directory = `${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
@@ -568,7 +598,11 @@ export function createReviewLoop(input: ReviewLoopInput) {
 						judge: ranCommandsText(judgeItems),
 					})
 				: parsed;
-		const findings = verdict ? reviewFindings(verdict, round.admitted) : [];
+		const findings = verdict
+			? reviewFindings(verdict, round.admitted, {
+					unattended: input.unattended,
+				})
+			: [];
 		const decision = verdict
 			? decideAfterVerdict({
 					verdict,
@@ -577,12 +611,25 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					deadlineAt: state.deadlineAt,
 				})
 			: ({ kind: "finish", reason: "check-failed" } as const);
+		// No verdict (timed out, or no verdict JSON) with ample time left: check the same tree again once.
+		const retry =
+			decision.kind === "finish" &&
+			retryCheck({
+				verdict,
+				rounds: state.rounds,
+				now,
+				deadlineAt: state.deadlineAt,
+			});
 		const updated = withRound(state, round.n, (current) => ({
 			...current,
 			verdict,
 			...(taken.timedOut ? { timedOut: true } : {}),
 			findings,
-			decision: decision.kind === "fix" ? "fix" : decision.reason,
+			decision: retry
+				? "retry"
+				: decision.kind === "fix"
+					? "fix"
+					: decision.reason,
 			checker: {
 				...current.checker,
 				endedAt: now,
@@ -594,6 +641,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					: {}),
 			},
 		}));
+		if (retry) return startCheck(await save(updated), step);
 		if (decision.kind === "finish")
 			return finish(
 				updated,

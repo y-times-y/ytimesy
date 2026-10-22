@@ -178,9 +178,9 @@ export function fusionLead(input: {
 		});
 		return [
 			report.budgetUsed
-				? `Sidekick ${session.id} round ${n} (${kind}) stopped: sidekick budget used (${report.budgetUsed}). Its edits so far are in your checkout; it wrote no report.`
+				? `Sidekick ${session.id} round ${n} (${kind}) stopped: sidekick budget used (${report.budgetUsed}). Its edits so far are in your checkout; ${report.report ? "its last message:" : "it wrote no report."}`
 				: `Sidekick ${session.id} round ${n} (${kind}) ${report.outcome === "completed" ? "reported" : "failed"}:`,
-			report.budgetUsed ? "" : report.report || "(no report)",
+			report.budgetUsed ? report.report : report.report || "(no report)",
 			files.length
 				? `Changed files in your checkout now:\n${files.join("\n")}`
 				: "",
@@ -283,7 +283,7 @@ export function checkerWorkerTool(input: {
 			readOnly: true,
 		});
 		return report.budgetUsed
-			? `Worker ${worker.id} stopped: checker worker budget used (${report.budgetUsed}).`
+			? `Worker ${worker.id} stopped: checker worker budget used (${report.budgetUsed}).${report.report ? ` Its last message:\n${report.report}` : ""}`
 			: `Worker ${worker.id} ${report.outcome}:\n${report.report || "(no report)"}`;
 	};
 	return {

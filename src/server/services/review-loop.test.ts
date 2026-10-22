@@ -24,6 +24,7 @@ function harness(options: {
 	deadlineAt?: number;
 	changed?: string;
 	rigor?: boolean;
+	unattended?: boolean;
 	/** checkerMode=pair, with each judge's workers. */
 	pair?: boolean;
 	workers?: (checkerSessionId: string) => LoopWorker[];
@@ -108,6 +109,7 @@ function harness(options: {
 		deps,
 		rigor: options.rigor,
 		pair: options.pair,
+		unattended: options.unattended,
 	});
 	const items = (usage: number, text: string): SessionItem[] => [
 		{
@@ -669,6 +671,73 @@ ${TASK}
 			outcome: "not-eligible",
 			note: "no files changed",
 		});
+	});
+
+	it("unattended, checks a turn without changes and sends back an answer that asks the user", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({
+			reports: [PASS, PASS],
+			changed: "",
+			rigor: true,
+			unattended: true,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.advance(30_000);
+		const first = await h.loop.afterAttempt(
+			h.step(
+				1,
+				"The inputs contradict each other, so /app/output/report.json was not created.\nPlease provide corrected inputs.",
+			),
+		);
+		expect(h.started).toHaveLength(1);
+		expect(h.started[0].brief).toContain("(no changed files recorded)");
+		expect(first.kind).toBe("run");
+		if (first.kind !== "run") throw new Error();
+		const notice = String(first.messages?.at(-1)?.content);
+		expect(notice).toContain("Please provide corrected inputs.");
+		expect(notice).toContain(
+			"Nobody will answer a question in this run: on an apparent contradiction or missing input, deliver the best-supported result",
+		);
+		// The fix wrote the deliverable outside the checkout: still checked, and the pass finishes.
+		const done = await h.loop.afterAttempt(
+			h.step(2, "Wrote /app/output/report.json.\nF1: fixed"),
+		);
+		expect(done.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
+		expect(h.state()?.outcome).toBe("pass");
+	});
+
+	it("checks the same tree again once when a check gives no verdict with ample time left", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: ["(stopped at its time budget)", PASS] });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const done = await h.loop.afterAttempt(h.step(1, "Done."));
+		expect(done.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
+		expect(h.started[1].brief).toContain(`<request>\n${TASK}\n</request>`);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"pass",
+		]);
+		expect(h.state()?.outcome).toBe("pass");
+		// Only once per turn: two silent checks end the loop.
+		const g = harness({ reports: ["no json", "no json either"] });
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(4 * 60_000);
+		await g.loop.afterAttempt(g.step(1, "Done."));
+		expect(g.started).toHaveLength(2);
+		expect(g.state()?.outcome).toBe("unsure");
 	});
 
 	it("respects a runner's deadline: no check without time for a check and a fix", async () => {

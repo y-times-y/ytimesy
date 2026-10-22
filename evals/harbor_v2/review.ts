@@ -12,7 +12,7 @@ import type { SessionItem } from "../../src/domain/session-item";
 import { subagentBudgetCheck } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import { subagentWrapUpNotice } from "../../src/domain/subagent-instructions";
-import { usageTokens } from "../../src/domain/subagent-usage";
+import { budgetUsageTokens } from "../../src/domain/subagent-usage";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { captureConversationCode } from "../../src/server/services/conversation-code-checkpoint";
 import {
@@ -288,9 +288,11 @@ export function childBudgetUsed(error: unknown): ChildBudgetUsed | null {
  * used (the minutes notice a minute earlier, so a verdict still fits), and a
  * stop at its token budget. Tokens are this round's own: usage events are
  * cumulative within one model run, so the last one since the round's first
- * event, never an earlier round's; weighted like the product's budget tokens.
- * A sidekick's token cap is the product's per-round cap (subagentBudgetCheck),
- * not its budget across rounds.
+ * event, never an earlier round's; counted (cache reads at their price
+ * share) and weighted like the product's budget tokens. A sidekick's token
+ * cap is the product's per-round cap (subagentBudgetCheck), not its budget
+ * across rounds. At the cap the child gets one last step to write its
+ * report (a notice); a step after that stops the round.
  */
 export function childStepGuard(input: {
 	role: TrialRole;
@@ -305,6 +307,7 @@ export function childStepGuard(input: {
 }) {
 	let steps = 0;
 	let warned = false;
+	let lastCall = false;
 	const limit = subagentBudgetCheck(
 		input.budget,
 		{ steps: 0, tokens: 0, createdAt: new Date(input.startedAt).toISOString() },
@@ -316,12 +319,26 @@ export function childStepGuard(input: {
 		steps++;
 		const now = (input.now ?? Date.now)();
 		const tokens =
-			usageTokens(lastUsage(input.events, input.from)) * (input.weight ?? 1);
-		if (tokens >= limit)
-			throw new ChildBudgetUsed(
-				input.role,
-				`${prefix}tokens ${count(tokens)}/${count(limit)}`,
-			);
+			budgetUsageTokens(lastUsage(input.events, input.from)) *
+			(input.weight ?? 1);
+		if (tokens >= limit) {
+			if (lastCall)
+				throw new ChildBudgetUsed(
+					input.role,
+					`${prefix}tokens ${count(tokens)}/${count(limit)}`,
+				);
+			lastCall = true;
+			return [
+				...messages,
+				{
+					role: "user",
+					content: budgetUsedNotice(
+						`${prefix}tokens ${count(tokens)}/${count(limit)}`,
+						input.role,
+					),
+				},
+			];
+		}
 		const elapsedMinutes = (now - input.startedAt) / 60_000;
 		const reason =
 			steps >= Math.ceil(input.budget.steps * 0.9)
@@ -344,6 +361,32 @@ export function childStepGuard(input: {
 			},
 		];
 	};
+}
+
+/** The notice for a child's last step at its token cap: no tools, its report now. */
+export function budgetUsedNotice(reason: string, role: TrialRole) {
+	return role === "sidekick"
+		? `Budget used (${reason}). Call no more tools: reply now with your report (what you changed, what you verified, what is left). This is a runtime notice, not a new request.`
+		: `Budget used (${reason}). Call no more tools: answer now with only the JSON your brief asks for; a requirement you could not check is not met. This is a runtime notice, not a new request.`;
+}
+
+/**
+ * A round stopped at its budget: the child's last text since the round's
+ * first event (its partial report or latest progress note), else "".
+ */
+export function lastChildText(events: readonly TimedEvent[], from: number) {
+	let id: string | null = null;
+	let text = "";
+	for (let index = from; index < events.length; index++) {
+		const { event } = events[index];
+		if (event.type !== "text-delta") continue;
+		if (event.id !== id) {
+			id = event.id;
+			text = "";
+		}
+		text += event.text;
+	}
+	return text.trim();
 }
 
 export type HarborReviewLoop = ReturnType<typeof createReviewLoop>;
@@ -369,5 +412,7 @@ export function harborReviewLoop(input: {
 		deps: input.deps,
 		rigor: input.rigor,
 		pair: input.pair,
+		// No one answers a trial's builder: every finished turn is checked.
+		unattended: true,
 	});
 }

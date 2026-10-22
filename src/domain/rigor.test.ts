@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
+	admittedUnfinished,
 	admittedUnverified,
 	builderRequirements,
 	MAX_BUILDER_REQUIREMENTS,
@@ -8,6 +9,7 @@ import {
 	RIGOR_REQUIREMENTS_INSTRUCTIONS,
 	requirementsFromText,
 	requirementsSegments,
+	UNATTENDED_RUN_INSTRUCTIONS,
 } from "./rigor";
 import type { SessionItem } from "./session-item";
 
@@ -27,6 +29,29 @@ describe("rigor", () => {
 			"I couldn't verify the upload against the live service.",
 			"The flaky integration test still fails.",
 		]);
+	});
+
+	it("finds, for unattended runs, questions to the user and missing deliverables", () => {
+		expect(
+			admittedUnfinished(
+				[
+					"Checked the VCF; the reference build in the config contradicts the input.",
+					"/app/output/mutation.report.json was not created.",
+					"Please provide a corrected config.",
+					"Wrote the report; no contradictions found.",
+				].join("\n"),
+			),
+		).toEqual([
+			"Checked the VCF; the reference build in the config contradicts the input.",
+			"/app/output/mutation.report.json was not created.",
+			"Please provide a corrected config.",
+		]);
+		expect(
+			admittedUnfinished("Done: wrote /results/out.csv; tests pass."),
+		).toEqual([]);
+		expect(UNATTENDED_RUN_INSTRUCTIONS).toContain(
+			"Never stop on an apparent contradiction or a missing input",
+		);
 	});
 
 	it("ignores answers that say nothing is unverified", () => {

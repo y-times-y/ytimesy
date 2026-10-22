@@ -8,6 +8,7 @@ import {
 	hasConcreteFindings,
 	isRunnableFile,
 	REVIEW_LOOP_LIMITS,
+	retryCheck,
 	reviewEligibility,
 	reviewFindings,
 	reviewNotice,
@@ -159,10 +160,39 @@ describe("review gating and time", () => {
 		expect(
 			reviewEligibility({ changedFiles: ["src/x.ts"], turnMs: 10_000 }).review,
 		).toBe(true);
+		// Unattended (an eval trial): the deliverable may be outside the checkout.
+		expect(
+			reviewEligibility({ changedFiles: [], turnMs: 10_000, unattended: true }),
+		).toEqual({ review: true });
 		for (const file of ["run.sh", "Makefile", "a/Dockerfile", "pyproject.toml"])
 			expect(isRunnableFile(file)).toBe(true);
 		for (const file of ["README.md", "out.csv", "image.png"])
 			expect(isRunnableFile(file)).toBe(false);
+	});
+
+	it("retries a check without a verdict once, when a whole check and a fix fit", () => {
+		const noJson = parseReviewVerdict("ran out of time");
+		const at = { now: 0, deadlineAt: 38 * 60_000 };
+		expect(retryCheck({ verdict: noJson, rounds: [], ...at })).toBe(true);
+		expect(retryCheck({ verdict: null, rounds: [], ...at })).toBe(true);
+		expect(
+			retryCheck({ verdict: review({ verdict: "unsure" }), rounds: [], ...at }),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [{ decision: "retry" } as never],
+				...at,
+			}),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: 10 * 60_000,
+			}),
+		).toBe(false);
 	});
 
 	it("checks only when a check and a fix fit, and gives the check the rest", () => {
