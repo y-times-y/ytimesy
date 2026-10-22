@@ -518,7 +518,7 @@ export async function runHarborTrial(
 				return report;
 			} catch (error) {
 				log(
-					`${session.role} ${session.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+					`${session.role} ${session.id} failed: ${error instanceof Error ? error.message : String(error)}${providerDetail(error)}`,
 				);
 				const report = { outcome: "failed" as const, report: "" };
 				session.reports.push(report);
@@ -918,4 +918,28 @@ export async function runHarborTrial(
 		reviewRounds,
 		efficiency,
 	};
+}
+
+/**
+ * The underlying provider error a SafeApiModelFailure keeps for operators
+ * (its message is a generic classification), for the bridge log only:
+ * name, message and cause chain, with AWS key ids and signatures redacted.
+ */
+export function providerDetail(error: unknown) {
+	let inner = (error as { providerError?: unknown } | null)?.providerError;
+	if (inner === undefined) return "";
+	const parts: string[] = [];
+	for (let depth = 0; depth < 4 && inner; depth++) {
+		parts.push(
+			inner instanceof Error
+				? `${inner.name}: ${inner.message}`
+				: (JSON.stringify(inner)?.slice(0, 400) ?? String(inner)),
+		);
+		inner = (inner as { cause?: unknown }).cause;
+	}
+	return ` [provider: ${parts
+		.join(" <- ")
+		.replace(/\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b/g, "<key>")
+		.replace(/Signature=[0-9a-f]+/g, "Signature=<redacted>")
+		.slice(0, 1200)}]`;
 }
