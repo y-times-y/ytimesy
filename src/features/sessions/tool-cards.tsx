@@ -55,7 +55,7 @@ export function RequirementsList({ items }: { items: readonly string[] }) {
 				<ListChecks size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Requirements</span>
 				<span className="session-requirements-count">{items.length}</span>
-				<ChevronRight size={12} className="session-activity-chevron" />
+				<ChevronRight size={14} className="session-activity-chevron" />
 			</summary>
 			<ol>
 				{items.map((item, index) => (
@@ -135,7 +135,7 @@ export function CheckVerdictCard({
 						<span className="session-tool-note">{facts.join(" · ")}</span>
 					) : null}
 				</span>
-				<ChevronRight size={12} className="session-activity-chevron" />
+				<ChevronRight size={14} className="session-activity-chevron" />
 			</summary>
 			<div className="session-command-detail session-check-detail">
 				{summary.rounds.length > 1 ? (
@@ -247,7 +247,7 @@ export function AgentCallView({
 				{helper?.tag ? (
 					<span className="agent-row-tag">{helper.tag}</span>
 				) : null}
-				<ChevronRight size={12} className="session-activity-chevron" />
+				<ChevronRight size={14} className="session-activity-chevron" />
 				{status ? (
 					<span className="session-activity-status">{status}</span>
 				) : null}

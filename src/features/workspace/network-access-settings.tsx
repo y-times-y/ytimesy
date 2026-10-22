@@ -77,10 +77,11 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 				<h3 id="network-access-heading">Internet access</h3>
 				<span>Per project</span>
 			</div>
-			<p className="settings-copy">
-				Choose what chat machines can reach. Changes apply to each chat machine
-				when its next turn starts. Cloud metadata addresses stay blocked in
-				every mode.
+			<p
+				className="settings-copy"
+				title="Changes apply to each chat machine when its next turn starts. Cloud metadata addresses stay blocked in every mode."
+			>
+				What chat machines can reach.
 			</p>
 			{current.data ? (
 				<NetworkAccessView
@@ -179,11 +180,14 @@ export function NetworkAccessView({
 					<p>{DEFAULT_ALLOWED_DOMAINS.join(", ")}</p>
 				</details>
 			) : null}
-			<p className="machine-size-note">
-				Restricted modes allow HTTPS to the listed names only. A wildcard
-				matches one label: *.example.com covers api.example.com but not
-				example.com. Plain HTTP, SSH and direct IP connections are blocked.
-			</p>
+			{mode === "full" ? null : (
+				<p
+					className="machine-size-note"
+					title="A wildcard matches one label: *.example.com covers api.example.com but not example.com. Plain HTTP, SSH and direct IP connections are blocked."
+				>
+					HTTPS to the listed names only.
+				</p>
+			)}
 			<button
 				type="submit"
 				className="settings-secondary"

@@ -64,7 +64,7 @@ export function SecretRequestCard({
 				<span className="plan-proposal-status">
 					{outcome === "provided" ? (
 						<>
-							<Check size={12} aria-hidden="true" /> Saved to project
+							<Check size={14} aria-hidden="true" /> Saved to project
 						</>
 					) : outcome === "answered" ? (
 						"Answered"

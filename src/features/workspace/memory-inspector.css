@@ -80,8 +80,9 @@
 }
 .memory-clear {
 	display: flex;
-	justify-content: flex-end;
+	justify-content: flex-start;
 	gap: 4px;
+	margin-top: 24px;
 }
 @container (min-width: 860px) {
 	.memory-inspector {
@@ -476,8 +477,9 @@ a.memory-row-action:hover {
 	margin-right: 6px;
 	padding: 0 6px;
 	border-radius: 4px;
-	background: #d9b45a1a;
-	color: #d9b45a;
+	/* Neutral like the history view's tag; replaced lines are dimmer. */
+	background: #ffffff14;
+	color: #d4d4d4;
 	font-size: 11px;
 	line-height: 17px;
 	vertical-align: 1px;

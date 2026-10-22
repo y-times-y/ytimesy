@@ -95,9 +95,8 @@ export function McpServers() {
 			<header className="integrations-head">
 				<div>
 					<h3>MCP servers</h3>
-					<p>
-						Connect any remote MCP server. Credentials stay encrypted on our
-						server and never enter the workspace.
+					<p title="Credentials stay encrypted on our server and never enter the workspace.">
+						Connect any remote MCP server.
 					</p>
 				</div>
 				{!adding ? (
@@ -242,7 +241,7 @@ export function McpServers() {
 										disabled={busy}
 										onClick={() => remove.mutate(server.id)}
 									>
-										<Trash2 size={15} />
+										<Trash2 size={16} />
 									</button>
 								</div>
 							</li>

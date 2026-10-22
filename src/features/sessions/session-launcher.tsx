@@ -26,7 +26,6 @@ import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
 	composerSendIsEnabled,
-	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
@@ -77,7 +76,7 @@ import {
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
 import { ContextUsage } from "./context-usage";
 import { ConversationRecovery } from "./conversation-recovery";
-import { HarnessLogin } from "./harness-login";
+import { ComposerSignIn } from "./harness-login";
 import type { MemoryMarkerActions } from "./memory-markers";
 import {
 	type ComposerSpeed,
@@ -852,6 +851,13 @@ export function SessionLauncher({
 					/>
 				) : null}
 				<div className="composer-shell">
+					<ComposerSignIn
+						harnessReady={harnessReady}
+						harnessId={harnessId}
+						connection={session.connection}
+						busy={busy}
+						onConnect={onConnect}
+					/>
 					<div className="session-composer">
 						{visibleSlashCommands.length > 0 ? (
 							<SlashCommandPalette
@@ -934,20 +940,6 @@ export function SessionLauncher({
 											/>
 										) : null}
 									</>
-								}
-								connectionContent={
-									harnessLoginShouldShow({
-										harnessReady,
-										harnessId,
-										connection: session.connection,
-									}) ? (
-										<HarnessLogin
-											harnessId={harnessId}
-											connection={session.connection}
-											busy={busy}
-											onConnect={onConnect}
-										/>
-									) : null
 								}
 								providerConnected={
 									harnessReady ||

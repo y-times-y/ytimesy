@@ -65,11 +65,8 @@ export function ModelFailoverSettings() {
 			<header className="settings-section-head">
 				<div>
 					<h3>Automatic failover</h3>
-					<p>
-						If a model's provider has an outage, is overloaded, rate limited or
-						out of plan usage, the turn continues on your next connection: the
-						same model first, then the closest comparable one. Your next message
-						tries your chosen model again.
+					<p title="If a provider has an outage, is overloaded, rate limited or out of plan usage, the turn continues on your next connection: the same model first, then the closest comparable one. Your next message tries your chosen model again.">
+						Keep a turn going when its provider fails.
 					</p>
 				</div>
 			</header>

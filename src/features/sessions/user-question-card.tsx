@@ -145,7 +145,7 @@ export function UserQuestionCard({
 				</footer>
 			) : reply ? (
 				<p className="user-question-reply">
-					<Check size={12} aria-hidden="true" />
+					<Check size={14} aria-hidden="true" />
 					<span>{reply}</span>
 				</p>
 			) : null}

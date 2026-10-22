@@ -25,6 +25,7 @@ import {
 	accountDeletionPhrase,
 } from "#/domain/account-deletion";
 import { offeredAgentProviders } from "#/domain/agent-provider";
+import type { CodexUsage } from "#/domain/codex-usage";
 import type {
 	ProjectSecretKind,
 	PublicProjectSecret,
@@ -43,6 +44,7 @@ import { authClient } from "../auth/client";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
+import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
@@ -176,7 +178,7 @@ export function ProjectSettings({
 									aria-current={section === item.id ? "page" : undefined}
 									onClick={() => setSection(item.id)}
 								>
-									<Icon size={15} strokeWidth={1.5} />
+									<Icon size={16} strokeWidth={1.5} />
 									{item.label}
 								</button>
 							);
@@ -301,17 +303,21 @@ function ProjectHeader({
 function SettingsHeader({
 	title,
 	description,
+	details,
 	action,
 }: {
 	title: string;
+	/** One short line. */
 	description?: string;
+	/** The fine print, shown as the description's tooltip. */
+	details?: string;
 	action?: ReactNode;
 }) {
 	return (
 		<header className="settings-section-head">
 			<div>
 				<h3>{title}</h3>
-				{description ? <p>{description}</p> : null}
+				{description ? <p title={details}>{description}</p> : null}
 			</div>
 			{action}
 		</header>
@@ -401,9 +407,11 @@ function DeleteAccount({ email }: { email?: string | null }) {
 			<div className="settings-row">
 				<div className="settings-row-text">
 					<span className="settings-row-title">Delete account</span>
-					<span className="settings-row-meta">
-						Permanently deletes your projects, chats, cloud machines, saved
-						files and connections. Your GitHub repositories are not touched.
+					<span
+						className="settings-row-meta"
+						title="Deletes your projects, chats, cloud machines, saved files and connections. Your GitHub repositories are not touched."
+					>
+						Permanent. Your GitHub repositories stay.
 					</span>
 				</div>
 				{confirming ? null : (
@@ -568,7 +576,7 @@ function GithubSection({
 							<li key={project.id} className="settings-row">
 								<div className="settings-row-main">
 									<span className="settings-row-icon">
-										<Folder size={15} strokeWidth={1.5} />
+										<Folder size={16} strokeWidth={1.5} />
 									</span>
 									<div className="settings-row-text">
 										<span className="settings-row-title">
@@ -613,9 +621,9 @@ const SECRET_KIND_LABELS: Record<ProjectSecretKind, string> = {
 };
 
 const SECRET_KIND_HINTS: Record<ProjectSecretKind, string> = {
-	runtime: "API keys the code needs; hidden from the agent",
-	environment: "Non-sensitive settings the agent can read",
-	build: "Only during environment setup, e.g. registry tokens",
+	runtime: "API keys the code needs; hidden from the agent.",
+	environment: "Non-sensitive settings the agent can read.",
+	build: "Only during environment setup, e.g. registry tokens.",
 };
 
 function ProjectSecretsSection({ project }: { project?: Project }) {
@@ -697,7 +705,8 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		<section className="settings-section settings-section-gap">
 			<SettingsHeader
 				title="Secrets"
-				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values (and common encodings of them) are redacted from what the model and this chat see on a best-effort basis, and commits containing them are refused. Build secrets are only passed to environment setup."
+				description="Encrypted and never shown again."
+				details="Environment variables and runtime secrets are loaded as environment variables for the agent and services. Runtime secret values (and common encodings of them) are redacted from what the model and this chat see on a best-effort basis, and commits containing them are refused. Build secrets are only passed to environment setup."
 			/>
 			<ul className="settings-group">
 				{secrets.length === 0 ? (
@@ -754,11 +763,13 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 									string,
 								][]
 							).map(([id, label]) => (
-								<SelectItem key={id} value={id} textValue={label}>
-									<span className="settings-option">
-										<span>{label}</span>
-										<small>{SECRET_KIND_HINTS[id]}</small>
-									</span>
+								<SelectItem
+									key={id}
+									value={id}
+									textValue={label}
+									title={SECRET_KIND_HINTS[id]}
+								>
+									{label}
 								</SelectItem>
 							))}
 						</SelectContent>
@@ -834,6 +845,8 @@ function AgentsSection({
 								: provider.id === "api"
 									? apiKeyCount > 0
 									: false;
+						const expired =
+							provider.id === "codex" && account.status === "expired";
 						return (
 							<li key={provider.id} className="settings-row">
 								<div className="settings-row-main">
@@ -856,7 +869,11 @@ function AgentsSection({
 										className="settings-badge"
 										data-tone={connected ? "ok" : undefined}
 									>
-										{connected ? "Connected" : "Not connected"}
+										{connected
+											? "Connected"
+											: expired
+												? "Expired"
+												: "Not connected"}
 									</span>
 									{provider.id === "codex" &&
 									account.status !== "disconnected" &&
@@ -908,6 +925,3 @@ function AgentsSection({
 		</>
 	);
 }
-
-import type { CodexUsage } from "#/domain/codex-usage";
-import { CodexSubscriptionUsage } from "../sessions/codex-usage";

@@ -1265,6 +1265,10 @@ details[open] > summary .session-activity-chevron {
 	container-type: inline-size;
 	container-name: composer;
 }
+/* The sign-in card sits on top of the composer, aligned with its edges. */
+.composer-shell > .harness-login {
+	margin: 0 0 8px;
+}
 .slash-palette {
 	margin: 0;
 	padding: 6px 6px 8px;
