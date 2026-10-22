@@ -51,6 +51,12 @@ const call = (id: string, name: string, input: unknown): Part => ({
 	input: JSON.stringify(input),
 });
 
+/** A checker step that runs a command: its verdict is matched against what it ran. */
+const ran = (id: string, command = "python3 solution.py"): Part[] => [
+	call(id, "bash", { command }),
+	finish(0, 0, true),
+];
+
 function scriptedModel(responses: Part[][]) {
 	let index = 0;
 	const model = new MockLanguageModelV4({
@@ -320,12 +326,19 @@ describe("runHarborTrial with review=on", () => {
 		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
 		const failing = JSON.stringify({
 			verdict: "fail",
-			failures: ["Output: solution.py prints 41, the request asks for 42"],
+			failures: [
+				{
+					failure: "Output: solution.py prints 41, the request asks for 42",
+					command: "python3 solution.py",
+					output: "41",
+				},
+			],
 			requirements: [
 				{
 					requirement: "prints 42",
 					met: false,
-					evidence: "python3 solution.py -> 41",
+					command: "python3 solution.py",
+					output: "41",
 				},
 			],
 			assumptions: [],
@@ -338,8 +351,12 @@ describe("runHarborTrial with review=on", () => {
 				{
 					requirement: "prints 42",
 					met: true,
-					evidence: "python3 solution.py -> 42",
+					command: "python3 solution.py",
+					output: "42",
 				},
+			],
+			tests: [
+				{ name: "prints 42", command: "python3 solution.py", passed: true },
 			],
 			assumptions: [],
 			notes: "",
@@ -354,7 +371,9 @@ describe("runHarborTrial with review=on", () => {
 			// Checker, round 1: a stray file from a command (a reader has no
 			// write tool but runs commands), then its verdict.
 			[
-				call("k1", "bash", { command: "echo checker scratch > stray.txt" }),
+				call("k1", "bash", {
+					command: "echo checker scratch > stray.txt; python3 solution.py",
+				}),
 				finish(100, 10, true),
 			],
 			[...text("k2", failing), finish(100, 10)],
@@ -365,6 +384,7 @@ describe("runHarborTrial with review=on", () => {
 			],
 			[...text("b4", "Fixed: prints 42."), finish(100, 10)],
 			// Checker, round 2.
+			ran("k3-run"),
 			[...text("k3", passing), finish(100, 10)],
 		]);
 		const result = await runHarborTrial({
@@ -386,7 +406,7 @@ describe("runHarborTrial with review=on", () => {
 			},
 		});
 		expect(result.failure).toBeNull();
-		expect(calls()).toBe(7);
+		expect(calls()).toBe(8);
 		expect(result.reviewRounds).toBe(1);
 		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
 			"print(42)\n",
@@ -404,8 +424,13 @@ describe("runHarborTrial with review=on", () => {
 			ok: true,
 		});
 		expect(trace.review.summary).toBeTruthy();
-		// Builder and checkers count against one trial: 7 requests, 700 + 70 tokens.
-		expect(result.requests).toBe(7);
+		// Its finding cites a command it ran (k1), so none was set aside.
+		expect(trace.review.state.rounds[0].verdict.downgraded).toEqual([]);
+		expect(trace.review.state.rounds[0].findings[0].text).toContain(
+			"(ran `python3 solution.py` -> 41)",
+		);
+		// Builder and checkers count against one trial: 8 requests, 700 + 70 tokens.
+		expect(result.requests).toBe(8);
 		expect(result.usage).toMatchObject({ inputTokens: 700, outputTokens: 70 });
 		const trajectory = JSON.parse(
 			await readFile(join(f.logs, "trajectory.json"), "utf8"),
@@ -445,8 +470,12 @@ describe("runHarborTrial with review=on", () => {
 				{
 					requirement: "prints 42",
 					met: true,
-					evidence: "python3 solution.py -> 42",
+					command: "python3 solution.py",
+					output: "42",
 				},
+			],
+			tests: [
+				{ name: "prints 42", command: "python3 solution.py", passed: true },
 			],
 			assumptions: [],
 			notes: "",
@@ -459,6 +488,7 @@ describe("runHarborTrial with review=on", () => {
 			[...text("b2", "Done."), finish(100, 10)],
 		]);
 		const checker = scriptedModel([
+			ran("k0"),
 			[...text("k1", passing), finish(1000, 100)],
 		]);
 		const runtimes: (string | null)[] = [];
@@ -486,7 +516,7 @@ describe("runHarborTrial with review=on", () => {
 		expect(result.failure).toBeNull();
 		expect(runtimes).toEqual([null, "claude-sonnet-5-5"]);
 		expect(builder.calls()).toBe(2);
-		expect(checker.calls()).toBe(1);
+		expect(checker.calls()).toBe(2);
 		const trajectory = JSON.parse(
 			await readFile(join(f.logs, "trajectory.json"), "utf8"),
 		);
@@ -541,7 +571,7 @@ describe("runHarborTrial with review=on", () => {
 		// The shared AA-style block: per role and model, calls and cache hit.
 		expect(result.efficiency).toMatchObject({
 			tasks: 1,
-			callsPerTask: 3,
+			callsPerTask: 4,
 			tokensPerTask: 1320,
 			cacheHitRate: 0,
 		});
@@ -554,10 +584,10 @@ describe("runHarborTrial with review=on", () => {
 			]),
 		).toEqual([
 			["builder", "claude-opus-5-5", 2],
-			["checker", "claude-sonnet-5-5", 1],
+			["checker", "claude-sonnet-5-5", 2],
 		]);
 		expect(trace.efficiency.perTaskUsd).toBeCloseTo(expected, 8);
-		expect(trajectory.final_metrics.extra.efficiency.callsPerTask).toBe(3);
+		expect(trajectory.final_metrics.extra.efficiency.callsPerTask).toBe(4);
 		expect(trajectory.final_metrics.total_cost_usd).toBeCloseTo(expected, 6);
 		// Harbor attributes each embedded checker trajectory to its own model.
 		if (process.env.HARBOR_PYTHON) {
@@ -717,12 +747,20 @@ describe("runHarborTrial with review=on", () => {
 				verdict: pass ? "pass" : "fail",
 				failures: pass
 					? []
-					: ["Output: solution.py prints 41, the request asks for 42"],
+					: [
+							{
+								failure:
+									"Output: solution.py prints 41, the request asks for 42",
+								command: "python3 solution.py",
+								output: "41",
+							},
+						],
 				requirements: [
 					{
 						requirement: "prints 42",
 						met: pass,
-						evidence: "worker ran python3 solution.py",
+						command: "python3 solution.py",
+						output: pass ? "42" : "41",
 					},
 				],
 				tests: [
@@ -755,6 +793,8 @@ describe("runHarborTrial with review=on", () => {
 				finish(200, 20, true),
 			],
 			[...text("j2", verdict(false)), finish(200, 20)],
+			// Round 2: the judge re-runs the worker's test itself.
+			ran("j3-run", "python3 solution.py > worker-out.txt; cat worker-out.txt"),
 			[...text("j3", verdict(true)), finish(200, 20)],
 		]);
 		const worker = scriptedModel([
@@ -793,7 +833,7 @@ describe("runHarborTrial with review=on", () => {
 			},
 		});
 		expect(result.failure).toBeNull();
-		expect([builder.calls(), judge.calls(), worker.calls()]).toEqual([4, 3, 2]);
+		expect([builder.calls(), judge.calls(), worker.calls()]).toEqual([4, 4, 2]);
 		expect(result.reviewRounds).toBe(1);
 		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
 			"print(42)\n",
@@ -821,7 +861,7 @@ describe("runHarborTrial with review=on", () => {
 			]),
 		).toEqual([
 			["builder", "claude-opus-5-5", 4],
-			["checker", "claude-sonnet-5-5", 3],
+			["checker", "claude-sonnet-5-5", 4],
 			["checkerWorker", "claude-haiku-5-5", 2],
 		]);
 	}, 120_000);
@@ -912,6 +952,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 				finish(100, 10, true),
 			],
 			[...text("l2", "Done: solution.py prints 42."), finish(100, 10)],
+			ran("k0"),
 			[...text("k1", verdict(true)), finish(100, 10)],
 		]);
 		const sidekick = scriptedModel([
@@ -938,7 +979,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 			),
 		}));
 		expect(result.failure).toBeNull();
-		expect([lead.calls(), sidekick.calls()]).toEqual([3, 3]);
+		expect([lead.calls(), sidekick.calls()]).toEqual([4, 3]);
 		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
 			"print(42)\n",
 		);
@@ -958,13 +999,14 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
 		const { model, calls } = scriptedModel([
 			[...text("b1", "Wrote the result to /app/out.txt."), finish(100, 10)],
+			ran("k0"),
 			[...text("k1", verdict(true)), finish(100, 10)],
 		]);
 		const result = await trial(f, "rh-nochange", async (wrap) => ({
 			model: wrap(model),
 		}));
 		expect(result.failure).toBeNull();
-		expect(calls()).toBe(2);
+		expect(calls()).toBe(3);
 		const t = await trace(f.logs);
 		expect(t.review.checks).toHaveLength(1);
 		expect(t.review.state.rounds[0].changedFiles).toBe(0);
@@ -981,6 +1023,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 				),
 				finish(100, 10),
 			],
+			ran("k0"),
 			[...text("k1", verdict(true)), finish(100, 10)],
 			[
 				call("b2", "write", { path: "solution.py", content: "print(42)\n" }),
@@ -990,13 +1033,14 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 				...text("b3", "Done: prints 42 (assumed 42 per the request)."),
 				finish(100, 10),
 			],
+			ran("k1b"),
 			[...text("k2", verdict(true)), finish(100, 10)],
 		]);
 		const result = await trial(f, "rh-question", async (wrap) => ({
 			model: wrap(model),
 		}));
 		expect(result.failure).toBeNull();
-		expect(calls()).toBe(5);
+		expect(calls()).toBe(7);
 		expect(result.reviewRounds).toBe(1);
 		const [notice] = await notices(f.logs);
 		expect(notice.message).toContain("Please confirm whether");
@@ -1017,6 +1061,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 				finish(100, 10, true),
 			],
 			[...text("b2", "Done."), finish(100, 10)],
+			ran("k0"),
 			[...text("k1", verdict(true)), finish(100, 10)],
 		]);
 		const original = builder.model.doStream.bind(builder.model);
@@ -1032,7 +1077,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 			{ deadlineAt, now },
 		);
 		expect(result.failure).toBeNull();
-		expect(builder.calls()).toBe(3);
+		expect(builder.calls()).toBe(4);
 		const t = await trace(f.logs);
 		expect(t.review.checks).toHaveLength(1);
 		expect(t.review.state.outcome).toBe("pass");
@@ -1052,13 +1097,14 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 				...text("k1", "I ran out of time before writing a verdict."),
 				finish(100, 10),
 			],
+			ran("k1b"),
 			[...text("k2", verdict(true)), finish(100, 10)],
 		]);
 		const result = await trial(f, "rh-retry", async (wrap) => ({
 			model: wrap(model),
 		}));
 		expect(result.failure).toBeNull();
-		expect(calls()).toBe(4);
+		expect(calls()).toBe(5);
 		expect(result.reviewRounds).toBe(0);
 		const t = await trace(f.logs);
 		expect(t.review.checks).toHaveLength(2);

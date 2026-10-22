@@ -103,19 +103,15 @@ describe("independentReviewBrief", () => {
 		);
 		// The verdict rules.
 		expect(brief).toContain(
-			"pass when every stated requirement is met with evidence and your non-probe tests and the existing checks pass",
+			"pass when a command you ran shows each stated requirement met and your non-probe tests and the existing checks pass",
 		);
 		expect(brief).toContain(
-			"fail only when the deliverable breaks something the request or its files state",
-		);
-		expect(brief).toContain(
-			"Your own re-derivation of an answer is not evidence by itself",
+			"fail only when a command you ran shows the deliverable breaking something the request or its files state",
 		);
 		expect(brief).toContain("a failed probe is a note, not a failure");
 		expect(brief).toContain(
 			"a pass without new tests of your own counts as unsure",
 		);
-		expect(brief).toContain("shown by a failing test or command");
 		expect(brief).toContain(
 			"unsure only when you genuinely could not run what matters; say why in notes",
 		);
@@ -132,20 +128,20 @@ describe("independentReviewBrief", () => {
 			"A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it.",
 		);
 		expect(brief).toContain(
-			"A credible alternative reading of a decision rule or spec that changes the output is a failure (both readings, the output each gives), not an assumption to note before passing.",
+			"Where a result hinges on one, run the deliverable or a script under the alternative reading. A credible alternative reading that the run shows changes the output is a failure (both readings, the output each gives)",
 		);
 	});
 
 	it("has the checker re-derive key outputs before reading the deliverable's rationale, and fail a departure from the convention", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(
-			"First derive each key output yourself from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved), before reading any rationale or assumptions the deliverable states, and diff your result against the deliverable. Only then read its reasoning: a mismatch it does not refute from the source text is a failure.",
+			"Before reading any rationale the deliverable states, write and run a script under /tmp/check/tests that derives each key output from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved) and diffs it against the deliverable's. A mismatch that script shows, and the deliverable's reasoning does not refute from the source text, is a failure.",
 		);
 		expect(brief).toContain(
 			'An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy".',
 		);
 		expect(brief).toContain(
-			"When one of the two readings is the convention of the library, ecosystem or standard involved and the deliverable does not follow it, fail and say to switch to the convention; having no oracle or test to settle it is not grounds to pass.",
+			"and so is a departure from the convention of the library, ecosystem or standard involved (say to switch to it); having no oracle is not grounds to pass.",
 		);
 		// The request and the deliverable come before any claim of the builder's.
 		const rigor = independentReviewBrief({

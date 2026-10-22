@@ -20,6 +20,8 @@ export type CheckerTest = {
 	readonly ranBy?: "worker" | "judge";
 	/** A robustness probe beyond what the request states: its failure is a note, never a finding. */
 	readonly probe?: true;
+	/** The review loop found its command among no commands the checker ran (checker-evidence.ts). */
+	readonly unrun?: true;
 };
 
 /** The checker's structured answer, normalized. */

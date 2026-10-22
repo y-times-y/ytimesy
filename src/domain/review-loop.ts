@@ -1,6 +1,6 @@
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
-import type { ReviewVerdict } from "./checker-brief";
+import { type ReviewVerdict, requirementText } from "./checker-brief";
 import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 
 /**
@@ -128,11 +128,7 @@ export function reviewFindings(
 	);
 	const unmet = verdict.requirements
 		.filter((entry) => entry.met === false)
-		.map((entry) =>
-			entry.evidence
-				? `${entry.requirement}: ${entry.evidence}`
-				: entry.requirement,
-		)
+		.map(requirementText)
 		.filter(
 			(text) =>
 				!failures.some(
@@ -215,7 +211,7 @@ export const hasConcreteFindings = (findings: readonly ReviewFinding[]) =>
 /** The checker's own tests that failed, with the command and output to reproduce each. */
 export function failingTests(verdict: ReviewVerdict | null): CheckerTest[] {
 	return (verdict?.tests ?? [])
-		.filter((test) => !test.passed)
+		.filter((test) => !test.passed && !test.unrun)
 		.slice(0, REVIEW_LOOP_LIMITS.maxFailingTests);
 }
 
@@ -347,7 +343,8 @@ export function checkerMs(input: {
 }
 
 /**
- * After a check that gave no verdict (it timed out or wrote no verdict JSON):
+ * After a check that gave no verdict (it timed out, wrote no verdict JSON, or
+ * said pass with nothing it ran to show it, checker-evidence.ts):
  * check again, once per turn, when a whole checker budget and a fix still
  * fit. A retry does not count as one of the turn's rounds.
  */
@@ -359,7 +356,10 @@ export function retryCheck(input: {
 	readonly pair?: boolean;
 	readonly unattended?: boolean;
 }) {
-	const noVerdict = !input.verdict || input.verdict.parsed === false;
+	const noVerdict =
+		!input.verdict ||
+		input.verdict.parsed === false ||
+		input.verdict.ungrounded === true;
 	return (
 		noVerdict &&
 		!input.rounds.some((round) => round.decision === "retry") &&
@@ -524,8 +524,9 @@ export function expectedCheckMs(state: ReviewLoopState) {
 /** One line per round, for the chat and the eval record. */
 export function reviewLoopSummary(state: ReviewLoopState) {
 	const lines = state.rounds.map((round) => {
+		const setAside = round.verdict?.downgraded?.length ?? 0;
 		const verdict = round.verdict
-			? `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}`
+			? `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}${setAside ? ` · ${setAside} not run, set aside` : ""}${round.verdict.ungrounded ? " · nothing run to show it" : ""}`
 			: round.timedOut
 				? "no verdict in time"
 				: "checking";

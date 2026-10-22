@@ -12,6 +12,10 @@ import {
 	parseReviewVerdict,
 	type ReviewVerdict,
 } from "#/domain/checker-brief";
+import {
+	executedCommands,
+	groundReviewVerdict,
+} from "#/domain/checker-evidence";
 import { pairReviewVerdict, ranCommandsText } from "#/domain/checker-pair";
 import { SessionItemId } from "#/domain/ids";
 import { type ModelBilling, usageCostUsd } from "#/domain/model-pricing";
@@ -556,6 +560,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					...(session.model ? { model: session.model } : {}),
 					usage: sessionTokenUsage(items),
 					ran: ranCommandsText(items),
+					executed: executedCommands(items),
 				};
 			}),
 		);
@@ -607,9 +612,10 @@ export function createReviewLoop(input: ReviewLoopInput) {
 	): Promise<AttemptLoopOutcome> {
 		const round = state.rounds.at(-1) as ReviewRound;
 		const now = deps.now();
-		const judgeItems = sessionItemsFromUnknown(
-			await deps.childItems(round.checker.sessionId).catch(() => []),
-		);
+		const judgeLog = await deps
+			.childItems(round.checker.sessionId)
+			.catch(() => null);
+		const judgeItems = sessionItemsFromUnknown(judgeLog ?? []);
 		const usage = sessionTokenUsage(judgeItems);
 		const workers = round.checker.pair
 			? await pairWorkers(round.checker.sessionId)
@@ -618,13 +624,25 @@ export function createReviewLoop(input: ReviewLoopInput) {
 			? null
 			: parseReviewVerdict(taken.report);
 		// checkerMode=pair: the judge's verdict, its tests marked with who ran them.
-		const verdict =
+		const paired =
 			parsed && workers
 				? pairReviewVerdict(parsed, {
 						worker: workers.map((worker) => worker.ran).join("\n"),
 						judge: ranCommandsText(judgeItems),
 					})
 				: parsed;
+		// Findings no command it (or its workers) ran shows are notes; an unshown pass is no verdict.
+		const verdict = paired
+			? groundReviewVerdict(
+					paired,
+					judgeLog === null
+						? null
+						: [
+								...executedCommands(judgeItems),
+								...(workers ?? []).flatMap((worker) => worker.executed),
+							],
+				)
+			: null;
 		const findings = verdict
 			? reviewFindings(verdict, round.admitted, {
 					unattended: input.unattended,
@@ -674,7 +692,9 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				usage,
 				...(workers
 					? {
-							workers: workers.map(({ ran: _ran, ...worker }) => worker),
+							workers: workers.map(
+								({ ran: _ran, executed: _executed, ...worker }) => worker,
+							),
 						}
 					: {}),
 			},
