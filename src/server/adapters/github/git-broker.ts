@@ -121,6 +121,8 @@ export async function receiveBrokeredRepository(
 		destination: string;
 		workingBranch?: string;
 		mode: "clone" | "update" | "switch";
+		/** See fetchedBranchCommand. */
+		pinnedRevision?: string;
 	},
 ): Promise<string> {
 	if (gitProxyConfiguration()) return receiveProxiedRepository(host, input);
@@ -193,6 +195,7 @@ ${fetchedBranchCommand({
 	workingBranch: input.workingBranch || input.branch,
 	mode: input.mode,
 	originUrl: url,
+	pinnedRevision: input.pinnedRevision,
 })}
 echo updated`,
 			);

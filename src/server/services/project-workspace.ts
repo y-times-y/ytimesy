@@ -20,8 +20,12 @@ import {
 	preparedCheckoutPathFromReuse,
 	reusePreparedCheckoutCommand,
 } from "#/server/adapters/freestyle/clone-project";
-import { authorizedRepository } from "#/server/adapters/github";
+import {
+	authorizedRepository,
+	repositoryBranchSha,
+} from "#/server/adapters/github";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
+import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -80,9 +84,11 @@ function ensureSingleProjectCheckout(
 				),
 			);
 			const switching = branch.stdout.trim() !== checkout.workingBranch;
+			// A pinned revision is always fetched: the checkout must land on it.
 			if (
-				checkout.retainExistingBranch ||
-				(checkout.preserveCurrentBranch && !switching)
+				!checkout.pinnedRevision &&
+				(checkout.retainExistingBranch ||
+					(checkout.preserveCurrentBranch && !switching))
 			)
 				return reusedPath;
 			yield* Effect.tryPromise(() =>
@@ -101,7 +107,7 @@ function ensureSingleProjectCheckout(
 				),
 			).pipe(
 				Effect.catchAll((error) =>
-					switching
+					switching || checkout.pinnedRevision
 						? Effect.fail(
 								error instanceof Error ? error : new Error(String(error)),
 							)
@@ -183,6 +189,29 @@ export function loadTenantProjectCheckout(scope: {
 				Boolean(session?.workingBranch) || legacyConversation,
 		};
 	}).pipe(Effect.mapError((error) => new Error(failureMessage(error))));
+}
+
+/**
+ * The commit a chat's new branch starts from, read from GitHub before its VM
+ * is ready: the head of the base branch the checkout fetches. Pinned on the
+ * checkout (pinnedRevision), it is also the chat's baseline.
+ */
+export async function checkoutBaseRevision(
+	checkout: Pick<
+		ProjectCheckout,
+		"installationId" | "name" | "fullName" | "branch"
+	>,
+): Promise<string | null> {
+	const token = await githubInstallationAccessToken(checkout.installationId, {
+		repositoryNames: [checkout.name],
+		contents: "read",
+	});
+	const sha = await repositoryBranchSha(
+		token,
+		checkout.fullName,
+		checkout.branch,
+	);
+	return sha && /^[a-f0-9]{40,64}$/.test(sha) ? sha : null;
 }
 
 async function checkoutForProject(

@@ -83,3 +83,23 @@ export async function saveSessionDerivedValue(
 		[sessionId, userId, key, jsonbText({ id: key, ok: true, result: value })],
 	);
 }
+
+/**
+ * The same derived value as journaled by another root chat of this user's
+ * project (the latest one): a value derived from content-addressed input is
+ * the same for every chat that names the same input in its key.
+ */
+export async function readProjectDerivedValue(
+	userId: string,
+	projectId: string,
+	key: string,
+): Promise<unknown> {
+	const result = await database().query<{ value: unknown }>(
+		`select r.response->'result' as value from agent_task_command_receipt r join agent_session s on s.id=r.parent_session_id
+		 where s.user_id=$1 and s.project_id=$2::uuid and s.parent_session_id is null
+		 and r.request_id=$3 and r.status='done' and r.response->>'ok'='true'
+		 order by r.updated_at desc limit 1`,
+		[userId, projectId, key],
+	);
+	return result.rows[0]?.value ?? null;
+}

@@ -10,6 +10,11 @@ export type ProjectCheckout = {
 	readonly additionalRepositories?: ProjectCheckout[];
 	readonly preserveCurrentBranch?: boolean;
 	readonly retainExistingBranch?: boolean;
+	/**
+	 * The commit the checkout and its baseline must land on, resolved before
+	 * the VM was ready (a new chat's early first request decided on it).
+	 */
+	readonly pinnedRevision?: string;
 };
 
 export function projectCheckoutPath(home: string, repoName: string): string {
