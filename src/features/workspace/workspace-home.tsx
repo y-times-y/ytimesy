@@ -5,6 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
+	backgroundPollMs,
+	backgroundReadChatIds,
+	backgroundRunsFromReadModel,
+} from "#/domain/agent-panel";
+import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
@@ -93,6 +98,7 @@ import {
 	listProjectAgentTasks,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
+import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
 	getCodexSession,
@@ -461,12 +467,42 @@ export function WorkspaceHome({
 				? 2_500
 				: false,
 	});
+	// Background commands of the chat and its helpers, for the agents list.
+	const backgroundChatIds = backgroundReadChatIds(
+		activeSessionId,
+		agentTasks.data ?? [],
+	);
+	const agentsWorking = shouldPollSubagents(
+		session.turnStatus,
+		agentTasks.data ?? [],
+	);
+	const backgroundCommands = useQuery({
+		queryKey: ["background-commands", activeSessionId, backgroundChatIds],
+		queryFn: () =>
+			readBackgroundCommandsFn({ data: { sessionIds: backgroundChatIds } }),
+		enabled: Boolean(activeProjectId && backgroundChatIds.length),
+		// A new helper changes the key; keep this chat's rows until it reads.
+		placeholderData: (previous, previousQuery) =>
+			previousQuery?.queryKey[1] === activeSessionId ? previous : undefined,
+		refetchInterval: (query) =>
+			backgroundPollMs({
+				agentsWorking,
+				running: Object.values(query.state.data ?? {}).reduce(
+					(count, commands) => count + commands.length,
+					0,
+				),
+			}),
+	});
+	const backgroundRuns = backgroundRunsFromReadModel(
+		backgroundCommands.data ?? {},
+	);
 	useEffect(() => {
 		if (
 			activeSessionId &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
+			void backgroundCommands.refetch();
 			void refetchPullRequests();
 			void chats.refetch();
 		}
@@ -474,6 +510,7 @@ export function WorkspaceHome({
 		activeSessionId,
 		session.turnStatus,
 		agentTasks.refetch,
+		backgroundCommands.refetch,
 		refetchPullRequests,
 		chats.refetch,
 	]);
@@ -1646,6 +1683,7 @@ export function WorkspaceHome({
 									await agentTasks.refetch();
 								}}
 								childTasks={agentTasks.data ?? []}
+								backgroundRuns={backgroundRuns}
 								memoryActions={memoryActions}
 								key={session.agentSessionId ?? "new"}
 								session={session}

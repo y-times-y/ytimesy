@@ -56,4 +56,16 @@ it("marks a command left running as a background start", () => {
 		),
 	).toMatchObject({ background: true });
 	expect(call({ command: "ls" }).background).toBeUndefined();
+	// The lean command tool's background start, and a recorded command.
+	expect(call({ command: "pnpm dev", background: true }).background).toBe(true);
+	expect(
+		toolActivity({
+			kind: "dynamicToolCall",
+			id: SessionItemId("d"),
+			tool: "bash",
+			input: JSON.stringify({ command: "pnpm dev" }),
+			status: "completed",
+			background: { id: "b1", label: "pnpm dev", startedAt: 0 },
+		}).background,
+	).toBe(true);
 });

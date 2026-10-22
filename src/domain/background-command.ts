@@ -1,3 +1,4 @@
+import { KIND_TAGS } from "./helper-names";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 
@@ -8,10 +9,6 @@ import type { SessionItem } from "./session-item";
  * the safety cap (lean-engine.ts) ends them; the agent that started one gets
  * a notice when it exits (background-command-notices.ts).
  */
-
-// TODO: unify with the agents-list display-name module on merge.
-/** The kind tag a background command shows with. */
-export const BACKGROUND_COMMAND_KIND_TAG = "Background";
 
 /** What a background command's card records (DynamicToolCallItem.background). */
 export type BackgroundCommandRecord = {
@@ -171,7 +168,7 @@ export function backgroundCommandNoticeLine(exit: {
 			: exit.exitCode === 0
 				? "finished"
 				: `failed (exit ${exit.exitCode})`;
-	return `${BACKGROUND_COMMAND_KIND_TAG}: ${exit.label} ${how} after ${formatCommandDuration(exit.endedAt - exit.startedAt)}`;
+	return `${KIND_TAGS.background}: ${exit.label} ${how} after ${formatCommandDuration(exit.endedAt - exit.startedAt)}`;
 }
 
 /**

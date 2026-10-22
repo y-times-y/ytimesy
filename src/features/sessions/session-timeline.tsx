@@ -18,7 +18,6 @@ import {
 	steeringSender,
 } from "#/domain/agent-panel";
 import {
-	BACKGROUND_COMMAND_KIND_TAG,
 	type BackgroundCommandRecord,
 	backgroundCommandStateText,
 	backgroundCommandStatus,
@@ -943,12 +942,10 @@ function SessionItemView({
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
-					data-background={
-						item.background || activity.background ? "true" : undefined
-					}
+					data-background={activity.background ? "true" : undefined}
 				>
 					<summary>
-						{item.background || activity.background ? (
+						{activity.background ? (
 							<AgentIcon
 								icon={KIND_ICONS.background}
 								color={agentColor("background")}
@@ -981,10 +978,8 @@ function SessionItemView({
 								<span className="session-tool-note">{activity.note}</span>
 							) : null}
 						</span>
-						{item.background ? (
+						{activity.background ? (
 							<BackgroundCommandTag record={item.background} />
-						) : activity.background ? (
-							<span className="agent-row-tag">{KIND_TAGS.background}</span>
 						) : null}
 						<ChevronRight
 							size={14}
@@ -1141,17 +1136,27 @@ function SessionItemView({
 	}
 }
 
-/** A background command's tag and live state: "Background · running 3m", "exited 0", "failed (exit 2)". */
-function BackgroundCommandTag({ record }: { record: BackgroundCommandRecord }) {
+/**
+ * A background command's kind tag (the agents list's, helper-names.ts) and,
+ * when the command is recorded, its live state: "running 3m", "exited 0",
+ * "failed (exit 2)".
+ */
+function BackgroundCommandTag({
+	record,
+}: {
+	record: BackgroundCommandRecord | undefined;
+}) {
 	return (
 		<span
 			className="session-background-tag"
-			data-state={backgroundCommandStatus(record)}
+			data-state={record ? backgroundCommandStatus(record) : undefined}
 		>
-			{BACKGROUND_COMMAND_KIND_TAG}
-			<span className="session-background-state">
-				{backgroundCommandStateText(record, Date.now())}
-			</span>
+			<span className="agent-row-tag">{KIND_TAGS.background}</span>
+			{record ? (
+				<span className="session-background-state">
+					{backgroundCommandStateText(record, Date.now())}
+				</span>
+			) : null}
 		</span>
 	);
 }

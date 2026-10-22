@@ -230,7 +230,11 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			const command = text("command") ?? text("cmd");
 			if (!command) return { verb: "Ran command" };
 			const display = displayCommand(command);
+			// One rule for the timeline: a recorded background command
+			// (background-command.ts), or another harness's background start.
 			const background =
+				item.background !== undefined ||
+				input.background === true ||
 				input.run_in_background === true ||
 				input.is_background === true ||
 				output?.status === "running" ||
