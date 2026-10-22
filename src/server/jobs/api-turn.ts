@@ -243,6 +243,7 @@ import {
 	type EarlyRequestReason,
 	type TurnTiming,
 	turnTiming,
+	withTurnTimingMarks,
 } from "../services/turn-timing";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -331,13 +332,13 @@ export async function runApiTurn(
 	try {
 		// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
 		for (let continued = false; ; continued = true) {
-			const outcome = await runApiTurnAttempt(
-				machines,
-				turn,
-				step,
-				continued,
-				timing,
-			);
+			const attempt = () =>
+				runApiTurnAttempt(machines, turn, step, continued, timing);
+			// Model and egress code below marks its own phases (request start,
+			// response headers, first body byte, egress path).
+			const outcome = await (timing
+				? withTurnTimingMarks((phase) => timing.mark(phase), attempt)
+				: attempt());
 			if (typeof outcome === "string") {
 				if (outcome !== "continue") forgetTurnMemo(turn.id);
 				ended = outcome;
