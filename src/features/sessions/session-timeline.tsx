@@ -10,6 +10,7 @@ import {
 } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
+	MAIN_MENTION_ID,
 	type MentionAgent,
 	mentionAgents,
 	mentionSegments,
@@ -264,7 +265,15 @@ export function SessionTimeline({
 		<MemoryMarkerProvider actions={memoryActions}>
 			<SenderContext.Provider value={senderName ?? null}>
 				<MentionContext.Provider
-					value={helperLines ? mentionAgents(helperLines.identities) : null}
+					// A view's own agent is never a mention: it is the one written to.
+					value={
+						helperLines
+							? mentionAgents(
+									helperLines.identities,
+									taskParentId ?? MAIN_MENTION_ID,
+								)
+							: null
+					}
 				>
 					<ol
 						ref={listRef}
@@ -404,7 +413,9 @@ export function SessionTimeline({
 										{message.from}
 										<span className="session-queued-badge">Queued</span>
 									</span>
-									<p>{message.text}</p>
+									<p>
+										<MentionText text={message.text} />
+									</p>
 								</div>
 							</li>
 						))}
@@ -747,7 +758,9 @@ function SessionItemView({
 								</div>
 							</details>
 						) : (
-							<p>{message.text}</p>
+							<p>
+								<MentionText text={message.text} />
+							</p>
 						)}
 					</div>
 				);

@@ -25,6 +25,8 @@ export type PeerMessage = {
 	readonly message: string;
 	/** The user wrote it from the chat's agents list; senderId is the recipient's parent. */
 	readonly fromUser?: true;
+	/** Model-only text after the message: who its @mentions name. */
+	readonly context?: string;
 };
 
 /** Only a started direct subagent of the sender, same owner and project. */
@@ -87,6 +89,7 @@ export async function deliverAgentPeerMessage(
 			: { kind: "parent", title: sender.title, id: sender.id },
 		message: message.message,
 		messageId,
+		...(message.context ? { context: message.context } : {}),
 	});
 	if (await serverPeerMessageAccepted(recipient.id, messageId)) return;
 	if (

@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
 	activeMention,
 	insertMention,
+	MAIN_MENTION_ID,
 	mentionAgents,
-	mentionedHelperNames,
+	mentionedAgentNames,
 	mentionMatches,
 	mentionNote,
 	mentionSegments,
 	withoutMentionNote,
 } from "./agent-mentions";
+import { parseSteering, steeringTexts } from "./agent-steering";
 import { isUserRequestMessage } from "./api-conversation";
 import { helperIdentitiesOf } from "./helper-names";
 import { SessionItemId } from "./ids";
@@ -27,9 +29,21 @@ const identities = helperIdentitiesOf([
 		title: "Find the export API",
 	},
 ]);
-const agents = mentionAgents(identities);
+// A helper's composer: Main and the other helpers.
+const agents = mentionAgents(identities, "none");
 
 describe("@mentions in the composer", () => {
+	it("never lists the agent whose composer it is", () => {
+		expect(
+			mentionAgents(identities, MAIN_MENTION_ID).map((agent) => agent.name),
+		).toEqual(["build-1", "research-1"]);
+		expect(mentionAgents(new Map(), MAIN_MENTION_ID)).toEqual([]);
+		expect(mentionAgents(identities, "a").map((agent) => agent.name)).toEqual([
+			"Main",
+			"research-1",
+		]);
+	});
+
 	it("lists Main first, then the helpers by short name with their task", () => {
 		expect(agents.map((agent) => [agent.name, agent.task])).toEqual([
 			["Main", undefined],
@@ -78,12 +92,12 @@ describe("@mentions in the composer", () => {
 		]);
 	});
 
-	it("reads only helper names from a message, once each", () => {
+	it("reads agent names from a message, once each", () => {
 		expect(
-			mentionedHelperNames(
-				"@build-1 and @Main, then @review-2 and @build-1; me@build-3",
+			mentionedAgentNames(
+				"@build-1 and @Main, then @review-2 and @build-1; me@build-3 @bob",
 			),
-		).toEqual(["build-1", "review-2"]);
+		).toEqual(["build-1", "main", "review-2"]);
 	});
 });
 
@@ -91,10 +105,7 @@ describe("the lead's mention note", () => {
 	const note = mentionNote([
 		{
 			name: "build-1",
-			id: "1",
-			role: "writer",
-			state: "working",
-			task: "Fix pricing rounding",
+			is: 'agent 1 (writer, working, "Fix pricing rounding")',
 		},
 	]);
 
@@ -114,5 +125,17 @@ describe("the lead's mention note", () => {
 				{ role: "user", content: `${text}\n\n${note}` },
 			),
 		).toBe(true);
+	});
+
+	it("rides on a helper's steering for the model only", () => {
+		const { text, runtimeText } = steeringTexts({
+			sender: { kind: "user" },
+			message: "ask @Main",
+			messageId: "m1",
+			context: note ?? "",
+		});
+		expect(text).not.toContain("@mentions");
+		expect(runtimeText).toContain(note);
+		expect(parseSteering(runtimeText)?.text).toBe("ask @Main");
 	});
 });

@@ -36,10 +36,39 @@ it("shows a sent message's mentions of the chat's agents as chips", () => {
 	expect(html).toContain("@build-7");
 });
 
+it("never chips the agent whose view it is", () => {
+	const items = [
+		{
+			kind: "userMessage" as const,
+			id: SessionItemId("u1"),
+			text: "@Main and @build-1",
+		},
+	];
+	const main = renderToStaticMarkup(
+		<SessionTimeline
+			items={items}
+			turnStatus="completed"
+			helperLines={{ identities }}
+		/>,
+	);
+	expect(main).toContain("@Main");
+	expect(main).toContain("<span>build-1</span>");
+	const helper = renderToStaticMarkup(
+		<SessionTimeline
+			items={items}
+			turnStatus="completed"
+			helperLines={{ identities }}
+			taskParentId="w"
+		/>,
+	);
+	expect(helper).toContain("<span>Main</span>");
+	expect(helper).toContain("@build-1");
+});
+
 it("lists Main and the helpers with their tasks in the popover", () => {
 	const html = renderToStaticMarkup(
 		<MentionPopover
-			agents={mentionAgents(identities)}
+			agents={mentionAgents(identities, "none")}
 			activeIndex={1}
 			onHover={() => {}}
 			onSelect={() => {}}
