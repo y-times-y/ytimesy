@@ -1,4 +1,9 @@
 import { workspacePublicationBranch } from "./publication";
+import {
+	type PullRequestChecksSummary,
+	type SidebarPullRequest,
+	sidebarPullRequest,
+} from "./sidebar-chat-status";
 
 export type SidebarChatPrNeed =
 	| "ready"
@@ -19,12 +24,15 @@ export type ListedPullRequest = {
 	readonly merged: boolean;
 	readonly mergeable: boolean | null;
 	readonly mergeableState: string | null;
+	/** The head's check results; listed only for open and draft pull requests. */
+	readonly checks?: PullRequestChecksSummary | null;
 };
 
 type SidebarChatPrMark = {
 	readonly need: SidebarChatPrNeed;
 	readonly url: string;
 	readonly label: string;
+	readonly pr: SidebarPullRequest;
 };
 
 export function sidebarChatPrNeedFromPullRequest(pr: {
@@ -82,6 +90,7 @@ export function sidebarChatPrMarkForWorkspace(input: {
 		need,
 		url: pullRequest.url,
 		label: sidebarChatPrNeedLabel(need),
+		pr: sidebarPullRequest(pullRequest),
 	};
 }
 

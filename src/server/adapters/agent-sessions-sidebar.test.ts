@@ -1,0 +1,60 @@
+import { randomUUID } from "node:crypto";
+import { PGlite } from "@electric-sql/pglite";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listSidebarAgentSessions } from "./agent-sessions";
+
+const holder = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock("./database", () => ({ database: () => holder }));
+
+let db: PGlite;
+const project = randomUUID();
+beforeEach(async () => {
+	db = new PGlite();
+	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,created_at timestamptz default now(),updated_at timestamptz default now());
+	 create table api_turn(id uuid primary key,session_id uuid,state text,created_at timestamptz default now());`);
+	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
+		const result = await db.query(sql, values);
+		return { ...result, rowCount: result.affectedRows || result.rows.length };
+	});
+});
+afterEach(() => db.close());
+
+async function chat(title: string, parent: string | null = null) {
+	const id = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,project_id,harness,title,parent_session_id) values($1,'alice',$2,'codex',$3,$4)",
+		[id, project, title, parent],
+	);
+	return id;
+}
+
+async function turn(sessionId: string, state: string, createdAt: string) {
+	await db.query(
+		"insert into api_turn(id,session_id,state,created_at) values($1,$2,$3,$4)",
+		[randomUUID(), sessionId, state, createdAt],
+	);
+}
+
+it("lists when Main's or a helper's active turn started, and nothing for finished turns", async () => {
+	const main = await chat("Main runs");
+	await turn(main, "running", "2026-10-22T10:00:00Z");
+	const parent = await chat("Helper runs");
+	const helper = await chat("helper", parent);
+	await turn(parent, "completed", "2026-10-22T09:00:00Z");
+	await turn(helper, "queued", "2026-10-22T10:05:00Z");
+	const idle = await chat("Idle");
+	await turn(idle, "completed", "2026-10-22T08:00:00Z");
+
+	const listed = await listSidebarAgentSessions("alice", project);
+	const since = Object.fromEntries(
+		listed.map((row) => [row.title, row.workingSince]),
+	);
+	expect(listed.map((row) => row.title).sort()).toEqual([
+		"Helper runs",
+		"Idle",
+		"Main runs",
+	]);
+	expect(since["Main runs"]).toBe("2026-10-22T10:00:00.000Z");
+	expect(since["Helper runs"]).toBe("2026-10-22T10:05:00.000Z");
+	expect(since.Idle).toBeNull();
+});

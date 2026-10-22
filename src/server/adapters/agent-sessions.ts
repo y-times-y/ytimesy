@@ -244,6 +244,36 @@ export async function listAgentSessions(userId: string, projectId: string) {
 }
 
 /**
+ * The project's chats for the sidebar, each with when its oldest active turn
+ * (Main's or a helper's) started: null when none is queued or running.
+ */
+export async function listSidebarAgentSessions(
+	userId: string,
+	projectId: string,
+) {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS},
+		  (select min(t.created_at) from api_turn t
+		   where t.state in ('queued','running')
+		    and t.session_id in (select s.id union all
+		     select c.id from agent_session c where c.parent_session_id=s.id)) as working_since
+		 from agent_session s
+		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+		 order by s.updated_at desc`,
+		[userId, projectId],
+	);
+	return result.rows.map(
+		(row: AgentSessionRow & { working_since: Date | string | null }) => ({
+			...toSession(row),
+			workingSince:
+				row.working_since instanceof Date
+					? row.working_since.toISOString()
+					: row.working_since,
+		}),
+	);
+}
+
+/**
  * Session metadata without its chat history, for callers that already hold the
  * items (the turn executor has the turn's copy); avoids reading the history back.
  */

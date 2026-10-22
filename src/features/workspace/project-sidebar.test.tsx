@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Project } from "#/domain/projects";
-import { SIDEBAR_SORT_KEY } from "#/domain/sidebar-chats";
+import {
+	CHAT_SEEN_SINCE_STORAGE_KEY,
+	SIDEBAR_SORT_KEY,
+	type SidebarChat,
+} from "#/domain/sidebar-chats";
 import { ProjectSidebar } from "./project-sidebar";
 
 const project = (id: string, name: string): Project => ({
@@ -149,5 +153,119 @@ describe("left sidebar", () => {
 		expect(html).toContain('data-activity="needs-you"');
 		expect(html).toContain('data-activity="running"');
 		expect(html).toContain("Show 2 more");
+	});
+
+	it("shows one status per row on the right, in words for screen readers", () => {
+		(globalThis as { window?: unknown }).window = {
+			localStorage: {
+				getItem: (key: string) =>
+					key === CHAT_SEEN_SINCE_STORAGE_KEY ? "1" : null,
+				setItem: () => undefined,
+			},
+		};
+		const pr = (
+			number: number,
+			state: "open" | "draft" | "merged" | "closed",
+			checks: "passed" | "failed" | null = null,
+		) => ({
+			number,
+			url: `https://github.com/acme/alpha/pull/${number}`,
+			state,
+			checks,
+			failedChecks: checks === "failed" ? 1 : 0,
+		});
+		const at = "2026-10-20T00:00:00Z";
+		const chats: SidebarChat[] = [
+			{
+				id: "q",
+				title: "Asks",
+				updatedAt: at,
+				turnStatus: "completed",
+				waitingOn: "question",
+			},
+			{
+				id: "w",
+				title: "Busy",
+				updatedAt: at,
+				turnStatus: "running",
+				pr: pr(1, "open"),
+			},
+			{
+				id: "h",
+				title: "Helper busy",
+				updatedAt: at,
+				turnStatus: "completed",
+				workingSince: at,
+			},
+			{
+				id: "f",
+				title: "Broke",
+				updatedAt: at,
+				turnStatus: "failed",
+				waitingOn: "failed",
+			},
+			{
+				id: "p",
+				title: "Passing",
+				updatedAt: at,
+				pr: pr(42, "open", "passed"),
+			},
+			{
+				id: "x",
+				title: "Failing",
+				updatedAt: at,
+				pr: pr(41, "open", "failed"),
+			},
+			{ id: "d", title: "Drafted", updatedAt: at, pr: pr(44, "draft") },
+			{ id: "m", title: "Merged", updatedAt: at, pr: pr(39, "merged") },
+			{ id: "c", title: "Closed", updatedAt: at, pr: pr(40, "closed") },
+			{ id: "u", title: "Unread", updatedAt: at, turnStatus: "completed" },
+			{ id: "o", title: "Old", updatedAt: at },
+		];
+		const html = renderToStaticMarkup(
+			<ProjectSidebar
+				projects={[alpha]}
+				projectsLoading={false}
+				selectedProjectId="alpha"
+				onSelectProject={() => undefined}
+				expanded
+				onToggle={() => undefined}
+				onAddProject={() => undefined}
+				chats={chats}
+				onNewChat={() => undefined}
+			/>,
+		);
+		const row = (title: string) => {
+			const start = html.lastIndexOf("<li", html.indexOf(`>${title}<`));
+			return html.slice(start, html.indexOf("</li>", start));
+		};
+		expect(row("Asks")).toContain('aria-label="Asking you a question"');
+		expect(row("Asks")).toContain("lucide-message-circle-question");
+		// Working beats the PR: no icon, the title shimmers, the time stays.
+		expect(row("Busy")).toContain('data-status="working"');
+		expect(row("Busy")).not.toContain("sidebar-chat-pr");
+		expect(row("Busy")).toContain("sidebar-chat-age");
+		expect(row("Helper busy")).toContain('data-status="working"');
+		expect(row("Broke")).toContain('aria-label="Last turn failed"');
+		expect(row("Broke")).toContain("lucide-triangle-alert");
+		expect(row("Passing")).toContain(
+			'aria-label="PR #42 open · checks passed"',
+		);
+		expect(row("Passing")).toContain('data-checks="passed"');
+		expect(row("Passing")).toContain(">42<");
+		expect(row("Failing")).toContain(
+			'aria-label="PR #41 open · 1 check failed"',
+		);
+		expect(row("Failing")).toContain('data-checks="failed"');
+		expect(row("Drafted")).toContain('aria-label="Draft PR #44"');
+		expect(row("Drafted")).toContain('data-pr="draft"');
+		expect(row("Merged")).toContain('aria-label="PR #39 merged"');
+		expect(row("Merged")).toContain('data-pr="merged"');
+		expect(row("Closed")).toContain('aria-label="PR #40 closed"');
+		expect(row("Closed")).toContain('data-pr="closed"');
+		expect(row("Unread")).toContain('class="sidebar-chat-unread"');
+		expect(row("Unread")).toContain('aria-label="New reply"');
+		expect(row("Old")).toContain('data-status="idle"');
+		expect(row("Old")).toContain("sidebar-chat-age");
 	});
 });
