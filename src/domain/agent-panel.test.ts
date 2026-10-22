@@ -415,9 +415,10 @@ describe("the background commands read model", () => {
 		expect(ids.slice(0, 2)).toEqual(["main", "h24"]);
 	});
 
-	it("polls fast while agents work, slower while only commands run", () => {
+	it("polls while agents work or commands run, not when nothing runs", () => {
 		expect(backgroundPollMs({ agentsWorking: true, running: 0 })).toBe(5_000);
-		expect(backgroundPollMs({ agentsWorking: false, running: 1 })).toBe(15_000);
+		// Between turns the read is what opens the stream for the exit's wake-up turn.
+		expect(backgroundPollMs({ agentsWorking: false, running: 1 })).toBe(5_000);
 		expect(backgroundPollMs({ agentsWorking: false, running: 0 })).toBe(false);
 	});
 });

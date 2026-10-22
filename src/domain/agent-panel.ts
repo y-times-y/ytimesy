@@ -461,17 +461,18 @@ export function backgroundReadChatIds(
 }
 
 /**
- * How often the list rereads background commands: quickly while the chat or
- * its helpers work (a step records a start or an exit), slower while only
- * commands run (an exit reaches the timeline within a minute between
- * turns), and not at all when nothing runs.
+ * How often the list rereads background commands: while the chat or its
+ * helpers work (a step records a start or an exit), and while commands run
+ * between turns. There the read is how the open chat learns a command ended:
+ * the exit is recorded just before it starts Main's wake-up turn, and seeing
+ * it opens the progress stream (WAKE_WATCH_MS), so a quick read lets that
+ * turn stream instead of arriving whole after it ends. Nothing runs: no read.
  */
 export function backgroundPollMs(input: {
 	readonly agentsWorking: boolean;
 	readonly running: number;
 }): number | false {
-	if (input.agentsWorking) return 5_000;
-	return input.running > 0 ? 15_000 : false;
+	return input.agentsWorking || input.running > 0 ? 5_000 : false;
 }
 
 /** Background commands as rows, named by what they run. */
