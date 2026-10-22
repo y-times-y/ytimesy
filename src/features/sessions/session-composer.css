@@ -1797,7 +1797,8 @@ li:has(> .session-message:hover) > .conversation-recovery,
 li:has(.session-message[data-role="user"]:hover) > .conversation-recovery,
 .conversation-recovery:has(.conversation-recovery-trigger:hover),
 .conversation-recovery:has(.conversation-recovery-trigger:focus-visible),
-.conversation-recovery[data-open] {
+.conversation-recovery[data-open],
+.conversation-recovery[data-error] {
 	opacity: 1;
 }
 @media (hover: none) {
@@ -1822,8 +1823,30 @@ li:has(.session-message[data-role="user"]:hover) > .conversation-recovery,
 .conversation-recovery-trigger:disabled {
 	opacity: 0.5;
 }
-.conversation-recovery [role="alert"] {
+.conversation-recovery[data-error] {
+	flex-direction: column;
+	align-items: flex-end;
+}
+.conversation-recovery-error {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	margin: 4px 0 0;
+	color: var(--destructive, var(--muted-foreground));
+}
+.conversation-recovery-dismiss {
+	pointer-events: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border-radius: 4px;
+	color: var(--muted-foreground);
+}
+.conversation-recovery-dismiss:hover {
+	background: var(--muted);
+	color: var(--foreground);
 }
 .recovery-menu {
 	z-index: 100;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type { ConversationPoint } from "../adapters/conversation-recovery";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
@@ -47,7 +48,7 @@ export async function captureConversationCode(
 		25_000,
 	);
 	if (result.exitCode)
-		throw new Error(
+		throw new RecoveryRefused(
 			"Could not create the code recovery point; no restore was attempted.",
 		);
 	return snapshot.parse(JSON.parse(result.stdout));
@@ -91,7 +92,7 @@ print('restored')`;
 		25_000,
 	);
 	if (result.exitCode || !result.stdout.includes("restored"))
-		throw new Error(
+		throw new RecoveryRefused(
 			"Code rewind failed; the pre-restore backup remains available.",
 		);
 }
@@ -129,9 +130,11 @@ print('present')`;
 		25_000,
 	);
 	if (result.stdout.includes("checkpoint-missing"))
-		throw new Error(FORK_CHECKPOINT_GONE);
+		throw new RecoveryRefused(FORK_CHECKPOINT_GONE);
 	if (result.exitCode || !result.stdout.includes("present"))
-		throw new Error("The chat's code checkpoint could not be read; retry.");
+		throw new RecoveryRefused(
+			"The chat's code checkpoint could not be read; retry.",
+		);
 }
 
 /**
@@ -166,7 +169,7 @@ print('forked')`;
 		60_000,
 	);
 	if (result.stdout.includes("checkpoint-missing"))
-		throw new Error(FORK_CHECKPOINT_GONE);
+		throw new RecoveryRefused(FORK_CHECKPOINT_GONE);
 	if (result.exitCode || !result.stdout.includes("forked"))
 		throw new Error(
 			"The fork could not start from this message's code; the source chat is unchanged.",
