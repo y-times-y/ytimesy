@@ -39,12 +39,43 @@ def fingerprint_and_prefix(path, prefix_limit):
             if len(prefix) < prefix_limit:
                 prefix.extend(chunk[:prefix_limit - len(prefix)])
     return digest.hexdigest(), bytes(prefix)
+# A read-only agent runs as another Linux user: files created under umask 077
+# (setup commands, transfers) are unreadable to it. Such a file is skipped and
+# named, never a reason to abandon the whole scan.
+unreadable = []
+def note_unreadable(path):
+    try:
+        name = pathlib.Path(os.path.relpath(path, root)).as_posix()
+    except ValueError:
+        return
+    if name not in unreadable and len(unreadable) < 50:
+        unreadable.append(name)
+def is_link(path):
+    try:
+        return path.is_symlink()
+    except OSError:
+        return False
+def is_regular(path):
+    try:
+        return path.is_file()
+    except OSError:
+        note_unreadable(path)
+        return False
+def read_prefix(path, prefix_limit):
+    try:
+        return fingerprint_and_prefix(path, prefix_limit)
+    except OSError:
+        note_unreadable(path)
+        return None
 for folder in folders:
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = folder / name
-        if path.is_file() and not path.is_symlink():
+        if is_regular(path) and not is_link(path):
             limit = min(16000, remaining)
-            digest, raw = fingerprint_and_prefix(path, (limit + 1) * 4)
+            read = read_prefix(path, (limit + 1) * 4)
+            if read is None:
+                continue
+            digest, raw = read
             text = raw.decode('utf-8', errors='replace')
             instructions.append({'path': pathlib.Path(os.path.relpath(path, root)).as_posix(), 'sha256': digest, 'content': text[:limit], 'nextStart': limit if len(text) > limit else None})
             remaining -= limit
@@ -63,7 +94,7 @@ for instruction in instructions:
             continue
         requested = parent / relative
         target = requested.resolve()
-        if not target.is_relative_to(root) or '.git' in target.relative_to(root).parts or requested.is_symlink() or not target.is_file():
+        if not target.is_relative_to(root) or '.git' in target.relative_to(root).parts or is_link(requested) or not is_regular(target):
             continue
         name = target.relative_to(root).as_posix()
         if name in seen_documents or any(item['path'] == name for item in instructions):
@@ -73,7 +104,10 @@ for instruction in instructions:
             continue
         seen_documents.add(name)
         limit = min(128000, document_budget)
-        digest, raw = fingerprint_and_prefix(target, (limit + 1) * 4)
+        read = read_prefix(target, (limit + 1) * 4)
+        if read is None:
+            continue
+        digest, raw = read
         if known_documents.get(name) == digest:
             documents.append({'path': name, 'referencedBy': instruction['path'], 'sha256': digest, 'alreadyInContext': True, 'nextStart': None})
             continue
@@ -90,10 +124,13 @@ configuration_budget = 32000
 for filename in ('package.json', 'biome.json', 'biome.jsonc', 'tsconfig.json', 'vitest.config.ts', 'vitest.config.mts', 'vitest.config.js'):
     requested = root / filename
     target = requested.resolve()
-    if requested.is_symlink() or not target.is_relative_to(root) or not target.is_file():
+    if is_link(requested) or not target.is_relative_to(root) or not is_regular(target):
         continue
     limit = min(16000, configuration_budget)
-    digest, raw = fingerprint_and_prefix(target, (limit + 1) * 4)
+    read = read_prefix(target, (limit + 1) * 4)
+    if read is None:
+        continue
+    digest, raw = read
     if known_documents.get(filename) == digest:
         configuration.append({'path': filename, 'sha256': digest, 'alreadyInContext': True, 'nextStart': None})
         continue
@@ -101,7 +138,8 @@ for filename in ('package.json', 'biome.json', 'biome.jsonc', 'tsconfig.json', '
     content = text[:limit]
     configuration.append({'path': filename, 'sha256': digest, 'content': content, 'nextStart': limit if len(text) > limit else None})
     configuration_budget -= len(content)
-files = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], timeout=10).decode().split('\\0')
+listing = subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], capture_output=True, timeout=10)
+files = listing.stdout.decode(errors='replace').split('\\0') if listing.returncode == 0 else []
 scope_files = []
 inventory_characters = 0
 inventory_truncated = False
@@ -111,9 +149,9 @@ for filename in sorted(set(files)):
         continue
     requested = root / path
     target = requested.resolve()
-    if requested.is_symlink() or not target.is_relative_to(root) or not target.is_relative_to(scope) or not target.is_file():
+    if not target.is_relative_to(root) or not target.is_relative_to(scope) or any(part.startswith('.') for part in target.relative_to(root).parts):
         continue
-    if any(part.startswith('.') for part in target.relative_to(root).parts):
+    if is_link(requested) or not is_regular(target):
         continue
     if len(scope_files) == 200 or inventory_characters + len(filename) > 8000:
         inventory_truncated = True
@@ -126,9 +164,12 @@ for filename in sorted(set(files)):
     if len(path.parts) != 4 or path.parts[:2] not in (('.agents', 'skills'), ('.claude', 'skills')) or path.name != 'SKILL.md':
         continue
     target = (root / path).resolve()
-    if not target.is_relative_to(root) or (root / path).is_symlink() or not target.is_file():
+    if not target.is_relative_to(root) or is_link(root / path) or not is_regular(target):
         continue
-    digest, raw = fingerprint_and_prefix(target, 4096)
+    read = read_prefix(target, 4096)
+    if read is None:
+        continue
+    digest, raw = read
     skills.append({'path': filename, 'sha256': digest, 'header': raw.decode('utf-8', errors='replace')})
     if len(skills) >= 100:
         break
@@ -140,7 +181,7 @@ for instruction in instructions:
 # Every nested instruction file, so a model need not probe directories for them.
 listed = subprocess.run(['git', '-C', str(root), 'ls-files', '-co', '--exclude-standard', '--', '*AGENTS.md', '*CLAUDE.md'], capture_output=True, text=True, timeout=10)
 nested = sorted(line for line in listed.stdout.splitlines() if '/' in line and pathlib.PurePosixPath(line).name in ('AGENTS.md', 'CLAUDE.md')) if listed.returncode == 0 else None
-print(json.dumps({'scope': scope.relative_to(root).as_posix(), 'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'nestedInstructionFiles': nested[:50] if nested is not None else None, 'nestedInstructionFilesTruncated': nested is not None and len(nested) > 50, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
+print(json.dumps({'scope': scope.relative_to(root).as_posix(), 'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'nestedInstructionFiles': nested[:50] if nested is not None else None, 'nestedInstructionFilesTruncated': nested is not None and len(nested) > 50, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated, 'scopeFilesUnavailable': listing.returncode != 0, 'unreadableFiles': unreadable}, ensure_ascii=False))`;
 
 type GuidancePacket = {
 	scope: string;
@@ -176,7 +217,34 @@ type GuidancePacket = {
 		nextStart: number | null;
 	}[];
 	documentLimitReached: boolean;
+	/** Git could not list the checkout's files; scopeFiles is empty. */
+	scopeFilesUnavailable?: boolean;
+	/** Files this agent's Linux user cannot read (a read-only agent), skipped. */
+	unreadableFiles?: string[];
 };
+
+/**
+ * The scan itself could not run (no checkout, scope outside it, no python3):
+ * a workspace condition, never a model or provider failure.
+ */
+export class RepositoryGuidanceUnavailable extends Error {
+	readonly reason: string;
+	constructor(reason: string) {
+		super(`Could not safely inspect repository guidance: ${reason}`);
+		this.name = "RepositoryGuidanceUnavailable";
+		this.reason = reason;
+	}
+}
+
+/** The last line of the scan's stderr (the Python exception), bounded. */
+function guidanceFailureReason(stderr: string, exitCode: number) {
+	const line = stderr
+		.split(/\r?\n/)
+		.map((entry) => entry.trim())
+		.filter(Boolean)
+		.at(-1);
+	return (line ?? `exit code ${exitCode}`).slice(0, 300);
+}
 
 const archivedGuidanceBody = z.object({
 	reference: z.string().regex(/^context-[0-9a-f-]{36}$/),
@@ -338,7 +406,9 @@ export async function inspectRepositoryGuidance(
 		20_000,
 	);
 	if (result.exitCode)
-		throw new Error("Could not safely inspect repository guidance.");
+		throw new RepositoryGuidanceUnavailable(
+			guidanceFailureReason(result.stderr, result.exitCode),
+		);
 	const packet = JSON.parse(result.stdout) as GuidancePacket;
 	return { ...packet, skills: skillMetadata(packet) };
 }

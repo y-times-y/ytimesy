@@ -1,17 +1,32 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ModelMessage } from "ai";
 import { afterEach, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import { repositoryGuidanceTool } from "./repository-guidance";
+import { localHarnessWorkspace } from "../../../tests/helpers/local-harness-workspace";
+import {
+	inspectRepositoryGuidance,
+	RepositoryGuidanceUnavailable,
+	repositoryGuidanceTool,
+} from "./repository-guidance";
+import { readRepositoryInstructions } from "./repository-instructions";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const run = promisify(execFile);
 const roots: string[] = [];
+const locked: string[] = [];
 afterEach(async () => {
+	await Promise.all(locked.splice(0).map((path) => chmod(path, 0o755)));
 	await Promise.all(
 		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
 	);
@@ -396,4 +411,57 @@ it("deduplicates only complete bodies still in the active transcript and reloads
 	expect((await read(".", [receipt])).referencedDocuments[0]).toMatchObject({
 		content: "Changed plan",
 	});
+});
+
+// A read-only helper runs the scan as another Linux user (ytimesy-reader), to
+// whom owner-only files (umask 077 setup commands and transfers) are
+// unreadable. One such file used to abort the whole scan, failing the helper
+// at start; mode 000 reproduces that for the owner here.
+it("skips files this agent cannot read instead of abandoning the scan", async () => {
+	const { root, read } = await fixture();
+	await writeFile(join(root, "AGENTS.md"), "Root rule. See [plan](PLAN.md).");
+	await writeFile(join(root, "CLAUDE.md"), "private rule");
+	await writeFile(join(root, "PLAN.md"), "private plan");
+	await writeFile(join(root, "package.json"), "{}");
+	await writeFile(join(root, "readme.txt"), "public");
+	await mkdir(join(root, "build"));
+	await writeFile(join(root, "build/out.js"), "built");
+	await run("git", ["-C", root, "add", "build/out.js"]);
+	for (const path of ["CLAUDE.md", "PLAN.md", "package.json", "build"]) {
+		await chmod(join(root, path), 0o000);
+		locked.push(join(root, path));
+	}
+	const result = await read(".");
+	expect(result.instructions.map((entry) => entry.path)).toEqual(["AGENTS.md"]);
+	expect(result.referencedDocuments).toEqual([]);
+	expect(result.configuration).toEqual([]);
+	expect(result.scopeFiles).toContain("readme.txt");
+	expect(result.scopeFiles).not.toContain("build/out.js");
+	expect([...(result.unreadableFiles ?? [])].sort()).toEqual([
+		"CLAUDE.md",
+		"PLAN.md",
+		"build/out.js",
+		"package.json",
+	]);
+	// The traversal guard still holds.
+	await expect(read("../private")).rejects.toThrow(
+		RepositoryGuidanceUnavailable,
+	);
+});
+
+it("names why the scan could not run, and turn-start instructions degrade instead of failing the turn", async () => {
+	const fixture = await localHarnessWorkspace();
+	roots.push(fixture.root);
+	const missing = { ...fixture.workspace, cwd: join(fixture.root, "gone") };
+	const failure = await inspectRepositoryGuidance(missing, {
+		scope: ".",
+	}).catch((error: unknown) => error);
+	expect(failure).toBeInstanceOf(RepositoryGuidanceUnavailable);
+	expect((failure as Error).message).toMatch(
+		/^Could not safely inspect repository guidance: FileNotFoundError/,
+	);
+	const sections = await readRepositoryInstructions(missing);
+	expect(sections).toHaveLength(1);
+	expect(sections[0].text).toContain("## Repository instructions unavailable");
+	expect(sections[0].text).toContain("AGENTS.md and CLAUDE.md");
 });

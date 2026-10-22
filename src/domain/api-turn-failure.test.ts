@@ -465,3 +465,14 @@ it("does not mistake other rejections for a context overflow", () => {
 	])
 		expect(contextOverflow(error)).toBeNull();
 });
+
+it("never reports a repository guidance scan failure as a provider failure", () => {
+	const error = new Error(
+		"Could not safely inspect repository guidance: PermissionError: denied",
+	);
+	error.name = "RepositoryGuidanceUnavailable";
+	const message = apiModelFailureMessage(error);
+	expect(message).toContain("Could not safely inspect repository guidance");
+	expect(message).toContain("not a model or provider failure");
+	expect(message).not.toContain("without a usable provider reason");
+});

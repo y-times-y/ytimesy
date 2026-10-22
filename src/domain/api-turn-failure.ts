@@ -563,6 +563,10 @@ export function apiModelFailureMessage(error: unknown): string {
 		);
 		if (known)
 			return `The workspace could not be prepared: ${known} No model request was started.`;
+		// RepositoryGuidanceUnavailable (server/services/repository-guidance.ts):
+		// a workspace condition, never a provider failure.
+		if (error.name === "RepositoryGuidanceUnavailable")
+			return `${error.message} This is a workspace problem, not a model or provider failure.`;
 	}
 	if (error instanceof ContextWindowExhausted)
 		return "The model ran out of context room for its answer, even after compacting this conversation. Start a new chat with a handoff summary. No fallback was used.";
