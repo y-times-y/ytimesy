@@ -698,11 +698,19 @@ export function steeringSender(
 /**
  * Where a helper's finish line goes in its parent's timeline: after the
  * last row of the turn it started in, before that turn's closing answer.
- * Undefined when its start is unknown (the line goes last).
+ * `items` keep the silent starts of wake-up turns (childTaskPublicItems):
+ * the report wakes Main in a turn of its own, and the line goes in that
+ * turn's group, before its answer. While that turn has no rows yet (or the
+ * helper finished after Main's answer and its wake-up turn is still to
+ * come), the line goes last, under Main's answer, where that turn will
+ * show: the same place it ends up, never above the earlier answer.
+ * Undefined when its start is unknown or the line goes last.
  */
 export function finishLineAnchorId(
 	items: readonly SessionItem[],
 	startAnchorId: SessionItem["id"] | undefined,
+	/** When the helper finished (ms), to tell a report Main is yet to wake for. */
+	finishedAt?: number,
 ): SessionItem["id"] | undefined {
 	const start = startAnchorId
 		? items.findIndex((item) => item.id === startAnchorId)
@@ -711,7 +719,28 @@ export function finishLineAnchorId(
 	const next = items.findIndex(
 		(item, index) => index > start && item.kind === "userMessage",
 	);
-	let end = (next < 0 ? items.length : next) - 1;
+	const last = (next < 0 ? items.length : next) - 1;
+	let end = last;
 	if (end > start && items[end]?.kind === "agentMessage") end -= 1;
+	const woke = items
+		.slice(start + 1, last + 1)
+		.some((item) => item.kind === "notice" && item.wake === true);
+	if (
+		!woke &&
+		next < 0 &&
+		end < last &&
+		finishedAt !== undefined &&
+		finishedAt > (turnCompletedAt(items, start) ?? Number.POSITIVE_INFINITY)
+	)
+		return undefined;
 	return items[end]?.id;
+}
+
+/** When the turn holding `index` ended, as its prompt records it. */
+function turnCompletedAt(items: readonly SessionItem[], index: number) {
+	for (let at = index; at >= 0; at--) {
+		const item = items[at];
+		if (item?.kind === "userMessage") return item.timing?.completedAt;
+	}
+	return undefined;
 }
