@@ -120,6 +120,7 @@ import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
 import {
 	readPreparedCheckoutDirectory,
+	readProjectDerivedValue,
 	readSessionDerivedValue,
 	savePreparedCheckoutDirectory,
 	saveSessionDerivedValue,
@@ -672,11 +673,30 @@ async function runApiTurnAttempt(
 		const redact: string[] = [...(projectSecrets?.redact ?? [])];
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
+		// Durable steps start at 1; a resumed first step reuses the deduped notice.
+		const firstStep = step ? step.index === 1 : !continued;
+		// A durable turn's first request need not wait for the workspace: a
+		// root builder on a lean surface whose VM is not ready within a short
+		// wait sends it with the repository path its chat (or project) last
+		// reported; tools still wait for the workspace, and the step ends
+		// only once the workspace and the UserPromptSubmit check are done.
+		const earlyFirstRequestEligible =
+			!!step &&
+			firstStep &&
+			!step.resumed &&
+			writable &&
+			!owner.parentSessionId &&
+			!owner.agentRole &&
+			!evaluation &&
+			variant.lead === "off" &&
+			attemptLimit(variant.attempts) <= 1 &&
+			variant.review !== "on";
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
 			abort.signal,
 			workspaceReuse,
+			{ pinNewChatBase: earlyFirstRequestEligible },
 		);
 		let codePoint: Promise<void> | undefined;
 		// A root builder's repository path lets its next turn (and a new chat in
@@ -769,30 +789,12 @@ async function runApiTurnAttempt(
 				await progress.drain();
 			}
 		};
-		// Durable steps start at 1; a resumed first step reuses the deduped notice.
-		const firstStep = step ? step.index === 1 : !continued;
 		// The first step's UserPromptSubmit check always prepares a writable
 		// workspace (before the model is called, unless the first request goes
 		// out early, below); start it now so the VM work overlaps the remaining
 		// setup. It is the same memoized preparation, so a failure still
 		// surfaces where the workspace is awaited.
 		if (firstStep && writable) void workspace().catch(() => {});
-		// A durable turn's first request need not wait for the workspace: a
-		// root builder on a lean surface whose VM is not ready within a short
-		// wait sends it with the repository path its chat (or project) last
-		// reported; tools still wait for the workspace, and the step ends
-		// only once the workspace and the UserPromptSubmit check are done.
-		const earlyFirstRequestEligible =
-			!!step &&
-			firstStep &&
-			!step.resumed &&
-			writable &&
-			!owner.parentSessionId &&
-			!owner.agentRole &&
-			!evaluation &&
-			variant.lead === "off" &&
-			attemptLimit(variant.attempts) <= 1 &&
-			variant.review !== "on";
 		/** Set when the first request goes out before the workspace is ready. */
 		let earlyPromptCheck: Promise<PromptCheck> | undefined;
 		// Repository instructions a first request went out without are
@@ -873,7 +875,12 @@ async function runApiTurnAttempt(
 				}),
 			redact,
 			// Without the workspace: the pinned baseline of the path the chat
-			// last reported, and the configuration journaled for it.
+			// last reported, and the configuration journaled for it. A new chat
+			// has no baseline yet; when its checkout is pinned to a commit known
+			// now (pinNewChatBase), the configuration another chat of the same
+			// user's project read from that very commit answers for it. Hooks
+			// come only from the repository at the baseline (.ytimesy/hooks.json;
+			// plugin hooks are not run), so the commit names all of it.
 			knownConfig: async () => {
 				if (!reportedDirectory) return null;
 				const base = await readVerificationBaseline(
@@ -881,11 +888,20 @@ async function runApiTurnAttempt(
 					owner.id,
 					reportedDirectory,
 				);
-				return base && /^[a-f0-9]{40,64}$/.test(base)
-					? readSessionDerivedValue(
+				if (base)
+					return /^[a-f0-9]{40,64}$/.test(base)
+						? readSessionDerivedValue(
+								owner.userId,
+								owner.id,
+								`lifecycle-hooks:${reportedDirectory}:${base}`,
+							)
+						: null;
+				const pinned = await prepareWorkspace.pinnedBase?.();
+				return pinned && owner.projectId
+					? readProjectDerivedValue(
 							owner.userId,
-							owner.id,
-							`lifecycle-hooks:${reportedDirectory}:${base}`,
+							owner.projectId,
+							`lifecycle-hooks:${reportedDirectory}:${pinned}`,
 						)
 					: null;
 			},

@@ -1,6 +1,8 @@
 import { Effect, Either } from "effect";
 import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
+import type { ProjectCheckout } from "#/domain/project-checkout";
+import { isGeneratedSessionBranch } from "#/domain/session-branch";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
@@ -13,6 +15,7 @@ import {
 } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
+	checkoutBaseRevision,
 	ensureProjectCheckout,
 	loadTenantProjectCheckout,
 } from "./project-workspace";
@@ -28,13 +31,30 @@ export function deferredApiTurnWorkspace(
 	signal: AbortSignal,
 	/** A durable step reuses its turn's earlier preparation; see turnWorkspaceReuse. */
 	reuse?: TurnWorkspaceReuse,
+	options: {
+		/**
+		 * A new chat (no machine yet) starting its own branch pins the commit
+		 * that branch starts from before its VM is ready, so an early first
+		 * request can decide on that commit's hook configuration.
+		 */
+		pinNewChatBase?: boolean;
+	} = {},
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
-	return () => {
+	let pinnedBase: Promise<string | null> = Promise.resolve(null);
+	const workspace = () => {
 		signal.throwIfAborted();
 		prepared ??= reusedOrPrepared();
 		return prepared;
 	};
+	return Object.assign(workspace, {
+		/**
+		 * The commit this preparation's checkout and baseline will be, known
+		 * before the VM is ready; null unless it was pinned (see pinNewChatBase).
+		 * Read after the workspace was started.
+		 */
+		pinnedBase: () => pinnedBase,
+	});
 	async function reusedOrPrepared(): Promise<AgentToolWorkspace> {
 		const earlier = reuse?.read();
 		if (earlier)
@@ -67,6 +87,26 @@ export function deferredApiTurnWorkspace(
 					Effect.either(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
+		// Only a chat that never had a machine gets a fresh copy of the project
+		// template, where its own new branch cannot exist yet: the checkout
+		// switches to it at the pinned commit, which becomes its baseline.
+		if (
+			earlyCheckout &&
+			options.pinNewChatBase &&
+			!owner.providerRef &&
+			!owner.parentSessionId
+		) {
+			pinnedBase = earlyCheckout
+				.then((planned) =>
+					Either.isRight(planned) &&
+					planned.right &&
+					startsNewChatBranch(planned.right)
+						? checkoutBaseRevision(planned.right)
+						: null,
+				)
+				.catch(() => null);
+		}
+		const pinning = pinnedBase;
 		signal.throwIfAborted();
 		const bound = owner.parentSessionId
 			? await bindPreparedAgentTaskMachine(
@@ -103,7 +143,14 @@ export function deferredApiTurnWorkspace(
 				additionalRepositoryNames = (
 					checkout?.additionalRepositories ?? []
 				).map((repo) => repo.name);
-				yield* ensureProjectCheckout(scoped, vm, checkout);
+				const pinnedRevision = yield* Effect.promise(() => pinning);
+				yield* ensureProjectCheckout(
+					scoped,
+					vm,
+					checkout && pinnedRevision
+						? { ...checkout, pinnedRevision }
+						: checkout,
+				);
 			}),
 		);
 		await metadataBlocked;
@@ -191,6 +238,16 @@ export function deferredApiTurnWorkspace(
 			pause = Math.min(pause * 2, 2_000);
 		}
 	}
+}
+
+/** A chat's own generated branch, started from a different base branch. */
+function startsNewChatBranch(checkout: ProjectCheckout) {
+	return (
+		!checkout.retainExistingBranch &&
+		checkout.workingBranch !== checkout.branch &&
+		isGeneratedSessionBranch(checkout.workingBranch) &&
+		!isGeneratedSessionBranch(checkout.branch)
+	);
 }
 
 /** Fails closed: a VM whose metadata cannot be blocked runs no turn. */

@@ -45,11 +45,17 @@ const mocks = vi.hoisted(() => ({
 	/** The chat's pinned baseline and its journaled hook configuration. */
 	baseline: vi.fn(),
 	hookConfig: vi.fn(),
+	/** A new chat's commit known before its VM, and its project's journaled configurations. */
+	pinnedBase: vi.fn(async (): Promise<string | null> => null),
+	projectHookConfig: vi.fn(
+		async (..._args: unknown[]): Promise<unknown> => null,
+	),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
 	readPreparedCheckoutDirectory: mocks.preparedDirectory,
 	savePreparedCheckoutDirectory: vi.fn(async () => {}),
 	readSessionDerivedValue: mocks.hookConfig,
+	readProjectDerivedValue: mocks.projectHookConfig,
 	saveSessionDerivedValue: vi.fn(async () => {}),
 }));
 // Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
@@ -172,6 +178,8 @@ beforeEach(() => {
 	mocks.preparedDirectory.mockReset().mockResolvedValue(null);
 	mocks.baseline.mockReset().mockResolvedValue(null);
 	mocks.hookConfig.mockReset().mockResolvedValue(null);
+	mocks.pinnedBase.mockReset().mockResolvedValue(null);
+	mocks.projectHookConfig.mockReset().mockResolvedValue(null);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -326,10 +334,13 @@ vi.mock("../services/project-secrets", () => ({
 vi.mock("../services/api-turn-workspace", () => ({
 	deferredApiTurnWorkspace: () => {
 		let prepared: Promise<unknown> | undefined;
-		return () => {
-			prepared ??= mocks.workspace();
-			return prepared;
-		};
+		return Object.assign(
+			() => {
+				prepared ??= mocks.workspace();
+				return prepared;
+			},
+			{ pinnedBase: mocks.pinnedBase },
+		);
 	},
 }));
 vi.mock("../services/session-workspace-machines", () => ({
@@ -1901,6 +1912,149 @@ describe("a builder's first request before its workspace is ready", () => {
 			).toBe("completed");
 		},
 	);
+
+	describe("a new chat, from its project's configuration at the same commit", () => {
+		const pinned = "b".repeat(40);
+		const key = `lifecycle-hooks:/repo:${pinned}`;
+		/** What other chats of the owner's project journaled, by key. */
+		function projectHooks(
+			journaled: Record<string, string[]>,
+			scope = { userId: "owner", projectId: "project" },
+		) {
+			mocks.projectHookConfig.mockImplementation(
+				async (userId, projectId, requested) => {
+					const events =
+						userId === scope.userId && projectId === scope.projectId
+							? journaled[requested as string]
+							: undefined;
+					return events
+						? {
+								version: 1,
+								hooks: events.map((event) => ({ event, command: "true" })),
+							}
+						: null;
+				},
+			);
+		}
+		beforeEach(() => {
+			mocks.baseline.mockResolvedValue(null);
+			mocks.hookConfig.mockResolvedValue(null);
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			mocks.pinnedBase.mockResolvedValue(pinned);
+		});
+
+		it("sends the first request early when that configuration has no UserPromptSubmit hook", async () => {
+			projectHooks({ [key]: ["PreToolUse", "Stop"] });
+			const workspace = heldWorkspace();
+			const order: string[] = [];
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				order.push("model");
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				setTimeout(() => {
+					order.push("workspace");
+					workspace.ready();
+				}, 5);
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(order).toEqual(["model", "workspace"]);
+			expect(mocks.projectHookConfig).toHaveBeenCalledWith(
+				"owner",
+				"project",
+				key,
+			);
+		});
+
+		it.each([
+			[
+				"the commit is not known before the workspace",
+				() => {
+					mocks.pinnedBase.mockResolvedValue(null);
+					projectHooks({ [key]: [] });
+				},
+			],
+			[
+				"only another commit's configuration is known",
+				() => projectHooks({ [`lifecycle-hooks:/repo:${"c".repeat(40)}`]: [] }),
+			],
+			[
+				"that configuration has a UserPromptSubmit hook",
+				() => projectHooks({ [key]: ["UserPromptSubmit"] }),
+			],
+			[
+				"only another user's chats know it",
+				() =>
+					projectHooks(
+						{ [key]: [] },
+						{ userId: "other", projectId: "project" },
+					),
+			],
+			[
+				"only another project's chats know it",
+				() =>
+					projectHooks({ [key]: [] }, { userId: "owner", projectId: "other" }),
+			],
+		])(
+			"waits for the workspace and the prompt check when %s",
+			async (_case, arrange) => {
+				arrange();
+				const workspace = heldWorkspace();
+				const held = mocks.workspace();
+				setTimeout(() => workspace.ready(), 600);
+				let checked = false;
+				mocks.promptSubmit.mockImplementation(async () => {
+					await held;
+					checked = true;
+					return { block: false };
+				});
+				mocks.stepRuntime.mockImplementation(async (input) => {
+					expect(checked).toBe(true);
+					await input.onEvent({
+						type: "text-delta",
+						id: "reply",
+						text: "ananab",
+					});
+					return { messages: input.messages, outcome: "completed" };
+				});
+				expect(
+					await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+				).toBe("completed");
+			},
+		);
+
+		it("keeps using the chat's own configuration once it has a baseline", async () => {
+			knownHooks(["UserPromptSubmit"]);
+			projectHooks({ [key]: [] });
+			const workspace = heldWorkspace();
+			const held = mocks.workspace();
+			setTimeout(() => workspace.ready(), 600);
+			let checked = false;
+			mocks.promptSubmit.mockImplementation(async () => {
+				await held;
+				checked = true;
+				return { block: false };
+			});
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				expect(checked).toBe(true);
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(mocks.projectHookConfig).not.toHaveBeenCalled();
+		});
+	});
 
 	it("waits for the workspace when no chat of the project reported a path", async () => {
 		const workspace = heldWorkspace();

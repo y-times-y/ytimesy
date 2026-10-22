@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	checkout: vi.fn(),
 	baseline: vi.fn(async () => {}),
 	load: vi.fn(() => Effect.succeed({}) as Effect.Effect<object, Error>),
+	revision: vi.fn(async (): Promise<string | null> => null),
 }));
 vi.mock("./verification-baseline", () => ({
 	establishVerificationBaselines: mocks.baseline,
@@ -29,10 +30,15 @@ vi.mock("./session-workspace-machines", () => ({
 }));
 vi.mock("./project-workspace", () => ({
 	loadTenantProjectCheckout: () => mocks.load(),
-	ensureProjectCheckout: () => {
-		mocks.checkout();
+	ensureProjectCheckout: (
+		_machines: unknown,
+		_vm: unknown,
+		checkout: unknown,
+	) => {
+		mocks.checkout(checkout);
 		return Effect.void;
 	},
+	checkoutBaseRevision: mocks.revision,
 }));
 
 const root = {
@@ -273,4 +279,98 @@ it("still requires the baseline for a writer subagent", async () => {
 			new AbortController().signal,
 		)(),
 	).rejects.toThrow("not pristine");
+});
+
+describe("a new chat's pinned base", () => {
+	const fresh = {
+		owner: "acme",
+		name: "app",
+		fullName: "acme/app",
+		branch: "main",
+		workingBranch: "ytimesy/fix-login-1234",
+		installationId: "1",
+		preserveCurrentBranch: true,
+		retainExistingBranch: false,
+	};
+	const sha = "b".repeat(40);
+	beforeEach(() => {
+		mocks.load.mockImplementation(() => Effect.succeed(fresh));
+		mocks.revision.mockResolvedValue(sha);
+	});
+
+	it("is read before the VM and the checkout lands on it", async () => {
+		let bound = () => {};
+		mocks.root.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					bound = () => resolve({ session: root, providerRef: "vm-root" });
+				}),
+		);
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		const preparing = prepare();
+		// Known while the VM is still being bound.
+		expect(await prepare.pinnedBase()).toBe(sha);
+		expect(mocks.revision).toHaveBeenCalledWith(fresh);
+		bound();
+		await preparing;
+		expect(mocks.checkout).toHaveBeenCalledWith({
+			...fresh,
+			pinnedRevision: sha,
+		});
+	});
+
+	it.each([
+		["not asked for", root, {}, fresh],
+		[
+			"a chat that already has a machine",
+			{ ...root, providerRef: "vm-root" } as AgentSessionRecord,
+			{ pinNewChatBase: true },
+			fresh,
+		],
+		[
+			"a chat on an existing branch",
+			root,
+			{ pinNewChatBase: true },
+			{ ...fresh, workingBranch: "main" },
+		],
+		[
+			"a chat that keeps its legacy checkout",
+			root,
+			{ pinNewChatBase: true },
+			{ ...fresh, retainExistingBranch: true },
+		],
+	])("is not pinned for %s", async (_case, owner, options, planned) => {
+		mocks.load.mockImplementation(() => Effect.succeed(planned));
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			owner,
+			new AbortController().signal,
+			undefined,
+			options,
+		);
+		await prepare();
+		expect(await prepare.pinnedBase()).toBeNull();
+		expect(mocks.revision).not.toHaveBeenCalled();
+		expect(mocks.checkout).toHaveBeenCalledWith(planned);
+	});
+
+	it("is unknown, and the checkout unpinned, when GitHub cannot say", async () => {
+		mocks.revision.mockRejectedValue(new Error("GitHub unavailable"));
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		await prepare();
+		expect(await prepare.pinnedBase()).toBeNull();
+		expect(mocks.checkout).toHaveBeenCalledWith(fresh);
+	});
 });

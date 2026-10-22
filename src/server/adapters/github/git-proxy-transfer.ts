@@ -132,6 +132,8 @@ export async function receiveProxiedRepository(
 		destination: string;
 		workingBranch?: string;
 		mode: "clone" | "update" | "switch";
+		/** See fetchedBranchCommand. */
+		pinnedRevision?: string;
 	},
 ) {
 	const dest = quote(input.destination);
@@ -175,6 +177,7 @@ export async function receiveProxiedRepository(
 				workingBranch: branch,
 				mode: input.mode,
 				originUrl: `https://github.com/${input.owner}/${input.name}.git`,
+				pinnedRevision: input.pinnedRevision,
 			})}`,
 			input.mode === "update"
 				? "Workspace Git could not fast-forward the checkout to its branch."
