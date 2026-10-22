@@ -86,7 +86,8 @@ export function explorationGroupIsLive(items: readonly SessionItem[]): boolean {
 /**
  * The timeline's rows: each finished turn folds its work under "Worked" and
  * keeps its answer in view. `items` may hold the hidden messages that start
- * wake-up turns; they split turns and are not shown.
+ * wake-up turns; they split turns and show no bubble, only a break when the
+ * turn's answer would otherwise run on from the one before it.
  */
 export function groupTimelineRows(
 	items: readonly SessionItem[],
@@ -167,6 +168,8 @@ export function groupTimelineRows(
 	}
 	// The user's reply to a question card shows in the card, not again below it.
 	let questionOpen = false;
+	/** Wake-up turns that start right under the previous turn's answer. */
+	const wakeBreaks: { at: number; item: SessionItem }[] = [];
 	for (const item of items) {
 		// A wake-up turn (a helper's report, a command's exit) starts silently:
 		// with a wake notice as the browser gets it (childTaskPublicItems), or
@@ -174,6 +177,9 @@ export function groupTimelineRows(
 		// answer stays in view, but shows no bubble of its own.
 		if (isWakeTurnStart(item)) {
 			flush(true);
+			const previous = rows.at(-1);
+			if (previous?.kind === "item" && previous.item.kind === "agentMessage")
+				wakeBreaks.push({ at: rows.length, item });
 			turn = [];
 			timing = turnStartTiming(item);
 			continue;
@@ -192,6 +198,17 @@ export function groupTimelineRows(
 		}
 	}
 	flush(turnStatus !== "running");
+	// A wake-up turn whose first row is its answer (no work to fold) would
+	// read as one message with the answer above it: its silent start stays
+	// as a row there, which the timeline draws as a turn break.
+	for (const { at, item } of wakeBreaks.reverse()) {
+		const next = rows[at];
+		if (next?.kind === "item" && next.item.kind === "agentMessage")
+			rows.splice(at, 0, {
+				kind: "item",
+				item: { kind: "notice", id: item.id, message: "", wake: true },
+			});
+	}
 	return rows;
 }
 

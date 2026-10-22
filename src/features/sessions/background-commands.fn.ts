@@ -19,7 +19,7 @@ import { WorkspaceMachineService } from "#/server/services/capabilities";
  * The running background commands of up to 20 of the user's chats (a chat
  * and its subagents), by chat id, for the agents list. As the timelines
  * record them: an exit reaches a chat's timeline at its agent's next step,
- * or within a minute between turns.
+ * or between turns within seconds (its exit callback; the cron within a minute).
  */
 export const readBackgroundCommandsFn = createServerFn({ method: "GET" })
 	.validator((data: unknown) =>

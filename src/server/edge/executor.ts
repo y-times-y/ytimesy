@@ -2,6 +2,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import { z } from "zod";
+import {
+	BACKGROUND_EXIT_PATH,
+	BACKGROUND_EXIT_TOKEN_HEADER,
+	backgroundExitRequest,
+	verifyBackgroundExitToken,
+} from "../../domain/background-exit-wake";
 import { backgroundJob } from "../../domain/background-job";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
@@ -103,6 +109,12 @@ const gitProxySecrets = z.object({
 	DATABASE_SSL_CA: z.string().optional(),
 	GIT_PROXY_SECRET: z.string().min(32),
 	GIT_PROXY_ENABLED: z.literal("1"),
+});
+// The guest's exit callback is signed with the git proxy's key, which the
+// command launch holds (gitProxyConfiguration) and the edge already has.
+const backgroundExitSecrets = z.object({
+	GIT_PROXY_SECRET: z.string().min(32),
+	BACKGROUND_EXECUTION_ENABLED: z.literal("1"),
 });
 const environmentSecrets = z.object({
 	ENVIRONMENT_WORKFLOW_SECRET: z.string().min(32),
@@ -1009,6 +1021,48 @@ export default {
 					durableObjectLocation(),
 				).start(parsed.data);
 				return new Response(null, { status: 202 });
+			}
+			// A background command exited: its guest asks for its chat's check now.
+			if (path === BACKGROUND_EXIT_PATH) {
+				if (request.method !== "POST")
+					return new Response(null, { status: 404 });
+				const config = backgroundExitSecrets.safeParse(env);
+				if (!config.success) return new Response(null, { status: 503 });
+				let body: string;
+				try {
+					body = await readBoundedRequestBody(request, 1024);
+				} catch {
+					return new Response(null, { status: 413 });
+				}
+				let value: unknown;
+				try {
+					value = JSON.parse(body);
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+				const exit = backgroundExitRequest.safeParse(value);
+				if (!exit.success) return new Response(null, { status: 400 });
+				if (
+					!(await verifyBackgroundExitToken(
+						config.data.GIT_PROXY_SECRET,
+						exit.data,
+						request.headers.get(BACKGROUND_EXIT_TOKEN_HEADER) ?? "",
+					))
+				)
+					return new Response(null, { status: 401 });
+				// One job per command, ever: a repeated or replayed callback is a no-op.
+				return Response.json(
+					{
+						state: await startBackgroundJob(env, {
+							id: backgroundJobId(
+								`background-exit:${exit.data.sessionId}:${exit.data.commandId}`,
+							),
+							kind: "background-wake",
+							...exit.data,
+						}),
+					},
+					{ status: 202 },
+				);
 			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);

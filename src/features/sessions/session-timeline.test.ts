@@ -572,6 +572,23 @@ describe("session timeline with server-started wake-up turns", () => {
 		expect(worked).not.toContain("391 PINEAPPLE");
 	});
 
+	it("sets an answer-only report turn apart from Main's previous answer", () => {
+		const html = render(
+			stored(
+				done([...helperChat(), answer("a3", "The build passed.")], Date.now()),
+			),
+			"completed",
+		);
+		const before = html.indexOf("391 PINEAPPLE");
+		const breakAt = html.indexOf('class="session-turn-break"');
+		const after = html.indexOf("The build passed.");
+		expect(before).toBeGreaterThan(-1);
+		expect(breakAt).toBeGreaterThan(before);
+		expect(after).toBeGreaterThan(breakAt);
+		expect(html.match(/session-turn-break/g)).toHaveLength(1);
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
 	it("keeps Main's Started message outside Worked when a command's exit wakes it", () => {
 		const startedAt = Date.now() - 60_000;
 		const background: SessionItem = {

@@ -96,6 +96,40 @@ describe("writer subagent git round trip", () => {
 		);
 	});
 
+	it("gives the fork the builder's commit identity when the repository names none, and keeps one it names", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		vms.git(vms.parentRepo, "config", "--unset", "user.email");
+		vms.git(vms.parentRepo, "config", "--unset", "user.name");
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-1",
+		});
+		expect(vms.git(fork.cwd, "config", "user.email")).toBe(
+			"noreply@ytimesy.com",
+		);
+		expect(vms.git(fork.cwd, "config", "user.name")).toBe("noreply");
+		// The writer's own commit, as it would run it in the fork.
+		writeFileSync(join(fork.cwd, "a.ts"), "export const a = 3;\n");
+		const committed = await vms.machines.exec(
+			fork.vm,
+			`git -C '${fork.cwd}' commit -qam 'writer edit' && git -C '${fork.cwd}' log -1 --format=%ae`,
+		);
+		expect(committed).toMatchObject({ exitCode: 0 });
+		expect(committed.stdout.trim()).toBe("noreply@ytimesy.com");
+
+		vms.git(vms.parentRepo, "config", "user.email", "person@example.test");
+		const named = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-2",
+		});
+		expect(vms.git(named.cwd, "config", "user.email")).toBe(
+			"person@example.test",
+		);
+	});
+
 	it("flags two writers on one file and git apply -3 surfaces the conflict", async () => {
 		const vms = localVms();
 		cleanup = vms.root;
