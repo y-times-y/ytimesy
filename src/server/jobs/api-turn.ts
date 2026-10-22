@@ -944,6 +944,9 @@ async function runApiTurnAttempt(
 			waitDeadlineAt: step?.waitDeadlineAt,
 			repositoryWorkspace: checkout,
 		});
+		// Why the chat's hook configuration was not known without the
+		// workspace, for the step's timing line (knownConfig below).
+		let hookConfigUnknown: EarlyRequestReason = "hook-config-unknown";
 		const hooks = harnessLifecycleHooks({
 			// Hooks run in the checkout; the memory token is redacted from
 			// their output before the clone puts it on the VM.
@@ -999,16 +1002,21 @@ async function runApiTurnAttempt(
 					owner.id,
 					reportedDirectory,
 				);
-				if (base)
-					return /^[a-f0-9]{40,64}$/.test(base)
-						? readSessionDerivedValue(
-								owner.userId,
-								owner.id,
-								`lifecycle-hooks:${reportedDirectory}:${base}`,
-							)
-						: null;
+				if (base) {
+					if (!/^[a-f0-9]{40,64}$/.test(base)) return null;
+					const saved = await readSessionDerivedValue(
+						owner.userId,
+						owner.id,
+						`lifecycle-hooks:${reportedDirectory}:${base}`,
+					);
+					if (saved === null) hookConfigUnknown = "hook-config-unjournaled";
+					return saved;
+				}
 				const pinned = await pinning;
-				if (!pinned || !owner.projectId) return null;
+				if (!pinned || !owner.projectId) {
+					hookConfigUnknown = "hook-config-no-pinned-base";
+					return null;
+				}
 				const journaled = await readProjectDerivedValue(
 					owner.userId,
 					owner.projectId,
@@ -1018,12 +1026,14 @@ async function runApiTurnAttempt(
 				// No chat of the project read that commit's configuration yet
 				// (its base branch moved): the same file at the same commit,
 				// read from GitHub while the VM boots.
-				return lifecycleConfigFromFile(
+				const file = lifecycleConfigFromFile(
 					(await prepareWorkspace.pinnedBaseFile?.(
 						pinned,
 						LIFECYCLE_CONFIG_PATH,
 					)) ?? null,
 				);
+				if (file === null) hookConfigUnknown = "hook-config-unreadable";
+				return file;
 			},
 			once: (id, run) =>
 				journaledToolOperation(
@@ -1387,7 +1397,7 @@ async function runApiTurnAttempt(
 					? "early"
 					: promptSubmit
 						? "prompt-hook-configured"
-						: "hook-config-unknown",
+						: hookConfigUnknown,
 			);
 		if (firstStep && promptSubmitKnown && promptSubmit === false) {
 			earlyPromptCheck = timed("turn:promptHook", () =>
