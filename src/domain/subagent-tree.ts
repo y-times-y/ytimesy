@@ -59,6 +59,8 @@ export type SubagentNode = {
 	readonly label: string;
 	/** How the chat names it (helper-names.ts): build-1 ("Build the CSV export"). */
 	readonly name: string;
+	/** Its short name alone: build-1. */
+	readonly shortName: string;
 	readonly level: number;
 	readonly title: string;
 	readonly role: SubagentRole;
@@ -172,14 +174,13 @@ export function subagentTree(
 			) ?? now,
 		);
 		const minutes = Math.max(0, (end - Date.parse(session.createdAt)) / 60_000);
+		const shortName = identities.get(task.id)?.name ?? "helper";
 		nodes.push({
 			id: task.id,
 			parentId: task.parentSessionId,
 			label: subagentLabelFromTaskLabel(task.label),
-			name: helperReference(
-				identities.get(task.id)?.name ?? "helper",
-				task.title,
-			),
+			name: helperReference(shortName, task.title),
+			shortName,
 			level: task.depth,
 			title: task.title,
 			role: session.agentRole,

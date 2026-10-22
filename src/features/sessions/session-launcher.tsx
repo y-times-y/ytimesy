@@ -10,6 +10,14 @@ import {
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
+	activeMention,
+	insertMention,
+	MAIN_MENTION_ID,
+	type MentionAgent,
+	mentionAgents,
+	mentionMatches,
+} from "#/domain/agent-mentions";
+import {
 	agentPanelRows,
 	type BackgroundRun,
 	helperIdentities,
@@ -84,6 +92,7 @@ import {
 } from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
 import type { MemoryMarkerActions } from "./memory-markers";
+import { MentionPopover } from "./mention-popover";
 import {
 	type ComposerSpeed,
 	composerListedModels,
@@ -418,12 +427,23 @@ export function SessionLauncher({
 	});
 	const identities = useMemo(() => helperIdentities(childTasks), [childTasks]);
 	const [selectedAgentId, setSelectedAgentId] = useState(LEAD_ROW_ID);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	/** The composer's caret, for the "@" popover. */
+	const [caret, setCaret] = useState(0);
+	const [mentionIndex, setMentionIndex] = useState(0);
+	const [mentionDismissed, setMentionDismissed] = useState<string | null>(null);
 	const selectedHelper = agents.helpers.find(
 		(row) => row.id === selectedAgentId,
 	);
 	const selectedTask = selectedHelper
 		? childTasks.find((task) => task.id === selectedHelper.id)
 		: undefined;
+	// The agent whose composer this is never appears: it is the one written to.
+	const mentionSelf = selectedHelper?.id ?? MAIN_MENTION_ID;
+	const mentionList = useMemo(
+		() => mentionAgents(identities, mentionSelf),
+		[identities, mentionSelf],
+	);
 	const sendToHelper = useServerFn(sendHelperMessage);
 	/** Messages the user sent a helper that its list does not show yet. */
 	const [helperOutbox, setHelperOutbox] = useState<
@@ -561,11 +581,57 @@ export function SessionLauncher({
 			? slashMenuCommands(slashDraft, allSlashCommands)
 			: [];
 
+	// "@": the chat's other agents, filtered by what follows it.
+	const mention =
+		mentionDismissed !== draft ? activeMention(draft, caret) : null;
+	const visibleMentions = mention
+		? mentionMatches(mentionList, mention.query)
+		: [];
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Every edit of the draft resets the menu highlight.
 	useEffect(() => {
 		setSlashIndex(0);
 		setSlashPicked(false);
+		setMentionIndex(0);
 	}, [draft]);
+
+	function pickMention(agent: MentionAgent) {
+		if (!mention) return;
+		const next = insertMention(draft, mention, caret, agent.name);
+		setDraft(next.text);
+		setCaret(next.caret);
+		requestAnimationFrame(() => {
+			const input = textareaRef.current;
+			input?.focus();
+			input?.setSelectionRange(next.caret, next.caret);
+		});
+	}
+
+	function handleMentionKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (visibleMentions.length === 0) return false;
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			event.preventDefault();
+			const step = event.key === "ArrowDown" ? 1 : -1;
+			setMentionIndex(
+				(index) =>
+					(index + step + visibleMentions.length) % visibleMentions.length,
+			);
+			return true;
+		}
+		if (event.key === "Escape") {
+			event.preventDefault();
+			setMentionDismissed(draft);
+			return true;
+		}
+		if (event.key === "Enter" || event.key === "Tab") {
+			const agent = visibleMentions[mentionIndex];
+			if (!agent || event.nativeEvent.isComposing) return false;
+			event.preventDefault();
+			pickMention(agent);
+			return true;
+		}
+		return false;
+	}
 
 	useEffect(() => {
 		const connectedHarness = connectedProviderId(session.connection);
@@ -920,7 +986,7 @@ export function SessionLauncher({
 				/>
 			)}
 			<div className="session-dock">
-				{visibleSlashCommands.length === 0 ? (
+				{visibleSlashCommands.length === 0 && visibleMentions.length === 0 ? (
 					<ProjectContext
 						projects={projects}
 						selectedProject={selectedProject}
@@ -949,7 +1015,14 @@ export function SessionLauncher({
 						onConnect={onConnect}
 					/>
 					<div className="session-composer">
-						{visibleSlashCommands.length > 0 ? (
+						{visibleMentions.length > 0 ? (
+							<MentionPopover
+								agents={visibleMentions}
+								activeIndex={mentionIndex}
+								onHover={setMentionIndex}
+								onSelect={pickMention}
+							/>
+						) : visibleSlashCommands.length > 0 ? (
 							<SlashCommandPalette
 								commands={visibleSlashCommands}
 								activeIndex={slashIndex}
@@ -959,6 +1032,9 @@ export function SessionLauncher({
 						) : null}
 
 						<TaskInput
+							textareaRef={textareaRef}
+							mentions={mentionList}
+							onCaretChange={setCaret}
 							value={draft}
 							onChange={(value) => {
 								setDraft(value);
@@ -978,7 +1054,8 @@ export function SessionLauncher({
 											: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
-								selectedHelper ? false : handleComposerKey(event)
+								handleMentionKey(event) ||
+								(!selectedHelper && handleComposerKey(event))
 							}
 						/>
 						{attachments.length > 0 && (
