@@ -78,7 +78,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 							{task.depth > 1 ? (
 								<CornerDownRight
 									className="task-branch"
-									size={13}
+									size={14}
 									aria-hidden="true"
 								/>
 							) : null}

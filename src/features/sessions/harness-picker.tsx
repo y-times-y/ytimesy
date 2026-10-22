@@ -329,7 +329,7 @@ export function HarnessPicker({
 													onClick={() => toggleFavorite(candidate.id)}
 												>
 													<Star
-														size={15}
+														size={16}
 														fill={favorite ? "currentColor" : "none"}
 													/>
 												</button>

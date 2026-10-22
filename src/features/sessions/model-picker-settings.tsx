@@ -40,7 +40,7 @@ export function ModelPickerSettings({
 			<p className="model-picker-current">{model.label}</p>
 			{model.reasoning && onReasoningIdChange ? (
 				<div className="model-picker-setting">
-					<Brain size={17} aria-hidden="true" />
+					<Brain size={16} aria-hidden="true" />
 					<span>Reasoning</span>
 					<Select
 						value={reasoning?.id ?? ""}
@@ -70,7 +70,7 @@ export function ModelPickerSettings({
 			) : null}
 			{onSpeedChange && model.speeds.length ? (
 				<div className="model-picker-setting">
-					<Zap size={17} aria-hidden="true" />
+					<Zap size={16} aria-hidden="true" />
 					<span>Speed</span>
 					<Select
 						value={selectedSpeed?.id ?? "standard"}
