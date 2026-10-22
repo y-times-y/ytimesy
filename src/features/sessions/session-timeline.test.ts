@@ -166,7 +166,7 @@ describe("session timeline live collapse", () => {
 				tasks: [{ ...child, turnStatus: "running", status: "working" }],
 			}),
 		);
-		expect(waiting).toContain("Waiting for subagents");
+		expect(waiting).toContain("Waiting for helpers");
 		expect(waiting).not.toContain(">Thinking<");
 	});
 	it("shows a helper's own conversation with senders and steering still queued", () => {
