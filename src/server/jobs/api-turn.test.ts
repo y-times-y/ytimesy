@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => ({
 	),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
+	MACHINE_PREWARM_KEY: "machine-prewarm",
 	readPreparedCheckoutDirectory: mocks.preparedDirectory,
 	savePreparedCheckoutDirectory: vi.fn(async () => {}),
 	readSessionDerivedValue: mocks.hookConfig,
