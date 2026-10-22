@@ -22,6 +22,7 @@ import {
 } from "#/domain/session-item";
 import type { ChatWaitingOn } from "#/domain/sidebar-chats";
 import { subagentTaskViews } from "#/domain/subagent-tree";
+import { startAfterResponse } from "#/server/adapters/after-response";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
@@ -31,6 +32,7 @@ import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
+import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
 import { withPublicFailure } from "#/server/public-failure";
 import {
 	deleteAgentSessionMachine,
@@ -109,6 +111,11 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 				projectId: data.projectId,
 				harness: data.harnessId as AgentProviderId,
 			});
+			// A chat's first call to its conversation object creates it, which
+			// takes 1-3 s on the edge; delivering the new chat's (empty) view
+			// now does that while the person types, so the first send's turn
+			// starts at once. Best effort: the send works the same without it.
+			startAfterResponse(() => relayConversationDeliveriesOnce(session.id));
 			return {
 				id: session.id,
 				title: session.title,
