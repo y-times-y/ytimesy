@@ -36,6 +36,19 @@ export function settledTurnItems(
 	return next;
 }
 
+/**
+ * When a finished agent's last turn ended, as its transcript records it; null
+ * for turns from before the end was recorded.
+ */
+export function lastTurnEnd(items: readonly SessionItem[]): number | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage" && !item.queued)
+			return item.timing?.completedAt ?? null;
+	}
+	return null;
+}
+
 /** A turn the user stopped closes with a "Stopped" notice, once. */
 export function withStoppedNotice(
 	items: readonly SessionItem[],
