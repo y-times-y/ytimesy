@@ -82,6 +82,7 @@ import {
 	sidebarPinnedStorageValue,
 	unsentSendReturnsHere,
 	withBusyChat,
+	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
 } from "#/domain/sidebar-chats";
@@ -321,6 +322,31 @@ export function WorkspaceHome({
 	const sessionEpoch = useRef(0);
 	/** The epoch in which New chat is creating a chat; nothing else gets selected meanwhile. */
 	const creatingChatEpoch = useRef<number | null>(null);
+	/** The chat New chat created last; its composer is the one the person typed into meanwhile. */
+	const createdChatId = useRef<string | null>(null);
+	/**
+	 * The composer is keyed by its chat, except that New chat's chat keeps the
+	 * composer it showed while being created: the text typed (and the focus)
+	 * in that half second survive the chat getting its id.
+	 */
+	const composerKey = useRef({
+		chatId: null as string | null,
+		key: "new",
+		n: 0,
+	});
+	if (composerKey.current.chatId !== session.agentSessionId) {
+		const previous = composerKey.current;
+		const n = previous.n + 1;
+		composerKey.current = {
+			chatId: session.agentSessionId,
+			key:
+				previous.chatId === null &&
+				session.agentSessionId === createdChatId.current
+					? previous.key
+					: (session.agentSessionId ?? `new:${n}`),
+			n,
+		};
+	}
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	/** A send waiting for the ChatGPT device code to be entered. */
 	const pendingSendRef = useRef<PendingSend | null>(null);
@@ -1165,6 +1191,7 @@ export function WorkspaceHome({
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
 				creatingChatEpoch.current = null;
+				createdChatId.current = created.id;
 				selectedSessionIdRef.current = created.id;
 				setSelectedSessionId(created.id);
 				setInspectorView("overview");
@@ -1452,7 +1479,7 @@ export function WorkspaceHome({
 				queryClient.setQueryData(
 					["agent-sessions", scope.projectId],
 					(current: readonly SidebarChat[] | undefined) =>
-						withChatTurnStatus(current ?? [], chatId, "running"),
+						withChatSent(current ?? [], chatId, pending.text),
 				);
 			}
 			requested = true;
@@ -1788,7 +1815,7 @@ export function WorkspaceHome({
 								childTasks={agentTasks.data ?? []}
 								backgroundRuns={backgroundRuns}
 								memoryActions={memoryActions}
-								key={session.agentSessionId ?? "new"}
+								key={composerKey.current.key}
 								session={session}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
