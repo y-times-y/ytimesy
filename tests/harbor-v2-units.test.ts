@@ -18,7 +18,9 @@ import {
 	streamKind,
 	terminalEvent,
 } from "../evals/harbor_v2/transport-guard";
+import { harborTurnId } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
+import { commandScopeRoot } from "../src/server/services/api-command-scope";
 
 const base = {
 	YTIMESY_HARBOR_ROUTE: "anthropic",
@@ -614,5 +616,21 @@ describe("job efficiency", () => {
 		const runs = await jobRuns(directory);
 		expect(runs.map((run) => run.solved).sort()).toEqual([false, true]);
 		expect(runs[0]).toMatchObject({ seconds: 60, models: [row] });
+	});
+});
+
+describe("harbor turn ids", () => {
+	it("gives Harbor trial and child ids a turn id the command runner accepts", () => {
+		// Harbor ids carry underscores and child ids a dot; raw, every bash
+		// call of the lead and its sidekick failed with "Invalid command scope".
+		for (const id of [
+			"session-window-debug__MVgXW8D",
+			"session-window-debug__MVgXW8D.1",
+			"harbor-checker-1",
+			`${"x".repeat(90)}__y.2`,
+		])
+			expect(() => commandScopeRoot(harborTurnId(id))).not.toThrow();
+		expect(harborTurnId("harbor-checker-1")).toBe("harbor-checker-1-turn");
+		expect(harborTurnId("a__b.1")).not.toBe(harborTurnId("a__b"));
 	});
 });
