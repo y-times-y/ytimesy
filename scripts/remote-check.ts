@@ -1,3 +1,6 @@
+# Docker Hub rate-limits the shared VM IPs (429): pull through Google's mirror, Docker Hub as fallback.
+mkdir -p /etc/docker && echo '{"registry-mirrors":["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
+systemctl restart docker 2>/dev/null || systemctl start docker 2>/dev/null || true
 // Full verification of a commit on a Freestyle development VM instead of the
 // laptop: install, typecheck, the full vitest suite and the offline
 // rehearsal (scripts/rehearsal, which needs only Docker; the VM has it).
@@ -240,10 +243,12 @@ curl -fsSL https://nodejs.org/dist/${nodeVersion}/node-${nodeVersion}-linux-$nar
 npm install -g --force --loglevel=error pnpm@${pnpmVersion}
 sudo -u ubuntu -H bash -c 'curl -fsSL https://bun.sh/install | bash -s bun-v${bunVersion}' >/dev/null
 command -v docker >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null)
-systemctl start docker 2>/dev/null || true
+# Docker Hub rate-limits the shared VM IPs (429): pull through Google's mirror, Docker Hub as fallback.
+mkdir -p /etc/docker && echo '{"registry-mirrors":["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
+systemctl restart docker 2>/dev/null || systemctl start docker 2>/dev/null || true
 usermod -aG docker ubuntu
 for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-# Docker Hub rate-limits the shared VM IPs (429); take the database image from Google's mirror.
+# The database image straight from the mirror, in case a pull skips it.
 docker pull -q mirror.gcr.io/library/postgres:17-alpine && docker tag mirror.gcr.io/library/postgres:17-alpine postgres:17-alpine || true
 # Nested Docker, as the rehearsal runs it: a privileged container with its own dockerd.
 docker run --rm --privileged ubuntu:24.04 bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq docker.io >/dev/null && (dockerd >/tmp/d.log 2>&1 &) && for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done && docker run --rm hello-world >/dev/null && echo nested-docker-ok' || echo nested-docker-FAILED
