@@ -103,6 +103,7 @@ export async function projectCleanupTargets(userId: string, projectId: string) {
 			union select provider_ref from owned_workspace
 			union select b.provider_ref from environment_build b join owned_workspace w on w.id=b.workspace_id
 			union select r.vm_id from workspace_retention r join owned_session s on s.id=r.session_id
+			union select a.vm_id from infrastructure_vm_admission a join owned_session s on a.slug='ytimesy-ag-'||left(replace(s.id::text,'-',''),16)
 		),
 		snapshots as (
 			select template_snapshot_id as id from owned_workspace

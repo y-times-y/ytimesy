@@ -43,6 +43,7 @@ import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
+import { prewarmedMachine } from "../adapters/machine-prewarm";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { cancelServerTurn } from "./cancel-server-turn";
 import { restoreSessionWorkspace } from "./session-checkpoint";
@@ -467,6 +468,12 @@ export async function deleteAgentSessionMachine(
 			.map((child) => child.providerRef),
 		templateProviderRef: workspace?.providerRef ?? null,
 	}).filter((ref) => !held.has(ref));
+	// A machine copied ahead that the chat never adopted (machine-prewarm.ts).
+	const prewarmed = session.providerRef
+		? null
+		: await prewarmedMachine(input.userId, session.id);
+	if (prewarmed && !held.has(prewarmed) && !refs.includes(prewarmed))
+		refs.push(prewarmed);
 	for (const ref of refs) {
 		await machines.destroy(WorkspaceId(ref));
 	}
