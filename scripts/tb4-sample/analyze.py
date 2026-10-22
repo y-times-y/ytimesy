@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GO_MIN_PASSES = 7  # pre-registered: Codex expected passes on this sample = 7.0
+GO_MIN_PASSES = 8  # pre-registered: Codex expected passes on this sample (7.0) + 1
 MAX_MEAN_TRIAL_USD = 3.0
 EXPECT = {
     "model": "openai.gpt-6.1-sol",
