@@ -65,6 +65,7 @@ function gate(options: {
 	exploreFlag?: boolean;
 	activeTurn?: boolean;
 	staged?: boolean;
+	thin?: boolean;
 }) {
 	let now = T0;
 	const deps = {
@@ -90,6 +91,7 @@ function gate(options: {
 			items: options.items ?? request,
 			explore: options.exploreFlag ?? true,
 			waitUntil: T0 + (options.waitMs ?? 60_000),
+			thin: options.thin,
 			deps,
 		});
 	return { deps, run, now: () => now };
@@ -308,6 +310,31 @@ describe("fusion lead gate", () => {
 			"sidekick-stalled:s:1",
 			expect.stringContaining("did not run or report"),
 		);
+		expect(deps.stage).toHaveBeenCalledWith(
+			"lead",
+			"sidekick-stalled:s:1",
+			expect.stringContaining("or do it yourself."),
+		);
+	});
+
+	it("tells a thin lead to restart a stalled writer, not to take over", async () => {
+		const stalled = newSidekickState({ tokens: 1_000_000 }, at(-6 * 60_000), {
+			requestKey: "u1",
+			kind: "explore",
+		});
+		const { deps, run } = gate({
+			children: () => [sidekick(stalled, false)],
+			thin: true,
+		});
+		expect(await run()).toBe("ready");
+		const notice = (
+			deps.stage.mock.calls as unknown as [string, string, string][]
+		).find(([, id]) => id === "sidekick-stalled:s:1")?.[2];
+		expect(notice).toContain(
+			"Restart it: start a new writer with `agent` role writer",
+		);
+		expect(notice).toContain("handoff");
+		expect(notice).not.toContain("yourself");
 	});
 });
 

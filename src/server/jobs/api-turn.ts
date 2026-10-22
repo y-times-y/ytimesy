@@ -427,6 +427,8 @@ async function runApiTurnAttempt(
 	let fusionLead: { userId: string; id: string } | undefined;
 	/** Lead mode fusion: the variant's role models (a sidekick's classifier and escalation model). */
 	let fusionRoleModels: RoleModels | undefined;
+	/** Lead mode fusion with leadTools=thin: a writer's notices point its lead to a restart. */
+	let fusionThinLead = false;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
 	let commandStop: Promise<void> | undefined;
@@ -633,6 +635,7 @@ async function runApiTurnAttempt(
 		if (variant.lead === "fusion" && !owner.parentSessionId)
 			fusionLead = { userId: owner.userId, id: owner.id };
 		fusionRoleModels = variant.roleModels;
+		fusionThinLead = variant.lead === "fusion" && variant.leadTools === "thin";
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -1265,6 +1268,7 @@ async function runApiTurnAttempt(
 							explore: fusionPairFor(owner.listedModelId, variant.roleModels)
 								.sidekickExplores,
 							waitUntil,
+							thin: thinLead,
 						} satisfies FusionLeadGateInput).then((ready) => {
 							if (ready === "ready") leadWrites.clear();
 							else if (ready === "busy") leadWrites.start();
@@ -2130,6 +2134,7 @@ async function runApiTurnAttempt(
 							: ""
 					}`,
 					roleModels: fusionRoleModels,
+					thinLead: fusionThinLead,
 					...(evaluation
 						? {
 								deps: {
@@ -2428,6 +2433,7 @@ async function runApiTurnAttempt(
 								? "budget exhausted"
 								: "failed",
 						roleModels: fusionRoleModels,
+						thinLead: fusionThinLead,
 						text: [
 							failureMessage,
 							items

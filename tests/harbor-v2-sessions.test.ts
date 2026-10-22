@@ -8,6 +8,7 @@ import {
 	lastChildText,
 } from "../evals/harbor_v2/review";
 import { type TimedEvent, trialSessions } from "../evals/harbor_v2/sessions";
+import { CHECKER_FINAL_NOTICE } from "../src/domain/checker-brief";
 import { newSidekickState } from "../src/domain/sidekick";
 
 const model = {
@@ -116,8 +117,11 @@ describe("child budgets", () => {
 			events: [usage(1_500_000)],
 			from: 0,
 		});
-		await checker([]);
-		await expect(checker([])).rejects.toThrow(
+		// At its cap a checker gets the forced final step (tools off); the
+		// step after it, whose history has that notice, stops the round.
+		const final = await checker([]);
+		expect(final.at(-1)?.content).toBe(CHECKER_FINAL_NOTICE);
+		await expect(checker(final)).rejects.toThrow(
 			"Checker budget used (tokens 1,500,000/1,500,000).",
 		);
 	});

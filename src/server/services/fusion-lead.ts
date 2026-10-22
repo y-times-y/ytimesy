@@ -11,6 +11,7 @@ import {
 	sidekickRoundOpen,
 	sidekickState,
 } from "#/domain/sidekick";
+import { AGENT_TOOL } from "#/domain/subagent";
 import { subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
@@ -144,7 +145,11 @@ async function roundsInProgress(
 	deps: FusionLeadDeps,
 	lead: AgentSessionRecord,
 	sidekicks: readonly Sidekick[],
-	options: { readonly stage: boolean },
+	options: {
+		readonly stage: boolean;
+		/** leadTools=thin: the lead cannot take over, so a stall points it to a restart. */
+		readonly thin?: boolean;
+	},
 ) {
 	const now = deps.now();
 	const iso = new Date(now).toISOString();
@@ -209,7 +214,11 @@ async function roundsInProgress(
 			await deps.stage(
 				lead.id,
 				`sidekick-stalled:${sidekick.session.id}:${round.n}`,
-				`Runtime notice: your writer's round ${round.n} did not run or report, so it is retired. Its changes, if any, are in your checkout (git status). Start a new writer for the brief, or do it yourself.`,
+				`Runtime notice: your writer's round ${round.n} did not run or report, so it is retired. Its changes, if any, are in your checkout (git status). ${
+					options.thin
+						? `Restart it: start a new writer with \`${AGENT_TOOL}\` role writer and re-brief it; it gets a handoff from this one.`
+						: "Start a new writer for the brief, or do it yourself."
+				}`,
 			);
 			continue;
 		}
@@ -229,6 +238,8 @@ export type FusionLeadGateInput = {
 	readonly explore: boolean;
 	/** The latest time this step may wait. */
 	readonly waitUntil: number;
+	/** leadTools=thin: notices point the lead to a restart, not a takeover. */
+	readonly thin?: boolean;
 	readonly deps?: Partial<FusionLeadDeps>;
 };
 
@@ -290,6 +301,7 @@ export async function fusionLeadGate(
 		}
 		const open = await roundsInProgress(deps, lead, sidekicks, {
 			stage: true,
+			thin: input.thin,
 		});
 		if (!open.length) return "ready";
 		if (!open.some((round) => round.kind === "explore")) return "busy";

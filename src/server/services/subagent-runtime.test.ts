@@ -888,6 +888,49 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");
 	});
 
+	it("points a thin lead to a restart on hand_back, a full lead to a takeover", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 2, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const reportFor = (thinLead: boolean) =>
+			subagentReport({
+				machines: { destroy: vi.fn(async () => {}) } as never,
+				session: sidekick,
+				items: [],
+				outcome: "finished",
+				text: "Still failing.",
+				now: NOW,
+				thinLead,
+				deps: {
+					session: vi.fn(async () => sidekick),
+					updateState: applying(
+						state,
+						vi.fn(async () => {}),
+					),
+					addUsage: vi.fn(async () => true),
+					classify: vi.fn(async () => ({
+						answer: { decision: "hand_back" as const, reason: "stuck" },
+						record: decisionRecord("hand_back"),
+						usage: null,
+					})),
+				},
+			});
+		const thin = await reportFor(true);
+		expect(thin).toContain("needs you (stuck)");
+		expect(thin).toContain("or restart it with a handoff.");
+		expect(thin).not.toContain("yourself");
+		expect(await reportFor(false)).toContain(
+			"or take over and do it yourself.",
+		);
+	});
+
 	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {
 		const state = sidekickState();
 		const idle = record("idle", "root", {
