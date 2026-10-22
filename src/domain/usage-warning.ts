@@ -13,13 +13,36 @@ export type UsageWarning = {
 
 const WINDOW_NAMES = { five_hour: "5-hour", weekly: "weekly" } as const;
 
-/** "Tue 3:05 PM" in the reader's own zone. */
-export function usageResetLabel(ms: number) {
-	return new Date(ms).toLocaleString(undefined, {
+/**
+ * "Fri, Oct 23, 3:15 AM (in 2 days)" in the reader's own zone. The zone and
+ * locale are parameters only so tests can pin them.
+ */
+export function usageResetLabel(
+	ms: number,
+	now: number = Date.now(),
+	zone: { readonly locale?: string; readonly timeZone?: string } = {},
+) {
+	const when = new Date(ms).toLocaleString(zone.locale, {
 		weekday: "short",
+		month: "short",
+		day: "numeric",
 		hour: "numeric",
 		minute: "2-digit",
+		timeZone: zone.timeZone,
 	});
+	const relative = relativeTime(ms - now, zone.locale);
+	return relative ? `${when} (${relative})` : when;
+}
+
+/** "in 20 minutes", "in 5 hours", "in 2 days"; null once the time has passed. */
+function relativeTime(deltaMs: number, locale?: string) {
+	const minutes = Math.round(deltaMs / 60_000);
+	if (minutes < 1) return null;
+	const format = new Intl.RelativeTimeFormat(locale, { numeric: "always" });
+	if (minutes < 60) return format.format(minutes, "minute");
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return format.format(hours, "hour");
+	return format.format(Math.round(hours / 24), "day");
 }
 
 /**
