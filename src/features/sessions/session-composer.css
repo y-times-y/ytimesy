@@ -67,38 +67,6 @@
 	line-height: 18px;
 	outline: none;
 }
-/* Mentions in the draft: a mirror behind the textarea draws them with their icons. */
-.composer-field {
-	position: relative;
-}
-.composer-field textarea {
-	position: relative;
-	z-index: 1;
-}
-.composer-field textarea[data-mentions="true"] {
-	-webkit-text-fill-color: transparent;
-}
-.composer-mirror {
-	position: absolute;
-	z-index: 0;
-	overflow: hidden;
-	border-style: solid;
-	border-color: transparent;
-	pointer-events: none;
-}
-.composer-mention-at {
-	position: relative;
-	color: transparent;
-}
-/* The icon sits where the "@" is, a hair left so it never touches the name. */
-.composer-mention-at .agent-icon {
-	position: absolute;
-	top: 50%;
-	left: calc(50% - 1px);
-	width: 0.92em;
-	height: 0.92em;
-	transform: translate(-50%, -50%);
-}
 .session-composer textarea::placeholder {
 	color: rgba(255, 255, 255, 0.4);
 }

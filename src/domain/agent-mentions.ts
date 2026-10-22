@@ -220,17 +220,3 @@ export function agentNameInCode(
 	const name = code.trim().replace(/^@/, "");
 	return names.has(name) ? name : null;
 }
-
-/**
- * Where a known "@name" ends right at the caret begins, so one Backspace
- * takes the whole mention; null otherwise.
- */
-export function mentionTokenBefore(
-	text: string,
-	caret: number,
-	known: (name: string) => boolean,
-): number | null {
-	const match = /(^|[\s(])@([A-Za-z][\w-]*)$/.exec(text.slice(0, caret));
-	if (!match || !known(match[2] ?? "")) return null;
-	return match.index + (match[1] ?? "").length;
-}

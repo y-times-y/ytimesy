@@ -1033,7 +1033,6 @@ export function SessionLauncher({
 
 						<TaskInput
 							textareaRef={textareaRef}
-							mentions={mentionList}
 							onCaretChange={setCaret}
 							value={draft}
 							onChange={(value) => {
