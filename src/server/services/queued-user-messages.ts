@@ -8,7 +8,10 @@ import {
 	sessionItemsQueuedWithUser,
 	withQueuedUserMessages,
 } from "#/domain/session-item";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	agentSessionForOwner,
+} from "../adapters/agent-sessions";
 import {
 	queuedUserMessageItems,
 	queueUserMessageWhileRunning,
@@ -24,6 +27,7 @@ import {
 	stopHarnessWorkspaceTurn,
 } from "./harness-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
+import { timed } from "./step-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 type ComposerSend = Parameters<typeof sendHarnessWorkspaceTask>[2];
@@ -39,19 +43,26 @@ export function sendComposerMessage(
 	input: ComposerSend,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.flatMap(
-		Effect.promise(() => queueBehindRunningTurn(scope, input)),
+		Effect.promise(() =>
+			timed("send:queueCheck", () => queueBehindRunningTurn(scope, input)),
+		),
 		(queued) =>
 			"view" in queued
 				? Effect.succeed(queued.view)
-				: sendHarnessWorkspaceTask(machines, scope, {
-						...input,
-						...(queued.storedAttachments
-							? {
-									attachments: undefined,
-									storedAttachments: queued.storedAttachments,
-								}
-							: {}),
-					}),
+				: sendHarnessWorkspaceTask(
+						machines,
+						scope,
+						{
+							...input,
+							...(queued.storedAttachments
+								? {
+										attachments: undefined,
+										storedAttachments: queued.storedAttachments,
+									}
+								: {}),
+						},
+						queued.session,
+					),
 	);
 }
 
@@ -60,7 +71,11 @@ async function queueBehindRunningTurn(
 	input: ComposerSend,
 ): Promise<
 	| { view: PublicCodexSession }
-	| { storedAttachments?: readonly MessageAttachment[] }
+	| {
+			storedAttachments?: readonly MessageAttachment[];
+			/** The chat as read here; the send that follows need not read it again. */
+			session?: AgentSessionRecord | null;
+	  }
 > {
 	if (
 		!scope.sessionId ||
@@ -75,7 +90,7 @@ async function queueBehindRunningTurn(
 		session.harness !== scope.harnessId ||
 		(scope.projectId && session.projectId !== scope.projectId)
 	)
-		return {};
+		return { session };
 	const messageId = input.idempotencyKey ?? randomUUID();
 	if (sendWasQueued(sessionItemsFromUnknown(session.items), messageId))
 		return { view: await publicSessionView(scope) };

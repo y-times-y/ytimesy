@@ -50,6 +50,7 @@ import {
 import { storeMessageAttachments } from "./message-attachments";
 import { pinnedTurnFailover } from "./model-failover";
 import { commitChatBranchForSubmission } from "./session-branch";
+import { timed } from "./step-timing";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
@@ -234,16 +235,18 @@ export async function sendSubscriptionTask(
 	const continuing = Boolean(input.continueOn);
 	// The chat view (its row, the account and catalog) and the settings the
 	// turn inherits are independent reads.
-	const [view, inherited] = await Promise.all([
-		readSubscriptionSession(scope, continuing, read),
-		input.variant === undefined && input.fast === undefined
-			? inheritedSubscriptionSettings(
-					scope.userId,
-					scope.sessionId as string,
-					input.modelId,
-				)
-			: null,
-	]);
+	const [view, inherited] = await timed("send:view", () =>
+		Promise.all([
+			readSubscriptionSession(scope, continuing, read),
+			input.variant === undefined && input.fast === undefined
+				? inheritedSubscriptionSettings(
+						scope.userId,
+						scope.sessionId as string,
+						input.modelId,
+					)
+				: null,
+		]),
+	);
 	if (!view.agentSessionId) throw new Error("Session is not available.");
 	// Continuing on a fallback during an outage: the fallback route is checked below.
 	if (!continuing && !view.models.some((model) => model.id === input.modelId))
@@ -304,19 +307,21 @@ export async function sendSubscriptionTask(
 			failover?.route.modelId ?? input.modelId,
 		);
 	assertApiContextFits(messages);
-	await enqueueApiTurn({
-		userId: scope.userId,
-		sessionId: scope.sessionId as string,
-		connectionId: null,
-		revision,
-		modelId: input.modelId,
-		routeId: input.modelId,
-		messages,
-		items,
-		preparedTask,
-		idempotencyKey: input.idempotencyKey,
-		failover,
-	});
+	await timed("send:enqueue", () =>
+		enqueueApiTurn({
+			userId: scope.userId,
+			sessionId: scope.sessionId as string,
+			connectionId: null,
+			revision,
+			modelId: input.modelId,
+			routeId: input.modelId,
+			messages,
+			items,
+			preparedTask,
+			idempotencyKey: input.idempotencyKey,
+			failover,
+		}),
+	);
 	// The sidebar shows the stored title; name the chat after its first
 	// message. A composer send already titled it when it claimed the chat, so
 	// this is a fallback and need not hold the response.
