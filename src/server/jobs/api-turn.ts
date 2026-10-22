@@ -1214,13 +1214,15 @@ async function runApiTurnAttempt(
 		if (step && (step.limitReached || step.index > modelStepLimit()))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
-		// An early first request does not wait for this check unless a
-		// UserPromptSubmit hook is known to be configured: its tools wait for
-		// it, a refusal ends the turn, and its feedback reaches the next step.
+		// A UserPromptSubmit hook can be a policy gate (refuse or redact a
+		// prompt), so a first request goes out before this check only when the
+		// chat's journaled configuration shows no such hook; unknown (a new
+		// chat, a first turn since the journal) waits as before. Its tools still
+		// wait for the check, and a late failure ends the turn.
 		if (
 			firstStep &&
 			reportedDirectory &&
-			(await hooks.promptSubmitConfigured()) !== true
+			(await hooks.promptSubmitConfigured()) === false
 		) {
 			earlyPromptCheck = timed("turn:promptHook", () =>
 				hooks.userPromptSubmit(
