@@ -407,9 +407,11 @@ function DeleteAccount({ email }: { email?: string | null }) {
 			<div className="settings-row">
 				<div className="settings-row-text">
 					<span className="settings-row-title">Delete account</span>
-					<span className="settings-row-meta">
-						Permanently deletes your projects, chats, cloud machines, saved
-						files and connections. Your GitHub repositories are not touched.
+					<span
+						className="settings-row-meta"
+						title="Deletes your projects, chats, cloud machines, saved files and connections. Your GitHub repositories are not touched."
+					>
+						Permanent. Your GitHub repositories stay.
 					</span>
 				</div>
 				{confirming ? null : (

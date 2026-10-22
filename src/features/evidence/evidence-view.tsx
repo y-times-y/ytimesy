@@ -182,7 +182,7 @@ function EvidenceHeader({
 					target="_blank"
 					rel="noreferrer"
 				>
-					Open <ExternalLink size={12} aria-hidden="true" />
+					Open <ExternalLink size={14} aria-hidden="true" />
 				</a>
 			) : null}
 		</header>
