@@ -2008,6 +2008,54 @@ describe("a builder's first request before its workspace is ready", () => {
 				expect.objectContaining({ vm: "vm" }),
 			);
 		});
+
+		it("does not hold an early first request for the VM to mark missing paths", async () => {
+			const clone = heldClone();
+			clone.done();
+			const workspace = heldWorkspace();
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const order: string[] = [];
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				order.push("model");
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				setTimeout(() => {
+					order.push("workspace");
+					workspace.ready();
+				}, 5);
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(order).toEqual(["model", "workspace"]);
+			expect(clone.checkouts).toEqual(["skipped"]);
+		});
+
+		it("marks missing paths from the checkout when the first request waits for it anyway", async () => {
+			const clone = heldClone();
+			clone.done();
+			knownHooks(["UserPromptSubmit"]);
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			const workspace = heldWorkspace();
+			setTimeout(() => workspace.ready(), 600);
+			mocks.promptSubmit.mockResolvedValue({ block: false });
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+			expect(clone.checkouts).toEqual(["read"]);
+		});
 	});
 
 	it("waits for the workspace as before when it is ready within the short wait", async () => {
