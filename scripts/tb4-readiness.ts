@@ -914,6 +914,61 @@ if (!flags.offline && creds) {
 			"record the controller VM id, `systemd`/tmux unit, and the R2 sync interval (<= 5 min) in the run notes",
 	});
 }
+{
+	const run = join(repo, "scripts/tb4-run");
+	const need = [
+		"controller.ts",
+		"lib.ts",
+		"watchdog.ts",
+		"provision.py",
+		"host/run-trial.sh",
+		"host/backup.sh",
+		"systemd/tb4-controller.service",
+		"systemd/tb4-watchdog.timer",
+		"systemd/tb4-backup.timer",
+		"faults/fault-proxy.ts",
+	];
+	const missing = need.filter((f) => !existsSync(join(run, f)));
+	const timer = existsSync(join(run, "systemd/tb4-watchdog.timer"))
+		? readFileSync(join(run, "systemd/tb4-watchdog.timer"), "utf8")
+		: "";
+	const service = existsSync(join(run, "systemd/tb4-controller.service"))
+		? readFileSync(join(run, "systemd/tb4-controller.service"), "utf8")
+		: "";
+	const ok =
+		!missing.length &&
+		/Persistent=true/.test(timer) &&
+		/OnUnitActiveSec=/.test(timer) &&
+		/Restart=always/.test(service);
+	add({
+		item: "6",
+		name: "controller, watchdog, backup and fault-proxy scripts present (scripts/tb4-run)",
+		status: ok ? "PASS" : "FAIL",
+		evidence: ok
+			? "journaled controller (resume on restart), systemd Restart=always, watchdog timer Persistent every 5 min, R2 backup timer, fault proxy"
+			: `missing ${missing.join(", ") || "timer/restart settings"}`,
+	});
+	const ledger = (
+		readFileSync(join(run, "lib.ts"), "utf8").match(/modelTotalCapUsd:\s*(\d+)/) ?? []
+	)[1];
+	add({
+		item: "5",
+		name: "AWS Budget ytimesy-tb4-monthly (50/80/100% to the owner's email) exists",
+		status: "MANUAL",
+		evidence: `controller global model stop $${ledger ?? "?"}; harbor-runner cannot read or create budgets (budgets:ViewBudget denied 2026-10-21)`,
+		command:
+			"TB4_AWS_PROFILE=<admin> python scripts/tb4-run/provision.py budget --email <owner email> (or attach scripts/tb4-run/iam-tb4-operator.json to harbor-runner), then confirm the subscription email",
+	});
+	add({
+		item: "3",
+		name: "failure injections run against a capped smoke trial",
+		status: "MANUAL",
+		evidence:
+			"fault proxy + controller handling tested offline (tests/tb4-run.test.ts); the bedrock route needs a base-URL override to put the proxy in the path",
+		command:
+			"docs/tb4-run-controller.md 'Failure injection': run each of the 5 cases on a capped smoke and record the journal + transport.log lines",
+	});
+}
 add({
 	item: "7",
 	name: "self-re-arming monitor with alerts; one named owner",
@@ -937,6 +992,8 @@ add({
 						].includes(f),
 				)
 				.map((f) => join(dir, f));
+	// The next run's rule lives in docs/ (benchmarks/ is read-only for this work).
+	candidates.unshift(join(repo, "docs/tb4-scoring-rule.md"));
 	const committed = candidates.filter((path) => {
 		try {
 			return !!execFileSync(
