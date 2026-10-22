@@ -11,12 +11,16 @@
  *     pause <reason> | resume | stop <reason>
  *     score [--codex benchmarks/evaluation/codex-public-job.json]
  *
+ *     tasks [--dataset <dir>]   write tasks.json from each task.toml (default: Harbor's
+ *                          dataset cache ~/.cache/harbor/tasks/packages/terminal-bench)
+ *
  * <run-dir>/hosts.json (written by provision.py) and <run-dir>/tasks.json
  * (written by `tasks`) describe the fleet and the dataset. The journal
  * <run-dir>/journal.jsonl is the only state.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -33,7 +37,50 @@ import {
 	replay,
 	scoredTrials,
 	type Task,
+	taskFromToml,
 } from "./lib.ts";
+
+/** Harbor's dataset cache, the one preflight.ts and run-trial.sh resolve tasks from. */
+export const HARBOR_TASK_CACHE = join(homedir(), ".cache/harbor/tasks/packages/terminal-bench");
+
+/**
+ * task.toml paths per task. Accepts Harbor's cache (<task>/<content hash>/task.toml;
+ * one hash per task is expected, the newest wins) or a flat dataset (<task>/task.toml).
+ */
+export function findTaskTomls(root: string): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const name of readdirSync(root)) {
+		const flat = join(root, name, "task.toml");
+		if (existsSync(flat)) {
+			out.set(name, flat);
+			continue;
+		}
+		const dir = join(root, name);
+		let best: { path: string; mtime: number } | undefined;
+		for (const hash of existsSync(dir) && statSync(dir).isDirectory() ? readdirSync(dir) : []) {
+			const path = join(dir, hash, "task.toml");
+			if (!existsSync(path)) continue;
+			const mtime = statSync(path).mtimeMs;
+			if (!best || mtime > best.mtime) best = { path, mtime };
+		}
+		if (best) out.set(name, best.path);
+	}
+	return out;
+}
+
+/** Parse every task.toml with one isolated python call (tomllib) and build the Task list. */
+export function loadTasks(root: string): Task[] {
+	const tomls = findTaskTomls(root);
+	if (!tomls.size) throw new Error(`no task.toml under ${root}`);
+	const parsed = JSON.parse(
+		execFileSync(
+			"python3",
+			["-I", "-c", "import json,sys,tomllib\nprint(json.dumps({p: tomllib.load(open(p,'rb')) for p in sys.argv[1:]}))", ...tomls.values()],
+			{ encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+		),
+	) as Record<string, Record<string, unknown>>;
+	return [...tomls].map(([name, path]) => taskFromToml(name, parsed[path])).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 /** Everything that touches a host; replaced by a fake in tests. */
 export type HostOps = {
@@ -249,6 +296,7 @@ async function main() {
 			owner: { type: "string" },
 			override: { type: "string" },
 			codex: { type: "string", default: "benchmarks/evaluation/codex-public-job.json" },
+			dataset: { type: "string" },
 		},
 	});
 	const runDir = values["run-dir"]!;
@@ -264,6 +312,12 @@ async function main() {
 				throw new Error("--run-id, --commit and --bundle-sha256 (64 hex) are required");
 			journal.append({ at: at(), type: "run-start", runId: values["run-id"], commit: values.commit, bundleSha256: values["bundle-sha256"]! });
 			journal.append({ at: at(), type: "batch-open", batch: "b1" });
+			break;
+		}
+		case "tasks": {
+			const list = loadTasks(values.dataset ?? HARBOR_TASK_CACHE);
+			writeFileSync(join(runDir, "tasks.json"), `${JSON.stringify(list, null, 2)}\n`);
+			console.log(`${list.length} tasks written to ${join(runDir, "tasks.json")}`);
 			break;
 		}
 		case "tick":

@@ -3,11 +3,16 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type HostOps, readTrialDir, tick } from "../scripts/tb4-run/controller.ts";
+import { findTaskTomls, type HostOps, loadTasks, readTrialDir, tick } from "../scripts/tb4-run/controller.ts";
 import { startFaultProxy } from "../scripts/tb4-run/faults/fault-proxy.ts";
 import {
 	batch2Decision,
 	classify,
+	fitsCpu,
+	HOST_RESERVED_VCPU,
+	hostCpuBudget,
+	TRIAL_OVERHEAD_VCPU,
+	taskFromToml,
 	type Host,
 	type HostObservation,
 	Journal,
@@ -128,6 +133,55 @@ describe("tb4 controller", () => {
 		writeFileSync(join(dir, "t__x", "result.json"), JSON.stringify(started(1)));
 		writeFileSync(join(dir, "t__x", "artifacts", "manifest.json"), JSON.stringify([{ source: "/app", status: "failed" }]));
 		expect(classify(readTrialDir(dir)!)).toMatchObject({ kind: "infra", reason: "agent /app did not reach the grader" });
+	});
+});
+
+describe("tb4 host CPU budget", () => {
+	const host: Host = { name: "cpu-0", kind: "cpu", vcpu: 64, memoryMb: 1 << 30, address: "x" };
+	const two = (i: number): Task => ({ name: `t${i}`, cpus: 2, memoryMb: 1024, gpus: 0, separateVerifier: true });
+
+	it("keeps the sum of in-flight task cpus plus overhead within vCPU minus the reserve", () => {
+		const many = Array.from({ length: 40 }, (_, i) => two(i));
+		const { journal } = newRun();
+		const launches = nextLaunches({ state: replay(journal.events()), tasks: many, hosts: [host] });
+		// 2 cpus + 1 overhead per trial in 64 - 2 = 62: 20 trials, not 32.
+		expect(launches).toHaveLength(Math.floor(hostCpuBudget(host) / (2 + TRIAL_OVERHEAD_VCPU)));
+		expect(launches.length * (2 + TRIAL_OVERHEAD_VCPU)).toBeLessThanOrEqual(host.vcpu - HOST_RESERVED_VCPU);
+	});
+
+	it("counts running trials from the journal", () => {
+		const { journal } = newRun();
+		for (let i = 0; i < 19; i++)
+			journal.append({ at: "t", type: "launch", attemptId: `r1-b1-t${i}-a01`, task: `t${i}`, batch: "b1", host: "cpu-0" });
+		const many = Array.from({ length: 40 }, (_, i) => two(i));
+		expect(nextLaunches({ state: replay(journal.events()), tasks: many, hosts: [host] })).toHaveLength(1);
+	});
+
+	it("an idle host takes one task as large as itself, and only that one", () => {
+		const p5: Host = { name: "gpu-0", kind: "gpu", vcpu: 16, memoryMb: 262144, address: "y" };
+		const jax: Task = { name: "jax", cpus: 16, memoryMb: 32768, gpus: 1, separateVerifier: true };
+		expect(fitsCpu(p5, { vcpu: 0, trials: 0 }, jax)).toBe(true);
+		expect(fitsCpu(p5, { vcpu: 5, trials: 1 }, { cpus: 2 })).toBe(true);
+		expect(fitsCpu(p5, { vcpu: 5, trials: 1 }, { cpus: 16 })).toBe(false);
+		const { journal } = newRun();
+		expect(nextLaunches({ state: replay(journal.events()), tasks: [jax], hosts: [p5] })).toHaveLength(1);
+	});
+
+	it("reads cpus as max(environment, separate verifier) from task.toml in Harbor's cache layout", () => {
+		expect(
+			taskFromToml("x", {
+				environment: { cpus: 4, memory_mb: 8192, gpus: 0 },
+				verifier: { environment_mode: "separate", environment: { cpus: 6, memory_mb: 4096 } },
+			}),
+		).toEqual({ name: "x", cpus: 6, memoryMb: 8192, gpus: 0, separateVerifier: true });
+		const root = mkdtempSync(join(tmpdir(), "tb4cache-"));
+		mkdirSync(join(root, "vpp", "abc123"), { recursive: true });
+		writeFileSync(
+			join(root, "vpp", "abc123", "task.toml"),
+			'[verifier]\nenvironment_mode = "separate"\n[verifier.environment]\ncpus = 2\nmemory_mb = 8192\n[environment]\ncpus = 2\nmemory_mb = 8192\ngpus = 0\n',
+		);
+		expect([...findTaskTomls(root).keys()]).toEqual(["vpp"]);
+		expect(loadTasks(root)).toEqual([{ name: "vpp", cpus: 2, memoryMb: 8192, gpus: 0, separateVerifier: true }]);
 	});
 });
 
