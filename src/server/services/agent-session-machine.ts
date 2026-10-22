@@ -63,52 +63,64 @@ async function resolveAgentSessionRecord(input: {
 		readonly access: AgentTaskAccess;
 	};
 }) {
-	const workspace = await workspaceForProject(input.userId, input.projectId);
+	// The named chat (and a subagent's parent) is read by id beside the
+	// project's environment; the project's whole chat list is read only when
+	// it is needed: to pick its latest chat, or the model a new chat inherits.
+	const [workspace, named, parent] = await Promise.all([
+		workspaceForProject(input.userId, input.projectId),
+		input.sessionId && !input.createNew
+			? agentSessionForOwner(input.userId, input.sessionId)
+			: null,
+		input.parentSessionId
+			? agentSessionForOwner(input.userId, input.parentSessionId)
+			: null,
+	]);
 	if (!workspace || !workspaceEnvironmentIsReady(workspace)) {
 		throw new Error("Prepare a project environment before starting an agent.");
 	}
-	const sessions = await listAgentSessions(input.userId, input.projectId);
+	let listed: Promise<AgentSessionRecord[]> | undefined;
+	const sessions = () => {
+		listed ??= listAgentSessions(input.userId, input.projectId);
+		return listed;
+	};
 	const selected = input.createNew
 		? null
 		: input.sessionId
-			? ((await agentSessionForOwner(input.userId, input.sessionId)) ??
-				sessions.find((session) => session.id === input.sessionId) ??
-				null)
+			? named
 			: input.parentSessionId
 				? await childAgentSession(input.userId, input.parentSessionId)
-				: (sessions[0] ?? null);
+				: ((await sessions())[0] ?? null);
 	if (input.sessionId && !input.createNew && !selected) {
 		throw new Error("Agent session is not available.");
 	}
 	if (selected && selected.projectId !== input.projectId) {
 		throw new Error("Agent session is not in this project.");
 	}
-	const parent = input.parentSessionId
-		? ((await agentSessionForOwner(input.userId, input.parentSessionId)) ??
-			null)
-		: null;
 	if (parent && parent.projectId !== input.projectId) {
 		throw new Error("The parent task is not in this project.");
 	}
-	const inherited = listedModelPreferenceFromSessions({
-		harness: input.harness,
-		sessions: [
-			...(parent
-				? [
-						{
-							harness: parent.harness,
-							listedModelId: parent.listedModelId,
-							items: parent.items,
-						},
-					]
-				: []),
-			...sessions.map((session) => ({
-				harness: session.harness,
-				listedModelId: session.listedModelId,
-				items: session.items,
-			})),
-		],
-	});
+	const inherited =
+		selected || input.listedModelId?.trim()
+			? null
+			: listedModelPreferenceFromSessions({
+					harness: input.harness,
+					sessions: [
+						...(parent
+							? [
+									{
+										harness: parent.harness,
+										listedModelId: parent.listedModelId,
+										items: parent.items,
+									},
+								]
+							: []),
+						...(await sessions()).map((session) => ({
+							harness: session.harness,
+							listedModelId: session.listedModelId,
+							items: session.items,
+						})),
+					],
+				});
 	const session =
 		selected ??
 		(await insertAgentSession({
@@ -119,7 +131,7 @@ async function resolveAgentSessionRecord(input: {
 			parentSessionId: input.parentSessionId,
 			title: input.title,
 			listedModelId:
-				input.listedModelId?.trim() || inherited.listedModelId || null,
+				input.listedModelId?.trim() || inherited?.listedModelId || null,
 			task: input.task,
 		}));
 	return {
@@ -391,12 +403,10 @@ export async function peekAgentSessionMachine(input: {
 	session: AgentSessionRecord | null;
 	providerRef: string | null;
 }> {
-	const sessions = await listAgentSessions(input.userId, input.projectId);
+	// A named chat is read by id; only the project's latest chat needs the list.
 	const session = input.sessionId
-		? ((await agentSessionForOwner(input.userId, input.sessionId)) ??
-			sessions.find((row) => row.id === input.sessionId) ??
-			null)
-		: (sessions[0] ?? null);
+		? await agentSessionForOwner(input.userId, input.sessionId)
+		: ((await listAgentSessions(input.userId, input.projectId))[0] ?? null);
 	return { session, providerRef: session?.providerRef ?? null };
 }
 
