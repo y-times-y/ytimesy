@@ -107,6 +107,7 @@ import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
+	prewarmProjectAgentSession,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
@@ -271,6 +272,9 @@ export function WorkspaceHome({
 	const [memoryPage, setMemoryPage] = useState<"list" | "graph" | null>(null);
 	const memoryPageOpen = memoryPage !== null;
 	const startSession = useServerFn(startProjectAgentSession);
+	const prewarmSession = useServerFn(prewarmProjectAgentSession);
+	/** Chats whose machine copy was already asked for in this page. */
+	const prewarmedChats = useRef(new Set<string>());
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
 	const [projectsOpen, setProjectsOpen] = useState(false);
@@ -1224,6 +1228,24 @@ export function WorkspaceHome({
 			});
 	}
 
+	/** Typing in an empty new chat copies its machine while the message is written. */
+	function prewarmOpenChat() {
+		const chatId = session.agentSessionId;
+		const projectId = selectedProject?.id;
+		if (
+			!chatId ||
+			!projectId ||
+			session.items.length ||
+			session.turnStatus === "running" ||
+			prewarmedChats.current.has(chatId)
+		)
+			return;
+		prewarmedChats.current.add(chatId);
+		void prewarmSession({ data: { projectId, sessionId: chatId } }).catch(
+			() => undefined,
+		);
+	}
+
 	function deleteChat(chatId: string) {
 		if (!selectedProject) {
 			return;
@@ -1816,6 +1838,7 @@ export function WorkspaceHome({
 								backgroundRuns={backgroundRuns}
 								memoryActions={memoryActions}
 								key={composerKey.current.key}
+								onDraftStarted={prewarmOpenChat}
 								session={session}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}

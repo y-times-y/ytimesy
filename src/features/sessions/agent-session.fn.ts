@@ -39,6 +39,7 @@ import {
 	openAgentSession,
 } from "#/server/services/agent-session-machine";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
+import { prewarmChatMachine } from "#/server/services/machine-prewarm";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 type PublicAgentChat = {
@@ -128,6 +129,27 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));
 		}
+	});
+
+/**
+ * The person started typing in an empty new chat: copy its machine now
+ * (prewarmChatMachine). Answers at once; a refused or failed copy only means
+ * the first turn makes it as before.
+ */
+export const prewarmProjectAgentSession = createServerFn({ method: "POST" })
+	.validator((data: { projectId: string; sessionId: string }) => ({
+		projectId: z.string().uuid().parse(data.projectId),
+		sessionId: z.string().uuid().parse(data.sessionId),
+	}))
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const copy = () =>
+			runWithMachines("Machine copy", publicFailureMessage, (machines) =>
+				prewarmChatMachine(machines, { ...data, userId: user.id }),
+			).catch(() => undefined);
+		if (!startAfterResponse(copy)) void copy();
+		return { ok: true };
 	});
 
 export const listProjectAgentTasks = createServerFn({ method: "GET" })

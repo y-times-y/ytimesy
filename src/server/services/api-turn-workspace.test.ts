@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
 	load: vi.fn(() => Effect.succeed({}) as Effect.Effect<object, Error>),
 	revision: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
 	fileAt: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	template: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
+}));
+vi.mock("../adapters/prepared-checkout", () => ({
+	templateCheckoutCommit: mocks.template,
 }));
 vi.mock("./verification-baseline", () => ({
 	establishVerificationBaselines: mocks.baseline,
@@ -62,6 +66,7 @@ const machines = {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.load.mockImplementation(() => Effect.succeed({}));
+	mocks.template.mockResolvedValue(null);
 	mocks.root.mockImplementation(async () => ({
 		session: root,
 		providerRef: "vm-root",
@@ -387,12 +392,6 @@ describe("a new chat's pinned base", () => {
 			fresh,
 		],
 		[
-			"a chat on an existing branch",
-			root,
-			{ pinNewChatBase: true },
-			{ ...fresh, workingBranch: "main" },
-		],
-		[
 			"a chat that keeps its legacy checkout",
 			root,
 			{ pinNewChatBase: true },
@@ -411,6 +410,71 @@ describe("a new chat's pinned base", () => {
 		expect(await prepare.pinnedBase()).toBeNull();
 		expect(mocks.revision).not.toHaveBeenCalled();
 		expect(mocks.checkout).toHaveBeenCalledWith(planned);
+	});
+
+	it("is the template's commit for a chat on the branch its template holds, and the checkout is not moved", async () => {
+		const template = "d".repeat(40);
+		mocks.template.mockResolvedValue(template);
+		mocks.fileAt.mockResolvedValue({ present: false });
+		const planned = { ...fresh, workingBranch: "main" };
+		mocks.load.mockImplementation(() => Effect.succeed(planned));
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		await prepare();
+		expect(await prepare.pinnedBase()).toBe(template);
+		expect(mocks.template).toHaveBeenCalledWith(
+			"owner",
+			"root",
+			"acme/app",
+			"main",
+		);
+		expect(mocks.revision).not.toHaveBeenCalled();
+		expect(mocks.checkout).toHaveBeenCalledWith(planned);
+		expect(await prepare.pinnedBaseFile(template, "a.json")).toEqual({
+			present: false,
+		});
+	});
+
+	it("is unknown on an existing branch no template build names", async () => {
+		const planned = { ...fresh, workingBranch: "feature" };
+		mocks.load.mockImplementation(() => Effect.succeed(planned));
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		await prepare();
+		expect(await prepare.pinnedBase()).toBeNull();
+		expect(mocks.checkout).toHaveBeenCalledWith(planned);
+	});
+
+	it("names the repository path of a fresh template copy before the VM", async () => {
+		const prepare = deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		const preparing = prepare();
+		expect(await prepare.plannedDirectory()).toBe("/home/ubuntu/app");
+		await preparing;
+		const existing = deferredApiTurnWorkspace(
+			machines,
+			{ ...root, providerRef: "vm-root" } as AgentSessionRecord,
+			new AbortController().signal,
+			undefined,
+			{ pinNewChatBase: true },
+		);
+		await existing();
+		expect(await existing.plannedDirectory()).toBeNull();
 	});
 
 	it("reads a file from GitHub only at the pinned commit", async () => {

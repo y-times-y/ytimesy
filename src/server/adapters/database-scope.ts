@@ -14,6 +14,35 @@ export function scopedDatabase() {
 	return scope.getStore()?.pool;
 }
 
+/**
+ * A read cached across the invocations (Worker requests or durable steps)
+ * of an isolate. On Workers, awaiting another request's pending I/O can hang
+ * this one for good (that request may end, cancelling it): a pending read is
+ * shared only within the invocation that started it, a settled one with any.
+ */
+export type InvocationSharedRead = {
+	readonly owner: object | undefined;
+	settled: boolean;
+};
+
+export function invocationSharedRead(
+	promise: Promise<unknown>,
+): InvocationSharedRead {
+	const read: InvocationSharedRead = {
+		owner: scope.getStore(),
+		settled: false,
+	};
+	const settle = () => {
+		read.settled = true;
+	};
+	promise.then(settle, settle);
+	return read;
+}
+
+export function usableInThisInvocation(read: InvocationSharedRead) {
+	return read.settled || read.owner === scope.getStore();
+}
+
 /** Typed resource keys are private to their owner; request-owned clients close before their database. */
 export function scopedResource<T>(
 	key: symbol,
