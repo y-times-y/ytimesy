@@ -53,7 +53,11 @@ import {
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
-import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
+import {
+	admitQueuedTurns,
+	runBackgroundJob,
+	startBackgroundJob,
+} from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -832,6 +836,18 @@ export default {
 					env.ENVIRONMENT_EXECUTION_ENABLED !== "1"
 				)
 					return new Response(null, { status: 503 });
+				// A sent message's wake: claim and start its turn in this request.
+				// A job runner object would add a new object's first call and an
+				// alarm (1-2 s on the edge) before the claim; a repeated admission
+				// is harmless, since a claim takes a turn once.
+				if (parsed.data.kind === "model-admission") {
+					await withDatabaseScope(
+						env.HYPERDRIVE.connectionString,
+						() => admitQueuedTurns(env),
+						null,
+					);
+					return Response.json({ state: "done" }, { status: 202 });
+				}
 				// Re-admitting the same signed job is a no-op that reports its state.
 				return Response.json(
 					{ state: await startBackgroundJob(env, parsed.data) },
