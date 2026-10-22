@@ -27,6 +27,7 @@ vi.mock("../src/server/jobs/model-workflow-executor", () => ({
 }));
 vi.mock("../src/server/edge/background-jobs", () => ({
 	BackgroundJobRunner: class {},
+	admitQueuedTurns: vi.fn(),
 	runBackgroundJob: vi.fn(),
 	startBackgroundJob: mocks.startJob,
 }));
