@@ -81,3 +81,40 @@ it("shows a helper's finish line under Main's earlier answer while the report's 
 	);
 	expect(finishBelowAnswer(ended)).toBe(true);
 });
+
+it("puts the finish card above Main's reply to the report, with the report's first line", () => {
+	const html = renderToStaticMarkup(
+		<SessionTimeline
+			items={[
+				...main,
+				{
+					kind: "agentMessage",
+					id: SessionItemId("reply"),
+					text: "From the report",
+				},
+			]}
+			turnStatus="completed"
+			tasks={[helper]}
+			helperLines={{
+				identities: new Map([
+					[
+						helper.id,
+						{
+							name: "research-1",
+							task: "Research the parser",
+							icon: "search" as const,
+							color: "#F43F5E",
+						},
+					],
+				]),
+				onSelect: () => {},
+			}}
+			autoScroll={false}
+		/>,
+	);
+	const card = html.indexOf('class="helper-card"');
+	expect(card).toBeGreaterThan(html.indexOf("Main earlier answer"));
+	expect(card).toBeLessThan(html.indexOf("From the report"));
+	expect(html).toContain('<span class="helper-card-name">research-1</span>');
+	expect(html).toContain('<span class="helper-card-line">Found it.</span>');
+});

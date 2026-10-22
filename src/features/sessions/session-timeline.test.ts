@@ -113,10 +113,10 @@ describe("session timeline live collapse", () => {
 						[
 							"child",
 							{
-								name: "Fix branch picker",
-								color: "var(--agent-build)",
+								name: "build-1",
+								task: "Fix branch picker",
+								color: "#F43F5E",
 								icon: "hammer" as const,
-								tag: "Build",
 							},
 						],
 					]),
@@ -138,10 +138,23 @@ describe("session timeline live collapse", () => {
 			}),
 		);
 		// The lead's chat shows a start line and a finish line, not the helper's transcript.
-		expect(html).toContain("Started “Fix branch picker”");
+		// Its short name on both, the task beside it, the colour on the icon only.
 		expect(html).toContain(
-			'<span class="helper-line-text" title="Implemented">“Fix branch picker” finished</span>',
+			'<span class="helper-line-name">build-1</span><span class="helper-line-text" title="Fix branch picker">started · <!-- -->Fix branch picker</span>',
 		);
+		expect(html).toContain('style="color:#F43F5E"');
+		// The finish is an outlined card that opens the helper; its report's
+		// first line under it, the full report on hover.
+		expect(html).toMatch(
+			/<button type="button" class="helper-card" data-status="finished" title="Implemented">/,
+		);
+		expect(html).toContain('<span class="helper-card-name">build-1</span>');
+		expect(html).toContain(
+			'<span class="helper-card-verb" data-verb="finished">finished</span> · Fix branch picker',
+		);
+		expect(html).toContain('<span class="helper-card-time">1s</span>');
+		expect(html).toContain('<span class="helper-card-line">Implemented</span>');
+		expect(html).not.toContain("agent-row-tag");
 		expect(html).not.toContain("child-task-card");
 		expect(html).not.toContain("Looking at the session timeline");
 		expect(html).not.toContain("Its final summary is below");
@@ -462,9 +475,53 @@ describe("session timeline after a reload", () => {
 			"completed",
 			[task],
 		);
-		expect(html).toContain("finished</span>");
+		expect(html).toContain('data-verb="finished">finished</span>');
 		expect(html).not.toContain("[agent 3");
-		expect(html).toContain("Parser fixed. · 12 steps · 6m · 362k tokens");
+		expect(html).toContain(
+			'<span class="helper-card-line">Parser fixed.</span>',
+		);
+		expect(html).toContain(
+			'title="Parser fixed.\n\n12 steps · 6m · 362k tokens"',
+		);
+	});
+
+	it("says failed on a failed helper's card, in its own colour", () => {
+		const task = {
+			id: "h1",
+			parentSessionId: "root",
+			title: "Fix the parser",
+			label: "Task 1",
+			depth: 1,
+			status: "failed",
+			prompt: "",
+			placement: "fresh",
+			access: "read_write",
+			summary: null,
+			harnessId: "api",
+			listedModelId: null,
+			createdAt: new Date(1_000).toISOString(),
+			updatedAt: new Date(2_000).toISOString(),
+			items: [
+				{
+					kind: "error",
+					id: SessionItemId("err"),
+					message: "Budget ran out",
+				},
+			],
+			turnStatus: "failed",
+		} as AgentTaskActivity;
+		const html = render(
+			[user("ask"), spawn, answer("a1", "Started a helper.")],
+			"completed",
+			[task],
+		);
+		expect(html).toContain('class="helper-card" data-status="failed"');
+		expect(html).toContain(
+			'<span class="helper-card-verb" data-verb="failed">failed</span> · Fix the parser',
+		);
+		expect(html).toContain(
+			'<span class="helper-card-line">Budget ran out</span>',
+		);
 	});
 
 	it("marks a stopped turn with a muted Stopped line", () => {

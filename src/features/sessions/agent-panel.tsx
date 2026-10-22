@@ -144,6 +144,11 @@ function AgentRow({
 			<span className="agent-row-name" title={row.title || row.name}>
 				{row.name}
 			</span>
+			{row.task ? (
+				<span className="agent-row-task" title={row.title}>
+					{row.task}
+				</span>
+			) : null}
 			{row.tag ? <span className="agent-row-tag">{row.tag}</span> : null}
 			{/* Keyed on the line: a new activity fades in instead of flickering. */}
 			<span

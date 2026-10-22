@@ -4,7 +4,11 @@ import {
 	agentTaskTree,
 	taskStatusFromTurn,
 } from "./agent-task";
-import { helperKindOf, helperReference } from "./helper-names";
+import {
+	helperIdentitiesOf,
+	helperKindOf,
+	helperReference,
+} from "./helper-names";
 import { sessionBilling } from "./model-pricing";
 import {
 	type SessionItem,
@@ -53,7 +57,7 @@ export type SubagentNode = {
 	readonly parentId: string;
 	/** Positional id: 1, 1.2, 1.2.1. */
 	readonly label: string;
-	/** How the chat names it (helper-names.ts): "Build the CSV export (Build)". */
+	/** How the chat names it (helper-names.ts): build-1 ("Build the CSV export"). */
 	readonly name: string;
 	readonly level: number;
 	readonly title: string;
@@ -140,6 +144,22 @@ export function subagentTree(
 		rootId,
 		sessions.filter((session) => session.id !== rootId) as never,
 	);
+	// Short names and numbers in start order, as the chat shows them.
+	const identities = helperIdentitiesOf(
+		tasks.flatMap((task) => {
+			const session = byId.get(task.id);
+			return session?.agentRole
+				? [
+						{
+							id: task.id,
+							createdAt: session.createdAt,
+							title: task.title,
+							kind: helperKindOf(session.agentRole, session.agentBudget),
+						},
+					]
+				: [];
+		}),
+	);
 	const nodes: SubagentNode[] = [];
 	for (const task of tasks) {
 		const session = byId.get(task.id);
@@ -157,8 +177,8 @@ export function subagentTree(
 			parentId: task.parentSessionId,
 			label: subagentLabelFromTaskLabel(task.label),
 			name: helperReference(
+				identities.get(task.id)?.name ?? "helper",
 				task.title,
-				helperKindOf(session.agentRole, session.agentBudget),
 			),
 			level: task.depth,
 			title: task.title,
@@ -202,7 +222,7 @@ export function subagentNodeRemaining(
 /** What the task panel shows for a subagent row (no prompts, no transcripts). */
 export type SubagentTaskView = {
 	readonly role: SubagentRole;
-	/** How the chat names it (helper-names.ts): its task, then its kind. */
+	/** How the chat names it (helper-names.ts): build-1 ("Its task"). */
 	readonly name?: string;
 	readonly vm: "fork" | "shared";
 	readonly steps: number;

@@ -197,7 +197,7 @@ describe("agent tool", () => {
 		});
 		expect(result).toEqual({
 			id: "1",
-			name: "Add the flag (Build)",
+			name: 'build-1 ("Add the flag")',
 			taskId: "child-1",
 			role: "writer",
 			vm: "fork",
@@ -423,7 +423,7 @@ describe("agent_send", () => {
 			await call("agent_send", { id: "1", message: "Use port 4001." }),
 		).toEqual({
 			id: "1",
-			name: "w (Build)",
+			name: 'build-1 ("w")',
 			status: "message queued",
 			delivery: "next step",
 		});
@@ -1329,7 +1329,7 @@ describe("checkerMode=pair: the checker's judge and worker", () => {
 			await call({ id: "1.1", brief: "Run tests/edge.sh as well." }),
 		).toEqual({
 			id: "1.1",
-			name: "Checker worker (Research)",
+			name: 'research-1 ("Checker worker")',
 			status:
 				"message queued: it is still working; its report arrives as a message",
 		});

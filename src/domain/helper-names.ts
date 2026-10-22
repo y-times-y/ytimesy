@@ -5,12 +5,13 @@ import {
 } from "./subagent";
 
 /**
- * How the chat shows its agents, everywhere: the agents list, the start and
- * finish lines, the helper view, and the agent tool's result and report
- * header the lead reads. The root agent is "Main"; a helper goes by its
- * task (the title the lead gave it), with a plain tag for its kind. Each
- * kind has an icon and a colour token; several of one kind keep the hue, a
- * shade lighter per extra instance. Internal role ids are unchanged.
+ * How the chat shows its agents, everywhere: the agents list, the start
+ * lines and finish cards, the helper view, and the agent tool's result and
+ * report header the lead reads. The root agent is "Main"; a helper goes by a
+ * short name, its kind and its number among the chat's helpers of that kind
+ * in start order ("build-1", "research-2"), with its task as the text
+ * beside it. Each kind has an icon; each helper has its own colour, the next
+ * of HELPER_COLORS in start order. Internal role ids are unchanged.
  */
 
 export const MAIN_NAME = "Main";
@@ -48,41 +49,40 @@ export const KIND_ICONS: Record<AgentKind, AgentIcon> = {
 };
 
 /**
- * Colour per kind, as CSS custom properties on :root (styles.css). The
- * sidekick is a Build agent working in Main's checkout: blue, apart from
- * fork builders' copper. Colour goes on icons and accents only; text stays
- * neutral.
+ * Main's and background commands' colours, as CSS custom properties on :root
+ * (styles.css). Helpers take HELPER_COLORS instead. Colour goes on icons
+ * only; text stays neutral.
  */
-export const KIND_COLOR_TOKENS: Record<AgentKind, string> = {
+export const AGENT_COLOR_TOKENS = {
 	main: "--agent-main",
-	sidekick: "--agent-sidekick",
-	writer: "--agent-build",
-	researcher: "--agent-research",
-	reviewer: "--agent-review",
-	checker: "--agent-verify",
 	background: "--agent-background",
-};
-export const KIND_COLORS: Record<AgentKind, string> = {
-	main: "#E5E5E5",
-	sidekick: "#7AA2F7",
-	writer: "#D9A066",
-	researcher: "#5FB3B3",
-	reviewer: "#B48EF0",
-	checker: "#7FC08A",
-	background: "#8A8F98",
-};
+} as const;
 
-/** How much lighter the nth agent of a kind is (0 for the first, 12% per extra, at most 36%). */
-export function kindShade(instance: number) {
-	return Math.min(0.36, Math.max(0, instance) * 0.12);
+/** A colour value for CSS: Main's or background commands' token. */
+export function agentColor(kind: keyof typeof AGENT_COLOR_TOKENS) {
+	return `var(${AGENT_COLOR_TOKENS[kind]})`;
 }
 
-/** A colour value for CSS: the kind's token, lightened for later instances. */
-export function agentColor(kind: AgentKind, shade = 0) {
-	const token = `var(${KIND_COLOR_TOKENS[kind]})`;
-	return shade > 0
-		? `color-mix(in oklab, ${token}, white ${Math.round(shade * 100)}%)`
-		: token;
+/** Each helper's icon colour, in the order the chat started them, cycling. */
+export const HELPER_COLORS = [
+	"#F43F5E",
+	"#A3E635",
+	"#60A5FA",
+	"#F97316",
+	"#FACC15",
+] as const;
+
+/** The colour of the chat's nth helper (0-based, in start order). */
+export function helperColor(index: number) {
+	return HELPER_COLORS[
+		((Math.trunc(index) % HELPER_COLORS.length) + HELPER_COLORS.length) %
+			HELPER_COLORS.length
+	] as string;
+}
+
+/** "build-1": a helper's kind, lowercased, and its number among that kind. */
+export function helperShortName(kind: HelperKind, number: number) {
+	return `${(KIND_TAGS[kind] as string).toLowerCase()}-${number}`;
 }
 
 /** Lead mode fusion's sidekick is a writer whose budget carries its sidekick state. */
@@ -115,9 +115,9 @@ export function helperName(title: string) {
 	return `${(space > 12 ? cut.slice(0, space) : cut).replace(/[\s,.;:-]+$/, "")}…`;
 }
 
-/** How the lead names a helper to the user: its task, then its kind. */
-export function helperReference(title: string, kind: HelperKind) {
-	return `${helperName(title)} (${KIND_TAGS[kind]})`;
+/** How the lead names a helper to the user: build-1 ("Fix pricing rounding"). */
+export function helperReference(shortName: string, title: string) {
+	return `${shortName} ("${helperName(title)}")`;
 }
 
 /**
@@ -142,15 +142,21 @@ export function helperCallLabel(call: {
 }
 
 export type HelperIdentity = {
+	/** Its short name: "build-1". */
 	readonly name: string;
+	/** Its task, cut cleanly (helperName). */
+	readonly task: string;
 	readonly kind: HelperKind;
-	readonly tag: string;
 	readonly icon: AgentIcon;
-	/** Its CSS colour (agentColor). */
+	/** Its CSS colour (helperColor). */
 	readonly color: string;
 };
 
-/** Every helper of one chat (any depth), in start order: name, tag, icon, colour. */
+/**
+ * Every helper of one chat (any depth), in start order: short name, task,
+ * icon and colour. Numbers and colours follow start order, so a helper keeps
+ * its own as others start and finish.
+ */
 export function helperIdentitiesOf(
 	helpers: readonly {
 		readonly id: string;
@@ -164,18 +170,20 @@ export function helperIdentitiesOf(
 			left.createdAt.localeCompare(right.createdAt) ||
 			left.id.localeCompare(right.id),
 	);
-	const seen = new Map<HelperKind, number>();
+	// Numbered per tag: a sidekick and a writer are both "build".
+	const seen = new Map<string, number>();
 	const identities = new Map<string, HelperIdentity>();
-	for (const helper of ordered) {
-		const instance = seen.get(helper.kind) ?? 0;
-		seen.set(helper.kind, instance + 1);
+	ordered.forEach((helper, index) => {
+		const tag = KIND_TAGS[helper.kind] as string;
+		const number = (seen.get(tag) ?? 0) + 1;
+		seen.set(tag, number);
 		identities.set(helper.id, {
-			name: helperName(helper.title),
+			name: helperShortName(helper.kind, number),
+			task: helperName(helper.title),
 			kind: helper.kind,
-			tag: KIND_TAGS[helper.kind] as string,
 			icon: KIND_ICONS[helper.kind],
-			color: agentColor(helper.kind, kindShade(instance)),
+			color: helperColor(index),
 		});
-	}
+	});
 	return identities;
 }

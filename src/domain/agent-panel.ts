@@ -13,11 +13,13 @@ import {
 	type AgentIcon,
 	type AgentKind,
 	agentColor,
+	HELPER_COLORS,
+	type HelperIdentity,
 	helperIdentitiesOf,
 	helperKind,
+	helperName,
 	KIND_ICONS,
 	KIND_TAGS,
-	kindShade,
 	MAIN_NAME,
 } from "./helper-names";
 import { sessionBilling, usageCostUsd } from "./model-pricing";
@@ -29,7 +31,7 @@ import { lastTurnEnd } from "./turn-end";
 /**
  * The chat's agents list under the composer: the lead (the chat's own
  * agent) and the helpers it started for the current request, each with a
- * stable name and colour, its status and a live line of what it is doing.
+ * stable short name and colour, its status and a live line of what it is doing.
  * Pure rules; the view is src/features/sessions/agent-panel.tsx.
  */
 
@@ -87,12 +89,15 @@ export type QueuedSteering = {
 export type AgentPanelRow = {
 	/** The helper's session id; the lead's row uses LEAD_ROW_ID. */
 	readonly id: string;
+	/** "Main", a helper's short name ("build-1"), a command's label. */
 	readonly name: string;
 	readonly kind: AgentKind;
-	/** Its kind's tag ("Build"); none for Main. */
+	/** A background command's tag ("Background"); a helper's name says its kind. */
 	readonly tag: string | null;
+	/** A helper's task, shown beside its short name. */
+	readonly task?: string;
 	readonly icon: AgentIcon;
-	/** A CSS colour for its icon and accents (helper-names.ts agentColor). */
+	/** A CSS colour for its icon (helper-names.ts). */
 	readonly color: string;
 	readonly status: AgentPanelStatus;
 	/**
@@ -111,7 +116,7 @@ export type AgentPanelRow = {
 
 export const LEAD_ROW_ID = "lead";
 
-/** Name, tag, icon and colour of every helper of the chat (helper-names.ts). */
+/** Short name, task, icon and colour of every helper of the chat (helper-names.ts). */
 export function helperIdentities(
 	tasks: readonly Pick<
 		AgentTaskActivity,
@@ -477,7 +482,7 @@ export function backgroundPollMs(input: {
 export function backgroundRows(
 	runs: readonly BackgroundRun[],
 ): AgentPanelRow[] {
-	return runs.map((run, index) => {
+	return runs.map((run) => {
 		const status: AgentPanelStatus =
 			run.status === "running"
 				? "working"
@@ -490,7 +495,7 @@ export function backgroundRows(
 			kind: "background",
 			tag: KIND_TAGS.background,
 			icon: KIND_ICONS.background,
-			color: agentColor("background", kindShade(index)),
+			color: agentColor("background"),
 			status,
 			// Running: the command is what it does; ended: how it ended, once.
 			doing:
@@ -527,7 +532,12 @@ export function agentPanelRows(input: {
 } {
 	const identities = helperIdentities(input.tasks);
 	const helpers = currentRequestHelpers(input.tasks, input.leadItems)
-		.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+		// Start order, as the names count (helperIdentitiesOf).
+		.sort(
+			(left, right) =>
+				left.createdAt.localeCompare(right.createdAt) ||
+				left.id.localeCompare(right.id),
+		)
 		.map((task): AgentPanelRow => {
 			const identity = identities.get(task.id);
 			const status = helperStatus(task.status);
@@ -539,13 +549,14 @@ export function agentPanelRows(input: {
 				!task.subagent.budget.sidekick.retired;
 			return {
 				id: task.id,
-				name: identity?.name ?? task.title,
+				name: identity?.name ?? helperName(task.title),
 				kind,
-				tag: KIND_TAGS[kind],
+				tag: null,
+				task: identity?.task ?? helperName(task.title),
 				icon: KIND_ICONS[kind],
-				color: identity?.color ?? agentColor(kind),
+				color: identity?.color ?? HELPER_COLORS[0],
 				status,
-				// The name is the task, so the line starts at "Starting".
+				// The task shows beside the name, so the line starts at "Starting".
 				...helperRowLine(
 					status,
 					agentDoing({
@@ -671,33 +682,47 @@ export function foldAgentRows(
 }
 
 /**
- * A helper's finish line in its parent's chat: "Build the CSV export
- * finished", with how it ended ("tests pass, 3 files changed") and its
- * report's facts (steps, time, tokens) as the detail behind it.
+ * A helper's finish card in its parent's chat: "build-1 finished · Fix
+ * pricing rounding · 1m 12s", over its report's first line. The full report
+ * and its facts (steps, time, tokens) are the card's hover detail.
  */
-export function helperFinishedLine(
-	row: Pick<AgentPanelRow, "name" | "status" | "doing"> & {
-		readonly summary?: string | null;
-	},
-): { readonly text: string; readonly detail: string } {
-	const verb = row.status === "failed" ? "failed" : "finished";
-	const how =
-		row.status === "failed"
-			? row.doing.replace(/^failed:?\s*/, "")
-			: row.doing === "finished"
-				? ""
-				: row.doing;
-	const meta = row.summary ? splitReportHeader(row.summary).meta : null;
-	// The header repeats the outcome and the name ("finished · Fix it · 14 steps · …").
-	const name = row.name.replace(/^“|”$/g, "");
-	const facts = (meta?.split(" · ") ?? []).filter(
-		(part, index) =>
-			!(index === 0 && /^(finished|failed|budget exhausted)$/.test(part)) &&
-			part !== name,
+export function helperFinishCard(
+	task: AgentTaskActivity,
+	identity?: Pick<HelperIdentity, "name" | "task">,
+): {
+	readonly name: string;
+	readonly verb: "finished" | "failed";
+	readonly task: string;
+	readonly duration: string;
+	readonly line: string;
+	readonly detail: string;
+} {
+	const failed = helperStatus(task.status) === "failed";
+	const items = withoutWakeTurnStarts(task.items);
+	const body = reportBody(task.summary)?.trim() ?? "";
+	const error = failed
+		? [...items].reverse().find((item) => item.kind === "error")
+		: undefined;
+	const line =
+		error?.kind === "error"
+			? firstLine(error.message, 240)
+			: firstLine(body, 240) || firstLine(lastAgentText(items), 240);
+	const metric = helperMetric(task);
+	const meta = task.summary ? splitReportHeader(task.summary).meta : null;
+	// The header's facts only; it repeats the outcome and the name.
+	const facts = (meta?.split(" · ") ?? []).filter((part) =>
+		/^(\d|~?\$|round )/.test(part),
 	);
 	return {
-		text: `${row.name} ${verb}`,
-		detail: [how, ...facts].filter(Boolean).join(" · "),
+		name: identity?.name ?? helperName(task.title),
+		verb: failed ? "failed" : "finished",
+		task: identity?.task ?? helperName(task.title),
+		duration:
+			metric.endedAt === undefined
+				? ""
+				: formatElapsed(metric.endedAt - metric.startedAt),
+		line,
+		detail: [body || line, facts.join(" · ")].filter(Boolean).join("\n\n"),
 	};
 }
 

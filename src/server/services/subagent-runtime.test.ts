@@ -288,7 +288,7 @@ describe("subagent report", () => {
 			now: NOW,
 		});
 		expect(report).toContain(
-			"[agent 1 writer finished · w (Build) · 41 steps · 6m · 380k tokens · $0.76]",
+			'[agent 1 writer finished · build-1 ("w") · 41 steps · 6m · 380k tokens · $0.76]',
 		);
 		expect(report).toContain("Added the flag; npm test exit 0.");
 		expect(report).toContain(
@@ -482,7 +482,7 @@ describe("sidekick (lead mode fusion)", () => {
 			},
 		});
 		expect(report).toContain(
-			"[agent 1 writer finished · s (Build) · round 2/6 · 60 steps · 3m",
+			'[agent 1 writer finished · build-1 ("s") · round 2/6 · 60 steps · 3m',
 		);
 		// Snapshotted in the lead's VM against the round's start; no fork, no patch.
 		expect(roundChanges).toHaveBeenCalledWith(
