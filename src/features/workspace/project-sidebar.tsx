@@ -135,6 +135,8 @@ export function ProjectSidebar({
 	const railLogo = useRef<HTMLButtonElement>(null);
 	const mobileToggle = useRef<HTMLButtonElement>(null);
 	const [hovered, setHovered] = useState(false);
+	// The sort menu opens outside the frame; while it is open the peek stays.
+	const [sortMenuOpen, setSortMenuOpen] = useState(false);
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	const [seenKeys, setSeenKeys] = useState<readonly string[]>(() =>
 		parseSeenChatKeys(readStorage(CHAT_SEEN_STORAGE_KEY)),
@@ -459,7 +461,7 @@ export function ProjectSidebar({
 		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
 			<div
 				className="project-sidebar-frame"
-				data-peek={!expanded && hovered}
+				data-peek={!expanded && (hovered || sortMenuOpen)}
 				onPointerEnter={(event) => {
 					if (
 						event.pointerType !== "mouse" ||
@@ -569,7 +571,15 @@ export function ProjectSidebar({
 					{projects.length ? (
 						<div className="sidebar-list-header">
 							<span>Chats</span>
-							<DropdownMenu.Root>
+							<DropdownMenu.Root
+								open={sortMenuOpen}
+								onOpenChange={(open) => {
+									setSortMenuOpen(open);
+									// The pointer is back over the sidebar after a pick: keep it open.
+									if (!open) setHovered(true);
+								}}
+								modal={false}
+							>
 								<DropdownMenu.Trigger asChild>
 									<button
 										type="button"
