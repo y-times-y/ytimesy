@@ -1105,7 +1105,12 @@ async function runApiTurnAttempt(
 		if (earlyFirstRequestEligible && !surface.lean)
 			timing?.early(false, "not-lean-surface");
 		if (surface.lean && earlyFirstRequestEligible) {
-			if (await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+			// A chat with no VM yet (a new chat) is still being given one, which
+			// takes over a second: waiting for it only delays the request.
+			if (
+				owner.providerRef &&
+				(await settlesWithin(checkout(), FIRST_REQUEST_WORKSPACE_WAIT_MS))
+			)
 				timing?.early(false, "workspace-ready");
 			else {
 				reportedDirectory = await timed("turn:checkoutDirectory", () =>
