@@ -386,6 +386,7 @@ export function PullRequestInspector({
 						<DropdownMenu.Item
 							key={pr.number}
 							className="pr-picker-item"
+							data-selected={pr.number === number || undefined}
 							onSelect={() => setPicked(pr.number)}
 						>
 							<span className="pr-picker-text">

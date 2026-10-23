@@ -273,7 +273,7 @@ export function ProjectPicker({
 						<div className="project-picker-actions">
 							{creating ? null : (
 								<button type="button" onClick={() => setCreating(true)}>
-									<Plus size={14} />
+									<Plus size={16} />
 									New repo
 								</button>
 							)}
@@ -283,7 +283,7 @@ export function ProjectPicker({
 									target="_blank"
 									rel="noreferrer"
 								>
-									<ExternalLink size={14} />
+									<ExternalLink size={16} />
 									Add from GitHub
 								</a>
 							) : (
@@ -292,12 +292,12 @@ export function ProjectPicker({
 									disabled={connection.isPending}
 									onClick={() => connection.mutate()}
 								>
-									<ExternalLink size={14} />
+									<ExternalLink size={16} />
 									{connection.isPending ? "Opening GitHub…" : "Connect GitHub"}
 								</button>
 							)}
 							<button type="button" onClick={() => setAddingProject(true)}>
-								<Layers size={14} />
+								<Layers size={16} />
 								Multi-repo
 							</button>
 						</div>
@@ -344,7 +344,7 @@ function PickerRow({
 			onClick={onChoose}
 			title={row.fullName}
 		>
-			<GitBranch size={14} aria-hidden="true" />
+			<GitBranch size={16} aria-hidden="true" />
 			<span className="project-picker-name">
 				<strong>{name}</strong>
 				{owner ? <small>{owner}</small> : null}

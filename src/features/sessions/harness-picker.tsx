@@ -315,7 +315,7 @@ export function HarnessPicker({
 														chooseModel(candidate.id);
 													}}
 												>
-													<AgentProviderMark provider={harnessId} size={18} />
+													<AgentProviderMark provider={harnessId} size={16} />
 													<span>{candidate.label}</span>
 													{candidate.id === modelId ? (
 														<Check size={14} aria-hidden="true" />
@@ -417,7 +417,7 @@ function CodexModelSearch({
 					key={model.id}
 					onClick={() => onSelect(model.id)}
 				>
-					<AgentProviderMark provider="codex" size={18} />
+					<AgentProviderMark provider="codex" size={16} />
 					<span>{model.label}</span>
 				</button>
 			))}

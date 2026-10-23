@@ -594,12 +594,14 @@ export function ProjectSidebar({
 										>
 											{(["recent", "projects"] as const).map((value) => (
 												<DropdownMenu.RadioItem key={value} value={value}>
-													<span className="sidebar-sort-check">
+													<span className="menu-row-label">
+														{value === "recent" ? "Recent" : "Projects"}
+													</span>
+													<span className="menu-row-check">
 														<DropdownMenu.ItemIndicator>
 															<Check size={14} strokeWidth={1.5} />
 														</DropdownMenu.ItemIndicator>
 													</span>
-													{value === "recent" ? "Recent" : "Projects"}
 												</DropdownMenu.RadioItem>
 											))}
 										</DropdownMenu.RadioGroup>
@@ -673,6 +675,19 @@ export function ProjectSidebar({
 												) : null}
 												<button
 													type="button"
+													className="sidebar-folder-toggle"
+													aria-label={
+														open
+															? `Collapse ${projectDisplayName(project)}`
+															: `Expand ${projectDisplayName(project)}`
+													}
+													aria-expanded={open}
+													onClick={() => toggleProjectFolder(project.id)}
+												>
+													<ChevronRight size={14} strokeWidth={1.5} />
+												</button>
+												<button
+													type="button"
 													className="sidebar-folder-add"
 													aria-label={`New chat in ${projectDisplayName(project)}`}
 													title="New chat"
@@ -690,19 +705,6 @@ export function ProjectSidebar({
 													}}
 												>
 													<Plus size={14} strokeWidth={1.5} />
-												</button>
-												<button
-													type="button"
-													className="sidebar-folder-toggle"
-													aria-label={
-														open
-															? `Collapse ${projectDisplayName(project)}`
-															: `Expand ${projectDisplayName(project)}`
-													}
-													aria-expanded={open}
-													onClick={() => toggleProjectFolder(project.id)}
-												>
-													<ChevronRight size={14} strokeWidth={1.5} />
 												</button>
 											</div>
 										</div>
