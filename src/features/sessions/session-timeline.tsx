@@ -79,12 +79,7 @@ import {
 	groupTimelineRows,
 	type TimelineRow,
 } from "#/domain/timeline-activity";
-import {
-	toolActivity,
-	toolCommand,
-	toolDetailTitle,
-	toolOutputText,
-} from "#/domain/tool-detail";
+import { toolActivity, toolDetailTitle } from "#/domain/tool-detail";
 import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
@@ -122,8 +117,8 @@ import {
 	AgentCallView,
 	CheckVerdictCard,
 	RequirementsList,
-	ToolInputFields,
 } from "./tool-cards";
+import { ProgramSource, ToolDetailBody } from "./tool-detail-body";
 import {
 	type UserQuestionActions,
 	UserQuestionCard,
@@ -1036,7 +1031,6 @@ function SessionItemView({
 						onOpenFile={onOpenFile}
 					/>
 				);
-			const command = toolCommand(item);
 			const activity = toolActivity(item);
 			// A run_code program: one card listing its inner calls as ordinary tool cards.
 			const program = codeModeProgram(item);
@@ -1078,7 +1072,9 @@ function SessionItemView({
 							{activity.added || activity.removed ? (
 								<span className="session-tool-stats">
 									<span data-sign="added">+{activity.added ?? 0}</span>
-									<span data-sign="removed">−{activity.removed ?? 0}</span>
+									{activity.removed !== undefined ? (
+										<span data-sign="removed">−{activity.removed}</span>
+									) : null}
 								</span>
 							) : null}
 							{activity.note ? (
@@ -1095,12 +1091,17 @@ function SessionItemView({
 						/>
 						{item.background ? null : activityStatus(item.status)}
 					</summary>
-					{item.input &&
-						(program !== null ? (
-							<details className="session-command-detail session-program">
-								<summary>
-									<span className="session-activity-meta">
-										{programLinesLabel(program)}
+					{program !== null ? (
+						<>
+							<details
+								className="tool-panel session-program"
+								data-kind="program"
+							>
+								<summary className="tool-panel-head">
+									<span className="tool-panel-title">
+										<span className="tool-panel-meta">
+											{programLinesLabel(program)}
+										</span>
 									</span>
 									<ChevronRight
 										size={14}
@@ -1108,58 +1109,51 @@ function SessionItemView({
 										className="session-activity-chevron"
 									/>
 								</summary>
-								<pre className="session-output">{program}</pre>
+								<ProgramSource program={program} />
 							</details>
-						) : (
-							<div className="session-command-detail">
-								<p className="session-activity-meta">Input</p>
-								{command ? (
-									<ShellCommandCode command={command} />
-								) : (
-									<ToolInputFields input={item.input} />
-								)}
-							</div>
-						))}
-					{innerCalls.length > 0 && (
-						<div className="session-command-detail">
-							<p className="session-activity-meta">
-								{`${innerCalls.length} tool ${innerCalls.length === 1 ? "call" : "calls"}`}
-							</p>
-							{innerCalls.map((call) => (
-								<SessionItemView
-									key={call.id}
-									item={call}
-									nested
-									fileChanges={fileChanges}
-									onOpenFile={onOpenFile}
-								/>
-							))}
-						</div>
-					)}
-					{codeResult ? (
-						<div className="session-command-detail">
-							<p className="session-activity-meta">Result</p>
-							<pre className="session-output">
-								{[
-									codeResult.error
-										? `Program failed: ${codeResult.error}`
-										: (codeResult.result ?? "(no return value)"),
-									codeResult.console ? `Console:\n${codeResult.console}` : "",
-								]
-									.filter(Boolean)
-									.join("\n\n")}
-							</pre>
-						</div>
+							{innerCalls.length > 0 && (
+								<div className="session-program-calls">
+									{innerCalls.map((call) => (
+										<SessionItemView
+											key={call.id}
+											item={call}
+											nested
+											fileChanges={fileChanges}
+											onOpenFile={onOpenFile}
+										/>
+									))}
+								</div>
+							)}
+							{codeResult &&
+							(codeResult.error ||
+								codeResult.console ||
+								(codeResult.result && codeResult.result !== "null")) ? (
+								<div className="tool-panel" data-kind="returned">
+									<div className="tool-panel-head">
+										<span className="tool-panel-title">
+											<span className="tool-panel-meta">
+												{codeResult.error ? "Program failed" : "Returned"}
+											</span>
+										</span>
+									</div>
+									<pre
+										className="tool-panel-body tool-panel-output"
+										data-tone={codeResult.error ? "bad" : undefined}
+									>
+										{[
+											codeResult.error ?? codeResult.result ?? "",
+											codeResult.console
+												? `Console:\n${codeResult.console}`
+												: "",
+										]
+											.filter(Boolean)
+											.join("\n\n")}
+									</pre>
+								</div>
+							) : null}
+						</>
 					) : (
-						item.output && (
-							<div className="session-command-detail">
-								<p className="session-activity-meta">Result</p>
-								<ToolInputFields input={toolOutputText(item.output)} />
-							</div>
-						)
-					)}
-					{!item.input && !item.output && (
-						<p>Details were not recorded for this older call.</p>
+						<ToolDetailBody item={item} />
 					)}
 				</details>
 			);
