@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { DropdownMenu, Tooltip as TooltipPrimitive } from "radix-ui";
 import {
-	type CSSProperties,
 	type ReactNode,
 	useEffect,
 	useRef,
@@ -360,12 +359,6 @@ export function ProjectSidebar({
 				className="sidebar-chat-row"
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
-				data-project-bar={project ? "true" : undefined}
-				style={
-					project
-						? ({ "--project-color": projectColor(project.id) } as CSSProperties)
-						: undefined
-				}
 			>
 				<button
 					type="button"
@@ -392,6 +385,17 @@ export function ProjectSidebar({
 							: onSelectChat?.(chat.id)
 					}
 				>
+					{/* The icon column every sidebar row shares: in Recent, the
+					    chat's project; under a project, empty so titles line up
+					    with the project's name. */}
+					<span className="sidebar-chat-lead" aria-hidden="true">
+						{project ? (
+							<span
+								className="sidebar-project-dot"
+								style={{ background: projectColor(project.id) }}
+							/>
+						) : null}
+					</span>
 					<span className="sidebar-chat-title">{chat.title}</span>
 					{projectName ? <span className="sr-only">{projectName}</span> : null}
 					{shown.kind === "working" ? (
