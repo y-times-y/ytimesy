@@ -14,16 +14,10 @@ import {
 	Pin,
 	Plus,
 	TriangleAlert,
-	Waypoints,
 	X,
 } from "lucide-react";
 import { DropdownMenu, Tooltip as TooltipPrimitive } from "radix-ui";
-import {
-	type ReactNode,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
@@ -97,11 +91,8 @@ interface ProjectSidebarProps {
 	projectChats?: readonly ProjectChats<Project>[];
 	/** Opens a chat that may belong to another project (the Recent list). */
 	onSelectChatInProject?: (projectId: string, chatId: string) => void;
-	/** Opens the full-page Memory view. */
+	/** Opens the full-page Memory view (graph and list). */
 	onOpenMemory?: () => void;
-	/** Opens the full-page Memory graph. */
-	onOpenMemoryGraph?: () => void;
-	memoryGraphActive?: boolean;
 	memoryActive?: boolean;
 }
 
@@ -126,8 +117,6 @@ export function ProjectSidebar({
 	projectChats = [],
 	onSelectChatInProject,
 	onOpenMemory,
-	onOpenMemoryGraph,
-	memoryGraphActive = false,
 	memoryActive = false,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
@@ -559,17 +548,6 @@ export function ProjectSidebar({
 								<BookMarked size={16} strokeWidth={1.5} />
 								Memory
 							</button>
-							{onOpenMemoryGraph ? (
-								<button
-									type="button"
-									className="sidebar-nav-item"
-									aria-current={memoryGraphActive ? "page" : undefined}
-									onClick={onOpenMemoryGraph}
-								>
-									<Waypoints size={16} strokeWidth={1.5} />
-									Memory graph
-								</button>
-							) : null}
 						</nav>
 					) : null}
 					{projects.length ? (
@@ -792,18 +770,6 @@ export function ProjectSidebar({
 							onClick={onOpenMemory}
 						>
 							<BookMarked size={16} strokeWidth={1.5} />
-						</button>
-					) : null}
-					{onOpenMemoryGraph ? (
-						<button
-							type="button"
-							className="panel-toggle"
-							aria-label="Memory graph"
-							title="Memory graph"
-							data-active={memoryGraphActive}
-							onClick={onOpenMemoryGraph}
-						>
-							<Waypoints size={16} strokeWidth={1.5} />
 						</button>
 					) : null}
 				</nav>

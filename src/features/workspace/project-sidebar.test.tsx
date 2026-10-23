@@ -68,6 +68,8 @@ describe("left sidebar", () => {
 		expect(html).toMatch(/class="sidebar-nav-item" aria-current="page"/);
 		expect(html).toContain(">Memory</button>");
 		expect(html).toContain('aria-label="Memory"');
+		expect(html.match(/class="sidebar-nav-item"/g)).toHaveLength(1);
+		expect(html).not.toContain("Memory graph");
 	});
 
 	it("groups by project by default, the most recently active project first", () => {

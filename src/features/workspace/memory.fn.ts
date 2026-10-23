@@ -11,12 +11,19 @@ import {
 	MEMORY_PROJECT_MAX,
 	type MemoryEdit,
 } from "#/domain/memory-edit";
-import type { DreamInput } from "#/domain/memory-lanes";
+import {
+	type SimilarPair,
+	similarPairs,
+	wordSimilarPairs,
+} from "#/domain/memory-graph";
+import { memoryEntries, memoryRows } from "#/domain/memory-overview";
 import {
 	type MEMORY_MODES,
+	memoryLineEmbeddingText,
 	memoryPath,
 	memoryToday,
 } from "#/domain/memory-repo";
+import { storedLineEmbeddings } from "#/server/adapters/memory-embeddings";
 import {
 	memoryRepo,
 	memoryRepoName,
@@ -27,6 +34,7 @@ import {
 	lastMemoryDreamRun,
 	lastMemoryReview,
 	markMemoryDreamed,
+	memoryChatTitles,
 	memoryLastActivity,
 	memorySettings,
 	saveMemoryMode,
@@ -35,7 +43,6 @@ import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import {
 	commitMemoryEdit,
-	dreamHistory,
 	lastDreamChange,
 } from "#/server/services/memory-edit";
 import {
@@ -245,15 +252,49 @@ export const readMemoryModeFn = createServerFn({ method: "GET" }).handler(
 	},
 );
 
-/** The memory lanes' history: recent dreams and the lines each merged. */
+/** Lines the graph draws similarity for; beyond this it uses shared words. */
+const GRAPH_VECTOR_LINES = 600;
+
+/**
+ * What the memory graph adds to the files: source chat titles, and similar
+ * line pairs from the line vectors already stored for the read hook (never
+ * a model call), or by shared words when most lines have no vector.
+ */
 export const readMemoryGraphFn = createServerFn({ method: "GET" }).handler(
-	async (): Promise<{ dreams: DreamInput[] }> => {
+	async (): Promise<{
+		titles: Record<string, string>;
+		similar: { basis: "meaning" | "words"; pairs: SimilarPair[] };
+	}> => {
 		const user = await requireUser(getRequest().headers);
-		if (!memoryReposAvailable()) return { dreams: [] };
+		const empty = {
+			titles: {},
+			similar: { basis: "words" as const, pairs: [] },
+		};
+		if (!memoryReposAvailable()) return empty;
 		const { repo } = await userRepo(user.id);
-		if (!repo) return { dreams: [] };
+		if (!repo) return empty;
+		const snapshot = await repo.snapshot();
+		const rows = memoryEntries(memoryRows(snapshot.files, memoryToday()));
+		const ids = rows.map((row) => `${row.path}:${row.line}`);
+		const [titles, vectors] = await Promise.all([
+			memoryChatTitles(
+				user.id,
+				rows.flatMap((row) => (row.chatId ? [row.chatId] : [])),
+			).catch(() => new Map<string, string>()),
+			rows.length <= GRAPH_VECTOR_LINES
+				? storedLineEmbeddings(
+						user.id,
+						rows.map((row) => memoryLineEmbeddingText(row)),
+					).catch(() => [])
+				: Promise.resolve([]),
+		]);
+		const stored = vectors.filter(Boolean).length;
+		const byMeaning = rows.length > 0 && stored >= rows.length * 0.6;
 		return {
-			dreams: await dreamHistory(repo, memoryToday()).catch(() => []),
+			titles: Object.fromEntries(titles),
+			similar: byMeaning
+				? { basis: "meaning", pairs: similarPairs(ids, vectors) }
+				: { basis: "words", pairs: wordSimilarPairs(rows) },
 		};
 	},
 );

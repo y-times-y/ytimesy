@@ -122,7 +122,7 @@ export function useMemoryScopeNames(
  * The user's memory as a list: a one-line composer, Personal and each
  * project as scopes, lines by topic with inline edit, move, pin and delete
  * (each one memory commit), and a short Dreaming card. The same view fills
- * the right panel and the Memory page; the graph has its own page.
+ * the right panel and the Memory page's List view, beside its graph.
  */
 export function MemoryInspector({
 	active,
