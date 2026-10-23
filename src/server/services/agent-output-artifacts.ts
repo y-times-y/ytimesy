@@ -8,8 +8,16 @@ import {
 } from "./agent-tool-workspace";
 
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+/**
+ * The longest shell command a tool accepts. A started job travels to the
+ * machine as one base64 argument, and Linux caps a single argument at 128 KiB,
+ * so 48,000 characters (64 KB encoded) leaves room. Generated check scripts
+ * passed inline reach 17-19k characters; a lower cap rejected them and made
+ * the model resend shorter copies.
+ */
+export const COMMAND_MAX_CHARACTERS = 48_000;
 export const verificationReceiptSchema = z.object({
-	command: z.string().min(1).max(16000),
+	command: z.string().min(1).max(COMMAND_MAX_CHARACTERS),
 	cwd: z.string().min(1).max(4096),
 	before: projectSourceEvidence,
 	after: projectSourceEvidence,

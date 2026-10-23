@@ -7,6 +7,13 @@
  */
 export const LEAN_MAX_LINES = 2000;
 export const LEAN_MAX_BYTES = 50 * 1024;
+/**
+ * Command output is held tighter: at most 400 lines and 16 KB, the start and
+ * the end kept. Every byte shown is re-read on each later request, and dumps of
+ * whole source trees or logs cost more than paging the saved file.
+ */
+export const LEAN_COMMAND_MAX_LINES = 400;
+export const LEAN_COMMAND_MAX_BYTES = 16 * 1024;
 
 export type Truncation = {
 	content: string;
@@ -105,6 +112,50 @@ export function keepTail(
 		firstLine: lines.length - kept.length + 1,
 		lastLine: lines.length,
 	};
+}
+
+/**
+ * Keeps a quarter of the limits from the start and the rest from the end, with
+ * a marker line where the middle was cut. firstLine and lastLine are those of
+ * the cut middle when truncated.
+ */
+export function keepEnds(
+	text: string,
+	limits: { maxLines?: number; maxBytes?: number } = {},
+): Truncation {
+	const maxLines = limits.maxLines ?? LEAN_COMMAND_MAX_LINES;
+	const maxBytes = limits.maxBytes ?? LEAN_COMMAND_MAX_BYTES;
+	const lines = lineList(text);
+	if (lines.length <= maxLines && bytes(text) <= maxBytes)
+		return keepTail(text, { maxLines, maxBytes });
+	const head = keepHead(text, {
+		maxLines: Math.floor(maxLines / 4),
+		maxBytes: Math.floor(maxBytes / 4),
+	});
+	const headLines = head.truncated ? head.lastLine : lines.length;
+	const tail = keepTail(lines.slice(headLines).join("\n"), {
+		maxLines: maxLines - headLines,
+		maxBytes: maxBytes - bytes(head.content),
+	});
+	const cutFrom = headLines + 1;
+	const cutTo = headLines + tail.firstLine - 1;
+	// One oversized line (or none left after the head): keep the end only.
+	if (cutTo < cutFrom) return keepTail(text, { maxLines, maxBytes });
+	return {
+		content: `${head.content}[... lines ${cutFrom}-${cutTo} cut ...]\n${tail.content}`,
+		truncated: true,
+		totalLines: lines.length,
+		firstLine: cutFrom,
+		lastLine: cutTo,
+	};
+}
+
+/** The note after command output whose middle keepEnds cut. */
+export function commandCutNote(
+	truncation: Pick<Truncation, "firstLine" | "lastLine" | "totalLines">,
+	outputPath: string,
+) {
+	return `[Lines ${truncation.firstLine}-${truncation.lastLine} of ${truncation.totalLines} were cut; all of it is in ${outputPath}]`;
 }
 
 /** The note after truncated command output: which lines are shown and where the rest is. */

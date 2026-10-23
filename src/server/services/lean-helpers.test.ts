@@ -324,7 +324,7 @@ describe("lean instructions", () => {
 			"Your tools: Bash runs shell commands; Edit and Write change files",
 		);
 		expect(claude).toContain(
-			"`ytimesy-check --files <delivered paths> [--input <paths they supply>] [--unprivileged] -- <run command>`: when you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run it once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (--unprivileged when the task mentions another user or dropped privileges); it runs your deliverable from a clean copy. Fix what it reports. Skip it for edits to an existing project whose own tests you ran.",
+			"`ytimesy-check --files <delivered paths> [--input <paths they supply>] [--named-data <data files the task names>] [--unprivileged] [--timeout <seconds>] [--keep-env <VAR>...] [--no-tracked] -- <run command>`: when you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run it once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (--unprivileged when the task mentions another user or dropped privileges); it runs your deliverable from a clean copy. Fix what it reports. Skip it for edits to an existing project whose own tests you ran.",
 		);
 		expect(claude).toContain("`~/.ytimesy/history/`");
 		expect(claude).toContain("`~/.ytimesy/environment.md` (if present)");
@@ -363,8 +363,9 @@ describe("lean instructions", () => {
 				leanShape: "gemini",
 			}),
 		).not.toContain("When only waiting is left");
-		// The lean surface adds its tools and Main's hand-off rule (HANDOFF_INSTRUCTIONS).
-		expect(lean.length).toBeLessThan(current.length + 2300);
+		// The lean surface adds its tools (with ytimesy-check's flags, so the model
+		// does not run --help) and Main's hand-off rule (HANDOFF_INSTRUCTIONS).
+		expect(lean.length).toBeLessThan(current.length + 2700);
 		const knowing = agentTurnInstructions({
 			...input,
 			projectKnowledge: "Billing lives in billing/.",

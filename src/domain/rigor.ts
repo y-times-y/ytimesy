@@ -124,7 +124,11 @@ export const UNVERIFIED_SEND_BACK_TIME_LEFT = 0.5;
  * or approves a plan before the work is graded. Given to the root builder.
  */
 export const UNATTENDED_RUN_INSTRUCTIONS =
-	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer. Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish your checks first and re-check the planned payload against the rules with them; a separate review program is not needed.";
+	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer. Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish your checks first and re-check the planned payload against the rules with them; a separate review program is not needed. " +
+	"When the request and the files disagree, the request's stated symptoms, definitions and supplied inputs outrank design notes, docstrings, existing behavior and bundled defaults. " +
+	"A term with an established meaning in a widely used library or field keeps that meaning unless the request overrides it. " +
+	"When the request gives derived or co-adjusted values, work them out under each plausible reading and keep the reading that reproduces them. " +
+	"For a speed or ratio target, measure it the way it will be judged: inputs built through the public interface, the stated kind of cases, fresh objects, only the measured call timed; aim for a wide margin.";
 
 /** Phrases that ask the user to act, or admit the deliverable is missing or unfinished. */
 const UNFINISHED =

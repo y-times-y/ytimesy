@@ -4,10 +4,11 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { checkExecutionGroups } from "#/domain/check-execution-groups";
 import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
-import type {
-	AgentOutput,
-	agentOutputArtifacts,
-	verificationReceiptSchema,
+import {
+	type AgentOutput,
+	type agentOutputArtifacts,
+	COMMAND_MAX_CHARACTERS,
+	type verificationReceiptSchema,
 } from "./agent-output-artifacts";
 import {
 	type AgentToolWorkspaceInput,
@@ -298,7 +299,9 @@ export function apiAgentCommandTools(
 		tools.bash = tool({
 			description:
 				"Run a shell command in this task's isolated repository: use rg, Git inspection and project CLIs directly. Commands are bounded to 30 seconds; use start_command and wait_command for longer work. Do not launch detached work or publish without authorization.",
-			inputSchema: z.object({ command: z.string().min(1).max(16000) }),
+			inputSchema: z.object({
+				command: z.string().min(1).max(COMMAND_MAX_CHARACTERS),
+			}),
 			execute: ({ command }, options) =>
 				input.once(options.toolCallId, async () => {
 					input.signal.throwIfAborted();
@@ -497,7 +500,7 @@ export function apiAgentCommandTools(
 		description:
 			"Start a repository command that may take several minutes. Returns an ID; use read_command to inspect output and completion. Bounded to ten minutes.",
 		inputSchema: z.object({
-			command: z.string().min(1).max(16_000),
+			command: z.string().min(1).max(COMMAND_MAX_CHARACTERS),
 			maxSeconds: z.number().int().min(30).max(600).default(300),
 		}),
 		execute: ({ command, maxSeconds = 300 }, options) =>
@@ -541,7 +544,7 @@ export function apiAgentCommandTools(
 		description:
 			"Run a repository shell command (rg, Git, project CLIs). Returns output and actual status if finished, or an owned id if still running after yieldSeconds. Continue the SAME command with continue_command, which waits for it to finish; never restart just because it yielded. Bounded to ten minutes. No detached work, credentials, or publication without authorization.",
 		inputSchema: z.object({
-			command: z.string().min(1).max(16000),
+			command: z.string().min(1).max(COMMAND_MAX_CHARACTERS),
 			maxSeconds: z.number().int().min(30).max(600).default(300),
 			// Returns as soon as the command finishes; a one-second default made
 			// every slower check cost an extra continue_command model step.
