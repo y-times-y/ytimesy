@@ -179,20 +179,10 @@
 	max-height: 320px;
 	overflow: auto;
 }
-.memory-menu [role="menuitem"] {
-	gap: 8px;
-	padding: 7px 10px;
-}
-.memory-menu-label {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .memory-menu-hint {
-	color: #6f6f6f;
-	font-size: 11.5px;
+	flex-shrink: 0;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
 }
 
 /* ---- list ---------------------------------------------------------------- */
