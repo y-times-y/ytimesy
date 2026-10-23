@@ -101,7 +101,7 @@ export function coreTools(engine: LeanEngine): ToolSet {
 				}),
 		}),
 		[names.command]: tool({
-			description: `Run a bash command from the repository root and wait for it to finish. You get stdout and stderr together; past 400 lines or 16 KB the middle is cut, and the whole output is kept in a file you can read or grep. timeout stops the command after that many seconds (default ${LEAN_COMMAND_DEFAULT_SECONDS}, at most ${LEAN_COMMAND_MAX_SECONDS}). Set background to start servers, watchers and long jobs; you are told when they finish.`,
+			description: `Run a bash command from the repository root and wait for it to finish. You get stdout and stderr together; past 2000 lines or 50 KB only the end is shown and the rest is kept in a file. timeout stops the command after that many seconds (default ${LEAN_COMMAND_DEFAULT_SECONDS}, at most ${LEAN_COMMAND_MAX_SECONDS}). Set background to start servers, watchers and long jobs; you are told when they finish.`,
 			inputSchema: z.object({
 				command: z
 					.string()

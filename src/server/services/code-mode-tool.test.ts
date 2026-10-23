@@ -339,8 +339,8 @@ describe("run_code on the lean surface", () => {
 		expect(value.missing).toBe(missing.text);
 		expect(value.failed).toEqual({ output: failed.text, exitCode: 3 });
 		expect(failed.text).toContain("Command exited with code 3");
-		// The command limit (400 lines, start and end kept, full output in a file) applies inside programs too.
-		expect(long.text).toMatch(/\[Lines 101-2700 of 3000 were cut/);
+		// The lean limit (2000 lines, tail kept, full output in a file) applies inside programs too.
+		expect(long.text).toMatch(/\[Output cut to lines 1001-3000 of 3000/);
 		expect(value.longTail).toBe(long.text.slice(-300));
 		expect(value.longLines).toBe(long.text.split("\n").length);
 		expect(badEdit.ok).toBe(false);
