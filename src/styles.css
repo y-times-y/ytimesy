@@ -332,6 +332,13 @@ button:enabled:active {
 	opacity: 0.85;
 }
 /* The project's dot sits centred in the shared icon column. */
+.sidebar-chat-lead {
+	display: grid;
+	place-items: center;
+	flex: 0 0 var(--list-icon-size);
+	width: var(--list-icon-size);
+}
+.sidebar-chat-lead .sidebar-project-dot,
 .sidebar-folder .sidebar-project-dot {
 	flex-basis: 8px;
 	width: 8px;
@@ -389,7 +396,10 @@ button:enabled:active {
 .sidebar-chat-row:hover {
 	background: var(--list-hover-bg);
 }
-.sidebar-folder-row[data-selected="true"],
+/* Only the open chat is highlighted; its project just reads brighter. */
+.sidebar-folder-row[data-selected="true"] .sidebar-folder {
+	color: var(--list-text-strong);
+}
 .sidebar-chat-row[data-selected="true"] {
 	background: var(--list-selected-bg);
 }
@@ -523,7 +533,7 @@ button:enabled:active {
 .sidebar-chat {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--list-row-gap);
 	flex: 1 1 auto;
 	width: auto;
 	min-width: 0;
@@ -741,18 +751,6 @@ button:enabled:active {
 }
 .sidebar-status-group .sidebar-chats {
 	margin: 0;
-}
-/* Recent mode: the chat's project as a thin bar on the row's edge. */
-.sidebar-chat-row[data-project-bar="true"]::before {
-	content: "";
-	position: absolute;
-	left: 0;
-	top: 7px;
-	bottom: 7px;
-	width: 2px;
-	border-radius: 2px;
-	background: var(--project-color);
-	opacity: 0.75;
 }
 .workspace-main {
 	position: relative;

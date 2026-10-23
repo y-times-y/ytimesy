@@ -85,9 +85,10 @@ describe("left sidebar", () => {
 		expect(html.indexOf("Newest chat")).toBeLessThan(
 			html.indexOf("Older chat"),
 		);
-		// The project shows as a thin colour bar, its name in the row's tooltip.
+		// The project shows as a colour dot in the row's icon column, its name
+		// in the row's tooltip.
 		expect(html).toMatch(
-			/data-project-bar="true" style="--project-color:#[0-9a-f]{6}"/,
+			/sidebar-chat-lead" aria-hidden="true"><span class="sidebar-project-dot" style="background:#[0-9a-f]{6}"/,
 		);
 		expect(html).toContain('title="Newest chat · Beta"');
 		expect(html).not.toContain("sidebar-chat-project");
