@@ -169,6 +169,8 @@ export type ModelSwitchItem = {
 		readonly key: string;
 	};
 	readonly state: "switched" | "awaitingApproval";
+	/** The failing route's error, redacted and at most 300 characters (not shown). */
+	readonly cause?: string;
 	/** The turn's usage before the switch; usage after it was served by `to`. */
 	readonly usageBefore?: ApiTokenUsage;
 };
