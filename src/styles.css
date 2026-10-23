@@ -380,21 +380,38 @@ button:enabled:active {
 .sidebar-chat-row[data-selected="true"] {
 	background: #ffffff0c;
 }
+/* The fold arrow sits last and stays hidden until the row is hovered. */
 .sidebar-folder-toggle {
 	display: grid;
 	place-items: center;
-	flex: 0 0 22px;
 	width: 22px;
 	height: 22px;
-	margin-left: 4px;
+	margin: 0;
 	padding: 0;
 	border: 0;
 	border-radius: 6px;
 	background: transparent;
-	color: #8a8a8a;
+	color: #6b6b6b;
+	opacity: 0;
+	transition:
+		opacity 120ms ease,
+		transform 120ms ease;
+}
+.sidebar-folder-row:hover .sidebar-folder-toggle,
+.sidebar-folder-toggle:focus-visible {
+	opacity: 1;
+}
+.sidebar-folder-toggle:hover {
+	background: #ffffff14;
+	color: #f2f2f2;
 }
 .sidebar-folder-row[data-open="true"] .sidebar-folder-toggle {
 	transform: rotate(90deg);
+}
+@media (hover: none) {
+	.sidebar-folder-toggle {
+		opacity: 1;
+	}
 }
 .sidebar-folder {
 	display: flex;
@@ -404,7 +421,7 @@ button:enabled:active {
 	width: auto;
 	min-width: 0;
 	min-height: 32px;
-	padding: 0 52px 0 4px;
+	padding: 0 76px 0 8px;
 	border: 0;
 	border-radius: 8px;
 	background: transparent;
