@@ -51,9 +51,13 @@ import { bedrockWebSearchTools } from "./bedrock";
  * Not reproduced (they need the product's database or job stack, or a
  * person): cross-chat memory, plan mode, MCP connections from the user's
  * account (task MCP servers are reached through the mcp-call helper),
- * plugins, project secrets, repository lifecycle hooks, subagents, the
- * attempt loop and the background-command completion gate. Without the
- * agent tool there is no orchestration block in any prompt.
+ * plugins, project secrets, repository lifecycle hooks, subagents and the
+ * attempt loop. Without the agent tool there is no orchestration block in
+ * any prompt. Background-command exit notices are not delivered between a
+ * run's steps; for the root builder, trial.ts runs a completion gate after
+ * each run instead (background-gate.ts): it waits for the commands the run
+ * left running and continues the session with their exit notice, as the
+ * product's wake-up of an idle chat would.
  */
 
 export type HarborWorkspace = AgentToolWorkspace & {
