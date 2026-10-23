@@ -640,19 +640,6 @@ export function ProjectSidebar({
 										>
 											<button
 												type="button"
-												className="sidebar-folder-toggle"
-												aria-label={
-													open
-														? `Collapse ${projectDisplayName(project)}`
-														: `Expand ${projectDisplayName(project)}`
-												}
-												aria-expanded={open}
-												onClick={() => toggleProjectFolder(project.id)}
-											>
-												<ChevronRight size={14} strokeWidth={1.5} />
-											</button>
-											<button
-												type="button"
 												className="sidebar-folder"
 												aria-current={selected ? "page" : undefined}
 												aria-expanded={open}
@@ -703,6 +690,19 @@ export function ProjectSidebar({
 													}}
 												>
 													<Plus size={14} strokeWidth={1.5} />
+												</button>
+												<button
+													type="button"
+													className="sidebar-folder-toggle"
+													aria-label={
+														open
+															? `Collapse ${projectDisplayName(project)}`
+															: `Expand ${projectDisplayName(project)}`
+													}
+													aria-expanded={open}
+													onClick={() => toggleProjectFolder(project.id)}
+												>
+													<ChevronRight size={14} strokeWidth={1.5} />
 												</button>
 											</div>
 										</div>
