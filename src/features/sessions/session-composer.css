@@ -11,8 +11,21 @@
 	flex: 1;
 	min-height: 0;
 	height: 100%;
+	width: 100%;
+}
+/* The chat reads as one centered column, but the timeline scrolls across the
+   whole panel so its scrollbar sits at the panel's edge. */
+.session-launcher[data-layout="chat"] > :not(.session-timeline, .sr-only) {
 	width: min(720px, 100%);
 	margin-inline: auto;
+}
+.session-launcher[data-layout="chat"] > .session-timeline {
+	width: calc(100% + 2 * var(--chat-gutter, 0px));
+	margin-inline: calc(-1 * var(--chat-gutter, 0px));
+	padding-inline: max(
+		var(--chat-gutter, 0px),
+		calc((100% + 2 * var(--chat-gutter, 0px) - 720px) / 2)
+	);
 }
 .session-context {
 	display: flex;
