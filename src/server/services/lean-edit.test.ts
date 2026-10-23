@@ -5,7 +5,7 @@ import {
 	LeanEditError,
 	normalizeForMatching,
 } from "./lean-edit";
-import { keepHead, keepTail } from "./lean-output";
+import { keepEnds, keepHead, keepTail } from "./lean-output";
 
 const names = { old: "old_string", all: "replace_all" };
 
@@ -206,6 +206,33 @@ describe("output limits", () => {
 		const huge = "z".repeat(80_000);
 		expect(Buffer.byteLength(keepTail(huge).content)).toBe(50 * 1024);
 		expect(keepTail("short\n")).toMatchObject({
+			truncated: false,
+			content: "short\n",
+		});
+	});
+
+	it("cuts the middle of long command output, keeping the start and the end", () => {
+		const cut = keepEnds(lines(1000));
+		expect(cut).toMatchObject({
+			truncated: true,
+			totalLines: 1000,
+			firstLine: 101,
+			lastLine: 700,
+		});
+		expect(cut.content.startsWith("line 1\n")).toBe(true);
+		expect(cut.content).toContain(
+			"line 100\n[... lines 101-700 cut ...]\nline 701\n",
+		);
+		expect(cut.content.endsWith("line 1000")).toBe(true);
+		const wide = keepEnds(
+			Array.from({ length: 50 }, () => "w".repeat(1000)).join("\n"),
+		);
+		expect(wide.truncated).toBe(true);
+		expect(Buffer.byteLength(wide.content)).toBeLessThanOrEqual(16 * 1024 + 64);
+		expect(Buffer.byteLength(keepEnds("z".repeat(80_000)).content)).toBe(
+			16 * 1024,
+		);
+		expect(keepEnds("short\n")).toMatchObject({
 			truncated: false,
 			content: "short\n",
 		});

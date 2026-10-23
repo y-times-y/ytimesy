@@ -563,7 +563,7 @@ describe("commands run on the shared runner", () => {
 		);
 	});
 
-	it("keeps the tail of long output and points at the full file", async () => {
+	it("keeps the last 400 lines of output it pages and points at the full file", async () => {
 		const long = randomUUID();
 		const text = Array.from(
 			{ length: 2500 },
@@ -585,12 +585,34 @@ describe("commands run on the shared runner", () => {
 		const result = (await run(tools, "bash", {
 			command: "seq",
 		})) as LeanCommandResult;
-		expect(result.output.startsWith("row 501\n")).toBe(true);
+		expect(result.output.startsWith("row 2101\n")).toBe(true);
 		expect(result.output.endsWith("row 2500")).toBe(true);
 		expect(result.truncationNote).toBe(
-			`[Output cut to lines 501-2500 of 2500; all of it is in ${outputs}/${long}.stdout]`,
+			`[Output cut to lines 2101-2500 of 2500; all of it is in ${outputs}/${long}.stdout]`,
 		);
 		expect(await modelText(tools, "bash", {}, result)).toContain("row 2500");
+	});
+
+	it("cuts the middle of long finished output, keeping its start and end", async () => {
+		const id = randomUUID();
+		const text = Array.from(
+			{ length: 1000 },
+			(_, index) => `row ${index + 1}`,
+		).join("\n");
+		const runner = commandRunner({
+			execute_command: [
+				{ id, status: 0, stdout: text, start: 0, nextStart: null },
+			],
+		});
+		const result = (await run(lean("core", runner.tools), "bash", {
+			command: "seq",
+		})) as LeanCommandResult;
+		expect(result.output.startsWith("row 1\n")).toBe(true);
+		expect(result.output).toContain("[... lines 101-700 cut ...]");
+		expect(result.output.endsWith("row 1000")).toBe(true);
+		expect(result.truncationNote).toBe(
+			`[Lines 101-700 of 1000 were cut; all of it is in ${outputs}/${id}.stdout]`,
+		);
 	});
 
 	it("Gemini run_shell_command runs in dir_path and reports in Gemini CLI's format", async () => {

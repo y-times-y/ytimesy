@@ -2,7 +2,10 @@ import { detectMediaType } from "@ai-sdk/provider-utils";
 import type { Tool } from "ai";
 import { z } from "zod";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
-import { AGENT_OUTPUT_LIMIT_BYTES } from "../agent-output-artifacts";
+import {
+	AGENT_OUTPUT_LIMIT_BYTES,
+	COMMAND_MAX_CHARACTERS,
+} from "../agent-output-artifacts";
 import { applyLeanEdit, type LeanEditNames } from "../lean-edit";
 import type { LeanCommandResult, LeanEngine } from "../lean-engine";
 import { LEAN_MAX_LINES } from "../lean-output";
@@ -14,8 +17,9 @@ export type ExecuteOptions = Parameters<NonNullable<Tool["execute"]>>[1];
 
 /** The longest path a lean tool accepts. */
 const PATH_MAX_CHARACTERS = 4096;
+
 /** The longest shell command a lean tool accepts (as execute_command). */
-export const COMMAND_MAX_CHARACTERS = 16_000;
+export { COMMAND_MAX_CHARACTERS };
 /** The longest old/new text an edit accepts, and the longest whole file a write accepts. */
 export const EDIT_TEXT_MAX_CHARACTERS = 1_000_000;
 export const WRITE_CONTENT_MAX_CHARACTERS = 5_000_000;

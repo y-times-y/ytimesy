@@ -11,9 +11,13 @@ import { journaledToolOperation } from "./journaled-tool-operation";
 import { LeanEditError } from "./lean-edit";
 import { ensureLeanHelpers } from "./lean-helpers";
 import {
+	commandCutNote,
 	commandTruncationNote,
+	keepEnds,
 	keepHead,
 	keepTail,
+	LEAN_COMMAND_MAX_BYTES,
+	LEAN_COMMAND_MAX_LINES,
 	LEAN_MAX_BYTES,
 } from "./lean-output";
 import { READ_SCRIPT, TAIL_SCRIPT, WRITE_SCRIPT } from "./lean-scripts";
@@ -176,13 +180,16 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 				? text.length < 32_000
 				: page.nextStart === null || page.nextStart === undefined);
 		if (complete) {
-			const truncation = keepTail(text, { maxBytes });
+			const truncation = keepEnds(text, {
+				maxBytes,
+				maxLines: LEAN_COMMAND_MAX_LINES,
+			});
 			return {
 				output: truncation.content,
 				end:
 					page.status === "running" ? (page.nextStart ?? undefined) : undefined,
 				note: truncation.truncated
-					? commandTruncationNote(truncation, outputPath(id))
+					? commandCutNote(truncation, outputPath(id))
 					: undefined,
 			};
 		}
@@ -203,7 +210,10 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 			lines: number;
 			end: number;
 		};
-		const truncation = keepTail(tail.text, { maxBytes });
+		const truncation = keepTail(tail.text, {
+			maxBytes,
+			maxLines: LEAN_COMMAND_MAX_LINES,
+		});
 		const shownLines = truncation.lastLine - truncation.firstLine + 1;
 		return {
 			output: truncation.content,
@@ -228,7 +238,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 		page: CommandPage,
 		from: number,
 		started: number,
-		maxBytes = LEAN_MAX_BYTES,
+		maxBytes = LEAN_COMMAND_MAX_BYTES,
 	): Promise<LeanCommandResult> {
 		const view = await shown(workspace, page.id, page, from, maxBytes);
 		const positions = await commandCursors();
