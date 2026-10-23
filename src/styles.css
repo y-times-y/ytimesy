@@ -963,6 +963,70 @@ button:enabled:active {
 .overview-diff-counts > :last-child {
 	color: #f87171;
 }
+/* Every menu and picker opens the same way: a short fade and a 2px slide
+   away from its trigger. */
+@keyframes menu-in {
+	from {
+		opacity: 0;
+		transform: translateY(var(--menu-in-y, -2px));
+	}
+}
+.recovery-menu,
+.inspector-view-menu,
+.pr-picker-menu,
+.project-picker,
+.harness-picker,
+.context-usage-popover,
+[data-slot="select-content"] {
+	animation: menu-in 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+:is(
+	.recovery-menu,
+	.inspector-view-menu,
+	.pr-picker-menu,
+	.project-picker,
+	.harness-picker,
+	.context-usage-popover,
+	[data-slot="select-content"]
+)[data-side="top"] {
+	--menu-in-y: 2px;
+}
+:is(
+	.recovery-menu,
+	.inspector-view-menu,
+	.pr-picker-menu,
+	.project-picker,
+	.harness-picker,
+	.context-usage-popover,
+	[data-slot="select-content"]
+)[data-state="closed"] {
+	animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.recovery-menu,
+	.inspector-view-menu,
+	.pr-picker-menu,
+	.project-picker,
+	.harness-picker,
+	.context-usage-popover,
+	[data-slot="select-content"] {
+		animation: none;
+	}
+}
+/* Keyboard focus on a list row: a quiet ring inside the row. */
+.project-picker-choice:focus-visible,
+.project-picker-actions :is(a, button):focus-visible,
+.model-picker-option:focus-visible,
+.model-browser-option:focus-visible,
+.slash-palette button:focus-visible,
+.add-project-repos button:focus-visible,
+.sidebar-nav-item:focus-visible,
+.sidebar-new-project:focus-visible,
+.sidebar-folder:focus-visible,
+.sidebar-chat:focus-visible {
+	outline: 1px solid #ffffff4d;
+	outline-offset: -1px;
+}
 /* Shared menu surface and rows: every Radix dropdown and select uses the
    list tokens on :root, so menus, pickers and the sidebar read as one. */
 .recovery-menu,
