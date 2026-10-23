@@ -406,6 +406,50 @@ type TurnRouteFields = {
 	readonly failover?: unknown;
 };
 
+/**
+ * Same-route retries: a transient failure (outage, timeout, overloaded) is
+ * retried on the serving route, after these waits, before the turn fails
+ * over. The count lives in the failover column with the route it counts, so
+ * a restarted executor resumes it; a step that succeeds clears it.
+ */
+export const MODEL_STEP_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000];
+
+export type RouteRetry = { readonly route: string; readonly count: number };
+
+/** The stored failover column: a switch, a retry count, both, or neither. */
+export type TurnFailoverColumn = (TurnFailover | Record<never, never>) & {
+	readonly retry?: RouteRetry;
+};
+
+const routeRetrySchema = z.object({
+	route: z.string().max(1024),
+	count: z.number().int().min(0),
+});
+
+/** Same-route retries the turn already made on `route`. */
+export function routeRetries(value: unknown, route: ModelRoute): number {
+	const parsed = routeRetrySchema.safeParse(
+		value && typeof value === "object"
+			? (value as { retry?: unknown }).retry
+			: undefined,
+	);
+	return parsed.success && parsed.data.route === routeKey(route)
+		? parsed.data.count
+		: 0;
+}
+
+/** The failover column with `count` retries on `route` (none clears it). */
+export function withRouteRetries(
+	value: unknown,
+	route: ModelRoute,
+	count: number,
+): TurnFailoverColumn {
+	const failover = turnFailover(value) ?? {};
+	return count > 0
+		? { ...failover, retry: { route: routeKey(route), count } }
+		: failover;
+}
+
 /** The route the user chose for this turn. */
 export function chosenRoute(turn: TurnRouteFields): ModelRoute {
 	return {

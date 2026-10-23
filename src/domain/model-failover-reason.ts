@@ -13,6 +13,7 @@ import {
 	UnsupportedEdgeModelEndpoint,
 } from "./api-turn-failure";
 import type { FailoverReason } from "./model-failover";
+import { publicToolDetail } from "./tool-detail";
 
 /** Failures a different route cannot fix: the user (or the request) must change. */
 const NEVER_FAIL_OVER = [
@@ -174,6 +175,60 @@ export function failoverReason(error: unknown): FailoverReason | null {
 			return "outage";
 	}
 	return null;
+}
+
+const TRANSIENT: readonly FailoverReason[] = [
+	"outage",
+	"timeout",
+	"overloaded",
+];
+
+/**
+ * A failure a moment later may fix on the same route. Quotas and rate limits
+ * are not, nor is a blocked Codex egress: every path was already tried.
+ */
+export function retriesSameRoute(error: unknown, reason: FailoverReason) {
+	return (
+		TRANSIENT.includes(reason) &&
+		!failureChain(error).some(
+			(current) => current instanceof CodexEgressUnavailable,
+		)
+	);
+}
+
+/** Why a model step failed, for the record: names, statuses and messages, redacted and short. */
+export function failureSummary(error: unknown): string {
+	const parts = failureChain(error).flatMap((current) => {
+		if (typeof current !== "object" || current === null)
+			return typeof current === "string" ? [current] : [];
+		const record = current as ErrorRecord;
+		const label = [
+			current instanceof IncompleteAgentTurn
+				? `IncompleteAgentTurn (${current.reason})`
+				: typeof record.name === "string"
+					? record.name
+					: "",
+			typeof record.statusCode === "number" ? String(record.statusCode) : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+		const text = [
+			label,
+			typeof record.message === "string" ? record.message : "",
+		]
+			.filter(Boolean)
+			.join(": ")
+			.replace(/\s+/g, " ")
+			.trim();
+		return text ? [text] : [];
+	});
+	const summary = publicToolDetail(
+		parts.filter((part, index) => parts.indexOf(part) === index).join(" <- "),
+	)
+		// Bearer JWTs and URL query strings (signed links) are never kept.
+		.replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]")
+		.replace(/(https?:\/\/[^\s?#]+)[?#]\S*/g, "$1");
+	return summary.length > 300 ? `${summary.slice(0, 299)}…` : summary;
 }
 
 /** The synthetic provider failure a forced development outage raises. */

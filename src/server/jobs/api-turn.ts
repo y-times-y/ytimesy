@@ -39,15 +39,20 @@ import {
 	failoverQuestion,
 	failoverRuntimeNote,
 	forcedDevelopmentOutage,
+	MODEL_STEP_RETRY_DELAYS_MS,
 	nextTurnFailover,
 	routeConnectionKey,
 	routeKey,
+	routeRetries,
 	servingRoute,
 	turnFailover,
+	withRouteRetries,
 } from "#/domain/model-failover";
 import {
 	developmentOutageError,
 	failoverReason,
+	failureSummary,
+	retriesSameRoute,
 } from "#/domain/model-failover-reason";
 import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
@@ -332,7 +337,9 @@ export async function runApiTurn(
 	timing?.mark("turnStart");
 	let ended = "error";
 	try {
-		// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
+		// Bounded: every failover adds a route to the turn's tried set
+		// (MAX_TURN_FAILOVERS); each route retries a failed step at most
+		// MODEL_STEP_RETRY_DELAYS_MS.length times before a step succeeds.
 		for (let continued = false; ; continued = true) {
 			const attempt = () =>
 				runApiTurnAttempt(machines, turn, step, continued, timing);
@@ -384,6 +391,10 @@ async function runApiTurnAttempt(
 	// After a failover the rest of the turn runs on the fallback; the turn row
 	// keeps the user's choice, so their next message tries it again.
 	const route = servingRoute(turn);
+	// Same-route retries of a failed step so far (kept with the turn's failover state).
+	let retried = routeRetries(turn.failover, route);
+	// Set once a model step succeeds after a retry: the next checkpoint clears the count.
+	let retryCleared: ReturnType<typeof withRouteRetries> | undefined;
 	let failoverScope:
 		| {
 				evaluation: boolean;
@@ -463,15 +474,21 @@ async function runApiTurnAttempt(
 	const saveCheckpoint = () =>
 		timed("turn:checkpoint", async () => {
 			const saved = () =>
-				checkpointed?.messages === messages && checkpointed.items === items;
+				!retryCleared &&
+				checkpointed?.messages === messages &&
+				checkpointed.items === items;
 			// The checkpoint writes the newest items, so a snapshot still waiting
 			// to be written would only cost a write (and a relay) before it.
 			if (!saved()) progress.supersede();
 			await progress.drain();
 			if (saved()) return;
 			const saving = { messages, items };
-			await checkpointApiTurn(turn, saving.messages, saving.items);
+			const clearing = retryCleared;
+			await (clearing
+				? checkpointApiTurn(turn, saving.messages, saving.items, clearing)
+				: checkpointApiTurn(turn, saving.messages, saving.items));
 			checkpointed = saving;
+			if (clearing === retryCleared) retryCleared = undefined;
 		});
 	let failureStage: ApiTurnFailureStage = "connection";
 	const control = {
@@ -1902,6 +1919,11 @@ async function runApiTurnAttempt(
 			result = await timed("turn:runAgent", async () =>
 				runAgent({ ...agentInput, messages }),
 			);
+			// The step succeeded: a later failure gets its own retries.
+			if (retried) {
+				retryCleared = withRouteRetries(turn.failover, route, 0);
+				retried = 0;
+			}
 		}
 		// An early first request: the step ends only once its workspace is
 		// ready (a workspace failure fails the turn as before, and the turn's
@@ -2242,9 +2264,50 @@ async function runApiTurnAttempt(
 			!coordinationFailure
 				? failoverReason(error)
 				: null;
+		// A transient failure first runs the step again on the same route, from
+		// the same checkpoint a failover would continue from, after a short
+		// wait. A step whose tools had started is not repeated here: the
+		// failover's runtime note tells the next model to inspect their effects.
+		if (
+			reason &&
+			retriesSameRoute(error, reason) &&
+			!failedAttempt?.inFlight &&
+			retried < MODEL_STEP_RETRY_DELAYS_MS.length
+		) {
+			try {
+				await abortableDelay(
+					MODEL_STEP_RETRY_DELAYS_MS[retried] ?? 0,
+					abort.signal,
+				);
+				const partial = failedAttempt?.uncommittedIds ?? [];
+				if (partial.length)
+					items = applyApiProgress(items, turn.id, {
+						type: "retract",
+						ids: step
+							? partial.map((id) => `step-${step.index}:${id}`)
+							: [...partial],
+					});
+				if (failedAttempt?.droppedStepSaved) messages = failedAttempt.committed;
+				const failover = withRouteRetries(turn.failover, route, retried + 1);
+				await checkpointApiTurn(turn, messages, items, failover);
+				console.warn("Model step retried on the same route", {
+					reason,
+					retry: retried + 1,
+					...apiTurnFailureClassification(error),
+				});
+				// The turn's lease carries over to the retried step.
+				coordinated = false;
+				return { failedOver: { ...turn, failover, messages, items } };
+			} catch (cause) {
+				if (!abort.signal.aborted)
+					console.warn("Model step retry failed", {
+						...apiTurnFailureClassification(cause),
+					});
+			}
+		}
 		let paused: ModelSwitchItem | undefined;
 		let exhausted = "";
-		if (reason && failoverScope) {
+		if (reason && failoverScope && !abort.signal.aborted) {
 			const scope = failoverScope;
 			try {
 				const plan = await planModelFailover({
@@ -2297,6 +2360,7 @@ async function runApiTurnAttempt(
 							state: "switched",
 							message: failoverNotice(plan.failing.label, next.label, reason),
 							reason,
+							cause: failureSummary(error),
 							from: plan.failing.label,
 							to: { ...next.label, key: routeKey(next.route) },
 						}),
@@ -2327,6 +2391,7 @@ async function runApiTurnAttempt(
 						state: "awaitingApproval",
 						message: failoverQuestion(plan.failing.label, to, reason),
 						reason,
+						cause: failureSummary(error),
 						from: plan.failing.label,
 						to: { ...to, key: routeKey(decision.candidate.route) },
 					});
@@ -2617,6 +2682,7 @@ function modelSwitchItem(
 		reason: ModelSwitchItem["reason"];
 		from: ModelSwitchItem["from"];
 		to: ModelSwitchItem["to"];
+		cause?: string;
 	},
 ): ModelSwitchItem {
 	const usageBefore = [...items]
@@ -2628,6 +2694,23 @@ function modelSwitchItem(
 		id: SessionItemId(input.id),
 		...(usageBefore ? { usageBefore } : {}),
 	};
+}
+
+/** Waits `ms`, or rejects with the signal's reason once it aborts. */
+function abortableDelay(ms: number, signal: AbortSignal) {
+	return new Promise<void>((resolve, reject) => {
+		if (signal.aborted) return reject(signal.reason);
+		const timer = setTimeout(done, ms);
+		function done() {
+			signal.removeEventListener("abort", stop);
+			resolve();
+		}
+		function stop() {
+			clearTimeout(timer);
+			reject(signal.reason);
+		}
+		signal.addEventListener("abort", stop, { once: true });
+	});
 }
 
 const TURN_TIME_LIMIT_MESSAGE =

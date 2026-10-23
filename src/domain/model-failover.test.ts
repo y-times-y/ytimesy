@@ -4,6 +4,7 @@ import { API_MODEL_LIST } from "./api-model-list";
 import {
 	ApiModelPreparationFailure,
 	ApiTurnCancelled,
+	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	IncompleteAgentTurn,
 	SafeApiModelFailure,
@@ -20,18 +21,25 @@ import {
 	failoverNotice,
 	forcedDevelopmentOutage,
 	MAX_TURN_FAILOVERS,
+	MODEL_STEP_RETRY_DELAYS_MS,
 	MODEL_TIERS,
 	type ModelRoute,
 	modelTier,
 	nextTurnFailover,
 	orderedFailoverConnections,
 	routeKey,
+	routeRetries,
 	SUBSCRIPTION_MODEL_EQUIVALENTS,
 	servingRoute,
 	turnFailover,
 	turnFailoverPolicy,
+	withRouteRetries,
 } from "./model-failover";
-import { failoverReason } from "./model-failover-reason";
+import {
+	failoverReason,
+	failureSummary,
+	retriesSameRoute,
+} from "./model-failover-reason";
 import {
 	subscriptionTurnRevision,
 	subscriptionTurnSettings,
@@ -596,5 +604,98 @@ describe("forced development outage", () => {
 				1,
 			),
 		).toBe(true);
+	});
+});
+
+describe("same-route retries", () => {
+	const codex: ModelRoute = {
+		connectionId: null,
+		connectionRevision: subscriptionTurnRevision("high", false),
+		modelId: "gpt-6.1-sol",
+	};
+	const other: ModelRoute = {
+		connectionId: "11111111-1111-4111-8111-111111111111",
+		connectionRevision: "or-rev",
+		modelId: "openai/gpt-6.1-sol",
+	};
+
+	it("retries transient failures twice, never quotas, rate limits or a blocked egress", () => {
+		expect(MODEL_STEP_RETRY_DELAYS_MS).toEqual([1_000, 3_000]);
+		const outage = new IncompleteAgentTurn("error");
+		expect(retriesSameRoute(outage, "outage")).toBe(true);
+		expect(retriesSameRoute(apiError(504), "timeout")).toBe(true);
+		expect(retriesSameRoute(apiError(529), "overloaded")).toBe(true);
+		expect(retriesSameRoute(apiError(429), "rate-limited")).toBe(false);
+		expect(
+			retriesSameRoute(new SubscriptionUsageLimitReached(null), "usage-limit"),
+		).toBe(false);
+		const egress = new CodexEgressUnavailable([
+			{ path: "direct", reason: "403" },
+		]);
+		expect(failoverReason(egress)).toBe("outage");
+		expect(retriesSameRoute(egress, "outage")).toBe(false);
+	});
+
+	it("counts per route in the failover column, beside any switch", () => {
+		expect(routeRetries(null, codex)).toBe(0);
+		const once = withRouteRetries(null, codex, 1);
+		expect(routeRetries(once, codex)).toBe(1);
+		expect(routeRetries(once, other)).toBe(0);
+		// A retry alone is not a failover: the turn keeps its own route.
+		expect(turnFailover(once)).toBeNull();
+		expect(withRouteRetries(once, codex, 0)).toEqual({});
+		const switched = nextTurnFailover(
+			null,
+			{ route: codex, label: { model: "GPT-6.1-Sol", connection: "Codex" } },
+			{
+				route: other,
+				connectionKey: other.connectionId as string,
+				connectionLabel: "OpenRouter",
+				modelLabel: "GPT-6.1 Sol",
+				paid: true,
+				sameModel: true,
+			},
+		);
+		// The switch starts the new route without retries.
+		expect(routeRetries(switched, other)).toBe(0);
+		const retried = withRouteRetries(switched, other, 2);
+		expect(routeRetries(retried, other)).toBe(2);
+		expect(servingRoute({ ...turnRow(), failover: retried })).toMatchObject(
+			other,
+		);
+		expect(servingRoute({ ...turnRow(), failover: once })).toEqual(
+			chosenRoute(turnRow()),
+		);
+		expect(withRouteRetries(retried, other, 0)).toEqual(turnFailover(switched));
+	});
+
+	function turnRow() {
+		return {
+			connection_id: codex.connectionId,
+			connection_revision: codex.connectionRevision,
+			model_id: codex.modelId,
+		};
+	}
+});
+
+describe("failureSummary", () => {
+	it("keeps the failure chain short and redacted", () => {
+		const summary = failureSummary(
+			new SafeApiModelFailure(
+				new APICallError({
+					message: `Service Unavailable Bearer abc.def.ghi sk-${"a".repeat(30)} eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl https://relay.invalid/v1?token=secret ${"x".repeat(400)}`,
+					url: "https://chatgpt.com/backend-api/codex/responses",
+					requestBodyValues: {},
+					statusCode: 503,
+					isRetryable: true,
+				}),
+			),
+		);
+		expect(summary.length).toBeLessThanOrEqual(300);
+		expect(summary).toContain("503: Service Unavailable");
+		expect(summary).not.toMatch(/abc\.def|sk-a|eyJ|token=|secret/);
+		expect(failureSummary(new IncompleteAgentTurn("error"))).toMatch(
+			/^IncompleteAgentTurn \(error\): /,
+		);
 	});
 });

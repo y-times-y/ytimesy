@@ -8,7 +8,11 @@ import {
 } from "#/domain/api-turn-settings";
 import { CONVERSATION_FORK_REQUEST_ID } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
-import type { TurnFailover } from "#/domain/model-failover";
+import {
+	type TurnFailover,
+	type TurnFailoverColumn,
+	turnFailover,
+} from "#/domain/model-failover";
 import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
@@ -53,7 +57,7 @@ export type ApiTurn = {
 	items: SessionItem[];
 	lease_id: string | null;
 	settings?: unknown;
-	/** The fallback route serving the rest of this turn after a failover (TurnFailover). */
+	/** The fallback route serving the rest of this turn after a failover (TurnFailover), and its same-route retries. */
 	failover?: unknown;
 	/** Epoch ms the turn was queued, when its loader read it (timing only). */
 	queued_at_ms?: number | null;
@@ -321,7 +325,7 @@ export async function previousTurnMessages(
 			connectionRevision: previous.connection_revision,
 			state: previous.state,
 			// Its native items (encrypted reasoning, signatures) came from the fallback.
-			failedOver: Boolean(previous.failover),
+			failedOver: turnFailover(previous.failover) !== null,
 		},
 		next,
 	);
@@ -457,12 +461,12 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	return Boolean(result.right.rowCount);
 }
 
-/** `failover`, when given, moves the rest of the turn to its route in the same write. */
+/** `failover`, when given, moves the rest of the turn to its route (or records its same-route retries) in the same write. */
 export async function checkpointApiTurn(
 	turn: ApiTurn,
 	messages: ModelMessage[],
 	items: readonly SessionItem[],
-	failover?: TurnFailover,
+	failover?: TurnFailoverColumn,
 ) {
 	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set messages=$3,items=$4,failover=coalesce($5::jsonb,failover),updated_at=now()
