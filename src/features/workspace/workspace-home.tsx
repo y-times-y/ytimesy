@@ -138,8 +138,7 @@ import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
-import { MemoryGraphPage } from "./memory-graph-page";
-import { MemoryInspector } from "./memory-inspector";
+import { MemoryPage, type MemoryView } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -269,8 +268,9 @@ export function WorkspaceHome({
 		chats: projectChatLists[index]?.data ?? [],
 	}));
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
-	const [memoryPage, setMemoryPage] = useState<"list" | "graph" | null>(null);
-	const memoryPageOpen = memoryPage !== null;
+	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
+	/** The Memory page's view; the graph first, the list kept while open. */
+	const [memoryView, setMemoryView] = useState<MemoryView>("graph");
 	const startSession = useServerFn(startProjectAgentSession);
 	const prewarmSession = useServerFn(prewarmProjectAgentSession);
 	/** Chats whose machine copy was already asked for in this page. */
@@ -1129,7 +1129,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		bumpSessionEpoch();
@@ -1162,7 +1162,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -1345,7 +1345,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1654,15 +1654,10 @@ export function WorkspaceHome({
 					openChat(chatId);
 				}}
 				onOpenMemory={() => {
-					setMemoryPage("list");
+					setMemoryPageOpen(true);
 					if (compact) setProjectsOpen(false);
 				}}
-				memoryActive={memoryPage === "list"}
-				onOpenMemoryGraph={() => {
-					setMemoryPage("graph");
-					if (compact) setProjectsOpen(false);
-				}}
-				memoryGraphActive={memoryPage === "graph"}
+				memoryActive={memoryPageOpen}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1722,31 +1717,13 @@ export function WorkspaceHome({
 				>
 					<PanelRight size={16} />
 				</button>
-				{memoryPage === "graph" ? (
-					<section
-						className="memory-page"
-						data-view="graph"
-						aria-label="Memory graph"
-					>
-						<MemoryGraphPage
-							active
-							projects={projects.data}
-							onOpenChat={openMemoryChat}
-						/>
-					</section>
-				) : memoryPage === "list" ? (
-					<section className="memory-page" aria-label="Memory page">
-						<header className="memory-page-header">
-							<h1>Memory</h1>
-							<p>What the agent remembers across chats.</p>
-						</header>
-						<MemoryInspector
-							active
-							layout="page"
-							projects={projects.data}
-							onOpenChat={openMemoryChat}
-						/>
-					</section>
+				{memoryPageOpen ? (
+					<MemoryPage
+						view={memoryView}
+						onViewChange={setMemoryView}
+						projects={projects.data}
+						onOpenChat={openMemoryChat}
+					/>
 				) : null}
 				<WorkspacePanes
 					open={inspectorOpen}
