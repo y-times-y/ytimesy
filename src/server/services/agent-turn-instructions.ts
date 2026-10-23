@@ -82,6 +82,8 @@ export function agentTurnInstructions(input: {
 	rigor?: boolean;
 	/** Harness variant subagents=force: the root builder must delegate at least once. */
 	forceDelegation?: boolean;
+	/** The Harbor bridge's root builder: brief final answer, no desktop browser block. */
+	unattended?: boolean;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -132,10 +134,14 @@ function leanTurnInstructions(
 		input.leadTools === "thin" &&
 		AGENT_TOOL in input.tools;
 	return [
-		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, AGENT_TOOL in input.tools)}`,
+		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, AGENT_TOOL in input.tools, input.unattended)}`,
 		thinLead
 			? ""
-			: leanToolInstructions(input.leanShape, { readOnly, codeMode }),
+			: leanToolInstructions(input.leanShape, {
+					readOnly,
+					codeMode,
+					unattended: input.unattended,
+				}),
 		codeMode === "primary"
 			? primaryCodeModeInstructions(input.leanShape, { readOnly })
 			: codeMode
@@ -180,7 +186,7 @@ function leanTurnInstructions(
 				: HANDOFF_INSTRUCTIONS,
 		rigorApplies(input) ? rigorBlock(input) : "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
-		readOnly || thinLead
+		readOnly || thinLead || input.unattended
 			? ""
 			: leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
 					prEvidence: input.prEvidence,
@@ -210,10 +216,11 @@ function leanEditTools(shape: LeanToolShape, tools: ToolSet) {
 function roleInstructions(
 	session: Parameters<typeof agentTurnInstructions>[0]["session"],
 	delegates: boolean,
+	unattended?: boolean,
 ) {
 	if (session.agentRole === "writer" && session.agentBudget?.sidekick)
 		return sidekickRoleInstructions(session.agentBudget);
 	return session.agentRole
 		? subagentRoleInstructions(session.agentRole, session.agentBudget ?? null)
-		: cloudAgentRoleInstructions({ delegates });
+		: cloudAgentRoleInstructions({ delegates, unattended });
 }

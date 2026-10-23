@@ -53,7 +53,7 @@ describe("rigor", () => {
 			"Never stop on an apparent contradiction or a missing input",
 		);
 		expect(UNATTENDED_RUN_INSTRUCTIONS).toContain(
-			"Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish verifying first and re-check the planned payload against the rules.",
+			"Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish your checks first and re-check the planned payload against the rules with them; a separate review program is not needed.",
 		);
 	});
 
