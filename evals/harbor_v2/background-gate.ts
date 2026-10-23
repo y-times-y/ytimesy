@@ -12,14 +12,17 @@ import {
  * (background-command-notices.ts), so the builder may end its turn while a
  * benchmark runs. A Harbor trial has no idle chat to wake; after a root
  * builder run ends, this waits (polling the machine's own command records)
- * for the commands it left running, then hands back the same notice for a
- * continuation run. Waiting stops at the trial deadline minus a margin for
+ * for the first of the commands it left running to exit (as the product
+ * wakes on each exit), then hands back the same notice for a continuation
+ * run. Waiting stops at the trial deadline minus a margin for
  * the agent to act on the results, and at each command's own time limit.
  */
 
 /** Gate rounds (continuations) per trial at most. */
 export const BACKGROUND_GATE_MAX_ROUNDS = 5;
 export const BACKGROUND_GATE_POLL_MS = 10_000;
+/** One wait at most: a server left running on purpose never exits, so it must not hold the trial. */
+export const BACKGROUND_GATE_MAX_WAIT_MS = 30 * 60_000;
 
 /** One gate wait as the trace records it. */
 export type BackgroundGateEntry = {
@@ -104,11 +107,13 @@ export async function backgroundGate(input: {
 		const capMs = backgroundCommandMaxSeconds() * 1000;
 		const waitUntil = Math.min(
 			stopAt,
+			started + BACKGROUND_GATE_MAX_WAIT_MS,
 			...state.running.map((command) =>
 				command.startedAt ? command.startedAt + capMs + 30_000 : stopAt,
 			),
 		);
-		while (state.running.length) {
+		// Every id is unannounced, so any exit among them is news: wake on the first one.
+		while (state.running.length && !state.exits.length) {
 			if (signal.aborted)
 				return {
 					notice: null,
