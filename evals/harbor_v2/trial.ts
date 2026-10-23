@@ -39,6 +39,11 @@ import {
 	type TimedEvent,
 	type TimedNotice,
 } from "./atif";
+import {
+	BACKGROUND_GATE_MAX_ROUNDS,
+	type BackgroundGateEntry,
+	backgroundGate,
+} from "./background-gate";
 import { bedrockWebSearchUsd } from "./bedrock";
 import {
 	checkerWorkerTool,
@@ -114,6 +119,8 @@ export type HarborTrialInput = {
 	};
 	log?: (line: string) => void;
 	now?: () => number;
+	/** The background-command gate's poll interval (tests shorten it). */
+	backgroundPollMs?: number;
 };
 
 export type HarborTrialResult = {
@@ -420,6 +427,7 @@ export async function runHarborTrial(
 	let instructions = "";
 	let tools = {};
 	const reviewTrace: ReviewTrace = { checks: [] };
+	const backgroundGates: BackgroundGateEntry[] = [];
 	let reviewRounds = 0;
 	let reviewSummary: unknown = null;
 	try {
@@ -826,6 +834,51 @@ export async function runHarborTrial(
 				runtime,
 			);
 		};
+		// The product wakes an idle chat when a background command exits
+		// (background-command-notices.ts); here the root builder's run is
+		// followed by a wait for the commands it left running and a
+		// continuation with their exit notice (background-gate.ts).
+		const runRootBuilder = async (history: ModelMessage[]) => {
+			let out = await runBuilder(history);
+			while (
+				backgroundGates.filter((gate) => gate.outcome === "notified").length <
+					BACKGROUND_GATE_MAX_ROUNDS &&
+				!signal.aborted
+			) {
+				const gate = await backgroundGate({
+					workspace: {
+						machines: input.machines,
+						vm: workspace.vm,
+						cwd: input.cwd,
+					},
+					sessionId: workspace.sessionId,
+					round: backgroundGates.length + 1,
+					deadlineAt: input.deadlineAt,
+					signal,
+					now,
+					...(input.backgroundPollMs !== undefined
+						? { pollMs: input.backgroundPollMs }
+						: {}),
+				});
+				if (gate.entry) {
+					backgroundGates.push(gate.entry);
+					log(
+						`background gate ${gate.entry.round}: ${gate.entry.outcome} after ${gate.entry.waitedSeconds}s (${gate.entry.ids.join(", ")})${gate.entry.error ? `: ${gate.entry.error}` : ""}`,
+					);
+				}
+				if (!gate.notice) break;
+				notices.push({
+					at: new Date(now()).toISOString(),
+					afterEvent: events.length,
+					text: gate.notice,
+				});
+				out = await runBuilder([
+					...out,
+					{ role: "user", content: gate.notice },
+				]);
+			}
+			return out;
+		};
 		let messages: ModelMessage[] = [
 			{ role: "user", content: input.instruction },
 		];
@@ -876,7 +929,7 @@ export async function runHarborTrial(
 			});
 			await loop.beforeModel(step());
 			for (;;) {
-				messages = await runBuilder(messages);
+				messages = await runRootBuilder(messages);
 				const outcome = await loop.afterAttempt(step());
 				if (outcome.kind !== "run" || !outcome.messages) {
 					reviewSummary =
@@ -896,7 +949,7 @@ export async function runHarborTrial(
 				messages = outcome.messages;
 				log(`review round ${reviewRounds}: findings returned to the builder`);
 			}
-		} else messages = await runBuilder(messages);
+		} else messages = await runRootBuilder(messages);
 	} catch (error) {
 		// A guard refusal surfaces from the model loop as a generic provider failure.
 		failure =
@@ -969,6 +1022,7 @@ export async function runHarborTrial(
 			},
 			events,
 			notices,
+			backgroundGates,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [

@@ -202,7 +202,9 @@ export function atifTrajectory(input: {
 			previousUsage = null;
 			closed = true;
 		}
-		while (notices.length && notices[0].afterEvent < index) {
+		// afterEvent is the event count when the notice was added: it goes
+		// before the event at that index (the next run's first).
+		while (notices.length && notices[0].afterEvent <= index) {
 			const notice = notices.shift() as TimedNotice;
 			drafts.push({ notice });
 			closed = true;

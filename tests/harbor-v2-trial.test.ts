@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -18,6 +18,12 @@ import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
+import { agentOutputDirectory } from "../src/server/services/agent-output-artifacts";
+import {
+	COMMAND_TMUX_SOCKET,
+	commandRoot,
+	commandSessionName,
+} from "../src/server/services/api-agent-command-tools";
 import { commandScopeRoot } from "../src/server/services/api-command-scope";
 import { localHarnessWorkspace } from "./helpers/local-harness-workspace";
 
@@ -1421,4 +1427,262 @@ describe("a cut-off checker's last word (bridge)", () => {
 		);
 		expect(ranTranscript(events, 3)).toBe("$ sleep 999\n(no output recorded)");
 	});
+});
+
+describe("runHarborTrial rehearsal: the background-command completion gate", () => {
+	const hasTmux = (() => {
+		try {
+			execFileSync("tmux", ["-V"], { stdio: "ignore" });
+			return true;
+		} catch {
+			return false;
+		}
+	})();
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const trace = async (logs: string) =>
+		JSON.parse(await readFile(join(logs, "ytimesy-trace.json"), "utf8"));
+
+	/**
+	 * A background command as the lean command tool's launch leaves it on the
+	 * machine (api-agent-command-tools.ts launchCommand): `<id>.background`
+	 * beside its output in the session's command root, a tmux session on the
+	 * runtime socket, `<id>.status` written when it exits. Started directly
+	 * because the runner's process fence reads /proc (Linux only).
+	 */
+	async function backgroundCommand(
+		sessionId: string,
+		spec: { seconds: number; output: string; exitCode: number },
+	) {
+		const id = crypto.randomUUID();
+		const root = commandRoot(sessionId);
+		const outputs = agentOutputDirectory(sessionId);
+		await mkdir(root, { recursive: true });
+		await mkdir(outputs, { recursive: true });
+		await writeFile(
+			`${root}/${id}.background`,
+			JSON.stringify({ label: "python3 bench.py", startedAt: Date.now() }),
+		);
+		await writeFile(`${root}/${id}.output`, "");
+		const q = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+		execFileSync("tmux", [
+			"-L",
+			COMMAND_TMUX_SOCKET,
+			"new-session",
+			"-d",
+			"-s",
+			commandSessionName(id),
+			`sleep ${spec.seconds}; printf %s ${q(spec.output)} > ${q(`${outputs}/${id}.stdout`)}; printf '%s\\n' ${spec.exitCode} > ${q(`${root}/${id}.status`)}`,
+		]);
+		cleanups.push(async () => {
+			try {
+				execFileSync(
+					"tmux",
+					[
+						"-L",
+						COMMAND_TMUX_SOCKET,
+						"kill-session",
+						"-t",
+						commandSessionName(id),
+					],
+					{ stdio: "ignore" },
+				);
+			} catch {}
+			await rm(root, { recursive: true, force: true });
+			await rm(outputs, { recursive: true, force: true });
+		});
+		return { id, root };
+	}
+	const running = (id: string) => {
+		try {
+			execFileSync(
+				"tmux",
+				[
+					"-L",
+					COMMAND_TMUX_SOCKET,
+					"has-session",
+					"-t",
+					commandSessionName(id),
+				],
+				{ stdio: "ignore" },
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const promptText = (model: MockLanguageModelV4, call: number) =>
+		JSON.stringify(model.doStreamCalls[call]?.prompt ?? null);
+
+	it.skipIf(!hasTmux)(
+		"waits for the background command the builder left running, then continues with its exit notice",
+		async () => {
+			const f = await fixture();
+			const trialId = `bg-gate-${crypto.randomUUID().slice(0, 8)}`;
+			let command = { id: "", root: "" };
+			const { model, calls } = scriptedModel([
+				[
+					...text(
+						"t1",
+						"Started the final benchmark in the background; I'll report geometric means when it finishes.",
+					),
+					finish(100, 10),
+				],
+				[
+					...text("t2", "Benchmark finished: geometric mean speedup 1.83x."),
+					finish(120, 12),
+				],
+			]);
+			const result = await runHarborTrial({
+				config: f.config,
+				trialId,
+				instruction: "Speed up the benchmark and report its geometric mean.",
+				cwd: f.checkout.root,
+				logsDir: f.logs,
+				deadlineAt: Date.now() + 3 * 60 * 60_000,
+				machines: f.side.machines,
+				userId: "harbor",
+				storage: f.archives.storage,
+				// Started as the builder's run begins (as its bash background option would).
+				runtime: async (wrap) => {
+					command = await backgroundCommand(trialId, {
+						seconds: 1.5,
+						output: "graph 1: 1.91x\ngraph 2: 1.75x\ngeomean 1.83x",
+						exitCode: 0,
+					});
+					return { model: wrap(model) };
+				},
+				harness,
+				backgroundPollMs: 200,
+			});
+			expect(result.failure).toBeNull();
+			expect(calls()).toBe(2);
+			const { id, root } = command;
+			// The continuation read the product's notice: exit code and output tail.
+			const continued = promptText(model, 1);
+			expect(continued).toContain(
+				`Background command ${id} (python3 bench.py) finished with exit 0`,
+			);
+			expect(continued).toContain("geomean 1.83x");
+			expect(continued).toContain("Runtime notice, not a new user request.");
+			expect(promptText(model, 0)).not.toContain(`Background command ${id}`);
+			// Claimed: never announced again.
+			expect(await readFile(`${root}/${id}.notified`, "utf8")).toBe("notice");
+			const t = await trace(f.logs);
+			expect(t.backgroundGates).toHaveLength(1);
+			expect(t.backgroundGates[0]).toMatchObject({
+				round: 1,
+				ids: [id],
+				outcome: "notified",
+				exitCodes: { [id]: 0 },
+				stillRunning: [],
+			});
+			expect(t.backgroundGates[0].waitedSeconds).toBeGreaterThan(0.5);
+			expect(t.notices.at(-1).text).toContain("geomean 1.83x");
+			// Usage counts both runs.
+			expect(result.requests).toBe(2);
+			expect(result.usage?.inputTokens).toBe(220);
+			const trajectory = JSON.parse(
+				await readFile(join(f.logs, "trajectory.json"), "utf8"),
+			);
+			// The notice is a user step between the two runs' answers.
+			expect(
+				trajectory.steps.map(
+					(step: { source: string; extra?: { kind?: string } }) =>
+						step.extra?.kind ?? step.source,
+				),
+			).toEqual(["system", "user", "agent", "runtime-notice", "agent"]);
+			expect(trajectory.steps.at(-1).message).toBe(
+				"Benchmark finished: geometric mean speedup 1.83x.",
+			);
+		},
+		60_000,
+	);
+
+	it.skipIf(!hasTmux)(
+		"stops waiting at the deadline margin: no continuation, the command keeps running, the trial ends cleanly",
+		async () => {
+			const f = await fixture();
+			const trialId = `bg-late-${crypto.randomUUID().slice(0, 8)}`;
+			let id = "";
+			const { model, calls } = scriptedModel([
+				[
+					...text("t1", "Benchmark started in the background."),
+					finish(100, 10),
+				],
+				[...text("t2", "never"), finish(1, 1)],
+			]);
+			const deadlineAt = Date.now() + 5_000;
+			const result = await runHarborTrial({
+				config: f.config,
+				trialId,
+				instruction: "Run the benchmark.",
+				cwd: f.checkout.root,
+				logsDir: f.logs,
+				deadlineAt,
+				machines: f.side.machines,
+				userId: "harbor",
+				storage: f.archives.storage,
+				runtime: async (wrap) => {
+					id = (
+						await backgroundCommand(trialId, {
+							seconds: 120,
+							output: "late",
+							exitCode: 0,
+						})
+					).id;
+					return { model: wrap(model) };
+				},
+				harness,
+				backgroundPollMs: 200,
+			});
+			expect(result.failure).toBeNull();
+			expect(calls()).toBe(1);
+			// The margin (10% of the time left, under 5 minutes) was left unspent.
+			expect(Date.now()).toBeLessThan(deadlineAt);
+			const t = await trace(f.logs);
+			expect(t.backgroundGates).toEqual([
+				expect.objectContaining({
+					ids: [id],
+					outcome: "deadline",
+					stillRunning: [id],
+				}),
+			]);
+			expect(t.notices).toEqual([]);
+			// Not killed: the trial leaves it as is.
+			expect(running(id)).toBe(true);
+		},
+		60_000,
+	);
+
+	it("runs no extra builder run when no background command was started", async () => {
+		const f = await fixture();
+		const { model, calls } = scriptedModel([
+			[...text("t1", "Done."), finish(100, 10)],
+			[...text("t2", "never"), finish(1, 1)],
+		]);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `bg-none-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 3 * 60 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+		});
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(1);
+		const t = await trace(f.logs);
+		expect(t.backgroundGates).toEqual([]);
+		expect(t.notices).toEqual([]);
+	}, 60_000);
 });
