@@ -285,6 +285,8 @@ export async function harborHarness(input: {
 		leanReadOnly: surface.lean?.readOnly,
 		leanWorkingDirectory: surface.lean ? workspace.cwd : undefined,
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
+		// Only the root builder: a subagent's brief already names what to report.
+		unattended: !input.subagent,
 	});
 	return {
 		tools,

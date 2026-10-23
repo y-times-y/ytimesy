@@ -55,6 +55,8 @@ export function leanToolInstructions(
 		readOnly?: boolean;
 		/** codeMode=primary: run_code is named first, as it is listed first. */
 		codeMode?: boolean | "primary";
+		/** An unattended run (the Harbor bridge): no desktop browser line. */
+		unattended?: boolean;
 	} = {},
 ) {
 	const runCode =
@@ -73,9 +75,19 @@ export function leanToolInstructions(
 		"- `ytimesy-check --files <delivered paths> [--input <paths they supply>] [--unprivileged] -- <run command>`: when you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run it once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (--unprivileged when the task mentions another user or dropped privileges); it runs your deliverable from a clean copy. Fix what it reports. Skip it for edits to an existing project whose own tests you ran.",
 		"- Parts of this conversation removed to save space are saved in `~/.ytimesy/history/`. Search there when you need exact earlier details.",
 		"- `~/.ytimesy/environment.md` (if present) describes how this workspace was prepared.",
-		"- `ytimesy-browser open|screenshot|inspect|exec` drives the desktop browser for visual checks.",
+		options.unattended
+			? ""
+			: "- `ytimesy-browser open|screenshot|inspect|exec` drives the desktop browser for visual checks.",
+		editLine(shape),
 		BACKGROUND_COMMANDS,
-	].join("\n");
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+/** Small edits over rewrites: a whole file re-sent through a heredoc costs its full length in output. */
+function editLine(shape: LeanToolShape) {
+	return `- Change an existing file with ${LEAN_SHAPE_TOOLS[shape].edit} (targeted edits), never by re-sending it through a shell heredoc or a generating script; write a whole file only when it is new or most of it changes. Keep one-off scripts short.`;
 }
 
 /** When to use run_code (harness variant codeMode=on), in the shape's tool names. */
