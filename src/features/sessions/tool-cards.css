@@ -176,3 +176,176 @@
 .session-background-tag[data-state="failed"] .session-background-state {
 	color: #f87171;
 }
+
+/* An opened tool card (tool-detail-body.tsx): one panel per call, a header
+   naming what it touched and a body showing exactly what happened. */
+.tool-panel {
+	margin: 4px 0 8px 20px;
+	border: 1px solid rgba(255, 255, 255, 0.07);
+	border-radius: 8px;
+	background: #0d0d0d;
+	overflow: hidden;
+	min-width: 0;
+}
+.tool-panel-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 30px;
+	padding: 5px 10px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+	background: rgba(255, 255, 255, 0.02);
+	font-size: 12px;
+}
+.tool-panel-head:last-child {
+	border-bottom: 0;
+}
+.tool-panel-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
+}
+.tool-panel-aside {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+.tool-panel-path {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: rgba(255, 255, 255, 0.82);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tool-panel-folder {
+	color: #6f6f6f;
+}
+.tool-panel-meta {
+	color: #7a7a7a;
+	font-size: 11px;
+}
+.tool-panel-tag {
+	padding: 0 6px;
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.05);
+	color: #a3a3a3;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	line-height: 18px;
+}
+.tool-panel-tag[data-tone="good"] {
+	background: rgba(74, 222, 128, 0.08);
+	color: #4ade80;
+}
+.tool-panel-tag[data-tone="bad"] {
+	background: rgba(248, 113, 113, 0.1);
+	color: #f87171;
+}
+.tool-panel-command {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+.tool-panel-prompt {
+	color: #5c5c5c;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	user-select: none;
+}
+.tool-panel-command .session-command-source {
+	color: rgba(255, 255, 255, 0.85);
+}
+.tool-panel-body {
+	max-height: 320px;
+	margin: 0;
+	overflow: auto;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	line-height: 1.6;
+}
+.tool-panel-output {
+	padding: 8px 12px;
+	color: #bdbdbd;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.tool-panel-output[data-tone="bad"],
+.tool-panel-note[data-tone="bad"] {
+	color: #f3a3a3;
+}
+.tool-panel-code {
+	padding: 6px 0;
+}
+.tool-line {
+	display: grid;
+	grid-template-columns: 44px minmax(0, 1fr);
+	min-width: 0;
+}
+.tool-line-number {
+	padding-right: 12px;
+	color: #4d4d4d;
+	text-align: right;
+	user-select: none;
+}
+.tool-line-code {
+	padding-right: 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: #c6c6c6;
+}
+.tool-line[data-sign="added"] {
+	background: rgba(74, 222, 128, 0.07);
+}
+.tool-line[data-sign="added"] .tool-line-number {
+	color: #4ade80;
+}
+.tool-line[data-sign="removed"] {
+	background: rgba(248, 113, 113, 0.07);
+}
+.tool-line[data-sign="removed"] .tool-line-number {
+	color: #f87171;
+}
+.tool-panel[data-kind="patch"] .tool-line {
+	grid-template-columns: minmax(0, 1fr);
+	padding-left: 12px;
+}
+.tool-hunk + .tool-hunk {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.tool-panel-note,
+.tool-panel-empty {
+	margin: 0;
+	padding: 6px 12px;
+	color: #7a7a7a;
+	font-size: 11px;
+}
+.tool-panel-note {
+	border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.tool-panel-empty {
+	font-style: italic;
+}
+.tool-panel-section {
+	padding: 4px 12px 8px;
+}
+.tool-panel-section + .tool-panel-output {
+	border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+/* run_code: the program folds into its header; its calls list as rows below. */
+details.tool-panel.session-program > summary {
+	cursor: pointer;
+	list-style: none;
+}
+details.tool-panel.session-program > summary::-webkit-details-marker {
+	display: none;
+}
+details.tool-panel.session-program:not([open]) > summary {
+	border-bottom: 0;
+}
+.session-program-calls {
+	margin: 2px 0 6px 20px;
+}

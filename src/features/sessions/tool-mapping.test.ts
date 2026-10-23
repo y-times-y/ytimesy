@@ -252,9 +252,12 @@ describe("timeline cards for harness items", () => {
 			"running",
 		);
 		expect(html).toContain("Read · Ran");
-		expect(html).toContain("2 tool calls");
+		expect(html).toContain("2 calls");
 		expect(html).toContain("Program · 1 line");
-		expect(html).toContain("<dt>path</dt>");
+		// Inner calls open as their own panels: the file read and the command run.
+		expect(html).toContain('data-kind="read"');
+		expect(html).toContain('data-kind="command"');
+		expect(html).toContain("Returned");
 		expect(html).not.toContain("{&quot;path&quot;");
 	});
 
