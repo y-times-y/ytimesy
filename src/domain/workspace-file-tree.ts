@@ -1,4 +1,5 @@
 import { fileBasename } from "./file-kind";
+import { filePreviewKind } from "./file-preview";
 import type { FileChangeEntry } from "./session-item";
 import { visibleWorkspacePath } from "./visible-workspace-path";
 
@@ -114,6 +115,27 @@ export function firstWorkspaceFilePath(
 		if (nested) return nested;
 	}
 	return undefined;
+}
+
+/** Up to `count` text files listed after `path`, in tree order. */
+export function nearbyFiles(
+	nodes: readonly WorkspaceTreeNode[],
+	path: string | undefined,
+	count: number,
+): string[] {
+	const files: string[] = [];
+	const walk = (list: readonly WorkspaceTreeNode[]) => {
+		for (const node of list)
+			if (node.kind === "file") files.push(node.path);
+			else walk(node.children);
+	};
+	walk(nodes);
+	const at = path ? files.indexOf(path) : -1;
+	if (at < 0) return [];
+	return files
+		.slice(at + 1)
+		.filter((file) => filePreviewKind(file) !== "image")
+		.slice(0, count);
 }
 
 export function fileTreeChangeMark(
