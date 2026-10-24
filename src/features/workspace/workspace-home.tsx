@@ -129,6 +129,7 @@ import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
+import { sentPasteFields } from "../sessions/pasted-text-chip";
 import {
 	type ComposerSendResult,
 	SessionLauncher,
@@ -1479,12 +1480,16 @@ export function WorkspaceHome({
 						pending.text,
 						pending.messageId,
 						pending.approvesPlan,
-						pending.attachments?.map((file) => ({
-							id: crypto.randomUUID(),
-							name: safeAttachmentName(file.name),
-							mediaType: file.mediaType,
-							size: base64ByteLength(file.base64),
-						})),
+						pending.attachments?.map((file) => {
+							const id = crypto.randomUUID();
+							return {
+								id,
+								name: safeAttachmentName(file.name),
+								mediaType: file.mediaType,
+								size: base64ByteLength(file.base64),
+								...sentPasteFields(id, file),
+							};
+						}),
 					);
 					return {
 						...current,

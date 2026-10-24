@@ -905,7 +905,11 @@
 	flex-direction: column;
 	gap: 0;
 	width: min(560px, calc(100vw - 24px));
-	max-height: min(480px, 60vh);
+	max-height: min(
+		480px,
+		60vh,
+		var(--radix-popover-content-available-height, 60vh)
+	);
 	overflow: auto;
 	overscroll-behavior: contain;
 	padding: 0 var(--menu-pad) var(--menu-pad);
