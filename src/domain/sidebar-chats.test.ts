@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
 	backgroundTurnPollChatIds,
+	chatsToReadAhead,
 	chatsWithPinnedFirst,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
@@ -450,5 +451,25 @@ describe("sidebar sort", () => {
 		expect(
 			projectsByRecentActivity([c, a, b], groups).map((project) => project.id),
 		).toEqual(["b", "a", "c"]);
+	});
+});
+
+describe("chatsToReadAhead", () => {
+	const chats = ["a", "b", "c", "d"].map((id) => ({ id }));
+
+	it("reads the latest chats except the open one and those already held", () => {
+		expect(
+			chatsToReadAhead({
+				chats,
+				openChatId: "a",
+				heldChatIds: new Set(["c"]),
+			}),
+		).toEqual(["b", "d"]);
+	});
+
+	it("looks only at the first few chats", () => {
+		expect(
+			chatsToReadAhead({ chats, heldChatIds: new Set(), limit: 2 }),
+		).toEqual(["a", "b"]);
 	});
 });

@@ -1,9 +1,30 @@
+import type { QueryClient } from "@tanstack/react-query";
 import type { Project } from "#/domain/projects";
+import { readMemoryFn, readMemoryGraphFn } from "./memory.fn";
 import { MemoryGraphPage } from "./memory-graph-page";
 import { MemoryInspector } from "./memory-inspector";
 import "./memory-inspector.css";
 
 export type MemoryView = "graph" | "list";
+
+/**
+ * Reads what the Memory page shows first (the files, then the graph) before
+ * it opens; the page's own queries then answer from the cache.
+ */
+export function prefetchMemoryPage(queryClient: QueryClient) {
+	void queryClient
+		.fetchQuery({ queryKey: ["memory"], queryFn: () => readMemoryFn() })
+		.then((memory) =>
+			memory.available
+				? queryClient.prefetchQuery({
+						queryKey: ["memory-graph", memory.files],
+						queryFn: () => readMemoryGraphFn(),
+						staleTime: 60_000,
+					})
+				: undefined,
+		)
+		.catch(() => undefined);
+}
 
 const VIEWS: readonly { value: MemoryView; label: string }[] = [
 	{ value: "graph", label: "Graph" },

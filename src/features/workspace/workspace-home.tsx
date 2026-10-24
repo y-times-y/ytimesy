@@ -1,7 +1,13 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Maximize2, Minimize2, PanelRight } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
@@ -68,6 +74,7 @@ import {
 } from "#/domain/session-progress";
 import {
 	backgroundTurnPollChatIds,
+	chatsToReadAhead,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
 	listedChatHarnessId,
@@ -135,10 +142,14 @@ import {
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
-import { readWorkspaceChangesFn } from "./explorer.fn";
+import {
+	readWorkspaceChangesFn,
+	resumeWorkspaceMachineFn,
+} from "./explorer.fn";
+import { prefetchWorkspaceFiles } from "./files-inspector";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
-import { MemoryPage, type MemoryView } from "./memory-page";
+import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -149,6 +160,7 @@ import {
 } from "./workspace-inspector";
 import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
+import { preloadWorkspaceTools } from "./workspace-tools-preload";
 
 /** One composer send, from the click until the server accepts or refuses it. */
 type PendingSend = {
@@ -174,15 +186,33 @@ type PendingSend = {
 	readonly settle: (result: ComposerSendResult) => void;
 };
 
+/** How long after the open chat shows the project's other chats are read ahead. */
+const READ_AHEAD_DELAY_MS = 800;
+
+/** How long after the inspector opens (or the chat changes) Files reads ahead. */
+const FILES_READ_AHEAD_MS = 100;
+
+/** A chat's machine is asked to wake at most this often from hovering its tools. */
+const MACHINE_RESUME_INTERVAL_MS = 60_000;
+
+/** When the Memory page and workspace tools load in the background. */
+const PAGE_SETTLED_PREFETCH_MS = 2_500;
+
 /** When to read a completed chat again for the save hook's marker. */
 const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
 
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
+	initialChats,
 }: {
 	initialSession: PublicCodexSession;
 	initialProjects?: Project[];
+	/** The first project's chats, read with the page. */
+	initialChats?: {
+		readonly projectId: string;
+		readonly chats: readonly SidebarChat[];
+	};
 }) {
 	const compact = useCompactLayout();
 	const workspaceMainRef = useRef<HTMLElement>(null);
@@ -200,6 +230,11 @@ export function WorkspaceHome({
 	}, []);
 	const singlePane = compact || inspectorCompact || inspectorExpanded;
 	const queryClient = useQueryClient();
+	useState(() => {
+		const key = ["agent-sessions", initialChats?.projectId];
+		if (initialChats && !queryClient.getQueryData(key))
+			queryClient.setQueryData(key, initialChats.chats);
+	});
 	const projects = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
@@ -363,6 +398,27 @@ export function WorkspaceHome({
 		(pending: PendingSend, view: PublicCodexSession) => Promise<void>
 	>(async () => undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
+	/** Chat views being read ahead of a click, by chat id; an open takes them over. */
+	const viewReads = useRef(
+		new Map<string, Promise<PublicCodexSession | null>>(),
+	);
+	/** The open chat's read: one already under way (a hover, the page's first chat), else a new one. */
+	const readOpenChat = useCallback(
+		async (selection: {
+			projectId: string;
+			sessionId: string;
+			harnessId: AgentProviderId;
+		}) =>
+			(await viewReads.current.get(selection.sessionId)) ??
+			getCodexSession({ data: selection }),
+		[],
+	);
+	// The page's latest chat is read before the page's other reads queue
+	// ahead of it; opening it then takes this read over.
+	useLayoutEffect(() => {
+		const first = initialChats?.chats[0];
+		if (first) readAheadRef.current(first.id);
+	}, [initialChats]);
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
 		return sessionEpoch.current;
@@ -449,6 +505,15 @@ export function WorkspaceHome({
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
+	const resumeMachine = useServerFn(resumeWorkspaceMachineFn);
+	/** When this page last asked each chat's machine to wake. */
+	const resumedMachines = useRef(new Map<string, number>());
+	/**
+	 * The page's first chat has been read. The slower side reads (git changes,
+	 * the desktop's state, each a machine call) wait for it, so the page's
+	 * first transcript does not queue behind them.
+	 */
+	const [firstChatRead, setFirstChatRead] = useState(false);
 	// Git in the workspace is the source of truth for what changed; the
 	// transcript only fills in while the machine is asleep.
 	const gitChanges = useQuery({
@@ -457,14 +522,18 @@ export function WorkspaceHome({
 			readChanges({
 				data: { projectId: selectedProject?.id, sessionId: selectedSessionId },
 			}),
-		enabled: Boolean(selectedProject?.id && selectedSessionId),
+		enabled: Boolean(selectedProject?.id && selectedSessionId && firstChatRead),
 		refetchInterval: session.turnStatus === "running" ? 10_000 : 60_000,
 		staleTime: 5_000,
 	});
 	const refetchChanges = gitChanges.refetch;
+	const changesTurnStatus = useRef(session.turnStatus);
 	useEffect(() => {
+		const was = changesTurnStatus.current;
+		changesTurnStatus.current = session.turnStatus;
 		// A finished turn is when the agent's edits settle; show them right away.
-		if (session.turnStatus !== "running") void refetchChanges();
+		if (isTurnRunning(was) && !isTurnRunning(session.turnStatus))
+			void refetchChanges();
 	}, [session.turnStatus, refetchChanges]);
 	const fileChanges =
 		gitChanges.data ?? fileChangesFromSessionItems(session.items);
@@ -574,9 +643,22 @@ export function WorkspaceHome({
 		helpersWorking,
 		watchingForWake: !!wakeWatch && wakeWatch.sessionId === activeSessionId,
 	});
+	const settledTurn = useRef<{
+		readonly chatId?: string;
+		readonly status: SessionTurnStatus;
+	}>({ status: "idle" });
 	useEffect(() => {
+		const previous = settledTurn.current;
+		settledTurn.current = {
+			chatId: activeSessionId,
+			status: session.turnStatus,
+		};
+		// A turn that just finished here settles its helpers, commands, PR and
+		// title; opening an already finished chat reads nothing extra.
 		if (
 			activeSessionId &&
+			previous.chatId === activeSessionId &&
+			isTurnRunning(previous.status) &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
@@ -744,9 +826,10 @@ export function WorkspaceHome({
 	});
 
 	useEffect(() => {
+		// Chat views stay cached by chat id: going back to another project's
+		// chat shows it at once.
 		void activeProjectId;
 		setSelectedSessionId(undefined);
-		sessionViews.current.clear();
 		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
 
@@ -772,17 +855,19 @@ export function WorkspaceHome({
 	}, [chats.data, composerDraft, selectedSessionId]);
 
 	useEffect(() => {
-		if (!activeProjectId) return;
+		if (!activeProjectId || !activeSessionId || !firstChatRead) return;
 		void loadDesktop({
 			data: { projectId: activeProjectId, sessionId: activeSessionId },
 		}).then((next) => {
+			// Another chat opened meanwhile keeps its own desktop.
+			if (selectedSessionIdRef.current !== activeSessionId) return;
 			setDesktop((current) =>
 				current.status === "starting" || current.status === "running"
 					? current
 					: next,
 			);
 		});
-	}, [loadDesktop, activeProjectId, activeSessionId]);
+	}, [loadDesktop, activeProjectId, activeSessionId, firstChatRead]);
 
 	// The agent starts the desktop itself for visual QA; show it working.
 	const agentDesktopActivity = agentDesktopActivityInTurn({
@@ -834,6 +919,7 @@ export function WorkspaceHome({
 				),
 			},
 			sessionEpoch.current,
+			readOpenChat,
 		),
 		enabled: Boolean(
 			activeProjectId && activeSessionId && !composerDraft && !composerBusy,
@@ -850,6 +936,54 @@ export function WorkspaceHome({
 		refetchIntervalInBackground: true,
 	});
 	refetchOpenSession.current = () => void sessionRead.refetch();
+	useEffect(() => {
+		if (sessionRead.isFetched) setFirstChatRead(true);
+	}, [sessionRead.isFetched]);
+	// Once the open chat has shown, the project's latest chats are read two
+	// at a time, so switching to one shows its transcript at once.
+	const latestChatIds = sessionRead.data
+		? (chats.data ?? []).map((chat) => chat.id).join(",")
+		: "";
+	useEffect(() => {
+		if (!latestChatIds) return;
+		const queue = chatsToReadAhead({
+			chats: latestChatIds.split(",").map((id) => ({ id })),
+			openChatId: activeSessionId,
+			heldChatIds: new Set([
+				...sessionViews.current.keys(),
+				...viewReads.current.keys(),
+			]),
+		});
+		let stopped = false;
+		const next = async (): Promise<void> => {
+			const id = queue.shift();
+			if (stopped || !id) return;
+			readAheadRef.current(id);
+			await viewReads.current.get(id);
+			return next();
+		};
+		const timer = window.setTimeout(() => {
+			void next();
+			void next();
+		}, READ_AHEAD_DELAY_MS);
+		return () => {
+			stopped = true;
+			window.clearTimeout(timer);
+		};
+	}, [latestChatIds, activeSessionId]);
+	// The Memory page reads a git snapshot (about a second); read it once the
+	// page has settled, and the workspace tools' code, so each opens at once.
+	const pageSettled = Boolean(sessionRead.data) || !activeSessionId;
+	const settledPrefetch = useRef(false);
+	useEffect(() => {
+		if (!pageSettled || settledPrefetch.current) return;
+		const timer = window.setTimeout(() => {
+			settledPrefetch.current = true;
+			prefetchMemoryPage(queryClient);
+			preloadWorkspaceTools();
+		}, PAGE_SETTLED_PREFETCH_MS);
+		return () => window.clearTimeout(timer);
+	}, [pageSettled, queryClient]);
 	// The save hook commits shortly after a turn completes and records its
 	// marker on the chat; read the chat again so it shows without a reload.
 	const memoryInChat = session.items.some(
@@ -1122,6 +1256,49 @@ export function WorkspaceHome({
 		setInspectorOpen(true);
 	}
 
+	/**
+	 * The pointer or focus reached a workspace view: Files reads its tree and
+	 * first file, Memory its files; Terminal, Desktop and Preview wake the
+	 * chat's machine (if it has one; never creating one) so they connect
+	 * without that wait.
+	 */
+	function intendView(view: ToolsView) {
+		const projectId = selectedProject?.id;
+		const sessionId = activeSessionId;
+		if (!projectId || !sessionId) return;
+		if (view === "memory") {
+			prefetchMemoryPage(queryClient);
+			return;
+		}
+		if (view === "files") {
+			void prefetchWorkspaceFiles(queryClient, {
+				projectId,
+				sessionId,
+				changes: fileChanges,
+			});
+			return;
+		}
+		if (view !== "terminal" && view !== "desktop" && view !== "preview") return;
+		const asked = resumedMachines.current.get(sessionId) ?? 0;
+		if (Date.now() - asked < MACHINE_RESUME_INTERVAL_MS) return;
+		resumedMachines.current.set(sessionId, Date.now());
+		void resumeMachine({ data: { projectId, sessionId } }).catch(
+			() => undefined,
+		);
+	}
+
+	const intendViewRef = useRef(intendView);
+	intendViewRef.current = intendView;
+	// An open inspector is a click from Files: read its tree ahead.
+	useEffect(() => {
+		if (!inspectorOpen || !activeProjectId || !activeSessionId) return;
+		const timer = window.setTimeout(
+			() => intendViewRef.current("files"),
+			FILES_READ_AHEAD_MS,
+		);
+		return () => window.clearTimeout(timer);
+	}, [inspectorOpen, activeProjectId, activeSessionId]);
+
 	function openMentionedFile(path: string) {
 		setSelectedFilePath(path);
 		openInspector("files");
@@ -1381,6 +1558,38 @@ export function WorkspaceHome({
 			canSend: false,
 		}));
 	}
+
+	/**
+	 * Reads a chat's view before it is opened (on hover, or the open project's
+	 * latest chats once the page is idle), so opening it shows the transcript
+	 * at once; the open reads it again. Never replaces a view the page holds.
+	 */
+	function readAheadChat(chatId: string) {
+		if (sessionViews.current.has(chatId) || viewReads.current.has(chatId))
+			return;
+		const listed = projectChats.find((group) =>
+			group.chats.some((chat) => chat.id === chatId),
+		);
+		if (!listed) return;
+		const read = getCodexSession({
+			data: {
+				projectId: listed.project.id,
+				sessionId: chatId,
+				harnessId: listedChatHarnessId(listed.chats, chatId, harnessId),
+			},
+		})
+			.then((view) => {
+				if (view.agentSessionId !== chatId) return null;
+				if (!sessionViews.current.has(chatId))
+					sessionViews.current.set(chatId, view);
+				return view;
+			})
+			.catch(() => null)
+			.finally(() => viewReads.current.delete(chatId));
+		viewReads.current.set(chatId, read);
+	}
+	const readAheadRef = useRef(readAheadChat);
+	readAheadRef.current = readAheadChat;
 
 	/** The send did not go out: take its message back, unlock the turn, say why. */
 	function abandonSend(pending: PendingSend, message: string | null) {
@@ -1658,6 +1867,8 @@ export function WorkspaceHome({
 					if (compact) setProjectsOpen(false);
 				}}
 				memoryActive={memoryPageOpen}
+				onChatIntent={readAheadChat}
+				onMemoryIntent={() => prefetchMemoryPage(queryClient)}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1993,6 +2204,7 @@ export function WorkspaceHome({
 							sessionId={activeSessionId}
 							memoryFocus={memoryFocus}
 							onStartDesktop={requestDesktop}
+							onViewIntent={intendView}
 							onOpenChat={(chatId) => {
 								if (!sidebarChats.some((chat) => chat.id === chatId))
 									return false;
@@ -2011,6 +2223,7 @@ export function WorkspaceHome({
 									repository={selectedProject?.fullName}
 									desktop={desktop}
 									onOpen={openInspector}
+									onIntent={intendView}
 									pullRequests={sessionPullRequests}
 								/>
 							}

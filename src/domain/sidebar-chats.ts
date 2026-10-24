@@ -371,6 +371,25 @@ export function backgroundTurnPollChatIds(input: {
 		.map((chat) => chat.id);
 }
 
+/** How many of the open project's latest chats are read ahead of a click. */
+export const READ_AHEAD_CHATS = 8;
+
+/**
+ * The open project's latest chats worth reading before they are opened: not
+ * the open one, nor one whose view the page already holds or is reading.
+ */
+export function chatsToReadAhead(input: {
+	readonly chats: readonly Pick<SidebarChat, "id">[];
+	readonly openChatId?: string;
+	readonly heldChatIds: ReadonlySet<string>;
+	readonly limit?: number;
+}): string[] {
+	return input.chats
+		.slice(0, input.limit ?? READ_AHEAD_CHATS)
+		.map((chat) => chat.id)
+		.filter((id) => id !== input.openChatId && !input.heldChatIds.has(id));
+}
+
 export function sessionViewAppliesToOpenChat(input: {
 	readonly openChatId?: string;
 	readonly agentSessionId: string | null;

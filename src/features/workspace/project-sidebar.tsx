@@ -94,6 +94,10 @@ interface ProjectSidebarProps {
 	/** Opens the full-page Memory view (graph and list). */
 	onOpenMemory?: () => void;
 	memoryActive?: boolean;
+	/** The pointer or focus reached a chat: it may open next. */
+	onChatIntent?: (chatId: string) => void;
+	/** The pointer or focus reached Memory: it may open next. */
+	onMemoryIntent?: () => void;
 }
 
 export function ProjectSidebar({
@@ -118,6 +122,8 @@ export function ProjectSidebar({
 	onSelectChatInProject,
 	onOpenMemory,
 	memoryActive = false,
+	onChatIntent,
+	onMemoryIntent,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
@@ -368,6 +374,8 @@ export function ProjectSidebar({
 							: [chat.title, projectName].filter(Boolean).join(" · ")
 					}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
+					onPointerEnter={() => onChatIntent?.(chat.id)}
+					onFocus={() => onChatIntent?.(chat.id)}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
 							? onSelectChatInProject(project.id, chat.id)
@@ -543,6 +551,8 @@ export function ProjectSidebar({
 								type="button"
 								className="sidebar-nav-item"
 								aria-current={memoryActive ? "page" : undefined}
+								onPointerEnter={onMemoryIntent}
+								onFocus={onMemoryIntent}
 								onClick={onOpenMemory}
 							>
 								<BookMarked size={16} strokeWidth={1.5} />
@@ -767,6 +777,8 @@ export function ProjectSidebar({
 							aria-label="Memory"
 							title="Memory"
 							data-active={memoryActive}
+							onPointerEnter={onMemoryIntent}
+							onFocus={onMemoryIntent}
 							onClick={onOpenMemory}
 						>
 							<BookMarked size={16} strokeWidth={1.5} />
