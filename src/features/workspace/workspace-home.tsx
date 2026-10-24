@@ -110,6 +110,7 @@ import {
 	prewarmProjectAgentSession,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
+import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
@@ -129,7 +130,6 @@ import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
-import { sentPasteFields } from "../sessions/pasted-text-chip";
 import {
 	type ComposerSendResult,
 	SessionLauncher,

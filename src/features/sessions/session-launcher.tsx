@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowUp, Square, X } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 import {
 	type KeyboardEvent,
 	useEffect,
@@ -52,7 +52,6 @@ import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
 import {
 	isLargePaste,
 	isPastedText,
-	lineCount,
 	nextPastedTextNumber,
 } from "#/domain/pasted-text";
 import type { Project } from "#/domain/projects";
@@ -91,6 +90,13 @@ import {
 	sendHelperMessage,
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
+import {
+	FileTile,
+	PastedTextTile,
+	pastedFileText,
+	pastedTextFile,
+	sentFileFields,
+} from "./attachment-tile";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
@@ -107,12 +113,6 @@ import {
 } from "./model-capabilities";
 import { getAgentModelCatalog } from "./model-catalog.fn";
 import { readPastedTextFn } from "./pasted-text.fn";
-import {
-	PastedTextChip,
-	pastedFileText,
-	pastedTextFile,
-	rememberSentPaste,
-} from "./pasted-text-chip";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -758,14 +758,12 @@ export function SessionLauncher({
 					? {
 							attachments: files.map((file) => {
 								const id = crypto.randomUUID();
-								const pasted = pastedFileText(file);
-								if (pasted !== undefined) rememberSentPaste(id, file);
 								return {
 									id,
 									name: safeAttachmentName(file.name),
 									mediaType: file.type || "application/octet-stream",
 									size: file.size,
-									...(pasted !== undefined ? { lines: lineCount(pasted) } : {}),
+									...sentFileFields(id, file),
 								};
 							}),
 						}
@@ -1082,6 +1080,34 @@ export function SessionLauncher({
 							/>
 						) : null}
 
+						{attachments.length > 0 && (
+							<ul className="attachment-tiles" aria-label="Attached files">
+								{attachments.map((file, index) => {
+									const key = `${file.name}-${file.lastModified}-${file.size}`;
+									const remove = () => {
+										const next = attachments.filter(
+											(_, fileIndex) => fileIndex !== index,
+										);
+										setAttachments(next);
+										setAttachmentError(attachmentLimitError(next));
+										textareaRef.current?.focus();
+									};
+									const pasted = pastedFileText(file);
+									return pasted !== undefined &&
+										isPastedText({ name: file.name, mediaType: file.type }) ? (
+										<PastedTextTile key={key} text={pasted} onRemove={remove} />
+									) : (
+										<FileTile
+											key={key}
+											name={file.name}
+											mediaType={file.type}
+											size={file.size}
+											onRemove={remove}
+										/>
+									);
+								})}
+							</ul>
+						)}
 						<TaskInput
 							textareaRef={textareaRef}
 							onCaretChange={setCaret}
@@ -1121,42 +1147,6 @@ export function SessionLauncher({
 								]);
 							}}
 						/>
-						{attachments.length > 0 && (
-							<ul className="session-attachments" aria-label="Attached files">
-								{attachments.map((file, index) => {
-									const remove = () => {
-										const next = attachments.filter(
-											(_, fileIndex) => fileIndex !== index,
-										);
-										setAttachments(next);
-										setAttachmentError(attachmentLimitError(next));
-									};
-									const pasted = pastedFileText(file);
-									return pasted !== undefined &&
-										isPastedText({ name: file.name, mediaType: file.type }) ? (
-										<PastedTextChip
-											key={`${file.name}-${file.lastModified}-${file.size}`}
-											text={pasted}
-											onRemove={() => {
-												remove();
-												textareaRef.current?.focus();
-											}}
-										/>
-									) : (
-										<li key={`${file.name}-${file.lastModified}-${file.size}`}>
-											<span title={file.name}>{file.name}</span>
-											<button
-												type="button"
-												aria-label={`Remove ${file.name}`}
-												onClick={remove}
-											>
-												<X size={14} />
-											</button>
-										</li>
-									);
-								})}
-							</ul>
-						)}
 						{forkPreparing ? (
 							<p className="model-provider-notice">Preparing workspace</p>
 						) : forkStatus.data?.state === "failed" ? (

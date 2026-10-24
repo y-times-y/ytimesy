@@ -4,7 +4,9 @@ import {
 	isPastedText,
 	lineCount,
 	nextPastedTextNumber,
+	PASTED_TEXT_PEEK,
 	PASTED_TEXT_THRESHOLD,
+	pastedTextFields,
 	pastedTextMeta,
 	pastedTextName,
 } from "./pasted-text";
@@ -66,5 +68,15 @@ describe("pasted text", () => {
 		expect(pastedTextMeta(1)).toBe("1 line");
 		expect(pastedTextMeta(84)).toBe("84 lines");
 		expect(pastedTextMeta(1200)).toBe("1,200 lines");
+	});
+
+	it("keeps the first non-blank lines for the tile", () => {
+		expect(pastedTextFields("a\n\n  \nb\nc\nd\ne\n")).toEqual({
+			lines: 7,
+			peek: "a\nb\nc\nd",
+		});
+		expect(pastedTextFields("x".repeat(500)).peek).toHaveLength(
+			PASTED_TEXT_PEEK.characters,
+		);
 	});
 });

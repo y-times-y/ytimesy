@@ -148,7 +148,7 @@ describe("message attachments on the machine", () => {
 describe("pasted text attachments", () => {
 	it("sends a large paste as a text file the agent is told to read", async () => {
 		const { pastedTextFile } = await import(
-			"#/features/sessions/pasted-text-chip"
+			"#/features/sessions/attachment-tile"
 		);
 		const { withAttachmentNote } = await import("#/domain/message-attachment");
 		const text = Array.from(
@@ -166,6 +166,7 @@ describe("pasted text attachments", () => {
 			name: "pasted-1.txt",
 			mediaType: "text/plain",
 			lines: 84,
+			peek: expect.stringMatching(/^line 0 .*\nline 1 /),
 		});
 		const path = attachmentPath(attachment);
 		written.push(path.slice(0, path.lastIndexOf("/")));

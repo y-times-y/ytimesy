@@ -1,4 +1,4 @@
-import { ChevronRight, Clock3, ImageIcon, Paperclip, X } from "lucide-react";
+import { ChevronRight, Clock3, X } from "lucide-react";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -93,6 +93,12 @@ import {
 } from "./agent-chip";
 import { AgentIcon } from "./agent-icon";
 import { AgentMarkdown } from "./agent-markdown";
+import {
+	FileTile,
+	type PastedTextPreview,
+	PastedTextReader,
+	PastedTextTile,
+} from "./attachment-tile";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { InlineMarkdown } from "./inline-markdown";
@@ -108,11 +114,6 @@ import {
 	type FailoverActions,
 	ModelSwitchCard,
 } from "./model-switch-card";
-import {
-	PastedTextChip,
-	type PastedTextPreview,
-	PastedTextReader,
-} from "./pasted-text-chip";
 import {
 	type SecretRequestActions,
 	SecretRequestCard,
@@ -595,23 +596,26 @@ function MessageAttachments({
 }) {
 	if (!attachments?.length) return null;
 	return (
-		<ul className="session-message-attachments" aria-label="Attached files">
+		<ul
+			className="attachment-tiles"
+			data-place="message"
+			aria-label="Attached files"
+		>
 			{attachments.map((attachment) =>
 				isPastedText(attachment) ? (
-					<PastedTextChip
+					<PastedTextTile
 						key={attachment.id}
 						attachmentId={attachment.id}
 						lines={attachment.lines}
+						peek={attachment.peek}
 					/>
 				) : (
-					<li key={attachment.id} title={attachment.name}>
-						{attachment.mediaType.startsWith("image/") ? (
-							<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
-						) : (
-							<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
-						)}
-						<span>{attachment.name}</span>
-					</li>
+					<FileTile
+						key={attachment.id}
+						name={attachment.name}
+						mediaType={attachment.mediaType}
+						size={attachment.size}
+					/>
 				),
 			)}
 		</ul>
@@ -627,10 +631,10 @@ function QueuedMessage({
 }) {
 	return (
 		<div className="session-message" data-role="user" data-queued="true">
+			<MessageAttachments attachments={item.attachments} />
 			<p>
 				<MentionText text={item.text} />
 			</p>
-			<MessageAttachments attachments={item.attachments} />
 			<p className="session-queued-note" role="status">
 				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Queued for the agent's next step</span>
@@ -811,10 +815,10 @@ function SessionItemView({
 			}
 			return (
 				<div className="session-message" data-role="user">
+					<MessageAttachments attachments={item.attachments} />
 					<p>
 						<MentionText text={item.text} />
 					</p>
-					<MessageAttachments attachments={item.attachments} />
 					{item.memory ? <MemoryRecallNote recall={item.memory} /> : null}
 				</div>
 			);

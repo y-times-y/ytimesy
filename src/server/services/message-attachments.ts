@@ -10,7 +10,7 @@ import {
 	type MessageAttachment,
 	safeAttachmentName,
 } from "#/domain/message-attachment";
-import { isPastedText, lineCount } from "#/domain/pasted-text";
+import { isPastedText, pastedTextFields } from "#/domain/pasted-text";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
 import {
@@ -47,11 +47,9 @@ export async function storeMessageAttachments(
 				mediaType,
 				size: base64ByteLength(file.base64),
 				...(isPastedText({ name, mediaType })
-					? {
-							lines: lineCount(
-								Buffer.from(file.base64, "base64").toString("utf8"),
-							),
-						}
+					? pastedTextFields(
+							Buffer.from(file.base64, "base64").toString("utf8"),
+						)
 					: {}),
 			};
 		}),

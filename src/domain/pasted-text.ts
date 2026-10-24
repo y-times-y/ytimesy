@@ -10,6 +10,9 @@ export const PASTED_TEXT_THRESHOLD = {
 /** The preview shows this much; the agent always gets the whole file. */
 export const PASTED_TEXT_PREVIEW_CHARACTERS = 100_000;
 
+/** The tile's faint first lines, kept with the sent message. */
+export const PASTED_TEXT_PEEK = { characters: 240, lines: 4 } as const;
+
 export const PASTED_TEXT_MEDIA_TYPE = "text/plain";
 
 const PASTED_TEXT_NAME = /^pasted-(\d+)\.txt$/;
@@ -54,4 +57,19 @@ export function isPastedText(file: {
 export function pastedTextMeta(lines: number | undefined) {
 	if (lines === undefined) return "";
 	return lines === 1 ? "1 line" : `${lines.toLocaleString("en")} lines`;
+}
+
+/** The first few lines, for the tile; whitespace-only lines are skipped. */
+export function pastedTextPeek(text: string) {
+	return text
+		.split(/\r\n|\r|\n/)
+		.filter((line) => line.trim())
+		.slice(0, PASTED_TEXT_PEEK.lines)
+		.join("\n")
+		.slice(0, PASTED_TEXT_PEEK.characters);
+}
+
+/** What a pasted text attachment keeps for its tile. */
+export function pastedTextFields(text: string) {
+	return { lines: lineCount(text), peek: pastedTextPeek(text) };
 }
