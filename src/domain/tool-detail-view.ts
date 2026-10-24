@@ -1,4 +1,11 @@
 import { leanToolRole } from "./harness-model-profile";
+import {
+	type McpCallName,
+	type McpResult,
+	mcpCallArguments,
+	mcpCallName,
+	mcpResult,
+} from "./mcp-call-view";
 import type { DynamicToolCallItem } from "./session-item";
 import { toolOutputText } from "./tool-detail";
 
@@ -33,6 +40,13 @@ export type ToolDetailView =
 	  }
 	| { kind: "write"; path: string; content: string; note?: string }
 	| { kind: "patch"; diff: string }
+	| {
+			kind: "mcp";
+			call: McpCallName;
+			/** The arguments sent, as JSON text. */
+			input?: string;
+			result: McpResult | null;
+	  }
 	| { kind: "fields"; input?: string; output?: string };
 
 function json(text: string | undefined): Record<string, unknown> | null {
@@ -164,6 +178,14 @@ function readResult(raw: string, offset: number) {
 }
 
 export function toolDetailView(item: DynamicToolCallItem): ToolDetailView {
+	const mcp = mcpCallName(item);
+	if (mcp)
+		return {
+			kind: "mcp",
+			call: mcp,
+			input: mcpCallArguments(item),
+			result: mcpResult(item.output),
+		};
 	const input = json(item.input) ?? {};
 	const text = (...keys: string[]) => {
 		for (const key of keys) {

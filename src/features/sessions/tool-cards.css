@@ -349,3 +349,205 @@ details.tool-panel.session-program:not([open]) > summary {
 .session-program-calls {
 	margin: 2px 0 6px 20px;
 }
+
+/* An MCP call's icon: its server's mark from Settings, at the row's 14px. */
+.mcp-server-icon {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+}
+.mcp-server-icon svg {
+	width: 13px;
+	height: 13px;
+}
+.mcp-server-icon[data-letter] {
+	border-radius: 3px;
+	background: #2a2a2a;
+	color: #e5e5e5;
+	font-size: 9px;
+	font-weight: 700;
+	line-height: 1;
+}
+.session-tool-sep {
+	margin-left: 6px;
+	color: #5c5c5c;
+}
+.session-tool-error {
+	margin-left: 8px;
+	padding: 0 5px;
+	border-radius: 4px;
+	background: rgba(248, 113, 113, 0.1);
+	color: #f87171;
+	font-size: 11px;
+	line-height: 16px;
+}
+
+/* An opened MCP card: Input and Output sections under the server / tool head. */
+.tool-panel-label {
+	margin: 2px 0 4px;
+	color: #6f6f6f;
+	font-size: 11px;
+}
+.tool-panel-section[data-part="output"] {
+	border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.tool-panel-section .tool-panel-meta {
+	margin: 0;
+}
+.tool-panel-section[data-tone="bad"] .tool-panel-label {
+	color: #f87171;
+}
+.tool-mcp-blocks {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+.tool-mcp-text {
+	color: rgba(255, 255, 255, 0.78);
+	font-size: 12px;
+	line-height: 1.6;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.tool-mcp-text[data-tone="bad"] {
+	color: #f3a3a3;
+}
+.tool-mcp-markdown {
+	font-size: 13px;
+	min-width: 0;
+}
+.tool-mcp-image {
+	display: block;
+	max-width: 100%;
+	max-height: 360px;
+	border-radius: 6px;
+	border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.tool-mcp-audio {
+	width: 100%;
+	max-width: 360px;
+}
+.tool-mcp-link {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 8px;
+	min-width: 0;
+	font-size: 12px;
+}
+.tool-mcp-link a,
+.tool-value-link {
+	color: #9ac2ff;
+	text-decoration: underline;
+	text-decoration-color: rgba(154, 194, 255, 0.35);
+	overflow-wrap: anywhere;
+}
+.tool-mcp-link p {
+	flex-basis: 100%;
+	margin: 0;
+	color: #a3a3a3;
+}
+.tool-mcp-resource {
+	display: grid;
+	gap: 4px;
+}
+
+/* Values inside fields: text wraps, scalars in mono, nested fields indent. */
+.session-tool-fields > div[data-block] {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 2px;
+}
+.session-tool-fields[data-depth] {
+	margin: 2px 0 0;
+	padding-left: 10px;
+	border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+.tool-value-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.tool-value-text[data-long] {
+	display: block;
+	color: rgba(255, 255, 255, 0.78);
+}
+.tool-value-code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	color: #c6c6c6;
+}
+.tool-value-code[data-type="number"],
+.tool-value-code[data-type="boolean"],
+.tool-value-code[data-type="null"] {
+	color: #9ac2ff;
+}
+.tool-value-empty {
+	color: #5c5c5c;
+	font-style: italic;
+}
+.tool-value-chips {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.tool-value-chips > * {
+	padding: 0 5px;
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.05);
+}
+.tool-value-list {
+	display: grid;
+	gap: 6px;
+	margin: 2px 0 0;
+	padding-left: 18px;
+	list-style: decimal;
+}
+.tool-value-list > li::marker {
+	color: #5c5c5c;
+	font-size: 11px;
+}
+.tool-value-json {
+	margin: 0;
+	color: #bdbdbd;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	line-height: 1.6;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.tool-value-fold > summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+	color: #7a7a7a;
+	list-style: none;
+}
+.tool-value-fold > summary::-webkit-details-marker {
+	display: none;
+}
+.tool-value-fold[open] > summary svg {
+	transform: rotate(90deg);
+}
+
+/* Long input or output: its top, then "Show more". */
+.tool-clamp:not([data-open]) {
+	max-height: 240px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(to bottom, #000 75%, transparent);
+	mask-image: linear-gradient(to bottom, #000 75%, transparent);
+}
+.tool-show-more {
+	margin-top: 4px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: #8a8a8a;
+	font-size: 11px;
+	cursor: pointer;
+}
+.tool-show-more:hover {
+	color: #d4d4d4;
+}

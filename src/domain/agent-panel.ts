@@ -8,6 +8,7 @@ import {
 	withoutWakeTurnStarts,
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
+import { mcpServerLabel } from "./connector-name";
 import { fileChangeActivity } from "./file-change-copy";
 import {
 	type AgentIcon,
@@ -200,7 +201,7 @@ export function activityPhrase(item: SessionItem): string | null {
 				: `editing ${item.changes.length} files`;
 		}
 		case "mcpToolCall":
-			return `using ${item.server}`;
+			return `using ${mcpServerLabel(item.server)}`;
 		case "webSearch":
 			return "searching the web";
 		case "reasoning":
@@ -209,6 +210,7 @@ export function activityPhrase(item: SessionItem): string | null {
 			if (item.tool === "agent") return "starting a helper";
 			if (item.tool === "agent_send") return "messaging a helper";
 			const activity = toolActivity(item);
+			if (activity.mcpServer) return `using ${activity.verb}`;
 			if (activity.verb === "Ran" && activity.target)
 				return commandPhrase(activity.target);
 			const verb = gerund(activity.verb);
