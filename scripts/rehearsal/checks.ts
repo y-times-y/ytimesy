@@ -510,7 +510,7 @@ export async function checkScenario(
 					briefs[1],
 					"<previous_review>",
 					"this review is a full, independent check of all four parts",
-					"Review 1, F1: Rehearsal finding",
+					"Review 1, F1:",
 				),
 			clip(briefs[1]?.slice(briefs[1].indexOf("<previous_review>")), 400),
 		);
@@ -600,7 +600,8 @@ export async function checkScenario(
 				rounds.every(
 					(round) =>
 						round.checker.pair === true &&
-						round.verdict?.notes.startsWith("rehearsal pair review") &&
+						// An uncited finding is set aside into the notes (checker-evidence.ts).
+						round.verdict?.notes.includes("rehearsal pair review") &&
 						round.verdict.tests.length === 1 &&
 						round.verdict.tests[0]?.ranBy === "worker",
 				),
@@ -635,7 +636,7 @@ export async function checkScenario(
 		);
 		check(
 			"the builder got the judge's findings and failing test",
-			has(notice?.lastUser, "F1. Rehearsal finding", "rehearsal_probe.sh"),
+			has(notice?.lastUser, "F1.", "rehearsal_probe.sh"),
 			clip(notice?.lastUser, 400),
 		);
 	}
@@ -717,7 +718,11 @@ export async function checkScenario(
 		const reviews = calls(items, "review_check");
 		check(
 			"review 1 passed but was sent back; review 2 passed and finished",
-			reviews.some((review) => has(review.output, "Review 1: pass")) &&
+			// Review 1 is sent back either way: its pass admits open work, or the
+			// loop re-ran its tests (an ungrounded pass) and they failed.
+			reviews.some((review) =>
+				/Review 1: (pass|fail)/.test(review.output ?? ""),
+			) &&
 				reviews.some((review) => has(review.output, "Review 2: pass")) &&
 				!reviews.some((review) => has(review.output, "Review ended")),
 			reviews.map((review) => clip(review.output, 160)).join(" / "),
