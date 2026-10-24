@@ -120,9 +120,12 @@ export const HARNESS_VARIANT_VALUES = {
 	 * roleModels.checker plans the check and writes the verdict, and a
 	 * cheaper read-only worker on roleModels.checkerWorker (codex:gpt-6-luna
 	 * when unset) does the reading, test writing and running it briefs. Each
-	 * review round is still a full independent check.
+	 * review round is still a full independent check. blind: the checker
+	 * first works out what the request requires from the checkout as it was
+	 * before the work (no deliverable in view) and writes its tests there,
+	 * then runs them against the deliverable (src/domain/checker-brief.ts).
 	 */
-	checkerMode: ["single", "pair"],
+	checkerMode: ["single", "pair", "blind"],
 	/**
 	 * Lead mode (src/domain/sidekick.ts, Devin Fusion style): fusion makes
 	 * the root builder a lead that plans, briefs, reviews and answers the

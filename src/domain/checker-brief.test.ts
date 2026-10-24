@@ -22,6 +22,30 @@ const input = {
 };
 
 describe("independentReviewBrief", () => {
+	it("checkerMode=blind: derives tests from the pre-work checkout before it may look at the deliverable, then runs them unchanged", () => {
+		const blind = independentReviewBrief({
+			...input,
+			blindBaseRef: "refs/ytimesy/review/t-base",
+			diffCommand: "git -C /app diff a b",
+		});
+		const phase1 = blind.indexOf("Phase 1, before you see the deliverable");
+		const phase2 = blind.indexOf("Phase 2, the deliverable");
+		expect(phase1).toBeGreaterThan(0);
+		expect(phase2).toBeGreaterThan(phase1);
+		expect(blind).toContain(
+			"git -C /app archive refs/ytimesy/review/t-base | tar -x -C /tmp/check/before",
+		);
+		expect(blind).toContain("do not open, list, grep or diff /app");
+		expect(blind).toContain(
+			"Never change an expected value to match the deliverable",
+		);
+		// The diff appears only in phase 2, and the four-part review is not used.
+		expect(blind.indexOf("git -C /app diff a b")).toBeGreaterThan(phase2);
+		expect(blind).not.toContain("Review in four parts:");
+		expect(independentReviewBrief(input)).toContain("Review in four parts:");
+		expect(independentReviewBrief(input)).not.toContain("Phase 1");
+	});
+
 	it("adds the rigor checks only with rigor=on", () => {
 		const plain = independentReviewBrief(input);
 		const rigor = independentReviewBrief({ ...input, rigor: true });
