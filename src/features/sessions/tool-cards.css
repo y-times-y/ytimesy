@@ -551,3 +551,7 @@ details.tool-panel.session-program:not([open]) > summary {
 .tool-show-more:hover {
 	color: #d4d4d4;
 }
+.tool-panel-section > .session-tool-fields,
+.tool-clamp > .session-tool-fields {
+	margin-top: 0;
+}
