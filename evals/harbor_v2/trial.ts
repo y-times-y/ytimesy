@@ -111,6 +111,12 @@ export type HarborTrialInput = {
 		model?: HarborModel,
 	) => Promise<ModelAgentRuntime>;
 	mcpServers?: readonly string[];
+	/**
+	 * Checker-only (development; review=on): a tar of a saved run's final
+	 * workspace in the sandbox. It is unpacked into the checkout after the
+	 * review loop's baseline, no builder runs, and the checker reviews it once.
+	 */
+	restore?: string;
 	harness: {
 		name: string;
 		version: string;
@@ -265,6 +271,8 @@ export function trialEfficiency(input: {
 	return { ...summary, modelRows };
 }
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
 const sum = (usages: (ApiTokenUsage | null)[]) =>
 	usages.reduce<ApiTokenUsage | null>(
 		(total, usage) => (usage ? addApiTokenUsage(total, usage) : total),
@@ -322,6 +330,8 @@ export async function runHarborTrial(
 	input: HarborTrialInput,
 ): Promise<HarborTrialResult> {
 	const { config } = input;
+	if (input.restore && config.variant.review !== "on")
+		throw new Error("Checker-only (a restored workspace) needs review=on.");
 	const now = input.now ?? Date.now;
 	const log = input.log ?? (() => {});
 	await mkdir(input.logsDir, { recursive: true });
@@ -928,7 +938,30 @@ export async function runHarborTrial(
 				waitUntil: input.deadlineAt - 120_000,
 			});
 			await loop.beforeModel(step());
-			for (;;) {
+			if (input.restore) {
+				// Checker-only: the saved work lands after the baseline, so the
+				// checker sees it as this run's change; one review, no builder.
+				const unpacked = await input.machines.exec(
+					workspace.vm,
+					`tar -xf ${shellQuote(input.restore)} -C ${shellQuote(input.cwd)} && rm -f ${shellQuote(input.restore)}`,
+					300_000,
+				);
+				if (unpacked.exitCode !== 0)
+					throw new Error(
+						`Restoring the saved workspace failed: ${unpacked.stderr.slice(0, 300)}`,
+					);
+				log(`checker-only: restored ${input.restore} into ${input.cwd}`);
+				messages = [
+					...messages,
+					{ role: "assistant", content: "Done. The work is in the checkout." },
+				];
+				const outcome = await loop.afterAttempt(step());
+				reviewSummary =
+					outcome.kind === "finished" ? outcome.items.at(-1) : null;
+				if (outcome.kind === "run") reviewRounds++;
+				log(`checker-only: review outcome ${outcome.kind}`);
+			}
+			for (; !input.restore; ) {
 				messages = await runRootBuilder(messages);
 				const outcome = await loop.afterAttempt(step());
 				if (outcome.kind !== "run" || !outcome.messages) {

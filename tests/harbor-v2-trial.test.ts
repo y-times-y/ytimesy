@@ -921,7 +921,7 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 		f: Awaited<ReturnType<typeof fixture>>,
 		trialId: string,
 		runtime: Parameters<typeof runHarborTrial>[0]["runtime"],
-		extra: { deadlineAt?: number; now?: () => number } = {},
+		extra: { deadlineAt?: number; now?: () => number; restore?: string } = {},
 	) {
 		for (const round of [1, 2, 3])
 			await rm(commandScopeRoot(harborTurnId(`${trialId}.1`, round)), {
@@ -941,8 +941,48 @@ describe("runHarborTrial rehearsal: unattended review and child budgets", () => 
 			runtime,
 			harness,
 			...(extra.now ? { now: extra.now } : {}),
+			...(extra.restore ? { restore: extra.restore } : {}),
 		});
 	}
+
+	it("checker-only: unpacks a saved workspace after the baseline and reviews it once, with no builder run", async () => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: "review=on" });
+		const saved = await mkdtemp(join(tmpdir(), "harbor-restore-"));
+		await writeFile(join(saved, "solution.py"), "print(42)\n");
+		const archive = `${saved}.tar`;
+		execFileSync("tar", ["-cf", archive, "-C", saved, "solution.py"]);
+		const { model, calls } = scriptedModel([
+			ran("k0"),
+			[...text("k1", verdict(true)), finish(100, 10)],
+		]);
+		const result = await trial(
+			f,
+			"rh-restore",
+			async (wrap) => ({ model: wrap(model) }),
+			{ restore: archive },
+		);
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(2);
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		const t = await trace(f.logs);
+		expect(t.review.checks).toHaveLength(1);
+		expect(t.review.state.rounds[0].changedFiles).toBe(1);
+		expect(t.review.state.outcome).toBe("pass");
+	}, 120_000);
+
+	it("refuses checker-only without review=on", async () => {
+		const f = await fixture({});
+		await expect(
+			trial(
+				f,
+				"rh-restore-off",
+				async (wrap) => ({ model: wrap({} as never) }),
+				{ restore: "/tmp/none.tar" },
+			),
+		).rejects.toThrow(/needs review=on/);
+	});
 
 	it("lead + sidekick + checker: the sidekick builds, the lead answers, the checker reviews the lead's turn", async () => {
 		const f = await fixture({
