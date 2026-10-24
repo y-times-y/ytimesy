@@ -6,7 +6,7 @@ import {
 } from "#/domain/workspace-terminal";
 import { boundedFreestyleFetch } from "./bounded-fetch";
 import { admitVmResume } from "./usage-admission";
-import { waitUntilGuestReady, waitUntilVmRunning } from "./wait-until-running";
+import { waitUntilGuestReady } from "./wait-until-running";
 
 export async function openWorkspacePty(input: {
 	readonly apiKey: string;
@@ -26,9 +26,9 @@ export async function openWorkspacePty(input: {
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}
-	// A machine that was not running yet has a guest that may not answer yet.
-	if (data.state === "running") await waitUntilVmRunning(vm, "Workspace VM");
-	else await waitUntilGuestReady(vm, "Workspace VM");
+	// A machine that was not running yet has a guest that may not answer yet;
+	// a running one was just read as running.
+	if (data.state !== "running") await waitUntilGuestReady(vm, "Workspace VM");
 	return vm.pty.open({
 		slug: WORKSPACE_PTY_SLUG,
 		cols: input.cols,

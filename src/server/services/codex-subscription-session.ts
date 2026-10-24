@@ -60,28 +60,34 @@ async function readSubscriptionSession(
 	/** The chat as the caller just read or wrote it, instead of reading it again. */
 	read?: AgentSessionRecord,
 ): Promise<PublicCodexSession> {
-	// Independent reads; the account is read last below only for its status
-	// after a catalog refresh may have expired it.
-	const [session, managed] = await Promise.all([
+	// Independent reads; the account is read again below only when a catalog
+	// refresh has just expired it.
+	const [session, managed, listedAccount] = await Promise.all([
 		scope.sessionId
 			? read?.id === scope.sessionId
 				? read
 				: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		hasManagedCodexAuth(scope.userId),
+		loadAgentAccount(scope.userId),
 	]);
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
 	let connected = managed;
+	let expired = false;
 	let models: Awaited<ReturnType<typeof codexSubscriptionCatalog>> = [];
 	try {
 		if (connected) models = await codexSubscriptionCatalog(scope.userId);
 	} catch (error) {
 		// A rejected refresh has just marked the account expired; show sign-in instead.
-		if (error instanceof CodexReconnectRequired) connected = false;
-		else if (!tolerateCatalogOutage) throw error;
+		if (error instanceof CodexReconnectRequired) {
+			connected = false;
+			expired = true;
+		} else if (!tolerateCatalogOutage) throw error;
 	}
-	const account = await loadAgentAccount(scope.userId);
+	const account = expired
+		? await loadAgentAccount(scope.userId)
+		: listedAccount;
 	const connection: AgentConnection =
 		connected && account.status === "connected"
 			? {

@@ -79,22 +79,19 @@ export function ensureSessionMachine(
 	scope: DesktopScope,
 ): Effect.Effect<string | null, unknown> {
 	return Effect.gen(function* () {
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		if (!scope.projectId) return null;
+		const projectId = scope.projectId;
+		const [workspace, peeked] = yield* Effect.tryPromise(() =>
+			Promise.all([
+				readyWorkspaceForOwner(scope.userId, projectId),
+				peekAgentSessionMachine({
+					userId: scope.userId,
+					projectId,
+					sessionId: scope.sessionId,
+				}),
+			]),
 		);
-		if (
-			!workspace ||
-			!workspaceEnvironmentIsReady(workspace) ||
-			!scope.projectId
-		)
-			return null;
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
-		);
+		if (!workspace || !workspaceEnvironmentIsReady(workspace)) return null;
 		const existing = peeked.session;
 		if (!existing) return null;
 		let providerRef = copiedAgentMachineRef({
@@ -119,6 +116,22 @@ export function ensureSessionMachine(
 		const ref = providerRef;
 		yield* Effect.tryPromise(() => machines.ensureRunning(WorkspaceId(ref)));
 		return ref;
+	});
+}
+
+/**
+ * Starts this chat's machine when it has one and it is asleep, so a terminal
+ * or desktop opened next connects without that wait. Never creates one.
+ */
+export function resumeSessionMachine(
+	machines: Pick<WorkspaceMachines, "ensureRunning">,
+	scope: DesktopScope,
+): Effect.Effect<boolean, unknown> {
+	return Effect.gen(function* () {
+		const ref = yield* Effect.tryPromise(() => peekSessionMachineRef(scope));
+		if (!ref) return false;
+		yield* Effect.tryPromise(() => machines.ensureRunning(WorkspaceId(ref)));
+		return true;
 	});
 }
 
@@ -292,12 +305,14 @@ export async function resolveDesktopRemote(
 /** The owner's chat machine for this scope, without creating or starting it. */
 export async function peekSessionMachineRef(scope: DesktopScope) {
 	if (!scope.projectId) return null;
-	const workspace = await readyWorkspaceForOwner(scope.userId, scope.projectId);
-	const peeked = await peekAgentSessionMachine({
-		userId: scope.userId,
-		projectId: scope.projectId,
-		sessionId: scope.sessionId,
-	});
+	const [workspace, peeked] = await Promise.all([
+		readyWorkspaceForOwner(scope.userId, scope.projectId),
+		peekAgentSessionMachine({
+			userId: scope.userId,
+			projectId: scope.projectId,
+			sessionId: scope.sessionId,
+		}),
+	]);
 	return copiedAgentMachineRef({
 		sessionProviderRef: peeked.providerRef,
 		templateProviderRef: workspace?.providerRef ?? null,
@@ -310,15 +325,16 @@ function recoverRunningDesktop(
 ): Effect.Effect<WorkspaceDesktop | null> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) return null;
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
-		);
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
+		const projectId = scope.projectId;
+		const [workspace, peeked] = yield* Effect.tryPromise(() =>
+			Promise.all([
+				readyWorkspaceForOwner(scope.userId, projectId),
+				peekAgentSessionMachine({
+					userId: scope.userId,
+					projectId,
+					sessionId: scope.sessionId,
+				}),
+			]),
 		);
 		const providerRef = copiedAgentMachineRef({
 			sessionProviderRef: peeked.providerRef,
