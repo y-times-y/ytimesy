@@ -236,6 +236,29 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
+		async readFile(
+			workspaceId: WorkspaceId,
+			path: string,
+		): Promise<Uint8Array | null> {
+			try {
+				return await retryTransientProviderFailure(() =>
+					freestyle.vms.ref(workspaceId).fs.readFile(path),
+				);
+			} catch (cause) {
+				if (
+					cause instanceof FreestyleApiError &&
+					(cause.status === 404 || cause.code === "NOT_FOUND")
+				) {
+					return null;
+				}
+				throw new WorkspaceCommandError({
+					operation: "readFile",
+					message: providerMessage(cause),
+					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
 			try {
 				const vm = freestyle.vms.ref(workspaceId);

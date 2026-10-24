@@ -71,6 +71,8 @@ export function readerWorkspaceMachines(
 	return {
 		...base,
 		runCapability: undefined,
+		// Raw reads would bypass the reader's file permissions.
+		readFile: undefined,
 		exec: async (vm, command, timeoutMs) => {
 			await prepare(vm);
 			return runAsReader(vm, scope(command), timeoutMs);

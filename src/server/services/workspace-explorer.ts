@@ -1,11 +1,15 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
-import type { WorkspaceFilePreview } from "#/domain/file-preview";
+import {
+	filePreviewKind,
+	type WorkspaceFilePreview,
+} from "#/domain/file-preview";
 import {
 	parseWorkspaceDiffOutput,
 	WORKSPACE_DIFF_BYTE_LIMIT,
 	WORKSPACE_DIFF_TRUNCATED_MARKER,
 } from "#/domain/git-diff";
+import { gitIndexPaths } from "#/domain/git-index";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
@@ -26,6 +30,10 @@ import {
 	workspaceSourceText,
 	workspaceSourceWriteText,
 } from "#/domain/workspace-explorer";
+import {
+	firstWorkspaceFilePath,
+	workspaceExplorerTree,
+} from "#/domain/workspace-file-tree";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { projectForOwner } from "../adapters/projects";
@@ -96,83 +104,199 @@ export function listProjectCommands(
 }
 
 /**
- * Lists the checkout without starting a paused VM. Files falls back to
- * turn changes when the machine is asleep.
+ * Lists the checkout without starting a paused VM, and reads the file Files
+ * opens with it (`open`, or the tree's first file) so the view needs one call.
+ * A running machine lists with git; a paused one is listed from its git index,
+ * read off its disk without waking it, and reported as asleep. Files the chat
+ * added and never staged are missing there until it wakes; Files adds the
+ * chat's own changes to the tree.
  */
 export function listWorkspaceExplorer(
 	machines: WorkspaceMachines,
 	scope: ExplorerScope,
+	open?: string,
 ): Effect.Effect<WorkspaceExplorerListing> {
-	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) =>
-		Effect.tryPromise(() =>
-			machines.exec(
-				workspaceId,
-				`bash -lc ${posixShellQuoted(roots.length > 1 ? roots.map((root) => `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard | while IFS= read -r file; do printf '%s/%s\\n' ${posixShellQuoted(root.name)} "$file"; done`).join("\n") : LIST_WORKSPACE_FILES)}`,
-				20_000,
-			),
-		).pipe(
-			Effect.map((result) => {
-				const listing = parseWorkspaceExplorerListing(result.stdout);
-				return roots.length > 1
-					? { ...listing, root: posix.dirname(roots[0].directory) }
-					: listing;
-			}),
-			Effect.catchAll(() => Effect.succeed(emptyListing())),
+	const list = (reuse: boolean) =>
+		Effect.gen(function* () {
+			const checkout = yield* findCheckout(machines, scope, { reuse });
+			if (checkout === "none")
+				return { ...emptyListing(), machine: "none" as const };
+			if (!checkout) return emptyListing();
+			const { workspaceId, roots, running } = checkout;
+			const readOpened = (path: string | undefined) =>
+				path && filePreviewKind(path) !== "image"
+					? readCheckoutFile(machines, checkout, path)
+					: Effect.succeed(null);
+			const listed = running
+				? listRunningCheckout(machines, workspaceId, roots)
+				: listCheckoutIndex(machines, workspaceId, roots);
+			const [listing, early] = yield* Effect.all(
+				[listed, readOpened(open?.trim() || undefined)],
+				{ concurrency: "unbounded" },
+			);
+			if (!listing?.paths.length && checkout.reused) return null;
+			if (!listing)
+				return {
+					...emptyListing(),
+					machine: running ? undefined : ("asleep" as const),
+				};
+			const first = open?.trim()
+				? undefined
+				: firstWorkspaceFilePath(workspaceExplorerTree(listing.paths));
+			const opened = early ?? (yield* readOpened(first));
+			return {
+				...listing,
+				...(running ? {} : { machine: "asleep" as const }),
+				opened,
+			};
+		});
+	return list(true).pipe(
+		// A remembered machine that lists nothing may be gone: look the chat up again.
+		Effect.flatMap((listing) =>
+			listing ? Effect.succeed(listing) : list(false),
+		),
+		Effect.map((listing) => listing ?? emptyListing()),
+		Effect.catchAll(() => Effect.succeed(emptyListing())),
+	);
+}
+
+/**
+ * Lists a running checkout with git (tracked and untracked files). A guest
+ * that has just woken can take many seconds to answer its first command;
+ * past a few seconds, or on failure, the git index stands in, as for a
+ * paused machine.
+ */
+function listRunningCheckout(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	roots: readonly ProjectFileRoot[],
+): Effect.Effect<WorkspaceExplorerListing | null> {
+	return Effect.tryPromise(() =>
+		machines.exec(
+			workspaceId,
+			`bash -lc ${posixShellQuoted(roots.length > 1 ? roots.map((root) => `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard | while IFS= read -r file; do printf '%s/%s\\n' ${posixShellQuoted(root.name)} "$file"; done`).join("\n") : LIST_WORKSPACE_FILES)}`,
+			20_000,
 		),
 	).pipe(
-		Effect.flatMap((listing) =>
-			listing
-				? Effect.succeed(listing)
-				: idleMachine(machines, scope).pipe(
-						Effect.map((machine) => ({ ...emptyListing(), machine })),
-					),
+		Effect.map((result) => {
+			const listing = parseWorkspaceExplorerListing(result.stdout);
+			return roots.length > 1
+				? { ...listing, root: posix.dirname(roots[0].directory) }
+				: listing;
+		}),
+		Effect.timeout(RUNNING_LIST_WAIT),
+		Effect.catchAll(() =>
+			listCheckoutIndex(machines, workspaceId, roots).pipe(
+				Effect.map((listing) => listing ?? emptyListing()),
+			),
 		),
 	);
 }
 
-/** Why the checkout can't be read: this chat has no machine yet, or it is asleep. */
-function idleMachine(
+const RUNNING_LIST_WAIT = "3 seconds";
+
+/** The tracked files of a checkout, from each repository's git index on the machine's disk. */
+function listCheckoutIndex(
 	machines: WorkspaceMachines,
-	scope: ExplorerScope,
-): Effect.Effect<"none" | "asleep" | undefined> {
-	const projectId = scope.projectId?.trim();
-	if (!projectId) return Effect.succeed(undefined);
-	return Effect.gen(function* () {
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId,
-				sessionId: scope.sessionId,
+	workspaceId: WorkspaceId,
+	roots: readonly ProjectFileRoot[],
+): Effect.Effect<WorkspaceExplorerListing | null> {
+	const readFile = machines.readFile;
+	if (!readFile || roots.length === 0) return Effect.succeed(null);
+	return Effect.tryPromise(() =>
+		Promise.all(
+			roots.map(async (root) => {
+				const bytes = await readFile(
+					workspaceId,
+					posix.join(root.directory, ".git/index"),
+				);
+				const paths = bytes ? gitIndexPaths(bytes, 4000) : null;
+				if (!paths) throw new Error("No readable git index.");
+				return roots.length > 1
+					? paths.map((path) => `${root.name}/${path}`)
+					: paths;
 			}),
-		);
-		if (!peeked.providerRef) return "none" as const;
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(peeked.providerRef as string)),
-		);
-		return running ? undefined : ("asleep" as const);
-	}).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+		),
+	).pipe(
+		Effect.map((lists) => {
+			const listing = parseWorkspaceExplorerListing(lists.flat().join("\n"));
+			return {
+				...listing,
+				root:
+					roots.length > 1
+						? posix.dirname(roots[0].directory)
+						: roots[0].directory,
+			};
+		}),
+		Effect.catchAll(() => Effect.succeed(null)),
+	);
 }
 
+/**
+ * Reads one file of the checkout. The provider reads a paused machine's disk
+ * without starting it, so this works whether or not the machine is awake.
+ */
 export function readWorkspaceExplorerFile(
 	machines: WorkspaceMachines,
 	scope: ExplorerScope,
 	requested: string,
 ): Effect.Effect<WorkspaceSourceFile | null> {
-	const want = requested.trim();
-	if (!want) return Effect.succeed(null);
-	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) => {
-		const path = resolveProjectFile(roots, want)?.path;
-		if (!path) return Effect.succeed(null);
-		return Effect.tryPromise(() =>
-			machines.readTextFile(workspaceId, path),
-		).pipe(
-			Effect.map((contents) => {
-				const text = workspaceSourceText(contents);
-				return text == null ? null : { path: want, text };
-			}),
-			Effect.catchAll(() => Effect.succeed(null)),
+	return readWorkspaceExplorerFiles(machines, scope, [requested]).pipe(
+		Effect.map(([file]) => file ?? null),
+	);
+}
+
+/** Reads several files of the checkout with one lookup of the chat's machine. */
+export function readWorkspaceExplorerFiles(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+	requested: readonly string[],
+): Effect.Effect<(WorkspaceSourceFile | null)[]> {
+	const wanted = requested.map((path) => path.trim());
+	const none = wanted.map(() => null);
+	if (!wanted.some(Boolean)) return Effect.succeed(none);
+	const read = (reuse: boolean) =>
+		findCheckout(machines, scope, { askRunning: false, reuse }).pipe(
+			Effect.flatMap((checkout) =>
+				checkout && checkout !== "none"
+					? Effect.all(
+							wanted.map((want) =>
+								want
+									? readCheckoutFile(machines, checkout, want)
+									: Effect.succeed(null),
+							),
+							{ concurrency: "unbounded" },
+						).pipe(Effect.map((files) => ({ files, reused: checkout.reused })))
+					: Effect.succeed({ files: none, reused: false }),
+			),
 		);
-	}).pipe(Effect.map((file) => file ?? null));
+	return read(true).pipe(
+		// A remembered machine that reads nothing may be gone: look the chat up again.
+		Effect.flatMap(({ files, reused }) =>
+			files.some(Boolean) || !reused
+				? Effect.succeed(files)
+				: read(false).pipe(Effect.map((again) => again.files)),
+		),
+		Effect.catchAll(() => Effect.succeed(none)),
+	);
+}
+
+function readCheckoutFile(
+	machines: WorkspaceMachines,
+	checkout: Checkout,
+	want: string,
+): Effect.Effect<WorkspaceSourceFile | null> {
+	const path = resolveProjectFile(checkout.roots, want)?.path;
+	if (!path) return Effect.succeed(null);
+	return Effect.tryPromise(() =>
+		machines.readTextFile(checkout.workspaceId, path),
+	).pipe(
+		Effect.map((contents) => {
+			const text = workspaceSourceText(contents);
+			return text == null ? null : { path: want, text };
+		}),
+		Effect.catchAll(() => Effect.succeed(null)),
+	);
 }
 
 export function writeWorkspaceExplorerFile(
@@ -352,31 +476,102 @@ function withRunningCheckout<A>(
 		roots: ProjectFileRoot[],
 	) => Effect.Effect<A>,
 ): Effect.Effect<A | null> {
+	return findCheckout(machines, scope).pipe(
+		Effect.flatMap((checkout) =>
+			checkout && checkout !== "none" && checkout.running
+				? run(checkout.workspaceId, checkout.root, checkout.roots)
+				: Effect.succeed(null),
+		),
+		Effect.catchAll(() => Effect.succeed(null)),
+	);
+}
+
+type Checkout = {
+	readonly workspaceId: WorkspaceId;
+	readonly root: string | null;
+	readonly roots: ProjectFileRoot[];
+	/** False when the machine is paused, or when the caller did not ask. */
+	readonly running: boolean;
+	/** The chat's machine came from a recent lookup, not the database. */
+	readonly reused: boolean;
+};
+
+type ChatMachine = {
+	readonly workspaceId: WorkspaceId;
+	readonly project: NonNullable<Awaited<ReturnType<typeof projectForOwner>>>;
+};
+
+/**
+ * Files' recent chat-to-machine lookups in this isolate, so switching files
+ * reads the file and not the database. Waking forgets the chat (it may get
+ * another machine), and a read that fails on a remembered machine looks the
+ * chat up again.
+ */
+const recentChatMachines = new Map<
+	string,
+	{ at: number; value: ChatMachine }
+>();
+const CHAT_MACHINE_REUSE_MS = 60_000;
+
+function chatMachineKey(scope: ExplorerScope) {
+	return `${scope.userId}\n${scope.projectId?.trim()}\n${scope.sessionId ?? ""}`;
+}
+
+export function forgetChatMachine(scope: ExplorerScope) {
+	recentChatMachines.delete(chatMachineKey(scope));
+}
+
+async function lookUpChatMachine(
+	scope: ExplorerScope,
+	projectId: string,
+	reuse: boolean,
+): Promise<{ value: ChatMachine | "none" | null; reused: boolean }> {
+	const key = chatMachineKey(scope);
+	const recent = recentChatMachines.get(key);
+	if (reuse && recent && Date.now() - recent.at < CHAT_MACHINE_REUSE_MS)
+		return { value: recent.value, reused: true };
+	const [peeked, project] = await Promise.all([
+		peekAgentSessionMachine({
+			userId: scope.userId,
+			projectId,
+			sessionId: scope.sessionId,
+		}),
+		projectForOwner(scope.userId, projectId),
+	]);
+	if (!peeked.providerRef) return { value: "none", reused: false };
+	if (!project) return { value: null, reused: false };
+	const value = { workspaceId: WorkspaceId(peeked.providerRef), project };
+	if (recentChatMachines.size >= 1000) recentChatMachines.clear();
+	recentChatMachines.set(key, { at: Date.now(), value });
+	return { value, reused: false };
+}
+
+/**
+ * The chat's machine and where its repositories are checked out; "none" when
+ * the chat has no machine yet. The chat and project rows are read together
+ * (or reused from a recent lookup, for Files), then the machine's state and
+ * checkout directory together; the directory is remembered per machine,
+ * since it never moves. Nothing is started.
+ */
+function findCheckout(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+	options: { readonly askRunning?: boolean; readonly reuse?: boolean } = {},
+): Effect.Effect<Checkout | "none" | null, unknown> {
 	const projectId = scope.projectId?.trim();
 	if (!projectId) return Effect.succeed(null);
-	return Effect.gen(function* () {
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId,
-				sessionId: scope.sessionId,
-			}),
+	return Effect.tryPromise(async () => {
+		const chat = await lookUpChatMachine(
+			scope,
+			projectId,
+			options.reuse === true,
 		);
-		const providerRef = peeked.providerRef;
-		if (!providerRef) return null;
-		const workspaceId = WorkspaceId(providerRef);
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(workspaceId),
-		);
-		if (!running) return null;
-		const cwd = yield* Effect.tryPromise(() =>
-			machines.readTextFile(workspaceId, PROJECT_CWD_PATH),
-		).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		const root = cwd?.trim() || null;
-		const project = yield* Effect.tryPromise(() =>
-			projectForOwner(scope.userId, projectId),
-		);
-		if (!project) return null;
+		if (!chat.value || chat.value === "none") return chat.value;
+		const { workspaceId, project } = chat.value;
+		const [running, root] = await Promise.all([
+			options.askRunning === false ? false : machines.isRunning(workspaceId),
+			checkoutRoot(machines, workspaceId),
+		]);
 		const roots = root
 			? repositoriesForProject(project).map((repo, index) => ({
 					name: projectFolderName(repo.fullName),
@@ -389,8 +584,27 @@ function withRunningCheckout<A>(
 								),
 				}))
 			: [];
-		return yield* run(workspaceId, root, roots);
-	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		return { workspaceId, root, roots, running, reused: chat.reused };
+	});
+}
+
+const checkoutRoots = new Map<string, string>();
+
+async function checkoutRoot(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Promise<string | null> {
+	const known = checkoutRoots.get(workspaceId);
+	if (known) return known;
+	const cwd = await machines
+		.readTextFile(workspaceId, PROJECT_CWD_PATH)
+		.catch(() => null);
+	const root = cwd?.trim() || null;
+	if (root) {
+		if (checkoutRoots.size >= 1000) checkoutRoots.clear();
+		checkoutRoots.set(workspaceId, root);
+	}
+	return root;
 }
 
 function emptyListing(): WorkspaceExplorerListing {
