@@ -157,6 +157,12 @@ export type ReviewLoopInput = {
 	 */
 	readonly pair?: boolean;
 	/**
+	 * Harness variant checkerMode=blind: the checker derives the request's
+	 * requirements and tests from the pre-work checkpoint before it looks at
+	 * the deliverable (checker-brief.ts, blindReviewSection).
+	 */
+	readonly blind?: boolean;
+	/**
 	 * lead=fusion: Main's writer is still in a build round as Main's turn
 	 * ends. Its work is not done, so the turn hands the loop off (no check);
 	 * the turn the writer's report wakes continues it from this turn's
@@ -567,6 +573,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					scratch: directory,
 					diffCommand: `git -C ${workspace.cwd} diff ${state.checkpoint.ref} ${snapshot.ref}`,
 					rigor: input.rigor,
+					...(input.blind ? { blindBaseRef: state.checkpoint.ref } : {}),
 					...(requirements ? { builderRequirements: requirements } : {}),
 					// A full check every round: the same brief, earlier findings as context.
 					...(input.pair
