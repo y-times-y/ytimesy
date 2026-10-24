@@ -149,26 +149,33 @@ async function bedrockClaudeRuntime(input: {
 	const cacheSettings = {
 		providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
 	};
-	const requestSettings = runtime.requestSettings;
+	const baseSettings = runtime.requestSettings;
+	if (!baseSettings)
+		throw new Error("The Claude runtime has no request settings.");
+	const requestSettings: NonNullable<ModelAgentRuntime["requestSettings"]> = (
+		instructions,
+	) => {
+		const settings = baseSettings(instructions);
+		return {
+			...settings,
+			providerOptions: {
+				...settings.providerOptions,
+				anthropic: {
+					...settings.providerOptions?.anthropic,
+					...cacheSettings.providerOptions.anthropic,
+				},
+			},
+		};
+	};
 	return {
 		...runtime,
 		cacheSettings,
 		maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
-		requestSettings: requestSettings
-			? (instructions) => {
-					const settings = requestSettings(instructions);
-					return {
-						...settings,
-						providerOptions: {
-							...settings.providerOptions,
-							anthropic: {
-								...settings.providerOptions?.anthropic,
-								...cacheSettings.providerOptions.anthropic,
-							},
-						},
-					};
-				}
-			: undefined,
+		requestSettings,
+		// Anthropic's native compaction (compaction: summarize) runs on Bedrock
+		// too. Without it the fallback refuses to compact a long single turn
+		// (bound-prefix policy) and a checker past ~104K tokens failed outright.
+		compact: nativeModelCompactor(runtime.model, "anthropic", requestSettings),
 	};
 }
 
