@@ -45,6 +45,7 @@ export function sessionScopedWorkspaceMachines(
 	const prepare = (command: string) =>
 		`mkdir -p '${root}'\n${scopeSessionRuntimeText(command, sessionId)}`;
 	const invokeCapability = base.runCapability;
+	const readBytes = base.readFile;
 	const scoped: WorkspaceMachines = {
 		...base,
 		...(invokeCapability
@@ -81,6 +82,10 @@ export function sessionScopedWorkspaceMachines(
 		},
 		readTextFile: (workspaceId, path) =>
 			base.readTextFile(workspaceId, scopeSessionRuntimeText(path, sessionId)),
+		readFile: readBytes
+			? (workspaceId, path) =>
+					readBytes(workspaceId, scopeSessionRuntimeText(path, sessionId))
+			: undefined,
 	};
 	unscopedMachines.set(scoped, base);
 	return scoped;

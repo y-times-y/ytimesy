@@ -67,6 +67,11 @@ export interface WorkspaceMachines {
 		workspaceId: WorkspaceId,
 		path: string,
 	) => Promise<string | null>;
+	/** A file's bytes; like readTextFile, it reads a paused machine's disk without starting it. */
+	readonly readFile?: (
+		workspaceId: WorkspaceId,
+		path: string,
+	) => Promise<Uint8Array | null>;
 	readonly destroy: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly ensureRunning: (workspaceId: WorkspaceId) => Promise<WorkspaceId>;
 	readonly isRunning: (workspaceId: WorkspaceId) => Promise<boolean>;

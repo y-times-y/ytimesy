@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -9,11 +16,20 @@ import {
 	parseWorkspaceDiffOutput,
 	WORKSPACE_DIFF_TRUNCATED_NOTE,
 } from "#/domain/git-diff";
-import { gitChangesScript, listProjectCommands } from "./workspace-explorer";
+import {
+	gitChangesScript,
+	listProjectCommands,
+	listWorkspaceExplorer,
+	readWorkspaceExplorerFile,
+} from "./workspace-explorer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
+// Each call names a new machine: the checkout directory is remembered per machine.
+let machineCount = 0;
 vi.mock("./agent-session-machine", () => ({
-	peekAgentSessionMachine: async () => ({ providerRef: "vm-1" }),
+	peekAgentSessionMachine: async () => ({
+		providerRef: `vm-${++machineCount}`,
+	}),
 }));
 vi.mock("../adapters/projects", () => ({
 	projectForOwner: async () => ({
@@ -86,6 +102,168 @@ it("returns nothing, without waking it, when the machine is paused", async () =>
 		),
 	).toEqual([]);
 	expect(exec).not.toHaveBeenCalled();
+});
+
+it("lists a paused machine from its git index and reads the first file, without waking it", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-paused-"));
+	try {
+		spawnSync("git", ["init", "-q"], { cwd: root });
+		await mkdir(join(root, "src"), { recursive: true });
+		await writeFile(join(root, "src/app.ts"), "export {};\n");
+		await writeFile(join(root, "README.md"), "# Hi\n");
+		spawnSync("git", ["add", "-A"], { cwd: root });
+		const exec = vi.fn();
+		const isRunning = vi.fn(async () => false);
+		const machines = {
+			isRunning,
+			exec,
+			readTextFile: async (_id: unknown, path: string) =>
+				path === "/tmp/ytimesy-project-cwd"
+					? `${root}\n`
+					: readFile(path, "utf8").catch(() => null),
+			readFile: async (_id: unknown, path: string) => readFile(path),
+		} as unknown as WorkspaceMachines;
+		const listing = await Effect.runPromise(
+			listWorkspaceExplorer(machines, {
+				userId: "alice",
+				projectId: "p1",
+				sessionId: "paused",
+			}),
+		);
+		expect(listing).toMatchObject({
+			root,
+			paths: ["README.md", "src/app.ts"],
+			machine: "asleep",
+			opened: { path: "src/app.ts", text: "export {};\n" },
+		});
+		expect(exec).not.toHaveBeenCalled();
+		// Reading a file never asks whether the machine runs.
+		isRunning.mockClear();
+		expect(
+			await Effect.runPromise(
+				readWorkspaceExplorerFile(
+					machines,
+					{ userId: "alice", projectId: "p1", sessionId: "paused" },
+					"README.md",
+				),
+			),
+		).toEqual({ path: "README.md", text: "# Hi\n" });
+		expect(isRunning).not.toHaveBeenCalled();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("lists a running machine with git and reads the asked-for file beside it", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-running-"));
+	try {
+		spawnSync("git", ["init", "-q"], { cwd: root });
+		await writeFile(join(root, "a.ts"), "a");
+		await writeFile(join(root, "untracked.ts"), "u");
+		spawnSync("git", ["add", "a.ts"], { cwd: root });
+		const machines = {
+			isRunning: async () => true,
+			readTextFile: async (_id: unknown, path: string) =>
+				path === "/tmp/ytimesy-project-cwd"
+					? `${root}\n`
+					: readFile(path, "utf8").catch(() => null),
+			exec: async (_id: unknown, command: string) => {
+				const result = spawnSync(
+					"sh",
+					[
+						"-c",
+						command
+							.replace("bash -lc", "bash -c")
+							.replaceAll("/tmp/ytimesy-project-cwd", join(root, ".cwd")),
+					],
+					{ encoding: "utf8" },
+				);
+				return {
+					exitCode: result.status ?? 1,
+					stdout: result.stdout,
+					stderr: result.stderr,
+				};
+			},
+		} as unknown as WorkspaceMachines;
+		await writeFile(join(root, ".cwd"), root);
+		await writeFile(join(root, ".git/info/exclude"), ".cwd\n");
+		const listing = await Effect.runPromise(
+			listWorkspaceExplorer(
+				machines,
+				{ userId: "alice", projectId: "p1", sessionId: "running" },
+				"untracked.ts",
+			),
+		);
+		expect(listing.machine).toBeUndefined();
+		expect([...listing.paths].sort()).toEqual(["a.ts", "untracked.ts"]);
+		expect(listing.opened).toEqual({ path: "untracked.ts", text: "u" });
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("lists from the git index when a just-woken machine does not answer git", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-slow-"));
+	try {
+		spawnSync("git", ["init", "-q"], { cwd: root });
+		await writeFile(join(root, "a.ts"), "a");
+		spawnSync("git", ["add", "a.ts"], { cwd: root });
+		const machines = {
+			isRunning: async () => true,
+			readTextFile: async (_id: unknown, path: string) =>
+				path === "/tmp/ytimesy-project-cwd"
+					? root
+					: readFile(path, "utf8").catch(() => null),
+			readFile: async (_id: unknown, path: string) => readFile(path),
+			exec: async () => {
+				throw new Error("guest did not answer");
+			},
+		} as unknown as WorkspaceMachines;
+		const listing = await Effect.runPromise(
+			listWorkspaceExplorer(machines, {
+				userId: "alice",
+				projectId: "p1",
+				sessionId: "slow",
+			}),
+		);
+		expect(listing).toMatchObject({
+			paths: ["a.ts"],
+			opened: { path: "a.ts", text: "a" },
+		});
+		expect(listing.machine).toBeUndefined();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("looks the chat up again when its remembered machine cannot read the file", async () => {
+	const scope = { userId: "alice", projectId: "p1", sessionId: "moved" };
+	const reads: string[] = [];
+	let gone: string | undefined;
+	const machines = {
+		isRunning: async () => true,
+		readTextFile: async (id: string, path: string) => {
+			reads.push(`${id}:${path}`);
+			if (path === "/tmp/ytimesy-project-cwd") return "/repo";
+			// The first machine this chat had is gone.
+			gone ??= id;
+			return id === gone ? null : "now";
+		},
+	} as unknown as WorkspaceMachines;
+	const read = () =>
+		Effect.runPromise(readWorkspaceExplorerFile(machines, scope, "a.ts"));
+	// Unreadable on a freshly looked-up machine: no second lookup.
+	expect(await read()).toBeNull();
+	// Unreadable on the remembered machine: looked up again, then read.
+	expect(await read()).toEqual({ path: "a.ts", text: "now" });
+	const machinesRead = reads
+		.filter((entry) => entry.endsWith(":/repo/a.ts"))
+		.map((entry) => entry.split(":")[0]);
+	expect(machinesRead).toEqual([
+		gone,
+		gone,
+		expect.not.stringMatching(gone ?? ""),
+	]);
 });
 
 it("returns a capped diff with a truncation note instead of failing on huge changes", async () => {
