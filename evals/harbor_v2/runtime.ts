@@ -7,10 +7,16 @@ import { nativeModelCompactor } from "../../src/server/adapters/model-compaction
 import { apiModelRuntime } from "../../src/server/services/api-agent-runtime";
 import type { ModelAgentRuntime } from "../../src/server/services/model-agent-loop";
 import {
+	bedrockAnthropicProfile,
 	bedrockCredentials,
 	bedrockSigningFetch,
 	responseTimeLimitFetch,
 } from "./bedrock";
+import {
+	anthropicClientModel,
+	BEDROCK_ANTHROPIC_BASE_URL,
+	bedrockAnthropicFetch,
+} from "./bedrock-anthropic";
 import { API_ENDPOINTS, type HarborBridgeConfig } from "./config";
 
 const KEY_SHAPES: Record<keyof typeof API_ENDPOINTS, RegExp> = {
@@ -73,7 +79,10 @@ export async function harborRuntime(input: {
 			);
 		return runtime;
 	}
-	if (config.route === "bedrock") return bedrockRuntime(input);
+	if (config.route === "bedrock")
+		return bedrockAnthropicProfile(config.modelId)
+			? bedrockClaudeRuntime(input)
+			: bedrockRuntime(input);
 	const endpoint = API_ENDPOINTS[config.route];
 	return apiModelRuntime({
 		provider: endpoint.provider,
@@ -89,6 +98,57 @@ export async function harborRuntime(input: {
 		wrapModel: input.wrapModel,
 	});
 }
+
+/**
+ * Claude models in Amazon Bedrock (bedrock-anthropic.ts): the product's
+ * Anthropic Messages runtime, its requests sent to bedrock-runtime as the
+ * model's inference profile and signed from the operator's AWS credentials.
+ * The client gets the Anthropic API's own id (claude-haiku-5-5) for pricing
+ * and request settings; no catalog lookup or native compaction (neither is
+ * on Bedrock's Messages route), so the context window is the stated one.
+ */
+async function bedrockClaudeRuntime(input: {
+	config: HarborBridgeConfig;
+	env: Record<string, string | undefined>;
+	userId: string;
+	cacheScope: string;
+	wrapModel: (model: LanguageModel) => LanguageModel;
+	fetch?: typeof globalThis.fetch;
+}): Promise<ModelAgentRuntime> {
+	const { config } = input;
+	const bedrock = config.bedrock;
+	if (!bedrock) throw new Error("The bedrock route needs its settings.");
+	const profile = bedrockAnthropicProfile(config.modelId);
+	if (!profile)
+		throw new Error(`"${config.modelId}" is not a Bedrock Claude id.`);
+	const clientModel = anthropicClientModel(profile);
+	const runtime = await apiModelRuntime({
+		provider: "anthropic",
+		baseUrl: BEDROCK_ANTHROPIC_BASE_URL,
+		// The Anthropic client needs a key; Bedrock is signed instead.
+		apiKey: "aws-sigv4",
+		modelId: clientModel,
+		userId: input.userId,
+		connectionId: `harbor:${config.route}`,
+		cacheScopeId: input.cacheScope,
+		contextCacheKey: JSON.stringify(["harbor", config.route, config.modelId]),
+		contextWindow: BEDROCK_CLAUDE_CONTEXT_WINDOW,
+		reasoning: config.effort,
+		fetch: bedrockAnthropicFetch({
+			credentials: await bedrockCredentials(input.env),
+			region: bedrock.region,
+			profile,
+			fetch: responseTimeLimitFetch(
+				input.fetch ?? globalThis.fetch.bind(globalThis),
+			),
+		}),
+		wrapModel: input.wrapModel,
+	});
+	return { ...runtime, maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS };
+}
+
+/** Bedrock serves Claude with a 200K-token context window. */
+export const BEDROCK_CLAUDE_CONTEXT_WINDOW = 200_000;
 
 /** The bedrock route's output cap per response. */
 export const BEDROCK_MAX_OUTPUT_TOKENS = 64_000;
