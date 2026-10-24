@@ -144,7 +144,32 @@ async function bedrockClaudeRuntime(input: {
 		}),
 		wrapModel: input.wrapModel,
 	});
-	return { ...runtime, maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS };
+	// Prompt caching as on api.anthropic.com (api-prompt-cache.ts): Bedrock
+	// caches Claude prefixes at the same cache_control breakpoints.
+	const cacheSettings = {
+		providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+	};
+	const requestSettings = runtime.requestSettings;
+	return {
+		...runtime,
+		cacheSettings,
+		maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
+		requestSettings: requestSettings
+			? (instructions) => {
+					const settings = requestSettings(instructions);
+					return {
+						...settings,
+						providerOptions: {
+							...settings.providerOptions,
+							anthropic: {
+								...settings.providerOptions?.anthropic,
+								...cacheSettings.providerOptions.anthropic,
+							},
+						},
+					};
+				}
+			: undefined,
+	};
 }
 
 /** Bedrock serves Claude with a 200K-token context window. */
