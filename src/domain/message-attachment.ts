@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isPastedText, pastedTextMeta } from "./pasted-text";
 
 /** A file the user attached to a message. Bytes live in private storage. */
 export type MessageAttachment = {
@@ -6,6 +7,8 @@ export type MessageAttachment = {
 	readonly name: string;
 	readonly mediaType: string;
 	readonly size: number;
+	/** Pasted text only: its line count, for the chip. */
+	readonly lines?: number;
 };
 
 export const MESSAGE_ATTACHMENT_LIMITS = {
@@ -29,6 +32,7 @@ export const messageAttachment = z.object({
 	name: z.string().min(1).max(120),
 	mediaType: z.string().min(1).max(120),
 	size: z.number().int().nonnegative().max(MESSAGE_ATTACHMENT_LIMITS.fileBytes),
+	lines: z.number().int().nonnegative().optional(),
 });
 
 /** One path segment: no separators, control characters or leading dots. */
@@ -66,14 +70,16 @@ export function withAttachmentNote(
 	attachments: readonly MessageAttachment[] | undefined,
 ) {
 	if (!attachments?.length) return text;
-	const lines = attachments.map(
-		(attachment) =>
-			`- ${attachmentPath(attachment)} (${attachment.mediaType}, ${sizeLabel(attachment.size)})`,
+	const lines = attachments.map((attachment) =>
+		isPastedText(attachment)
+			? `- ${attachmentPath(attachment)} (pasted text${attachment.lines === undefined ? "" : `, ${pastedTextMeta(attachment.lines)}`}, ${sizeLabel(attachment.size)})`
+			: `- ${attachmentPath(attachment)} (${attachment.mediaType}, ${sizeLabel(attachment.size)})`,
 	);
 	const images = attachments.some((attachment) =>
 		isViewableImage(attachment.mediaType),
 	);
-	return `${text}\n\nThe user attached ${attachments.length === 1 ? "a file" : "files"}, saved on your machine:\n${lines.join("\n")}${images ? "\nLook at each attached image with view_image (pass the absolute path) before acting on it." : ""}`;
+	const pasted = attachments.some(isPastedText);
+	return `${text}\n\nThe user attached ${attachments.length === 1 ? "a file" : "files"}, saved on your machine:\n${lines.join("\n")}${images ? "\nLook at each attached image with view_image (pass the absolute path) before acting on it." : ""}${pasted ? "\nEach pasted text file holds text the user pasted into this message. Read it in full before acting on it." : ""}`;
 }
 
 /** Base64 file bytes as the browser sends them, before storage. */

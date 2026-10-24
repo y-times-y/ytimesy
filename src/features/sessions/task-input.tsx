@@ -1,4 +1,10 @@
-import { type KeyboardEvent, type RefObject, useEffect, useRef } from "react";
+import {
+	type ClipboardEvent,
+	type KeyboardEvent,
+	type RefObject,
+	useEffect,
+	useRef,
+} from "react";
 
 function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = "auto";
@@ -36,6 +42,7 @@ export function TaskInput({
 	label = "Task description",
 	onKeyDown,
 	onCaretChange,
+	onPaste,
 	textareaRef,
 }: {
 	value: string;
@@ -47,6 +54,7 @@ export function TaskInput({
 	onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
 	/** The caret moved: typing, clicks and arrow keys. */
 	onCaretChange?: (caret: number) => void;
+	onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
 	textareaRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -84,6 +92,7 @@ export function TaskInput({
 					onChange(event.currentTarget.value);
 					onCaretChange?.(event.currentTarget.selectionStart);
 				}}
+				onPaste={onPaste}
 				onSelect={(event) =>
 					onCaretChange?.(event.currentTarget.selectionStart)
 				}
