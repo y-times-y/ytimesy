@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { apiConversation } from "./api-conversation";
 import {
+	attachmentKindLabel,
 	attachmentPath,
 	base64ByteLength,
 	declaredMediaType,
@@ -106,6 +107,16 @@ describe("message attachments", () => {
 		expect(declaredMediaType("")).toBe("application/octet-stream");
 		expect(declaredMediaType("text/html; charset=utf-8")).toBe(
 			"application/octet-stream",
+		);
+	});
+});
+
+describe("attachment tile labels", () => {
+	it("names a file's type by extension, else by media type", () => {
+		expect(attachmentKindLabel("report.pdf", "application/pdf")).toBe("PDF");
+		expect(attachmentKindLabel("Makefile", "text/plain")).toBe("TXT");
+		expect(attachmentKindLabel("blob", "application/octet-stream")).toBe(
+			"File",
 		);
 	});
 });

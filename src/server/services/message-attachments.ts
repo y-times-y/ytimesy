@@ -10,6 +10,7 @@ import {
 	type MessageAttachment,
 	safeAttachmentName,
 } from "#/domain/message-attachment";
+import { isPastedText, pastedTextFields } from "#/domain/pasted-text";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
 import {
@@ -39,14 +40,35 @@ export async function storeMessageAttachments(
 				topLevelType: "image",
 			});
 			await uploadMessageAttachment(userId, sessionId, id, file.base64);
+			const mediaType = detected ?? declaredMediaType(file.mediaType);
 			return {
 				id,
 				name,
-				mediaType: detected ?? declaredMediaType(file.mediaType),
+				mediaType,
 				size: base64ByteLength(file.base64),
+				...(isPastedText({ name, mediaType })
+					? pastedTextFields(
+							Buffer.from(file.base64, "base64").toString("utf8"),
+						)
+					: {}),
 			};
 		}),
 	);
+}
+
+/** The full text of a pasted text attachment, for its preview. */
+export async function pastedTextContent(
+	userId: string,
+	sessionId: string,
+	attachment: MessageAttachment,
+) {
+	if (!isPastedText(attachment)) throw new Error("Not pasted text.");
+	const base64 = await downloadMessageAttachment(
+		userId,
+		sessionId,
+		attachment.id,
+	);
+	return Buffer.from(base64, "base64").toString("utf8");
 }
 
 export function sessionAttachments(items: readonly SessionItem[]) {

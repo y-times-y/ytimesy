@@ -117,6 +117,7 @@ import {
 	prewarmProjectAgentSession,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
+import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
@@ -1688,12 +1689,16 @@ export function WorkspaceHome({
 						pending.text,
 						pending.messageId,
 						pending.approvesPlan,
-						pending.attachments?.map((file) => ({
-							id: crypto.randomUUID(),
-							name: safeAttachmentName(file.name),
-							mediaType: file.mediaType,
-							size: base64ByteLength(file.base64),
-						})),
+						pending.attachments?.map((file) => {
+							const id = crypto.randomUUID();
+							return {
+								id,
+								name: safeAttachmentName(file.name),
+								mediaType: file.mediaType,
+								size: base64ByteLength(file.base64),
+								...sentPasteFields(id, file),
+							};
+						}),
 					);
 					return {
 						...current,

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowUp, Square, X } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 import {
 	type KeyboardEvent,
 	useEffect,
@@ -49,6 +49,11 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
+import {
+	isLargePaste,
+	isPastedText,
+	nextPastedTextNumber,
+} from "#/domain/pasted-text";
 import type { Project } from "#/domain/projects";
 import {
 	secretDeclinedText,
@@ -85,6 +90,13 @@ import {
 	sendHelperMessage,
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
+import {
+	FileTile,
+	PastedTextTile,
+	pastedFileText,
+	pastedTextFile,
+	sentFileFields,
+} from "./attachment-tile";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
@@ -100,6 +112,7 @@ import {
 	sessionModelsFromListed,
 } from "./model-capabilities";
 import { getAgentModelCatalog } from "./model-catalog.fn";
+import { readPastedTextFn } from "./pasted-text.fn";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -265,6 +278,28 @@ export function SessionLauncher({
 		readonly files: readonly File[];
 	} | null>(null);
 	const [attachmentError, setAttachmentError] = useState<string | null>(null);
+	function attachFiles(selected: readonly File[]) {
+		const additions = selected.filter(
+			(file) =>
+				!attachments.some(
+					(existing) =>
+						existing.name === file.name &&
+						existing.size === file.size &&
+						existing.lastModified === file.lastModified,
+				),
+		);
+		const next = [...attachments, ...additions];
+		setAttachments(next);
+		setAttachmentError(attachmentLimitError(next));
+	}
+	const readPastedText = useServerFn(readPastedTextFn);
+	const pastedTextSession = session.agentSessionId;
+	const loadPastedText = pastedTextSession
+		? (attachmentId: string) =>
+				readPastedText({
+					data: { sessionId: pastedTextSession, attachmentId },
+				})
+		: undefined;
 	// A message with only attachments still needs words for the transcript and model.
 	const sendableDraft = (text: string) =>
 		text || (attachments.length ? ATTACHMENTS_ONLY_TEXT : "");
@@ -721,12 +756,16 @@ export function SessionLauncher({
 				...(turnStatus === "running" ? { queued: true as const } : {}),
 				...(files.length
 					? {
-							attachments: files.map((file) => ({
-								id: crypto.randomUUID(),
-								name: safeAttachmentName(file.name),
-								mediaType: file.type || "application/octet-stream",
-								size: file.size,
-							})),
+							attachments: files.map((file) => {
+								const id = crypto.randomUUID();
+								return {
+									id,
+									name: safeAttachmentName(file.name),
+									mediaType: file.type || "application/octet-stream",
+									size: file.size,
+									...sentFileFields(id, file),
+								};
+							}),
 						}
 					: {}),
 			},
@@ -992,6 +1031,7 @@ export function SessionLauncher({
 						onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
 					}}
 					onRemoveQueued={onRemoveQueued}
+					readPastedText={loadPastedText}
 				/>
 			)}
 			<div className="session-dock">
@@ -1040,6 +1080,34 @@ export function SessionLauncher({
 							/>
 						) : null}
 
+						{attachments.length > 0 && (
+							<ul className="attachment-tiles" aria-label="Attached files">
+								{attachments.map((file, index) => {
+									const key = `${file.name}-${file.lastModified}-${file.size}`;
+									const remove = () => {
+										const next = attachments.filter(
+											(_, fileIndex) => fileIndex !== index,
+										);
+										setAttachments(next);
+										setAttachmentError(attachmentLimitError(next));
+										textareaRef.current?.focus();
+									};
+									const pasted = pastedFileText(file);
+									return pasted !== undefined &&
+										isPastedText({ name: file.name, mediaType: file.type }) ? (
+										<PastedTextTile key={key} text={pasted} onRemove={remove} />
+									) : (
+										<FileTile
+											key={key}
+											name={file.name}
+											mediaType={file.type}
+											size={file.size}
+											onRemove={remove}
+										/>
+									);
+								})}
+							</ul>
+						)}
 						<TaskInput
 							textareaRef={textareaRef}
 							onCaretChange={setCaret}
@@ -1065,29 +1133,20 @@ export function SessionLauncher({
 								handleMentionKey(event) ||
 								(!selectedHelper && handleComposerKey(event))
 							}
+							onPaste={(event) => {
+								// Helpers take text only; a large paste there stays inline.
+								if (selectedHelper) return;
+								const text = event.clipboardData.getData("text/plain");
+								if (!isLargePaste(text)) return;
+								event.preventDefault();
+								attachFiles([
+									pastedTextFile(
+										text,
+										nextPastedTextNumber(attachments.map((file) => file.name)),
+									),
+								]);
+							}}
 						/>
-						{attachments.length > 0 && (
-							<ul className="session-attachments" aria-label="Attached files">
-								{attachments.map((file, index) => (
-									<li key={`${file.name}-${file.lastModified}-${file.size}`}>
-										<span title={file.name}>{file.name}</span>
-										<button
-											type="button"
-											aria-label={`Remove ${file.name}`}
-											onClick={() => {
-												const next = attachments.filter(
-													(_, fileIndex) => fileIndex !== index,
-												);
-												setAttachments(next);
-												setAttachmentError(attachmentLimitError(next));
-											}}
-										>
-											<X size={14} />
-										</button>
-									</li>
-								))}
-							</ul>
-						)}
 						{forkPreparing ? (
 							<p className="model-provider-notice">Preparing workspace</p>
 						) : forkStatus.data?.state === "failed" ? (
@@ -1173,20 +1232,7 @@ export function SessionLauncher({
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
 								onSpeedChange={setSpeed}
-								onAttachFiles={(selected) => {
-									const additions = selected.filter(
-										(file) =>
-											!attachments.some(
-												(existing) =>
-													existing.name === file.name &&
-													existing.size === file.size &&
-													existing.lastModified === file.lastModified,
-											),
-									);
-									const next = [...attachments, ...additions];
-									setAttachments(next);
-									setAttachmentError(attachmentLimitError(next));
-								}}
+								onAttachFiles={attachFiles}
 							/>
 							{turnStatus === "running" ? (
 								<button
