@@ -112,7 +112,7 @@ describe("toolDetailView", () => {
 		).toMatchObject({ hunks: [{ removed: "x", added: "y" }] });
 	});
 
-	it("shows a written file's content and falls back to fields for other tools", () => {
+	it("shows a written file's content, MCP calls as MCP, and other tools as fields", () => {
 		expect(
 			toolDetailView(
 				call(
@@ -124,6 +124,13 @@ describe("toolDetailView", () => {
 		).toMatchObject({ kind: "write", content: "a\n" });
 		expect(
 			toolDetailView(call("mcp__linear__get_issue", { id: "X-1" }, "{}")),
-		).toMatchObject({ kind: "fields" });
+		).toMatchObject({
+			kind: "mcp",
+			call: { serverLabel: "Linear", toolLabel: "Get issue" },
+			input: '{"id":"X-1"}',
+		});
+		expect(toolDetailView(call("some_tool", { a: 1 }, "ok"))).toMatchObject({
+			kind: "fields",
+		});
 	});
 });

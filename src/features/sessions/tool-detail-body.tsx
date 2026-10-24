@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
 import { fileBasename } from "#/domain/file-kind";
+import type { McpBlock } from "#/domain/mcp-call-view";
 import type { DynamicToolCallItem } from "#/domain/session-item";
 import { sourceLanguageFromPath } from "#/domain/source-language";
 import { type ToolDetailView, toolDetailView } from "#/domain/tool-detail-view";
+import { AgentMarkdown } from "./agent-markdown";
 import { FileTypeIcon } from "./file-type-icon";
 import { HighlightedTokens, useHighlightedLines } from "./highlighted-code";
+import { McpServerIcon } from "./mcp-server-icon";
 import { ShellCommandCode } from "./shell-command-code";
 import { ToolInputFields } from "./tool-cards";
+import { looksLong, ShowMore, ToolFields, ToolValue } from "./tool-value";
 
 /** An opened tool card: one panel that shows the call as it happened. */
 export function ToolDetailBody({ item }: { item: DynamicToolCallItem }) {
@@ -25,6 +29,14 @@ export function ToolDetailBody({ item }: { item: DynamicToolCallItem }) {
 			return <PatchPanel diff={view.diff} />;
 		case "fields":
 			return <FieldsPanel view={view} failed={failed} />;
+		case "mcp":
+			return (
+				<McpPanel
+					view={view}
+					failed={failed}
+					running={item.status === "inProgress"}
+				/>
+			);
 	}
 }
 
@@ -366,5 +378,156 @@ export function ProgramSource({ program }: { program: string }) {
 				startLine={1}
 			/>
 		</div>
+	);
+}
+
+/** Roughly how much a result shows, to decide whether it starts clamped. */
+function blocksText(blocks: readonly McpBlock[]) {
+	return blocks
+		.map((block) =>
+			block.kind === "text"
+				? block.text
+				: block.kind === "json"
+					? JSON.stringify(block.value, null, 2)
+					: block.kind === "resource"
+						? (block.text ?? block.uri)
+						: block.kind === "image"
+							? "\n".repeat(12)
+							: "",
+		)
+		.join("\n");
+}
+
+function McpBlockView({ block, bad }: { block: McpBlock; bad: boolean }) {
+	switch (block.kind) {
+		case "text":
+			return block.markdown && !bad ? (
+				<div className="tool-mcp-markdown">
+					<AgentMarkdown text={block.text} />
+				</div>
+			) : (
+				<div className="tool-mcp-text" data-tone={bad ? "bad" : undefined}>
+					{block.text}
+				</div>
+			);
+		case "json":
+			return <ToolValue value={block.value} />;
+		case "image":
+			return (
+				<img className="tool-mcp-image" src={block.src} alt="Tool result" />
+			);
+		case "audio":
+			// biome-ignore lint/a11y/useMediaCaption: tool output has no captions
+			return <audio className="tool-mcp-audio" controls src={block.src} />;
+		case "link":
+			return (
+				<div className="tool-mcp-link">
+					{block.href ? (
+						<a href={block.href} target="_blank" rel="noopener noreferrer">
+							{block.label}
+						</a>
+					) : (
+						<code>{block.label}</code>
+					)}
+					{block.label !== block.uri ? (
+						<span className="tool-panel-meta">{block.uri}</span>
+					) : null}
+					{block.description ? <p>{block.description}</p> : null}
+				</div>
+			);
+		case "resource":
+			return (
+				<div className="tool-mcp-resource">
+					<div className="tool-mcp-link">
+						{block.href ? (
+							<a href={block.href} target="_blank" rel="noopener noreferrer">
+								{block.uri}
+							</a>
+						) : (
+							<code>{block.uri}</code>
+						)}
+						{block.mimeType ? (
+							<span className="tool-panel-meta">{block.mimeType}</span>
+						) : null}
+					</div>
+					{block.text ? (
+						<div className="tool-mcp-text">{block.text}</div>
+					) : null}
+				</div>
+			);
+	}
+}
+
+/** An MCP call: the server and tool, the arguments as fields, the result as its content blocks. */
+function McpPanel({
+	view,
+	failed,
+	running,
+}: {
+	view: Extract<ToolDetailView, { kind: "mcp" }>;
+	failed: boolean;
+	running: boolean;
+}) {
+	const result = view.result;
+	const bad = failed || result?.isError === true;
+	const outputText = result ? blocksText(result.blocks) : "";
+	return (
+		<Panel
+			kind="mcp"
+			head={
+				<>
+					<McpServerIcon server={view.call.server} />
+					<span
+						className="tool-panel-path"
+						title={`${view.call.server} / ${view.call.tool}`}
+					>
+						<span className="tool-panel-folder">{view.call.server} / </span>
+						{view.call.tool}
+					</span>
+				</>
+			}
+			aside={
+				bad ? (
+					<span className="tool-panel-tag" data-tone="bad">
+						{failed ? "Failed" : "Error"}
+					</span>
+				) : running ? (
+					<span className="tool-panel-tag">Running</span>
+				) : null
+			}
+		>
+			<div className="tool-panel-section" data-part="input">
+				<p className="tool-panel-label">Input</p>
+				{view.input ? (
+					<ShowMore long={looksLong(view.input)}>
+						<ToolFields input={view.input} />
+					</ShowMore>
+				) : (
+					<p className="tool-panel-meta">No arguments</p>
+				)}
+			</div>
+			{result || !running ? (
+				<div
+					className="tool-panel-section"
+					data-part="output"
+					data-tone={bad ? "bad" : undefined}
+				>
+					<p className="tool-panel-label">{bad ? "Error" : "Output"}</p>
+					{result?.blocks.length ? (
+						<ShowMore long={looksLong(outputText)}>
+							<div className="tool-mcp-blocks">
+								{result.blocks.map((block, index) => (
+									// biome-ignore lint/suspicious/noArrayIndexKey: content blocks keep their order
+									<McpBlockView key={index} block={block} bad={bad} />
+								))}
+							</div>
+						</ShowMore>
+					) : (
+						<p className="tool-panel-meta">No output</p>
+					)}
+				</div>
+			) : null}
+			{result?.note ? <p className="tool-panel-note">{result.note}</p> : null}
+		</Panel>
 	);
 }

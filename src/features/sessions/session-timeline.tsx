@@ -41,6 +41,7 @@ import {
 	codeModeResult,
 } from "#/domain/code-mode";
 import { commandActivityTitle } from "#/domain/command-activity-title";
+import { mcpServerLabel, mcpToolLabel } from "#/domain/connector-name";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
 	fileChangeActivity,
@@ -56,6 +57,7 @@ import {
 	KIND_ICONS,
 	KIND_TAGS,
 } from "#/domain/helper-names";
+import { mcpResult } from "#/domain/mcp-call-view";
 import { isPastedText } from "#/domain/pasted-text";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
@@ -103,6 +105,7 @@ import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { InlineMarkdown } from "./inline-markdown";
 import { LiveCollapsible } from "./live-collapsible";
+import { McpServerIcon } from "./mcp-server-icon";
 import {
 	type MemoryMarkerActions,
 	MemoryMarkerProvider,
@@ -1043,9 +1046,17 @@ function SessionItemView({
 					data-live={live ? "true" : undefined}
 				>
 					<p>
-						<ActivityIcon glyph="mcp" />
+						<McpServerIcon server={item.server} />
 						<span className={titleClass}>
-							{item.server} · {item.tool}
+							<span className="session-tool-verb">
+								{mcpServerLabel(item.server)}
+							</span>
+							<span className="session-tool-sep" aria-hidden="true">
+								·
+							</span>
+							<span className="session-tool-target">
+								{mcpToolLabel(item.tool, item.server)}
+							</span>
 						</span>
 						{activityStatus(item.status)}
 					</p>
@@ -1086,6 +1097,8 @@ function SessionItemView({
 								icon={KIND_ICONS.background}
 								color={agentColor("background")}
 							/>
+						) : activity.mcpServer ? (
+							<McpServerIcon server={activity.mcpServer} />
 						) : (
 							<ActivityIcon
 								glyph={
@@ -1097,6 +1110,11 @@ function SessionItemView({
 						)}
 						<span className={titleClass} title={toolDetailTitle(item)}>
 							<span className="session-tool-verb">{activity.verb}</span>
+							{activity.mcpServer && activity.target ? (
+								<span className="session-tool-sep" aria-hidden="true">
+									·
+								</span>
+							) : null}
 							{activity.target ? (
 								activity.code ? (
 									<code className="session-tool-target">{activity.target}</code>
@@ -1114,6 +1132,9 @@ function SessionItemView({
 							) : null}
 							{activity.note ? (
 								<span className="session-tool-note">{activity.note}</span>
+							) : null}
+							{activity.mcpServer && mcpResult(item.output)?.isError ? (
+								<span className="session-tool-error">Error</span>
 							) : null}
 						</span>
 						{activity.background ? (
