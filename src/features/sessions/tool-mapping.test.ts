@@ -126,8 +126,8 @@ describe("chat tool mapping", () => {
 		const name = mcpToolName("github", "search_issues");
 		expect(activityGlyphForToolName(name)).toBe("mcp");
 		expect(toolActivity(call(name))).toMatchObject({
-			verb: "github",
-			target: "search issues",
+			verb: "GitHub",
+			target: "Search issues",
 		});
 	});
 

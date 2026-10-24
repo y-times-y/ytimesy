@@ -5,6 +5,7 @@ import {
 	Globe,
 	Info,
 	type LucideIcon,
+	Plug,
 	Split,
 	SquareTerminal,
 } from "lucide-react";
@@ -21,6 +22,8 @@ const run = SquareTerminal;
 const web = Globe;
 const agent = Split;
 const notice = Info;
+/** A connector with no mark of its own; MCP calls show their server's (mcp-server-icon.tsx). */
+const connector = Plug;
 
 const icons = {
 	thinking: think,
@@ -40,7 +43,7 @@ const icons = {
 	browser: run,
 	tool: run,
 	web,
-	mcp: web,
+	mcp: connector,
 	agent,
 	message: agent,
 	switch: agent,
