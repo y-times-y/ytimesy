@@ -56,6 +56,7 @@ import {
 	KIND_ICONS,
 	KIND_TAGS,
 } from "#/domain/helper-names";
+import { isPastedText } from "#/domain/pasted-text";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
@@ -108,6 +109,11 @@ import {
 	ModelSwitchCard,
 } from "./model-switch-card";
 import {
+	PastedTextChip,
+	type PastedTextPreview,
+	PastedTextReader,
+} from "./pasted-text-chip";
+import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
@@ -143,7 +149,10 @@ export function SessionTimeline({
 	helperLines,
 	senderName,
 	queuedSteering = [],
+	readPastedText,
 }: {
+	/** Loads a sent message's pasted text for its chip's preview. */
+	readPastedText?: (attachmentId: string) => Promise<PastedTextPreview>;
 	/**
 	 * The chat's helpers by session id, with their agents-list names and
 	 * colours: a thin line marks where each started and where it finished;
@@ -255,7 +264,10 @@ export function SessionTimeline({
 		return null;
 
 	return (
-		<MemoryMarkerProvider actions={memoryActions}>
+		<TimelineProviders
+			memoryActions={memoryActions}
+			readPastedText={readPastedText}
+		>
 			<SenderContext.Provider value={senderName ?? null}>
 				<AgentMentionContext.Provider
 					value={agentMentions(helperLines, taskParentId)}
@@ -415,6 +427,24 @@ export function SessionTimeline({
 					</ol>
 				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
+		</TimelineProviders>
+	);
+}
+
+function TimelineProviders({
+	memoryActions,
+	readPastedText,
+	children,
+}: {
+	memoryActions?: MemoryMarkerActions;
+	readPastedText?: (attachmentId: string) => Promise<PastedTextPreview>;
+	children: ReactNode;
+}) {
+	return (
+		<MemoryMarkerProvider actions={memoryActions}>
+			<PastedTextReader.Provider value={readPastedText ?? null}>
+				{children}
+			</PastedTextReader.Provider>
 		</MemoryMarkerProvider>
 	);
 }
@@ -558,6 +588,36 @@ function HelperFinishCard({
 	);
 }
 
+function MessageAttachments({
+	attachments,
+}: {
+	attachments: UserMessageItem["attachments"];
+}) {
+	if (!attachments?.length) return null;
+	return (
+		<ul className="session-message-attachments" aria-label="Attached files">
+			{attachments.map((attachment) =>
+				isPastedText(attachment) ? (
+					<PastedTextChip
+						key={attachment.id}
+						attachmentId={attachment.id}
+						lines={attachment.lines}
+					/>
+				) : (
+					<li key={attachment.id} title={attachment.name}>
+						{attachment.mediaType.startsWith("image/") ? (
+							<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
+						) : (
+							<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
+						)}
+						<span>{attachment.name}</span>
+					</li>
+				),
+			)}
+		</ul>
+	);
+}
+
 function QueuedMessage({
 	item,
 	onRemove,
@@ -570,20 +630,7 @@ function QueuedMessage({
 			<p>
 				<MentionText text={item.text} />
 			</p>
-			{item.attachments?.length ? (
-				<ul className="session-message-attachments" aria-label="Attached files">
-					{item.attachments.map((attachment) => (
-						<li key={attachment.id} title={attachment.name}>
-							{attachment.mediaType.startsWith("image/") ? (
-								<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
-							) : (
-								<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
-							)}
-							<span>{attachment.name}</span>
-						</li>
-					))}
-				</ul>
-			) : null}
+			<MessageAttachments attachments={item.attachments} />
 			<p className="session-queued-note" role="status">
 				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Queued for the agent's next step</span>
@@ -767,23 +814,7 @@ function SessionItemView({
 					<p>
 						<MentionText text={item.text} />
 					</p>
-					{item.attachments?.length ? (
-						<ul
-							className="session-message-attachments"
-							aria-label="Attached files"
-						>
-							{item.attachments.map((attachment) => (
-								<li key={attachment.id} title={attachment.name}>
-									{attachment.mediaType.startsWith("image/") ? (
-										<ImageIcon size={14} strokeWidth={1.5} aria-hidden="true" />
-									) : (
-										<Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
-									)}
-									<span>{attachment.name}</span>
-								</li>
-							))}
-						</ul>
-					) : null}
+					<MessageAttachments attachments={item.attachments} />
 					{item.memory ? <MemoryRecallNote recall={item.memory} /> : null}
 				</div>
 			);
