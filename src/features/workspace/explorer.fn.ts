@@ -14,7 +14,10 @@ import { enabledPluginComponents } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
-import { ensureSessionMachine } from "#/server/services/workspace-desktop";
+import {
+	ensureSessionMachine,
+	resumeSessionMachine,
+} from "#/server/services/workspace-desktop";
 import {
 	type ExplorerScope,
 	listProjectCommands,
@@ -97,6 +100,20 @@ export const wakeWorkspaceMachineFn = createServerFn({ method: "POST" })
 			),
 		);
 		return { ready: ref !== null };
+	});
+
+/** Wakes this chat's machine if it has one, ahead of a terminal or desktop opening. */
+export const resumeWorkspaceMachineFn = createServerFn({ method: "POST" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<{ ready: boolean }> => {
+		requireSameOrigin(getRequest());
+		const scope = await requireScope(data.projectId, data.sessionId);
+		const ready = await runWithMachines((machines) =>
+			resumeSessionMachine(machines, scope).pipe(
+				Effect.catchAll(() => Effect.succeed(false)),
+			),
+		);
+		return { ready };
 	});
 
 export const readWorkspaceSourceFn = createServerFn({ method: "GET" })

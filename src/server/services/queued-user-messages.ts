@@ -219,16 +219,26 @@ export function removeQueuedComposerMessage(
 export async function publicSessionView(
 	scope: HarnessSessionScope,
 ): Promise<PublicCodexSession> {
+	// The queue is read beside the chat (opening a chat waits on both); it
+	// joins the view only if the view is that chat.
+	const queued = scope.sessionId
+		? queuedUserMessageItems(scope.sessionId)
+		: null;
+	queued?.catch(() => {});
+	const view = await Effect.runPromise(readHarnessWorkspaceSession(scope));
 	return withQueuedMessages(
-		await Effect.runPromise(readHarnessWorkspaceSession(scope)),
+		view,
+		queued && view.agentSessionId === scope.sessionId ? queued : undefined,
 	);
 }
 
 export async function withQueuedMessages(
 	view: PublicCodexSession,
+	/** The chat's queue, already being read. */
+	reading?: ReturnType<typeof queuedUserMessageItems>,
 ): Promise<PublicCodexSession> {
 	if (!view.agentSessionId) return view;
-	const queued = await queuedUserMessageItems(view.agentSessionId);
+	const queued = await (reading ?? queuedUserMessageItems(view.agentSessionId));
 	return queued.length
 		? { ...view, items: withQueuedUserMessages(view.items, queued) }
 		: view;
