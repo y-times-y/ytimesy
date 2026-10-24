@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { fileBasename } from "#/domain/file-kind";
 import { filePreviewKind } from "#/domain/file-preview";
 import type { FileChangeEntry } from "#/domain/session-item";
@@ -16,6 +16,7 @@ import {
 	fileChangeForPath,
 	fileTreeChangeMark,
 	firstWorkspaceFilePath,
+	nearbyFiles,
 	type WorkspaceTreeNode,
 	workspaceExplorerTree,
 	workspacePathForMention,
@@ -23,8 +24,8 @@ import {
 import { FileTypeIcon } from "../sessions/file-type-icon";
 import {
 	listWorkspaceExplorerFn,
-	readWorkspacePreviewFn,
 	readWorkspaceSourceFn,
+	readWorkspaceSourcesFn,
 	wakeWorkspaceMachineFn,
 	writeWorkspaceSourceFn,
 } from "./explorer.fn";
@@ -33,15 +34,37 @@ import {
 	PreviewModeSwitch,
 	WorkspaceImagePreview,
 } from "./file-preview";
+import { readFilesSnapshot, saveFilesSnapshot } from "./files-snapshot";
 
-/** The chat's file tree, as Files lists it. */
-function explorerQuery(projectId?: string, sessionId?: string) {
+/**
+ * The chat's file tree, as Files lists it. The listing also carries the file
+ * Files opens first (`open`, or the tree's first file), which goes straight
+ * into that file's query, so opening Files is one round trip.
+ */
+function explorerQuery(
+	queryClient: QueryClient,
+	projectId?: string,
+	sessionId?: string,
+	open?: string,
+) {
 	return queryOptions({
 		queryKey: ["workspace-explorer", projectId, sessionId],
-		queryFn: () =>
-			listWorkspaceExplorerFn({
-				data: { projectId, sessionId },
-			}),
+		queryFn: async () => {
+			const listing = await listWorkspaceExplorerFn({
+				data: { projectId, sessionId, path: open },
+			});
+			if (listing.opened)
+				queryClient.setQueryData(
+					sourceQuery(projectId, sessionId, listing.opened.path).queryKey,
+					listing.opened,
+				);
+			if (listing.paths.length)
+				saveFilesSnapshot(sessionId, {
+					root: listing.root,
+					paths: listing.paths,
+				});
+			return listing;
+		},
 		staleTime: 8_000,
 	});
 }
@@ -50,21 +73,53 @@ function explorerQuery(projectId?: string, sessionId?: string) {
 function sourceQuery(projectId?: string, sessionId?: string, path?: string) {
 	return queryOptions({
 		queryKey: ["workspace-source", projectId, sessionId, path],
-		queryFn: async () => {
-			const data = { projectId, sessionId, path };
-			if (filePreviewKind(path ?? "") === "code")
-				return readWorkspaceSourceFn({ data });
-			const preview = await readWorkspacePreviewFn({ data });
-			return preview.kind === "text"
-				? { path: path ?? "", text: preview.text }
-				: null;
-		},
+		queryFn: () =>
+			readWorkspaceSourceFn({ data: { projectId, sessionId, path } }),
+		// Hover and neighbour reads count as fresh for a moment; an opened file
+		// still shows its last text at once and refreshes behind it.
+		staleTime: 5_000,
 	});
+}
+
+/** Reads a file ahead of a click: hovered or focused. */
+function prefetchSource(
+	queryClient: QueryClient,
+	projectId: string | undefined,
+	sessionId: string | undefined,
+	path: string,
+) {
+	if (!projectId || !sessionId || filePreviewKind(path) === "image") return;
+	void queryClient.prefetchQuery(sourceQuery(projectId, sessionId, path));
+}
+
+/** Reads the files next to the open one in one call, skipping any already read. */
+async function prefetchSources(
+	queryClient: QueryClient,
+	projectId: string | undefined,
+	sessionId: string | undefined,
+	paths: readonly string[],
+) {
+	const unread = paths.filter(
+		(path) =>
+			queryClient.getQueryState(
+				sourceQuery(projectId, sessionId, path).queryKey,
+			)?.status !== "success",
+	);
+	if (!projectId || !sessionId || unread.length === 0) return;
+	const files = await readWorkspaceSourcesFn({
+		data: { projectId, sessionId, paths: unread },
+	}).catch(() => []);
+	for (const [index, file] of files.entries())
+		if (file)
+			queryClient.setQueryData(
+				sourceQuery(projectId, sessionId, unread[index]).queryKey,
+				file,
+			);
 }
 
 /**
  * Reads the chat's file tree and the file Files opens first, before the view
- * opens. A machine that is asleep only reports so; nothing is woken.
+ * opens. A machine that is asleep is read from its disk; nothing is woken.
  */
 export async function prefetchWorkspaceFiles(
 	queryClient: QueryClient,
@@ -76,15 +131,18 @@ export async function prefetchWorkspaceFiles(
 ) {
 	try {
 		const explorer = await queryClient.fetchQuery(
-			explorerQuery(input.projectId, input.sessionId),
+			explorerQuery(
+				queryClient,
+				input.projectId,
+				input.sessionId,
+				readFilesSnapshot(input.sessionId)?.opened,
+			),
 		);
 		const path = firstWorkspaceFilePath(
 			workspaceExplorerTree(explorer.paths, input.changes),
 		);
-		if (path && filePreviewKind(path) !== "image")
-			await queryClient.prefetchQuery(
-				sourceQuery(input.projectId, input.sessionId, path),
-			);
+		if (path && !explorer.opened && !readFilesSnapshot(input.sessionId)?.opened)
+			prefetchSource(queryClient, input.projectId, input.sessionId, path);
 	} catch {
 		// The view reads them again when it opens.
 	}
@@ -123,9 +181,16 @@ export function FilesInspector({
 				queryKey: ["workspace-explorer", projectId, sessionId],
 			}),
 	});
+	// The tree and file this browser last showed for the chat stand in until
+	// the server answers.
+	const snapshot = useMemo(() => readFilesSnapshot(sessionId), [sessionId]);
+	const openHint = selectedPath ?? snapshot?.opened;
 	const explorer = useQuery({
-		...explorerQuery(projectId, sessionId),
+		...explorerQuery(queryClient, projectId, sessionId, openHint),
 		enabled: active && Boolean(projectId && sessionId),
+		placeholderData: snapshot
+			? { root: snapshot.root, paths: snapshot.paths }
+			: undefined,
 	});
 	const tree = workspaceExplorerTree(explorer.data?.paths ?? [], changes);
 	const activePath =
@@ -135,14 +200,45 @@ export function FilesInspector({
 					explorer.data?.paths ?? [],
 					changes,
 				)
-			: undefined) ?? firstWorkspaceFilePath(tree);
+			: undefined) ??
+		(explorer.isPlaceholderData ? snapshot?.opened : undefined) ??
+		firstWorkspaceFilePath(tree);
+	// The listing reads the file it was asked to open; any other waits for nothing.
+	const listingReadsActive =
+		!explorer.isFetched &&
+		Boolean(activePath) &&
+		(activePath === openHint || !openHint);
 	const source = useQuery({
 		...sourceQuery(projectId, sessionId, activePath),
 		enabled:
 			active &&
+			!listingReadsActive &&
 			Boolean(projectId && sessionId && activePath) &&
 			filePreviewKind(activePath ?? "") !== "image",
 	});
+	useEffect(() => {
+		if (activePath && explorer.isFetched)
+			saveFilesSnapshot(sessionId, { opened: activePath });
+	}, [activePath, explorer.isFetched, sessionId]);
+	// Reads the next couple of files in the tree, once the open one is shown.
+	const sourceLoaded = source.data !== undefined;
+	const nearby = nearbyFiles(tree, activePath, 3).join("\n");
+	useEffect(() => {
+		if (!active || !sourceLoaded || !nearby) return;
+		const timer = window.setTimeout(
+			() =>
+				void prefetchSources(
+					queryClient,
+					projectId,
+					sessionId,
+					nearby.split("\n"),
+				),
+			1_000,
+		);
+		return () => window.clearTimeout(timer);
+	}, [active, sourceLoaded, nearby, queryClient, projectId, sessionId]);
+	const prefetchFile = (path: string) =>
+		prefetchSource(queryClient, projectId, sessionId, path);
 	return (
 		<section ref={filesRef} className="files-inspector" aria-label="Files">
 			<div className="files-toolbar">
@@ -165,7 +261,7 @@ export function FilesInspector({
 					key={activePath}
 					path={activePath}
 					text={source.data?.text ?? null}
-					pending={source.isFetching}
+					pending={source.isFetching || listingReadsActive}
 					onRetry={() => {
 						void explorer.refetch();
 						void source.refetch();
@@ -196,8 +292,10 @@ export function FilesInspector({
 											? "This project's environment isn't ready yet."
 											: explorer.data.machine === "none"
 												? "This chat doesn't have its own computer yet, so there are no files to show."
-												: "This chat's computer is asleep to save minutes."}
-									{tree.length && !wake.isPending
+												: explorer.data.paths.length
+													? "Computer asleep. Wake it to save edits."
+													: "This chat's computer is asleep to save minutes."}
+									{tree.length && !explorer.data.paths.length && !wake.isPending
 										? " Showing this chat's changes only."
 										: ""}
 								</p>
@@ -227,6 +325,7 @@ export function FilesInspector({
 								nodes={tree}
 								depth={0}
 								selectedPath={activePath}
+								onIntent={prefetchFile}
 								onSelectPath={(path) => {
 									onSelectPath(path);
 									if (filesRef.current && filesRef.current.clientWidth <= 600)
@@ -399,13 +498,16 @@ function FileTreeFile({
 	depth,
 	selected,
 	onSelectPath,
+	onIntent,
 }: {
 	node: Extract<WorkspaceTreeNode, { kind: "file" }>;
 	depth: number;
 	selected: boolean;
 	onSelectPath: (path: string) => void;
+	onIntent: (path: string) => void;
 }) {
 	const mark = fileTreeChangeMark(node.change?.change);
+	const hover = useRef<number | undefined>(undefined);
 	return (
 		<button
 			type="button"
@@ -414,6 +516,12 @@ function FileTreeFile({
 			data-change={node.change?.change}
 			style={{ paddingLeft: 8 + depth * 12 }}
 			onClick={() => onSelectPath(node.path)}
+			// A pointer that rests on a file (not one sweeping past) reads it ahead.
+			onPointerEnter={() => {
+				hover.current = window.setTimeout(() => onIntent(node.path), 60);
+			}}
+			onPointerLeave={() => window.clearTimeout(hover.current)}
+			onFocus={() => onIntent(node.path)}
 		>
 			<FileTypeIcon path={node.path} />
 			<span className="file-tree-name">{node.name}</span>
@@ -427,11 +535,13 @@ function FileTreeNodes({
 	depth,
 	selectedPath,
 	onSelectPath,
+	onIntent,
 }: {
 	nodes: readonly WorkspaceTreeNode[];
 	depth: number;
 	selectedPath?: string;
 	onSelectPath: (path: string) => void;
+	onIntent: (path: string) => void;
 }) {
 	return (
 		<ul className="file-tree-list">
@@ -448,6 +558,7 @@ function FileTreeNodes({
 								depth={depth + 1}
 								selectedPath={selectedPath}
 								onSelectPath={onSelectPath}
+								onIntent={onIntent}
 							/>
 						</details>
 					) : (
@@ -456,6 +567,7 @@ function FileTreeNodes({
 							depth={depth}
 							selected={node.path === selectedPath}
 							onSelectPath={onSelectPath}
+							onIntent={onIntent}
 						/>
 					)}
 				</li>
