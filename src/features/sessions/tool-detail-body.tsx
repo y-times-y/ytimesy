@@ -356,7 +356,13 @@ function FieldsPanel({
 					<ToolInputFields input={view.input} />
 				</div>
 			) : null}
-			{view.output ? (
+			{view.output && !failed && /^\s*[[{]/.test(view.output) ? (
+				<div className="tool-panel-section" data-part="output">
+					<ShowMore long={looksLong(view.output)}>
+						<ToolFields input={view.output} empty="No output" />
+					</ShowMore>
+				</div>
+			) : view.output ? (
 				<pre
 					className="tool-panel-body tool-panel-output"
 					data-tone={failed ? "bad" : undefined}

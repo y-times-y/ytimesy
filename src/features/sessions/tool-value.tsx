@@ -8,7 +8,7 @@ import { type ReactNode, useState } from "react";
  */
 
 const MAX_DEPTH = 4;
-/** Lists longer than this, below the top level, start folded. */
+/** Lists longer than this, nested inside a field, start folded. */
 const FOLD_ITEMS = 6;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -94,7 +94,7 @@ export function ToolValue({
 				))}
 			</ol>
 		);
-		return depth > 0 && value.length > FOLD_ITEMS ? (
+		return depth > 1 && value.length > FOLD_ITEMS ? (
 			<Folded label={`${value.length} items`}>{list}</Folded>
 		) : (
 			list
@@ -148,7 +148,13 @@ function Folded({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** A JSON object's fields, an empty-arguments line, or free-form text as-is. */
-export function ToolFields({ input }: { input: string }) {
+export function ToolFields({
+	input,
+	empty = "No arguments",
+}: {
+	input: string;
+	empty?: string;
+}) {
 	let value: unknown;
 	try {
 		value = JSON.parse(input);
@@ -156,7 +162,7 @@ export function ToolFields({ input }: { input: string }) {
 		return <pre className="tool-value-json">{input}</pre>;
 	}
 	if (isRecord(value) && Object.keys(value).length === 0)
-		return <p className="tool-panel-meta">No arguments</p>;
+		return <p className="tool-panel-meta">{empty}</p>;
 	if (!value || typeof value !== "object")
 		return <pre className="tool-value-json">{input}</pre>;
 	return <ToolValue value={value} />;
