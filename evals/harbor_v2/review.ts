@@ -431,6 +431,7 @@ export type HarborReviewLoop = ReturnType<typeof createReviewLoop>;
 export function harborReviewLoop(input: {
 	rigor?: boolean;
 	pair?: boolean;
+	blind?: boolean;
 	sessionId: string;
 	turnId: string;
 	workspace: AgentToolWorkspace;
@@ -449,6 +450,7 @@ export function harborReviewLoop(input: {
 		deps: input.deps,
 		rigor: input.rigor,
 		pair: input.pair,
+		blind: input.blind,
 		// No one answers a trial's builder: every finished turn is checked.
 		unattended: true,
 	});
