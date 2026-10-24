@@ -18,6 +18,7 @@ import asyncio
 import json
 import math
 import os
+import tarfile
 import time
 import tomllib
 from pathlib import Path
@@ -76,6 +77,22 @@ def agent_timeout_seconds(logs_dir: Path) -> float:
         return BACKSTOP_SECONDS
 
 
+def write_restore_archive(source: Path, archive: Path) -> None:
+    """A tar of a saved workspace, without macOS metadata files (._*, .DS_Store)."""
+
+    def keep(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        name = Path(info.name).name
+        if name.startswith("._") or name == ".DS_Store":
+            return None
+        info.uid = info.gid = 0
+        info.uname = info.gname = "root"
+        return info
+
+    with tarfile.open(archive, "w") as tar:
+        for entry in sorted(source.iterdir()):
+            tar.add(entry, arcname=entry.name, filter=keep)
+
+
 class YtimesyHarborV2Agent(YtimesyAgent):
     capabilities = AgentCapabilities(skills=True, mcp_servers=True, atif=True)
 
@@ -93,6 +110,16 @@ class YtimesyHarborV2Agent(YtimesyAgent):
         # The bridge's deadline ends a little before Harbor's so it can still
         # write its trace, trajectory and spend settlement.
         timeout = max(60.0, agent_timeout_seconds(logs) - 60)
+        # Checker-only (development; docs/harbor-bridge-v2.md): a saved run's
+        # final workspace goes into the sandbox as a tar the bridge unpacks
+        # after the review loop's baseline, so the checker reviews that work.
+        restore = None
+        saved = os.environ.get("YTIMESY_HARBOR_RESTORE_DIR")
+        if saved:
+            archive = logs / "restore.tar"
+            write_restore_archive(Path(saved), archive)
+            restore = "/tmp/ytimesy-restore.tar"
+            await environment.upload_file(archive, restore)
         arguments = json.dumps(
             {
                 "instruction": instruction,
@@ -102,6 +129,7 @@ class YtimesyHarborV2Agent(YtimesyAgent):
                 "trialId": logs.parent.name,
                 "task": trial_task_name(logs),
                 "timeoutSeconds": timeout,
+                **({"restore": restore} if restore else {}),
             }
         )
         stderr = open(logs / "ytimesy-bridge.log", "wb")
