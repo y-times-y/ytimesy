@@ -4,30 +4,36 @@ import type { RunningBackgroundCommand } from "./background-command";
 import {
 	type AgentTaskActivity,
 	childTaskPromptId,
-	childTaskPublicItems,
 	isInternalChildTaskMessage,
+	withoutWakeTurnStarts,
 } from "./child-task-activity";
 import { commandActivityTitle } from "./command-activity-title";
+import { mcpServerLabel } from "./connector-name";
 import { fileChangeActivity } from "./file-change-copy";
 import {
 	type AgentIcon,
 	type AgentKind,
 	agentColor,
+	HELPER_COLORS,
+	type HelperIdentity,
 	helperIdentitiesOf,
 	helperKind,
+	helperName,
 	KIND_ICONS,
 	KIND_TAGS,
-	kindShade,
 	MAIN_NAME,
 } from "./helper-names";
+import { reportSummaryLine } from "./markdown-text";
 import { sessionBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
+import { splitReportHeader } from "./subagent";
 import { toolActivity } from "./tool-detail";
+import { lastTurnEnd } from "./turn-end";
 
 /**
  * The chat's agents list under the composer: the lead (the chat's own
  * agent) and the helpers it started for the current request, each with a
- * stable name and colour, its status and a live line of what it is doing.
+ * stable short name and colour, its status and a live line of what it is doing.
  * Pure rules; the view is src/features/sessions/agent-panel.tsx.
  */
 
@@ -47,6 +53,8 @@ export type AgentMetric = {
 	readonly startedAt: number;
 	/** Set once it ended: the time shown is then its total duration. */
 	readonly endedAt?: number;
+	/** It ended at a time nobody recorded: no time is shown, never a running clock. */
+	readonly untimed?: true;
 	readonly tokens?: {
 		readonly input: number;
 		readonly output: number;
@@ -83,18 +91,24 @@ export type QueuedSteering = {
 export type AgentPanelRow = {
 	/** The helper's session id; the lead's row uses LEAD_ROW_ID. */
 	readonly id: string;
+	/** "Main", a helper's short name ("build-1"), a command's label. */
 	readonly name: string;
 	readonly kind: AgentKind;
-	/** Its kind's tag ("Build"); none for Main. */
+	/** A background command's tag ("Background"); a helper's name says its kind. */
 	readonly tag: string | null;
+	/** A helper's task, shown beside its short name. */
+	readonly task?: string;
 	readonly icon: AgentIcon;
-	/** A CSS colour for its icon and accents (helper-names.ts agentColor). */
+	/** A CSS colour for its icon (helper-names.ts). */
 	readonly color: string;
 	readonly status: AgentPanelStatus;
-	/** The short status word on the right ("working", "exited 0"). */
-	readonly statusLabel: string;
-	/** One line: what it does now, or how it ended. */
+	/**
+	 * One sentence-case line that carries the state: what it does now
+	 * ("Reading app.ts"), or its state ("Done", "Waiting for you", "Exited 0").
+	 */
 	readonly doing: string;
+	/** More on the line, on hover: a finished helper's report line, a command. */
+	readonly doingDetail?: string;
 	readonly queued: number;
 	readonly title: string;
 	readonly metric?: AgentMetric;
@@ -104,7 +118,7 @@ export type AgentPanelRow = {
 
 export const LEAD_ROW_ID = "lead";
 
-/** Name, tag, icon and colour of every helper of the chat (helper-names.ts). */
+/** Short name, task, icon and colour of every helper of the chat (helper-names.ts). */
 export function helperIdentities(
 	tasks: readonly Pick<
 		AgentTaskActivity,
@@ -187,7 +201,7 @@ export function activityPhrase(item: SessionItem): string | null {
 				: `editing ${item.changes.length} files`;
 		}
 		case "mcpToolCall":
-			return `using ${item.server}`;
+			return `using ${mcpServerLabel(item.server)}`;
 		case "webSearch":
 			return "searching the web";
 		case "reasoning":
@@ -196,6 +210,7 @@ export function activityPhrase(item: SessionItem): string | null {
 			if (item.tool === "agent") return "starting a helper";
 			if (item.tool === "agent_send") return "messaging a helper";
 			const activity = toolActivity(item);
+			if (activity.mcpServer) return `using ${activity.verb}`;
 			if (activity.verb === "Ran" && activity.target)
 				return commandPhrase(activity.target);
 			const verb = gerund(activity.verb);
@@ -219,6 +234,11 @@ function firstLine(text: string | null | undefined, max = 90) {
 	return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 }
 
+/** A helper's report without its "[agent 3 writer finished · …]" header line. */
+function reportBody(summary: string | null | undefined) {
+	return summary ? splitReportHeader(summary).body : summary;
+}
+
 function lastAgentText(items: readonly SessionItem[]) {
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
@@ -239,10 +259,12 @@ export function agentDoing(input: {
 	readonly title: string;
 	readonly summary?: string | null;
 }): string {
-	const items = childTaskPublicItems(input.items);
+	const items = withoutWakeTurnStarts(input.items);
 	if (input.status === "done")
 		return (
-			firstLine(input.summary) || firstLine(lastAgentText(items)) || "finished"
+			firstLine(reportBody(input.summary)) ||
+			firstLine(lastAgentText(items)) ||
+			"finished"
 		);
 	if (input.status === "failed") {
 		const error = [...items].reverse().find((item) => item.kind === "error");
@@ -298,25 +320,42 @@ export function queuedSteeringFor(task: AgentTaskActivity) {
 	return task.queuedSteering ?? [];
 }
 
-const STATUS_LABELS: Record<AgentPanelStatus, string> = {
-	working: "working",
-	free: "free",
-	done: "done",
-	failed: "failed",
-	idle: "idle",
-};
+/** "reading app.ts" -> "Reading app.ts". */
+export function sentenceCase(text: string) {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
-/** A helper's time: its sidekick round, or its whole run. */
+/**
+ * A helper row's line: what it does while it works, else its state once.
+ * A finished helper's report line moves behind the hover.
+ */
+export function helperRowLine(
+	status: AgentPanelStatus,
+	doing: string,
+): { readonly doing: string; readonly doingDetail?: string } {
+	if (status === "done")
+		return doing && doing !== "finished"
+			? { doing: "Done", doingDetail: doing }
+			: { doing: "Done" };
+	return { doing: sentenceCase(doing) };
+}
+
+/**
+ * A helper's time: its sidekick round, or its whole run. A finished one's
+ * end is its last turn's recorded end; its row's update time moves on later
+ * (its report, its fork's cleanup), so it stands in only for older turns.
+ */
 export function helperMetric(task: AgentTaskActivity): AgentMetric {
 	const round = task.subagent?.budget?.sidekick?.roundStartedAt;
 	const startedAt = Date.parse(round ?? task.createdAt);
 	const ended = helperStatus(task.status) !== "working";
 	const spend = task.subagent?.spend;
+	const end = ended
+		? (lastTurnEnd(task.items) ?? Date.parse(task.updatedAt))
+		: null;
 	return {
 		startedAt,
-		...(ended
-			? { endedAt: Math.max(startedAt, Date.parse(task.updatedAt)) }
-			: {}),
+		...(end !== null ? { endedAt: Math.max(startedAt, end) } : {}),
 		...(spend
 			? {
 					tokens: {
@@ -342,12 +381,17 @@ export function leadMetric(input: {
 	const startedAt = prompt?.timing?.startedAt;
 	if (!prompt || startedAt === undefined) return undefined;
 	const usage = prompt.apiUsage;
-	const completedAt = prompt.timing?.completedAt;
+	// The request's last turn: its own, or a wake-up turn a report started since.
+	const completedAt = lastTurnEnd(input.items) ?? undefined;
+	const running = input.turnStatus === "running";
+	if (!running && !completedAt && !usage) return undefined;
 	return {
 		startedAt,
-		...(input.turnStatus !== "running" && completedAt
-			? { endedAt: completedAt }
-			: {}),
+		...(running
+			? {}
+			: completedAt
+				? { endedAt: Math.max(startedAt, completedAt) }
+				: { untimed: true as const }),
 		...(usage
 			? {
 					tokens: {
@@ -423,24 +467,25 @@ export function backgroundReadChatIds(
 }
 
 /**
- * How often the list rereads background commands: quickly while the chat or
- * its helpers work (a step records a start or an exit), slower while only
- * commands run (an exit reaches the timeline within a minute between
- * turns), and not at all when nothing runs.
+ * How often the list rereads background commands: while the chat or its
+ * helpers work (a step records a start or an exit), and while commands run
+ * between turns. There the read is how the open chat learns a command ended:
+ * the exit is recorded just before it starts Main's wake-up turn, and seeing
+ * it opens the progress stream (WAKE_WATCH_MS), so a quick read lets that
+ * turn stream instead of arriving whole after it ends. Nothing runs: no read.
  */
 export function backgroundPollMs(input: {
 	readonly agentsWorking: boolean;
 	readonly running: number;
 }): number | false {
-	if (input.agentsWorking) return 5_000;
-	return input.running > 0 ? 15_000 : false;
+	return input.agentsWorking || input.running > 0 ? 5_000 : false;
 }
 
 /** Background commands as rows, named by what they run. */
 export function backgroundRows(
 	runs: readonly BackgroundRun[],
 ): AgentPanelRow[] {
-	return runs.map((run, index) => {
+	return runs.map((run) => {
 		const status: AgentPanelStatus =
 			run.status === "running"
 				? "working"
@@ -453,15 +498,16 @@ export function backgroundRows(
 			kind: "background",
 			tag: KIND_TAGS.background,
 			icon: KIND_ICONS.background,
-			color: agentColor("background", kindShade(index)),
+			color: agentColor("background"),
 			status,
-			statusLabel:
+			// Running: the command is what it does; ended: how it ended, once.
+			doing:
 				run.status === "running"
-					? "running"
+					? run.command
 					: run.status === "failed"
-						? "failed"
-						: `exited ${run.exitCode ?? 0}`,
-			doing: run.command,
+						? "Failed"
+						: `Exited ${run.exitCode ?? 0}`,
+			...(run.status === "running" ? {} : { doingDetail: run.command }),
 			queued: 0,
 			title: run.command,
 			metric: {
@@ -489,7 +535,12 @@ export function agentPanelRows(input: {
 } {
 	const identities = helperIdentities(input.tasks);
 	const helpers = currentRequestHelpers(input.tasks, input.leadItems)
-		.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+		// Start order, as the names count (helperIdentitiesOf).
+		.sort(
+			(left, right) =>
+				left.createdAt.localeCompare(right.createdAt) ||
+				left.id.localeCompare(right.id),
+		)
 		.map((task): AgentPanelRow => {
 			const identity = identities.get(task.id);
 			const status = helperStatus(task.status);
@@ -501,20 +552,23 @@ export function agentPanelRows(input: {
 				!task.subagent.budget.sidekick.retired;
 			return {
 				id: task.id,
-				name: identity?.name ?? task.title,
+				name: identity?.name ?? helperName(task.title),
 				kind,
-				tag: KIND_TAGS[kind],
+				tag: null,
+				task: identity?.task ?? helperName(task.title),
 				icon: KIND_ICONS[kind],
-				color: identity?.color ?? agentColor(kind),
+				color: identity?.color ?? HELPER_COLORS[0],
 				status,
-				statusLabel: STATUS_LABELS[status],
-				// The name is the task, so the line starts at "starting".
-				doing: agentDoing({
+				// The task shows beside the name, so the line starts at "Starting".
+				...helperRowLine(
 					status,
-					items: task.items,
-					title: "",
-					summary: task.summary,
-				}),
+					agentDoing({
+						status,
+						items: task.items,
+						title: "",
+						summary: task.summary,
+					}),
+				),
 				queued: queuedSteeringFor(task).length,
 				title: task.title,
 				metric: helperMetric(task),
@@ -522,9 +576,9 @@ export function agentPanelRows(input: {
 			};
 		});
 	const background = backgroundRows(input.background ?? []);
-	const othersWork = [...helpers, ...background].some(
-		(row) => row.status === "working",
-	);
+	const helpersWork = helpers.some((row) => row.status === "working");
+	const othersWork =
+		helpersWork || background.some((row) => row.status === "working");
 	const turn = leadStatus(input.leadTurnStatus);
 	const status: AgentPanelStatus =
 		turn === "working" ? "working" : othersWork ? "free" : turn;
@@ -537,16 +591,17 @@ export function agentPanelRows(input: {
 			icon: KIND_ICONS.main,
 			color: agentColor("main"),
 			status,
-			statusLabel: STATUS_LABELS[status],
 			doing:
 				status === "working"
-					? agentDoing({ status, items: input.leadItems, title: "" }) ||
-						"thinking"
+					? sentenceCase(
+							agentDoing({ status, items: input.leadItems, title: "" }) ||
+								"thinking",
+						)
 					: status === "free"
-						? "free while helpers work"
+						? `Free while ${helpersWork ? "helpers work" : "commands run"}`
 						: status === "failed"
-							? "failed"
-							: "waiting for you",
+							? "Failed"
+							: "Waiting for you",
 			queued: 0,
 			title: input.leadTitle ?? "",
 			metric: leadMetric({
@@ -581,10 +636,13 @@ export function formatTokens(count: number) {
 
 /** The right-hand metric: "2m 05s · 21k tokens"; time only without tokens. */
 export function metricText(metric: AgentMetric, now: number) {
-	const time = formatElapsed((metric.endedAt ?? now) - metric.startedAt);
+	// None counted yet (a helper starting) shows no "0 tokens".
 	const tokens = metric.tokens
-		? metric.tokens.input + metric.tokens.output
+		? metric.tokens.input + metric.tokens.output || null
 		: null;
+	if (metric.untimed)
+		return tokens === null ? "" : `${formatTokens(tokens)} tokens`;
+	const time = formatElapsed((metric.endedAt ?? now) - metric.startedAt);
 	return tokens === null ? time : `${time} · ${formatTokens(tokens)} tokens`;
 }
 
@@ -627,18 +685,49 @@ export function foldAgentRows(
 	return { shown: active, folded: finished };
 }
 
-/** "Build the CSV export finished: tests pass, 3 files changed". */
-export function helperFinishedNote(
-	row: Pick<AgentPanelRow, "name" | "status" | "doing">,
-) {
-	const verb = row.status === "failed" ? "failed" : "finished";
-	const detail =
-		row.status === "failed"
-			? row.doing.replace(/^failed:?\s*/, "")
-			: row.doing === "finished"
+/**
+ * A helper's finish card in its parent's chat: "build-1 finished · Fix
+ * pricing rounding · 1m 12s", over its report's first line. The full report
+ * and its facts (steps, time, tokens) are the card's hover detail.
+ */
+export function helperFinishCard(
+	task: AgentTaskActivity,
+	identity?: Pick<HelperIdentity, "name" | "task">,
+): {
+	readonly name: string;
+	readonly verb: "finished" | "failed";
+	readonly task: string;
+	readonly duration: string;
+	readonly line: string;
+	readonly detail: string;
+} {
+	const failed = helperStatus(task.status) === "failed";
+	const items = withoutWakeTurnStarts(task.items);
+	const body = reportBody(task.summary)?.trim() ?? "";
+	const error = failed
+		? [...items].reverse().find((item) => item.kind === "error")
+		: undefined;
+	const line =
+		error?.kind === "error"
+			? firstLine(error.message, 240)
+			: reportSummaryLine(body) || reportSummaryLine(lastAgentText(items));
+	const metric = helperMetric(task);
+	const meta = task.summary ? splitReportHeader(task.summary).meta : null;
+	// The header's facts only; it repeats the outcome and the name.
+	const facts = (meta?.split(" · ") ?? []).filter((part) =>
+		/^(\d|~?\$|round )/.test(part),
+	);
+	return {
+		name: identity?.name ?? helperName(task.title),
+		verb: failed ? "failed" : "finished",
+		task: identity?.task ?? helperName(task.title),
+		duration:
+			metric.endedAt === undefined
 				? ""
-				: row.doing;
-	return detail ? `${row.name} ${verb}: ${detail}` : `${row.name} ${verb}`;
+				: formatElapsed(metric.endedAt - metric.startedAt),
+		line,
+		detail: [body || line, facts.join(" · ")].filter(Boolean).join("\n\n"),
+	};
 }
 
 /** Who sent a message in a helper's transcript: its parent's name, or "You". */
@@ -657,11 +746,19 @@ export function steeringSender(
 /**
  * Where a helper's finish line goes in its parent's timeline: after the
  * last row of the turn it started in, before that turn's closing answer.
- * Undefined when its start is unknown (the line goes last).
+ * `items` keep the silent starts of wake-up turns (childTaskPublicItems):
+ * the report wakes Main in a turn of its own, and the line goes in that
+ * turn's group, before its answer. While that turn has no rows yet (or the
+ * helper finished after Main's answer and its wake-up turn is still to
+ * come), the line goes last, under Main's answer, where that turn will
+ * show: the same place it ends up, never above the earlier answer.
+ * Undefined when its start is unknown or the line goes last.
  */
 export function finishLineAnchorId(
 	items: readonly SessionItem[],
 	startAnchorId: SessionItem["id"] | undefined,
+	/** When the helper finished (ms), to tell a report Main is yet to wake for. */
+	finishedAt?: number,
 ): SessionItem["id"] | undefined {
 	const start = startAnchorId
 		? items.findIndex((item) => item.id === startAnchorId)
@@ -670,7 +767,28 @@ export function finishLineAnchorId(
 	const next = items.findIndex(
 		(item, index) => index > start && item.kind === "userMessage",
 	);
-	let end = (next < 0 ? items.length : next) - 1;
+	const last = (next < 0 ? items.length : next) - 1;
+	let end = last;
 	if (end > start && items[end]?.kind === "agentMessage") end -= 1;
+	const woke = items
+		.slice(start + 1, last + 1)
+		.some((item) => item.kind === "notice" && item.wake === true);
+	if (
+		!woke &&
+		next < 0 &&
+		end < last &&
+		finishedAt !== undefined &&
+		finishedAt > (turnCompletedAt(items, start) ?? Number.POSITIVE_INFINITY)
+	)
+		return undefined;
 	return items[end]?.id;
+}
+
+/** When the turn holding `index` ended, as its prompt records it. */
+function turnCompletedAt(items: readonly SessionItem[], index: number) {
+	for (let at = index; at >= 0; at--) {
+		const item = items[at];
+		if (item?.kind === "userMessage") return item.timing?.completedAt;
+	}
+	return undefined;
 }

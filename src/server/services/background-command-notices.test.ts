@@ -9,6 +9,7 @@ import { agentOutputDirectory } from "./agent-output-artifacts";
 import { commandRoot } from "./api-agent-command-tools";
 import {
 	backgroundNoticeId,
+	wakeChatForBackgroundCommands,
 	wakeChatsForBackgroundCommands,
 	withBackgroundCommandNotices,
 } from "./background-command-notices";
@@ -269,6 +270,56 @@ describe("waking a chat between turns", () => {
 		expect(notify).not.toHaveBeenCalled();
 	});
 
+	it("checks chats a few at a time, not one after another, and stops starting new ones past its budget", async () => {
+		const machines = hostMachines();
+		let inFlight = 0;
+		let peak = 0;
+		const checked: string[] = [];
+		const candidates = Array.from({ length: 12 }, (_, index) => ({
+			userId: "user",
+			id: `chat-${index}`,
+		}));
+		const slowSession = async (_user: string, id: string) => {
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			checked.push(id);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			inFlight -= 1;
+			return null;
+		};
+		const dependencies = {
+			candidates: async () => candidates,
+			session: slowSession,
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify: async () => undefined,
+		};
+		const started = Date.now();
+		await wakeChatsForBackgroundCommands(machines, dependencies, {
+			concurrency: 4,
+		});
+		expect(peak).toBe(4);
+		expect(checked).toHaveLength(12);
+		// Serial would be 12 x 20ms; four at a time is about 3 x 20ms.
+		expect(Date.now() - started).toBeLessThan(200);
+		// Past the budget no new chat starts; the next tick takes the rest.
+		checked.length = 0;
+		let clock = 0;
+		await wakeChatsForBackgroundCommands(
+			machines,
+			{
+				...dependencies,
+				session: async (user: string, id: string) => {
+					clock += 1_000;
+					return slowSession(user, id);
+				},
+			},
+			{ concurrency: 2, budgetMs: 3_000, now: () => clock },
+		);
+		expect(checked.length).toBeLessThan(12);
+		expect(checked.length).toBeGreaterThanOrEqual(2);
+	});
+
 	it("skips chats whose turn runs (the turn reads it at its next step) and machines that stopped", async () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
@@ -292,5 +343,66 @@ describe("waking a chat between turns", () => {
 		expect(busy.exec).not.toHaveBeenCalled();
 		expect(stopped.exec).not.toHaveBeenCalled();
 		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("a command's exit callback wakes its chat once, even racing the cron's watcher", async () => {
+		const id = crypto.randomUUID();
+		const chat = await session([{ id, status: "0" }]);
+		const machines = hostMachines();
+		const notify = vi.fn(async () => undefined);
+		const dependencies = {
+			candidates: async () => [{ userId: "user", id: chat.sessionId }],
+			session: async () => record(chat.sessionId, chat.items),
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify,
+		};
+		const [callback, cron] = await Promise.all([
+			wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				dependencies,
+			),
+			wakeChatsForBackgroundCommands(machines, dependencies),
+		]);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect([callback === "woken", cron === 1].filter(Boolean)).toHaveLength(1);
+	});
+
+	it("a callback for a closed card costs no guest call, and waits while the chat's turn runs", async () => {
+		const id = crypto.randomUUID();
+		const chat = await session([{ id, status: "0" }]);
+		const machines = hostMachines();
+		const notify = vi.fn(async () => undefined);
+		const dependencies = {
+			candidates: async () => [],
+			session: async () => record(chat.sessionId, chat.items),
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify,
+		};
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: crypto.randomUUID() },
+				dependencies,
+			),
+		).toBe("idle");
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				{ ...dependencies, activeTurn: async () => true },
+			),
+		).toBe("busy");
+		expect(machines.exec).not.toHaveBeenCalled();
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				dependencies,
+			),
+		).toBe("woken");
+		expect(notify).toHaveBeenCalledTimes(1);
 	});
 });

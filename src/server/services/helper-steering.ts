@@ -1,6 +1,6 @@
 import { steeringTexts, userSteeringNotice } from "#/domain/agent-steering";
 import { isActiveSidekick } from "#/domain/sidekick";
-import { subagentTaskViews } from "#/domain/subagent-tree";
+import { subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -8,6 +8,7 @@ import {
 } from "../adapters/agent-sessions";
 import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
 import { enqueuePeerMessage } from "../jobs/queue";
+import { mentionNoteFromTree } from "./agent-mentions";
 
 export type HelperSteeringDeps = {
 	readonly session: (
@@ -80,9 +81,10 @@ export async function sendUserMessageToHelper(
 		throw new HelperSteeringError(
 			"That agent has finished; message the lead instead.",
 		);
-	const name =
-		subagentTaskViews(root.id, [root, ...helpers], deps.now()).get(helper.id)
-			?.name ?? "a helper";
+	const nodes = subagentTree(root.id, [root, ...helpers], deps.now()).nodes;
+	const name = nodes.find((node) => node.id === helper.id)?.name ?? "a helper";
+	// The helper reads who the message's @mentions name (Main, other helpers).
+	const context = mentionNoteFromTree(message, nodes, helper.id);
 	if (resting)
 		// No job: delivery would start a turn now, beside the lead's own work.
 		await deps.stage(
@@ -92,6 +94,7 @@ export async function sendUserMessageToHelper(
 				sender: { kind: "user" },
 				message,
 				messageId: input.requestId,
+				...(context ? { context } : {}),
 			}).runtimeText,
 		);
 	else
@@ -102,6 +105,7 @@ export async function sendUserMessageToHelper(
 				recipientId: helper.id,
 				message,
 				fromUser: true,
+				...(context ? { context } : {}),
 			},
 			`user:${helper.id}:${input.requestId}`,
 		);

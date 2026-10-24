@@ -160,79 +160,131 @@ const watchDependencies = (): BackgroundWatchDependencies => ({
 	},
 });
 
+/** Chats one watcher pass checks at once (each is a guest call of up to 15s). */
+export const BACKGROUND_WAKE_CONCURRENCY = 6;
+/** No new chat is started after this; the next tick picks up the rest. */
+export const BACKGROUND_WAKE_BUDGET_MS = 40_000;
+
 /**
  * The cron's watcher for chats between turns (maintenance "supervise"): a
  * background command that exited gets its card updated and its notice
  * delivered, which wakes the agent that started it the way a subagent's
  * report does (or reaches a turn that just started at its next step).
+ * Chats are checked a few at a time, never one after another: each check is
+ * a guest call, and a serial pass over many chats with long-running commands
+ * held the tick (and the newest chat's exit) for minutes.
  */
 export async function wakeChatsForBackgroundCommands(
 	machines: WorkspaceMachines,
 	dependencies: BackgroundWatchDependencies = watchDependencies(),
+	options: { concurrency?: number; budgetMs?: number; now?: () => number } = {},
 ) {
+	const concurrency = Math.max(
+		1,
+		options.concurrency ?? BACKGROUND_WAKE_CONCURRENCY,
+	);
+	const now = options.now ?? Date.now;
+	const deadline = now() + (options.budgetMs ?? BACKGROUND_WAKE_BUDGET_MS);
+	const candidates = [
+		...(await dependencies.candidates(backgroundCommandMaxSeconds())),
+	];
 	let woken = 0;
-	for (const candidate of await dependencies.candidates(
-		backgroundCommandMaxSeconds(),
-	)) {
-		try {
-			const session = await dependencies.session(
-				candidate.userId,
-				candidate.id,
-			);
+	let next = 0;
+	const worker = async () => {
+		while (next < candidates.length && now() < deadline) {
+			const candidate = candidates[next];
+			next += 1;
 			if (
-				!session?.providerRef ||
-				session.turnStatus === "running" ||
-				(await dependencies.activeTurn(session.userId, session.id))
-			)
-				continue;
-			const scoped = machinesForAgentSession(machines, session);
-			const vm = WorkspaceId(session.providerRef);
-			// A stopped machine stopped its commands; never start one to look.
-			if (!(await scoped.isRunning(vm))) continue;
-			// The stored items as they are (compare-and-set below).
-			const stored = Array.isArray(session.items)
-				? (session.items as SessionItem[])
-				: [];
-			const exits = await observeBackgroundCommands({
-				machines: scoped,
-				vm,
-				cwd: "/",
-				sessionId: session.id,
-				ids: openBackgroundCommandIds(stored),
-				claim: true,
-			});
-			if (!exits.length) continue;
-			const next = withBackgroundCommandExits(stored, exits);
-			if (next !== stored)
-				await dependencies.replaceItems(
-					session.userId,
-					session.id,
-					session.items,
-					next,
-				);
-			const fresh = exits.filter((exit) => exit.fresh);
-			if (!fresh.length) continue;
-			try {
-				await dependencies.notify(
+				(await wakeChatForBackgroundCommands(
 					machines,
-					session,
-					backgroundNoticeId(session.id, fresh[0].id),
-					backgroundCommandNoticeMessage(fresh),
-				);
-			} catch (error) {
-				// A turn that started meanwhile reads the staged notice at its next step.
-				if (!(await dependencies.activeTurn(session.userId, session.id)))
-					throw error;
-			}
-			woken += 1;
-		} catch (error) {
-			console.warn("A background command notice was not delivered.", {
-				sessionId: candidate.id,
-				error: error instanceof Error ? error.message : String(error),
-			});
+					candidate,
+					dependencies,
+				)) === "woken"
+			)
+				woken += 1;
 		}
-	}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(concurrency, candidates.length) }, worker),
+	);
 	return woken;
+}
+
+/**
+ * One chat's check, for the cron's watcher and for a command's exit callback
+ * (`commandId`: background-exit-wake.ts). Both claim a notice on the machine
+ * with an exclusive create and deliver it under a stable id, so a command's
+ * exit is announced once whichever of them (or a running turn) sees it first.
+ * A callback whose command the timeline already closed costs no guest call.
+ * "busy": the chat's turn runs, so this check was left to it (a callback
+ * retries later, in case the turn ended before it saw the exit).
+ */
+export async function wakeChatForBackgroundCommands(
+	machines: WorkspaceMachines,
+	candidate: { userId: string; id: string; commandId?: string },
+	dependencies: BackgroundWatchDependencies = watchDependencies(),
+): Promise<"woken" | "busy" | "idle"> {
+	try {
+		const session = await dependencies.session(candidate.userId, candidate.id);
+		if (!session?.providerRef) return "idle";
+		// The stored items as they are (compare-and-set below).
+		const stored = Array.isArray(session.items)
+			? (session.items as SessionItem[])
+			: [];
+		const open = openBackgroundCommandIds(stored);
+		if (
+			!open.length ||
+			(candidate.commandId && !open.includes(candidate.commandId))
+		)
+			return "idle";
+		if (
+			session.turnStatus === "running" ||
+			(await dependencies.activeTurn(session.userId, session.id))
+		)
+			return "busy";
+		const scoped = machinesForAgentSession(machines, session);
+		const vm = WorkspaceId(session.providerRef);
+		// A stopped machine stopped its commands; never start one to look.
+		if (!(await scoped.isRunning(vm))) return "idle";
+		const exits = await observeBackgroundCommands({
+			machines: scoped,
+			vm,
+			cwd: "/",
+			sessionId: session.id,
+			ids: open,
+			claim: true,
+		});
+		if (!exits.length) return "idle";
+		const next = withBackgroundCommandExits(stored, exits);
+		if (next !== stored)
+			await dependencies.replaceItems(
+				session.userId,
+				session.id,
+				session.items,
+				next,
+			);
+		const fresh = exits.filter((exit) => exit.fresh);
+		if (!fresh.length) return "idle";
+		try {
+			await dependencies.notify(
+				machines,
+				session,
+				backgroundNoticeId(session.id, fresh[0].id),
+				backgroundCommandNoticeMessage(fresh),
+			);
+		} catch (error) {
+			// A turn that started meanwhile reads the staged notice at its next step.
+			if (!(await dependencies.activeTurn(session.userId, session.id)))
+				throw error;
+		}
+		return "woken";
+	} catch (error) {
+		console.warn("A background command notice was not delivered.", {
+			sessionId: candidate.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return "idle";
+	}
 }
 
 /** The user stops one of a chat's background commands (no notice: the agent did not ask for it to end). */

@@ -4,8 +4,11 @@ import { withBackgroundJobDispatcher } from "./background-job-dispatch";
 import { withExecutorBinding } from "./executor-fetch";
 import { admitQueuedTurnsWith, startQueuedTurnsDirectly } from "./turn-start";
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn() }));
-vi.mock("./api-turns", () => ({ claimApiTurn: mocks.claim }));
+const mocks = vi.hoisted(() => ({ claim: vi.fn(), release: vi.fn() }));
+vi.mock("./api-turns", () => ({
+	claimApiTurn: mocks.claim,
+	releaseClaimedApiTurn: mocks.release,
+}));
 
 const secret = "k".repeat(64);
 const session = "00000000-0000-4000-8000-000000000001";
@@ -22,6 +25,7 @@ beforeEach(() => {
 	vi.stubEnv("YTIMESY_BACKGROUND_WORKFLOW_URL", "https://edge.example/");
 	vi.stubEnv("YTIMESY_BACKGROUND_WORKFLOW_SECRET", secret);
 	mocks.claim.mockReset();
+	mocks.release.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -101,11 +105,26 @@ it("starts the claimed turn through the executor binding with a signed request, 
 	});
 });
 
-it("fails after a second failed start so the caller dispatches the admission job", async () => {
+it("puts a turn whose hand-off failed twice back in the queue, then fails so the caller dispatches the admission job", async () => {
 	mocks.claim.mockResolvedValueOnce(claimed);
-	const executor = vi.fn(async () => new Response(null, { status: 503 }));
+	// What dev answered: the room's router took /turn/start and said 404.
+	const executor = vi.fn(async () => new Response(null, { status: 404 }));
 	await expect(
 		withExecutorBinding(executor, startQueuedTurnsDirectly),
 	).rejects.toThrow("Turn start failed.");
 	expect(executor).toHaveBeenCalledTimes(2);
+	expect(mocks.release).toHaveBeenCalledWith(turnId, lease);
+});
+
+it("does not release a turn its chat answered for, started or not", async () => {
+	mocks.claim
+		.mockResolvedValueOnce(claimed)
+		.mockResolvedValueOnce({ ...claimed, id: "other" })
+		.mockResolvedValueOnce(null);
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await admitQueuedTurnsWith(
+		vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+	);
+	expect(mocks.release).not.toHaveBeenCalled();
+	warn.mockRestore();
 });

@@ -9,6 +9,7 @@ import {
 	workflowStepSchema,
 } from "#/domain/model-workflow";
 import { prRepairDelivery } from "#/domain/pr-repair-signal";
+import { withStoppedNotice } from "#/domain/turn-end";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { type ApiTurn, finalizeApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
@@ -108,12 +109,15 @@ export async function executeModelStep(
 	if (claim.kind === "unavailable") return "unavailable";
 	if (claim.kind === "done") return claim.outcome;
 	if (claim.kind === "cancelled") {
-		const items = applyApiProgress(claim.turn.items, claim.turn.id, {
-			type: "finish",
-			reason: "cancelled",
-			inputTokens: null,
-			outputTokens: null,
-		});
+		const items = withStoppedNotice(
+			applyApiProgress(claim.turn.items, claim.turn.id, {
+				type: "finish",
+				reason: "cancelled",
+				inputTokens: null,
+				outputTokens: null,
+			}),
+			claim.turn.id,
+		);
 		const saved = await finalizeApiTurn(claim.turn, "cancelled", items);
 		if (saved !== "cancelled") return "unavailable";
 		// Earlier steps may have left owned background commands running.

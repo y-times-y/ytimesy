@@ -35,7 +35,12 @@ it("shows task hierarchy and statuses without interactive controls", () => {
 			],
 		}),
 	);
-	expect(html).toContain("Task 1.1");
+	// Short names and icon colours as the agents list gives them, in start order.
+	expect(html).toContain("<strong>build-1</strong>");
+	expect(html).toContain("<strong>build-2</strong>");
+	expect(html).toContain('style="color:#FF8F96"');
+	expect(html).toContain("Helpers <span");
+	expect(html).not.toContain("Task 1");
 	expect(html).toContain("1/2 completed");
 	expect(html).toContain("Test model");
 	expect(html).toContain('aria-label="Working"');
@@ -44,9 +49,9 @@ it("shows task hierarchy and statuses without interactive controls", () => {
 	expect(html).not.toContain("fresh");
 });
 
-it("explains that subagents appear once started when empty", () => {
+it("explains that helpers appear once started when empty", () => {
 	const html = renderToStaticMarkup(createElement(TaskPanel, { tasks: [] }));
-	expect(html).toContain("when the agent starts them");
+	expect(html).toContain("Helpers appear here when Main starts them.");
 	expect(html).not.toContain("New task");
 });
 
@@ -117,7 +122,7 @@ it("shows each subagent's role, VM, budget use and spend, and the tree total", (
 	expect(html).toContain(
 		"reviewer · shared · 7 steps · 2 min · 100k tok · $0.20",
 	);
-	expect(html).toContain("Subagents 2 · 480k tok · $0.96 · 9.0 VM min");
+	expect(html).toContain("Helpers 2 · 480k tok · $0.96 · 9.0 VM min");
 	expect(html).not.toContain("Private brief");
 	expect(html).not.toMatch(/<(button|input|select|textarea|details|a)\b/);
 });

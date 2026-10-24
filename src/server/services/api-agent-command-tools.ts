@@ -20,6 +20,7 @@ import {
 	scopedShellCommand,
 	stopApiCommand,
 } from "./api-command-scope";
+import { prepareBackgroundExitCallback } from "./background-exit-callback";
 import {
 	COMMAND_WAIT_DEFAULT_SECONDS,
 	COMMAND_WAIT_MAX_SECONDS,
@@ -193,6 +194,8 @@ print(json.dumps({'status': state, 'stopped': stopped, 'stdout': text[:32000], '
 export function apiAgentCommandTools(
 	input: AgentToolWorkspaceInput & {
 		sessionId: string;
+		/** The chat's owner: signs a background command's exit callback. */
+		userId?: string;
 		turnId: string;
 		readOnly: boolean;
 		signal: AbortSignal;
@@ -251,9 +254,22 @@ export function apiAgentCommandTools(
 			seconds: maxSeconds,
 			commandId: id,
 		});
-		const job = input.output
-			? `${input.output.captureCommand(scoped, maxSeconds, id, true)} >${quote(`${path.status}.pending`)} && mv ${quote(`${path.status}.pending`)} ${quote(path.status)}`
-			: `${scoped} >${quote(path.output)} 2>&1; printf '%s\\n' "$?" >${quote(path.status)}`;
+		// A background command tells the edge when it exits, so its chat wakes
+		// within seconds; without a callback the cron's watcher still does.
+		const exitCallback =
+			background && input.userId
+				? await prepareBackgroundExitCallback(machines, vm, {
+						userId: input.userId,
+						sessionId: input.sessionId,
+						commandId: id,
+						root,
+					})
+				: "";
+		const job = `${
+			input.output
+				? `${input.output.captureCommand(scoped, maxSeconds, id, true)} >${quote(`${path.status}.pending`)} && mv ${quote(`${path.status}.pending`)} ${quote(path.status)}`
+				: `${scoped} >${quote(path.output)} 2>&1; printf '%s\\n' "$?" >${quote(path.status)}`
+		}${exitCallback}`;
 		const observation =
 			observeSeconds === undefined
 				? ""

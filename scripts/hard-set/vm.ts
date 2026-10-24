@@ -13,8 +13,12 @@ import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
 import { WorkspaceId } from "../../src/domain/ids";
 import { subscriptionFetch } from "../../src/server/adapters/codex-subscription-transport";
+import { boundedFreestyleFetch } from "../../src/server/adapters/freestyle/bounded-fetch";
 import { GUEST_INTERNET_FIREWALL } from "../../src/server/adapters/freestyle/proof-vm";
-import { waitUntilVmRunning } from "../../src/server/adapters/freestyle/wait-until-running";
+import {
+	waitUntilGuestAnswers,
+	waitUntilVmRunning,
+} from "../../src/server/adapters/freestyle/wait-until-running";
 import { createFreestyleWorkspaceMachines } from "../../src/server/adapters/freestyle/workspace-machines";
 import { modelWorkflowSigningSecret } from "../../src/server/adapters/model-workflow-dispatch";
 import { workspaceBootSnapshotId } from "../../src/server/records/tools-snapshot-store";
@@ -26,7 +30,7 @@ export const sh = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 export type TaskVms = ReturnType<typeof taskVms>;
 
 export function taskVms(apiKey: string) {
-	const client = new Freestyle({ apiKey });
+	const client = new Freestyle({ apiKey, fetch: boundedFreestyleFetch() });
 	const machines = createFreestyleWorkspaceMachines(apiKey);
 
 	async function execOk(vm: string, command: string, ms: number) {
@@ -141,6 +145,8 @@ export function taskVms(apiKey: string) {
 			storage: Math.max(data.resources.storage, 32768),
 		};
 		await created.vm.resize(target);
+		// A new VM reads as running before its guest answers its first command.
+		await waitUntilGuestAnswers(created.vm, "Hard set");
 		// The runtime cap is what stops the VM, not the ttl: confirm it took.
 		const cap = (await created.vm.data()).maxRunTotalSeconds;
 		if (cap !== lifetimeSec)

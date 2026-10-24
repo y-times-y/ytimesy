@@ -1,10 +1,16 @@
 import type { AgentProviderId } from "./agent-provider";
+import { startsTurn } from "./child-task-activity";
 import {
 	isTurnRunning,
 	type SessionItem,
 	type SessionTurnStatus,
+	sessionTitleFromText,
+	UNTITLED_SESSION_TITLE,
 } from "./session-item";
-import type { SidebarChatPrNeed } from "./sidebar-pr";
+import {
+	type SidebarPullRequest,
+	sidebarChatUnread,
+} from "./sidebar-chat-status";
 
 export type SidebarChat = {
 	readonly id: string;
@@ -15,15 +21,26 @@ export type SidebarChat = {
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
-	readonly prUrl?: string | null;
-	readonly prNeed?: SidebarChatPrNeed | null;
+	/** The chat's pull request, when the project's PR list has one for its branch. */
+	readonly pr?: SidebarPullRequest | null;
 	/** What the chat waits on from the user, if anything (chatWaitingOn). */
 	readonly waitingOn?: ChatWaitingOn | null;
+	/** When Main's or a helper's active turn started, if one runs. */
+	readonly workingSince?: string | null;
 };
 
 type SidebarChatAttention = "running" | "attention" | "idle";
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
+/** When this browser started tracking seen chats: older replies count as read. */
+export const CHAT_SEEN_SINCE_STORAGE_KEY = "ytimesy-chat-seen-since";
+/** Seen keys kept in storage; older ones fall off. */
+const CHAT_SEEN_KEYS_KEPT = 500;
+
+export function parseSeenSince(raw: string | null): number | null {
+	const value = raw ? Number(raw) : Number.NaN;
+	return Number.isFinite(value) && value > 0 ? value : null;
+}
 
 export function compactRelativeAge(
 	from: string | null | undefined,
@@ -68,6 +85,11 @@ export function seenChatStorageValue(keys: readonly string[]) {
 	return JSON.stringify([...new Set(keys)]);
 }
 
+/** Seen chat keys to store: unique, newest last, the oldest dropped past a cap. */
+export function trimmedSeenChatKeys(keys: readonly string[]): string[] {
+	return [...new Set(keys)].slice(-CHAT_SEEN_KEYS_KEPT);
+}
+
 export function sidebarChatAttention(input: {
 	readonly running: boolean;
 	readonly turnStatus?: SessionTurnStatus;
@@ -88,6 +110,8 @@ export function sidebarHasAttentionChat(input: {
 	readonly seenKeys: readonly string[];
 	readonly busyChatIds?: readonly string[];
 	readonly openTurnStatus?: SessionTurnStatus;
+	/** Replies older than this count as read; undefined keeps every reply. */
+	readonly seenSinceMs?: number | null;
 }): boolean {
 	const seen = new Set(input.seenKeys);
 	return input.chats.some((chat) => {
@@ -98,13 +122,25 @@ export function sidebarHasAttentionChat(input: {
 			openChatId: input.selectedChatId,
 			openTurnStatus: input.openTurnStatus,
 		});
-		return (
+		const attention =
 			sidebarChatAttention({
 				running,
 				turnStatus: chat.turnStatus,
 				selected: chat.id === input.selectedChatId,
 				seen: seen.has(sidebarChatSeenKey(chat)),
-			}) === "attention"
+			}) === "attention";
+		if (!attention || input.seenSinceMs === undefined) return attention;
+		// A failed turn stays attention; a completed one only while unread.
+		return (
+			chat.turnStatus === "failed" ||
+			sidebarChatUnread({
+				selected: false,
+				running,
+				turnStatus: chat.turnStatus,
+				updatedAt: chat.updatedAt,
+				seen: false,
+				seenSinceMs: input.seenSinceMs,
+			})
 		);
 	});
 }
@@ -262,6 +298,30 @@ export function withChatTurnStatus(
 	);
 }
 
+/**
+ * A chat just sent to, as the server will list it once the send lands: running,
+ * and named after its first message when it was untitled (claimChatForSend).
+ */
+export function withChatSent(
+	chats: readonly SidebarChat[],
+	chatId: string | undefined,
+	text: string,
+): SidebarChat[] {
+	if (!chatId) return [...chats];
+	return chats.map((chat) =>
+		chat.id === chatId
+			? {
+					...chat,
+					turnStatus: "running",
+					title:
+						chat.title === UNTITLED_SESSION_TITLE
+							? sessionTitleFromText(text)
+							: chat.title,
+				}
+			: chat,
+	);
+}
+
 export function listedChatTurnStatus(
 	chats: readonly SidebarChat[],
 	chatId: string,
@@ -309,6 +369,25 @@ export function backgroundTurnPollChatIds(input: {
 			return isTurnRunning(chat.turnStatus ?? "idle");
 		})
 		.map((chat) => chat.id);
+}
+
+/** How many of the open project's latest chats are read ahead of a click. */
+export const READ_AHEAD_CHATS = 8;
+
+/**
+ * The open project's latest chats worth reading before they are opened: not
+ * the open one, nor one whose view the page already holds or is reading.
+ */
+export function chatsToReadAhead(input: {
+	readonly chats: readonly Pick<SidebarChat, "id">[];
+	readonly openChatId?: string;
+	readonly heldChatIds: ReadonlySet<string>;
+	readonly limit?: number;
+}): string[] {
+	return input.chats
+		.slice(0, input.limit ?? READ_AHEAD_CHATS)
+		.map((chat) => chat.id)
+		.filter((id) => id !== input.openChatId && !input.heldChatIds.has(id));
 }
 
 export function sessionViewAppliesToOpenChat(input: {
@@ -433,7 +512,7 @@ export function chatWaitingOn(
 	if (turnStatus === "running") return null;
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
-		if (!item || item.kind === "userMessage") break;
+		if (!item || startsTurn(item)) break;
 		if (item.kind === "userQuestion") return "question";
 		if (item.kind === "secretRequest") return "secret";
 		if (item.kind === "planProposal") return "plan";

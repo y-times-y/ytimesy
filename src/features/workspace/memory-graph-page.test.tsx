@@ -8,45 +8,27 @@ vi.mock("@tanstack/react-start", () => ({
 vi.mock("./memory.fn", () => ({
 	readMemoryFn: async () => null,
 	readMemoryDreamsFn: async () => null,
-	readMemoryGraphFn: async () => ({ dreams: [] }),
+	readMemoryGraphFn: async () => null,
 	readMemoryHistoryFn: async () => [],
 	clearMemoryFn: async () => undefined,
 	editMemoryFn: async () => ({ ok: true }),
 }));
 
-const { MemoryGraphPage } = await import("./memory-graph-page");
+const { MemoryGraphPage, MemoryGraphLegend, hexagonPath } = await import(
+	"./memory-graph-page"
+);
 
 const A = "11111111-1111-4111-8111-111111111111";
 const files = [
 	{
 		path: "api.md",
-		content: `# API\n\n- Errors are problem+json [project: acme/web; source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
+		content: `# API\n\n- Errors are problem+json [source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
 	},
 ];
 
 function render() {
 	const client = new QueryClient();
 	client.setQueryData(["memory"], { available: true, mode: "full", files });
-	client.setQueryData(["memory-lanes", files], {
-		dreams: [
-			{
-				at: "2026-10-19T03:00:00Z",
-				message: "Merged notes",
-				merges: [
-					{
-						into: "Errors are problem+json",
-						from: [
-							{
-								text: "Errors are JSON",
-								added: "2026-10-03",
-								project: "acme/web",
-							},
-						],
-					},
-				],
-			},
-		],
-	});
 	return renderToStaticMarkup(
 		<QueryClientProvider client={client}>
 			<MemoryGraphPage active onOpenChat={() => true} />
@@ -54,27 +36,46 @@ function render() {
 	);
 }
 
-describe("Memory history page", () => {
-	it("lists one readable row per memory, newest first, with a dream divider and its merge", () => {
-		const html = render();
-		expect(html).toContain('aria-label="2 memories in 2 scopes"');
-		expect(html.match(/data-row="/g)).toHaveLength(4);
-		const order = [
-			"Errors are problem+json",
-			"Dream · Oct 19 · 1 merged",
-			"Errors are JSON",
-			"Always pnpm",
-			"Old webhook note",
-		].map((text) => html.indexOf(text));
-		expect(order.every((at) => at >= 0)).toBe(true);
-		expect([...order].sort((a, b) => a - b)).toEqual(order);
-		// Replaced rows fade; the merge branches in; always on is a text tag.
-		expect(html).toContain('data-retired="true"');
-		expect(html.match(/history-branch/g)).toHaveLength(1);
-		expect(html).toContain('class="history-tag">Always on<');
-		expect(html).toContain(">Inferred<");
-		expect(html).not.toContain("Zoom");
-		expect(html).not.toContain("Today");
+describe("Memory graph page", () => {
+	it("draws chat hubs and one hexagon per memory, statuses as badges", () => {
+		const page = render();
+		const html = page.slice(0, page.indexOf("memory-graph-legend"));
+		expect(html).toContain(
+			'aria-label="Memory graph: 3 memories from 3 sources"',
+		);
+		expect(html.match(/class="memory-hex"/g)).toHaveLength(3);
+		expect(html.match(/class="memory-hub"/g)).toHaveLength(3);
+		expect(html).toContain('data-status="forgotten"');
+		expect(html).toContain('data-status="rule"');
+		expect(html).toContain('data-inferred="true"');
+		expect(html).toContain("All memory");
+		expect(html).toContain("3 memories");
 		expect(html).not.toContain("<select");
+	});
+
+	it("explains every mark in the legend with the same shapes", () => {
+		const html = renderToStaticMarkup(
+			<MemoryGraphLegend similarBasis="meaning" />,
+		);
+		for (const label of [
+			"Chat",
+			"Memory",
+			"Older version",
+			"New",
+			"Expiring soon",
+			"Retired",
+			"Always on",
+			"From chat",
+			"Similar",
+			"Newer version",
+			"Weak",
+			"Strong",
+		])
+			expect(html).toContain(label);
+		expect(html).toContain('class="memory-hex-shape"');
+	});
+
+	it("rounds the hexagon's six corners", () => {
+		expect(hexagonPath(15).match(/Q/g)).toHaveLength(6);
 	});
 });

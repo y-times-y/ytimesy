@@ -10,6 +10,7 @@ import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
+import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
@@ -230,6 +231,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 	if (machines) return queue;
 	const infrastructureClient = new Freestyle({
 		apiKey: await Effect.runPromise(readFreestyleApiKey()),
+		fetch: boundedFreestyleFetch(),
 	});
 	let reconcilingUsage = false;
 	let fleetObservedAt = 0;

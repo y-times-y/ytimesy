@@ -73,7 +73,8 @@ describe("eval cost", () => {
 			agents: 3,
 			estimated: false,
 		});
-		expect(attempt.vmMinutes).toBeCloseTo(9);
+		// The finished writer's fork counts from boot to its finish, not to now.
+		expect(attempt.vmMinutes).toBeCloseTo(8);
 	});
 
 	it("divides all spend by solved tasks, so failures are paid for", () => {

@@ -20,18 +20,21 @@ export async function connectWorkspaceTerminal(input: {
 	readonly onData: (data: Uint8Array) => void;
 	readonly onError: (cause: unknown) => void;
 }): Promise<PtySession> {
-	const workspace = await readyWorkspaceForOwner(input.userId, input.projectId);
+	// Independent reads: opening the terminal waits on all of them.
+	const [workspace, peeked] = await Promise.all([
+		readyWorkspaceForOwner(input.userId, input.projectId),
+		peekAgentSessionMachine({
+			userId: input.userId,
+			projectId: input.projectId,
+			sessionId: input.sessionId,
+		}),
+	]);
 	const blocked = terminalConnectBlockedReason(workspace);
 	if (blocked || !workspace) {
 		throw new Error(
 			blocked ?? "Prepare a workspace before opening the terminal.",
 		);
 	}
-	const peeked = await peekAgentSessionMachine({
-		userId: input.userId,
-		projectId: input.projectId,
-		sessionId: input.sessionId,
-	});
 	const providerRef = copiedAgentMachineRef({
 		sessionProviderRef: peeked.providerRef,
 		templateProviderRef: workspace.providerRef,

@@ -7,8 +7,12 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
+import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { incomingAttachments } from "#/domain/message-attachment";
-import { chatHoldingSend } from "#/server/adapters/agent-sessions";
+import {
+	chatHoldingSend,
+	listSidebarAgentSessions,
+} from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
@@ -22,14 +26,15 @@ import {
 	connectHarnessWorkspaceSession,
 	emptyHarnessSession,
 	type HarnessSessionScope,
-	readHarnessWorkspaceSession,
 } from "#/server/services/harness-workspace-session";
 import {
+	publicSessionView,
 	removeQueuedComposerMessage,
 	sendComposerMessage,
 	stopTurnKeepingQueue,
 	withQueuedMessages,
 } from "#/server/services/queued-user-messages";
+import { timed, withStepTrace } from "#/server/services/step-timing";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 /** A fallback route's key: the connection ("codex" or a connection id), then the model. */
@@ -135,15 +140,9 @@ export const getCodexSession = createServerFn({ method: "GET" })
 					)
 				: null;
 			if (!landed) return emptyHarnessSession();
-			return withQueuedMessages(
-				await Effect.runPromise(
-					readHarnessWorkspaceSession({ ...scope, sessionId: landed }),
-				),
-			);
+			return publicSessionView({ ...scope, sessionId: landed });
 		}
-		return withQueuedMessages(
-			await Effect.runPromise(readHarnessWorkspaceSession(scope)),
-		);
+		return publicSessionView(scope);
 	});
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
@@ -157,15 +156,33 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 				signedIn: false,
 				session: emptyHarnessSession(),
 				projects: undefined,
+				chats: undefined,
 			};
 		}
-		const [snapshotAvailable, projects] = await Promise.all([
+		const listed = listProjects(user.id).catch(() => undefined);
+		// The first project's chats come with the page, so its latest chat
+		// starts loading as soon as the page runs instead of after a list read.
+		const firstChats = listed
+			.then(async (projects) => {
+				const projectId = projects?.[0]?.id;
+				if (!projectId) return undefined;
+				return {
+					projectId,
+					chats: chatsFromAgentSessions(
+						await listSidebarAgentSessions(user.id, projectId),
+					),
+				};
+			})
+			.catch(() => undefined);
+		const [snapshotAvailable, projects, chats] = await Promise.all([
 			hasManagedCodexAuth(user.id),
-			listProjects(user.id).catch(() => undefined),
+			listed,
+			firstChats,
 		]);
 		return {
 			signedIn: true,
 			projects,
+			chats,
 			session: {
 				...emptyHarnessSession(),
 				snapshotAvailable,
@@ -273,20 +290,27 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			};
 		},
 	)
-	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(
-			data.projectId,
-			data.harnessId,
-			data.sessionId,
-			data.createNew,
-		);
-		await consumeUserAction(scope.userId, "chat-send");
-		return withQueuedMessages(
-			await runWithMachines((machines) =>
-				sendComposerMessage(machines, scope, data),
-			),
-		);
-	});
+	.handler(
+		async ({ data }): Promise<PublicCodexSession> =>
+			// Development diagnostics: one timing line per send (step-timing.ts).
+			withStepTrace({ send: data.sessionId ? "chat" : "new" }, async () => {
+				const scope = await timed("send:auth", () =>
+					requireScope(
+						data.projectId,
+						data.harnessId,
+						data.sessionId,
+						data.createNew,
+					),
+				);
+				await timed("send:rate", () =>
+					consumeUserAction(scope.userId, "chat-send"),
+				);
+				const sent = await runWithMachines((machines) =>
+					sendComposerMessage(machines, scope, data),
+				);
+				return timed("send:queued", () => withQueuedMessages(sent));
+			}),
+	);
 
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)

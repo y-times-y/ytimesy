@@ -14,9 +14,8 @@ it("shows Use memory as a switch with what off means", () => {
 	);
 	expect(on).toContain(">Use memory</label>");
 	expect(on).toMatch(/role="switch"[^>]*aria-checked="true"/);
-	expect(on).toContain(
-		"nothing is recalled into chats and nothing new is saved",
-	);
+	expect(on).toContain("When off, chats don&#x27;t read or save memory.");
+	expect(on).toContain("Your own edits still save.");
 	const off = renderToStaticMarkup(
 		<MemorySettingsView on={false} available onChange={() => {}} />,
 	);

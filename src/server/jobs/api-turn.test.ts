@@ -6,6 +6,7 @@ import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { loadModelConnection } from "../adapters/model-connections";
+import { FIRST_REQUEST_WORKSPACE_WAIT_MS } from "../services/first-request-gate";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -65,6 +66,7 @@ const mocks = vi.hoisted(() => ({
 	),
 }));
 vi.mock("../adapters/prepared-checkout", () => ({
+	MACHINE_PREWARM_KEY: "machine-prewarm",
 	readPreparedCheckoutDirectory: mocks.preparedDirectory,
 	savePreparedCheckoutDirectory: vi.fn(async () => {}),
 	readSessionDerivedValue: mocks.hookConfig,
@@ -1920,6 +1922,34 @@ describe("a builder's first request before its workspace is ready", () => {
 		mocks.lean = lean;
 		knownHooks([]);
 	});
+	/** The chat already has a VM (a follow-up message, not a new chat). */
+	function withVm() {
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			taskAccess: "read_write",
+			providerRef: "vm",
+		});
+	}
+
+	it("sends a new chat's first request without the short wait for a VM it does not have yet", async () => {
+		mocks.preparedDirectory.mockResolvedValue("/repo");
+		const workspace = heldWorkspace();
+		const started = Date.now();
+		let sentAfter = Number.POSITIVE_INFINITY;
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			sentAfter = Date.now() - started;
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			setTimeout(() => workspace.ready(), 5);
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(sentAfter).toBeLessThan(FIRST_REQUEST_WORKSPACE_WAIT_MS);
+	});
 
 	it("calls the model before the VM is ready, naming the path the chat reported", async () => {
 		const workspace = heldWorkspace();
@@ -1987,6 +2017,8 @@ describe("a builder's first request before its workspace is ready", () => {
 			expect(JSON.stringify(line)).not.toMatch(/ananab|repo/);
 
 			log.mockClear();
+			// A chat that already has its VM waits briefly for it.
+			withVm();
 			mocks.workspace.mockResolvedValue({
 				machines: {},
 				vm: "vm",
@@ -2214,6 +2246,7 @@ describe("a builder's first request before its workspace is ready", () => {
 	});
 
 	it("waits for the workspace as before when it is ready within the short wait", async () => {
+		withVm();
 		mocks.preparedDirectory.mockResolvedValue("/elsewhere");
 		mocks.stepRuntime.mockImplementation(async (input) => {
 			expect(input.instructions).toContain("/repo");

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { RecoveryRefused } from "#/domain/conversation-recovery-failure";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 
 export const TURN_STILL_FINISHING =
@@ -40,12 +41,12 @@ export async function holdSettledConversationTurn(
 	};
 	const acquired = await coordinateConversationTurn("acquire", probe).catch(
 		() => {
-			throw new Error(
+			throw new RecoveryRefused(
 				"Could not confirm the last turn has finished. Try again in a moment.",
 			);
 		},
 	);
-	if (!acquired) throw new Error(TURN_STILL_FINISHING);
+	if (!acquired) throw new RecoveryRefused(TURN_STILL_FINISHING);
 	let lost = false;
 	let renewing: Promise<void> = Promise.resolve();
 	const timer = setInterval(() => {
@@ -64,7 +65,7 @@ export async function holdSettledConversationTurn(
 	let released: Promise<void> | undefined;
 	return {
 		assertHeld() {
-			if (lost) throw new Error(TURN_HOLD_LOST);
+			if (lost) throw new RecoveryRefused(TURN_HOLD_LOST);
 		},
 		release() {
 			released ??= (async () => {

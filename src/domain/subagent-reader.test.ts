@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
@@ -17,6 +18,7 @@ import {
 	READER_NETWORK_ISOLATION_CHECK,
 	READER_NETWORK_NAMESPACE,
 	READER_USER_SETUP_SCRIPT,
+	readerCheckoutAccessScript,
 	readerCommand,
 	readerMayWrite,
 	readerPreparationScript,
@@ -67,37 +69,123 @@ describe("reader Linux user", () => {
 		expect(script).toContain('chmod o-rw,o+x "$HOME"');
 		expect(script).toContain("chmod 0700 /tmp/ytimesy-secrets");
 		expect(script).toContain(
-			"find '/home/ubuntu/repo' -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} +",
+			"find '/home/ubuntu/repo' -type f \\( -name '.env*' -o -name .git-credentials -o -name .netrc \\) -exec chmod o-rwx {} +",
 		);
 		expect(script).toContain("sudo -n chmod 1777 /tmp/ytimesy-sessions");
 	});
 
-	it("makes the checkout's Git metadata readable, though the transfer wrote it under umask 077", () => {
-		const repo = mkdtempSync(join(tmpdir(), "reader-git-"));
+	/**
+	 * A checkout written under umask 077 (0600 files, 0700 directories), with
+	 * a dotenv file and a link to a private file outside it. `tools` names
+	 * the commands on PATH besides the stand-ins; sudo always fails, as for a
+	 * builder without root.
+	 */
+	function umask077Checkout() {
+		const root = mkdtempSync(join(tmpdir(), "reader-checkout-"));
+		const repo = join(root, "repo");
+		const bin = join(root, "bin");
+		mkdirSync(join(repo, ".git", "objects", "ab"), { recursive: true });
+		mkdirSync(join(repo, ".agents", "skills"), { recursive: true });
+		mkdirSync(bin);
+		writeFileSync(join(repo, "package.json"), "{}");
+		writeFileSync(join(repo, ".agents", "skills", "SKILL.md"), "x");
+		writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+		writeFileSync(join(repo, ".env"), "SECRET=1");
+		writeFileSync(join(root, "id_rsa"), "key");
+		symlinkSync(join(root, "id_rsa"), join(repo, "leak"));
+		for (const file of [
+			"package.json",
+			".agents/skills/SKILL.md",
+			".git/HEAD",
+			".env",
+			"../id_rsa",
+		])
+			chmodSync(join(repo, file), 0o600);
+		for (const dir of [".git/objects/ab", ".git", ".agents/skills", ".agents"])
+			chmodSync(join(repo, dir), 0o700);
+		chmodSync(repo, 0o700);
+		writeFileSync(join(bin, "sudo"), "#!/bin/sh\nexit 1\n");
+		chmodSync(join(bin, "sudo"), 0o755);
+		const mode = (path: string) => statSync(join(repo, path)).mode & 0o777;
+		const run = () =>
+			spawnSync("/bin/bash", ["-c", readerCheckoutAccessScript(repo)], {
+				env: { PATH: bin },
+				encoding: "utf8",
+			});
+		const tool = (name: string, body?: string) => {
+			if (body) {
+				writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`);
+				chmodSync(join(bin, name), 0o755);
+				return;
+			}
+			const found = spawnSync("/bin/sh", ["-c", `command -v ${name}`], {
+				encoding: "utf8",
+			}).stdout.trim();
+			symlinkSync(found, join(bin, name));
+		};
+		return { root, repo, mode, run, tool };
+	}
+
+	it("is part of preparation whenever there is a checkout", () => {
+		expect(
+			readerPreparationScript({ sessionId: "c", checkout: "/home/ubuntu/r" }),
+		).toContain(readerCheckoutAccessScript("/home/ubuntu/r"));
+		expect(readerPreparationScript({ sessionId: "c" })).not.toContain(
+			"ytimesy_reader_grant",
+		);
+	});
+
+	it("grants the reader user alone read access to a umask-077 checkout by ACL, inherited by new files", () => {
+		const { root, repo, run, tool } = umask077Checkout();
 		try {
-			mkdirSync(join(repo, ".git", "objects", "ab"), { recursive: true });
-			writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-			writeFileSync(join(repo, ".git", "objects", "ab", "cd"), "x");
-			chmodSync(join(repo, ".git", "HEAD"), 0o600);
-			chmodSync(join(repo, ".git", "objects", "ab", "cd"), 0o400);
-			chmodSync(join(repo, ".git", "objects", "ab"), 0o700);
-			const line = readerPreparationScript({
-				sessionId: "child-1",
-				checkout: repo,
-			})
+			tool("find");
+			tool("chmod");
+			// A stand-in setfacl records each call and the paths it got.
+			tool("setfacl", `echo "$*" >> "${root}/calls"`);
+			expect(run().status).toBe(0);
+			const calls = readFileSync(join(root, "calls"), "utf8")
+				.trim()
 				.split("\n")
-				.find((l) => l.includes("/.git"));
-			expect(line).toBeDefined();
-			expect(spawnSync("/bin/sh", ["-c", line ?? "false"]).status).toBe(0);
-			expect(statSync(join(repo, ".git", "HEAD")).mode & 0o777).toBe(0o644);
-			expect(statSync(join(repo, ".git", "objects", "ab")).mode & 0o777).toBe(
-				0o755,
-			);
-			expect(
-				statSync(join(repo, ".git", "objects", "ab", "cd")).mode & 0o777,
-			).toBe(0o444);
+				.map((line) => line.replaceAll(repo, "R"));
+			const granted = (path: string, how: string) =>
+				calls.some((c) => c.startsWith(how) && c.split(" ").includes(path));
+			const dirs = ["R", "R/.git", "R/.git/objects/ab", "R/.agents/skills"];
+			for (const dir of dirs)
+				expect(
+					granted(dir, "-m u:ytimesy-reader:rX,d:u:ytimesy-reader:rX "),
+					dir,
+				).toBe(true);
+			for (const file of [
+				"R/package.json",
+				"R/.git/HEAD",
+				"R/.agents/skills/SKILL.md",
+			])
+				expect(granted(file, "-m u:ytimesy-reader:rX "), file).toBe(true);
+			// Never write access, never through the link, and the dotenv file
+			// loses what the walk granted it.
+			expect(calls.join("\n")).not.toMatch(/rw|R\/leak/);
+			expect(granted("R/.env", "-x u:ytimesy-reader ")).toBe(true);
 		} finally {
-			rmSync(repo, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to read-only modes without setfacl, keeping dotenv files and link targets private", () => {
+		const { root, repo, mode, run, tool } = umask077Checkout();
+		try {
+			tool("find");
+			tool("chmod");
+			expect(run().status).toBe(0);
+			expect(mode("")).toBe(0o705);
+			expect(mode(".git/objects/ab")).toBe(0o705);
+			expect(mode("package.json")).toBe(0o604);
+			expect(mode(".git/HEAD")).toBe(0o604);
+			expect(mode(".agents/skills/SKILL.md")).toBe(0o604);
+			expect(mode(".env")).toBe(0o600);
+			expect(statSync(join(root, "id_rsa")).mode & 0o777).toBe(0o600);
+			expect(statSync(join(repo, "leak")).isFile()).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 

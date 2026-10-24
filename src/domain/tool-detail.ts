@@ -1,6 +1,7 @@
 import { CODE_MODE_TOOL, codeModeCallItems, codeModeResult } from "./code-mode";
 import { commandActivityTitle } from "./command-activity-title";
 import { leanToolRole } from "./harness-model-profile";
+import { mcpCallName } from "./mcp-call-view";
 import { redactSecrets } from "./project-workspace";
 import type { SessionActivityGlyph } from "./session-activity";
 import type { DynamicToolCallItem } from "./session-item";
@@ -122,6 +123,8 @@ type ToolActivity = {
 	fallback?: true;
 	/** A command left running in the background (ytimesy-job). */
 	background?: true;
+	/** An MCP call: verb is the server, target the tool; the card shows the server's icon. */
+	mcpServer?: string;
 };
 
 /** What a command mostly does, for its icon. */
@@ -217,9 +220,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 	const text = (key: string) =>
 		typeof input[key] === "string" ? (input[key] as string) : undefined;
 	const tool = item.tool;
-	const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(tool);
+	const mcp = mcpCallName(item);
 	if (mcp)
-		return { verb: mcp[1], target: mcp[2].replaceAll("_", " "), glyph: "mcp" };
+		return {
+			verb: mcp.serverLabel,
+			target: mcp.toolLabel,
+			glyph: "mcp",
+			mcpServer: mcp.server,
+		};
 	// A lean surface's tool shows as its role (LEAN_SHAPE_TOOLS).
 	const leanRole = leanToolRole(tool);
 	switch (leanRole ? `lean:${leanRole}` : tool) {
@@ -572,10 +580,7 @@ function harnessToolActivity(
 				target: text("query") ? clip(text("query") as string, 80) : undefined,
 			};
 		case "call_mcp_tool":
-			return {
-				verb: text("server") ?? "MCP",
-				target: text("tool")?.replaceAll("_", " "),
-			};
+			return { verb: "Called MCP tool" };
 		case "agent": {
 			const role = text("role") ?? (field("role") as string | undefined);
 			const model = field("model");

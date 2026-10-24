@@ -50,6 +50,7 @@ import {
 import { storeMessageAttachments } from "./message-attachments";
 import { pinnedTurnFailover } from "./model-failover";
 import { commitChatBranchForSubmission } from "./session-branch";
+import { timed } from "./step-timing";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
@@ -59,28 +60,34 @@ async function readSubscriptionSession(
 	/** The chat as the caller just read or wrote it, instead of reading it again. */
 	read?: AgentSessionRecord,
 ): Promise<PublicCodexSession> {
-	// Independent reads; the account is read last below only for its status
-	// after a catalog refresh may have expired it.
-	const [session, managed] = await Promise.all([
+	// Independent reads; the account is read again below only when a catalog
+	// refresh has just expired it.
+	const [session, managed, listedAccount] = await Promise.all([
 		scope.sessionId
 			? read?.id === scope.sessionId
 				? read
 				: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		hasManagedCodexAuth(scope.userId),
+		loadAgentAccount(scope.userId),
 	]);
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
 	let connected = managed;
+	let expired = false;
 	let models: Awaited<ReturnType<typeof codexSubscriptionCatalog>> = [];
 	try {
 		if (connected) models = await codexSubscriptionCatalog(scope.userId);
 	} catch (error) {
 		// A rejected refresh has just marked the account expired; show sign-in instead.
-		if (error instanceof CodexReconnectRequired) connected = false;
-		else if (!tolerateCatalogOutage) throw error;
+		if (error instanceof CodexReconnectRequired) {
+			connected = false;
+			expired = true;
+		} else if (!tolerateCatalogOutage) throw error;
 	}
-	const account = await loadAgentAccount(scope.userId);
+	const account = expired
+		? await loadAgentAccount(scope.userId)
+		: listedAccount;
 	const connection: AgentConnection =
 		connected && account.status === "connected"
 			? {
@@ -234,16 +241,18 @@ export async function sendSubscriptionTask(
 	const continuing = Boolean(input.continueOn);
 	// The chat view (its row, the account and catalog) and the settings the
 	// turn inherits are independent reads.
-	const [view, inherited] = await Promise.all([
-		readSubscriptionSession(scope, continuing, read),
-		input.variant === undefined && input.fast === undefined
-			? inheritedSubscriptionSettings(
-					scope.userId,
-					scope.sessionId as string,
-					input.modelId,
-				)
-			: null,
-	]);
+	const [view, inherited] = await timed("send:view", () =>
+		Promise.all([
+			readSubscriptionSession(scope, continuing, read),
+			input.variant === undefined && input.fast === undefined
+				? inheritedSubscriptionSettings(
+						scope.userId,
+						scope.sessionId as string,
+						input.modelId,
+					)
+				: null,
+		]),
+	);
 	if (!view.agentSessionId) throw new Error("Session is not available.");
 	// Continuing on a fallback during an outage: the fallback route is checked below.
 	if (!continuing && !view.models.some((model) => model.id === input.modelId))
@@ -304,19 +313,21 @@ export async function sendSubscriptionTask(
 			failover?.route.modelId ?? input.modelId,
 		);
 	assertApiContextFits(messages);
-	await enqueueApiTurn({
-		userId: scope.userId,
-		sessionId: scope.sessionId as string,
-		connectionId: null,
-		revision,
-		modelId: input.modelId,
-		routeId: input.modelId,
-		messages,
-		items,
-		preparedTask,
-		idempotencyKey: input.idempotencyKey,
-		failover,
-	});
+	await timed("send:enqueue", () =>
+		enqueueApiTurn({
+			userId: scope.userId,
+			sessionId: scope.sessionId as string,
+			connectionId: null,
+			revision,
+			modelId: input.modelId,
+			routeId: input.modelId,
+			messages,
+			items,
+			preparedTask,
+			idempotencyKey: input.idempotencyKey,
+			failover,
+		}),
+	);
 	// The sidebar shows the stored title; name the chat after its first
 	// message. A composer send already titled it when it claimed the chat, so
 	// this is a fallback and need not hold the response.

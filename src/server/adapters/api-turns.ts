@@ -6,16 +6,23 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { CONVERSATION_FORK_REQUEST_ID } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
-import type { TurnFailover } from "#/domain/model-failover";
+import {
+	type TurnFailover,
+	type TurnFailoverColumn,
+	turnFailover,
+} from "#/domain/model-failover";
 import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { settledTurnItems } from "#/domain/turn-end";
 import {
 	configuredTurnExecutor,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
+import { withStepTrace } from "../services/step-timing";
 import {
 	captureTurnFinished,
 	captureTurnStarted,
@@ -50,7 +57,7 @@ export type ApiTurn = {
 	items: SessionItem[];
 	lease_id: string | null;
 	settings?: unknown;
-	/** The fallback route serving the rest of this turn after a failover (TurnFailover). */
+	/** The fallback route serving the rest of this turn after a failover (TurnFailover), and its same-route retries. */
 	failover?: unknown;
 	/** Epoch ms the turn was queued, when its loader read it (timing only). */
 	queued_at_ms?: number | null;
@@ -258,8 +265,10 @@ export async function enqueueApiTurn(input: {
 				);
 			}
 		};
-		if (!startAfterResponse(wake)) {
-			await wake();
+		const traced = () =>
+			withStepTrace({ wake: input.sessionId.slice(0, 8) }, wake);
+		if (!startAfterResponse(traced)) {
+			await traced();
 			return;
 		}
 		// The chat's progress stream shows the sent message and the running
@@ -316,7 +325,7 @@ export async function previousTurnMessages(
 			connectionRevision: previous.connection_revision,
 			state: previous.state,
 			// Its native items (encrypted reasoning, signatures) came from the fallback.
-			failedOver: Boolean(previous.failover),
+			failedOver: turnFailover(previous.failover) !== null,
 		},
 		next,
 	);
@@ -357,6 +366,8 @@ export async function claimApiTurn(
 	// holds it) is taken first and held until the commit; without it the
 	// queued turn is never read or locked, so another worker's claim order
 	// is unchanged.
+	// A forked chat's turn waits queued until its VM copy is bound
+	// (conversation-fork.ts journal).
 	const batch = `begin;
 set local idle_in_transaction_session_timeout = '30s';
 set local statement_timeout = '20s';
@@ -365,6 +376,7 @@ with admission as (select pg_try_advisory_xact_lock(81738419) as acquired)
  where id=(select q.id from api_turn q where (select acquired from admission)
  and q.state='queued' and q.executor='${executor}' and not q.cancel_requested
  ${sessionId ? `and q.session_id='${sessionId}'::uuid` : ""}
+ and not exists(select 1 from agent_task_command_receipt f where f.parent_session_id=q.session_id and f.request_id='${CONVERSATION_FORK_REQUEST_ID}')
  and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<${perUserLimit}
  and (select count(*) from api_turn r where r.state='running')<${fleetLimit}
  order by q.created_at for update skip locked limit 1)
@@ -449,12 +461,12 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	return Boolean(result.right.rowCount);
 }
 
-/** `failover`, when given, moves the rest of the turn to its route in the same write. */
+/** `failover`, when given, moves the rest of the turn to its route (or records its same-route retries) in the same write. */
 export async function checkpointApiTurn(
 	turn: ApiTurn,
 	messages: ModelMessage[],
 	items: readonly SessionItem[],
-	failover?: TurnFailover,
+	failover?: TurnFailoverColumn,
 ) {
 	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set messages=$3,items=$4,failover=coalesce($5::jsonb,failover),updated_at=now()
@@ -527,9 +539,11 @@ export async function finishApiTurn(
 export async function finalizeApiTurn(
 	turn: ApiTurn,
 	state: "completed" | "failed" | "cancelled",
-	items: readonly SessionItem[],
+	settled: readonly SessionItem[],
 	messages?: readonly ModelMessage[],
 ) {
+	// Its messages record when it ended (turn-end.ts).
+	const items = settledTurnItems(settled, Date.now());
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(
@@ -592,6 +606,22 @@ export async function refreshWaitingApiTurns(
  * here. The chat reads idle only once no other turn of it is still running:
  * the active turn Stop also cancelled reports its own end when it finishes.
  */
+/**
+ * Puts a claimed durable turn whose hand-off to its chat failed back in the
+ * queue, so the next admission claims it again (with a new lease) instead of
+ * it waiting out its lease. Fenced by the lease it was claimed with: a chat
+ * that did receive it can no longer read or write it under that lease, so
+ * it still runs exactly once.
+ */
+export async function releaseClaimedApiTurn(turnId: string, leaseId: string) {
+	const result = await database().query(
+		`update api_turn set state='queued',lease_id=null,updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and executor='durable-object'`,
+		[turnId, leaseId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
 export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {
 	const result = await database().query<SettledTurnRow>(
 		`with saved as (update api_turn set state='cancelled',updated_at=now()

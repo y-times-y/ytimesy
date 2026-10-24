@@ -125,6 +125,26 @@ describe("subagent spend", () => {
 		expect(forkVmMinutes(null, Date.now())).toBe(0);
 	});
 
+	it("stops a finished writer's VM minutes at its finish, not at the fork's later deletion", () => {
+		const bootedAt = "2026-10-17T10:00:00.000Z";
+		const finished = Date.parse("2026-10-17T10:01:18.000Z");
+		// Kept for a follow-up, deleted 30 minutes later: still 1.3 minutes.
+		expect(
+			forkVmMinutes(
+				{ bootedAt },
+				Date.parse("2026-10-17T10:05:36.000Z"),
+				finished,
+			),
+		).toBeCloseTo(1.3);
+		expect(
+			forkVmMinutes(
+				{ bootedAt, deletedAt: "2026-10-17T10:31:18.000Z" },
+				Date.parse("2026-10-17T12:00:00.000Z"),
+				finished,
+			),
+		).toBeCloseTo(1.3);
+	});
+
 	it("labels a plan-billed spend as a list-price estimate, or plan when unpriced", () => {
 		const spend = agentSpend({
 			items: [turn("p", 1_000_000, 100_000)],

@@ -46,6 +46,7 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 			recipientId: reference,
 			message: z.string().min(1).max(8000),
 			fromUser: z.literal(true).optional(),
+			context: z.string().max(4000).optional(),
 		})
 		.strict(),
 	z
@@ -57,6 +58,26 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		})
 		.strict(),
 	z.object({ ...identity, kind: z.literal("pr-repair") }).strict(),
+	// A background command's exit callback (background-exit-wake.ts): one per command.
+	z
+		.object({
+			...identity,
+			kind: z.literal("background-wake"),
+			userId: reference,
+			sessionId: z.uuid(),
+			commandId: z.uuid(),
+		})
+		.strict(),
+	// A forked chat's VM, copied after its chat opened (conversation-recovery.ts).
+	z
+		.object({
+			...identity,
+			kind: z.literal("conversation-fork"),
+			userId: reference,
+			sessionId: z.uuid(),
+			attempt: z.number().int().positive().max(1000),
+		})
+		.strict(),
 	// Pull request evidence (harness variant prEvidence), after a turn's draft handoff.
 	z
 		.object({

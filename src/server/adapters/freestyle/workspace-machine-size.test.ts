@@ -9,6 +9,7 @@ const provider = vi.hoisted(() => ({
 	resize: vi.fn(),
 	remove: vi.fn(),
 	create: vi.fn(),
+	exec: vi.fn(),
 }));
 vi.mock("freestyle", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("freestyle")>();
@@ -22,6 +23,7 @@ vi.mock("freestyle", async (importOriginal) => {
 		}),
 		resize: provider.resize,
 		delete: provider.remove,
+		exec: provider.exec,
 	};
 	return {
 		...actual,
@@ -46,6 +48,7 @@ beforeEach(() => {
 	provider.metadata = {};
 	vi.clearAllMocks();
 	provider.resize.mockResolvedValue(undefined);
+	provider.exec.mockResolvedValue({ statusCode: 0 });
 });
 afterEach(() => vi.unstubAllEnvs());
 it("grows a prepared new copy to Large by default", async () => {

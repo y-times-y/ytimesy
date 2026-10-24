@@ -6,8 +6,13 @@ const MAX_WORKSPACE_SOURCE_CHARS = 200_000;
 export type WorkspaceExplorerListing = {
 	readonly root: string | null;
 	readonly paths: readonly string[];
-	/** Why there is nothing to list: no machine for this chat yet, or it is asleep. */
+	/**
+	 * No machine for this chat yet, or it is asleep: then the paths, when
+	 * there are any, are the files its git index tracks.
+	 */
 	readonly machine?: "none" | "asleep";
+	/** The file Files opens first, read with the listing; null if it has no text. */
+	readonly opened?: WorkspaceSourceFile | null;
 };
 
 export type WorkspaceSourceFile = {

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowUp, Square, X } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 import {
 	type KeyboardEvent,
 	useEffect,
@@ -9,6 +9,14 @@ import {
 	useState,
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
+import {
+	activeMention,
+	insertMention,
+	MAIN_MENTION_ID,
+	type MentionAgent,
+	mentionAgents,
+	mentionMatches,
+} from "#/domain/agent-mentions";
 import {
 	agentPanelRows,
 	type BackgroundRun,
@@ -22,6 +30,7 @@ import {
 import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import { composerProjectNotice } from "#/domain/composer-project";
 import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
@@ -40,6 +49,11 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
+import {
+	isLargePaste,
+	isPastedText,
+	nextPastedTextNumber,
+} from "#/domain/pasted-text";
 import type { Project } from "#/domain/projects";
 import {
 	secretDeclinedText,
@@ -69,15 +83,28 @@ import { CloudUsageIndicator } from "../workspace/usage-windows";
 import { AgentIcon } from "./agent-icon";
 import { AgentPanel } from "./agent-panel";
 import {
+	getConversationForkStatus,
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
+	retryConversationForkFn,
 	sendHelperMessage,
 } from "./agent-session.fn";
 import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
+import {
+	FileTile,
+	PastedTextTile,
+	pastedFileText,
+	pastedTextFile,
+	sentFileFields,
+} from "./attachment-tile";
 import { ContextUsage } from "./context-usage";
-import { ConversationRecovery } from "./conversation-recovery";
+import {
+	ConversationRecovery,
+	refreshRecoveredWorkspace,
+} from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
 import type { MemoryMarkerActions } from "./memory-markers";
+import { MentionPopover } from "./mention-popover";
 import {
 	type ComposerSpeed,
 	composerListedModels,
@@ -85,6 +112,7 @@ import {
 	sessionModelsFromListed,
 } from "./model-capabilities";
 import { getAgentModelCatalog } from "./model-catalog.fn";
+import { readPastedTextFn } from "./pasted-text.fn";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -124,7 +152,10 @@ export function SessionLauncher({
 	memoryActions,
 	onRemoveQueued,
 	backgroundRuns,
+	onDraftStarted,
 }: {
+	/** The draft went from empty to some text (a new chat starts its machine then). */
+	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
 	backgroundRuns?: readonly BackgroundRun[];
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
@@ -152,7 +183,11 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
-	onRecovered?: (sessionId: string, prompt: string | null) => Promise<void>;
+	onRecovered?: (
+		sessionId: string,
+		prompt: string | null,
+		items: readonly SessionItem[] | null,
+	) => Promise<void>;
 	initialDraft?: string;
 	childTasks?: readonly AgentTaskActivity[];
 	projects: Project[];
@@ -243,6 +278,28 @@ export function SessionLauncher({
 		readonly files: readonly File[];
 	} | null>(null);
 	const [attachmentError, setAttachmentError] = useState<string | null>(null);
+	function attachFiles(selected: readonly File[]) {
+		const additions = selected.filter(
+			(file) =>
+				!attachments.some(
+					(existing) =>
+						existing.name === file.name &&
+						existing.size === file.size &&
+						existing.lastModified === file.lastModified,
+				),
+		);
+		const next = [...attachments, ...additions];
+		setAttachments(next);
+		setAttachmentError(attachmentLimitError(next));
+	}
+	const readPastedText = useServerFn(readPastedTextFn);
+	const pastedTextSession = session.agentSessionId;
+	const loadPastedText = pastedTextSession
+		? (attachmentId: string) =>
+				readPastedText({
+					data: { sessionId: pastedTextSession, attachmentId },
+				})
+		: undefined;
 	// A message with only attachments still needs words for the transcript and model.
 	const sendableDraft = (text: string) =>
 		text || (attachments.length ? ATTACHMENTS_ONLY_TEXT : "");
@@ -270,6 +327,69 @@ export function SessionLauncher({
 			});
 		},
 	});
+	const loadForkStatus = useServerFn(getConversationForkStatus);
+	const retryFork = useServerFn(retryConversationForkFn);
+	const [forkRetrying, setForkRetrying] = useState(false);
+	// A forked chat opens before its VM copy is ready: a message sent meanwhile
+	// waits queued. Only a chat without a VM can be one.
+	const forkStatus = useQuery({
+		queryKey: [
+			"conversation-fork",
+			selectedProject?.id,
+			session.agentSessionId,
+		],
+		enabled:
+			!!selectedProject?.id && !!session.agentSessionId && !session.workspaceId,
+		queryFn: () =>
+			selectedProject && session.agentSessionId
+				? loadForkStatus({
+						data: {
+							projectId: selectedProject.id,
+							sessionId: session.agentSessionId,
+						},
+					})
+				: null,
+		refetchInterval: (query) =>
+			query.state.data?.state === "preparing" ? 2_000 : false,
+	});
+	const forkPreparing = forkStatus.data?.state === "preparing";
+	const wasForkPreparing = useRef(false);
+	useEffect(() => {
+		// The copy is bound: Files and Changes now have a workspace to show.
+		if (wasForkPreparing.current && !forkStatus.data)
+			void refreshRecoveredWorkspace(queryClient);
+		wasForkPreparing.current = forkPreparing;
+	}, [forkPreparing, forkStatus.data, queryClient]);
+	async function retryForkCopy() {
+		if (!selectedProject || !session.agentSessionId) return;
+		const key = [
+			"conversation-fork",
+			selectedProject.id,
+			session.agentSessionId,
+		];
+		setForkRetrying(true);
+		try {
+			queryClient.setQueryData(
+				key,
+				await retryFork({
+					data: {
+						projectId: selectedProject.id,
+						sessionId: session.agentSessionId,
+					},
+				}),
+			);
+		} catch (cause) {
+			queryClient.setQueryData(key, {
+				state: "failed",
+				message:
+					cause instanceof Error
+						? cause.message
+						: "Couldn't fork this chat. Try again.",
+			});
+		} finally {
+			setForkRetrying(false);
+		}
+	}
 	const loadEvidence = useServerFn(listChatEvidence);
 	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
 	const chatEvidence = useQuery({
@@ -299,6 +419,12 @@ export function SessionLauncher({
 		},
 	});
 	const [draft, setDraft] = useState(initialDraft);
+	const drafting = draft.trim().length > 0;
+	const draftStarted = useRef(onDraftStarted);
+	draftStarted.current = onDraftStarted;
+	useEffect(() => {
+		if (drafting) draftStarted.current?.();
+	}, [drafting]);
 	const loadProjectCommands = useServerFn(listProjectCommandsFn);
 	const saveProjectSecret = useServerFn(saveProjectSecretFn);
 	const projectCommands = useQuery({
@@ -345,12 +471,23 @@ export function SessionLauncher({
 	});
 	const identities = useMemo(() => helperIdentities(childTasks), [childTasks]);
 	const [selectedAgentId, setSelectedAgentId] = useState(LEAD_ROW_ID);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	/** The composer's caret, for the "@" popover. */
+	const [caret, setCaret] = useState(0);
+	const [mentionIndex, setMentionIndex] = useState(0);
+	const [mentionDismissed, setMentionDismissed] = useState<string | null>(null);
 	const selectedHelper = agents.helpers.find(
 		(row) => row.id === selectedAgentId,
 	);
 	const selectedTask = selectedHelper
 		? childTasks.find((task) => task.id === selectedHelper.id)
 		: undefined;
+	// The agent whose composer this is never appears: it is the one written to.
+	const mentionSelf = selectedHelper?.id ?? MAIN_MENTION_ID;
+	const mentionList = useMemo(
+		() => mentionAgents(identities, mentionSelf),
+		[identities, mentionSelf],
+	);
 	const sendToHelper = useServerFn(sendHelperMessage);
 	/** Messages the user sent a helper that its list does not show yet. */
 	const [helperOutbox, setHelperOutbox] = useState<
@@ -362,6 +499,7 @@ export function SessionLauncher({
 		}[]
 	>([]);
 	const [helperError, setHelperError] = useState<string | null>(null);
+	const [noProject, setNoProject] = useState<string | null>(null);
 	useEffect(() => {
 		setHelperOutbox((current) => {
 			const next = current.filter((sent) => {
@@ -392,7 +530,7 @@ export function SessionLauncher({
 		if (!selectedHelper || !text || !selectedProject || !session.agentSessionId)
 			return;
 		if (!selectedHelper.messageable) {
-			setHelperError(`“${selectedHelper.name}” has finished.`);
+			setHelperError(`${selectedHelper.name} has finished.`);
 			return;
 		}
 		const id = crypto.randomUUID();
@@ -487,11 +625,57 @@ export function SessionLauncher({
 			? slashMenuCommands(slashDraft, allSlashCommands)
 			: [];
 
+	// "@": the chat's other agents, filtered by what follows it.
+	const mention =
+		mentionDismissed !== draft ? activeMention(draft, caret) : null;
+	const visibleMentions = mention
+		? mentionMatches(mentionList, mention.query)
+		: [];
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Every edit of the draft resets the menu highlight.
 	useEffect(() => {
 		setSlashIndex(0);
 		setSlashPicked(false);
+		setMentionIndex(0);
 	}, [draft]);
+
+	function pickMention(agent: MentionAgent) {
+		if (!mention) return;
+		const next = insertMention(draft, mention, caret, agent.name);
+		setDraft(next.text);
+		setCaret(next.caret);
+		requestAnimationFrame(() => {
+			const input = textareaRef.current;
+			input?.focus();
+			input?.setSelectionRange(next.caret, next.caret);
+		});
+	}
+
+	function handleMentionKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (visibleMentions.length === 0) return false;
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			event.preventDefault();
+			const step = event.key === "ArrowDown" ? 1 : -1;
+			setMentionIndex(
+				(index) =>
+					(index + step + visibleMentions.length) % visibleMentions.length,
+			);
+			return true;
+		}
+		if (event.key === "Escape") {
+			event.preventDefault();
+			setMentionDismissed(draft);
+			return true;
+		}
+		if (event.key === "Enter" || event.key === "Tab") {
+			const agent = visibleMentions[mentionIndex];
+			if (!agent || event.nativeEvent.isComposing) return false;
+			event.preventDefault();
+			pickMention(agent);
+			return true;
+		}
+		return false;
+	}
 
 	useEffect(() => {
 		const connectedHarness = connectedProviderId(session.connection);
@@ -546,6 +730,12 @@ export function SessionLauncher({
 
 	function sendText(typed: string, continueOn?: string) {
 		const text = sendableDraft(typed);
+		const projectNotice = text
+			? composerProjectNotice({ selectedProjectId: selectedProject?.id })
+			: null;
+		setNoProject(projectNotice);
+		// The text stays in the box; nothing is sent until there is a project.
+		if (projectNotice) return;
 		if (!composerCanSend(text, false) || attachmentError) return;
 		const files = attachments;
 		captureAnalytics("prompt_submitted", {
@@ -566,12 +756,16 @@ export function SessionLauncher({
 				...(turnStatus === "running" ? { queued: true as const } : {}),
 				...(files.length
 					? {
-							attachments: files.map((file) => ({
-								id: crypto.randomUUID(),
-								name: safeAttachmentName(file.name),
-								mediaType: file.type || "application/octet-stream",
-								size: file.size,
-							})),
+							attachments: files.map((file) => {
+								const id = crypto.randomUUID();
+								return {
+									id,
+									name: safeAttachmentName(file.name),
+									mediaType: file.type || "application/octet-stream",
+									size: file.size,
+									...sentFileFields(id, file),
+								};
+							}),
 						}
 					: {}),
 			},
@@ -715,8 +909,10 @@ export function SessionLauncher({
 							color={selectedHelper.color}
 						/>
 						<span className="helper-view-name">{selectedHelper.name}</span>
-						{selectedHelper.tag ? (
-							<span className="agent-row-tag">{selectedHelper.tag}</span>
+						{selectedHelper.task ? (
+							<span className="helper-view-task" title={selectedHelper.title}>
+								{selectedHelper.task}
+							</span>
 						) : null}
 						<button
 							type="button"
@@ -782,8 +978,16 @@ export function SessionLauncher({
 														mode,
 													},
 												});
-												await onRecovered(recovered.id, recovered.prompt);
+												// The server is done: the prompt and the restored
+												// code show now, not after the chat reloads.
 												if (recovered.prompt) setDraft(recovered.prompt);
+												if (mode === "code" || mode === "both")
+													void refreshRecoveredWorkspace(queryClient);
+												await onRecovered(
+													recovered.id,
+													recovered.prompt,
+													recovered.items,
+												);
 												await recoveryPoints.refetch();
 											}}
 										/>
@@ -827,10 +1031,11 @@ export function SessionLauncher({
 						onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
 					}}
 					onRemoveQueued={onRemoveQueued}
+					readPastedText={loadPastedText}
 				/>
 			)}
 			<div className="session-dock">
-				{visibleSlashCommands.length === 0 ? (
+				{visibleSlashCommands.length === 0 && visibleMentions.length === 0 ? (
 					<ProjectContext
 						projects={projects}
 						selectedProject={selectedProject}
@@ -859,7 +1064,14 @@ export function SessionLauncher({
 						onConnect={onConnect}
 					/>
 					<div className="session-composer">
-						{visibleSlashCommands.length > 0 ? (
+						{visibleMentions.length > 0 ? (
+							<MentionPopover
+								agents={visibleMentions}
+								activeIndex={mentionIndex}
+								onHover={setMentionIndex}
+								onSelect={pickMention}
+							/>
+						) : visibleSlashCommands.length > 0 ? (
 							<SlashCommandPalette
 								commands={visibleSlashCommands}
 								activeIndex={slashIndex}
@@ -868,7 +1080,37 @@ export function SessionLauncher({
 							/>
 						) : null}
 
+						{attachments.length > 0 && (
+							<ul className="attachment-tiles" aria-label="Attached files">
+								{attachments.map((file, index) => {
+									const key = `${file.name}-${file.lastModified}-${file.size}`;
+									const remove = () => {
+										const next = attachments.filter(
+											(_, fileIndex) => fileIndex !== index,
+										);
+										setAttachments(next);
+										setAttachmentError(attachmentLimitError(next));
+										textareaRef.current?.focus();
+									};
+									const pasted = pastedFileText(file);
+									return pasted !== undefined &&
+										isPastedText({ name: file.name, mediaType: file.type }) ? (
+										<PastedTextTile key={key} text={pasted} onRemove={remove} />
+									) : (
+										<FileTile
+											key={key}
+											name={file.name}
+											mediaType={file.type}
+											size={file.size}
+											onRemove={remove}
+										/>
+									);
+								})}
+							</ul>
+						)}
 						<TaskInput
+							textareaRef={textareaRef}
+							onCaretChange={setCaret}
 							value={draft}
 							onChange={(value) => {
 								setDraft(value);
@@ -878,42 +1120,63 @@ export function SessionLauncher({
 							disabled={busy && !selectedHelper}
 							placeholder={
 								selectedHelper
-									? `Message “${selectedHelper.name}”…`
+									? `Message ${selectedHelper.name}…`
 									: agents.lead.status === "free"
-										? "Ask Main anything while helpers work"
+										? agents.helpers.some((row) => row.status === "working")
+											? "Ask Main anything while helpers work"
+											: "Ask Main anything while commands run"
 										: followUpLayout
 											? "Follow up…"
 											: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
-								selectedHelper ? false : handleComposerKey(event)
+								handleMentionKey(event) ||
+								(!selectedHelper && handleComposerKey(event))
 							}
+							onPaste={(event) => {
+								// Helpers take text only; a large paste there stays inline.
+								if (selectedHelper) return;
+								const text = event.clipboardData.getData("text/plain");
+								if (!isLargePaste(text)) return;
+								event.preventDefault();
+								attachFiles([
+									pastedTextFile(
+										text,
+										nextPastedTextNumber(attachments.map((file) => file.name)),
+									),
+								]);
+							}}
 						/>
-						{attachments.length > 0 && (
-							<ul className="session-attachments" aria-label="Attached files">
-								{attachments.map((file, index) => (
-									<li key={`${file.name}-${file.lastModified}-${file.size}`}>
-										<span title={file.name}>{file.name}</span>
-										<button
-											type="button"
-											aria-label={`Remove ${file.name}`}
-											onClick={() => {
-												const next = attachments.filter(
-													(_, fileIndex) => fileIndex !== index,
-												);
-												setAttachments(next);
-												setAttachmentError(attachmentLimitError(next));
-											}}
-										>
-											<X size={14} />
-										</button>
-									</li>
-								))}
-							</ul>
-						)}
+						{forkPreparing ? (
+							<p className="model-provider-notice">Preparing workspace</p>
+						) : forkStatus.data?.state === "failed" ? (
+							<p className="session-attachment-error" role="alert">
+								{forkStatus.data.message}{" "}
+								<button
+									type="button"
+									className="session-inline-action"
+									disabled={forkRetrying}
+									onClick={() => void retryForkCopy()}
+								>
+									Retry
+								</button>
+							</p>
+						) : null}
 						{helperError ? (
 							<p className="session-attachment-error" role="alert">
 								{helperError}
+							</p>
+						) : null}
+						{noProject && !selectedProject ? (
+							<p className="session-attachment-error" role="alert">
+								{noProject}{" "}
+								<button
+									type="button"
+									className="session-inline-action"
+									onClick={() => onProjectPickerOpenChange?.(true)}
+								>
+									Connect GitHub
+								</button>
 							</p>
 						) : null}
 						{attachmentError && (
@@ -969,20 +1232,7 @@ export function SessionLauncher({
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
 								onSpeedChange={setSpeed}
-								onAttachFiles={(selected) => {
-									const additions = selected.filter(
-										(file) =>
-											!attachments.some(
-												(existing) =>
-													existing.name === file.name &&
-													existing.size === file.size &&
-													existing.lastModified === file.lastModified,
-											),
-									);
-									const next = [...attachments, ...additions];
-									setAttachments(next);
-									setAttachmentError(attachmentLimitError(next));
-								}}
+								onAttachFiles={attachFiles}
 							/>
 							{turnStatus === "running" ? (
 								<button
@@ -1001,7 +1251,7 @@ export function SessionLauncher({
 								<button
 									type="button"
 									className="session-send"
-									aria-label={`Send to “${selectedHelper.name}”`}
+									aria-label={`Send to ${selectedHelper.name}`}
 									disabled={!draft.trim() || !selectedHelper.messageable}
 									title={
 										selectedHelper.messageable

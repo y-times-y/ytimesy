@@ -5,7 +5,12 @@ import {
 	agentProviderById,
 } from "./agent-provider";
 import { parseModelRouteId } from "./model-connection";
-import { isTurnRunning, type SessionTurnStatus } from "./session-item";
+import {
+	isTurnRunning,
+	type SessionItem,
+	type SessionTurnStatus,
+	sendWasQueued,
+} from "./session-item";
 
 type HarnessReadiness =
 	| "ready"
@@ -104,6 +109,41 @@ export function sendAfterConnect(
 	)
 		return "await_sign_in";
 	return "abandon";
+}
+
+/**
+ * What the server's answer to a send means. The answer counts as sent only
+ * when the chat it returns holds the message (by its id) or has a turn
+ * running; any other answer left an optimistic "Thinking" with no turn behind
+ * it, so it is reported and the message goes back to the composer.
+ */
+export function sendReplyOutcome(
+	reply:
+		| {
+				readonly connection?: AgentConnection | null;
+				readonly items: readonly SessionItem[];
+				readonly turnStatus: SessionTurnStatus;
+		  }
+		| null
+		| undefined,
+	messageId: string,
+):
+	| { readonly kind: "sent" | "await_sign_in" }
+	| { readonly kind: "failed"; readonly message: string } {
+	// A refused request (an origin check, an expired session) has no view.
+	if (!reply?.connection)
+		return { kind: "failed", message: "The message could not be sent. Retry." };
+	// The server refused the send; it reports why in place of the chat.
+	if (reply.connection.status === "failed")
+		return { kind: "failed", message: reply.connection.message };
+	if (sendAfterConnect(reply.connection) === "await_sign_in")
+		return { kind: "await_sign_in" };
+	if (sendWasQueued(reply.items, messageId) || reply.turnStatus === "running")
+		return { kind: "sent" };
+	return {
+		kind: "failed",
+		message: "The message didn't reach the chat. Retry.",
+	};
 }
 
 export function selectedHarnessIsConnected(

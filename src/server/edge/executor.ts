@@ -2,6 +2,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import { z } from "zod";
+import {
+	BACKGROUND_EXIT_PATH,
+	BACKGROUND_EXIT_TOKEN_HEADER,
+	backgroundExitRequest,
+	verifyBackgroundExitToken,
+} from "../../domain/background-exit-wake";
 import { backgroundJob } from "../../domain/background-job";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
@@ -18,7 +24,11 @@ import {
 	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
-import { ConversationRoom, routeRealtimeRequest } from "../../realtime/worker";
+import {
+	ConversationRoom,
+	isRealtimeRoute,
+	routeRealtimeRequest,
+} from "../../realtime/worker";
 import {
 	type ApiTurn,
 	cancelWaitingApiTurn,
@@ -67,6 +77,7 @@ import {
 	authorizeGitProxy,
 	claimGitProxyGrant,
 } from "./github-git-authorization";
+import { executorIngressRoute } from "./ingress-route";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
@@ -98,6 +109,12 @@ const gitProxySecrets = z.object({
 	DATABASE_SSL_CA: z.string().optional(),
 	GIT_PROXY_SECRET: z.string().min(32),
 	GIT_PROXY_ENABLED: z.literal("1"),
+});
+// The guest's exit callback is signed with the git proxy's key, which the
+// command launch holds (gitProxyConfiguration) and the edge already has.
+const backgroundExitSecrets = z.object({
+	GIT_PROXY_SECRET: z.string().min(32),
+	BACKGROUND_EXECUTION_ENABLED: z.literal("1"),
 });
 const environmentSecrets = z.object({
 	ENVIRONMENT_WORKFLOW_SECRET: z.string().min(32),
@@ -571,12 +588,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	async fetch(request: Request) {
 		const path = new URL(request.url).pathname;
-		if (
-			path === "/snapshot" ||
-			path === "/stream" ||
-			path === "/purge" ||
-			path.startsWith("/turn/")
-		) {
+		if (isRealtimeRoute(path)) {
 			const secret = process.env.YTIMESY_REALTIME_SECRET;
 			if (!secret || secret.length < 32)
 				return new Response(null, { status: 503 });
@@ -800,12 +812,9 @@ export default {
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;
-			if (
-				path === "/snapshot" ||
-				path === "/stream" ||
-				path === "/purge" ||
-				path.startsWith("/turn/")
-			) {
+			const route = executorIngressRoute(path);
+			// By exact name: /turn/start below is not the room's.
+			if (route === "room") {
 				const secret = process.env.YTIMESY_REALTIME_SECRET;
 				if (!secret || secret.length < 32)
 					return new Response(null, { status: 503 });
@@ -818,7 +827,7 @@ export default {
 			}
 			// The web Worker claimed a sent message's turn on its own database
 			// connection (turn-start.ts) and hands it to the chat's loop here.
-			if (path === "/turn/start") {
+			if (route === "turn-start") {
 				if (request.method !== "POST")
 					return new Response(null, { status: 404 });
 				const config = z
@@ -855,7 +864,7 @@ export default {
 					status: (await startClaimedTurn(env, turn.data)) ? 204 : 409,
 				});
 			}
-			if (new URL(request.url).pathname === "/jobs/start") {
+			if (route === "jobs-start") {
 				if (request.method !== "POST")
 					return new Response(null, { status: 404 });
 				const config = z
@@ -1012,6 +1021,48 @@ export default {
 					durableObjectLocation(),
 				).start(parsed.data);
 				return new Response(null, { status: 202 });
+			}
+			// A background command exited: its guest asks for its chat's check now.
+			if (path === BACKGROUND_EXIT_PATH) {
+				if (request.method !== "POST")
+					return new Response(null, { status: 404 });
+				const config = backgroundExitSecrets.safeParse(env);
+				if (!config.success) return new Response(null, { status: 503 });
+				let body: string;
+				try {
+					body = await readBoundedRequestBody(request, 1024);
+				} catch {
+					return new Response(null, { status: 413 });
+				}
+				let value: unknown;
+				try {
+					value = JSON.parse(body);
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+				const exit = backgroundExitRequest.safeParse(value);
+				if (!exit.success) return new Response(null, { status: 400 });
+				if (
+					!(await verifyBackgroundExitToken(
+						config.data.GIT_PROXY_SECRET,
+						exit.data,
+						request.headers.get(BACKGROUND_EXIT_TOKEN_HEADER) ?? "",
+					))
+				)
+					return new Response(null, { status: 401 });
+				// One job per command, ever: a repeated or replayed callback is a no-op.
+				return Response.json(
+					{
+						state: await startBackgroundJob(env, {
+							id: backgroundJobId(
+								`background-exit:${exit.data.sessionId}:${exit.data.commandId}`,
+							),
+							kind: "background-wake",
+							...exit.data,
+						}),
+					},
+					{ status: 202 },
+				);
 			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);

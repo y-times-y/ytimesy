@@ -91,20 +91,22 @@
 .add-project-repos button {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--list-row-gap);
 	width: 100%;
-	min-height: 36px;
-	padding: 7px 8px;
+	min-height: var(--list-row-height);
+	padding: var(--list-row-pad);
 	border: 0;
-	border-radius: 6px;
+	border-radius: var(--list-row-radius);
 	background: transparent;
-	color: #ddd;
+	color: var(--list-text);
 	text-align: left;
-	font-size: 13px;
+	font-size: var(--list-font-size);
 }
-.add-project-repos button:hover,
+.add-project-repos button:hover {
+	background: var(--list-hover-bg);
+}
 .add-project-repos button[aria-pressed="true"] {
-	background: #ffffff08;
+	background: var(--list-selected-bg);
 }
 .add-project-repos button:focus-visible {
 	outline: 1px solid #777;
@@ -115,7 +117,7 @@
 }
 .add-project-repo-icon {
 	flex-shrink: 0;
-	color: #858585;
+	color: var(--list-icon-color);
 }
 .add-project-repo-label {
 	flex: 1;
@@ -125,7 +127,7 @@
 	white-space: nowrap;
 }
 .project-create-owner {
-	color: #888;
+	color: var(--list-text-muted);
 }
 .project-create-selected {
 	flex-shrink: 0;

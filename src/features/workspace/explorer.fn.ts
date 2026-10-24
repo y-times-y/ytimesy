@@ -14,12 +14,17 @@ import { enabledPluginComponents } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
-import { ensureSessionMachine } from "#/server/services/workspace-desktop";
+import {
+	ensureSessionMachine,
+	resumeSessionMachine,
+} from "#/server/services/workspace-desktop";
 import {
 	type ExplorerScope,
+	forgetChatMachine,
 	listProjectCommands,
 	listWorkspaceExplorer,
 	readWorkspaceExplorerFile,
+	readWorkspaceExplorerFiles,
 	readWorkspaceFilePreview,
 	readWorkspaceGitChanges,
 	writeWorkspaceExplorerFile,
@@ -72,13 +77,14 @@ async function requireScope(
 	return { userId: user.id, projectId, sessionId };
 }
 
+/** The chat's file tree, with the file Files opens first (`path`, or the tree's first file). */
 export const listWorkspaceExplorerFn = createServerFn({ method: "GET" })
 	.validator(optionalProjectId)
 	.handler(async ({ data }): Promise<WorkspaceExplorerListing> => {
 		try {
 			const scope = await requireScope(data.projectId, data.sessionId);
 			return await runWithMachines((machines) =>
-				listWorkspaceExplorer(machines, scope),
+				listWorkspaceExplorer(machines, scope, data.path),
 			);
 		} catch {
 			return { root: null, paths: [] };
@@ -91,12 +97,28 @@ export const wakeWorkspaceMachineFn = createServerFn({ method: "POST" })
 	.handler(async ({ data }): Promise<{ ready: boolean }> => {
 		requireSameOrigin(getRequest());
 		const scope = await requireScope(data.projectId, data.sessionId);
+		forgetChatMachine(scope);
 		const ref = await runWithMachines((machines) =>
 			ensureSessionMachine(machines, scope).pipe(
 				Effect.catchAll(() => Effect.succeed(null)),
 			),
 		);
 		return { ready: ref !== null };
+	});
+
+/** Wakes this chat's machine if it has one, ahead of a terminal or desktop opening. */
+export const resumeWorkspaceMachineFn = createServerFn({ method: "POST" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<{ ready: boolean }> => {
+		requireSameOrigin(getRequest());
+		const scope = await requireScope(data.projectId, data.sessionId);
+		forgetChatMachine(scope);
+		const ready = await runWithMachines((machines) =>
+			resumeSessionMachine(machines, scope).pipe(
+				Effect.catchAll(() => Effect.succeed(false)),
+			),
+		);
+		return { ready };
 	});
 
 export const readWorkspaceSourceFn = createServerFn({ method: "GET" })
@@ -110,6 +132,34 @@ export const readWorkspaceSourceFn = createServerFn({ method: "GET" })
 			);
 		} catch {
 			return null;
+		}
+	});
+
+/** Up to four files at once, as Files reads the ones next to the open file. */
+export const readWorkspaceSourcesFn = createServerFn({ method: "GET" })
+	.validator(
+		(
+			data:
+				| { projectId?: string; sessionId?: string; paths?: unknown }
+				| undefined,
+		) => ({
+			...optionalProjectId(data),
+			paths: (Array.isArray(data?.paths) ? data.paths : [])
+				.filter((path): path is string => typeof path === "string")
+				.map((path) => path.trim())
+				.filter(Boolean)
+				.slice(0, 4),
+		}),
+	)
+	.handler(async ({ data }): Promise<(WorkspaceSourceFile | null)[]> => {
+		if (!data.paths.length) return [];
+		try {
+			const scope = await requireScope(data.projectId, data.sessionId);
+			return await runWithMachines((machines) =>
+				readWorkspaceExplorerFiles(machines, scope, data.paths),
+			);
+		} catch {
+			return data.paths.map(() => null);
 		}
 	});
 

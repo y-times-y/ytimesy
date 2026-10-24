@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { Freestyle, type Vm } from "freestyle";
+import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
 import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
+import { boundedFreestyleFetch } from "#/server/adapters/freestyle/bounded-fetch";
 import {
 	CHEAP_BASE_RESOURCES,
 	CHEAP_BASE_SNAPSHOT,
 } from "#/server/adapters/freestyle/product-vm";
 import { GUEST_INTERNET_FIREWALL } from "#/server/adapters/freestyle/proof-vm";
-import { waitUntilVmRunning } from "#/server/adapters/freestyle/wait-until-running";
+import { waitUntilGuestReady } from "#/server/adapters/freestyle/wait-until-running";
 
 // Builds the shared "tools" image that workspace VMs boot from (see
 // src/domain/workspace-boot-snapshot.ts). No user data or credentials go in.
@@ -34,6 +36,7 @@ EOF`,
 	},
 	{
 		name: "apt packages",
+		// acl: setfacl grants the reader user the checkout (subagent-reader.ts).
 		script: `
 export DEBIAN_FRONTEND=noninteractive
 install -d -m 0755 /etc/apt/keyrings
@@ -41,7 +44,7 @@ curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc
 chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
 apt-get -o DPkg::Lock::Timeout=180 update -qq
-apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ripgrep gh openjdk-21-jdk-headless iptables >/dev/null
+apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ripgrep gh openjdk-21-jdk-headless iptables acl >/dev/null
 apt-get clean
 rm -rf /var/lib/apt/lists/*`,
 	},
@@ -90,6 +93,11 @@ EOF`,
 		script: `corepack enable --install-directory /usr/local/bin pnpm yarn`,
 	},
 	{
+		// Docker Hub rate-limits the shared VM IPs; pulls go through a mirror.
+		name: "docker registry mirror",
+		script: dockerRegistryMirrorScript(),
+	},
+	{
 		// Read-only subagents run their commands as this user (src/domain/subagent-reader.ts).
 		name: "reader user",
 		script: READER_USER_SETUP_SCRIPT,
@@ -106,10 +114,11 @@ const VERSIONS = `
 for c in "node --version" "npm --version" "corepack --version" "pnpm --version" "yarn --version" "bun --version" \\
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
-  "git --version" "docker --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version"; do
+  "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
-done`;
+done
+printf '%-24s %s\\n' "docker mirrors" "$(cat /etc/docker/daemon.json 2>/dev/null | tr -d ' \\n')"`;
 
 const TIMING = `bash -c 'TIMEFORMAT=%R; for i in 1 2 3; do time bash -lc true; done; for i in 1 2 3; do time bash -c true; done' 2>&1 | tr '\\n' ' '`;
 
@@ -121,7 +130,7 @@ const SNAPSHOT_SLUG = `ytimesy-tools-${recipeHash}`;
 
 const key = process.env.FREESTYLE_API_KEY;
 if (!key) throw new Error("FREESTYLE_API_KEY is required.");
-const client = new Freestyle({ apiKey: key });
+const client = new Freestyle({ apiKey: key, fetch: boundedFreestyleFetch() });
 
 async function run(vm: Vm, label: string, script: string, linuxUser?: string) {
 	const started = Date.now();
@@ -150,7 +159,7 @@ async function bootVm(snapshotId: string, purpose: string) {
 		automaticRestart: false,
 		metadata: { purpose: "ytimesy-proof" },
 	});
-	const { resources } = await waitUntilVmRunning(created.vm, "Tools VM");
+	const { resources } = await waitUntilGuestReady(created.vm, "Tools VM");
 	// Admission sizes the tools image as the base image without a source VM.
 	if (
 		resources.cpu !== CHEAP_BASE_RESOURCES.cpu ||

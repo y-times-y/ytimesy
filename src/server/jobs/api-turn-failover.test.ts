@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 import { APICallError } from "ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+	CodexEgressUnavailable,
 	IncompleteAgentTurn,
 	SafeApiModelFailure,
+	SubscriptionUsageLimitReached,
 } from "#/domain/api-turn-failure";
 import { SessionItemId } from "#/domain/ids";
-import type { TurnFailover } from "#/domain/model-failover";
+import {
+	routeRetries,
+	type TurnFailover,
+	type TurnFailoverColumn,
+} from "#/domain/model-failover";
 import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
@@ -24,6 +30,15 @@ const mocks = vi.hoisted(() => ({
 	analytics: vi.fn(),
 	owner: vi.fn(),
 	result: vi.fn(),
+	// Same-route retry waits; the failover tests below run without retries.
+	retryDelays: [] as number[],
+}));
+
+vi.mock("#/domain/model-failover", async (importOriginal) => ({
+	...(await importOriginal<typeof import("#/domain/model-failover")>()),
+	get MODEL_STEP_RETRY_DELAYS_MS() {
+		return mocks.retryDelays;
+	},
 }));
 
 vi.mock("../adapters/api-turns", () => ({
@@ -183,13 +198,14 @@ function afterCheckpoint(turn: ApiTurn): ApiTurn {
 		ApiTurn,
 		ApiTurn["messages"],
 		SessionItem[],
-		TurnFailover | undefined,
+		TurnFailoverColumn | undefined,
 	];
 	return { ...turn, messages, items, failover: failover ?? turn.failover };
 }
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.retryDelays = [];
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
 	mocks.checkpoint.mockResolvedValue(undefined);
 	mocks.analytics.mockResolvedValue(undefined);
@@ -473,4 +489,174 @@ it("keeps the local worker's turn running on the fallback in the same call", asy
 	expect(items.find((item) => item.kind === "modelSwitch")).toMatchObject({
 		reason: "overloaded",
 	});
+});
+
+const codexRoute = {
+	connectionId: null,
+	connectionRevision: subscriptionTurnRevision("high", false),
+	modelId: "gpt-6.1-sol",
+};
+
+/** Codex streams some text, then the stream ends in error. */
+function midStreamFailure(error: unknown = new IncompleteAgentTurn("error")) {
+	return async (input: {
+		messages: ApiTurn["messages"];
+		onEvent: (event: unknown) => Promise<void>;
+		onAttemptFailed?: (state: unknown) => void;
+	}) => {
+		await input.onEvent({ type: "text-delta", id: "t1", text: "Let me" });
+		input.onAttemptFailed?.({
+			committed: input.messages,
+			droppedStepSaved: false,
+			uncommittedIds: ["t1"],
+		});
+		throw error;
+	};
+}
+
+function switchItem(turn: ApiTurn) {
+	return turn.items.find(
+		(item): item is ModelSwitchItem => item.kind === "modelSwitch",
+	);
+}
+
+it("retries a transient mid-stream failure on the same route before any switch", async () => {
+	mocks.retryDelays = [0, 0];
+	mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());
+	let turn = codexTurn();
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	expect(routeRetries(turn.failover, codexRoute)).toBe(1);
+	// Still the user's route: no switch, no notice, the cut-off text retracted.
+	expect(switchItem(turn)).toBeUndefined();
+	expect(turn.items.some((item) => item.kind === "agentMessage")).toBe(false);
+	expect(turn.messages).toEqual(codexTurn().messages);
+
+	mocks.subscriptionStep.mockImplementationOnce(async (input) => {
+		expect(input.modelId).toBe("gpt-6.1-sol");
+		expect(input.messages).toEqual(codexTurn().messages);
+		await input.onEvent({ type: "text-delta", id: "r", text: "Fixed." });
+		return { messages: input.messages, outcome: "completed" };
+	});
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(2))).toBe(
+		"completed",
+	);
+	expect(mocks.subscriptionStep).toHaveBeenCalledTimes(2);
+	expect(mocks.apiStep).not.toHaveBeenCalled();
+	// The step that succeeded cleared the count for later failures.
+	expect(routeRetries(afterCheckpoint(turn).failover, codexRoute)).toBe(0);
+	const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
+	expect(items.some((item) => item.kind === "modelSwitch")).toBe(false);
+	expect(mocks.analytics).not.toHaveBeenCalledWith(
+		"owner",
+		"model_failover",
+		expect.anything(),
+		expect.anything(),
+	);
+});
+
+it("fails over after the third transient failure in a row, saying why", async () => {
+	mocks.retryDelays = [0, 0];
+	let turn = codexTurn();
+	for (const index of [1, 2]) {
+		mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());
+		expect(await runApiTurn({} as WorkspaceMachines, turn, step(index))).toBe(
+			"continue",
+		);
+		turn = afterCheckpoint(turn);
+		expect(routeRetries(turn.failover, codexRoute)).toBe(index);
+		expect(switchItem(turn)).toBeUndefined();
+	}
+	mocks.subscriptionStep.mockImplementationOnce(
+		midStreamFailure(
+			new SafeApiModelFailure(
+				new APICallError({
+					message: "Service Unavailable Bearer secret-token",
+					url: "https://chatgpt.com/backend-api/codex/responses",
+					requestBodyValues: {},
+					statusCode: 503,
+					isRetryable: true,
+				}),
+			),
+		),
+	);
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(3))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	expect(mocks.subscriptionStep).toHaveBeenCalledTimes(3);
+	expect((turn.failover as TurnFailover).route.connectionId).toBe(OPENROUTER);
+	const notice = switchItem(turn);
+	expect(notice).toMatchObject({ state: "switched", reason: "outage" });
+	expect(notice?.cause).toContain("503: Service Unavailable");
+	expect(notice?.cause).not.toContain("secret-token");
+	expect(notice?.cause?.length).toBeLessThanOrEqual(300);
+});
+
+it.each([
+	["a usage limit", new SubscriptionUsageLimitReached(null), "usage-limit"],
+	[
+		"a blocked Codex egress",
+		new CodexEgressUnavailable([{ path: "direct", reason: "403" }]),
+		"outage",
+	],
+])("fails over at once on %s, without a retry", async (_, error, reason) => {
+	mocks.retryDelays = [0, 0];
+	mocks.subscriptionStep.mockRejectedValueOnce(error);
+	let turn = codexTurn();
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	expect(mocks.subscriptionStep).toHaveBeenCalledTimes(1);
+	expect((turn.failover as TurnFailover).route.connectionId).toBe(OPENROUTER);
+	expect(switchItem(turn)).toMatchObject({ reason });
+});
+
+it("keeps the retry count across an executor restart", async () => {
+	mocks.retryDelays = [0, 0];
+	mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());
+	let turn = codexTurn();
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	// The retried step is re-run after its executor restarted mid-step.
+	mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());
+	expect(
+		await runApiTurn({} as WorkspaceMachines, turn, {
+			...step(2),
+			resumed: true,
+		}),
+	).toBe("continue");
+	turn = afterCheckpoint(turn);
+	expect(routeRetries(turn.failover, codexRoute)).toBe(2);
+	mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(3))).toBe(
+		"continue",
+	);
+	turn = afterCheckpoint(turn);
+	expect((turn.failover as TurnFailover).route.connectionId).toBe(OPENROUTER);
+});
+
+it("retries the local worker's turn in the same call", async () => {
+	mocks.retryDelays = [0, 0];
+	const local = vi.mocked(
+		(await import("../services/codex-subscription-agent"))
+			.runCodexSubscriptionAgent,
+	);
+	local.mockReset();
+	local.mockRejectedValueOnce(new IncompleteAgentTurn("error"));
+	local.mockImplementationOnce(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "r", text: "Done." });
+		return input.messages;
+	});
+	expect(await runApiTurn({} as WorkspaceMachines, codexTurn())).toBe(
+		"completed",
+	);
+	expect(local).toHaveBeenCalledTimes(2);
+	const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
+	expect(items.some((item) => item.kind === "modelSwitch")).toBe(false);
 });

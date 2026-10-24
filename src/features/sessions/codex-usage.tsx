@@ -1,4 +1,5 @@
 import type { CodexUsage } from "#/domain/codex-usage";
+import { usageResetLabel } from "#/domain/usage-warning";
 
 function windowLabel(minutes?: number | null) {
 	if (!minutes) return "Usage window";
@@ -9,11 +10,7 @@ function windowLabel(minutes?: number | null) {
 
 function resetLabel(resetsAt?: number | null) {
 	if (!resetsAt) return null;
-	return `Resets ${new Date(resetsAt * 1000).toLocaleString(undefined, {
-		weekday: "short",
-		hour: "numeric",
-		minute: "2-digit",
-	})}`;
+	return `Resets ${usageResetLabel(resetsAt * 1000)}`;
 }
 
 export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {

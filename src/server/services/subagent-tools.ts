@@ -260,7 +260,13 @@ const LEAD_ROLE_TEXT =
 
 const agentInput = z.object({
 	role: z.enum(SUBAGENT_ROLES).describe(ROLE_TEXT),
-	title: z.string().min(1).max(SUBAGENT_TITLE_MAX),
+	title: z
+		.string()
+		.min(1)
+		.max(SUBAGENT_TITLE_MAX)
+		.describe(
+			'Its task in a few plain words, e.g. "Read package metadata"; not a slug or a name (the chat names it, e.g. "research-1")',
+		),
 	brief: z
 		.string()
 		.max(SUBAGENT_BRIEF_MAX)

@@ -12,6 +12,7 @@ import {
 	pullRequestParticipants,
 	pullRequestPerson,
 } from "../../domain/pull-request-review";
+import { pullRequestChecksSummary } from "../../domain/sidebar-chat-status";
 import { serverConfig } from "../config";
 
 const tokenResponse = z.object({
@@ -454,6 +455,15 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 				repo,
 				pull_number: pull.number,
 			});
+			// Only an open PR's checks show in the sidebar; finished ones skip the calls.
+			const checks =
+				full.data.state === "open"
+					? pullRequestChecksSummary(
+							(await headChecks(github, owner, repo, full.data.head.sha)).map(
+								(check) => check.state,
+							),
+						)
+					: null;
 			return {
 				number: full.data.number,
 				url: full.data.html_url,
@@ -463,9 +473,41 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 				merged: Boolean(full.data.merged),
 				mergeable: full.data.mergeable ?? null,
 				mergeableState: full.data.mergeable_state ?? null,
+				checks,
 			};
 		}),
 	);
+}
+
+/** The latest check runs and commit statuses on a commit; empty when GitHub refuses. */
+async function headChecks(
+	github: ReturnType<typeof githubClient>,
+	owner: string,
+	repo: string,
+	ref: string,
+) {
+	const [runs, statuses] = await Promise.all([
+		github.checks
+			.listForRef({ owner, repo, ref, per_page: 100 })
+			.then((response) => response.data.check_runs)
+			.catch(() => []),
+		github.repos
+			.getCombinedStatusForRef({ owner, repo, ref })
+			.then((response) => response.data.statuses)
+			.catch(() => []),
+	]);
+	return [
+		...runs.map((run) => ({
+			name: run.name,
+			state: checkState(run),
+			url: run.html_url ?? null,
+		})),
+		...statuses.map((status) => ({
+			name: status.context,
+			state: checkState(status),
+			url: status.target_url ?? null,
+		})),
+	];
 }
 
 /** Everything the in-app review panel shows for one ytimesy pull request. */
@@ -536,17 +578,7 @@ export async function pullRequestDetail(
 		})),
 	].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 	const author = pullRequestPerson(pull.data.user);
-	const head = pull.data.head.sha;
-	const [runs, statuses] = await Promise.all([
-		github.checks
-			.listForRef({ owner, repo, ref: head, per_page: 100 })
-			.then((response) => response.data.check_runs)
-			.catch(() => []),
-		github.repos
-			.getCombinedStatusForRef({ owner, repo, ref: head })
-			.then((response) => response.data.statuses)
-			.catch(() => []),
-	]);
+	const checks = await headChecks(github, owner, repo, pull.data.head.sha);
 	return {
 		number: pull.data.number,
 		title: pull.data.title,
@@ -572,18 +604,7 @@ export async function pullRequestDetail(
 		deletions: pull.data.deletions,
 		changedFiles: pull.data.changed_files,
 		comments: pull.data.comments + pull.data.review_comments,
-		checks: [
-			...runs.map((run) => ({
-				name: run.name,
-				state: checkState(run),
-				url: run.html_url ?? null,
-			})),
-			...statuses.map((status) => ({
-				name: status.context,
-				state: checkState(status),
-				url: status.target_url ?? null,
-			})),
-		],
+		checks,
 		reviews: reviews.data
 			.filter((review) => review.state !== "PENDING")
 			.map((review) => ({

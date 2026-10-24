@@ -28,6 +28,7 @@ vi.mock("../adapters/checkpoints/storage", () => ({
 
 const {
 	materializeMessageAttachments,
+	pastedTextContent,
 	sessionAttachments,
 	storeMessageAttachments,
 } = await import("./message-attachments");
@@ -141,5 +142,59 @@ describe("message attachments on the machine", () => {
 			[attachment],
 		);
 		expect(await readFile(path)).toEqual(Buffer.alloc(0));
+	});
+});
+
+describe("pasted text attachments", () => {
+	it("sends a large paste as a text file the agent is told to read", async () => {
+		const { pastedTextFile } = await import(
+			"#/features/sessions/attachment-tile"
+		);
+		const { withAttachmentNote } = await import("#/domain/message-attachment");
+		const text = Array.from(
+			{ length: 84 },
+			(_, index) => `line ${index} — ünïcode`,
+		).join("\n");
+		const file = pastedTextFile(text, 1);
+		expect(file).toMatchObject({ name: "pasted-1.txt", type: "text/plain" });
+		// What encodeAttachments sends for this file.
+		const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+		const [attachment] = await storeMessageAttachments("user", "session", [
+			{ name: file.name, mediaType: file.type, base64 },
+		]);
+		expect(attachment).toMatchObject({
+			name: "pasted-1.txt",
+			mediaType: "text/plain",
+			lines: 84,
+			peek: expect.stringMatching(/^line 0 .*\nline 1 /),
+		});
+		const path = attachmentPath(attachment);
+		written.push(path.slice(0, path.lastIndexOf("/")));
+		await materializeMessageAttachments(
+			host,
+			WorkspaceId("vm"),
+			"user",
+			"session",
+			[attachment],
+		);
+		expect(await readFile(path, "utf8")).toBe(text);
+		const note = withAttachmentNote("Summarize this", [attachment]);
+		expect(note).toContain(`${path} (pasted text, 84 lines`);
+		expect(note).toContain("Read it in full before acting on it.");
+		expect(await pastedTextContent("user", "session", attachment)).toBe(text);
+	});
+
+	it("does not count lines or serve previews for other files", async () => {
+		const [attachment] = await storeMessageAttachments("user", "session", [
+			{
+				name: "notes.txt",
+				mediaType: "text/plain",
+				base64: Buffer.from("a\nb").toString("base64"),
+			},
+		]);
+		expect(attachment).not.toHaveProperty("lines");
+		await expect(
+			pastedTextContent("user", "session", attachment),
+		).rejects.toThrow();
 	});
 });

@@ -84,7 +84,7 @@ describe("the user steering a helper", () => {
 			}),
 		]);
 		await expect(sendUserMessageToHelper(input, fake)).resolves.toMatchObject({
-			name: "Build the export (Build)",
+			name: 'build-1 ("Build the export")',
 			status: "queued",
 			delivery: "next step",
 		});
@@ -101,7 +101,31 @@ describe("the user steering a helper", () => {
 		expect(fake.notifyLead).toHaveBeenCalledWith(
 			"root",
 			"user-steer:req-1",
-			"The user sent Build the export (Build): Skip the docs",
+			'The user sent build-1 ("Build the export"): Skip the docs',
+		);
+	});
+	it("tells the helper who its message's @mentions name, but not the lead's notice", async () => {
+		const fake = deps([
+			row("root", null),
+			row("helper", "root", { title: "Build the export" }),
+			row("other", "root", {
+				title: "Find the API",
+				agentRole: "researcher",
+				createdAt: "2026-10-21T10:01:00Z",
+			}),
+		]);
+		await sendUserMessageToHelper(
+			{ ...input, message: "Ask @Main or @research-1, not @build-1" },
+			fake,
+		);
+		expect(fake.enqueue.mock.calls[0]?.[0]).toMatchObject({
+			message: "Ask @Main or @research-1, not @build-1",
+			context: `[@mentions in the user's message: @Main = the lead agent; @research-1 = agent 2 (researcher, working, "Find the API")]`,
+		});
+		expect(fake.notifyLead).toHaveBeenCalledWith(
+			"root",
+			"user-steer:req-1",
+			expect.not.stringContaining("@mentions"),
 		);
 	});
 	it("reaches a nested helper through its own parent", async () => {

@@ -2,14 +2,17 @@
 // at that user message through the real recovery path (the menu's "Fork
 // conversation"), then check the fork's VM, branch and transcript, the
 // source's, a turn run in the fork, and that a checkpoint whose refs are gone
-// refuses the fork without copying a VM.
+// fails the fork's workspace without leaving a VM copy.
 import { agentSessionMachineSlug } from "../../src/domain/agent-session";
 import { WorkspaceId } from "../../src/domain/ids";
 import { posixShellQuoted } from "../../src/domain/posix-command";
 import { conversationPoint } from "../../src/server/adapters/conversation-recovery";
 import { database } from "../../src/server/adapters/database";
 import { PROJECT_CWD_PATH } from "../../src/server/adapters/freestyle/clone-project";
-import { recoverConversation } from "../../src/server/services/conversation-recovery";
+import {
+	conversationForkState,
+	recoverConversation,
+} from "../../src/server/services/conversation-recovery";
 import type { WorkspaceMachines } from "../../src/server/services/workspace-machines";
 import type { RehearsalEdge } from "./edge";
 import { type Check, FORK_IN_FORK, FORK_MARKER } from "./scenarios";
@@ -74,6 +77,19 @@ export async function rehearseFork(input: {
 				).rows[0],
 		);
 
+	// A fork's chat opens before its VM is copied (a background job); its
+	// status is null once the copy is bound.
+	const forkCopied = async (id: string) => {
+		const deadline = Date.now() + input.timeoutMs;
+		for (;;) {
+			const state = await edge.invoke(() =>
+				conversationForkState(user.userId, user.projectId, id),
+			);
+			if (state?.state !== "preparing" || Date.now() > deadline) return state;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+	};
+
 	const source = await sessionRow(sessionId);
 	const messages = (source?.items ?? []).filter(
 		(item) => item.kind === "userMessage",
@@ -112,9 +128,16 @@ export async function rehearseFork(input: {
 		check("Fork conversation succeeded", false, (error as Error).message);
 		return checks;
 	}
-	check("Fork conversation succeeded", true);
+	const opened = Date.now();
+	const copied = await forkCopied(forkId);
+	check(
+		"Fork conversation succeeded",
+		copied === null,
+		clip(JSON.stringify(copied)),
+	);
+	if (copied) return checks;
 	console.log(
-		`rehearsal: fork at message ${input.forkAt} ready in ${((Date.now() - clicked) / 1000).toFixed(1)}s (click to fork row and VM)`,
+		`rehearsal: fork at message ${input.forkAt} opened in ${((opened - clicked) / 1000).toFixed(1)}s, VM ready in ${((Date.now() - clicked) / 1000).toFixed(1)}s`,
 	);
 	const fork = await sessionRow(forkId);
 	const copy = chatForks().at(-1);
@@ -238,6 +261,8 @@ export async function rehearseFork(input: {
 			)
 			.then(
 				async ({ id }) => {
+					const copied = await forkCopied(id);
+					if (copied) return { error: JSON.stringify(copied) };
 					const row = await sessionRow(id);
 					return row?.provider_ref
 						? { marker: await marker(row.provider_ref) }
@@ -258,7 +283,8 @@ export async function rehearseFork(input: {
 		);
 	}
 
-	// A checkpoint whose refs are gone refuses the fork before any VM is copied.
+	// A checkpoint whose refs are gone: the fork's chat opens, then shows
+	// the refusal in place of a workspace, and no VM copy is left behind.
 	const ref = point.code.ref;
 	await machines.exec(
 		WorkspaceId(vm),
@@ -276,13 +302,13 @@ export async function rehearseFork(input: {
 			}),
 		)
 		.then(
-			() => "forked",
+			async ({ id }) => JSON.stringify(await forkCopied(id)),
 			(error: Error) => error.message,
 		);
 	check(
-		"a checkpoint whose refs are gone refuses the fork, copying no VM",
+		"a checkpoint whose refs are gone fails the fork's workspace, copying no VM",
 		/checkpoint is gone/.test(refused) && chatForks().length === forksNow,
-		refused,
+		clip(refused),
 	);
 	return checks;
 }
