@@ -163,6 +163,13 @@ async function bedrockClaudeRuntime(input: {
 				anthropic: {
 					...settings.providerOptions?.anthropic,
 					...cacheSettings.providerOptions.anthropic,
+					// Native compaction rewrites the prefix a signed thinking block
+					// was bound to; Bedrock then refuses the next request ("bound to
+					// a different conversation"). Drop such a block instead.
+					thinking: {
+						type: "adaptive",
+						blockBinding: { prefixMismatchBehavior: "drop_block" },
+					},
 				},
 			},
 		};
