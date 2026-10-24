@@ -48,7 +48,7 @@ moved.
 | 10-23 | c2: same with checker @high | Live, Bedrock | 4/8, $13.27. Converted nothing. Wrongly rejected session-window 3 times |
 | 10-23 | Failure analysis of 13 failed trials (b3, s2, s3) | Offline | 11 causes: 8 knowable from the task and files, 1 ambiguous, 2 unknowable. The checker adopts the builder's reading; it lists the right alternative as a probe, sees it fail, and passes anyway |
 | 10-24 | Different, weaker model family: Claude Haiku 5.5 on Bedrock, current brief | 16 labelled Codex runs, checker-only trials | Caught 1/5 confirmed failures (plus lake-temp, unconfirmed), wrongly failed 0/5, about $0.10/check |
-| 10-24 | `checkerMode=blind`: phase 1 writes tests from the request and the pre-work checkout (no deliverable or diff in view); phase 2 runs them unchanged on the deliverable | 6 key samples (the misses above + 2 passes) | 0/2 so far (freecad, interleaved still passed); rest pending |
+| 10-24 | `checkerMode=blind`: phase 1 writes tests from the request and the pre-work checkout (no deliverable or diff in view); phase 2 runs them unchanged on the deliverable | 6 key samples (the misses above + 2 passes) | 0/2 (freecad, interleaved still passed); stopped there by decision |
 
 Fusion's lead also reviewed each sidekick round in place (lead=fusion). On
 s2/s3 (15 trials) it passed 4 against Codex's expected 8.8 at 2x Codex's
