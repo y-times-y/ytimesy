@@ -6,6 +6,7 @@ import {
 	PopoverTrigger,
 } from "#/components/ui/popover";
 import {
+	isPastedText,
 	lineCount,
 	PASTED_TEXT_MEDIA_TYPE,
 	PASTED_TEXT_PREVIEW_CHARACTERS,
@@ -44,6 +45,27 @@ export function pastedFileText(file: File) {
 export function rememberSentPaste(attachmentId: string, file: File) {
 	const text = textByFile.get(file);
 	if (text !== undefined) textBySentId.set(attachmentId, text);
+}
+
+/**
+ * A sending paste as the transcript shows it: its line count, and its text
+ * kept for the chip's preview. Other files add nothing.
+ */
+export function sentPasteFields(
+	attachmentId: string,
+	file: {
+		readonly name: string;
+		readonly mediaType: string;
+		readonly base64: string;
+	},
+): { lines?: number } {
+	if (!isPastedText(file)) return {};
+	const bytes = Uint8Array.from(atob(file.base64), (char) =>
+		char.charCodeAt(0),
+	);
+	const text = new TextDecoder().decode(bytes);
+	textBySentId.set(attachmentId, text);
+	return { lines: lineCount(text) };
 }
 
 function preview(text: string): PastedTextPreview {
