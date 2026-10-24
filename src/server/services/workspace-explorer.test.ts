@@ -168,16 +168,7 @@ it("lists a running machine with git and reads the asked-for file beside it", as
 					? `${root}\n`
 					: readFile(path, "utf8").catch(() => null),
 			exec: async (_id: unknown, command: string) => {
-				const result = spawnSync(
-					"sh",
-					[
-						"-c",
-						command
-							.replace("bash -lc", "bash -c")
-							.replaceAll("/tmp/ytimesy-project-cwd", join(root, ".cwd")),
-					],
-					{ encoding: "utf8" },
-				);
+				const result = spawnSync("sh", ["-c", command], { encoding: "utf8" });
 				return {
 					exitCode: result.status ?? 1,
 					stdout: result.stdout,
@@ -185,8 +176,6 @@ it("lists a running machine with git and reads the asked-for file beside it", as
 				};
 			},
 		} as unknown as WorkspaceMachines;
-		await writeFile(join(root, ".cwd"), root);
-		await writeFile(join(root, ".git/info/exclude"), ".cwd\n");
 		const listing = await Effect.runPromise(
 			listWorkspaceExplorer(
 				machines,
@@ -231,6 +220,46 @@ it("lists from the git index when a just-woken machine does not answer git", asy
 			opened: { path: "a.ts", text: "a" },
 		});
 		expect(listing.machine).toBeUndefined();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("finds the checkout at its default path once a cold restart cleared /tmp", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-cold-"));
+	try {
+		spawnSync("git", ["init", "-q"], { cwd: root });
+		await writeFile(join(root, "a.ts"), "a");
+		spawnSync("git", ["add", "a.ts"], { cwd: root });
+		// The project's repository is owner/repo, checked out at /home/ubuntu/repo.
+		const onDisk = (path: string) =>
+			path.startsWith("/home/ubuntu/repo/")
+				? join(root, path.slice("/home/ubuntu/repo/".length))
+				: null;
+		const machines = {
+			isRunning: async () => false,
+			readTextFile: async (_id: unknown, path: string) => {
+				const local = onDisk(path);
+				return local ? readFile(local, "utf8").catch(() => null) : null;
+			},
+			readFile: async (_id: unknown, path: string) => {
+				const local = onDisk(path);
+				return local ? readFile(local).catch(() => null) : null;
+			},
+		} as unknown as WorkspaceMachines;
+		expect(
+			await Effect.runPromise(
+				listWorkspaceExplorer(machines, {
+					userId: "alice",
+					projectId: "p1",
+					sessionId: "cold",
+				}),
+			),
+		).toMatchObject({
+			root: "/home/ubuntu/repo",
+			paths: ["a.ts"],
+			opened: { path: "a.ts", text: "a" },
+		});
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
