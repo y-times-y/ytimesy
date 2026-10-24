@@ -45,7 +45,36 @@ export type ReviewBriefInput = {
 	 * round that is still a full check.
 	 */
 	readonly previousFindings?: readonly string[];
+	/**
+	 * Harness variant checkerMode=blind: the git ref of the checkout before
+	 * the work. The checker derives the requirements, expected values and
+	 * tests from it and the request before it looks at the deliverable, so
+	 * the deliverable's reading of the request cannot shape its tests.
+	 */
+	readonly blindBaseRef?: string;
 };
+
+/**
+ * checkerMode=blind: the review's steps. Phase 1 sees only the request and
+ * the checkout as it was before the work; phase 2 runs phase 1's tests,
+ * unchanged, against the deliverable.
+ */
+function blindReviewSteps(
+	input: ReviewBriefInput & { blindBaseRef: string },
+	work: string,
+) {
+	const before = `${input.scratch}/before`;
+	const tests = `${input.scratch}/tests`;
+	return [
+		"Review in two phases. The point of phase 1 is an independent reading of the request: a strict grader wrote its hidden tests from the request, not from the deliverable, so your tests must come from the request too.",
+		`Phase 1, before you see the deliverable. Extract the checkout as it was before the work: \`mkdir -p ${before} && git -C ${input.checkout} archive ${input.blindBaseRef} | tar -x -C ${before}\`. Until ${tests}/expectations.md is written, do not open, list, grep or diff ${input.checkout}, the changed files or the deliverable's notes; work only from the request and ${before}. In phase 1:`,
+		`1. List every requirement the request states: each symptom to fix, definition, rule, example value, output format, file path, name, limit and side effect, in the request's own words.`,
+		`2. Work out the expected results yourself. Where the request or ${before} supplies inputs, data, examples or sample cases, compute what a correct deliverable must produce from them: a short script under ${input.scratch}/derive that implements the governing rule independently, or values derived by hand from the text. Where the wording allows more than one reading, write each plausible reading down with the result it gives; keep the one the request's own examples, definitions and supplied data support, then the convention of the library or field involved, and say why. Terms with an established meaning in a widely used library or field keep it unless the request redefines them.`,
+		`3. Write tests under ${tests} that check each requirement with those expected values, through the interfaces a grader would call: the functions, signatures, command lines and file paths the request and ${before} define (a hidden test calls what already exists; it does not know new helpers). Keep \`${tests}/run.sh\` running all of them (non-zero exit on a failure) with the target directory as its first argument and ${work} when none is given (the review loop runs it again with none). Run it against ${before}: tests of what the request says is missing or broken should fail there; if one passes on ${before}, check whether it really tests the requirement.`,
+		`4. Write ${tests}/expectations.md: the requirements, the readings you chose and why, and the expected values.`,
+		`Phase 2, the deliverable. Copy the checkout (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run \`${tests}/run.sh ${work}\` with your phase-1 tests unchanged. Never change an expected value to match the deliverable; fix a test only for a bug in the test itself that also shows on ${before}, and say so in notes. Every failing test is a failure, with the command and what it printed. Only then read the deliverable${input.diffCommand ? ` (\`${input.diffCommand}\` shows the whole change)` : ""}: explain each failure from the code, and look for anything the request requires that your tests could not reach (an output written elsewhere, a service, a run as another user); add a test for each and run it. Also check plausibility: magnitudes, counts and ranges against the inputs, no placeholders or hard-coded answers. Tests that go beyond what the request and its files state are marked "probe": true; a failed probe is a note, not a failure.`,
+	];
+}
 
 /** rigor=on: stated interpretations get the convention-based reading tested. */
 const RIGOR_ASSUMPTIONS =
@@ -93,7 +122,8 @@ function deliverableLine(input: ReviewBriefInput) {
 		...(outside.length
 			? [`Files the run delivered outside it: ${outside.join(", ")}.`]
 			: []),
-		...(input.diffCommand
+		// checkerMode=blind names the diff only in phase 2.
+		...(input.diffCommand && !input.blindBaseRef
 			? [`\`${input.diffCommand}\` shows the whole change.`]
 			: []),
 	].join(" ");
@@ -104,6 +134,13 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 	const work = `${input.scratch}/work`;
 	const rigor = !!input.rigor;
 	const claimed = rigor ? (input.builderRequirements ?? []) : [];
+	const fourPartReview = [
+		"Review in four parts:",
+		`1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them). A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it. Then list every other requirement in the files the request points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, run a command that shows it is met or not (a file and line too: grep -n, not reading). A requirement you could not check is not met.${claimed.length ? RIGOR_COMPARE : ""}`,
+		`2. Assumptions. Before reading any rationale the deliverable states, write and run a script under ${input.scratch}/tests that derives each key output from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved) and diffs it against the deliverable's. A mismatch that script shows, and the deliverable's reasoning does not refute from the source text, is a failure. An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy". Then list the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. ${AMBIGUITY}${rigor ? RIGOR_ASSUMPTIONS : ""}`,
+		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
+		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Keep \`${input.scratch}/tests/run.sh\` running all your non-probe tests (non-zero exit on a failure); the review loop runs it again after you. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed. Mark a test "probe": true when it goes beyond what the request and its files state (inputs, sizes, cases or guarantees they do not ask for); a failed probe is a note, not a failure.${rigor ? RIGOR_OUTSIDE_RUN : ""}`,
+	];
 	return [
 		"You are an independent checker. Decide whether the delivered work meets the request below. You did not build it and nobody will tell you what to look for. A strict grader with hidden tests judges it after you, from the request alone, so look for what such a grader would check and what would make it fail.",
 		"",
@@ -115,15 +152,24 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		deliverableLine(input),
 		"</deliverable>",
 		"",
-		`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
-		findingsLine(input.scratch),
-		STAND_IN,
-		"",
-		"Review in four parts:",
-		`1. Requirements. Before anything else, and before reading the deliverable's notes or rationale, list each symptom or requirement the request itself states and mark it fixed or not fixed by running a reproduction through the existing public API and entry points, the calls a normal caller makes (hidden tests use them). A stated symptom not fixed that way is a failure, whatever docstrings, comments or the deliverable's notes say; a fix that needs new methods, flags, protocols or extra caller calls does not fix it. Then list every other requirement in the files the request points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, run a command that shows it is met or not (a file and line too: grep -n, not reading). A requirement you could not check is not met.${claimed.length ? RIGOR_COMPARE : ""}`,
-		`2. Assumptions. Before reading any rationale the deliverable states, write and run a script under ${input.scratch}/tests that derives each key output from the governing rule or procedure in the request and its files (enumerated lists, precedence orders, required-type tables, the convention of the library or standard involved) and diffs it against the deliverable's. A mismatch that script shows, and the deliverable's reasoning does not refute from the source text, is a failure. An explicit list or precedence order beats general guidance such as "minimal" or "avoid redundancy". Then list the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. ${AMBIGUITY}${rigor ? RIGOR_ASSUMPTIONS : ""}`,
-		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
-		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Keep \`${input.scratch}/tests/run.sh\` running all your non-probe tests (non-zero exit on a failure); the review loop runs it again after you. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed. Mark a test "probe": true when it goes beyond what the request and its files state (inputs, sizes, cases or guarantees they do not ask for); a failed probe is a note, not a failure.${rigor ? RIGOR_OUTSIDE_RUN : ""}`,
+		...(input.blindBaseRef
+			? [
+					`Do not change the deliverable; run experiments only in ${input.scratch}.`,
+					findingsLine(input.scratch),
+					STAND_IN,
+					"",
+					...blindReviewSteps(
+						{ ...input, blindBaseRef: input.blindBaseRef },
+						work,
+					),
+				]
+			: [
+					`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
+					findingsLine(input.scratch),
+					STAND_IN,
+					"",
+					...fourPartReview,
+				]),
 		...(claimed.length
 			? [
 					"",

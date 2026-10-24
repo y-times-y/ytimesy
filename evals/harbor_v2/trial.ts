@@ -908,6 +908,7 @@ export async function runHarborTrial(
 				instruction: input.instruction,
 				rigor: config.variant.rigor === "on",
 				pair: config.variant.checkerMode === "pair",
+				blind: config.variant.checkerMode === "blind",
 				deps: harborReviewDeps({
 					workspace,
 					// Leave the grader's side two minutes.
