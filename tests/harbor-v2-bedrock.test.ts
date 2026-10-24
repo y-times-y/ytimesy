@@ -163,7 +163,7 @@ describe("bedrock route config", () => {
 		).toThrow(/must be one of global, us/);
 		expect(() =>
 			harborBridgeConfig({ ...bedrock, YTIMESY_HARBOR_MODEL: "gpt-6.1-sol" }),
-		).toThrow(/not a Bedrock OpenAI model id/);
+		).toThrow(/not a Bedrock OpenAI or Claude model id/);
 		expect(() =>
 			harborBridgeConfig({
 				...bedrock,

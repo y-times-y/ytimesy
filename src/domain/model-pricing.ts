@@ -247,7 +247,8 @@ export function pricedModelId(routeOrModelId: string) {
 	const route = parseModelRouteId(routeOrModelId);
 	const id = (route?.modelId ?? routeOrModelId.replace(/^codex:/, ""))
 		.replace(/:free$/, "")
-		.replace(/^(?:[a-z]{2,4}\.)?anthropic\.(?=claude-)/, "")
+		// Bedrock's Claude ids and inference profiles (`global.anthropic.claude-haiku-5-5`).
+		.replace(/^(?:[a-z]{2,6}(?:-[a-z]+)?\.)?anthropic\.(?=claude-)/, "")
 		// Bedrock's OpenAI ids and inference profiles (`global.openai.gpt-6.1-sol`).
 		.replace(/^(?:[a-z]{2,6}(?:-[a-z]+)?\.)?openai\.(?=gpt-)/, "");
 	const claude = /^(claude-[a-z]+)-(\d+)-(\d{1,2})(?:-v\d+(?::\d+)?)?$/.exec(

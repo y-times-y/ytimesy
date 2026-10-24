@@ -101,6 +101,21 @@ export type BedrockInferenceProfile =
 const PROFILED_OPENAI =
 	/^(?:global|us|us-gov|eu|apac|jp|au|ca)\.openai\.gpt-[\w.-]+$/;
 const FOUNDATION_OPENAI = /^openai\.gpt-[\w.-]+$/;
+const PROFILED_ANTHROPIC =
+	/^(?:global|us|us-gov|eu|apac|jp|au|ca)\.anthropic\.claude-[\w.:-]+$/;
+const FOUNDATION_ANTHROPIC = /^anthropic\.claude-[\w.:-]+$/;
+
+/**
+ * A Bedrock Claude id as its inference profile (`anthropic.claude-haiku-5-5`
+ * on the global profile is `global.anthropic.claude-haiku-5-5`), else null.
+ * Claude runs on bedrock-runtime (bedrock-anthropic.ts) whichever endpoint
+ * the OpenAI models use.
+ */
+export function bedrockAnthropicProfile(modelId: string): string | null {
+	if (PROFILED_ANTHROPIC.test(modelId)) return modelId;
+	if (FOUNDATION_ANTHROPIC.test(modelId)) return `global.${modelId}`;
+	return null;
+}
 
 export function bedrockBaseUrl(
 	region: string,
@@ -129,6 +144,8 @@ export function bedrockModelId(
 	modelId: string,
 	route: { endpoint: BedrockEndpoint; profile: BedrockInferenceProfile },
 ) {
+	const claude = bedrockAnthropicProfile(modelId);
+	if (claude) return claude;
 	if (route.endpoint === "mantle") {
 		if (PROFILED_OPENAI.test(modelId))
 			return modelId.slice(modelId.indexOf(".") + 1);
@@ -138,7 +155,7 @@ export function bedrockModelId(
 		if (FOUNDATION_OPENAI.test(modelId)) return `${route.profile}.${modelId}`;
 	}
 	throw new Error(
-		`"${modelId}" is not a Bedrock OpenAI model id; use openai.<model> (for example openai.gpt-6.1-sol) or an inference profile id (global.openai.<model>).`,
+		`"${modelId}" is not a Bedrock OpenAI or Claude model id; use openai.<model> (for example openai.gpt-6.1-sol), anthropic.<model> (anthropic.claude-haiku-5-5) or an inference profile id (global.openai.<model>).`,
 	);
 }
 
