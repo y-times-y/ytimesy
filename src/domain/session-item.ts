@@ -169,6 +169,8 @@ export type ModelSwitchItem = {
 		readonly key: string;
 	};
 	readonly state: "switched" | "awaitingApproval";
+	/** The failing route's error, redacted and at most 300 characters (not shown). */
+	readonly cause?: string;
 	/** The turn's usage before the switch; usage after it was served by `to`. */
 	readonly usageBefore?: ApiTokenUsage;
 };
@@ -180,6 +182,15 @@ export type NoticeSessionItem = {
 	readonly message: string;
 	/** A background command's exit (background-command.ts). */
 	readonly background?: true;
+	/** The user stopped the turn (turn-end.ts). */
+	readonly stopped?: true;
+	/**
+	 * The silent start of a wake-up turn the server began (a helper's report,
+	 * a background command's exit), standing in for its hidden message
+	 * (childTaskPublicItems). It shows nothing; it ends the turn before it.
+	 */
+	readonly wake?: true;
+	readonly timing?: UserMessageItem["timing"];
 };
 
 export type UnknownSessionItem = {
@@ -350,6 +361,30 @@ function lastUserMessage(
 }
 
 /**
+ * The open chat right after a recovery the server confirmed. A restore of
+ * this chat shows the restored transcript at once (null: a code-only
+ * restore keeps it); another chat (a fork) is opened instead, so this is
+ * null and the caller switches chats.
+ */
+export function sessionViewAfterRecovery<
+	View extends {
+		readonly agentSessionId?: string | null;
+		readonly items: readonly SessionItem[];
+		readonly turnStatus: SessionTurnStatus;
+	},
+>(
+	current: View,
+	recovered: {
+		readonly id: string;
+		readonly items: readonly SessionItem[] | null;
+	},
+): View | null {
+	if (current.agentSessionId !== recovered.id) return null;
+	if (!recovered.items) return current;
+	return { ...current, items: recovered.items, turnStatus: "idle" };
+}
+
+/**
  * Whether a server view may replace the open chat while it shows a running turn.
  * A view from before the send landed must not erase the message just sent, so a
  * settled view counts only when it carries that same message (by id). An idle
@@ -445,10 +480,13 @@ export function chatHeaderTitle(
 }
 
 /** A chat's title from its first message: the first line, shortened. */
+/** A chat's title until its first message names it. */
+export const UNTITLED_SESSION_TITLE = "New session";
+
 export function sessionTitleFromText(text: string): string {
-	if (!text) return "New session";
+	if (!text) return UNTITLED_SESSION_TITLE;
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
-	if (!line) return "New session";
+	if (!line) return UNTITLED_SESSION_TITLE;
 	return line.length > 48 ? `${line.slice(0, 47)}…` : line;
 }
 

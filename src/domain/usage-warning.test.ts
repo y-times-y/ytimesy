@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { usageWindowState } from "./infrastructure-usage";
-import { usageWarning } from "./usage-warning";
+import { usageResetLabel, usageWarning } from "./usage-warning";
 
 const now = Date.parse("2026-10-20T12:00:00Z");
 const label = (ms: number) => new Date(ms).toISOString();
@@ -41,4 +41,27 @@ it("says when new work can start again once a window is exhausted", () => {
 	expect(warning?.level).toBe("exhausted");
 	expect(warning?.message).toContain("Running work finishes");
 	expect(warning?.message).toContain(label(now - 60_000 + 5 * 3_600_000));
+});
+
+it("labels a reset with its date and how far away it is, in the given zone", () => {
+	const zone = { locale: "en-US", timeZone: "America/Los_Angeles" };
+	const friday = Date.parse("2026-10-23T10:15:00Z");
+	expect(
+		usageResetLabel(friday, Date.parse("2026-10-21T10:00:00Z"), zone),
+	).toBe("Fri, Oct 23, 3:15 AM (in 2 days)");
+	expect(
+		usageResetLabel(friday, Date.parse("2026-10-23T05:00:00Z"), zone),
+	).toBe("Fri, Oct 23, 3:15 AM (in 5 hours)");
+	expect(
+		usageResetLabel(friday, Date.parse("2026-10-23T10:00:00Z"), zone),
+	).toBe("Fri, Oct 23, 3:15 AM (in 15 minutes)");
+	expect(usageResetLabel(friday, friday + 60_000, zone)).toBe(
+		"Fri, Oct 23, 3:15 AM",
+	);
+	expect(
+		usageResetLabel(friday, Date.parse("2026-10-21T10:00:00Z"), {
+			locale: "en-US",
+			timeZone: "Asia/Tokyo",
+		}),
+	).toBe("Fri, Oct 23, 7:15 PM (in 2 days)");
 });

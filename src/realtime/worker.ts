@@ -397,6 +397,23 @@ export default {
 	},
 };
 
+/** Turn coordination paths of a chat's room; other /turn/* paths are not the room's. */
+const ROOM_TURN_PATH = /^\/turn\/(acquire|renew|release|cancel)$/;
+
+/**
+ * Whether a path is the chat room's (snapshots, the stream, purge and turn
+ * coordination), by exact name: the executor routes everything else itself
+ * (its own POST /turn/start included).
+ */
+export function isRealtimeRoute(pathname: string) {
+	return (
+		pathname === "/snapshot" ||
+		pathname === "/stream" ||
+		pathname === "/purge" ||
+		ROOM_TURN_PATH.test(pathname)
+	);
+}
+
 /** Shared authenticated routing permits realtime and model execution to use the same chat DO. */
 export async function routeRealtimeRequest(
 	request: Request,
@@ -414,7 +431,7 @@ export async function routeRealtimeRequest(
 					(url.pathname === "/snapshot" ||
 						url.pathname === "/stream" ||
 						url.pathname === "/purge" ||
-						/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
+						ROOM_TURN_PATH.test(url.pathname))) ||
 				(request.method === "GET" && url.pathname === "/stream")
 			)
 		)

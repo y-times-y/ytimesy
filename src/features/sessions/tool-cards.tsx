@@ -11,40 +11,11 @@ import { helperCallLabel } from "#/domain/helper-names";
 import type { DynamicToolCallItem } from "#/domain/session-item";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
+import { ToolFields } from "./tool-value";
 
 /** A tool's JSON arguments (or object result) as labelled fields, not a JSON blob; anything else as text. */
 export function ToolInputFields({ input }: { input: string }) {
-	let value: unknown;
-	try {
-		value = JSON.parse(input);
-	} catch {
-		return <pre className="session-output">{input}</pre>;
-	}
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		return <pre className="session-output">{input}</pre>;
-	const entries = Object.entries(value as Record<string, unknown>);
-	if (entries.length === 0)
-		return <p className="session-activity-meta">No arguments</p>;
-	return (
-		<dl className="session-tool-fields">
-			{entries.map(([key, entry]) => {
-				const text =
-					typeof entry === "string" ? entry : JSON.stringify(entry, null, 2);
-				return (
-					<div key={key}>
-						<dt>{key.replaceAll("_", " ")}</dt>
-						<dd>
-							{text.includes("\n") || text.length > 120 ? (
-								<pre className="session-output">{text}</pre>
-							) : (
-								<code>{text}</code>
-							)}
-						</dd>
-					</div>
-				);
-			})}
-		</dl>
-	);
+	return <ToolFields input={input} />;
 }
 
 /** The builder's <requirements> block: a collapsed list, not raw tags. */
@@ -199,7 +170,7 @@ export function AgentCallView({
 	live?: boolean;
 	onOpenFile?: (path: string) => void;
 }) {
-	// A helper goes by its task and a kind tag (helper-names.ts), not its role.
+	// The call names its helper by task and kind tag (helper-names.ts), not its role.
 	const helper =
 		call.tool === "agent" && !call.explore ? helperCallLabel(call) : null;
 	const verb =

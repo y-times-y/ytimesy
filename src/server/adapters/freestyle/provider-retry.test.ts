@@ -45,3 +45,38 @@ it("never retries a conflict or a budget refusal", async () => {
 	);
 	expect(operation).toHaveBeenCalledTimes(1);
 });
+
+it("treats a fresh guest's fetch failure and the provider's request timeout as transient", () => {
+	expect(isTransientProviderFailure(new TypeError("fetch failed"))).toBe(true);
+	expect(
+		isTransientProviderFailure(
+			new FreestyleApiError(
+				504,
+				{ code: "UNKNOWN_ERROR", message: "Request Timeout" },
+				"/v5/background-requests/req-1",
+			),
+		),
+	).toBe(true);
+	expect(
+		isTransientProviderFailure(
+			new FreestyleApiError(
+				408,
+				{ code: "UNKNOWN_ERROR", message: "Request Timeout" },
+				"/v5/vms/x/exec-await",
+			),
+		),
+	).toBe(true);
+	// A caller's abort or a not-found answer is final.
+	expect(
+		isTransientProviderFailure(new DOMException("aborted", "AbortError")),
+	).toBe(false);
+	expect(
+		isTransientProviderFailure(
+			new FreestyleApiError(
+				404,
+				{ code: "UNKNOWN_ERROR", message: "Not Found" },
+				"/v5/vms/x",
+			),
+		),
+	).toBe(false);
+});

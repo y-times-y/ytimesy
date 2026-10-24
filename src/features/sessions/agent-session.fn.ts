@@ -14,6 +14,7 @@ import {
 	type AgentTaskActivity,
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
+import { publicRecoveryFailure } from "#/domain/conversation-recovery-failure";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type SessionTurnStatus,
@@ -21,20 +22,24 @@ import {
 } from "#/domain/session-item";
 import type { ChatWaitingOn } from "#/domain/sidebar-chats";
 import { subagentTaskViews } from "#/domain/subagent-tree";
+import { startAfterResponse } from "#/server/adapters/after-response";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
-	listAgentSessions,
+	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
+import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
+import { withPublicFailure } from "#/server/public-failure";
 import {
 	deleteAgentSessionMachine,
 	openAgentSession,
 } from "#/server/services/agent-session-machine";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
+import { prewarmChatMachine } from "#/server/services/machine-prewarm";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 type PublicAgentChat = {
@@ -47,16 +52,26 @@ type PublicAgentChat = {
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
 	readonly waitingOn?: ChatWaitingOn | null;
+	readonly workingSince?: string | null;
 };
 
+/**
+ * Runs with the workspace machines. A failure reaches the user only as
+ * `publicFailure` words it; the real error is logged on the server.
+ */
 function runWithMachines<A>(
+	operation: string,
+	publicFailure: (error: unknown) => string,
 	run: (machines: WorkspaceMachines) => Promise<A>,
 ): Promise<A> {
-	return Effect.runPromise(
-		Effect.gen(function* () {
-			const machines = yield* WorkspaceMachineService;
-			return yield* Effect.tryPromise(() => run(machines));
-		}).pipe(Effect.provide(FreestyleWorkspaceMachinesLive)),
+	return withPublicFailure(operation, publicFailure, async () =>
+		run(
+			await Effect.runPromise(
+				WorkspaceMachineService.pipe(
+					Effect.provide(FreestyleWorkspaceMachinesLive),
+				),
+			),
+		),
 	);
 }
 
@@ -68,7 +83,7 @@ export const listProjectAgentSessions = createServerFn({ method: "GET" })
 		if (!data.projectId) return [];
 		try {
 			const user = await requireUser(getRequest().headers);
-			const sessions = await listAgentSessions(user.id, data.projectId);
+			const sessions = await listSidebarAgentSessions(user.id, data.projectId);
 			return chatsFromAgentSessions(sessions);
 		} catch {
 			return [];
@@ -97,6 +112,11 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 				projectId: data.projectId,
 				harness: data.harnessId as AgentProviderId,
 			});
+			// A chat's first call to its conversation object creates it, which
+			// takes 1-3 s on the edge; delivering the new chat's (empty) view
+			// now does that while the person types, so the first send's turn
+			// starts at once. Best effort: the send works the same without it.
+			startAfterResponse(() => relayConversationDeliveriesOnce(session.id));
 			return {
 				id: session.id,
 				title: session.title,
@@ -109,6 +129,27 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));
 		}
+	});
+
+/**
+ * The person started typing in an empty new chat: copy its machine now
+ * (prewarmChatMachine). Answers at once; a refused or failed copy only means
+ * the first turn makes it as before.
+ */
+export const prewarmProjectAgentSession = createServerFn({ method: "POST" })
+	.validator((data: { projectId: string; sessionId: string }) => ({
+		projectId: z.string().uuid().parse(data.projectId),
+		sessionId: z.string().uuid().parse(data.sessionId),
+	}))
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const copy = () =>
+			runWithMachines("Machine copy", publicFailureMessage, (machines) =>
+				prewarmChatMachine(machines, { ...data, userId: user.id }),
+			).catch(() => undefined);
+		if (!startAfterResponse(copy)) void copy();
+		return { ok: true };
 	});
 
 export const listProjectAgentTasks = createServerFn({ method: "GET" })
@@ -191,7 +232,7 @@ export const deleteProjectAgentSession = createServerFn({ method: "POST" })
 	})
 	.handler(async ({ data }): Promise<{ id: string }> => {
 		const user = await requireUser(getRequest().headers);
-		await runWithMachines((machines) =>
+		await runWithMachines("Chat deletion", publicFailureMessage, (machines) =>
 			deleteAgentSessionMachine(machines, {
 				userId: user.id,
 				projectId: data.projectId,
@@ -232,7 +273,46 @@ export const restoreConversationPoint = createServerFn({ method: "POST" })
 		const { recoverConversation } = await import(
 			"#/server/services/conversation-recovery"
 		);
-		return runWithMachines((machines) =>
-			recoverConversation(machines, user.id, data),
+		return runWithMachines(
+			"Conversation recovery",
+			(error) => publicRecoveryFailure(error, data.mode),
+			(machines) => recoverConversation(machines, user.id, data),
+		);
+	});
+
+const forkedChat = z.object({ projectId: z.uuid(), sessionId: z.uuid() });
+
+/** A forked chat's VM copy: preparing, failed (with retry), or null when ready. */
+export const getConversationForkStatus = createServerFn({ method: "GET" })
+	.validator((data: { projectId: string; sessionId: string }) =>
+		forkedChat.parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { conversationForkState } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return conversationForkState(user.id, data.projectId, data.sessionId);
+	});
+
+export const retryConversationForkFn = createServerFn({ method: "POST" })
+	.validator((data: { projectId: string; sessionId: string }) =>
+		forkedChat.parse(data),
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { retryConversationFork } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return runWithMachines(
+			"Fork retry",
+			(error) => publicRecoveryFailure(error, "fork"),
+			(machines) =>
+				retryConversationFork(
+					machines,
+					user.id,
+					data.projectId,
+					data.sessionId,
+				),
 		);
 	});

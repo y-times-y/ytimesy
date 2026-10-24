@@ -6,6 +6,7 @@ import {
 	type WorkspaceProvisionOptions,
 	type WorkspaceRuntime,
 } from "../workspace-runtime";
+import { boundedFreestyleFetch } from "./bounded-fetch";
 import { runDetachedCommand } from "./detached-command";
 import { withdrawVmEdgeRoutes } from "./edge-routes";
 import { runLongCommand } from "./long-command";
@@ -24,7 +25,7 @@ import {
 	admitVmResume,
 	infrastructureAdmissionEnabled,
 } from "./usage-admission";
-import { waitUntilVmRunning } from "./wait-until-running";
+import { waitUntilGuestReady, waitUntilVmRunning } from "./wait-until-running";
 
 export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	constructor(
@@ -71,7 +72,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 									automaticRestart: false,
 								}),
 					});
-					await waitUntilVmRunning(created.vm, "Workspace VM");
+					await waitUntilGuestReady(created.vm, "Workspace VM");
 					return created.vmId;
 				},
 				options?.maxRunSeconds,
@@ -103,7 +104,9 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		if (data.state === "paused" || data.state === "stopped") {
 			await vm.start();
 		}
-		await waitUntilVmRunning(vm, "Workspace VM");
+		// A machine that was not running yet has a guest that may not answer yet.
+		if (data.state === "running") await waitUntilVmRunning(vm, "Workspace VM");
+		else await waitUntilGuestReady(vm, "Workspace VM");
 		return providerRef;
 	}
 
@@ -153,11 +156,16 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 
 	async writeTextFile(providerRef: string, path: string, contents: string) {
 		if (infrastructureAdmissionEnabled()) await this.recover(providerRef);
-		await this.client().vms.ref(providerRef).fs.writeTextFile(path, contents);
+		// Writing the same contents again is harmless.
+		await retryTransientProviderFailure(() =>
+			this.client().vms.ref(providerRef).fs.writeTextFile(path, contents),
+		);
 	}
 
 	async readTextFile(providerRef: string, path: string) {
-		return this.client().vms.ref(providerRef).fs.readTextFile(path);
+		return retryTransientProviderFailure(() =>
+			this.client().vms.ref(providerRef).fs.readTextFile(path),
+		);
 	}
 
 	async snapshot(providerRef: string, slug: string) {
@@ -211,7 +219,10 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	private client() {
-		return new Freestyle({ apiKey: this.apiKey, fetch: this.options.fetch });
+		return new Freestyle({
+			apiKey: this.apiKey,
+			fetch: this.options.fetch ?? boundedFreestyleFetch(),
+		});
 	}
 }
 

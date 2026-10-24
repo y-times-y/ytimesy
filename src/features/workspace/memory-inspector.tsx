@@ -42,6 +42,7 @@ import {
 	readMemoryHistoryFn,
 } from "./memory.fn";
 import { MemoryDreams } from "./memory-dreams";
+import { memoryHistoryChanges } from "./memory-history";
 import { type MemoryMenuChoice, MemoryScopeMenu } from "./memory-menu";
 import "./memory-inspector.css";
 
@@ -59,6 +60,12 @@ export function formatMemoryDate(date: string) {
 				timeZone: "UTC",
 			});
 }
+
+const HISTORY_CHANGE_LABEL = {
+	add: "Added",
+	delete: "Removed",
+	update: "Updated",
+} as const;
 
 const rowKey = (row: Pick<MemoryRow, "path" | "line">) =>
 	`${row.path}:${row.line}`;
@@ -115,7 +122,7 @@ export function useMemoryScopeNames(
  * The user's memory as a list: a one-line composer, Personal and each
  * project as scopes, lines by topic with inline edit, move, pin and delete
  * (each one memory commit), and a short Dreaming card. The same view fills
- * the right panel and the Memory page; the graph has its own page.
+ * the right panel and the Memory page's List view, beside its graph.
  */
 export function MemoryInspector({
 	active,
@@ -660,27 +667,38 @@ function TopicGroup({
 								<div>
 									<strong>{commit.message}</strong>{" "}
 									<span className="memory-muted">
-										{new Date(commit.committedAt).toLocaleString()}
+										{new Date(commit.committedAt).toLocaleString(undefined, {
+											dateStyle: "medium",
+											timeStyle: "short",
+										})}
 									</span>
 								</div>
-								<pre>
-									{commit.patch.split("\n").map((line, index) => (
-										<span
-											// biome-ignore lint/suspicious/noArrayIndexKey: lines of one fixed patch.
+								<ul className="memory-history-changes">
+									{memoryHistoryChanges(commit.patch).map((entry, index) => (
+										<li
+											// biome-ignore lint/suspicious/noArrayIndexKey: entries of one fixed patch.
 											key={index}
-											data-change={
-												line.startsWith("+")
-													? "add"
-													: line.startsWith("-")
-														? "delete"
-														: undefined
-											}
+											data-change={entry.change}
 										>
-											{line}
-											{"\n"}
-										</span>
+											<span className="memory-history-text">{entry.text}</span>
+											<span className="memory-row-meta">
+												<span>{HISTORY_CHANGE_LABEL[entry.change]}</span>
+												{entry.manual ? <span>Added by you</span> : null}
+												{entry.chatId ? (
+													<a
+														className="memory-row-action"
+														href={`/?chat=${entry.chatId}`}
+													>
+														From a chat
+													</a>
+												) : null}
+												{entry.added ? (
+													<span>{formatMemoryDate(entry.added)}</span>
+												) : null}
+											</span>
+										</li>
 									))}
-								</pre>
+								</ul>
 							</li>
 						))
 					)}

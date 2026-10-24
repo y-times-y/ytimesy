@@ -1,10 +1,15 @@
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
 import {
-	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
 	harnessVariantFromUnknown,
+	PRODUCT_HARNESS_VARIANT,
 } from "#/domain/harness-variant";
 import { database } from "./database";
+import {
+	type InvocationSharedRead,
+	invocationSharedRead,
+	usableInThisInvocation,
+} from "./database-scope";
 
 /**
  * Development evaluations run as throwaway users (dev_eval_user). Only a
@@ -29,23 +34,30 @@ type EvalUserRow = {
 // user), so one read per isolate is enough. Regular users cache as null.
 // Read only in development (devEvalUsersEnabled); bounded so a long-lived
 // isolate keeps at most the most recent users, oldest dropped first.
-const rows = new Map<string, Promise<EvalUserRow | null>>();
+// A read still in flight is shared only within its own invocation
+// (invocationSharedRead).
+const rows = new Map<
+	string,
+	{ row: Promise<EvalUserRow | null> } & InvocationSharedRead
+>();
 const MAX_CACHED_USERS = 1000;
 
 function evalUserRow(userId: string) {
-	let row = rows.get(userId);
-	if (!row) {
-		row = database()
-			.query<EvalUserRow>(
-				"select owner_user_id,harness_variant from dev_eval_user where user_id=$1",
-				[userId],
-			)
-			.then((result) => result.rows[0] ?? null);
-		if (rows.size >= MAX_CACHED_USERS)
-			rows.delete(rows.keys().next().value as string);
-		rows.set(userId, row);
-		row.catch(() => rows.delete(userId));
-	}
+	const cached = rows.get(userId);
+	if (cached && usableInThisInvocation(cached)) return cached.row;
+	const row = database()
+		.query<EvalUserRow>(
+			"select owner_user_id,harness_variant from dev_eval_user where user_id=$1",
+			[userId],
+		)
+		.then((result) => result.rows[0] ?? null);
+	if (rows.size >= MAX_CACHED_USERS && !cached)
+		rows.delete(rows.keys().next().value as string);
+	const entry = { row, ...invocationSharedRead(row) };
+	rows.set(userId, entry);
+	row.catch(() => {
+		if (rows.get(userId) === entry) rows.delete(userId);
+	});
 	return row;
 }
 
@@ -68,13 +80,13 @@ export async function isDevEvalUser(userId: string): Promise<boolean> {
 	return Boolean(await evalUserRow(userId));
 }
 
-/** The eval user's harness variant; the default for everyone else. */
+/** The eval user's harness variant; the product's for everyone else. */
 export async function harnessVariantForUser(
 	userId: string,
 ): Promise<HarnessVariant> {
-	if (!devEvalUsersEnabled()) return DEFAULT_HARNESS_VARIANT;
+	if (!devEvalUsersEnabled()) return PRODUCT_HARNESS_VARIANT;
 	const row = await evalUserRow(userId);
 	return row
 		? harnessVariantFromUnknown(row.harness_variant)
-		: DEFAULT_HARNESS_VARIANT;
+		: PRODUCT_HARNESS_VARIANT;
 }

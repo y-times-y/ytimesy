@@ -7,6 +7,7 @@ import {
 } from "../../domain/environment-workflow";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { environmentFreestyleFetch } from "../adapters/freestyle/environment-fetch";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import {
@@ -145,7 +146,7 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 		const journal = { current: null as CommandJournal | null };
 		const runtime = this.journaled(
 			workspaceRuntimeFromEnv(process.env, {
-				fetch: environmentFreestyleFetch(counts),
+				fetch: environmentFreestyleFetch(counts, boundedFreestyleFetch()),
 				streamSetupCommands: true,
 			}),
 			request.requestId,

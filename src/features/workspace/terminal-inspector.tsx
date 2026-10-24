@@ -72,12 +72,14 @@ export function TerminalInspector({
 			setError(null);
 			socket.addEventListener("open", () => {
 				if (closed) return;
-				setConnected(true);
 				socket.send(
 					JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
 				);
 			});
 			socket.addEventListener("message", (event) => {
+				// The socket opens before the machine answers (it may be waking);
+				// the shell's first output is what connects the terminal.
+				if (!closed && !isTerminalError(event.data)) setConnected(true);
 				if (typeof event.data === "string") {
 					try {
 						const message = JSON.parse(event.data) as {
@@ -183,4 +185,13 @@ export function TerminalInspector({
 			/>
 		</section>
 	);
+}
+
+function isTerminalError(data: unknown) {
+	if (typeof data !== "string") return false;
+	try {
+		return (JSON.parse(data) as { type?: string }).type === "error";
+	} catch {
+		return false;
+	}
 }

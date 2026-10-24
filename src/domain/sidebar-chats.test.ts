@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
 	backgroundTurnPollChatIds,
+	chatsToReadAhead,
 	chatsWithPinnedFirst,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
@@ -25,6 +26,7 @@ import {
 	togglePinnedChatIds,
 	unsentSendReturnsHere,
 	withBusyChat,
+	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
 	withProjectExpanded,
@@ -178,6 +180,29 @@ describe("parallel chat busy", () => {
 				openTurnStatus: "idle",
 			}),
 		).toBe(false);
+	});
+
+	it("names an untitled chat after the message sent to it, before the send lands", () => {
+		expect(
+			withChatSent(
+				[
+					{ id: "a", title: "New session", turnStatus: "idle" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				"a",
+				"fix login\nthen run the tests",
+			),
+		).toEqual([
+			{ id: "a", title: "fix login", turnStatus: "running" },
+			{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+		]);
+		expect(
+			withChatSent(
+				[{ id: "a", title: "fix login", turnStatus: "idle" }],
+				"a",
+				"and the signup page",
+			),
+		).toEqual([{ id: "a", title: "fix login", turnStatus: "running" }]);
 	});
 
 	it("marks only that chat running in the listed rows", () => {
@@ -426,5 +451,25 @@ describe("sidebar sort", () => {
 		expect(
 			projectsByRecentActivity([c, a, b], groups).map((project) => project.id),
 		).toEqual(["b", "a", "c"]);
+	});
+});
+
+describe("chatsToReadAhead", () => {
+	const chats = ["a", "b", "c", "d"].map((id) => ({ id }));
+
+	it("reads the latest chats except the open one and those already held", () => {
+		expect(
+			chatsToReadAhead({
+				chats,
+				openChatId: "a",
+				heldChatIds: new Set(["c"]),
+			}),
+		).toEqual(["b", "d"]);
+	});
+
+	it("looks only at the first few chats", () => {
+		expect(
+			chatsToReadAhead({ chats, heldChatIds: new Set(), limit: 2 }),
+		).toEqual(["a", "b"]);
 	});
 });

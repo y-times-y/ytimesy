@@ -13,6 +13,7 @@ import {
 	deliverAuthEmails,
 } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
+import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
@@ -26,8 +27,13 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
-import { wakeChatsForBackgroundCommands } from "./background-command-notices";
+import {
+	wakeChatForBackgroundCommands,
+	wakeChatsForBackgroundCommands,
+} from "./background-command-notices";
+import { prepareForkWorkspace } from "./conversation-recovery";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
+import { sweepUnusedChatMachines } from "./machine-prewarm";
 import {
 	DREAM_IDLE_SECONDS,
 	runMemoryDream,
@@ -59,13 +65,22 @@ export async function deliverBackgroundJob(
 					await recoverStaleQueuedWorkspaces();
 					await alertAbandonedTurns(await expireApiTurnLeases());
 					break;
-				case "supervise":
-					await recoverChildTurnEvents(machines);
-					// Background commands that exited while their chat was between turns.
-					await wakeChatsForBackgroundCommands(machines);
-					// Writer subagents' forks, 30 minutes after their report.
-					await teardownSubagentForks(machines);
+				case "supervise": {
+					// Independent sweeps, side by side: a slow one never holds a
+					// background command's wake-up behind it.
+					const sweeps = await Promise.allSettled([
+						recoverChildTurnEvents(machines),
+						// Background commands that exited while their chat was between turns.
+						wakeChatsForBackgroundCommands(machines),
+						// Writer subagents' forks, 30 minutes after their report.
+						teardownSubagentForks(machines),
+						// New chats' machines copied ahead, when nothing was sent.
+						sweepUnusedChatMachines(machines),
+					]);
+					const failed = sweeps.find((sweep) => sweep.status === "rejected");
+					if (failed) throw failed.reason;
 					break;
+				}
 				case "delivery":
 					await relayConversationDeliveriesOnce();
 					// Verification and password-reset mail queued by the web app.
@@ -91,6 +106,7 @@ export async function deliverBackgroundJob(
 				case "infrastructure": {
 					const client = new Freestyle({
 						apiKey: Effect.runSync(readFreestyleApiKey()),
+						fetch: boundedFreestyleFetch(),
 					});
 					await reconcileInfrastructureVms(client);
 					await observeFleetCosts(client);
@@ -159,6 +175,27 @@ export async function deliverBackgroundJob(
 			break;
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
+			break;
+		case "background-wake":
+			// While the chat's turn runs, look again shortly (15 s, the job
+			// runner's retry); the turn usually closes the card itself first.
+			if (
+				(await wakeChatForBackgroundCommands(machines, {
+					userId: job.userId,
+					id: job.sessionId,
+					commandId: job.commandId,
+				})) === "busy"
+			)
+				return "pending";
+			break;
+		case "conversation-fork":
+			// A failure is kept on the fork's journal for its chat to show.
+			await prepareForkWorkspace(
+				machines,
+				job.userId,
+				job.sessionId,
+				job.attempt,
+			);
 			break;
 		case "pr-evidence": {
 			const outcome = await runPullRequestEvidenceJob(machines, job);

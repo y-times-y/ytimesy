@@ -184,9 +184,10 @@ export async function receiveBrokeredRepository(
 			const dest = quote(input.destination);
 			await checked(
 				host,
+				// Only the bundle is private: the checkout keeps the VM's umask so
+				// a read-only helper (another Linux user) can read it.
 				`set -eu
-umask 077
-base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)}
+(umask 077; base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)})
 ${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
 git -C ${dest} -c core.hooksPath=/dev/null fetch --no-tags ${quote(transfer)} refs/heads/source
 ${fetchedBranchCommand({

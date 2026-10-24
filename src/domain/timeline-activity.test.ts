@@ -25,6 +25,135 @@ function fileChange(id: string, path: string): SessionItem {
 	};
 }
 
+const user = (id: string, text = id): SessionItem => ({
+	kind: "userMessage",
+	id: SessionItemId(id),
+	text,
+});
+const answer = (id: string, text: string): SessionItem => ({
+	kind: "agentMessage",
+	id: SessionItemId(id),
+	text,
+});
+const call = (id: string): SessionItem => ({
+	kind: "dynamicToolCall",
+	id: SessionItemId(id),
+	tool: "bash",
+	status: "completed",
+});
+const wake = (id: string): SessionItem =>
+	user(id, `\u2063ytimesy-child-event:${id}`);
+
+describe("wake-up turns and question replies", () => {
+	it("keeps Main's answer in view when a wake-up turn follows it", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				call("spawn"),
+				answer("a1", "This repo uses Vitest. A helper is writing the tests."),
+				wake("e1"),
+				call("check"),
+				answer("a2", "The helper finished: 4 tests added."),
+			],
+			"completed",
+		);
+		expect(
+			rows.map((row) => (row.kind === "item" ? row.item.id : row.kind)),
+		).toEqual(["ask", "work", "a1", "work", "a2"]);
+		// The hidden wake-up message shows no bubble.
+		expect(
+			rows.some((row) => row.kind === "item" && row.item.id === "e1"),
+		).toBe(false);
+	});
+	it("ends the turn before a running wake-up turn", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				call("bg"),
+				answer("a1", "I'll let you know when the build finishes."),
+				wake("exit"),
+				call("read-log"),
+			],
+			"running",
+		);
+		expect(
+			rows.map((row) => (row.kind === "item" ? row.item.id : row.kind)),
+		).toEqual(["ask", "work", "a1", "read-log"]);
+	});
+	it("breaks an answer-only wake-up turn from the answer above it, and nothing else", () => {
+		const ids = (items: SessionItem[], status: "completed" | "running") =>
+			groupTimelineRows(items, status).map((row) =>
+				row.kind === "item"
+					? row.item.kind === "notice" && row.item.wake
+						? `break:${row.item.id}`
+						: row.item.id
+					: row.kind,
+			);
+		expect(
+			ids(
+				[
+					user("ask"),
+					answer("a1", "391 PINEAPPLE"),
+					wake("e1"),
+					answer("a2", "The build passed."),
+				],
+				"completed",
+			),
+		).toEqual(["ask", "a1", "break:e1", "a2"]);
+		// While it streams, too.
+		expect(
+			ids(
+				[user("ask"), answer("a1", "391"), wake("e1"), answer("a2", "The")],
+				"running",
+			),
+		).toEqual(["ask", "a1", "break:e1", "a2"]);
+		// Its work row already separates it; a first turn has nothing above.
+		expect(
+			ids(
+				[
+					user("ask"),
+					answer("a1", "x"),
+					wake("e1"),
+					call("c"),
+					answer("a2", "y"),
+				],
+				"completed",
+			),
+		).toEqual(["ask", "a1", "work", "a2"]);
+		expect(ids([wake("e1"), answer("a2", "y")], "completed")).toEqual(["a2"]);
+		// The break is a silent notice, never the hidden message's bubble.
+		const row = groupTimelineRows(
+			[user("ask"), answer("a1", "x"), wake("e1"), answer("a2", "y")],
+			"completed",
+		)[2];
+		expect(row).toMatchObject({
+			kind: "item",
+			item: { kind: "notice", wake: true, message: "" },
+		});
+	});
+	it("shows a question card's reply once, in the card", () => {
+		const rows = groupTimelineRows(
+			[
+				user("ask"),
+				{
+					kind: "userQuestion",
+					id: SessionItemId("q"),
+					questions: [],
+				},
+				user("reply", "Use Postgres"),
+				answer("a", "Postgres it is."),
+			],
+			"completed",
+		);
+		const ids = rows.map((row) =>
+			row.kind === "item" ? row.item.id : row.kind,
+		);
+		expect(ids).toContain("q");
+		expect(ids).not.toContain("reply");
+		expect(ids).toContain("a");
+	});
+});
+
 describe("timeline activity grouping", () => {
 	it("keeps explicit commentary inside work when a turn fails without an answer", () => {
 		const rows = groupTimelineRows(

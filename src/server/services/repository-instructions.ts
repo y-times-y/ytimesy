@@ -3,6 +3,7 @@ import type { AgentToolWorkspaceInput } from "./agent-tool-workspace";
 import {
 	inspectRepositoryGuidance,
 	type RepositoryGuidance,
+	RepositoryGuidanceUnavailable,
 } from "./repository-guidance";
 
 const HEADING = "# Repository instructions";
@@ -58,6 +59,12 @@ export function repositoryInstructionSections(
 					: "## Nested instruction files\n\nNo other folder in this repository has its own AGENTS.md or CLAUDE.md.",
 		announceChanges: true,
 	});
+	const unreadable = guidance.unreadableFiles ?? [];
+	if (unreadable.length)
+		sections.push({
+			text: `## Files this agent cannot read\n\nThis agent's user cannot read these files, so any instructions or configuration in them are not included above:\n${unreadable.map((path) => `- ${path}`).join("\n")}`,
+			announceChanges: true,
+		});
 	if (guidance.skills.length)
 		sections.push({
 			text: `## Skills\n\nWhen the task matches a skill's description, read its SKILL.md completely with cat before acting:\n${guidance.skills
@@ -191,14 +198,30 @@ export function withRepositoryInstructions(
 	return [...messages, message];
 }
 
-/** Scan the checkout (root plus Git ancestors of a subdirectory checkout) and render it. */
+/**
+ * Scan the checkout (root plus Git ancestors of a subdirectory checkout) and
+ * render it. A scan that cannot run is a workspace condition, not a reason to
+ * fail the turn (or to report it as a model failure): the agent proceeds
+ * without the automatic copy and is told to read the files itself.
+ */
 export async function readRepositoryInstructions(
 	workspace: AgentToolWorkspaceInput,
-) {
-	return repositoryInstructionSections(
-		await inspectRepositoryGuidance(workspace, {
+): Promise<Section[]> {
+	let guidance: RepositoryGuidance;
+	try {
+		guidance = await inspectRepositoryGuidance(workspace, {
 			scope: ".",
 			gitAncestors: true,
-		}),
-	);
+		});
+	} catch (error) {
+		if (!(error instanceof RepositoryGuidanceUnavailable)) throw error;
+		console.warn("Repository instructions were not loaded.", error.reason);
+		return [
+			{
+				text: "## Repository instructions unavailable\n\nThey could not be loaded automatically from this checkout. Before relying on repository conventions, read AGENTS.md and CLAUDE.md at the repository root with cat if they exist.",
+				announceChanges: true,
+			},
+		];
+	}
+	return repositoryInstructionSections(guidance);
 }

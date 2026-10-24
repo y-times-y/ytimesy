@@ -1,17 +1,40 @@
 import { FreestyleApiError } from "freestyle";
 
-/** Backoff for provider 5xx answers ("Internal server error") on idempotent machine operations. */
+/** Backoff for transient provider failures on idempotent machine operations. */
 export const TRANSIENT_PROVIDER_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 
-/** A provider 5xx, possibly wrapped (Effect's UnknownException keeps it as `cause`/`error`). */
+/** What the user sees when the provider stays unreachable after the retries. */
+export const PROVIDER_UNAVAILABLE_MESSAGE =
+	"The workspace machine is not responding. Try again in a minute.";
+
+/** Connection-level failures (undici, Workers) that never reached an answer. */
+const NETWORK_FAILURE =
+	/\b(fetch failed|network connection lost|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_SOCKET|socket hang up|other side closed)\b/i;
+
+/**
+ * A failure worth one more try: a provider 5xx (or a timeout it or this
+ * client answered with), or a connection that failed before any answer.
+ * Possibly wrapped: Effect's UnknownException keeps it as `cause`/`error`.
+ * A caller's abort is not one.
+ */
 export function isTransientProviderFailure(error: unknown, depth = 0): boolean {
 	if (depth > 3 || !error || typeof error !== "object") return false;
 	if (error instanceof FreestyleApiError)
-		return error.status >= 500 && error.status < 600;
+		return (
+			(error.status >= 500 && error.status < 600) ||
+			error.status === 408 ||
+			(error.code === "UNKNOWN_ERROR" && /request timeout/i.test(error.message))
+		);
 	if (
 		error instanceof Error &&
 		error.name === "FreestyleApiError" &&
-		/internal server error/i.test(error.message)
+		/internal server error|request timeout/i.test(error.message)
+	)
+		return true;
+	if (
+		error instanceof Error &&
+		error.name !== "AbortError" &&
+		NETWORK_FAILURE.test(error.message)
 	)
 		return true;
 	const record = error as { cause?: unknown; error?: unknown };
@@ -23,9 +46,9 @@ export function isTransientProviderFailure(error: unknown, depth = 0): boolean {
 
 /**
  * Retries an operation the caller has made safe to repeat (start/resume of a
- * named VM, or a slug-keyed create that recovers an existing VM) when the
- * provider answers with a transient 5xx. Anything else, or a persistent 5xx,
- * propagates unchanged.
+ * named VM, a slug-keyed create that recovers an existing VM, a file write,
+ * a harmless probe) when the provider fails transiently. Anything else, or a
+ * persistent failure, propagates unchanged. Never wrap a user's command.
  */
 export async function retryTransientProviderFailure<T>(
 	operation: () => Promise<T>,
@@ -37,7 +60,7 @@ export async function retryTransientProviderFailure<T>(
 		} catch (error) {
 			if (attempt >= delaysMs.length || !isTransientProviderFailure(error))
 				throw error;
-			console.warn("Machine provider returned a transient error; retrying.", {
+			console.warn("Machine provider failed transiently; retrying.", {
 				attempt: attempt + 1,
 			});
 			await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));

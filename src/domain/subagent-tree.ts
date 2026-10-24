@@ -1,6 +1,14 @@
 import type { AgentProviderId } from "./agent-provider";
-import { type AgentTaskStatus, agentTaskTree } from "./agent-task";
-import { helperKindOf, helperReference } from "./helper-names";
+import {
+	type AgentTaskStatus,
+	agentTaskTree,
+	taskStatusFromTurn,
+} from "./agent-task";
+import {
+	helperIdentitiesOf,
+	helperKindOf,
+	helperReference,
+} from "./helper-names";
 import { sessionBilling } from "./model-pricing";
 import {
 	type SessionItem,
@@ -24,6 +32,7 @@ import {
 	subtreeSpends,
 	totalSpend,
 } from "./subagent-usage";
+import { lastTurnEnd } from "./turn-end";
 
 /** The session fields the tree reads (AgentSessionRecord satisfies it). */
 export type SubagentTreeSession = {
@@ -48,8 +57,10 @@ export type SubagentNode = {
 	readonly parentId: string;
 	/** Positional id: 1, 1.2, 1.2.1. */
 	readonly label: string;
-	/** How the chat names it (helper-names.ts): "Build the CSV export (Build)". */
+	/** How the chat names it (helper-names.ts): build-1 ("Build the CSV export"). */
 	readonly name: string;
+	/** Its short name alone: build-1. */
+	readonly shortName: string;
 	readonly level: number;
 	readonly title: string;
 	readonly role: SubagentRole;
@@ -72,15 +83,37 @@ export type SubagentTree = {
 	readonly builder: AgentSpend;
 };
 
+/**
+ * When a finished agent stopped: its last turn's recorded end, or for turns
+ * from before ends were recorded its row's update time. Null while it works.
+ * A finished helper's clock and VM minutes stop here, not at now.
+ */
+function finishedAt(
+	session: SubagentTreeSession,
+	items: readonly SessionItem[],
+) {
+	const status = taskStatusFromTurn(session.turnStatus, session.taskState);
+	if (status === "working" || status === "waiting") return null;
+	const end = lastTurnEnd(items) ?? Date.parse(session.updatedAt);
+	return Number.isFinite(end) ? end : null;
+}
+
 function sessionSpend(
 	session: SubagentTreeSession,
 	now: number,
 	basisModelId: string | null,
 ) {
+	const items = sessionItemsFromUnknown(
+		session.items,
+	) as readonly SessionItem[];
 	return agentSpend({
-		items: sessionItemsFromUnknown(session.items) as readonly SessionItem[],
+		items,
 		billing: sessionBilling(session),
-		vmMinutes: forkVmMinutes(session.agentFork ?? null, now),
+		vmMinutes: forkVmMinutes(
+			session.agentFork ?? null,
+			now,
+			finishedAt(session, items),
+		),
 		budgetWeight: budgetTokenWeight(session.listedModelId, basisModelId),
 	});
 }
@@ -113,19 +146,41 @@ export function subagentTree(
 		rootId,
 		sessions.filter((session) => session.id !== rootId) as never,
 	);
+	// Short names and numbers in start order, as the chat shows them.
+	const identities = helperIdentitiesOf(
+		tasks.flatMap((task) => {
+			const session = byId.get(task.id);
+			return session?.agentRole
+				? [
+						{
+							id: task.id,
+							createdAt: session.createdAt,
+							title: task.title,
+							kind: helperKindOf(session.agentRole, session.agentBudget),
+						},
+					]
+				: [];
+		}),
+	);
 	const nodes: SubagentNode[] = [];
 	for (const task of tasks) {
 		const session = byId.get(task.id);
 		if (!session?.agentRole) continue;
-		const minutes = Math.max(0, (now - Date.parse(session.createdAt)) / 60_000);
+		const end = Math.min(
+			now,
+			finishedAt(
+				session,
+				sessionItemsFromUnknown(session.items) as readonly SessionItem[],
+			) ?? now,
+		);
+		const minutes = Math.max(0, (end - Date.parse(session.createdAt)) / 60_000);
+		const shortName = identities.get(task.id)?.name ?? "helper";
 		nodes.push({
 			id: task.id,
 			parentId: task.parentSessionId,
 			label: subagentLabelFromTaskLabel(task.label),
-			name: helperReference(
-				task.title,
-				helperKindOf(session.agentRole, session.agentBudget),
-			),
+			name: helperReference(shortName, task.title),
+			shortName,
 			level: task.depth,
 			title: task.title,
 			role: session.agentRole,
@@ -168,7 +223,7 @@ export function subagentNodeRemaining(
 /** What the task panel shows for a subagent row (no prompts, no transcripts). */
 export type SubagentTaskView = {
 	readonly role: SubagentRole;
-	/** How the chat names it (helper-names.ts): its task, then its kind. */
+	/** How the chat names it (helper-names.ts): build-1 ("Its task"). */
 	readonly name?: string;
 	readonly vm: "fork" | "shared";
 	readonly steps: number;

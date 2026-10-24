@@ -1,7 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { Info } from "lucide-react";
 import { useState } from "react";
 import { Switch } from "#/components/ui/switch";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "#/components/ui/tooltip";
 import { TRAINING_POLICY_VERSION } from "#/content/legal/versions";
 import type { TrainingConsent } from "#/domain/training-consent";
 import {
@@ -16,6 +23,24 @@ import {
 } from "./training-consent.fn";
 
 const CONSENT_KEY = ["training-consent"];
+
+/** Every commitment the setting makes; shown behind the info tooltip. */
+export const TRAINING_DETAILS =
+	"Let ytimesy use your chats from now on, including prompts, agent actions and the code the agent reads or writes, to improve our agents and train our own models. We remove account details and secrets first, and never share it with model providers. Your API keys, secrets and attachments are never included. Turn this off any time; we stop immediately and delete what we kept within 30 days.";
+
+/**
+ * The details open below the icon and stay in the viewport. The tooltip is
+ * portaled to the page, so it sits above the Settings overlay (z-index 200);
+ * at the default z-50 it opened behind the dialog and only its top line
+ * showed above the dialog's edge.
+ */
+export const TRAINING_TOOLTIP_PLACEMENT = {
+	side: "bottom",
+	align: "start",
+	sideOffset: 6,
+	collisionPadding: 16,
+	className: "z-[210] leading-snug",
+} as const;
 
 /** Settings, Privacy: "Help improve ytimesy", off unless the user turns it on. */
 export function TrainingConsentSettings() {
@@ -62,13 +87,21 @@ export function TrainingConsentView(props: {
 							Help improve ytimesy
 						</label>
 						<span className="settings-row-meta">
-							Let ytimesy use your chats from now on, including prompts, agent
-							actions and the code the agent reads or writes, to improve our
-							agents and train our own models. We remove account details and
-							secrets first, and never share it with model providers. Your API
-							keys, secrets and attachments are never included. Turn this off
-							any time; we stop immediately and delete what we kept within 30
-							days.{" "}
+							Use your chats to improve our agents and models.{" "}
+							<TooltipProvider>
+								<Tooltip>
+									<TooltipTrigger
+										type="button"
+										aria-label="Training details"
+										className="settings-info-trigger"
+									>
+										<Info aria-hidden="true" className="size-3.5" />
+									</TooltipTrigger>
+									<TooltipContent {...TRAINING_TOOLTIP_PLACEMENT}>
+										{TRAINING_DETAILS}
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>{" "}
 							<a
 								href="/training"
 								target="_blank"
@@ -77,6 +110,7 @@ export function TrainingConsentView(props: {
 							>
 								Learn more<span className="sr-only"> about training data</span>
 							</a>
+							<span className="sr-only"> {TRAINING_DETAILS}</span>
 						</span>
 					</div>
 					<div className="settings-row-actions">

@@ -56,8 +56,9 @@ it("describes tool calls as short sentences with the right icon", () => {
 		),
 	).toMatchObject({ verb: "Created", target: "x.cc" });
 	expect(toolActivity(call("mcp__linear__list_issues", {}))).toMatchObject({
-		verb: "linear",
-		target: "list issues",
+		verb: "Linear",
+		target: "List issues",
+		mcpServer: "linear",
 	});
 	expect(
 		toolActivity(call("view_image", { path: "out/shot.png" })),

@@ -2,13 +2,17 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
+import type { UserMessageItem } from "#/domain/session-item";
 import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 	withQueuedUserMessages,
 } from "#/domain/session-item";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	agentSessionForOwner,
+} from "../adapters/agent-sessions";
 import {
 	queuedUserMessageItems,
 	queueUserMessageWhileRunning,
@@ -16,6 +20,7 @@ import {
 	restoreQueuedUserMessage,
 	takeNextQueuedUserMessage,
 } from "../adapters/queued-user-messages";
+import { mentionNoteFor } from "./agent-mentions";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import {
 	type HarnessSessionScope,
@@ -24,6 +29,7 @@ import {
 	stopHarnessWorkspaceTurn,
 } from "./harness-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
+import { timed } from "./step-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 type ComposerSend = Parameters<typeof sendHarnessWorkspaceTask>[2];
@@ -39,19 +45,26 @@ export function sendComposerMessage(
 	input: ComposerSend,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.flatMap(
-		Effect.promise(() => queueBehindRunningTurn(scope, input)),
+		Effect.promise(() =>
+			timed("send:queueCheck", () => queueBehindRunningTurn(scope, input)),
+		),
 		(queued) =>
 			"view" in queued
 				? Effect.succeed(queued.view)
-				: sendHarnessWorkspaceTask(machines, scope, {
-						...input,
-						...(queued.storedAttachments
-							? {
-									attachments: undefined,
-									storedAttachments: queued.storedAttachments,
-								}
-							: {}),
-					}),
+				: sendHarnessWorkspaceTask(
+						machines,
+						scope,
+						{
+							...input,
+							...(queued.storedAttachments
+								? {
+										attachments: undefined,
+										storedAttachments: queued.storedAttachments,
+									}
+								: {}),
+						},
+						queued.session,
+					),
 	);
 }
 
@@ -60,7 +73,11 @@ async function queueBehindRunningTurn(
 	input: ComposerSend,
 ): Promise<
 	| { view: PublicCodexSession }
-	| { storedAttachments?: readonly MessageAttachment[] }
+	| {
+			storedAttachments?: readonly MessageAttachment[];
+			/** The chat as read here; the send that follows need not read it again. */
+			session?: AgentSessionRecord | null;
+	  }
 > {
 	if (
 		!scope.sessionId ||
@@ -75,7 +92,7 @@ async function queueBehindRunningTurn(
 		session.harness !== scope.harnessId ||
 		(scope.projectId && session.projectId !== scope.projectId)
 	)
-		return {};
+		return { session };
 	const messageId = input.idempotencyKey ?? randomUUID();
 	if (sendWasQueued(sessionItemsFromUnknown(session.items), messageId))
 		return { view: await publicSessionView(scope) };
@@ -96,7 +113,7 @@ async function queueBehindRunningTurn(
 	if (item?.kind !== "userMessage") return {};
 	const outcome = await queueUserMessageWhileRunning(scope.userId, session.id, {
 		item,
-		message: withAttachmentNote(item.text, item.attachments),
+		message: await queuedModelText(scope.userId, session.id, item),
 		harnessId: scope.harnessId,
 		modelId: input.modelId,
 		...(input.variant ? { variant: input.variant } : {}),
@@ -106,6 +123,19 @@ async function queueBehindRunningTurn(
 	// The turn ended meanwhile: this send starts the next one with the stored files.
 	if (outcome === "not-running") return { storedAttachments: attachments };
 	return { view: await publicSessionView(scope) };
+}
+
+/** What the model reads for a queued message: its text, files and mention note. */
+async function queuedModelText(
+	userId: string,
+	sessionId: string,
+	item: UserMessageItem,
+) {
+	const text = withAttachmentNote(item.text, item.attachments);
+	const note = await mentionNoteFor(userId, sessionId, item.text).catch(
+		() => null,
+	);
+	return note ? `${text}\n\n${note}` : text;
 }
 
 /**
@@ -189,16 +219,26 @@ export function removeQueuedComposerMessage(
 export async function publicSessionView(
 	scope: HarnessSessionScope,
 ): Promise<PublicCodexSession> {
+	// The queue is read beside the chat (opening a chat waits on both); it
+	// joins the view only if the view is that chat.
+	const queued = scope.sessionId
+		? queuedUserMessageItems(scope.sessionId)
+		: null;
+	queued?.catch(() => {});
+	const view = await Effect.runPromise(readHarnessWorkspaceSession(scope));
 	return withQueuedMessages(
-		await Effect.runPromise(readHarnessWorkspaceSession(scope)),
+		view,
+		queued && view.agentSessionId === scope.sessionId ? queued : undefined,
 	);
 }
 
 export async function withQueuedMessages(
 	view: PublicCodexSession,
+	/** The chat's queue, already being read. */
+	reading?: ReturnType<typeof queuedUserMessageItems>,
 ): Promise<PublicCodexSession> {
 	if (!view.agentSessionId) return view;
-	const queued = await queuedUserMessageItems(view.agentSessionId);
+	const queued = await (reading ?? queuedUserMessageItems(view.agentSessionId));
 	return queued.length
 		? { ...view, items: withQueuedUserMessages(view.items, queued) }
 		: view;

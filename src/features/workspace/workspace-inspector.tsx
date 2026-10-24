@@ -1,4 +1,16 @@
-import { ListTodo, Plus, X } from "lucide-react";
+import {
+	AppWindow,
+	BookMarked,
+	Check,
+	Files,
+	FolderTree,
+	GitPullRequest,
+	ListTodo,
+	Monitor,
+	Plus,
+	SquareTerminal,
+	X,
+} from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
@@ -27,38 +39,45 @@ export type InspectorView = ToolsView | "overview";
 const views = {
 	files: {
 		label: "Files",
+		icon: FolderTree,
 		title: "No files yet.",
 		description: "The workspace tree will appear here.",
 	},
 	diff: {
 		label: "Diff",
+		icon: Files,
 		title: "No changes yet.",
 		description: "Changes from this turn will appear here.",
 	},
 	pr: {
 		label: "Pull request",
+		icon: GitPullRequest,
 		title: "No repository connected.",
 		description:
 			"Connect this project to a GitHub repository to review its pull requests here.",
 	},
 	terminal: {
 		label: "Terminal",
+		icon: SquareTerminal,
 		title: "No terminal connected.",
 		description: "Start a workspace to use the terminal.",
 	},
 	desktop: {
 		label: "Desktop",
+		icon: Monitor,
 		title: "Shared desktop",
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
 	preview: {
 		label: "Preview",
+		icon: AppWindow,
 		title: "Preview",
 		description: "Open the apps running in this chat's workspace.",
 	},
 	memory: {
 		label: "Memory",
+		icon: BookMarked,
 		title: "Memory",
 		description: "What the agent remembers about you across chats.",
 	},
@@ -80,7 +99,10 @@ export function WorkspaceInspector({
 	pullRequest,
 	onOpenChat,
 	memoryFocus,
+	onViewIntent,
 }: {
+	/** The pointer or focus reached a view's entry: it may open next. */
+	onViewIntent?: (view: ToolsView) => void;
 	/** A memory file to show when the Memory tab opens from a chat marker. */
 	memoryFocus?: { path: string };
 	collapsed: boolean;
@@ -135,6 +157,7 @@ export function WorkspaceInspector({
 								type="button"
 								key={view}
 								aria-pressed={activeView === view}
+								onPointerEnter={() => onViewIntent?.(view)}
 								onClick={() => onActiveViewChange(view)}
 							>
 								{views[view].label}
@@ -154,7 +177,12 @@ export function WorkspaceInspector({
 							</button>
 						</div>
 					))}
-					<DropdownMenu.Root>
+					<DropdownMenu.Root
+						onOpenChange={(open) => {
+							// Most of the menu's views need the chat's machine: wake it now.
+							if (open) onViewIntent?.("terminal");
+						}}
+					>
 						<DropdownMenu.Trigger asChild>
 							<button
 								type="button"
@@ -166,18 +194,36 @@ export function WorkspaceInspector({
 						</DropdownMenu.Trigger>
 						<DropdownMenu.Portal>
 							<DropdownMenu.Content
-								className="inspector-view-menu"
+								className="recovery-menu inspector-view-menu"
 								sideOffset={6}
 								align="start"
 							>
-								{(Object.keys(views) as ToolsView[]).map((view) => (
-									<DropdownMenu.Item
-										key={view}
-										onSelect={() => onActiveViewChange(view)}
-									>
-										{views[view].label}
-									</DropdownMenu.Item>
-								))}
+								{(Object.keys(views) as ToolsView[]).map((view) => {
+									const Icon = views[view].icon;
+									const active = activeView === view;
+									return (
+										<DropdownMenu.Item
+											key={view}
+											data-selected={active || undefined}
+											onFocus={() => onViewIntent?.(view)}
+											onSelect={() => onActiveViewChange(view)}
+										>
+											<Icon size={16} strokeWidth={1.5} aria-hidden="true" />
+											<span className="menu-row-label">
+												{views[view].label}
+											</span>
+											<span className="menu-row-check">
+												{active ? (
+													<Check
+														size={14}
+														strokeWidth={1.5}
+														aria-hidden="true"
+													/>
+												) : null}
+											</span>
+										</DropdownMenu.Item>
+									);
+								})}
 							</DropdownMenu.Content>
 						</DropdownMenu.Portal>
 					</DropdownMenu.Root>

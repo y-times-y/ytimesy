@@ -171,6 +171,7 @@ export function apiAgentTools(
 			output,
 			turnId: input.turnId,
 			sessionId: session.id,
+			userId: session.userId,
 			readOnly: readOnly && !input.readerCommands,
 			signal,
 			once,

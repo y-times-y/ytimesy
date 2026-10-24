@@ -46,14 +46,57 @@ export function latestUserRequestText(items: readonly SessionItem[]) {
 	return "";
 }
 
-/** Old notification turns remain in storage, but are not user-authored chat. */
+/**
+ * The chat as the browser gets it. The hidden message that starts a wake-up
+ * turn (a helper's report, a background command's exit) is not user-authored
+ * chat, so it becomes a silent wake notice: the timeline still sees where the
+ * turn before it ended. Old internal agent notifications are dropped.
+ */
 export function childTaskPublicItems(
 	items: readonly SessionItem[],
 ): SessionItem[] {
-	return items.filter(
-		(item) =>
-			(item.kind !== "userMessage" && item.kind !== "agentMessage") ||
-			!isInternalChildTaskMessage(item.text),
+	return items.flatMap((item): SessionItem[] => {
+		if (item.kind === "userMessage" && isInternalChildTaskMessage(item.text))
+			return [
+				{
+					kind: "notice",
+					id: item.id,
+					message: "",
+					wake: true,
+					...(item.timing ? { timing: item.timing } : {}),
+				},
+			];
+		if (item.kind === "agentMessage" && isInternalChildTaskMessage(item.text))
+			return [];
+		return [item];
+	});
+}
+
+/** Where a turn starts: the user's message, or the silent start of a wake-up turn. */
+export function startsTurn(item: SessionItem): boolean {
+	return item.kind === "userMessage" || isWakeTurnStart(item);
+}
+
+export function isWakeTurnStart(item: SessionItem): boolean {
+	return (
+		(item.kind === "notice" && item.wake === true) ||
+		(item.kind === "userMessage" && isInternalChildTaskMessage(item.text))
+	);
+}
+
+/** When a turn started or ended, as its first item records it. */
+export function turnStartTiming(item: SessionItem) {
+	return item.kind === "userMessage" || item.kind === "notice"
+		? item.timing
+		: undefined;
+}
+
+/** The chat without the silent starts of wake-up turns (none of them shows). */
+export function withoutWakeTurnStarts(
+	items: readonly SessionItem[],
+): SessionItem[] {
+	return childTaskPublicItems(items).filter(
+		(item) => !(item.kind === "notice" && item.wake),
 	);
 }
 

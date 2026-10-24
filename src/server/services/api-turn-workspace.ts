@@ -1,7 +1,10 @@
 import { Effect, Either } from "effect";
 import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
-import type { ProjectCheckout } from "#/domain/project-checkout";
+import {
+	type ProjectCheckout,
+	projectCheckoutPath,
+} from "#/domain/project-checkout";
 import { isGeneratedSessionBranch } from "#/domain/session-branch";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
@@ -9,6 +12,7 @@ import {
 	agentSessionForOwner,
 } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { templateCheckoutCommit } from "../adapters/prepared-checkout";
 import {
 	bindAgentSessionMachine,
 	bindPreparedAgentTaskMachine,
@@ -33,9 +37,11 @@ export function deferredApiTurnWorkspace(
 	reuse?: TurnWorkspaceReuse,
 	options: {
 		/**
-		 * A new chat (no machine yet) starting its own branch pins the commit
-		 * that branch starts from before its VM is ready, so an early first
-		 * request can decide on that commit's hook configuration.
+		 * A new chat (no machine yet) learns the commit its checkout will hold
+		 * before its VM is ready, so an early first request can decide on that
+		 * commit's hook configuration: starting its own branch, it pins the
+		 * commit that branch starts from; on the branch its project template
+		 * holds, it is the template's commit (the copy keeps that checkout).
 		 */
 		pinNewChatBase?: boolean;
 		/** Reports each preparation phase as it is reached (the step's timing line). */
@@ -55,7 +61,10 @@ export function deferredApiTurnWorkspace(
 		checkedOut = resolve;
 	});
 	let pinnedBase: Promise<string | null> = Promise.resolve(null);
+	/** Whether the checkout must land on pinnedBase (a new branch), not only holds it. */
+	let pinsCheckout: Promise<boolean> = Promise.resolve(false);
 	let pinnedReads: ReturnType<typeof checkoutGitHubReads> | null = null;
+	let plannedDirectory: Promise<string | null> = Promise.resolve(null);
 	const workspace = () => {
 		signal.throwIfAborted();
 		prepared ??= reusedOrPrepared();
@@ -82,6 +91,13 @@ export function deferredApiTurnWorkspace(
 		 * Read after the workspace was started.
 		 */
 		pinnedBase: () => pinnedBase,
+		/**
+		 * Where a fresh copy of the project template holds the repository
+		 * (`$HOME/<name>`, as the environment build and the clone place it),
+		 * known before the VM is ready; null unless pinNewChatBase applies.
+		 * Read after the workspace was started.
+		 */
+		plannedDirectory: () => plannedDirectory,
 		/**
 		 * A file of the repository at the pinned base, read from GitHub before
 		 * the VM is ready; null unless `revision` is that pinned base, or when
@@ -134,18 +150,36 @@ export function deferredApiTurnWorkspace(
 			!owner.providerRef &&
 			!owner.parentSessionId
 		) {
-			pinnedBase = earlyCheckout
-				.then((planned) => {
-					if (
-						!Either.isRight(planned) ||
-						!planned.right ||
-						!startsNewChatBranch(planned.right)
-					)
-						return null;
-					const reads = checkoutGitHubReads(planned.right);
-					pinnedReads = reads;
-					return reads.baseRevision();
+			const fresh = earlyCheckout.then((planned) =>
+				Either.isRight(planned) ? planned.right : null,
+			);
+			const newBranch = fresh.then(
+				(planned) => !!planned && startsNewChatBranch(planned),
+			);
+			pinsCheckout = newBranch.catch(() => false);
+			pinnedBase = fresh
+				.then(async (planned) => {
+					if (!planned) return null;
+					if (await newBranch) {
+						const reads = checkoutGitHubReads(planned);
+						pinnedReads = reads;
+						return reads.baseRevision();
+					}
+					if (!keepsTemplateCheckout(planned)) return null;
+					const commit = await templateCheckoutCommit(
+						owner.userId,
+						owner.id,
+						planned.fullName,
+						planned.workingBranch,
+					);
+					if (commit) pinnedReads = checkoutGitHubReads(planned);
+					return commit;
 				})
+				.catch(() => null);
+			plannedDirectory = fresh
+				.then((planned) =>
+					planned ? projectCheckoutPath(TEMPLATE_HOME, planned.name) : null,
+				)
 				.catch(() => null);
 		}
 		const pinning = pinnedBase;
@@ -187,7 +221,9 @@ export function deferredApiTurnWorkspace(
 				additionalRepositoryNames = (
 					checkout?.additionalRepositories ?? []
 				).map((repo) => repo.name);
-				const pinnedRevision = yield* Effect.promise(() => pinning);
+				const pinnedRevision = (yield* Effect.promise(() => pinsCheckout))
+					? yield* Effect.promise(() => pinning)
+					: null;
 				yield* ensureProjectCheckout(
 					scoped,
 					vm,
@@ -286,6 +322,19 @@ export function deferredApiTurnWorkspace(
 		}
 	}
 }
+
+/**
+ * A copy of the project template whose checkout the chat keeps as it is:
+ * on the branch the template checked out (templateCheckoutCommit matches it),
+ * ensureProjectCheckout reuses that checkout without fetching, so its HEAD
+ * is the template's commit.
+ */
+function keepsTemplateCheckout(checkout: ProjectCheckout) {
+	return !!checkout.preserveCurrentBranch && !checkout.retainExistingBranch;
+}
+
+/** The guest home the environment build and the clone resolve on product VMs. */
+const TEMPLATE_HOME = "/home/ubuntu";
 
 /** A chat's own generated branch, started from a different base branch. */
 function startsNewChatBranch(checkout: ProjectCheckout) {

@@ -5,11 +5,14 @@ import {
 	Clock3,
 	CornerDownRight,
 } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useMemo } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import { helperIdentities } from "#/domain/agent-panel";
 import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
+import { helperName, KIND_ICONS } from "#/domain/helper-names";
 import type { SubagentTaskView } from "#/domain/subagent-tree";
 import { formatSpend, totalSpend } from "#/domain/subagent-usage";
+import { AgentIcon } from "./agent-icon";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
 	draft: "Starting",
@@ -42,6 +45,8 @@ export function subagentUsageLine(view: SubagentTaskView) {
 }
 
 export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
+	// Short names and colours as the agents list gives them.
+	const identities = useMemo(() => helperIdentities(tasks), [tasks]);
 	const completed = tasks.filter((task) => task.status === "done").length;
 	const subagents = tasks.flatMap((task) =>
 		task.subagent ? [task.subagent.spend] : [],
@@ -50,10 +55,10 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 		? formatSpend(totalSpend(subagents))
 		: null;
 	return (
-		<section className="task-panel" aria-label="Tasks">
+		<section className="task-panel" aria-label="Helpers">
 			<header className="task-panel-header">
 				<h2>
-					Tasks <span className="task-count">{tasks.length}</span>
+					Helpers <span className="task-count">{tasks.length}</span>
 				</h2>
 				{tasks.length > 0 ? (
 					<span className="task-count">
@@ -62,67 +67,80 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 				) : null}
 			</header>
 			{tasks.length === 0 ? (
-				<p className="task-empty">
-					Subagents appear here when the agent starts them.
-				</p>
+				<p className="task-empty">Helpers appear here when Main starts them.</p>
 			) : (
 				<ol className="task-list">
-					{tasks.map((task) => (
-						<li
-							className="task-row"
-							key={task.id}
-							style={
-								{ "--task-depth": Math.max(0, task.depth - 1) } as CSSProperties
-							}
-						>
-							{task.depth > 1 ? (
-								<CornerDownRight
-									className="task-branch"
-									size={14}
-									aria-hidden="true"
-								/>
-							) : null}
-							<span
-								className="task-status"
-								role="img"
-								data-status={task.status}
-								aria-label={statusLabels[task.status]}
+					{tasks.map((task) => {
+						const identity = identities.get(task.id);
+						return (
+							<li
+								className="task-row"
+								key={task.id}
+								style={
+									{
+										"--task-depth": Math.max(0, task.depth - 1),
+									} as CSSProperties
+								}
 							>
-								{task.status === "done" ? (
-									<Check size={14} />
-								) : task.status === "failed" ? (
-									<CircleAlert size={14} />
-								) : task.status === "waiting" ? (
-									<Clock3 size={14} />
-								) : task.status === "working" ? (
-									<MatrixDotLoader />
-								) : (
-									<Circle size={12} fill="none" />
-								)}
-							</span>
-							<div className="task-row-copy">
-								<div>
-									<span className="task-label">{task.label}</span>
-									<strong>{task.title}</strong>
-								</div>
-								<small>
-									{task.listedModelId ?? task.harnessId}
-									<span aria-hidden="true"> · </span>
-									{statusLabels[task.status]}
-								</small>
-								{task.subagent ? (
-									<small className="task-usage">
-										{subagentUsageLine(task.subagent)}
-									</small>
+								{task.depth > 1 ? (
+									<CornerDownRight
+										className="task-branch"
+										size={14}
+										aria-hidden="true"
+									/>
 								) : null}
-							</div>
-						</li>
-					))}
+								<span
+									className="task-status"
+									role="img"
+									data-status={task.status}
+									aria-label={statusLabels[task.status]}
+								>
+									{task.status === "done" ? (
+										<Check size={14} />
+									) : task.status === "failed" ? (
+										<CircleAlert size={14} />
+									) : task.status === "waiting" ? (
+										<Clock3 size={14} />
+									) : task.status === "working" ? (
+										<MatrixDotLoader />
+									) : (
+										<Circle size={12} fill="none" />
+									)}
+								</span>
+								<div className="task-row-copy">
+									<div>
+										{identity ? (
+											<span className="task-agent">
+												<AgentIcon
+													icon={KIND_ICONS[identity.kind]}
+													color={identity.color}
+												/>
+												<strong>{identity.name}</strong>
+											</span>
+										) : null}
+										<span className="task-label">
+											{identity?.task ?? helperName(task.title)}
+										</span>
+									</div>
+									<small>
+										{task.listedModelId ?? task.harnessId}
+										<span aria-hidden="true"> · </span>
+										{statusLabels[task.status]}
+									</small>
+									{task.subagent ? (
+										<small className="task-usage">
+											{subagentUsageLine(task.subagent)}
+										</small>
+									) : null}
+								</div>
+							</li>
+						);
+					})}
 				</ol>
 			)}
 			{treeSpend ? (
 				<p className="task-usage task-usage-total">
-					Subagents {subagents.length} ·{" "}
+					Helpers {subagents.length} ·{" "}
 					{[`${treeSpend.tokens} tok`, treeSpend.dollars, treeSpend.vm]
 						.filter(Boolean)
 						.join(" · ")}

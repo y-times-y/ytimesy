@@ -217,6 +217,15 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	roleModels: {},
 };
 
+/**
+ * What real users get: builder subagents on. Evals keep
+ * DEFAULT_HARNESS_VARIANT as their baseline, so a run's arms are unchanged.
+ */
+export const PRODUCT_HARNESS_VARIANT: HarnessVariant = {
+	...DEFAULT_HARNESS_VARIANT,
+	subagents: "on",
+};
+
 /** The outputCap variant's limit in characters; undefined when off. */
 export function outputCapCharacters(cap: OutputCap) {
 	return cap === "off" ? undefined : Number(cap);

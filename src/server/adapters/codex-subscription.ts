@@ -27,6 +27,11 @@ import {
 	subscriptionConnection,
 	subscriptionFetch,
 } from "./codex-subscription-transport";
+import {
+	type InvocationSharedRead,
+	invocationSharedRead,
+	usableInThisInvocation,
+} from "./database-scope";
 import { nativeModelCompactor } from "./model-compaction";
 
 /** Diagnostics only: records request start to the first streamed body byte. */
@@ -194,15 +199,13 @@ type Catalog = z.infer<typeof catalogSchema>;
 /** Fresh for a minute; past that, served while a refresh runs (plans rarely change). */
 const CATALOG_FRESH_MS = 60_000;
 const CATALOG_STALE_MS = 10 * 60_000;
-const catalogs = new Map<
-	string,
-	{
-		expires: number;
-		promise: Promise<Catalog>;
-		/** The last catalog read, kept as plain data (never a pending request). */
-		value?: { catalog: Catalog; until: number };
-	}
->();
+type CatalogEntry = {
+	expires: number;
+	promise: Promise<Catalog>;
+	/** The last catalog read, kept as plain data (never a pending request). */
+	value?: { catalog: Catalog; until: number };
+} & InvocationSharedRead;
+const catalogs = new Map<string, CatalogEntry>();
 
 /**
  * A step reads the account's token once: the catalog read and the model
@@ -217,17 +220,26 @@ type SubscriptionConnection = Awaited<
 >;
 const connections = new Map<
 	string,
-	{ at: number; promise: Promise<SubscriptionConnection> }
+	{
+		at: number;
+		promise: Promise<SubscriptionConnection>;
+	} & InvocationSharedRead
 >();
 
 function sharedSubscriptionConnection(userId: string) {
 	const now = Date.now();
 	const cached = connections.get(userId);
-	if (cached && now >= cached.at && now - cached.at < CONNECTION_REUSE_MS)
+	if (
+		cached &&
+		now >= cached.at &&
+		now - cached.at < CONNECTION_REUSE_MS &&
+		usableInThisInvocation(cached)
+	)
 		return cached;
 	if (connections.size >= 1000 && !cached)
 		connections.delete(connections.keys().next().value as string);
-	const entry = { at: now, promise: subscriptionConnection(userId) };
+	const promise = subscriptionConnection(userId);
+	const entry = { at: now, promise, ...invocationSharedRead(promise) };
 	connections.set(userId, entry);
 	entry.promise.catch(() => {
 		if (connections.get(userId) === entry) connections.delete(userId);
@@ -256,14 +268,11 @@ function loadCatalog(
 			),
 		)
 		.then((value) => catalogSchema.parse(value));
-	const entry: {
-		expires: number;
-		promise: Promise<Catalog>;
-		value?: { catalog: Catalog; until: number };
-	} = {
+	const entry: CatalogEntry = {
 		expires: Date.now() + CATALOG_FRESH_MS,
 		promise,
 		...(previous ? { value: previous } : {}),
+		...invocationSharedRead(promise),
 	};
 	catalogs.set(userId, entry);
 	promise.then(
@@ -275,7 +284,13 @@ function loadCatalog(
 			// next read loads again.
 			if (catalogs.get(userId) !== entry) return;
 			if (previous && previous.until > Date.now())
-				catalogs.set(userId, { expires: 0, promise, value: previous });
+				catalogs.set(userId, {
+					expires: 0,
+					promise,
+					value: previous,
+					owner: undefined,
+					settled: true,
+				});
 			else catalogs.delete(userId);
 		},
 	);
@@ -288,11 +303,13 @@ async function subscriptionCatalog(userId: string) {
 		throw new Error("Connect Codex before starting this agent.");
 	}
 	const cached = catalogs.get(userId);
-	if (cached && cached.expires > Date.now()) return cached.promise;
-	// Past a minute: answer from the last catalog and refresh it alongside.
+	const fresh = !!cached && cached.expires > Date.now();
+	if (cached && fresh && usableInThisInvocation(cached)) return cached.promise;
+	// Past a minute (or while another request refreshes it): answer from the
+	// last catalog, refreshing it alongside when no refresh runs.
 	const stale = cached?.value;
 	if (stale && stale.until > Date.now()) {
-		loadCatalog(userId, stale).catch(() => {});
+		if (!fresh) loadCatalog(userId, stale).catch(() => {});
 		return stale.catalog;
 	}
 	return loadCatalog(userId);

@@ -14,6 +14,7 @@ import {
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewAfterRecovery,
 	sessionViewShouldReplaceOpenTurn,
 	sessionWithoutFailedSend,
 	visibleSessionItems,
@@ -517,5 +518,33 @@ describe("chatHeaderTitle", () => {
 		);
 		expect(chatHeaderTitle("New session", "Fix it")).toBe("Fix it");
 		expect(chatHeaderTitle("  ", "Fix it")).toBe("Fix it");
+	});
+});
+
+describe("sessionViewAfterRecovery", () => {
+	const items: SessionItem[] = [
+		{ kind: "userMessage", id: SessionItemId("first"), text: "Implement" },
+		{ kind: "agentMessage", id: SessionItemId("answer"), text: "Done" },
+	];
+	const open = {
+		agentSessionId: "chat-1",
+		items,
+		turnStatus: "completed" as const,
+		title: "Chat",
+	};
+
+	it("shows a restored transcript of the open chat at once instead of blanking it", () => {
+		expect(sessionViewAfterRecovery(open, { id: "chat-1", items: [] })).toEqual(
+			{ ...open, items: [], turnStatus: "idle" },
+		);
+	});
+
+	it("keeps the transcript for a code-only restore and switches chats for a fork", () => {
+		expect(sessionViewAfterRecovery(open, { id: "chat-1", items: null })).toBe(
+			open,
+		);
+		expect(
+			sessionViewAfterRecovery(open, { id: "fork-1", items: [] }),
+		).toBeNull();
 	});
 });

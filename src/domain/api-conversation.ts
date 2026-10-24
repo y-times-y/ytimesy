@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { withoutMentionNote } from "./agent-mentions";
 import { isMemoryPart } from "./memory-repo";
 import {
 	type MessageAttachment,
@@ -137,5 +138,6 @@ export function isUserRequestMessage(
 						part.type === "text" && !isMemoryPart(part.text) ? [part.text] : [],
 					)
 					.join("\n");
-	return texts.has(text);
+	// A queued request carries its mention note (agent-mentions.ts) last.
+	return texts.has(text) || texts.has(withoutMentionNote(text));
 }

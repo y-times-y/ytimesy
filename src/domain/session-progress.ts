@@ -1,3 +1,4 @@
+import { startsTurn } from "./child-task-activity";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 
 /** When the live progress stream last delivered this chat's turn. */
@@ -23,7 +24,12 @@ export type SessionProgress = {
 	readonly turnStatus: SessionTurnStatus;
 };
 
-/** Snapshots replace text; reconnects never append a replayed delta twice. */
+/**
+ * Snapshots replace text; reconnects never append a replayed delta twice.
+ * A snapshot must hold every message the open chat shows (so one from before
+ * a send never erases it); it may add later ones, such as the hidden message
+ * that starts a wake-up turn after a helper's report or a command's exit.
+ */
 export function progressMatchesTurn(
 	current: readonly SessionItem[],
 	next: readonly SessionItem[],
@@ -35,8 +41,50 @@ export function progressMatchesTurn(
 	return (
 		expected.length === 0 ||
 		(received.length >= expected.length &&
-			expected.at(-1)?.text === received.at(-1)?.text)
+			expected.at(-1)?.text === received[expected.length - 1]?.text)
 	);
+}
+
+/**
+ * A running snapshot of the turn the user just stopped (sent before the stop
+ * settled) must not bring it back. A wake-up turn after it starts with a new
+ * message, so it still shows.
+ */
+export function progressRevivesStoppedTurn(input: {
+	readonly stopRequested: boolean;
+	readonly current: readonly SessionItem[];
+	readonly next: readonly SessionItem[];
+	readonly nextStatus: SessionTurnStatus;
+}): boolean {
+	if (!input.stopRequested || input.nextStatus !== "running") return false;
+	const starts = (items: readonly SessionItem[]) =>
+		items.filter(
+			(item) =>
+				startsTurn(item) && !(item.kind === "userMessage" && item.queued),
+		).length;
+	return starts(input.next) <= starts(input.current);
+}
+
+/**
+ * How long the open chat keeps listening after its last helper or background
+ * command was seen to end: the report or exit notice starts Main's wake-up
+ * turn on the server within this window (a queued report can lag its task).
+ */
+export const WAKE_WATCH_MS = 90_000;
+
+/**
+ * Whether the open chat listens on its live progress stream: while its own
+ * turn runs, while its helpers work (each report wakes Main), and for a short
+ * window after the last helper or background command ended. A chat with only
+ * a long background command does not hold a stream; its exit, seen by the
+ * commands read, opens the window. Idle chats hold nothing.
+ */
+export function progressStreamWanted(input: {
+	readonly turnRunning: boolean;
+	readonly helpersWorking: boolean;
+	readonly watchingForWake: boolean;
+}): boolean {
+	return input.turnRunning || input.helpersWorking || input.watchingForWake;
 }
 
 import type { CodexUsage } from "./codex-usage";

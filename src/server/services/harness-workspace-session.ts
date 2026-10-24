@@ -16,6 +16,7 @@ import {
 	saveAgentTaskState,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
+import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { prepareAgentTaskStart } from "./agent-session-machine";
 import {
 	readApiWorkspaceSession,
@@ -34,6 +35,7 @@ import {
 	type PublicCodexSession,
 } from "./codex-workspace-session";
 import { commitChatBranchForSubmission } from "./session-branch";
+import { timed } from "./step-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type HarnessSessionScope = CodexSessionScope & {
@@ -131,6 +133,8 @@ export function sendHarnessWorkspaceTask(
 		/** Continue this turn on a fallback route the user approved (`<connection>|<model>`). */
 		readonly continueOn?: string;
 	},
+	/** The chat as the caller just read it (by id, for this user), saving a read. */
+	known?: AgentSessionRecord | null,
 ): Effect.Effect<PublicHarnessSession> {
 	if (
 		scope.harnessId !== "api" &&
@@ -138,29 +142,42 @@ export function sendHarnessWorkspaceTask(
 		scope.sessionId
 	) {
 		let claimed = false;
+		// The plan's model catalog (a ChatGPT request, often uncached on a new
+		// Worker isolate) loads beside the claim and branch commit; the view
+		// below awaits the same load.
+		warmCodexSubscriptionCatalog(scope.userId);
 		return Effect.gen(function* () {
-			const previous = yield* Effect.tryPromise(() =>
-				agentSessionForOwner(scope.userId, scope.sessionId as string),
-			);
+			const previous =
+				known?.id === scope.sessionId
+					? known
+					: yield* Effect.tryPromise(() =>
+							timed("send:chat", () =>
+								agentSessionForOwner(scope.userId, scope.sessionId as string),
+							),
+						);
 			const switching = previous && previous.harness !== scope.harnessId;
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
 			// Claimed before the commit and file uploads, so New chat can't reuse it.
 			claimed = yield* Effect.tryPromise(() =>
-				claimChatForSend(scope.userId, scope.sessionId as string, input.text),
+				timed("send:claim", () =>
+					claimChatForSend(scope.userId, scope.sessionId as string, input.text),
+				),
 			);
 			// The chat as read above (the claim only titled it), then as each
 			// write below leaves it: the send reads it no further.
 			let current = previous;
 			if (scope.projectId)
 				current = yield* Effect.tryPromise(() =>
-					commitChatBranchForSubmission({
-						userId: scope.userId,
-						projectId: scope.projectId as string,
-						sessionId: scope.sessionId as string,
-						text: input.text,
-						session: previous,
-					}),
+					timed("send:branch", () =>
+						commitChatBranchForSubmission({
+							userId: scope.userId,
+							projectId: scope.projectId as string,
+							sessionId: scope.sessionId as string,
+							text: input.text,
+							session: previous,
+						}),
+					),
 				);
 			// The envelope repeats the transcript; the send uses it only when the
 			// last turn left no structured history to continue from.

@@ -53,18 +53,18 @@ export function MemoryScopeMenu({
 					{choices.map((choice) => (
 						<DropdownMenu.Item
 							key={choice.value ?? ""}
+							data-selected={choice.value === value || undefined}
 							onSelect={() => onChoose(choice.value)}
 						>
-							<Check
-								size={14}
-								strokeWidth={1.5}
-								aria-hidden="true"
-								style={{ opacity: choice.value === value ? 1 : 0 }}
-							/>
-							<span className="memory-menu-label">{choice.label}</span>
+							<span className="menu-row-label">{choice.label}</span>
 							{choice.hint ? (
 								<span className="memory-menu-hint">{choice.hint}</span>
 							) : null}
+							<span className="menu-row-check">
+								{choice.value === value ? (
+									<Check size={14} strokeWidth={1.5} aria-hidden="true" />
+								) : null}
+							</span>
 						</DropdownMenu.Item>
 					))}
 				</DropdownMenu.Content>

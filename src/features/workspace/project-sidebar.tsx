@@ -5,33 +5,32 @@ import {
 	BookMarked,
 	Check,
 	ChevronRight,
-	CircleAlert,
-	Clock3,
-	GitCompareArrows,
 	GitMerge,
 	GitPullRequest,
 	GitPullRequestClosed,
 	GitPullRequestDraft,
+	MessageCircleQuestion,
 	PanelLeft,
 	Pin,
 	Plus,
-	ShieldX,
-	Waypoints,
+	TriangleAlert,
+	X,
 } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
-import {
-	type CSSProperties,
-	type ReactNode,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { DropdownMenu, Tooltip as TooltipPrimitive } from "radix-ui";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
+	type SidebarChatStatus,
+	type SidebarPullRequest,
+	sidebarChatStatus,
+	sidebarChatStatusLabel,
+	sidebarChatUnread,
+} from "#/domain/sidebar-chat-status";
+import {
+	CHAT_SEEN_SINCE_STORAGE_KEY,
 	CHAT_SEEN_STORAGE_KEY,
 	chatsWithPinnedFirst,
-	chatWaitingOnLabel,
 	collapsedProjectStorageValue,
 	compactRelativeAge,
 	newChatIsActive,
@@ -39,6 +38,7 @@ import {
 	parseCollapsedProjectIds,
 	parsePinnedChatIds,
 	parseSeenChatKeys,
+	parseSeenSince,
 	parseSidebarSort,
 	pinnedChatStorageValue,
 	projectColor,
@@ -60,12 +60,9 @@ import {
 	sidebarStatusSections,
 	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
+	trimmedSeenChatKeys,
 	withProjectExpanded,
 } from "#/domain/sidebar-chats";
-import {
-	type SidebarChatPrNeed,
-	sidebarChatPrNeedLabel,
-} from "#/domain/sidebar-pr";
 import {
 	accountDisplayName,
 	accountInitials,
@@ -94,12 +91,13 @@ interface ProjectSidebarProps {
 	projectChats?: readonly ProjectChats<Project>[];
 	/** Opens a chat that may belong to another project (the Recent list). */
 	onSelectChatInProject?: (projectId: string, chatId: string) => void;
-	/** Opens the full-page Memory view. */
+	/** Opens the full-page Memory view (graph and list). */
 	onOpenMemory?: () => void;
-	/** Opens the full-page Memory graph. */
-	onOpenMemoryGraph?: () => void;
-	memoryGraphActive?: boolean;
 	memoryActive?: boolean;
+	/** The pointer or focus reached a chat: it may open next. */
+	onChatIntent?: (chatId: string) => void;
+	/** The pointer or focus reached Memory: it may open next. */
+	onMemoryIntent?: () => void;
 }
 
 export function ProjectSidebar({
@@ -123,20 +121,29 @@ export function ProjectSidebar({
 	projectChats = [],
 	onSelectChatInProject,
 	onOpenMemory,
-	onOpenMemoryGraph,
-	memoryGraphActive = false,
 	memoryActive = false,
+	onChatIntent,
+	onMemoryIntent,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
 	const mobileToggle = useRef<HTMLButtonElement>(null);
 	const [hovered, setHovered] = useState(false);
+	// The sort menu opens outside the frame; while it is open the peek stays.
+	const [sortMenuOpen, setSortMenuOpen] = useState(false);
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	const [seenKeys, setSeenKeys] = useState<readonly string[]>(() =>
-		typeof window === "undefined"
-			? []
-			: parseSeenChatKeys(window.localStorage.getItem(CHAT_SEEN_STORAGE_KEY)),
+		parseSeenChatKeys(readStorage(CHAT_SEEN_STORAGE_KEY)),
 	);
+	// Replies from before this browser tracked seen chats count as read.
+	const [seenSinceMs] = useState<number | null>(() => {
+		if (typeof window === "undefined") return null;
+		const stored = parseSeenSince(readStorage(CHAT_SEEN_SINCE_STORAGE_KEY));
+		if (stored !== null) return stored;
+		const now = Date.now();
+		writeStorage(CHAT_SEEN_SINCE_STORAGE_KEY, String(now));
+		return now;
+	});
 	const [collapsedProjectIds, setCollapsedProjectIds] = useState<
 		readonly string[]
 	>(() =>
@@ -191,6 +198,7 @@ export function ProjectSidebar({
 		seenKeys,
 		busyChatIds,
 		openTurnStatus,
+		seenSinceMs,
 	});
 
 	function cancelClose() {
@@ -217,11 +225,8 @@ export function ProjectSidebar({
 		const key = sidebarChatSeenKey({ ...chat, turnStatus });
 		setSeenKeys((current) => {
 			if (current.includes(key)) return current;
-			const next = [...current, key];
-			window.localStorage.setItem(
-				CHAT_SEEN_STORAGE_KEY,
-				seenChatStorageValue(next),
-			);
+			const next = trimmedSeenChatKeys([...current, key]);
+			writeStorage(CHAT_SEEN_STORAGE_KEY, seenChatStorageValue(next));
 			return next;
 		});
 	}, [selectedChatId, openTurnStatus, chats]);
@@ -267,24 +272,53 @@ export function ProjectSidebar({
 		});
 	}
 
+	/** Main's turn, or a helper's (an active turn the list reports). */
 	function chatRunning(chat: SidebarChat) {
-		return sidebarChatIsRunning({
-			chatId: chat.id,
-			turnStatus: chat.id === selectedChatId ? openTurnStatus : chat.turnStatus,
-			busyChatIds,
-			openChatId: selectedChatId,
-			openTurnStatus,
-		});
+		return (
+			sidebarChatIsRunning({
+				chatId: chat.id,
+				turnStatus:
+					chat.id === selectedChatId ? openTurnStatus : chat.turnStatus,
+				busyChatIds,
+				openChatId: selectedChatId,
+				openTurnStatus,
+			}) || Boolean(chat.workingSince)
+		);
+	}
+
+	/** The open chat's own turn is fresher than the listed one. */
+	function chatWaitingOn(chat: SidebarChat) {
+		return chat.id === selectedChatId && openTurnStatus === "running"
+			? null
+			: chat.waitingOn;
 	}
 
 	function chatStatus(chat: SidebarChat): SidebarStatusGroup {
+		return sidebarStatusGroup({
+			running: chatRunning(chat),
+			waitingOn: chatWaitingOn(chat),
+		});
+	}
+
+	function rowStatus(chat: SidebarChat): SidebarChatStatus {
 		const running = chatRunning(chat);
-		// The open chat's own turn is fresher than the listed one.
-		const waitingOn =
-			chat.id === selectedChatId && openTurnStatus === "running"
-				? null
-				: chat.waitingOn;
-		return sidebarStatusGroup({ running, waitingOn });
+		const selected = chat.id === selectedChatId;
+		return sidebarChatStatus({
+			running,
+			workingSince: chat.workingSince,
+			waitingOn: chatWaitingOn(chat),
+			pr: chat.pr,
+			unread: sidebarChatUnread({
+				selected,
+				running,
+				turnStatus: selected
+					? (openTurnStatus ?? chat.turnStatus)
+					: chat.turnStatus,
+				updatedAt: chat.updatedAt,
+				seen: seenKeys.includes(sidebarChatSeenKey(chat)),
+				seenSinceMs,
+			}),
+		});
 	}
 
 	function statusSection(
@@ -309,24 +343,17 @@ export function ProjectSidebar({
 
 	function chatRow(chat: SidebarChat, project?: Project) {
 		const status = chatStatus(chat);
-		const waiting =
-			status === "needs-you" && chat.waitingOn
-				? chatWaitingOnLabel(chat.waitingOn)
-				: null;
+		const shown = rowStatus(chat);
+		const label = sidebarChatStatusLabel(shown, nowMs);
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = pinnedChatIds.includes(chat.id);
-		return (
+		const projectName = project ? projectDisplayName(project) : null;
+		const row = (
 			<li
 				key={chat.id}
 				className="sidebar-chat-row"
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
-				data-project-bar={project ? "true" : undefined}
-				style={
-					project
-						? ({ "--project-color": projectColor(project.id) } as CSSProperties)
-						: undefined
-				}
 			>
 				<button
 					type="button"
@@ -339,28 +366,37 @@ export function ProjectSidebar({
 								? "running"
 								: undefined
 					}
-					title={[
-						chat.title,
-						project ? projectDisplayName(project) : null,
-						waiting,
-					]
-						.filter(Boolean)
-						.join(" · ")}
+					data-status={shown.kind}
+					// The status tooltip names the row's state; the title only the chat.
+					title={
+						label
+							? undefined
+							: [chat.title, projectName].filter(Boolean).join(" · ")
+					}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
+					onPointerEnter={() => onChatIntent?.(chat.id)}
+					onFocus={() => onChatIntent?.(chat.id)}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
 							? onSelectChatInProject(project.id, chat.id)
 							: onSelectChat?.(chat.id)
 					}
 				>
-					<span className="sidebar-chat-dot" aria-hidden="true" />
+					{/* The icon column every sidebar row shares: in Recent, the
+					    chat's project; under a project, empty so titles line up
+					    with the project's name. */}
+					<span className="sidebar-chat-lead" aria-hidden="true">
+						{project ? (
+							<span
+								className="sidebar-project-dot"
+								style={{ background: projectColor(project.id) }}
+							/>
+						) : null}
+					</span>
 					<span className="sidebar-chat-title">{chat.title}</span>
-					{project ? (
-						<span className="sr-only">{projectDisplayName(project)}</span>
-					) : null}
-					{waiting ? <span className="sr-only">{waiting}</span> : null}
-					{status === "working" ? (
-						<span className="sr-only">Running</span>
+					{projectName ? <span className="sr-only">{projectName}</span> : null}
+					{shown.kind === "working" ? (
+						<span className="sr-only">Working</span>
 					) : null}
 				</button>
 				<div className="sidebar-chat-trailing">
@@ -396,80 +432,323 @@ export function ProjectSidebar({
 							<Archive size={14} strokeWidth={1.5} />
 						</button>
 					) : null}
-					{chat.prNeed ? (
-						<a
-							className="sidebar-chat-pr"
-							href={chat.prUrl ?? undefined}
-							target={chat.prUrl ? "_blank" : undefined}
-							rel={chat.prUrl ? "noreferrer" : undefined}
-							data-need={chat.prNeed}
-							aria-label={`${sidebarChatPrNeedLabel(chat.prNeed)} for ${chat.title}`}
-							title={sidebarChatPrNeedLabel(chat.prNeed)}
-							onClick={(event) => event.stopPropagation()}
-						>
-							<SidebarChatPrIcon need={chat.prNeed} />
-						</a>
-					) : null}
-					{age ? <span className="sidebar-chat-age">{age}</span> : null}
+					<SidebarChatStatusMark status={shown} label={label} age={age} />
 				</div>
 			</li>
+		);
+		if (!label) return row;
+		return (
+			<TooltipPrimitive.Root key={chat.id}>
+				<TooltipPrimitive.Trigger asChild>{row}</TooltipPrimitive.Trigger>
+				<TooltipPrimitive.Portal>
+					<TooltipPrimitive.Content
+						className="sidebar-status-tooltip"
+						side="right"
+						sideOffset={10}
+					>
+						{shown.kind === "working" ? (
+							<LiveStatusLabel status={shown} />
+						) : (
+							label
+						)}
+					</TooltipPrimitive.Content>
+				</TooltipPrimitive.Portal>
+			</TooltipPrimitive.Root>
 		);
 	}
 
 	return (
-		<div
-			className="project-sidebar-frame"
-			data-peek={!expanded && hovered}
-			onPointerEnter={(event) => {
-				if (
-					event.pointerType !== "mouse" ||
-					!window.matchMedia(
-						"(hover: hover) and (min-width: 601px) and (min-height: 501px)",
-					).matches
-				)
-					return;
-				cancelClose();
-				if (!expanded) setHovered(true);
-			}}
-			onPointerLeave={() => {
-				cancelClose();
-				closeTimer.current = setTimeout(() => setHovered(false), 140);
-			}}
-		>
-			<button
-				ref={mobileToggle}
-				type="button"
-				className="workspace-sidebar-toggle mobile-projects-toggle"
-				aria-label={expanded ? "Close left sidebar" : "Open left sidebar"}
-				title={expanded ? "Close left sidebar" : "Open left sidebar"}
-				aria-expanded={expanded}
-				aria-controls="project-sidebar"
-				onClick={toggleProjects}
-			>
-				<PanelLeft size={16} strokeWidth={1.5} />
-			</button>
-			<button
-				type="button"
-				className="sidebar-backdrop"
-				aria-label="Close chats"
-				tabIndex={-1}
-				onClick={toggleProjects}
-			/>
-			<aside
-				id="project-sidebar"
-				className="project-sidebar"
-				aria-label="Projects and chats"
-				inert={!visible}
-				aria-hidden={!visible}
-				onKeyDown={(event) => {
-					if (event.key === "Escape" && expanded) {
-						event.preventDefault();
-						toggleProjects();
-					}
+		// Status tooltips hold no controls: they close as the pointer leaves the row.
+		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
+			<div
+				className="project-sidebar-frame"
+				data-peek={!expanded && (hovered || sortMenuOpen)}
+				onPointerEnter={(event) => {
+					if (
+						event.pointerType !== "mouse" ||
+						!window.matchMedia(
+							"(hover: hover) and (min-width: 601px) and (min-height: 501px)",
+						).matches
+					)
+						return;
+					cancelClose();
+					if (!expanded) setHovered(true);
+				}}
+				onPointerLeave={() => {
+					cancelClose();
+					closeTimer.current = setTimeout(() => setHovered(false), 140);
 				}}
 			>
-				<div className="sidebar-brand-row">
-					<a href="/" className="brand" aria-label="ytimesy home">
+				<button
+					ref={mobileToggle}
+					type="button"
+					className="workspace-sidebar-toggle mobile-projects-toggle"
+					aria-label={expanded ? "Close left sidebar" : "Open left sidebar"}
+					title={expanded ? "Close left sidebar" : "Open left sidebar"}
+					aria-expanded={expanded}
+					aria-controls="project-sidebar"
+					onClick={toggleProjects}
+				>
+					<PanelLeft size={16} strokeWidth={1.5} />
+				</button>
+				<button
+					type="button"
+					className="sidebar-backdrop"
+					aria-label="Close chats"
+					tabIndex={-1}
+					onClick={toggleProjects}
+				/>
+				<aside
+					id="project-sidebar"
+					className="project-sidebar"
+					aria-label="Projects and chats"
+					inert={!visible}
+					aria-hidden={!visible}
+					onKeyDown={(event) => {
+						if (event.key === "Escape" && expanded) {
+							event.preventDefault();
+							toggleProjects();
+						}
+					}}
+				>
+					<div className="sidebar-brand-row">
+						<a href="/" className="brand" aria-label="ytimesy home">
+							<img
+								className="brand-mark"
+								src="/brand/mark.svg"
+								width={28}
+								height={28}
+								alt=""
+							/>
+							<span className="brand-name">ytimesy</span>
+						</a>
+						<button
+							ref={sidebarToggle}
+							type="button"
+							className="workspace-sidebar-toggle sidebar-brand-toggle"
+							aria-label={expanded ? "Collapse chats" : "Keep chats open"}
+							title={expanded ? "Collapse chats" : "Keep chats open"}
+							aria-expanded={expanded}
+							aria-controls="project-sidebar"
+							onClick={toggleProjects}
+						>
+							<PanelLeft size={16} strokeWidth={1.5} />
+						</button>
+					</div>
+					<div className="sidebar-toolbar">
+						<button
+							type="button"
+							className="sidebar-new-project"
+							onClick={onAddProject}
+						>
+							<Plus size={16} strokeWidth={1.5} />
+							New project
+						</button>
+					</div>
+					{onOpenMemory ? (
+						<nav className="sidebar-nav" aria-label="Workspace">
+							<button
+								type="button"
+								className="sidebar-nav-item"
+								aria-current={memoryActive ? "page" : undefined}
+								onPointerEnter={onMemoryIntent}
+								onFocus={onMemoryIntent}
+								onClick={onOpenMemory}
+							>
+								<BookMarked size={16} strokeWidth={1.5} />
+								Memory
+							</button>
+						</nav>
+					) : null}
+					{projects.length ? (
+						<div className="sidebar-list-header">
+							<span>Chats</span>
+							<DropdownMenu.Root
+								open={sortMenuOpen}
+								onOpenChange={(open) => {
+									setSortMenuOpen(open);
+									// The pointer is back over the sidebar after a pick: keep it open.
+									if (!open) setHovered(true);
+								}}
+								modal={false}
+							>
+								<DropdownMenu.Trigger asChild>
+									<button
+										type="button"
+										className="sidebar-sort-button"
+										aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
+										title="Sort chats"
+									>
+										<ArrowUpDown size={14} strokeWidth={1.5} />
+									</button>
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Portal>
+									<DropdownMenu.Content
+										className="recovery-menu sidebar-sort-menu"
+										align="end"
+										sideOffset={4}
+									>
+										<DropdownMenu.RadioGroup
+											value={sort}
+											onValueChange={(value) =>
+												chooseSort(value === "recent" ? "recent" : "projects")
+											}
+										>
+											{(["recent", "projects"] as const).map((value) => (
+												<DropdownMenu.RadioItem key={value} value={value}>
+													<span className="menu-row-label">
+														{value === "recent" ? "Recent" : "Projects"}
+													</span>
+													<span className="menu-row-check">
+														<DropdownMenu.ItemIndicator>
+															<Check size={14} strokeWidth={1.5} />
+														</DropdownMenu.ItemIndicator>
+													</span>
+												</DropdownMenu.RadioItem>
+											))}
+										</DropdownMenu.RadioGroup>
+									</DropdownMenu.Content>
+								</DropdownMenu.Portal>
+							</DropdownMenu.Root>
+						</div>
+					) : null}
+					{projects.length && sort === "recent" ? (
+						recentChats.length ? (
+							<RecentSections
+								sections={sidebarStatusSections(
+									recentChats,
+									(row) => chatStatus(row.chat),
+									doneExpanded,
+								)}
+								render={statusSection}
+								onShowMore={() => setDoneExpanded(true)}
+							/>
+						) : (
+							<p className="sidebar-empty">{emptyCopy}</p>
+						)
+					) : projects.length ? (
+						<ul className="sidebar-projects">
+							{orderedProjects.map((project) => {
+								const selected = project.id === selectedProjectId;
+								const open = projectFolderIsExpanded({
+									projectId: project.id,
+									selectedProjectId,
+									collapsedIds: collapsedProjectIds,
+								});
+								return (
+									<li key={project.id} className="sidebar-project">
+										<div
+											className="sidebar-folder-row"
+											data-selected={selected}
+											data-open={open}
+										>
+											<button
+												type="button"
+												className="sidebar-folder"
+												aria-current={selected ? "page" : undefined}
+												aria-expanded={open}
+												onClick={() =>
+													selected
+														? toggleProjectFolder(project.id)
+														: openProject(project.id)
+												}
+											>
+												<span
+													className="sidebar-project-dot"
+													style={{ background: projectColor(project.id) }}
+													aria-hidden="true"
+												/>
+												<span>{projectDisplayName(project)}</span>
+											</button>
+											<div className="sidebar-folder-actions">
+												{onDeleteProject ? (
+													<button
+														type="button"
+														className="sidebar-folder-remove"
+														aria-label={`Remove ${projectDisplayName(project)}`}
+														title="Remove project"
+														onClick={(event) => {
+															event.stopPropagation();
+															onDeleteProject(project.id);
+														}}
+													>
+														<Archive size={14} strokeWidth={1.5} />
+													</button>
+												) : null}
+												<button
+													type="button"
+													className="sidebar-folder-toggle"
+													aria-label={
+														open
+															? `Collapse ${projectDisplayName(project)}`
+															: `Expand ${projectDisplayName(project)}`
+													}
+													aria-expanded={open}
+													onClick={() => toggleProjectFolder(project.id)}
+												>
+													<ChevronRight size={14} strokeWidth={1.5} />
+												</button>
+												<button
+													type="button"
+													className="sidebar-folder-add"
+													aria-label={`New chat in ${projectDisplayName(project)}`}
+													title="New chat"
+													data-active={
+														selected && newChatActive ? "true" : undefined
+													}
+													onClick={() => {
+														persistCollapsed(
+															withProjectExpanded(
+																collapsedProjectIds,
+																project.id,
+															),
+														);
+														onNewChat(project.id);
+													}}
+												>
+													<Plus size={14} strokeWidth={1.5} />
+												</button>
+											</div>
+										</div>
+										{open ? (
+											chats.length === 0 ? (
+												<p className="sidebar-empty">{emptyCopy}</p>
+											) : (
+												<ul className="sidebar-chats">
+													{chatsWithPinnedFirst(chats, pinnedChatIds).map(
+														(chat) => chatRow(chat),
+													)}
+												</ul>
+											)
+										) : null}
+									</li>
+								);
+							})}
+						</ul>
+					) : projectsLoading ? null : (
+						<p className="sidebar-empty">No repositories connected.</p>
+					)}
+					{onOpenSettings ? (
+						<SidebarAccountButton onOpen={onOpenSettings} />
+					) : null}
+				</aside>
+				<nav
+					className="sidebar-rail"
+					aria-label="Chat shortcuts"
+					inert={visible}
+					aria-hidden={visible}
+				>
+					<button
+						type="button"
+						className="rail-brand"
+						ref={railLogo}
+						aria-label="Open chats"
+						title="Open chats"
+						aria-expanded={expanded}
+						aria-controls="project-sidebar"
+						data-activity={hasAttentionChat ? "attention" : undefined}
+						onClick={toggleProjects}
+					>
 						<img
 							className="brand-mark"
 							src="/brand/mark.svg"
@@ -477,281 +756,37 @@ export function ProjectSidebar({
 							height={28}
 							alt=""
 						/>
-						<span className="brand-name">ytimesy</span>
-					</a>
-					<button
-						ref={sidebarToggle}
-						type="button"
-						className="workspace-sidebar-toggle sidebar-brand-toggle"
-						aria-label={expanded ? "Collapse chats" : "Keep chats open"}
-						title={expanded ? "Collapse chats" : "Keep chats open"}
-						aria-expanded={expanded}
-						aria-controls="project-sidebar"
-						onClick={toggleProjects}
-					>
-						<PanelLeft size={16} strokeWidth={1.5} />
+						{hasAttentionChat ? (
+							<span className="sr-only">A chat needs attention</span>
+						) : null}
 					</button>
-				</div>
-				<div className="sidebar-toolbar">
 					<button
 						type="button"
-						className="sidebar-new-project"
-						onClick={onAddProject}
+						className="panel-toggle"
+						aria-label="New chat"
+						title="New chat"
+						data-active={newChatActive}
+						onClick={() => onNewChat()}
 					>
 						<Plus size={16} strokeWidth={1.5} />
-						New project
 					</button>
-				</div>
-				{onOpenMemory ? (
-					<nav className="sidebar-nav" aria-label="Workspace">
+					{onOpenMemory ? (
 						<button
 							type="button"
-							className="sidebar-nav-item"
-							aria-current={memoryActive ? "page" : undefined}
+							className="panel-toggle"
+							aria-label="Memory"
+							title="Memory"
+							data-active={memoryActive}
+							onPointerEnter={onMemoryIntent}
+							onFocus={onMemoryIntent}
 							onClick={onOpenMemory}
 						>
 							<BookMarked size={16} strokeWidth={1.5} />
-							Memory
 						</button>
-						{onOpenMemoryGraph ? (
-							<button
-								type="button"
-								className="sidebar-nav-item"
-								aria-current={memoryGraphActive ? "page" : undefined}
-								onClick={onOpenMemoryGraph}
-							>
-								<Waypoints size={16} strokeWidth={1.5} />
-								Memory graph
-							</button>
-						) : null}
-					</nav>
-				) : null}
-				{projects.length ? (
-					<div className="sidebar-list-header">
-						<span>Chats</span>
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger asChild>
-								<button
-									type="button"
-									className="sidebar-sort-button"
-									aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
-									title="Sort chats"
-								>
-									<ArrowUpDown size={14} strokeWidth={1.5} />
-								</button>
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Portal>
-								<DropdownMenu.Content
-									className="recovery-menu sidebar-sort-menu"
-									align="end"
-									sideOffset={4}
-								>
-									<DropdownMenu.RadioGroup
-										value={sort}
-										onValueChange={(value) =>
-											chooseSort(value === "recent" ? "recent" : "projects")
-										}
-									>
-										{(["recent", "projects"] as const).map((value) => (
-											<DropdownMenu.RadioItem key={value} value={value}>
-												<span className="sidebar-sort-check">
-													<DropdownMenu.ItemIndicator>
-														<Check size={14} strokeWidth={1.5} />
-													</DropdownMenu.ItemIndicator>
-												</span>
-												{value === "recent" ? "Recent" : "Projects"}
-											</DropdownMenu.RadioItem>
-										))}
-									</DropdownMenu.RadioGroup>
-								</DropdownMenu.Content>
-							</DropdownMenu.Portal>
-						</DropdownMenu.Root>
-					</div>
-				) : null}
-				{projects.length && sort === "recent" ? (
-					recentChats.length ? (
-						<RecentSections
-							sections={sidebarStatusSections(
-								recentChats,
-								(row) => chatStatus(row.chat),
-								doneExpanded,
-							)}
-							render={statusSection}
-							onShowMore={() => setDoneExpanded(true)}
-						/>
-					) : (
-						<p className="sidebar-empty">{emptyCopy}</p>
-					)
-				) : projects.length ? (
-					<ul className="sidebar-projects">
-						{orderedProjects.map((project) => {
-							const selected = project.id === selectedProjectId;
-							const open = projectFolderIsExpanded({
-								projectId: project.id,
-								selectedProjectId,
-								collapsedIds: collapsedProjectIds,
-							});
-							return (
-								<li key={project.id} className="sidebar-project">
-									<div
-										className="sidebar-folder-row"
-										data-selected={selected}
-										data-open={open}
-									>
-										<button
-											type="button"
-											className="sidebar-folder-toggle"
-											aria-label={
-												open
-													? `Collapse ${projectDisplayName(project)}`
-													: `Expand ${projectDisplayName(project)}`
-											}
-											aria-expanded={open}
-											onClick={() => toggleProjectFolder(project.id)}
-										>
-											<ChevronRight size={14} strokeWidth={1.5} />
-										</button>
-										<button
-											type="button"
-											className="sidebar-folder"
-											aria-current={selected ? "page" : undefined}
-											aria-expanded={open}
-											onClick={() =>
-												selected
-													? toggleProjectFolder(project.id)
-													: openProject(project.id)
-											}
-										>
-											<span
-												className="sidebar-project-dot"
-												style={{ background: projectColor(project.id) }}
-												aria-hidden="true"
-											/>
-											<span>{projectDisplayName(project)}</span>
-										</button>
-										<div className="sidebar-folder-actions">
-											{onDeleteProject ? (
-												<button
-													type="button"
-													className="sidebar-folder-remove"
-													aria-label={`Remove ${projectDisplayName(project)}`}
-													title="Remove project"
-													onClick={(event) => {
-														event.stopPropagation();
-														onDeleteProject(project.id);
-													}}
-												>
-													<Archive size={14} strokeWidth={1.5} />
-												</button>
-											) : null}
-											<button
-												type="button"
-												className="sidebar-folder-add"
-												aria-label={`New chat in ${projectDisplayName(project)}`}
-												title="New chat"
-												data-active={
-													selected && newChatActive ? "true" : undefined
-												}
-												onClick={() => {
-													persistCollapsed(
-														withProjectExpanded(
-															collapsedProjectIds,
-															project.id,
-														),
-													);
-													onNewChat(project.id);
-												}}
-											>
-												<Plus size={14} strokeWidth={1.5} />
-											</button>
-										</div>
-									</div>
-									{open ? (
-										chats.length === 0 ? (
-											<p className="sidebar-empty">{emptyCopy}</p>
-										) : (
-											<ul className="sidebar-chats">
-												{chatsWithPinnedFirst(chats, pinnedChatIds).map(
-													(chat) => chatRow(chat),
-												)}
-											</ul>
-										)
-									) : null}
-								</li>
-							);
-						})}
-					</ul>
-				) : projectsLoading ? null : (
-					<p className="sidebar-empty">No repositories connected.</p>
-				)}
-				{onOpenSettings ? (
-					<SidebarAccountButton onOpen={onOpenSettings} />
-				) : null}
-			</aside>
-			<nav
-				className="sidebar-rail"
-				aria-label="Chat shortcuts"
-				inert={visible}
-				aria-hidden={visible}
-			>
-				<button
-					type="button"
-					className="rail-brand"
-					ref={railLogo}
-					aria-label="Open chats"
-					title="Open chats"
-					aria-expanded={expanded}
-					aria-controls="project-sidebar"
-					data-activity={hasAttentionChat ? "attention" : undefined}
-					onClick={toggleProjects}
-				>
-					<img
-						className="brand-mark"
-						src="/brand/mark.svg"
-						width={28}
-						height={28}
-						alt=""
-					/>
-					{hasAttentionChat ? (
-						<span className="sr-only">A chat needs attention</span>
 					) : null}
-				</button>
-				<button
-					type="button"
-					className="panel-toggle"
-					aria-label="New chat"
-					title="New chat"
-					data-active={newChatActive}
-					onClick={() => onNewChat()}
-				>
-					<Plus size={16} strokeWidth={1.5} />
-				</button>
-				{onOpenMemory ? (
-					<button
-						type="button"
-						className="panel-toggle"
-						aria-label="Memory"
-						title="Memory"
-						data-active={memoryActive}
-						onClick={onOpenMemory}
-					>
-						<BookMarked size={16} strokeWidth={1.5} />
-					</button>
-				) : null}
-				{onOpenMemoryGraph ? (
-					<button
-						type="button"
-						className="panel-toggle"
-						aria-label="Memory graph"
-						title="Memory graph"
-						data-active={memoryGraphActive}
-						onClick={onOpenMemoryGraph}
-					>
-						<Waypoints size={16} strokeWidth={1.5} />
-					</button>
-				) : null}
-			</nav>
-		</div>
+				</nav>
+			</div>
+		</TooltipPrimitive.Provider>
 	);
 }
 
@@ -836,16 +871,126 @@ function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
 	);
 }
 
-function SidebarChatPrIcon({ need }: { need: SidebarChatPrNeed }) {
-	if (need === "ready") return <GitPullRequest size={14} strokeWidth={1.5} />;
-	if (need === "merged") return <GitMerge size={14} strokeWidth={1.5} />;
-	if (need === "pending") return <Clock3 size={14} strokeWidth={1.5} />;
-	if (need === "conflict")
-		return <GitCompareArrows size={14} strokeWidth={1.5} />;
-	if (need === "blocked") return <ShieldX size={14} strokeWidth={1.5} />;
-	if (need === "checks_failed")
-		return <CircleAlert size={14} strokeWidth={1.5} />;
-	if (need === "draft")
-		return <GitPullRequestDraft size={14} strokeWidth={1.5} />;
-	return <GitPullRequestClosed size={14} strokeWidth={1.5} />;
+/** The row's one status on the right: an icon, an unread dot, or the relative time. */
+function SidebarChatStatusMark({
+	status,
+	label,
+	age,
+}: {
+	status: SidebarChatStatus;
+	label: string | null;
+	age: string | null;
+}) {
+	const time = age ? <span className="sidebar-chat-age">{age}</span> : null;
+	switch (status.kind) {
+		case "asking":
+			return (
+				<span
+					className="sidebar-chat-status"
+					data-status="asking"
+					role="img"
+					aria-label={label ?? undefined}
+				>
+					<MessageCircleQuestion size={14} strokeWidth={2} aria-hidden="true" />
+				</span>
+			);
+		case "failed":
+			return (
+				<span
+					className="sidebar-chat-status"
+					data-status="failed"
+					role="img"
+					aria-label={label ?? undefined}
+				>
+					<TriangleAlert size={14} strokeWidth={2} aria-hidden="true" />
+				</span>
+			);
+		case "pr":
+			return <SidebarChatPr pr={status.pr} label={label} />;
+		case "unread":
+			return (
+				<span
+					className="sidebar-chat-unread"
+					role="img"
+					aria-label={label ?? undefined}
+				/>
+			);
+		case "working":
+		case "idle":
+			return time;
+	}
+}
+
+function SidebarChatPr({
+	pr,
+	label,
+}: {
+	pr: SidebarPullRequest;
+	label: string | null;
+}) {
+	const Icon = {
+		open: GitPullRequest,
+		draft: GitPullRequestDraft,
+		merged: GitMerge,
+		closed: GitPullRequestClosed,
+	}[pr.state];
+	return (
+		<a
+			className="sidebar-chat-status sidebar-chat-pr"
+			data-pr={pr.state}
+			href={pr.url}
+			target="_blank"
+			rel="noreferrer"
+			aria-label={label ?? undefined}
+			onClick={(event) => event.stopPropagation()}
+		>
+			<Icon size={14} strokeWidth={2} aria-hidden="true" />
+			<span aria-hidden="true">{pr.number}</span>
+			{pr.checks === "passed" ? (
+				<Check
+					className="sidebar-chat-check"
+					data-checks="passed"
+					size={11}
+					strokeWidth={2.6}
+					aria-hidden="true"
+				/>
+			) : pr.checks === "failed" ? (
+				<X
+					className="sidebar-chat-check"
+					data-checks="failed"
+					size={11}
+					strokeWidth={2.6}
+					aria-hidden="true"
+				/>
+			) : null}
+		</a>
+	);
+}
+
+/** "Working · 1m 12s", ticking each second while the tooltip is open. */
+function LiveStatusLabel({ status }: { status: SidebarChatStatus }) {
+	const [nowMs, setNowMs] = useState(() => Date.now());
+	useEffect(() => {
+		const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+		return () => window.clearInterval(timer);
+	}, []);
+	return <>{sidebarChatStatusLabel(status, nowMs)}</>;
+}
+
+/** localStorage can be missing or throw (private mode, blocked site data). */
+function readStorage(key: string): string | null {
+	if (typeof window === "undefined") return null;
+	try {
+		return window.localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+function writeStorage(key: string, value: string) {
+	try {
+		window.localStorage.setItem(key, value);
+	} catch {
+		// The marker only lives for this page then.
+	}
 }

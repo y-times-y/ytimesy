@@ -1,9 +1,20 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import { withBackgroundCommandExits } from "#/domain/background-command";
+import {
+	type AgentTaskActivity,
+	childTaskEventQueueText,
+	childTaskPublicItems,
+} from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
-import type { SessionItem } from "#/domain/session-item";
+import {
+	type SessionItem,
+	type SessionTurnStatus,
+	sessionItemsFromUnknown,
+	sessionItemsQueuedWithUser,
+} from "#/domain/session-item";
+import { settledTurnItems, withStoppedNotice } from "#/domain/turn-end";
 import { SessionTimeline } from "./session-timeline";
 
 // Replies render through the real Markdown renderer (the app loads it lazily).
@@ -102,10 +113,10 @@ describe("session timeline live collapse", () => {
 						[
 							"child",
 							{
-								name: "Fix branch picker",
-								color: "var(--agent-build)",
+								name: "build-1",
+								task: "Fix branch picker",
+								color: "#FF8F96",
 								icon: "hammer" as const,
-								tag: "Build",
 							},
 						],
 					]),
@@ -127,8 +138,23 @@ describe("session timeline live collapse", () => {
 			}),
 		);
 		// The lead's chat shows a start line and a finish line, not the helper's transcript.
-		expect(html).toContain("Started “Fix branch picker”");
-		expect(html).toContain("“Fix branch picker” finished: Implemented");
+		// Its short name on both, the task beside it, the colour on the icon only.
+		expect(html).toContain(
+			'<span class="helper-line-name">build-1</span><span class="helper-line-text" title="Fix branch picker">started · <!-- -->Fix branch picker</span>',
+		);
+		expect(html).toContain('style="color:#FF8F96"');
+		// The finish is an outlined card that opens the helper; its report's
+		// first line under it, the full report on hover.
+		expect(html).toMatch(
+			/<button type="button" class="helper-card" data-status="finished" title="Implemented">/,
+		);
+		expect(html).toContain('<span class="helper-card-name">build-1</span>');
+		expect(html).toContain(
+			'<span class="helper-card-verb" data-verb="finished">finished</span> · Fix branch picker',
+		);
+		expect(html).toContain('<span class="helper-card-time">1s</span>');
+		expect(html).toContain('<span class="helper-card-line">Implemented</span>');
+		expect(html).not.toContain("agent-row-tag");
 		expect(html).not.toContain("child-task-card");
 		expect(html).not.toContain("Looking at the session timeline");
 		expect(html).not.toContain("Its final summary is below");
@@ -140,7 +166,7 @@ describe("session timeline live collapse", () => {
 				tasks: [{ ...child, turnStatus: "running", status: "working" }],
 			}),
 		);
-		expect(waiting).toContain("Waiting for subagents");
+		expect(waiting).toContain("Waiting for helpers");
 		expect(waiting).not.toContain(">Thinking<");
 	});
 	it("shows a helper's own conversation with senders and steering still queued", () => {
@@ -343,5 +369,325 @@ describe("session timeline live collapse", () => {
 		expect(response).toContain("file-type-icon");
 		expect(response).toContain('title="Open src/styles.css"');
 		expect(html).toContain("src/styles.css");
+	});
+});
+
+function render(
+	items: SessionItem[],
+	turnStatus: SessionTurnStatus,
+	tasks: AgentTaskActivity[] = [],
+) {
+	return renderToString(
+		createElement(SessionTimeline, { items, turnStatus, tasks }),
+	);
+}
+
+const user = (id: string, text = id): SessionItem => ({
+	kind: "userMessage",
+	id: SessionItemId(id),
+	text,
+});
+const answer = (id: string, text: string): SessionItem => ({
+	kind: "agentMessage",
+	id: SessionItemId(id),
+	text,
+});
+const spawn: SessionItem = {
+	kind: "dynamicToolCall",
+	id: SessionItemId("spawn"),
+	tool: "agent",
+	input: JSON.stringify({ role: "writer", title: "Fix the parser" }),
+	status: "completed",
+};
+
+/** The "Worked" groups' HTML (nested <details> included), and what shows outside them. */
+function split(html: string) {
+	let worked = "";
+	let outside = "";
+	let at = 0;
+	for (;;) {
+		const start = html.indexOf('<details class="session-work">', at);
+		if (start < 0) break;
+		outside += html.slice(at, start);
+		const tag = /<details\b|<\/details>/g;
+		tag.lastIndex = start;
+		let depth = 0;
+		let end = html.length;
+		for (let match = tag.exec(html); match; match = tag.exec(html)) {
+			depth += match[0] === "</details>" ? -1 : 1;
+			if (depth === 0) {
+				end = tag.lastIndex;
+				break;
+			}
+		}
+		worked += html.slice(start, end);
+		at = end;
+	}
+	return { worked, outside: outside + html.slice(at) };
+}
+
+describe("session timeline after a reload", () => {
+	it("keeps Main's answer outside Worked when a wake-up turn followed it", () => {
+		const html = render(
+			[
+				user("ask", "Add tests"),
+				spawn,
+				answer("a1", "This repo uses Vitest; a helper is writing the tests."),
+				user("e1", "⁣ytimesy-child-event:e1"),
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("check"),
+					tool: "bash",
+					status: "completed",
+				},
+				answer("a2", "The helper added 4 tests and they pass."),
+			],
+			"completed",
+		);
+		const { outside } = split(html);
+		expect(outside).toContain("This repo uses Vitest");
+		expect(outside).toContain("The helper added 4 tests");
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
+	it("shows a helper's finish as its name and finished, never the report header", () => {
+		const task = {
+			id: "h1",
+			parentSessionId: "root",
+			title: "Fix the parser",
+			label: "Task 1",
+			depth: 1,
+			status: "done",
+			prompt: "",
+			placement: "fresh",
+			access: "read_write",
+			summary:
+				"[agent 3 writer finished · Fix the parser · 12 steps · 6m · 362k tokens]\n\nParser fixed.",
+			harnessId: "api",
+			listedModelId: null,
+			createdAt: new Date(1_000).toISOString(),
+			updatedAt: new Date(2_000).toISOString(),
+			items: [],
+			turnStatus: "completed",
+		} as AgentTaskActivity;
+		const html = render(
+			[user("ask"), spawn, answer("a1", "Started a helper.")],
+			"completed",
+			[task],
+		);
+		expect(html).toContain('data-verb="finished">finished</span>');
+		expect(html).not.toContain("[agent 3");
+		expect(html).toContain(
+			'<span class="helper-card-line">Parser fixed.</span>',
+		);
+		expect(html).toContain(
+			'title="Parser fixed.\n\n12 steps · 6m · 362k tokens"',
+		);
+	});
+
+	it("says failed on a failed helper's card, in its own colour", () => {
+		const task = {
+			id: "h1",
+			parentSessionId: "root",
+			title: "Fix the parser",
+			label: "Task 1",
+			depth: 1,
+			status: "failed",
+			prompt: "",
+			placement: "fresh",
+			access: "read_write",
+			summary: null,
+			harnessId: "api",
+			listedModelId: null,
+			createdAt: new Date(1_000).toISOString(),
+			updatedAt: new Date(2_000).toISOString(),
+			items: [
+				{
+					kind: "error",
+					id: SessionItemId("err"),
+					message: "Budget ran out",
+				},
+			],
+			turnStatus: "failed",
+		} as AgentTaskActivity;
+		const html = render(
+			[user("ask"), spawn, answer("a1", "Started a helper.")],
+			"completed",
+			[task],
+		);
+		expect(html).toContain('class="helper-card" data-status="failed"');
+		expect(html).toContain(
+			'<span class="helper-card-verb" data-verb="failed">failed</span> · Fix the parser',
+		);
+		expect(html).toContain(
+			'<span class="helper-card-line">Budget ran out</span>',
+		);
+	});
+
+	it("marks a stopped turn with a muted Stopped line", () => {
+		const html = render(
+			withStoppedNotice(
+				[
+					user("ask"),
+					{
+						kind: "dynamicToolCall",
+						id: SessionItemId("run"),
+						tool: "bash",
+						status: "completed",
+					},
+				],
+				"t1",
+			),
+			"idle",
+		);
+		expect(html).toContain('class="session-stopped"');
+		expect(split(html).outside).toContain(">Stopped</p>");
+	});
+
+	it("shows a question card's answer once, in the card", () => {
+		const html = render(
+			[
+				user("ask"),
+				{
+					kind: "userQuestion",
+					id: SessionItemId("q"),
+					questions: [
+						{
+							question: "Which database?",
+							options: [{ label: "Postgres" }, { label: "SQLite" }],
+						},
+					],
+				},
+				user("reply", "Database: Postgres"),
+				answer("a", "Using Postgres."),
+			],
+			"completed",
+		);
+		expect(html.match(/Database: Postgres/g)).toHaveLength(1);
+		expect(html).toContain("user-question-reply");
+	});
+});
+
+/**
+ * Wake-up turns as the browser really gets them: the server stores the
+ * hidden child-event message (deliverParentTaskNotification through
+ * sessionItemsQueuedWithUser), and every read the browser makes (reload,
+ * live progress snapshot) projects the stored items with childTaskPublicItems.
+ */
+describe("session timeline with server-started wake-up turns", () => {
+	const stored = (items: readonly SessionItem[]) =>
+		childTaskPublicItems(
+			sessionItemsFromUnknown(JSON.parse(JSON.stringify(items))),
+		);
+	const done = (items: readonly SessionItem[], at: number) =>
+		settledTurnItems(items, at);
+	const helperChat = () => {
+		let items: SessionItem[] = sessionItemsQueuedWithUser(
+			[],
+			"Start a slow build helper",
+			"m1",
+		);
+		items = done(
+			[...items, spawn, answer("a1", "Started the build helper.")],
+			Date.now(),
+		);
+		items = sessionItemsQueuedWithUser(items, "What is 391 plus fruit?", "m2");
+		items = done([...items, answer("a2", "391 PINEAPPLE")], Date.now());
+		return sessionItemsQueuedWithUser(
+			items,
+			childTaskEventQueueText("6f1c2a9e-0d4b-4c51-9a63-2f8f5b1d7e10"),
+		);
+	};
+	const check: SessionItem = {
+		kind: "dynamicToolCall",
+		id: SessionItemId("check"),
+		tool: "bash",
+		status: "completed",
+	};
+
+	it("keeps Main's answer outside Worked while a helper's report turn runs", () => {
+		const html = render(stored([...helperChat(), check]), "running");
+		const { worked, outside } = split(html);
+		expect(outside).toContain("391 PINEAPPLE");
+		expect(worked).not.toContain("391 PINEAPPLE");
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
+	it("keeps it there after the report turn ends and on reload", () => {
+		const html = render(
+			stored(
+				done(
+					[...helperChat(), check, answer("a3", "The build passed.")],
+					Date.now(),
+				),
+			),
+			"completed",
+		);
+		const { worked, outside } = split(html);
+		expect(outside).toContain("391 PINEAPPLE");
+		expect(outside).toContain("The build passed.");
+		expect(worked).not.toContain("391 PINEAPPLE");
+	});
+
+	it("sets an answer-only report turn apart from Main's previous answer", () => {
+		const html = render(
+			stored(
+				done([...helperChat(), answer("a3", "The build passed.")], Date.now()),
+			),
+			"completed",
+		);
+		const before = html.indexOf("391 PINEAPPLE");
+		const breakAt = html.indexOf('class="session-turn-break"');
+		const after = html.indexOf("The build passed.");
+		expect(before).toBeGreaterThan(-1);
+		expect(breakAt).toBeGreaterThan(before);
+		expect(after).toBeGreaterThan(breakAt);
+		expect(html.match(/session-turn-break/g)).toHaveLength(1);
+		expect(html).not.toContain("ytimesy-child-event");
+	});
+
+	it("keeps Main's Started message outside Worked when a command's exit wakes it", () => {
+		const startedAt = Date.now() - 60_000;
+		const background: SessionItem = {
+			kind: "dynamicToolCall",
+			id: SessionItemId("bg"),
+			tool: "bash",
+			input: JSON.stringify({ command: "pnpm build", background: true }),
+			status: "completed",
+			background: { id: "cmd1", label: "pnpm build", startedAt },
+		};
+		let items: SessionItem[] = sessionItemsQueuedWithUser(
+			[],
+			"Run the build in the background",
+			"m1",
+		);
+		items = done(
+			[...items, background, answer("a1", "Started pnpm build.")],
+			Date.now(),
+		);
+		items = withBackgroundCommandExits(items, [
+			{
+				id: "cmd1",
+				label: "pnpm build",
+				startedAt,
+				endedAt: Date.now(),
+				exitCode: 0,
+				outputPath: "/tmp/ytimesy-detached/cmd1/output",
+				lastLines: "done",
+				announced: true,
+			},
+		]);
+		items = sessionItemsQueuedWithUser(
+			items,
+			childTaskEventQueueText("bg:cmd1"),
+		);
+		const html = render(
+			stored([...items, check, answer("a2", "The build finished cleanly.")]),
+			"completed",
+		);
+		const { worked, outside } = split(html);
+		expect(outside).toContain("Started pnpm build.");
+		expect(worked).not.toContain("Started pnpm build.");
+		expect(outside).toContain("The build finished cleanly.");
 	});
 });

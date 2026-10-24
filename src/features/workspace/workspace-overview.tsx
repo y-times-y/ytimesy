@@ -28,7 +28,10 @@ export function WorkspaceOverview({
 	repository,
 	desktop,
 	onOpen,
+	onIntent,
 }: {
+	/** The pointer or focus reached a view's card: it may open next. */
+	onIntent?: (view: ToolsView) => void;
 	tasks: readonly AgentTask[];
 	items: readonly SessionItem[];
 	changes: readonly FileChangeEntry[];
@@ -117,6 +120,8 @@ export function WorkspaceOverview({
 						key={card.view}
 						className="overview-card"
 						type="button"
+						onPointerEnter={() => onIntent?.(card.view)}
+						onFocus={() => onIntent?.(card.view)}
 						onClick={() => onOpen(card.view)}
 					>
 						<card.icon size={16} />

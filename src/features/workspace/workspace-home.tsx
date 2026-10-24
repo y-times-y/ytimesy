@@ -1,7 +1,13 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Maximize2, Minimize2, PanelRight } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
@@ -18,6 +24,7 @@ import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
 	sendAfterConnect,
+	sendReplyOutcome,
 } from "#/domain/harness-access";
 import {
 	inspectorPaneIsWide,
@@ -48,6 +55,7 @@ import {
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewAfterRecovery,
 	sessionViewShouldReplaceOpenTurn,
 	sessionWithoutFailedSend,
 } from "#/domain/session-item";
@@ -55,14 +63,18 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
+	progressRevivesStoppedTurn,
+	progressStreamWanted,
 	SEND_TIMEOUT_MESSAGE,
 	SEND_TIMEOUT_MS,
 	type SessionProgress,
 	sessionReadInterval,
+	WAKE_WATCH_MS,
 	withinTimeout,
 } from "#/domain/session-progress";
 import {
 	backgroundTurnPollChatIds,
+	chatsToReadAhead,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
 	listedChatHarnessId,
@@ -77,6 +89,7 @@ import {
 	sidebarPinnedStorageValue,
 	unsentSendReturnsHere,
 	withBusyChat,
+	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
 } from "#/domain/sidebar-chats";
@@ -101,8 +114,10 @@ import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
+	prewarmProjectAgentSession,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
+import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
@@ -128,11 +143,14 @@ import {
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
-import { readWorkspaceChangesFn } from "./explorer.fn";
+import {
+	readWorkspaceChangesFn,
+	resumeWorkspaceMachineFn,
+} from "./explorer.fn";
+import { prefetchWorkspaceFiles } from "./files-inspector";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
-import { MemoryGraphPage } from "./memory-graph-page";
-import { MemoryInspector } from "./memory-inspector";
+import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -143,6 +161,7 @@ import {
 } from "./workspace-inspector";
 import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
+import { preloadWorkspaceTools } from "./workspace-tools-preload";
 
 /** One composer send, from the click until the server accepts or refuses it. */
 type PendingSend = {
@@ -168,15 +187,33 @@ type PendingSend = {
 	readonly settle: (result: ComposerSendResult) => void;
 };
 
+/** How long after the open chat shows the project's other chats are read ahead. */
+const READ_AHEAD_DELAY_MS = 800;
+
+/** How long after the inspector opens (or the chat changes) Files reads ahead. */
+const FILES_READ_AHEAD_MS = 100;
+
+/** A chat's machine is asked to wake at most this often from hovering its tools. */
+const MACHINE_RESUME_INTERVAL_MS = 60_000;
+
+/** When the Memory page and workspace tools load in the background. */
+const PAGE_SETTLED_PREFETCH_MS = 2_500;
+
 /** When to read a completed chat again for the save hook's marker. */
 const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
 
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
+	initialChats,
 }: {
 	initialSession: PublicCodexSession;
 	initialProjects?: Project[];
+	/** The first project's chats, read with the page. */
+	initialChats?: {
+		readonly projectId: string;
+		readonly chats: readonly SidebarChat[];
+	};
 }) {
 	const compact = useCompactLayout();
 	const workspaceMainRef = useRef<HTMLElement>(null);
@@ -194,6 +231,11 @@ export function WorkspaceHome({
 	}, []);
 	const singlePane = compact || inspectorCompact || inspectorExpanded;
 	const queryClient = useQueryClient();
+	useState(() => {
+		const key = ["agent-sessions", initialChats?.projectId];
+		if (initialChats && !queryClient.getQueryData(key))
+			queryClient.setQueryData(key, initialChats.chats);
+	});
 	const projects = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
@@ -262,9 +304,13 @@ export function WorkspaceHome({
 		chats: projectChatLists[index]?.data ?? [],
 	}));
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
-	const [memoryPage, setMemoryPage] = useState<"list" | "graph" | null>(null);
-	const memoryPageOpen = memoryPage !== null;
+	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
+	/** The Memory page's view; the graph first, the list kept while open. */
+	const [memoryView, setMemoryView] = useState<MemoryView>("graph");
 	const startSession = useServerFn(startProjectAgentSession);
+	const prewarmSession = useServerFn(prewarmProjectAgentSession);
+	/** Chats whose machine copy was already asked for in this page. */
+	const prewarmedChats = useRef(new Set<string>());
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
 	const [projectsOpen, setProjectsOpen] = useState(false);
@@ -316,6 +362,31 @@ export function WorkspaceHome({
 	const sessionEpoch = useRef(0);
 	/** The epoch in which New chat is creating a chat; nothing else gets selected meanwhile. */
 	const creatingChatEpoch = useRef<number | null>(null);
+	/** The chat New chat created last; its composer is the one the person typed into meanwhile. */
+	const createdChatId = useRef<string | null>(null);
+	/**
+	 * The composer is keyed by its chat, except that New chat's chat keeps the
+	 * composer it showed while being created: the text typed (and the focus)
+	 * in that half second survive the chat getting its id.
+	 */
+	const composerKey = useRef({
+		chatId: null as string | null,
+		key: "new",
+		n: 0,
+	});
+	if (composerKey.current.chatId !== session.agentSessionId) {
+		const previous = composerKey.current;
+		const n = previous.n + 1;
+		composerKey.current = {
+			chatId: session.agentSessionId,
+			key:
+				previous.chatId === null &&
+				session.agentSessionId === createdChatId.current
+					? previous.key
+					: (session.agentSessionId ?? `new:${n}`),
+			n,
+		};
+	}
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	/** A send waiting for the ChatGPT device code to be entered. */
 	const pendingSendRef = useRef<PendingSend | null>(null);
@@ -328,6 +399,27 @@ export function WorkspaceHome({
 		(pending: PendingSend, view: PublicCodexSession) => Promise<void>
 	>(async () => undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
+	/** Chat views being read ahead of a click, by chat id; an open takes them over. */
+	const viewReads = useRef(
+		new Map<string, Promise<PublicCodexSession | null>>(),
+	);
+	/** The open chat's read: one already under way (a hover, the page's first chat), else a new one. */
+	const readOpenChat = useCallback(
+		async (selection: {
+			projectId: string;
+			sessionId: string;
+			harnessId: AgentProviderId;
+		}) =>
+			(await viewReads.current.get(selection.sessionId)) ??
+			getCodexSession({ data: selection }),
+		[],
+	);
+	// The page's latest chat is read before the page's other reads queue
+	// ahead of it; opening it then takes this read over.
+	useLayoutEffect(() => {
+		const first = initialChats?.chats[0];
+		if (first) readAheadRef.current(first.id);
+	}, [initialChats]);
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
 		return sessionEpoch.current;
@@ -414,6 +506,15 @@ export function WorkspaceHome({
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
+	const resumeMachine = useServerFn(resumeWorkspaceMachineFn);
+	/** When this page last asked each chat's machine to wake. */
+	const resumedMachines = useRef(new Map<string, number>());
+	/**
+	 * The page's first chat has been read. The slower side reads (git changes,
+	 * the desktop's state, each a machine call) wait for it, so the page's
+	 * first transcript does not queue behind them.
+	 */
+	const [firstChatRead, setFirstChatRead] = useState(false);
 	// Git in the workspace is the source of truth for what changed; the
 	// transcript only fills in while the machine is asleep.
 	const gitChanges = useQuery({
@@ -422,14 +523,18 @@ export function WorkspaceHome({
 			readChanges({
 				data: { projectId: selectedProject?.id, sessionId: selectedSessionId },
 			}),
-		enabled: Boolean(selectedProject?.id && selectedSessionId),
+		enabled: Boolean(selectedProject?.id && selectedSessionId && firstChatRead),
 		refetchInterval: session.turnStatus === "running" ? 10_000 : 60_000,
 		staleTime: 5_000,
 	});
 	const refetchChanges = gitChanges.refetch;
+	const changesTurnStatus = useRef(session.turnStatus);
 	useEffect(() => {
+		const was = changesTurnStatus.current;
+		changesTurnStatus.current = session.turnStatus;
 		// A finished turn is when the agent's edits settle; show them right away.
-		if (session.turnStatus !== "running") void refetchChanges();
+		if (isTurnRunning(was) && !isTurnRunning(session.turnStatus))
+			void refetchChanges();
 	}, [session.turnStatus, refetchChanges]);
 	const fileChanges =
 		gitChanges.data ?? fileChangesFromSessionItems(session.items);
@@ -451,11 +556,7 @@ export function WorkspaceHome({
 			workingBranch: chat.workingBranch,
 			pullRequests: listedPullRequests,
 		});
-		return {
-			...chat,
-			prUrl: mark?.url ?? null,
-			prNeed: mark?.need ?? null,
-		};
+		return { ...chat, pr: mark?.pr ?? null };
 	});
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
@@ -504,9 +605,61 @@ export function WorkspaceHome({
 	const backgroundRuns = backgroundRunsFromReadModel(
 		backgroundCommands.data ?? {},
 	);
+	// A helper's report or a background command's exit starts Main's next turn
+	// on the server; the open chat listens for it (progressStreamWanted), and
+	// for a stopped turn's settled transcript.
+	const helpersWorking = (agentTasks.data ?? []).some(
+		(task) => task.status === "working" || task.status === "waiting",
+	);
+	const backgroundRunning = backgroundRuns.some(
+		(run) => run.status === "running",
+	);
+	const [wakeWatch, setWakeWatch] = useState<{
+		readonly sessionId: string;
+		readonly since: number;
+	} | null>(null);
+	const sideWork = useRef<{
+		readonly sessionId: string | undefined;
+		readonly active: boolean;
+	}>({ sessionId: undefined, active: false });
 	useEffect(() => {
+		const active = helpersWorking || backgroundRunning;
+		const previous = sideWork.current;
+		sideWork.current = { sessionId: activeSessionId, active };
 		if (
 			activeSessionId &&
+			previous.sessionId === activeSessionId &&
+			previous.active &&
+			!active
+		)
+			setWakeWatch({ sessionId: activeSessionId, since: Date.now() });
+	}, [activeSessionId, helpersWorking, backgroundRunning]);
+	useEffect(() => {
+		if (!wakeWatch) return;
+		const timer = window.setTimeout(() => setWakeWatch(null), WAKE_WATCH_MS);
+		return () => window.clearTimeout(timer);
+	}, [wakeWatch]);
+	const listenForProgress = progressStreamWanted({
+		turnRunning: session.turnStatus === "running",
+		helpersWorking,
+		watchingForWake: !!wakeWatch && wakeWatch.sessionId === activeSessionId,
+	});
+	const settledTurn = useRef<{
+		readonly chatId?: string;
+		readonly status: SessionTurnStatus;
+	}>({ status: "idle" });
+	useEffect(() => {
+		const previous = settledTurn.current;
+		settledTurn.current = {
+			chatId: activeSessionId,
+			status: session.turnStatus,
+		};
+		// A turn that just finished here settles its helpers, commands, PR and
+		// title; opening an already finished chat reads nothing extra.
+		if (
+			activeSessionId &&
+			previous.chatId === activeSessionId &&
+			isTurnRunning(previous.status) &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
@@ -674,9 +827,10 @@ export function WorkspaceHome({
 	});
 
 	useEffect(() => {
+		// Chat views stay cached by chat id: going back to another project's
+		// chat shows it at once.
 		void activeProjectId;
 		setSelectedSessionId(undefined);
-		sessionViews.current.clear();
 		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
 
@@ -702,17 +856,19 @@ export function WorkspaceHome({
 	}, [chats.data, composerDraft, selectedSessionId]);
 
 	useEffect(() => {
-		if (!activeProjectId) return;
+		if (!activeProjectId || !activeSessionId || !firstChatRead) return;
 		void loadDesktop({
 			data: { projectId: activeProjectId, sessionId: activeSessionId },
 		}).then((next) => {
+			// Another chat opened meanwhile keeps its own desktop.
+			if (selectedSessionIdRef.current !== activeSessionId) return;
 			setDesktop((current) =>
 				current.status === "starting" || current.status === "running"
 					? current
 					: next,
 			);
 		});
-	}, [loadDesktop, activeProjectId, activeSessionId]);
+	}, [loadDesktop, activeProjectId, activeSessionId, firstChatRead]);
 
 	// The agent starts the desktop itself for visual QA; show it working.
 	const agentDesktopActivity = agentDesktopActivityInTurn({
@@ -764,6 +920,7 @@ export function WorkspaceHome({
 				),
 			},
 			sessionEpoch.current,
+			readOpenChat,
 		),
 		enabled: Boolean(
 			activeProjectId && activeSessionId && !composerDraft && !composerBusy,
@@ -780,6 +937,54 @@ export function WorkspaceHome({
 		refetchIntervalInBackground: true,
 	});
 	refetchOpenSession.current = () => void sessionRead.refetch();
+	useEffect(() => {
+		if (sessionRead.isFetched) setFirstChatRead(true);
+	}, [sessionRead.isFetched]);
+	// Once the open chat has shown, the project's latest chats are read two
+	// at a time, so switching to one shows its transcript at once.
+	const latestChatIds = sessionRead.data
+		? (chats.data ?? []).map((chat) => chat.id).join(",")
+		: "";
+	useEffect(() => {
+		if (!latestChatIds) return;
+		const queue = chatsToReadAhead({
+			chats: latestChatIds.split(",").map((id) => ({ id })),
+			openChatId: activeSessionId,
+			heldChatIds: new Set([
+				...sessionViews.current.keys(),
+				...viewReads.current.keys(),
+			]),
+		});
+		let stopped = false;
+		const next = async (): Promise<void> => {
+			const id = queue.shift();
+			if (stopped || !id) return;
+			readAheadRef.current(id);
+			await viewReads.current.get(id);
+			return next();
+		};
+		const timer = window.setTimeout(() => {
+			void next();
+			void next();
+		}, READ_AHEAD_DELAY_MS);
+		return () => {
+			stopped = true;
+			window.clearTimeout(timer);
+		};
+	}, [latestChatIds, activeSessionId]);
+	// The Memory page reads a git snapshot (about a second); read it once the
+	// page has settled, and the workspace tools' code, so each opens at once.
+	const pageSettled = Boolean(sessionRead.data) || !activeSessionId;
+	const settledPrefetch = useRef(false);
+	useEffect(() => {
+		if (!pageSettled || settledPrefetch.current) return;
+		const timer = window.setTimeout(() => {
+			settledPrefetch.current = true;
+			prefetchMemoryPage(queryClient);
+			preloadWorkspaceTools();
+		}, PAGE_SETTLED_PREFETCH_MS);
+		return () => window.clearTimeout(timer);
+	}, [pageSettled, queryClient]);
 	// The save hook commits shortly after a turn completes and records its
 	// marker on the chat; read the chat again so it shows without a reload.
 	const memoryInChat = session.items.some(
@@ -919,12 +1124,7 @@ export function WorkspaceHome({
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	useEffect(() => {
-		if (
-			!activeProjectId ||
-			!activeSessionId ||
-			session.turnStatus !== "running"
-		)
-			return;
+		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
 		const source = new EventSource(
 			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId })}`,
@@ -949,6 +1149,15 @@ export function WorkspaceHome({
 			)
 				return;
 			if (!progressMatchesTurn(currentSessionRef.current.items, progress.items))
+				return;
+			if (
+				progressRevivesStoppedTurn({
+					stopRequested: stopRequestedFor.current === activeSessionId,
+					current: currentSessionRef.current.items,
+					next: progress.items,
+					nextStatus: progress.turnStatus,
+				})
+			)
 				return;
 			lastRevision = event.lastEventId;
 			liveProgress.current = {
@@ -997,7 +1206,7 @@ export function WorkspaceHome({
 			if (progressStreamOpen.current === activeSessionId)
 				progressStreamOpen.current = null;
 		};
-	}, [activeProjectId, activeSessionId, session.turnStatus, harnessId]);
+	}, [activeProjectId, activeSessionId, listenForProgress, harnessId]);
 
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
@@ -1048,6 +1257,49 @@ export function WorkspaceHome({
 		setInspectorOpen(true);
 	}
 
+	/**
+	 * The pointer or focus reached a workspace view: Files reads its tree and
+	 * first file, Memory its files; Terminal, Desktop and Preview wake the
+	 * chat's machine (if it has one; never creating one) so they connect
+	 * without that wait.
+	 */
+	function intendView(view: ToolsView) {
+		const projectId = selectedProject?.id;
+		const sessionId = activeSessionId;
+		if (!projectId || !sessionId) return;
+		if (view === "memory") {
+			prefetchMemoryPage(queryClient);
+			return;
+		}
+		if (view === "files") {
+			void prefetchWorkspaceFiles(queryClient, {
+				projectId,
+				sessionId,
+				changes: fileChanges,
+			});
+			return;
+		}
+		if (view !== "terminal" && view !== "desktop" && view !== "preview") return;
+		const asked = resumedMachines.current.get(sessionId) ?? 0;
+		if (Date.now() - asked < MACHINE_RESUME_INTERVAL_MS) return;
+		resumedMachines.current.set(sessionId, Date.now());
+		void resumeMachine({ data: { projectId, sessionId } }).catch(
+			() => undefined,
+		);
+	}
+
+	const intendViewRef = useRef(intendView);
+	intendViewRef.current = intendView;
+	// An open inspector is a click from Files: read its tree ahead.
+	useEffect(() => {
+		if (!inspectorOpen || !activeProjectId || !activeSessionId) return;
+		const timer = window.setTimeout(
+			() => intendViewRef.current("files"),
+			FILES_READ_AHEAD_MS,
+		);
+		return () => window.clearTimeout(timer);
+	}, [inspectorOpen, activeProjectId, activeSessionId]);
+
 	function openMentionedFile(path: string) {
 		setSelectedFilePath(path);
 		openInspector("files");
@@ -1055,7 +1307,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		bumpSessionEpoch();
@@ -1088,7 +1340,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -1121,6 +1373,7 @@ export function WorkspaceHome({
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
 				creatingChatEpoch.current = null;
+				createdChatId.current = created.id;
 				selectedSessionIdRef.current = created.id;
 				setSelectedSessionId(created.id);
 				setInspectorView("overview");
@@ -1151,6 +1404,24 @@ export function WorkspaceHome({
 					canSend: false,
 				}));
 			});
+	}
+
+	/** Typing in an empty new chat copies its machine while the message is written. */
+	function prewarmOpenChat() {
+		const chatId = session.agentSessionId;
+		const projectId = selectedProject?.id;
+		if (
+			!chatId ||
+			!projectId ||
+			session.items.length ||
+			session.turnStatus === "running" ||
+			prewarmedChats.current.has(chatId)
+		)
+			return;
+		prewarmedChats.current.add(chatId);
+		void prewarmSession({ data: { projectId, sessionId: chatId } }).catch(
+			() => undefined,
+		);
 	}
 
 	function deleteChat(chatId: string) {
@@ -1252,7 +1523,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
-		setMemoryPage(null);
+		setMemoryPageOpen(false);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1289,18 +1560,53 @@ export function WorkspaceHome({
 		}));
 	}
 
+	/**
+	 * Reads a chat's view before it is opened (on hover, or the open project's
+	 * latest chats once the page is idle), so opening it shows the transcript
+	 * at once; the open reads it again. Never replaces a view the page holds.
+	 */
+	function readAheadChat(chatId: string) {
+		if (sessionViews.current.has(chatId) || viewReads.current.has(chatId))
+			return;
+		const listed = projectChats.find((group) =>
+			group.chats.some((chat) => chat.id === chatId),
+		);
+		if (!listed) return;
+		const read = getCodexSession({
+			data: {
+				projectId: listed.project.id,
+				sessionId: chatId,
+				harnessId: listedChatHarnessId(listed.chats, chatId, harnessId),
+			},
+		})
+			.then((view) => {
+				if (view.agentSessionId !== chatId) return null;
+				if (!sessionViews.current.has(chatId))
+					sessionViews.current.set(chatId, view);
+				return view;
+			})
+			.catch(() => null)
+			.finally(() => viewReads.current.delete(chatId));
+		viewReads.current.set(chatId, read);
+	}
+	const readAheadRef = useRef(readAheadChat);
+	readAheadRef.current = readAheadChat;
+
 	/** The send did not go out: take its message back, unlock the turn, say why. */
 	function abandonSend(pending: PendingSend, message: string | null) {
 		if (pendingSendRef.current === pending) pendingSendRef.current = null;
 		if (message) toast.error(message);
+		// Keyed by the message id, so it only touches a view that still shows
+		// this send: its "Thinking" never outlives the send, even if the chat
+		// was reselected meanwhile.
+		setSession((current) =>
+			sessionWithoutFailedSend(
+				current,
+				pending.messageId,
+				pending.previousTurnStatus,
+			),
+		);
 		if (pending.epoch === sessionEpoch.current) {
-			setSession((current) =>
-				sessionWithoutFailedSend(
-					current,
-					pending.messageId,
-					pending.previousTurnStatus,
-				),
-			);
 			// A first message that made no chat returns to the new-chat draft.
 			if (pending.startsNewChat && !selectedSessionIdRef.current) {
 				pendingNewChatRef.current = false;
@@ -1383,12 +1689,16 @@ export function WorkspaceHome({
 						pending.text,
 						pending.messageId,
 						pending.approvesPlan,
-						pending.attachments?.map((file) => ({
-							id: crypto.randomUUID(),
-							name: safeAttachmentName(file.name),
-							mediaType: file.mediaType,
-							size: base64ByteLength(file.base64),
-						})),
+						pending.attachments?.map((file) => {
+							const id = crypto.randomUUID();
+							return {
+								id,
+								name: safeAttachmentName(file.name),
+								mediaType: file.mediaType,
+								size: base64ByteLength(file.base64),
+								...sentPasteFields(id, file),
+							};
+						}),
 					);
 					return {
 						...current,
@@ -1405,7 +1715,7 @@ export function WorkspaceHome({
 				queryClient.setQueryData(
 					["agent-sessions", scope.projectId],
 					(current: readonly SidebarChat[] | undefined) =>
-						withChatTurnStatus(current ?? [], chatId, "running"),
+						withChatSent(current ?? [], chatId, pending.text),
 				);
 			}
 			requested = true;
@@ -1433,13 +1743,11 @@ export function WorkspaceHome({
 				SEND_TIMEOUT_MS,
 				SEND_TIMEOUT_MESSAGE,
 			);
-			// A refused request (an origin check, an expired session) has no view.
-			if (!next?.connection)
-				throw new Error("The message could not be sent. Retry.");
-			// The server refused the send; it reports why in place of the chat.
-			if (next.connection.status === "failed")
-				throw new Error(next.connection.message);
-			if (sendAfterConnect(next.connection) === "await_sign_in") {
+			// A reply that holds neither the message nor a running turn means
+			// no turn is behind the "Thinking": report it, never leave it.
+			const outcome = sendReplyOutcome(next, pending.messageId);
+			if (outcome.kind === "failed") throw new Error(outcome.message);
+			if (outcome.kind === "await_sign_in") {
 				// The saved sign-in was gone: show the code, send once it is entered.
 				if (epoch === sessionEpoch.current)
 					setSession((current) => ({
@@ -1474,7 +1782,12 @@ export function WorkspaceHome({
 		setBusyChatIds((ids) => withBusyChat(ids, chatId));
 		let next: PublicCodexSession;
 		try {
-			next = await connect({ data: pending.scope });
+			// A connect that hangs returns the message instead of holding it.
+			next = await withinTimeout(
+				connect({ data: pending.scope }),
+				SEND_TIMEOUT_MS,
+				SEND_TIMEOUT_MESSAGE,
+			);
 			if (!next?.connection) throw new Error("Could not connect. Retry.");
 		} catch (cause) {
 			if (epoch === sessionEpoch.current)
@@ -1555,15 +1868,12 @@ export function WorkspaceHome({
 					openChat(chatId);
 				}}
 				onOpenMemory={() => {
-					setMemoryPage("list");
+					setMemoryPageOpen(true);
 					if (compact) setProjectsOpen(false);
 				}}
-				memoryActive={memoryPage === "list"}
-				onOpenMemoryGraph={() => {
-					setMemoryPage("graph");
-					if (compact) setProjectsOpen(false);
-				}}
-				memoryGraphActive={memoryPage === "graph"}
+				memoryActive={memoryPageOpen}
+				onChatIntent={readAheadChat}
+				onMemoryIntent={() => prefetchMemoryPage(queryClient)}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1623,31 +1933,13 @@ export function WorkspaceHome({
 				>
 					<PanelRight size={16} />
 				</button>
-				{memoryPage === "graph" ? (
-					<section
-						className="memory-page"
-						data-view="graph"
-						aria-label="Memory graph"
-					>
-						<MemoryGraphPage
-							active
-							projects={projects.data}
-							onOpenChat={openMemoryChat}
-						/>
-					</section>
-				) : memoryPage === "list" ? (
-					<section className="memory-page" aria-label="Memory page">
-						<header className="memory-page-header">
-							<h1>Memory</h1>
-							<p>What the agent remembers across chats.</p>
-						</header>
-						<MemoryInspector
-							active
-							layout="page"
-							projects={projects.data}
-							onOpenChat={openMemoryChat}
-						/>
-					</section>
+				{memoryPageOpen ? (
+					<MemoryPage
+						view={memoryView}
+						onViewChange={setMemoryView}
+						projects={projects.data}
+						onOpenChat={openMemoryChat}
+					/>
 				) : null}
 				<WorkspacePanes
 					open={inspectorOpen}
@@ -1707,26 +1999,39 @@ export function WorkspaceHome({
 										? recoveryDraft.prompt
 										: ""
 								}
-								onRecovered={async (id, prompt) => {
+								onRecovered={async (id, prompt, items) => {
 									const projectId = selectedProject?.id;
 									if (!projectId) return;
 									setRecoveryDraft({ id, prompt: prompt ?? "" });
 									sessionViews.current.delete(id);
-									openChat(id);
+									// A restore of this chat shows its transcript now; the
+									// full reload below can take a while (it reconnects).
+									const restored = sessionViewAfterRecovery(
+										currentSessionRef.current,
+										{ id, items },
+									);
+									if (restored) setSession(restored);
+									else openChat(id);
 									const epoch = sessionEpoch.current;
-									const next = await getCodexSession({
-										data: { projectId, sessionId: id, harnessId },
-									});
-									if (epoch !== sessionEpoch.current) return;
-									rememberSessionView(next);
-									setSession(next);
-									await chats.refetch();
-									await agentTasks.refetch();
+									try {
+										const next = await getCodexSession({
+											data: { projectId, sessionId: id, harnessId },
+										});
+										if (epoch !== sessionEpoch.current) return;
+										rememberSessionView(next);
+										setSession(next);
+										await chats.refetch();
+										await agentTasks.refetch();
+									} catch (cause) {
+										// The recovery itself is done; live updates catch up.
+										console.warn("Reloading the recovered chat failed.", cause);
+									}
 								}}
 								childTasks={agentTasks.data ?? []}
 								backgroundRuns={backgroundRuns}
 								memoryActions={memoryActions}
-								key={session.agentSessionId ?? "new"}
+								key={composerKey.current.key}
+								onDraftStarted={prewarmOpenChat}
 								session={session}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
@@ -1828,6 +2133,10 @@ export function WorkspaceHome({
 									// The stopped turn ends idle; accept that view even if the
 									// live progress stream never reports the stop.
 									stopRequestedFor.current = chatId ?? null;
+									// The turn settles on the server after this answers; keep
+									// listening so its "Stopped" marker shows without a reload.
+									if (chatId)
+										setWakeWatch({ sessionId: chatId, since: Date.now() });
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
@@ -1900,6 +2209,7 @@ export function WorkspaceHome({
 							sessionId={activeSessionId}
 							memoryFocus={memoryFocus}
 							onStartDesktop={requestDesktop}
+							onViewIntent={intendView}
 							onOpenChat={(chatId) => {
 								if (!sidebarChats.some((chat) => chat.id === chatId))
 									return false;
@@ -1918,6 +2228,7 @@ export function WorkspaceHome({
 									repository={selectedProject?.fullName}
 									desktop={desktop}
 									onOpen={openInspector}
+									onIntent={intendView}
 									pullRequests={sessionPullRequests}
 								/>
 							}
