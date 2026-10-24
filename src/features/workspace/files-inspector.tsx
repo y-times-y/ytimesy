@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	queryOptions,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -28,6 +34,62 @@ import {
 	WorkspaceImagePreview,
 } from "./file-preview";
 
+/** The chat's file tree, as Files lists it. */
+function explorerQuery(projectId?: string, sessionId?: string) {
+	return queryOptions({
+		queryKey: ["workspace-explorer", projectId, sessionId],
+		queryFn: () =>
+			listWorkspaceExplorerFn({
+				data: { projectId, sessionId },
+			}),
+		staleTime: 8_000,
+	});
+}
+
+/** One file's text, as Files opens it (null when it has no text view). */
+function sourceQuery(projectId?: string, sessionId?: string, path?: string) {
+	return queryOptions({
+		queryKey: ["workspace-source", projectId, sessionId, path],
+		queryFn: async () => {
+			const data = { projectId, sessionId, path };
+			if (filePreviewKind(path ?? "") === "code")
+				return readWorkspaceSourceFn({ data });
+			const preview = await readWorkspacePreviewFn({ data });
+			return preview.kind === "text"
+				? { path: path ?? "", text: preview.text }
+				: null;
+		},
+	});
+}
+
+/**
+ * Reads the chat's file tree and the file Files opens first, before the view
+ * opens. A machine that is asleep only reports so; nothing is woken.
+ */
+export async function prefetchWorkspaceFiles(
+	queryClient: QueryClient,
+	input: {
+		readonly projectId: string;
+		readonly sessionId: string;
+		readonly changes: readonly FileChangeEntry[];
+	},
+) {
+	try {
+		const explorer = await queryClient.fetchQuery(
+			explorerQuery(input.projectId, input.sessionId),
+		);
+		const path = firstWorkspaceFilePath(
+			workspaceExplorerTree(explorer.paths, input.changes),
+		);
+		if (path && filePreviewKind(path) !== "image")
+			await queryClient.prefetchQuery(
+				sourceQuery(input.projectId, input.sessionId, path),
+			);
+	} catch {
+		// The view reads them again when it opens.
+	}
+}
+
 const SourceEditor = lazy(() =>
 	import("./source-editor").then((module) => ({
 		default: module.SourceEditor,
@@ -52,9 +114,6 @@ export function FilesInspector({
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [treeOpen, setTreeOpen] = useState(true);
 	const filesRef = useRef<HTMLElement>(null);
-	const listExplorer = useServerFn(listWorkspaceExplorerFn);
-	const readSource = useServerFn(readWorkspaceSourceFn);
-	const readPreview = useServerFn(readWorkspacePreviewFn);
 	const wakeMachine = useServerFn(wakeWorkspaceMachineFn);
 	const queryClient = useQueryClient();
 	const wake = useMutation({
@@ -65,13 +124,8 @@ export function FilesInspector({
 			}),
 	});
 	const explorer = useQuery({
-		queryKey: ["workspace-explorer", projectId, sessionId],
-		queryFn: () =>
-			listExplorer({
-				data: { projectId, sessionId },
-			}),
+		...explorerQuery(projectId, sessionId),
 		enabled: active && Boolean(projectId && sessionId),
-		staleTime: 8_000,
 	});
 	const tree = workspaceExplorerTree(explorer.data?.paths ?? [], changes);
 	const activePath =
@@ -83,16 +137,7 @@ export function FilesInspector({
 				)
 			: undefined) ?? firstWorkspaceFilePath(tree);
 	const source = useQuery({
-		queryKey: ["workspace-source", projectId, sessionId, activePath],
-		queryFn: async () => {
-			const data = { projectId, sessionId, path: activePath };
-			if (filePreviewKind(activePath ?? "") === "code")
-				return readSource({ data });
-			const preview = await readPreview({ data });
-			return preview.kind === "text"
-				? { path: activePath ?? "", text: preview.text }
-				: null;
-		},
+		...sourceQuery(projectId, sessionId, activePath),
 		enabled:
 			active &&
 			Boolean(projectId && sessionId && activePath) &&

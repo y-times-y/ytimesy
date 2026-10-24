@@ -99,7 +99,10 @@ export function WorkspaceInspector({
 	pullRequest,
 	onOpenChat,
 	memoryFocus,
+	onViewIntent,
 }: {
+	/** The pointer or focus reached a view's entry: it may open next. */
+	onViewIntent?: (view: ToolsView) => void;
 	/** A memory file to show when the Memory tab opens from a chat marker. */
 	memoryFocus?: { path: string };
 	collapsed: boolean;
@@ -154,6 +157,7 @@ export function WorkspaceInspector({
 								type="button"
 								key={view}
 								aria-pressed={activeView === view}
+								onPointerEnter={() => onViewIntent?.(view)}
 								onClick={() => onActiveViewChange(view)}
 							>
 								{views[view].label}
@@ -173,7 +177,12 @@ export function WorkspaceInspector({
 							</button>
 						</div>
 					))}
-					<DropdownMenu.Root>
+					<DropdownMenu.Root
+						onOpenChange={(open) => {
+							// Most of the menu's views need the chat's machine: wake it now.
+							if (open) onViewIntent?.("terminal");
+						}}
+					>
 						<DropdownMenu.Trigger asChild>
 							<button
 								type="button"
@@ -196,6 +205,7 @@ export function WorkspaceInspector({
 										<DropdownMenu.Item
 											key={view}
 											data-selected={active || undefined}
+											onFocus={() => onViewIntent?.(view)}
 											onSelect={() => onActiveViewChange(view)}
 										>
 											<Icon size={16} strokeWidth={1.5} aria-hidden="true" />
