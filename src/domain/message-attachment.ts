@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isPastedText, pastedTextMeta } from "./pasted-text";
+import { isPastedText, PASTED_TEXT_PEEK, pastedTextMeta } from "./pasted-text";
 
 /** A file the user attached to a message. Bytes live in private storage. */
 export type MessageAttachment = {
@@ -7,8 +7,9 @@ export type MessageAttachment = {
 	readonly name: string;
 	readonly mediaType: string;
 	readonly size: number;
-	/** Pasted text only: its line count, for the chip. */
+	/** Pasted text only: its line count and first lines, for the tile. */
 	readonly lines?: number;
+	readonly peek?: string;
 };
 
 export const MESSAGE_ATTACHMENT_LIMITS = {
@@ -33,6 +34,7 @@ export const messageAttachment = z.object({
 	mediaType: z.string().min(1).max(120),
 	size: z.number().int().nonnegative().max(MESSAGE_ATTACHMENT_LIMITS.fileBytes),
 	lines: z.number().int().nonnegative().optional(),
+	peek: z.string().max(PASTED_TEXT_PEEK.characters).optional(),
 });
 
 /** One path segment: no separators, control characters or leading dots. */
@@ -57,11 +59,22 @@ export function isViewableImage(mediaType: string) {
 	return (VIEWABLE_IMAGE_TYPES as readonly string[]).includes(mediaType);
 }
 
-function sizeLabel(bytes: number) {
+export function attachmentSizeLabel(bytes: number) {
 	if (bytes === 0) return "empty";
 	return bytes < 1024 * 1024
 		? `${Math.max(1, Math.round(bytes / 1024))} KB`
 		: `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A tile's short type: the file's extension, else its media subtype. */
+export function attachmentKindLabel(name: string, mediaType: string) {
+	const extension = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1];
+	if (extension) return extension.toUpperCase();
+	const subtype = mediaType.split("/")[1]?.split(/[;+.-]/)[0];
+	if (subtype === "plain") return "TXT";
+	return subtype && subtype.length <= 5 && subtype !== "octet"
+		? subtype.toUpperCase()
+		: "File";
 }
 
 /** What the model reads: where each attached file is and how to inspect it. */
@@ -72,8 +85,8 @@ export function withAttachmentNote(
 	if (!attachments?.length) return text;
 	const lines = attachments.map((attachment) =>
 		isPastedText(attachment)
-			? `- ${attachmentPath(attachment)} (pasted text${attachment.lines === undefined ? "" : `, ${pastedTextMeta(attachment.lines)}`}, ${sizeLabel(attachment.size)})`
-			: `- ${attachmentPath(attachment)} (${attachment.mediaType}, ${sizeLabel(attachment.size)})`,
+			? `- ${attachmentPath(attachment)} (pasted text${attachment.lines === undefined ? "" : `, ${pastedTextMeta(attachment.lines)}`}, ${attachmentSizeLabel(attachment.size)})`
+			: `- ${attachmentPath(attachment)} (${attachment.mediaType}, ${attachmentSizeLabel(attachment.size)})`,
 	);
 	const images = attachments.some((attachment) =>
 		isViewableImage(attachment.mediaType),
