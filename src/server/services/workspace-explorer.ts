@@ -12,6 +12,7 @@ import {
 import { gitIndexPaths } from "#/domain/git-index";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
+import { projectCheckoutPath } from "#/domain/project-checkout";
 import {
 	type ProjectFileRoot,
 	resolveProjectFile,
@@ -46,17 +47,6 @@ export type ExplorerScope = {
 	readonly projectId?: string;
 	readonly sessionId?: string;
 };
-
-const LIST_WORKSPACE_FILES = `CWD=""
-if [ -f ${PROJECT_CWD_PATH} ]; then
-  CWD=$(tr -d '\\n' < ${PROJECT_CWD_PATH})
-fi
-if [ -z "$CWD" ] || [ ! -d "$CWD/.git" ]; then
-  exit 0
-fi
-echo "PROJECT_CWD=$CWD"
-git -C "$CWD" ls-files -co --exclude-standard
-`;
 
 const READ_PROJECT_COMMANDS = `import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -171,19 +161,22 @@ function listRunningCheckout(
 	workspaceId: WorkspaceId,
 	roots: readonly ProjectFileRoot[],
 ): Effect.Effect<WorkspaceExplorerListing | null> {
+	if (roots.length === 0) return Effect.succeed(null);
+	const prefixed = roots.length > 1;
+	const command = roots
+		.map((root) =>
+			prefixed
+				? `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard | while IFS= read -r file; do printf '%s/%s\\n' ${posixShellQuoted(root.name)} "$file"; done`
+				: `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard`,
+		)
+		.join("\n");
 	return Effect.tryPromise(() =>
-		machines.exec(
-			workspaceId,
-			`bash -lc ${posixShellQuoted(roots.length > 1 ? roots.map((root) => `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard | while IFS= read -r file; do printf '%s/%s\\n' ${posixShellQuoted(root.name)} "$file"; done`).join("\n") : LIST_WORKSPACE_FILES)}`,
-			20_000,
-		),
+		machines.exec(workspaceId, `bash -lc ${posixShellQuoted(command)}`, 20_000),
 	).pipe(
-		Effect.map((result) => {
-			const listing = parseWorkspaceExplorerListing(result.stdout);
-			return roots.length > 1
-				? { ...listing, root: posix.dirname(roots[0].directory) }
-				: listing;
-		}),
+		Effect.map((result) => ({
+			...parseWorkspaceExplorerListing(result.stdout),
+			root: prefixed ? posix.dirname(roots[0].directory) : roots[0].directory,
+		})),
 		Effect.timeout(RUNNING_LIST_WAIT),
 		Effect.catchAll(() =>
 			listCheckoutIndex(machines, workspaceId, roots).pipe(
@@ -570,7 +563,7 @@ function findCheckout(
 		const { workspaceId, project } = chat.value;
 		const [running, root] = await Promise.all([
 			options.askRunning === false ? false : machines.isRunning(workspaceId),
-			checkoutRoot(machines, workspaceId),
+			checkoutRoot(machines, workspaceId, project),
 		]);
 		const roots = root
 			? repositoriesForProject(project).map((repo, index) => ({
@@ -590,16 +583,33 @@ function findCheckout(
 
 const checkoutRoots = new Map<string, string>();
 
+/**
+ * Where the chat's first repository is checked out: the path its checkout
+ * recorded in /tmp, or, once a cold restart has cleared /tmp, the default
+ * checkout path if a repository is there.
+ */
 async function checkoutRoot(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
+	project: ChatMachine["project"],
 ): Promise<string | null> {
 	const known = checkoutRoots.get(workspaceId);
 	if (known) return known;
 	const cwd = await machines
 		.readTextFile(workspaceId, PROJECT_CWD_PATH)
 		.catch(() => null);
-	const root = cwd?.trim() || null;
+	let root = cwd?.trim() || null;
+	const first = repositoriesForProject(project)[0];
+	if (!root && first) {
+		const fallback = projectCheckoutPath(
+			"/home/ubuntu",
+			projectFolderName(first.fullName),
+		);
+		const head = await machines
+			.readTextFile(workspaceId, `${fallback}/.git/HEAD`)
+			.catch(() => null);
+		if (head) root = fallback;
+	}
 	if (root) {
 		if (checkoutRoots.size >= 1000) checkoutRoots.clear();
 		checkoutRoots.set(workspaceId, root);
