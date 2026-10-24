@@ -76,21 +76,18 @@ const LETTERED: Record<string, { hex: string; label: string }> = {
 	context7: { hex: "059669", label: "C7" },
 };
 
-const BRAND_NAMES: Record<string, string> = {
-	github: "GitHub",
-	gitlab: "GitLab",
-	posthog: "PostHog",
-	pagerduty: "PagerDuty",
-	planetscale: "PlanetScale",
-};
+export { brandName } from "#/domain/connector-name";
 
-/** A display name for a brand id ("github" → "GitHub", "linear" → "Linear"). */
-export function brandName(id: string) {
-	return BRAND_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+function hostname(url: string | undefined) {
+	try {
+		return url ? new URL(url).hostname : "";
+	} catch {
+		return "";
+	}
 }
 
 function brandFor(id: string, url?: string) {
-	const host = url ? new URL(url).hostname : "";
+	const host = hostname(url);
 	const key = [id, ...id.split(/[-_]/)].find(
 		(candidate) => candidate in LOGOS || candidate in LETTERED,
 	);
@@ -106,6 +103,39 @@ function readableFill(hex: string) {
 	return 0.2126 * r + 0.7152 * g + 0.0722 * b < 80 ? "#f2f2f2" : `#${hex}`;
 }
 
+/**
+ * The mark Settings shows for a connector: a bundled brand logo, a lettered
+ * tile in the brand's color, or the name's initial on a neutral tile.
+ */
+export type BrandMark =
+	| { kind: "logo"; brand: string; fill: string; path: string }
+	| { kind: "letter"; brand?: string; label: string; background?: string };
+
+export function brandMark(id: string, name: string, url?: string): BrandMark {
+	const brand = brandFor(id.toLowerCase(), url);
+	const logo = brand ? LOGOS[brand] : undefined;
+	if (brand && logo)
+		return {
+			kind: "logo",
+			brand,
+			fill: readableFill(logo.hex),
+			path: logo.path,
+		};
+	const lettered = brand ? LETTERED[brand] : undefined;
+	return {
+		kind: "letter",
+		brand,
+		label:
+			lettered?.label ??
+			(name
+				.replace(/[^\p{L}\p{N}]/gu, "")
+				.slice(0, 1)
+				.toUpperCase() ||
+				"?"),
+		background: lettered ? `#${lettered.hex}` : undefined,
+	};
+}
+
 export function BrandLogo({
 	id,
 	name,
@@ -115,25 +145,23 @@ export function BrandLogo({
 	name: string;
 	url?: string;
 }) {
-	const brand = brandFor(id.toLowerCase(), url);
-	const logo = brand ? LOGOS[brand] : undefined;
-	if (logo)
+	const mark = brandMark(id, name, url);
+	if (mark.kind === "logo")
 		return (
 			<span className="integration-logo" aria-hidden="true">
-				<svg viewBox="0 0 24 24" fill={readableFill(logo.hex)}>
+				<svg viewBox="0 0 24 24" fill={mark.fill}>
 					<title>{name}</title>
-					<path d={logo.path} />
+					<path d={mark.path} />
 				</svg>
 			</span>
 		);
-	const lettered = brand ? LETTERED[brand] : undefined;
 	return (
 		<span
 			className="integration-logo integration-logo-letter"
-			style={lettered ? { background: `#${lettered.hex}` } : undefined}
+			style={mark.background ? { background: mark.background } : undefined}
 			aria-hidden="true"
 		>
-			{lettered?.label ?? name.slice(0, 1).toUpperCase()}
+			{mark.label}
 		</span>
 	);
 }

@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
+import { mcpServerLabel as serverLabel } from "#/domain/connector-name";
 import type { PublicMcpServer } from "#/server/adapters/mcp-servers";
-import { BrandLogo, brandName } from "./brand-logo";
+import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
 import {
 	addMcpServerFn,
@@ -13,12 +14,6 @@ import {
 	startMcpOAuthFn,
 } from "./mcp-servers.fn";
 import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
-
-/** Plugin servers are named <plugin>-<server>; "linear-linear" reads as "Linear". */
-function serverLabel(name: string) {
-	const words = [...new Set(name.split(/[-_]/))];
-	return words.length === 1 ? brandName(words[0]) : name;
-}
 
 /** Remote MCP servers the agent can use; called from our server, keys never shown again. */
 export function McpServers() {
