@@ -111,24 +111,52 @@ export function eventMessageSse(message: EventMessage): string {
 	return `event: ${event.type ?? "message"}\ndata: ${json}\n\n`;
 }
 
-function sseStream(body: ReadableStream<Uint8Array>) {
+function sseStream(
+	body: ReadableStream<Uint8Array>,
+	log: (line: string) => void,
+) {
 	const reader = body.getReader();
 	let pending: Uint8Array = new Uint8Array(0);
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) {
+				let read: ReadableStreamReadResult<Uint8Array>;
+				try {
+					read = await reader.read();
+				} catch (error) {
+					log(
+						`bedrock claude stream read failed: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					throw error;
+				}
+				if (read.done) {
+					if (pending.length)
+						log(
+							`bedrock claude stream ended mid-message (${pending.length} bytes)`,
+						);
 					controller.close();
 					return;
 				}
-				const joined = new Uint8Array(pending.length + value.length);
+				const joined = new Uint8Array(pending.length + read.value.length);
 				joined.set(pending);
-				joined.set(value, pending.length);
-				const { messages, rest } = decodeEventStream(joined);
-				pending = rest;
-				const text = messages.map(eventMessageSse).join("");
+				joined.set(read.value, pending.length);
+				let text: string;
+				try {
+					const { messages, rest } = decodeEventStream(joined);
+					pending = rest;
+					for (const message of messages)
+						if (message.headers[":message-type"] !== "event")
+							log(
+								`bedrock claude stream ${message.headers[":message-type"]}: ${message.headers[":exception-type"] ?? message.headers[":error-code"] ?? ""} ${new TextDecoder().decode(message.payload).slice(0, 500)}`,
+							);
+					text = messages.map(eventMessageSse).join("");
+				} catch (error) {
+					log(
+						`bedrock claude stream decode failed: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					throw error;
+				}
 				if (text) {
 					controller.enqueue(encoder.encode(text));
 					return;
@@ -152,8 +180,12 @@ export function bedrockAnthropicFetch(input: {
 	profile: string;
 	fetch: typeof globalThis.fetch;
 	now?: () => Date;
+	/** Bedrock's stream exceptions and refused requests (the bridge's stderr log). */
+	log?: (line: string) => void;
 }): typeof globalThis.fetch {
 	const messagesUrl = `${BEDROCK_ANTHROPIC_BASE_URL}/messages`;
+	const log =
+		input.log ?? ((line: string) => process.stderr.write(`${line}\n`));
 	return async (request, init) => {
 		const url =
 			typeof request === "string"
@@ -196,8 +228,18 @@ export function bedrockAnthropicFetch(input: {
 			body,
 			signal: init?.signal,
 		});
-		if (!response.ok || !streaming || !response.body) return response;
-		return new Response(sseStream(response.body), {
+		if (!response.ok) {
+			const detail = await response.text();
+			log(
+				`bedrock claude request refused: ${response.status} ${detail.slice(0, 500)}`,
+			);
+			return new Response(detail, {
+				status: response.status,
+				headers: response.headers,
+			});
+		}
+		if (!streaming || !response.body) return response;
+		return new Response(sseStream(response.body, log), {
 			status: 200,
 			headers: { "content-type": "text/event-stream" },
 		});
