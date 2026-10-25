@@ -58,6 +58,7 @@ import {
 	type HarborModel,
 	routeProvider,
 } from "./config";
+import { grindNotice } from "./grind-gate";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
 	briefFindingsPath,
@@ -887,8 +888,29 @@ export async function runHarborTrial(
 					{ role: "user", content: gate.notice },
 				]);
 			}
+			// grind=on: an early finish with most of the time left goes back once
+			// or twice to try to break the result (grind-gate.ts).
+			if (config.variant.grind === "on" && !signal.aborted) {
+				const notice = grindNotice({
+					startedAtMs: Date.parse(startedAt),
+					nowMs: now(),
+					deadlineAtMs: input.deadlineAt,
+					rounds: grindRounds,
+				});
+				if (notice) {
+					grindRounds++;
+					log(`grind ${grindRounds}: sent back after an early finish`);
+					notices.push({
+						at: new Date(now()).toISOString(),
+						afterEvent: events.length,
+						text: notice,
+					});
+					return runRootBuilder([...out, { role: "user", content: notice }]);
+				}
+			}
 			return out;
 		};
+		let grindRounds = 0;
 		let messages: ModelMessage[] = [
 			{ role: "user", content: input.instruction },
 		];

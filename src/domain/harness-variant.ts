@@ -170,6 +170,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * is. off = the surface's own limits only (the default).
 	 */
 	outputCap: ["off", "10000", "16000"],
+	/**
+	 * Grind budget (unattended runs only; evals/harbor_v2/grind-gate.ts): on
+	 * sends a builder that finishes early, with most of its time left, back
+	 * at most twice to try to break its own result before it may finish.
+	 * off = the builder stops when it says it is done (the default).
+	 */
+	grind: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -217,6 +224,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	leadEffort: "high",
 	rigor: "off",
 	outputCap: "off",
+	grind: "off",
 	roleModels: {},
 };
 
