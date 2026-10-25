@@ -44,6 +44,7 @@ function HomePage() {
 		projects,
 		chats,
 		openChatView,
+		openChatId,
 		account,
 		renderedAtMs,
 	} = Route.useLoaderData();
@@ -60,9 +61,14 @@ function HomePage() {
 	return (
 		<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
 			{openChatView instanceof Promise ? (
-				// A slow read of the chat: the page streams without it, and the
-				// page with it open replaces that when the read lands.
-				<Suspense fallback={home()}>
+				// A slow read of the chat: the page streams with the chat open
+				// but its transcript still empty (title, composer, sidebar in
+				// place), and the transcript fills in when the read lands.
+				<Suspense
+					fallback={home(
+						openChatId ? { ...session, agentSessionId: openChatId } : undefined,
+					)}
+				>
 					<WithOpenChat view={openChatView}>{home}</WithOpenChat>
 				</Suspense>
 			) : (
