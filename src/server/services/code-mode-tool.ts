@@ -55,7 +55,7 @@ const FAILURE_VALUE =
  * provider-hosted tools (web search runs inside the model call, so a program
  * cannot call it), plan, secret or turn-ending tools. `extra` names other
  * tools the caller allows (an eval harness's own, such as the requirements
- * ledger).
+ * ledger or the goal tool).
  */
 function callableTools(
 	tools: ToolSet,

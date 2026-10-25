@@ -203,6 +203,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * back, at most twice. off = no ledger (the default).
 	 */
 	ledger: ["off", "on"],
+	/**
+	 * Goal mode (unattended runs only; src/domain/goal.ts): on makes the
+	 * request the run's goal, gives the root builder the goal tool, and sends
+	 * it back with an audit notice while the goal is active, until it marks
+	 * the goal complete with evidence or blocked, or a deterministic stop
+	 * (deadline, no progress, continuation cap). Supersedes grind. off = the
+	 * builder stops when it says it is done (the default).
+	 */
+	goal: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -254,6 +263,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	effortMix: "off",
 	envSnapshot: "off",
 	ledger: "off",
+	goal: "off",
 	roleModels: {},
 };
 

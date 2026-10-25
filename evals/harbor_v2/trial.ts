@@ -17,6 +17,13 @@ import {
 	treeModelSpend,
 } from "../../src/domain/eval-efficiency";
 import {
+	type Goal,
+	goalCompactionNote,
+	newGoal,
+	nextGoalStep,
+	withGoalNote,
+} from "../../src/domain/goal";
+import {
 	harnessVariantLabel,
 	leadReasoningEffort,
 } from "../../src/domain/harness-variant";
@@ -27,6 +34,7 @@ import type { SubagentBudget } from "../../src/domain/subagent";
 import { budgetTokenWeight } from "../../src/domain/subagent-usage";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
+import { goalTool } from "../../src/server/services/goal-tool";
 import {
 	type ModelAgentRuntime,
 	runModelAgent,
@@ -484,6 +492,17 @@ export async function runHarborTrial(
 	}[] = [];
 	let reviewRounds = 0;
 	let reviewSummary: unknown = null;
+	// goal=on: the request is the run's goal, held here outside the
+	// transcript (src/domain/goal.ts); the builder marks it with the goal tool.
+	const goalState: { goal: Goal } | null =
+		config.variant.goal === "on" && !input.restore
+			? {
+					goal: newGoal({
+						objective: input.instruction,
+						deadlineAtMs: input.deadlineAt,
+					}),
+				}
+			: null;
 	try {
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
@@ -870,16 +889,35 @@ export async function runHarborTrial(
 			...(config.variant.lead === "fusion"
 				? { extraTools: () => lead?.tools() ?? {} }
 				: {}),
-			...(ledger
-				? {
-						trialTools: requirementsTool({
+			// The trial's own tools: ledger=on's requirements, goal=on's goal.
+			trialTools: {
+				...(ledger
+					? requirementsTool({
 							state: ledger,
 							instruction: input.instruction,
 							now,
 							log,
-						}),
-					}
-				: {}),
+						})
+					: {}),
+				...(goalState
+					? goalTool({
+							state: goalState,
+							now,
+							onUpdate: (goal) => {
+								const claim = goal.claim;
+								if (!claim) return;
+								log(
+									`goal update ${claim.status} (${claim.evidence.length} evidence)${claim.reason ? `: ${claim.reason.slice(0, 200)}` : ""}`,
+								);
+								claim.evidence.forEach((entry, index) => {
+									log(
+										`goal evidence ${index + 1}: ${entry.requirement.slice(0, 160)} => ${entry.proof.slice(0, 240)}`,
+									);
+								});
+							},
+						})
+					: {}),
+			},
 		});
 		instructions = harness.instructions;
 		tools = harness.tools;
@@ -897,6 +935,26 @@ export async function runHarborTrial(
 					toolSurface: "implementation",
 					cacheScopeId: input.trialId,
 					...harness.input,
+					// The first message may carry more than the request (envSnapshot,
+					// goal): it survives compaction as the person's request either way.
+					isUserRequest: (message) =>
+						message.role === "user" &&
+						(message.content === input.instruction ||
+							message.content === firstMessage),
+					// goal=on: an active goal's objective follows every compaction.
+					...(goalState
+						? {
+								compactionSnapshot: async (history, runSignal) =>
+									[
+										await harness.input
+											.compactionSnapshot?.(history, runSignal)
+											.catch(() => undefined),
+										goalCompactionNote(goalState.goal),
+									]
+										.filter(Boolean)
+										.join("\n\n") || undefined,
+							}
+						: {}),
 					tools: harness.tools,
 					instructions: harness.instructions,
 					signal,
@@ -996,6 +1054,38 @@ export async function runHarborTrial(
 					);
 				}
 			}
+			// goal=on: while the goal is active the builder goes back with the
+			// audit notice, until it marks the goal or a deterministic stop
+			// (src/domain/goal.ts). It supersedes grind: never both notices.
+			if (goalState) {
+				if (signal.aborted) return out;
+				const { goal, step } = nextGoalStep(goalState.goal, {
+					nowMs: now(),
+					toolCalls:
+						goalContinuedAt === null
+							? null
+							: events
+									.slice(goalContinuedAt)
+									.filter((entry) => entry.event.type === "tool-call").length,
+				});
+				goalState.goal = goal;
+				if (step.kind === "stopped") return out;
+				if (step.kind === "stop") {
+					log(`goal stop ${step.reason}`);
+					return out;
+				}
+				if (step.kind === "wrapUp")
+					log(`goal stop ${step.reason} (wrap-up sent)`);
+				else log(`goal continuation ${step.round}`);
+				mix?.continuation();
+				goalContinuedAt = events.length;
+				notices.push({
+					at: new Date(now()).toISOString(),
+					afterEvent: events.length,
+					text: step.text,
+				});
+				return runRootBuilder([...out, { role: "user", content: step.text }]);
+			}
 			// grind=on: an early finish with most of the time left goes back once
 			// or twice to try to break the result (grind-gate.ts). With the
 			// ledger on too, both share FINISH_CONTINUATIONS_MAX.
@@ -1029,6 +1119,8 @@ export async function runHarborTrial(
 			return out;
 		};
 		let grindRounds = 0;
+		// Where the last goal continuation's run began, for its tool-call count.
+		let goalContinuedAt: number | null = null;
 		// envSnapshot=on: one read-only probe of the sandbox before the first
 		// request (env-snapshot.ts); without it the request goes alone.
 		if (config.variant.envSnapshot === "on" && !input.restore) {
@@ -1043,6 +1135,10 @@ export async function runHarborTrial(
 					: "env snapshot failed; the request goes alone",
 			);
 			if (snapshot) firstMessage = `${snapshot}\n\n${firstMessage}`;
+		}
+		if (goalState) {
+			firstMessage = withGoalNote(firstMessage);
+			log("goal set");
 		}
 		let messages: ModelMessage[] = [{ role: "user", content: firstMessage }];
 		// The request's exploration round, before the lead's first model call.
@@ -1219,6 +1315,8 @@ export async function runHarborTrial(
 						gates: ledgerGates,
 					}
 				: null,
+			// goal=on: its final state, with the builder's claim and evidence.
+			goal: goalState?.goal ?? null,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [
@@ -1279,7 +1377,10 @@ export async function runHarborTrial(
 		notices,
 		toolDefinitions,
 		subagents,
-		metricsExtra: { efficiency },
+		metricsExtra: {
+			efficiency,
+			...(goalState ? { goal: goalState.goal } : {}),
+		},
 		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
 	});
 	await writeFile(
