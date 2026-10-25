@@ -24,7 +24,10 @@ import { harborBridgeConfig } from "./config";
 import { harborRuntime } from "./runtime";
 import { guardedLanguageModel, trialSpendGuard } from "./spend";
 
-const MODELS = ["openai.gpt-6.1-sol", "openai.gpt-6-luna"];
+const MODELS = process.env.YTIMESY_SMOKE_MODELS?.split(",") ?? [
+	"openai.gpt-6.1-sol",
+	"openai.gpt-6-luna",
+];
 
 const base = harborBridgeConfig(process.env);
 if (!base.bedrock) throw new Error("Set YTIMESY_HARBOR_ROUTE=bedrock.");

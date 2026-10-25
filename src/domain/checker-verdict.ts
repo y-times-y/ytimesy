@@ -20,6 +20,8 @@ export type CheckerTest = {
 	readonly ranBy?: "worker" | "judge";
 	/** A robustness probe beyond what the request states: its failure is a note, never a finding. */
 	readonly probe?: true;
+	/** The review loop found its command among no commands the checker ran (checker-evidence.ts). */
+	readonly unrun?: true;
 };
 
 /** The checker's structured answer, normalized. */
@@ -241,7 +243,7 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 
 /** The note an untested pass gets. */
 export const UNTESTED_PASS_NOTE =
-	"(Said pass without running a new test of its own; counted as unsure.)";
+	"(Said pass without running a new test of its own.)";
 
 /** The failure a report without verdict JSON gets (not a finding about the work). */
 export const NO_VERDICT_FAILURE = "The checker's report held no verdict JSON.";

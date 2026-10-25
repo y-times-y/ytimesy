@@ -5,6 +5,11 @@ import type {
 	AttemptSnapshot,
 	LoopChildModel,
 } from "../../src/domain/attempt-loop";
+import {
+	CHECKER_FINAL_NOTICE,
+	checkerFinalStep,
+	hasCheckerFinalNotice,
+} from "../../src/domain/checker-brief";
 import { SessionItemId } from "../../src/domain/ids";
 import type { ModelBilling } from "../../src/domain/model-pricing";
 import type { ReviewLoopState } from "../../src/domain/review-loop";
@@ -12,7 +17,7 @@ import type { SessionItem } from "../../src/domain/session-item";
 import { subagentBudgetCheck } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import { subagentWrapUpNotice } from "../../src/domain/subagent-instructions";
-import { usageTokens } from "../../src/domain/subagent-usage";
+import { budgetUsageTokens } from "../../src/domain/subagent-usage";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { captureConversationCode } from "../../src/server/services/conversation-code-checkpoint";
 import {
@@ -198,15 +203,21 @@ export function commandItems(
 ): SessionItem[] {
 	return events.flatMap(({ event }, index) => {
 		if (event.type !== "tool-call") return [];
-		const input = event.input as { command?: unknown; code?: unknown } | null;
+		const input = event.input as {
+			command?: unknown;
+			cmd?: unknown;
+			code?: unknown;
+		} | null;
 		const text =
 			typeof input?.command === "string"
 				? input.command
-				: typeof input?.code === "string"
-					? input.code
-					: typeof event.input === "string"
-						? event.input
-						: JSON.stringify(event.input ?? "");
+				: typeof input?.cmd === "string"
+					? input.cmd
+					: typeof input?.code === "string"
+						? input.code
+						: typeof event.input === "string"
+							? event.input
+							: JSON.stringify(event.input ?? "");
 		return [
 			{
 				kind: "dynamicToolCall" as const,
@@ -288,9 +299,13 @@ export function childBudgetUsed(error: unknown): ChildBudgetUsed | null {
  * used (the minutes notice a minute earlier, so a verdict still fits), and a
  * stop at its token budget. Tokens are this round's own: usage events are
  * cumulative within one model run, so the last one since the round's first
- * event, never an earlier round's; weighted like the product's budget tokens.
- * A sidekick's token cap is the product's per-round cap (subagentBudgetCheck),
- * not its budget across rounds.
+ * event, never an earlier round's; counted (cache reads at their price
+ * share) and weighted like the product's budget tokens. A sidekick's token
+ * cap is the product's per-round cap (subagentBudgetCheck), not its budget
+ * across rounds. At the cap the child gets one last step to write its
+ * report (a notice); a step after that stops the round. A checker's last
+ * step, at its token cap or within a minute of its time, is the product's
+ * forced final step: the final notice with tools off (onFinalStep).
  */
 export function childStepGuard(input: {
 	role: TrialRole;
@@ -301,10 +316,13 @@ export function childStepGuard(input: {
 	from: number;
 	/** budgetTokenWeight of the child's model against the builder's. */
 	weight?: number;
+	/** A checker's final step: the caller turns its tools off for it. */
+	onFinalStep?: () => void;
 	now?: () => number;
 }) {
 	let steps = 0;
 	let warned = false;
+	let lastCall = false;
 	const limit = subagentBudgetCheck(
 		input.budget,
 		{ steps: 0, tokens: 0, createdAt: new Date(input.startedAt).toISOString() },
@@ -316,12 +334,48 @@ export function childStepGuard(input: {
 		steps++;
 		const now = (input.now ?? Date.now)();
 		const tokens =
-			usageTokens(lastUsage(input.events, input.from)) * (input.weight ?? 1);
-		if (tokens >= limit)
-			throw new ChildBudgetUsed(
-				input.role,
-				`${prefix}tokens ${count(tokens)}/${count(limit)}`,
-			);
+			budgetUsageTokens(lastUsage(input.events, input.from)) *
+			(input.weight ?? 1);
+		if (input.role === "checker") {
+			const final = checkerFinalStep({
+				msLeft: input.startedAt + input.budget.minutes * 60_000 - now,
+				exhausted: tokens >= limit || steps >= input.budget.steps,
+				hadFinal: hasCheckerFinalNotice(messages),
+			});
+			// The stop names the used-up limit, as the product's guard does.
+			if (final === "stop")
+				throw new ChildBudgetUsed(
+					input.role,
+					steps >= input.budget.steps
+						? `${prefix}steps ${count(steps)}/${count(input.budget.steps)}`
+						: tokens >= limit
+							? `${prefix}tokens ${count(tokens)}/${count(limit)}`
+							: "final step taken",
+				);
+			if (final === "final") {
+				lastCall = true;
+				input.onFinalStep?.();
+				return [...messages, { role: "user", content: CHECKER_FINAL_NOTICE }];
+			}
+		}
+		if (tokens >= limit) {
+			if (lastCall)
+				throw new ChildBudgetUsed(
+					input.role,
+					`${prefix}tokens ${count(tokens)}/${count(limit)}`,
+				);
+			lastCall = true;
+			return [
+				...messages,
+				{
+					role: "user",
+					content: budgetUsedNotice(
+						`${prefix}tokens ${count(tokens)}/${count(limit)}`,
+						input.role,
+					),
+				},
+			];
+		}
 		const elapsedMinutes = (now - input.startedAt) / 60_000;
 		const reason =
 			steps >= Math.ceil(input.budget.steps * 0.9)
@@ -346,11 +400,38 @@ export function childStepGuard(input: {
 	};
 }
 
+/** The notice for a child's last step at its token cap: no tools, its report now. */
+export function budgetUsedNotice(reason: string, role: TrialRole) {
+	return role === "sidekick"
+		? `Budget used (${reason}). Call no more tools: reply now with your report (what you changed, what you verified, what is left). This is a runtime notice, not a new request.`
+		: `Budget used (${reason}). Call no more tools: answer now with only the JSON your brief asks for; a requirement you could not check is not met. This is a runtime notice, not a new request.`;
+}
+
+/**
+ * A round stopped at its budget: the child's last text since the round's
+ * first event (its partial report or latest progress note), else "".
+ */
+export function lastChildText(events: readonly TimedEvent[], from: number) {
+	let id: string | null = null;
+	let text = "";
+	for (let index = from; index < events.length; index++) {
+		const { event } = events[index];
+		if (event.type !== "text-delta") continue;
+		if (event.id !== id) {
+			id = event.id;
+			text = "";
+		}
+		text += event.text;
+	}
+	return text.trim();
+}
+
 export type HarborReviewLoop = ReturnType<typeof createReviewLoop>;
 
 export function harborReviewLoop(input: {
 	rigor?: boolean;
 	pair?: boolean;
+	blind?: boolean;
 	sessionId: string;
 	turnId: string;
 	workspace: AgentToolWorkspace;
@@ -369,5 +450,41 @@ export function harborReviewLoop(input: {
 		deps: input.deps,
 		rigor: input.rigor,
 		pair: input.pair,
+		blind: input.blind,
+		// No one answers a trial's builder: every finished turn is checked.
+		unattended: true,
 	});
+}
+
+/**
+ * A round's tool calls with what each returned, for a cut-off checker's
+ * final call: `$ <command>` then its output (clipped), in order.
+ */
+export function ranTranscript(events: readonly TimedEvent[], from: number) {
+	const outputs = new Map<string, string>();
+	for (let index = from; index < events.length; index++) {
+		const { event } = events[index];
+		if (event.type === "tool-result")
+			outputs.set(
+				event.id,
+				(typeof event.output === "string"
+					? event.output
+					: JSON.stringify(event.output ?? "")
+				).slice(-1500),
+			);
+	}
+	const lines: string[] = [];
+	for (const item of commandItems("final", events.slice(from))) {
+		const index = Number(item.id.split("-call-")[1]);
+		const event = events[from + index]?.event;
+		const output = event?.type === "tool-call" ? outputs.get(event.id) : "";
+		if (item.kind === "dynamicToolCall")
+			lines.push(`$ ${item.input}`, output || "(no output recorded)");
+	}
+	return lines.join("\n");
+}
+
+/** The findings file a checker's brief names, or null. */
+export function briefFindingsPath(brief: string) {
+	return /(\/\S+\/findings\.jsonl)/.exec(brief)?.[1] ?? null;
 }

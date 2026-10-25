@@ -1,6 +1,11 @@
 import type { ModelMessage } from "ai";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
-import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
+import {
+	CHECKER_FINAL_NOTICE,
+	checkerFinalStep,
+	checkerWrapUpLeadMs,
+	hasCheckerFinalNotice,
+} from "#/domain/checker-brief";
 import { WorkspaceId } from "#/domain/ids";
 import { sessionBilling } from "#/domain/model-pricing";
 import type { RoleModels } from "#/domain/role-models";
@@ -47,8 +52,8 @@ import { subagentTree } from "#/domain/subagent-tree";
 import {
 	agentSpend,
 	budgetTokenWeight,
+	budgetUsageTokens,
 	sessionTokenUsage,
-	usageTokens,
 } from "#/domain/subagent-usage";
 import {
 	type AgentSessionRecord,
@@ -95,13 +100,18 @@ type SubagentSession = Pick<
 /**
  * Checked before every model step of a subagent's turn: counts the step,
  * compares steps, wall minutes and subtree tokens with its budget, adds the
- * wrap-up notice once at 90% and stops the turn at 100%.
+ * wrap-up notice once at 90% and stops the turn at 100%. A checker instead
+ * gets one final step at its limit (or within a minute of its time): the
+ * final notice, with tools off (onFinalStep), so it still answers pass or
+ * fail; a step after that stops it.
  */
 export async function guardSubagentStep(input: {
 	readonly session: SubagentSession;
 	readonly items: readonly SessionItem[];
 	readonly messages: ModelMessage[];
 	readonly now?: number;
+	/** A checker's final step: the caller turns its tools off for this step. */
+	readonly onFinalStep?: () => void;
 	readonly deps?: {
 		readonly recordStep?: typeof recordSubagentStep;
 		readonly descendants?: typeof descendantAgentSessions;
@@ -120,7 +130,7 @@ export async function guardSubagentStep(input: {
 	).reduce(
 		(total, child) =>
 			total +
-			usageTokens(sessionTokenUsage(child.items as SessionItem[])) *
+			budgetUsageTokens(sessionTokenUsage(child.items as SessionItem[])) *
 				weight(child.listedModelId),
 		0,
 	);
@@ -131,7 +141,7 @@ export async function guardSubagentStep(input: {
 		{
 			steps,
 			tokens:
-				usageTokens(sessionTokenUsage(input.items)) *
+				budgetUsageTokens(sessionTokenUsage(input.items)) *
 					weight(input.session.listedModelId) +
 				childTokens,
 			createdAt: input.session.createdAt,
@@ -143,6 +153,24 @@ export async function guardSubagentStep(input: {
 		check.used,
 		checker ? checkerWrapUpLeadMs(check.limits.minutes * 60_000) / 60_000 : 0,
 	);
+	if (checker) {
+		const final = checkerFinalStep({
+			msLeft: (check.limits.minutes - check.used.minutes) * 60_000,
+			exhausted: state.state === "exhausted",
+			hadFinal: hasCheckerFinalNotice(input.messages),
+		});
+		if (final === "final") {
+			input.onFinalStep?.();
+			return [
+				...input.messages,
+				{ role: "user", content: CHECKER_FINAL_NOTICE },
+			];
+		}
+		if (final === "stop")
+			throw new SubagentBudgetExhausted(
+				`${check.reasonPrefix}${state.state === "exhausted" ? state.reason : "final step taken"}`,
+			);
+	}
 	if (state.state === "exhausted")
 		throw new SubagentBudgetExhausted(`${check.reasonPrefix}${state.reason}`);
 	if (state.state === "wrap-up") {
@@ -182,6 +210,8 @@ export async function subagentReport(input: {
 	readonly deps?: SidekickRuntimeDeps;
 	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
 	readonly roleModels?: RoleModels;
+	/** Lead mode fusion with leadTools=thin: the lead restarts a failed writer, never takes over. */
+	readonly thinLead?: boolean;
 	/**
 	 * Stops the round's classifier early. Not the finished turn's own signal:
 	 * the report is written after the turn ended, when that signal is spent.
@@ -269,6 +299,7 @@ export async function subagentReport(input: {
 				items: input.items,
 				model: session.listedModelId ?? null,
 				roleModels: input.roleModels,
+				thinLead: input.thinLead,
 				signal: input.signal,
 				now,
 				deps: input.deps,
@@ -430,6 +461,7 @@ async function endSidekickRoundAndReport(input: {
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
 	readonly roleModels?: RoleModels;
+	readonly thinLead?: boolean;
 	readonly signal?: AbortSignal;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
@@ -526,6 +558,7 @@ async function endSidekickRoundAndReport(input: {
 				: answer.decision,
 		reason: answer.reason,
 		...(switching ? { switchTo: escalation } : {}),
+		thin: input.thinLead,
 	});
 	if (ended.retired)
 		return [

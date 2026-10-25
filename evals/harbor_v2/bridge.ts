@@ -27,6 +27,8 @@ const args = JSON.parse(process.argv[2] ?? "{}") as {
 	task?: string;
 	timeoutSeconds: number;
 	mcpServers?: string[];
+	/** Checker-only: a saved workspace's tar in the sandbox (agent.py, YTIMESY_HARBOR_RESTORE_DIR). */
+	restore?: string;
 };
 const channel = harborChannel({ stdin: process.stdin, stdout: process.stdout });
 const log = (line: string) => process.stderr.write(`${line}\n`);
@@ -119,6 +121,7 @@ try {
 					wrapModel,
 				}),
 			mcpServers: args.mcpServers,
+			restore: args.restore,
 			harness: await harnessFingerprint(),
 			log,
 		});

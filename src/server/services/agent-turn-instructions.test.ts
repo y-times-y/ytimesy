@@ -378,6 +378,35 @@ describe("lead mode fusion instructions", () => {
 		expect(off).not.toContain("you are Main");
 	});
 
+	it("gives the thin lead (leadTools=thin) the decide-not-do block without the builder's workspace commands", () => {
+		const thin = agentTurnInstructions({
+			...base,
+			leanShape: "codex",
+			session: {},
+			tools: { exec_command: stub, agent: stub, agent_send: stub },
+			lead: "fusion",
+			leadTools: "thin",
+			fusionPair: fusionPairProfile("gpt-6.1-sol", "gpt-6-luna"),
+		});
+		expect(thin).toContain("You decide; your writer does.");
+		expect(thin).toContain("`exec_command` only inspect");
+		expect(thin).toContain("Acceptance checks");
+		expect(thin).toContain("Up to 2 restarts per request");
+		expect(thin).not.toContain("ytimesy-check");
+		expect(thin).not.toContain("take over and edit yourself");
+		const blocking = agentTurnInstructions({
+			...base,
+			leanShape: "core",
+			session: {},
+			tools: { bash: stub, read: stub, agent: stub },
+			lead: "fusion",
+			leadTools: "thin",
+			leadBlocking: true,
+		});
+		expect(blocking).toContain("restart: true");
+		expect(blocking).toContain("wait for the round and return its report");
+	});
+
 	it("shapes briefs, pushback and exploration by the pair's profile", () => {
 		const tools = { bash: stub, read: stub, edit: stub, agent: stub };
 		const withPair = (pair: FusionPairProfile) =>

@@ -23,6 +23,9 @@ describe("pricedModelId", () => {
 		expect(pricedModelId("us.anthropic.claude-opus-5-5-v1:0")).toBe(
 			"claude-opus-5.5",
 		);
+		expect(pricedModelId("global.anthropic.claude-haiku-5-5")).toBe(
+			"claude-haiku-5.5",
+		);
 	});
 
 	it("leaves other ids as they were", () => {

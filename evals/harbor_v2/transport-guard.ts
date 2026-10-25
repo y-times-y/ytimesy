@@ -1,4 +1,11 @@
 import { appendFileSync, writeFileSync } from "node:fs";
+import {
+	DEGENERATE_RUN_CHARS,
+	DegenerateOutput,
+	whitespaceRun,
+} from "#/domain/degenerate-output";
+
+export { DEGENERATE_RUN_CHARS, DegenerateOutput, whitespaceRun };
 
 /**
  * Provider-neutral transport guard for Harbor bridge v2 (successor of the
@@ -20,6 +27,13 @@ import { appendFileSync, writeFileSync } from "node:fs";
  * 4 KB of stream text and the request body in a side file). Credentials are
  * never logged: only the URL path, response headers' request id and the
  * stream itself are recorded.
+ *
+ * A response whose streamed output degenerates into a long run of whitespace
+ * (a tool call's arguments or answer text; Luna on Bedrock once streamed 64K
+ * tokens of blank lines inside one run_code call, 15-17 MB over 6-8.5
+ * minutes, until max_output_tokens) is cut as soon as the run passes
+ * `degenerateRunChars` and resent like a cut stream (the detection is
+ * shared with the product's model loop: src/domain/degenerate-output.ts).
  *
  * Cost note: a retried cut request was already billed by the provider; its
  * usage never reaches the harness, so the trial's estimate undercounts it.
@@ -99,8 +113,37 @@ export function terminalEvent(
 	return finish ? { type: "finish", status: finish.finishReason } : null;
 }
 
+/** The output text one SSE data payload streams (answer text or tool-call arguments), if any. */
+export function outputDelta(kind: StreamKind, data: string): string | null {
+	if (kind === "google" || !/delta/.test(data)) return null;
+	let event: { type?: unknown; delta?: unknown };
+	try {
+		event = JSON.parse(data);
+	} catch {
+		return null;
+	}
+	if (kind === "openai")
+		return (event.type === "response.output_text.delta" ||
+			event.type === "response.function_call_arguments.delta" ||
+			event.type === "response.custom_tool_call_input.delta") &&
+			typeof event.delta === "string"
+			? event.delta
+			: null;
+	if (event.type !== "content_block_delta") return null;
+	const delta = (event.delta ?? {}) as {
+		text?: unknown;
+		partial_json?: unknown;
+	};
+	return typeof delta.text === "string"
+		? delta.text
+		: typeof delta.partial_json === "string"
+			? delta.partial_json
+			: null;
+}
+
 type Drained = {
 	chunks: Uint8Array[];
+	degenerate: DegenerateOutput | null;
 	terminal: TerminalEvent | null;
 	error: unknown;
 	bytes: number;
@@ -113,7 +156,10 @@ type Drained = {
 async function drain(
 	kind: StreamKind,
 	body: ReadableStream<Uint8Array>,
+	degenerateRunChars: number,
 ): Promise<Drained> {
+	const run = whitespaceRun();
+	let degenerate: DegenerateOutput | null = null;
 	const decoder = new TextDecoder();
 	const chunks: Uint8Array[] = [];
 	const eventTypes: string[] = [];
@@ -134,6 +180,12 @@ async function drain(
 			if (eventTypes.length > 10) eventTypes.shift();
 		}
 		terminal = terminalEvent(kind, data) ?? terminal;
+		const delta = outputDelta(kind, data);
+		if (delta !== null && !degenerate) {
+			const length = run(delta);
+			if (length >= degenerateRunChars)
+				degenerate = new DegenerateOutput(length);
+		}
 	};
 	try {
 		for (;;) {
@@ -155,6 +207,10 @@ async function drain(
 				line(lineBuffer.slice(0, index).replace(/\r$/, ""));
 				lineBuffer = lineBuffer.slice(index + 1);
 			}
+			if (degenerate) {
+				await reader.cancel(degenerate).catch(() => {});
+				break;
+			}
 		}
 		if (lineBuffer) line(lineBuffer);
 	} catch (caught) {
@@ -162,8 +218,9 @@ async function drain(
 	}
 	return {
 		chunks,
-		terminal,
-		error,
+		degenerate,
+		terminal: degenerate ? null : terminal,
+		error: degenerate ?? error,
 		bytes,
 		maxGapMs,
 		eventTypes,
@@ -219,9 +276,12 @@ export function guardedFetch(
 		maxAttempts?: number;
 		/** Back-off before a resend; tests pass 0. */
 		delayMs?: (attempt: number) => number;
+		/** Whitespace run in streamed output that cuts the response (DEGENERATE_RUN_CHARS). */
+		degenerateRunChars?: number;
 	} = {},
 ): typeof globalThis.fetch {
 	const maxAttempts = options.maxAttempts ?? 3;
+	const degenerateRunChars = options.degenerateRunChars ?? DEGENERATE_RUN_CHARS;
 	const delayMs = options.delayMs ?? ((attempt: number) => 2000 * attempt);
 	const record = (entry: Record<string, unknown>) => {
 		if (!options.logPath) return;
@@ -283,7 +343,7 @@ export function guardedFetch(
 				});
 				return response;
 			}
-			const drained = await drain(kind, response.body);
+			const drained = await drain(kind, response.body, degenerateRunChars);
 			const base = {
 				kind,
 				path,
@@ -300,7 +360,11 @@ export function guardedFetch(
 			}
 			const aborted = init?.signal?.aborted === true;
 			record({
-				phase: drained.error ? "stream-error" : "stream-cut",
+				phase: drained.degenerate
+					? "degenerate"
+					: drained.error
+						? "stream-error"
+						: "stream-cut",
 				...base,
 				terminal: drained.terminal ?? "none",
 				errors: drained.error ? errorChain(drained.error) : undefined,

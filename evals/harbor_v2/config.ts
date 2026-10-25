@@ -101,6 +101,8 @@ export const BRIDGE_VARIANT_KEYS = [
 	"promptCacheScope",
 	"roleModels",
 	"lead",
+	"leadTools",
+	"leadEffort",
 	"checkerMode",
 	"rigor",
 ] as const satisfies readonly (keyof HarnessVariant)[];

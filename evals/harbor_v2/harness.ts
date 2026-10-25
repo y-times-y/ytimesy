@@ -4,8 +4,10 @@ import {
 	CODE_MODE_TOOL,
 	type CodeModeResult,
 } from "../../src/domain/code-mode";
+import { fusionPairFor } from "../../src/domain/fusion-pairs";
 import type { HarnessVariant } from "../../src/domain/harness-variant";
 import type { ModelProvider } from "../../src/domain/model-connection";
+import { UNATTENDED_RUN_INSTRUCTIONS } from "../../src/domain/rigor";
 import type { SubagentBudget, SubagentRole } from "../../src/domain/subagent";
 import {
 	archiveModelContext,
@@ -34,6 +36,7 @@ import { dapDebuggerTools } from "../../src/server/services/dap-debugger";
 import type { ModelAgentInput } from "../../src/server/services/model-agent-loop";
 import { nodeDebuggerTools } from "../../src/server/services/node-debugger";
 import { repositoryGuidanceTool } from "../../src/server/services/repository-guidance";
+import { thinLeadTools } from "../../src/server/services/thin-lead-tools";
 import { bedrockWebSearchTools } from "./bedrock";
 
 /**
@@ -48,9 +51,13 @@ import { bedrockWebSearchTools } from "./bedrock";
  * Not reproduced (they need the product's database or job stack, or a
  * person): cross-chat memory, plan mode, MCP connections from the user's
  * account (task MCP servers are reached through the mcp-call helper),
- * plugins, project secrets, repository lifecycle hooks, subagents, the
- * attempt loop and the background-command completion gate. Without the
- * agent tool there is no orchestration block in any prompt.
+ * plugins, project secrets, repository lifecycle hooks, subagents and the
+ * attempt loop. Without the agent tool there is no orchestration block in
+ * any prompt. Background-command exit notices are not delivered between a
+ * run's steps; for the root builder, trial.ts runs a completion gate after
+ * each run instead (background-gate.ts): it waits for the commands the run
+ * left running and continues the session with their exit notice, as the
+ * product's wake-up of an idle chat would.
  */
 
 export type HarborWorkspace = AgentToolWorkspace & {
@@ -163,7 +170,8 @@ export async function harborHarness(input: {
 	/**
 	 * A runtime subagent: the review loop's checker or a pair worker (read
 	 * only), or lead=fusion's sidekick (role writer: it writes the lead's
-	 * checkout). No web search.
+	 * checkout). Web search as the trial passes it (the checker gets the
+	 * builder's).
 	 */
 	subagent?: { role: SubagentRole; budget: SubagentBudget; readOnly: boolean };
 	/**
@@ -212,19 +220,27 @@ export async function harborHarness(input: {
 			memo,
 		},
 	});
-	const webSearch =
-		input.webSearch && !input.subagent
-			? input.bedrock
-				? bedrockWebSearchTools()
-				: nativeWebSearchTools(
-						input.provider === "codex-subscription" ? "openai" : input.provider,
-					)
-			: {};
+	const webSearch = input.webSearch
+		? input.bedrock
+			? bedrockWebSearchTools()
+			: nativeWebSearchTools(
+					input.provider === "codex-subscription" ? "openai" : input.provider,
+				)
+		: {};
 	let tools: ToolSet = { ...surface.tools, ...webSearch };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
 	// deferred tools here: the bridge offers no agent, plan or MCP tools.
+	// lead=fusion's thin lead (leadTools=thin): delegation, a capped read and
+	// a bounded inspection command only (thin-lead-tools.ts), as the product's.
+	const thinLead =
+		!input.subagent &&
+		variant.lead === "fusion" &&
+		variant.leadTools === "thin" &&
+		!!surface.lean;
 	const codeMode =
-		surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		surface.lean && variant.codeMode !== "off" && !thinLead
+			? variant.codeMode
+			: null;
 	if (codeMode) {
 		const journal = new Map<string, CodeModeResult>();
 		const runCode = codeModeTool({
@@ -248,6 +264,7 @@ export async function harborHarness(input: {
 					: { ...tools, [CODE_MODE_TOOL]: runCode };
 	}
 	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
+	if (thinLead) tools = thinLeadTools(tools);
 	const instructions = agentTurnInstructions({
 		session: input.subagent
 			? {
@@ -256,6 +273,14 @@ export async function harborHarness(input: {
 				}
 			: {},
 		lead: variant.lead,
+		// leadTools=full keeps the earlier bridge prompt unchanged (no pair tuning).
+		...(thinLead
+			? {
+					leadTools: "thin" as const,
+					leadBlocking: true,
+					fusionPair: fusionPairFor(input.modelId, variant.roleModels),
+				}
+			: {}),
 		rigor: variant.rigor === "on",
 		tools,
 		plugins: [],
@@ -264,10 +289,13 @@ export async function harborHarness(input: {
 		leanReadOnly: surface.lean?.readOnly,
 		leanWorkingDirectory: surface.lean ? workspace.cwd : undefined,
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
+		// Only the root builder: a subagent's brief already names what to report.
+		unattended: !input.subagent,
 	});
 	return {
 		tools,
-		instructions: `${instructions}${input.mcpNote ?? ""}`,
+		// The root builder of a trial: nobody answers its questions.
+		instructions: `${instructions}${input.subagent ? "" : `\n${UNATTENDED_RUN_INSTRUCTIONS}`}${input.mcpNote ?? ""}`,
 		leanShape: surface.lean?.shape ?? null,
 		input: {
 			prepareMessages: repositoryContext.prepare,

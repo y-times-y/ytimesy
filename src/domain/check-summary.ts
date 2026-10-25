@@ -1,4 +1,6 @@
-import { ATTEMPT_VERDICTS, type AttemptVerdictKind } from "./checker-verdict";
+/** A card shows pass or fail; anything else (an older "unsure") is no verdict, neutral. */
+export type CheckVerdict = "pass" | "fail";
+
 import type { DynamicToolCallItem } from "./session-item";
 
 /** The tool name of the review loop's chat record (server/services/review-loop.ts). */
@@ -8,8 +10,8 @@ export const ATTEMPT_CHECK_TOOL = "attempt_check";
 
 export type CheckRound = {
 	readonly n: number;
-	/** pass | fail | unsure, or null while checking / when no verdict came in time. */
-	readonly verdict: AttemptVerdictKind | null;
+	/** pass | fail, or null while checking / with no verdict (older "unsure" records too). */
+	readonly verdict: CheckVerdict | null;
 	/** The round's line after its number, as the loop wrote it. */
 	readonly text: string;
 	readonly findings: number;
@@ -26,7 +28,7 @@ export type CheckSummary = {
 	readonly maxRounds: number | null;
 	readonly rounds: readonly CheckRound[];
 	/** The latest round's verdict (attempts: the kept attempt's). */
-	readonly verdict: AttemptVerdictKind | null;
+	readonly verdict: CheckVerdict | null;
 	readonly findings: readonly string[];
 	readonly failingTests: readonly {
 		readonly name: string;
@@ -41,10 +43,8 @@ export type CheckSummary = {
 	readonly spend?: string;
 };
 
-const verdictOf = (text: string): AttemptVerdictKind | null =>
-	((ATTEMPT_VERDICTS as readonly string[]).find((verdict) =>
-		text.startsWith(verdict),
-	) as AttemptVerdictKind | undefined) ?? null;
+const verdictOf = (text: string): CheckVerdict | null =>
+	text.startsWith("pass") ? "pass" : text.startsWith("fail") ? "fail" : null;
 
 /** The verdict card's data, or null for any other tool call. */
 export function checkSummary(item: DynamicToolCallItem): CheckSummary | null {

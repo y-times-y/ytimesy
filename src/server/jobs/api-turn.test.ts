@@ -1591,6 +1591,45 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		mocks.lean = null;
 	});
 
+	it("lead=fusion (leadTools=thin): Main gets delegation and inspection only, at leadEffort; full restores its surface", async () => {
+		const seen: { tools: string[]; reasoning: unknown }[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			seen.push({
+				tools: Object.keys(input.tools ?? {}).sort(),
+				reasoning: input.reasoning,
+			});
+			return { messages: input.messages, outcome: "completed" };
+		});
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		const base = (await import("#/domain/harness-variant"))
+			.DEFAULT_HARNESS_VARIANT;
+		for (const leadTools of ["thin", "full"] as const) {
+			mocks.variant.mockReturnValue({ ...base, lead: "fusion", leadTools });
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: `turn-lead-${leadTools}` },
+				durable(),
+			);
+		}
+		mocks.lean = null;
+		const [thin, full] = seen;
+		expect(thin?.tools).toEqual(
+			expect.arrayContaining(["agent", "agent_send"]),
+		);
+		for (const name of ["write", "edit", "apply_patch", "run_code"])
+			expect(thin?.tools).not.toContain(name);
+		expect(full?.tools.length).toBeGreaterThan(thin?.tools.length ?? 0);
+		expect(full?.tools).toEqual(
+			expect.arrayContaining(["agent", "agent_send"]),
+		);
+	});
+
 	it("is off by default: no loop, the turn completes as before", async () => {
 		finishing();
 		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(

@@ -39,7 +39,7 @@ export function RequirementsList({ items }: { items: readonly string[] }) {
 	);
 }
 
-const VERDICT_LABEL = { pass: "Pass", fail: "Fail", unsure: "Unsure" };
+const VERDICT_LABEL = { pass: "Pass", fail: "Fail" };
 
 /** A review or attempt loop record as one compact verdict row that opens to its findings. */
 export function CheckVerdictCard({

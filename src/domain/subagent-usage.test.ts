@@ -4,6 +4,7 @@ import { modelBilling, usageCostUsd } from "./model-pricing";
 import type { SessionItem } from "./session-item";
 import {
 	agentSpend,
+	budgetUsageTokens,
 	forkVmMinutes,
 	formatSpend,
 	sessionTokenUsage,
@@ -159,5 +160,29 @@ describe("subagent spend", () => {
 				}),
 			).dollars,
 		).toBe("plan");
+	});
+});
+
+describe("budgetUsageTokens", () => {
+	it("counts cache reads at a tenth, the rest in full", () => {
+		expect(
+			budgetUsageTokens({
+				inputTokens: 900_000,
+				outputTokens: 20_000,
+				uncachedInputTokens: 100_000,
+				cacheReadTokens: 800_000,
+				cacheWriteTokens: 0,
+			}),
+		).toBe(200_000);
+		expect(
+			budgetUsageTokens({
+				inputTokens: 1_000,
+				outputTokens: 10,
+				uncachedInputTokens: null,
+				cacheReadTokens: null,
+				cacheWriteTokens: null,
+			}),
+		).toBe(1_010);
+		expect(budgetUsageTokens(null)).toBe(0);
 	});
 });

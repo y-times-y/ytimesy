@@ -1079,7 +1079,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, Main hands off and reviews in place",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				fusionLeadScript("[rehearsal:fusion]"),
 				sidekickScript("sidekick", "[rehearsal:fusion]", [
@@ -1094,7 +1094,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c2. lead=fusion explore-first, rigor=on, review=on: the harness's exploration round returns snippets, the lead writes its requirements list and plans from them without reading; the checker gets the list",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,review=on,rigor=on,roleModels.writer=codex:gpt-6-luna",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,review=on,rigor=on,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				exploreLeadScript("[rehearsal:fusion-explore]"),
 				exploreCheckerScript("[rehearsal:fusion-explore]"),
@@ -1113,7 +1113,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c3. lead=fusion multi-turn: the chat's second message is explored by, and built on, the same sidekick session",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				multiturnLeadScript("[rehearsal:fusion-multiturn]"),
 				sidekickScript("mt-sidekick", "[rehearsal:fusion-multiturn]", [
@@ -1130,7 +1130,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c4. lead=fusion classifier switch: the same check fails twice, the classifier says switch_model, the same sidekick continues on writerEscalation after its compaction",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
 			scripts: [
 				// First: after its compaction the escalated sidekick's history keeps the request's tag.
 				escalatedSidekickScript(),
@@ -1157,7 +1157,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c5. lead=fusion hand_back: the classifier hands the build round back, the notice reaches the lead, which takes over",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
 			scripts: [
 				handbackLeadScript("[rehearsal:fusion-handback]"),
 				sidekickScript("handback-sidekick", "[rehearsal:fusion-handback]", [
@@ -1171,7 +1171,7 @@ export function scenarios(): Scenario[] {
 			title:
 				"c6. lead=fusion classifier failure: an unparsable answer falls back to the rules, which hand the stuck round back",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+				"codeMode=primary,subagents=on,lead=fusion,leadTools=full,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				classifierFailLeadScript("[rehearsal:fusion-classifier-fail]"),
 				sidekickScript(

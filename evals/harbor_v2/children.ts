@@ -7,7 +7,11 @@ import {
 	MAX_LIVE_CHECKER_WORKERS,
 } from "../../src/domain/checker-pair";
 import { usageCostUsd } from "../../src/domain/model-pricing";
-import { harnessExplorationBrief } from "../../src/domain/sidekick";
+import {
+	harnessExplorationBrief,
+	SIDEKICK_MAX_RESTARTS,
+	sidekickHandoffBrief,
+} from "../../src/domain/sidekick";
 import {
 	applicableDecision,
 	CLASSIFIER_INSTRUCTIONS,
@@ -19,6 +23,7 @@ import {
 } from "../../src/domain/sidekick-classifier";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "../../src/domain/subagent";
 import { usageTokens } from "../../src/domain/subagent-usage";
+import { capText } from "../../src/server/services/tool-output-cap";
 import type { BridgeRole, HarborModel } from "./config";
 import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
 
@@ -70,7 +75,23 @@ export type FusionTrace = {
 		outcome: string;
 	}[];
 	refused: string[];
+	/** Fresh sidekicks started with a handoff after a failed one (leadTools=thin). */
+	restarts: { from: string; to: string; reason: string }[];
 };
+
+/** The most characters of a round's report the lead reads (its context stays small). */
+export const LEAD_REPORT_MAX_CHARS = 12_000;
+
+/** Why a round counts as failed for a restart, or null when it delivered a report. */
+function roundFailure(report: ChildReport) {
+	if (report.budgetUsed) return `budget used: ${report.budgetUsed}`;
+	if (report.outcome !== "completed") return "it failed";
+	const text = report.report.trim();
+	// Degenerate output: nothing, or one character repeated.
+	if (!text || /^(.)\1*$/s.test(text))
+		return "its output was empty or degenerate";
+	return null;
+}
 
 export function fusionLead(input: {
 	parentId: string;
@@ -82,11 +103,16 @@ export function fusionLead(input: {
 	/** `git status --short` of the checkout, for the round's report and the classifier. */
 	changedFiles: () => Promise<string[]>;
 	trace: FusionTrace;
+	/** leadTools=thin: the lead cannot take over, so failures point it to a restart. */
+	thin?: boolean;
 	now?: () => number;
 }) {
 	const now = input.now ?? Date.now;
 	let sidekick: ChildSession | null = null;
 	let switchedTo: string | null = null;
+	let lastFailure: string | null = null;
+	const restartsLeft = () =>
+		SIDEKICK_MAX_RESTARTS - input.trace.restarts.length;
 
 	async function round(brief: string, kind: "explore" | "build") {
 		const session = sidekick as ChildSession;
@@ -168,23 +194,34 @@ export function fusionLead(input: {
 		} as SidekickDecisionRecord);
 		if (answer.decision === "switch_model" && input.escalation)
 			switchedTo = input.escalation.modelId;
+		lastFailure = roundFailure(report);
 		const notice = sidekickDecisionNotice({
 			label: session.id,
 			decision: answer.decision,
 			reason: answer.reason,
+			thin: input.thin,
 			...(answer.decision === "switch_model" && input.escalation
 				? { switchTo: input.escalation.modelId }
 				: {}),
 		});
 		return [
 			report.budgetUsed
-				? `Sidekick ${session.id} round ${n} (${kind}) stopped: sidekick budget used (${report.budgetUsed}). Its edits so far are in your checkout; it wrote no report.`
+				? `Sidekick ${session.id} round ${n} (${kind}) stopped: sidekick budget used (${report.budgetUsed}). Its edits so far are in your checkout; ${report.report ? "its last message:" : "it wrote no report."}`
 				: `Sidekick ${session.id} round ${n} (${kind}) ${report.outcome === "completed" ? "reported" : "failed"}:`,
-			report.budgetUsed ? "" : report.report || "(no report)",
+			capText(
+				report.budgetUsed ? report.report : report.report || "(no report)",
+				LEAD_REPORT_MAX_CHARS,
+				"ask your writer for the part you need",
+			),
 			files.length
 				? `Changed files in your checkout now:\n${files.join("\n")}`
 				: "",
 			notice,
+			input.thin && lastFailure
+				? restartsLeft() > 0
+					? `Runtime notice: this round failed (${lastFailure}). Re-brief your writer more narrowly, or restart it: ${AGENT_SEND_TOOL} with id ${session.id}, restart: true and your brief (a fresh writer gets a handoff; ${restartsLeft()} restart(s) left).`
+					: `Runtime notice: this round failed (${lastFailure}) and no restarts are left. Re-brief your writer narrowly, or finish and report what is blocked.`
+				: "",
 		]
 			.filter(Boolean)
 			.join("\n\n");
@@ -201,8 +238,29 @@ export function fusionLead(input: {
 
 	const refuse = (why: string) => {
 		input.trace.refused.push(why);
-		return `Refused: ${why} Do the work yourself.`;
+		return `Refused: ${why} ${input.thin ? "Brief your writer instead." : "Do the work yourself."}`;
 	};
+
+	/** A fresh sidekick in place of the current one, briefed with a handoff. */
+	async function restart(message: string) {
+		const previous = sidekick as ChildSession;
+		previous.stop();
+		const files = await input.changedFiles().catch(() => []);
+		const reason = lastFailure ?? "restarted by Main";
+		const next = start();
+		input.trace.restarts.push({ from: previous.id, to: next.id, reason });
+		return round(
+			sidekickHandoffBrief({
+				previous: previous.id,
+				reason,
+				lastBrief: previous.briefs.at(-1),
+				lastReport: previous.reports.at(-1)?.report,
+				changes: files.join("\n"),
+				message,
+			}),
+			"build",
+		);
+	}
 
 	return {
 		/** The harness's exploration round for the request, before the lead's first model call. */
@@ -227,7 +285,7 @@ export function fusionLead(input: {
 						);
 					if (sidekick)
 						return refuse(
-							`one writer at a time: your sidekick ${sidekick.id} already exists; send it the brief with ${AGENT_SEND_TOOL}.`,
+							`one writer at a time: your sidekick ${sidekick.id} already exists; send it the brief with ${AGENT_SEND_TOOL}${input.thin ? " (restart: true replaces it with a fresh one)" : ""}.`,
 						);
 					if (!brief?.trim()) return refuse("a writer needs a brief.");
 					start();
@@ -235,15 +293,17 @@ export function fusionLead(input: {
 				},
 			}),
 			[AGENT_SEND_TOOL]: tool({
-				description:
-					"Send your sidekick its next brief or feedback (a new round, its report is this call's result), or stop it.",
+				description: input.thin
+					? "Send your sidekick its next brief or feedback (a new round, its report is this call's result), stop it, or restart it (restart: true: a fresh sidekick gets a handoff and your message)."
+					: "Send your sidekick its next brief or feedback (a new round, its report is this call's result), or stop it.",
 				inputSchema: z.object({
 					id: z.string(),
 					message: z.string().max(8_000).optional(),
 					stop: z.boolean().optional(),
 					explore: z.boolean().optional(),
+					...(input.thin ? { restart: z.boolean().optional() } : {}),
 				}),
-				execute: async ({ id, message, stop, explore }) => {
+				execute: async ({ id, message, stop, explore, ...rest }) => {
 					if (!sidekick || sidekick.id !== id)
 						return refuse(`no sidekick ${id}.`);
 					if (stop) {
@@ -251,6 +311,13 @@ export function fusionLead(input: {
 						return `Sidekick ${id} stopped.`;
 					}
 					if (!message?.trim()) return refuse("send needs a message.");
+					if ((rest as { restart?: boolean }).restart) {
+						if (restartsLeft() <= 0)
+							return refuse(
+								`all ${SIDEKICK_MAX_RESTARTS} restarts are used; re-brief sidekick ${id} narrowly, or finish and report what is blocked.`,
+							);
+						return restart(message);
+					}
 					return round(message, explore ? "explore" : "build");
 				},
 			}),
@@ -283,7 +350,7 @@ export function checkerWorkerTool(input: {
 			readOnly: true,
 		});
 		return report.budgetUsed
-			? `Worker ${worker.id} stopped: checker worker budget used (${report.budgetUsed}).`
+			? `Worker ${worker.id} stopped: checker worker budget used (${report.budgetUsed}).${report.report ? ` Its last message:\n${report.report}` : ""}`
 			: `Worker ${worker.id} ${report.outcome}:\n${report.report || "(no report)"}`;
 	};
 	return {

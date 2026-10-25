@@ -64,6 +64,19 @@ export function usageTokens(usage: ApiTokenUsage | null | undefined) {
 	return (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
 }
 
+/** What one cache-read token counts in a budget: about its price share of a fresh input token. */
+export const CACHE_READ_BUDGET_SHARE = 0.1;
+
+/**
+ * Tokens as a subagent's budget counts them: input plus output, with cache
+ * reads at CACHE_READ_BUDGET_SHARE. Every step re-reads the cached history,
+ * so counting reads in full ends a long round on its history alone.
+ */
+export function budgetUsageTokens(usage: ApiTokenUsage | null | undefined) {
+	const reads = Math.min(usage?.cacheReadTokens ?? 0, usage?.inputTokens ?? 0);
+	return usageTokens(usage) - reads * (1 - CACHE_READ_BUDGET_SHARE);
+}
+
 /** Budget weights are clamped: a free or very cheap child gets at most 4× the raw tokens (the hard cap). */
 export const BUDGET_WEIGHT_MIN = 0.25;
 export const BUDGET_WEIGHT_MAX = 4;
