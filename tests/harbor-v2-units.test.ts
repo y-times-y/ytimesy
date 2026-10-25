@@ -20,6 +20,7 @@ import {
 import {
 	DegenerateOutput,
 	guardedFetch,
+	requestBodyEffort,
 	streamKind,
 	terminalEvent,
 	whitespaceRun,
@@ -458,7 +459,7 @@ describe("transport guard", () => {
 			);
 			const response = await fetch("https://api.openai.com/v1/responses", {
 				method: "POST",
-				body: '{"stream":true,"input":[]}',
+				body: '{"stream":true,"input":[],"reasoning":{"effort":"max"}}',
 			});
 			expect(calls).toBe(3);
 			expect(await response.text()).toBe(cut);
@@ -471,12 +472,28 @@ describe("transport guard", () => {
 				"stream-cut",
 				"stream-cut",
 			]);
-			expect(entries[0]).toMatchObject({ kind: "openai", willRetry: true });
+			expect(entries[0]).toMatchObject({
+				kind: "openai",
+				effort: "max",
+				willRetry: true,
+			});
 			expect(entries[2].willRetry).toBe(false);
 			expect(JSON.stringify(entries)).not.toContain("Authorization");
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+
+	it("reads the reasoning effort a request body names, per provider", () => {
+		expect(
+			requestBodyEffort('{"stream":true,"reasoning":{"effort":"high"}}'),
+		).toBe("high");
+		expect(
+			requestBodyEffort('{"stream":true,"output_config":{"effort":"max"}}'),
+		).toBe("max");
+		expect(requestBodyEffort('{"stream":true}')).toBeNull();
+		expect(requestBodyEffort("not json")).toBeNull();
+		expect(requestBodyEffort(null)).toBeNull();
 	});
 
 	it("counts a whitespace run across deltas, escaped newlines in tool-call arguments included", () => {

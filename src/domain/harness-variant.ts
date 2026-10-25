@@ -177,6 +177,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * off = the builder stops when it says it is done (the default).
 	 */
 	grind: ["off", "on"],
+	/**
+	 * The reasoning sandwich (unattended runs only; evals/harbor_v2/
+	 * effort-mix.ts): on keeps the turn's effort for the root builder's
+	 * first two model requests (planning) and for continuation rounds the
+	 * harness sends (grind), and holds every other request at high. A turn
+	 * effort of high or lower is unchanged. off = the turn's effort for every
+	 * request (the default).
+	 */
+	effortMix: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -225,6 +234,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	rigor: "off",
 	outputCap: "off",
 	grind: "off",
+	effortMix: "off",
 	roleModels: {},
 };
 

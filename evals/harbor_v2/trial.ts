@@ -58,6 +58,7 @@ import {
 	type HarborModel,
 	routeProvider,
 } from "./config";
+import { effortMix } from "./effort-mix";
 import { grindNotice } from "./grind-gate";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
@@ -445,6 +446,12 @@ export async function runHarborTrial(
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
+		// effortMix=on: the root builder's own requests plan and continue at the
+		// turn's effort and execute at high (effort-mix.ts); children keep theirs.
+		const mix = config.variant.effortMix === "on" ? effortMix(log) : null;
+		const builderRuntime = mix
+			? { ...runtime, model: mix.wrap(runtime.model) }
+			: runtime;
 		const provider = routeProvider(config.route);
 		const onEvent = async (event: ApiAgentEvent) => {
 			events.push({ at: new Date(now()).toISOString(), event });
@@ -842,7 +849,7 @@ export async function runHarborTrial(
 					onEvent,
 					onStep: async () => {},
 				},
-				runtime,
+				builderRuntime,
 			);
 		};
 		// The product wakes an idle chat when a background command exits
@@ -900,6 +907,7 @@ export async function runHarborTrial(
 				if (notice) {
 					grindRounds++;
 					log(`grind ${grindRounds}: sent back after an early finish`);
+					mix?.continuation();
 					notices.push({
 						at: new Date(now()).toISOString(),
 						afterEvent: events.length,

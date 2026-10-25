@@ -1798,3 +1798,87 @@ describe("grindNotice", () => {
 		expect(grindMinimumMs(hour)).toBe(15 * 60_000);
 	});
 });
+
+describe("runHarborTrial with effortMix=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const step = (id: string): Part[] => [
+		call(id, "bash", { command: "true" }),
+		finish(100, 10, true),
+	];
+	const run = async (env: Record<string, string>) => {
+		const f = await fixture(env);
+		const { model } = scriptedModel([
+			step("e1"),
+			step("e2"),
+			step("e3"),
+			[...text("d1", "Done."), finish(100, 10)],
+			step("e4"),
+			[...text("d2", "Checked again; done."), finish(100, 10)],
+			[...text("d3", "Still holds; done."), finish(100, 10)],
+		]);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `mix-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 3 * 60 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			// The routes' request settings name the turn's effort.
+			runtime: async (wrap) => ({
+				model: wrap(model),
+				requestSettings: (instructions) => ({
+					system: instructions,
+					providerOptions: { anthropic: { effort: f.config.effort } },
+				}),
+			}),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		expect(result.failure).toBeNull();
+		return {
+			sent: model.doStreamCalls.map(
+				(entry) => entry.providerOptions?.anthropic?.effort,
+			),
+			logged: lines.filter((line) => line.startsWith("effort ")),
+		};
+	};
+
+	it("plans and continues at the turn's effort and executes at high", async () => {
+		const { sent, logged } = await run({
+			YTIMESY_HARBOR_VARIANT: "grind=on,effortMix=on",
+		});
+		// Two planning requests, execution, then two grind continuation rounds.
+		expect(sent).toEqual(["max", "max", "high", "high", "max", "max", "max"]);
+		expect(logged).toEqual([
+			"effort 1 max",
+			"effort 2 max",
+			"effort 3 high",
+			"effort 4 high",
+			"effort 5 max",
+			"effort 6 max",
+			"effort 7 max",
+		]);
+	}, 60_000);
+
+	it("leaves every request at the turn's effort when off or at high", async () => {
+		const off = await run({ YTIMESY_HARBOR_VARIANT: "grind=on" });
+		expect(new Set(off.sent)).toEqual(new Set(["max"]));
+		expect(off.logged).toEqual([]);
+		const high = await run({
+			YTIMESY_HARBOR_VARIANT: "grind=on,effortMix=on",
+			YTIMESY_HARBOR_EFFORT: "high",
+		});
+		expect(new Set(high.sent)).toEqual(new Set(["high"]));
+		expect(high.logged).toHaveLength(7);
+	}, 60_000);
+});
