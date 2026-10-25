@@ -159,6 +159,14 @@ const OPEN_CHAT_GIVE_UP_MS = 8_000;
 /** An open chat read past OPEN_CHAT_WAIT_MS: the page streams it in. */
 export type StreamedChatView = Promise<PublicCodexSession | undefined>;
 
+/** The chat the page opens: the linked chat if it is listed, else the latest. */
+function chatToOpen<Chat extends { readonly id: string }>(
+	chats: readonly Chat[] | undefined,
+	linkedChatId: string | undefined,
+) {
+	return chats?.find((chat) => chat.id === linkedChatId) ?? chats?.[0];
+}
+
 /** The read, or undefined once `ms` pass first. */
 function within<T>(read: Promise<T>, ms: number) {
 	let timer: number | undefined;
@@ -223,10 +231,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			.catch(() => undefined);
 		const openChat = firstChats
 			.then((first) => {
-				// The linked chat, as the browser would open it; else the latest.
-				const chat =
-					first?.chats.find((listed) => listed.id === link.chatId) ??
-					first?.chats[0];
+				const chat = chatToOpen(first?.chats, link.chatId);
 				if (!first || !chat) return undefined;
 				return publicSessionView({
 					userId: user.id,
@@ -261,6 +266,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			// The server renders this chat open, as the browser would open it;
 			// a slow read streams in after the rest of the page.
 			openChatView,
+			openChatId: chatToOpen(chats?.chats, link.chatId)?.id,
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
 			// Relative times render from this on the server and while hydrating.
