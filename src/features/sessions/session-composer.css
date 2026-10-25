@@ -1078,6 +1078,14 @@ button.attachment-tile-body[data-state="open"] {
 	flex-direction: column;
 	gap: 8px;
 }
+/* Streamdown skips laying out code blocks off screen (content-visibility:
+   auto, sized 200px until first shown). A transcript painted at its end then
+   resizes each block as it scrolls into view, and the jump moves the end out
+   of view again. Code blocks lay out at their real size from the first paint. */
+.session-markdown [data-streamdown="code-block"] {
+	content-visibility: visible !important;
+	contain-intrinsic-size: none !important;
+}
 .session-markdown ul,
 .session-markdown ol {
 	margin: 0;
