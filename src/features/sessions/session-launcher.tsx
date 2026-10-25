@@ -4,6 +4,7 @@ import { ArrowUp, Square } from "lucide-react";
 import {
 	type KeyboardEvent,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -30,6 +31,11 @@ import {
 import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import {
+	composerDraftKey,
+	loadComposerDraft,
+	saveComposerDraft,
+} from "#/domain/composer-drafts";
 import { composerProjectNotice } from "#/domain/composer-project";
 import {
 	canResumeDisconnectedFollowUp,
@@ -74,7 +80,11 @@ import {
 	slashMenuCommands,
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
-import { useTypedBeforeHydration } from "#/features/app/first-paint";
+import {
+	useHydrated,
+	useHydrating,
+	useTypedBeforeHydration,
+} from "#/features/app/first-paint";
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -125,6 +135,9 @@ type InspectorView = "files" | "diff" | "terminal" | "desktop";
 const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
 
 export const COMPOSER_INPUT_ID = "composer-draft";
+
+/** How long typing pauses before the draft is saved for a reload. */
+const DRAFT_SAVE_DELAY_MS = 300;
 
 /**
  * How a composer send ended. `unsent` returns the message to this composer;
@@ -421,9 +434,38 @@ export function SessionLauncher({
 				: 30_000;
 		},
 	});
-	// Text typed before the page's scripts ran stays in the composer.
+	// Text typed before the page's scripts ran, or this browser's saved draft
+	// that the first-paint script filled in, stays in the composer. It
+	// hydrates as the server rendered it (no draft) and takes the text up
+	// before the next paint, so what the draft drives (the send button)
+	// updates too: hydration leaves server attributes as they are. A composer
+	// mounted later reads its saved draft itself.
+	const draftKey = composerDraftKey(session.agentSessionId);
+	const hydrating = useHydrating();
+	const hydrated = useHydrated();
 	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
-	const [draft, setDraft] = useState(initialDraft || typedBeforeHydration);
+	const [draft, setDraft] = useState(
+		() => initialDraft || (hydrating ? "" : loadComposerDraft(draftKey)),
+	);
+	useLayoutEffect(() => {
+		if (typedBeforeHydration)
+			setDraft((current) => current || typedBeforeHydration);
+	}, [typedBeforeHydration]);
+	// Saved as it is typed; cleared at once when it empties (a send).
+	const savedDraft = useRef(draft);
+	useEffect(() => {
+		if (draft === savedDraft.current) return;
+		const save = () => {
+			savedDraft.current = draft;
+			saveComposerDraft(draftKey, draft);
+		};
+		if (!draft.trim()) {
+			save();
+			return;
+		}
+		const timer = window.setTimeout(save, DRAFT_SAVE_DELAY_MS);
+		return () => window.clearTimeout(timer);
+	}, [draft, draftKey]);
 	const drafting = draft.trim().length > 0;
 	const draftStarted = useRef(onDraftStarted);
 	draftStarted.current = onDraftStarted;
@@ -1115,6 +1157,7 @@ export function SessionLauncher({
 						)}
 						<TaskInput
 							id={COMPOSER_INPUT_ID}
+							draftKey={draftKey}
 							textareaRef={textareaRef}
 							onCaretChange={setCaret}
 							value={draft}
@@ -1277,6 +1320,12 @@ export function SessionLauncher({
 									type="button"
 									className="session-send"
 									aria-label="Send"
+									// Before hydration: ready once the composer has text (data-has-text, session-composer.css).
+									data-ready-with-text={
+										!hydrated && composerCanSend("text", false)
+											? "true"
+											: undefined
+									}
 									disabled={
 										Boolean(attachmentError) ||
 										(draftCommand

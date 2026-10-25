@@ -425,6 +425,19 @@
 	background: #777;
 	color: #363636;
 }
+/* Before hydration: text typed or restored into the composer (data-has-text,
+   set by the draft script in src/features/app/first-paint.ts) shows the send
+   button as React will render it. */
+.session-composer:has(#composer-draft[data-has-text])
+.session-send[data-ready-with-text]:disabled {
+	cursor: pointer;
+}
+.session-composer:has(#composer-draft[data-has-text])
+	.session-send[data-ready-with-text]:disabled
+	.send-face {
+	background: #ececec;
+	color: #151515;
+}
 .reasoning-option {
 	display: inline-flex;
 	align-items: center;

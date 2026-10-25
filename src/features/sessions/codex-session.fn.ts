@@ -145,6 +145,29 @@ export const getCodexSession = createServerFn({ method: "GET" })
 		return publicSessionView(scope);
 	});
 
+/**
+ * How long the page's first bytes wait for its latest chat's view after its
+ * other reads: within it the chat renders in the page's first HTML. Past it
+ * the page streams without the chat and the chat follows in the same
+ * response, until LATEST_CHAT_GIVE_UP_MS; then the browser reads it.
+ */
+const LATEST_CHAT_WAIT_MS = 250;
+const LATEST_CHAT_GIVE_UP_MS = 8_000;
+
+/** A latest chat read past LATEST_CHAT_WAIT_MS: the page streams it in. */
+export type StreamedChatView = Promise<PublicCodexSession | undefined>;
+
+/** The read, or undefined once `ms` pass first. */
+function within<T>(read: Promise<T>, ms: number) {
+	let timer: number | undefined;
+	return Promise.race([
+		read,
+		new Promise<undefined>((resolve) => {
+			timer = setTimeout(resolve, ms);
+		}),
+	]).finally(() => clearTimeout(timer));
+}
+
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 	async () => {
 		let user: Awaited<ReturnType<typeof requireUser>>;
@@ -175,15 +198,45 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 				};
 			})
 			.catch(() => undefined);
+		const latestChat = firstChats
+			.then((first) => {
+				const chat = first?.chats[0];
+				if (!first || !chat) return undefined;
+				return publicSessionView({
+					userId: user.id,
+					projectId: first.projectId,
+					harnessId: chat.harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
+					sessionId: chat.id,
+				});
+			})
+			.catch(() => undefined);
 		const [snapshotAvailable, projects, chats] = await Promise.all([
 			hasManagedCodexAuth(user.id),
 			listed,
 			firstChats,
 		]);
+		// Landed in time, the view comes as a value: the browser hydrates it
+		// without waiting on a promise.
+		let landed: { view: PublicCodexSession | undefined } | undefined;
+		const streamed: StreamedChatView = within(
+			latestChat.catch(() => undefined),
+			LATEST_CHAT_GIVE_UP_MS,
+		).then((view) => {
+			landed = { view };
+			return view;
+		});
+		await within(streamed, LATEST_CHAT_WAIT_MS);
+		const settled = landed as typeof landed | undefined;
+		const latestChatView = settled ? settled.view : streamed;
 		return {
 			signedIn: true,
 			projects,
 			chats,
+			// The server renders this chat open, as the browser would open it;
+			// a slow read streams in after the rest of the page.
+			latestChatView,
+			// The sidebar's account button renders from this.
+			account: { name: user.name, email: user.email, image: user.image },
 			// Relative times render from this on the server and while hydrating.
 			renderedAtMs: Date.now(),
 			session: {

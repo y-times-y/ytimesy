@@ -55,6 +55,7 @@ import {
 	type SidebarSort,
 	type SidebarStatusGroup,
 	seenChatStorageValue,
+	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
@@ -70,8 +71,19 @@ import {
 	accountDisplayName,
 	accountInitials,
 } from "#/domain/workspace-settings";
-import { dropFirstPaintStyles, useFirstPaint } from "../app/first-paint";
+import {
+	dropFirstPaintStyles,
+	FIRST_PAINT_ROWS_SCRIPT,
+	useFirstPaint,
+} from "../app/first-paint";
 import { requestJson } from "../projects/api";
+
+/** Who is signed in, as the account button shows them. */
+export type SidebarAccount = {
+	readonly name?: string | null;
+	readonly email?: string | null;
+	readonly image?: string | null;
+};
 
 interface ProjectSidebarProps {
 	projects: Project[];
@@ -104,6 +116,8 @@ interface ProjectSidebarProps {
 	onMemoryIntent?: () => void;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
+	/** The signed-in user as the page loaded, until the account read answers. */
+	account?: SidebarAccount;
 }
 
 export function ProjectSidebar({
@@ -131,6 +145,7 @@ export function ProjectSidebar({
 	onChatIntent,
 	onMemoryIntent,
 	renderedAtMs,
+	account,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
@@ -196,14 +211,17 @@ export function ProjectSidebar({
 		projectSelected: Boolean(selected),
 		hasUserMessage,
 	});
-	const hasAttentionChat = sidebarHasAttentionChat({
-		chats,
-		selectedChatId,
-		seenKeys: shownSeenKeys,
-		busyChatIds,
-		openTurnStatus,
-		seenSinceMs: shownSeenSinceMs,
-	});
+	// Before hydration the rows script shows the rail's dot (data-attention on rows).
+	const hasAttentionChat =
+		hydrated &&
+		sidebarHasAttentionChat({
+			chats,
+			selectedChatId,
+			seenKeys,
+			busyChatIds,
+			openTurnStatus,
+			seenSinceMs,
+		});
 
 	function cancelClose() {
 		if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -307,7 +325,10 @@ export function ProjectSidebar({
 		});
 	}
 
-	function rowStatus(chat: SidebarChat): SidebarChatStatus {
+	function rowStatus(
+		chat: SidebarChat,
+		seen: { readonly keys: readonly string[]; readonly sinceMs: number | null },
+	): SidebarChatStatus {
 		const running = chatRunning(chat);
 		const selected = chat.id === selectedChatId;
 		return sidebarChatStatus({
@@ -322,10 +343,40 @@ export function ProjectSidebar({
 					? (openTurnStatus ?? chat.turnStatus)
 					: chat.turnStatus,
 				updatedAt: chat.updatedAt,
-				seen: shownSeenKeys.includes(sidebarChatSeenKey(chat)),
-				seenSinceMs: shownSeenSinceMs,
+				seen: seen.keys.includes(sidebarChatSeenKey(chat)),
+				seenSinceMs: seen.sinceMs,
 			}),
 		});
+	}
+
+	/**
+	 * Before hydration: what the rows script needs to mark this row from this
+	 * browser's seen chats (src/features/app/first-paint.ts).
+	 */
+	function firstPaintMarks(chat: SidebarChat) {
+		if (hydrated) return {};
+		const unseenReply =
+			rowStatus(chat, { keys: [], sinceMs: Number.NEGATIVE_INFINITY }).kind ===
+			"unread";
+		const attention = sidebarChatAttention({
+			running: sidebarChatIsRunning({
+				chatId: chat.id,
+				turnStatus: chat.turnStatus,
+				busyChatIds,
+				openChatId: selectedChatId,
+				openTurnStatus,
+			}),
+			turnStatus: chat.turnStatus,
+			selected: chat.id === selectedChatId,
+			seen: false,
+		});
+		return {
+			"data-seen-key": sidebarChatSeenKey(chat),
+			"data-updated-at": chat.updatedAt ?? undefined,
+			"data-unread-mark": unseenReply ? "true" : undefined,
+			"data-attention":
+				attention === "attention" ? (chat.turnStatus ?? undefined) : undefined,
+		};
 	}
 
 	function statusSection(
@@ -333,6 +384,8 @@ export function ProjectSidebar({
 		label: string,
 		rows: readonly { chat: SidebarChat; project: Project }[],
 		total: number,
+		/** Before hydration every Done row renders; these past the fold start hidden. */
+		hiddenFrom = Number.POSITIVE_INFINITY,
 	) {
 		if (!total) return null;
 		return (
@@ -342,15 +395,20 @@ export function ProjectSidebar({
 					<span className="sidebar-status-count">{total}</span>
 				</h3>
 				<ul className="sidebar-chats">
-					{rows.map(({ chat, project }) => chatRow(chat, project))}
+					{rows.map(({ chat, project }, index) =>
+						chatRow(chat, project, index >= hiddenFrom),
+					)}
 				</ul>
 			</li>
 		);
 	}
 
-	function chatRow(chat: SidebarChat, project?: Project) {
+	function chatRow(chat: SidebarChat, project?: Project, pastFold = false) {
 		const status = chatStatus(chat);
-		const shown = rowStatus(chat);
+		const shown = rowStatus(chat, {
+			keys: shownSeenKeys,
+			sinceMs: shownSeenSinceMs,
+		});
 		const label = sidebarChatStatusLabel(shown, nowMs);
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
 		const pinned = shownPinnedIds.includes(chat.id);
@@ -362,6 +420,8 @@ export function ProjectSidebar({
 				data-chat-id={chat.id}
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
+				data-done-overflow={pastFold ? "true" : undefined}
+				{...firstPaintMarks(chat)}
 			>
 				<button
 					type="button"
@@ -628,6 +688,15 @@ export function ProjectSidebar({
 									(row) => chatStatus(row.chat),
 									doneExpanded,
 								)}
+								firstPaintDone={
+									hydrated
+										? undefined
+										: sidebarStatusSections(
+												recentChats,
+												(row) => chatStatus(row.chat),
+												true,
+											).done
+								}
 								render={statusSection}
 								onShowMore={() => setDoneExpanded(true)}
 								firstPaintView={firstPaintView("recent")}
@@ -752,9 +821,17 @@ export function ProjectSidebar({
 						<p className="sidebar-empty">No repositories connected.</p>
 					)}
 					{onOpenSettings ? (
-						<SidebarAccountButton onOpen={onOpenSettings} />
+						<SidebarAccountButton onOpen={onOpenSettings} initial={account} />
 					) : null}
 				</aside>
+				{hydrated ? null : (
+					// Runs as the server's HTML parses, before the rail below paints.
+					<script
+						// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
+						dangerouslySetInnerHTML={{ __html: FIRST_PAINT_ROWS_SCRIPT }}
+						suppressHydrationWarning
+					/>
+				)}
 				<nav
 					className="sidebar-rail"
 					aria-label="Chat shortcuts"
@@ -820,16 +897,20 @@ type StatusSections = ReturnType<
 /** The Recent list by status: Needs you, Working, then Done (folded after a few). */
 function RecentSections({
 	sections,
+	firstPaintDone,
 	render,
 	onShowMore,
 	firstPaintView,
 }: {
 	sections: StatusSections;
+	/** Before hydration: every Done row, so saved pins past the fold can show. */
+	firstPaintDone?: StatusSections["done"];
 	render: (
 		group: SidebarStatusGroup,
 		label: string,
 		rows: StatusSections["done"],
 		total: number,
+		hiddenFrom?: number,
 	) => ReactNode;
 	onShowMore: () => void;
 	firstPaintView?: SidebarSort;
@@ -846,7 +927,15 @@ function RecentSections({
 				sections.needsYou.length,
 			)}
 			{render("working", "Working", sections.working, sections.working.length)}
-			{render("done", "Done", sections.done, sections.doneTotal)}
+			{firstPaintDone
+				? render(
+						"done",
+						"Done",
+						firstPaintDone,
+						sections.doneTotal,
+						sections.done.length,
+					)
+				: render("done", "Done", sections.done, sections.doneTotal)}
 			{sections.doneHidden ? (
 				<li>
 					<button
@@ -862,7 +951,13 @@ function RecentSections({
 	);
 }
 
-function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
+function SidebarAccountButton({
+	onOpen,
+	initial,
+}: {
+	onOpen: () => void;
+	initial?: SidebarAccount;
+}) {
 	const account = useQuery({
 		queryKey: ["account"],
 		queryFn: () =>
@@ -874,7 +969,7 @@ function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
 				};
 			}>("/api/account"),
 	});
-	const user = account.data?.user ?? {};
+	const user = account.data?.user ?? initial ?? {};
 	const name = accountDisplayName(user);
 	return (
 		<button

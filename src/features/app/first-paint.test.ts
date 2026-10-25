@@ -1,16 +1,26 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	COMPOSER_DRAFTS_KEY,
+	DRAFT_MAX_AGE_MS,
+	storageWithDraft,
+} from "#/domain/composer-drafts";
+import {
+	CHAT_SEEN_SINCE_STORAGE_KEY,
+	CHAT_SEEN_STORAGE_KEY,
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
 	SIDEBAR_PINNED_STORAGE_KEY,
 	SIDEBAR_SORT_KEY,
 } from "#/domain/sidebar-chats";
 import {
+	COMPOSER_DRAFT_SCRIPT,
+	FIRST_PAINT_ROWS_SCRIPT,
 	FIRST_PAINT_SCRIPT,
 	type FirstPaintChoices,
 	readSavedChoices,
 	SERVER_FIRST_PAINT,
+	TIMELINE_END_SCRIPT,
 } from "./first-paint";
 
 class FakeSheet {
@@ -34,7 +44,7 @@ function browser(input: {
 		},
 		matchMedia: () => ({ matches: Boolean(input.phone) }),
 		__YT_BOOT__: undefined as FirstPaintChoices | undefined,
-		__YT_BOOT_STYLES__: undefined as FakeSheet | undefined,
+		__YT_BOOT_STYLES__: undefined as FakeSheet[] | undefined,
 	};
 	const document = {
 		documentElement: { dataset: {} as Record<string, string> },
@@ -119,7 +129,7 @@ describe("first-paint script", () => {
 			sidebarSort: "recent",
 		});
 		const [sheet] = page.document.adoptedStyleSheets;
-		expect(page.window.__YT_BOOT_STYLES__).toBe(sheet);
+		expect(page.window.__YT_BOOT_STYLES__).toEqual([sheet]);
 		expect(sheet?.text).toBe(
 			'.sidebar-chat-row[data-chat-id="chat-1"]{--chat-pinned:1}' +
 				'.sidebar-chat-row[data-chat-id="chat-2"]{--chat-pinned:1}' +
@@ -142,5 +152,251 @@ describe("first-paint script", () => {
 			}),
 		);
 		expect(page.document.adoptedStyleSheets).toEqual([]);
+	});
+});
+
+type FakeRow = { dataset: Record<string, string | undefined> };
+
+/** The rows script against a page whose selectors return these rows. */
+function runRowsScript(input: {
+	stored?: Record<string, string>;
+	pinnedChatIds?: readonly string[];
+	rows: Record<string, FakeRow[]>;
+	/** A later streamed copy of the sidebar, whose script runs after. */
+	laterCopy?: Record<string, FakeRow[]>;
+}) {
+	const page = browser({ stored: input.stored });
+	page.window.__YT_BOOT__ = {
+		...SERVER_FIRST_PAINT,
+		pinnedChatIds: input.pinnedChatIds ?? [],
+	};
+	const document = { ...page.document, currentScript: {} };
+	for (const rows of [input.rows, input.laterCopy]) {
+		if (!rows) continue;
+		document.currentScript = {
+			previousElementSibling: {
+				querySelectorAll: (selector: string) => rows[selector] ?? [],
+			},
+		};
+		runInNewContext(FIRST_PAINT_ROWS_SCRIPT, {
+			window: page.window,
+			document,
+			CSSStyleSheet: FakeSheet,
+		});
+	}
+	return document.adoptedStyleSheets.map((sheet) => sheet.text).join("");
+}
+
+const UNREAD_ROWS = "[data-unread-mark]";
+const OPEN_PROJECT_ROWS =
+	'.sidebar-folder-row[data-selected="true"] + .sidebar-chats [data-attention]';
+const DONE_ROWS = '.sidebar-recent [data-group="done"] .sidebar-chat-row';
+const reply = (id: string, updatedAt: string): FakeRow => ({
+	dataset: {
+		chatId: id,
+		seenKey: `${id}:completed:${updatedAt}`,
+		updatedAt,
+		unreadMark: "true",
+		attention: "completed",
+	},
+});
+
+describe("first-paint rows script", () => {
+	const seenSince = {
+		[CHAT_SEEN_SINCE_STORAGE_KEY]: String(Date.parse("2026-10-01T00:00:00Z")),
+	};
+
+	it("marks replies newer than this browser's seen chats, and the rail", () => {
+		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
+		const old = reply("old", "2026-09-01T00:00:00Z");
+		const css = runRowsScript({
+			stored: seenSince,
+			rows: { [UNREAD_ROWS]: [fresh, old], [OPEN_PROJECT_ROWS]: [fresh, old] },
+		});
+		expect(css).toContain(
+			'.sidebar-chat-row[data-chat-id="fresh"][data-unread-mark] .sidebar-chat-age{display:none}',
+		);
+		expect(css).not.toContain('data-chat-id="old"');
+		expect(css).toContain(".rail-brand::after{display:block}");
+	});
+
+	it("keeps only the marks of a later streamed copy of the sidebar", () => {
+		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
+		const css = runRowsScript({
+			stored: seenSince,
+			rows: { [UNREAD_ROWS]: [fresh], [OPEN_PROJECT_ROWS]: [fresh] },
+			// The copy with the chat open: an open chat is never unread.
+			laterCopy: {},
+		});
+		expect(css).toBe("");
+	});
+
+	it("leaves seen replies, and every reply when nothing was tracked yet", () => {
+		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
+		const seen = {
+			...seenSince,
+			[CHAT_SEEN_STORAGE_KEY]: JSON.stringify([fresh.dataset.seenKey]),
+		};
+		for (const stored of [seen, {}])
+			expect(
+				runRowsScript({
+					stored,
+					rows: { [UNREAD_ROWS]: [fresh], [OPEN_PROJECT_ROWS]: [fresh] },
+				}),
+			).toBe("");
+	});
+
+	it("shows a failed chat's attention dot until it is seen", () => {
+		const failed: FakeRow = {
+			dataset: { chatId: "f", seenKey: "f:failed:", attention: "failed" },
+		};
+		expect(
+			runRowsScript({ rows: { [OPEN_PROJECT_ROWS]: [failed] } }),
+		).toContain(".rail-brand::after{display:block}");
+		expect(
+			runRowsScript({
+				stored: { [CHAT_SEEN_STORAGE_KEY]: JSON.stringify(["f:failed:"]) },
+				rows: { [OPEN_PROJECT_ROWS]: [failed] },
+			}),
+		).toBe("");
+	});
+
+	it("shows a saved pin past the Done fold in place of the fold's last row", () => {
+		const row = (id: string, overflow = false): FakeRow => ({
+			dataset: { chatId: id, doneOverflow: overflow ? "true" : undefined },
+		});
+		const css = runRowsScript({
+			pinnedChatIds: ["late"],
+			rows: { [DONE_ROWS]: [row("a"), row("b"), row("late", true)] },
+		});
+		expect(css).toBe(
+			'.sidebar-recent [data-chat-id="b"]{display:none}' +
+				'.sidebar-recent [data-chat-id="late"]{display:flex}',
+		);
+	});
+});
+
+describe("transcript end script", () => {
+	it("runs with no outer scope and scrolls the list before it to its end", () => {
+		const scrolled: unknown[] = [];
+		const list = {
+			addEventListener: () => undefined,
+			lastElementChild: {
+				scrollIntoView: (options: unknown) => scrolled.push(options),
+			},
+		};
+		runInNewContext(TIMELINE_END_SCRIPT, {
+			document: { currentScript: { previousElementSibling: list } },
+			window: { addEventListener: () => undefined },
+		});
+		expect(scrolled).toEqual([{ block: "end" }]);
+	});
+});
+
+describe("transcript end script, as fonts and images load", () => {
+	function page() {
+		const scrolled: unknown[] = [];
+		const listeners: Record<string, () => void> = {};
+		const list = {
+			clientHeight: 600,
+			addEventListener: (type: string, listener: () => void) => {
+				listeners[type] = listener;
+			},
+			lastElementChild: { scrollIntoView: () => scrolled.push("end") },
+		};
+		let onLoad: () => void = () => undefined;
+		runInNewContext(TIMELINE_END_SCRIPT, {
+			document: {
+				currentScript: { previousElementSibling: list },
+				readyState: "complete",
+			},
+			window: {
+				addEventListener: (_type: string, listener: () => void) => {
+					onLoad = listener;
+				},
+			},
+		});
+		return { scrolled, listeners, load: () => onLoad() };
+	}
+
+	it("keeps the end in view however the browser moved scrollTop", () => {
+		const { scrolled, load } = page();
+		load();
+		expect(scrolled).toEqual(["end", "end"]);
+	});
+
+	it("stops once the reader scrolls", () => {
+		const { scrolled, listeners, load } = page();
+		listeners.wheel?.();
+		load();
+		expect(scrolled).toEqual(["end"]);
+	});
+});
+
+describe("composer draft script", () => {
+	class FakeTextarea {
+		value = "";
+		scrollHeight = 80;
+		style: Record<string, string> = {};
+		dataset: Record<string, string> = { draftKey: "chat-1" };
+		listeners: Record<string, () => void> = {};
+		addEventListener(type: string, listener: () => void) {
+			this.listeners[type] = listener;
+		}
+	}
+	function run(stored: string | null, typed = "") {
+		const input = new FakeTextarea();
+		input.value = typed;
+		runInNewContext(COMPOSER_DRAFT_SCRIPT, {
+			window: {
+				localStorage: {
+					getItem: (key: string) =>
+						key === COMPOSER_DRAFTS_KEY ? stored : null,
+				},
+			},
+			document: { currentScript: { previousElementSibling: input } },
+			HTMLTextAreaElement: FakeTextarea,
+			Date,
+		});
+		return input;
+	}
+	const saved = storageWithDraft(
+		null,
+		"chat-1",
+		"line one\nline two",
+		Date.now(),
+		DRAFT_MAX_AGE_MS,
+	);
+
+	it("fills in and sizes the saved draft of the textarea's chat", () => {
+		const input = run(saved);
+		expect(input.value).toBe("line one\nline two");
+		expect(input.style.height).toBe("80px");
+		expect(input.dataset.expanded).toBe("true");
+		expect(input.dataset.hasText).toBe("");
+	});
+
+	it("marks the textarea while it holds text, as typed before hydration", () => {
+		const input = run(null);
+		expect(input.dataset.hasText).toBeUndefined();
+		input.value = "typed";
+		input.listeners.input?.();
+		expect(input.dataset.hasText).toBe("");
+		input.value = " ";
+		input.listeners.input?.();
+		expect(input.dataset.hasText).toBeUndefined();
+	});
+
+	it("leaves text typed already, and other chats' drafts", () => {
+		expect(run(saved, "typed").value).toBe("typed");
+		const other = storageWithDraft(
+			null,
+			"chat-2",
+			"x",
+			Date.now(),
+			DRAFT_MAX_AGE_MS,
+		);
+		expect(run(other).value).toBe("");
+		expect(run(null).style.height).toBeUndefined();
 	});
 });

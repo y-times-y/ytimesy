@@ -84,6 +84,7 @@ import {
 } from "#/domain/timeline-activity";
 import { toolActivity, toolDetailTitle } from "#/domain/tool-detail";
 import { userQuestionReply } from "#/domain/user-question";
+import { TIMELINE_END_SCRIPT, useHydrated } from "../app/first-paint";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
@@ -245,6 +246,7 @@ export function SessionTimeline({
 		else currentTurnIds.add(item.id);
 	}
 
+	const hydrated = useHydrated();
 	useEffect(() => {
 		if (!autoScroll || !stickToEnd.current) return;
 		if (allItems.length === 0 && turnStatus !== "running") return;
@@ -429,6 +431,14 @@ export function SessionTimeline({
 							</li>
 						) : null}
 					</ol>
+					{autoScroll && !hydrated ? (
+						// The server's transcript paints scrolled to its end, as the effect above leaves it.
+						<script
+							// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
+							dangerouslySetInnerHTML={{ __html: TIMELINE_END_SCRIPT }}
+							suppressHydrationWarning
+						/>
+					) : null}
 				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
 		</TimelineProviders>
