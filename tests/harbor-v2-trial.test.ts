@@ -9,6 +9,12 @@ import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it } from "vitest";
 import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { harborBridgeConfig } from "../evals/harbor_v2/config";
+import {
+	ENV_SNAPSHOT_HEADER,
+	ENV_SNAPSHOT_MAX_CHARS,
+	envSnapshot,
+	envSnapshotProbe,
+} from "../evals/harbor_v2/env-snapshot";
 import { grindMinimumMs, grindNotice } from "../evals/harbor_v2/grind-gate";
 import {
 	HARBOR_REQUEST,
@@ -18,6 +24,7 @@ import {
 import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
+import { WorkspaceId } from "../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
 import { agentOutputDirectory } from "../src/server/services/agent-output-artifacts";
 import {
@@ -26,6 +33,7 @@ import {
 	commandSessionName,
 } from "../src/server/services/api-agent-command-tools";
 import { commandScopeRoot } from "../src/server/services/api-command-scope";
+import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
 import { localHarnessWorkspace } from "./helpers/local-harness-workspace";
 
 /**
@@ -1881,4 +1889,110 @@ describe("runHarborTrial with effortMix=on", () => {
 		expect(new Set(high.sent)).toEqual(new Set(["high"]));
 		expect(high.logged).toHaveLength(7);
 	}, 60_000);
+});
+
+describe("runHarborTrial with envSnapshot=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const run = async (variant: string) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model } = scriptedModel([
+			[...text("e1", "Done."), finish(100, 10)],
+		]);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `env-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 120_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			log: (line) => lines.push(line),
+		});
+		const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		return { result, prompt, lines, trajectory, commands: f.side.commands };
+	};
+
+	it("puts the sandbox probe's facts above the request, logged and in the trajectory", async () => {
+		const { result, prompt, lines, trajectory, commands } =
+			await run("envSnapshot=on");
+		expect(result.failure).toBeNull();
+		expect(prompt).toContain(ENV_SNAPSHOT_HEADER);
+		expect(prompt).toContain("## Files");
+		expect(prompt.indexOf(ENV_SNAPSHOT_HEADER)).toBeLessThan(
+			prompt.indexOf("Say done."),
+		);
+		expect(lines.some((line) => /^env snapshot \d+ chars$/.test(line))).toBe(
+			true,
+		);
+		expect(trajectory.steps[1].message).toContain(ENV_SNAPSHOT_HEADER);
+		expect(commands.filter((c) => c.includes("## System"))).toHaveLength(1);
+	}, 60_000);
+
+	it("sends the request alone when off", async () => {
+		const { prompt, trajectory, commands } = await run("envSnapshot=off");
+		expect(prompt).not.toContain(ENV_SNAPSHOT_HEADER);
+		expect(trajectory.steps[1].message).toBe("Say done.");
+		expect(commands.some((c) => c.includes("## System"))).toBe(false);
+	}, 60_000);
+});
+
+describe("envSnapshot", () => {
+	const vm = WorkspaceId("harbor");
+	const machines = (exec: () => Promise<unknown>) =>
+		({ exec }) as unknown as WorkspaceMachines;
+
+	it("caps long output with a cut note and gives up quietly on a failed probe", async () => {
+		const long = await envSnapshot({
+			machines: machines(async () => ({
+				stdout: "x".repeat(ENV_SNAPSHOT_MAX_CHARS + 500),
+				stderr: "",
+				exitCode: 0,
+			})),
+			vm,
+			cwd: "/app",
+		});
+		expect(long?.startsWith(ENV_SNAPSHOT_HEADER)).toBe(true);
+		expect(long).toContain(
+			`[snapshot cut at ${ENV_SNAPSHOT_MAX_CHARS} of ${ENV_SNAPSHOT_MAX_CHARS + 500} chars]`,
+		);
+		expect(
+			await envSnapshot({
+				machines: machines(async () => {
+					throw new Error("sandbox gone");
+				}),
+				vm,
+				cwd: "/app",
+			}),
+		).toBeNull();
+		expect(
+			await envSnapshot({
+				machines: machines(async () => ({
+					stdout: "  \n",
+					stderr: "",
+					exitCode: 124,
+				})),
+				vm,
+				cwd: "/app",
+			}),
+		).toBeNull();
+	});
+
+	it("quotes the working directory and writes nothing", () => {
+		const probe = envSnapshotProbe("/app's dir");
+		expect(probe).toContain(`cd '/app'\\''s dir'`);
+		expect(probe).not.toMatch(/\b(rm|mv|cp|tee|mkdir|install)\b/);
+	});
 });
