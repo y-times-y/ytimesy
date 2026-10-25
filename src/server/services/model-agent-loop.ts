@@ -54,6 +54,7 @@ import { instructionProfile } from "#/domain/instruction-profiles";
 import { longContextThreshold } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
+import { withProviderOptionsEffort } from "#/server/adapters/api-reasoning-effort";
 import {
 	apiOutputTokenDetails,
 	apiTokenUsage,
@@ -246,20 +247,10 @@ export function summaryRequestSettings<T extends object>(settings: T): T {
 		settings as { providerOptions?: Record<string, Record<string, unknown>> }
 	).providerOptions;
 	if (!options) return settings;
-	const lowered = { ...options };
-	if (options.openai && "reasoningEffort" in options.openai)
-		lowered.openai = { ...options.openai, reasoningEffort: "low" };
-	if (options.anthropic && "effort" in options.anthropic)
-		lowered.anthropic = { ...options.anthropic, effort: "low" };
-	const reasoning = options.openrouter?.reasoning as
-		| Record<string, unknown>
-		| undefined;
-	if (reasoning && "effort" in reasoning)
-		lowered.openrouter = {
-			...options.openrouter,
-			reasoning: { ...reasoning, effort: "low" },
-		};
-	return { ...settings, providerOptions: lowered };
+	return {
+		...settings,
+		providerOptions: withProviderOptionsEffort(options, "low"),
+	};
 }
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
