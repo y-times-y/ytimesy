@@ -29,7 +29,10 @@
 		"session-window-debug",
 		"shadow-relay",
 		"wal-recovery-ordering",
-		"nextjs-performance"
+		"nextjs-performance",
+		"batched-eval-parity",
+		"music-harmony",
+		"html-js-filter"
 	],
 	"validation": [
 		"fin-saccr-rwa",
@@ -39,14 +42,11 @@
 		"vpp-loss-divergence"
 	],
 	"test": [
-		"batched-eval-parity",
 		"coq-block-bound",
 		"freecad-impeller",
 		"freight-dispatch-shift",
-		"html-js-filter",
 		"legacy-utility-triage",
 		"mp-checkpoint-consolidation",
-		"music-harmony",
 		"ontology-kg-querying",
 		"photonic-waveguide-routing",
 		"risk-scorer-replay",
@@ -105,6 +105,9 @@
 		"wdm-design": "Codex trial cost"
 	},
 	"moved": {
-		"nextjs-performance": "validation -> dev on 2026-10-11: a local Codex development session (2026-09-27 to 2026-10-08) read its instruction.md and tests/docker-compose.yaml and ran its oracle and diagnostic jobs before the splits were frozen, so it is not unseen."
+		"nextjs-performance": "validation -> dev on 2026-10-11: a local Codex development session (2026-09-27 to 2026-10-08) read its instruction.md and tests/docker-compose.yaml and ran its oracle and diagnostic jobs before the splits were frozen, so it is not unseen.",
+		"batched-eval-parity": "test -> dev on 2026-10-24: studied in the 12-task samples (2026-10-22/23) and its grader failures were analysed (hidden test output read).",
+		"music-harmony": "test -> dev on 2026-10-24: a Codex trial's grader output (test-stdout) was read while building the checker bench.",
+		"html-js-filter": "test -> dev on 2026-10-24: Codex trials' grader output (test-stdout) was read while building the checker bench."
 	}
 }
