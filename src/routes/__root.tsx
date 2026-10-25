@@ -1,3 +1,4 @@
+import interLatin from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
@@ -7,7 +8,6 @@ import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
-
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -28,6 +28,14 @@ export const Route = createRootRoute({
 			},
 		],
 		links: [
+			// The text's font downloads with the stylesheet instead of after it.
+			{
+				rel: "preload",
+				href: interLatin,
+				as: "font",
+				type: "font/woff2",
+				crossOrigin: "anonymous",
+			},
 			{
 				rel: "stylesheet",
 				href: appCss,
