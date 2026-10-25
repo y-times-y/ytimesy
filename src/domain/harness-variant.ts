@@ -177,6 +177,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 * off = the builder stops when it says it is done (the default).
 	 */
 	grind: ["off", "on"],
+	/**
+	 * Environment snapshot (unattended runs only; evals/harbor_v2/env-snapshot.ts):
+	 * on runs one fixed read-only probe in the sandbox (OS, resources, file
+	 * tree, project files, tools, network, processes) before the builder's
+	 * first request and puts its output above the request. off = the request
+	 * alone (the default).
+	 */
+	envSnapshot: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -225,6 +233,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	rigor: "off",
 	outputCap: "off",
 	grind: "off",
+	envSnapshot: "off",
 	roleModels: {},
 };
 
