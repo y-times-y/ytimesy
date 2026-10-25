@@ -900,6 +900,8 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (
 			composerDraft ||
+			// A chat is open, or opened since this render (a linked chat).
+			selectedSessionIdRef.current ||
 			selectedSessionId ||
 			pendingNewChatRef.current ||
 			creatingChatEpoch.current === sessionEpoch.current ||

@@ -20,10 +20,15 @@ export const Route = createFileRoute("/")({
 			chat: typeof search.chat === "string" ? search.chat : undefined,
 			project: typeof search.project === "string" ? search.project : undefined,
 		}) as ChatLink,
-	loaderDeps: ({ search }) => ({ chat: search.chat, project: search.project }),
-	loader: async ({ deps }) => {
+	// The page reads its data once. The app rewrites the address bar itself
+	// (a handled link, a sign-in return), and the router takes each rewrite
+	// as a navigation: reloading then would remount the page with another
+	// chat open. A chat link is therefore not a loader dependency either.
+	shouldReload: false,
+	loader: async ({ location }) => {
+		const link = location.search as ChatLink;
 		const bootstrap = await getWorkspaceBootstrap({
-			data: { chatId: deps.chat, projectId: deps.project },
+			data: { chatId: link.chat, projectId: link.project },
 		});
 		// Navigating here in the browser: the page shows with its chat open,
 		// not first without it. Only the server's page streams it in.
