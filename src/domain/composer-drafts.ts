@@ -98,3 +98,52 @@ export function saveComposerDraft(chatKey: string, text: string) {
 		// Without storage the draft lasts as long as the page.
 	}
 }
+
+/**
+ * Saves a composer's drafts a moment after typing stops. Each pending save
+ * keeps the chat it was typed in: when the composer moves to another chat
+ * (New chat's chat gets its id, a switch, a send), the pending text is
+ * saved at once under the chat it belongs to, never under the next one.
+ */
+export type DraftSaver = {
+	/** Text typed in this chat; blank text (a send) is saved at once. */
+	readonly typed: (chatKey: string, text: string) => void;
+	/** Saves the pending text now. */
+	readonly flush: () => void;
+};
+
+export function createDraftSaver(
+	save: (chatKey: string, text: string) => void,
+	delayMs: number,
+	timers: {
+		readonly set: (run: () => void, ms: number) => unknown;
+		readonly clear: (timer: unknown) => void;
+	} = {
+		set: (run, ms) => setTimeout(run, ms),
+		clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+	},
+): DraftSaver {
+	let pending: { chatKey: string; text: string; timer: unknown } | null = null;
+	function flush() {
+		if (!pending) return;
+		const { chatKey, text, timer } = pending;
+		pending = null;
+		timers.clear(timer);
+		save(chatKey, text);
+	}
+	return {
+		typed(chatKey, text) {
+			if (pending?.chatKey !== chatKey) flush();
+			else if (pending) {
+				timers.clear(pending.timer);
+				pending = null;
+			}
+			if (!text.trim()) {
+				save(chatKey, text);
+				return;
+			}
+			pending = { chatKey, text, timer: timers.set(flush, delayMs) };
+		},
+		flush,
+	};
+}
