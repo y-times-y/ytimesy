@@ -105,6 +105,7 @@ export const BRIDGE_VARIANT_KEYS = [
 	"leadEffort",
 	"checkerMode",
 	"rigor",
+	"grind",
 ] as const satisfies readonly (keyof HarnessVariant)[];
 
 /**

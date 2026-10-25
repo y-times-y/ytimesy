@@ -9,6 +9,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it } from "vitest";
 import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { harborBridgeConfig } from "../evals/harbor_v2/config";
+import { grindMinimumMs, grindNotice } from "../evals/harbor_v2/grind-gate";
 import {
 	HARBOR_REQUEST,
 	harborChannel,
@@ -1725,4 +1726,75 @@ describe("runHarborTrial rehearsal: the background-command completion gate", () 
 		expect(t.backgroundGates).toEqual([]);
 		expect(t.notices).toEqual([]);
 	}, 60_000);
+});
+
+describe("runHarborTrial with grind=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const run = async (variant: string, deadlineMs: number) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel([
+			[...text("g1", "Done."), finish(100, 10)],
+			[...text("g2", "Checked again; done."), finish(100, 10)],
+			[...text("g3", "Still holds; done."), finish(100, 10)],
+			[...text("g4", "never"), finish(1, 1)],
+		]);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `grind-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+		});
+		return { result, calls: calls(), logs: f.logs };
+	};
+
+	it("sends an early finish back at most twice, with the generic notice", async () => {
+		const { result, calls, logs } = await run("grind=on", 3 * 60 * 60_000);
+		expect(result.failure).toBeNull();
+		expect(calls).toBe(3);
+		const notices = JSON.parse(
+			await readFile(join(logs, "ytimesy-trace.json"), "utf8"),
+		).notices;
+		expect(notices).toHaveLength(2);
+		expect(notices[0].text).toContain("try to break your result");
+	}, 60_000);
+
+	it("stops at the first finish without grind or with too little time left", async () => {
+		expect((await run("grind=off", 3 * 60 * 60_000)).calls).toBe(1);
+		expect((await run("grind=on", 10 * 60_000)).calls).toBe(1);
+	}, 60_000);
+});
+
+describe("grindNotice", () => {
+	const hour = 60 * 60_000;
+	it("asks for more work only early in a long enough run, at most twice", () => {
+		const base = { startedAtMs: 0, deadlineAtMs: 8 * hour };
+		expect(grindNotice({ ...base, nowMs: 20 * 60_000, rounds: 0 })).toContain(
+			"460 minutes remain",
+		);
+		expect(grindNotice({ ...base, nowMs: 61 * 60_000, rounds: 0 })).toBeNull();
+		expect(grindNotice({ ...base, nowMs: 20 * 60_000, rounds: 2 })).toBeNull();
+		// A 1-hour task may finish after 15 minutes.
+		expect(
+			grindNotice({
+				startedAtMs: 0,
+				deadlineAtMs: hour,
+				nowMs: 16 * 60_000,
+				rounds: 0,
+			}),
+		).toBeNull();
+		expect(grindMinimumMs(hour)).toBe(15 * 60_000);
+	});
 });
