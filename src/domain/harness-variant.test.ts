@@ -32,6 +32,7 @@ describe("harness variants", () => {
 			grind: "off",
 			effortMix: "off",
 			envSnapshot: "off",
+			goal: "off",
 			roleModels: {},
 		});
 	});
@@ -62,6 +63,7 @@ describe("harness variants", () => {
 			grind: "off",
 			effortMix: "off",
 			envSnapshot: "off",
+			goal: "off",
 			roleModels: {},
 		});
 		expect(
@@ -86,6 +88,7 @@ describe("harness variants", () => {
 			grind: "off",
 			effortMix: "off",
 			envSnapshot: "off",
+			goal: "off",
 			roleModels: {},
 		});
 		expect(
@@ -130,6 +133,7 @@ describe("harness variants", () => {
 			grind: "off",
 			effortMix: "off",
 			envSnapshot: "off",
+			goal: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({

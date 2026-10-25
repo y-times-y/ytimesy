@@ -194,6 +194,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * alone (the default).
 	 */
 	envSnapshot: ["off", "on"],
+	/**
+	 * Goal mode (unattended runs only; src/domain/goal.ts): on makes the
+	 * request the run's goal, gives the root builder the goal tool, and sends
+	 * it back with an audit notice while the goal is active, until it marks
+	 * the goal complete with evidence or blocked, or a deterministic stop
+	 * (deadline, no progress, continuation cap). Supersedes grind. off = the
+	 * builder stops when it says it is done (the default).
+	 */
+	goal: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -244,6 +253,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	grind: "off",
 	effortMix: "off",
 	envSnapshot: "off",
+	goal: "off",
 	roleModels: {},
 };
 
