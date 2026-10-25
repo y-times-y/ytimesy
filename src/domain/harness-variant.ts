@@ -194,6 +194,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * alone (the default).
 	 */
 	envSnapshot: ["off", "on"],
+	/**
+	 * Requirement ledger (unattended runs only; evals/harbor_v2/
+	 * requirement-ledger.ts): on gives the root builder a requirements tool
+	 * and a first-message note to record the request's requirements (quote,
+	 * readings, one check command each) before building; when it finishes,
+	 * the harness runs every check and sends a failure (or a missing ledger)
+	 * back, at most twice. off = no ledger (the default).
+	 */
+	ledger: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -244,6 +253,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	grind: "off",
 	effortMix: "off",
 	envSnapshot: "off",
+	ledger: "off",
 	roleModels: {},
 };
 

@@ -21,6 +21,11 @@ import {
 	harborChannel,
 	harborMachines,
 } from "../evals/harbor_v2/harbor-machines";
+import {
+	type LedgerState,
+	REQUIREMENTS_TOOL,
+	requirementsTool,
+} from "../evals/harbor_v2/requirement-ledger";
 import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
@@ -1994,5 +1999,200 @@ describe("envSnapshot", () => {
 		const probe = envSnapshotProbe("/app's dir");
 		expect(probe).toContain(`cd '/app'\\''s dir'`);
 		expect(probe).not.toMatch(/\b(rm|mv|cp|tee|mkdir|install)\b/);
+	});
+});
+
+describe("runHarborTrial with ledger=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const instruction = "Create done.txt containing ok.";
+	const run = async (
+		variant: string,
+		responses: Part[][],
+		deadlineMs = 3 * 60 * 60_000,
+	) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel(responses);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `ledger-${crypto.randomUUID().slice(0, 8)}`,
+			instruction,
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		return { result, calls: calls(), lines, trace, trajectory };
+	};
+	const requirements = [
+		{
+			id: "R1",
+			quote: "Create done.txt containing ok",
+			check: "grep -qx ok done.txt",
+		},
+	];
+	const done = (id: string): Part[] => [...text(id, "Done."), finish(100, 10)];
+
+	it("records the ledger with the direct tool, runs its checks at the finish and sends a failure back", async () => {
+		const { result, calls, lines, trace, trajectory } = await run("ledger=on", [
+			[
+				call("l1", "requirements", { op: "set", requirements }),
+				finish(100, 10, true),
+			],
+			done("d1"),
+			[
+				call("w1", "write", { path: "done.txt", content: "ok\n" }),
+				finish(100, 10, true),
+			],
+			done("d2"),
+			done("never"),
+		]);
+		expect(result.failure).toBeNull();
+		expect(calls).toBe(4);
+		expect(trajectory.steps[1].message).toContain(
+			'Harness note: before you build, record this request\'s requirements with the requirements tool (op "set")',
+		);
+		expect(trajectory.steps[1].message.startsWith(instruction)).toBe(true);
+		expect(lines).toContain("ledger set 1 items");
+		expect(lines).toContain("ledger gate round 1: 1/1 failed");
+		expect(lines).toContain("ledger gate round 2: 0/1 failed");
+		expect(trace.notices).toHaveLength(1);
+		expect(trace.notices[0].continuation).toBe("ledger");
+		expect(trace.notices[0].text).toContain("1 of 1 failed");
+		expect(trace.notices[0].text).toContain(
+			'- R1: "Create done.txt containing ok"',
+		);
+		expect(trace.notices[0].text).toContain("check: grep -qx ok done.txt");
+		expect(trace.notices[0].text).toMatch(/exit code: [1-9]/);
+		expect(trace.ledger.items).toEqual(requirements);
+		expect(
+			trace.ledger.gates.map((gate: { sentBack: boolean }) => gate.sentBack),
+		).toEqual([true, false]);
+		expect(
+			trace.builderRuns.map(
+				(entry: { continuation: string | null }) => entry.continuation,
+			),
+		).toEqual([null, "ledger"]);
+	}, 60_000);
+
+	it("takes the ledger from a code mode program", async () => {
+		const { calls, lines, trace } = await run("ledger=on,codeMode=primary", [
+			[
+				call("p1", "run_code", {
+					code: `await tools.write({ path: "done.txt", content: "ok\\n" }); return await tools.requirements(${JSON.stringify({ op: "set", requirements })});`,
+				}),
+				finish(100, 10, true),
+			],
+			done("d1"),
+			done("never"),
+		]);
+		expect(calls).toBe(2);
+		expect(lines).toContain("ledger set 1 items");
+		expect(lines).toContain("ledger gate round 1: 0/1 failed");
+		expect(trace.notices).toEqual([]);
+	}, 60_000);
+
+	it("sends a finish without a ledger back at most twice, then lets grind use what is left of the shared cap", async () => {
+		const missing = await run("ledger=on", [done("d1")]);
+		expect(missing.calls).toBe(3);
+		expect(missing.lines).toContain("ledger gate round 1: no ledger recorded");
+		expect(missing.trace.notices[0].text).toContain(
+			"You finished without recording the request's requirements.",
+		);
+		const both = await run("ledger=on,grind=on", [done("d1")]);
+		// Two ledger rounds, then one grind round: three continuations at most.
+		expect(both.calls).toBe(4);
+		expect(
+			both.trace.notices.map(
+				(notice: { continuation: string }) => notice.continuation,
+			),
+		).toEqual(["ledger", "ledger", "grind"]);
+	}, 60_000);
+
+	it("changes nothing when off, and skips the gate with too little time left", async () => {
+		const off = await run("ledger=off", [done("d1")]);
+		expect(off.calls).toBe(1);
+		expect(off.trajectory.steps[1].message).toBe(instruction);
+		expect(off.trace.ledger).toBeNull();
+		const late = await run("ledger=on", [done("d1")], 5 * 60_000);
+		expect(late.calls).toBe(1);
+		expect(
+			late.lines.some((line) => line.startsWith("ledger gate skipped")),
+		).toBe(true);
+	}, 60_000);
+});
+
+describe("requirementsTool", () => {
+	const execute = (ledger: LedgerState, args: unknown, lines: string[] = []) =>
+		(
+			requirementsTool({
+				state: ledger,
+				instruction: "Sort the  list\nin place.",
+				now: () => 0,
+				log: (line) => lines.push(line),
+			})[REQUIREMENTS_TOOL].execute as (
+				args: unknown,
+				options: unknown,
+			) => Promise<string>
+		)(args, { toolCallId: "t", messages: [] });
+
+	it("replaces the list, logs each set and flags quotes the request does not contain", async () => {
+		const ledger: LedgerState = { items: null, sets: [] };
+		const lines: string[] = [];
+		expect(await execute(ledger, { op: "get" })).toBe(
+			"No requirements recorded yet.",
+		);
+		const item = { id: "R1", quote: "sort the list in place", check: "true" };
+		expect(
+			await execute(ledger, { op: "set", requirements: [item] }, lines),
+		).not.toContain("Not found");
+		const second = await execute(
+			ledger,
+			{
+				op: "set",
+				requirements: [
+					item,
+					{
+						id: "R2",
+						quote: "stable",
+						readings: [
+							{ reading: "a", satisfied: false },
+							{ reading: "b", satisfied: false },
+						],
+						check: "true",
+					},
+				],
+			},
+			lines,
+		);
+		expect(second).toContain("replacing the earlier 1");
+		expect(second).toContain("Not found word for word in the request: R2.");
+		expect(second).toContain("No reading marked satisfied: R2.");
+		expect(lines).toEqual([
+			"ledger set 1 items",
+			"ledger set 2 items (replaced 1)",
+		]);
+		expect(
+			await execute(ledger, { op: "set", requirements: [item, item] }),
+		).toContain("ids must be unique (repeated: R1)");
+		expect(ledger.items).toHaveLength(2);
+		expect(JSON.parse(await execute(ledger, { op: "get" }))[1].id).toBe("R2");
 	});
 });

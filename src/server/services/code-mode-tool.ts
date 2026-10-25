@@ -53,9 +53,15 @@ const FAILURE_VALUE =
  * names), the user's MCP tools and the subagent tools (subagents=on; also
  * in the tool list, so the model may call them either way), never
  * provider-hosted tools (web search runs inside the model call, so a program
- * cannot call it), plan, secret or turn-ending tools.
+ * cannot call it), plan, secret or turn-ending tools. `extra` names other
+ * tools the caller allows (an eval harness's own, such as the requirements
+ * ledger).
  */
-function callableTools(tools: ToolSet, deferred: ReadonlySet<string>) {
+function callableTools(
+	tools: ToolSet,
+	deferred: ReadonlySet<string>,
+	extra: ReadonlySet<string>,
+) {
 	const lean = new Set<string>(leanToolNames());
 	return Object.fromEntries(
 		Object.entries(tools).filter(
@@ -65,6 +71,7 @@ function callableTools(tools: ToolSet, deferred: ReadonlySet<string>) {
 				definition.type !== "provider" &&
 				(lean.has(name) ||
 					deferred.has(name) ||
+					extra.has(name) ||
 					name === AGENT_TOOL ||
 					name === AGENT_SEND_TOOL ||
 					name === SEARCH_MCP_TOOLS_TOOL ||
@@ -274,11 +281,17 @@ export function codeModeTool(input: {
 	mode?: "on" | "primary";
 	/** Tools not in the request's tool list that programs may call (primary). */
 	deferred?: readonly string[];
+	/** Other tools in `tools` that programs may call too (an eval harness's own). */
+	callable?: readonly string[];
 }): Tool | undefined {
 	const deferred = new Set(
 		input.mode === "primary" ? (input.deferred ?? []) : [],
 	);
-	const callable = callableTools(input.tools, deferred);
+	const callable = callableTools(
+		input.tools,
+		deferred,
+		new Set(input.callable ?? []),
+	);
 	const names = Object.keys(callable);
 	if (!names.length) return undefined;
 	const hidden = names.filter((name) => deferred.has(name));
