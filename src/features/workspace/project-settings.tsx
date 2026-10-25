@@ -48,12 +48,15 @@ import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
+import { getModelFailoverSettings } from "../sessions/model-failover.fn";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
+import { readMachineSizeFn } from "./machine-size.fn";
 import { MachineSizeSettings } from "./machine-size-settings";
 import { MemorySettings } from "./memory-settings";
+import { readNetworkAccessFn } from "./network-access.fn";
 import { NetworkAccessSettings } from "./network-access-settings";
 import {
 	deleteProjectSecretFn,
@@ -118,7 +121,8 @@ export function ProjectSettings({
 	const subscriptionUsage = useQuery({
 		queryKey: ["codex-subscription-usage"],
 		queryFn: () => readSubscriptionUsage(),
-		enabled: open && section === "agents",
+		// Read with the panel, so Agents shows at its full height when picked.
+		enabled: open,
 		staleTime: 30_000,
 		refetchInterval: open && section === "agents" ? 60_000 : false,
 		retry: false,
@@ -128,6 +132,32 @@ export function ProjectSettings({
 		queryFn: () => requestJson<AccountView>("/api/account"),
 		enabled: open,
 	});
+	// The sections' own reads start with the panel: a section picked later
+	// shows at its full height instead of growing as its data lands.
+	const queryClient = useQueryClient();
+	const prefetchProjectId =
+		settingsProjectId ?? selectedProject?.id ?? projectId;
+	useEffect(() => {
+		if (!open) return;
+		void queryClient.prefetchQuery({
+			queryKey: ["model-connections"],
+			queryFn: () => getModelConnections(),
+		});
+		void queryClient.prefetchQuery({
+			queryKey: ["model-failover-settings"],
+			queryFn: () => getModelFailoverSettings(),
+		});
+		if (!prefetchProjectId) return;
+		const data = { projectId: prefetchProjectId };
+		void queryClient.prefetchQuery({
+			queryKey: ["project-machine-size", prefetchProjectId],
+			queryFn: () => readMachineSizeFn({ data }),
+		});
+		void queryClient.prefetchQuery({
+			queryKey: ["project-network-access", prefetchProjectId],
+			queryFn: () => readNetworkAccessFn({ data }),
+		});
+	}, [open, prefetchProjectId, queryClient]);
 
 	useEffect(() => {
 		if (!open) return;
