@@ -403,6 +403,15 @@ button:enabled:active {
 .sidebar-chat-row[data-selected="true"] {
 	background: var(--list-selected-bg);
 }
+/* Saved pins and folded projects: React renders them from data-pinned and
+   data-open; before hydration the first-paint script sets these properties
+   from localStorage instead (src/features/app/first-paint.ts). */
+.sidebar-chat-row[data-pinned="true"] {
+	--chat-pinned: 1;
+}
+.sidebar-chat-row {
+	order: calc(-1 * var(--chat-pinned, 0));
+}
 /* Row actions, end side: [archive][fold arrow][+]. The + keeps a fixed
    spot flush with the row's end; archive and the arrow take no space until
    the row is hovered, then open to the left of the + so it never moves. */
@@ -436,7 +445,7 @@ button:enabled:active {
 	color: #f2f2f2;
 }
 .sidebar-folder-row[data-open="true"] .sidebar-folder-toggle {
-	transform: rotate(90deg);
+	transform: var(--folder-chevron, rotate(90deg));
 }
 @media (hover: none) {
 	.sidebar-folder-toggle {
@@ -605,6 +614,17 @@ button:enabled:active {
 	overflow: hidden;
 	pointer-events: none;
 }
+/* A pinned row keeps its pin showing (--chat-pinned above). */
+.sidebar-chat-row .sidebar-chat-pin {
+	flex-basis: calc(var(--chat-pinned, 0) * 18px);
+	width: calc(var(--chat-pinned, 0) * 18px);
+	opacity: var(--chat-pinned, 0);
+	color: color-mix(
+		in srgb,
+		#c8c8c8 calc(var(--chat-pinned, 0) * 100%),
+		#6d6d6d
+	);
+}
 .sidebar-chat-row:hover .sidebar-chat-pin,
 .sidebar-chat-row:hover .sidebar-chat-archive,
 .sidebar-chat-pin:focus-visible,
@@ -751,6 +771,23 @@ button:enabled:active {
 }
 .sidebar-status-group .sidebar-chats {
 	margin: 0;
+}
+/* First paint (src/features/app/first-paint.ts): a folded project's chats
+   and pin fills follow the script's properties until React renders them. */
+.sidebar-project > .sidebar-chats {
+	display: var(--folder-chats, flex);
+}
+.sidebar-project > .sidebar-empty {
+	display: var(--folder-chats, block);
+}
+/* Before hydration the sidebar renders both sort views; the saved sort picks one. */
+:root:not([data-sidebar-sort="recent"]) [data-sort-view="recent"],
+:root[data-sidebar-sort="recent"] [data-sort-view="projects"] {
+	display: none;
+}
+.sidebar-chat-pin svg {
+	fill: currentColor;
+	fill-opacity: var(--chat-pinned, 0);
 }
 .workspace-main {
 	position: relative;
@@ -2018,7 +2055,9 @@ a.session-title-meta:focus-visible {
 		opacity 180ms ease,
 		transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.workspace-shell[data-projects-collapsed="true"] {
+/* <html data-sidebar> is set before the first paint by the first-paint script
+   and kept current by WorkspaceHome (src/features/app/first-paint.ts). */
+:where(:root:not([data-sidebar="open"])) .workspace-shell {
 	grid-template-columns: var(--rail-width) minmax(0, 1fr);
 }
 .workspace-body[data-inspector-view="side"] {
@@ -2027,7 +2066,7 @@ a.session-title-meta:focus-visible {
 .workspace-body[data-inspector-collapsed="true"] {
 	grid-template-columns: minmax(0, 1fr) 0px;
 }
-.workspace-shell[data-projects-collapsed="true"] .project-sidebar {
+:where(:root:not([data-sidebar="open"])) .workspace-shell .project-sidebar {
 	opacity: 0;
 	transform: translateX(-12px);
 }
@@ -2036,7 +2075,7 @@ a.session-title-meta:focus-visible {
 	transform: translateX(12px);
 }
 @media (prefers-reduced-motion: reduce) {
-	.workspace-shell[data-projects-collapsed],
+	.workspace-shell,
 	.workspace-body[data-inspector-collapsed],
 	.project-sidebar,
 	.workspace-inspector {
@@ -2127,14 +2166,14 @@ a.session-title-meta:focus-visible {
 	flex-shrink: 0;
 }
 
-.workspace-shell[data-projects-collapsed="true"] .sidebar-rail {
+:where(:root:not([data-sidebar="open"])) .workspace-shell .sidebar-rail {
 	opacity: 1;
 	visibility: visible;
 	transition-delay: 0s;
 }
 @media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
 	.workspace-shell,
-	.workspace-shell[data-projects-collapsed="true"] {
+	:where(:root:not([data-sidebar="open"])) .workspace-shell {
 		grid-template-columns: 0 minmax(0, 1fr);
 	}
 	.sidebar-rail {
@@ -2162,7 +2201,7 @@ a.session-title-meta:focus-visible {
 	}
 }
 @media (prefers-reduced-motion: reduce) {
-	.workspace-shell[data-projects-collapsed] .sidebar-rail {
+	.workspace-shell .sidebar-rail {
 		transition: none;
 	}
 }
@@ -2284,7 +2323,7 @@ a.session-title-meta:focus-visible {
 		overflow-y: auto;
 		z-index: 2;
 	}
-	.workspace-shell[data-projects-collapsed="false"] .sidebar-backdrop {
+	:where(:root[data-sidebar="open"]) .workspace-shell .sidebar-backdrop {
 		display: block;
 		position: fixed;
 		inset: 0;

@@ -74,6 +74,7 @@ import {
 	slashMenuCommands,
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
+import { useTypedBeforeHydration } from "#/features/app/first-paint";
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -122,6 +123,8 @@ import { TaskInput } from "./task-input";
 type InspectorView = "files" | "diff" | "terminal" | "desktop";
 
 const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
+
+export const COMPOSER_INPUT_ID = "composer-draft";
 
 /**
  * How a composer send ended. `unsent` returns the message to this composer;
@@ -418,7 +421,9 @@ export function SessionLauncher({
 				: 30_000;
 		},
 	});
-	const [draft, setDraft] = useState(initialDraft);
+	// Text typed before the page's scripts ran stays in the composer.
+	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
+	const [draft, setDraft] = useState(initialDraft || typedBeforeHydration);
 	const drafting = draft.trim().length > 0;
 	const draftStarted = useRef(onDraftStarted);
 	draftStarted.current = onDraftStarted;
@@ -1109,6 +1114,7 @@ export function SessionLauncher({
 							</ul>
 						)}
 						<TaskInput
+							id={COMPOSER_INPUT_ID}
 							textareaRef={textareaRef}
 							onCaretChange={setCaret}
 							value={draft}

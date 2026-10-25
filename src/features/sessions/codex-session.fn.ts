@@ -157,6 +157,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 				session: emptyHarnessSession(),
 				projects: undefined,
 				chats: undefined,
+				renderedAtMs: Date.now(),
 			};
 		}
 		const listed = listProjects(user.id).catch(() => undefined);
@@ -183,6 +184,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 			signedIn: true,
 			projects,
 			chats,
+			// Relative times render from this on the server and while hydrating.
+			renderedAtMs: Date.now(),
 			session: {
 				...emptyHarnessSession(),
 				snapshotAvailable,
