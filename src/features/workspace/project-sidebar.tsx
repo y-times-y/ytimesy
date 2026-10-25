@@ -17,7 +17,13 @@ import {
 	X,
 } from "lucide-react";
 import { DropdownMenu, Tooltip as TooltipPrimitive } from "radix-ui";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
@@ -35,11 +41,8 @@ import {
 	compactRelativeAge,
 	newChatIsActive,
 	type ProjectChats,
-	parseCollapsedProjectIds,
-	parsePinnedChatIds,
 	parseSeenChatKeys,
 	parseSeenSince,
-	parseSidebarSort,
 	pinnedChatStorageValue,
 	projectColor,
 	projectFolderIsExpanded,
@@ -67,6 +70,7 @@ import {
 	accountDisplayName,
 	accountInitials,
 } from "#/domain/workspace-settings";
+import { dropFirstPaintStyles, useFirstPaint } from "../app/first-paint";
 import { requestJson } from "../projects/api";
 
 interface ProjectSidebarProps {
@@ -98,6 +102,8 @@ interface ProjectSidebarProps {
 	onChatIntent?: (chatId: string) => void;
 	/** The pointer or focus reached Memory: it may open next. */
 	onMemoryIntent?: () => void;
+	/** When the server rendered the page: relative times hydrate from it. */
+	renderedAtMs?: number;
 }
 
 export function ProjectSidebar({
@@ -124,6 +130,7 @@ export function ProjectSidebar({
 	memoryActive = false,
 	onChatIntent,
 	onMemoryIntent,
+	renderedAtMs,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
@@ -131,7 +138,8 @@ export function ProjectSidebar({
 	const [hovered, setHovered] = useState(false);
 	// The sort menu opens outside the frame; while it is open the peek stays.
 	const [sortMenuOpen, setSortMenuOpen] = useState(false);
-	const [nowMs, setNowMs] = useState(() => Date.now());
+	const [nowMs, setNowMs] = useState(() => renderedAtMs ?? Date.now());
+	const firstPaint = useFirstPaint();
 	const [seenKeys, setSeenKeys] = useState<readonly string[]>(() =>
 		parseSeenChatKeys(readStorage(CHAT_SEEN_STORAGE_KEY)),
 	);
@@ -144,27 +152,23 @@ export function ProjectSidebar({
 		writeStorage(CHAT_SEEN_SINCE_STORAGE_KEY, String(now));
 		return now;
 	});
-	const [collapsedProjectIds, setCollapsedProjectIds] = useState<
-		readonly string[]
-	>(() =>
-		typeof window === "undefined"
-			? []
-			: parseCollapsedProjectIds(
-					window.localStorage.getItem(SIDEBAR_COLLAPSED_PROJECTS_KEY),
-				),
+	const [collapsedProjectIds, setCollapsedProjectIds] = useState(
+		firstPaint.choices.collapsedProjectIds,
 	);
-	const [pinnedChatIds, setPinnedChatIds] = useState<readonly string[]>(() =>
-		typeof window === "undefined"
-			? []
-			: parsePinnedChatIds(
-					window.localStorage.getItem(SIDEBAR_PINNED_CHATS_KEY),
-				),
+	const [pinnedChatIds, setPinnedChatIds] = useState(
+		firstPaint.choices.pinnedChatIds,
 	);
-	const [sort, setSort] = useState<SidebarSort>(() =>
-		typeof window === "undefined"
-			? "projects"
-			: parseSidebarSort(window.localStorage.getItem(SIDEBAR_SORT_KEY)),
-	);
+	const [sort, setSort] = useState(firstPaint.choices.sidebarSort);
+	// Until hydrated this renders the server's markup: both sort views, no
+	// pins, folds or unread marks. The first-paint script shows the saved
+	// choices meanwhile (src/features/app/first-paint.ts).
+	const hydrated = firstPaint.hydrated;
+	const shownSort = hydrated ? sort : null;
+	const shownPinnedIds = hydrated ? pinnedChatIds : [];
+	const shownCollapsedIds = hydrated ? collapsedProjectIds : [];
+	const shownSeenKeys = hydrated ? seenKeys : [];
+	const shownSeenSinceMs = hydrated ? seenSinceMs : null;
+	const firstPaintView = (view: SidebarSort) => (hydrated ? undefined : view);
 	// The open project's chats are the freshest list; the others come from projectChats.
 	const groups = projects.map((project) => ({
 		project,
@@ -174,12 +178,12 @@ export function ProjectSidebar({
 				: (projectChats.find((group) => group.project.id === project.id)
 						?.chats ?? []),
 	}));
-	const recentChats = recentSidebarChats(groups, pinnedChatIds);
+	const recentChats = recentSidebarChats(groups, shownPinnedIds);
 	const [doneExpanded, setDoneExpanded] = useState(false);
 	const orderedProjects = projectsByRecentActivity(projects, groups);
 	function chooseSort(next: SidebarSort) {
 		setSort(next);
-		window.localStorage.setItem(SIDEBAR_SORT_KEY, next);
+		writeStorage(SIDEBAR_SORT_KEY, next);
 	}
 	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const visible = expanded || hovered;
@@ -195,10 +199,10 @@ export function ProjectSidebar({
 	const hasAttentionChat = sidebarHasAttentionChat({
 		chats,
 		selectedChatId,
-		seenKeys,
+		seenKeys: shownSeenKeys,
 		busyChatIds,
 		openTurnStatus,
-		seenSinceMs,
+		seenSinceMs: shownSeenSinceMs,
 	});
 
 	function cancelClose() {
@@ -212,10 +216,16 @@ export function ProjectSidebar({
 		[],
 	);
 
-	useEffect(() => {
+	// Hydration renders the server's times; this client's clock takes over before the paint.
+	useLayoutEffect(() => {
+		setNowMs(Date.now());
 		const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
 		return () => window.clearInterval(timer);
 	}, []);
+
+	useLayoutEffect(() => {
+		if (hydrated) dropFirstPaintStyles();
+	}, [hydrated]);
 
 	useEffect(() => {
 		const chat = chats.find((row) => row.id === selectedChatId);
@@ -233,7 +243,7 @@ export function ProjectSidebar({
 
 	function persistCollapsed(next: readonly string[]) {
 		setCollapsedProjectIds(next);
-		window.localStorage.setItem(
+		writeStorage(
 			SIDEBAR_COLLAPSED_PROJECTS_KEY,
 			collapsedProjectStorageValue(next),
 		);
@@ -241,10 +251,7 @@ export function ProjectSidebar({
 
 	function persistPinned(next: readonly string[]) {
 		setPinnedChatIds(next);
-		window.localStorage.setItem(
-			SIDEBAR_PINNED_CHATS_KEY,
-			pinnedChatStorageValue(next),
-		);
+		writeStorage(SIDEBAR_PINNED_CHATS_KEY, pinnedChatStorageValue(next));
 	}
 
 	function openProject(projectId: string) {
@@ -315,8 +322,8 @@ export function ProjectSidebar({
 					? (openTurnStatus ?? chat.turnStatus)
 					: chat.turnStatus,
 				updatedAt: chat.updatedAt,
-				seen: seenKeys.includes(sidebarChatSeenKey(chat)),
-				seenSinceMs,
+				seen: shownSeenKeys.includes(sidebarChatSeenKey(chat)),
+				seenSinceMs: shownSeenSinceMs,
 			}),
 		});
 	}
@@ -346,12 +353,13 @@ export function ProjectSidebar({
 		const shown = rowStatus(chat);
 		const label = sidebarChatStatusLabel(shown, nowMs);
 		const age = compactRelativeAge(chat.updatedAt, nowMs);
-		const pinned = pinnedChatIds.includes(chat.id);
+		const pinned = shownPinnedIds.includes(chat.id);
 		const projectName = project ? projectDisplayName(project) : null;
 		const row = (
 			<li
 				key={chat.id}
 				className="sidebar-chat-row"
+				data-chat-id={chat.id}
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
 			>
@@ -576,7 +584,7 @@ export function ProjectSidebar({
 									<button
 										type="button"
 										className="sidebar-sort-button"
-										aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
+										aria-label={`Sort chats: ${shownSort === "recent" ? "Recent" : "Projects"}`}
 										title="Sort chats"
 									>
 										<ArrowUpDown size={14} strokeWidth={1.5} />
@@ -612,7 +620,7 @@ export function ProjectSidebar({
 							</DropdownMenu.Root>
 						</div>
 					) : null}
-					{projects.length && sort === "recent" ? (
+					{projects.length && shownSort !== "projects" ? (
 						recentChats.length ? (
 							<RecentSections
 								sections={sidebarStatusSections(
@@ -622,21 +630,35 @@ export function ProjectSidebar({
 								)}
 								render={statusSection}
 								onShowMore={() => setDoneExpanded(true)}
+								firstPaintView={firstPaintView("recent")}
 							/>
 						) : (
-							<p className="sidebar-empty">{emptyCopy}</p>
+							<p
+								className="sidebar-empty"
+								data-sort-view={firstPaintView("recent")}
+							>
+								{emptyCopy}
+							</p>
 						)
-					) : projects.length ? (
-						<ul className="sidebar-projects">
+					) : null}
+					{projects.length && shownSort !== "recent" ? (
+						<ul
+							className="sidebar-projects"
+							data-sort-view={firstPaintView("projects")}
+						>
 							{orderedProjects.map((project) => {
 								const selected = project.id === selectedProjectId;
 								const open = projectFolderIsExpanded({
 									projectId: project.id,
 									selectedProjectId,
-									collapsedIds: collapsedProjectIds,
+									collapsedIds: shownCollapsedIds,
 								});
 								return (
-									<li key={project.id} className="sidebar-project">
+									<li
+										key={project.id}
+										className="sidebar-project"
+										data-project-id={project.id}
+									>
 										<div
 											className="sidebar-folder-row"
 											data-selected={selected}
@@ -715,7 +737,7 @@ export function ProjectSidebar({
 												<p className="sidebar-empty">{emptyCopy}</p>
 											) : (
 												<ul className="sidebar-chats">
-													{chatsWithPinnedFirst(chats, pinnedChatIds).map(
+													{chatsWithPinnedFirst(chats, shownPinnedIds).map(
 														(chat) => chatRow(chat),
 													)}
 												</ul>
@@ -725,7 +747,8 @@ export function ProjectSidebar({
 								);
 							})}
 						</ul>
-					) : projectsLoading ? null : (
+					) : null}
+					{projects.length || projectsLoading ? null : (
 						<p className="sidebar-empty">No repositories connected.</p>
 					)}
 					{onOpenSettings ? (
@@ -799,6 +822,7 @@ function RecentSections({
 	sections,
 	render,
 	onShowMore,
+	firstPaintView,
 }: {
 	sections: StatusSections;
 	render: (
@@ -808,9 +832,13 @@ function RecentSections({
 		total: number,
 	) => ReactNode;
 	onShowMore: () => void;
+	firstPaintView?: SidebarSort;
 }) {
 	return (
-		<ul className="sidebar-recent sidebar-status-groups">
+		<ul
+			className="sidebar-recent sidebar-status-groups"
+			data-sort-view={firstPaintView}
+		>
 			{render(
 				"needs-you",
 				"Needs you",

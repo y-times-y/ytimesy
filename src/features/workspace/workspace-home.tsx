@@ -85,7 +85,6 @@ import {
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sessionWithoutOpenChat,
-	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	unsentSendReturnsHere,
 	withBusyChat,
@@ -107,6 +106,12 @@ import {
 import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import {
+	readSavedChoices,
+	showSidebarOpen,
+	useFirstPaint,
+	useTypedBeforeHydration,
+} from "../app/first-paint";
 import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
@@ -138,6 +143,7 @@ import {
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
 import {
+	COMPOSER_INPUT_ID,
 	type ComposerSendResult,
 	SessionLauncher,
 } from "../sessions/session-launcher";
@@ -206,8 +212,11 @@ export function WorkspaceHome({
 	initialSession,
 	initialProjects,
 	initialChats,
+	renderedAtMs,
 }: {
 	initialSession: PublicCodexSession;
+	/** When the server rendered the page: relative times hydrate from it. */
+	renderedAtMs?: number;
 	initialProjects?: Project[];
 	/** The first project's chats, read with the page. */
 	initialChats?: {
@@ -215,7 +224,10 @@ export function WorkspaceHome({
 		readonly chats: readonly SidebarChat[];
 	};
 }) {
-	const compact = useCompactLayout();
+	const firstPaint = useFirstPaint();
+	const compact = useCompactLayout(firstPaint.choices.compact);
+	// The server lays out a desktop; until hydrated, CSS media queries do the phone layout.
+	const layoutCompact = firstPaint.hydrated && compact;
 	const workspaceMainRef = useRef<HTMLElement>(null);
 	const [inspectorCompact, setInspectorCompact] = useState(false);
 	const [inspectorExpanded, setInspectorExpanded] = useState(false);
@@ -229,7 +241,7 @@ export function WorkspaceHome({
 		observer.observe(main);
 		return () => observer.disconnect();
 	}, []);
-	const singlePane = compact || inspectorCompact || inspectorExpanded;
+	const singlePane = layoutCompact || inspectorCompact || inspectorExpanded;
 	const queryClient = useQueryClient();
 	useState(() => {
 		const key = ["agent-sessions", initialChats?.projectId];
@@ -313,8 +325,11 @@ export function WorkspaceHome({
 	const prewarmedChats = useRef(new Set<string>());
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
-	const [projectsOpen, setProjectsOpen] = useState(false);
-	const [sidebarPinReady, setSidebarPinReady] = useState(false);
+	const [projectsOpen, setProjectsOpen] = useState(
+		firstPaint.choices.sidebarOpen,
+	);
+	// <html data-sidebar> lays the sidebar out (the first-paint script set it).
+	const shownProjectsOpen = firstPaint.hydrated && projectsOpen;
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [inspectorView, setInspectorView] = useState<InspectorView>("overview");
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
@@ -353,7 +368,12 @@ export function WorkspaceHome({
 		else if (result === "cancelled") toast("Sign-in was cancelled.");
 		else toast.error("Sign-in didn't complete. Try again.");
 	}, [queryClient]);
-	const [composerDraft, setComposerDraft] = useState(false);
+	// Text typed before hydration is a new chat being written: the latest
+	// chat does not open over it.
+	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
+	const [composerDraft, setComposerDraft] = useState(
+		typedBeforeHydration !== "",
+	);
 	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	const composerDraftRef = useRef(false);
 	composerDraftRef.current = composerDraft;
@@ -747,32 +767,26 @@ export function WorkspaceHome({
 		};
 	}
 
+	// A phone's drawer starts closed; back on a wide screen the pinned choice returns.
 	useEffect(() => {
-		const mobile =
-			compact ||
-			window.matchMedia(
-				"(max-width: 600px), (max-width: 900px) and (max-height: 500px)",
-			).matches;
-		if (mobile) {
-			setProjectsOpen(false);
-			setSidebarPinReady(true);
-			return;
-		}
-		setProjectsOpen(
-			sidebarIsPinnedInStorage(
-				window.localStorage.getItem(SIDEBAR_PINNED_STORAGE_KEY),
-			),
-		);
-		setSidebarPinReady(true);
+		setProjectsOpen(!compact && readSavedChoices().sidebarOpen);
 	}, [compact]);
 
 	useEffect(() => {
-		if (!sidebarPinReady || compact) return;
-		window.localStorage.setItem(
-			SIDEBAR_PINNED_STORAGE_KEY,
-			sidebarPinnedStorageValue(projectsOpen),
-		);
-	}, [compact, projectsOpen, sidebarPinReady]);
+		if (compact) return;
+		try {
+			window.localStorage.setItem(
+				SIDEBAR_PINNED_STORAGE_KEY,
+				sidebarPinnedStorageValue(projectsOpen),
+			);
+		} catch {
+			// The choice then holds for this page only.
+		}
+	}, [compact, projectsOpen]);
+
+	useLayoutEffect(() => {
+		showSidebarOpen(projectsOpen);
+	}, [projectsOpen]);
 
 	useEffect(() => {
 		const params = new URLSearchParams(window.location.search);
@@ -1840,13 +1854,13 @@ export function WorkspaceHome({
 	}
 
 	return (
-		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
+		<div className="workspace-shell">
 			<ProjectSidebar
 				projects={projects.data ?? []}
 				projectsLoading={projects.isPending}
 				selectedProjectId={selectedProject?.id}
 				onSelectProject={selectProject}
-				expanded={projectsOpen}
+				expanded={shownProjectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
 				onAddProject={openAddProject}
 				chats={sidebarChats}
@@ -1874,6 +1888,7 @@ export function WorkspaceHome({
 				memoryActive={memoryPageOpen}
 				onChatIntent={readAheadChat}
 				onMemoryIntent={() => prefetchMemoryPage(queryClient)}
+				renderedAtMs={renderedAtMs}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1896,12 +1911,12 @@ export function WorkspaceHome({
 				ref={workspaceMainRef}
 				className="workspace-main"
 				data-memory-page={memoryPageOpen ? "true" : undefined}
-				inert={compact && projectsOpen}
+				inert={layoutCompact && shownProjectsOpen}
 				data-can-expand-inspector={
-					inspectorOpen && !compact && !inspectorCompact
+					inspectorOpen && !layoutCompact && !inspectorCompact
 				}
 			>
-				{inspectorOpen && !compact && !inspectorCompact ? (
+				{inspectorOpen && !layoutCompact && !inspectorCompact ? (
 					<button
 						type="button"
 						className="workspace-sidebar-toggle workspace-inspector-expand"

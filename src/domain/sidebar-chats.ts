@@ -166,11 +166,8 @@ export const SIDEBAR_PINNED_CHATS_KEY = "ytimesy-pinned-chats";
 export const SIDEBAR_COLLAPSED_PROJECTS_KEY =
 	"ytimesy-sidebar-collapsed-projects";
 
-export function parseCollapsedProjectIds(
-	raw: string | null,
-): readonly string[] {
-	return parseSeenChatKeys(raw);
-}
+/** Self-contained: the first-paint script inlines it (src/features/app/first-paint.ts). */
+export const parseCollapsedProjectIds = parseSeenChatKeys;
 
 export function collapsedProjectStorageValue(ids: readonly string[]) {
 	return seenChatStorageValue(ids);
@@ -209,9 +206,8 @@ export function sidebarPinnedStorageValue(pinned: boolean): "1" | "0" {
 	return pinned ? "1" : "0";
 }
 
-export function parsePinnedChatIds(raw: string | null): readonly string[] {
-	return parseSeenChatKeys(raw);
-}
+/** Self-contained: the first-paint script inlines it (src/features/app/first-paint.ts). */
+export const parsePinnedChatIds = parseSeenChatKeys;
 
 export function pinnedChatStorageValue(ids: readonly string[]) {
 	return seenChatStorageValue(ids);

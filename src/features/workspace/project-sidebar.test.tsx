@@ -6,6 +6,7 @@ import {
 	SIDEBAR_SORT_KEY,
 	type SidebarChat,
 } from "#/domain/sidebar-chats";
+import { RenderAsHydrated } from "../app/first-paint";
 import { ProjectSidebar } from "./project-sidebar";
 
 const project = (id: string, name: string): Project => ({
@@ -33,7 +34,7 @@ const projectChats = [
 	},
 ];
 
-function render(stored: string | null) {
+function render(stored: string | null, hydrated = true) {
 	(globalThis as { window?: unknown }).window = {
 		localStorage: {
 			getItem: (key: string) => (key === SIDEBAR_SORT_KEY ? stored : null),
@@ -41,20 +42,22 @@ function render(stored: string | null) {
 		},
 	};
 	return renderToStaticMarkup(
-		<ProjectSidebar
-			projects={[alpha, beta]}
-			projectsLoading={false}
-			selectedProjectId="alpha"
-			onSelectProject={() => undefined}
-			expanded
-			onToggle={() => undefined}
-			onAddProject={() => undefined}
-			chats={projectChats[0].chats}
-			onNewChat={() => undefined}
-			projectChats={projectChats}
-			onOpenMemory={() => undefined}
-			memoryActive
-		/>,
+		<RenderAsHydrated value={hydrated}>
+			<ProjectSidebar
+				projects={[alpha, beta]}
+				projectsLoading={false}
+				selectedProjectId="alpha"
+				onSelectProject={() => undefined}
+				expanded
+				onToggle={() => undefined}
+				onAddProject={() => undefined}
+				chats={projectChats[0].chats}
+				onNewChat={() => undefined}
+				projectChats={projectChats}
+				onOpenMemory={() => undefined}
+				memoryActive
+			/>
+		</RenderAsHydrated>,
 	);
 }
 
@@ -134,18 +137,20 @@ describe("left sidebar", () => {
 			},
 		};
 		const html = renderToStaticMarkup(
-			<ProjectSidebar
-				projects={[alpha]}
-				projectsLoading={false}
-				selectedProjectId="alpha"
-				onSelectProject={() => undefined}
-				expanded
-				onToggle={() => undefined}
-				onAddProject={() => undefined}
-				chats={groups[0].chats}
-				onNewChat={() => undefined}
-				projectChats={groups}
-			/>,
+			<RenderAsHydrated value>
+				<ProjectSidebar
+					projects={[alpha]}
+					projectsLoading={false}
+					selectedProjectId="alpha"
+					onSelectProject={() => undefined}
+					expanded
+					onToggle={() => undefined}
+					onAddProject={() => undefined}
+					chats={groups[0].chats}
+					onNewChat={() => undefined}
+					projectChats={groups}
+				/>
+			</RenderAsHydrated>,
 		);
 		const needs = html.indexOf("Needs you");
 		const working = html.indexOf("Working");
@@ -226,17 +231,19 @@ describe("left sidebar", () => {
 			{ id: "o", title: "Old", updatedAt: at },
 		];
 		const html = renderToStaticMarkup(
-			<ProjectSidebar
-				projects={[alpha]}
-				projectsLoading={false}
-				selectedProjectId="alpha"
-				onSelectProject={() => undefined}
-				expanded
-				onToggle={() => undefined}
-				onAddProject={() => undefined}
-				chats={chats}
-				onNewChat={() => undefined}
-			/>,
+			<RenderAsHydrated value>
+				<ProjectSidebar
+					projects={[alpha]}
+					projectsLoading={false}
+					selectedProjectId="alpha"
+					onSelectProject={() => undefined}
+					expanded
+					onToggle={() => undefined}
+					onAddProject={() => undefined}
+					chats={chats}
+					onNewChat={() => undefined}
+				/>
+			</RenderAsHydrated>,
 		);
 		const row = (title: string) => {
 			const start = html.lastIndexOf("<li", html.indexOf(`>${title}<`));
@@ -270,5 +277,26 @@ describe("left sidebar", () => {
 		expect(row("Unread")).toContain('aria-label="New reply"');
 		expect(row("Old")).toContain('data-status="idle"');
 		expect(row("Old")).toContain("sidebar-chat-age");
+	});
+
+	it("renders the server's markup while hydrating, whatever this browser saved", () => {
+		const html = render("recent", false);
+		// Both sort views; <html data-sidebar-sort> shows one (first-paint.ts).
+		expect(html).toContain(
+			'class="sidebar-recent sidebar-status-groups" data-sort-view="recent"',
+		);
+		expect(html).toContain(
+			'class="sidebar-projects" data-sort-view="projects"',
+		);
+		expect(html).toContain('aria-label="Sort chats: Projects"');
+		// Rows carry the ids the first-paint stylesheet targets.
+		expect(html).toContain('class="sidebar-chat-row" data-chat-id="a1"');
+		expect(html).toContain('class="sidebar-project" data-project-id="alpha"');
+	});
+
+	it("renders only the saved sort view once hydrated", () => {
+		const html = render("recent");
+		expect(html).not.toContain("data-sort-view");
+		expect(html).not.toContain("sidebar-projects");
 	});
 });

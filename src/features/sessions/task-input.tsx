@@ -44,6 +44,7 @@ export function TaskInput({
 	onCaretChange,
 	onPaste,
 	textareaRef,
+	id,
 }: {
 	value: string;
 	onChange: (value: string) => void;
@@ -56,6 +57,7 @@ export function TaskInput({
 	onCaretChange?: (caret: number) => void;
 	onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
 	textareaRef?: RefObject<HTMLTextAreaElement | null>;
+	id?: string;
 }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => {
@@ -79,6 +81,7 @@ export function TaskInput({
 	return (
 		<div className="composer-input">
 			<textarea
+				id={id}
 				ref={(node) => {
 					inputRef.current = node;
 					if (textareaRef) textareaRef.current = node;

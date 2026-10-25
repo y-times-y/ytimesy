@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Analytics } from "../features/analytics/analytics";
 import { ReplayConsentBanner } from "../features/analytics/replay-consent-banner";
 import { AppError, AppNotFound } from "../features/app/app-status";
+import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
 
@@ -46,6 +47,12 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
 		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
+				{/* Server and client bundles minify the script differently; it ran once already. */}
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
+					dangerouslySetInnerHTML={{ __html: FIRST_PAINT_SCRIPT }}
+					suppressHydrationWarning
+				/>
 				<HeadContent />
 			</head>
 			<body>

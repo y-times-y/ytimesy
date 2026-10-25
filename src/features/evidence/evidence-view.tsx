@@ -9,6 +9,7 @@ import {
 	evidencePagePath,
 	evidenceVerifiedAtHead,
 } from "#/domain/pr-evidence";
+import { useHydrated } from "#/features/app/first-paint";
 
 const STATUS_LABEL: Record<EvidenceStatus, string> = {
 	capturing: "Capturing",
@@ -50,10 +51,17 @@ function short(sha: string | null) {
 	return sha ? sha.slice(0, 7) : "unknown";
 }
 
-function when(value: string | null) {
+/**
+ * The server knows neither the reader's time zone nor locale: the server and
+ * hydration render UTC in en-US, then the reader's own format takes over.
+ */
+function when(value: string | null, hydrated: boolean) {
 	if (!value) return "";
 	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+	if (Number.isNaN(date.getTime())) return "";
+	return hydrated
+		? date.toLocaleString()
+		: date.toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" });
 }
 
 /** What the harness checked, in plain facts. */
@@ -69,6 +77,7 @@ function EvidenceFacts({
 		? evidenceVerifiedAtHead(manifest, evidence.headSha)
 		: false;
 	const failedSteps = manifest?.flow.filter((step) => !step.ok) ?? [];
+	const hydrated = useHydrated();
 	return (
 		<dl className="evidence-facts">
 			<dt>Commit</dt>
@@ -133,9 +142,9 @@ function EvidenceFacts({
 				<>
 					<dt>Captured</dt>
 					<dd>
-						{when(evidence.captureStartedAt)}
+						{when(evidence.captureStartedAt, hydrated)}
 						{full && evidence.captureFinishedAt
-							? ` to ${when(evidence.captureFinishedAt)} (workspace clock)`
+							? ` to ${when(evidence.captureFinishedAt, hydrated)} (workspace clock)`
 							: ""}
 					</dd>
 				</>
