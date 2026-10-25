@@ -16,6 +16,10 @@ import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { apiPickerSections } from "#/domain/provider-access";
 import { authClient } from "#/features/auth/client";
+import {
+	ModelPickerUsage,
+	useCloudUsageWindows,
+} from "../workspace/usage-windows";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
 import {
@@ -97,6 +101,8 @@ export function HarnessPicker({
 	const selected =
 		options.find((option) => option.id === harnessId) ?? options[0];
 	const [open, setOpen] = useState(false);
+	// Read with the composer, so the picker opens at its full height.
+	const usageWindows = useCloudUsageWindows();
 	const [browse, setBrowse] = useState(harnessId === "api");
 	const [apiProvider, setApiProvider] = useState("openai");
 	const [search, setSearch] = useState("");
@@ -376,6 +382,7 @@ export function HarnessPicker({
 						)}
 					</section>
 				</div>
+				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>
 	);
