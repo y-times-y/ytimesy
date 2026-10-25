@@ -30,6 +30,7 @@ describe("harness variants", () => {
 			rigor: "off",
 			outputCap: "off",
 			grind: "off",
+			ledger: "off",
 			roleModels: {},
 		});
 	});
@@ -58,6 +59,7 @@ describe("harness variants", () => {
 			rigor: "off",
 			outputCap: "off",
 			grind: "off",
+			ledger: "off",
 			roleModels: {},
 		});
 		expect(
@@ -80,6 +82,7 @@ describe("harness variants", () => {
 			rigor: "off",
 			outputCap: "off",
 			grind: "off",
+			ledger: "off",
 			roleModels: {},
 		});
 		expect(
@@ -122,6 +125,7 @@ describe("harness variants", () => {
 			rigor: "off",
 			outputCap: "off",
 			grind: "off",
+			ledger: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
