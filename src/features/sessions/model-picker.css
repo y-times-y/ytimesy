@@ -131,9 +131,6 @@
 .context-usage-trigger[data-tone="low"] {
 	color: #f87171;
 }
-.context-usage-popover .codex-usage-window {
-	min-width: 220px;
-}
 .context-usage-popover {
 	width: max-content;
 	max-width: calc(100vw - 24px);
@@ -593,4 +590,39 @@
 .harness-select-speed {
 	color: #f5c542;
 	flex-shrink: 0;
+}
+
+/* Cloud usage: one quiet line under the models. */
+.model-picker-usage {
+	display: flex;
+	flex-shrink: 0;
+	gap: 16px;
+	padding: 8px calc(var(--menu-pad) + var(--list-row-pad-x));
+	border-top: 1px solid var(--menu-divider);
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	font-variant-numeric: tabular-nums;
+}
+.model-picker-usage-window {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.model-picker-usage-bar {
+	flex: 1;
+	height: 4px;
+	overflow: hidden;
+	border-radius: 99px;
+	background: var(--menu-divider);
+}
+.model-picker-usage-bar > span {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--list-text-muted);
+}
+.model-picker-usage-bar[data-tone="low"] > span {
+	background: #f87171;
 }
