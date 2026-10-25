@@ -180,8 +180,8 @@ export async function harborHarness(input: {
 	 */
 	extraTools?: (tools: ToolSet) => ToolSet;
 	/**
-	 * The trial's own tools (ledger=on's requirements): direct tools that
-	 * run_code programs may call too, kept for a thin lead.
+	 * The trial's own tools (ledger=on's requirements, goal=on's goal tool):
+	 * direct tools that run_code programs may call too, kept for a thin lead.
 	 */
 	trialTools?: ToolSet;
 }): Promise<HarborHarness> {

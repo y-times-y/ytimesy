@@ -2196,3 +2196,157 @@ describe("requirementsTool", () => {
 		expect(JSON.parse(await execute(ledger, { op: "get" }))[1].id).toBe("R2");
 	});
 });
+
+describe("runHarborTrial with goal=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const done = (id: string): Part[] => [...text(id, "Done."), finish(100, 10)];
+	const bash = (id: string): Part[] => [
+		call(id, "bash", { command: "true" }),
+		finish(100, 10, true),
+	];
+	const run = async (
+		variant: string,
+		responses: Part[][],
+		deadlineMs = 3 * 60 * 60_000,
+	) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel(responses);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `goal-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		expect(result.failure).toBeNull();
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		return {
+			calls: calls(),
+			goalLines: lines.filter((line) => line.startsWith("goal ")),
+			trace,
+			model,
+		};
+	};
+
+	it("sets the request as the goal and continues until the builder marks it complete with evidence", async () => {
+		const { calls, goalLines, trace, model } = await run("goal=on,grind=on", [
+			done("g1"),
+			[
+				call("u1", "goal", {
+					op: "update",
+					status: "complete",
+					evidence: [{ requirement: "Say done.", proof: "echo done -> done" }],
+				}),
+				finish(100, 10, true),
+			],
+			done("g2"),
+			done("never"),
+		]);
+		expect(calls).toBe(3);
+		expect(goalLines).toEqual([
+			"goal set",
+			"goal continuation 1",
+			"goal update complete (1 evidence)",
+			"goal evidence 1: Say done. => echo done -> done",
+			"goal stop complete",
+		]);
+		const first = JSON.stringify(model.doStreamCalls[0].prompt);
+		expect(first).toContain("the request above is this run's goal");
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"goal"');
+		// Goal supersedes grind: one notice, the goal's.
+		expect(trace.notices).toHaveLength(1);
+		expect(trace.notices[0].text).toContain(
+			"<objective>\nSay done.\n</objective>",
+		);
+		expect(trace.notices[0].text).not.toContain("try to break");
+		expect(trace.goal).toMatchObject({
+			status: "complete",
+			stopReason: "complete",
+			continuations: 1,
+			claim: {
+				evidence: [{ requirement: "Say done.", proof: "echo done -> done" }],
+				unquoted: 0,
+			},
+		});
+	}, 60_000);
+
+	it("stops after three continuation turns without a tool call", async () => {
+		const { calls, goalLines, trace } = await run("goal=on", [done("g1")]);
+		expect(calls).toBe(4);
+		expect(goalLines.at(-1)).toBe("goal stop no-progress");
+		expect(trace.goal.status).toBe("blocked");
+	}, 60_000);
+
+	it("caps continuations at six", async () => {
+		const responses = Array.from({ length: 7 }, (_, index) => [
+			bash(`b${index}`),
+			done(`d${index}`),
+		]).flat();
+		const { calls, goalLines } = await run("goal=on", responses);
+		expect(calls).toBe(14);
+		expect(
+			goalLines.filter((line) => line.startsWith("goal continuation")),
+		).toHaveLength(6);
+		expect(goalLines.at(-1)).toBe("goal stop max-continuations");
+	}, 60_000);
+
+	it("sends one wrap-up line near the deadline instead of a continuation", async () => {
+		const { calls, goalLines, trace } = await run(
+			"goal=on",
+			[done("g1"), done("g2"), done("never")],
+			3 * 60_000,
+		);
+		expect(calls).toBe(2);
+		expect(goalLines).toEqual([
+			"goal set",
+			"goal stop deadline (wrap-up sent)",
+		]);
+		expect(trace.notices[0].text).toContain("Time is nearly up");
+	}, 60_000);
+
+	it("offers the goal tool directly and to run_code programs", async () => {
+		const { model } = await run("goal=on,codeMode=on", [
+			[
+				call("u1", "goal", {
+					op: "update",
+					status: "blocked",
+					reason: "No network.",
+				}),
+				finish(100, 10, true),
+			],
+			done("g1"),
+		]);
+		const tools = JSON.stringify(model.doStreamCalls[0].tools);
+		expect(tools).toContain('"name":"goal"');
+		expect(tools).toContain("tools.goal");
+	}, 60_000);
+
+	it("leaves the run unchanged when off", async () => {
+		const { calls, goalLines, trace, model } = await run("goal=off", [
+			done("g1"),
+			done("never"),
+		]);
+		expect(calls).toBe(1);
+		expect(goalLines).toEqual([]);
+		expect(trace.goal).toBeNull();
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).not.toContain(
+			'"goal"',
+		);
+	}, 60_000);
+});
