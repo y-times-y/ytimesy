@@ -186,6 +186,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 * request (the default).
 	 */
 	effortMix: ["off", "on"],
+	/**
+	 * Environment snapshot (unattended runs only; evals/harbor_v2/env-snapshot.ts):
+	 * on runs one fixed read-only probe in the sandbox (OS, resources, file
+	 * tree, project files, tools, network, processes) before the builder's
+	 * first request and puts its output above the request. off = the request
+	 * alone (the default).
+	 */
+	envSnapshot: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -235,6 +243,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	outputCap: "off",
 	grind: "off",
 	effortMix: "off",
+	envSnapshot: "off",
 	roleModels: {},
 };
 
