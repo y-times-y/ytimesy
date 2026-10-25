@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
 import {
-	type BackgroundCommandExit,
 	backgroundCommandNoticeMessage,
 	hasOpenBackgroundCommand,
 	withBackgroundCommandExits,
@@ -20,15 +19,11 @@ import {
 	replaceIdleSessionItems,
 } from "../adapters/background-command-sessions";
 import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
-import { agentOutputDirectory } from "./agent-output-artifacts";
 import {
 	deliverParentTaskNotification,
 	ReportHeldForTurn,
 } from "./agent-task-event-delivery";
-import {
-	type AgentToolWorkspaceInput,
-	resolveToolWorkspace,
-} from "./agent-tool-workspace";
+import type { AgentToolWorkspaceInput } from "./agent-tool-workspace";
 import {
 	COMMAND_TMUX_SOCKET,
 	commandRoot,
@@ -41,6 +36,7 @@ import {
 	COMMAND_STOP_SCRIPT,
 	commandScopeRoot,
 } from "./api-command-scope";
+import { observeBackgroundCommands } from "./background-command-observation";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -55,88 +51,6 @@ import type { WorkspaceMachines } from "./workspace-machines";
  * deliver one.
  */
 
-/** Built on use: test module mocks of the command tools need not export the socket. */
-const observeScript = () => `import json, os, pathlib, subprocess, sys, time
-root, outputs, claim = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3] == '1'
-ids = json.loads(sys.argv[4])
-results = []
-def tail(path):
-    try:
-        with open(path, 'rb') as handle:
-            handle.seek(0, 2); size = handle.tell(); handle.seek(max(0, size - 4000))
-            text = handle.read().decode('utf-8', 'replace')
-    except OSError:
-        return ''
-    return '\\n'.join(text.splitlines()[-20:])
-for identifier in ids:
-    meta = root / (identifier + '.background')
-    if root.is_symlink() or not meta.is_file():
-        continue
-    try:
-        record = json.loads(meta.read_text())
-    except ValueError:
-        continue
-    status = root / (identifier + '.status')
-    stopped = None
-    if status.is_file():
-        raw = status.read_text().strip()
-        try:
-            parsed = json.loads(raw) if raw.startswith('{') else {'exitCode': int(raw), 'stopped': None}
-            code, stopped = parsed['exitCode'], parsed.get('stopped')
-        except (ValueError, KeyError):
-            code = 'interrupted'
-        ended = int(status.stat().st_mtime * 1000)
-    elif subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', 'ytimesy-' + identifier.replace('-', '')], capture_output=True).returncode == 0:
-        results.append({'id': identifier, 'running': True})
-        continue
-    else:
-        code, ended = 'interrupted', int(time.time() * 1000)
-    notified = root / (identifier + '.notified')
-    fresh = False
-    if not notified.exists() and claim:
-        try:
-            os.close(os.open(notified, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-            notified.write_text('notice'); fresh = True
-        except FileExistsError:
-            pass
-    if not notified.exists():
-        continue
-    try:
-        by = notified.read_text().strip() or 'notice'
-    except OSError:
-        by = 'notice'
-    output = outputs / (identifier + '.stdout')
-    if not output.is_file():
-        output = root / (identifier + '.output')
-    results.append({'id': identifier, 'running': False, 'label': str(record.get('label') or 'command')[:80], 'startedAt': int(record.get('startedAt') or ended), 'endedAt': ended, 'exitCode': code, 'stopped': stopped, 'announced': by == 'notice', 'fresh': fresh, 'outputPath': str(output), 'lastLines': tail(output) if by == 'notice' else ''})
-print(json.dumps(results))`;
-
-const observation = z.array(
-	z.union([
-		z.object({ id: z.uuid(), running: z.literal(true) }),
-		z.object({
-			id: z.uuid(),
-			running: z.literal(false),
-			label: z.string(),
-			startedAt: z.number(),
-			endedAt: z.number(),
-			exitCode: z.union([z.number().int(), z.literal("interrupted")]),
-			stopped: z.enum(["timeout", "output_limit"]).nullable(),
-			announced: z.boolean(),
-			fresh: z.boolean(),
-			outputPath: z.string(),
-			lastLines: z.string(),
-		}),
-	]),
-);
-
-export type ObservedBackgroundExit = BackgroundCommandExit & {
-	/** The agent did not stop or see it finish itself: it gets (or got) a notice. */
-	readonly announced: boolean;
-	/** This observation claimed its notice: the caller delivers it. */
-	readonly fresh: boolean;
-};
-
 /** The ids of background commands the timeline records as not exited (the newest 20). */
 export function openBackgroundCommandIds(items: readonly SessionItem[]) {
 	const ids = items.flatMap((item) =>
@@ -147,33 +61,6 @@ export function openBackgroundCommandIds(items: readonly SessionItem[]) {
 			: [],
 	);
 	return [...new Set(ids)].slice(-20);
-}
-
-/**
- * One guest observation of the given background commands. With `claim`, an
- * exit nobody learnt of yet is claimed for a notice (fresh); without it such
- * exits are left for whoever claims them and not reported.
- */
-export async function observeBackgroundCommands(
-	input: AgentToolWorkspaceInput & {
-		sessionId: string;
-		ids: readonly string[];
-		claim: boolean;
-	},
-): Promise<ObservedBackgroundExit[]> {
-	const ids = z.array(z.uuid()).max(20).parse(input.ids);
-	if (!ids.length) return [];
-	const { machines, vm } = await resolveToolWorkspace(input);
-	const result = await machines.exec(
-		vm,
-		`python3 -c ${quote(observeScript())} ${quote(commandRoot(input.sessionId))} ${quote(agentOutputDirectory(input.sessionId))} ${input.claim ? 1 : 0} ${quote(JSON.stringify(ids))}`,
-		15_000,
-	);
-	if (result.exitCode)
-		throw new Error("Could not observe background commands.");
-	return observation
-		.parse(JSON.parse(result.stdout))
-		.flatMap((entry) => (entry.running ? [] : [entry]));
 }
 
 /** A stable notification id per command (the peer inbox dedupes on it). */

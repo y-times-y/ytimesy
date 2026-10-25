@@ -6,7 +6,17 @@ import { codexSubscriptionModel } from "../../src/server/adapters/codex-subscrip
 import { nativeModelCompactor } from "../../src/server/adapters/model-compaction";
 import { apiModelRuntime } from "../../src/server/services/api-agent-runtime";
 import type { ModelAgentRuntime } from "../../src/server/services/model-agent-loop";
-import { bedrockCredentials, bedrockSigningFetch } from "./bedrock";
+import {
+	bedrockAnthropicProfile,
+	bedrockCredentials,
+	bedrockSigningFetch,
+	responseTimeLimitFetch,
+} from "./bedrock";
+import {
+	anthropicClientModel,
+	BEDROCK_ANTHROPIC_BASE_URL,
+	bedrockAnthropicFetch,
+} from "./bedrock-anthropic";
 import { API_ENDPOINTS, type HarborBridgeConfig } from "./config";
 
 const KEY_SHAPES: Record<keyof typeof API_ENDPOINTS, RegExp> = {
@@ -69,7 +79,10 @@ export async function harborRuntime(input: {
 			);
 		return runtime;
 	}
-	if (config.route === "bedrock") return bedrockRuntime(input);
+	if (config.route === "bedrock")
+		return bedrockAnthropicProfile(config.modelId)
+			? bedrockClaudeRuntime(input)
+			: bedrockRuntime(input);
 	const endpoint = API_ENDPOINTS[config.route];
 	return apiModelRuntime({
 		provider: endpoint.provider,
@@ -85,6 +98,99 @@ export async function harborRuntime(input: {
 		wrapModel: input.wrapModel,
 	});
 }
+
+/**
+ * Claude models in Amazon Bedrock (bedrock-anthropic.ts): the product's
+ * Anthropic Messages runtime, its requests sent to bedrock-runtime as the
+ * model's inference profile and signed from the operator's AWS credentials.
+ * The client gets the Anthropic API's own id (claude-haiku-5-5) for pricing
+ * and request settings; no catalog lookup or native compaction (neither is
+ * on Bedrock's Messages route), so the context window is the stated one.
+ */
+async function bedrockClaudeRuntime(input: {
+	config: HarborBridgeConfig;
+	env: Record<string, string | undefined>;
+	userId: string;
+	cacheScope: string;
+	wrapModel: (model: LanguageModel) => LanguageModel;
+	fetch?: typeof globalThis.fetch;
+}): Promise<ModelAgentRuntime> {
+	const { config } = input;
+	const bedrock = config.bedrock;
+	if (!bedrock) throw new Error("The bedrock route needs its settings.");
+	const profile = bedrockAnthropicProfile(config.modelId);
+	if (!profile)
+		throw new Error(`"${config.modelId}" is not a Bedrock Claude id.`);
+	const clientModel = anthropicClientModel(profile);
+	const runtime = await apiModelRuntime({
+		provider: "anthropic",
+		baseUrl: BEDROCK_ANTHROPIC_BASE_URL,
+		// The Anthropic client needs a key; Bedrock is signed instead.
+		apiKey: "aws-sigv4",
+		modelId: clientModel,
+		userId: input.userId,
+		connectionId: `harbor:${config.route}`,
+		cacheScopeId: input.cacheScope,
+		contextCacheKey: JSON.stringify(["harbor", config.route, config.modelId]),
+		contextWindow: BEDROCK_CLAUDE_CONTEXT_WINDOW,
+		reasoning: config.effort,
+		fetch: bedrockAnthropicFetch({
+			credentials: await bedrockCredentials(input.env),
+			region: bedrock.region,
+			profile,
+			fetch: responseTimeLimitFetch(
+				input.fetch ?? globalThis.fetch.bind(globalThis),
+			),
+		}),
+		wrapModel: input.wrapModel,
+	});
+	// Prompt caching as on api.anthropic.com (api-prompt-cache.ts): Bedrock
+	// caches Claude prefixes at the same cache_control breakpoints.
+	const cacheSettings = {
+		providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+	};
+	const baseSettings = runtime.requestSettings;
+	if (!baseSettings)
+		throw new Error("The Claude runtime has no request settings.");
+	const requestSettings: NonNullable<ModelAgentRuntime["requestSettings"]> = (
+		instructions,
+	) => {
+		const settings = baseSettings(instructions);
+		return {
+			...settings,
+			providerOptions: {
+				...settings.providerOptions,
+				anthropic: {
+					...settings.providerOptions?.anthropic,
+					...cacheSettings.providerOptions.anthropic,
+					// Native compaction rewrites the prefix a signed thinking block
+					// was bound to; Bedrock then refuses the next request ("bound to
+					// a different conversation"). Drop such a block instead.
+					thinking: {
+						type: "adaptive",
+						blockBinding: { prefixMismatchBehavior: "drop_block" },
+					},
+				},
+			},
+		};
+	};
+	return {
+		...runtime,
+		cacheSettings,
+		maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
+		requestSettings,
+		// Anthropic's native compaction (compaction: summarize) runs on Bedrock
+		// too. Without it the fallback refuses to compact a long single turn
+		// (bound-prefix policy) and a checker past ~104K tokens failed outright.
+		compact: nativeModelCompactor(runtime.model, "anthropic", requestSettings),
+	};
+}
+
+/** Bedrock serves Claude with a 200K-token context window. */
+export const BEDROCK_CLAUDE_CONTEXT_WINDOW = 200_000;
+
+/** The bedrock route's output cap per response. */
+export const BEDROCK_MAX_OUTPUT_TOKENS = 64_000;
 
 /**
  * OpenAI models in Amazon Bedrock (bedrock.ts): the product's OpenAI
@@ -125,7 +231,10 @@ async function bedrockRuntime(input: {
 			credentials,
 			region: bedrock.region,
 			endpoint: bedrock.endpoint,
-			fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
+			// One request's wall time is bounded (responseTimeLimitFetch).
+			fetch: responseTimeLimitFetch(
+				input.fetch ?? globalThis.fetch.bind(globalThis),
+			),
 			model: { client: clientModel, profile: config.modelId },
 		}),
 		wrapModel: input.wrapModel,
@@ -136,10 +245,12 @@ async function bedrockRuntime(input: {
 	const requestSettings = runtime.requestSettings;
 	return {
 		...runtime,
-		// No output cap, as Codex and the subscription route send none. The API
-		// default (8K) cut Luna at max effort mid tool call: a sidekick lost
-		// three steps in a row to response.incomplete (max_output_tokens).
-		maxOutputTokens: undefined,
+		// A large but finite output cap. The API default (8K) cut Luna at max
+		// effort mid tool call (a sidekick lost three steps in a row to
+		// response.incomplete); with no cap one response ran away for 30
+		// minutes (1.6 MB). A step cut at this cap is resampled once with a
+		// note to work in smaller steps (model-agent-loop's outputLimitCut).
+		maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
 		requestSettings: requestSettings
 			? (instructions) => {
 					const settings = requestSettings(instructions);

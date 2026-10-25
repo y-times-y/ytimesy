@@ -5,6 +5,7 @@ import {
 	harnessVariantFromFlags,
 	harnessVariantFromUnknown,
 	harnessVariantLabel,
+	leadReasoningEffort,
 	outputCapCharacters,
 	promptCacheScopeId,
 } from "./harness-variant";
@@ -24,6 +25,8 @@ describe("harness variants", () => {
 			review: "off",
 			checkerMode: "single",
 			lead: "off",
+			leadTools: "thin",
+			leadEffort: "high",
 			rigor: "off",
 			outputCap: "off",
 			roleModels: {},
@@ -49,6 +52,8 @@ describe("harness variants", () => {
 			review: "off",
 			checkerMode: "single",
 			lead: "off",
+			leadTools: "thin",
+			leadEffort: "high",
 			rigor: "off",
 			outputCap: "off",
 			roleModels: {},
@@ -68,6 +73,8 @@ describe("harness variants", () => {
 			review: "off",
 			checkerMode: "single",
 			lead: "off",
+			leadTools: "thin",
+			leadEffort: "high",
 			rigor: "off",
 			outputCap: "off",
 			roleModels: {},
@@ -107,6 +114,8 @@ describe("harness variants", () => {
 			review: "off",
 			checkerMode: "single",
 			lead: "off",
+			leadTools: "thin",
+			leadEffort: "high",
 			rigor: "off",
 			outputCap: "off",
 			roleModels: {},
@@ -210,5 +219,32 @@ describe("harness variants", () => {
 		expect(promptCacheScopeId("account", "chat-1")).toBe(
 			promptCacheScopeId("account", "chat-2"),
 		);
+	});
+
+	it("parses the fusion lead's tools and effort, and holds the lead's effort at its ceiling", () => {
+		const variant = harnessVariantFromFlags([
+			"lead=fusion,leadTools=full,leadEffort=medium",
+		]);
+		expect(variant).toMatchObject({
+			lead: "fusion",
+			leadTools: "full",
+			leadEffort: "medium",
+		});
+		expect(harnessVariantLabel(variant)).toBe(
+			"lead=fusion,leadTools=full,leadEffort=medium",
+		);
+		expect(() => harnessVariantFromFlags(["leadEffort=huge"])).toThrow(
+			"leadEffort accepts",
+		);
+		expect(harnessVariantFromFlags(["lead=fusion"])).toMatchObject({
+			leadTools: "thin",
+			leadEffort: "high",
+		});
+		expect(leadReasoningEffort("max", "high")).toBe("high");
+		expect(leadReasoningEffort("xhigh", "high")).toBe("high");
+		expect(leadReasoningEffort("medium", "high")).toBe("medium");
+		expect(leadReasoningEffort("minimal", "high")).toBe("minimal");
+		expect(leadReasoningEffort("max", "inherit")).toBe("max");
+		expect(leadReasoningEffort(undefined, "high")).toBeUndefined();
 	});
 });

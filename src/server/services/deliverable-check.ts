@@ -158,7 +158,7 @@ for match in re.finditer(r"No module named '([\w.]+)'",output):
     if module in seen: continue
     seen.add(module)
     local=any(os.path.exists(os.path.join(root,candidate)) for candidate in (module+'.py',module))
-    problems.append({'kind':'missing-module','path':module,'detail':'A local module that is not delivered.' if local else 'Not importable in a clean environment; declare and install it, or avoid it. It may only be present in the workspace virtualenv, user site-packages or PYTHONPATH.'})
+    problems.append({'kind':'missing-module','path':module,'detail':'A local module that is not delivered.' if local else 'Not importable in a clean environment. If the system that runs it provides the module through a variable such as PYTHONPATH (the task environment sets it, not you), rerun with --keep-env <that variable> instead of changing the deliverable. Otherwise declare and install it, or avoid it.'})
 for line in output.splitlines():
     if 'Permission denied' in line or 'Operation not permitted' in line:
         problems.append({'kind':'permission','path':None,'detail':line.strip()[:300]}); break

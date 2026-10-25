@@ -24,9 +24,16 @@ function harness(options: {
 	deadlineAt?: number;
 	changed?: string;
 	rigor?: boolean;
+	unattended?: boolean;
 	/** checkerMode=pair, with each judge's workers. */
 	pair?: boolean;
+	/** The commands each checker ran (its bash calls); default RAN. */
+	ran?: readonly string[];
 	workers?: (checkerSessionId: string) => LoopWorker[];
+	/** Other VM commands' results (findings file, the loop's re-runs); default exit 0, no output. */
+	exec?: (command: string) => { exitCode: number; stdout: string } | undefined;
+	/** checkerExec: the loop's re-runs with the checker's access. */
+	checkerExec?: ReviewLoopDeps["checkerExec"];
 }) {
 	let now = 1_000_000;
 	let tree = "t-base";
@@ -71,6 +78,13 @@ function harness(options: {
 			return { outcome: "completed", report };
 		},
 		childItems: async () => [
+			...(options.ran ?? RAN).map((command, index) => ({
+				kind: "dynamicToolCall",
+				id: `ran-${index}`,
+				tool: "bash",
+				input: JSON.stringify({ command }, null, 2),
+				status: "completed",
+			})),
 			{
 				kind: "userMessage",
 				id: "u",
@@ -90,8 +104,9 @@ function harness(options: {
 			vm.push(command);
 			if (command.includes("diff --name-only"))
 				return { exitCode: 0, stdout: options.changed ?? "compaction.py\n" };
-			return { exitCode: 0, stdout: "" };
+			return options.exec?.(command) ?? { exitCode: 0, stdout: "" };
 		},
+		...(options.checkerExec ? { checkerExec: options.checkerExec } : {}),
 	};
 	const workspace: AgentToolWorkspace = {
 		machines: {} as AgentToolWorkspace["machines"],
@@ -108,6 +123,7 @@ function harness(options: {
 		deps,
 		rigor: options.rigor,
 		pair: options.pair,
+		unattended: options.unattended,
 	});
 	const items = (usage: number, text: string): SessionItem[] => [
 		{
@@ -150,27 +166,43 @@ function harness(options: {
 	};
 }
 
+const T1 = "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py";
+const T2 = "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t2.py";
+/** What the scripted checkers ran: the commands their answers cite. */
+const RAN = [T1, T2, "true", "c", "make test"];
+
 const verdict = (value: Record<string, unknown>) =>
 	`[agent 1 checker finished]\n${JSON.stringify(value)}`;
 
 const FAIL = verdict({
 	verdict: "fail",
-	failures: ["ordering: a newer tombstone hides an older live version"],
+	failures: [
+		{
+			failure: "ordering: a newer tombstone hides an older live version",
+			command: T1,
+		},
+	],
 	tests: [
 		{
 			name: "a tombstone over a live version, then compaction",
-			command: "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py",
+			command: T1,
 			passed: false,
 			output: "AssertionError: get(k) returned None\nexpected v1",
 		},
 		{ name: "empty store compacts", command: "true", passed: true },
 	],
 	requirements: [
-		{ requirement: "regression test", met: true, evidence: "make test ok" },
+		{
+			requirement: "regression test",
+			met: true,
+			command: "make test",
+			output: "ok",
+		},
 		{
 			requirement: "compaction keeps obsolete versions bounded",
 			met: false,
-			evidence: "versions grow 3x after 1000 writes",
+			command: T2,
+			output: "versions grow 3x after 1000 writes",
 		},
 	],
 	assumptions: [
@@ -276,6 +308,8 @@ describe("review loop", () => {
 		const PROBE = "python3 /tmp/ytimesy-attempts/turn/review-2/tests/t2.py";
 		const h = harness({
 			pair: true,
+			// The judge runs nothing itself: its workers do.
+			ran: [],
 			reports: [
 				FAIL,
 				verdict({
@@ -611,10 +645,59 @@ ${TASK}
 		expect(h.started).toHaveLength(2);
 	});
 
-	it("finishes on unsure without concrete findings, and on a fix that changed nothing", async () => {
+	it("unattended, runs up to four rounds while time remains", async () => {
+		const failing = (n: number) =>
+			verdict({
+				verdict: "fail",
+				failures: [`case ${n}: wrong output from \`make test\``],
+			});
+		const h = harness({
+			reports: [failing(1), failing(2), failing(3), failing(4)],
+			unattended: true,
+			deadlineAt: 1_000_000 + 8 * 3_600_000,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		for (let round = 1; round <= 4; round++) {
+			h.setTree(`t-${round}`);
+			expect((await h.loop.afterAttempt(h.step(round, "F1: fixed"))).kind).toBe(
+				"run",
+			);
+		}
+		h.setTree("t-5");
+		expect((await h.loop.afterAttempt(h.step(5, "F1: fixed"))).kind).toBe(
+			"finished",
+		);
+		expect(h.state()?.outcome).toBe("rounds");
+		expect(h.started).toHaveLength(4);
+		expect(h.started[3].title).toBe("Review 4 of 4");
+	});
+
+	it("unattended, stops when a check repeats the previous findings unchanged", async () => {
+		const h = harness({
+			reports: [FAIL, FAIL],
+			unattended: true,
+			deadlineAt: 1_000_000 + 8 * 3_600_000,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe("run");
+		h.setTree("t-2");
+		expect((await h.loop.afterAttempt(h.step(2, "F1: fixed"))).kind).toBe(
+			"finished",
+		);
+		expect(h.state()?.outcome).toBe("no-progress");
+		expect(h.started).toHaveLength(2);
+	});
+
+	it("reads an older unsure without findings as pass, and finishes on a fix that changed nothing", async () => {
 		const h = harness({
 			reports: [
-				verdict({ verdict: "unsure", failures: [], notes: "could not run it" }),
+				verdict({
+					verdict: "unsure",
+					failures: [],
+					tests: [{ name: "edge", command: "c", passed: true }],
+					notes: "could not run it",
+				}),
 			],
 		});
 		await h.loop.beforeModel(h.step(0, ""));
@@ -623,7 +706,11 @@ ${TASK}
 		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
 			"finished",
 		);
-		expect(h.state()?.outcome).toBe("unsure");
+		expect(h.state()?.outcome).toBe("pass");
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "pass",
+			via: "normal",
+		});
 
 		const g = harness({ reports: [FAIL] });
 		await g.loop.beforeModel(g.step(0, ""));
@@ -671,6 +758,300 @@ ${TASK}
 		});
 	});
 
+	it("unattended, checks a turn without changes and sends back an answer that asks the user", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({
+			reports: [PASS, PASS],
+			changed: "",
+			rigor: true,
+			unattended: true,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.advance(30_000);
+		const first = await h.loop.afterAttempt(
+			h.step(
+				1,
+				"The inputs contradict each other, so /app/output/report.json was not created.\nPlease provide corrected inputs.",
+			),
+		);
+		expect(h.started).toHaveLength(1);
+		expect(h.started[0].brief).toContain("(no changed files recorded)");
+		expect(first.kind).toBe("run");
+		if (first.kind !== "run") throw new Error();
+		const notice = String(first.messages?.at(-1)?.content);
+		expect(notice).toContain("Please provide corrected inputs.");
+		expect(notice).toContain(
+			"Nobody will answer a question in this run: on an apparent contradiction or missing input, deliver the best-supported result",
+		);
+		// The fix wrote the deliverable outside the checkout: still checked, and the pass finishes.
+		const done = await h.loop.afterAttempt(
+			h.step(2, "Wrote /app/output/report.json.\nF1: fixed"),
+		);
+		expect(done.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
+		expect(h.state()?.outcome).toBe("pass");
+	});
+
+	it("unattended, a build past the loop's hour is still reviewed: the window runs to the runner's deadline, else from the first check", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		// A trial with 8 hours: the build took 90 minutes.
+		const trialEnd = 1_000_000 + 8 * 60 * 60_000;
+		const h = harness({
+			reports: [PASS],
+			unattended: true,
+			deadlineAt: trialEnd,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(90 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(1);
+		expect(h.state()?.outcome).toBe("pass");
+		expect(h.state()?.deadlineAt).toBe(trialEnd);
+		// Without a runner's deadline: the loop's minutes from the first check.
+		const g = harness({ reports: [PASS], unattended: true });
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(90 * 60_000);
+		const checkAt = g.now();
+		await g.loop.afterAttempt(g.step(1, "Done."));
+		expect(g.started).toHaveLength(1);
+		expect(g.state()?.deadlineAt).toBe(checkAt + 60 * 60_000);
+		// The product keeps its hour from the turn's start.
+		const p = harness({ reports: [PASS], deadlineAt: trialEnd });
+		await p.loop.beforeModel(p.step(0, ""));
+		p.setTree("t-1");
+		p.advance(90 * 60_000);
+		await p.loop.afterAttempt(p.step(1, "Done."));
+		expect(p.started).toHaveLength(0);
+		expect(p.state()?.outcome).toBe("time");
+	});
+
+	it("checks the same tree again once when a check gives no verdict with ample time left", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: ["(stopped at its time budget)", PASS] });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const done = await h.loop.afterAttempt(h.step(1, "Done."));
+		expect(done.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
+		expect(h.started[1].brief).toContain(`<request>\n${TASK}\n</request>`);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"pass",
+		]);
+		expect(h.state()?.outcome).toBe("pass");
+		expect(h.state()?.rounds[1].verdict?.via).toBe("retry");
+		// Only once per turn: two silent checks pass with the note.
+		const g = harness({ reports: ["no json", "no json either"] });
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(4 * 60_000);
+		await g.loop.afterAttempt(g.step(1, "Done."));
+		expect(g.started).toHaveLength(2);
+		expect(g.state()).toMatchObject({
+			outcome: "pass",
+			note: "not verified by running",
+		});
+		expect(g.state()?.rounds[1].verdict).toMatchObject({
+			verdict: "pass",
+			via: "default-pass",
+		});
+	});
+
+	it("an ungrounded pass the loop cannot run either is checked again once, then passes with a note", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		// Nothing the loop re-runs can start (command not found).
+		const h = harness({
+			reports: [PASS, PASS],
+			ran: ["ls"],
+			exec: (command) =>
+				command.startsWith("cd '/tmp/ytimesy-attempts/turn/review-")
+					? { exitCode: 127, stdout: "c: not found" }
+					: undefined,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(2);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"pass",
+		]);
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "pass",
+			ungrounded: true,
+		});
+		expect(h.state()?.rounds[1].verdict).toMatchObject({
+			verdict: "pass",
+			via: "default-pass",
+		});
+		expect(h.state()?.rounds[1].verdict?.notes).toContain(
+			"(Pass, not verified by running.)",
+		);
+		expect(JSON.stringify(h.state())).not.toContain("unsure");
+	});
+
+	it("grounds an unshown pass by running the checker's tests itself, with its access", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: T1, passed: true }],
+		});
+		const runs: string[] = [];
+		const h = harness({
+			reports: [PASS],
+			ran: ["ls"],
+			checkerExec: async (id, command) => {
+				runs.push(`${id}: ${command}`);
+				return command.includes("run.sh")
+					? { exitCode: 1, stdout: "" }
+					: { exitCode: 0, stdout: "1 passed" };
+			},
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe(
+			"finished",
+		);
+		expect(h.started).toHaveLength(1);
+		expect(runs).toEqual([
+			"child-1: cd '/tmp/ytimesy-attempts/turn/review-1' 2>/dev/null; test -f /tmp/ytimesy-attempts/turn/review-1/tests/run.sh && bash /tmp/ytimesy-attempts/turn/review-1/tests/run.sh",
+			`child-1: cd '/tmp/ytimesy-attempts/turn/review-1' 2>/dev/null; ${T1}`,
+		]);
+		const round = h.state()?.rounds[0];
+		expect(round?.verdict).toMatchObject({
+			verdict: "pass",
+			via: "harness-grounded",
+		});
+		expect(round?.verdict?.harnessRuns?.[1]).toEqual({
+			command: T1,
+			exitCode: 0,
+			output: "1 passed",
+			test: true,
+		});
+		expect(h.state()?.outcome).toBe("pass");
+		// Its test fails when the loop runs it: a fail, handed to the builder.
+		const g = harness({
+			reports: [PASS],
+			ran: ["ls"],
+			exec: (command) =>
+				command.includes(T1)
+					? { exitCode: 1, stdout: "AssertionError: expected v1" }
+					: command.includes("run.sh")
+						? { exitCode: 1, stdout: "" }
+						: undefined,
+		});
+		await g.loop.beforeModel(g.step(0, ""));
+		g.setTree("t-1");
+		g.advance(4 * 60_000);
+		expect((await g.loop.afterAttempt(g.step(1, "Done."))).kind).toBe("run");
+		expect(g.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "fail",
+			via: "harness-grounded",
+		});
+		expect(g.state()?.rounds[0].findings[0].text).toContain(
+			"AssertionError: expected v1",
+		);
+	});
+
+	it("a checker cut off with a findings file: the verdict comes from the file", async () => {
+		const findings = [
+			JSON.stringify({
+				requirement: "regression test",
+				met: true,
+				command: "make test",
+				output: "ok",
+			}),
+			JSON.stringify({
+				failure: "ordering: a newer tombstone hides an older live version",
+				command: T1,
+				output: "get(k) returned None",
+			}),
+		].join("\n");
+		const h = harness({
+			reports: [null],
+			exec: (command) =>
+				command.includes("/tmp/ytimesy-attempts/turn/review-1/findings.jsonl")
+					? { exitCode: 0, stdout: findings }
+					: undefined,
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const out = await h.loop.afterAttempt({
+			...h.step(1, "Done."),
+			waitUntil: h.now() + 60 * 60_000,
+		});
+		expect(out.kind).toBe("run");
+		expect(h.started).toHaveLength(1);
+		const round = h.state()?.rounds[0];
+		expect(round?.timedOut).toBe(true);
+		expect(round?.verdict).toMatchObject({
+			verdict: "fail",
+			via: "findings-file",
+		});
+		expect(round?.findings[0].text).toContain("ordering: a newer tombstone");
+		expect(round?.decision).toBe("fix");
+	});
+
+	it("records a verdict from the checker's forced final step", async () => {
+		const h = harness({
+			reports: [`${FAIL}\n(verdict from the forced final step)`],
+		});
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		expect((await h.loop.afterAttempt(h.step(1, "Done."))).kind).toBe("run");
+		expect(h.state()?.rounds[0].verdict).toMatchObject({
+			verdict: "fail",
+			via: "forced-final",
+		});
+	});
+
+	it("sets aside findings no command the checker ran shows, and counts them", async () => {
+		// It ran only its passing test: both findings and the failing test are unrun.
+		const h = harness({ reports: [FAIL], ran: ["true"] });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const done = await h.loop.afterAttempt(h.step(1, "Done."));
+		expect(done.kind).toBe("finished");
+		const round = h.state()?.rounds[0];
+		expect(round?.verdict?.verdict).toBe("pass");
+		expect(round?.findings).toEqual([]);
+		expect(round?.verdict?.downgraded).toHaveLength(2);
+		expect(round?.verdict?.notes).toContain("Set aside");
+		expect(h.state()?.outcome).toBe("pass");
+		if (done.kind !== "finished") throw new Error();
+		const summary = done.items.at(-1);
+		if (summary?.kind !== "dynamicToolCall") throw new Error();
+		expect(summary.output).toContain("2 not run, set aside");
+	});
+
 	it("respects a runner's deadline: no check without time for a check and a fix", async () => {
 		const h = harness({ reports: [FAIL], deadlineAt: 1_000_000 + 5 * 60_000 });
 		await h.loop.beforeModel(h.step(0, ""));
@@ -708,12 +1089,18 @@ ${TASK}
 			waitUntil: h.now() + 60 * 60_000,
 		});
 		expect(h.deps.stopChild).toHaveBeenCalledWith("child-1");
+		// No answer and no findings file: checked again once, then pass with the note.
 		expect(resumed.kind).toBe("finished");
+		expect(h.started).toHaveLength(2);
 		expect(h.state()).toMatchObject({
-			outcome: "check-failed",
-			note: "the checker gave no verdict in time",
+			outcome: "pass",
+			note: "not verified by running; the checker gave no verdict in time",
 		});
 		expect(h.state()?.rounds[0].timedOut).toBe(true);
+		expect(h.state()?.rounds.map((round) => round.decision)).toEqual([
+			"retry",
+			"pass",
+		]);
 	});
 
 	it("salvages a verdict cut off at the checker's limit", async () => {

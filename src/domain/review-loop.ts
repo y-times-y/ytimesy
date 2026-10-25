@@ -1,6 +1,10 @@
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
-import type { ReviewVerdict } from "./checker-brief";
+import {
+	type ReviewVerdict,
+	requirementText,
+	type VerdictVia,
+} from "./checker-brief";
 import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 
 /**
@@ -9,7 +13,9 @@ import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
  * reviews the delivered work against the user's request (the shared brief in
  * checker-brief.ts). A pass finishes the turn. Concrete findings are handed
  * back to the same builder run as one runtime notice ("verify each; fix the
- * real ones; say which you reject"), up to two review rounds per turn. No
+ * real ones; say which you reject"), up to two review rounds per turn (four
+ * unattended, while time remains, ending early when a check repeats the
+ * previous one's findings unchanged). No
  * reset, no candidates. These are the pure rules; the runtime is
  * src/server/services/review-loop.ts.
  */
@@ -17,6 +23,12 @@ import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 export const REVIEW_LOOP_LIMITS = {
 	/** Checks per turn; each check with concrete findings is followed by one fix. */
 	maxRounds: 2,
+	/**
+	 * Unattended (an eval trial): nobody waits and the trial's time would
+	 * otherwise go unused (TB4 s3 session-window-debug ended "rounds" with
+	 * most of 8 hours left), so more checks while time remains.
+	 */
+	unattendedMaxRounds: 4,
 	/** Wall time for a turn's reviews and fixes in the product (a runner's deadline only shortens it). */
 	loopMinutes: 60,
 	checker: { steps: 60, minutes: 10, tokens: 800_000 },
@@ -26,6 +38,11 @@ export const REVIEW_LOOP_LIMITS = {
 	 * establish); still bounded by the loop's deadline less a fix.
 	 */
 	pairCheckerMinutes: 14,
+	/**
+	 * Unattended (an eval trial): a single checker gets more time than in the
+	 * product, where a person waits; checks there ran into 10 minutes.
+	 */
+	unattendedCheckerMinutes: 15,
 	/** What a check is expected to take before one has been timed in this turn. */
 	expectedCheckMs: 150_000,
 	/** The least time a fix needs after its check. */
@@ -53,12 +70,17 @@ export type ReviewEligibility =
 /**
  * Product gating for a finished turn: only a turn that changed files, and
  * either ran long enough to be real work or delivered something runnable.
- * (Plan mode, subagents and read-only turns never get a loop at all.)
+ * (Plan mode, subagents and read-only turns never get a loop at all.) An
+ * unattended run (an eval trial) is always reviewed: its deliverable may lie
+ * outside the checkout, and a turn that stopped without one has nobody to
+ * notice but the checker.
  */
 export function reviewEligibility(input: {
 	readonly changedFiles: readonly string[];
 	readonly turnMs: number;
+	readonly unattended?: boolean;
 }): ReviewEligibility {
+	if (input.unattended) return { review: true };
 	if (!input.changedFiles.length)
 		return { review: false, reason: "no files changed" };
 	if (
@@ -81,8 +103,8 @@ export type ReviewFinding = {
 };
 
 /** rigor=on: the finding for a final answer that admits unverified work with time left. */
-function unverifiedText(admitted: readonly string[]) {
-	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.`;
+function unverifiedText(admitted: readonly string[], unattended?: boolean) {
+	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.${unattended ? " Nobody will answer a question in this run: on an apparent contradiction or missing input, deliver the best-supported result at the paths the request names and state the assumption." : ""}`;
 }
 
 const RUNTIME_FAILURES = new Set([
@@ -103,17 +125,14 @@ export function reviewFindings(
 	verdict: ReviewVerdict,
 	/** rigor=on: lines of the builder's final answer that admit unverified work. */
 	admitted: readonly string[] = [],
+	options: { readonly unattended?: boolean } = {},
 ): ReviewFinding[] {
 	const failures = verdict.failures.filter(
 		(failure) => !RUNTIME_FAILURES.has(failure),
 	);
 	const unmet = verdict.requirements
 		.filter((entry) => entry.met === false)
-		.map((entry) =>
-			entry.evidence
-				? `${entry.requirement}: ${entry.evidence}`
-				: entry.requirement,
-		)
+		.map(requirementText)
 		.filter(
 			(text) =>
 				!failures.some(
@@ -123,7 +142,12 @@ export function reviewFindings(
 		);
 	const concrete = [
 		...(admitted.length
-			? [{ kind: "unverified" as const, text: unverifiedText(admitted) }]
+			? [
+					{
+						kind: "unverified" as const,
+						text: unverifiedText(admitted, options.unattended),
+					},
+				]
 			: []),
 		...failures.map((text) => ({ kind: "failure" as const, text })),
 		...unmet.map((text) => ({ kind: "requirement" as const, text })),
@@ -149,6 +173,41 @@ export function reviewFindings(
 	}));
 }
 
+/** Counted checks a turn may run: the product's, more unattended. */
+export const maxReviewRounds = (input: { readonly unattended?: boolean }) =>
+	input.unattended
+		? REVIEW_LOOP_LIMITS.unattendedMaxRounds
+		: REVIEW_LOOP_LIMITS.maxRounds;
+
+const findingKey = (text: string) =>
+	text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * No progress: this check's concrete findings are exactly the previous
+ * check's (same text, ignoring whitespace and case), so the fix in between
+ * changed nothing the checker can see. Assumptions do not count.
+ */
+export function sameFindings(
+	previous: readonly ReviewFinding[],
+	current: readonly ReviewFinding[],
+) {
+	const keys = (findings: readonly ReviewFinding[]) =>
+		[
+			...new Set(
+				findings
+					.filter((finding) => finding.kind !== "assumption")
+					.map((finding) => findingKey(finding.text)),
+			),
+		].sort();
+	const before = keys(previous);
+	const after = keys(current);
+	return (
+		after.length > 0 &&
+		before.length === after.length &&
+		before.every((key, index) => key === after[index])
+	);
+}
+
 /** Findings the builder can act on: a failure or an unmet requirement (assumptions alone are not). */
 export const hasConcreteFindings = (findings: readonly ReviewFinding[]) =>
 	findings.some((finding) => finding.kind !== "assumption");
@@ -156,7 +215,7 @@ export const hasConcreteFindings = (findings: readonly ReviewFinding[]) =>
 /** The checker's own tests that failed, with the command and output to reproduce each. */
 export function failingTests(verdict: ReviewVerdict | null): CheckerTest[] {
 	return (verdict?.tests ?? [])
-		.filter((test) => !test.passed)
+		.filter((test) => !test.passed && !test.unrun)
 		.slice(0, REVIEW_LOOP_LIMITS.maxFailingTests);
 }
 
@@ -256,8 +315,10 @@ export function decideCheck(input: {
 	readonly expectedCheckMs: number;
 	/** checkerMode=pair: the check may use pairCheckerMinutes. */
 	readonly pair?: boolean;
+	/** An unattended run: the check may use unattendedCheckerMinutes. */
+	readonly unattended?: boolean;
 }): ReviewDecision {
-	if (input.checksDone >= REVIEW_LOOP_LIMITS.maxRounds)
+	if (input.checksDone >= maxReviewRounds(input))
 		return { kind: "finish", reason: "rounds" };
 	const available = input.deadlineAt - input.now;
 	if (available < input.expectedCheckMs + REVIEW_LOOP_LIMITS.minFixMs)
@@ -265,32 +326,81 @@ export function decideCheck(input: {
 	return {
 		kind: "check",
 		checkMs: Math.min(
-			(input.pair
-				? REVIEW_LOOP_LIMITS.pairCheckerMinutes
-				: REVIEW_LOOP_LIMITS.checker.minutes) * 60_000,
+			checkerMs(input),
 			available - REVIEW_LOOP_LIMITS.minFixMs,
 		),
 	};
 }
 
+/** A whole check's time limit: the product's, more for a pair or an unattended run. */
+export function checkerMs(input: {
+	readonly pair?: boolean;
+	readonly unattended?: boolean;
+}) {
+	return (
+		Math.max(
+			REVIEW_LOOP_LIMITS.checker.minutes,
+			input.pair ? REVIEW_LOOP_LIMITS.pairCheckerMinutes : 0,
+			input.unattended ? REVIEW_LOOP_LIMITS.unattendedCheckerMinutes : 0,
+		) * 60_000
+	);
+}
+
+/**
+ * After a check that gave no verdict (it timed out with no findings file,
+ * wrote no verdict JSON, or said pass with nothing it or the review loop ran
+ * to show it, checker-evidence.ts): check again, once per turn, when a whole
+ * checker budget and a fix still fit. A retry does not count as one of the
+ * turn's rounds. Without one, the verdict is pass with a note
+ * (defaultPassVerdict).
+ */
+export function retryCheck(input: {
+	readonly verdict: ReviewVerdict | null;
+	readonly rounds: readonly ReviewRound[];
+	readonly now: number;
+	readonly deadlineAt: number;
+	readonly pair?: boolean;
+	readonly unattended?: boolean;
+}) {
+	const noVerdict =
+		!input.verdict ||
+		input.verdict.parsed === false ||
+		input.verdict.ungrounded === true;
+	return (
+		noVerdict &&
+		!input.rounds.some((round) => round.decision === "retry") &&
+		input.deadlineAt - input.now >=
+			checkerMs(input) + REVIEW_LOOP_LIMITS.minFixMs
+	);
+}
+
+/** Checks that count against maxRounds (a retried check does not). */
+export const countedChecks = (rounds: readonly ReviewRound[]) =>
+	rounds.filter((round) => round.decision !== "retry").length;
+
 export type ReviewOutcome =
 	| "pass"
 	| "no-findings"
 	| "rounds"
+	| "no-progress"
 	| "time"
 	| "not-eligible"
-	| "check-failed"
-	| "unsure";
+	| "check-failed";
 
 /**
  * After a verdict: pass finishes (unless the builder admitted unverified
  * work, rigor=on); concrete findings get a fix while time allows.
+ * Unattended, a check that repeats the previous fixed round's findings
+ * unchanged finishes: another fix round would not converge.
  */
 export function decideAfterVerdict(input: {
 	readonly verdict: ReviewVerdict;
 	readonly findings: readonly ReviewFinding[];
 	readonly now: number;
 	readonly deadlineAt: number;
+	/** Unattended: the findings of the previous counted check that got a fix. */
+	readonly previousFindings?: readonly ReviewFinding[];
+	readonly unattended?: boolean;
 }):
 	| { readonly kind: "fix" }
 	| { readonly kind: "finish"; readonly reason: ReviewOutcome } {
@@ -299,15 +409,14 @@ export function decideAfterVerdict(input: {
 		!input.findings.some((finding) => finding.kind === "unverified")
 	)
 		return { kind: "finish", reason: "pass" };
-	// Unsure is not evidence that the work is wrong: only a fail (or rigor's
-	// admitted-unverified finding) sends the builder back.
-	if (
-		input.verdict.verdict === "unsure" &&
-		!input.findings.some((finding) => finding.kind === "unverified")
-	)
-		return { kind: "finish", reason: "unsure" };
 	if (!hasConcreteFindings(input.findings))
 		return { kind: "finish", reason: "no-findings" };
+	if (
+		input.unattended &&
+		input.previousFindings &&
+		sameFindings(input.previousFindings, input.findings)
+	)
+		return { kind: "finish", reason: "no-progress" };
 	if (input.deadlineAt - input.now < REVIEW_LOOP_LIMITS.minFixMs)
 		return { kind: "finish", reason: "time" };
 	return { kind: "fix" };
@@ -341,8 +450,8 @@ export type ReviewRound = {
 	/** rigor=on: the builder's requirements list the checker got as a claim. */
 	readonly builderRequirements?: readonly string[];
 	readonly findings: readonly ReviewFinding[];
-	/** What followed the verdict. */
-	readonly decision?: "fix" | ReviewOutcome;
+	/** What followed the verdict; retry: no verdict, so the same tree was checked again. */
+	readonly decision?: "fix" | "retry" | ReviewOutcome;
 	readonly fix?: {
 		readonly startedAt: number;
 		readonly usageAtStart: ApiTokenUsage | null;
@@ -410,11 +519,25 @@ export function expectedCheckMs(state: ReviewLoopState) {
 	);
 }
 
+/** How a verdict was reached, in the round's line (normal says nothing). */
+const VIA_LABELS: Record<VerdictVia, string> = {
+	normal: "",
+	"forced-final": "answered at its time limit",
+	"findings-file": "from its findings file",
+	"harness-grounded": "its tests re-run by the loop",
+	retry: "on a second check",
+	"default-pass": "not verified by running",
+};
+
 /** One line per round, for the chat and the eval record. */
 export function reviewLoopSummary(state: ReviewLoopState) {
 	const lines = state.rounds.map((round) => {
+		const setAside = round.verdict?.downgraded?.length ?? 0;
+		const via = round.verdict?.via ? VIA_LABELS[round.verdict.via] : "";
 		const verdict = round.verdict
-			? `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}`
+			? round.verdict.parsed === false
+				? "no verdict"
+				: `${round.verdict.verdict}${round.findings.length ? ` (${round.findings.length} finding${round.findings.length === 1 ? "" : "s"})` : ""}${setAside ? ` · ${setAside} not run, set aside` : ""}${round.verdict.ungrounded ? " · nothing run to show it" : ""}${via ? ` · ${via}` : ""}`
 			: round.timedOut
 				? "no verdict in time"
 				: "checking";
@@ -424,7 +547,9 @@ export function reviewLoopSummary(state: ReviewLoopState) {
 				? responses
 					? ` · fixed ${responses.fixed.length}, rejected ${responses.rejected.length}${responses.unanswered.length ? `, unanswered ${responses.unanswered.length}` : ""}`
 					: " · fixing"
-				: "";
+				: round.decision === "retry"
+					? " · checking again"
+					: "";
 		return `Review ${round.n}: ${verdict}${fix}`;
 	});
 	if (state.outcome && state.outcome !== "pass")

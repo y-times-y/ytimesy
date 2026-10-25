@@ -47,7 +47,7 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 | `YTIMESY_HARBOR_APPROVED` | must equal the route: the operator's billing approval (required) |
 | `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` / `openai.gpt-6.1-sol` (bedrock) |
 | `YTIMESY_HARBOR_EFFORT` | `low` … `max` (default `max`) |
-| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `rigor`, `promptCacheScope`, `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
+| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `leadTools` (`thin`, `full`), `leadEffort` (`high`, `inherit`, `low`, `medium`, `xhigh`, `max`), `rigor`, `promptCacheScope`, `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
 | `YTIMESY_HARBOR_TRIAL_USD_CAP` | per-trial cap; default $20 or the total cap if lower; at most $100 |
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
@@ -146,6 +146,26 @@ briefs, reports, conversation), in place of the product's agent_sessions rows an
   other role, or a second writer, is refused ("do the work yourself"). The sidekick gets the
   product's sidekick role block (`newSidekickState` in its budget) and keeps its conversation
   across rounds.
+- **Thin lead** (`leadTools=thin`, the default with lead=fusion; product and bridge share
+  `src/server/services/thin-lead-tools.ts`): the lead decides, the sidekick does. Its tools
+  are `agent`, `agent_send`, the surface's read tool and its command tool limited to
+  read-only inspections (git status/diff/log/show, ls, head, sed -n, grep, wc, find; no
+  redirection, substitution, background jobs or programs), both capped at 8,000 characters;
+  no edit/write/apply_patch, stdin, run_code or web search. Its prompt
+  (`fusionThinLeadInstructions`) asks for briefs with goal, files, constraints, steps and
+  acceptance checks, and for evidence (commands, exit status, key output) instead of
+  rerunning checks. A round's report reaches the lead capped at 12,000 characters. A failed
+  round (budget used, error, empty or degenerate output) ends with a notice to re-brief or
+  restart: `agent_send` `restart: true` starts a fresh sidekick whose first brief is a
+  handoff (the failed one's last brief and message, the changed files) plus the lead's
+  message, at most `SIDEKICK_MAX_RESTARTS` (2) per trial; `fusion.restarts` in the trace.
+  The review checker still runs after the lead's answer; its findings go back to the lead,
+  which can only fix them through the sidekick. `leadTools=full` restores the earlier lead
+  (whole builder surface, earlier prompt) for comparison.
+- **leadEffort** (default `high`): a ceiling on the lead's own reasoning effort
+  (`leadReasoningEffort`; `inherit` keeps `YTIMESY_HARBOR_EFFORT`). The sidekick keeps
+  `roleModels.writer`'s effort (else `YTIMESY_HARBOR_EFFORT`), the checker its own. The
+  trace's `leadEffort` is the effort applied.
 - **Classifier**: after every round, the product's `CLASSIFIER_INSTRUCTIONS`, `classifierMessage`,
   `parseClassifierReply`, `applicableDecision` and the rules fallback, one tool-free call on
   `roleModels.classifier` (the builder's model when unset; the product defaults to
@@ -294,6 +314,17 @@ no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
   the copy, findings reach the builder, the fix passes, the worker's test is `ranBy: worker`;
   rows builder/checker/checkerWorker. The single-checker test: the checker's stray file never
   reaches the checkout.
+- `tests/harbor-v2-trial.test.ts`, rehearsal of the unattended review and child budgets:
+  lead=fusion + review=on (sidekick builds, the checker reviews the lead's turn); a turn
+  with no checkout changes is still checked; with rigor=on an answer asking the user a
+  question is sent back; a build past the product's hour is checked in the trial's time;
+  a check without a verdict is retried once (not a round); a sidekick stopped at its round
+  budget gets the last-step notice and the lead gets its last message; a step cut at the
+  64K output cap is resampled with the smaller-steps note. The thin lead: its one shell
+  attempt is refused, it briefs, inspects with `git status`, answers; the sidekick writes
+  and runs the deliverable; the checker passes it; the lead's tools are exactly agent,
+  agent_send, bash, read. `leadTools=full,leadEffort=inherit` restores the full surface. The Bedrock request time limits
+  are in `tests/harbor-v2-bedrock.test.ts`.
 - `tests/harbor-v2-sessions.test.ts`: the in-memory session store.
 - `tests/harbor-v2-units.test.ts`: config validation, guard, ledger (incl. concurrency and
   stop file), transport guard (Anthropic/OpenAI/Gemini terminal events, resend after a

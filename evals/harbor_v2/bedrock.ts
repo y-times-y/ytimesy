@@ -101,6 +101,21 @@ export type BedrockInferenceProfile =
 const PROFILED_OPENAI =
 	/^(?:global|us|us-gov|eu|apac|jp|au|ca)\.openai\.gpt-[\w.-]+$/;
 const FOUNDATION_OPENAI = /^openai\.gpt-[\w.-]+$/;
+const PROFILED_ANTHROPIC =
+	/^(?:global|us|us-gov|eu|apac|jp|au|ca)\.anthropic\.claude-[\w.:-]+$/;
+const FOUNDATION_ANTHROPIC = /^anthropic\.claude-[\w.:-]+$/;
+
+/**
+ * A Bedrock Claude id as its inference profile (`anthropic.claude-haiku-5-5`
+ * on the global profile is `global.anthropic.claude-haiku-5-5`), else null.
+ * Claude runs on bedrock-runtime (bedrock-anthropic.ts) whichever endpoint
+ * the OpenAI models use.
+ */
+export function bedrockAnthropicProfile(modelId: string): string | null {
+	if (PROFILED_ANTHROPIC.test(modelId)) return modelId;
+	if (FOUNDATION_ANTHROPIC.test(modelId)) return `global.${modelId}`;
+	return null;
+}
 
 export function bedrockBaseUrl(
 	region: string,
@@ -129,6 +144,8 @@ export function bedrockModelId(
 	modelId: string,
 	route: { endpoint: BedrockEndpoint; profile: BedrockInferenceProfile },
 ) {
+	const claude = bedrockAnthropicProfile(modelId);
+	if (claude) return claude;
 	if (route.endpoint === "mantle") {
 		if (PROFILED_OPENAI.test(modelId))
 			return modelId.slice(modelId.indexOf(".") + 1);
@@ -138,7 +155,7 @@ export function bedrockModelId(
 		if (FOUNDATION_OPENAI.test(modelId)) return `${route.profile}.${modelId}`;
 	}
 	throw new Error(
-		`"${modelId}" is not a Bedrock OpenAI model id; use openai.<model> (for example openai.gpt-6.1-sol) or an inference profile id (global.openai.<model>).`,
+		`"${modelId}" is not a Bedrock OpenAI or Claude model id; use openai.<model> (for example openai.gpt-6.1-sol), anthropic.<model> (anthropic.claude-haiku-5-5) or an inference profile id (global.openai.<model>).`,
 	);
 }
 
@@ -358,5 +375,127 @@ export function bedrockSigningFetch(input: {
 		))
 			headers.set(name, value);
 		return input.fetch(url, { ...init, method, headers, body });
+	};
+}
+
+/** A response stream stopped at its wall-clock or idle limit (network-shaped, so the loop resamples the step). */
+export class ResponseTimeLimit extends Error {
+	readonly code = "ETIMEDOUT";
+	constructor(reason: string) {
+		super(`Model response stopped: ${reason} (ETIMEDOUT).`);
+		this.name = "ResponseTimeLimit";
+	}
+}
+
+const duration = (ms: number) =>
+	ms >= 60_000
+		? `${Math.round(ms / 60_000)} minutes`
+		: `${Math.round(ms / 1000)} s`;
+
+/** Per model request on the bedrock route: one response's whole stream, and the longest silence in it. */
+export const BEDROCK_RESPONSE_LIMITS = {
+	totalMs: 20 * 60_000,
+	idleMs: 10 * 60_000,
+} as const;
+
+/**
+ * Bounds one request's wall time: the whole response (headers and body) gets
+ * `totalMs`, and once its body streams no more than `idleMs` may pass
+ * without a byte. A Bedrock
+ * response once streamed for 30 minutes (1.6 MB) and would have run to the
+ * trial's timeout. At a limit the request is aborted and its body fails with
+ * an ETIMEDOUT error, which the model loop treats as an interrupted stream:
+ * the step is resampled from the history before it (a few times, with
+ * backoff), then the turn fails.
+ */
+export function responseTimeLimitFetch(
+	fetch: typeof globalThis.fetch,
+	limits: {
+		readonly totalMs: number;
+		readonly idleMs: number;
+	} = BEDROCK_RESPONSE_LIMITS,
+	now: () => number = Date.now,
+): typeof globalThis.fetch {
+	return async (request, init) => {
+		const startedAt = now();
+		const aborter = new AbortController();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stopped: ResponseTimeLimit | undefined;
+		let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const clear = () => clearTimeout(timer);
+		// Until the headers arrive only the total limit applies: the bridge's
+		// transport guard (beneath this fetch) holds a response's headers until
+		// its whole stream has arrived, so the idle limit there would cut every
+		// streaming response at idleMs however steadily it streamed (a 514 s
+		// response came within 86 s of it).
+		const arm = (idle = true) => {
+			clear();
+			const total = startedAt + limits.totalMs - now();
+			const ms = Math.max(0, idle ? Math.min(total, limits.idleMs) : total);
+			timer = setTimeout(() => {
+				stopped = new ResponseTimeLimit(
+					!idle || total <= limits.idleMs
+						? `the response ran past ${duration(limits.totalMs)}`
+						: `no data for ${duration(limits.idleMs)}`,
+				);
+				aborter.abort(stopped);
+				try {
+					body?.error(stopped);
+				} catch {
+					/* Already closed. */
+				}
+			}, ms);
+		};
+		arm(false);
+		let response: Response;
+		try {
+			response = await fetch(request, {
+				...init,
+				signal: init?.signal
+					? AbortSignal.any([init.signal, aborter.signal])
+					: aborter.signal,
+			});
+		} catch (error) {
+			clear();
+			throw stopped ?? error;
+		}
+		if (!response.body) {
+			clear();
+			return response;
+		}
+		const reader = response.body.getReader();
+		arm();
+		return new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					body = controller;
+				},
+				async pull(controller) {
+					try {
+						const { done, value } = await reader.read();
+						if (stopped) return;
+						if (done) {
+							clear();
+							controller.close();
+							return;
+						}
+						arm();
+						controller.enqueue(value);
+					} catch (error) {
+						clear();
+						if (!stopped) controller.error(error);
+					}
+				},
+				cancel(reason) {
+					clear();
+					return reader.cancel(reason);
+				},
+			}),
+			{
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			},
+		);
 	};
 }

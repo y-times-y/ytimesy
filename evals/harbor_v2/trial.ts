@@ -6,13 +6,20 @@ import {
 	addApiTokenUsage,
 } from "../../src/domain/api-token-usage";
 import {
+	CHECKER_FORCED_FINAL_MARK,
+	checkerFinalPrompt,
+} from "../../src/domain/checker-brief";
+import {
 	type EfficiencySummary,
 	efficiencySummary,
 	type ModelSpendRow,
 	type SpendSession,
 	treeModelSpend,
 } from "../../src/domain/eval-efficiency";
-import { harnessVariantLabel } from "../../src/domain/harness-variant";
+import {
+	harnessVariantLabel,
+	leadReasoningEffort,
+} from "../../src/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
 import { newSidekickState } from "../../src/domain/sidekick";
@@ -32,6 +39,11 @@ import {
 	type TimedEvent,
 	type TimedNotice,
 } from "./atif";
+import {
+	BACKGROUND_GATE_MAX_ROUNDS,
+	type BackgroundGateEntry,
+	backgroundGate,
+} from "./background-gate";
 import { bedrockWebSearchUsd } from "./bedrock";
 import {
 	checkerWorkerTool,
@@ -48,13 +60,16 @@ import {
 } from "./config";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
+	briefFindingsPath,
 	type CheckerRun,
 	childBudgetUsed,
 	childStepGuard,
 	finalAnswer,
 	harborReviewDeps,
 	harborReviewLoop,
+	lastChildText,
 	type ReviewTrace,
+	ranTranscript,
 	reviewItems,
 } from "./review";
 import { type TrialRole, trialSessions } from "./sessions";
@@ -96,6 +111,12 @@ export type HarborTrialInput = {
 		model?: HarborModel,
 	) => Promise<ModelAgentRuntime>;
 	mcpServers?: readonly string[];
+	/**
+	 * Checker-only (development; review=on): a tar of a saved run's final
+	 * workspace in the sandbox. It is unpacked into the checkout after the
+	 * review loop's baseline, no builder runs, and the checker reviews it once.
+	 */
+	restore?: string;
 	harness: {
 		name: string;
 		version: string;
@@ -104,6 +125,8 @@ export type HarborTrialInput = {
 	};
 	log?: (line: string) => void;
 	now?: () => number;
+	/** The background-command gate's poll interval (tests shorten it). */
+	backgroundPollMs?: number;
 };
 
 export type HarborTrialResult = {
@@ -248,6 +271,8 @@ export function trialEfficiency(input: {
 	return { ...summary, modelRows };
 }
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
 const sum = (usages: (ApiTokenUsage | null)[]) =>
 	usages.reduce<ApiTokenUsage | null>(
 		(total, usage) => (usage ? addApiTokenUsage(total, usage) : total),
@@ -305,6 +330,8 @@ export async function runHarborTrial(
 	input: HarborTrialInput,
 ): Promise<HarborTrialResult> {
 	const { config } = input;
+	if (input.restore && config.variant.review !== "on")
+		throw new Error("Checker-only (a restored workspace) needs review=on.");
 	const now = input.now ?? Date.now;
 	const log = input.log ?? (() => {});
 	await mkdir(input.logsDir, { recursive: true });
@@ -349,7 +376,18 @@ export async function runHarborTrial(
 	const notices: TimedNotice[] = [];
 	const sessions = trialSessions(now);
 	const readerCopies: { sessionId: string; copy: string; ok: boolean }[] = [];
-	const fusionTrace: FusionTrace = { decisions: [], rounds: [], refused: [] };
+	const fusionTrace: FusionTrace = {
+		decisions: [],
+		rounds: [],
+		refused: [],
+		restarts: [],
+	};
+	// lead=fusion: the lead's own calls at most at leadEffort (its sidekick keeps its own).
+	const builderEffort =
+		config.variant.lead === "fusion"
+			? (leadReasoningEffort(config.effort, config.variant.leadEffort) ??
+				config.effort)
+			: config.effort;
 	const builderModel: HarborModel = {
 		modelId: config.modelId,
 		effort: config.effort,
@@ -370,10 +408,14 @@ export async function runHarborTrial(
 			billing: child.model.billing,
 		})),
 	];
-	// Bedrock bills each Web Search query on top of tokens (builder only).
+	// Bedrock bills each Web Search query on top of tokens (builder and checkers).
 	const searchUsd = () =>
 		config.route === "bedrock"
-			? bedrockWebSearchUsd(events.map((entry) => entry.event))
+			? bedrockWebSearchUsd(
+					[events, ...sessions.all().map((child) => child.events)].flatMap(
+						(list) => list.map((entry) => entry.event),
+					),
+				)
 			: 0;
 	const guard = trialSpendGuard({
 		capUsd: config.trialUsdCap,
@@ -395,6 +437,7 @@ export async function runHarborTrial(
 	let instructions = "";
 	let tools = {};
 	const reviewTrace: ReviewTrace = { checks: [] };
+	const backgroundGates: BackgroundGateEntry[] = [];
 	let reviewRounds = 0;
 	let reviewSummary: unknown = null;
 	try {
@@ -426,6 +469,63 @@ export async function runHarborTrial(
 		const roleModel = (role: BridgeRole) =>
 			config.roles[role] ?? (role === "checker" ? checkerModel : builderModel);
 		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
+		const checkerLastWord = async (
+			session: Parameters<RunRound>[0],
+			brief: string,
+			from: number,
+		) => {
+			const path = briefFindingsPath(brief);
+			const findings = path
+				? await input.machines
+						.exec(
+							workspace.vm,
+							`tail -c 20000 '${path}' 2>/dev/null || true`,
+							20_000,
+						)
+						.then((result) => result.stdout)
+						.catch(() => "")
+				: "";
+			try {
+				session.starts.push(session.events.length);
+				const out = await runModelAgent(
+					{
+						userId: input.userId,
+						modelId: session.model.modelId,
+						reasoning: session.model.effort,
+						toolSurface: "implementation",
+						cacheScopeId: session.id,
+						tools: {},
+						instructions:
+							"You are an independent checker whose time ran out. Give your verdict now.",
+						signal: AbortSignal.any([signal, AbortSignal.timeout(75_000)]),
+						maxSteps: 1,
+						turnTimeoutMs: 75_000,
+						messages: [
+							{
+								role: "user",
+								content: checkerFinalPrompt({
+									brief,
+									ran: ranTranscript(session.events, from),
+									findings,
+								}),
+							},
+						],
+						onEvent: async (event) => {
+							session.events.push({ at: new Date(now()).toISOString(), event });
+						},
+						onStep: async () => {},
+					},
+					await runtimeFor(session.model),
+				);
+				return finalAnswer(out);
+			} catch (error) {
+				log(
+					`checker ${session.id}: no forced final answer (${error instanceof Error ? error.message.slice(0, 160) : String(error)})`,
+				);
+				return lastChildText(session.events, from);
+			}
+		};
 		// One round of a child session (sidekick, checker, worker) in process,
 		// on the same container: its harness, the product's role prompt.
 		const runRound: RunRound = async (session, brief, options) => {
@@ -446,6 +546,10 @@ export async function runHarborTrial(
 			// later round's command exit 130 at once.
 			const turnId = harborTurnId(session.id, session.briefs.length);
 			const started = now();
+			const checkerRole =
+				session.role === "checker" || session.role === "checkerWorker";
+			// The checker's forced final step (childStepGuard): tools off for it.
+			let finalStep = false;
 			const onChildEvent = async (event: ApiAgentEvent) => {
 				session.events.push({ at: new Date(now()).toISOString(), event });
 			};
@@ -473,7 +577,10 @@ export async function runHarborTrial(
 				modelId: session.model.modelId,
 				provider,
 				variant: config.variant,
-				webSearch: false,
+				// A checker has the builder's execution access: web search and MCP too.
+				webSearch: config.webSearch && checkerRole,
+				bedrock: config.route === "bedrock",
+				...(checkerRole ? { mcpNote: mcpNoteFor(input.mcpServers) } : {}),
 				instruction: brief,
 				storage: input.storage,
 				onEvent: onChildEvent,
@@ -494,6 +601,9 @@ export async function runHarborTrial(
 				events: session.events,
 				from: roundStart,
 				weight: budgetTokenWeight(session.model.modelId, config.modelId),
+				onFinalStep: () => {
+					finalStep = true;
+				},
 			});
 			session.starts.push(roundStart);
 			try {
@@ -514,6 +624,9 @@ export async function runHarborTrial(
 						signal: childSignal,
 						maxSteps: budget.steps,
 						turnTimeoutMs: budget.minutes * 60_000,
+						...(session.role === "checker"
+							? { toolsOff: () => finalStep }
+							: {}),
 						messages: roundMessages(session, brief),
 						onEvent: onChildEvent,
 						onStep: async () => {},
@@ -523,17 +636,34 @@ export async function runHarborTrial(
 				session.messages = messages;
 				const report = {
 					outcome: "completed" as const,
-					report: finalAnswer(messages),
+					report: `${finalAnswer(messages)}${finalStep ? `\n${CHECKER_FORCED_FINAL_MARK}` : ""}`,
 				};
 				session.reports.push(report);
 				return report;
 			} catch (error) {
+				// A checker cut off (time, stop, budget) before its answer: one
+				// call without tools for the verdict from what it ran.
+				if (session.role === "checker" && !signal.aborted) {
+					const last = finalStep
+						? lastChildText(session.events, roundStart)
+						: "";
+					const report = {
+						outcome: "completed" as const,
+						report: `${last || (await checkerLastWord(session, brief, roundStart))}\n${CHECKER_FORCED_FINAL_MARK}`,
+					};
+					log(
+						`checker ${session.id} cut off (${error instanceof Error ? error.message.slice(0, 120) : String(error)}); forced final answer`,
+					);
+					session.reports.push(report);
+					return report;
+				}
 				const used = childBudgetUsed(error);
 				if (used) {
 					log(`${session.role} ${session.id} stopped: ${used.message}`);
+					// Its last text (a partial report or progress note) still reaches its parent.
 					const report = {
 						outcome: "failed" as const,
-						report: "",
+						report: lastChildText(session.events, roundStart),
 						budgetUsed: used.reason,
 					};
 					session.reports.push(report);
@@ -617,7 +747,8 @@ export async function runHarborTrial(
 			})();
 			return {
 				done,
-				usage: () => lastUsage(session.events),
+				// Its rounds plus a forced final call, each a run of its own.
+				usage: () => runsUsage(session.events, session.starts),
 				stop: () => session.stop(),
 			};
 		};
@@ -669,6 +800,7 @@ export async function runHarborTrial(
 							return status.stdout.split("\n").filter(Boolean).slice(0, 40);
 						},
 						trace: fusionTrace,
+						thin: config.variant.leadTools === "thin",
 						now,
 					})
 				: null;
@@ -696,7 +828,7 @@ export async function runHarborTrial(
 				{
 					userId: input.userId,
 					modelId: config.modelId,
-					reasoning: config.effort,
+					reasoning: builderEffort,
 					toolSurface: "implementation",
 					cacheScopeId: input.trialId,
 					...harness.input,
@@ -711,6 +843,51 @@ export async function runHarborTrial(
 				},
 				runtime,
 			);
+		};
+		// The product wakes an idle chat when a background command exits
+		// (background-command-notices.ts); here the root builder's run is
+		// followed by a wait for the commands it left running and a
+		// continuation with their exit notice (background-gate.ts).
+		const runRootBuilder = async (history: ModelMessage[]) => {
+			let out = await runBuilder(history);
+			while (
+				backgroundGates.filter((gate) => gate.outcome === "notified").length <
+					BACKGROUND_GATE_MAX_ROUNDS &&
+				!signal.aborted
+			) {
+				const gate = await backgroundGate({
+					workspace: {
+						machines: input.machines,
+						vm: workspace.vm,
+						cwd: input.cwd,
+					},
+					sessionId: workspace.sessionId,
+					round: backgroundGates.length + 1,
+					deadlineAt: input.deadlineAt,
+					signal,
+					now,
+					...(input.backgroundPollMs !== undefined
+						? { pollMs: input.backgroundPollMs }
+						: {}),
+				});
+				if (gate.entry) {
+					backgroundGates.push(gate.entry);
+					log(
+						`background gate ${gate.entry.round}: ${gate.entry.outcome} after ${gate.entry.waitedSeconds}s (${gate.entry.ids.join(", ")})${gate.entry.error ? `: ${gate.entry.error}` : ""}`,
+					);
+				}
+				if (!gate.notice) break;
+				notices.push({
+					at: new Date(now()).toISOString(),
+					afterEvent: events.length,
+					text: gate.notice,
+				});
+				out = await runBuilder([
+					...out,
+					{ role: "user", content: gate.notice },
+				]);
+			}
+			return out;
 		};
 		let messages: ModelMessage[] = [
 			{ role: "user", content: input.instruction },
@@ -731,6 +908,7 @@ export async function runHarborTrial(
 				instruction: input.instruction,
 				rigor: config.variant.rigor === "on",
 				pair: config.variant.checkerMode === "pair",
+				blind: config.variant.checkerMode === "blind",
 				deps: harborReviewDeps({
 					workspace,
 					// Leave the grader's side two minutes.
@@ -761,8 +939,31 @@ export async function runHarborTrial(
 				waitUntil: input.deadlineAt - 120_000,
 			});
 			await loop.beforeModel(step());
-			for (;;) {
-				messages = await runBuilder(messages);
+			if (input.restore) {
+				// Checker-only: the saved work lands after the baseline, so the
+				// checker sees it as this run's change; one review, no builder.
+				const unpacked = await input.machines.exec(
+					workspace.vm,
+					`tar -xf ${shellQuote(input.restore)} -C ${shellQuote(input.cwd)} && rm -f ${shellQuote(input.restore)}`,
+					300_000,
+				);
+				if (unpacked.exitCode !== 0)
+					throw new Error(
+						`Restoring the saved workspace failed: ${unpacked.stderr.slice(0, 300)}`,
+					);
+				log(`checker-only: restored ${input.restore} into ${input.cwd}`);
+				messages = [
+					...messages,
+					{ role: "assistant", content: "Done. The work is in the checkout." },
+				];
+				const outcome = await loop.afterAttempt(step());
+				reviewSummary =
+					outcome.kind === "finished" ? outcome.items.at(-1) : null;
+				if (outcome.kind === "run") reviewRounds++;
+				log(`checker-only: review outcome ${outcome.kind}`);
+			}
+			for (; !input.restore; ) {
+				messages = await runRootBuilder(messages);
 				const outcome = await loop.afterAttempt(step());
 				if (outcome.kind !== "run" || !outcome.messages) {
 					reviewSummary =
@@ -782,7 +983,7 @@ export async function runHarborTrial(
 				messages = outcome.messages;
 				log(`review round ${reviewRounds}: findings returned to the builder`);
 			}
-		} else messages = await runBuilder(messages);
+		} else messages = await runRootBuilder(messages);
 	} catch (error) {
 		// A guard refusal surfaces from the model loop as a generic provider failure.
 		failure =
@@ -825,6 +1026,7 @@ export async function runHarborTrial(
 		route: config.route,
 		model: config.modelId,
 		effort: config.effort,
+		...(config.variant.lead === "fusion" ? { leadEffort: builderEffort } : {}),
 		checkerModel: config.checker
 			? { model: config.checker.modelId, effort: config.checker.effort }
 			: null,
@@ -854,6 +1056,7 @@ export async function runHarborTrial(
 			},
 			events,
 			notices,
+			backgroundGates,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [

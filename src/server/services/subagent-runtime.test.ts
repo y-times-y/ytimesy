@@ -93,6 +93,8 @@ const {
 	teardownSubagentForks,
 } = await import("./subagent-runtime");
 
+const { CHECKER_FINAL_NOTICE } = await import("#/domain/checker-brief");
+
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
 const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString();
 
@@ -175,6 +177,43 @@ describe("subagent step guard", () => {
 		await expect(guard(13, { budget: stopping })).rejects.toThrow(
 			"stopped by the parent",
 		);
+	});
+
+	it("gives a checker one final step with tools off at its limit, then stops it", async () => {
+		const checker = { ...session, agentRole: "checker" as const };
+		const run = (
+			steps: number,
+			createdAt: string,
+			history: ModelMessage[] = messages,
+		) => {
+			const onFinalStep = vi.fn();
+			const result = guardSubagentStep({
+				session: { ...checker, createdAt },
+				items: [],
+				messages: history,
+				now: NOW,
+				onFinalStep,
+				deps: {
+					recordStep: vi.fn(async () => ({ steps, budget })),
+					descendants: vi.fn(async () => []),
+				},
+			});
+			return { result, onFinalStep };
+		};
+		// Within a minute of its 30 minutes: the final step, tools off.
+		const near = run(10, at(-29.5));
+		const final = await near.result;
+		expect(final.at(-1)?.content).toBe(CHECKER_FINAL_NOTICE);
+		expect(near.onFinalStep).toHaveBeenCalledOnce();
+		// At its step limit too, instead of stopping at once.
+		const exhausted = run(100, at(-5));
+		expect((await exhausted.result).at(-1)?.content).toBe(CHECKER_FINAL_NOTICE);
+		// After its final step: stopped.
+		await expect(run(101, at(-31), final).result).rejects.toBeInstanceOf(
+			SubagentBudgetExhausted,
+		);
+		// Other roles still stop at once.
+		await expect(guard(100)).rejects.toBeInstanceOf(SubagentBudgetExhausted);
 	});
 
 	it("counts a cheaper model's tokens at the builder's price", async () => {
@@ -847,6 +886,49 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(report).toContain("needs you (stuck)");
 		expect(addUsage).toHaveBeenCalledWith("s", usage);
 		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");
+	});
+
+	it("points a thin lead to a restart on hand_back, a full lead to a takeover", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 2, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const reportFor = (thinLead: boolean) =>
+			subagentReport({
+				machines: { destroy: vi.fn(async () => {}) } as never,
+				session: sidekick,
+				items: [],
+				outcome: "finished",
+				text: "Still failing.",
+				now: NOW,
+				thinLead,
+				deps: {
+					session: vi.fn(async () => sidekick),
+					updateState: applying(
+						state,
+						vi.fn(async () => {}),
+					),
+					addUsage: vi.fn(async () => true),
+					classify: vi.fn(async () => ({
+						answer: { decision: "hand_back" as const, reason: "stuck" },
+						record: decisionRecord("hand_back"),
+						usage: null,
+					})),
+				},
+			});
+		const thin = await reportFor(true);
+		expect(thin).toContain("needs you (stuck)");
+		expect(thin).toContain("or restart it with a handoff.");
+		expect(thin).not.toContain("yourself");
+		expect(await reportFor(false)).toContain(
+			"or take over and do it yourself.",
+		);
 	});
 
 	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {

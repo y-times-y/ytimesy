@@ -7,10 +7,13 @@ import {
 	findingResponses,
 	hasConcreteFindings,
 	isRunnableFile,
+	maxReviewRounds,
 	REVIEW_LOOP_LIMITS,
+	retryCheck,
 	reviewEligibility,
 	reviewFindings,
 	reviewNotice,
+	sameFindings,
 } from "./review-loop";
 
 const review = (value: Record<string, unknown>) =>
@@ -159,10 +162,61 @@ describe("review gating and time", () => {
 		expect(
 			reviewEligibility({ changedFiles: ["src/x.ts"], turnMs: 10_000 }).review,
 		).toBe(true);
+		// Unattended (an eval trial): the deliverable may be outside the checkout.
+		expect(
+			reviewEligibility({ changedFiles: [], turnMs: 10_000, unattended: true }),
+		).toEqual({ review: true });
 		for (const file of ["run.sh", "Makefile", "a/Dockerfile", "pyproject.toml"])
 			expect(isRunnableFile(file)).toBe(true);
 		for (const file of ["README.md", "out.csv", "image.png"])
 			expect(isRunnableFile(file)).toBe(false);
+	});
+
+	it("retries a check without a verdict once, when a whole check and a fix fit", () => {
+		const noJson = parseReviewVerdict("ran out of time");
+		const at = { now: 0, deadlineAt: 38 * 60_000 };
+		expect(retryCheck({ verdict: noJson, rounds: [], ...at })).toBe(true);
+		expect(retryCheck({ verdict: null, rounds: [], ...at })).toBe(true);
+		expect(
+			retryCheck({ verdict: review({ verdict: "unsure" }), rounds: [], ...at }),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [{ decision: "retry" } as never],
+				...at,
+			}),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: 10 * 60_000,
+			}),
+		).toBe(false);
+		// Unattended: the retry needs a whole unattended check and a fix.
+		const unattendedFit =
+			REVIEW_LOOP_LIMITS.unattendedCheckerMinutes * 60_000 +
+			REVIEW_LOOP_LIMITS.minFixMs;
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: unattendedFit - 1,
+				unattended: true,
+			}),
+		).toBe(false);
+		expect(
+			retryCheck({
+				verdict: null,
+				rounds: [],
+				now: 0,
+				deadlineAt: unattendedFit,
+				unattended: true,
+			}),
+		).toBe(true);
 	});
 
 	it("checks only when a check and a fix fit, and gives the check the rest", () => {
@@ -191,10 +245,87 @@ describe("review gating and time", () => {
 			kind: "check",
 			checkMs: 240_000,
 		});
+		// Unattended (an eval trial): a longer single check than the product's.
+		expect(decideCheck({ ...base, deadlineAt: 1e9, unattended: true })).toEqual(
+			{
+				kind: "check",
+				checkMs: REVIEW_LOOP_LIMITS.unattendedCheckerMinutes * 60_000,
+			},
+		);
+		expect(REVIEW_LOOP_LIMITS.unattendedCheckerMinutes).toBe(15);
 		expect(decideCheck({ ...base, checksDone: 2, deadlineAt: 1e9 })).toEqual({
 			kind: "finish",
 			reason: "rounds",
 		});
+	});
+
+	it("allows more rounds unattended while time remains; the product keeps two", () => {
+		const base = { now: 0, expectedCheckMs: 150_000, deadlineAt: 1e9 };
+		expect(maxReviewRounds({})).toBe(2);
+		expect(maxReviewRounds({ unattended: true })).toBe(4);
+		for (const checksDone of [2, 3])
+			expect(decideCheck({ ...base, checksDone, unattended: true }).kind).toBe(
+				"check",
+			);
+		expect(decideCheck({ ...base, checksDone: 4, unattended: true })).toEqual({
+			kind: "finish",
+			reason: "rounds",
+		});
+		expect(
+			decideCheck({
+				...base,
+				checksDone: 3,
+				unattended: true,
+				deadlineAt: 200_000,
+			}),
+		).toEqual({ kind: "finish", reason: "time" });
+	});
+
+	it("unattended, stops when a check repeats the previous findings unchanged", () => {
+		const fail = review({
+			verdict: "fail",
+			failures: ["x: wrong", "y: missing"],
+			assumptions: [{ assumption: "a" }],
+		});
+		const findings = reviewFindings(fail);
+		const reworded = reviewFindings(
+			review({
+				verdict: "fail",
+				failures: ["Y:  missing", "x: wrong"],
+				assumptions: [{ assumption: "b" }],
+			}),
+		);
+		expect(sameFindings(findings, reworded)).toBe(true);
+		expect(
+			sameFindings(
+				findings,
+				reviewFindings(review({ verdict: "fail", failures: ["x: wrong"] })),
+			),
+		).toBe(false);
+		expect(
+			sameFindings(
+				findings,
+				reviewFindings(
+					review({ verdict: "fail", failures: ["x: wrong", "y: still"] }),
+				),
+			),
+		).toBe(false);
+		const base = { verdict: fail, findings, now: 0, deadlineAt: 1e9 };
+		expect(
+			decideAfterVerdict({
+				...base,
+				unattended: true,
+				previousFindings: reworded,
+			}),
+		).toEqual({ kind: "finish", reason: "no-progress" });
+		// The first check, or a changed finding, still gets a fix.
+		expect(decideAfterVerdict({ ...base, unattended: true })).toEqual({
+			kind: "fix",
+		});
+		// The product is unchanged: its second check's findings get a fix.
+		expect(decideAfterVerdict({ ...base, previousFindings: reworded })).toEqual(
+			{ kind: "fix" },
+		);
 	});
 
 	it("fixes only concrete findings with time left", () => {
@@ -219,7 +350,9 @@ describe("review gating and time", () => {
 				deadlineAt: 1e9,
 			}),
 		).toEqual({ kind: "finish", reason: "pass" });
+		// An older "unsure" answer maps to pass or fail: no unsure outcome.
 		const unsure = review({ verdict: "unsure", failures: [] });
+		expect(unsure.verdict).toBe("pass");
 		expect(
 			decideAfterVerdict({
 				verdict: unsure,
@@ -227,8 +360,8 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "unsure" });
-		// Unsure with findings still finishes: only a fail sends the builder back.
+		).toEqual({ kind: "finish", reason: "pass" });
+		// With failures it is a fail: the builder gets them.
 		expect(
 			decideAfterVerdict({
 				verdict: review({ verdict: "unsure", failures: ["x: maybe wrong"] }),
@@ -236,6 +369,6 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "unsure" });
+		).toEqual({ kind: "fix" });
 	});
 });

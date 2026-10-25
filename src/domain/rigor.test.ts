@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
+	admittedUnfinished,
 	admittedUnverified,
 	builderRequirements,
 	MAX_BUILDER_REQUIREMENTS,
@@ -8,6 +9,7 @@ import {
 	RIGOR_REQUIREMENTS_INSTRUCTIONS,
 	requirementsFromText,
 	requirementsSegments,
+	UNATTENDED_RUN_INSTRUCTIONS,
 } from "./rigor";
 import type { SessionItem } from "./session-item";
 
@@ -29,6 +31,32 @@ describe("rigor", () => {
 		]);
 	});
 
+	it("finds, for unattended runs, questions to the user and missing deliverables", () => {
+		expect(
+			admittedUnfinished(
+				[
+					"Checked the VCF; the reference build in the config contradicts the input.",
+					"/app/output/mutation.report.json was not created.",
+					"Please provide a corrected config.",
+					"Wrote the report; no contradictions found.",
+				].join("\n"),
+			),
+		).toEqual([
+			"Checked the VCF; the reference build in the config contradicts the input.",
+			"/app/output/mutation.report.json was not created.",
+			"Please provide a corrected config.",
+		]);
+		expect(
+			admittedUnfinished("Done: wrote /results/out.csv; tests pass."),
+		).toEqual([]);
+		expect(UNATTENDED_RUN_INSTRUCTIONS).toContain(
+			"Never stop on an apparent contradiction or a missing input",
+		);
+		expect(UNATTENDED_RUN_INSTRUCTIONS).toContain(
+			"Before an irreversible submission (posting to an external service, portal or API that cannot be undone), finish your checks first and re-check the planned payload against the rules with them; a separate review program is not needed.",
+		);
+	});
+
 	it("ignores answers that say nothing is unverified", () => {
 		expect(
 			admittedUnverified(
@@ -39,10 +67,19 @@ describe("rigor", () => {
 
 	it("keeps the builder block general", () => {
 		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
-			"Prefer the convention of the library, ecosystem or standard involved; otherwise the strictest reading.",
+			"Prefer the convention of the library, ecosystem or standard involved, even over a stricter or more literal reading; take the strictest reading only when no convention applies.",
+		);
+		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
+			"an item the list does not name for a slot cannot fill it, even if it carries the same facts",
 		);
 		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
 			"run the deliverable as an outside user would",
+		);
+		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
+			"Reproduce it using only the existing calls a normal caller would make, and see it fail before your fix and pass after. A fix that needs callers to adopt a new method, protocol or extra calls does not fix that symptom",
+		);
+		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
+			"Never declare a reported symptom unresolvable while time remains.",
 		);
 	});
 

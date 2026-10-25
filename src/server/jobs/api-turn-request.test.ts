@@ -289,7 +289,13 @@ async function sentRequest(
 	variant: Partial<HarnessVariant>,
 	options: { step?: number; text?: string } = {},
 ) {
-	mocks.variant.mockReturnValue({ ...DEFAULT_HARNESS_VARIANT, ...variant });
+	// These requests were written for the full fusion lead (Main with the
+	// builder's tools); the thin lead, now the default, has its own tests.
+	mocks.variant.mockReturnValue({
+		...DEFAULT_HARNESS_VARIANT,
+		...(variant.lead === "fusion" ? { leadTools: "full" as const } : {}),
+		...variant,
+	});
 	mocks.agentInputs.length = 0;
 	const text = options.text ?? "Fix the compaction bug in /app.";
 	const bodies: Record<string, unknown>[] = [];
@@ -669,9 +675,9 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 				(role !== "builder" || subagents === "on" || lead === "fusion");
 			expect(available.has("agent")).toBe(delegates);
 			const main = delegates && role === "builder" && lead === "fusion";
-			expect(
-				body.instructions.includes(main ? "Helpers:" : "Subagents:"),
-			).toBe(delegates);
+			expect(body.instructions.includes(main ? "Helpers:" : "Subagents:")).toBe(
+				delegates,
+			);
 			expect(body.instructions.includes("you are Main")).toBe(main);
 			expect(body.instructions.includes("You are Main's writer")).toBe(
 				role === "sidekick",

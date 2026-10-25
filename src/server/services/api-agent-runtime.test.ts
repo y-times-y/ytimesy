@@ -1512,6 +1512,124 @@ it("does not resample a step whose tool call already started", async () => {
 	expect(call).toBe(1);
 });
 
+it("cuts a step whose tool-call arguments degenerate into whitespace and resamples it", async () => {
+	// atrx-vep-crispr (s3): Luna streamed 64K tokens of blank lines inside one
+	// run_code call until its output cap.
+	let call = 0;
+	const execute = vi.fn(async () => "ran");
+	const model = new MockLanguageModelV4({
+		doStream: async () => {
+			if (call++ > 0)
+				return stream([
+					{ type: "text-start", id: "a" },
+					{ type: "text-delta", id: "a", delta: "Done." },
+					{ type: "text-end", id: "a" },
+					finish,
+				]);
+			// Paced like a network stream; without the cut the call would complete and run.
+			return {
+				stream: simulateReadableStream({
+					initialDelayInMs: null,
+					chunkDelayInMs: 1,
+					chunks: [
+						{ type: "tool-input-start", id: "c1", toolName: "run_code" },
+						{ type: "tool-input-delta", id: "c1", delta: '{"code":"ls' },
+						...Array.from({ length: 30 }, () => ({
+							type: "tool-input-delta" as const,
+							id: "c1",
+							delta: " \\n  \\n".repeat(100),
+						})),
+						{ type: "tool-input-delta", id: "c1", delta: '"}' },
+						{ type: "tool-input-end", id: "c1" },
+						{
+							type: "tool-call",
+							toolCallId: "c1",
+							toolName: "run_code",
+							input: '{"code":"ls"}',
+						},
+						{
+							...finish,
+							finishReason: { unified: "tool-calls", raw: "tool_use" },
+						},
+					] as StreamPart[],
+				}),
+			};
+		},
+	});
+	const messages = await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "luna",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {
+				run_code: tool({
+					inputSchema: z.object({ code: z.string() }),
+					execute,
+				}),
+			},
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(execute).not.toHaveBeenCalled();
+	expect(JSON.stringify(messages)).toContain("Done.");
+});
+
+it("cuts degenerate answer text, retracts it, and leaves ordinary whitespace alone", async () => {
+	let call = 0;
+	const events: ApiAgentEvent[] = [];
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			call++ === 0
+				? stream([
+						{ type: "text-start", id: "0" },
+						{ type: "text-delta", id: "0", delta: "Plan:" },
+						...Array.from({ length: 100 }, () => ({
+							type: "text-delta" as const,
+							id: "0",
+							delta: "\n".repeat(100),
+						})),
+						{ type: "text-end", id: "0" },
+						finish,
+					])
+				: stream([
+						{ type: "text-start", id: "0" },
+						{ type: "text-delta", id: "0", delta: "Done." },
+						// Ordinary formatting: whitespace runs well under the threshold.
+						...Array.from({ length: 500 }, () => ({
+							type: "text-delta" as const,
+							id: "0",
+							delta: "text\n\n    ",
+						})),
+						{ type: "text-end", id: "0" },
+						finish,
+					]),
+	});
+	const messages = await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "luna",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {},
+			signal: new AbortController().signal,
+			onEvent: async (event) => {
+				events.push(event);
+			},
+			onStep: async () => {},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(events).toContainEqual({ type: "retract", ids: ["0"] });
+	expect(JSON.stringify(messages)).toContain("Done.");
+	expect(JSON.stringify(messages)).not.toContain("Plan:");
+});
+
 it("replaces a dropped response's partial text instead of appending the retry to it", async () => {
 	let call = 0;
 	// Anthropic numbers parts by block index, so the retry reuses id "0".

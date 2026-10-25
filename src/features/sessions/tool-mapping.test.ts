@@ -177,6 +177,27 @@ describe("timeline cards for harness items", () => {
 		expect(html).not.toContain("Result");
 	});
 
+	it("renders an older unsure review record as a neutral no verdict, never Unsure", () => {
+		const html = render(
+			[
+				prompt,
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("review-old"),
+					tool: REVIEW_CHECK_TOOL,
+					input: "independent review 1 of up to 2",
+					output:
+						"Review 1: unsure\nReview ended: unsure.\nChecker spent 10k tokens.",
+					status: "completed",
+				},
+			],
+			"running",
+		);
+		expect(html).toContain('data-verdict="none"');
+		expect(html).not.toContain('data-verdict="unsure"');
+		expect(html).not.toContain(">Unsure<");
+	});
+
 	it("renders an agent call with its role, title, model and report", () => {
 		const html = render(
 			[

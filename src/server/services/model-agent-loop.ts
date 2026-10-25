@@ -27,6 +27,11 @@ import {
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import {
+	DEGENERATE_RUN_CHARS,
+	DegenerateOutput,
+	whitespaceRun,
+} from "#/domain/degenerate-output";
+import {
 	harnessModelFamily,
 	harnessModelToolInstructions,
 	isShellSurface,
@@ -74,6 +79,7 @@ import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
 import { stableHistoryKeyOrder } from "./stable-history-key-order";
 import { timed } from "./step-timing";
+import { withWebSearchNotes } from "./web-search-notes";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
@@ -102,6 +108,8 @@ export type ModelAgentInput = {
 	 * callable until they appear here. Read before every step.
 	 */
 	toolOrder?: () => readonly string[];
+	/** True for a step offered no tools (a checker's forced final step). */
+	toolsOff?: () => boolean;
 	/** Retired and ignored: every turn uses the implementation surface; frozen benchmark runners still pass it. */
 	toolSurface?: "implementation";
 	/** Harness variant `instructions`; unset or default = the family's profile. */
@@ -186,6 +194,17 @@ export type ModelSwitchTarget = {
 	readonly trigger: "pending" | "compaction";
 };
 
+/** Budget stops thrown from a step's preparation (product subagents, the eval bridge's children). */
+const BUDGET_STOPS = new Set(["SubagentBudgetExhausted", "ChildBudgetUsed"]);
+
+function isBudgetStop(error: unknown): error is Error {
+	for (let current = error, depth = 0; current && depth < 8; depth++) {
+		if (current instanceof Error && BUDGET_STOPS.has(current.name)) return true;
+		current = (current as { cause?: unknown }).cause;
+	}
+	return false;
+}
+
 /** Ends a run whose history was just compacted for a model switch; it is saved already. */
 export class ModelSwitchAtCompaction extends Error {
 	constructor(
@@ -206,6 +225,41 @@ export function withoutToolSettings<T extends object>(settings: T): T {
 	if (!openai || !("parallelToolCalls" in openai)) return settings;
 	const { parallelToolCalls: _, ...rest } = openai;
 	return { ...settings, providerOptions: { ...options, openai: rest } };
+}
+
+/**
+ * A text context summary's output cap (reasoning included). It was 2048: Luna
+ * at max effort on Bedrock spent all of it reasoning over a 415K-token
+ * history and returned no text, so a sidekick's round failed on "Context
+ * summary was empty". The summary's own length is bounded by
+ * compactApiHistory.
+ */
+export const SUMMARY_MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Settings for a context summary request: the run's settings at low reasoning
+ * effort. Writing a summary needs little reasoning, and a run's high effort
+ * can spend the summary's whole output cap before any text.
+ */
+export function summaryRequestSettings<T extends object>(settings: T): T {
+	const options = (
+		settings as { providerOptions?: Record<string, Record<string, unknown>> }
+	).providerOptions;
+	if (!options) return settings;
+	const lowered = { ...options };
+	if (options.openai && "reasoningEffort" in options.openai)
+		lowered.openai = { ...options.openai, reasoningEffort: "low" };
+	if (options.anthropic && "effort" in options.anthropic)
+		lowered.anthropic = { ...options.anthropic, effort: "low" };
+	const reasoning = options.openrouter?.reasoning as
+		| Record<string, unknown>
+		| undefined;
+	if (reasoning && "effort" in reasoning)
+		lowered.openrouter = {
+			...options.openrouter,
+			reasoning: { ...reasoning, effort: "low" },
+		};
+	return { ...settings, providerOptions: lowered };
 }
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
@@ -380,6 +434,7 @@ const INTERRUPTED_STREAM =
 
 /** Network-level interruption anywhere in the failure chain, not a provider rejection. */
 function interruptedStream(error: unknown) {
+	if (error instanceof DegenerateOutput) return true;
 	for (let current = error, depth = 0; current && depth < 8; depth++) {
 		if (typeof current !== "object") break;
 		const record = current as {
@@ -646,6 +701,11 @@ async function executeModelSteps(
 	const requestSettings =
 		runtime.requestSettings ??
 		((instructions: string) => ({ system: instructions }));
+	// OpenAI Responses with store:false drops hosted web searches from replayed
+	// history; keep each one as a short note instead (web-search-notes.ts).
+	const dropsHostedTools =
+		runtime.requestSettings?.(input.instructions).providerOptions?.openai
+			?.store === false;
 	let history = input.messages;
 	let pendingCompaction = forceCompaction;
 	let compactFirst = input.compactFirst === true;
@@ -872,11 +932,13 @@ async function executeModelSteps(
 								...cacheSettings,
 								model,
 								...withoutToolSettings(
-									requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+									summaryRequestSettings(
+										requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+									),
 								),
 								prompt: JSON.stringify(older),
 								maxRetries: 1,
-								maxOutputTokens: 2048,
+								maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
 								abortSignal: runSignal,
 								onError: () => {},
 							});
@@ -956,11 +1018,18 @@ async function executeModelSteps(
 						const summary = await generateText({
 							...cacheSettings,
 							model,
-							...requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+							...summaryRequestSettings(
+								requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+							),
 							prompt: JSON.stringify(older),
 							maxRetries: 1,
 							maxOutputTokens:
-								runtime.maxOutputTokens === undefined ? undefined : 2048,
+								runtime.maxOutputTokens === undefined
+									? undefined
+									: Math.min(
+											runtime.maxOutputTokens,
+											SUMMARY_MAX_OUTPUT_TOKENS,
+										),
 							abortSignal: runSignal,
 						});
 						await recordUsage(summary.usage);
@@ -1054,12 +1123,16 @@ async function executeModelSteps(
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
 				// Same bytes whether the history is in memory or reloaded from jsonb.
-				const order = input.toolOrder?.().filter((name) => name in tools);
+				const order = input.toolsOff?.()
+					? []
+					: input.toolOrder?.().filter((name) => name in tools);
+				const sent =
+					runtime.imageInput === false
+						? withImagePlaceholders(history)
+						: history;
 				return {
 					messages: stableHistoryKeyOrder(
-						runtime.imageInput === false
-							? withImagePlaceholders(history)
-							: history,
+						dropsHostedTools ? withWebSearchNotes(sent) : sent,
 					),
 					...(order ? { activeTools: order, toolOrder: order } : {}),
 				};
@@ -1078,6 +1151,11 @@ async function executeModelSteps(
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
 				if (error instanceof ModelSwitchAtCompaction) return;
+				// A subagent stopped at its budget is the runtime's stop, not the provider's.
+				if (isBudgetStop(error)) {
+					console.warn("Agent budget stop", error.message);
+					return;
+				}
 				console.warn(
 					error instanceof InitialAgentReadFailure
 						? "Agent preparation failed"
@@ -1235,11 +1313,23 @@ async function executeModelSteps(
 		let searchCalled = false;
 		let citedSources: { url: string; title?: string }[] = [];
 		let searchStep = 0;
+		// A response whose answer text or tool-call arguments degenerate into
+		// whitespace would run to the output cap: cut it as an interrupted
+		// stream ("terminated"), which resamples the step before any tool ran.
+		let whitespace = whitespaceRun();
+		const degenerate = (delta: string) => {
+			const run = whitespace(delta);
+			if (run >= DEGENERATE_RUN_CHARS) throw new DegenerateOutput(run);
+		};
 		for await (const part of result.fullStream) {
 			switch (part.type) {
 				case "start-step":
 					searchCalled = false;
 					citedSources = [];
+					whitespace = whitespaceRun();
+					break;
+				case "tool-input-delta":
+					degenerate(part.delta);
 					break;
 				case "source":
 					if (
@@ -1286,6 +1376,7 @@ async function executeModelSteps(
 					break;
 				case "text-delta":
 				case "reasoning-delta":
+					if (part.type === "text-delta") degenerate(part.text);
 					await input.onEvent({
 						type: part.type,
 						id: part.id,
@@ -1326,9 +1417,12 @@ async function executeModelSteps(
 					});
 					break;
 				case "error":
+					// A budget stop is the runtime's, not the provider's: its caller
+					// recognizes it (and hands the child's last message on) only unwrapped.
 					if (
 						part.error instanceof InitialAgentReadFailure ||
-						part.error instanceof ModelSwitchAtCompaction
+						part.error instanceof ModelSwitchAtCompaction ||
+						isBudgetStop(part.error)
 					)
 						throw part.error;
 					throw new SafeApiModelFailure(part.error);

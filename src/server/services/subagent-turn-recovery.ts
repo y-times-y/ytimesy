@@ -2,6 +2,7 @@ import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { database } from "../adapters/database";
+import { harnessVariantForUser } from "../adapters/dev-eval-users";
 import { enqueueAgentTaskEvent } from "../jobs/queue";
 import { subagentReport } from "./subagent-runtime";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -57,12 +58,14 @@ export async function recoverChildTurnEvents(machines: WorkspaceMachines) {
 						.slice(-9000) || "(no final report)";
 		const session = await agentSessionForOwner(turn.user_id, turn.session_id);
 		if (!session) continue;
+		const variant = await harnessVariantForUser(turn.user_id).catch(() => null);
 		const summary = await subagentReport({
 			machines,
 			session,
 			items,
 			outcome: turn.state === "failed" ? "failed" : "finished",
 			text,
+			thinLead: variant?.lead === "fusion" && variant.leadTools === "thin",
 		}).catch(() => text);
 		const id = await saveAgentTaskResultAndEvent({
 			sessionId: turn.session_id,
