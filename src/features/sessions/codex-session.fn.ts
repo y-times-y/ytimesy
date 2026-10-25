@@ -10,6 +10,7 @@ import {
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { incomingAttachments } from "#/domain/message-attachment";
 import {
+	agentSessionMetadataForOwner,
 	chatHoldingSend,
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
@@ -146,15 +147,16 @@ export const getCodexSession = createServerFn({ method: "GET" })
 	});
 
 /**
- * How long the page's first bytes wait for its latest chat's view after its
- * other reads: within it the chat renders in the page's first HTML. Past it
- * the page streams without the chat and the chat follows in the same
- * response, until LATEST_CHAT_GIVE_UP_MS; then the browser reads it.
+ * How long the page's first bytes wait for its open chat's view (the linked
+ * chat, else the latest) after its other reads: within it the chat renders
+ * in the page's first HTML. Past it the page streams without the chat and
+ * the chat follows in the same response, until OPEN_CHAT_GIVE_UP_MS; then
+ * the browser reads it.
  */
-const LATEST_CHAT_WAIT_MS = 250;
-const LATEST_CHAT_GIVE_UP_MS = 8_000;
+const OPEN_CHAT_WAIT_MS = 250;
+const OPEN_CHAT_GIVE_UP_MS = 8_000;
 
-/** A latest chat read past LATEST_CHAT_WAIT_MS: the page streams it in. */
+/** An open chat read past OPEN_CHAT_WAIT_MS: the page streams it in. */
 export type StreamedChatView = Promise<PublicCodexSession | undefined>;
 
 /** The read, or undefined once `ms` pass first. */
@@ -168,8 +170,18 @@ function within<T>(read: Promise<T>, ms: number) {
 	]).finally(() => clearTimeout(timer));
 }
 
-export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
-	async () => {
+/** A chat link (`/?chat=<id>`, `/?project=<id>&chat=<id>`): the chat the page opens. */
+const linkedChatInput = z
+	.object({
+		chatId: z.string().uuid().optional(),
+		projectId: z.string().uuid().optional(),
+	})
+	.optional()
+	.catch(undefined);
+
+export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
+	.validator((data: unknown) => linkedChatInput.parse(data) ?? {})
+	.handler(async ({ data: link }) => {
 		let user: Awaited<ReturnType<typeof requireUser>>;
 		try {
 			user = await requireUser(getRequest().headers);
@@ -184,11 +196,22 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 			};
 		}
 		const listed = listProjects(user.id).catch(() => undefined);
-		// The first project's chats come with the page, so its latest chat
-		// starts loading as soon as the page runs instead of after a list read.
+		// A linked chat without its project: the project it belongs to.
+		const linkedChatProject =
+			link.chatId && !link.projectId
+				? agentSessionMetadataForOwner(user.id, link.chatId)
+						.then((chat) => chat?.projectId)
+						.catch(() => undefined)
+				: undefined;
+		// The open project's chats come with the page (a linked chat's
+		// project, else the first), so the chat it opens starts loading as
+		// soon as the page runs instead of after a list read.
 		const firstChats = listed
 			.then(async (projects) => {
-				const projectId = projects?.[0]?.id;
+				const linkedProjectId = link.projectId ?? (await linkedChatProject);
+				const projectId =
+					projects?.find((project) => project.id === linkedProjectId)?.id ??
+					projects?.[0]?.id;
 				if (!projectId) return undefined;
 				return {
 					projectId,
@@ -198,9 +221,12 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 				};
 			})
 			.catch(() => undefined);
-		const latestChat = firstChats
+		const openChat = firstChats
 			.then((first) => {
-				const chat = first?.chats[0];
+				// The linked chat, as the browser would open it; else the latest.
+				const chat =
+					first?.chats.find((listed) => listed.id === link.chatId) ??
+					first?.chats[0];
 				if (!first || !chat) return undefined;
 				return publicSessionView({
 					userId: user.id,
@@ -219,22 +245,22 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 		// without waiting on a promise.
 		let landed: { view: PublicCodexSession | undefined } | undefined;
 		const streamed: StreamedChatView = within(
-			latestChat.catch(() => undefined),
-			LATEST_CHAT_GIVE_UP_MS,
+			openChat.catch(() => undefined),
+			OPEN_CHAT_GIVE_UP_MS,
 		).then((view) => {
 			landed = { view };
 			return view;
 		});
-		await within(streamed, LATEST_CHAT_WAIT_MS);
+		await within(streamed, OPEN_CHAT_WAIT_MS);
 		const settled = landed as typeof landed | undefined;
-		const latestChatView = settled ? settled.view : streamed;
+		const openChatView = settled ? settled.view : streamed;
 		return {
 			signedIn: true,
 			projects,
 			chats,
 			// The server renders this chat open, as the browser would open it;
 			// a slow read streams in after the rest of the page.
-			latestChatView,
+			openChatView,
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
 			// Relative times render from this on the server and while hydrating.
@@ -256,8 +282,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 					: {}),
 			},
 		};
-	},
-);
+	});
 
 /** Advances a pending ChatGPT sign-in; the composer polls this while it waits. */
 export const pollCodexLogin = createServerFn({ method: "POST" })
