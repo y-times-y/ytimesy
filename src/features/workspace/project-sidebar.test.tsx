@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Project } from "#/domain/projects";
@@ -292,6 +293,67 @@ describe("left sidebar", () => {
 		// Rows carry the ids the first-paint stylesheet targets.
 		expect(html).toContain('class="sidebar-chat-row" data-chat-id="a1"');
 		expect(html).toContain('class="sidebar-project" data-project-id="alpha"');
+	});
+
+	it("renders every Done row while hydrating, past the fold hidden, and marks what the rows script needs", () => {
+		const done = Array.from({ length: 10 }, (_, index) => ({
+			id: `d${index}`,
+			title: `Done chat ${index}`,
+			turnStatus: "completed" as const,
+			updatedAt: `2026-10-${String(10 + index).padStart(2, "0")}T00:00:00Z`,
+		}));
+		const markup = (hydrated: boolean) => {
+			(globalThis as { window?: unknown }).window = {
+				localStorage: {
+					getItem: (key: string) =>
+						key === SIDEBAR_SORT_KEY ? "recent" : null,
+					setItem: () => undefined,
+				},
+			};
+			return renderToStaticMarkup(
+				<QueryClientProvider client={new QueryClient()}>
+					<RenderAsHydrated value={hydrated}>
+						<ProjectSidebar
+							projects={[alpha]}
+							projectsLoading={false}
+							selectedProjectId="alpha"
+							onSelectProject={() => undefined}
+							expanded
+							onToggle={() => undefined}
+							onAddProject={() => undefined}
+							chats={done}
+							onNewChat={() => undefined}
+							projectChats={[{ project: alpha, chats: done }]}
+							onOpenSettings={() => undefined}
+							account={{ name: "Ada Lovelace" }}
+						/>
+					</RenderAsHydrated>
+				</QueryClientProvider>,
+			);
+		};
+		const recent = (html: string) =>
+			html.slice(
+				html.indexOf("sidebar-recent"),
+				html.indexOf("sidebar-projects"),
+			);
+		const serverHtml = markup(false);
+		expect(recent(serverHtml).match(/class="sidebar-chat-row"/g)).toHaveLength(
+			10,
+		);
+		expect(recent(serverHtml).match(/data-done-overflow="true"/g)).toHaveLength(
+			2,
+		);
+		expect(serverHtml).toContain("Show 2 more");
+		expect(serverHtml).toContain(
+			'data-seen-key="d9:completed:2026-10-19T00:00:00Z" data-updated-at="2026-10-19T00:00:00Z" data-unread-mark="true" data-attention="completed"',
+		);
+		expect(serverHtml).toContain("<script>");
+		// The account button renders from the page's user, not after its read.
+		expect(serverHtml).toContain('class="sidebar-account-name">Ada Lovelace<');
+		const hydratedHtml = markup(true);
+		expect(hydratedHtml.match(/class="sidebar-chat-row"/g)).toHaveLength(8);
+		expect(hydratedHtml).not.toContain("data-seen-key");
+		expect(hydratedHtml).not.toContain("<script>");
 	});
 
 	it("renders only the saved sort view once hydrated", () => {

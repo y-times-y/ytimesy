@@ -158,7 +158,7 @@ import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
-import { ProjectSidebar } from "./project-sidebar";
+import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
 import {
 	type InspectorView,
@@ -212,9 +212,15 @@ export function WorkspaceHome({
 	initialSession,
 	initialProjects,
 	initialChats,
+	initialChatView,
+	account,
 	renderedAtMs,
 }: {
 	initialSession: PublicCodexSession;
+	/** The first project's latest chat, read with the page: it renders open. */
+	initialChatView?: PublicCodexSession;
+	/** The signed-in user, for the sidebar's account button. */
+	account?: SidebarAccount;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
 	initialProjects?: Project[];
@@ -259,8 +265,14 @@ export function WorkspaceHome({
 	const selectedProject =
 		projects.data?.find((project) => project.id === selectedProjectId) ??
 		projects.data?.[0];
-	const [selectedSessionId, setSelectedSessionId] = useState<string>();
-	const [session, setSession] = useState(initialSession);
+	// Text typed before hydration stays where it was typed: in the chat the
+	// server rendered, or in a new chat that the latest chat does not open over.
+	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
+	const openAtLoad = initialChatView?.agentSessionId
+		? { id: initialChatView.agentSessionId, view: initialChatView }
+		: undefined;
+	const [selectedSessionId, setSelectedSessionId] = useState(openAtLoad?.id);
+	const [session, setSession] = useState(openAtLoad?.view ?? initialSession);
 	const [recoveryDraft, setRecoveryDraft] = useState<{
 		id: string;
 		prompt: string;
@@ -337,8 +349,16 @@ export function WorkspaceHome({
 	const [memoryFocus, setMemoryFocus] = useState<{ path: string }>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
 	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
-	const [harnessId, setHarnessId] = useState<AgentProviderId>(
-		DEFAULT_COMPOSER_HARNESS_ID,
+	const [harnessId, setHarnessId] = useState<AgentProviderId>(() =>
+		openAtLoad
+			? composerHarnessForChat({
+					listedHarnessId: initialChats?.chats.find(
+						(chat) => chat.id === openAtLoad.id,
+					)?.harnessId,
+					connectionProvider: connectedProviderId(openAtLoad.view.connection),
+					fallback: DEFAULT_COMPOSER_HARNESS_ID,
+				})
+			: DEFAULT_COMPOSER_HARNESS_ID,
 	);
 	const [desktop, setDesktop] = useState<WorkspaceDesktop>({
 		status: "stopped",
@@ -368,11 +388,8 @@ export function WorkspaceHome({
 		else if (result === "cancelled") toast("Sign-in was cancelled.");
 		else toast.error("Sign-in didn't complete. Try again.");
 	}, [queryClient]);
-	// Text typed before hydration is a new chat being written: the latest
-	// chat does not open over it.
-	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
 	const [composerDraft, setComposerDraft] = useState(
-		typedBeforeHydration !== "",
+		!openAtLoad && typedBeforeHydration !== "",
 	);
 	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	const composerDraftRef = useRef(false);
@@ -419,6 +436,27 @@ export function WorkspaceHome({
 		(pending: PendingSend, view: PublicCodexSession) => Promise<void>
 	>(async () => undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
+	// The chat the server rendered open is held like a read one: nothing reads it again now.
+	useState(() => {
+		if (!openAtLoad || !initialChats) return;
+		sessionViews.current.set(openAtLoad.id, openAtLoad.view);
+		const { queryKey } = sessionReconciliationQuery(
+			{
+				projectId: initialChats.projectId,
+				sessionId: openAtLoad.id,
+				harnessId: listedChatHarnessId(
+					initialChats.chats,
+					openAtLoad.id,
+					harnessId,
+				),
+			},
+			sessionEpoch.current,
+		);
+		queryClient.setQueryData(queryKey, {
+			epoch: sessionEpoch.current,
+			view: openAtLoad.view,
+		});
+	});
 	/** Chat views being read ahead of a click, by chat id; an open takes them over. */
 	const viewReads = useRef(
 		new Map<string, Promise<PublicCodexSession | null>>(),
@@ -840,10 +878,14 @@ export function WorkspaceHome({
 		openChat(id);
 	});
 
+	// The project the open chat belongs to; the chat the server rendered open
+	// stays open as the page hydrates.
+	const chatsProjectId = useRef(activeProjectId);
 	useEffect(() => {
+		if (chatsProjectId.current === activeProjectId) return;
+		chatsProjectId.current = activeProjectId;
 		// Chat views stay cached by chat id: going back to another project's
 		// chat shows it at once.
-		void activeProjectId;
 		setSelectedSessionId(undefined);
 		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
@@ -1889,6 +1931,7 @@ export function WorkspaceHome({
 				onChatIntent={readAheadChat}
 				onMemoryIntent={() => prefetchMemoryPage(queryClient)}
 				renderedAtMs={renderedAtMs}
+				account={account}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}

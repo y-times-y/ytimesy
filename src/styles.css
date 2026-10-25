@@ -685,7 +685,14 @@ button:enabled:active {
 .sidebar-chat-check[data-checks="failed"] {
 	color: #f87171;
 }
-.sidebar-chat-unread {
+/* Before hydration the first-paint rows script shows the dot as the
+   trailing ::after and restyles the title (src/features/app/first-paint.ts). */
+.sidebar-chat-trailing::after {
+	content: "";
+	display: none;
+}
+.sidebar-chat-unread,
+.sidebar-chat-trailing::after {
 	flex: 0 0 6px;
 	width: 6px;
 	height: 6px;
@@ -693,9 +700,13 @@ button:enabled:active {
 	border-radius: 50%;
 	background: #e5e5e5;
 }
+.project-sidebar {
+	--chat-unread-color: #f4f4f4;
+	--chat-unread-weight: 500;
+}
 .sidebar-chat[data-status="unread"] .sidebar-chat-title {
-	color: #f4f4f4;
-	font-weight: 500;
+	color: var(--chat-unread-color);
+	font-weight: var(--chat-unread-weight);
 }
 /* Working: the title shimmers slowly, like "Thinking" in the chat. */
 .sidebar-chat[data-status="working"] .sidebar-chat-title {
@@ -779,6 +790,10 @@ button:enabled:active {
 }
 .sidebar-project > .sidebar-empty {
 	display: var(--folder-chats, block);
+}
+/* Before hydration every Done row renders; the rows script shows saved pins past the fold. */
+.sidebar-recent [data-done-overflow] {
+	display: none;
 }
 /* Before hydration the sidebar renders both sort views; the saved sort picks one. */
 :root:not([data-sidebar-sort="recent"]) [data-sort-view="recent"],
@@ -2066,6 +2081,12 @@ a.session-title-meta:focus-visible {
 .workspace-body[data-inspector-collapsed="true"] {
 	grid-template-columns: minmax(0, 1fr) 0px;
 }
+/* The server renders a closed inspector pane 1/101 wide (react-resizable-panels
+   drops a 0 default size); the client lays it out at 0. */
+.workspace-body[data-inspector-collapsed="true"] > #inspector {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
+	flex-grow: 0 !important;
+}
 :where(:root:not([data-sidebar="open"])) .workspace-shell .project-sidebar {
 	opacity: 0;
 	transform: translateX(-12px);
@@ -2148,8 +2169,10 @@ a.session-title-meta:focus-visible {
 	border-radius: 7px;
 	background: transparent;
 }
-.rail-brand[data-activity="attention"]::after {
+/* The attention dot; before hydration the first-paint rows script may show it. */
+.rail-brand::after {
 	content: "";
+	display: none;
 	position: absolute;
 	right: 5px;
 	top: 5px;
@@ -2157,6 +2180,9 @@ a.session-title-meta:focus-visible {
 	height: 8px;
 	border-radius: 50%;
 	background: #3b82f6;
+}
+.rail-brand[data-activity="attention"]::after {
+	display: block;
 }
 .rail-brand:hover {
 	background: #ffffff08;

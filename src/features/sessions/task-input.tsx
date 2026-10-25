@@ -5,18 +5,8 @@ import {
 	useEffect,
 	useRef,
 } from "react";
-
-function fitDraftHeight(input: HTMLTextAreaElement) {
-	input.style.height = "auto";
-	if (!input.value) {
-		input.dataset.expanded = "false";
-		return;
-	}
-	if (input.value && input.scrollHeight > 36) {
-		input.dataset.expanded = "true";
-	}
-	input.style.height = `${input.scrollHeight}px`;
-}
+import { COMPOSER_DRAFT_SCRIPT, useHydrated } from "../app/first-paint";
+import { fitDraftHeight } from "./fit-draft-height";
 
 /**
  * Enter sends; Shift+Enter is a newline. An Enter that confirms an input
@@ -45,6 +35,7 @@ export function TaskInput({
 	onPaste,
 	textareaRef,
 	id,
+	draftKey,
 }: {
 	value: string;
 	onChange: (value: string) => void;
@@ -58,7 +49,13 @@ export function TaskInput({
 	onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
 	textareaRef?: RefObject<HTMLTextAreaElement | null>;
 	id?: string;
+	/**
+	 * The chat whose saved draft (src/domain/composer-drafts.ts) the server's
+	 * textarea shows from the first paint, filled in by an inline script.
+	 */
+	draftKey?: string;
 }) {
+	const hydrated = useHydrated();
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => {
 		const input = inputRef.current;
@@ -86,6 +83,9 @@ export function TaskInput({
 					inputRef.current = node;
 					if (textareaRef) textareaRef.current = node;
 				}}
+				data-draft-key={draftKey}
+				// The draft script may fill and size the server's textarea before hydration.
+				suppressHydrationWarning={draftKey !== undefined}
 				aria-label={label}
 				placeholder={placeholder}
 				rows={1}
@@ -107,6 +107,13 @@ export function TaskInput({
 					}
 				}}
 			/>
+			{draftKey !== undefined && !hydrated ? (
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
+					dangerouslySetInnerHTML={{ __html: COMPOSER_DRAFT_SCRIPT }}
+					suppressHydrationWarning
+				/>
+			) : null}
 		</div>
 	);
 }
