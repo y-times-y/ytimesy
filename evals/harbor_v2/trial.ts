@@ -58,6 +58,7 @@ import {
 	type HarborModel,
 	routeProvider,
 } from "./config";
+import { envSnapshot } from "./env-snapshot";
 import { grindNotice } from "./grind-gate";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
@@ -436,6 +437,9 @@ export async function runHarborTrial(
 	};
 	let failure: string | null = null;
 	let instructions = "";
+	// The root builder's first message: the request, under envSnapshot=on
+	// with the sandbox's facts above it.
+	let firstMessage = input.instruction;
 	let tools = {};
 	const reviewTrace: ReviewTrace = { checks: [] };
 	const backgroundGates: BackgroundGateEntry[] = [];
@@ -911,9 +915,22 @@ export async function runHarborTrial(
 			return out;
 		};
 		let grindRounds = 0;
-		let messages: ModelMessage[] = [
-			{ role: "user", content: input.instruction },
-		];
+		// envSnapshot=on: one read-only probe of the sandbox before the first
+		// request (env-snapshot.ts); without it the request goes alone.
+		if (config.variant.envSnapshot === "on" && !input.restore) {
+			const snapshot = await envSnapshot({
+				machines: input.machines,
+				vm: workspace.vm,
+				cwd: input.cwd,
+			});
+			log(
+				snapshot
+					? `env snapshot ${snapshot.length} chars`
+					: "env snapshot failed; the request goes alone",
+			);
+			if (snapshot) firstMessage = `${snapshot}\n\n${input.instruction}`;
+		}
+		let messages: ModelMessage[] = [{ role: "user", content: firstMessage }];
 		// The request's exploration round, before the lead's first model call.
 		if (lead)
 			messages.push({
@@ -1132,7 +1149,7 @@ export async function runHarborTrial(
 		effort: config.effort,
 		billing: config.billing,
 		systemPrompt: instructions || "(not built)",
-		instruction: input.instruction,
+		instruction: firstMessage,
 		startedAt,
 		events,
 		runStarts: builderStarts,
