@@ -56,8 +56,8 @@ async function readSubscriptionSession(
 	scope: CodexSessionScope,
 	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
 	tolerateCatalogOutage = false,
-	/** The chat as the caller just read or wrote it, instead of reading it again. */
-	read?: AgentSessionRecord,
+	/** The chat as the caller just read or wrote it (or is reading it), instead of reading it again. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<PublicCodexSession> {
 	return (
 		await readSubscriptionSessionState(scope, tolerateCatalogOutage, read)
@@ -68,15 +68,17 @@ async function readSubscriptionSession(
 async function readSubscriptionSessionState(
 	scope: CodexSessionScope,
 	tolerateCatalogOutage = false,
-	read?: AgentSessionRecord,
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<{ view: PublicCodexSession; sealedDeviceLogin: string | null }> {
 	// Independent reads; the account row (login, status, pending sign-in) is
 	// one read, again below only when a catalog refresh has just expired it.
 	const [session, state] = await Promise.all([
 		scope.sessionId
-			? read?.id === scope.sessionId
+			? read instanceof Promise
 				? read
-				: agentSessionForOwner(scope.userId, scope.sessionId)
+				: read?.id === scope.sessionId
+					? read
+					: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		loadAgentAccountState(scope.userId),
 	]);
@@ -132,8 +134,14 @@ async function readSubscriptionSessionState(
 /** The chat view, showing a ChatGPT sign-in the server is waiting on. */
 export async function readSubscriptionLoginSession(
 	scope: CodexSessionScope,
+	/** The chat as the caller read it (by id, for this user), or is reading it. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<PublicCodexSession> {
-	const { view, sealedDeviceLogin } = await readSubscriptionSessionState(scope);
+	const { view, sealedDeviceLogin } = await readSubscriptionSessionState(
+		scope,
+		false,
+		read,
+	);
 	if (view.connection.status === "authenticated") return view;
 	return withDeviceLogin(
 		view,

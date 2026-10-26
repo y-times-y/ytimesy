@@ -99,6 +99,11 @@ import {
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
+	progressPage,
+	withEarlierPages,
+	withOlderPage,
+} from "#/domain/transcript-page";
+import {
 	agentDesktopActivityInTurn,
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
@@ -127,6 +132,7 @@ import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
 import {
 	connectCodexSession,
 	getCodexSession,
+	getOlderSessionItems,
 	pollCodexLogin,
 	removeQueuedSessionMessage,
 	sendCodexSessionTask,
@@ -204,6 +210,9 @@ const MACHINE_RESUME_INTERVAL_MS = 60_000;
 
 /** When the Memory page and workspace tools load in the background. */
 const PAGE_SETTLED_PREFETCH_MS = 2_500;
+
+/** How long after a failed read of older turns the next one may start. */
+const OLDER_RETRY_MS = 3_000;
 
 /** When to read a completed chat again for the save hook's marker. */
 const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
@@ -501,7 +510,11 @@ export function WorkspaceHome({
 	const rememberSessionView = useCallback(
 		(next: PublicCodexSession) => {
 			if (!next.agentSessionId) return;
-			sessionViews.current.set(next.agentSessionId, next);
+			// Older pages the reader loaded stay with the chat's newer view.
+			sessionViews.current.set(
+				next.agentSessionId,
+				withEarlierPages(sessionViews.current.get(next.agentSessionId), next),
+			);
 			if (!selectedProject?.id) return;
 			const chatId = next.agentSessionId;
 			queryClient.setQueryData(
@@ -541,7 +554,13 @@ export function WorkspaceHome({
 					next.turnStatus === "running" &&
 					progressIsFresh(liveProgress.current, next.agentSessionId, Date.now())
 				)
-					next = { ...next, items: current.items };
+					next = {
+						...next,
+						items: current.items,
+						hasOlderItems: current.hasOlderItems,
+					};
+				// The server sends the chat's last turns; older ones read stay above.
+				next = withEarlierPages(current, next);
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,
@@ -1213,13 +1232,21 @@ export function WorkspaceHome({
 				!Array.isArray(progress.items)
 			)
 				return;
-			if (!progressMatchesTurn(currentSessionRef.current.items, progress.items))
+			// A snapshot holds the chat's last turns; older ones shown stay above.
+			const page = progressPage(progress);
+			const shown = (current: PublicCodexSession) =>
+				withEarlierPages(current, {
+					agentSessionId: activeSessionId,
+					...page,
+				});
+			const incoming = shown(currentSessionRef.current);
+			if (!progressMatchesTurn(currentSessionRef.current.items, incoming.items))
 				return;
 			if (
 				progressRevivesStoppedTurn({
 					stopRequested: stopRequestedFor.current === activeSessionId,
 					current: currentSessionRef.current.items,
-					next: progress.items,
+					next: incoming.items,
 					nextStatus: progress.turnStatus,
 				})
 			)
@@ -1229,16 +1256,18 @@ export function WorkspaceHome({
 				sessionId: activeSessionId,
 				receivedAt: Date.now(),
 			};
-			setSession((current) =>
-				progressMatchesTurn(current.items, progress.items)
+			setSession((current) => {
+				const next = shown(current);
+				return progressMatchesTurn(current.items, next.items)
 					? {
 							...current,
-							items: progress.items,
+							items: next.items,
+							hasOlderItems: next.hasOlderItems,
 							turnStatus: progress.turnStatus,
 							usage: progress.usage ?? current.usage,
 						}
-					: current,
-			);
+					: current;
+			});
 			if (
 				progress.turnStatus === "completed" ||
 				progress.turnStatus === "failed"
@@ -1623,6 +1652,60 @@ export function WorkspaceHome({
 			connection: { status: "disconnected" },
 			canSend: false,
 		}));
+	}
+
+	/** The open chat's older turns being read, by the oldest item shown then. */
+	const olderRead = useRef<string | null>(null);
+	/** When reading older turns last failed: the next try waits a little. */
+	const olderFailedAt = useRef(0);
+	const [olderLoading, setOlderLoading] = useState(false);
+	/**
+	 * Reads the turns before the oldest one shown and puts them above it. A
+	 * chat whose transcript no longer holds that item (a restore rewrote it)
+	 * is read again instead.
+	 */
+	function loadOlderItems() {
+		const view = currentSessionRef.current;
+		const chatId = view.agentSessionId;
+		const before = view.items[0]?.id;
+		const projectId = activeProjectId;
+		if (!view.hasOlderItems || !chatId || !before || !projectId) return;
+		if (olderRead.current) return;
+		if (Date.now() - olderFailedAt.current < OLDER_RETRY_MS) return;
+		olderRead.current = before;
+		setOlderLoading(true);
+		const epoch = sessionEpoch.current;
+		const settle = () => {
+			olderRead.current = null;
+			setOlderLoading(false);
+		};
+		void getOlderSessionItems({
+			data: { projectId, sessionId: chatId, before },
+		})
+			.then(async (page) => {
+				if (epoch !== sessionEpoch.current) return;
+				if (!page.found) {
+					const fresh = await getCodexSession({
+						data: { projectId, sessionId: chatId, harnessId },
+					});
+					if (epoch !== sessionEpoch.current) return;
+					sessionViews.current.set(chatId, fresh);
+					setSession((current) =>
+						current.agentSessionId === chatId ? fresh : current,
+					);
+					return;
+				}
+				const older = { ...page, chatId, beforeId: before };
+				const cached = sessionViews.current.get(chatId);
+				if (cached)
+					sessionViews.current.set(chatId, withOlderPage(cached, older));
+				setSession((current) => withOlderPage(current, older));
+			})
+			// A failed read is tried again once the reader scrolls after a pause.
+			.catch(() => {
+				olderFailedAt.current = Date.now();
+			})
+			.finally(settle);
 	}
 
 	/**
@@ -2215,6 +2298,11 @@ export function WorkspaceHome({
 											void chats.refetch();
 										});
 								}}
+								olderItems={
+									session.hasOlderItems
+										? { loading: olderLoading, onLoad: loadOlderItems }
+										: undefined
+								}
 								onRemoveQueued={(messageId) => {
 									const epoch = sessionEpoch.current;
 									setSession((current) => ({

@@ -8,9 +8,16 @@ import {
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { incomingAttachments } from "#/domain/message-attachment";
+import { sessionItemsFromUnknown } from "#/domain/session-item";
+import {
+	TRANSCRIPT_PAGE_TURNS,
+	type TranscriptPage,
+} from "#/domain/transcript-page";
 import {
 	agentSessionMetadataForOwner,
+	agentSessionPageForOwner,
 	chatHoldingSend,
 	chatToOpenMetadata,
 	listSidebarAgentSessions,
@@ -145,6 +152,36 @@ export const getCodexSession = createServerFn({ method: "GET" })
 			return publicSessionView({ ...scope, sessionId: landed });
 		}
 		return publicSessionView(scope);
+	});
+
+/**
+ * The turns before the oldest item the reader has (`before`), read as the
+ * reader scrolls up. `found` is false when the chat no longer holds that
+ * item (a restore rewrote it); the reader then reads the chat again.
+ */
+export const getOlderSessionItems = createServerFn({ method: "GET" })
+	.validator((data: unknown) =>
+		z
+			.object({
+				projectId: z.uuid(),
+				sessionId: z.uuid(),
+				before: z.string().min(1).max(500),
+			})
+			.parse(data),
+	)
+	.handler(async ({ data }): Promise<TranscriptPage & { found: boolean }> => {
+		const user = await requireUser(getRequest().headers);
+		const page = await agentSessionPageForOwner(user.id, data.sessionId, {
+			turns: TRANSCRIPT_PAGE_TURNS,
+			beforeId: data.before,
+		});
+		if (!page || page.projectId !== data.projectId)
+			throw new Error("Session is not in this project.");
+		return {
+			items: childTaskPublicItems(sessionItemsFromUnknown(page.items)),
+			hasOlderItems: page.hasOlderItems,
+			found: page.pageFound,
+		};
 	});
 
 /**

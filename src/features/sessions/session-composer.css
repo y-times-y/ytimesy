@@ -776,7 +776,8 @@
 .session-timeline li[data-kind="agentMessage"] {
 	margin: 6px 0 8px;
 }
-.session-timeline li[data-kind="agentMessage"] + li[data-kind="agentMessage"] {
+/* data-follows: the row above, mounted or not (virtual-transcript.tsx). */
+.session-timeline li[data-kind="agentMessage"][data-follows="agentMessage"] {
 	margin-top: 2px;
 }
 .session-message {
@@ -2870,4 +2871,22 @@ button.helper-card:hover {
 /* Status by brightness: finished agents dim, working ones stay bright. */
 .agent-row[data-status="done"]:not([aria-current="true"]) .agent-row-name {
 	color: #9a9a9a;
+}
+
+/* The list keeps the row being read in place itself (virtual-transcript.tsx);
+   the browser's own scroll anchoring would move it twice. */
+.session-timeline {
+	overflow-anchor: none;
+}
+/* Above a chat's loaded turns while it holds older ones: a fixed-height row,
+   so the spinner showing while they load moves nothing. */
+.session-timeline li[data-kind="older"] {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 28px;
+	color: #6b6b6b;
+}
+.session-timeline li[data-kind="older"] svg {
+	animation: project-picker-spin 0.9s linear infinite;
 }

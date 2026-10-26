@@ -92,11 +92,13 @@ export function emptyHarnessSession(
 /** The stored transcript and connection; reading never starts a VM. */
 export function readHarnessWorkspaceSession(
 	scope: HarnessSessionScope,
+	/** The chat as the caller read it (by id, for this user), or is reading it. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Effect.Effect<PublicHarnessSession> {
 	return Effect.promise(() =>
 		scope.harnessId === "codex"
-			? readSubscriptionLoginSession(scope)
-			: readApiWorkspaceSession(scope),
+			? readSubscriptionLoginSession(scope, read)
+			: readApiWorkspaceSession(scope, read),
 	);
 }
 

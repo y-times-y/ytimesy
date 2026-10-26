@@ -15,6 +15,7 @@ import type {
 } from "#/domain/subagent";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
+import { STARTS_TURN_SQL } from "./transcript-page-sql";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -269,6 +270,8 @@ export async function listSidebarAgentSessions(
 	userId: string,
 	projectId: string,
 ) {
+	// Only each chat's last turn: what the chat waits on from the user
+	// (chatWaitingOn) is read from it, and whole transcripts are large.
 	const result = await database().query(
 		`select ${SESSION_COLUMNS.replace(",items,", `,${SIDEBAR_ITEMS} as items,`)},
 		  (select min(t.created_at) from api_turn t
@@ -306,6 +309,56 @@ export async function agentSessionMetadataForOwner(
 	if (!result.rows[0]) return null;
 	const { items: _items, ...metadata } = toSession(result.rows[0]);
 	return metadata;
+}
+
+/**
+ * A chat with one page of its transcript (transcriptPageBefore in
+ * transcript-page.ts): the `turns` turns before the item `beforeId`, else
+ * its last `turns` turns. The database slices the stored array, so only the
+ * page leaves it. Null for a chat that is not the user's; `items` is empty
+ * and `pageFound` false when the transcript no longer holds `beforeId`.
+ */
+export async function agentSessionPageForOwner(
+	userId: string,
+	sessionId: string,
+	page: { readonly turns: number; readonly beforeId?: string },
+): Promise<
+	| (AgentSessionRecord & {
+			readonly hasOlderItems: boolean;
+			readonly pageFound: boolean;
+	  })
+	| null
+> {
+	// Materialized: each step reads the stored array once, not once per item.
+	const result = await database().query(
+		`with s as materialized (select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2),
+		 k as materialized (select e.o, e.it->>'id' as id, ${STARTS_TURN_SQL} as starts
+		  from s, jsonb_array_elements(s.items) with ordinality e(it,o)),
+		 st as (select case when $3::text is null then (select count(*)+1 from k)
+		  else (select o from k where id=$3::text limit 1) end as stop),
+		 b as (select st.stop, (select case when count(*) < $4 then 1 else min(t.o) end
+		  from (select o from k where starts and o < st.stop order by o desc limit $4) t) as first from st)
+		 select ${SESSION_COLUMNS.split(",")
+				.map((column) =>
+					column === "items"
+						? `case when b.stop is null or b.stop <= b.first then '[]'::jsonb
+		  else jsonb_path_query_array(s.items, ('$[' || (b.first-1) || ' to ' || (b.stop-2) || ']')::jsonpath) end as items`
+						: `s.${column}`,
+				)
+				.join(",")},
+		  b.first > 1 as has_older_items, b.stop is not null as page_found
+		 from s, b`,
+		[sessionId, userId, page.beforeId ?? null, page.turns],
+	);
+	const row = result.rows[0] as
+		| (AgentSessionRow & { has_older_items: boolean; page_found: boolean })
+		| undefined;
+	if (!row) return null;
+	return {
+		...toSession(row),
+		hasOlderItems: row.has_older_items,
+		pageFound: row.page_found,
+	};
 }
 
 export async function agentSessionForOwner(userId: string, sessionId: string) {
