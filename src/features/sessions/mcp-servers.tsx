@@ -1,8 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { mcpServerLabel as serverLabel } from "#/domain/connector-name";
+import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
 import type { PublicMcpServer } from "#/server/adapters/mcp-servers";
 import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
@@ -14,6 +20,60 @@ import {
 	startMcpOAuthFn,
 } from "./mcp-servers.fn";
 import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
+
+const SERVERS_KEY = ["mcp-servers"];
+
+function mcpServersSave<TVariables>(
+	queryClient: QueryClient,
+	update: (
+		servers: PublicMcpServer[],
+		variables: TVariables,
+	) => PublicMcpServer[],
+) {
+	return optimisticMutation<PublicMcpServer[], TVariables>({
+		queryClient,
+		scope: "integrations",
+		writes: (variables) => [
+			cacheWrite<PublicMcpServer[]>(SERVERS_KEY, (servers) =>
+				update(servers, variables),
+			),
+		],
+		serverWrites: (data) => [{ queryKey: SERVERS_KEY, data }],
+	});
+}
+
+/** A server's switch moves at once; the server's checked list replaces it. */
+export function mcpServerToggle(
+	queryClient: QueryClient,
+	toggle: (input: {
+		data: { id: string; enabled: boolean };
+	}) => Promise<PublicMcpServer[]>,
+) {
+	return {
+		mutationFn: (input: { id: string; enabled: boolean }) =>
+			toggle({ data: input }),
+		...mcpServersSave<{ id: string; enabled: boolean }>(
+			queryClient,
+			(servers, { id, enabled }) =>
+				servers.map((server) =>
+					server.id === id ? { ...server, enabled } : server,
+				),
+		),
+	};
+}
+
+/** A removed server leaves the list at once. */
+export function mcpServerRemove(
+	queryClient: QueryClient,
+	remove: (input: { data: { id: string } }) => Promise<PublicMcpServer[]>,
+) {
+	return {
+		mutationFn: (id: string) => remove({ data: { id } }),
+		...mcpServersSave<string>(queryClient, (servers, id) =>
+			servers.filter((server) => server.id !== id),
+		),
+	};
+}
 
 /** Remote MCP servers the agent can use; called from our server, keys never shown again. */
 export function McpServers() {
@@ -73,17 +133,9 @@ export function McpServers() {
 			else setAdded(result.toolCount);
 		},
 	});
-	const toggle = useMutation({
-		mutationFn: (input: { id: string; enabled: boolean }) =>
-			toggleServer({ data: input }),
-		onSuccess: update,
-	});
-	const remove = useMutation({
-		mutationFn: (id: string) => deleteServer({ data: { id } }),
-		onSuccess: update,
-	});
-	const busy =
-		add.isPending || toggle.isPending || remove.isPending || signIn.isPending;
+	const toggle = useMutation(mcpServerToggle(queryClient, toggleServer));
+	const remove = useMutation(mcpServerRemove(queryClient, deleteServer));
+	const busy = add.isPending || signIn.isPending;
 	const error = add.error ?? toggle.error ?? remove.error ?? signIn.error;
 	return (
 		<section className="integrations" aria-label="MCP servers">
@@ -217,7 +269,11 @@ export function McpServers() {
 											disabled={busy}
 											onClick={() => signIn.mutate(server.id)}
 										>
-											{needsSignIn ? "Sign in" : "Reconnect"}
+											{signIn.isPending && signIn.variables === server.id
+												? "Opening…"
+												: needsSignIn
+													? "Sign in"
+													: "Reconnect"}
 										</button>
 									) : null}
 									<IntegrationSwitch

@@ -43,6 +43,7 @@ import {
 import { memoryRows } from "#/domain/memory-overview";
 import type { Project } from "#/domain/projects";
 import { editMemoryFn, readMemoryFn, readMemoryGraphFn } from "./memory.fn";
+import { memoryEditSave } from "./memory-edit-save";
 import {
 	formatMemoryDate,
 	memoryLineRef,
@@ -439,12 +440,12 @@ export function MemoryGraphPage({
 		} else if (!current.moved) setSelected(null);
 	};
 
+	const editSave = memoryEditSave(queryClient, editMemory);
 	const edit = useMutation({
-		mutationFn: (data: MemoryEdit) => editMemory({ data }),
-		onSuccess: (result, data) => {
-			if (!result.ok) return;
+		...editSave,
+		onMutate: (data) => {
 			if (data.op === "delete") setSelected(null);
-			return queryClient.invalidateQueries({ queryKey: ["memory"] });
+			return editSave.onMutate(data);
 		},
 	});
 
@@ -669,7 +670,7 @@ export function MemoryGraphPage({
 					hubLabel={hubs.get(selectedMemory.hub)?.label}
 					scopeLabel={scopeTitle(selectedMemory.scope)}
 					choices={choices}
-					busy={edit.isPending}
+					busy={false}
 					error={
 						edit.data && !edit.data.ok ? edit.data.error : edit.error?.message
 					}
