@@ -370,14 +370,10 @@ exports[`replays a reservation idempotently and refuses a changed identity 1`] =
 }
 `;
 
-exports[`settles a paused VM and buys a fresh cap before resuming it > round trips 1`] = `22`;
+exports[`settles a paused VM and buys a fresh cap before resuming it > round trips 1`] = `11`;
 
 exports[`settles a paused VM and buys a fresh cap before resuming it 1`] = `
 [
-  {
-    "automaticRestart": false,
-    "maxRunTotalSeconds": 903,
-  },
   {
     "automaticRestart": false,
     "maxRunTotalSeconds": 1203,

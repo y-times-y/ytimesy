@@ -17,6 +17,7 @@ import {
 import { loadToolsSnapshotSetting } from "../product-settings";
 import { consumeUserAction } from "../user-action-rate";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
+import { sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
 import {
 	assertRetentionTouched,
 	RETENTION_TOUCH_CTES,
@@ -77,9 +78,9 @@ export function computeHourlyMicroUsd(resources: VmResources) {
 	return Math.ceil(resources.cpu * 40_320 + (resources.memory / 1024) * 12_900);
 }
 
-const OWNERS_SQL = `select user_id from workspace where 'ytimesy-ws-' || id::text=$1
- union all select user_id from agent_session where 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1
- union all select w.user_id from environment_build b join workspace w on w.id=b.workspace_id where 'ytimesy-build-' || b.id::text=$1`;
+const OWNERS_SQL = `select user_id from workspace where ${uuidSlugMatch("$1", "ytimesy-ws-", "id")}
+ union all select user_id from agent_session where ${sessionSlugMatch("$1")}
+ union all select w.user_id from environment_build b join workspace w on w.id=b.workspace_id where ${uuidSlugMatch("$1", "ytimesy-build-", "b.id")}`;
 
 type AdmissionContext = {
 	/** The slug's owners; admission requires exactly one. */
@@ -213,6 +214,15 @@ export async function lockedVm<T>(
 	}
 }
 
+/** What a hold has used: its machine's runtime since the hold's baseline, at its rate. */
+function heldUsage(row: Admission, totalSeconds: number) {
+	return Math.ceil(
+		((totalSeconds - Number(row.baseline_seconds)) *
+			Number(row.hourly_micro_usd)) /
+			3600,
+	);
+}
+
 const ADMISSION_COLUMNS =
 	"slug,vm_id,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd,updated_at";
 
@@ -226,6 +236,15 @@ async function admittedCap(
 	requestedSeconds = 300,
 	settled = false,
 	read?: AdmissionContext,
+	options: {
+		/**
+		 * Buy a fresh hold even if the previous cap still covers the
+		 * operation: a settled machine's resume re-checks the usage windows.
+		 */
+		renew?: boolean;
+		/** The new cap must reach at least totalSeconds plus this. */
+		minimumSeconds?: number;
+	} = {},
 ): Promise<{ cap: number; row: Admission }> {
 	if (!Number.isFinite(totalSeconds) || totalSeconds < 0)
 		throw new Error("VM runtime counter is unavailable.");
@@ -244,6 +263,7 @@ async function admittedCap(
 				"VM resources changed; its budget must be reconciled before resuming.",
 			);
 		if (
+			!options.renew &&
 			resumeCapDecision({
 				metered: true,
 				settled,
@@ -254,20 +274,15 @@ async function admittedCap(
 			}) === "keep"
 		)
 			return { cap: Number(previous.max_run_total_seconds), row: previous };
-		const consumed = Math.ceil(
-			((totalSeconds - Number(previous.baseline_seconds)) *
-				Number(previous.hourly_micro_usd)) /
-				3600,
-		);
-		await settleInfrastructureUsage(
-			{
-				id: previous.reservation_id,
-				userId,
-				consumedMicroUsd: consumed,
-			},
-			client,
-		);
 	}
+	// The previous hold settles at its real usage in the new hold's
+	// transaction: both commit, or neither does.
+	const settlePrevious = previous
+		? {
+				id: previous.reservation_id,
+				consumedMicroUsd: heldUsage(previous, totalSeconds),
+			}
+		: undefined;
 	const hourlyMicroUsd = computeHourlyMicroUsd(resources);
 	const holdFor = (runSeconds: number) =>
 		Math.ceil(
@@ -284,16 +299,17 @@ async function admittedCap(
 			id,
 			userId,
 			resourceKey: `vm:${slug}`,
-			amountMicroUsd: holdFor(requested),
+			amountMicroUsd: holdFor(Math.max(requested, options.minimumSeconds ?? 0)),
 			hourlyMicroUsd,
-			minimumMicroUsd: holdFor(1),
+			minimumMicroUsd: holdFor(Math.max(1, options.minimumSeconds ?? 0)),
 			// A known VM that is not paused or stopped is already running.
 			continuing: vmId !== undefined && !settled,
+			settlePrevious,
 		},
 		client,
 	);
 	const seconds = Math.min(
-		requested,
+		Math.max(requested, options.minimumSeconds ?? 0),
 		Math.floor((held * 3600) / hourlyMicroUsd) - PROVIDER_STOP_BUFFER_SECONDS,
 	);
 	// Persist BEFORE provider mutation. A failed create/update retains its hold and retries the same absolute cap.
@@ -343,29 +359,71 @@ export async function admitVmResume(
 		return;
 	}
 	if (!data.slug) throw new Error("VM usage identity is missing.");
-	// Settle a stopped VM like a paused one, so its next cap is bought from
-	// its real runtime instead of starting against a spent cap.
-	if (settledState(data.state)) await reconcilePausedVm(vm);
-	await lockedVm(data.slug, async (client) => {
-		const latest = await vm.data();
-		const context = await admissionContext(client, data.slug as string, latest);
+	const slug = data.slug;
+	await lockedVm(slug, async (client) => {
+		let latest = await vm.data();
+		const context = await admissionContext(client, slug, latest);
 		assertRetentionTouched(context.retention, latest);
 		if (latest.totalRunSeconds == null)
 			throw new Error("VM runtime counter is unavailable.");
-		let { cap, row } = await admittedCap(
-			data.slug as string,
-			latest.resources,
-			latest.totalRunSeconds,
-			client,
-			latest.id,
-			Math.max(300, requiredSeconds + 15),
-			settledState(latest.state),
-			context,
-		);
-		if (
-			settledState(latest.state) &&
-			cap - latest.totalRunSeconds < requiredSeconds + 15
-		)
+		let total: number = latest.totalRunSeconds;
+		const requested = Math.max(300, requiredSeconds + 15);
+		const settled = settledState(latest.state);
+		const admit = (read: AdmissionContext, total: number, renew = false) =>
+			admittedCap(
+				slug,
+				latest.resources,
+				total,
+				client,
+				latest.id,
+				requested,
+				settled,
+				read,
+				renew
+					? {
+							renew,
+							minimumSeconds: Math.max(
+								0,
+								Math.ceil((latest.maxRunTotalSeconds ?? 0) - Math.floor(total)),
+							),
+						}
+					: {},
+			);
+		let admitted: { cap: number; row: Admission } | undefined;
+		// A paused or stopped machine's hold settles at its real runtime and a
+		// fresh one is bought (re-checking the usage windows), as
+		// reconcilePausedVm then a new admission did. Done in one transaction
+		// and one cap update when the new cap covers the provider's current
+		// one: then the machine is never able to run past its paid runtime,
+		// even if the update below fails. Otherwise (or on any refusal) the
+		// cap is revoked first, exactly as before.
+		const previous = context.admission;
+		if (settled && previous?.vm_id === latest.id) {
+			const providerCap = latest.maxRunTotalSeconds;
+			if (
+				typeof providerCap === "number" &&
+				providerCap >= 0 &&
+				providerCap - Math.floor(total) <= requested
+			)
+				admitted = await admit(context, total, true).catch(() => undefined);
+			if (!admitted) {
+				latest = await revokeAndSettlePaused(vm, client, latest, previous);
+				// Confirmed unchanged by revokeAndSettlePaused.
+				total = latest.totalRunSeconds ?? total;
+				admitted = await admit(
+					{
+						...context,
+						admission: {
+							...previous,
+							max_run_total_seconds: String(Math.floor(total)),
+						},
+					},
+					total,
+				);
+			}
+		} else admitted = await admit(context, total);
+		let { cap, row } = admitted;
+		if (settledState(latest.state) && cap - total < requiredSeconds + 15)
 			throw new MachineUsageLimitReached();
 		let runningUsage: number | undefined;
 		if (latest.state === "running") {
@@ -413,8 +471,14 @@ export async function admitVmResume(
 			latest.maxRunTotalSeconds !== cap ||
 			latest.automaticRestart !== false
 		) {
-			await vm.update({ maxRunTotalSeconds: cap, automaticRestart: false });
-			const confirmed = await vm.data();
+			// The update answers with the VM's record; only a record that does
+			// not show the new cap is read again before refusing.
+			const updated: VmData | undefined = await vm.update({
+				maxRunTotalSeconds: cap,
+				automaticRestart: false,
+			});
+			const confirmed =
+				updated?.maxRunTotalSeconds === cap ? updated : await vm.data();
 			if (confirmed.maxRunTotalSeconds !== cap)
 				throw new Error("Provider did not confirm the execution budget.");
 		}
@@ -627,33 +691,45 @@ export async function reconcilePausedVm(vm: Vm) {
 		if (!row || row.vm_id !== data.id) return;
 		const current = await vm.data();
 		if (!settledState(current.state) || current.totalRunSeconds == null) return;
-		const cap = Math.floor(current.totalRunSeconds);
-		await vm.update({ maxRunTotalSeconds: cap, automaticRestart: false });
-		const confirmed = await vm.data();
-		if (
-			!settledState(confirmed.state) ||
-			confirmed.maxRunTotalSeconds !== cap ||
-			confirmed.totalRunSeconds !== current.totalRunSeconds
-		)
-			throw new Error("Paused usage reconciliation could not be confirmed.");
-		const consumed = Math.ceil(
-			((current.totalRunSeconds - Number(row.baseline_seconds)) *
-				Number(row.hourly_micro_usd)) /
-				3600,
-		);
-		await client.query(
-			"update infrastructure_vm_admission set max_run_total_seconds=$2 where slug=$1",
-			[data.slug, cap],
-		);
-		await settleInfrastructureUsage(
-			{
-				id: row.reservation_id,
-				userId: row.user_id,
-				consumedMicroUsd: consumed,
-			},
-			client,
-		);
+		await revokeAndSettlePaused(vm, client, current, row);
 	});
+}
+
+/**
+ * Under the VM's lease: caps a settled VM at the runtime it has used,
+ * confirms that, then settles its hold at that usage. Returns the confirmed
+ * provider state.
+ */
+async function revokeAndSettlePaused(
+	vm: Vm,
+	client: PoolClient,
+	current: VmData,
+	row: Admission,
+) {
+	if (current.totalRunSeconds == null)
+		throw new Error("VM runtime counter is unavailable.");
+	const cap = Math.floor(current.totalRunSeconds);
+	await vm.update({ maxRunTotalSeconds: cap, automaticRestart: false });
+	const confirmed = await vm.data();
+	if (
+		!settledState(confirmed.state) ||
+		confirmed.maxRunTotalSeconds !== cap ||
+		confirmed.totalRunSeconds !== current.totalRunSeconds
+	)
+		throw new Error("Paused usage reconciliation could not be confirmed.");
+	await client.query(
+		"update infrastructure_vm_admission set max_run_total_seconds=$2 where slug=$1",
+		[row.slug, cap],
+	);
+	await settleInfrastructureUsage(
+		{
+			id: row.reservation_id,
+			userId: row.user_id,
+			consumedMicroUsd: heldUsage(row, current.totalRunSeconds),
+		},
+		client,
+	);
+	return confirmed;
 }
 
 /** A paused or stopped VM accrues no runtime, so its hold can be settled. */

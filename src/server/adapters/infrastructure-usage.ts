@@ -207,6 +207,12 @@ export async function reserveInfrastructureUsage(
 		 * admitted before the limit).
 		 */
 		continuing?: boolean;
+		/**
+		 * The machine's previous hold, settled at its real usage first in the
+		 * same transaction (as settleInfrastructureUsage would, committed only
+		 * with this reservation).
+		 */
+		settlePrevious?: { id: string; consumedMicroUsd: number };
 	},
 	existingClient?: PoolClient,
 	mode: "create" | "increase" = "create",
@@ -219,7 +225,14 @@ export async function reserveInfrastructureUsage(
 	)
 		throw new Error("Invalid infrastructure reservation.");
 	const limits = infrastructureUsageLimits();
+	if (input.settlePrevious)
+		validUsageAmount(input.settlePrevious.consumedMicroUsd);
 	return usageTransaction(async (client) => {
+		if (input.settlePrevious)
+			await settleHold(client, {
+				...input.settlePrevious,
+				userId: input.userId,
+			});
 		let amountToReserve = input.amountMicroUsd;
 		const period = utcUsageMonth();
 		// Everything the decision needs in one read under the budget lock; the
@@ -329,28 +342,34 @@ export async function settleInfrastructureUsage(
 	existingClient?: PoolClient,
 ) {
 	validUsageAmount(input.consumedMicroUsd);
-	await usageTransaction(async (client) => {
-		// Reads the hold and settles it in one statement; the update only
-		// applies where the checks below pass, and any refusal rolls back.
-		const result = await client.query<{
-			reserved_micro_usd: string;
-			consumed_micro_usd: string | null;
-		}>(
-			`with hold as (select reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1 and user_id=$2),
-			 settled as (update infrastructure_usage_reservation set consumed_micro_usd=$3,settled_at=now()
-			  where id=$1 and user_id=$2 and consumed_micro_usd is null and reserved_micro_usd>=$3 returning 1)
-			 select reserved_micro_usd,consumed_micro_usd from hold`,
-			[input.id, input.userId, input.consumedMicroUsd],
-		);
-		const row = result.rows[0];
-		if (!row || input.consumedMicroUsd > Number(row.reserved_micro_usd))
-			throw new Error("Infrastructure settlement exceeds its reservation.");
-		if (
-			row.consumed_micro_usd !== null &&
-			Number(row.consumed_micro_usd) !== input.consumedMicroUsd
-		)
-			throw new Error("Infrastructure settlement changed after confirmation.");
-	}, existingClient);
+	await usageTransaction((client) => settleHold(client, input), existingClient);
+}
+
+/** Settles a hold inside the caller's budget transaction; a refusal throws (and rolls it back). */
+async function settleHold(
+	client: PoolClient,
+	input: { id: string; userId: string; consumedMicroUsd: number },
+) {
+	// Reads the hold and settles it in one statement; the update only
+	// applies where the checks below pass, and any refusal rolls back.
+	const result = await client.query<{
+		reserved_micro_usd: string;
+		consumed_micro_usd: string | null;
+	}>(
+		`with hold as (select reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1 and user_id=$2),
+		 settled as (update infrastructure_usage_reservation set consumed_micro_usd=$3,settled_at=now()
+		  where id=$1 and user_id=$2 and consumed_micro_usd is null and reserved_micro_usd>=$3 returning 1)
+		 select reserved_micro_usd,consumed_micro_usd from hold`,
+		[input.id, input.userId, input.consumedMicroUsd],
+	);
+	const row = result.rows[0];
+	if (!row || input.consumedMicroUsd > Number(row.reserved_micro_usd))
+		throw new Error("Infrastructure settlement exceeds its reservation.");
+	if (
+		row.consumed_micro_usd !== null &&
+		Number(row.consumed_micro_usd) !== input.consumedMicroUsd
+	)
+		throw new Error("Infrastructure settlement changed after confirmation.");
 }
 
 /** Kinds an admin may set now: a per-user override of one usage window's limit. */

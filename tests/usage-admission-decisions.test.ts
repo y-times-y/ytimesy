@@ -44,7 +44,7 @@ beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
 	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text,agent_role text);
-	create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);
+	create table workspace(id uuid,user_id text); create table environment_build(id uuid,workspace_id uuid);
 	create table api_turn(id text,user_id text,state text,session_id text);`);
 	for (const file of [
 		"20261003020000_infrastructure_usage",
@@ -464,4 +464,110 @@ it("replays a reservation idempotently and refuses a changed identity", async ()
 		),
 	).toBe("Infrastructure reservation is unavailable.");
 	expect(await decisions()).toMatchSnapshot();
+});
+
+it("revokes first, then buys a fresh cap, when a paused VM's cap reaches past the new one", async () => {
+	// 2000 - 903 seconds of prepaid runtime left: more than a resume buys.
+	await seedAdmission({ cap: 2000, baseline: 600 });
+	await seedRetention();
+	const { vm, updates, state } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 2000,
+	});
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(updates).toEqual([
+		{ maxRunTotalSeconds: 903, automaticRestart: false },
+		{ maxRunTotalSeconds: 1203, automaticRestart: false },
+	]);
+	const { reservations, admission } = await decisions();
+	expect(reservations.map((row) => row.consumed_micro_usd)).toEqual([
+		"11131",
+		null,
+	]);
+	expect((admission[0] as Record<string, unknown>).max_run_total_seconds).toBe(
+		"1203",
+	);
+	expect(state.maxRunTotalSeconds).toBe(1203);
+});
+
+it("a refused resume still settles the paused hold and revokes its cap, as before", async () => {
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "10000");
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm, updates } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 900,
+	});
+	expect(await outcome(() => resume(vm, 60))).toMatch(/5-hour cloud usage/);
+	expect(updates).toEqual([
+		{ maxRunTotalSeconds: 903, automaticRestart: false },
+	]);
+	const { reservations, admission } = await decisions();
+	expect(reservations).toHaveLength(1);
+	expect(reservations[0].consumed_micro_usd).toBe("11131");
+	expect((admission[0] as Record<string, unknown>).max_run_total_seconds).toBe(
+		"903",
+	);
+});
+
+it("leaves a paused VM covered by its new hold when the single cap update fails", async () => {
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm, state } = machine({
+		state: "paused",
+		totalRunSeconds: 850,
+		maxRunTotalSeconds: 900,
+	});
+	vm.update = async () => {
+		throw new Error("provider unavailable");
+	};
+	expect(await outcome(() => resume(vm, 60))).toBe("provider unavailable");
+	const { reservations, admission } = await decisions();
+	// The old hold settled at its use; the open new one pays up to 1150,
+	// past the 900 the provider still allows.
+	expect(reservations.map((row) => row.consumed_micro_usd)).toEqual([
+		String(Math.ceil((250 * hourly) / 3600)),
+		null,
+	]);
+	expect(
+		Number((admission[0] as Record<string, unknown>).max_run_total_seconds),
+	).toBeGreaterThanOrEqual(state.maxRunTotalSeconds);
+	expect(
+		Number((admission[0] as Record<string, unknown>).baseline_seconds),
+	).toBe(850);
+});
+
+it("takes the cap update's own answer as its confirmation, and re-reads only when it does not show the cap", async () => {
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm, state } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 900,
+	});
+	const read = vm.data;
+	let reads = 0;
+	vm.data = async () => {
+		reads++;
+		return read();
+	};
+	const update = vm.update;
+	vm.update = async (patch: Partial<Provider>) => {
+		await update(patch);
+		return { ...state, slug, resources } as never;
+	};
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	// One read before the lease (resume's), one under it; none after the update.
+	expect(reads).toBe(2);
+	vm.update = async (patch: Partial<Provider>) => {
+		await update(patch);
+		return { ...state, maxRunTotalSeconds: 1 } as never;
+	};
+	state.state = "paused";
+	state.totalRunSeconds = 1150;
+	reads = 0;
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(reads).toBe(3);
 });
