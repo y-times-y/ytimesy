@@ -23,7 +23,7 @@ export { DEGENERATE_RUN_CHARS, DegenerateOutput, whitespaceRun };
  * agent yet, so the identical request is sent again (at most maxAttempts
  * times). The harness's streamRetries: 0 therefore never sees a partial
  * response. Each call is logged as one JSON line (request id, status,
- * timings, terminal event; on a cut also the last event types, the last
+ * reasoning effort the body names, timings, terminal event; on a cut also the last event types, the last
  * 4 KB of stream text and the request body in a side file). Credentials are
  * never logged: only the URL path, response headers' request id and the
  * stream itself are recorded.
@@ -262,6 +262,24 @@ function errorChain(error: unknown) {
 	return out;
 }
 
+/**
+ * The reasoning effort a streamed request's body names (OpenAI Responses'
+ * reasoning.effort, Anthropic Messages' output_config.effort); null when none.
+ */
+export function requestBodyEffort(body: string | null): string | null {
+	if (!body) return null;
+	try {
+		const parsed = JSON.parse(body) as {
+			reasoning?: { effort?: unknown };
+			output_config?: { effort?: unknown };
+		};
+		const effort = parsed.reasoning?.effort ?? parsed.output_config?.effort;
+		return typeof effort === "string" ? effort : null;
+	} catch {
+		return null;
+	}
+}
+
 const requestIdOf = (headers: Headers) =>
 	headers.get("x-request-id") ??
 	headers.get("request-id") ??
@@ -313,6 +331,7 @@ export function guardedFetch(
 		const kind = streamKind(url, body);
 		if (!kind) return original(input, init);
 		const path = new URL(url).pathname;
+		const effort = requestBodyEffort(body);
 		let last: { response: Response; drained: Drained } | null = null;
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const started = Date.now();
@@ -323,6 +342,7 @@ export function guardedFetch(
 				record({
 					phase: "request",
 					kind,
+					effort,
 					path,
 					attempt,
 					ms: Date.now() - started,
@@ -335,6 +355,7 @@ export function guardedFetch(
 				record({
 					phase: "response",
 					kind,
+					effort,
 					path,
 					attempt,
 					requestId,
@@ -346,6 +367,7 @@ export function guardedFetch(
 			const drained = await drain(kind, response.body, degenerateRunChars);
 			const base = {
 				kind,
+				effort,
 				path,
 				attempt,
 				requestId,

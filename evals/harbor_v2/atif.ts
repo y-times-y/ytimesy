@@ -32,7 +32,13 @@ export const ATIF_SCHEMA_VERSION = "ATIF-v1.7";
 
 export type TimedEvent = { at: string; event: ApiAgentEvent };
 /** A user-role message the harness injected mid-run (e.g. review findings). */
-export type TimedNotice = { at: string; afterEvent: number; text: string };
+export type TimedNotice = {
+	at: string;
+	afterEvent: number;
+	text: string;
+	/** A finish gate that sent the builder back (trial.ts BuilderContinuation). */
+	continuation?: "ledger" | "grind";
+};
 
 type ToolCall = {
 	tool_call_id: string;

@@ -170,6 +170,48 @@ export const HARNESS_VARIANT_VALUES = {
 	 * is. off = the surface's own limits only (the default).
 	 */
 	outputCap: ["off", "10000", "16000"],
+	/**
+	 * Grind budget (unattended runs only; evals/harbor_v2/grind-gate.ts): on
+	 * sends a builder that finishes early, with most of its time left, back
+	 * at most twice to try to break its own result before it may finish.
+	 * off = the builder stops when it says it is done (the default).
+	 */
+	grind: ["off", "on"],
+	/**
+	 * The reasoning sandwich (unattended runs only; evals/harbor_v2/
+	 * effort-mix.ts): on keeps the turn's effort for the root builder's
+	 * first two model requests (planning) and for continuation rounds the
+	 * harness sends (grind), and holds every other request at high. A turn
+	 * effort of high or lower is unchanged. off = the turn's effort for every
+	 * request (the default).
+	 */
+	effortMix: ["off", "on"],
+	/**
+	 * Environment snapshot (unattended runs only; evals/harbor_v2/env-snapshot.ts):
+	 * on runs one fixed read-only probe in the sandbox (OS, resources, file
+	 * tree, project files, tools, network, processes) before the builder's
+	 * first request and puts its output above the request. off = the request
+	 * alone (the default).
+	 */
+	envSnapshot: ["off", "on"],
+	/**
+	 * Requirement ledger (unattended runs only; evals/harbor_v2/
+	 * requirement-ledger.ts): on gives the root builder a requirements tool
+	 * and a first-message note to record the request's requirements (quote,
+	 * readings, one check command each) before building; when it finishes,
+	 * the harness runs every check and sends a failure (or a missing ledger)
+	 * back, at most twice. off = no ledger (the default).
+	 */
+	ledger: ["off", "on"],
+	/**
+	 * Goal mode (unattended runs only; src/domain/goal.ts): on makes the
+	 * request the run's goal, gives the root builder the goal tool, and sends
+	 * it back with an audit notice while the goal is active, until it marks
+	 * the goal complete with evidence or blocked, or a deterministic stop
+	 * (deadline, no progress, continuation cap). Supersedes grind. off = the
+	 * builder stops when it says it is done (the default).
+	 */
+	goal: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -217,6 +259,11 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	leadEffort: "high",
 	rigor: "off",
 	outputCap: "off",
+	grind: "off",
+	effortMix: "off",
+	envSnapshot: "off",
+	ledger: "off",
+	goal: "off",
 	roleModels: {},
 };
 

@@ -179,6 +179,11 @@ export async function harborHarness(input: {
 	 * the fusion lead's agent/agent_send, a pair judge's checker_worker.
 	 */
 	extraTools?: (tools: ToolSet) => ToolSet;
+	/**
+	 * The trial's own tools (ledger=on's requirements, goal=on's goal tool):
+	 * direct tools that run_code programs may call too, kept for a thin lead.
+	 */
+	trialTools?: ToolSet;
 }): Promise<HarborHarness> {
 	const { workspace, variant } = input;
 	const memo = memoryMemo();
@@ -227,7 +232,8 @@ export async function harborHarness(input: {
 					input.provider === "codex-subscription" ? "openai" : input.provider,
 				)
 		: {};
-	let tools: ToolSet = { ...surface.tools, ...webSearch };
+	const trialTools = input.trialTools ?? {};
+	let tools: ToolSet = { ...surface.tools, ...webSearch, ...trialTools };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
 	// deferred tools here: the bridge offers no agent, plan or MCP tools.
 	// lead=fusion's thin lead (leadTools=thin): delegation, a capped read and
@@ -250,6 +256,7 @@ export async function harborHarness(input: {
 			turnId: workspace.turnId,
 			mode: codeMode,
 			deferred: [],
+			callable: Object.keys(trialTools),
 			journal: (toolCallId) => ({
 				recorded: async () => journal.get(toolCallId),
 				record: async (result) => {
@@ -264,7 +271,7 @@ export async function harborHarness(input: {
 					: { ...tools, [CODE_MODE_TOOL]: runCode };
 	}
 	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
-	if (thinLead) tools = thinLeadTools(tools);
+	if (thinLead) tools = { ...thinLeadTools(tools), ...trialTools };
 	const instructions = agentTurnInstructions({
 		session: input.subagent
 			? {
