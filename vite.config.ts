@@ -58,6 +58,8 @@ const cloudflareTarget = process.env.YTIMESY_TARGET === "cloudflare";
 
 const config = defineConfig({
 	resolve: { tsconfigPaths: true },
+	// The code-highlighting worker loads Shiki grammars on demand (dynamic imports).
+	worker: { format: "es" },
 	plugins: [
 		...(cloudflareTarget
 			? [
