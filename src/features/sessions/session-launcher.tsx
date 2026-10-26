@@ -109,9 +109,11 @@ import {
 	pastedTextFile,
 	sentFileFields,
 } from "./attachment-tile";
+import { chatSideKeys } from "./chat-side-queries";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
+	ConversationRecoverySlot,
 	refreshRecoveredWorkspace,
 } from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
@@ -322,18 +324,20 @@ export function SessionLauncher({
 		text || (attachments.length ? ATTACHMENTS_ONLY_TEXT : "");
 	const loadRecovery = useServerFn(getConversationRecoveryPoints);
 	const recoverPoint = useServerFn(restoreConversationPoint);
+	// Known on the server too, so the transcript keeps a recovery row under
+	// each user message from the first paint while the points load.
+	const recoverable =
+		!!selectedProject?.id &&
+		!!session.agentSessionId &&
+		(harnessId === "codex" || harnessId === "api");
 	const recoveryPoints = useQuery({
-		queryKey: [
-			"conversation-recovery",
+		queryKey: chatSideKeys.recoveryPoints(
 			selectedProject?.id,
 			session.agentSessionId,
 			session.items.length,
 			session.turnStatus,
-		],
-		enabled:
-			!!selectedProject?.id &&
-			!!session.agentSessionId &&
-			(harnessId === "codex" || harnessId === "api"),
+		),
+		enabled: recoverable,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId) return [];
 			return loadRecovery({
@@ -410,12 +414,11 @@ export function SessionLauncher({
 	const loadEvidence = useServerFn(listChatEvidence);
 	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
 	const chatEvidence = useQuery({
-		queryKey: [
-			"chat-evidence",
+		queryKey: chatSideKeys.evidence(
 			selectedProject?.id,
 			session.agentSessionId,
 			session.turnStatus,
-		],
+		),
 		enabled: !!selectedProject?.id && !!session.agentSessionId,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId)
@@ -1016,12 +1019,17 @@ export function SessionLauncher({
 			) : (
 				<SessionTimeline
 					recoveryControls={
-						onRecovered && selectedProject && session.agentSessionId
+						onRecovered &&
+						recoverable &&
+						selectedProject &&
+						session.agentSessionId
 							? (messageId) => {
 									const point = recoveryPoints.data?.find(
 										(point) => point.messageId === messageId,
 									);
-									if (!point) return null;
+									// The row's room stays while the points load or when a
+									// message has none: the transcript's spacing never moves.
+									if (!point) return <ConversationRecoverySlot />;
 									return (
 										<ConversationRecovery
 											codeAvailable={point.codeAvailable}
