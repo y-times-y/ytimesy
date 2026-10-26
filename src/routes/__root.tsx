@@ -5,10 +5,7 @@ import { useState } from "react";
 import { Analytics } from "../features/analytics/analytics";
 import { ReplayConsentBanner } from "../features/analytics/replay-consent-banner";
 import { AppError, AppNotFound } from "../features/app/app-status";
-import {
-	FIRST_PAINT_SCRIPT,
-	WORKSPACE_PANES_END,
-} from "../features/app/first-paint";
+import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
 import appCss from "../styles.css?url";
@@ -42,15 +39,6 @@ export const Route = createRootRoute({
 			{
 				rel: "stylesheet",
 				href: appCss,
-			},
-			// The first paint waits until the chat and the right panel are both
-			// parsed (WORKSPACE_PANES_END): a half-parsed page would paint the
-			// chat full width, its transcript at the top, then move both.
-			// Browsers without render-blocking expect links ignore it.
-			{
-				rel: "expect",
-				href: `#${WORKSPACE_PANES_END}`,
-				blocking: "render",
 			},
 		],
 	}),
