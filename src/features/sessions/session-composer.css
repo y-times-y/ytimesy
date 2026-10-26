@@ -2871,3 +2871,16 @@ button.helper-card:hover {
 .agent-row[data-status="done"]:not([aria-current="true"]) .agent-row-name {
 	color: #9a9a9a;
 }
+
+/* Above a chat's loaded turns while it holds older ones: a fixed-height row,
+   so the spinner showing while they load moves nothing. */
+.session-timeline li[data-kind="older"] {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 28px;
+	color: #6b6b6b;
+}
+.session-timeline li[data-kind="older"] svg {
+	animation: project-picker-spin 0.9s linear infinite;
+}

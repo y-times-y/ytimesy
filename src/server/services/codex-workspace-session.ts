@@ -15,7 +15,10 @@ export type PublicCodexSession = {
 	readonly blockedListedModelIds: readonly string[];
 	readonly canSend: boolean;
 	readonly turnStatus: SessionTurnStatus;
+	/** The browser gets the chat's last turns (transcript-page.ts). */
 	readonly items: readonly SessionItem[];
+	/** The chat holds turns before `items`; the reader loads them by scrolling up. */
+	readonly hasOlderItems?: boolean;
 };
 
 export type CodexSessionScope = {

@@ -170,7 +170,10 @@ export function SessionLauncher({
 	onRemoveQueued,
 	backgroundRuns,
 	onDraftStarted,
+	olderItems,
 }: {
+	/** The chat holds turns before those shown; they load as the reader scrolls up. */
+	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
 	/** The draft went from empty to some text (a new chat starts its machine then). */
 	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
@@ -1091,6 +1094,7 @@ export function SessionLauncher({
 					}}
 					onRemoveQueued={onRemoveQueued}
 					readPastedText={loadPastedText}
+					olderItems={olderItems}
 				/>
 			)}
 			<div className="session-dock">
