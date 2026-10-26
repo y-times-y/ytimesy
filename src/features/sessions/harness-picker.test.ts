@@ -1,8 +1,18 @@
-import { createElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type ComponentProps, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { HarnessPicker } from "./harness-picker";
 import { sessionModelsFromListed } from "./model-capabilities";
+
+/** The picker reads cloud usage with react-query. */
+function picker(props: ComponentProps<typeof HarnessPicker>) {
+	return createElement(
+		QueryClientProvider,
+		{ client: new QueryClient() },
+		createElement(HarnessPicker, props),
+	);
+}
 
 describe("model picker trigger", () => {
 	const props = {
@@ -13,7 +23,7 @@ describe("model picker trigger", () => {
 	};
 	it("shows the listed model even while disconnected", () => {
 		const html = renderToStaticMarkup(
-			createElement(HarnessPicker, {
+			picker({
 				...props,
 				models: sessionModelsFromListed([
 					{ id: "test-model", label: "Listed model" },
@@ -25,7 +35,7 @@ describe("model picker trigger", () => {
 	});
 	it("does not present a provider name as a selected model", () => {
 		const html = renderToStaticMarkup(
-			createElement(HarnessPicker, {
+			picker({
 				...props,
 				models: [],
 				modelId: "",

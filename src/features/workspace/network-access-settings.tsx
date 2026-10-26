@@ -83,17 +83,16 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 			>
 				What chat machines can reach.
 			</p>
-			{current.data ? (
+			{/* While the setting loads, the same form shows disabled: nothing moves when it lands. */}
+			{current.data || current.isPending ? (
 				<NetworkAccessView
 					mode={mode}
 					text={text}
-					pending={save.isPending}
+					pending={save.isPending || !current.data}
 					onMode={setMode}
 					onText={setText}
 					onSubmit={onSubmit}
 				/>
-			) : current.isPending ? (
-				<p className="settings-copy">Reading internet access…</p>
 			) : null}
 			{save.isSuccess && !save.isPending ? (
 				<p role="status" className="settings-copy">

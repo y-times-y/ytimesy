@@ -208,6 +208,17 @@ const PAGE_SETTLED_PREFETCH_MS = 2_500;
 /** When to read a completed chat again for the save hook's marker. */
 const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
 
+/** Drops a handled link parameter from the address bar. */
+function withoutSearchParam(name: string) {
+	const here = new URL(window.location.href);
+	here.searchParams.delete(name);
+	window.history.replaceState(
+		window.history.state,
+		"",
+		`${here.pathname}${here.search}${here.hash}`,
+	);
+}
+
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
@@ -217,14 +228,16 @@ export function WorkspaceHome({
 	renderedAtMs,
 }: {
 	initialSession: PublicCodexSession;
-	/** The first project's latest chat, read with the page: it renders open. */
+	/** The chat the page opens (a linked chat, else the latest), read with
+	 * the page: it renders open. */
 	initialChatView?: PublicCodexSession;
 	/** The signed-in user, for the sidebar's account button. */
 	account?: SidebarAccount;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
 	initialProjects?: Project[];
-	/** The first project's chats, read with the page. */
+	/** The open project's chats (a linked chat's project, else the first),
+	 * read with the page. */
 	initialChats?: {
 		readonly projectId: string;
 		readonly chats: readonly SidebarChat[];
@@ -261,7 +274,10 @@ export function WorkspaceHome({
 		retry: retryTransientRead,
 		retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2000),
 	});
-	const [selectedProjectId, setSelectedProjectId] = useState<string>();
+	// The project the server opened: a linked chat's, else the first.
+	const [selectedProjectId, setSelectedProjectId] = useState(
+		initialChats?.projectId,
+	);
 	const selectedProject =
 		projects.data?.find((project) => project.id === selectedProjectId) ??
 		projects.data?.[0];
@@ -840,7 +856,10 @@ export function WorkspaceHome({
 		);
 	}, []);
 
-	// `?project=<id>&chat=<id>` (from GitHub wake-ups) opens a chat in another project.
+	// `/?chat=<id>` and `/?project=<id>&chat=<id>` (memory sources, GitHub
+	// wake-ups): the server renders that chat open. The link leaves the
+	// address bar; a chat the server could not open (not listed yet) opens
+	// here once its project's list has it.
 	const linkedProject = useRef(
 		typeof window === "undefined"
 			? null
@@ -850,13 +869,7 @@ export function WorkspaceHome({
 		const id = linkedProject.current;
 		if (!id || !projects.data?.some((project) => project.id === id)) return;
 		linkedProject.current = null;
-		const here = new URL(window.location.href);
-		here.searchParams.delete("project");
-		window.history.replaceState(
-			window.history.state,
-			"",
-			`${here.pathname}${here.search}${here.hash}`,
-		);
+		withoutSearchParam("project");
 		selectProject(id);
 	});
 	const linkedChat = useRef(
@@ -868,14 +881,8 @@ export function WorkspaceHome({
 		const id = linkedChat.current;
 		if (!id || !chats.data?.some((chat) => chat.id === id)) return;
 		linkedChat.current = null;
-		const here = new URL(window.location.href);
-		here.searchParams.delete("chat");
-		window.history.replaceState(
-			window.history.state,
-			"",
-			`${here.pathname}${here.search}${here.hash}`,
-		);
-		openChat(id);
+		withoutSearchParam("chat");
+		if (activeSessionId !== id) openChat(id);
 	});
 
 	// The project the open chat belongs to; the chat the server rendered open
@@ -893,6 +900,8 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (
 			composerDraft ||
+			// A chat is open, or opened since this render (a linked chat).
+			selectedSessionIdRef.current ||
 			selectedSessionId ||
 			pendingNewChatRef.current ||
 			creatingChatEpoch.current === sessionEpoch.current ||
