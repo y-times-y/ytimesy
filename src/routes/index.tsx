@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ReactNode, Suspense, use } from "react";
-import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { IdentityGate } from "../features/auth/identity-gate";
 import { LandingPage } from "../features/landing/landing-page";
 import {
 	getWorkspaceBootstrap,
+	type OpenChatView,
 	type StreamedChatView,
 } from "../features/sessions/codex-session.fn";
 import { WorkspaceHome } from "../features/workspace/workspace-home";
@@ -52,8 +52,9 @@ function HomePage() {
 		openChatId,
 		account,
 		renderedAtMs,
+		inspector,
 	} = Route.useLoaderData();
-	const home = (openChat?: PublicCodexSession) => (
+	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
 			initialSession={session}
 			initialProjects={projects}
@@ -61,6 +62,7 @@ function HomePage() {
 			initialChatView={openChat}
 			account={account}
 			renderedAtMs={renderedAtMs}
+			savedInspector={inspector}
 		/>
 	);
 	return (
@@ -88,7 +90,7 @@ function WithOpenChat({
 	children,
 }: {
 	view: StreamedChatView;
-	children: (openChat?: PublicCodexSession) => ReactNode;
+	children: (openChat?: OpenChatView) => ReactNode;
 }) {
 	return children(use(view));
 }
