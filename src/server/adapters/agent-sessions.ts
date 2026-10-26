@@ -247,12 +247,29 @@ export async function listAgentSessions(userId: string, projectId: string) {
  * The project's chats for the sidebar, each with when its oldest active turn
  * (Main's or a helper's) started: null when none is queued or running.
  */
+/**
+ * What a sidebar row needs of a chat's history: chatWaitingOn reads back
+ * from the end only to the item that started the last turn (a user message
+ * or a wake notice), and only each item's kind, state and wake flag. Whole
+ * histories run to megabytes per chat; this sends a few bytes per item of
+ * the last turn. A user message keeps an empty text (any user message
+ * starts a turn, whatever it says).
+ */
+const SIDEBAR_ITEMS = `(case when jsonb_typeof(s.items)='array' then (
+  select coalesce(jsonb_agg(case when jsonb_typeof(e.value)='object'
+   then jsonb_build_object('kind',e.value->'kind','state',e.value->'state','wake',e.value->'wake','text','')
+   else e.value end order by e.n),'[]'::jsonb)
+  from jsonb_array_elements(s.items) with ordinality e(value,n)
+  where e.n >= coalesce((select max(x.n) from jsonb_array_elements(s.items) with ordinality x(value,n)
+   where x.value->>'kind'='userMessage' or (x.value->>'kind'='notice' and x.value->'wake'='true'::jsonb)),1)
+ ) else '[]'::jsonb end)`;
+
 export async function listSidebarAgentSessions(
 	userId: string,
 	projectId: string,
 ) {
 	const result = await database().query(
-		`select ${SESSION_COLUMNS},
+		`select ${SESSION_COLUMNS.replace(",items,", `,${SIDEBAR_ITEMS} as items,`)},
 		  (select min(t.created_at) from api_turn t
 		   where t.state in ('queued','running')
 		    and t.session_id in (select s.id union all
@@ -296,6 +313,22 @@ export async function agentSessionForOwner(userId: string, sessionId: string) {
 		[sessionId, userId],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+/** The project's latest chat without its history (listAgentSessions()[0], metadata only). */
+export async function latestAgentSessionMetadata(
+	userId: string,
+	projectId: string,
+): Promise<Omit<AgentSessionRecord, "items"> | null> {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
+		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		 order by updated_at desc limit 1`,
+		[userId, projectId],
+	);
+	if (!result.rows[0]) return null;
+	const { items: _items, ...metadata } = toSession(result.rows[0]);
+	return metadata;
 }
 
 /** Selection is a chat draft; it must never invalidate the project template. */

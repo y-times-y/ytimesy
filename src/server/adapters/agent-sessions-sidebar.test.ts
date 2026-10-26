@@ -58,3 +58,78 @@ it("lists when Main's or a helper's active turn started, and nothing for finishe
 	expect(since["Helper runs"]).toBe("2026-10-22T10:05:00.000Z");
 	expect(since.Idle).toBeNull();
 });
+
+it("reads only the last turn's item kinds, and finds what each chat waits on as the whole history would", async () => {
+	const { chatsFromAgentSessions } = await import("#/domain/agent-session");
+	const big = "x".repeat(10_000);
+	const histories: Record<string, unknown> = {
+		question: [
+			{ kind: "userMessage", text: "hi" },
+			{ kind: "assistantMessage", text: big },
+			{ kind: "userQuestion", question: big },
+		],
+		answered: [
+			{ kind: "userQuestion", question: "?" },
+			{ kind: "userMessage", text: "answer" },
+			{ kind: "assistantMessage", text: big },
+		],
+		paused: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "modelSwitch", state: "awaitingApproval", detail: big },
+		],
+		woken: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "secretRequest", name: "X" },
+			{ kind: "notice", wake: true, text: "woke" },
+			{ kind: "assistantMessage", text: big },
+		],
+		secret: [
+			{ kind: "notice", wake: false, text: "not a turn start" },
+			{ kind: "secretRequest", name: "X" },
+		],
+		empty: [],
+		notArray: { kind: "userQuestion" },
+	};
+	const ids: Record<string, string> = {};
+	for (const [title, items] of Object.entries(histories)) {
+		ids[title] = await chat(title);
+		await db.query("update agent_session set items=$2 where id=$1", [
+			ids[title],
+			JSON.stringify(items),
+		]);
+	}
+	await db.query(
+		"update agent_session set turn_status='failed' where title='answered'",
+	);
+	const listed = await listSidebarAgentSessions("alice", project);
+	const byTitle = Object.fromEntries(listed.map((row) => [row.title, row]));
+	// Nothing past the last turn start, and no item bodies.
+	expect(byTitle.question.items).toEqual([
+		{ kind: "userMessage", state: null, wake: null, text: "" },
+		{ kind: "assistantMessage", state: null, wake: null, text: "" },
+		{ kind: "userQuestion", state: null, wake: null, text: "" },
+	]);
+	expect(byTitle.woken.items).toHaveLength(2);
+	expect(JSON.stringify(listed).includes(big)).toBe(false);
+	const waiting = (rows: readonly { title: string }[]) =>
+		Object.fromEntries(
+			chatsFromAgentSessions(rows as never).map((row) => [
+				row.title,
+				row.waitingOn,
+			]),
+		);
+	const full = listed.map((row) => ({
+		...row,
+		items: Array.isArray(histories[row.title]) ? histories[row.title] : [],
+	}));
+	expect(waiting(listed)).toEqual(waiting(full));
+	expect(waiting(listed)).toMatchObject({
+		question: "question",
+		answered: "failed",
+		paused: "paused",
+		woken: null,
+		secret: "secret",
+		empty: null,
+		notArray: null,
+	});
+});

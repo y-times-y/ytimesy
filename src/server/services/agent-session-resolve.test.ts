@@ -13,7 +13,10 @@ vi.mock("#/server/adapters/workspaces", () => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
 	listAgentSessions: mocks.list,
+	latestAgentSessionMetadata: async (userId: string, projectId: string) =>
+		(await mocks.list(userId, projectId))[0] ?? null,
 	insertAgentSession: mocks.insert,
 	reusableEmptyChat: mocks.reusable,
 	childAgentSession: vi.fn(),
