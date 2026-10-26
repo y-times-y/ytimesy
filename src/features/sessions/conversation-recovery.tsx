@@ -112,6 +112,11 @@ export function ConversationRecovery({
 	);
 }
 
+/** The recovery row's room under a message without a recovery point (yet). */
+export function ConversationRecoverySlot() {
+	return <div className="conversation-recovery" aria-hidden="true" />;
+}
+
 /** A recovery failure, kept until the user dismisses it or acts again. */
 export function RecoveryAlert({
 	message,

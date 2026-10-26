@@ -2016,6 +2016,8 @@ details[open] > summary .session-activity-chevron {
 	color: var(--muted-foreground);
 	font-size: 12px;
 	margin-top: 2px;
+	/* The icon's height, with or without the icon (ConversationRecoverySlot). */
+	min-height: 26px;
 	/* Only the icon takes the pointer, so the empty width beside it never
 	   counts as hovering. */
 	pointer-events: none;
