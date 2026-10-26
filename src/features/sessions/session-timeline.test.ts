@@ -364,7 +364,7 @@ describe("session timeline live collapse", () => {
 		expect(html).toContain("session-file-open");
 		expect(html).toContain("file-type-icon");
 		expect(html).toContain('data-change="update"');
-		const response = html.split('<li data-kind="fileChange"')[0];
+		const response = html.split('data-kind="fileChange"')[0];
 		expect(response).not.toContain("data-change=");
 		expect(response).toContain("file-type-icon");
 		expect(response).toContain('title="Open src/styles.css"');

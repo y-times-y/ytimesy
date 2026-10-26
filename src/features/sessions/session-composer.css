@@ -776,7 +776,8 @@
 .session-timeline li[data-kind="agentMessage"] {
 	margin: 6px 0 8px;
 }
-.session-timeline li[data-kind="agentMessage"] + li[data-kind="agentMessage"] {
+/* data-follows: the row above, mounted or not (virtual-transcript.tsx). */
+.session-timeline li[data-kind="agentMessage"][data-follows="agentMessage"] {
 	margin-top: 2px;
 }
 .session-message {
@@ -2872,6 +2873,11 @@ button.helper-card:hover {
 	color: #9a9a9a;
 }
 
+/* The list keeps the row being read in place itself (virtual-transcript.tsx);
+   the browser's own scroll anchoring would move it twice. */
+.session-timeline {
+	overflow-anchor: none;
+}
 /* Above a chat's loaded turns while it holds older ones: a fixed-height row,
    so the spinner showing while they load moves nothing. */
 .session-timeline li[data-kind="older"] {

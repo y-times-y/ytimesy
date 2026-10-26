@@ -1,14 +1,6 @@
 import { ChevronRight, Clock3, LoaderCircle, X } from "lucide-react";
 import type { ReactNode } from "react";
-import {
-	createContext,
-	Fragment,
-	type UIEvent,
-	useContext,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-} from "react";
+import { createContext, memo, useContext, useMemo, useRef } from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
 	MAIN_MENTION_ID,
@@ -135,6 +127,7 @@ import {
 	type UserQuestionActions,
 	UserQuestionCard,
 } from "./user-question-card";
+import { type TranscriptEntry, VirtualTranscript } from "./virtual-transcript";
 
 export function SessionTimeline({
 	items: allItems,
@@ -201,20 +194,35 @@ export function SessionTimeline({
 	autoScroll?: boolean;
 	collapseInstructions?: boolean;
 }) {
-	const listRef = useRef<HTMLOListElement>(null);
-	const stickToEnd = useRef(true);
-	// Waiting messages are not part of the turn yet; they sit below its activity.
-	const queued = allItems.filter(isQueuedUserMessage);
-	const items = queued.length
-		? allItems.filter((item) => !isQueuedUserMessage(item))
-		: allItems;
-	// Wake-up turn starts stay in for grouping: they end the turn before them.
-	const presented = childTaskPublicItems(compactTimelineItems(items));
-	const visible = withoutWakeTurnStarts(presented);
+	// Derived once per transcript change, not per render (the composer's
+	// typing renders this again): the rows stay the same objects, so the
+	// mounted ones are not drawn again.
+	const { queued, items, presented, visible, rows, fileChanges } = useMemo(
+		() => timelineRows(allItems, turnStatus),
+		[allItems, turnStatus],
+	);
+	// The same while the helpers are: a new value would give every reply's
+	// Markdown new components, and React would build their DOM again.
+	const selectHelper = useRef(helperLines?.onSelect);
+	selectHelper.current = helperLines?.onSelect;
+	const identities = helperLines?.identities;
+	const selectable = Boolean(helperLines?.onSelect);
+	const mentions = useMemo(
+		() =>
+			agentMentions(
+				identities && {
+					identities,
+					...(selectable
+						? { onSelect: (id: string) => selectHelper.current?.(id) }
+						: {}),
+				},
+				taskParentId,
+			),
+		[identities, selectable, taskParentId],
+	);
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
-	const rows = groupTimelineRows(presented, turnStatus);
 	const finishes = helperFinishAnchors({
 		items: presented,
 		rows,
@@ -227,12 +235,15 @@ export function SessionTimeline({
 				finishedAt: helperMetric(task).endedAt,
 			})),
 	});
-	const helperMarks = childTasks.map((task) => ({
-		task,
-		start: childTaskAnchorId(task, visible),
-		// null: last, where the report's wake-up turn will show.
-		finish: finishes.get(task.id),
-	}));
+	const helperMarks = childTasks
+		.map((task) => ({
+			task,
+			start: childTaskAnchorId(task, visible),
+			// null: last, where the report's wake-up turn will show.
+			finish: finishes.get(task.id),
+		}))
+		// A helper started in a turn not loaded yet shows with that turn.
+		.filter((mark) => mark.start || !olderItems);
 	// A helper's start line stands in for the agent call that started it.
 	const startsHelper = (row: TimelineRow) =>
 		!!helperLines &&
@@ -245,8 +256,10 @@ export function SessionTimeline({
 		(row.kind === "item"
 			? row.item.id === id
 			: row.items.some((item) => item.id === id));
-	const evidenceAt = evidenceAnchors(visible, evidence);
-	const fileChanges = fileChangesFromSessionItems(items);
+	const evidenceAt = evidenceAnchors(
+		visible,
+		olderItems ? evidenceSince(visible, evidence) : evidence,
+	);
 	const currentTurnIds = new Set<SessionItem["id"]>();
 	for (const item of presented) {
 		if (startsTurn(item)) currentTurnIds.clear();
@@ -254,39 +267,6 @@ export function SessionTimeline({
 	}
 
 	const hydrated = useHydrated();
-	useEffect(() => {
-		if (!autoScroll || !stickToEnd.current) return;
-		if (allItems.length === 0 && turnStatus !== "running") return;
-		listRef.current?.lastElementChild?.scrollIntoView({ block: "end" });
-	}, [autoScroll, allItems, turnStatus]);
-
-	function rememberScrollPin(event: UIEvent<HTMLOListElement>) {
-		const list = event.currentTarget;
-		stickToEnd.current =
-			list.scrollHeight - list.scrollTop - list.clientHeight < 64;
-		if (olderItems && !olderItems.loading && list.scrollTop < LOAD_OLDER_PX)
-			olderItems.onLoad();
-	}
-
-	// Older turns land above the reader: the row at the top of the view keeps
-	// its place. Read from the DOM as it was, before React replaces it.
-	const firstId = allItems[0]?.id;
-	const shownFirstId = useRef(firstId);
-	const prependAnchor = useRef<ScrollAnchor | null>(null);
-	if (shownFirstId.current !== firstId) {
-		if (
-			listRef.current &&
-			allItems.some((item) => item.id === shownFirstId.current)
-		)
-			prependAnchor.current = scrollAnchor(listRef.current);
-		shownFirstId.current = firstId;
-	}
-	// biome-ignore lint/correctness/useExhaustiveDependencies: runs when the first row changes, the commit a prepend lands in.
-	useLayoutEffect(() => {
-		const anchor = prependAnchor.current;
-		prependAnchor.current = null;
-		if (anchor && listRef.current) restoreScrollAnchor(listRef.current, anchor);
-	}, [firstId]);
 
 	if (
 		visible.length === 0 &&
@@ -298,178 +278,165 @@ export function SessionTimeline({
 	)
 		return null;
 
+	// Each row of the list, in order; the list mounts only those near the view.
+	const entries: TranscriptEntry[] = [];
+	const add = (entry: Omit<TranscriptEntry, "follows">) =>
+		entries.push({ ...entry, follows: entries.at(-1)?.kind });
+	for (const row of rows) {
+		const rowId = row.kind === "item" ? row.item.id : row.id;
+		if (!startsHelper(row))
+			add({
+				key: row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`,
+				kind: row.kind === "item" ? row.item.kind : row.kind,
+				row: rowId,
+				estimate: rowEstimate(row),
+				content: (
+					<>
+						{row.kind === "item" && row.item.kind === "planProposal" ? (
+							<PlanMessage text={row.item.text} onOpenFile={onOpenFile} />
+						) : row.kind === "item" && row.item.kind === "userQuestion" ? (
+							<UserQuestionCard
+								item={row.item}
+								reply={userQuestionReply(items, row.item.id)}
+								actions={questionActions}
+							/>
+						) : row.kind === "item" && row.item.kind === "secretRequest" ? (
+							<SecretRequestCard
+								item={row.item}
+								outcome={secretRequestOutcome(items, row.item.id)}
+								actions={secretActions}
+							/>
+						) : row.kind === "item" &&
+							row.item.kind === "modelSwitch" &&
+							row.item.state === "awaitingApproval" ? (
+							<ModelSwitchCard
+								item={row.item}
+								answered={answeredAfter(items, row.item.id)}
+								actions={failoverActions}
+							/>
+						) : (
+							<TimelineRowView
+								row={row}
+								collapseInstructions={collapseInstructions}
+								turnRunning={
+									turnStatus === "running" && currentTurnIds.has(rowId)
+								}
+								isLastItem={
+									(row.kind === "item" ? row.item.id : row.items.at(-1)?.id) ===
+									visible.at(-1)?.id
+								}
+								fileChanges={fileChanges}
+								onOpenFile={onOpenFile}
+							/>
+						)}
+						{row.kind === "item" && row.item.kind === "userMessage"
+							? recoveryControls?.(row.item.id)
+							: null}
+					</>
+				),
+			});
+		for (const { task } of helperMarks.filter((mark) =>
+			rowHas(row, mark.start),
+		))
+			add(helperStartEntry(task, helperLines));
+		for (const { task } of helperMarks.filter((mark) =>
+			rowHas(row, mark.finish),
+		))
+			add(helperFinishEntry(task, helperLines));
+		for (const record of row.kind === "item"
+			? (evidenceAt.anchored.get(row.item.id) ?? [])
+			: row.items.flatMap((item) => evidenceAt.anchored.get(item.id) ?? []))
+			add(evidenceEntry(record));
+	}
+	for (const { task } of helperMarks.filter((mark) => !mark.start))
+		add(helperStartEntry(task, helperLines));
+	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
+		add(helperFinishEntry(task, helperLines));
+	for (const record of evidenceAt.trailing) add(evidenceEntry(record));
+	if (showTurnWorking(items, turnStatus))
+		add({
+			key: "working",
+			kind: "working",
+			estimate: 30,
+			content: (
+				<p className="session-working session-shimmer">
+					{compactingContext(items) ? "Compacting context" : "Thinking"}
+				</p>
+			),
+		});
+	for (const item of queued)
+		add({
+			key: item.id,
+			kind: "userMessage",
+			queued: true,
+			estimate: 60,
+			content: <QueuedMessage item={item} onRemove={onRemoveQueued} />,
+		});
+	for (const message of queuedSteering)
+		add({
+			key: message.id,
+			kind: "userMessage",
+			queued: true,
+			estimate: 60,
+			content: (
+				<div
+					className="session-message"
+					data-role="user"
+					data-queued="true"
+					data-sender="true"
+				>
+					<span className="session-message-sender">
+						{message.from}
+						<span className="session-queued-badge">Queued</span>
+					</span>
+					<p>
+						<MentionText text={message.text} />
+					</p>
+				</div>
+			),
+		});
+	if (
+		turnStatus !== "running" &&
+		childTasks.some((task) => task.turnStatus === "running")
+	)
+		add({
+			key: "waiting-for-children",
+			kind: "waiting-for-children",
+			estimate: 30,
+			content: (
+				<p className="session-working" role="status">
+					Waiting for helpers
+				</p>
+			),
+		});
+
 	return (
 		<TimelineProviders
 			memoryActions={memoryActions}
 			readPastedText={readPastedText}
 		>
 			<SenderContext.Provider value={senderName ?? null}>
-				<AgentMentionContext.Provider
-					value={agentMentions(helperLines, taskParentId)}
-				>
-					<ol
-						ref={listRef}
-						className="session-timeline"
-						aria-label="Session"
-						onScroll={rememberScrollPin}
-					>
-						{olderItems ? (
-							<li data-kind="older" aria-hidden={!olderItems.loading}>
-								{olderItems.loading ? (
-									<LoaderCircle size={14} aria-label="Loading" />
-								) : null}
-							</li>
-						) : null}
-						{rows.map((row) => {
-							const rowId = row.kind === "item" ? row.item.id : row.id;
-							return (
-								<Fragment
-									key={
-										row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`
+				<AgentMentionContext.Provider value={mentions}>
+					<VirtualTranscript
+						entries={entries}
+						first={
+							olderItems
+								? {
+										kind: "older",
+										height: OLDER_ROW_HEIGHT,
+										content: olderItems.loading ? (
+											<LoaderCircle size={14} aria-label="Loading" />
+										) : null,
 									}
-								>
-									{startsHelper(row) ? null : (
-										<li
-											data-kind={row.kind === "item" ? row.item.kind : row.kind}
-											data-row={rowId}
-										>
-											{row.kind === "item" &&
-											row.item.kind === "planProposal" ? (
-												<PlanMessage
-													text={row.item.text}
-													onOpenFile={onOpenFile}
-												/>
-											) : row.kind === "item" &&
-												row.item.kind === "userQuestion" ? (
-												<UserQuestionCard
-													item={row.item}
-													reply={userQuestionReply(items, row.item.id)}
-													actions={questionActions}
-												/>
-											) : row.kind === "item" &&
-												row.item.kind === "secretRequest" ? (
-												<SecretRequestCard
-													item={row.item}
-													outcome={secretRequestOutcome(items, row.item.id)}
-													actions={secretActions}
-												/>
-											) : row.kind === "item" &&
-												row.item.kind === "modelSwitch" &&
-												row.item.state === "awaitingApproval" ? (
-												<ModelSwitchCard
-													item={row.item}
-													answered={answeredAfter(items, row.item.id)}
-													actions={failoverActions}
-												/>
-											) : (
-												<TimelineRowView
-													row={row}
-													collapseInstructions={collapseInstructions}
-													turnRunning={
-														turnStatus === "running" &&
-														currentTurnIds.has(rowId)
-													}
-													isLastItem={
-														(row.kind === "item"
-															? row.item.id
-															: row.items.at(-1)?.id) === visible.at(-1)?.id
-													}
-													fileChanges={fileChanges}
-													onOpenFile={onOpenFile}
-												/>
-											)}
-											{row.kind === "item" && row.item.kind === "userMessage"
-												? recoveryControls?.(row.item.id)
-												: null}
-										</li>
-									)}
-									{helperMarks
-										.filter((mark) => rowHas(row, mark.start))
-										.map(({ task }) => (
-											<li key={`start:${task.id}`} data-kind="helper-start">
-												<HelperLine task={task} lines={helperLines} />
-											</li>
-										))}
-									{helperMarks
-										.filter((mark) => rowHas(row, mark.finish))
-										.map(({ task }) => (
-											<li key={`finish:${task.id}`} data-kind="helper-finish">
-												<HelperFinishCard task={task} lines={helperLines} />
-											</li>
-										))}
-									{(row.kind === "item"
-										? (evidenceAt.anchored.get(row.item.id) ?? [])
-										: row.items.flatMap(
-												(item) => evidenceAt.anchored.get(item.id) ?? [],
-											)
-									).map((record) => (
-										<li key={`evidence:${record.id}`} data-kind="evidence">
-											<EvidenceCard evidence={record} />
-										</li>
-									))}
-								</Fragment>
-							);
-						})}
-						{helperMarks
-							.filter((mark) => !mark.start)
-							.map(({ task }) => (
-								<li key={`start:${task.id}`} data-kind="helper-start">
-									<HelperLine task={task} lines={helperLines} />
-								</li>
-							))}
-						{helperMarks
-							.filter((mark) => mark.finish === null)
-							.map(({ task }) => (
-								<li key={`finish:${task.id}`} data-kind="helper-finish">
-									<HelperFinishCard task={task} lines={helperLines} />
-								</li>
-							))}
-						{evidenceAt.trailing.map((record) => (
-							<li key={`evidence:${record.id}`} data-kind="evidence">
-								<EvidenceCard evidence={record} />
-							</li>
-						))}
-						{showTurnWorking(items, turnStatus) ? (
-							<li data-kind="working">
-								<p className="session-working session-shimmer">
-									{compactingContext(items) ? "Compacting context" : "Thinking"}
-								</p>
-							</li>
-						) : null}
-						{queued.map((item) => (
-							<li key={item.id} data-kind="userMessage" data-queued="true">
-								<QueuedMessage item={item} onRemove={onRemoveQueued} />
-							</li>
-						))}
-						{queuedSteering.map((message) => (
-							<li key={message.id} data-kind="userMessage" data-queued="true">
-								<div
-									className="session-message"
-									data-role="user"
-									data-queued="true"
-									data-sender="true"
-								>
-									<span className="session-message-sender">
-										{message.from}
-										<span className="session-queued-badge">Queued</span>
-									</span>
-									<p>
-										<MentionText text={message.text} />
-									</p>
-								</div>
-							</li>
-						))}
-						{turnStatus !== "running" &&
-						childTasks.some((task) => task.turnStatus === "running") ? (
-							<li data-kind="waiting-for-children">
-								<p className="session-working" role="status">
-									Waiting for helpers
-								</p>
-							</li>
-						) : null}
-					</ol>
+								: undefined
+						}
+						followEnd={autoScroll}
+						onNearStart={
+							olderItems && !olderItems.loading ? olderItems.onLoad : undefined
+						}
+					/>
 					{autoScroll && !hydrated ? (
-						// The server's transcript paints scrolled to its end, as the effect above leaves it.
+						// The server's transcript paints scrolled to its end, where the list keeps it.
 						<script
 							// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
 							dangerouslySetInnerHTML={{ __html: TIMELINE_END_SCRIPT }}
@@ -482,33 +449,102 @@ export function SessionTimeline({
 	);
 }
 
-/** How near the top (px) the reader is when the chat's older turns start loading. */
-const LOAD_OLDER_PX = 1_200;
-
-/** The row at the top of a scrolled list, and how far it sits from the list's top. */
-type ScrollAnchor = { readonly row: string; readonly offset: number };
-
-function scrollAnchor(list: HTMLElement): ScrollAnchor | null {
-	const top = list.getBoundingClientRect().top;
-	for (const row of list.querySelectorAll<HTMLElement>(
-		":scope > li[data-row]",
-	)) {
-		const box = row.getBoundingClientRect();
-		if (box.bottom > top)
-			return { row: row.dataset.row ?? "", offset: box.top - top };
-	}
-	return null;
+function timelineRows(
+	allItems: readonly SessionItem[],
+	turnStatus: SessionTurnStatus,
+) {
+	// Waiting messages are not part of the turn yet; they sit below its activity.
+	const queued = allItems.filter(isQueuedUserMessage);
+	const items = queued.length
+		? allItems.filter((item) => !isQueuedUserMessage(item))
+		: allItems;
+	// Wake-up turn starts stay in for grouping: they end the turn before them.
+	const presented = childTaskPublicItems(compactTimelineItems(items));
+	return {
+		queued,
+		items,
+		presented,
+		visible: withoutWakeTurnStarts(presented),
+		rows: groupTimelineRows(presented, turnStatus),
+		fileChanges: fileChangesFromSessionItems(items),
+	};
 }
 
-function restoreScrollAnchor(list: HTMLElement, anchor: ScrollAnchor) {
-	const row = [
-		...list.querySelectorAll<HTMLElement>(":scope > li[data-row]"),
-	].find((candidate) => candidate.dataset.row === anchor.row);
-	if (!row) return;
-	list.scrollTop +=
-		row.getBoundingClientRect().top -
-		list.getBoundingClientRect().top -
-		anchor.offset;
+/** The row above a chat's loaded turns while it holds older ones (px, styled to match). */
+const OLDER_ROW_HEIGHT = 28;
+
+function helperStartEntry(
+	task: AgentTaskActivity,
+	lines: HelperLines | undefined,
+): Omit<TranscriptEntry, "follows"> {
+	return {
+		key: `start:${task.id}`,
+		kind: "helper-start",
+		estimate: 28,
+		content: <HelperLine task={task} lines={lines} />,
+	};
+}
+
+function helperFinishEntry(
+	task: AgentTaskActivity,
+	lines: HelperLines | undefined,
+): Omit<TranscriptEntry, "follows"> {
+	return {
+		key: `finish:${task.id}`,
+		kind: "helper-finish",
+		estimate: 120,
+		content: <HelperFinishCard task={task} lines={lines} />,
+	};
+}
+
+function evidenceEntry(
+	record: EvidenceRecord,
+): Omit<TranscriptEntry, "follows"> {
+	return {
+		key: `evidence:${record.id}`,
+		kind: "evidence",
+		estimate: 160,
+		content: <EvidenceCard evidence={record} />,
+	};
+}
+
+/** Evidence from the loaded turns on: earlier records show with their own turns. */
+function evidenceSince(
+	visible: readonly SessionItem[],
+	evidence: readonly EvidenceRecord[],
+) {
+	const first = visible.find(
+		(item) => item.kind === "userMessage" && item.timing,
+	);
+	const since =
+		first?.kind === "userMessage" ? first.timing?.startedAt : undefined;
+	return since === undefined
+		? evidence
+		: evidence.filter((record) => Date.parse(record.createdAt) >= since);
+}
+
+/**
+ * A row's height (px, with its margins) until it is measured: text by its
+ * length, tool rows as one line. It sizes only the space for rows not
+ * mounted; mounted rows take their real height.
+ */
+function rowEstimate(row: TimelineRow): number {
+	if (row.kind !== "item") return 40;
+	const item = row.item;
+	if (item.kind === "userMessage") return 54 + 18 * textLines(item.text, 90);
+	if (item.kind === "agentMessage")
+		return Math.min(14 + 20 * textLines(item.text, 100), 6_000);
+	if (item.kind === "planProposal" || item.kind === "plan")
+		return Math.min(60 + 20 * textLines(item.text, 100), 3_000);
+	if (item.kind === "userQuestion" || item.kind === "secretRequest") return 160;
+	return 34;
+}
+
+function textLines(text: string, perLine: number) {
+	let lines = 0;
+	for (const line of text.split("\n"))
+		lines += Math.max(1, Math.ceil(line.length / perLine));
+	return lines;
 }
 
 function TimelineProviders({
@@ -732,7 +768,7 @@ function QueuedMessage({
 	);
 }
 
-function TimelineRowView({
+const TimelineRowView = memo(function TimelineRowView({
 	row,
 	collapseInstructions = false,
 	turnRunning,
@@ -822,7 +858,7 @@ function TimelineRowView({
 			onOpenFile={onOpenFile}
 		/>
 	);
-}
+});
 
 function SessionItemView({
 	item,
