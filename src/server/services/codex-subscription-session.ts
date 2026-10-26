@@ -57,16 +57,18 @@ async function readSubscriptionSession(
 	scope: CodexSessionScope,
 	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
 	tolerateCatalogOutage = false,
-	/** The chat as the caller just read or wrote it, instead of reading it again. */
-	read?: AgentSessionRecord,
+	/** The chat as the caller just read or wrote it (or is reading it), instead of reading it again. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<PublicCodexSession> {
 	// Independent reads; the account is read again below only when a catalog
 	// refresh has just expired it.
 	const [session, managed, listedAccount] = await Promise.all([
 		scope.sessionId
-			? read?.id === scope.sessionId
+			? read instanceof Promise
 				? read
-				: agentSessionForOwner(scope.userId, scope.sessionId)
+				: read?.id === scope.sessionId
+					? read
+					: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
 		hasManagedCodexAuth(scope.userId),
 		loadAgentAccount(scope.userId),
@@ -121,8 +123,10 @@ async function readSubscriptionSession(
 /** The chat view, showing a ChatGPT sign-in the server is waiting on. */
 export async function readSubscriptionLoginSession(
 	scope: CodexSessionScope,
+	/** The chat as the caller read it (by id, for this user), or is reading it. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<PublicCodexSession> {
-	const view = await readSubscriptionSession(scope);
+	const view = await readSubscriptionSession(scope, false, read);
 	if (view.connection.status === "authenticated") return view;
 	return withDeviceLogin(view, await readCodexDeviceLogin(scope.userId));
 }

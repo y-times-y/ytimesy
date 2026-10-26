@@ -55,9 +55,15 @@ export async function apiModelCatalog(userId: string) {
 
 export async function readApiWorkspaceSession(
 	scope: CodexSessionScope,
+	/** The chat as the caller read it (by id, for this user), or is reading it. */
+	read?: AgentSessionRecord | Promise<AgentSessionRecord | null>,
 ): Promise<PublicCodexSession> {
 	const session = scope.sessionId
-		? await agentSessionForOwner(scope.userId, scope.sessionId)
+		? read instanceof Promise
+			? await read
+			: read?.id === scope.sessionId
+				? read
+				: await agentSessionForOwner(scope.userId, scope.sessionId)
 		: null;
 	if (session && session.projectId !== scope.projectId)
 		throw new Error("Session is not in this project.");

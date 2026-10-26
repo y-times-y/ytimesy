@@ -1,4 +1,4 @@
-import { ChevronRight, Clock3, X } from "lucide-react";
+import { ChevronRight, Clock3, LoaderCircle, X } from "lucide-react";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -6,6 +6,7 @@ import {
 	type UIEvent,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useRef,
 } from "react";
 import { agentCall } from "#/domain/agent-call";
@@ -155,7 +156,13 @@ export function SessionTimeline({
 	senderName,
 	queuedSteering = [],
 	readPastedText,
+	olderItems,
 }: {
+	/**
+	 * The chat holds turns before `items`: they load as the reader nears the
+	 * top, and the message being read stays where it is.
+	 */
+	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
 	/** Loads a sent message's pasted text for its chip's preview. */
 	readPastedText?: (attachmentId: string) => Promise<PastedTextPreview>;
 	/**
@@ -257,7 +264,29 @@ export function SessionTimeline({
 		const list = event.currentTarget;
 		stickToEnd.current =
 			list.scrollHeight - list.scrollTop - list.clientHeight < 64;
+		if (olderItems && !olderItems.loading && list.scrollTop < LOAD_OLDER_PX)
+			olderItems.onLoad();
 	}
+
+	// Older turns land above the reader: the row at the top of the view keeps
+	// its place. Read from the DOM as it was, before React replaces it.
+	const firstId = allItems[0]?.id;
+	const shownFirstId = useRef(firstId);
+	const prependAnchor = useRef<ScrollAnchor | null>(null);
+	if (shownFirstId.current !== firstId) {
+		if (
+			listRef.current &&
+			allItems.some((item) => item.id === shownFirstId.current)
+		)
+			prependAnchor.current = scrollAnchor(listRef.current);
+		shownFirstId.current = firstId;
+	}
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runs when the first row changes, the commit a prepend lands in.
+	useLayoutEffect(() => {
+		const anchor = prependAnchor.current;
+		prependAnchor.current = null;
+		if (anchor && listRef.current) restoreScrollAnchor(listRef.current, anchor);
+	}, [firstId]);
 
 	if (
 		visible.length === 0 &&
@@ -284,6 +313,13 @@ export function SessionTimeline({
 						aria-label="Session"
 						onScroll={rememberScrollPin}
 					>
+						{olderItems ? (
+							<li data-kind="older" aria-hidden={!olderItems.loading}>
+								{olderItems.loading ? (
+									<LoaderCircle size={14} aria-label="Loading" />
+								) : null}
+							</li>
+						) : null}
 						{rows.map((row) => {
 							const rowId = row.kind === "item" ? row.item.id : row.id;
 							return (
@@ -295,6 +331,7 @@ export function SessionTimeline({
 									{startsHelper(row) ? null : (
 										<li
 											data-kind={row.kind === "item" ? row.item.kind : row.kind}
+											data-row={rowId}
 										>
 											{row.kind === "item" &&
 											row.item.kind === "planProposal" ? (
@@ -443,6 +480,35 @@ export function SessionTimeline({
 			</SenderContext.Provider>
 		</TimelineProviders>
 	);
+}
+
+/** How near the top (px) the reader is when the chat's older turns start loading. */
+const LOAD_OLDER_PX = 1_200;
+
+/** The row at the top of a scrolled list, and how far it sits from the list's top. */
+type ScrollAnchor = { readonly row: string; readonly offset: number };
+
+function scrollAnchor(list: HTMLElement): ScrollAnchor | null {
+	const top = list.getBoundingClientRect().top;
+	for (const row of list.querySelectorAll<HTMLElement>(
+		":scope > li[data-row]",
+	)) {
+		const box = row.getBoundingClientRect();
+		if (box.bottom > top)
+			return { row: row.dataset.row ?? "", offset: box.top - top };
+	}
+	return null;
+}
+
+function restoreScrollAnchor(list: HTMLElement, anchor: ScrollAnchor) {
+	const row = [
+		...list.querySelectorAll<HTMLElement>(":scope > li[data-row]"),
+	].find((candidate) => candidate.dataset.row === anchor.row);
+	if (!row) return;
+	list.scrollTop +=
+		row.getBoundingClientRect().top -
+		list.getBoundingClientRect().top -
+		anchor.offset;
 }
 
 function TimelineProviders({
