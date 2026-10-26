@@ -2,7 +2,7 @@
 
 Five new harness switches, each tested against the base harness with the same model, plus a frozen check on untouched TB4 tasks against Codex.
 
-**Bottom line:** no switch beat the base harness on tasks we had not looked at. All five are merged to main (f50e45b) and **off by default**. Goal mode is kept for the product. On 25 untouched TB4 tasks, the frozen base harness matched Codex task for task (14/25 each) at about 20% higher cost.
+**Bottom line:** no switch beat the base harness on tasks we had not looked at. All five are merged to main (f50e45b) and **off by default**. Goal mode is kept for the product. On 25 untouched TB4 tasks, the frozen base harness matched Codex task for task (14/25 each) at about 7% higher token cost at list price.
 
 ## Setup
 
@@ -157,7 +157,9 @@ Fixes were proposed from these failures (run the client's exact commands; check 
 | Failed (Codex 0/5) | foodstuff-beta-activity, freecad-impeller, freight-dispatch-shift, glycan-ms2-elucidation, gsea-proteomics, intrastat-meldung, medical-claims-processing, ontology-kg-querying, production-planning, react-lead-form, vllm-deepseek-streaming |
 
 - The frozen v13 harness once passed intrastat-meldung (3/5) and vllm-deepseek-streaming (2/5). Neither passed this time.
-- **Cost:** $30.70 vs Codex $25.54 for the same 25 tasks at list price (+20%; Codex's figure is its per-task average over 5 trials).
+- **Cost:** our token cost at OpenAI list price was $27.24 against Codex's $25.54 for the same 25 tasks (+7%; Codex's figure is its per-task average over 5 trials). We were billed $30.70: the bridge prices the in-Region Bedrock id at the geographic rate (+10%, `BEDROCK_REGIONAL_PREMIUM`), and web search added $0.62.
+  - Output tokens: +$2.31 (1.51M vs 1.28M), mostly from three runs that took 2–3x Codex's time (ontology-kg-querying, freight-dispatch-shift, mp-checkpoint-consolidation).
+  - Input: we used 32% fewer input tokens than Codex (35.8M vs 52.5M), but lost cached prefixes mid-run about 27 times (about 1.7M tokens billed at the write or uncached rate instead of the cached rate), e.g. ontology-kg-querying request 29 reread 0 of a 259k-token prefix 3.5 minutes after the previous request.
 - **Caching:** 89.6% of input tokens were cached. fin-saccr-rwa was only 57% cached; that cache break is worth investigating because it costs money on every model.
 
 **What it means:**
