@@ -42,8 +42,9 @@ import {
 } from "#/domain/memory-graph";
 import { memoryRows } from "#/domain/memory-overview";
 import type { Project } from "#/domain/projects";
+import { saveErrorMessage } from "#/lib/optimistic-mutation";
 import { editMemoryFn, readMemoryFn, readMemoryGraphFn } from "./memory.fn";
-import { memoryEditSave } from "./memory-edit-save";
+import { editorToReopen, memoryEditSave } from "./memory-edit-save";
 import {
 	formatMemoryDate,
 	memoryLineRef,
@@ -441,11 +442,25 @@ export function MemoryGraphPage({
 	};
 
 	const editSave = memoryEditSave(queryClient, editMemory);
+	/** A text edit the server refused: its editor reopens with what was typed. */
+	const [retryDraft, setRetryDraft] = useState<{
+		key: string;
+		text: string;
+	} | null>(null);
 	const edit = useMutation({
 		...editSave,
 		onMutate: (data) => {
+			setRetryDraft(null);
 			if (data.op === "delete") setSelected(null);
 			return editSave.onMutate(data);
+		},
+		onError: (error, data, snapshot) => {
+			editSave.onError(error, data, snapshot);
+			const reopen = editorToReopen(data);
+			if (reopen) {
+				setSelected(reopen.key);
+				setRetryDraft(reopen);
+			}
 		},
 	});
 
@@ -672,11 +687,16 @@ export function MemoryGraphPage({
 					choices={choices}
 					busy={false}
 					error={
-						edit.data && !edit.data.ok ? edit.data.error : edit.error?.message
+						edit.data && !edit.data.ok
+							? edit.data.error
+							: saveErrorMessage(edit.error)
 					}
 					onClose={() => setSelected(null)}
 					onOpenChat={onOpenChat}
 					onEdit={(data) => edit.mutate(data)}
+					retryDraft={
+						retryDraft?.key === selectedMemory.id ? retryDraft : undefined
+					}
 				/>
 			) : selectedHub ? (
 				<aside className="memory-graph-card memory-graph-details">
@@ -756,6 +776,7 @@ function MemoryDetails({
 	onClose,
 	onOpenChat,
 	onEdit,
+	retryDraft,
 }: {
 	memory: GraphMemory;
 	hubLabel?: string;
@@ -766,10 +787,17 @@ function MemoryDetails({
 	onClose: () => void;
 	onOpenChat: (chatId: string) => boolean;
 	onEdit: (edit: MemoryEdit) => void;
+	/** What the user had typed, when the server refused the edit. */
+	retryDraft?: { text: string };
 }) {
 	const { row } = memory;
-	const [editing, setEditing] = useState(false);
-	const [draft, setDraft] = useState(row.text);
+	const [editing, setEditing] = useState(Boolean(retryDraft));
+	const [draft, setDraft] = useState(retryDraft?.text ?? row.text);
+	useEffect(() => {
+		if (!retryDraft) return;
+		setDraft(retryDraft.text);
+		setEditing(true);
+	}, [retryDraft]);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const ref = memoryLineRef(row);
 	const status = memory.forgotten

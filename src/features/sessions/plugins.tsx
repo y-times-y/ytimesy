@@ -7,7 +7,11 @@ import {
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import type { PublicMcpServer } from "#/server/adapters/mcp-servers";
 import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
@@ -169,7 +173,7 @@ export function Plugins() {
 					</a>
 				) : null}
 			</header>
-			{error ? <p role="alert">{error.message}</p> : null}
+			{error ? <p role="alert">{saveErrorMessage(error)}</p> : null}
 			{installed.length ? (
 				<>
 					<h4 className="integrations-label">Installed</h4>

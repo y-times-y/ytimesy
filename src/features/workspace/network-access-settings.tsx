@@ -14,7 +14,10 @@ import {
 	type VmNetworkPolicy,
 	vmNetworkPolicy,
 } from "#/domain/vm-network-policy";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readNetworkAccessFn, saveNetworkAccessFn } from "./network-access.fn";
 
 const MODES: { id: VmNetworkMode; name: string; description: string }[] = [
@@ -36,7 +39,11 @@ const MODES: { id: VmNetworkMode; name: string; description: string }[] = [
 	},
 ];
 
-/** The saved policy shows at once; a failed save puts the old one back. */
+/**
+ * A typed form, so nothing is written ahead of the server: the form keeps
+ * what was typed while it saves and after a failure, for a retry. The saved
+ * policy replaces the cache only once the server confirms it.
+ */
 export function networkAccessSave(
 	queryClient: QueryClient,
 	projectId: string,
@@ -51,7 +58,7 @@ export function networkAccessSave(
 		...optimisticMutation<VmNetworkPolicy, VmNetworkPolicy>({
 			queryClient,
 			scope: `network-access:${projectId}`,
-			writes: (policy) => [cacheWrite<VmNetworkPolicy>(queryKey, () => policy)],
+			writes: () => [],
 			serverWrites: (data) => [{ queryKey, data }],
 		}),
 	};
@@ -108,19 +115,21 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 				<NetworkAccessView
 					mode={mode}
 					text={text}
-					pending={!current.data}
+					pending={save.isPending || !current.data}
 					onMode={setMode}
 					onText={setText}
 					onSubmit={onSubmit}
 				/>
 			) : null}
-			{(save.isSuccess || save.isPending) && !save.error ? (
+			{save.isSuccess ? (
 				<p role="status" className="settings-copy">
 					Saved. Applies at each chat's next turn.
 				</p>
 			) : null}
 			{invalid || current.error || save.error ? (
-				<p role="alert">{invalid ?? (current.error ?? save.error)?.message}</p>
+				<p role="alert">
+					{invalid ?? current.error?.message ?? saveErrorMessage(save.error)}
+				</p>
 			) : null}
 		</section>
 	);

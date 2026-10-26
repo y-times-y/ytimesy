@@ -4,6 +4,8 @@ import {
 	QueryClient,
 	type QueryKey,
 } from "@tanstack/react-query";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { PublicModelConnection } from "#/domain/model-connection";
 import type { TrainingConsent } from "#/domain/training-consent";
@@ -21,7 +23,11 @@ const { failoverSettingsSave } = await import(
 );
 const { pluginToggle, pluginUninstall } = await import("../sessions/plugins");
 const { machineSizeSave } = await import("./machine-size-settings");
-const { memoryClear, memoryEditSave } = await import("./memory-edit-save");
+const { editorToReopen, memoryClear, memoryEditSave } = await import(
+	"./memory-edit-save"
+);
+const { MemoryRowItem } = await import("./memory-inspector");
+const { saveErrorMessage } = await import("#/lib/optimistic-mutation");
 const { memoryModeChange } = await import("./memory-settings");
 const { networkAccessSave } = await import("./network-access-settings");
 const { chatRemoval, projectRemoval } = await import("./sidebar-removals");
@@ -41,7 +47,7 @@ type ActionCase = {
 	readonly build: (
 		client: QueryClient,
 		server: (input: unknown) => Promise<unknown>,
-	) => MutationObserverOptions<unknown, Error, never, unknown>;
+	) => object;
 	readonly variables: unknown;
 	readonly optimistic: Entries;
 	readonly answer: unknown;
@@ -189,7 +195,10 @@ const cases: ActionCase[] = [
 		before: [[["project-network-access", "p"], { mode: "full", domains: [] }]],
 		build: (client, call) => networkAccessSave(client, "p", call as never),
 		variables: policy,
-		optimistic: [[["project-network-access", "p"], policy]],
+		// A typed form: nothing is written before the server confirms.
+		optimistic: [
+			[["project-network-access", "p"], { mode: "full", domains: [] }],
+		],
 		answer: policy,
 		after: [[["project-network-access", "p"], policy]],
 	},
@@ -394,7 +403,7 @@ describe.each(cases)("$name", (action) => {
 		const backend = deferredServer();
 		const observer = new MutationObserver(
 			client,
-			action.build(client, backend.call) as MutationObserverOptions<
+			action.build(client, backend.call) as unknown as MutationObserverOptions<
 				unknown,
 				Error,
 				unknown,
@@ -486,4 +495,85 @@ it("a rename-then-delete style pair on one list ends as the server says", async 
 	expect(client.getQueryState(["agent-sessions", "p"])?.isInvalidated).toBe(
 		true,
 	);
+});
+
+describe("failed saves keep what the user typed", () => {
+	it("leaves the internet access entry untouched, so the typed form stays for a retry", async () => {
+		const saved = { mode: "full", domains: [] };
+		const client = seeded([[["project-network-access", "p"], saved]]);
+		const observer = new MutationObserver(
+			client,
+			networkAccessSave(client, "p", async () => {
+				throw new TypeError("Failed to fetch");
+			}),
+		);
+		await expect(observer.mutate(policy)).rejects.toThrow();
+		// The same object: the form's sync from the cache does not run.
+		expect(client.getQueryData(["project-network-access", "p"])).toBe(saved);
+	});
+
+	it("reopens a refused text edit with what was typed; other edits just roll back", () => {
+		expect(
+			editorToReopen({ op: "update", ref: usePnpm, text: "Use pnpm only" }),
+		).toEqual({ key: "tooling.md:3", text: "Use pnpm only" });
+		expect(editorToReopen({ op: "update", ref: usePnpm, always: true })).toBe(
+			null,
+		);
+		expect(editorToReopen({ op: "delete", ref: usePnpm })).toBe(null);
+	});
+
+	it("the reopened editor holds the typed text, not the saved line", () => {
+		const html = renderToStaticMarkup(
+			createElement(MemoryRowItem, {
+				row: {
+					path: "tooling.md",
+					line: 3,
+					text: "Use pnpm",
+					rule: false,
+					replaced: false,
+					kind: "stated",
+				},
+				fresh: false,
+				showScope: false,
+				showTopic: false,
+				scopeLabel: "Personal",
+				topicTitle: "Tooling",
+				topics: {},
+				choices: [],
+				busy: false,
+				editing: true,
+				draftText: "Use pnpm only",
+				confirmingDelete: false,
+				onOpenTopic: () => undefined,
+				onOpenChat: () => true,
+				onStartEdit: () => undefined,
+				onCancelEdit: () => undefined,
+				onSaveText: () => undefined,
+				onMove: () => undefined,
+				onTogglePin: () => undefined,
+				onAskDelete: () => undefined,
+				onCancelDelete: () => undefined,
+				onDelete: () => undefined,
+			}),
+		);
+		expect(html).toContain("Use pnpm only</textarea>");
+	});
+});
+
+describe("saveErrorMessage", () => {
+	it("says a request that never reached the server plainly", () => {
+		expect(saveErrorMessage(new TypeError("Failed to fetch"))).toBe(
+			"Couldn't save. Check your connection.",
+		);
+		expect(saveErrorMessage(new Error("Failed to fetch"))).toBe(
+			"Couldn't save. Check your connection.",
+		);
+	});
+
+	it("keeps the server's own reason", () => {
+		expect(saveErrorMessage(new Error("Project not found."))).toBe(
+			"Project not found.",
+		);
+		expect(saveErrorMessage(null)).toBeUndefined();
+	});
 });
