@@ -104,13 +104,28 @@ it("reserves before create, reuses uncertain admission and rejects ownerless VMs
 		throw new Error("uncertain");
 	});
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", uncertain),
+		admitVmCreate(
+			client,
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+			"freestyle/ubuntu-sm",
+			uncertain,
+		),
 	).rejects.toThrow("uncertain");
-	await admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", create);
+	await admitVmCreate(
+		client,
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+		"freestyle/ubuntu-sm",
+		create,
+	);
 	expect(create).toHaveBeenCalledWith(300);
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", create),
+		admitVmCreate(
+			client,
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+			"freestyle/ubuntu-sm",
+			create,
+		),
 	).rejects.toThrow("generation changed");
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
@@ -132,11 +147,21 @@ it("sizes the shared tools image as the base image, with no source VM to read", 
 		},
 	} as unknown as Freestyle;
 	const create = vi.fn(async (_cap?: number) => "vm");
-	await admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "sh-tools", create);
+	await admitVmCreate(
+		client,
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
+		"sh-tools",
+		create,
+	);
 	expect(create).toHaveBeenCalledWith(300);
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a2", "sh-other", create),
+		admitVmCreate(
+			client,
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a2",
+			"sh-other",
+			create,
+		),
 	).rejects.toThrow("source VM lookup");
 });
 
