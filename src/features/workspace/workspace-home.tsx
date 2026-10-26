@@ -112,6 +112,7 @@ import {
 	useFirstPaint,
 	useTypedBeforeHydration,
 } from "../app/first-paint";
+import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
@@ -1188,6 +1189,8 @@ export function WorkspaceHome({
 			});
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
+	const pageRestores = usePageRestores();
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reopens the stream.
 	useEffect(() => {
 		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
@@ -1265,13 +1268,19 @@ export function WorkspaceHome({
 				refetchOpenSession.current();
 			}
 		};
-		return () => {
+		return closeOnPageHide(() => {
 			source.close();
 			liveProgress.current = null;
 			if (progressStreamOpen.current === activeSessionId)
 				progressStreamOpen.current = null;
-		};
-	}, [activeProjectId, activeSessionId, listenForProgress, harnessId]);
+		});
+	}, [
+		activeProjectId,
+		activeSessionId,
+		listenForProgress,
+		harnessId,
+		pageRestores,
+	]);
 
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
