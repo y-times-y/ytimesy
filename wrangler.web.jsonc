@@ -11,6 +11,11 @@
   "services": [{ "binding": "EXECUTOR", "service": "ytimesy-edge-executor-development", "remote": true }],
   "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1" },
   "observability": { "enabled": true },
+  // Pages read Postgres (Hyperdrive) several times per request and talk to
+  // Durable Objects placed near it (enam), so Cloudflare may run this Worker
+  // near them instead of near the visitor. Static assets are still served from
+  // the visitor's location. Inherited by the production environment.
+  "placement": { "mode": "smart" },
   // Not public: no routes, no workers.dev URL and no preview URLs until launch.
   // Auth email (verification, password reset) without an API token.
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],

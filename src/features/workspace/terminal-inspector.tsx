@@ -11,6 +11,7 @@ import {
 	interactionPending,
 	startInteraction,
 } from "#/features/analytics/web-vitals";
+import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 
 export function TerminalInspector({
 	projectId,
@@ -34,7 +35,9 @@ export function TerminalInspector({
 	// xterm mounts only after hydration (ClientOnly below); attach then.
 	const hydrated = useHydrated();
 	const attachAttempt = shouldAttach && hydrated ? retryGeneration + 1 : 0;
+	const pageRestores = usePageRestores();
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reconnects.
 	useEffect(() => {
 		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
 			setConnected(false);
@@ -154,14 +157,14 @@ export function TerminalInspector({
 			};
 			if (closed) dispose();
 		})();
-		return () => {
+		return closeOnPageHide(() => {
 			closed = true;
 			// Closed before the shell answered: no timing for this open.
 			cancelInteraction("terminal_ready");
 			dispose?.();
 			setConnected(false);
-		};
-	}, [attachAttempt, projectId, sessionId]);
+		});
+	}, [attachAttempt, projectId, sessionId, pageRestores]);
 
 	if (!shouldAttach) {
 		return (

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
+import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 
 export function DesktopStage({
 	projectId,
@@ -14,7 +15,9 @@ export function DesktopStage({
 	const host = useRef<HTMLDivElement>(null);
 	const [disconnected, setDisconnected] = useState<string | null>(null);
 	const [generation, setGeneration] = useState(0);
+	const pageRestores = usePageRestores();
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reconnects.
 	useEffect(() => {
 		const target = host.current;
 		// The generation dependency reconnects with a fresh RFB client.
@@ -60,15 +63,15 @@ export function DesktopStage({
 				if (!disposed) setDisconnected("The desktop viewer failed to load.");
 			});
 
-		return () => {
+		return closeOnPageHide(() => {
 			disposed = true;
 			try {
 				rfb?.disconnect();
 			} catch {
 				target.replaceChildren();
 			}
-		};
-	}, [projectId, sessionId, password, generation]);
+		});
+	}, [projectId, sessionId, password, generation, pageRestores]);
 
 	return (
 		<>
