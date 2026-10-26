@@ -1,3 +1,4 @@
+import { forgetUserSessions } from "../auth/session-cache";
 import { database } from "./database";
 
 /**
@@ -82,6 +83,8 @@ export async function deleteAccountRecords(userId: string) {
 	} finally {
 		client.release();
 	}
+	// Its sessions went with the user row: none is answered from memory again.
+	forgetUserSessions(userId);
 }
 
 /**
