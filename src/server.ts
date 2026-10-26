@@ -7,8 +7,8 @@ import { canonicalOriginRedirect } from "./server/web/canonical-origin";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
 import { limitRequestBody } from "./server/web/request-size";
-import { serverFnOriginRejection } from "./server/web/server-fn-origin";
 import { withSecurityHeaders } from "./server/web/security-headers";
+import { serverFnOriginRejection } from "./server/web/server-fn-origin";
 
 type WorkerContext = { waitUntil(work: Promise<unknown>): void };
 
@@ -72,6 +72,7 @@ export default createServerEntry({
 							(await handleWorkerSocket(request)) ?? handler.fetch(request),
 					),
 				),
+			`${request.method} ${new URL(request.url).pathname}`,
 		);
 	},
 });
