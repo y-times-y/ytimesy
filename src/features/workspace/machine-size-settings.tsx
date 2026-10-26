@@ -33,13 +33,15 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 			>
 				Resources for new chat machines.
 			</p>
-			{preference.data ? (
+			{/* While the choice loads, the same list shows disabled: nothing moves when it lands. */}
+			{preference.data || preference.isPending ? (
 				<RadioGroup.Root
 					orientation="vertical"
 					className="machine-size-list"
 					aria-label="Machine size"
-					value={preference.data}
-					disabled={save.isPending}
+					aria-busy={preference.isPending}
+					value={preference.data ?? ""}
+					disabled={save.isPending || !preference.data}
 					onValueChange={(value) => {
 						const size = MACHINE_SIZES.find((row) => row.id === value);
 						if (size) save.mutate(size.id);
@@ -74,8 +76,6 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 						</RadioGroup.Item>
 					))}
 				</RadioGroup.Root>
-			) : preference.isPending ? (
-				<p className="settings-copy">Reading machine preference…</p>
 			) : null}
 			{save.isPending ? (
 				<p role="status" className="settings-copy">

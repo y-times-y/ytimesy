@@ -28,6 +28,12 @@ Nothing inside React runs early enough to fix the first paint. Hydration happens
 - Place it as early as possible: directly after the element it fixes, or in `<head>` (TanStack Start: `src/routes/__root.tsx`) for `<html>` attributes.
 - Server-safe defaults must still render a usable page when the script cannot run.
 
+## Silent re-render: zero warnings is not proof
+
+If anything suspends during hydration (a `use(promise)` in a Suspense boundary, a `React.lazy` component, a streamed loader value), React can discard the server HTML and client-render the subtree on the next update from above, with no hydration warning, even in dev. The user sees the page rebuild: empty transcript, raw markdown, then the final page. Check for it directly: count how often a top-level node (e.g. `div.workspace-shell`) is replaced during load with a MutationObserver, and measure CLS with a `layout-shift` PerformanceObserver under 6x CPU throttle. Fix by settling streamed values and lazy modules before hydrating (see `src/client.tsx`, `src/features/app/hydration-ready.ts`), not by adding fallbacks.
+
+Other first-paint shifts seen here: web fonts without preload and a metric-matched fallback face; `content-visibility:auto` placeholders (Streamdown code blocks) that resize when painted; forms that appear after a "Reading..." line instead of rendering disabled at full size; router loaders that re-run when the app rewrites the URL (`shouldReload: false`).
+
 ## Checklist for any new client-only UI state
 
 - Does the server render a different first paint than the user will end up seeing? If yes, apply the pattern.

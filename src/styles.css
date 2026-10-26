@@ -10,8 +10,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Arial sized to Inter's metrics: text painted before Inter has loaded
+   keeps its line breaks and heights, so the swap moves nothing. */
+@font-face {
+	font-family: "Inter Fallback";
+	src: local("Arial"), local("ArialMT"), local("Helvetica");
+	ascent-override: 90.2%;
+	descent-override: 22.48%;
+	line-gap-override: 0%;
+	size-adjust: 107.4%;
+}
+
 :root {
-	font-family: "Inter Variable", ui-sans-serif, sans-serif;
+	font-family: "Inter Variable", "Inter Fallback", ui-sans-serif, sans-serif;
 	color: #ededed;
 	background: #080808;
 	font-synthesis: none;
@@ -2418,7 +2429,7 @@ a.session-title-meta:focus-visible {
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
 	--font-heading: var(--font-sans);
-	--font-sans: "Inter Variable", sans-serif;
+	--font-sans: "Inter Variable", "Inter Fallback", sans-serif;
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

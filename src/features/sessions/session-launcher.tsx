@@ -33,6 +33,8 @@ import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import {
 	composerDraftKey,
+	createDraftSaver,
+	type DraftSaver,
 	loadComposerDraft,
 	saveComposerDraft,
 } from "#/domain/composer-drafts";
@@ -90,7 +92,6 @@ import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
-import { CloudUsageIndicator } from "../workspace/usage-windows";
 import { AgentIcon } from "./agent-icon";
 import { AgentPanel } from "./agent-panel";
 import {
@@ -451,21 +452,31 @@ export function SessionLauncher({
 		if (typedBeforeHydration)
 			setDraft((current) => current || typedBeforeHydration);
 	}, [typedBeforeHydration]);
-	// Saved as it is typed; cleared at once when it empties (a send).
+	// Saved as it is typed, under the chat it was typed in; cleared at once
+	// when it empties (a send). Moving to another chat or unmounting saves
+	// the pending text right away, still under its own chat.
+	const draftSaver = useRef<DraftSaver | null>(null);
+	draftSaver.current ??= createDraftSaver(
+		saveComposerDraft,
+		DRAFT_SAVE_DELAY_MS,
+	);
 	const savedDraft = useRef(draft);
+	const draftKeyNow = useRef(draftKey);
+	draftKeyNow.current = draftKey;
 	useEffect(() => {
 		if (draft === savedDraft.current) return;
-		const save = () => {
-			savedDraft.current = draft;
-			saveComposerDraft(draftKey, draft);
-		};
-		if (!draft.trim()) {
-			save();
-			return;
-		}
-		const timer = window.setTimeout(save, DRAFT_SAVE_DELAY_MS);
-		return () => window.clearTimeout(timer);
-	}, [draft, draftKey]);
+		savedDraft.current = draft;
+		draftSaver.current?.typed(draftKeyNow.current, draft);
+	}, [draft]);
+	useEffect(() => {
+		void draftKey;
+		return () => draftSaver.current?.flush();
+	}, [draftKey]);
+	/** A send: this chat's saved draft goes now, before the chat can change. */
+	const clearSavedDraft = () => {
+		savedDraft.current = "";
+		draftSaver.current?.typed(draftKey, "");
+	};
 	const drafting = draft.trim().length > 0;
 	const draftStarted = useRef(onDraftStarted);
 	draftStarted.current = onDraftStarted;
@@ -839,6 +850,7 @@ export function SessionLauncher({
 			})?.then((result) => {
 				if (result !== "sent") unsend(result === "unsent");
 			});
+		clearSavedDraft();
 		setDraft("");
 		if (!files.length) {
 			send([]);
@@ -1236,22 +1248,19 @@ export function SessionLauncher({
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
-									<>
-										<CloudUsageIndicator />
-										{harnessId === "codex" ||
-										recordedContextUsage(session.items) ? (
-											<ContextUsage
-												context={
-													session.usage?.context ??
-													recordedContextUsage(session.items)?.context
-												}
-												compacting={
-													session.usage?.compacting ??
-													recordedContextUsage(session.items)?.compacting
-												}
-											/>
-										) : null}
-									</>
+									harnessId === "codex" ||
+									recordedContextUsage(session.items) ? (
+										<ContextUsage
+											context={
+												session.usage?.context ??
+												recordedContextUsage(session.items)?.context
+											}
+											compacting={
+												session.usage?.compacting ??
+												recordedContextUsage(session.items)?.compacting
+											}
+										/>
+									) : null
 								}
 								providerConnected={
 									harnessReady ||
