@@ -1,9 +1,16 @@
+import { ClientOnly, useHydrated } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import {
 	terminalClosedMessage,
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
 } from "#/domain/workspace-terminal";
+import {
+	cancelInteraction,
+	finishInteraction,
+	interactionPending,
+	startInteraction,
+} from "#/features/analytics/web-vitals";
 
 export function TerminalInspector({
 	projectId,
@@ -24,7 +31,9 @@ export function TerminalInspector({
 		projectId,
 		sessionId,
 	});
-	const attachAttempt = shouldAttach ? retryGeneration + 1 : 0;
+	// xterm mounts only after hydration (ClientOnly below); attach then.
+	const hydrated = useHydrated();
+	const attachAttempt = shouldAttach && hydrated ? retryGeneration + 1 : 0;
 
 	useEffect(() => {
 		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
@@ -32,6 +41,9 @@ export function TerminalInspector({
 			return;
 		}
 		const container = containerRef.current;
+		// Timed from the open (or a restart) to the shell's first output.
+		if (!interactionPending("terminal_ready"))
+			startInteraction("terminal_ready");
 		let closed = false;
 		let dispose: (() => void) | undefined;
 		void (async () => {
@@ -79,7 +91,10 @@ export function TerminalInspector({
 			socket.addEventListener("message", (event) => {
 				// The socket opens before the machine answers (it may be waking);
 				// the shell's first output is what connects the terminal.
-				if (!closed && !isTerminalError(event.data)) setConnected(true);
+				if (!closed && !isTerminalError(event.data)) {
+					setConnected(true);
+					finishInteraction("terminal_ready");
+				}
 				if (typeof event.data === "string") {
 					try {
 						const message = JSON.parse(event.data) as {
@@ -141,6 +156,8 @@ export function TerminalInspector({
 		})();
 		return () => {
 			closed = true;
+			// Closed before the shell answered: no timing for this open.
+			cancelInteraction("terminal_ready");
 			dispose?.();
 			setConnected(false);
 		};
@@ -161,28 +178,43 @@ export function TerminalInspector({
 	}
 
 	return (
-		<section className="terminal-inspector" aria-label="Workspace terminal">
-			{error ? (
-				<>
-					<p className="terminal-inspector-error" role="alert">
-						{error}
+		<ClientOnly fallback={<TerminalPlaceholder />}>
+			<section className="terminal-inspector" aria-label="Workspace terminal">
+				<div
+					ref={containerRef}
+					className="terminal-inspector-frame"
+					data-connected={connected ? "true" : "false"}
+				/>
+				{/* Over the frame, never above it: the terminal keeps its box when it connects. */}
+				{error ? (
+					<div className="terminal-inspector-status" role="alert">
+						<p className="terminal-inspector-error">{error}</p>
+						<button
+							type="button"
+							className="desktop-start"
+							onClick={() => setRetryGeneration((generation) => generation + 1)}
+						>
+							Restart terminal
+						</button>
+					</div>
+				) : connected ? null : (
+					<p className="terminal-inspector-status desktop-inspector-status">
+						Starting terminal…
 					</p>
-					<button
-						type="button"
-						className="desktop-start"
-						onClick={() => setRetryGeneration((generation) => generation + 1)}
-					>
-						Restart terminal
-					</button>
-				</>
-			) : connected ? null : (
-				<p className="desktop-inspector-status">Starting terminal…</p>
-			)}
-			<div
-				ref={containerRef}
-				className="terminal-inspector-frame"
-				data-connected={connected ? "true" : "false"}
-			/>
+				)}
+			</section>
+		</ClientOnly>
+	);
+}
+
+/** The terminal before xterm mounts: the same box, chrome and status line. */
+export function TerminalPlaceholder() {
+	return (
+		<section className="terminal-inspector" aria-label="Workspace terminal">
+			<div className="terminal-inspector-frame" data-connected="false" />
+			<p className="terminal-inspector-status desktop-inspector-status">
+				Starting terminal…
+			</p>
 		</section>
 	);
 }

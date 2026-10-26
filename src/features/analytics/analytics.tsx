@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { analyticsSurface } from "#/domain/analytics";
 import { authClient } from "#/features/auth/client";
 import { captureAnalytics, setAnalyticsUser } from "./client";
+import { startWebVitals } from "./web-vitals";
 
 export function Analytics() {
 	const { data, isPending } = authClient.useSession();
@@ -10,6 +11,9 @@ export function Analytics() {
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
+	useEffect(() => {
+		startWebVitals();
+	}, []);
 	useEffect(() => {
 		if (!isPending) setAnalyticsUser(userId);
 	}, [isPending, userId]);

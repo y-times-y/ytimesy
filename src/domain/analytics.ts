@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
+import { interactionTimingEvent, webVitalEvent } from "./web-vitals";
 
 const surface = z.enum(["workspace", "onboarding", "auth", "other"]);
 const runtime = z.enum(["codex", "api"]);
@@ -74,6 +75,10 @@ export const analyticsEvents = {
 	inspector_opened: z.object({
 		panel: z.enum(["files", "diff", "terminal", "desktop"]),
 	}),
+	/** A Core Web Vital measured in this visitor's browser (web-vitals.ts). */
+	web_vital: webVitalEvent,
+	/** How long a key interaction took for this visitor (web-vitals.ts). */
+	interaction_timing: interactionTimingEvent,
 };
 export type AnalyticsEvent = keyof typeof analyticsEvents;
 export type AnalyticsProperties<E extends AnalyticsEvent> = z.input<
