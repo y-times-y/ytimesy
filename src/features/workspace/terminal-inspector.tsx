@@ -4,6 +4,7 @@ import {
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
 } from "#/domain/workspace-terminal";
+import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 
 export function TerminalInspector({
 	projectId,
@@ -25,7 +26,9 @@ export function TerminalInspector({
 		sessionId,
 	});
 	const attachAttempt = shouldAttach ? retryGeneration + 1 : 0;
+	const pageRestores = usePageRestores();
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reconnects.
 	useEffect(() => {
 		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
 			setConnected(false);
@@ -139,12 +142,12 @@ export function TerminalInspector({
 			};
 			if (closed) dispose();
 		})();
-		return () => {
+		return closeOnPageHide(() => {
 			closed = true;
 			dispose?.();
 			setConnected(false);
-		};
-	}, [attachAttempt, projectId, sessionId]);
+		});
+	}, [attachAttempt, projectId, sessionId, pageRestores]);
 
 	if (!shouldAttach) {
 		return (
