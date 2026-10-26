@@ -22,6 +22,7 @@ import { projectForOwner } from "../projects";
 import { repositoryDirectory } from "../repository-setup";
 import { productCreateVmFields } from "./product-vm";
 import { scrubAgentSecrets } from "./scrub-agent-secrets";
+import { sessionSlugMatch } from "./slug-sql";
 import {
 	admitVmCreate,
 	computeHourlyMicroUsd,
@@ -57,7 +58,7 @@ export function workspaceRetentionEnabled() {
  */
 export const RETENTION_TOUCH_CTES = `retention_prior as (select phase,vm_id from workspace_retention where $5::boolean and slug=$1),
  retention_touched as (insert into workspace_retention(session_id,user_id,vm_id,slug,resources)
-  select id,user_id,$2,$1,$3::jsonb from agent_session where $5::boolean and 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1 and (agent_role is null or agent_role='writer')
+  select id,user_id,$2,$1,$3::jsonb from agent_session where $5::boolean and ${sessionSlugMatch("$1")} and (agent_role is null or agent_role='writer')
   and coalesce((select phase='active' and vm_id=$2 from retention_prior),$4::boolean)
   on conflict(session_id) do update set last_activity_at=now(),vm_id=$2,resources=$3::jsonb where workspace_retention.phase='active' returning 1)`;
 

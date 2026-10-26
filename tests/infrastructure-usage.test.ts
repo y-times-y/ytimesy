@@ -31,7 +31,7 @@ vi.mock("../src/server/adapters/database", () => ({
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(
-		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); create table api_turn(id text,user_id text,state text,session_id text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
+		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id uuid,user_id text); create table agent_session(id uuid,user_id text); create table environment_build(id uuid,workspace_id uuid); create table api_turn(id text,user_id text,state text,session_id text); insert into workspace values('00000000-0000-4000-8000-0000000000a1','alice'),('00000000-0000-4000-8000-0000000000a2','alice'); insert into environment_build values('00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000a1');",
 	);
 	await db.exec(
 		readFileSync(
@@ -104,13 +104,13 @@ it("reserves before create, reuses uncertain admission and rejects ownerless VMs
 		throw new Error("uncertain");
 	});
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-one", "freestyle/ubuntu-sm", uncertain),
+		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", uncertain),
 	).rejects.toThrow("uncertain");
-	await admitVmCreate(client, "ytimesy-ws-one", "freestyle/ubuntu-sm", create);
+	await admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", create);
 	expect(create).toHaveBeenCalledWith(300);
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-one", "freestyle/ubuntu-sm", create),
+		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "freestyle/ubuntu-sm", create),
 	).rejects.toThrow("generation changed");
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
@@ -132,11 +132,11 @@ it("sizes the shared tools image as the base image, with no source VM to read", 
 		},
 	} as unknown as Freestyle;
 	const create = vi.fn(async (_cap?: number) => "vm");
-	await admitVmCreate(client, "ytimesy-ws-one", "sh-tools", create);
+	await admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a1", "sh-tools", create);
 	expect(create).toHaveBeenCalledWith(300);
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
 	await expect(
-		admitVmCreate(client, "ytimesy-ws-two", "sh-other", create),
+		admitVmCreate(client, "ytimesy-ws-00000000-0000-4000-8000-0000000000a2", "sh-other", create),
 	).rejects.toThrow("source VM lookup");
 });
 
@@ -144,7 +144,7 @@ it("reserves the larger requested copy shape before provisioning", async () => {
 	enableVmAllowance();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm",
 		300,
@@ -157,13 +157,13 @@ it("uses provider runtime counters and confirms caps before a caller can resume"
 	enableVmAllowance();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm",
 	);
 	const data = {
 		id: "vm",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		resources: { cpu: 2, memory: 4096, storage: 16384 },
 		totalRunSeconds: 300,
 		maxRunTotalSeconds: 300,
@@ -202,13 +202,13 @@ it.each([
 		enableVmAllowance();
 		await admitVmCreate(
 			{} as Freestyle,
-			"ytimesy-ws-one",
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 			"freestyle/ubuntu-sm",
 			async () => "vm",
 		);
 		const data = {
 			id: "vm",
-			slug: "ytimesy-ws-one",
+			slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 			state: "running",
 			resources: { cpu: 2, memory: 4096, storage: 16384 },
 			totalRunSeconds: 0,
@@ -244,13 +244,13 @@ it("reuses a running VM's admission for a minute only while it still covers the 
 	forgetRecentAdmission();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm",
 	);
 	const data = {
 		id: "vm",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		state: "running",
 		resources: { cpu: 2, memory: 4096, storage: 16384 },
 		totalRunSeconds: 0,
@@ -291,7 +291,7 @@ it("does not call the VM creator when spending would exceed the fleet ceiling", 
 	await expect(
 		admitVmCreate(
 			{} as Freestyle,
-			"ytimesy-ws-one",
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 			"freestyle/ubuntu-sm",
 			create,
 		),
@@ -303,7 +303,7 @@ it("extends an active VM before a long command without charging its earlier hold
 	enableVmAllowance();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm",
 	);
@@ -312,7 +312,7 @@ it("extends an active VM before a long command without charging its earlier hold
 	);
 	const data = {
 		id: "vm",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		state: "running",
 		resources: { cpu: 2, memory: 4096, storage: 16384 },
 		totalRunSeconds: 0,
@@ -344,7 +344,7 @@ it("resolves setup ownership through the workspace and funds long preparation wi
 	const create = vi.fn(async (_cap?: number) => "build-vm");
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-build-build-one",
+		"ytimesy-build-00000000-0000-4000-8000-0000000000b1",
 		"freestyle/ubuntu-sm",
 		create,
 		3600,
@@ -360,13 +360,13 @@ it("retains a paused hold if the provider fails to confirm revocation", async ()
 	enableVmAllowance();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm",
 	);
 	const data = {
 		id: "vm",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		state: "paused",
 		totalRunSeconds: 23,
 		maxRunTotalSeconds: 300,
@@ -384,13 +384,13 @@ it.each([0, 23])(
 		enableVmAllowance();
 		await admitVmCreate(
 			{} as Freestyle,
-			"ytimesy-ws-one",
+			"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 			"freestyle/ubuntu-sm",
 			async () => "vm",
 		);
 		const data = {
 			id: "vm",
-			slug: "ytimesy-ws-one",
+			slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 			state: "paused",
 			resources: { cpu: 2, memory: 4096, storage: 16384 },
 			totalRunSeconds: runtime,
@@ -425,7 +425,7 @@ it("funds the requested long operation before resuming a paused machine", async 
 	enableVmAllowance();
 	const data = {
 		id: "vm",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		state: "paused",
 		resources: { cpu: 2, memory: 4096, storage: 16384 },
 		totalRunSeconds: 0,
@@ -712,19 +712,19 @@ it("settles stopped VMs like paused ones and converts a deleted VM's hold into u
 	enableVmAllowance();
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-one",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		"freestyle/ubuntu-sm",
 		async () => "vm-stopped",
 	);
 	await admitVmCreate(
 		{} as Freestyle,
-		"ytimesy-ws-two",
+		"ytimesy-ws-00000000-0000-4000-8000-0000000000a2",
 		"freestyle/ubuntu-sm",
 		async () => "vm-deleted",
 	);
 	const stopped = {
 		id: "vm-stopped",
-		slug: "ytimesy-ws-one",
+		slug: "ytimesy-ws-00000000-0000-4000-8000-0000000000a1",
 		state: "stopped",
 		resources: { cpu: 2, memory: 4096, storage: 16384 },
 		totalRunSeconds: 10,
