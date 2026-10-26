@@ -1,0 +1,37 @@
+name: Web performance budget
+# Fails when the workspace page's first-load JS or CSS grows past
+# scripts/bundle-budget.json, or when first-paint layout shift or hydration
+# warnings regress past scripts/first-paint/budget.json. No secrets: the
+# first-paint check serves the build locally against a Docker Postgres with
+# fixture chats (scripts/first-paint/run.ts).
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  web-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Production web build
+        run: pnpm build
+        env:
+          YTIMESY_TARGET: cloudflare
+      - name: Bundle size budget
+        run: pnpm check:bundle
+      - name: First paint (layout shift and hydration warnings)
+        run: pnpm check:first-paint --shots .ytimesy/first-paint
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: first-paint
+          path: .ytimesy/first-paint

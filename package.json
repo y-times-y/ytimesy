@@ -20,7 +20,9 @@
 		"typecheck:edge-executor": "pnpm build:edge-executor && tsc --noEmit --project tsconfig.edge-executor.json",
 		"prove:workspace": "tsx scripts/prove-workspace.ts",
 		"db:migrate": "node --env-file-if-exists=.env --import tsx scripts/db-migrate.ts",
-		"rehearsal": "node --import tsx scripts/rehearsal/run.ts"
+		"rehearsal": "node --import tsx scripts/rehearsal/run.ts",
+		"check:bundle": "node --import tsx scripts/check-bundle-size.ts",
+		"check:first-paint": "node --import tsx scripts/first-paint/run.ts"
 	},
 	"dependencies": {
 		"@ai-sdk/anthropic": "4.0.65",
