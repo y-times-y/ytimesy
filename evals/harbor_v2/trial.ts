@@ -17,6 +17,13 @@ import {
 	treeModelSpend,
 } from "../../src/domain/eval-efficiency";
 import {
+	type Goal,
+	goalCompactionNote,
+	newGoal,
+	nextGoalStep,
+	withGoalNote,
+} from "../../src/domain/goal";
+import {
 	harnessVariantLabel,
 	leadReasoningEffort,
 } from "../../src/domain/harness-variant";
@@ -27,6 +34,7 @@ import type { SubagentBudget } from "../../src/domain/subagent";
 import { budgetTokenWeight } from "../../src/domain/subagent-usage";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
+import { goalTool } from "../../src/server/services/goal-tool";
 import {
 	type ModelAgentRuntime,
 	runModelAgent,
@@ -58,7 +66,18 @@ import {
 	type HarborModel,
 	routeProvider,
 } from "./config";
+import { effortMix } from "./effort-mix";
+import { envSnapshot } from "./env-snapshot";
+import { grindNotice } from "./grind-gate";
 import { type HarborWorkspace, harborHarness } from "./harness";
+import {
+	FINISH_CONTINUATIONS_MAX,
+	type LedgerGateEntry,
+	type LedgerState,
+	ledgerGate,
+	requirementsTool,
+	withLedgerInstruction,
+} from "./requirement-ledger";
 import {
 	briefFindingsPath,
 	type CheckerRun,
@@ -271,6 +290,24 @@ export function trialEfficiency(input: {
 	return { ...summary, modelRows };
 }
 
+/**
+ * Why a root builder run started: a finish sent back by the background,
+ * ledger or grind gate; null for the first run and a review fix.
+ */
+export type BuilderContinuation = "background" | "ledger" | "grind" | null;
+
+/**
+ * The root builder's effort for one run: the hook for an effort mix (for
+ * example top effort for the runs a finish gate sends back). Every run keeps
+ * the trial's effort today.
+ */
+export function builderRunEffort<Effort>(
+	effort: Effort,
+	_continuation: BuilderContinuation,
+): Effort {
+	return effort;
+}
+
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 const sum = (usages: (ApiTokenUsage | null)[]) =>
@@ -438,12 +475,44 @@ export async function runHarborTrial(
 	let tools = {};
 	const reviewTrace: ReviewTrace = { checks: [] };
 	const backgroundGates: BackgroundGateEntry[] = [];
+	// ledger=on: the builder's requirement list and the gate's check runs.
+	const ledger: LedgerState | null =
+		config.variant.ledger === "on" ? { items: null, sets: [] } : null;
+	const ledgerGates: LedgerGateEntry[] = [];
+	let ledgerRounds = 0;
+	// The root builder's first message: the request, with ledger=on's note;
+	// under envSnapshot=on the sandbox's facts go above it.
+	let firstMessage = ledger
+		? withLedgerInstruction(input.instruction)
+		: input.instruction;
+	// Each root builder run and why it started (an effort mix keys on this).
+	const builderRuns: {
+		afterEvent: number;
+		continuation: BuilderContinuation;
+	}[] = [];
 	let reviewRounds = 0;
 	let reviewSummary: unknown = null;
+	// goal=on: the request is the run's goal, held here outside the
+	// transcript (src/domain/goal.ts); the builder marks it with the goal tool.
+	const goalState: { goal: Goal } | null =
+		config.variant.goal === "on" && !input.restore
+			? {
+					goal: newGoal({
+						objective: input.instruction,
+						deadlineAtMs: input.deadlineAt,
+					}),
+				}
+			: null;
 	try {
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
+		// effortMix=on: the root builder's own requests plan and continue at the
+		// turn's effort and execute at high (effort-mix.ts); children keep theirs.
+		const mix = config.variant.effortMix === "on" ? effortMix(log) : null;
+		const builderRuntime = mix
+			? { ...runtime, model: mix.wrap(runtime.model) }
+			: runtime;
 		const provider = routeProvider(config.route);
 		const onEvent = async (event: ApiAgentEvent) => {
 			events.push({ at: new Date(now()).toISOString(), event });
@@ -812,26 +881,80 @@ export async function runHarborTrial(
 			variant: config.variant,
 			webSearch: config.webSearch,
 			bedrock: config.route === "bedrock",
-			instruction: input.instruction,
+			// The first user message, with ledger=on's note: the request itself.
+			instruction: firstMessage,
 			storage: input.storage,
 			onEvent,
 			mcpNote: mcpNoteFor(input.mcpServers),
 			...(config.variant.lead === "fusion"
 				? { extraTools: () => lead?.tools() ?? {} }
 				: {}),
+			// The trial's own tools: ledger=on's requirements, goal=on's goal.
+			trialTools: {
+				...(ledger
+					? requirementsTool({
+							state: ledger,
+							instruction: input.instruction,
+							now,
+							log,
+						})
+					: {}),
+				...(goalState
+					? goalTool({
+							state: goalState,
+							now,
+							onUpdate: (goal) => {
+								const claim = goal.claim;
+								if (!claim) return;
+								log(
+									`goal update ${claim.status} (${claim.evidence.length} evidence)${claim.reason ? `: ${claim.reason.slice(0, 200)}` : ""}`,
+								);
+								claim.evidence.forEach((entry, index) => {
+									log(
+										`goal evidence ${index + 1}: ${entry.requirement.slice(0, 160)} => ${entry.proof.slice(0, 240)}`,
+									);
+								});
+							},
+						})
+					: {}),
+			},
 		});
 		instructions = harness.instructions;
 		tools = harness.tools;
-		const runBuilder = (messages: ModelMessage[]) => {
+		const runBuilder = (
+			messages: ModelMessage[],
+			continuation: BuilderContinuation = null,
+		) => {
 			builderStarts.push(events.length);
+			builderRuns.push({ afterEvent: events.length, continuation });
 			return runModelAgent(
 				{
 					userId: input.userId,
 					modelId: config.modelId,
-					reasoning: builderEffort,
+					reasoning: builderRunEffort(builderEffort, continuation),
 					toolSurface: "implementation",
 					cacheScopeId: input.trialId,
 					...harness.input,
+					// The first message may carry more than the request (envSnapshot,
+					// goal): it survives compaction as the person's request either way.
+					isUserRequest: (message) =>
+						message.role === "user" &&
+						(message.content === input.instruction ||
+							message.content === firstMessage),
+					// goal=on: an active goal's objective follows every compaction.
+					...(goalState
+						? {
+								compactionSnapshot: async (history, runSignal) =>
+									[
+										await harness.input
+											.compactionSnapshot?.(history, runSignal)
+											.catch(() => undefined),
+										goalCompactionNote(goalState.goal),
+									]
+										.filter(Boolean)
+										.join("\n\n") || undefined,
+							}
+						: {}),
 					tools: harness.tools,
 					instructions: harness.instructions,
 					signal,
@@ -841,15 +964,18 @@ export async function runHarborTrial(
 					onEvent,
 					onStep: async () => {},
 				},
-				runtime,
+				builderRuntime,
 			);
 		};
 		// The product wakes an idle chat when a background command exits
 		// (background-command-notices.ts); here the root builder's run is
 		// followed by a wait for the commands it left running and a
 		// continuation with their exit notice (background-gate.ts).
-		const runRootBuilder = async (history: ModelMessage[]) => {
-			let out = await runBuilder(history);
+		const runRootBuilder = async (
+			history: ModelMessage[],
+			continuation: BuilderContinuation = null,
+		): Promise<ModelMessage[]> => {
+			let out = await runBuilder(history, continuation);
 			while (
 				backgroundGates.filter((gate) => gate.outcome === "notified").length <
 					BACKGROUND_GATE_MAX_ROUNDS &&
@@ -882,16 +1008,139 @@ export async function runHarborTrial(
 					afterEvent: events.length,
 					text: gate.notice,
 				});
-				out = await runBuilder([
-					...out,
-					{ role: "user", content: gate.notice },
-				]);
+				out = await runBuilder(
+					[...out, { role: "user", content: gate.notice }],
+					"background",
+				);
+			}
+			// ledger=on: the harness runs the recorded checks on the finished
+			// result and sends failures back (requirement-ledger.ts). Before
+			// grind: a failing requirement is the more concrete notice.
+			if (ledger && !signal.aborted) {
+				const gate = await ledgerGate({
+					state: ledger,
+					cwd: input.cwd,
+					exec: async (command, timeoutMs) => {
+						const result = await input.machines.exec(
+							workspace.vm,
+							command,
+							timeoutMs,
+						);
+						return {
+							exitCode: result.exitCode,
+							output: `${result.stdout}${result.stderr}`,
+						};
+					},
+					rounds: ledgerRounds,
+					runs: ledgerGates.length,
+					deadlineAtMs: input.deadlineAt,
+					now,
+					signal,
+					log,
+				});
+				if (gate.entry) ledgerGates.push(gate.entry);
+				if (gate.notice) {
+					ledgerRounds++;
+					mix?.continuation();
+					notices.push({
+						at: new Date(now()).toISOString(),
+						afterEvent: events.length,
+						text: gate.notice,
+						continuation: "ledger",
+					});
+					return runRootBuilder(
+						[...out, { role: "user", content: gate.notice }],
+						"ledger",
+					);
+				}
+			}
+			// goal=on: while the goal is active the builder goes back with the
+			// audit notice, until it marks the goal or a deterministic stop
+			// (src/domain/goal.ts). It supersedes grind: never both notices.
+			if (goalState) {
+				if (signal.aborted) return out;
+				const { goal, step } = nextGoalStep(goalState.goal, {
+					nowMs: now(),
+					toolCalls:
+						goalContinuedAt === null
+							? null
+							: events
+									.slice(goalContinuedAt)
+									.filter((entry) => entry.event.type === "tool-call").length,
+				});
+				goalState.goal = goal;
+				if (step.kind === "stopped") return out;
+				if (step.kind === "stop") {
+					log(`goal stop ${step.reason}`);
+					return out;
+				}
+				if (step.kind === "wrapUp")
+					log(`goal stop ${step.reason} (wrap-up sent)`);
+				else log(`goal continuation ${step.round}`);
+				mix?.continuation();
+				goalContinuedAt = events.length;
+				notices.push({
+					at: new Date(now()).toISOString(),
+					afterEvent: events.length,
+					text: step.text,
+				});
+				return runRootBuilder([...out, { role: "user", content: step.text }]);
+			}
+			// grind=on: an early finish with most of the time left goes back once
+			// or twice to try to break the result (grind-gate.ts). With the
+			// ledger on too, both share FINISH_CONTINUATIONS_MAX.
+			if (
+				config.variant.grind === "on" &&
+				!signal.aborted &&
+				(!ledger || ledgerRounds + grindRounds < FINISH_CONTINUATIONS_MAX)
+			) {
+				const notice = grindNotice({
+					startedAtMs: Date.parse(startedAt),
+					nowMs: now(),
+					deadlineAtMs: input.deadlineAt,
+					rounds: grindRounds,
+				});
+				if (notice) {
+					grindRounds++;
+					log(`grind ${grindRounds}: sent back after an early finish`);
+					mix?.continuation();
+					notices.push({
+						at: new Date(now()).toISOString(),
+						afterEvent: events.length,
+						text: notice,
+						continuation: "grind",
+					});
+					return runRootBuilder(
+						[...out, { role: "user", content: notice }],
+						"grind",
+					);
+				}
 			}
 			return out;
 		};
-		let messages: ModelMessage[] = [
-			{ role: "user", content: input.instruction },
-		];
+		let grindRounds = 0;
+		// Where the last goal continuation's run began, for its tool-call count.
+		let goalContinuedAt: number | null = null;
+		// envSnapshot=on: one read-only probe of the sandbox before the first
+		// request (env-snapshot.ts); without it the request goes alone.
+		if (config.variant.envSnapshot === "on" && !input.restore) {
+			const snapshot = await envSnapshot({
+				machines: input.machines,
+				vm: workspace.vm,
+				cwd: input.cwd,
+			});
+			log(
+				snapshot
+					? `env snapshot ${snapshot.length} chars`
+					: "env snapshot failed; the request goes alone",
+			);
+			if (snapshot) firstMessage = `${snapshot}\n\n${firstMessage}`;
+		}
+		if (goalState) {
+			firstMessage = withGoalNote(firstMessage);
+			log("goal set");
+		}
+		let messages: ModelMessage[] = [{ role: "user", content: firstMessage }];
 		// The request's exploration round, before the lead's first model call.
 		if (lead)
 			messages.push({
@@ -1057,6 +1306,17 @@ export async function runHarborTrial(
 			events,
 			notices,
 			backgroundGates,
+			builderRuns,
+			ledger: ledger
+				? {
+						rounds: ledgerRounds,
+						sets: ledger.sets,
+						items: ledger.items,
+						gates: ledgerGates,
+					}
+				: null,
+			// goal=on: its final state, with the builder's claim and evidence.
+			goal: goalState?.goal ?? null,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [
@@ -1110,14 +1370,17 @@ export async function runHarborTrial(
 		effort: config.effort,
 		billing: config.billing,
 		systemPrompt: instructions || "(not built)",
-		instruction: input.instruction,
+		instruction: firstMessage,
 		startedAt,
 		events,
 		runStarts: builderStarts,
 		notices,
 		toolDefinitions,
 		subagents,
-		metricsExtra: { efficiency },
+		metricsExtra: {
+			efficiency,
+			...(goalState ? { goal: goalState.goal } : {}),
+		},
 		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
 	});
 	await writeFile(

@@ -10,13 +10,26 @@ import { afterEach, describe, expect, it } from "vitest";
 import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { harborBridgeConfig } from "../evals/harbor_v2/config";
 import {
+	ENV_SNAPSHOT_HEADER,
+	ENV_SNAPSHOT_MAX_CHARS,
+	envSnapshot,
+	envSnapshotProbe,
+} from "../evals/harbor_v2/env-snapshot";
+import { grindMinimumMs, grindNotice } from "../evals/harbor_v2/grind-gate";
+import {
 	HARBOR_REQUEST,
 	harborChannel,
 	harborMachines,
 } from "../evals/harbor_v2/harbor-machines";
+import {
+	type LedgerState,
+	REQUIREMENTS_TOOL,
+	requirementsTool,
+} from "../evals/harbor_v2/requirement-ledger";
 import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
+import { WorkspaceId } from "../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
 import { agentOutputDirectory } from "../src/server/services/agent-output-artifacts";
 import {
@@ -25,6 +38,7 @@ import {
 	commandSessionName,
 } from "../src/server/services/api-agent-command-tools";
 import { commandScopeRoot } from "../src/server/services/api-command-scope";
+import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
 import { localHarnessWorkspace } from "./helpers/local-harness-workspace";
 
 /**
@@ -1724,5 +1738,615 @@ describe("runHarborTrial rehearsal: the background-command completion gate", () 
 		const t = await trace(f.logs);
 		expect(t.backgroundGates).toEqual([]);
 		expect(t.notices).toEqual([]);
+	}, 60_000);
+});
+
+describe("runHarborTrial with grind=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const run = async (variant: string, deadlineMs: number) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel([
+			[...text("g1", "Done."), finish(100, 10)],
+			[...text("g2", "Checked again; done."), finish(100, 10)],
+			[...text("g3", "Still holds; done."), finish(100, 10)],
+			[...text("g4", "never"), finish(1, 1)],
+		]);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `grind-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+		});
+		return { result, calls: calls(), logs: f.logs };
+	};
+
+	it("sends an early finish back at most twice, with the generic notice", async () => {
+		const { result, calls, logs } = await run("grind=on", 3 * 60 * 60_000);
+		expect(result.failure).toBeNull();
+		expect(calls).toBe(3);
+		const notices = JSON.parse(
+			await readFile(join(logs, "ytimesy-trace.json"), "utf8"),
+		).notices;
+		expect(notices).toHaveLength(2);
+		expect(notices[0].text).toContain("try to break your result");
+	}, 60_000);
+
+	it("stops at the first finish without grind or with too little time left", async () => {
+		expect((await run("grind=off", 3 * 60 * 60_000)).calls).toBe(1);
+		expect((await run("grind=on", 10 * 60_000)).calls).toBe(1);
+	}, 60_000);
+});
+
+describe("grindNotice", () => {
+	const hour = 60 * 60_000;
+	it("asks for more work only early in a long enough run, at most twice", () => {
+		const base = { startedAtMs: 0, deadlineAtMs: 8 * hour };
+		expect(grindNotice({ ...base, nowMs: 20 * 60_000, rounds: 0 })).toContain(
+			"460 minutes remain",
+		);
+		expect(grindNotice({ ...base, nowMs: 61 * 60_000, rounds: 0 })).toBeNull();
+		expect(grindNotice({ ...base, nowMs: 20 * 60_000, rounds: 2 })).toBeNull();
+		// A 1-hour task may finish after 15 minutes.
+		expect(
+			grindNotice({
+				startedAtMs: 0,
+				deadlineAtMs: hour,
+				nowMs: 16 * 60_000,
+				rounds: 0,
+			}),
+		).toBeNull();
+		expect(grindMinimumMs(hour)).toBe(15 * 60_000);
+	});
+});
+
+describe("runHarborTrial with effortMix=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const step = (id: string): Part[] => [
+		call(id, "bash", { command: "true" }),
+		finish(100, 10, true),
+	];
+	const run = async (env: Record<string, string>) => {
+		const f = await fixture(env);
+		const { model } = scriptedModel([
+			step("e1"),
+			step("e2"),
+			step("e3"),
+			[...text("d1", "Done."), finish(100, 10)],
+			step("e4"),
+			[...text("d2", "Checked again; done."), finish(100, 10)],
+			[...text("d3", "Still holds; done."), finish(100, 10)],
+		]);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `mix-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 3 * 60 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			// The routes' request settings name the turn's effort.
+			runtime: async (wrap) => ({
+				model: wrap(model),
+				requestSettings: (instructions) => ({
+					system: instructions,
+					providerOptions: { anthropic: { effort: f.config.effort } },
+				}),
+			}),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		expect(result.failure).toBeNull();
+		return {
+			sent: model.doStreamCalls.map(
+				(entry) => entry.providerOptions?.anthropic?.effort,
+			),
+			logged: lines.filter((line) => line.startsWith("effort ")),
+		};
+	};
+
+	it("plans and continues at the turn's effort and executes at high", async () => {
+		const { sent, logged } = await run({
+			YTIMESY_HARBOR_VARIANT: "grind=on,effortMix=on",
+		});
+		// Two planning requests, execution, then two grind continuation rounds.
+		expect(sent).toEqual(["max", "max", "high", "high", "max", "max", "max"]);
+		expect(logged).toEqual([
+			"effort 1 max",
+			"effort 2 max",
+			"effort 3 high",
+			"effort 4 high",
+			"effort 5 max",
+			"effort 6 max",
+			"effort 7 max",
+		]);
+	}, 60_000);
+
+	it("leaves every request at the turn's effort when off or at high", async () => {
+		const off = await run({ YTIMESY_HARBOR_VARIANT: "grind=on" });
+		expect(new Set(off.sent)).toEqual(new Set(["max"]));
+		expect(off.logged).toEqual([]);
+		const high = await run({
+			YTIMESY_HARBOR_VARIANT: "grind=on,effortMix=on",
+			YTIMESY_HARBOR_EFFORT: "high",
+		});
+		expect(new Set(high.sent)).toEqual(new Set(["high"]));
+		expect(high.logged).toHaveLength(7);
+	}, 60_000);
+});
+
+describe("runHarborTrial with envSnapshot=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const run = async (variant: string) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model } = scriptedModel([
+			[...text("e1", "Done."), finish(100, 10)],
+		]);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `env-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 120_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			log: (line) => lines.push(line),
+		});
+		const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		return { result, prompt, lines, trajectory, commands: f.side.commands };
+	};
+
+	it("puts the sandbox probe's facts above the request, logged and in the trajectory", async () => {
+		const { result, prompt, lines, trajectory, commands } =
+			await run("envSnapshot=on");
+		expect(result.failure).toBeNull();
+		expect(prompt).toContain(ENV_SNAPSHOT_HEADER);
+		expect(prompt).toContain("## Files");
+		expect(prompt.indexOf(ENV_SNAPSHOT_HEADER)).toBeLessThan(
+			prompt.indexOf("Say done."),
+		);
+		expect(lines.some((line) => /^env snapshot \d+ chars$/.test(line))).toBe(
+			true,
+		);
+		expect(trajectory.steps[1].message).toContain(ENV_SNAPSHOT_HEADER);
+		expect(commands.filter((c) => c.includes("## System"))).toHaveLength(1);
+	}, 60_000);
+
+	it("sends the request alone when off", async () => {
+		const { prompt, trajectory, commands } = await run("envSnapshot=off");
+		expect(prompt).not.toContain(ENV_SNAPSHOT_HEADER);
+		expect(trajectory.steps[1].message).toBe("Say done.");
+		expect(commands.some((c) => c.includes("## System"))).toBe(false);
+	}, 60_000);
+});
+
+describe("envSnapshot", () => {
+	const vm = WorkspaceId("harbor");
+	const machines = (exec: () => Promise<unknown>) =>
+		({ exec }) as unknown as WorkspaceMachines;
+
+	it("caps long output with a cut note and gives up quietly on a failed probe", async () => {
+		const long = await envSnapshot({
+			machines: machines(async () => ({
+				stdout: "x".repeat(ENV_SNAPSHOT_MAX_CHARS + 500),
+				stderr: "",
+				exitCode: 0,
+			})),
+			vm,
+			cwd: "/app",
+		});
+		expect(long?.startsWith(ENV_SNAPSHOT_HEADER)).toBe(true);
+		expect(long).toContain(
+			`[snapshot cut at ${ENV_SNAPSHOT_MAX_CHARS} of ${ENV_SNAPSHOT_MAX_CHARS + 500} chars]`,
+		);
+		expect(
+			await envSnapshot({
+				machines: machines(async () => {
+					throw new Error("sandbox gone");
+				}),
+				vm,
+				cwd: "/app",
+			}),
+		).toBeNull();
+		expect(
+			await envSnapshot({
+				machines: machines(async () => ({
+					stdout: "  \n",
+					stderr: "",
+					exitCode: 124,
+				})),
+				vm,
+				cwd: "/app",
+			}),
+		).toBeNull();
+	});
+
+	it("quotes the working directory and writes nothing", () => {
+		const probe = envSnapshotProbe("/app's dir");
+		expect(probe).toContain(`cd '/app'\\''s dir'`);
+		expect(probe).not.toMatch(/\b(rm|mv|cp|tee|mkdir|install)\b/);
+	});
+});
+
+describe("runHarborTrial with ledger=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const instruction = "Create done.txt containing ok.";
+	const run = async (
+		variant: string,
+		responses: Part[][],
+		deadlineMs = 3 * 60 * 60_000,
+	) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel(responses);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `ledger-${crypto.randomUUID().slice(0, 8)}`,
+			instruction,
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		return { result, calls: calls(), lines, trace, trajectory };
+	};
+	const requirements = [
+		{
+			id: "R1",
+			quote: "Create done.txt containing ok",
+			check: "grep -qx ok done.txt",
+		},
+	];
+	const done = (id: string): Part[] => [...text(id, "Done."), finish(100, 10)];
+
+	it("records the ledger with the direct tool, runs its checks at the finish and sends a failure back", async () => {
+		const { result, calls, lines, trace, trajectory } = await run("ledger=on", [
+			[
+				call("l1", "requirements", { op: "set", requirements }),
+				finish(100, 10, true),
+			],
+			done("d1"),
+			[
+				call("w1", "write", { path: "done.txt", content: "ok\n" }),
+				finish(100, 10, true),
+			],
+			done("d2"),
+			done("never"),
+		]);
+		expect(result.failure).toBeNull();
+		expect(calls).toBe(4);
+		expect(trajectory.steps[1].message).toContain(
+			'Harness note: before you build, record this request\'s requirements with the requirements tool (op "set")',
+		);
+		expect(trajectory.steps[1].message.startsWith(instruction)).toBe(true);
+		expect(lines).toContain("ledger set 1 items");
+		expect(lines).toContain("ledger gate round 1: 1/1 failed");
+		expect(lines).toContain("ledger gate round 2: 0/1 failed");
+		expect(trace.notices).toHaveLength(1);
+		expect(trace.notices[0].continuation).toBe("ledger");
+		expect(trace.notices[0].text).toContain("1 of 1 failed");
+		expect(trace.notices[0].text).toContain(
+			'- R1: "Create done.txt containing ok"',
+		);
+		expect(trace.notices[0].text).toContain("check: grep -qx ok done.txt");
+		expect(trace.notices[0].text).toMatch(/exit code: [1-9]/);
+		expect(trace.ledger.items).toEqual(requirements);
+		expect(
+			trace.ledger.gates.map((gate: { sentBack: boolean }) => gate.sentBack),
+		).toEqual([true, false]);
+		expect(
+			trace.builderRuns.map(
+				(entry: { continuation: string | null }) => entry.continuation,
+			),
+		).toEqual([null, "ledger"]);
+	}, 60_000);
+
+	it("takes the ledger from a code mode program", async () => {
+		const { calls, lines, trace } = await run("ledger=on,codeMode=primary", [
+			[
+				call("p1", "run_code", {
+					code: `await tools.write({ path: "done.txt", content: "ok\\n" }); return await tools.requirements(${JSON.stringify({ op: "set", requirements })});`,
+				}),
+				finish(100, 10, true),
+			],
+			done("d1"),
+			done("never"),
+		]);
+		expect(calls).toBe(2);
+		expect(lines).toContain("ledger set 1 items");
+		expect(lines).toContain("ledger gate round 1: 0/1 failed");
+		expect(trace.notices).toEqual([]);
+	}, 60_000);
+
+	it("sends a finish without a ledger back at most twice, then lets grind use what is left of the shared cap", async () => {
+		const missing = await run("ledger=on", [done("d1")]);
+		expect(missing.calls).toBe(3);
+		expect(missing.lines).toContain("ledger gate round 1: no ledger recorded");
+		expect(missing.trace.notices[0].text).toContain(
+			"You finished without recording the request's requirements.",
+		);
+		const both = await run("ledger=on,grind=on", [done("d1")]);
+		// Two ledger rounds, then one grind round: three continuations at most.
+		expect(both.calls).toBe(4);
+		expect(
+			both.trace.notices.map(
+				(notice: { continuation: string }) => notice.continuation,
+			),
+		).toEqual(["ledger", "ledger", "grind"]);
+	}, 60_000);
+
+	it("changes nothing when off, and skips the gate with too little time left", async () => {
+		const off = await run("ledger=off", [done("d1")]);
+		expect(off.calls).toBe(1);
+		expect(off.trajectory.steps[1].message).toBe(instruction);
+		expect(off.trace.ledger).toBeNull();
+		const late = await run("ledger=on", [done("d1")], 5 * 60_000);
+		expect(late.calls).toBe(1);
+		expect(
+			late.lines.some((line) => line.startsWith("ledger gate skipped")),
+		).toBe(true);
+	}, 60_000);
+});
+
+describe("requirementsTool", () => {
+	const execute = (ledger: LedgerState, args: unknown, lines: string[] = []) =>
+		(
+			requirementsTool({
+				state: ledger,
+				instruction: "Sort the  list\nin place.",
+				now: () => 0,
+				log: (line) => lines.push(line),
+			})[REQUIREMENTS_TOOL].execute as (
+				args: unknown,
+				options: unknown,
+			) => Promise<string>
+		)(args, { toolCallId: "t", messages: [] });
+
+	it("replaces the list, logs each set and flags quotes the request does not contain", async () => {
+		const ledger: LedgerState = { items: null, sets: [] };
+		const lines: string[] = [];
+		expect(await execute(ledger, { op: "get" })).toBe(
+			"No requirements recorded yet.",
+		);
+		const item = { id: "R1", quote: "sort the list in place", check: "true" };
+		expect(
+			await execute(ledger, { op: "set", requirements: [item] }, lines),
+		).not.toContain("Not found");
+		const second = await execute(
+			ledger,
+			{
+				op: "set",
+				requirements: [
+					item,
+					{
+						id: "R2",
+						quote: "stable",
+						readings: [
+							{ reading: "a", satisfied: false },
+							{ reading: "b", satisfied: false },
+						],
+						check: "true",
+					},
+				],
+			},
+			lines,
+		);
+		expect(second).toContain("replacing the earlier 1");
+		expect(second).toContain("Not found word for word in the request: R2.");
+		expect(second).toContain("No reading marked satisfied: R2.");
+		expect(lines).toEqual([
+			"ledger set 1 items",
+			"ledger set 2 items (replaced 1)",
+		]);
+		expect(
+			await execute(ledger, { op: "set", requirements: [item, item] }),
+		).toContain("ids must be unique (repeated: R1)");
+		expect(ledger.items).toHaveLength(2);
+		expect(JSON.parse(await execute(ledger, { op: "get" }))[1].id).toBe("R2");
+	});
+});
+
+describe("runHarborTrial with goal=on", () => {
+	const harness = {
+		name: "ytimesy",
+		version: "test",
+		commit: null,
+		bundleSha256: null,
+	};
+	const done = (id: string): Part[] => [...text(id, "Done."), finish(100, 10)];
+	const bash = (id: string): Part[] => [
+		call(id, "bash", { command: "true" }),
+		finish(100, 10, true),
+	];
+	const run = async (
+		variant: string,
+		responses: Part[][],
+		deadlineMs = 3 * 60 * 60_000,
+	) => {
+		const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+		const { model, calls } = scriptedModel(responses);
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `goal-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + deadlineMs,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness,
+			backgroundPollMs: 200,
+			log: (line) => lines.push(line),
+		});
+		expect(result.failure).toBeNull();
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		return {
+			calls: calls(),
+			goalLines: lines.filter((line) => line.startsWith("goal ")),
+			trace,
+			model,
+		};
+	};
+
+	it("sets the request as the goal and continues until the builder marks it complete with evidence", async () => {
+		const { calls, goalLines, trace, model } = await run("goal=on,grind=on", [
+			done("g1"),
+			[
+				call("u1", "goal", {
+					op: "update",
+					status: "complete",
+					evidence: [{ requirement: "Say done.", proof: "echo done -> done" }],
+				}),
+				finish(100, 10, true),
+			],
+			done("g2"),
+			done("never"),
+		]);
+		expect(calls).toBe(3);
+		expect(goalLines).toEqual([
+			"goal set",
+			"goal continuation 1",
+			"goal update complete (1 evidence)",
+			"goal evidence 1: Say done. => echo done -> done",
+			"goal stop complete",
+		]);
+		const first = JSON.stringify(model.doStreamCalls[0].prompt);
+		expect(first).toContain("the request above is this run's goal");
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"goal"');
+		// Goal supersedes grind: one notice, the goal's.
+		expect(trace.notices).toHaveLength(1);
+		expect(trace.notices[0].text).toContain(
+			"<objective>\nSay done.\n</objective>",
+		);
+		expect(trace.notices[0].text).not.toContain("try to break");
+		expect(trace.goal).toMatchObject({
+			status: "complete",
+			stopReason: "complete",
+			continuations: 1,
+			claim: {
+				evidence: [{ requirement: "Say done.", proof: "echo done -> done" }],
+				unquoted: 0,
+			},
+		});
+	}, 60_000);
+
+	it("stops after three continuation turns without a tool call", async () => {
+		const { calls, goalLines, trace } = await run("goal=on", [done("g1")]);
+		expect(calls).toBe(4);
+		expect(goalLines.at(-1)).toBe("goal stop no-progress");
+		expect(trace.goal.status).toBe("blocked");
+	}, 60_000);
+
+	it("caps continuations at six", async () => {
+		const responses = Array.from({ length: 7 }, (_, index) => [
+			bash(`b${index}`),
+			done(`d${index}`),
+		]).flat();
+		const { calls, goalLines } = await run("goal=on", responses);
+		expect(calls).toBe(14);
+		expect(
+			goalLines.filter((line) => line.startsWith("goal continuation")),
+		).toHaveLength(6);
+		expect(goalLines.at(-1)).toBe("goal stop max-continuations");
+	}, 60_000);
+
+	it("sends one wrap-up line near the deadline instead of a continuation", async () => {
+		const { calls, goalLines, trace } = await run(
+			"goal=on",
+			[done("g1"), done("g2"), done("never")],
+			3 * 60_000,
+		);
+		expect(calls).toBe(2);
+		expect(goalLines).toEqual([
+			"goal set",
+			"goal stop deadline (wrap-up sent)",
+		]);
+		expect(trace.notices[0].text).toContain("Time is nearly up");
+	}, 60_000);
+
+	it("offers the goal tool directly and to run_code programs", async () => {
+		const { model } = await run("goal=on,codeMode=on", [
+			[
+				call("u1", "goal", {
+					op: "update",
+					status: "blocked",
+					reason: "No network.",
+				}),
+				finish(100, 10, true),
+			],
+			done("g1"),
+		]);
+		const tools = JSON.stringify(model.doStreamCalls[0].tools);
+		expect(tools).toContain('"name":"goal"');
+		expect(tools).toContain("tools.goal");
+	}, 60_000);
+
+	it("leaves the run unchanged when off", async () => {
+		const { calls, goalLines, trace, model } = await run("goal=off", [
+			done("g1"),
+			done("never"),
+		]);
+		expect(calls).toBe(1);
+		expect(goalLines).toEqual([]);
+		expect(trace.goal).toBeNull();
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).not.toContain(
+			'"goal"',
+		);
 	}, 60_000);
 });
