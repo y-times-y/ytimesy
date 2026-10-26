@@ -23,6 +23,7 @@ import {
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -283,7 +284,8 @@ export function MemoryGraphPage({
 			y: height / 2 - (box.y + box.height / 2) * k,
 		});
 	}, [nodes]);
-	useEffect(() => {
+	// Before paint: the first frame already shows the fitted graph.
+	useLayoutEffect(() => {
 		if (fitted.current !== nodes && nodes.length) {
 			fitted.current = nodes;
 			fitView();
@@ -448,12 +450,7 @@ export function MemoryGraphPage({
 		},
 	});
 
-	if (memory.isPending)
-		return (
-			<section className="memory-graph-page memory-graph-empty">
-				Loading memory…
-			</section>
-		);
+	if (memory.isPending) return <MemoryGraphLoading />;
 	if (memory.isError || !memory.data?.available)
 		return (
 			<section className="memory-graph-page memory-graph-empty">
@@ -729,6 +726,15 @@ export function MemoryGraphPage({
 					/>
 				) : null}
 			</aside>
+		</section>
+	);
+}
+
+/** The graph before its data (or its code) is ready: the same box as the graph. */
+export function MemoryGraphLoading() {
+	return (
+		<section className="memory-graph-page memory-graph-empty">
+			Loading memory…
 		</section>
 	);
 }

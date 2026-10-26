@@ -4,6 +4,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import CodeMirror, { EditorView, type Extension } from "@uiw/react-codemirror";
 import { useEffect, useMemo, useState } from "react";
 import { fileEditorSaveHotkey } from "#/domain/workspace-explorer";
+import { SourceEditorPlaceholder } from "./source-editor-placeholder";
 
 const editorTheme = EditorView.theme({
 	"&": { backgroundColor: "transparent", height: "100%" },
@@ -48,6 +49,10 @@ export function SourceEditor({
 			cancelled = true;
 		};
 	}, [path]);
+	// CodeMirror lays out its first frame before it has measured its line
+	// height; it stays hidden behind the placeholder until it has.
+	const [measuredPath, setMeasuredPath] = useState<string>();
+	const measured = measuredPath === path;
 	const extensions = useMemo(
 		() => [
 			EditorView.contentAttributes.of({ "aria-label": path }),
@@ -58,6 +63,7 @@ export function SourceEditor({
 	return (
 		<div
 			className="source-editor"
+			data-measured={measured || undefined}
 			onKeyDownCapture={(event) => {
 				if (fileEditorSaveHotkey(event)) {
 					event.preventDefault();
@@ -65,8 +71,15 @@ export function SourceEditor({
 				}
 			}}
 		>
+			{measured ? null : <SourceEditorPlaceholder value={value} />}
 			<CodeMirror
 				key={path}
+				onCreateEditor={(view) =>
+					view.requestMeasure({
+						read: () => null,
+						write: () => setMeasuredPath(path),
+					})
+				}
 				value={value}
 				onChange={onChange}
 				theme={workspaceEditorTheme}
