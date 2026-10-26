@@ -1423,11 +1423,37 @@ a.session-title-meta:focus-visible {
 	font-size: 13px;
 }
 .terminal-inspector {
+	position: relative;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
 	min-height: 0;
 	background: #111;
+}
+/* Status and errors sit over the frame, so xterm's box never moves. */
+.terminal-inspector-status {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 1;
+	margin: 0;
+	padding: 8px 12px;
+	background: #111;
+}
+div.terminal-inspector-status {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	border-bottom: 1px solid #242424;
+}
+div.terminal-inspector-status .terminal-inspector-error {
+	flex: 1;
+	padding: 0;
+	border: 0;
+}
+div.terminal-inspector-status .desktop-start {
+	margin-top: 0;
 }
 .terminal-inspector-error {
 	margin: 0;
@@ -1834,6 +1860,61 @@ a.session-title-meta:focus-visible {
 }
 .source-editor > div {
 	height: 100%;
+}
+.source-editor:not([data-measured]) > .cm-theme {
+	visibility: hidden;
+}
+/* CodeMirror's metrics (base theme + editorTheme in source-editor.tsx), drawn
+   before it loads, so its text lands where the placeholder's was. */
+.source-editor-placeholder-scroller {
+	display: flex;
+	align-items: flex-start;
+	height: 100%;
+	overflow: hidden;
+	font-family: var(--font-mono, monospace);
+	line-height: 1.4;
+	color: #abb2bf;
+}
+.source-editor-placeholder-gutter {
+	flex-shrink: 0;
+	display: flex;
+	min-height: 100%;
+	color: #7d8799;
+}
+.source-editor-placeholder-gutter > div {
+	padding-top: 4px;
+}
+.source-editor-placeholder-gutter > div > div {
+	height: calc(14px * 1.4);
+}
+/* Line numbers: as wide as the last line's number, at least 20px. */
+.source-editor-placeholder-gutter > div:first-child > div {
+	box-sizing: border-box;
+	min-width: 20px;
+	width: calc(var(--gutter-digits) * 1ch + 8px);
+	padding: 0 3px 0 5px;
+	text-align: right;
+}
+/* The fold gutter: one marker wide. */
+.source-editor-placeholder-gutter > div:last-child {
+	width: calc(1ch + 2px);
+}
+.source-editor-placeholder-content {
+	flex-grow: 2;
+	padding: 4px 0;
+	font-size: 14px;
+	white-space: pre;
+}
+.source-editor-placeholder-content > div {
+	padding: 0 2px 0 6px;
+}
+@media (max-width: 600px) {
+	.source-editor-placeholder-content {
+		font-size: 16px;
+	}
+	.source-editor-placeholder-gutter > div > div {
+		height: calc(16px * 1.4);
+	}
 }
 @media (max-width: 600px) {
 	.source-editor .cm-content {

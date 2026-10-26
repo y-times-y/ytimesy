@@ -1,0 +1,8 @@
+{
+	"budgetPercent": 5,
+	"baseline": {
+		"entryJs": 88268,
+		"firstLoadJs": 629253,
+		"firstLoadCss": 87073
+	}
+}

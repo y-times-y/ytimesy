@@ -103,6 +103,7 @@ import {
 	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
+import { replyStartedAfter } from "#/domain/web-vitals";
 import {
 	progressPage,
 	withEarlierPages,
@@ -115,6 +116,11 @@ import {
 } from "#/domain/workspace-desktop";
 import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
+import {
+	finishInteraction,
+	interactionTag,
+	startInteraction,
+} from "#/features/analytics/web-vitals";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
 	readSavedChoices,
@@ -1034,6 +1040,20 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (sessionRead.isFetched) setFirstChatRead(true);
 	}, [sessionRead.isFetched]);
+	// Speed reports (web-vitals.ts): a switched-to chat shows its transcript,
+	// or its empty view once read; a sent message gets the agent's first output.
+	const switchedChatShown =
+		Boolean(activeSessionId) &&
+		session.agentSessionId === activeSessionId &&
+		(session.items.length > 0 || sessionRead.isFetched);
+	useEffect(() => {
+		if (switchedChatShown && activeSessionId) finishInteraction("chat_switch");
+	}, [switchedChatShown, activeSessionId]);
+	useEffect(() => {
+		const sent = interactionTag("first_token");
+		if (sent && replyStartedAfter(session.items, sent))
+			finishInteraction("first_token");
+	}, [session.items]);
 	// Once the open chat has shown, the project's latest chats are read two
 	// at a time, so switching to one shows its transcript at once.
 	const latestChatIds = sessionRead.data
@@ -1357,6 +1377,11 @@ export function WorkspaceHome({
 			view === "desktop"
 		)
 			captureAnalytics("inspector_opened", { panel: view });
+		// Timed only when the view actually opens (web-vitals.ts).
+		if (inspectorView !== view || !inspectorOpen) {
+			if (view === "files") startInteraction("files_open");
+			if (view === "terminal") startInteraction("terminal_ready");
+		}
 		setInspectorView(view);
 		setInspectorOpen(true);
 	}
@@ -1595,6 +1620,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
+		startInteraction("chat_switch");
 		setMemoryPageOpen(false);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);

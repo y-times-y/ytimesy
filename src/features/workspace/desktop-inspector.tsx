@@ -1,3 +1,4 @@
+import { ClientOnly } from "@tanstack/react-router";
 import { useEffect } from "react";
 import {
 	desktopInspectorPrompt,
@@ -37,11 +38,14 @@ export function DesktopInspector({
 	if (desktop.status === "running" && projectId && sessionId) {
 		return (
 			<section className="desktop-inspector" aria-label="Workspace desktop">
-				<DesktopStage
-					projectId={projectId}
-					sessionId={sessionId}
-					password={desktop.viewerPassword}
-				/>
+				{/* noVNC needs the DOM; the same empty stage stands in until it mounts. */}
+				<ClientOnly fallback={<div className="desktop-stage-rfb" />}>
+					<DesktopStage
+						projectId={projectId}
+						sessionId={sessionId}
+						password={desktop.viewerPassword}
+					/>
+				</ClientOnly>
 			</section>
 		);
 	}
