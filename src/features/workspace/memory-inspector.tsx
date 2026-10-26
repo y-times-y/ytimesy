@@ -11,11 +11,7 @@ import {
 	X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import {
-	MEMORY_EDIT_TEXT_MAX,
-	type MemoryEdit,
-	type MemoryLineRef,
-} from "#/domain/memory-edit";
+import { MEMORY_EDIT_TEXT_MAX, type MemoryLineRef } from "#/domain/memory-edit";
 import {
 	type MemoryRow,
 	memoryRows,
@@ -42,6 +38,7 @@ import {
 	readMemoryHistoryFn,
 } from "./memory.fn";
 import { MemoryDreams } from "./memory-dreams";
+import { memoryClear, memoryEditSave } from "./memory-edit-save";
 import { memoryHistoryChanges } from "./memory-history";
 import { type MemoryMenuChoice, MemoryScopeMenu } from "./memory-menu";
 import "./memory-inspector.css";
@@ -187,32 +184,40 @@ export function MemoryInspector({
 			?.scrollIntoView?.({ block: "start", behavior: "smooth" });
 	}, [focusTopic]);
 
-	const invalidate = () =>
-		queryClient.invalidateQueries({ queryKey: ["memory"] });
+	const clearSave = memoryClear(queryClient, clearMemory);
 	const clear = useMutation({
-		mutationFn: () => clearMemory({ data: {} }),
-		onSuccess: () => {
+		...clearSave,
+		onMutate: (variables) => {
 			setConfirmClear(false);
 			setScope(null);
-			return invalidate();
+			return clearSave.onMutate(variables);
+		},
+		onError: (error, variables, snapshot) => {
+			clearSave.onError(error, variables, snapshot);
+			setNotice(error.message);
 		},
 	});
+	const editSave = memoryEditSave(queryClient, editMemory);
 	const edit = useMutation({
-		mutationFn: (data: MemoryEdit) => editMemory({ data }),
-		onSuccess: (result, data) => {
-			if (!result.ok) {
-				if (data.op !== "add") setNotice(result.error);
-				return;
+		...editSave,
+		onMutate: (data) => {
+			if (data.op !== "add") {
+				setEditing(null);
+				setConfirmDelete(null);
+				setNotice(null);
 			}
-			setEditing(null);
-			setConfirmDelete(null);
-			setNotice(null);
-			if (data.op === "add" && result.added) setJustAdded(result.added);
 			if (data.op === "delete" && justAdded?.text === data.ref.text)
 				setJustAdded(null);
-			return invalidate();
+			return editSave.onMutate(data);
 		},
-		onError: (error, data) => {
+		onSuccess: (result, data) => {
+			if (data.op !== "add") return;
+			if (!result.ok) return;
+			setNotice(null);
+			if (result.added) setJustAdded(result.added);
+		},
+		onError: (error, data, snapshot) => {
+			editSave.onError(error, data, snapshot);
 			if (data.op !== "add") setNotice(error.message);
 		},
 	});
@@ -278,7 +283,7 @@ export function MemoryInspector({
 			topicTitle={titles[row.path] ?? row.path}
 			topics={repo}
 			choices={choices}
-			busy={edit.isPending}
+			busy={clear.isPending}
 			editing={editing === rowKey(row)}
 			confirmingDelete={confirmDelete === rowKey(row)}
 			onOpenTopic={(path) => {
