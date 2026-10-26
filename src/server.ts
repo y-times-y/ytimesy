@@ -4,11 +4,12 @@ import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import { canonicalOriginRedirect } from "./server/web/canonical-origin";
+import { EARLY_HINT_LINKS } from "./server/web/early-hints";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
 import { limitRequestBody } from "./server/web/request-size";
-import { serverFnOriginRejection } from "./server/web/server-fn-origin";
 import { withSecurityHeaders } from "./server/web/security-headers";
+import { serverFnOriginRejection } from "./server/web/server-fn-origin";
 
 type WorkerContext = { waitUntil(work: Promise<unknown>): void };
 
@@ -43,6 +44,11 @@ async function monitored(
 	}
 }
 
+/** Pages answer with Link headers that Cloudflare turns into 103 Early Hints. */
+function renderPage(request: Request) {
+	return handler.fetch(request, { responseLinkHeader: EARLY_HINT_LINKS });
+}
+
 export default createServerEntry({
 	async fetch(incoming, ...rest) {
 		const [env, context] = rest as unknown as [
@@ -57,7 +63,7 @@ export default createServerEntry({
 		if (request instanceof Response) return withSecurityHeaders(request);
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(
-				await monitored(request, () => handler.fetch(request)),
+				await monitored(request, () => renderPage(request)),
 			);
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
@@ -69,7 +75,7 @@ export default createServerEntry({
 					await monitored(
 						request,
 						async () =>
-							(await handleWorkerSocket(request)) ?? handler.fetch(request),
+							(await handleWorkerSocket(request)) ?? renderPage(request),
 					),
 				),
 		);
