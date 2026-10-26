@@ -30,12 +30,19 @@ vi.mock("#/server/adapters/codex-subscription", () => ({
 }));
 vi.mock("#/server/auth/agent-account", () => ({
 	loadAgentAccount: mocks.account,
+	// One read of the account row: its status and whether its login is usable.
+	loadAgentAccountState: async (userId: string) => ({
+		account: await mocks.account(userId),
+		managed: await mocks.auth(userId),
+		sealedDeviceLogin: null,
+	}),
 }));
 vi.mock("#/server/auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: mocks.auth,
 }));
 vi.mock("#/server/auth/codex-device-login", () => ({
 	readCodexDeviceLogin: vi.fn(),
+	deviceLoginFromSealed: vi.fn(),
 	startCodexDeviceLogin: vi.fn(),
 }));
 vi.mock("#/server/services/agent-session-machine", () => ({

@@ -100,7 +100,15 @@ export async function readCodexDeviceLogin(
 			[userId],
 		)
 	).rows[0];
-	const login = await openPending(row?.encrypted_device_login ?? null, userId);
+	return deviceLoginFromSealed(row?.encrypted_device_login ?? null, userId);
+}
+
+/** readCodexDeviceLogin for a sealed login the caller already read. */
+export async function deviceLoginFromSealed(
+	sealed: string | null,
+	userId: string,
+): Promise<CodexDeviceLogin> {
+	const login = await openPending(sealed, userId);
 	return login && login.expiresAt > Date.now()
 		? pendingView(login)
 		: { status: "none" };

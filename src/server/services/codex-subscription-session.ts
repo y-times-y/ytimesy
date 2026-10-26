@@ -33,13 +33,12 @@ import {
 	previousTurnMessages,
 } from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
-import { loadAgentAccount } from "../auth/agent-account";
+import { loadAgentAccount, loadAgentAccountState } from "../auth/agent-account";
 import {
 	type CodexDeviceLogin,
-	readCodexDeviceLogin,
+	deviceLoginFromSealed,
 	startCodexDeviceLogin,
 } from "../auth/codex-device-login";
-import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
 import {
@@ -60,17 +59,28 @@ async function readSubscriptionSession(
 	/** The chat as the caller just read or wrote it, instead of reading it again. */
 	read?: AgentSessionRecord,
 ): Promise<PublicCodexSession> {
-	// Independent reads; the account is read again below only when a catalog
-	// refresh has just expired it.
-	const [session, managed, listedAccount] = await Promise.all([
+	return (
+		await readSubscriptionSessionState(scope, tolerateCatalogOutage, read)
+	).view;
+}
+
+/** The view, and the account's sealed pending sign-in read with it. */
+async function readSubscriptionSessionState(
+	scope: CodexSessionScope,
+	tolerateCatalogOutage = false,
+	read?: AgentSessionRecord,
+): Promise<{ view: PublicCodexSession; sealedDeviceLogin: string | null }> {
+	// Independent reads; the account row (login, status, pending sign-in) is
+	// one read, again below only when a catalog refresh has just expired it.
+	const [session, state] = await Promise.all([
 		scope.sessionId
 			? read?.id === scope.sessionId
 				? read
 				: agentSessionForOwner(scope.userId, scope.sessionId)
 			: null,
-		hasManagedCodexAuth(scope.userId),
-		loadAgentAccount(scope.userId),
+		loadAgentAccountState(scope.userId),
 	]);
+	const { managed, account: listedAccount } = state;
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
 	let connected = managed;
@@ -101,7 +111,7 @@ async function readSubscriptionSession(
 				? { status: "expired", provider: "codex", message: account.message }
 				: { status: "disconnected" };
 	const items = childTaskPublicItems(sessionItemsFromUnknown(session?.items));
-	return {
+	const view: PublicCodexSession = {
 		...emptyCodexSession(),
 		items,
 		models,
@@ -116,15 +126,19 @@ async function readSubscriptionSession(
 		canSend: connected && models.length > 0,
 		connection,
 	};
+	return { view, sealedDeviceLogin: state.sealedDeviceLogin };
 }
 
 /** The chat view, showing a ChatGPT sign-in the server is waiting on. */
 export async function readSubscriptionLoginSession(
 	scope: CodexSessionScope,
 ): Promise<PublicCodexSession> {
-	const view = await readSubscriptionSession(scope);
+	const { view, sealedDeviceLogin } = await readSubscriptionSessionState(scope);
 	if (view.connection.status === "authenticated") return view;
-	return withDeviceLogin(view, await readCodexDeviceLogin(scope.userId));
+	return withDeviceLogin(
+		view,
+		await deviceLoginFromSealed(sealedDeviceLogin, scope.userId),
+	);
 }
 
 /** Connect: an unconnected account starts a server-side ChatGPT sign-in. */

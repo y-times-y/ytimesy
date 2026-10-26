@@ -19,6 +19,25 @@ export async function loadAgentAccount(
 	return toAccount(result.rows[0]);
 }
 
+/**
+ * The account, whether its managed login is usable (as hasManagedCodexAuth
+ * answers it) and its sealed pending sign-in, from one read of its row.
+ */
+export async function loadAgentAccountState(userId: string) {
+	const result = await database().query<
+		AgentAccountRow & { encrypted_device_login: string | null }
+	>(
+		"select status,encrypted_codex_auth,plan_type,email,message,encrypted_device_login from agent_account where user_id=$1 and provider='codex'",
+		[userId],
+	);
+	const row = result.rows[0];
+	return {
+		account: toAccount(row),
+		managed: row?.status === "connected" && row.encrypted_codex_auth !== null,
+		sealedDeviceLogin: row?.encrypted_device_login ?? null,
+	};
+}
+
 export async function disconnectAgentAccount(userId: string) {
 	await database().query(
 		"delete from agent_account where user_id=$1 and provider='codex'",
