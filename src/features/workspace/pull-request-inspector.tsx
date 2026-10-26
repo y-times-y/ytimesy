@@ -526,7 +526,7 @@ function PullRequestReview({
 							disabled={act.isPending}
 							onClick={() => act.mutate({ action: "ready" })}
 						>
-							Ready for review
+							{act.isPending ? "Marking ready…" : "Ready for review"}
 						</button>
 					) : confirmMerge ? (
 						<>

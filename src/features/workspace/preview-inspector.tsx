@@ -141,7 +141,12 @@ export function PreviewInspector({
 							<label className="preview-share">
 								<input
 									type="checkbox"
-									checked={entry.shareUrl !== null}
+									// The link comes from the server; until then the box shows the choice.
+									checked={
+										share.isPending && share.variables.port === entry.port
+											? share.variables.shared
+											: entry.shareUrl !== null
+									}
 									disabled={share.isPending}
 									onChange={(event) =>
 										share.mutate({

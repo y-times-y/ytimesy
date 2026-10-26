@@ -11,11 +11,7 @@ import {
 	X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import {
-	MEMORY_EDIT_TEXT_MAX,
-	type MemoryEdit,
-	type MemoryLineRef,
-} from "#/domain/memory-edit";
+import { MEMORY_EDIT_TEXT_MAX, type MemoryLineRef } from "#/domain/memory-edit";
 import {
 	type MemoryRow,
 	memoryRows,
@@ -34,6 +30,7 @@ import {
 	projectDisplayName,
 	projectFolderName,
 } from "#/domain/projects";
+import { saveErrorMessage } from "#/lib/optimistic-mutation";
 import {
 	clearMemoryFn,
 	editMemoryFn,
@@ -42,6 +39,11 @@ import {
 	readMemoryHistoryFn,
 } from "./memory.fn";
 import { MemoryDreams } from "./memory-dreams";
+import {
+	editorToReopen,
+	memoryClear,
+	memoryEditSave,
+} from "./memory-edit-save";
 import { memoryHistoryChanges } from "./memory-history";
 import { type MemoryMenuChoice, MemoryScopeMenu } from "./memory-menu";
 import "./memory-inspector.css";
@@ -165,6 +167,11 @@ export function MemoryInspector({
 	const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 	const [confirmClear, setConfirmClear] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
+	/** A text edit the server refused: its editor reopens with what was typed. */
+	const [retryDraft, setRetryDraft] = useState<{
+		key: string;
+		text: string;
+	} | null>(null);
 	const [justAdded, setJustAdded] = useState<MemoryLineRef | null>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
@@ -187,33 +194,48 @@ export function MemoryInspector({
 			?.scrollIntoView?.({ block: "start", behavior: "smooth" });
 	}, [focusTopic]);
 
-	const invalidate = () =>
-		queryClient.invalidateQueries({ queryKey: ["memory"] });
+	const clearSave = memoryClear(queryClient, clearMemory);
 	const clear = useMutation({
-		mutationFn: () => clearMemory({ data: {} }),
-		onSuccess: () => {
+		...clearSave,
+		onMutate: (variables) => {
 			setConfirmClear(false);
 			setScope(null);
-			return invalidate();
+			return clearSave.onMutate(variables);
+		},
+		onError: (error, variables, snapshot) => {
+			clearSave.onError(error, variables, snapshot);
+			setNotice(saveErrorMessage(error) ?? null);
 		},
 	});
+	const editSave = memoryEditSave(queryClient, editMemory);
 	const edit = useMutation({
-		mutationFn: (data: MemoryEdit) => editMemory({ data }),
-		onSuccess: (result, data) => {
-			if (!result.ok) {
-				if (data.op !== "add") setNotice(result.error);
-				return;
+		...editSave,
+		onMutate: (data) => {
+			if (data.op !== "add") {
+				setEditing(null);
+				setConfirmDelete(null);
+				setNotice(null);
+				setRetryDraft(null);
 			}
-			setEditing(null);
-			setConfirmDelete(null);
-			setNotice(null);
-			if (data.op === "add" && result.added) setJustAdded(result.added);
 			if (data.op === "delete" && justAdded?.text === data.ref.text)
 				setJustAdded(null);
-			return invalidate();
+			return editSave.onMutate(data);
 		},
-		onError: (error, data) => {
-			if (data.op !== "add") setNotice(error.message);
+		onSuccess: (result, data) => {
+			if (data.op !== "add") return;
+			if (!result.ok) return;
+			setNotice(null);
+			if (result.added) setJustAdded(result.added);
+		},
+		onError: (error, data, snapshot) => {
+			editSave.onError(error, data, snapshot);
+			if (data.op === "add") return;
+			setNotice(saveErrorMessage(error) ?? null);
+			const reopen = editorToReopen(data);
+			if (reopen) {
+				setRetryDraft(reopen);
+				setEditing(reopen.key);
+			}
 		},
 	});
 
@@ -278,8 +300,9 @@ export function MemoryInspector({
 			topicTitle={titles[row.path] ?? row.path}
 			topics={repo}
 			choices={choices}
-			busy={edit.isPending}
+			busy={clear.isPending}
 			editing={editing === rowKey(row)}
+			draftText={retryDraft?.key === rowKey(row) ? retryDraft.text : undefined}
 			confirmingDelete={confirmDelete === rowKey(row)}
 			onOpenTopic={(path) => {
 				setQuery("");
@@ -288,10 +311,14 @@ export function MemoryInspector({
 			}}
 			onOpenChat={onOpenChat}
 			onStartEdit={() => {
+				setRetryDraft(null);
 				setEditing(rowKey(row));
 				setConfirmDelete(null);
 			}}
-			onCancelEdit={() => setEditing(null)}
+			onCancelEdit={() => {
+				setEditing(null);
+				setRetryDraft(null);
+			}}
 			onSaveText={(text) =>
 				edit.mutate({ op: "update", ref: memoryLineRef(row), text })
 			}
@@ -319,7 +346,7 @@ export function MemoryInspector({
 		edit.variables?.op === "add"
 			? edit.data && !edit.data.ok
 				? edit.data.error
-				: edit.error?.message
+				: saveErrorMessage(edit.error)
 			: undefined;
 	return (
 		<section
@@ -711,7 +738,7 @@ function TopicGroup({
 }
 
 /** One memory line: text (edited in place), muted details, and its actions. */
-function MemoryRowItem({
+export function MemoryRowItem({
 	row,
 	fresh,
 	showScope,
@@ -722,6 +749,7 @@ function MemoryRowItem({
 	choices,
 	busy,
 	editing,
+	draftText,
 	confirmingDelete,
 	onOpenTopic,
 	onOpenChat,
@@ -745,6 +773,8 @@ function MemoryRowItem({
 	choices: readonly MemoryMenuChoice[];
 	busy: boolean;
 	editing: boolean;
+	/** What the user had typed, when a failed save reopens the editor. */
+	draftText?: string;
 	confirmingDelete: boolean;
 	onOpenTopic: (path: string) => void;
 	onOpenChat: (chatId: string) => boolean;
@@ -758,10 +788,10 @@ function MemoryRowItem({
 	onDelete: () => void;
 	onUndo?: () => void;
 }) {
-	const [draft, setDraft] = useState(row.text);
+	const [draft, setDraft] = useState(draftText ?? row.text);
 	useEffect(() => {
-		if (editing) setDraft(row.text);
-	}, [editing, row.text]);
+		if (editing) setDraft(draftText ?? row.text);
+	}, [editing, row.text, draftText]);
 	const inline = (text: string) =>
 		text.split(/(\[\[[^\]]+\]\])/g).map((part, index) => {
 			const target = /^\[\[([^\]]+)\]\]$/.exec(part)?.[1];

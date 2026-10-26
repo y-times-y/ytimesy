@@ -232,6 +232,11 @@ export function ProjectPicker({
 										key={row.key}
 										row={row}
 										disabled={save.isPending || create.isPending}
+										adding={
+											save.isPending &&
+											save.variables?.repositoryId ===
+												row.repository?.repositoryId
+										}
 										onChoose={() => choose(row)}
 									/>
 								))
@@ -324,10 +329,13 @@ export function ProjectPicker({
 function PickerRow({
 	row,
 	disabled,
+	adding = false,
 	onChoose,
 }: {
 	row: { fullName: string; selected: boolean };
 	disabled: boolean;
+	/** The server is making this repository a project. */
+	adding?: boolean;
 	onChoose: () => void;
 }) {
 	const slash = row.fullName.indexOf("/");
@@ -341,6 +349,7 @@ function PickerRow({
 			className="project-picker-choice"
 			data-selected={row.selected ? "true" : undefined}
 			disabled={disabled}
+			aria-busy={adding || undefined}
 			onClick={onChoose}
 			title={row.fullName}
 		>
@@ -349,7 +358,11 @@ function PickerRow({
 				<strong>{name}</strong>
 				{owner ? <small>{owner}</small> : null}
 			</span>
-			{row.selected ? <Check size={14} aria-hidden="true" /> : null}
+			{adding ? (
+				<small className="project-picker-adding">Adding…</small>
+			) : row.selected ? (
+				<Check size={14} aria-hidden="true" />
+			) : null}
 		</button>
 	);
 }

@@ -1,7 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
+import type { PublicMcpServer } from "#/server/adapters/mcp-servers";
 import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
 import { getMcpServersFn, startMcpOAuthFn } from "./mcp-servers.fn";
@@ -12,6 +23,69 @@ import {
 	setPluginEnabledFn,
 	uninstallPluginFn,
 } from "./plugins.fn";
+
+type PluginsView = Awaited<ReturnType<typeof getPluginsFn>>;
+type InstalledPlugins = PluginsView["installed"];
+const PLUGINS_KEY = ["plugins"];
+const SERVERS_KEY = ["mcp-servers"];
+
+function installedSave<TVariables>(
+	queryClient: QueryClient,
+	writes: (variables: TVariables) => ReturnType<typeof cacheWrite>[],
+) {
+	return optimisticMutation<InstalledPlugins, TVariables>({
+		queryClient,
+		// Shared with MCP servers: a plugin's servers are in that list too.
+		scope: "integrations",
+		writes,
+		invalidate: [SERVERS_KEY],
+	});
+}
+
+const withInstalled = (
+	update: (installed: InstalledPlugins) => InstalledPlugins,
+) =>
+	cacheWrite<PluginsView>(PLUGINS_KEY, (view) => ({
+		...view,
+		installed: update(view.installed),
+	}));
+
+/** A plugin's switch moves at once. */
+export function pluginToggle(
+	queryClient: QueryClient,
+	toggle: (input: {
+		data: { id: string; enabled: boolean };
+	}) => Promise<InstalledPlugins>,
+) {
+	return {
+		mutationFn: (input: { id: string; enabled: boolean }) =>
+			toggle({ data: input }),
+		...installedSave<{ id: string; enabled: boolean }>(
+			queryClient,
+			({ id, enabled }) => [
+				withInstalled((installed) =>
+					installed.map((row) => (row.id === id ? { ...row, enabled } : row)),
+				),
+			],
+		),
+	};
+}
+
+/** A removed plugin and its tool servers leave the lists at once. */
+export function pluginUninstall(
+	queryClient: QueryClient,
+	uninstall: (input: { data: { id: string } }) => Promise<InstalledPlugins>,
+) {
+	return {
+		mutationFn: (id: string) => uninstall({ data: { id } }),
+		...installedSave<string>(queryClient, (id) => [
+			withInstalled((installed) => installed.filter((row) => row.id !== id)),
+			cacheWrite<PublicMcpServer[]>(SERVERS_KEY, (servers) =>
+				servers.filter((server) => server.pluginId !== id),
+			),
+		]),
+	};
+}
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -25,12 +99,12 @@ export function Plugins() {
 	const getServers = useServerFn(getMcpServersFn);
 	const startSignIn = useServerFn(startMcpOAuthFn);
 	const plugins = useQuery({
-		queryKey: ["plugins"],
+		queryKey: PLUGINS_KEY,
 		queryFn: () => getPlugins(),
 	});
 	// Shared with the MCP servers panel: which plugin servers still need sign-in.
 	const servers = useQuery({
-		queryKey: ["mcp-servers"],
+		queryKey: SERVERS_KEY,
 		queryFn: () => getServers(),
 	});
 	const [config, setConfig] = useState<Record<string, Record<string, string>>>(
@@ -65,20 +139,11 @@ export function Plugins() {
 			void refresh();
 		},
 	});
-	const toggleMutation = useMutation({
-		mutationFn: (input: { id: string; enabled: boolean }) =>
-			toggle({ data: input }),
-		onSuccess: refresh,
-	});
-	const uninstallMutation = useMutation({
-		mutationFn: (id: string) => uninstall({ data: { id } }),
-		onSuccess: refresh,
-	});
-	const busy =
-		installMutation.isPending ||
-		toggleMutation.isPending ||
-		uninstallMutation.isPending ||
-		signIn.isPending;
+	const toggleMutation = useMutation(pluginToggle(queryClient, toggle));
+	const uninstallMutation = useMutation(
+		pluginUninstall(queryClient, uninstall),
+	);
+	const busy = installMutation.isPending || signIn.isPending;
 	const catalog = plugins.data?.catalog ?? [];
 	const installed = plugins.data?.installed ?? [];
 	const installedIds = new Set(installed.map((row) => row.catalogId));
@@ -108,7 +173,7 @@ export function Plugins() {
 					</a>
 				) : null}
 			</header>
-			{error ? <p role="alert">{error.message}</p> : null}
+			{error ? <p role="alert">{saveErrorMessage(error)}</p> : null}
 			{installed.length ? (
 				<>
 					<h4 className="integrations-label">Installed</h4>
@@ -169,7 +234,9 @@ export function Plugins() {
 														disabled={busy}
 														onClick={() => signIn.mutate(server.id)}
 													>
-														Sign in
+														{signIn.isPending && signIn.variables === server.id
+															? "Opening…"
+															: "Sign in"}
 													</button>
 												))
 											: null}

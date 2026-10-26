@@ -1,4 +1,9 @@
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useQueries,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Maximize2, Minimize2, PanelRight } from "lucide-react";
 import {
@@ -165,6 +170,7 @@ import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
+import { chatRemoval, projectRemoval } from "./sidebar-removals";
 import { useCompactLayout } from "./use-compact-layout";
 import {
 	type InspectorView,
@@ -362,6 +368,10 @@ export function WorkspaceHome({
 	const prewarmedChats = useRef(new Set<string>());
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
+	const removeChat = useMutation(chatRemoval(queryClient, deleteSession));
+	const removeOwnedProject = useMutation(
+		projectRemoval(queryClient, deleteProject),
+	);
 	const [projectsOpen, setProjectsOpen] = useState(
 		firstPaint.choices.sidebarOpen,
 	);
@@ -1522,8 +1532,7 @@ export function WorkspaceHome({
 		if (!selectedProject) {
 			return;
 		}
-		const remaining = sidebarChats.filter((chat) => chat.id !== chatId);
-		queryClient.setQueryData(["agent-sessions", selectedProject.id], remaining);
+		removeChat.mutate({ projectId: selectedProject.id, sessionId: chatId });
 		sessionViews.current.delete(chatId);
 		const nextId = selectedChatIdAfterDelete({
 			chats: sidebarChats,
@@ -1546,33 +1555,16 @@ export function WorkspaceHome({
 				canSend: false,
 			}));
 		}
-		void deleteSession({
-			data: { projectId: selectedProject.id, sessionId: chatId },
-		})
-			.then(() => chats.refetch())
-			.catch((cause) => {
-				void chats.refetch();
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: harnessId,
-						message: publicFailureMessage(cause),
-					},
-					canSend: false,
-				}));
-			});
 	}
 
 	function removeProject(projectId: string) {
 		const listed = projects.data ?? [];
-		const remaining = listed.filter((project) => project.id !== projectId);
 		const nextId = selectedProjectIdAfterDelete({
 			projects: listed,
 			selectedProjectId: selectedProject?.id,
 			deletedProjectId: projectId,
 		});
-		queryClient.setQueryData(["projects"], remaining);
+		removeOwnedProject.mutate(projectId);
 		queryClient.removeQueries({ queryKey: ["agent-sessions", projectId] });
 		setSelectedProjectId(nextId);
 		if (selectedProject?.id === projectId) {
@@ -1595,20 +1587,6 @@ export function WorkspaceHome({
 				canSend: false,
 			}));
 		}
-		void deleteProject({ data: { projectId } })
-			.then(() => projects.refetch())
-			.catch((cause) => {
-				void projects.refetch();
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: harnessId,
-						message: publicFailureMessage(cause),
-					},
-					canSend: false,
-				}));
-			});
 	}
 
 	async function signOut() {
@@ -1816,6 +1794,29 @@ export function WorkspaceHome({
 		}
 	}
 
+	/** The transcript with the sent message at its end (once, by message id). */
+	function itemsWithSentMessage(
+		items: PublicCodexSession["items"],
+		pending: PendingSend,
+	) {
+		return sessionItemsQueuedWithUser(
+			items,
+			pending.text,
+			pending.messageId,
+			pending.approvesPlan,
+			pending.attachments?.map((file) => {
+				const id = crypto.randomUUID();
+				return {
+					id,
+					name: safeAttachmentName(file.name),
+					mediaType: file.mediaType,
+					size: base64ByteLength(file.base64),
+					...sentPasteFields(id, file),
+				};
+			}),
+		);
+	}
+
 	async function deliverSend(pending: PendingSend, view: PublicCodexSession) {
 		if (pendingSendRef.current === pending) pendingSendRef.current = null;
 		const { epoch, scope, chatId } = pending;
@@ -1832,22 +1833,7 @@ export function WorkspaceHome({
 			if (epoch === sessionEpoch.current) {
 				stopRequestedFor.current = null;
 				setSession((current) => {
-					const items = sessionItemsQueuedWithUser(
-						current.items,
-						pending.text,
-						pending.messageId,
-						pending.approvesPlan,
-						pending.attachments?.map((file) => {
-							const id = crypto.randomUUID();
-							return {
-								id,
-								name: safeAttachmentName(file.name),
-								mediaType: file.mediaType,
-								size: base64ByteLength(file.base64),
-								...sentPasteFields(id, file),
-							};
-						}),
-					);
+					const items = itemsWithSentMessage(current.items, pending);
 					return {
 						...current,
 						turnStatus: "running",
@@ -1928,6 +1914,13 @@ export function WorkspaceHome({
 	async function connectThenSend(pending: PendingSend) {
 		const { epoch, chatId } = pending;
 		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		// The message shows while the chat connects (its machine may be waking);
+		// the connected view replaces it, and the send adds it back as sent.
+		if (epoch === sessionEpoch.current)
+			setSession((current) => ({
+				...current,
+				items: itemsWithSentMessage(current.items, pending),
+			}));
 		let next: PublicCodexSession;
 		try {
 			// A connect that hangs returns the message instead of holding it.
@@ -2305,6 +2298,10 @@ export function WorkspaceHome({
 								}
 								onRemoveQueued={(messageId) => {
 									const epoch = sessionEpoch.current;
+									const index = session.items.findIndex(
+										(item) => item.id === messageId,
+									);
+									const removed = session.items[index];
 									setSession((current) => ({
 										...current,
 										items: current.items.filter(
@@ -2313,7 +2310,23 @@ export function WorkspaceHome({
 									}));
 									void removeQueued({ data: { ...sessionScope(), messageId } })
 										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => toast.error(publicFailureMessage(cause)));
+										.catch((cause) => {
+											toast.error(publicFailureMessage(cause));
+											// Put the queued message back where it was, in the same chat.
+											if (!removed || epoch !== sessionEpoch.current) return;
+											setSession((current) =>
+												current.items.some((item) => item.id === messageId)
+													? current
+													: {
+															...current,
+															items: [
+																...current.items.slice(0, index),
+																removed,
+																...current.items.slice(index),
+															],
+														},
+											);
+										});
 								}}
 								onOpenInspector={openInspector}
 								onOpenFile={openMentionedFile}

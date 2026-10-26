@@ -256,7 +256,7 @@ export function InfrastructureUsage() {
 						type="submit"
 						disabled={adjustment.isPending || users.isPending || users.isError}
 					>
-						Save allowance
+						{adjustment.isPending ? "Saving…" : "Save allowance"}
 					</button>
 					{adjustment.isSuccess ? (
 						<p role="status">Allowance updated.</p>

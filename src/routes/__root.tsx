@@ -1,13 +1,14 @@
 import interLatin from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Analytics } from "../features/analytics/analytics";
 import { ReplayConsentBanner } from "../features/analytics/replay-consent-banner";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
+import { followOtherTabSaves } from "../lib/optimistic-mutation";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -52,6 +53,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				defaultOptions: { queries: { staleTime: 15000, retry: false } },
 			}),
 	);
+	useEffect(() => followOtherTabSaves(queryClient), [queryClient]);
 	return (
 		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
