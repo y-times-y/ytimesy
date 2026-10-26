@@ -488,12 +488,14 @@ export async function admitVmResume(
 				"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and (vm_id is null or vm_id=$2)",
 				[data.slug, latest.id],
 			);
-		if (runningUsage !== undefined)
-			recentAdmissions.set(latest.id, {
-				cap,
-				usedSeconds: runningUsage,
-				at: Date.now(),
-			});
+		// A paused machine admitted here runs from its counter now: the Files
+		// read or terminal that follows its start reuses this admission like a
+		// running machine's (recentAdmissionCovers still needs it running).
+		recentAdmissions.set(latest.id, {
+			cap,
+			usedSeconds: runningUsage ?? total,
+			at: Date.now(),
+		});
 	});
 }
 
