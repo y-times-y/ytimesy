@@ -20,10 +20,12 @@ import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	childAgentSession,
 	deleteAgentSessionForOwner,
 	descendantAgentSessions,
 	insertAgentSession,
+	latestAgentSessionMetadata,
 	listAgentSessions,
 	providerRefsHeldOutside,
 	reusableEmptyChat,
@@ -407,13 +409,14 @@ export async function peekAgentSessionMachine(input: {
 	readonly projectId: string;
 	readonly sessionId?: string;
 }): Promise<{
-	session: AgentSessionRecord | null;
+	session: Omit<AgentSessionRecord, "items"> | null;
 	providerRef: string | null;
 }> {
-	// A named chat is read by id; only the project's latest chat needs the list.
+	// A named chat is read by id, else the project's latest; never its
+	// history, which can run to megabytes and is not needed here.
 	const session = input.sessionId
-		? await agentSessionForOwner(input.userId, input.sessionId)
-		: ((await listAgentSessions(input.userId, input.projectId))[0] ?? null);
+		? await agentSessionMetadataForOwner(input.userId, input.sessionId)
+		: await latestAgentSessionMetadata(input.userId, input.projectId);
 	return { session, providerRef: session?.providerRef ?? null };
 }
 
