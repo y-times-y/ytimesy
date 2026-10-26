@@ -159,8 +159,9 @@ Fixes were proposed from these failures (run the client's exact commands; check 
 - The frozen v13 harness once passed intrastat-meldung (3/5) and vllm-deepseek-streaming (2/5). Neither passed this time.
 - **Cost:** our token cost at OpenAI list price was $27.24 against Codex's $25.54 for the same 25 tasks (+7%; Codex's figure is its per-task average over 5 trials). We were billed $30.70: the bridge prices the in-Region Bedrock id at the geographic rate (+10%, `BEDROCK_REGIONAL_PREMIUM`), and web search added $0.62.
   - Output tokens: +$2.31 (1.51M vs 1.28M), mostly from three runs that took 2–3x Codex's time (ontology-kg-querying, freight-dispatch-shift, mp-checkpoint-consolidation).
-  - Input: we used 32% fewer input tokens than Codex (35.8M vs 52.5M), but lost cached prefixes mid-run about 27 times (about 1.7M tokens billed at the write or uncached rate instead of the cached rate), e.g. ontology-kg-querying request 29 reread 0 of a 259k-token prefix 3.5 minutes after the previous request.
-- **Caching:** 89.6% of input tokens were cached. fin-saccr-rwa was only 57% cached; that cache break is worth investigating because it costs money on every model.
+  - Tool-call input is the same size as Codex's (1.67M vs 1.52M characters), so the extra output is reasoning. On 5 of the 6 longest tasks our single run produced more output than any of Codex's 5 runs except one outlier.
+  - Input: we used 32% fewer input tokens than Codex (35.8M vs 52.5M). Prompt reuse is healthy: 1.6% of reusable prefix tokens missed the cache, against Codex's 0.7%. Two incidents explain most of it: ontology-kg-querying request 28 reasoned for 18 minutes, so the cached prefix expired before request 29 (about $0.60); fin-saccr-rwa's hosted web search pulled about 440k tokens of regulation text into three requests, billed as uncached input (about $0.90). That is why fin-saccr-rwa showed 57% cached; it is web search content, not a cache bug.
+- **Caching:** 89.6% of input tokens were cached. fin-saccr-rwa was only 57% cached because of web search page content (see above), not a cache break.
 
 **What it means:**
 - **No regressions:** we keep everything Codex reliably passes.
