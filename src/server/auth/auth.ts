@@ -14,6 +14,13 @@ import {
 	requestAllowsLocalQaIdentity,
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
+import {
+	cachedSession,
+	forgetSession,
+	forgetUserSessions,
+	rememberSession,
+	sessionCacheKey,
+} from "./session-cache";
 import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
 
 /**
@@ -146,6 +153,20 @@ export function authOptions() {
 		databaseHooks: {
 			user: {
 				create: { after: accountCreated },
+				// Cached sessions carry the user; a change or deletion re-reads it.
+				update: {
+					after: async (user: { id: string }) => forgetUserSessions(user.id),
+				},
+				delete: {
+					after: async (user: { id: string }) => forgetUserSessions(user.id),
+				},
+			},
+			// Sign-out, revocation and password reset delete session rows.
+			session: {
+				delete: {
+					after: async (session: { token: string }) =>
+						forgetSession(session.token),
+				},
 			},
 		},
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },
@@ -188,8 +209,28 @@ export function auth() {
 	}
 	return instance;
 }
-export async function requireUser(headers: Headers) {
+type AuthSession = NonNullable<
+	Awaited<ReturnType<ReturnType<typeof createAuth>["api"]["getSession"]>>
+>;
+
+/**
+ * The caller's session, or null when signed out. A cookie Better Auth
+ * accepted in the last SESSION_CACHE_TTL_MS is answered from this isolate's
+ * memory instead of the database (see session-cache.ts for why that is safe).
+ */
+export async function readSession(
+	headers: Headers,
+): Promise<AuthSession | null> {
+	const key = sessionCacheKey(headers);
+	const cached = key ? cachedSession<AuthSession>(key) : undefined;
+	if (cached) return cached;
 	const session = await auth().api.getSession({ headers });
+	if (session && key) rememberSession(key, session);
+	return session;
+}
+
+export async function requireUser(headers: Headers) {
+	const session = await readSession(headers);
 	if (session) return session.user;
 	if (!requestAllowsLocalQaIdentity(headers)) {
 		throw new Response("Sign in required", { status: 401 });

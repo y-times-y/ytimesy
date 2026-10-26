@@ -12,7 +12,7 @@ import {
 	adjustInfrastructureAllowance,
 	userInfrastructureUsage,
 } from "#/server/adapters/infrastructure-usage";
-import { auth, requireUser } from "#/server/auth/auth";
+import { readSession, requireUser } from "#/server/auth/auth";
 import {
 	isInfrastructureAdmin,
 	requireInfrastructureAdmin,
@@ -22,7 +22,8 @@ export const infrastructureUsageFn = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const headers = getRequest().headers;
 		const user = await requireUser(headers);
-		const authenticated = await auth().api.getSession({ headers });
+		// Answered from the session cache requireUser just filled.
+		const authenticated = await readSession(headers);
 		return {
 			userId: user.id,
 			requiresAdminSignIn: !authenticated && isInfrastructureAdmin(user.id),
@@ -63,9 +64,7 @@ export const adjustInfrastructureUsageFn = createServerFn({ method: "POST" })
 	});
 
 async function requireAuthenticatedAdmin() {
-	const session = await auth().api.getSession({
-		headers: getRequest().headers,
-	});
+	const session = await readSession(getRequest().headers);
 	if (!session)
 		throw new Response("Sign in to manage allowances.", { status: 401 });
 	requireInfrastructureAdmin(session.user.id);
