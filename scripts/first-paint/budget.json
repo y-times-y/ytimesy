@@ -1,0 +1,37 @@
+{
+	"clsMargin": 0.01,
+	"baseline": {
+		"landing-desktop": {
+			"cls": 0,
+			"hydrationWarnings": 0
+		},
+		"landing-phone": {
+			"cls": 0,
+			"hydrationWarnings": 0
+		},
+		"home-desktop": {
+			"cls": 0,
+			"hydrationWarnings": 0
+		},
+		"home-phone": {
+			"cls": 0.0001,
+			"hydrationWarnings": 0
+		},
+		"chat-rich-desktop": {
+			"cls": 0,
+			"hydrationWarnings": 0
+		},
+		"chat-rich-phone": {
+			"cls": 0.0001,
+			"hydrationWarnings": 0
+		},
+		"chat-empty-desktop": {
+			"cls": 0,
+			"hydrationWarnings": 0
+		},
+		"chat-empty-phone": {
+			"cls": 0.0001,
+			"hydrationWarnings": 0
+		}
+	}
+}
