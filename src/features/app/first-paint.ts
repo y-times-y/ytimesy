@@ -283,6 +283,14 @@ export function showTimelineEnd() {
 export const TIMELINE_END_SCRIPT = `(${showTimelineEnd})()`;
 
 /**
+ * The id of an empty element right after the chat and right-panel panes. The
+ * page's first paint waits until it is parsed (a render-blocking expect link
+ * in __root.tsx), so a half-parsed page never paints: the chat full width
+ * before the right panel arrives, its transcript at the top before the end.
+ */
+export const WORKSPACE_PANES_END = "workspace-panes-end";
+
+/**
  * Self-contained, inlined right after the composer's server-rendered
  * textarea: it fills in this browser's saved draft for the textarea's chat
  * (data-draft-key) and sizes it, before the first paint. Hydration then

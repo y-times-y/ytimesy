@@ -27,8 +27,11 @@ import {
 	sendReplyOutcome,
 } from "#/domain/harness-access";
 import {
+	CLOSED_INSPECTOR,
 	inspectorPaneIsWide,
 	inspectorSplitRatio,
+	type SavedInspector,
+	savedInspectorCookie,
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
 import { memoryHoldsLine } from "#/domain/memory-marker";
@@ -124,9 +127,11 @@ import {
 } from "../sessions/agent-session.fn";
 import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
+import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
 	connectCodexSession,
 	getCodexSession,
+	type OpenChatView,
 	pollCodexLogin,
 	removeQueuedSessionMessage,
 	sendCodexSessionTask,
@@ -226,15 +231,18 @@ export function WorkspaceHome({
 	initialChatView,
 	account,
 	renderedAtMs,
+	savedInspector = CLOSED_INSPECTOR,
 }: {
 	initialSession: PublicCodexSession;
 	/** The chat the page opens (a linked chat, else the latest), read with
 	 * the page: it renders open. */
-	initialChatView?: PublicCodexSession;
+	initialChatView?: OpenChatView;
 	/** The signed-in user, for the sidebar's account button. */
 	account?: SidebarAccount;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
+	/** The right panel as this browser left it (a cookie the server reads). */
+	savedInspector?: SavedInspector;
 	initialProjects?: Project[];
 	/** The open project's chats (a linked chat's project, else the first),
 	 * read with the page. */
@@ -266,6 +274,39 @@ export function WorkspaceHome({
 		const key = ["agent-sessions", initialChats?.projectId];
 		if (initialChats && !queryClient.getQueryData(key))
 			queryClient.setQueryData(key, initialChats.chats);
+		// The open chat's helper lines, evidence cards and recovery rows,
+		// read with it: they render on the server, not in after the page loads.
+		const side = initialChatView?.side;
+		const projectId = initialChats?.projectId;
+		const sessionId = initialChatView?.agentSessionId ?? undefined;
+		if (!side || !projectId || !sessionId) return;
+		const seed = (key: readonly unknown[], data: unknown) => {
+			if (data !== undefined && !queryClient.getQueryData(key))
+				queryClient.setQueryData(key, data);
+		};
+		const { turnStatus, items } = initialChatView;
+		seed(chatSideKeys.tasks(projectId, sessionId), side.tasks);
+		if (side.tasks)
+			seed(
+				chatSideKeys.background(
+					sessionId,
+					backgroundReadChatIds(sessionId, side.tasks),
+				),
+				side.background,
+			);
+		seed(
+			chatSideKeys.evidence(projectId, sessionId, turnStatus),
+			side.evidence,
+		);
+		seed(
+			chatSideKeys.recoveryPoints(
+				projectId,
+				sessionId,
+				items.length,
+				turnStatus,
+			),
+			side.recoveryPoints,
+		);
 	});
 	const projects = useQuery({
 		queryKey: ["projects"],
@@ -358,12 +399,44 @@ export function WorkspaceHome({
 	);
 	// <html data-sidebar> lays the sidebar out (the first-paint script set it).
 	const shownProjectsOpen = firstPaint.hydrated && projectsOpen;
-	const [inspectorOpen, setInspectorOpen] = useState(false);
-	const [inspectorView, setInspectorView] = useState<InspectorView>("overview");
+	const [inspectorOpen, setInspectorOpen] = useState(savedInspector.open);
+	const [inspectorView, setInspectorView] = useState<InspectorView>(
+		savedInspector.view,
+	);
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
 	/** The memory file a chat's memory marker asked the Memory tab to show. */
 	const [memoryFocus, setMemoryFocus] = useState<{ path: string }>();
-	const [customSplit, setCustomSplit] = useState<number | null>(null);
+	const [customSplit, setCustomSplit] = useState<number | null>(
+		savedInspector.split,
+	);
+	// A saved open panel where it would cover the chat (a phone, a narrow
+	// window) closes as the page hydrates; CSS already shows it closed.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: once, as the page hydrates.
+	useLayoutEffect(() => {
+		const width = workspaceMainRef.current?.getBoundingClientRect().width;
+		if (
+			firstPaint.choices.compact ||
+			(width !== undefined && workspaceNeedsSinglePane(width))
+		)
+			setInspectorOpen(false);
+	}, []);
+	// The next page load renders the right panel as it is now. Only the
+	// side-by-side layout saves it: on a phone it covers the chat instead.
+	useEffect(() => {
+		if (!firstPaint.hydrated || singlePane) return;
+		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
+		document.cookie = savedInspectorCookie({
+			open: inspectorOpen,
+			view: inspectorView,
+			split: customSplit,
+		});
+	}, [
+		firstPaint.hydrated,
+		singlePane,
+		inspectorOpen,
+		inspectorView,
+		customSplit,
+	]);
 	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(() =>
 		openAtLoad
@@ -636,7 +709,7 @@ export function WorkspaceHome({
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
 	const agentTasks = useQuery({
-		queryKey: ["agent-tasks", activeProjectId, activeSessionId],
+		queryKey: chatSideKeys.tasks(activeProjectId, activeSessionId),
 		queryFn: () =>
 			listProjectAgentTasks({
 				data: {
@@ -660,7 +733,7 @@ export function WorkspaceHome({
 		agentTasks.data ?? [],
 	);
 	const backgroundCommands = useQuery({
-		queryKey: ["background-commands", activeSessionId, backgroundChatIds],
+		queryKey: chatSideKeys.background(activeSessionId, backgroundChatIds),
 		queryFn: () =>
 			readBackgroundCommandsFn({ data: { sessionIds: backgroundChatIds } }),
 		enabled: Boolean(activeProjectId && backgroundChatIds.length),

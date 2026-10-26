@@ -817,6 +817,8 @@ button:enabled:active {
 }
 .workspace-main {
 	position: relative;
+	/* The saved right panel's rules below ask how wide it is. */
+	container: workspace-main / inline-size;
 	min-width: 0;
 	min-height: 0;
 	height: 100%;
@@ -2097,6 +2099,55 @@ a.session-title-meta:focus-visible {
 .workspace-body[data-inspector-collapsed="true"] > #inspector {
 	/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
 	flex-grow: 0 !important;
+}
+/* A saved open right panel (src/domain/inspector-split.ts) where there is no
+   room beside the chat (a phone, a narrow window): the server lays it out side
+   by side, and WorkspaceHome closes it as it hydrates (data-compact turns
+   true). Until then it shows closed, as it will be. */
+@media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> #chat {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
+		flex-grow: 1 !important;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> #inspector {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
+		flex-grow: 0 !important;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> .workspace-separator,
+	.workspace-main[data-can-expand-inspector="true"]
+		> .workspace-inspector-expand {
+		display: none;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		.welcome-panel {
+		visibility: visible;
+	}
+}
+/* CHAT_PANE_MIN_WIDTH + INSPECTOR_PANE_MIN_WIDTH + 4 (workspaceNeedsSinglePane). */
+@container workspace-main (max-width: 683.98px) {
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> #chat {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
+		flex-grow: 1 !important;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> #inspector {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides the panel's inline flex-grow */
+		flex-grow: 0 !important;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		> .workspace-separator,
+	.workspace-main[data-can-expand-inspector="true"]
+		> .workspace-inspector-expand {
+		display: none;
+	}
+	.workspace-body[data-compact="false"][data-inspector-collapsed="false"]
+		.welcome-panel {
+		visibility: visible;
+	}
 }
 :where(:root:not([data-sidebar="open"])) .workspace-shell .project-sidebar {
 	opacity: 0;

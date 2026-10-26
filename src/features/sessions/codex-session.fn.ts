@@ -8,6 +8,7 @@ import {
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import {
 	agentSessionMetadataForOwner,
@@ -28,6 +29,10 @@ import {
 	emptyHarnessSession,
 	type HarnessSessionScope,
 } from "#/server/services/harness-workspace-session";
+import {
+	type OpenChatSide,
+	openChatSide,
+} from "#/server/services/open-chat-side";
 import {
 	publicSessionView,
 	removeQueuedComposerMessage,
@@ -156,8 +161,13 @@ export const getCodexSession = createServerFn({ method: "GET" })
 const OPEN_CHAT_WAIT_MS = 250;
 const OPEN_CHAT_GIVE_UP_MS = 8_000;
 
+/** The chat the page opens, with what its transcript shows beside its items. */
+export type OpenChatView = PublicCodexSession & {
+	readonly side?: OpenChatSide;
+};
+
 /** An open chat read past OPEN_CHAT_WAIT_MS: the page streams it in. */
-export type StreamedChatView = Promise<PublicCodexSession | undefined>;
+export type StreamedChatView = Promise<OpenChatView | undefined>;
 
 /** The chat the page opens: the linked chat if it is listed, else the latest. */
 function chatToOpen<Chat extends { readonly id: string }>(
@@ -229,16 +239,43 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
+		// What the open chat shows beside its items (helpers, evidence,
+		// recovery rows) renders with it. A linked chat's starts at once, in
+		// parallel with the reads before the view, so it does not hold the view.
+		const linkedSideProject = link.chatId
+			? (link.projectId ?? linkedChatProject)
+			: undefined;
+		const linkedSide =
+			link.chatId && linkedSideProject
+				? Promise.resolve(linkedSideProject).then((projectId) =>
+						projectId && link.chatId
+							? {
+									projectId,
+									sessionId: link.chatId,
+									side: openChatSide(user.id, projectId, link.chatId),
+								}
+							: undefined,
+					)
+				: undefined;
 		const openChat = firstChats
-			.then((first) => {
+			.then(async (first) => {
 				const chat = chatToOpen(first?.chats, link.chatId);
 				if (!first || !chat) return undefined;
-				return publicSessionView({
-					userId: user.id,
-					projectId: first.projectId,
-					harnessId: chat.harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
-					sessionId: chat.id,
-				});
+				const early = await linkedSide;
+				const side =
+					early?.projectId === first.projectId && early.sessionId === chat.id
+						? early.side
+						: openChatSide(user.id, first.projectId, chat.id);
+				const [view, sideData] = await Promise.all([
+					publicSessionView({
+						userId: user.id,
+						projectId: first.projectId,
+						harnessId: chat.harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
+						sessionId: chat.id,
+					}),
+					side,
+				]);
+				return view && { ...view, side: sideData };
 			})
 			.catch(() => undefined);
 		const [snapshotAvailable, projects, chats] = await Promise.all([
@@ -248,7 +285,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 		]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
-		let landed: { view: PublicCodexSession | undefined } | undefined;
+		let landed: { view: OpenChatView | undefined } | undefined;
 		const streamed: StreamedChatView = within(
 			openChat.catch(() => undefined),
 			OPEN_CHAT_GIVE_UP_MS,
@@ -269,6 +306,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			openChatId: chatToOpen(chats?.chats, link.chatId)?.id,
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
+			// The right panel as this browser left it.
+			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
 			// Relative times render from this on the server and while hydrating.
 			renderedAtMs: Date.now(),
 			session: {
