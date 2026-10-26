@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ReactNode, Suspense, use } from "react";
+import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
 import { LandingPage } from "../features/landing/landing-page";
 import {
@@ -39,6 +40,21 @@ export const Route = createFileRoute("/")({
 			return { ...bootstrap, openChatView: await bootstrap.openChatView };
 		return bootstrap;
 	},
+	// The signed-in page's first paint waits until the chat and the right
+	// panel are both parsed (WORKSPACE_PANES_END): a half-parsed page would
+	// paint the chat full width, its transcript at the top, then move both.
+	// Browsers without render-blocking expect links ignore it.
+	head: ({ loaderData }) => ({
+		links: loaderData?.signedIn
+			? [
+					{
+						rel: "expect",
+						href: `#${WORKSPACE_PANES_END}`,
+						blocking: "render",
+					},
+				]
+			: [],
+	}),
 	component: HomePage,
 });
 
