@@ -7,6 +7,7 @@ import {
 	admitVmCreate,
 	admitVmResume,
 	forgetRecentAdmission,
+	recentAdmissionCovers,
 } from "../src/server/adapters/freestyle/usage-admission";
 import {
 	reserveInfrastructureUsage,
@@ -570,4 +571,24 @@ it("takes the cap update's own answer as its confirmation, and re-reads only whe
 	reads = 0;
 	expect(await outcome(() => resume(vm, 60))).toBe(null);
 	expect(reads).toBe(3);
+});
+
+it("lets the operations right after a wake reuse its admission once the machine runs", async () => {
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm, state } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 900,
+	});
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	const read = await vm.data();
+	// Still paused: not covered.
+	expect(recentAdmissionCovers(read, 60)).toBe(false);
+	state.state = "running";
+	expect(recentAdmissionCovers(await vm.data(), 60)).toBe(true);
+	// Past the bought runtime, or another cap: admitted again.
+	expect(recentAdmissionCovers(await vm.data(), 300)).toBe(false);
+	state.maxRunTotalSeconds = 2000;
+	expect(recentAdmissionCovers(await vm.data(), 60)).toBe(false);
 });

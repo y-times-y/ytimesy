@@ -5,7 +5,7 @@ import {
 	workspacePtyCommand,
 } from "#/domain/workspace-terminal";
 import { boundedFreestyleFetch } from "./bounded-fetch";
-import { admitVmResume } from "./usage-admission";
+import { admitVmResume, recentAdmissionCovers } from "./usage-admission";
 import { waitUntilGuestReady } from "./wait-until-running";
 
 export async function openWorkspacePty(input: {
@@ -22,7 +22,10 @@ export async function openWorkspacePty(input: {
 	});
 	const vm = client.vms.ref(input.providerRef);
 	const data = await vm.data();
-	await admitVmResume(vm, data);
+	// A running machine admitted in the last minute (its wake, a Files read)
+	// is not admitted again; anything else is.
+	if (!(data.state === "running" && recentAdmissionCovers(data, 60)))
+		await admitVmResume(vm, data);
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}
