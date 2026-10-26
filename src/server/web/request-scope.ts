@@ -3,6 +3,7 @@ import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-tran
 import { withDatabaseScope } from "../adapters/database-scope";
 import { withExecutorBinding } from "../adapters/executor-fetch";
 import { withEdgeModelEndpoints } from "../edge/model-endpoint";
+import { stepTimingEnabled, withStepTrace } from "../services/step-timing";
 import type { WebWorkerEnvironment } from "./environment";
 
 /**
@@ -16,7 +17,18 @@ export function withWebRequestScope(
 	env: WebWorkerEnvironment,
 	waitUntil: (work: Promise<unknown>) => void,
 	handle: () => Promise<Response>,
+	/**
+	 * With YTIMESY_DEBUG_STEP_TIMING=1 in development, the request is logged
+	 * as one step-timing line under this label: its database queries (count,
+	 * time, and the first ones in start order, which show serial chains) and
+	 * provider calls.
+	 */
+	traceLabel?: string,
 ): Promise<Response> {
+	if (traceLabel && stepTimingEnabled()) {
+		const untraced = handle;
+		handle = () => withStepTrace({ request: traceLabel }, untraced);
+	}
 	return new Promise<Response>((respond, fail) => {
 		let responded = false;
 		const after: Promise<unknown>[] = [];
