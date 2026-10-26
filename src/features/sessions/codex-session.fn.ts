@@ -12,6 +12,7 @@ import { incomingAttachments } from "#/domain/message-attachment";
 import {
 	agentSessionMetadataForOwner,
 	chatHoldingSend,
+	chatToOpenMetadata,
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
@@ -211,15 +212,18 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 						.then((chat) => chat?.projectId)
 						.catch(() => undefined)
 				: undefined;
-		// The open project's chats come with the page (a linked chat's
-		// project, else the first), so the chat it opens starts loading as
+		// The open project (a linked chat's project, else the first).
+		const openProjectId = listed.then(async (projects) => {
+			const linkedProjectId = link.projectId ?? (await linkedChatProject);
+			return (
+				projects?.find((project) => project.id === linkedProjectId)?.id ??
+				projects?.[0]?.id
+			);
+		});
+		// Its chats come with the page, so the chat it opens starts loading as
 		// soon as the page runs instead of after a list read.
-		const firstChats = listed
-			.then(async (projects) => {
-				const linkedProjectId = link.projectId ?? (await linkedChatProject);
-				const projectId =
-					projects?.find((project) => project.id === linkedProjectId)?.id ??
-					projects?.[0]?.id;
+		const firstChats = openProjectId
+			.then(async (projectId) => {
 				if (!projectId) return undefined;
 				return {
 					projectId,
@@ -229,14 +233,18 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		const openChat = firstChats
-			.then((first) => {
-				const chat = chatToOpen(first?.chats, link.chatId);
-				if (!first || !chat) return undefined;
+		// The chat it opens (the one chatToOpen picks from that list) is found
+		// by a small read beside the list, not after it: the list reads every
+		// chat's last turn.
+		const openChat = openProjectId
+			.then(async (projectId) => {
+				if (!projectId) return undefined;
+				const chat = await chatToOpenMetadata(user.id, projectId, link.chatId);
+				if (!chat) return undefined;
 				return publicSessionView({
 					userId: user.id,
-					projectId: first.projectId,
-					harnessId: chat.harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
+					projectId,
+					harnessId: chat.harness ?? DEFAULT_COMPOSER_HARNESS_ID,
 					sessionId: chat.id,
 				});
 			})

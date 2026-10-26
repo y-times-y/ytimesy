@@ -332,6 +332,24 @@ export async function latestAgentSessionMetadata(
 	return metadata;
 }
 
+/**
+ * The chat a page opens in a project, without its history: the linked chat
+ * when it is one of the project's top-level chats (as the sidebar lists
+ * them), else the latest. Read beside the sidebar list instead of after it.
+ */
+export async function chatToOpenMetadata(
+	userId: string,
+	projectId: string,
+	linkedChatId?: string,
+): Promise<Omit<AgentSessionRecord, "items"> | null> {
+	if (linkedChatId) {
+		const linked = await agentSessionMetadataForOwner(userId, linkedChatId);
+		if (linked?.projectId === projectId && !linked.parentSessionId)
+			return linked;
+	}
+	return latestAgentSessionMetadata(userId, projectId);
+}
+
 /** Selection is a chat draft; it must never invalidate the project template. */
 export async function saveSessionBranchSelection(
 	userId: string,

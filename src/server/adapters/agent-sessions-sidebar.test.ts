@@ -133,3 +133,39 @@ it("reads only the last turn's item kinds, and finds what each chat waits on as 
 		notArray: null,
 	});
 });
+
+it("finds the chat a page opens as the sidebar list would pick it, without reading its history", async () => {
+	const { chatToOpenMetadata } = await import("./agent-sessions");
+	const older = await chat("older");
+	const latest = await chat("latest");
+	const helper = await chat("helper", latest);
+	await db.query(
+		"update agent_session set updated_at=now()-interval '1 hour' where id=$1",
+		[older],
+	);
+	await db.query(
+		"update agent_session set updated_at=now()+interval '1 hour' where id=$1",
+		[helper],
+	);
+	const other = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,project_id,harness,title) values($1,'alice',$2,'api','elsewhere')",
+		[other, randomUUID()],
+	);
+	const listed = await listSidebarAgentSessions("alice", project);
+	const pick = (linked?: string) =>
+		(listed.find((row) => row.id === linked) ?? listed[0])?.id;
+	for (const linked of [
+		undefined,
+		older,
+		latest,
+		helper,
+		other,
+		randomUUID(),
+	]) {
+		const found = await chatToOpenMetadata("alice", project, linked);
+		expect(found?.id, String(linked)).toBe(pick(linked));
+		expect(found && "items" in found).toBeFalsy();
+	}
+	expect(await chatToOpenMetadata("bob", project, older)).toBeNull();
+});
