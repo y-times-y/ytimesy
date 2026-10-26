@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createMCPClient } from "@ai-sdk/mcp";
 import {
 	listMcpServersWithOAuth,
@@ -65,6 +66,59 @@ export async function mcpSignInState(input: {
 	}
 }
 
+/**
+ * A sign-in check's answer is reused for this long. Each check connects to the
+ * MCP server (up to CHECK_TIMEOUT_MS), and Settings reads the list on every
+ * open. The answer is display state, never an authorization: tools connect
+ * with the stored token themselves.
+ */
+export const SIGN_IN_CHECK_TTL_MS = 60_000;
+const checks = new Map<string, { state: McpSignInState; until: number }>();
+
+/**
+ * Keyed by the stored sign-in itself: signing in, a refreshed token or a
+ * changed URL is a new key, so a new sign-in is never shown as missing.
+ */
+function checkKey(input: {
+	userId: string;
+	serverId: string;
+	url: string;
+	sealedOAuth: string | null;
+}) {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				input.userId,
+				input.serverId,
+				input.url,
+				input.sealedOAuth,
+			]),
+		)
+		.digest("base64url");
+}
+
+async function cachedSignInState(
+	input: Parameters<typeof mcpSignInState>[0],
+	now = Date.now(),
+): Promise<McpSignInState> {
+	const key = checkKey(input);
+	const hit = checks.get(key);
+	if (hit && hit.until > now) return hit.state;
+	const state = await mcpSignInState(input);
+	// An unreachable server is checked again next time.
+	if (state === "unreachable") checks.delete(key);
+	else {
+		if (checks.size >= 1_000) checks.clear();
+		checks.set(key, { state, until: Date.now() + SIGN_IN_CHECK_TTL_MS });
+	}
+	return state;
+}
+
+/** Test seam. */
+export function forgetMcpSignInChecks() {
+	checks.clear();
+}
+
 /** The user's MCP servers, with OAuth sign-in checked against each server. */
 export async function listMcpServersChecked(
 	userId: string,
@@ -76,7 +130,7 @@ export async function listMcpServersChecked(
 				server.auth === "oauth"
 					? {
 							...server,
-							signIn: await mcpSignInState({
+							signIn: await cachedSignInState({
 								userId,
 								serverId: server.id,
 								url: server.url,
