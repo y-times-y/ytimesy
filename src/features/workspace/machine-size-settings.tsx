@@ -7,7 +7,11 @@ import {
 import { useServerFn } from "@tanstack/react-start";
 import { RadioGroup } from "radix-ui";
 import { MACHINE_SIZES } from "#/domain/machine-size";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readMachineSizeFn, saveMachineSizeFn } from "./machine-size.fn";
 
 type MachineSizeId = (typeof MACHINE_SIZES)[number]["id"];
@@ -102,7 +106,9 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 				</RadioGroup.Root>
 			) : null}
 			{preference.error || save.error ? (
-				<p role="alert">{(preference.error ?? save.error)?.message}</p>
+				<p role="alert">
+					{preference.error?.message ?? saveErrorMessage(save.error)}
+				</p>
 			) : null}
 		</section>
 	);

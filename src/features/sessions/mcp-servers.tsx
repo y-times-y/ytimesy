@@ -8,7 +8,11 @@ import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { mcpServerLabel as serverLabel } from "#/domain/connector-name";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import type { PublicMcpServer } from "#/server/adapters/mcp-servers";
 import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
@@ -160,7 +164,7 @@ export function McpServers() {
 				) : null}
 			</header>
 			{servers.isError ? <p role="alert">Could not load MCP servers.</p> : null}
-			{error ? <p role="alert">{error.message}</p> : null}
+			{error ? <p role="alert">{saveErrorMessage(error)}</p> : null}
 			{added !== null ? (
 				<p className="integration-desc">
 					Connected · {added} tools available to the agent.

@@ -67,6 +67,15 @@ export function memoryEditSave<TResult extends SavedEdit>(
 	};
 }
 
+/** A text edit that failed: which line's editor to reopen, holding what was typed. */
+export function editorToReopen(
+	edit: MemoryEdit,
+): { key: string; text: string } | null {
+	return edit.op === "update" && edit.text !== undefined
+		? { key: `${edit.ref.path}:${edit.ref.line}`, text: edit.text }
+		: null;
+}
+
 /** "Delete all memory" empties the list at once. */
 export function memoryClear(
 	queryClient: QueryClient,

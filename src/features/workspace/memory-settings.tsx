@@ -6,7 +6,11 @@ import {
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Switch } from "#/components/ui/switch";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readMemoryModeFn, saveMemoryModeFn } from "./memory.fn";
 
 const MODE_KEY = ["memory-mode"];
@@ -47,7 +51,7 @@ export function MemorySettings() {
 			on={mode.data ? mode.data.mode !== "off" : true}
 			available={mode.data?.available ?? true}
 			loading={mode.isPending}
-			error={change.error?.message ?? mode.error?.message}
+			error={saveErrorMessage(change.error) ?? mode.error?.message}
 			onChange={(on) => change.mutate(on)}
 		/>
 	);

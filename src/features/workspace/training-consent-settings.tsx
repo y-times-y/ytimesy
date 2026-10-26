@@ -16,7 +16,11 @@ import {
 } from "#/components/ui/tooltip";
 import { TRAINING_POLICY_VERSION } from "#/content/legal/versions";
 import type { TrainingConsent } from "#/domain/training-consent";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import {
 	chooseReplay,
 	useReplayConsent,
@@ -108,7 +112,7 @@ export function TrainingConsentSettings() {
 		<TrainingConsentView
 			enabled={consent.data?.enabled ?? false}
 			loading={consent.isPending}
-			error={change.error?.message ?? consent.error?.message}
+			error={saveErrorMessage(change.error) ?? consent.error?.message}
 			onChange={(enabled) => change.mutate(enabled)}
 		/>
 	);
@@ -272,7 +276,7 @@ export function ProjectTrainingSettings({ projectId }: { projectId: string }) {
 	return (
 		<ProjectTrainingView
 			excluded={project.data.excluded}
-			error={change.error?.message}
+			error={saveErrorMessage(change.error)}
 			onChange={(excluded) => change.mutate(excluded)}
 		/>
 	);

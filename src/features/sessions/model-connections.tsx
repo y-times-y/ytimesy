@@ -21,7 +21,11 @@ import {
 	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
-import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import {
 	deleteModelConnectionFn,
 	getBrowseModels,
@@ -341,7 +345,7 @@ export function ModelConnections() {
 			) : null}
 			{save.error || remove.error || verify.error ? (
 				<p role="alert">
-					{(save.error ?? remove.error ?? verify.error)?.message}
+					{saveErrorMessage(save.error ?? remove.error ?? verify.error)}
 				</p>
 			) : null}
 		</section>

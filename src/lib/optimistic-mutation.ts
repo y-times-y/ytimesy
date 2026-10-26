@@ -19,6 +19,21 @@ type Snapshot = readonly { queryKey: QueryKey; data: unknown }[];
 
 const CROSS_TAB_CHANNEL = "ytimesy-cache";
 
+export const SAVE_FAILED_OFFLINE = "Couldn't save. Check your connection.";
+
+/** A failed save as the control says it: a request that never reached the server reads plainly. */
+export function saveErrorMessage(
+	error: Error | null | undefined,
+): string | undefined {
+	if (!error) return undefined;
+	return error instanceof TypeError ||
+		/failed to fetch|networkerror|load failed|network request failed/i.test(
+			error.message,
+		)
+		? SAVE_FAILED_OFFLINE
+		: error.message;
+}
+
 /**
  * Options to spread into `useMutation`: the screen shows the expected result
  * at once and the server catches up.
