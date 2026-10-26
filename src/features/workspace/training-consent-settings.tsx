@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Info } from "lucide-react";
 import { useState } from "react";
@@ -12,6 +17,11 @@ import {
 import { TRAINING_POLICY_VERSION } from "#/content/legal/versions";
 import type { TrainingConsent } from "#/domain/training-consent";
 import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
+import {
 	chooseReplay,
 	useReplayConsent,
 } from "../analytics/replay-consent-banner";
@@ -23,6 +33,55 @@ import {
 } from "./training-consent.fn";
 
 const CONSENT_KEY = ["training-consent"];
+
+/** The account switch moves at once; the server's record replaces it. */
+export function trainingConsentChange(
+	queryClient: QueryClient,
+	save: (input: {
+		data: { enabled: boolean; policyVersion: string };
+	}) => Promise<TrainingConsent>,
+) {
+	return {
+		mutationFn: (enabled: boolean) =>
+			save({ data: { enabled, policyVersion: TRAINING_POLICY_VERSION } }),
+		...optimisticMutation<TrainingConsent, boolean>({
+			queryClient,
+			scope: "training-consent",
+			writes: (enabled) => [
+				cacheWrite<TrainingConsent>(CONSENT_KEY, (current) => ({
+					...current,
+					enabled,
+				})),
+			],
+			serverWrites: (data) => [{ queryKey: CONSENT_KEY, data }],
+		}),
+	};
+}
+
+/** "Never use this project for training" moves at once. */
+export function projectTrainingChange(
+	queryClient: QueryClient,
+	projectId: string,
+	save: (input: {
+		data: { projectId: string; excluded: boolean };
+	}) => Promise<{ excluded: boolean }>,
+) {
+	const queryKey = ["project-training", projectId];
+	return {
+		mutationFn: (excluded: boolean) => save({ data: { projectId, excluded } }),
+		...optimisticMutation<{ excluded: boolean }, boolean>({
+			queryClient,
+			scope: `project-training:${projectId}`,
+			writes: (excluded) => [
+				cacheWrite<{ excluded: boolean }>(queryKey, (current) => ({
+					...current,
+					excluded,
+				})),
+			],
+			serverWrites: (data) => [{ queryKey, data }],
+		}),
+	};
+}
 
 /** Every commitment the setting makes; shown behind the info tooltip. */
 export const TRAINING_DETAILS =
@@ -48,17 +107,12 @@ export function TrainingConsentSettings() {
 	const save = useServerFn(saveTrainingConsentFn);
 	const queryClient = useQueryClient();
 	const consent = useQuery({ queryKey: CONSENT_KEY, queryFn: () => read() });
-	const change = useMutation({
-		mutationFn: (enabled: boolean) =>
-			save({ data: { enabled, policyVersion: TRAINING_POLICY_VERSION } }),
-		onSuccess: (next) => queryClient.setQueryData(CONSENT_KEY, next),
-	});
+	const change = useMutation(trainingConsentChange(queryClient, save));
 	return (
 		<TrainingConsentView
 			enabled={consent.data?.enabled ?? false}
 			loading={consent.isPending}
-			saving={change.isPending}
-			error={change.error?.message ?? consent.error?.message}
+			error={saveErrorMessage(change.error) ?? consent.error?.message}
 			onChange={(enabled) => change.mutate(enabled)}
 		/>
 	);
@@ -67,7 +121,6 @@ export function TrainingConsentSettings() {
 export function TrainingConsentView(props: {
 	readonly enabled: boolean;
 	readonly loading?: boolean;
-	readonly saving?: boolean;
 	readonly error?: string;
 	readonly onChange: (enabled: boolean) => void;
 }) {
@@ -117,7 +170,7 @@ export function TrainingConsentView(props: {
 						<Switch
 							id="training-consent"
 							checked={props.enabled}
-							disabled={props.loading || props.saving || confirming}
+							disabled={props.loading || confirming}
 							onCheckedChange={(checked) => {
 								if (checked) setConfirming(true);
 								else props.onChange(false);
@@ -216,16 +269,14 @@ export function ProjectTrainingSettings({ projectId }: { projectId: string }) {
 		queryFn: () => read({ data: { projectId } }),
 		enabled: consent.data?.enabled === true,
 	});
-	const change = useMutation({
-		mutationFn: (excluded: boolean) => save({ data: { projectId, excluded } }),
-		onSuccess: (next) => queryClient.setQueryData(key, next),
-	});
+	const change = useMutation(
+		projectTrainingChange(queryClient, projectId, save),
+	);
 	if (!consent.data?.enabled || !project.data) return null;
 	return (
 		<ProjectTrainingView
 			excluded={project.data.excluded}
-			saving={change.isPending}
-			error={change.error?.message}
+			error={saveErrorMessage(change.error)}
 			onChange={(excluded) => change.mutate(excluded)}
 		/>
 	);
@@ -233,7 +284,6 @@ export function ProjectTrainingSettings({ projectId }: { projectId: string }) {
 
 export function ProjectTrainingView(props: {
 	readonly excluded: boolean;
-	readonly saving?: boolean;
 	readonly error?: string;
 	readonly onChange: (excluded: boolean) => void;
 }) {
@@ -253,7 +303,6 @@ export function ProjectTrainingView(props: {
 					<Switch
 						id="project-training"
 						checked={props.excluded}
-						disabled={props.saving}
 						onCheckedChange={props.onChange}
 					/>
 				</div>

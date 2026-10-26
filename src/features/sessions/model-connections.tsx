@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import "./model-connections.css";
@@ -17,12 +22,39 @@ import {
 	type PublicModelConnection,
 } from "#/domain/model-connection";
 import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
+import {
 	deleteModelConnectionFn,
 	getBrowseModels,
 	getModelConnections,
 	saveModelConnectionFn,
 	verifyModelConnectionFn,
 } from "./model-connections.fn";
+
+const CONNECTIONS_KEY = ["model-connections"];
+
+/** A removed API key leaves the list at once. */
+export function modelConnectionRemove(
+	queryClient: QueryClient,
+	remove: (input: { data: { id: string } }) => Promise<PublicModelConnection[]>,
+) {
+	return {
+		mutationFn: (id: string) => remove({ data: { id } }),
+		...optimisticMutation<PublicModelConnection[], string>({
+			queryClient,
+			scope: "model-connections",
+			writes: (id) => [
+				cacheWrite<PublicModelConnection[]>(CONNECTIONS_KEY, (rows) =>
+					rows.filter((row) => row.id !== id),
+				),
+			],
+			serverWrites: (data) => [{ queryKey: CONNECTIONS_KEY, data }],
+		}),
+	};
+}
 
 export function ModelConnections() {
 	const queryClient = useQueryClient();
@@ -69,16 +101,15 @@ export function ModelConnections() {
 			setBaseUrl("");
 		},
 	});
-	const remove = useMutation({
-		mutationFn: (id: string) => removeConnection({ data: { id } }),
-		onSuccess: update,
-	});
+	const remove = useMutation(
+		modelConnectionRemove(queryClient, removeConnection),
+	);
 	const verify = useMutation({
 		mutationFn: (input: { connectionId: string; modelId: string }) =>
 			verifyConnection({ data: input }),
 		onSuccess: update,
 	});
-	const busy = save.isPending || remove.isPending || verify.isPending;
+	const busy = save.isPending || verify.isPending;
 	const [adding, setAdding] = useState(false);
 	const formOpen = adding || Boolean(replacing);
 	function closeForm() {
@@ -314,7 +345,7 @@ export function ModelConnections() {
 			) : null}
 			{save.error || remove.error || verify.error ? (
 				<p role="alert">
-					{(save.error ?? remove.error ?? verify.error)?.message}
+					{saveErrorMessage(save.error ?? remove.error ?? verify.error)}
 				</p>
 			) : null}
 		</section>

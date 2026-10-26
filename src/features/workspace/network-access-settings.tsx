@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { RadioGroup } from "radix-ui";
 import { type FormEvent, useEffect, useState } from "react";
@@ -9,6 +14,10 @@ import {
 	type VmNetworkPolicy,
 	vmNetworkPolicy,
 } from "#/domain/vm-network-policy";
+import {
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readNetworkAccessFn, saveNetworkAccessFn } from "./network-access.fn";
 
 const MODES: { id: VmNetworkMode; name: string; description: string }[] = [
@@ -30,6 +39,31 @@ const MODES: { id: VmNetworkMode; name: string; description: string }[] = [
 	},
 ];
 
+/**
+ * A typed form, so nothing is written ahead of the server: the form keeps
+ * what was typed while it saves and after a failure, for a retry. The saved
+ * policy replaces the cache only once the server confirms it.
+ */
+export function networkAccessSave(
+	queryClient: QueryClient,
+	projectId: string,
+	save: (input: {
+		data: { projectId: string; policy: VmNetworkPolicy };
+	}) => Promise<VmNetworkPolicy>,
+) {
+	const queryKey = ["project-network-access", projectId];
+	return {
+		mutationFn: (policy: VmNetworkPolicy) =>
+			save({ data: { projectId, policy } }),
+		...optimisticMutation<VmNetworkPolicy, VmNetworkPolicy>({
+			queryClient,
+			scope: `network-access:${projectId}`,
+			writes: () => [],
+			serverWrites: (data) => [{ queryKey, data }],
+		}),
+	};
+}
+
 export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 	const read = useServerFn(readNetworkAccessFn);
 	const saveFn = useServerFn(saveNetworkAccessFn);
@@ -47,14 +81,7 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 		setMode(current.data.mode);
 		setText(current.data.domains.join("\n"));
 	}, [current.data]);
-	const save = useMutation({
-		mutationFn: (policy: VmNetworkPolicy) =>
-			saveFn({ data: { projectId, policy } }),
-		onSuccess: (policy) => {
-			queryClient.setQueryData(queryKey, policy);
-			setText(policy.domains.join("\n"));
-		},
-	});
+	const save = useMutation(networkAccessSave(queryClient, projectId, saveFn));
 	function onSubmit(event: FormEvent) {
 		event.preventDefault();
 		const parsed = vmNetworkPolicy.safeParse({
@@ -94,13 +121,15 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 					onSubmit={onSubmit}
 				/>
 			) : null}
-			{save.isSuccess && !save.isPending ? (
+			{save.isSuccess ? (
 				<p role="status" className="settings-copy">
 					Saved. Applies at each chat's next turn.
 				</p>
 			) : null}
 			{invalid || current.error || save.error ? (
-				<p role="alert">{invalid ?? (current.error ?? save.error)?.message}</p>
+				<p role="alert">
+					{invalid ?? current.error?.message ?? saveErrorMessage(save.error)}
+				</p>
 			) : null}
 		</section>
 	);

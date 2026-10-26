@@ -703,10 +703,13 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		}
 	}
 
+	/** The secret leaves the list at once; a failed removal brings it back. */
 	async function onDelete(secretId: string) {
 		if (!project || busy) return;
+		const before = secrets;
 		setBusy(true);
 		setError(null);
+		setSecrets(before.filter((secret) => secret.id !== secretId));
 		try {
 			setSecrets(
 				await deleteSecret({
@@ -714,6 +717,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 				}),
 			);
 		} catch (cause) {
+			setSecrets(before);
 			setError(
 				cause instanceof Error ? cause.message : "Could not remove secret.",
 			);

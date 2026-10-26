@@ -1,8 +1,40 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { RadioGroup } from "radix-ui";
 import { MACHINE_SIZES } from "#/domain/machine-size";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readMachineSizeFn, saveMachineSizeFn } from "./machine-size.fn";
+
+type MachineSizeId = (typeof MACHINE_SIZES)[number]["id"];
+
+/** Picking a size shows it chosen at once; a failed save puts the old one back. */
+export function machineSizeSave(
+	queryClient: QueryClient,
+	projectId: string,
+	save: (input: {
+		data: { projectId: string; size: MachineSizeId };
+	}) => Promise<MachineSizeId>,
+) {
+	const queryKey = ["project-machine-size", projectId];
+	return {
+		mutationFn: (size: MachineSizeId) => save({ data: { projectId, size } }),
+		...optimisticMutation<MachineSizeId, MachineSizeId>({
+			queryClient,
+			scope: `machine-size:${projectId}`,
+			writes: (size) => [cacheWrite<MachineSizeId>(queryKey, () => size)],
+			serverWrites: (data) => [{ queryKey, data }],
+		}),
+	};
+}
 
 export function MachineSizeSettings({ projectId }: { projectId: string }) {
 	const readSize = useServerFn(readMachineSizeFn);
@@ -13,11 +45,7 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 		queryKey,
 		queryFn: () => readSize({ data: { projectId } }),
 	});
-	const save = useMutation({
-		mutationFn: (size: (typeof MACHINE_SIZES)[number]["id"]) =>
-			saveSize({ data: { projectId, size } }),
-		onSuccess: (size) => queryClient.setQueryData(queryKey, size),
-	});
+	const save = useMutation(machineSizeSave(queryClient, projectId, saveSize));
 	return (
 		<section
 			className="machine-size-settings"
@@ -41,7 +69,7 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 					aria-label="Machine size"
 					aria-busy={preference.isPending}
 					value={preference.data ?? ""}
-					disabled={save.isPending || !preference.data}
+					disabled={!preference.data}
 					onValueChange={(value) => {
 						const size = MACHINE_SIZES.find((row) => row.id === value);
 						if (size) save.mutate(size.id);
@@ -77,13 +105,10 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 					))}
 				</RadioGroup.Root>
 			) : null}
-			{save.isPending ? (
-				<p role="status" className="settings-copy">
-					Saving preference…
-				</p>
-			) : null}
 			{preference.error || save.error ? (
-				<p role="alert">{(preference.error ?? save.error)?.message}</p>
+				<p role="alert">
+					{preference.error?.message ?? saveErrorMessage(save.error)}
+				</p>
 			) : null}
 		</section>
 	);

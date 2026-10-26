@@ -1,6 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { cacheWrite, optimisticMutation } from "#/lib/optimistic-mutation";
 import "./model-connections.css";
 import { IntegrationSwitch } from "./integration-controls";
 import {
@@ -16,6 +22,37 @@ const KIND_LABELS = {
 	custom: "Custom endpoint",
 } as const;
 
+const SETTINGS_KEY = ["model-failover-settings"];
+
+/** Switches and reordering show at once; the server's settings replace them. */
+export function failoverSettingsSave(
+	queryClient: QueryClient,
+	save: (input: {
+		data: {
+			enabled: boolean;
+			askBeforePaid: boolean;
+			connectionOrder: string[];
+		};
+	}) => Promise<Settings>,
+) {
+	return {
+		mutationFn: (next: Settings) =>
+			save({
+				data: {
+					enabled: next.enabled,
+					askBeforePaid: next.askBeforePaid,
+					connectionOrder: next.connections.map((row) => row.key),
+				},
+			}),
+		...optimisticMutation<Settings, Settings>({
+			queryClient,
+			scope: "model-failover-settings",
+			writes: (next) => [cacheWrite<Settings>(SETTINGS_KEY, () => next)],
+			serverWrites: (data) => [{ queryKey: SETTINGS_KEY, data }],
+		}),
+	};
+}
+
 /**
  * When a model's connection is down, a turn continues on the next one: the
  * same model on another connection first, then the closest comparable model.
@@ -27,28 +64,10 @@ export function ModelFailoverSettings() {
 	const getSettings = useServerFn(getModelFailoverSettings);
 	const saveSettings = useServerFn(saveModelFailoverSettingsFn);
 	const settings = useQuery({
-		queryKey: ["model-failover-settings"],
+		queryKey: SETTINGS_KEY,
 		queryFn: () => getSettings(),
 	});
-	const save = useMutation({
-		mutationFn: (next: Settings) =>
-			saveSettings({
-				data: {
-					enabled: next.enabled,
-					askBeforePaid: next.askBeforePaid,
-					connectionOrder: next.connections.map((row) => row.key),
-				},
-			}),
-		onMutate: (next) => {
-			queryClient.setQueryData(["model-failover-settings"], next);
-		},
-		onSuccess: (saved) => {
-			queryClient.setQueryData(["model-failover-settings"], saved);
-		},
-		onError: () => {
-			void settings.refetch();
-		},
-	});
+	const save = useMutation(failoverSettingsSave(queryClient, saveSettings));
 	const current = settings.data;
 	function move(index: number, offset: -1 | 1) {
 		if (!current) return;
@@ -89,7 +108,6 @@ export function ModelFailoverSettings() {
 								<IntegrationSwitch
 									label="Switch automatically during outages"
 									checked={current.enabled}
-									disabled={save.isPending}
 									onChange={(enabled) => save.mutate({ ...current, enabled })}
 								/>
 							</div>
@@ -107,7 +125,7 @@ export function ModelFailoverSettings() {
 								<IntegrationSwitch
 									label="Ask before using a paid key"
 									checked={current.askBeforePaid}
-									disabled={save.isPending || !current.enabled}
+									disabled={!current.enabled}
 									onChange={(askBeforePaid) =>
 										save.mutate({ ...current, askBeforePaid })
 									}
@@ -135,7 +153,7 @@ export function ModelFailoverSettings() {
 											type="button"
 											className="settings-secondary model-failover-move"
 											aria-label={`Move ${connection.label} up`}
-											disabled={save.isPending || index === 0}
+											disabled={index === 0}
 											onClick={() => move(index, -1)}
 										>
 											<ChevronUp size={14} aria-hidden="true" />
@@ -144,10 +162,7 @@ export function ModelFailoverSettings() {
 											type="button"
 											className="settings-secondary model-failover-move"
 											aria-label={`Move ${connection.label} down`}
-											disabled={
-												save.isPending ||
-												index === current.connections.length - 1
-											}
+											disabled={index === current.connections.length - 1}
 											onClick={() => move(index, 1)}
 										>
 											<ChevronDown size={14} aria-hidden="true" />

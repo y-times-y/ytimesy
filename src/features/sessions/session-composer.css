@@ -613,6 +613,14 @@
 	opacity: 0.45;
 	cursor: default;
 }
+.project-picker-choice[aria-busy="true"] {
+	opacity: 1;
+}
+.project-picker-adding {
+	flex-shrink: 0;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+}
 .project-picker-skeleton {
 	display: flex;
 	flex-direction: column;

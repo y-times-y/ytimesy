@@ -1,9 +1,43 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Switch } from "#/components/ui/switch";
+import {
+	cacheWrite,
+	optimisticMutation,
+	saveErrorMessage,
+} from "#/lib/optimistic-mutation";
 import { readMemoryModeFn, saveMemoryModeFn } from "./memory.fn";
 
 const MODE_KEY = ["memory-mode"];
+
+type MemoryMode = Awaited<ReturnType<typeof readMemoryModeFn>>;
+
+/** The switch moves at once; memory and dreams refetch once the save lands. */
+export function memoryModeChange(
+	queryClient: QueryClient,
+	save: (input: { data: { mode: "full" | "off" } }) => Promise<unknown>,
+) {
+	return {
+		mutationFn: (on: boolean) => save({ data: { mode: on ? "full" : "off" } }),
+		...optimisticMutation<unknown, boolean>({
+			queryClient,
+			scope: "memory-mode",
+			writes: (on) => [
+				cacheWrite<MemoryMode>(MODE_KEY, (current) =>
+					current.available
+						? { ...current, mode: on ? "full" : "off" }
+						: current,
+				),
+			],
+			invalidate: [["memory"], ["memory-dreams"]],
+		}),
+	};
+}
 
 /** Settings, Memory: whether chats recall and save memory. */
 export function MemorySettings() {
@@ -11,22 +45,13 @@ export function MemorySettings() {
 	const save = useServerFn(saveMemoryModeFn);
 	const queryClient = useQueryClient();
 	const mode = useQuery({ queryKey: MODE_KEY, queryFn: () => read() });
-	const change = useMutation({
-		mutationFn: (on: boolean) => save({ data: { mode: on ? "full" : "off" } }),
-		onSuccess: () =>
-			Promise.all(
-				[MODE_KEY, ["memory"], ["memory-dreams"]].map((queryKey) =>
-					queryClient.invalidateQueries({ queryKey }),
-				),
-			),
-	});
+	const change = useMutation(memoryModeChange(queryClient, save));
 	return (
 		<MemorySettingsView
 			on={mode.data ? mode.data.mode !== "off" : true}
 			available={mode.data?.available ?? true}
 			loading={mode.isPending}
-			saving={change.isPending}
-			error={change.error?.message ?? mode.error?.message}
+			error={saveErrorMessage(change.error) ?? mode.error?.message}
 			onChange={(on) => change.mutate(on)}
 		/>
 	);
@@ -36,7 +61,6 @@ export function MemorySettingsView(props: {
 	readonly on: boolean;
 	readonly available: boolean;
 	readonly loading?: boolean;
-	readonly saving?: boolean;
 	readonly error?: string;
 	readonly onChange: (on: boolean) => void;
 }) {
@@ -64,7 +88,7 @@ export function MemorySettingsView(props: {
 						<Switch
 							id="memory-use"
 							checked={props.available && props.on}
-							disabled={!props.available || props.loading || props.saving}
+							disabled={!props.available || props.loading}
 							onCheckedChange={props.onChange}
 						/>
 					</div>
