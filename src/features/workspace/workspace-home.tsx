@@ -211,6 +211,9 @@ const MACHINE_RESUME_INTERVAL_MS = 60_000;
 /** When the Memory page and workspace tools load in the background. */
 const PAGE_SETTLED_PREFETCH_MS = 2_500;
 
+/** How long after a failed read of older turns the next one may start. */
+const OLDER_RETRY_MS = 3_000;
+
 /** When to read a completed chat again for the save hook's marker. */
 const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
 
@@ -1653,6 +1656,8 @@ export function WorkspaceHome({
 
 	/** The open chat's older turns being read, by the oldest item shown then. */
 	const olderRead = useRef<string | null>(null);
+	/** When reading older turns last failed: the next try waits a little. */
+	const olderFailedAt = useRef(0);
 	const [olderLoading, setOlderLoading] = useState(false);
 	/**
 	 * Reads the turns before the oldest one shown and puts them above it. A
@@ -1666,6 +1671,7 @@ export function WorkspaceHome({
 		const projectId = activeProjectId;
 		if (!view.hasOlderItems || !chatId || !before || !projectId) return;
 		if (olderRead.current) return;
+		if (Date.now() - olderFailedAt.current < OLDER_RETRY_MS) return;
 		olderRead.current = before;
 		setOlderLoading(true);
 		const epoch = sessionEpoch.current;
@@ -1695,8 +1701,10 @@ export function WorkspaceHome({
 					sessionViews.current.set(chatId, withOlderPage(cached, older));
 				setSession((current) => withOlderPage(current, older));
 			})
-			// A failed read is tried again when the reader scrolls next.
-			.catch(() => undefined)
+			// A failed read is tried again once the reader scrolls after a pause.
+			.catch(() => {
+				olderFailedAt.current = Date.now();
+			})
 			.finally(settle);
 	}
 

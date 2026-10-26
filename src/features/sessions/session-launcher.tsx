@@ -519,7 +519,11 @@ export function SessionLauncher({
 	const [slashMenuDismissed, setSlashMenuDismissed] = useState<string | null>(
 		null,
 	);
-	const items = visibleSessionItems(session.items, optimisticItems);
+	// Kept while the person types, so the transcript does not render again.
+	const items = useMemo(
+		() => visibleSessionItems(session.items, optimisticItems),
+		[session.items, optimisticItems],
+	);
 	const turnStatus = session.turnStatus;
 	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
 	const agents = agentPanelRows({
@@ -1018,6 +1022,8 @@ export function SessionLauncher({
 				</>
 			) : (
 				<SessionTimeline
+					// Another chat opens as a new list, at its end.
+					key={session.agentSessionId ?? "new"}
 					recoveryControls={
 						onRecovered && selectedProject && session.agentSessionId
 							? (messageId) => {
