@@ -74,7 +74,7 @@ export function optimisticMutation<TData, TVariables>(input: {
 					queryClient.setQueryData(queryKey, data);
 			if (input.errorToast) toast.error(input.errorToast);
 		},
-		onSettled: async (
+		onSettled: (
 			data: TData | undefined,
 			error: Error | null,
 			variables: TVariables,
@@ -97,9 +97,9 @@ export function optimisticMutation<TData, TVariables>(input: {
 				...answered.map(({ queryKey }) => queryKey),
 				...stale,
 			]);
-			await Promise.all(
-				stale.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-			);
+			// Not awaited: the control's error or done state shows without waiting for the refetch.
+			for (const queryKey of stale)
+				void queryClient.invalidateQueries({ queryKey });
 		},
 	};
 }
