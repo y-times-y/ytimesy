@@ -103,12 +103,12 @@ import {
 	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
-import { replyStartedAfter } from "#/domain/web-vitals";
 import {
 	progressPage,
 	withEarlierPages,
 	withOlderPage,
 } from "#/domain/transcript-page";
+import { replyStartedAfter } from "#/domain/web-vitals";
 import {
 	agentDesktopActivityInTurn,
 	desktopInspectorShouldStart,

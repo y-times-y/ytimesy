@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import type { PostHog } from "posthog-node";
-import { redactSecrets } from "#/domain/redact-secrets";
 import {
 	type ServerAnalyticsEvent,
 	type ServerAnalyticsProperties,
 	serverAnalyticsEvents,
 } from "#/domain/analytics";
+import { redactSecrets } from "#/domain/redact-secrets";
 import { scopedResource } from "./database-scope";
 import { trackInvocationTask } from "./invocation-tasks";
 
