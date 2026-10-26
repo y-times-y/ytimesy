@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { serverSessionProgressResponse } from "./server-session-progress";
 import { sessionProgressResponse } from "./session-progress";
 
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: vi.fn(),
+	agentSessionMetadataForOwner: vi.fn(),
 }));
 vi.mock("./server-session-progress", () => ({
 	serverSessionProgressResponse: vi.fn(
@@ -25,8 +25,8 @@ const record = {
 	taskPlacement: "shared",
 };
 function mockSession(value: object | null) {
-	vi.mocked(agentSessionForOwner).mockResolvedValue(
-		value as Awaited<ReturnType<typeof agentSessionForOwner>>,
+	vi.mocked(agentSessionMetadataForOwner).mockResolvedValue(
+		value as Awaited<ReturnType<typeof agentSessionMetadataForOwner>>,
 	);
 }
 afterEach(() => {

@@ -8,6 +8,8 @@ export const conversationSnapshotSchema = z.object({
 	progress: z.object({
 		sessionId: z.uuid(),
 		items: z.array(z.unknown()),
+		/** The items are the chat's last turns; it holds turns before them. */
+		hasOlderItems: z.boolean().optional(),
 		turnStatus: z.enum(["idle", "running", "completed", "failed"]),
 		usage: z.unknown().optional(),
 	}),

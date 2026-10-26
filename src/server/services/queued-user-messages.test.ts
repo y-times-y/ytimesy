@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
+	agentSessionPageForOwner: vi.fn(async () => null),
 }));
 vi.mock("../adapters/queued-user-messages", () => ({
 	queueUserMessageWhileRunning: mocks.queue,

@@ -1,4 +1,4 @@
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { serverSessionProgressResponse } from "./server-session-progress";
 
 export async function sessionProgressResponse(input: {
@@ -7,7 +7,11 @@ export async function sessionProgressResponse(input: {
 	sessionId: string;
 	signal: AbortSignal;
 }) {
-	const session = await agentSessionForOwner(input.userId, input.sessionId);
+	// Only whose chat it is: the stream reads the transcript page itself.
+	const session = await agentSessionMetadataForOwner(
+		input.userId,
+		input.sessionId,
+	);
 	if (!session || session.projectId !== input.projectId)
 		return new Response(null, { status: 404 });
 	return serverSessionProgressResponse({

@@ -170,7 +170,10 @@ export function SessionLauncher({
 	onRemoveQueued,
 	backgroundRuns,
 	onDraftStarted,
+	olderItems,
 }: {
+	/** The chat holds turns before those shown; they load as the reader scrolls up. */
+	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
 	/** The draft went from empty to some text (a new chat starts its machine then). */
 	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
@@ -516,7 +519,11 @@ export function SessionLauncher({
 	const [slashMenuDismissed, setSlashMenuDismissed] = useState<string | null>(
 		null,
 	);
-	const items = visibleSessionItems(session.items, optimisticItems);
+	// Kept while the person types, so the transcript does not render again.
+	const items = useMemo(
+		() => visibleSessionItems(session.items, optimisticItems),
+		[session.items, optimisticItems],
+	);
 	const turnStatus = session.turnStatus;
 	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
 	const agents = agentPanelRows({
@@ -1015,6 +1022,8 @@ export function SessionLauncher({
 				</>
 			) : (
 				<SessionTimeline
+					// Another chat opens as a new list, at its end.
+					key={session.agentSessionId ?? "new"}
 					recoveryControls={
 						onRecovered && selectedProject && session.agentSessionId
 							? (messageId) => {
@@ -1091,6 +1100,7 @@ export function SessionLauncher({
 					}}
 					onRemoveQueued={onRemoveQueued}
 					readPastedText={loadPastedText}
+					olderItems={olderItems}
 				/>
 			)}
 			<div className="session-dock">

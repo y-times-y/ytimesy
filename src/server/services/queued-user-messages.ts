@@ -10,8 +10,13 @@ import {
 	withQueuedUserMessages,
 } from "#/domain/session-item";
 import {
+	latestTranscriptPage,
+	TRANSCRIPT_PAGE_TURNS,
+} from "#/domain/transcript-page";
+import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionPageForOwner,
 } from "../adapters/agent-sessions";
 import {
 	queuedUserMessageItems,
@@ -215,7 +220,11 @@ export function removeQueuedComposerMessage(
 	});
 }
 
-/** A chat as the browser sees it: its transcript, then the messages still waiting. */
+/**
+ * A chat as the browser sees it: its last turns (the database reads only
+ * those; older ones load as the reader scrolls up), then the messages still
+ * waiting.
+ */
 export async function publicSessionView(
 	scope: HarnessSessionScope,
 ): Promise<PublicCodexSession> {
@@ -225,18 +234,41 @@ export async function publicSessionView(
 		? queuedUserMessageItems(scope.sessionId)
 		: null;
 	queued?.catch(() => {});
-	const view = await Effect.runPromise(readHarnessWorkspaceSession(scope));
+	const reading = scope.sessionId
+		? agentSessionPageForOwner(scope.userId, scope.sessionId, {
+				turns: TRANSCRIPT_PAGE_TURNS,
+			})
+		: undefined;
+	const view = await Effect.runPromise(
+		readHarnessWorkspaceSession(scope, reading),
+	);
+	const page = await reading;
 	return withQueuedMessages(
-		view,
+		page?.hasOlderItems && view.agentSessionId === page.id
+			? { ...view, hasOlderItems: true }
+			: view,
 		queued && view.agentSessionId === scope.sessionId ? queued : undefined,
 	);
 }
 
+/**
+ * A view built from the whole transcript (a send, a stop, a connect), as
+ * the browser gets it: the chat's last turns. Messages still waiting are
+ * added after this.
+ */
+function latestPageView(view: PublicCodexSession): PublicCodexSession {
+	const page = latestTranscriptPage(view.items);
+	return page.hasOlderItems
+		? { ...view, items: page.items, hasOlderItems: true }
+		: view;
+}
+
 export async function withQueuedMessages(
-	view: PublicCodexSession,
+	whole: PublicCodexSession,
 	/** The chat's queue, already being read. */
 	reading?: ReturnType<typeof queuedUserMessageItems>,
 ): Promise<PublicCodexSession> {
+	const view = latestPageView(whole);
 	if (!view.agentSessionId) return view;
 	const queued = await (reading ?? queuedUserMessageItems(view.agentSessionId));
 	return queued.length

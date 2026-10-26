@@ -20,7 +20,10 @@ export function progressIsFresh(
 export type SessionProgress = {
 	readonly usage?: CodexUsage;
 	readonly sessionId: string;
+	/** The chat's last turns (transcript-page.ts). */
 	readonly items: readonly SessionItem[];
+	/** The chat holds turns before `items`. */
+	readonly hasOlderItems?: boolean;
 	readonly turnStatus: SessionTurnStatus;
 };
 
