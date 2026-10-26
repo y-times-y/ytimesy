@@ -12,6 +12,13 @@ import {
 } from "./replay-consent";
 import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
 
+/** Where analytics events go; the page preconnects to it (src/routes/__root.tsx). */
+export const ANALYTICS_HOST =
+	import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
+export const ANALYTICS_ENABLED = Boolean(
+	import.meta.env.VITE_POSTHOG_PROJECT_TOKEN,
+);
+
 let client: Promise<PostHog | null> | undefined;
 function analyticsClient(): Promise<PostHog | null> {
 	if (typeof window === "undefined") return Promise.resolve(null);
@@ -20,8 +27,7 @@ function analyticsClient(): Promise<PostHog | null> {
 	client ??= import("posthog-js")
 		.then(({ default: posthog }) => {
 			posthog.init(token, {
-				api_host:
-					import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com",
+				api_host: ANALYTICS_HOST,
 				autocapture: false,
 				capture_pageview: false,
 				capture_pageleave: false,

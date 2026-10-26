@@ -131,7 +131,7 @@ it("lists each chat with only its last turn, enough to say what it waits on", as
 	]);
 	const [listed] = await listSidebarAgentSessions("alice", project);
 	// The sidebar reads only item kinds, not bodies or ids.
-	expect(listed?.items.map((item) => item.kind)).toEqual([
+	expect((listed?.items as { kind: string }[]).map((item) => item.kind)).toEqual([
 		"userMessage",
 		"userQuestion",
 	]);
