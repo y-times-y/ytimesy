@@ -4,6 +4,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	disconnectAgentAccount,
 	loadAgentAccount,
+	loadAgentAccountState,
 } from "../src/server/auth/agent-account";
 import { codexExternalTokens } from "../src/server/auth/codex-managed-auth";
 import { seal } from "../src/server/auth/token-vault";
@@ -45,6 +46,7 @@ beforeAll(async () => {
 		"20260921231000_agent_task_events.sql",
 		"20260923014000_codex_managed_auth.sql",
 		"20260927210000_project_environments.sql",
+		"20261013210000_codex_device_login.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -91,4 +93,31 @@ it("reads a stored ChatGPT login and keeps accounts isolated by user", async () 
 	expect(await loadAgentAccount("bob")).toEqual({ status: "disconnected" });
 	await disconnectAgentAccount("alice");
 	expect(await loadAgentAccount("alice")).toEqual({ status: "disconnected" });
+});
+
+it("reads status, usable login and pending sign-in in one read, as the separate reads answer them", async () => {
+	const rows: [string, string | null, string | null][] = [
+		["connected", "sealed", null],
+		["connected", null, null],
+		["expired", "sealed", null],
+		["disconnected", null, "pending-sign-in"],
+	];
+	for (const [status, auth, device] of rows) {
+		await db.query("delete from agent_account where user_id='bob'");
+		await db.query(
+			"insert into agent_account(user_id,provider,status,encrypted_codex_auth,encrypted_device_login,message) values('bob','codex',$1,$2,$3,'Reconnect Codex.')",
+			[status, auth, device],
+		);
+		const state = await loadAgentAccountState("bob");
+		expect(state.account).toEqual(await loadAgentAccount("bob"));
+		// hasManagedCodexAuth's condition (this mock's rowCount cannot answer it).
+		expect(state.managed).toBe(status === "connected" && auth !== null);
+		expect(state.sealedDeviceLogin).toBe(device);
+	}
+	await db.query("delete from agent_account where user_id='bob'");
+	expect(await loadAgentAccountState("bob")).toEqual({
+		account: { status: "disconnected" },
+		managed: false,
+		sealedDeviceLogin: null,
+	});
 });
