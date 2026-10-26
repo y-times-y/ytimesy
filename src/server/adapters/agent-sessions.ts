@@ -256,12 +256,13 @@ export async function listAgentSessions(userId: string, projectId: string) {
  * starts a turn, whatever it says).
  */
 const SIDEBAR_ITEMS = `(case when jsonb_typeof(s.items)='array' then (
-  select coalesce(jsonb_agg(case when jsonb_typeof(e.value)='object'
-   then jsonb_build_object('kind',e.value->'kind','state',e.value->'state','wake',e.value->'wake','text','')
-   else e.value end order by e.n),'[]'::jsonb)
-  from jsonb_array_elements(s.items) with ordinality e(value,n)
-  where e.n >= coalesce((select max(x.n) from jsonb_array_elements(s.items) with ordinality x(value,n)
-   where x.value->>'kind'='userMessage' or (x.value->>'kind'='notice' and x.value->'wake'='true'::jsonb)),1)
+  select coalesce(jsonb_agg(case when jsonb_typeof(t.value)='object'
+   then jsonb_build_object('kind',t.value->'kind','state',t.value->'state','wake',t.value->'wake','text','')
+   else t.value end order by t.n),'[]'::jsonb)
+  from (select x.value,x.n,max(case when x.value->>'kind'='userMessage'
+     or (x.value->>'kind'='notice' and x.value->'wake'='true'::jsonb) then x.n end) over () as last
+   from jsonb_array_elements(s.items) with ordinality x(value,n)) t
+  where t.n >= coalesce(t.last,1)
  ) else '[]'::jsonb end)`;
 
 export async function listSidebarAgentSessions(
