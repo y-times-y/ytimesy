@@ -5,6 +5,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { ClientOnly } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import {
 	workspaceExplorerTree,
 	workspacePathForMention,
 } from "#/domain/workspace-file-tree";
+import { finishInteraction } from "../analytics/web-vitals";
 import { FileTypeIcon } from "../sessions/file-type-icon";
 import {
 	listWorkspaceExplorerFn,
@@ -35,6 +37,7 @@ import {
 	WorkspaceImagePreview,
 } from "./file-preview";
 import { readFilesSnapshot, saveFilesSnapshot } from "./files-snapshot";
+import { SourceEditorPlaceholder } from "./source-editor-placeholder";
 
 /**
  * The chat's file tree, as Files lists it. The listing also carries the file
@@ -192,6 +195,11 @@ export function FilesInspector({
 			? { root: snapshot.root, paths: snapshot.paths }
 			: undefined,
 	});
+	// Files opened until its tree shows (web-vitals.ts).
+	const treeShown = active && Boolean(explorer.data);
+	useEffect(() => {
+		if (treeShown) finishInteraction("files_open");
+	}, [treeShown]);
 	const tree = workspaceExplorerTree(explorer.data?.paths ?? [], changes);
 	const activePath =
 		(selectedPath
@@ -477,16 +485,18 @@ function FileSourcePreview({
 				{mode === "preview" ? (
 					<FilePreview path={path} content={{ kind: "text", text: value }} />
 				) : (
-					<Suspense fallback={<pre>{value}</pre>}>
-						<SourceEditor
-							path={path}
-							value={value}
-							onChange={(next) => onDraftChange(path, next, saved)}
-							onSave={() => {
-								if (dirty && !save.isPending) save.mutate();
-							}}
-						/>
-					</Suspense>
+					<ClientOnly fallback={<SourceEditorPlaceholder value={value} />}>
+						<Suspense fallback={<SourceEditorPlaceholder value={value} />}>
+							<SourceEditor
+								path={path}
+								value={value}
+								onChange={(next) => onDraftChange(path, next, saved)}
+								onSave={() => {
+									if (dirty && !save.isPending) save.mutate();
+								}}
+							/>
+						</Suspense>
+					</ClientOnly>
 				)}
 			</div>
 		</section>

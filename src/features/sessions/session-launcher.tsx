@@ -82,6 +82,7 @@ import {
 	slashMenuCommands,
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
+import { startInteraction } from "#/features/analytics/web-vitals";
 import {
 	useHydrated,
 	useHydrating,
@@ -810,6 +811,7 @@ export function SessionLauncher({
 		const retry = unsentSend.current;
 		const userMessageId =
 			retry && sameSend(retry, text, files) ? retry.id : crypto.randomUUID();
+		startInteraction("first_token", userMessageId);
 		unsentSend.current = null;
 		setOptimisticItems((current) => [
 			...current,
