@@ -28,7 +28,11 @@ import {
 	leadReasoningEffort,
 } from "../../src/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
-import { modelBilling, usageCostUsd } from "../../src/domain/model-pricing";
+import {
+	modelBilling,
+	openaiDirectCostUsd,
+	usageCostUsd,
+} from "../../src/domain/model-pricing";
 import { newSidekickState } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
 import { budgetTokenWeight } from "../../src/domain/subagent-usage";
@@ -451,10 +455,15 @@ export async function runHarborTrial(
 		]);
 	// Each run at its own model's price (a cheaper checker counts less).
 	const spendParts = () => [
-		{ usage: runsUsage(events, builderStarts), billing: config.billing },
+		{
+			usage: runsUsage(events, builderStarts),
+			billing: config.billing,
+			modelId: config.modelId,
+		},
 		...sessions.all().map((child) => ({
 			usage: runsUsage(child.events, child.starts),
 			billing: child.model.billing,
+			modelId: child.model.modelId,
 		})),
 	];
 	// Bedrock bills each Web Search query on top of tokens (builder and checkers).
@@ -1326,6 +1335,13 @@ export async function runHarborTrial(
 		const cost = usageCostUsd(part.usage, part.billing);
 		return cost === null ? null : total + cost;
 	}, searchUsd());
+	// The same tokens at OpenAI's own billing (no Bedrock premium or
+	// cache-write charge, no web search): comparable with Codex's Harbor jobs.
+	const openaiDirectUsd = spendParts().reduce<number | null>((total, part) => {
+		if (total === null) return null;
+		const cost = openaiDirectCostUsd(part.usage, part.modelId);
+		return cost === null ? null : total + cost;
+	}, 0);
 	const efficiency = trialEfficiency({
 		rootId: input.trialId,
 		harness: config.route === "codex-subscription" ? "codex" : "api",
@@ -1367,6 +1383,7 @@ export async function runHarborTrial(
 			requests: guard.requests(),
 			usage,
 			costUsd,
+			openaiDirectUsd,
 			efficiency,
 			review: {
 				rounds: reviewRounds,

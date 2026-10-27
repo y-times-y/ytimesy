@@ -371,6 +371,46 @@ export function usageCostUsd(
 }
 
 /**
+ * What the same tokens would cost on OpenAI's own API, for comparing a
+ * Bedrock run with OpenAI-billed ones: the list price (no Bedrock geographic
+ * premium) and no cache-write charge (OpenAI bills uncached input at the
+ * input price). Harbor Hub's Codex jobs report exactly this. Web search is
+ * not included. Null for a model that is not OpenAI's or has no price.
+ */
+export function openaiDirectCostUsd(
+	usage: ApiTokenUsage | null | undefined,
+	modelId: string,
+): number | null {
+	if (!/^(?:[a-z]{2,6}(?:-[a-z]+)?\.)?(?:openai\.)?gpt-/.test(modelId))
+		return null;
+	const price = modelPrice(pricedModelId(modelId));
+	if (!price) return null;
+	if (!usage) return 0;
+	const uncachedOnly = <T extends TokenCounts>(counts: T): T => ({
+		...counts,
+		uncachedInputTokens:
+			(counts.uncachedInputTokens ??
+				Math.max(
+					0,
+					(counts.inputTokens ?? 0) -
+						(counts.cacheReadTokens ?? 0) -
+						(counts.cacheWriteTokens ?? 0),
+				)) + (counts.cacheWriteTokens ?? 0),
+		cacheWriteTokens: 0,
+	});
+	return usageCostUsd(
+		{
+			...uncachedOnly(usage),
+			costUsd: undefined,
+			...(usage.longContext
+				? { longContext: uncachedOnly(usage.longContext) }
+				: {}),
+		},
+		{ kind: "tokens", price },
+	);
+}
+
+/**
  * Dollars per token for a typical agent turn's mix (mostly cached input):
  * 15% uncached input, 80% cache reads, 5% output. Used only to compare two
  * models' prices (budget weights), never to bill.
