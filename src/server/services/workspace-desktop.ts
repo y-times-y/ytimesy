@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { copiedAgentMachineRef } from "#/domain/agent-session";
+import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
@@ -185,6 +186,7 @@ export function startWorkspaceDesktop(
 		return running;
 	}).pipe(
 		Effect.catchAll((cause) => {
+			console.error("desktop start failed", failureMessage(cause));
 			const failed: WorkspaceDesktop = {
 				status: "failed",
 				reason: desktopStartFailureReason(cause),
