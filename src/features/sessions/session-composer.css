@@ -775,7 +775,8 @@
 	min-width: 0;
 }
 .session-timeline li[data-kind="userMessage"] {
-	margin: 4px 0 14px;
+	position: relative;
+	margin: 16px 0 12px;
 }
 .session-timeline li[data-kind="agentMessage"] {
 	margin: 6px 0 8px;
@@ -2044,6 +2045,17 @@ details[open] > summary .session-activity-chevron {
 }
 .conversation-recovery-trigger {
 	pointer-events: auto;
+}
+/* On a user message the icon sits inside the bubble's right end, so it
+   takes no row of its own; an error keeps its line under the bubble. */
+li[data-kind="userMessage"] > .conversation-recovery:not([data-error]) {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	margin: 0;
+}
+.session-message[data-role="user"] p:not(.session-queued-note) {
+	padding-right: 36px;
 }
 li:has(> .session-message:hover) > .conversation-recovery,
 li:has(.session-message[data-role="user"]:hover) > .conversation-recovery,
