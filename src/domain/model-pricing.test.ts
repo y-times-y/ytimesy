@@ -5,6 +5,7 @@ import {
 	longContextThreshold,
 	modelBilling,
 	modelPrice,
+	openaiDirectCostUsd,
 	pricedModelId,
 	referenceTokenPrice,
 	usageCostUsd,
@@ -262,5 +263,42 @@ describe("Bedrock OpenAI prices", () => {
 			(50_000 * 4 + 200_000 * 0.2 + 50_000 * 5 + 10_000 * 15) / 1_000_000,
 			10,
 		);
+	});
+});
+
+describe("openaiDirectCostUsd", () => {
+	const usage = {
+		inputTokens: 1_000_000,
+		outputTokens: 100_000,
+		uncachedInputTokens: 50_000,
+		cacheReadTokens: 900_000,
+		cacheWriteTokens: 50_000,
+	};
+
+	it("bills OpenAI's way: list price, cache writes as plain input", () => {
+		// 100k uncached x $2 + 900k cached x $0.10 + 100k output x $10.
+		expect(openaiDirectCostUsd(usage, "openai.gpt-6.1-sol")).toBeCloseTo(
+			1.29,
+			6,
+		);
+		expect(openaiDirectCostUsd(usage, "global.openai.gpt-6.1-sol")).toBeCloseTo(
+			1.29,
+			6,
+		);
+		expect(openaiDirectCostUsd(usage, "gpt-6.1-sol")).toBeCloseTo(1.29, 6);
+	});
+
+	it("is below the Bedrock in-Region bill for the same tokens", () => {
+		const bedrock = usageCostUsd(
+			usage,
+			modelBilling({ harness: "api", modelId: "openai.gpt-6.1-sol" }),
+		);
+		expect(bedrock).toBeGreaterThan(
+			openaiDirectCostUsd(usage, "openai.gpt-6.1-sol") ?? 0,
+		);
+	});
+
+	it("is null for models that are not OpenAI's", () => {
+		expect(openaiDirectCostUsd(usage, "claude-opus-5.5")).toBeNull();
 	});
 });
