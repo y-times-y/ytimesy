@@ -45,11 +45,13 @@ export DEBIAN_FRONTEND=noninteractive
 export HOME="\${HOME:-/root}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH:-}"
 
+# Chrome installs in the background while later installs run in the
+# foreground; each waits for the other's dpkg lock instead of failing on it.
 apt_get() {
   if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    sudo -n apt-get "$@"
+    sudo -n apt-get -o DPkg::Lock::Timeout=180 "$@"
   else
-    apt-get "$@"
+    apt-get -o DPkg::Lock::Timeout=180 "$@"
   fi
 }
 
@@ -74,6 +76,14 @@ find_chrome_bin() {
 }
 
 apply_guest_identity() {
+  # The name resolves before it is set, so sudo never warns it cannot.
+  if ! grep -q '[[:space:]]ytimesy$' /etc/hosts 2>/dev/null; then
+    if [ -w /etc/hosts ]; then
+      printf '127.0.1.1 ytimesy\\n' >> /etc/hosts
+    elif command -v sudo >/dev/null 2>&1; then
+      printf '127.0.1.1 ytimesy\\n' | sudo -n tee -a /etc/hosts >/dev/null 2>&1 || true
+    fi
+  fi
   if command -v sudo >/dev/null 2>&1; then
     sudo -n hostname ytimesy >/dev/null 2>&1 || true
     printf 'ytimesy\\n' | sudo -n tee /etc/hostname >/dev/null 2>&1 || true
@@ -82,9 +92,6 @@ apply_guest_identity() {
   export HOSTNAME=ytimesy
   if [ -w /etc/hostname ]; then
     printf 'ytimesy\\n' > /etc/hostname
-  fi
-  if [ -w /etc/hosts ] && ! grep -q '[[:space:]]ytimesy$' /etc/hosts 2>/dev/null; then
-    printf '127.0.1.1 ytimesy\\n' >> /etc/hosts
   fi
   PROFILE="\${HOME}/.bashrc"
   touch "$PROFILE"
@@ -166,6 +173,11 @@ fi
 if ! command -v xdotool >/dev/null 2>&1 || ! command -v scrot >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends xdotool scrot x11-utils dbus-x11 fonts-liberation || true
 fi
+# Every foreground install finishes before Chrome's background one starts,
+# so the desktop never waits behind Chrome's download for the dpkg lock.
+if ! command -v xhost >/dev/null 2>&1; then
+  apt_get install -y -qq --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || true
+fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   (
     if ! install_google_chrome; then
@@ -244,9 +256,6 @@ fi
 export DISPLAY=:0
 # The builder's own processes reach the display without the cookie too (by
 # uid over the local socket); any other user still needs the cookie.
-if ! command -v xhost >/dev/null 2>&1; then
-  apt_get install -y -qq --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || true
-fi
 xhost "+SI:localuser:$(id -un)" >/dev/null 2>&1 || true
 if ! pgrep -x fluxbox >/dev/null 2>&1; then
   fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
