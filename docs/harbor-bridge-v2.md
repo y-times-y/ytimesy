@@ -350,7 +350,7 @@ no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
 
 ## Reason Agent parity setup
 
-`YTIMESY_HARBOR_VARIANT=codeMode=on,plan=on,helpers=on,fetch=on` (web search on) matches Reason
+`YTIMESY_HARBOR_VARIANT=codeMode=on,plan=on,helpers=on,fetch=on,search=function` (web search on) matches Reason
 Agent 1.2's TB4 setup as its public trajectories show it (198 TB4 trials, GPT-6 Astra xhigh):
 bash called directly at each step, code mode optional and used mostly for parallel reads (16% of
 calls), a plan tool (12 of 66 tasks), subagents (8 of 66 tasks), web search and web fetch. On
