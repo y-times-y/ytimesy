@@ -1425,11 +1425,23 @@ a.session-title-meta:focus-visible {
 	font-size: 13px;
 }
 .terminal-inspector {
+	position: relative;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
 	min-height: 0;
 	background: #111;
+}
+/* Starting, or the error and Restart: laid over the terminal's top edge. */
+.terminal-inspector-notice {
+	position: absolute;
+	inset: 0 0 auto;
+	z-index: 1;
+	padding: 0 12px 12px;
+	background: #111;
+}
+.terminal-inspector-notice .terminal-inspector-error {
+	margin: 0 -12px;
 }
 .terminal-inspector-error {
 	margin: 0;

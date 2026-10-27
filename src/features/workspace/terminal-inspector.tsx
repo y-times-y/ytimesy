@@ -162,8 +162,10 @@ export function TerminalInspector({
 
 	return (
 		<section className="terminal-inspector" aria-label="Workspace terminal">
+			{/* Over the terminal, not above it: the terminal keeps its place and
+			    size while it starts, connects or fails. */}
 			{error ? (
-				<>
+				<div className="terminal-inspector-notice">
 					<p className="terminal-inspector-error" role="alert">
 						{error}
 					</p>
@@ -174,9 +176,11 @@ export function TerminalInspector({
 					>
 						Restart terminal
 					</button>
-				</>
+				</div>
 			) : connected ? null : (
-				<p className="desktop-inspector-status">Starting terminal…</p>
+				<div className="terminal-inspector-notice">
+					<p className="desktop-inspector-status">Starting terminal…</p>
+				</div>
 			)}
 			<div
 				ref={containerRef}
