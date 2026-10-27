@@ -212,6 +212,21 @@ export const HARNESS_VARIANT_VALUES = {
 	 * builder stops when it says it is done (the default).
 	 */
 	goal: ["off", "on"],
+	/**
+	 * Plan tool (src/server/services/plan-tool.ts): on gives the root builder
+	 * update_plan, a short step list (each step pending, in_progress or
+	 * completed) the harness keeps and records, in Codex's shape. off = no
+	 * plan tool (the default).
+	 */
+	plan: ["off", "on"],
+	/**
+	 * Read-only helpers (unattended runs only; evals/harbor_v2/helpers.ts):
+	 * on gives the root builder agent / agent_wait / agent_send for
+	 * researcher and reviewer subagents, each on its own read-only copy of
+	 * the checkout, on the builder's model. The builder stays the only
+	 * writer. off = no helpers (the default).
+	 */
+	helpers: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -264,6 +279,8 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	envSnapshot: "off",
 	ledger: "off",
 	goal: "off",
+	plan: "off",
+	helpers: "off",
 	roleModels: {},
 };
 

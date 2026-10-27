@@ -235,7 +235,8 @@ export async function harborHarness(input: {
 	const trialTools = input.trialTools ?? {};
 	let tools: ToolSet = { ...surface.tools, ...webSearch, ...trialTools };
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
-	// deferred tools here: the bridge offers no agent, plan or MCP tools.
+	// deferred tools here: the trial's own tools (helpers=on's agent tools,
+	// plan=on's update_plan) are direct tools that programs may call too.
 	// lead=fusion's thin lead (leadTools=thin): delegation, a capped read and
 	// a bounded inspection command only (thin-lead-tools.ts), as the product's.
 	const thinLead =
