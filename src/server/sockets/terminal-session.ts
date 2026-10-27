@@ -8,6 +8,7 @@ import { repositoryDirectory } from "../adapters/repository-setup";
 import { requireUser } from "../auth/auth";
 import { connectWorkspaceTerminal } from "../services/workspace-terminal";
 import type { ClientSocket } from "./client-socket";
+import { logRelay } from "./relay-log";
 
 export const TERMINAL_PATH = "/api/terminal";
 
@@ -35,6 +36,8 @@ export async function runTerminalSession(
 			Number(url.searchParams.get("cols")),
 			Number(url.searchParams.get("rows")),
 		);
+		const started = Date.now();
+		let firstOutput = true;
 		const pty = await connectWorkspaceTerminal({
 			userId: user.id,
 			projectId,
@@ -43,12 +46,22 @@ export async function runTerminalSession(
 			cols: size.cols,
 			rows: size.rows,
 			onData: (data) => {
+				if (firstOutput) {
+					firstOutput = false;
+					logRelay("terminal", "first-output", {
+						bytes: data.byteLength,
+						ms: Date.now() - started,
+					});
+				}
 				if (socket.open) socket.send(data);
 			},
 			onError: (cause) => {
-				sendTerminalError(socket, publicFailureMessage(cause));
+				const message = publicFailureMessage(cause);
+				logRelay("terminal", "upstream-error", { reason: message });
+				sendTerminalError(socket, message);
 			},
 		});
+		logRelay("terminal", "upstream-open", { ms: Date.now() - started });
 		socket.onMessage((data, binary) => {
 			if (!binary && typeof data === "string") {
 				const control = parseTerminalClientMessage(data);
@@ -61,7 +74,10 @@ export async function runTerminalSession(
 			}
 			pty.write(data);
 		});
-		socket.onClose(() => pty.detach());
+		socket.onClose((close) => {
+			logRelay("terminal", "client-closed", { ...close });
+			pty.detach();
+		});
 	} catch (cause) {
 		const message =
 			cause instanceof Response
@@ -69,6 +85,7 @@ export async function runTerminalSession(
 					? "Sign in required."
 					: await cause.text()
 				: publicFailureMessage(cause);
+		logRelay("terminal", "failed", { reason: message });
 		sendTerminalError(socket, message || "Terminal failed to connect.");
 		socket.close();
 	}
