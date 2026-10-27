@@ -1054,6 +1054,17 @@ button.attachment-tile-body[data-state="open"] {
 	font-size: 13px;
 	line-height: 18px;
 }
+/* The turn's first moment: "Thinking" holds the reply's place, in the
+   box its first line takes (li[data-kind="agentMessage"] and its 22px
+   line), so the first words replace it without moving. */
+.session-timeline li[data-kind="working"] {
+	margin: 6px 0 8px;
+}
+.session-timeline li[data-kind="working"] > .session-working {
+	margin: 0;
+	font-size: 14px;
+	line-height: 22px;
+}
 .session-shimmer {
 	background-image: linear-gradient(
 		90deg,
