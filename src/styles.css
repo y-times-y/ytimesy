@@ -153,8 +153,8 @@ button:enabled:active {
 	min-height: 100dvh;
 	height: 100dvh;
 	display: grid;
+	position: relative;
 	--sidebar-width: 260px;
-	--rail-width: 44px;
 	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
 	transition:
 		grid-template-columns 280ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -864,20 +864,54 @@ button:enabled:active {
 .workspace-inspector-expand {
 	right: 44px;
 }
+/* Inside the sidebar beside the logo: only on a phone, where the sidebar
+   opens over the top-left toggle. */
 .sidebar-brand-toggle {
+	display: none;
 	position: static;
 	flex-shrink: 0;
 }
-.mobile-projects-toggle {
+/* The left sidebar's toggle: top left of the chat, as the right sidebar's is
+   top right, moving with the sidebar's edge. <html data-sidebar> places it
+   from the first paint (src/features/app/first-paint.ts). */
+.left-sidebar-toggle {
+	left: 4px;
+	transition:
+		color 120ms ease,
+		left 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+:where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
+	left: calc(var(--sidebar-width) + 4px);
+}
+/* The attention dot, while the sidebar is closed; before hydration the
+   first-paint rows script may show it. */
+.left-sidebar-toggle::after {
+	content: "";
 	display: none;
-	left: 0;
+	position: absolute;
+	right: 9px;
+	top: 9px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #3b82f6;
+}
+:where(:root:not([data-sidebar="open"]))
+	.workspace-shell
+	.left-sidebar-toggle[data-activity="attention"]::after {
+	display: block;
 }
 @media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
-	.mobile-projects-toggle[aria-expanded="false"] {
-		display: grid;
+	.left-sidebar-toggle,
+	:where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
+		top: max(6px, env(safe-area-inset-top));
+		left: max(6px, env(safe-area-inset-left));
 	}
-	.workspace-main .session-title-row {
-		padding-left: 52px;
+	:where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
+		visibility: hidden;
+	}
+	.sidebar-brand-toggle {
+		display: grid;
 	}
 }
 .inspector-toolbar {
@@ -1440,9 +1474,6 @@ a.session-title-meta:focus-visible {
 	padding: 0 12px 12px;
 	background: #111;
 }
-.terminal-inspector-notice .terminal-inspector-error {
-	margin: 0 -12px;
-}
 .terminal-inspector-error {
 	margin: 0;
 	padding: 8px 12px;
@@ -1450,6 +1481,9 @@ a.session-title-meta:focus-visible {
 	font-size: 12px;
 	line-height: 1.4;
 	color: #c8c8c8;
+}
+.terminal-inspector-notice .terminal-inspector-error {
+	margin: 0 -12px;
 }
 .terminal-inspector-frame {
 	flex: 1;
@@ -2098,7 +2132,7 @@ a.session-title-meta:focus-visible {
 /* <html data-sidebar> is set before the first paint by the first-paint script
    and kept current by WorkspaceHome (src/features/app/first-paint.ts). */
 :where(:root:not([data-sidebar="open"])) .workspace-shell {
-	grid-template-columns: var(--rail-width) minmax(0, 1fr);
+	grid-template-columns: 0 minmax(0, 1fr);
 }
 .workspace-body[data-inspector-view="side"] {
 	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -2173,7 +2207,8 @@ a.session-title-meta:focus-visible {
 	.workspace-shell,
 	.workspace-body[data-inspector-collapsed],
 	.project-sidebar,
-	.workspace-inspector {
+	.workspace-inspector,
+	.left-sidebar-toggle {
 		transition-duration: 0s;
 	}
 }
@@ -2215,69 +2250,15 @@ a.session-title-meta:focus-visible {
 	align-items: center;
 	justify-content: space-between;
 }
-.sidebar-rail {
-	position: absolute;
-	inset: 0 auto 0 0;
-	width: var(--rail-width);
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 10px;
-	padding-top: 10px;
-	border-right: 1px solid #1c1c1c;
-	opacity: 0;
-	visibility: hidden;
-	transition:
-		opacity 180ms ease,
-		visibility 0s 180ms;
-}
-.rail-brand {
-	display: grid;
-	place-items: center;
-	position: relative;
-	width: 40px;
-	height: 40px;
-	margin-bottom: 13px;
-	padding: 6px;
-	border: 0;
-	border-radius: 7px;
-	background: transparent;
-}
-/* The attention dot; before hydration the first-paint rows script may show it. */
-.rail-brand::after {
-	content: "";
-	display: none;
-	position: absolute;
-	right: 5px;
-	top: 5px;
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: #3b82f6;
-}
-.rail-brand[data-activity="attention"]::after {
-	display: block;
-}
-.rail-brand:hover {
-	background: #ffffff08;
-}
 .brand-mark {
 	display: block;
 	flex-shrink: 0;
 }
 
-:where(:root:not([data-sidebar="open"])) .workspace-shell .sidebar-rail {
-	opacity: 1;
-	visibility: visible;
-	transition-delay: 0s;
-}
 @media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
 	.workspace-shell,
 	:where(:root:not([data-sidebar="open"])) .workspace-shell {
 		grid-template-columns: 0 minmax(0, 1fr);
-	}
-	.sidebar-rail {
-		display: none;
 	}
 	.project-sidebar-frame {
 		width: 0;
@@ -2299,30 +2280,6 @@ a.session-title-meta:focus-visible {
 		padding-right: 14px;
 		padding-left: 14px;
 	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.workspace-shell .sidebar-rail {
-		transition: none;
-	}
-}
-.project-sidebar-frame[data-peek="true"] {
-	overflow: visible;
-	z-index: 4;
-}
-.project-sidebar-frame[data-peek="true"] .project-sidebar {
-	position: absolute;
-	inset: 0 auto 0 0;
-	opacity: 1;
-	transform: none;
-	background: #0c0c0c;
-	border-right: 1px solid #303030;
-	border-radius: 8px;
-	box-shadow: 12px 0 30px #0005;
-}
-.project-sidebar-frame[data-peek="true"] .sidebar-rail {
-	opacity: 0;
-	visibility: hidden;
-	transition-delay: 0s;
 }
 .sidebar-backdrop {
 	display: none;
@@ -2395,8 +2352,7 @@ a.session-title-meta:focus-visible {
 		justify-content: stretch;
 	}
 
-	.panel-toggle,
-	.rail-brand {
+	.panel-toggle {
 		width: 44px;
 		height: 44px;
 	}
@@ -2404,13 +2360,6 @@ a.session-title-meta:focus-visible {
 		width: 44px;
 		min-width: 44px;
 		padding: 0;
-	}
-	.sidebar-rail {
-		padding-top: 6px;
-		gap: 10px;
-	}
-	.rail-brand {
-		margin-bottom: 10px;
 	}
 	.project-sidebar {
 		position: fixed;
@@ -2466,8 +2415,7 @@ a.session-title-meta:focus-visible {
 	}
 }
 @media (pointer: coarse) and (min-width: 601px) {
-	.panel-toggle,
-	.rail-brand {
+	.panel-toggle {
 		min-width: 44px;
 		min-height: 44px;
 	}
@@ -3298,6 +3246,8 @@ a.session-title-meta:focus-visible {
 .workspace-main .session-title-row {
 	min-height: 44px;
 	padding-right: 52px;
+	/* The left sidebar's toggle. */
+	padding-left: 52px;
 }
 .overview-section h2 span {
 	margin-left: 6px;

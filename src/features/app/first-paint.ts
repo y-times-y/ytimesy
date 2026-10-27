@@ -141,7 +141,7 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 /**
  * Self-contained, inlined right after the sidebar's server HTML: what needs
  * both the rows and this browser's storage. It marks unread replies and the
- * rail's attention dot from the seen chats, and in Recent shows saved pins
+ * left sidebar toggle's attention dot from the seen chats, and in Recent shows saved pins
  * that sit past the Done fold. Rows carry data-seen-key, data-updated-at,
  * data-unread-mark, data-attention and data-done-overflow while hydrating.
  */
@@ -201,7 +201,9 @@ export function markFirstPaintRows(
 				: unread(row),
 		)
 	)
-		rules.push(".rail-brand::after{display:block}");
+		rules.push(
+			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
+		);
 	const done = rows('.sidebar-recent [data-group="done"] .sidebar-chat-row');
 	const fold = done.filter((row) => !row.dataset.doneOverflow).length;
 	const shown = new Set(
