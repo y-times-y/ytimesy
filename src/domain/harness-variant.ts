@@ -227,6 +227,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * writer. off = no helpers (the default).
 	 */
 	helpers: ["off", "on"],
+	/**
+	 * Web fetch (src/server/services/web-fetch-tool.ts): on gives every agent
+	 * web_fetch, one public http(s) page as text, fetched from the harness
+	 * side on any route (not a provider-hosted tool). off = no web_fetch (the
+	 * default).
+	 */
+	fetch: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -281,6 +288,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	goal: "off",
 	plan: "off",
 	helpers: "off",
+	fetch: "off",
 	roleModels: {},
 };
 

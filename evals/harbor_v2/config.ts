@@ -112,6 +112,7 @@ export const BRIDGE_VARIANT_KEYS = [
 	"goal",
 	"plan",
 	"helpers",
+	"fetch",
 ] as const satisfies readonly (keyof HarnessVariant)[];
 
 /**
