@@ -162,7 +162,12 @@ export async function createOperatorEvaluationDatabase(directory: string) {
 			"cp /operator-cert/server.key /tmp/evaluation.key && cp /operator-cert/server.crt /tmp/evaluation.crt && chown postgres:postgres /tmp/evaluation.key /tmp/evaluation.crt && chmod 600 /tmp/evaluation.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/evaluation.crt -c ssl_key_file=/tmp/evaluation.key",
 		]);
 		created = true;
-		const binding = await command(["docker", "port", container, "5432/tcp"]);
+		// Under load Docker can report the port binding a moment after start.
+		let binding = "";
+		for (let attempt = 0; attempt < 20 && !binding; attempt++) {
+			binding = await command(["docker", "port", container, "5432/tcp"]);
+			if (!binding) await new Promise((done) => setTimeout(done, 500));
+		}
 		if (!/^127\.0\.0\.1:\d+$/.test(binding))
 			throw new Error("Evaluation PostgreSQL is not loopback-only.");
 		const url = new URL(
