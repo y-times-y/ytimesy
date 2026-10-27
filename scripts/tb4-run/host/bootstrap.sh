@@ -16,6 +16,14 @@ if [ "__ROLE__" != "controller" ] && [ "__ROLE__" != "controller-test" ]; then
   # dockerd caches NCPU at start (Freestyle lesson): restart once after boot.
   systemctl restart docker
   [ "$(docker info --format '{{.NCPU}}')" = "$(nproc)" ] || fail "docker NCPU != nproc"
+  # Verifiers with allow_internet = false (batched-eval-parity, lake-temp-glm) need
+  # Harbor's Docker egress-control sidecar, which needs nftables fib inet rules
+  # (CONFIG_NFT_FIB_INET). Without it Harbor rejects the verifier after the agent ran.
+  # Docker Desktop's linuxkit kernel lacks it; Ubuntu's AWS kernel ships it as a module.
+  if [ -f "/boot/config-$(uname -r)" ]; then
+    grep -qE '^CONFIG_NFT_FIB_INET=[ym]' "/boot/config-$(uname -r)" || fail "kernel lacks CONFIG_NFT_FIB_INET (no-network verifiers)"
+  fi
+  modprobe nft_fib_inet 2>/dev/null || grep -qE '^CONFIG_NFT_FIB_INET=y' "/boot/config-$(uname -r)" 2>/dev/null || fail "nft_fib_inet module not loadable"
 fi
 if [ "__ROLE__" = "gpu" ]; then
   nvidia-smi --query-gpu=name --format=csv,noheader | grep -q "H100" || fail "no H100 visible"

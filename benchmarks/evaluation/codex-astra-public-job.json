@@ -1,0 +1,405 @@
+{
+	"job": "caf6e433 (Harbor Hub job id prefix)",
+	"agent": "codex 0.151.0",
+	"model": "gpt-6-astra xhigh",
+	"source": "Harbor Hub public job; per-trial rows downloaded 2026-10-26",
+	"costFormula": "OpenAI list price GPT-6 Astra: (input-cached)*10 + cached*1 + output*50 USD per 1M tokens",
+	"tasks": {
+		"atrx-vep-crispr": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 2.369,
+			"meanSeconds": 525
+		},
+		"batched-eval-parity": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 4.833,
+			"meanSeconds": 1974
+		},
+		"biped-contact-dynamics": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 6.661,
+			"meanSeconds": 1412
+		},
+		"bun-sourcemap-leak": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 2.593,
+			"meanSeconds": 790
+		},
+		"cad-model": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.751,
+			"meanSeconds": 568
+		},
+		"cargo-flight-dispatch": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 2.574,
+			"meanSeconds": 1901
+		},
+		"coq-block-bound": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.707,
+			"meanSeconds": 1136
+		},
+		"ctr-optimization": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 17.108,
+			"meanSeconds": 17568
+		},
+		"cumulative-layout-shift": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 32.356,
+			"meanSeconds": 4516
+		},
+		"data-anonymization": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.723,
+			"meanSeconds": 1645
+		},
+		"distributed-dedup": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 7.442,
+			"meanSeconds": 4204
+		},
+		"embedding-drift-monitor": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 3.089,
+			"meanSeconds": 1285
+		},
+		"fin-saccr-rwa": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 5.893,
+			"meanSeconds": 1548
+		},
+		"foodstuff-beta-activity": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.74,
+			"meanSeconds": 439
+		},
+		"formal-crypto": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 5.607,
+			"meanSeconds": 1917
+		},
+		"fp8-rmsnorm-gemm": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 10.946,
+			"meanSeconds": 2536
+		},
+		"freecad-impeller": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.166,
+			"meanSeconds": 1244
+		},
+		"freecad-platform-drawing": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.444,
+			"meanSeconds": 524
+		},
+		"freecad-spring-clip": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 2.643,
+			"meanSeconds": 681
+		},
+		"freight-dispatch-shift": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.976,
+			"meanSeconds": 2701
+		},
+		"glycan-ms2-elucidation": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.202,
+			"meanSeconds": 354
+		},
+		"gsea-proteomics": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 3.579,
+			"meanSeconds": 1126
+		},
+		"heat-pump-warranty": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 7.448,
+			"meanSeconds": 843
+		},
+		"hof-topology-interpenetration": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.059,
+			"meanSeconds": 1144
+		},
+		"html-js-filter": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 5.396,
+			"meanSeconds": 1558
+		},
+		"interleaved-vigenere": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.043,
+			"meanSeconds": 1220
+		},
+		"intrastat-meldung": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 5.582,
+			"meanSeconds": 886
+		},
+		"jax-speedrun-gpu": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 51.137,
+			"meanSeconds": 21395
+		},
+		"ks-solver-cpp": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 7.393,
+			"meanSeconds": 2500
+		},
+		"kv-live-surgery": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 9.568,
+			"meanSeconds": 1586
+		},
+		"lake-temp-glm": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 17.325,
+			"meanSeconds": 5382
+		},
+		"layout-config-recreation": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 24.523,
+			"meanSeconds": 3191
+		},
+		"layout-config-recreation2": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.501,
+			"meanSeconds": 454
+		},
+		"legacy-utility-triage": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 9.947,
+			"meanSeconds": 3428
+		},
+		"live-database-cutover": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 13.927,
+			"meanSeconds": 3485
+		},
+		"math-eval-grader": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.694,
+			"meanSeconds": 1836
+		},
+		"medical-claims-processing": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 8.338,
+			"meanSeconds": 1490
+		},
+		"mp-checkpoint-consolidation": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 5.654,
+			"meanSeconds": 1101
+		},
+		"music-harmony": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 5.238,
+			"meanSeconds": 1229
+		},
+		"mvcc-lsm-compaction": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 1.72,
+			"meanSeconds": 843
+		},
+		"nextjs-performance": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 8.417,
+			"meanSeconds": 2467
+		},
+		"ontology-kg-querying": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 5.165,
+			"meanSeconds": 1765
+		},
+		"payments-pipeline-fix": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 6.889,
+			"meanSeconds": 2075
+		},
+		"photonic-waveguide-routing": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.484,
+			"meanSeconds": 1686
+		},
+		"pretrain-shard-corruption": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.442,
+			"meanSeconds": 773
+		},
+		"production-planning": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 2.276,
+			"meanSeconds": 561
+		},
+		"protein-autointerp-disulfide": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 3.077,
+			"meanSeconds": 2281
+		},
+		"react-lead-form": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.537,
+			"meanSeconds": 1300
+		},
+		"retro-console-soc": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 9.794,
+			"meanSeconds": 2000
+		},
+		"risk-scorer-replay": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.507,
+			"meanSeconds": 1843
+		},
+		"roy-polymorph-cn": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.239,
+			"meanSeconds": 799
+		},
+		"rs-archive-clone": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 10.425,
+			"meanSeconds": 1616
+		},
+		"satb-audio-transcription": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.285,
+			"meanSeconds": 595
+		},
+		"session-window-debug": {
+			"passes": 2,
+			"trials": 5,
+			"meanCostUsd": 1.714,
+			"meanSeconds": 819
+		},
+		"sglang-qwen-burst": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 12.595,
+			"meanSeconds": 1324
+		},
+		"shadow-relay": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.365,
+			"meanSeconds": 365
+		},
+		"sound-change-cascade": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.083,
+			"meanSeconds": 1346
+		},
+		"takens-embedding-lean": {
+			"passes": 2,
+			"trials": 5,
+			"meanCostUsd": 12.687,
+			"meanSeconds": 1970
+		},
+		"telecom-entity-resolution": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 7.997,
+			"meanSeconds": 1898
+		},
+		"uefi-bootkit": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 9.903,
+			"meanSeconds": 1514
+		},
+		"vba-userform-port": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 11.122,
+			"meanSeconds": 3067
+		},
+		"vf2-speedup-networkx": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 7.081,
+			"meanSeconds": 2711
+		},
+		"vllm-deepseek-streaming": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.846,
+			"meanSeconds": 936
+		},
+		"vpp-loss-divergence": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.71,
+			"meanSeconds": 443
+		},
+		"wal-recovery-ordering": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.16,
+			"meanSeconds": 1240
+		},
+		"wdm-design": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 6.406,
+			"meanSeconds": 4196
+		}
+	}
+}

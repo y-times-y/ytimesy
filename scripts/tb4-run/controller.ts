@@ -9,7 +9,8 @@
  *     status               counts per batch, in flight, paused/stopped
  *     open-batch b2 --owner <name>   only when the batch-2 rule says go (or --override with a dated amendment)
  *     pause <reason> | resume | stop <reason>
- *     score [--codex benchmarks/evaluation/codex-public-job.json]
+ *     score [--codex benchmarks/evaluation/codex-public-job.json] [--reason-job <reason-job.json>]
+ *     init ... --open-all            Astra x5 rule: both batches open at init, no batch-2 gate
  *
  *     tasks [--dataset <dir>]   write tasks.json from each task.toml (default: Harbor's
  *                          dataset cache ~/.cache/harbor/tasks/packages/terminal-bench)
@@ -26,6 +27,8 @@ import { parseArgs } from "node:util";
 import {
 	BATCHES,
 	batch2Decision,
+	earlyStopDecision,
+	floorCeiling,
 	type HarborResult,
 	type Host,
 	type HostObservation,
@@ -259,7 +262,7 @@ export function tick(input: { runDir: string; journal: Journal; hosts: Host[]; t
 	return log;
 }
 
-export function scoreReport(runDir: string, tasks: Task[], codexPath: string) {
+export function scoreReport(runDir: string, tasks: Task[], codexPath: string, reasonPath?: string) {
 	const state = replay(new Journal(join(runDir, "journal.jsonl")).events());
 	const perTask = scoredTrials(state);
 	const names = tasks.map((t) => t.name).sort();
@@ -267,6 +270,13 @@ export function scoreReport(runDir: string, tasks: Task[], codexPath: string) {
 	const codex = JSON.parse(readFileSync(codexPath, "utf8")) as { tasks: Record<string, { passes: number; trials: number }> };
 	const theirs = names.map((t) => (codex.tasks[t] ? codex.tasks[t].passes / codex.tasks[t].trials : 0));
 	const cmp = pairedComparison(ours.rates, theirs);
+	const codexPct = (100 * theirs.reduce((a, b) => a + b, 0)) / names.length;
+	const bounds = floorCeiling(perTask, names);
+	const reason = reasonPath
+		? (JSON.parse(readFileSync(reasonPath, "utf8")) as { tasks: Record<string, { passes: number; trials: number }> })
+		: undefined;
+	const reasonRates = reason ? names.map((t) => (reason.tasks[t] ? reason.tasks[t].passes / reason.tasks[t].trials : 0)) : undefined;
+	const reasonPct = reasonRates ? (100 * reasonRates.reduce((a, b) => a + b, 0)) / names.length : undefined;
 	const infra = [...state.attempts.values()].filter((a) => a.outcome?.kind === "infra");
 	const incomplete = names.filter((t) => (perTask.get(t)?.scored.length ?? 0) < (state.openBatches.has("b2") ? 5 : 1));
 	return {
@@ -275,8 +285,13 @@ export function scoreReport(runDir: string, tasks: Task[], codexPath: string) {
 		bundleSha256: state.bundleSha256,
 		batches: [...state.openBatches],
 		passAt1Pct: ours.pct,
-		codexPassAt1Pct: (100 * theirs.reduce((a, b) => a + b, 0)) / names.length,
+		codexPassAt1Pct: codexPct,
 		paired: cmp,
+		bounds,
+		vsCodex: earlyStopDecision(bounds, codexPct),
+		...(reasonRates && reasonPct !== undefined
+			? { reasonPassAt1Pct: reasonPct, pairedVsReason: pairedComparison(ours.rates, reasonRates), vsReason: earlyStopDecision(bounds, reasonPct) }
+			: {}),
 		batch2: state.openBatches.has("b2") ? "opened" : batch2Decision(cmp),
 		infraAttempts: infra.map((a) => ({ attemptId: a.attemptId, reason: (a.outcome as { reason: string }).reason })),
 		extraValidNotScored: [...perTask.entries()].flatMap(([t, v]) => v.extra.map((e) => `${t}:${e.attemptId}`)),
@@ -297,6 +312,8 @@ async function main() {
 			override: { type: "string" },
 			codex: { type: "string", default: "benchmarks/evaluation/codex-public-job.json" },
 			dataset: { type: "string" },
+			"open-all": { type: "boolean", default: false },
+			"reason-job": { type: "string" },
 		},
 	});
 	const runDir = values["run-dir"]!;
@@ -312,6 +329,9 @@ async function main() {
 				throw new Error("--run-id, --commit and --bundle-sha256 (64 hex) are required");
 			journal.append({ at: at(), type: "run-start", runId: values["run-id"], commit: values.commit, bundleSha256: values["bundle-sha256"]! });
 			journal.append({ at: at(), type: "batch-open", batch: "b1" });
+			// The Astra x5 rule (docs/tb4-astra-run-2026-10-27.md): no batch-2 gate;
+			// all 5 trials per task start together.
+			if (values["open-all"]) journal.append({ at: at(), type: "batch-open", batch: "b2" });
 			break;
 		}
 		case "tasks": {
@@ -371,7 +391,7 @@ async function main() {
 			break;
 		}
 		case "score":
-			console.log(JSON.stringify(scoreReport(runDir, tasks(), values.codex!), null, 2));
+			console.log(JSON.stringify(scoreReport(runDir, tasks(), values.codex!, values["reason-job"]), null, 2));
 			break;
 		default:
 			throw new Error(`unknown command ${cmd}`);
