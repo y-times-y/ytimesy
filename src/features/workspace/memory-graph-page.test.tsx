@@ -14,7 +14,7 @@ vi.mock("./memory.fn", () => ({
 	editMemoryFn: async () => ({ ok: true }),
 }));
 
-const { MemoryGraphPage, MemoryGraphLegend, hexagonPath } = await import(
+const { MemoryGraphPage, MemoryBlocksKey } = await import(
 	"./memory-graph-page"
 );
 
@@ -22,13 +22,17 @@ const A = "11111111-1111-4111-8111-111111111111";
 const files = [
 	{
 		path: "api.md",
-		content: `# API\n\n- Errors are problem+json [source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
+		content: `# API\n\n- Errors are problem+json [project: acme/web; source: /?chat=${A}; added: 2026-10-20]\n- Old webhook note [superseded-by: /?chat=${A}; project: acme/web; added: 2026-09-01]\n- Always pnpm [scope: always; kind: inferred; source: manual; added: 2026-09-02]\n`,
 	},
 ];
 
-function render() {
+function render(memoryFiles = files) {
 	const client = new QueryClient();
-	client.setQueryData(["memory"], { available: true, mode: "full", files });
+	client.setQueryData(["memory"], {
+		available: true,
+		mode: "full",
+		files: memoryFiles,
+	});
 	return renderToStaticMarkup(
 		<QueryClientProvider client={client}>
 			<MemoryGraphPage active onOpenChat={() => true} />
@@ -37,45 +41,55 @@ function render() {
 }
 
 describe("Memory graph page", () => {
-	it("draws chat hubs and one hexagon per memory, statuses as badges", () => {
-		const page = render();
-		const html = page.slice(0, page.indexOf("memory-graph-legend"));
+	it("draws one block of squares per space in its final place", () => {
+		const html = render();
 		expect(html).toContain(
-			'aria-label="Memory graph: 3 memories from 3 sources"',
+			'aria-label="Memory blocks: 3 memories in 2 spaces"',
 		);
-		expect(html.match(/class="memory-hex"/g)).toHaveLength(3);
-		expect(html.match(/class="memory-hub"/g)).toHaveLength(3);
-		expect(html).toContain('data-status="forgotten"');
-		expect(html).toContain('data-status="rule"');
-		expect(html).toContain('data-inferred="true"');
-		expect(html).toContain("All memory");
-		expect(html).toContain("3 memories");
+		expect(html.match(/class="memory-block"/g)).toHaveLength(2);
+		expect(html.match(/class="memory-cell"/g)).toHaveLength(3);
+		expect(html).toContain('data-mark="pinned"');
+		expect(html).toContain('data-mark="inferred"');
+		expect(html).toContain('data-mark="archived"');
+		// Laid out by the data alone: no view transform before any gesture.
+		expect(html).toContain('<div class="memory-blocks-world">');
+		expect(html).toContain("1 active");
+	});
+
+	it("filters by space and New with chips, never a native select", () => {
+		const html = render();
+		const chips = html.slice(
+			html.indexOf("memory-blocks-chips"),
+			html.indexOf("memory-blocks-stage"),
+		);
+		for (const label of [">All<", ">web<", ">Personal<", ">New<"])
+			expect(chips).toContain(label);
 		expect(html).not.toContain("<select");
 	});
 
-	it("explains every mark in the legend with the same shapes", () => {
-		const html = renderToStaticMarkup(
-			<MemoryGraphLegend similarBasis="meaning" />,
-		);
-		for (const label of [
-			"Chat",
-			"Memory",
-			"Older version",
-			"New",
+	it("keeps none of the old graph's marks", () => {
+		const html = render();
+		for (const gone of [
+			"memory-hex",
+			"memory-hub",
+			"memory-graph-edges",
 			"Expiring soon",
-			"Retired",
-			"Always on",
-			"From chat",
 			"Similar",
-			"Newer version",
-			"Weak",
-			"Strong",
 		])
-			expect(html).toContain(label);
-		expect(html).toContain('class="memory-hex-shape"');
+			expect(html).not.toContain(gone);
 	});
 
-	it("rounds the hexagon's six corners", () => {
-		expect(hexagonPath(15).match(/Q/g)).toHaveLength(6);
+	it("says so when there is no memory", () => {
+		const html = render([]);
+		expect(html).toContain("No memory yet.");
+		expect(html).not.toContain("memory-blocks-chips");
+	});
+
+	it("explains every mark in the key with the same mark", () => {
+		const html = renderToStaticMarkup(<MemoryBlocksKey hatch="h" />);
+		for (const label of ["Pinned", "Memory", "Inferred", "Archived", "New"])
+			expect(html).toContain(label);
+		expect(html).toContain("Older");
+		expect(html).toContain("Newer");
 	});
 });

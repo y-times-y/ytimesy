@@ -1,8 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { ClientOnly } from "@tanstack/react-router";
 import type { Project } from "#/domain/projects";
 import { readMemoryFn, readMemoryGraphFn } from "./memory.fn";
-import { MemoryGraphLoading, MemoryGraphPage } from "./memory-graph-page";
+import { MemoryGraphPage } from "./memory-graph-page";
 import { MemoryInspector } from "./memory-inspector";
 import "./memory-inspector.css";
 
@@ -68,10 +67,8 @@ export function MemoryPage({
 				</fieldset>
 			</header>
 			{view === "graph" ? (
-				// The graph measures its frame and the window: browser only.
-				<ClientOnly fallback={<MemoryGraphLoading />}>
-					<MemoryGraphPage active projects={projects} onOpenChat={onOpenChat} />
-				</ClientOnly>
+				// Its layout comes from the data alone: the server draws it too.
+				<MemoryGraphPage active projects={projects} onOpenChat={onOpenChat} />
 			) : (
 				<MemoryInspector
 					active
