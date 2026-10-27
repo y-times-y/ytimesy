@@ -66,7 +66,9 @@ describe("workspace desktop", () => {
 				sessionId: "session-1",
 			}),
 		).toMatchObject({
-			actionLabel: "Retry desktop",
+			title: "Desktop didn't start",
+			description: "VM not found",
+			actionLabel: "Try again",
 		});
 	});
 });
