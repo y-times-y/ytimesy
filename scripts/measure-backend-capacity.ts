@@ -60,6 +60,12 @@ try {
 		"utf8",
 	);
 	await fixture.query(delivery.split("-- Shared-harness")[0]);
+	await fixture.query(
+		await readFile(
+			"supabase/migrations/20261026100000_agent_session_item.sql",
+			"utf8",
+		),
+	);
 	worker = await unstable_dev("src/realtime/worker.ts", {
 		config: "wrangler.realtime.jsonc",
 		local: true,

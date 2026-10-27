@@ -15,7 +15,6 @@ import type {
 } from "#/domain/subagent";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
-import { STARTS_TURN_SQL } from "./transcript-page-sql";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -329,24 +328,22 @@ export async function agentSessionPageForOwner(
 	  })
 	| null
 > {
-	// Materialized: each step reads the stored array once, not once per item.
+	// Reads agent_session_item (transcript-page-sql.ts): the cursor and the
+	// turn starts by index, then only the page's rows.
 	const result = await database().query(
-		`with s as materialized (select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2),
-		 k as materialized (select e.o, e.it->>'id' as id, ${STARTS_TURN_SQL} as starts
-		  from s, jsonb_array_elements(s.items) with ordinality e(it,o)),
-		 st as (select case when $3::text is null then (select count(*)+1 from k)
-		  else (select o from k where id=$3::text limit 1) end as stop),
-		 b as (select st.stop, (select case when count(*) < $4 then 1 else min(t.o) end
-		  from (select o from k where starts and o < st.stop order by o desc limit $4) t) as first from st)
-		 select ${SESSION_COLUMNS.split(",")
-				.map((column) =>
-					column === "items"
-						? `case when b.stop is null or b.stop <= b.first then '[]'::jsonb
-		  else jsonb_path_query_array(s.items, ('$[' || (b.first-1) || ' to ' || (b.stop-2) || ']')::jsonpath) end as items`
-						: `s.${column}`,
-				)
-				.join(",")},
-		  b.first > 1 as has_older_items, b.stop is not null as page_found
+		`with s as (select ${SESSION_COLUMNS.replace(",items,", ",")} from agent_session where id=$1 and user_id=$2),
+		 st as (select case when $3::text is null
+		   then (select coalesce(max(i.position)+1,0) from agent_session_item i where i.session_id=$1)
+		   else (select min(i.position) from agent_session_item i where i.session_id=$1 and i.item_id=$3::text) end as stop),
+		 b as (select st.stop, (select case when count(*) < $4 then 0 else min(t.position) end
+		  from (select i.position from agent_session_item i
+		   where i.session_id=$1 and i.starts_turn and i.position < st.stop
+		   order by i.position desc limit $4) t) as first from st)
+		 select s.*,
+		  case when b.stop is null or b.stop <= b.first then '[]'::jsonb
+		  else (select jsonb_agg(i.item order by i.position) from agent_session_item i
+		   where i.session_id=$1 and i.position >= b.first and i.position < b.stop) end as items,
+		  b.first > 0 as has_older_items, b.stop is not null as page_found
 		 from s, b`,
 		[sessionId, userId, page.beforeId ?? null, page.turns],
 	);
