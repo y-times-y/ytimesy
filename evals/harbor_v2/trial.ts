@@ -39,6 +39,7 @@ import {
 	type ModelAgentRuntime,
 	runModelAgent,
 } from "../../src/server/services/model-agent-loop";
+import { type PlanUpdate, planTool } from "../../src/server/services/plan-tool";
 import type { WorkspaceMachines } from "../../src/server/services/workspace-machines";
 import {
 	type AtifTrajectory,
@@ -70,6 +71,7 @@ import { effortMix } from "./effort-mix";
 import { envSnapshot } from "./env-snapshot";
 import { grindNotice } from "./grind-gate";
 import { type HarborWorkspace, harborHarness } from "./harness";
+import { type HelperRole, helperTools } from "./helpers";
 import {
 	FINISH_CONTINUATIONS_MAX,
 	type LedgerGateEntry,
@@ -91,7 +93,12 @@ import {
 	ranTranscript,
 	reviewItems,
 } from "./review";
-import { type TrialRole, trialSessions } from "./sessions";
+import {
+	type ChildReport,
+	type ChildSession,
+	type TrialRole,
+	trialSessions,
+} from "./sessions";
 import {
 	guardedLanguageModel,
 	reserveTrial,
@@ -263,7 +270,12 @@ export function trialEfficiency(input: {
 							harness: input.harness,
 							listedModelId: child.modelId,
 							// Each role as the product's tree marks it (eval-efficiency.ts).
-							agentRole: child.role === "sidekick" ? "writer" : "checker",
+							agentRole:
+								child.role === "sidekick"
+									? "writer"
+									: child.role === "helper"
+										? "researcher"
+										: "checker",
 							...(child.role === "sidekick"
 								? { agentBudget: { sidekick: {} } as unknown as SubagentBudget }
 								: child.role === "checkerWorker"
@@ -503,6 +515,8 @@ export async function runHarborTrial(
 					}),
 				}
 			: null;
+	// plan=on: every update_plan the root builder sent, for the trace.
+	const planUpdates: PlanUpdate[] = [];
 	try {
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
@@ -646,15 +660,20 @@ export async function runHarborTrial(
 				modelId: session.model.modelId,
 				provider,
 				variant: config.variant,
-				// A checker has the builder's execution access: web search and MCP too.
-				webSearch: config.webSearch && checkerRole,
+				// A checker or helper has the builder's execution access: web search and MCP too.
+				webSearch:
+					config.webSearch && (checkerRole || session.role === "helper"),
 				bedrock: config.route === "bedrock",
-				...(checkerRole ? { mcpNote: mcpNoteFor(input.mcpServers) } : {}),
+				...(checkerRole || session.role === "helper"
+					? { mcpNote: mcpNoteFor(input.mcpServers) }
+					: {}),
 				instruction: brief,
 				storage: input.storage,
 				onEvent: onChildEvent,
 				subagent: {
-					role: session.role === "sidekick" ? "writer" : "checker",
+					role:
+						options.agentRole ??
+						(session.role === "sidekick" ? "writer" : "checker"),
 					budget: childBudget,
 					readOnly: options.readOnly,
 				},
@@ -821,6 +840,38 @@ export async function runHarborTrial(
 				stop: () => session.stop(),
 			};
 		};
+		// helpers=on: a researcher or reviewer on its own copy of the checkout,
+		// made at each round's start (the builder's work so far), as the checker's.
+		const startHelper = async (
+			session: ChildSession,
+			role: HelperRole,
+			brief: string,
+		): Promise<ChildReport> => {
+			const copy = readerCopyPath(input.trialId, session.id);
+			const made = await input.machines.exec(
+				workspace.vm,
+				readerCopyCommand(input.cwd, copy),
+				120_000,
+			);
+			readerCopies.push({
+				sessionId: session.id,
+				copy,
+				ok: made.exitCode === 0,
+			});
+			if (made.exitCode !== 0) {
+				log(
+					`helper ${session.id}: no read copy (${made.stderr.slice(0, 200)})`,
+				);
+				const failed = { outcome: "failed" as const, report: "" };
+				session.reports.push(failed);
+				return failed;
+			}
+			return runRound(session, brief.split(input.cwd).join(copy), {
+				readOnly: true,
+				cwd: copy,
+				agentRole: role,
+			});
+		};
 		// lead=fusion: the builder is the lead, with one sidekick in its checkout.
 		const lead =
 			config.variant.lead === "fusion"
@@ -889,8 +940,29 @@ export async function runHarborTrial(
 			...(config.variant.lead === "fusion"
 				? { extraTools: () => lead?.tools() ?? {} }
 				: {}),
-			// The trial's own tools: ledger=on's requirements, goal=on's goal.
+			// The trial's own tools: ledger=on's requirements, goal=on's goal,
+			// plan=on's update_plan, helpers=on's read-only subagents.
 			trialTools: {
+				...(config.variant.plan === "on"
+					? planTool({
+							now,
+							onUpdate: (update) => {
+								planUpdates.push(update);
+								log(
+									`plan update ${planUpdates.length}: ${update.plan.map((entry) => `[${entry.status}] ${entry.step.slice(0, 80)}`).join("; ")}`,
+								);
+							},
+						})
+					: {}),
+				...(config.variant.helpers === "on"
+					? helperTools({
+							parentId: input.trialId,
+							sessions,
+							model: builderModel,
+							start: startHelper,
+							log,
+						})
+					: {}),
 				...(ledger
 					? requirementsTool({
 							state: ledger,
@@ -1317,6 +1389,8 @@ export async function runHarborTrial(
 				: null,
 			// goal=on: its final state, with the builder's claim and evidence.
 			goal: goalState?.goal ?? null,
+			// plan=on: each update_plan the root builder sent.
+			plan: config.variant.plan === "on" ? planUpdates : null,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [
@@ -1380,6 +1454,7 @@ export async function runHarborTrial(
 		metricsExtra: {
 			efficiency,
 			...(goalState ? { goal: goalState.goal } : {}),
+			...(config.variant.plan === "on" ? { plan: planUpdates } : {}),
 		},
 		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
 	});

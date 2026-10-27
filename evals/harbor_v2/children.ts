@@ -21,7 +21,11 @@ import {
 	type SidekickDecisionRecord,
 	sidekickDecisionNotice,
 } from "../../src/domain/sidekick-classifier";
-import { AGENT_SEND_TOOL, AGENT_TOOL } from "../../src/domain/subagent";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	type SubagentRole,
+} from "../../src/domain/subagent";
 import { usageTokens } from "../../src/domain/subagent-usage";
 import { capText } from "../../src/server/services/tool-output-cap";
 import type { BridgeRole, HarborModel } from "./config";
@@ -56,6 +60,8 @@ export type RunRound = (
 		extraTools?: (tools: ToolSet) => ToolSet;
 		/** A reader's own copy of the checkout (default: the lead's checkout). */
 		cwd?: string;
+		/** The product subagent role its prompt is built for (default: by its trial role). */
+		agentRole?: SubagentRole;
 	},
 ) => Promise<ChildReport>;
 

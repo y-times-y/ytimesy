@@ -34,6 +34,8 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
 			roleModels: {},
 		});
 	});
@@ -66,6 +68,8 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
 			roleModels: {},
 		});
 		expect(
@@ -92,6 +96,8 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
 			roleModels: {},
 		});
 		expect(
@@ -138,6 +144,8 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
