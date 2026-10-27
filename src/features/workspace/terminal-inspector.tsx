@@ -183,15 +183,13 @@ export function TerminalInspector({
 	return (
 		<ClientOnly fallback={<TerminalPlaceholder />}>
 			<section className="terminal-inspector" aria-label="Workspace terminal">
-				<div
-					ref={containerRef}
-					className="terminal-inspector-frame"
-					data-connected={connected ? "true" : "false"}
-				/>
-				{/* Over the frame, never above it: the terminal keeps its box when it connects. */}
+				{/* Over the terminal, not above it: the terminal keeps its place and
+				    size while it starts, connects or fails. */}
 				{error ? (
-					<div className="terminal-inspector-status" role="alert">
-						<p className="terminal-inspector-error">{error}</p>
+					<div className="terminal-inspector-notice">
+						<p className="terminal-inspector-error" role="alert">
+							{error}
+						</p>
 						<button
 							type="button"
 							className="desktop-start"
@@ -201,23 +199,28 @@ export function TerminalInspector({
 						</button>
 					</div>
 				) : connected ? null : (
-					<p className="terminal-inspector-status desktop-inspector-status">
-						Starting terminal…
-					</p>
+					<div className="terminal-inspector-notice">
+						<p className="desktop-inspector-status">Starting terminal…</p>
+					</div>
 				)}
+				<div
+					ref={containerRef}
+					className="terminal-inspector-frame"
+					data-connected={connected ? "true" : "false"}
+				/>
 			</section>
 		</ClientOnly>
 	);
 }
 
-/** The terminal before xterm mounts: the same box, chrome and status line. */
+/** The terminal before xterm mounts: the same box, frame and notice overlay. */
 export function TerminalPlaceholder() {
 	return (
 		<section className="terminal-inspector" aria-label="Workspace terminal">
+			<div className="terminal-inspector-notice">
+				<p className="desktop-inspector-status">Starting terminal…</p>
+			</div>
 			<div className="terminal-inspector-frame" data-connected="false" />
-			<p className="terminal-inspector-status desktop-inspector-status">
-				Starting terminal…
-			</p>
 		</section>
 	);
 }

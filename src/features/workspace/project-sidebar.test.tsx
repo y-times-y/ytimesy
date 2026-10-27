@@ -67,13 +67,19 @@ afterEach(() => {
 });
 
 describe("left sidebar", () => {
-	it("has a Memory entry in the sidebar and the rail", () => {
+	it("has a Memory entry in the sidebar", () => {
 		const html = render(null);
 		expect(html).toMatch(/class="sidebar-nav-item" aria-current="page"/);
 		expect(html).toContain(">Memory</button>");
-		expect(html).toContain('aria-label="Memory"');
 		expect(html.match(/class="sidebar-nav-item"/g)).toHaveLength(1);
 		expect(html).not.toContain("Memory graph");
+	});
+
+	it("has one top-left toggle and no rail: the logo is only in the sidebar", () => {
+		const html = render(null);
+		expect(html).toContain("left-sidebar-toggle");
+		expect(html).not.toContain("sidebar-rail");
+		expect(html.match(/class="brand-mark"/g)).toHaveLength(1);
 	});
 
 	it("groups by project by default, the most recently active project first", () => {

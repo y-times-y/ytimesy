@@ -121,7 +121,10 @@ export function WorkspaceInspector({
 	/** Opens a chat linked from memory; false when it is not in this project's list. */
 	onOpenChat?: (chatId: string) => boolean;
 }) {
-	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
+	// The tab it opens on (a saved panel) is open from the server's render.
+	const [openedViews, setOpenedViews] = useState<ToolsView[]>(() =>
+		activeView === "overview" ? [] : [activeView],
+	);
 	useEffect(() => {
 		if (activeView !== "overview")
 			setOpenedViews((current) =>

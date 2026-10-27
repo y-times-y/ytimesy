@@ -9,6 +9,7 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
@@ -29,6 +30,7 @@ import { requireUser } from "#/server/auth/auth";
 import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
 import { requireSameOrigin } from "#/server/http";
+import { agentModelCatalog } from "#/server/services/agent-model-catalog";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
@@ -36,6 +38,10 @@ import {
 	emptyHarnessSession,
 	type HarnessSessionScope,
 } from "#/server/services/harness-workspace-session";
+import {
+	type OpenChatSide,
+	openChatSide,
+} from "#/server/services/open-chat-side";
 import {
 	publicSessionView,
 	removeQueuedComposerMessage,
@@ -194,8 +200,13 @@ export const getOlderSessionItems = createServerFn({ method: "GET" })
 const OPEN_CHAT_WAIT_MS = 250;
 const OPEN_CHAT_GIVE_UP_MS = 8_000;
 
+/** The chat the page opens, with what its transcript shows beside its items. */
+export type OpenChatView = PublicCodexSession & {
+	readonly side?: OpenChatSide;
+};
+
 /** An open chat read past OPEN_CHAT_WAIT_MS: the page streams it in. */
-export type StreamedChatView = Promise<PublicCodexSession | undefined>;
+export type StreamedChatView = Promise<OpenChatView | undefined>;
 
 /** The chat the page opens: the linked chat if it is listed, else the latest. */
 function chatToOpen<Chat extends { readonly id: string }>(
@@ -239,6 +250,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				session: emptyHarnessSession(),
 				projects: undefined,
 				chats: undefined,
+				projectChats: undefined,
 				renderedAtMs: Date.now(),
 			};
 		}
@@ -258,19 +270,64 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				projects?.[0]?.id
 			);
 		});
-		// Its chats come with the page, so the chat it opens starts loading as
-		// soon as the page runs instead of after a list read.
+		// Every project's chats come with the page: the sidebar orders its
+		// projects and the Recent list by them, so the server's order is the
+		// order the browser keeps (read in the browser, the projects reordered
+		// as the page loaded).
+		const projectChatReads = listed.then(
+			(projects) =>
+				new Map(
+					(projects ?? []).map((project) => [
+						project.id,
+						listSidebarAgentSessions(user.id, project.id).then(
+							chatsFromAgentSessions,
+						),
+					]),
+				),
+		);
+		const otherChats = projectChatReads.then((reads) =>
+			Promise.all(
+				[...reads].map(([projectId, read]) =>
+					read.then(
+						(chats) => ({ projectId, chats }),
+						() => undefined,
+					),
+				),
+			),
+		);
+		// The open project's chats come with the page, so the chat it opens
+		// starts loading as soon as the page runs instead of after a list read.
 		const firstChats = openProjectId
 			.then(async (projectId) => {
 				if (!projectId) return undefined;
+				const read = (await projectChatReads).get(projectId);
 				return {
 					projectId,
-					chats: chatsFromAgentSessions(
-						await listSidebarAgentSessions(user.id, projectId),
-					),
+					chats: await (read ??
+						listSidebarAgentSessions(user.id, projectId).then(
+							chatsFromAgentSessions,
+						)),
 				};
 			})
 			.catch(() => undefined);
+		// What the open chat shows beside its items (helpers, evidence,
+		// recovery rows) renders with it. A linked chat's starts at once, in
+		// parallel with the reads before the view, so it does not hold the view.
+		const linkedSideProject = link.chatId
+			? (link.projectId ?? linkedChatProject)
+			: undefined;
+		const linkedSide =
+			link.chatId && linkedSideProject
+				? Promise.resolve(linkedSideProject).then((projectId) =>
+						projectId && link.chatId
+							? {
+									projectId,
+									sessionId: link.chatId,
+									side: openChatSide(user.id, projectId, link.chatId),
+								}
+							: undefined,
+					)
+				: undefined;
 		// The chat it opens (the one chatToOpen picks from that list) is found
 		// by a small read beside the list, not after it: the list reads every
 		// chat's last turn.
@@ -279,22 +336,45 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				if (!projectId) return undefined;
 				const chat = await chatToOpenMetadata(user.id, projectId, link.chatId);
 				if (!chat) return undefined;
-				return publicSessionView({
-					userId: user.id,
-					projectId,
-					harnessId: chat.harness ?? DEFAULT_COMPOSER_HARNESS_ID,
-					sessionId: chat.id,
-				});
+				const early = await linkedSide;
+				const side =
+					early?.projectId === projectId && early.sessionId === chat.id
+						? early.side
+						: openChatSide(user.id, projectId, chat.id);
+				const harnessId = chat.harness ?? DEFAULT_COMPOSER_HARNESS_ID;
+				const [view, sideData] = await Promise.all([
+					publicSessionView({
+						userId: user.id,
+						projectId,
+						harnessId,
+						sessionId: chat.id,
+					}),
+					side,
+				]);
+				if (!view) return view;
+				// Without the view's models the composer would name the model by
+				// its id until the browser reads the catalog.
+				const models = view.models.length
+					? undefined
+					: await agentModelCatalog(user.id, harnessId).catch(() => undefined);
+				return {
+					...view,
+					side: models?.length
+						? { ...sideData, catalog: { harnessId, models } }
+						: sideData,
+				};
 			})
 			.catch(() => undefined);
-		const [snapshotAvailable, projects, chats] = await Promise.all([
-			hasManagedCodexAuth(user.id),
-			listed,
-			firstChats,
-		]);
+		const [snapshotAvailable, projects, chats, projectChats] =
+			await Promise.all([
+				hasManagedCodexAuth(user.id),
+				listed,
+				firstChats,
+				otherChats.catch(() => []),
+			]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
-		let landed: { view: PublicCodexSession | undefined } | undefined;
+		let landed: { view: OpenChatView | undefined } | undefined;
 		const streamed: StreamedChatView = within(
 			openChat.catch(() => undefined),
 			OPEN_CHAT_GIVE_UP_MS,
@@ -315,8 +395,14 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			// a slow read streams in after the rest of the page.
 			openChatView,
 			openChatId: chatToOpen(chats?.chats, link.chatId)?.id,
+			// The other projects' chats, for the sidebar's project order and Recent list.
+			projectChats: projectChats.flatMap((group) =>
+				group && group.projectId !== chats?.projectId ? [group] : [],
+			),
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
+			// The right panel as this browser left it.
+			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
 			// Relative times render from this on the server and while hydrating.
 			renderedAtMs: Date.now(),
 			session: {

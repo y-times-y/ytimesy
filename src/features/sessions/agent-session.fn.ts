@@ -8,28 +8,15 @@ import {
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
-import { HELPER_MESSAGE_MAX, parseSteering } from "#/domain/agent-steering";
-import { agentTaskTree } from "#/domain/agent-task";
-import {
-	type AgentTaskActivity,
-	childTaskPublicItems,
-} from "#/domain/child-task-activity";
+import { HELPER_MESSAGE_MAX } from "#/domain/agent-steering";
+import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { publicRecoveryFailure } from "#/domain/conversation-recovery-failure";
 import { publicFailureMessage } from "#/domain/project-workspace";
-import {
-	type SessionTurnStatus,
-	sessionItemsFromUnknown,
-} from "#/domain/session-item";
+import type { SessionTurnStatus } from "#/domain/session-item";
 import type { ChatWaitingOn } from "#/domain/sidebar-chats";
-import { subagentTaskViews } from "#/domain/subagent-tree";
 import { startAfterResponse } from "#/server/adapters/after-response";
-import {
-	agentSessionForOwner,
-	descendantAgentSessions,
-	listSidebarAgentSessions,
-} from "#/server/adapters/agent-sessions";
+import { listSidebarAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
-import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
@@ -38,6 +25,7 @@ import {
 	deleteAgentSessionMachine,
 	openAgentSession,
 } from "#/server/services/agent-session-machine";
+import { projectAgentTasks } from "#/server/services/agent-task-activity";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import { prewarmChatMachine } from "#/server/services/machine-prewarm";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -162,43 +150,7 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 	.handler(async ({ data }): Promise<readonly AgentTaskActivity[]> => {
 		if (!data.projectId || !data.rootSessionId) return [];
 		const user = await requireUser(getRequest().headers);
-		const root = await agentSessionForOwner(user.id, data.rootSessionId);
-		if (!root || root.projectId !== data.projectId || root.parentSessionId) {
-			return [];
-		}
-		// Subagents only: rows of the retired lead/child architecture (no
-		// agent role) and anything under them are not shown.
-		const descendants = (
-			await descendantAgentSessions(user.id, root.id)
-		).filter((session) => session.agentRole);
-		const byId = new Map(descendants.map((session) => [session.id, session]));
-		const subagents = subagentTaskViews(
-			root.id,
-			[root, ...descendants],
-			Date.now(),
-		);
-		const pending = await pendingSteeringMessages(
-			descendants
-				.filter((session) => session.turnStatus === "running")
-				.map((session) => session.id),
-		).catch(() => []);
-		return agentTaskTree(root.id, descendants).map((task) => {
-			const subagent = subagents.get(task.id);
-			const queuedSteering = pending.flatMap((row) => {
-				if (row.recipientId !== task.id) return [];
-				const steering = parseSteering(row.message);
-				return steering ? [{ id: row.id, ...steering }] : [];
-			});
-			return {
-				...task,
-				...(queuedSteering.length ? { queuedSteering } : {}),
-				items: childTaskPublicItems(
-					sessionItemsFromUnknown(byId.get(task.id)?.items),
-				),
-				turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
-				...(subagent ? { subagent } : {}),
-			};
-		});
+		return projectAgentTasks(user.id, data.projectId, data.rootSessionId);
 	});
 
 const helperMessageInput = z.object({

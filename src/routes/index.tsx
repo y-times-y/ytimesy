@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ReactNode, Suspense, use } from "react";
-import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
 import { LandingPage } from "../features/landing/landing-page";
 import {
 	getWorkspaceBootstrap,
+	type OpenChatView,
 	type StreamedChatView,
 } from "../features/sessions/codex-session.fn";
 import { WorkspaceHome } from "../features/workspace/workspace-home";
@@ -39,6 +40,21 @@ export const Route = createFileRoute("/")({
 			return { ...bootstrap, openChatView: await bootstrap.openChatView };
 		return bootstrap;
 	},
+	// The signed-in page's first paint waits until the chat and the right
+	// panel are both parsed (WORKSPACE_PANES_END): a half-parsed page would
+	// paint the chat full width, its transcript at the top, then move both.
+	// Browsers without render-blocking expect links ignore it.
+	head: ({ loaderData }) => ({
+		links: loaderData?.signedIn
+			? [
+					{
+						rel: "expect",
+						href: `#${WORKSPACE_PANES_END}`,
+						blocking: "render",
+					},
+				]
+			: [],
+	}),
 	component: HomePage,
 });
 
@@ -49,20 +65,24 @@ function HomePage() {
 		userId,
 		projects,
 		chats,
+		projectChats,
 		openChatView,
 		openChatId,
 		account,
 		renderedAtMs,
+		inspector,
 	} = Route.useLoaderData();
-	const home = (openChat?: PublicCodexSession) => (
+	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
 			initialSession={session}
 			initialProjects={projects}
 			initialChats={chats}
+			initialProjectChats={projectChats}
 			initialChatView={openChat}
 			account={account}
 			userId={userId}
 			renderedAtMs={renderedAtMs}
+			savedInspector={inspector}
 		/>
 	);
 	return (
@@ -90,7 +110,7 @@ function WithOpenChat({
 	children,
 }: {
 	view: StreamedChatView;
-	children: (openChat?: PublicCodexSession) => ReactNode;
+	children: (openChat?: OpenChatView) => ReactNode;
 }) {
 	return children(use(view));
 }

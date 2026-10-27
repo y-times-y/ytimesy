@@ -141,7 +141,7 @@ export function showFirstPaintChoices(choices: FirstPaintChoices) {
 /**
  * Self-contained, inlined right after the sidebar's server HTML: what needs
  * both the rows and this browser's storage. It marks unread replies and the
- * rail's attention dot from the seen chats, and in Recent shows saved pins
+ * left sidebar toggle's attention dot from the seen chats, and in Recent shows saved pins
  * that sit past the Done fold. Rows carry data-seen-key, data-updated-at,
  * data-unread-mark, data-attention and data-done-overflow while hydrating.
  */
@@ -201,7 +201,9 @@ export function markFirstPaintRows(
 				: unread(row),
 		)
 	)
-		rules.push(".rail-brand::after{display:block}");
+		rules.push(
+			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
+		);
 	const done = rows('.sidebar-recent [data-group="done"] .sidebar-chat-row');
 	const fold = done.filter((row) => !row.dataset.doneOverflow).length;
 	const shown = new Set(
@@ -281,6 +283,14 @@ export function showTimelineEnd() {
 }
 
 export const TIMELINE_END_SCRIPT = `(${showTimelineEnd})()`;
+
+/**
+ * The id of an empty element right after the chat and right-panel panes. The
+ * page's first paint waits until it is parsed (a render-blocking expect link
+ * in __root.tsx), so a half-parsed page never paints: the chat full width
+ * before the right panel arrives, its transcript at the top before the end.
+ */
+export const WORKSPACE_PANES_END = "workspace-panes-end";
 
 /**
  * Self-contained, inlined right after the composer's server-rendered
