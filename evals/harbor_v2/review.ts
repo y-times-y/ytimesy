@@ -283,6 +283,7 @@ const CHILD_ROLE_LABELS: Record<TrialRole, string> = {
 	checkerWorker: "Checker worker",
 	classifier: "Classifier",
 	helper: "Helper",
+	search: "Search",
 };
 
 /** The ChildBudgetUsed anywhere in an error's cause chain. */

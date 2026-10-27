@@ -2496,3 +2496,89 @@ describe("runHarborTrial with fetch=on", () => {
 		expect(await tools("codeMode=primary")).not.toContain("web_fetch");
 	}, 60_000);
 });
+
+describe("runHarborTrial with search=function", () => {
+	const run = async (variant: string, responses: Part[][]) => {
+		const f = await fixture({
+			YTIMESY_HARBOR_WEB_SEARCH: "on",
+			YTIMESY_HARBOR_VARIANT: variant,
+		});
+		const scripted = scriptedModel(responses);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: `search-${crypto.randomUUID().slice(0, 8)}`,
+			instruction: "Find the docs, then say done.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(scripted.model) }),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		return { ...scripted, result, trace };
+	};
+	const toolsOf = (call: { tools?: unknown }) =>
+		((call.tools ?? []) as { type: string; name: string }[]).map(
+			(entry) => `${entry.type}:${entry.name}`,
+		);
+
+	it("offers a function web_search whose call is its own request with the hosted tool, counted in usage", async () => {
+		const { model, calls, result, trace } = await run(
+			"codeMode=on,search=function",
+			[
+				[
+					call("s1", "web_search", { query: "harbor docs" }),
+					finish(100, 10, true),
+				],
+				// The call's own request: hosted search only, answers in text.
+				[
+					...text("q1", "Found: https://example.com/harbor-docs"),
+					finish(30, 8),
+				],
+				[...text("d1", "Done."), finish(120, 5)],
+			],
+		);
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(3);
+		const builder = toolsOf(model.doStreamCalls[0]);
+		expect(builder).toContain("function:web_search");
+		expect(builder.some((entry) => entry.startsWith("provider:"))).toBe(false);
+		// run_code programs may call it too.
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain(
+			"tools.web_search",
+		);
+		const search = toolsOf(model.doStreamCalls[1]);
+		expect(search).toHaveLength(1);
+		expect(search[0]).toMatch(/^provider:/);
+		expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain(
+			"harbor docs",
+		);
+		expect(JSON.stringify(model.doStreamCalls[2].prompt)).toContain(
+			"https://example.com/harbor-docs",
+		);
+		expect(result.usage?.requests).toBe(3);
+		expect(result.usage?.inputTokens).toBe(250);
+		expect(trace.checkers).toEqual([
+			expect.objectContaining({ role: "search", brief: "harbor docs" }),
+		]);
+	}, 120_000);
+
+	it("keeps the hosted tool in every request by default", async () => {
+		const { model } = await run("codeMode=on", [
+			[...text("d1", "Done."), finish(10, 1)],
+		]);
+		const builder = toolsOf(model.doStreamCalls[0]);
+		expect(builder.some((entry) => entry.startsWith("provider:"))).toBe(true);
+		expect(builder).not.toContain("function:web_search");
+	}, 120_000);
+});

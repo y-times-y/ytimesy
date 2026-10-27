@@ -18,7 +18,9 @@ export type TrialRole =
 	| "checkerWorker"
 	| "classifier"
 	/** helpers=on: a read-only researcher or reviewer the root builder started. */
-	| "helper";
+	| "helper"
+	/** search=function: one web_search call's own request with the hosted search tool. */
+	| "search";
 
 export type TimedEvent = { at: string; event: ApiAgentEvent };
 
