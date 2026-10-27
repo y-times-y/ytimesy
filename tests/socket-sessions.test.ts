@@ -17,6 +17,19 @@ vi.mock("../src/server/services/workspace-terminal", () => ({
 vi.mock("../src/server/services/workspace-desktop", () => ({
 	resolveDesktopRemote: mocks.desktop,
 }));
+const machines = vi.hoisted(() => ({ ensureRunning: async () => "vm" }));
+vi.mock("../src/server/adapters/freestyle/live", async () => {
+	const { Layer } = await import("effect");
+	const { WorkspaceMachineService } = await import(
+		"../src/server/services/capabilities"
+	);
+	return {
+		FreestyleWorkspaceMachinesLive: Layer.succeed(
+			WorkspaceMachineService,
+			machines as never,
+		),
+	};
+});
 
 import { runDesktopSession } from "../src/server/sockets/desktop-session";
 import { runTerminalSession } from "../src/server/sockets/terminal-session";
@@ -124,4 +137,24 @@ it("pipes the desktop both ways, trying the websockify path when the origin refu
 	expect(client.sent).toEqual([new Uint8Array([2])]);
 	remote.emit.close?.();
 	expect(client.closed.length).toBe(1);
+});
+
+it("wakes the desktop's machine and closes with the reason when it cannot", async () => {
+	mocks.user.mockResolvedValue({ id: "u" });
+	mocks.project.mockResolvedValue({ fullName: "org/repo" });
+	mocks.desktop.mockRejectedValue(new Error("Workspace VM could not start."));
+	const openRemote = vi.fn();
+	const client = fakeSocket();
+	await runDesktopSession(
+		client,
+		new Headers(),
+		url("/api/desktop", "projectId=p&sessionId=s"),
+		openRemote,
+	);
+	expect(mocks.desktop).toHaveBeenCalledWith(
+		{ userId: "u", projectId: "p", sessionId: "s" },
+		machines,
+	);
+	expect(openRemote).not.toHaveBeenCalled();
+	expect(client.closed).toEqual([[4000, "Workspace VM could not start."]]);
 });

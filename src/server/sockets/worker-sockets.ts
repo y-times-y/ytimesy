@@ -43,18 +43,29 @@ function workerSocket(socket: WebSocket): ClientSocket {
 	};
 }
 
+/** How long the VM's viewer may take to answer the upgrade. */
+const REMOTE_HANDSHAKE_MS = 8_000;
+
 const openWorkerRemoteSocket: OpenDesktopRemote = async (url, auth) => {
-	const response = await fetch(url.replace(/^ws/i, "http"), {
-		headers: {
-			Upgrade: "websocket",
-			"Sec-WebSocket-Protocol": "binary",
-			Authorization: auth.authorization,
-		},
-		signal: AbortSignal.timeout(8_000),
-	});
-	if (!response.webSocket) throw new Error("Desktop is not ready.");
-	response.webSocket.accept();
-	return workerSocket(response.webSocket);
+	// Times the handshake only: a fetch signal stays bound to the upgraded
+	// socket, so AbortSignal.timeout here cut every desktop off after 8s.
+	const handshake = new AbortController();
+	const timer = setTimeout(() => handshake.abort(), REMOTE_HANDSHAKE_MS);
+	try {
+		const response = await fetch(url.replace(/^ws/i, "http"), {
+			headers: {
+				Upgrade: "websocket",
+				"Sec-WebSocket-Protocol": "binary",
+				Authorization: auth.authorization,
+			},
+			signal: handshake.signal,
+		});
+		if (!response.webSocket) throw new Error("Desktop is not ready.");
+		response.webSocket.accept();
+		return workerSocket(response.webSocket);
+	} finally {
+		clearTimeout(timer);
+	}
 };
 
 /**

@@ -83,6 +83,9 @@ export function terminalInspectorPrompt(input: {
 	};
 }
 
+/** How long the terminal socket may take to open before the panel says so. */
+export const TERMINAL_SOCKET_OPEN_TIMEOUT_MS = 15_000;
+
 /** What the terminal panel shows once its socket closes without an error message. */
 export function terminalClosedMessage(input: {
 	readonly reason?: string;

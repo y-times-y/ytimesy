@@ -109,6 +109,28 @@ export function desktopClientViewerUrl(input: {
 	return `/api/desktop?${params}`;
 }
 
+/** How long the desktop socket may take to open before the panel says so. */
+export const DESKTOP_SOCKET_OPEN_TIMEOUT_MS = 15_000;
+/** How long the viewer may take to show the screen (the relay may wake the machine first). */
+export const DESKTOP_CONNECT_TIMEOUT_MS = 120_000;
+
+/**
+ * The one line under "Desktop disconnected": the server's close reason when
+ * it gave one (its relay closes with why), else what the viewer saw.
+ */
+export function desktopDisconnectMessage(input: {
+	readonly reason?: string;
+	readonly connected: boolean;
+	readonly clean: boolean;
+}) {
+	const reason = input.reason?.trim();
+	if (reason) return reason;
+	if (!input.connected) return "The desktop didn't answer.";
+	return input.clean
+		? "The desktop connection closed."
+		: "The desktop connection was lost.";
+}
+
 export function desktopRemoteOrigin(hostname: string) {
 	return `https://${hostname.replace(/\/$/, "")}`;
 }
