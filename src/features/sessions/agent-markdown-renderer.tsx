@@ -82,6 +82,17 @@ function rehypeAgentNames(options: { readonly names: readonly string[] }) {
 	return (tree: HastNode) => visit(tree);
 }
 
+/**
+ * New words of a streaming reply fade in as they show; the reply's own
+ * pace comes from useSmoothText, so they are not staggered further. A
+ * constant: Streamdown compares it by identity.
+ */
+const NEW_WORDS_FADE = {
+	animation: "fadeIn",
+	duration: 180,
+	stagger: 0,
+} as const;
+
 export function AgentMarkdown({
 	text,
 	streaming = false,
@@ -187,7 +198,7 @@ export function AgentMarkdown({
 			className="session-markdown"
 			mode={streaming ? "streaming" : "static"}
 			isAnimating={streaming}
-			animated={streaming}
+			animated={streaming ? NEW_WORDS_FADE : false}
 			components={components}
 			plugins={{ code: codeHighlighter }}
 			rehypePlugins={rehypePlugins}

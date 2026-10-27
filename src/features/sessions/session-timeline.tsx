@@ -121,6 +121,7 @@ import {
 	SecretRequestCard,
 } from "./secret-request-card";
 import { ShellCommandCode } from "./shell-command-code";
+import { useSmoothText } from "./smooth-text";
 import { useStableActions, useStableCallback } from "./stable-callbacks";
 import { TodoList } from "./todo-list";
 import {
@@ -1022,30 +1023,12 @@ function SessionItemView({
 			return <MemorySaveNote item={item} />;
 		case "agentMessage":
 			return (
-				<div
-					className="session-message"
-					data-role="assistant"
-					data-streaming={turnRunning && item.streaming ? "true" : undefined}
-				>
-					{requirementsSegments(item.text).map((segment, index) =>
-						segment.kind === "requirements" ? (
-							<RequirementsList
-								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-								key={index}
-								items={segment.items}
-							/>
-						) : (
-							<AgentMarkdown
-								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-								key={index}
-								text={segment.text}
-								streaming={Boolean(turnRunning && item.streaming)}
-								fileChanges={fileChanges}
-								onOpenFile={onOpenFile}
-							/>
-						),
-					)}
-				</div>
+				<AgentReply
+					text={item.text}
+					streaming={Boolean(turnRunning && item.streaming)}
+					fileChanges={fileChanges}
+					onOpenFile={onOpenFile}
+				/>
 			);
 		case "reasoning": {
 			const summaries = item.summaries.filter((summary) => summary.trim());
@@ -1494,6 +1477,47 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+/** An agent's reply; while it streams, its text shows at a steady pace (useSmoothText). */
+function AgentReply({
+	text,
+	streaming,
+	fileChanges,
+	onOpenFile,
+}: {
+	text: string;
+	streaming: boolean;
+	fileChanges: readonly FileChangeEntry[];
+	onOpenFile?: (path: string) => void;
+}) {
+	const shown = useSmoothText(text, streaming);
+	return (
+		<div
+			className="session-message"
+			data-role="assistant"
+			data-streaming={streaming ? "true" : undefined}
+		>
+			{requirementsSegments(shown).map((segment, index) =>
+				segment.kind === "requirements" ? (
+					<RequirementsList
+						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+						key={index}
+						items={segment.items}
+					/>
+				) : (
+					<AgentMarkdown
+						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+						key={index}
+						text={segment.text}
+						streaming={streaming}
+						fileChanges={fileChanges}
+						onOpenFile={onOpenFile}
+					/>
+				),
+			)}
+		</div>
+	);
 }
 
 /**

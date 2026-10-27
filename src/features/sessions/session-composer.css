@@ -2896,3 +2896,12 @@ button.helper-card:hover {
 .session-timeline li[data-kind="older"] svg {
 	animation: project-picker-spin 0.9s linear infinite;
 }
+
+/* Reduced motion: a streaming reply's new words show without fading in;
+   they still arrive at a steady pace (smooth-text.ts). */
+@media (prefers-reduced-motion: reduce) {
+	.session-markdown [data-sd-animate],
+	.session-markdown [data-sd-animate-marker]::marker {
+		animation: none;
+	}
+}
