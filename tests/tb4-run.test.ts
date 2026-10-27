@@ -17,8 +17,11 @@ import {
 	type HostObservation,
 	Journal,
 	ledgerTotals,
+	earlyStopDecision,
+	floorCeiling,
 	nextLaunches,
 	pairedComparison,
+	SPEND,
 	passAtK,
 	replay,
 	scoredTrials,
@@ -314,5 +317,61 @@ describe("tb4 fault proxy (offline)", () => {
 		await expect(fetch(`http://127.0.0.1:${s.port}/sse`).then((x) => x.text())).rejects.toThrow();
 		for (const x of [t, o, s]) x.server.close();
 		up.server.close();
+	});
+});
+
+describe("tb4 Astra x5 run rules", () => {
+	const trial = (reward: number, i: number) => ({ attemptId: `a${i}`, batch: "b1" as const, reward, agentStartedAt: `t${i}` });
+	it("floor counts missing trials as fails, ceiling as passes", () => {
+		const perTask = new Map([
+			["x", { scored: [trial(1, 1), trial(1, 2), trial(0, 3)] }],
+			["y", { scored: [trial(1, 4), trial(1, 5), trial(1, 6), trial(1, 7), trial(1, 8)] }],
+		]);
+		const b = floorCeiling(perTask, ["x", "y", "z"], 5);
+		expect(b.missingTrials).toBe(2 + 0 + 5);
+		expect(b.floorPct).toBeCloseTo((100 * (2 / 5 + 1 + 0)) / 3);
+		expect(b.ceilingPct).toBeCloseTo((100 * (4 / 5 + 1 + 1)) / 3);
+	});
+	it("stops early only when the ceiling is below the competitor", () => {
+		expect(earlyStopDecision({ floorPct: 40, ceilingPct: 55, missingTrials: 9 }, 57.9).stop).toBe(true);
+		expect(earlyStopDecision({ floorPct: 60, ceilingPct: 70, missingTrials: 9 }, 57.9)).toMatchObject({ stop: false });
+		expect(earlyStopDecision({ floorPct: 60, ceilingPct: 70, missingTrials: 9 }, 57.9).why).toContain("ahead");
+		expect(earlyStopDecision({ floorPct: 50, ceilingPct: 65, missingTrials: 9 }, 57.9).why).toContain("undecided");
+	});
+	it("open-all journals both batches at init", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tb4astra-"));
+		const journal = new Journal(join(dir, "journal.jsonl"));
+		journal.append({ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) });
+		journal.append({ at: "t", type: "batch-open", batch: "b1" });
+		journal.append({ at: "t", type: "batch-open", batch: "b2" });
+		expect([...replay(journal.events()).openBatches].sort()).toEqual(["b1", "b2"]);
+	});
+	it("stops launches at the cap minus the margin for running trials", () => {
+		const saved = { cap: SPEND.modelTotalCapUsd, margin: SPEND.modelStopMarginUsd };
+		Object.assign(SPEND, { modelTotalCapUsd: 2400, modelStopMarginUsd: 300 });
+		try {
+			const input = {
+				now: 0,
+				state: replay([]),
+				logSilenceMs: new Map<string, number>(),
+				unhealthyHosts: [] as string[],
+				bedrockErrorsLast15m: { throttles: 0, serverErrors: 0 },
+				infraSpendUsd: 0,
+				alerted: { model: [0.5, 0.8], infra: [] as number[] },
+				controllerActive: true,
+				lastProgressAt: 0,
+			};
+			expect(watch({ ...input, modelSpendUsd: 2050 }).actions).toEqual([]);
+			expect(watch({ ...input, modelSpendUsd: 2150 }).actions).toEqual(["stop:model-cap"]);
+		} finally {
+			Object.assign(SPEND, { modelTotalCapUsd: saved.cap, modelStopMarginUsd: saved.margin });
+		}
+	});
+	it("ships a trial cap for every TB4 task, at most the bridge maximum", async () => {
+		const { readFileSync } = await import("node:fs");
+		const caps = JSON.parse(readFileSync("scripts/tb4-run/astra-trial-caps.json", "utf8")) as Record<string, number>;
+		const codex = JSON.parse(readFileSync("benchmarks/evaluation/codex-astra-public-job.json", "utf8")) as { tasks: Record<string, unknown> };
+		expect(Object.keys(caps).sort()).toEqual(Object.keys(codex.tasks).sort());
+		expect(Math.max(...Object.values(caps))).toBeLessThanOrEqual(100);
 	});
 });

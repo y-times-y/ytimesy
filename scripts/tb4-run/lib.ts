@@ -483,6 +483,40 @@ export function pairedComparison(ours: number[], theirs: number[], seed = 202610
 	};
 }
 
+/**
+ * Live bounds on the final pass@1 while trials are running: the floor counts
+ * every missing trial as a fail, the ceiling as a pass. Once the floor is
+ * above a competitor's score no remaining trial can change the order; once
+ * the ceiling is below it, we cannot catch up.
+ */
+export function floorCeiling(
+	perTask: Map<string, { scored: ScoredTrial[] }>,
+	tasks: string[],
+	trialsPerTask = SCORED_TRIALS_PER_TASK,
+) {
+	let floor = 0;
+	let ceiling = 0;
+	let missing = 0;
+	for (const t of tasks) {
+		const s = (perTask.get(t)?.scored ?? []).slice(0, trialsPerTask);
+		const passes = s.filter((x) => x.reward >= 1).length;
+		const left = trialsPerTask - s.length;
+		missing += left;
+		floor += passes / trialsPerTask;
+		ceiling += (passes + left) / trialsPerTask;
+	}
+	return { floorPct: (100 * floor) / tasks.length, ceilingPct: (100 * ceiling) / tasks.length, missingTrials: missing };
+}
+
+/** The Astra run's only early stop: the ceiling is below the competitor. */
+export function earlyStopDecision(bounds: ReturnType<typeof floorCeiling>, competitorPct: number) {
+	if (bounds.ceilingPct < competitorPct)
+		return { stop: true, why: `ceiling ${bounds.ceilingPct.toFixed(1)}% < ${competitorPct.toFixed(1)}%: cannot catch up` };
+	if (bounds.floorPct > competitorPct)
+		return { stop: false, why: `floor ${bounds.floorPct.toFixed(1)}% > ${competitorPct.toFixed(1)}%: ahead whatever remains; finish the run` };
+	return { stop: false, why: `undecided: ${bounds.floorPct.toFixed(1)}%..${bounds.ceilingPct.toFixed(1)}% vs ${competitorPct.toFixed(1)}%` };
+}
+
 /** Scoring rule 5: batch 2 runs only when batch 1 is clearly ahead. */
 export function batch2Decision(cmp: ReturnType<typeof pairedComparison>) {
 	return cmp.meanDiffPts >= 3
@@ -492,17 +526,23 @@ export function batch2Decision(cmp: ReturnType<typeof pairedComparison>) {
 
 /* ---------- spend ---------- */
 
+const envUsd = (name: string, fallback: number) => Number(process.env[name] ?? "") || fallback;
 export const SPEND = {
 	/** Expected model spend for 330 trials on Bedrock (Sol lead + Luna roles). */
 	modelExpectedUsd: [360, 500] as const,
 	/** Expected infra (EC2 hosts + p5 + EBS + egress). */
-	infraExpectedUsd: [300, 560] as const,
+	infraExpectedUsd: [300, envUsd("TB4_INFRA_CAP_USD", 560)] as const,
 	/** Bridge per-trial cap: ~8x the expected mean ($1.1-1.5), below the bridge max $100. */
-	trialCapUsd: 12,
+	trialCapUsd: envUsd("TB4_TRIAL_CAP_USD", 12),
 	/** Bridge total cap per host ledger and the controller's global model stop. */
-	modelTotalCapUsd: 900,
+	modelTotalCapUsd: envUsd("TB4_MODEL_TOTAL_CAP_USD", 900),
+	/**
+	 * Launches stop this much below the total cap, so trials already running
+	 * can finish without the settled total passing the cap (0 = stop at the cap).
+	 */
+	modelStopMarginUsd: envUsd("TB4_MODEL_STOP_MARGIN_USD", 0),
 	/** AWS Budget (monthly, account-wide: EC2 + Bedrock + Marketplace). */
-	awsBudgetUsd: 1500,
+	awsBudgetUsd: envUsd("TB4_AWS_BUDGET_USD", 1500),
 	alertFractions: [0.5, 0.8, 1] as const,
 };
 
@@ -566,6 +606,11 @@ export function watch(input: WatchInput): { alerts: Alert[]; actions: string[] }
 	for (const f of crossedThresholds(input.modelSpendUsd, SPEND.modelTotalCapUsd, input.alerted.model)) {
 		alerts.push({ level: f >= 1 ? "critical" : "warn", key: `model-spend-${f}`, text: `model spend $${input.modelSpendUsd.toFixed(0)} crossed ${f * 100}% of $${SPEND.modelTotalCapUsd}` });
 		if (f >= 1) actions.push("stop:model-cap");
+	}
+	const stopAt = SPEND.modelTotalCapUsd - SPEND.modelStopMarginUsd;
+	if (SPEND.modelStopMarginUsd > 0 && input.modelSpendUsd >= stopAt && input.modelSpendUsd < SPEND.modelTotalCapUsd) {
+		alerts.push({ level: "critical", key: "model-spend-margin", text: `model spend $${input.modelSpendUsd.toFixed(0)} reached the stop line $${stopAt.toFixed(0)} (cap $${SPEND.modelTotalCapUsd} minus margin for running trials)` });
+		actions.push("stop:model-cap");
 	}
 	const infraCap = SPEND.infraExpectedUsd[1];
 	for (const f of crossedThresholds(input.infraSpendUsd, infraCap, input.alerted.infra)) {

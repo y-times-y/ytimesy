@@ -10,6 +10,13 @@ job=/opt/tb4/jobs/$id
 mkdir -p "$job"
 set -a; . /opt/tb4/run.env; set +a   # route, variant, caps, ledger, bundle (no secrets printed)
 export YTIMESY_TRANSPORT_LOG="$job/transport.log" YTIMESY_HARBOR_SPEND_LEDGER=/opt/tb4/ledger.jsonl
+# Per-task trial cap (Astra run: scripts/tb4-run/astra-trial-caps.json copied to
+# /opt/tb4/trial-caps.json); the run.env cap applies to tasks not listed.
+if [ -f /opt/tb4/trial-caps.json ]; then
+  cap=$(jq -r --arg t "$task" '.[$t] // empty' /opt/tb4/trial-caps.json)
+  [ -n "$cap" ] && export YTIMESY_HARBOR_TRIAL_USD_CAP="$cap"
+fi
+echo "trial cap: ${YTIMESY_HARBOR_TRIAL_USD_CAP:-unset}" > "$job/trial-cap.txt"
 if nvidia-smi >/dev/null 2>&1; then
   # Scoring rule: the GPU model is asserted inside the trial's container before the
   # agent starts. Until the bridge does it in-container, record the host GPU here.
