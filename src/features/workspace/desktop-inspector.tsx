@@ -1,5 +1,6 @@
 import { ClientOnly } from "@tanstack/react-router";
 import { useEffect } from "react";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	desktopInspectorPrompt,
 	desktopInspectorShouldStart,
@@ -52,25 +53,33 @@ export function DesktopInspector({
 	}
 
 	const prompt = desktopInspectorPrompt({ desktop, projectId, sessionId });
-	const failed = desktop.status === "failed";
-	const starting = desktop.status === "starting" || shouldStart || busy;
+	const starting = prompt.starting || (busy && !prompt.actionLabel);
 
 	return (
 		<section
 			className="inspector-empty desktop-inspector-empty"
 			data-kind="desktop"
+			data-starting={starting ? "true" : undefined}
 			aria-live="polite"
+			aria-busy={starting || undefined}
 		>
 			<h2>{prompt.title}</h2>
-			{failed ? (
-				<p className="desktop-inspector-reason" title={prompt.description}>
+			{/* Always one line tall: the reason, the slow-start hint (fades in by
+			    CSS after a delay) or nothing, so no state moves the button slot. */}
+			{prompt.description ? (
+				<p
+					key="description"
+					className="desktop-inspector-line"
+					title={prompt.description}
+				>
 					{prompt.description}
 				</p>
 			) : (
-				<p>{prompt.description}</p>
+				<p key="hint" className="desktop-inspector-line" data-slow-hint>
+					{starting ? prompt.slowHint : null}
+				</p>
 			)}
-			{/* One fixed-height slot for the button or the status line, so moving
-			    between failed and starting shifts nothing below the copy. */}
+			{/* One fixed-height slot for the button or the spinner. */}
 			<div className="desktop-inspector-action">
 				{prompt.actionLabel ? (
 					<RetryButton
@@ -79,7 +88,7 @@ export function DesktopInspector({
 						onClick={onStart}
 					/>
 				) : starting ? (
-					<p className="desktop-inspector-status">Starting…</p>
+					<MatrixDotLoader className="desktop-inspector-spinner" />
 				) : null}
 			</div>
 		</section>
