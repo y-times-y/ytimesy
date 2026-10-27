@@ -15,6 +15,32 @@ describe("start workspace desktop", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain("--no-sandbox");
 	});
 
+	it("waits for the dpkg lock and finishes foreground installs before Chrome's", () => {
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			"sudo -n apt-get -o DPkg::Lock::Timeout=180",
+		);
+		const chromeStarts = START_WORKSPACE_DESKTOP.indexOf(
+			") >/tmp/ytimesy-chrome-install.log 2>&1 &",
+		);
+		expect(chromeStarts).toBeGreaterThan(0);
+		const lastForegroundInstall =
+			START_WORKSPACE_DESKTOP.lastIndexOf("apt_get install");
+		expect(lastForegroundInstall).toBeLessThan(chromeStarts);
+		expect(START_WORKSPACE_DESKTOP.indexOf("x11-xserver-utils")).toBeLessThan(
+			chromeStarts,
+		);
+	});
+
+	it("makes the guest name resolve before setting it", () => {
+		const hostsEntry = START_WORKSPACE_DESKTOP.indexOf(
+			"sudo -n tee -a /etc/hosts",
+		);
+		expect(hostsEntry).toBeGreaterThan(0);
+		expect(hostsEntry).toBeLessThan(
+			START_WORKSPACE_DESKTOP.indexOf("sudo -n hostname ytimesy"),
+		);
+	});
+
 	it("installs Chrome, wallpaper, and a dock with Chrome, Terminal, and Files", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain("google-chrome-stable");
 		expect(START_WORKSPACE_DESKTOP).toContain(
