@@ -2905,3 +2905,47 @@ button.helper-card:hover {
 		animation: none;
 	}
 }
+
+/* Over the composer's top edge while the reader is away from the latest
+   rows (virtual-transcript.tsx); it takes no room in the layout. */
+.timeline-jump {
+	position: relative;
+	height: 0;
+	flex: none;
+	z-index: 2;
+}
+.timeline-jump > button {
+	position: absolute;
+	bottom: 12px;
+	left: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: #1f1f1f;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+		0 4px 12px rgba(0, 0, 0, 0.4);
+	color: #ececec;
+	cursor: pointer;
+	transform: translateX(-50%);
+	animation: timeline-jump-in 160ms ease-out both;
+}
+.timeline-jump > button:hover {
+	background: #2a2a2a;
+}
+@keyframes timeline-jump-in {
+	from {
+		opacity: 0;
+		transform: translate(-50%, 4px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.timeline-jump > button {
+		animation: none;
+	}
+}

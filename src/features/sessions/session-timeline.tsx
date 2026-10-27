@@ -82,7 +82,6 @@ import {
 	sameJsonValue,
 } from "#/domain/unchanged-items";
 import { userQuestionReply } from "#/domain/user-question";
-import { TIMELINE_END_SCRIPT, useHydrated } from "../app/first-paint";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
@@ -287,8 +286,6 @@ export function SessionTimeline({
 		else currentTurnIds.add(item.id);
 	}
 
-	const hydrated = useHydrated();
-
 	if (
 		visible.length === 0 &&
 		queued.length === 0 &&
@@ -457,18 +454,11 @@ export function SessionTimeline({
 								: undefined
 						}
 						followEnd={autoScroll}
+						followKey={queued.at(-1)?.id ?? sentMessageId(presented)}
 						onNearStart={
 							olderItems && !olderItems.loading ? olderItems.onLoad : undefined
 						}
 					/>
-					{autoScroll && !hydrated ? (
-						// The server's transcript paints scrolled to its end, where the list keeps it.
-						<script
-							// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
-							dangerouslySetInnerHTML={{ __html: TIMELINE_END_SCRIPT }}
-							suppressHydrationWarning
-						/>
-					) : null}
 				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
 		</TimelineProviders>
@@ -551,6 +541,15 @@ const RecoveryControls = memo(function RecoveryControls({
 }) {
 	return render(messageId);
 });
+
+/** The last message the reader sent: sending one brings the list back to its end. */
+function sentMessageId(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage") return item.id;
+	}
+	return undefined;
+}
 
 /** The row above a chat's loaded turns while it holds older ones (px, styled to match). */
 const OLDER_ROW_HEIGHT = 28;
