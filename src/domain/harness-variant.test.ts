@@ -34,6 +34,10 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
+			fetch: "off",
+			prompt: "full",
 			roleModels: {},
 		});
 	});
@@ -66,6 +70,10 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
+			fetch: "off",
+			prompt: "full",
 			roleModels: {},
 		});
 		expect(
@@ -92,6 +100,10 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
+			fetch: "off",
+			prompt: "full",
 			roleModels: {},
 		});
 		expect(
@@ -138,6 +150,10 @@ describe("harness variants", () => {
 			envSnapshot: "off",
 			ledger: "off",
 			goal: "off",
+			plan: "off",
+			helpers: "off",
+			fetch: "off",
+			prompt: "full",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({

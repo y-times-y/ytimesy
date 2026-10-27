@@ -2350,3 +2350,149 @@ describe("runHarborTrial with goal=on", () => {
 		);
 	}, 60_000);
 });
+
+describe("runHarborTrial with plan=on and helpers=on", () => {
+	it("records the plan, runs a read-only helper in its own copy and counts its usage", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "codeMode=primary,plan=on,helpers=on",
+		});
+		const plan = [
+			{ step: "Ask a helper what exists", status: "in_progress" },
+			{ step: "Write solution.py", status: "pending" },
+		];
+		// Builder and helper share the builder's model: one script, in call order.
+		const { model, calls } = scriptedModel([
+			[call("p1", "update_plan", { plan }), finish(100, 10, true)],
+			[
+				call("a1", "agent", {
+					role: "researcher",
+					title: "List files",
+					brief: "List the files and report them.",
+					wait: true,
+				}),
+				finish(100, 10, true),
+			],
+			// The helper: a command that writes, in its copy only.
+			[
+				call("h1", "bash", { command: "echo seen > helper-note.txt; ls" }),
+				finish(40, 4, true),
+			],
+			[...text("h2", "Files: README.md, helper-note.txt"), finish(40, 4)],
+			[
+				call("b3", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b4", "Done."), finish(100, 10)],
+		]);
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: "trial-helpers",
+			instruction: "Create solution.py that prints 42.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(calls()).toBe(6);
+		const builderTools = JSON.stringify(model.doStreamCalls[0].tools);
+		for (const name of ["update_plan", "agent", "agent_wait", "agent_send"])
+			expect(builderTools).toContain(`"name":"${name}"`);
+		// Under codeMode=primary programs may call them too.
+		expect(builderTools).toContain("tools.update_plan");
+		// helpers=on's own section replaces the product's writer-delegation text.
+		const builderPrompt = JSON.stringify(model.doStreamCalls[0].prompt);
+		expect(builderPrompt).toContain(
+			"independent investigation likely to take over 10 minutes",
+		);
+		expect(builderPrompt).not.toContain("start writers in parallel");
+		// The helper is a reader: no write or edit tool, no agent tools.
+		const helperTools = (model.doStreamCalls[2].tools ?? []).map(
+			(entry: { name: string }) => entry.name,
+		);
+		expect(helperTools).not.toContain("write");
+		expect(helperTools).not.toContain("edit");
+		expect(helperTools).not.toContain("agent");
+		// Its report reached the builder.
+		expect(JSON.stringify(model.doStreamCalls[4].prompt)).toContain(
+			"Files: README.md, helper-note.txt",
+		);
+		// It wrote only in its own copy; the builder's write is in the checkout.
+		await expect(
+			readFile(join(f.checkout.root, "helper-note.txt")),
+		).rejects.toThrow();
+		expect(await readFile(join(f.checkout.root, "solution.py"), "utf8")).toBe(
+			"print(42)\n",
+		);
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.plan).toEqual([{ at: expect.any(String), plan }]);
+		expect(trace.review.readerCopies[0]).toMatchObject({
+			sessionId: "trial-helpers.1",
+			ok: true,
+		});
+		expect(trace.checkers[0]).toMatchObject({
+			sessionId: "trial-helpers.1",
+			role: "helper",
+		});
+		// Its usage is the trial's: 4 builder and 2 helper requests.
+		expect(result.usage?.requests).toBe(6);
+		expect(
+			result.efficiency?.models.map((row) => [row.role, row.requests]),
+		).toEqual([
+			["builder", 4],
+			// The product's tree labels a reader child "subagent".
+			["subagent", 2],
+		]);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		expect(trajectory.final_metrics.extra.plan).toEqual(trace.plan);
+		expect(trajectory.subagent_trajectories[0].agent.name).toBe(
+			"ytimesy-helper",
+		);
+	}, 120_000);
+});
+
+describe("runHarborTrial with fetch=on", () => {
+	it("offers web_fetch directly and to run_code programs, and not when off", async () => {
+		const tools = async (variant: string) => {
+			const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+			const { model } = scriptedModel([[...text("d", "Done."), finish(10, 1)]]);
+			const result = await runHarborTrial({
+				config: f.config,
+				trialId: `fetch-${crypto.randomUUID().slice(0, 8)}`,
+				instruction: "Say done.",
+				cwd: f.checkout.root,
+				logsDir: f.logs,
+				deadlineAt: Date.now() + 30 * 60_000,
+				machines: f.side.machines,
+				userId: "harbor",
+				storage: f.archives.storage,
+				runtime: async (wrap) => ({ model: wrap(model) }),
+				harness: {
+					name: "ytimesy",
+					version: "test",
+					commit: null,
+					bundleSha256: null,
+				},
+			});
+			expect(result.failure).toBeNull();
+			return JSON.stringify(model.doStreamCalls[0].tools);
+		};
+		const on = await tools("codeMode=primary,fetch=on");
+		expect(on).toContain('"name":"web_fetch"');
+		expect(on).toContain("tools.web_fetch");
+		expect(await tools("codeMode=primary")).not.toContain("web_fetch");
+	}, 60_000);
+});

@@ -84,6 +84,8 @@ export function agentTurnInstructions(input: {
 	forceDelegation?: boolean;
 	/** The Harbor bridge's root builder: brief final answer, no desktop browser block. */
 	unattended?: boolean;
+	/** Replaces the subagent section (the Harbor bridge's read-only helpers). */
+	helperInstructions?: string;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -173,13 +175,15 @@ function leanTurnInstructions(
 							).read,
 							pair: input.fusionPair,
 						})
-					: orchestratorInstructions({
-							codeMode,
-							force: !!input.forceDelegation && !input.session.agentRole,
-							main: !input.session.agentRole,
-							// A read-only subagent may start readers, never writers.
-							readOnly: readOnly || isReaderRole(input.session.agentRole),
-						})
+					: input.helperInstructions && !input.session.agentRole
+						? input.helperInstructions
+						: orchestratorInstructions({
+								codeMode,
+								force: !!input.forceDelegation && !input.session.agentRole,
+								main: !input.session.agentRole,
+								// A read-only subagent may start readers, never writers.
+								readOnly: readOnly || isReaderRole(input.session.agentRole),
+							})
 			: // Main without helpers still hands off its background commands.
 				input.session.agentRole
 				? ""

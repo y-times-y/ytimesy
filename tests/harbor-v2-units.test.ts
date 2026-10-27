@@ -195,7 +195,23 @@ describe("harborBridgeConfig", () => {
 					...capped,
 					YTIMESY_HARBOR_VARIANT: `subagents=${subagents},lead=fusion`,
 				}),
-			).toThrow(/several writers at once/);
+			).toThrow(/several writers at once.*use helpers=on/);
+		expect(
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "codeMode=primary,plan=on,helpers=on,fetch=on",
+			}).variant,
+		).toMatchObject({
+			codeMode: "primary",
+			plan: "on",
+			helpers: "on",
+			fetch: "on",
+		});
+		expect(harborBridgeConfig(capped).variant).toMatchObject({
+			plan: "off",
+			helpers: "off",
+			fetch: "off",
+		});
 		expect(
 			harborBridgeConfig({
 				...capped,
