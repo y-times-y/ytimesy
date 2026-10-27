@@ -195,9 +195,9 @@ describe("helperTools (helpers=write)", () => {
 
 	it("gives the builder the writers' section and lists writes outside owns", () => {
 		expect(WRITE_HELPER_INSTRUCTIONS).toContain(
-			"decide right after reading the task",
+			"decide once, after your first look at the task",
 		);
-		expect(WRITE_HELPER_INSTRUCTIONS).toContain("Never start a writer later");
+		expect(WRITE_HELPER_INSTRUCTIONS).toContain("and never later");
 		// The read-only helpers' rules stay.
 		expect(WRITE_HELPER_INSTRUCTIONS).toContain(
 			"independent investigation likely to take over 10 minutes",

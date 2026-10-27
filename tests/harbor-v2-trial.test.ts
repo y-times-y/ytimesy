@@ -2566,7 +2566,7 @@ describe("runHarborTrial with helpers=write", () => {
 		expect(served).toEqual({ builder: 3, a: 2, b: 2 });
 		// The builder's section is the writers' one; its agent tool takes owns.
 		expect(prompts.builder?.[0]).toContain(
-			"decide right after reading the task",
+			"decide once, after your first look at the task",
 		);
 		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"owns"');
 		// Writers: the shared-checkout role with their paths, write tools, no agent tools.
