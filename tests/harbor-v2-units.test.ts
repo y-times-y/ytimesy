@@ -207,6 +207,18 @@ describe("harborBridgeConfig", () => {
 			helpers: "on",
 			fetch: "on",
 		});
+		expect(
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "codeMode=on,helpers=write",
+			}).variant.helpers,
+		).toBe("write");
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "helpers=many",
+			}),
+		).toThrow();
 		expect(harborBridgeConfig(capped).variant).toMatchObject({
 			plan: "off",
 			helpers: "off",
