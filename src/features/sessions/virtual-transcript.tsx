@@ -4,6 +4,7 @@ import {
 	useVirtualizer,
 	type VirtualItem,
 } from "@tanstack/react-virtual";
+import { ArrowDown } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -13,7 +14,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { useHydrated } from "../app/first-paint";
+import { TIMELINE_END_SCRIPT, useHydrated } from "../app/first-paint";
 
 /** One row of a transcript list. */
 export type TranscriptEntry = {
@@ -48,8 +49,8 @@ const OVERSCAN = 8;
 const PADDING_START = 4;
 const PADDING_END = 16;
 
-/** Within this distance of the end (px) the list follows new rows down. */
-const FOLLOW_END_PX = 64;
+/** Within this distance of the end (px) the reader is back at the end, and the list follows again. */
+const AT_END_PX = 4;
 
 /** How near the top (px) the reader is when onNearStart asks for more. */
 const NEAR_START_PX = 1_200;
@@ -65,6 +66,7 @@ export function VirtualTranscript({
 	first,
 	followEnd = true,
 	onNearStart,
+	followKey,
 }: {
 	entries: readonly TranscriptEntry[];
 	/**
@@ -81,6 +83,11 @@ export function VirtualTranscript({
 	followEnd?: boolean;
 	/** The reader is near the top: rows before the first may be added. */
 	onNearStart?: () => void;
+	/**
+	 * Changes when the reader sends a message: the list goes back to its
+	 * end and follows again, wherever the reader was.
+	 */
+	followKey?: string;
 }) {
 	const id = useId();
 	const listRef = useRef<HTMLOListElement>(null);
@@ -88,6 +95,12 @@ export function VirtualTranscript({
 	// Hydrating: the server's rows are laid out already. The list starts from
 	// their real heights and scroll position, so taking over moves nothing.
 	const [serverLayout] = useState(() => readServerLayout(id, entries));
+	// Following: the list keeps its end in view as rows are added or grow.
+	// Scrolling up stops it; scrolling back to the end, the jump button or
+	// sending a message starts it again.
+	const following = useRef(followEnd);
+	const [awayFromEnd, setAwayFromEnd] = useState(false);
+	const lastScrollTop = useRef<number | null>(null);
 	const rangeExtractor = useCallback(
 		(range: Range) => {
 			const newest = Math.max(0, range.count - MOUNTED_END_ROWS);
@@ -123,8 +136,50 @@ export function VirtualTranscript({
 		initialMeasurementsCache: serverLayout?.sizes,
 		anchorTo: "end",
 		followOnAppend: followEnd,
-		scrollEndThreshold: FOLLOW_END_PX,
+		// While following, any growth keeps the end in view; otherwise none.
+		scrollEndThreshold:
+			followEnd && !awayFromEnd ? Number.POSITIVE_INFINITY : 0,
 	});
+	const follow = useCallback(
+		(smooth: boolean) => {
+			following.current = true;
+			setAwayFromEnd(false);
+			const list = listRef.current;
+			const distance = list ? distanceFromEnd(list) : 0;
+			virtualizer.scrollToEnd({
+				behavior: smooth && distance < SMOOTH_JUMP_MAX_PX ? "smooth" : "auto",
+			});
+		},
+		[virtualizer],
+	);
+	const onScroll = useCallback(() => {
+		const list = listRef.current;
+		if (!list || !followEnd) return;
+		const top = list.scrollTop;
+		const movedUp =
+			lastScrollTop.current !== null && top < lastScrollTop.current - 1;
+		lastScrollTop.current = top;
+		const atEnd = distanceFromEnd(list) <= AT_END_PX;
+		// The list's own corrections only move it down, or keep it at the
+		// end when rows shrink: moving up away from the end is the reader.
+		const next = atEnd || (following.current && !movedUp);
+		if (next === following.current) return;
+		following.current = next;
+		setAwayFromEnd(!next);
+	}, [followEnd]);
+	// Rows replaced at the end (the "Thinking" line by the reply) are not an
+	// append the virtualizer follows: keep the end in view after each render.
+	useLayoutEffect(() => {
+		const list = listRef.current;
+		if (!list || !followEnd || !hydrated || !following.current) return;
+		if (distanceFromEnd(list) > 1) list.scrollTop = list.scrollHeight;
+	});
+	const sentKey = useRef(followKey);
+	useLayoutEffect(() => {
+		if (sentKey.current === followKey) return;
+		sentKey.current = followKey;
+		if (followEnd && !following.current) follow(false);
+	}, [followKey, followEnd, follow]);
 	// Opened in the browser (another chat): at the end, as the server's paints.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: once, when the list mounts.
 	useLayoutEffect(() => {
@@ -189,10 +244,48 @@ export function VirtualTranscript({
 	if (rest > 0.5) children.push(spacer("space:end", rest));
 
 	return (
-		<ol ref={listRef} id={id} className="session-timeline" aria-label="Session">
-			{children}
-		</ol>
+		<>
+			<ol
+				ref={listRef}
+				id={id}
+				className="session-timeline"
+				aria-label="Session"
+				onScroll={followEnd ? onScroll : undefined}
+			>
+				{children}
+			</ol>
+			{followEnd && !hydrated ? (
+				// The server's transcript paints scrolled to its end, where the list keeps it.
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
+					dangerouslySetInnerHTML={{ __html: TIMELINE_END_SCRIPT }}
+					suppressHydrationWarning
+				/>
+			) : null}
+			{followEnd ? (
+				// No height: the button floats over the composer's top edge.
+				<div className="timeline-jump">
+					{awayFromEnd ? (
+						<button
+							type="button"
+							aria-label="Jump to latest"
+							title="Jump to latest"
+							onClick={() => follow(true)}
+						>
+							<ArrowDown size={16} strokeWidth={1.75} aria-hidden="true" />
+						</button>
+					) : null}
+				</div>
+			) : null}
+		</>
 	);
+}
+
+/** Farther than this (px), the jump button moves at once instead of scrolling smoothly. */
+const SMOOTH_JUMP_MAX_PX = 2_400;
+
+function distanceFromEnd(list: HTMLElement) {
+	return list.scrollHeight - list.scrollTop - list.clientHeight;
 }
 
 /** Room for rows not mounted. */

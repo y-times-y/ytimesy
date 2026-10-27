@@ -162,17 +162,17 @@
 	color: #777;
 	transition: transform 160ms ease;
 }
+/* Pixel wave: a bright diagonal wave rolls across nine square pixels. */
 .t-matrix {
 	--t-matrix-cycle: 1200ms;
-	--t-matrix-ease: cubic-bezier(0.4, 0, 0.2, 1);
-	--t-matrix-dot-size: 3px;
-	--t-matrix-gap: 2px;
-	--t-matrix-dim: 0.18;
+	--t-matrix-cell: 4px;
+	--t-matrix-gap: 1.5px;
+	--t-matrix-dim: 0.15;
 	width: 16px;
 	height: 16px;
 	display: inline-grid;
-	grid-template-columns: repeat(3, var(--t-matrix-dot-size));
-	grid-auto-rows: var(--t-matrix-dot-size);
+	grid-template-columns: repeat(3, var(--t-matrix-cell));
+	grid-auto-rows: var(--t-matrix-cell);
 	gap: var(--t-matrix-gap);
 	place-content: center;
 	flex: none;
@@ -181,28 +181,24 @@
 	display: block;
 	background: currentColor;
 	opacity: var(--t-matrix-dim);
-	animation: t-matrix-orbit var(--t-matrix-cycle) var(--t-matrix-ease) infinite;
+	animation: t-matrix-wave var(--t-matrix-cycle) ease-in-out infinite;
+	/* Negative: each pixel starts mid-cycle, so the first frame is never blank. */
 	animation-delay: calc(
-		var(--t-matrix-step, 0) *
+		var(--t-matrix-diag, 0) *
 		var(--t-matrix-cycle) /
 		8 -
 		var(--t-matrix-cycle)
 	);
 }
-.t-matrix > .t-matrix-center {
-	animation: none;
-	opacity: var(--t-matrix-dim);
-}
-@keyframes t-matrix-orbit {
+@keyframes t-matrix-wave {
 	0%,
 	100% {
+		opacity: var(--t-matrix-dim);
+	}
+	35% {
 		opacity: 1;
 	}
-	12.5% {
-		opacity: 0.65;
-	}
-	37.5%,
-	87.5% {
+	70% {
 		opacity: var(--t-matrix-dim);
 	}
 }
@@ -1057,6 +1053,17 @@ button.attachment-tile-body[data-state="open"] {
 	color: rgba(255, 255, 255, 0.45);
 	font-size: 13px;
 	line-height: 18px;
+}
+/* The turn's first moment: "Thinking" holds the reply's place, in the
+   box its first line takes (li[data-kind="agentMessage"] and its 22px
+   line), so the first words replace it without moving. */
+.session-timeline li[data-kind="working"] {
+	margin: 6px 0 8px;
+}
+.session-timeline li[data-kind="working"] > .session-working {
+	margin: 0;
+	font-size: 14px;
+	line-height: 22px;
 }
 .session-shimmer {
 	background-image: linear-gradient(
@@ -2899,4 +2906,57 @@ button.helper-card:hover {
 }
 .session-timeline li[data-kind="older"] svg {
 	animation: project-picker-spin 0.9s linear infinite;
+}
+
+/* Reduced motion: a streaming reply's new words show without fading in;
+   they still arrive at a steady pace (smooth-text.ts). */
+@media (prefers-reduced-motion: reduce) {
+	.session-markdown [data-sd-animate],
+	.session-markdown [data-sd-animate-marker]::marker {
+		animation: none;
+	}
+}
+
+/* Over the composer's top edge while the reader is away from the latest
+   rows (virtual-transcript.tsx); it takes no room in the layout. */
+.timeline-jump {
+	position: relative;
+	height: 0;
+	flex: none;
+	z-index: 2;
+}
+.timeline-jump > button {
+	position: absolute;
+	bottom: 12px;
+	left: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: #1f1f1f;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+		0 4px 12px rgba(0, 0, 0, 0.4);
+	color: #ececec;
+	cursor: pointer;
+	transform: translateX(-50%);
+	animation: timeline-jump-in 160ms ease-out both;
+}
+.timeline-jump > button:hover {
+	background: #2a2a2a;
+}
+@keyframes timeline-jump-in {
+	from {
+		opacity: 0;
+		transform: translate(-50%, 4px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.timeline-jump > button {
+		animation: none;
+	}
 }

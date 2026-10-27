@@ -1,11 +1,11 @@
 import type { AnyRouter } from "@tanstack/react-router";
-import { markdownRenderer } from "../sessions/agent-markdown";
+import { LIVE_MARKDOWN, markdownRenderer } from "../sessions/agent-markdown";
 
 /**
  * Waits until React can hydrate the server HTML without suspending: the
  * streamed response has ended, the loaders' streamed values (a chat read
  * after the first bytes) have arrived, and the Markdown renderer has loaded
- * if the page shows Markdown.
+ * if the page shows Markdown that is not a settled reply's adopted HTML.
  *
  * Anything that suspends while hydrating leaves its Suspense boundary
  * dehydrated, and the first update from above (the theme, the session, the
@@ -25,7 +25,7 @@ export async function readyToHydrate(router: AnyRouter): Promise<void> {
 	);
 	await Promise.all([
 		...streamed.map(settledForUse),
-		document.querySelector(".session-markdown") ? markdownRenderer() : null,
+		document.querySelector(LIVE_MARKDOWN) ? markdownRenderer() : null,
 	]);
 }
 
