@@ -83,7 +83,7 @@ export function DesktopStage({
 					role="alert"
 				>
 					<h2>Desktop disconnected</h2>
-					<p className="desktop-inspector-reason" title={disconnected}>
+					<p className="desktop-inspector-line" title={disconnected}>
 						{disconnected}
 					</p>
 					<div className="desktop-inspector-action">

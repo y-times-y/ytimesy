@@ -56,9 +56,19 @@ describe("workspace desktop", () => {
 				sessionId: "session-1",
 			}),
 		).toMatchObject({
-			title: "Starting desktop…",
+			title: "Starting desktop",
+			description: null,
 			actionLabel: null,
+			starting: true,
+			slowHint: "First start can take a minute",
 		});
+		expect(
+			desktopInspectorPrompt({
+				desktop: { status: "starting" },
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toMatchObject({ title: "Starting desktop", starting: true });
 		expect(
 			desktopInspectorPrompt({
 				desktop: { status: "failed", reason: "VM not found" },
@@ -69,6 +79,7 @@ describe("workspace desktop", () => {
 			title: "Desktop didn't start",
 			description: "VM not found",
 			actionLabel: "Try again",
+			starting: false,
 		});
 	});
 });
