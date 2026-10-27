@@ -39,8 +39,9 @@ describe("Memory page", () => {
 		expect(html).toContain("<h1>Memory</h1>");
 		expect(html).toMatch(/aria-pressed="true"[^>]*>Graph</);
 		expect(html).toMatch(/aria-pressed="false"[^>]*>List</);
-		// The graph is client-only: the server draws its loading box in its place.
-		expect(html).toContain('class="memory-graph-page memory-graph-empty"');
+		// The graph renders on the server too, in its final layout.
+		expect(html).toContain('class="memory-graph-page"');
+		expect(html).toContain('class="memory-block"');
 		expect(html).not.toContain("memory-inspector");
 	});
 
