@@ -4,7 +4,7 @@ import {
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
 } from "./session-item";
-import { chatWaitingOn } from "./sidebar-chats";
+import { type ChatWaitingOn, chatWaitingOn } from "./sidebar-chats";
 
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
@@ -75,7 +75,9 @@ export function chatsFromAgentSessions(
 		readonly workspaceId?: string | null;
 		readonly workingBranch?: string | null;
 		readonly taskBranch?: string | null;
-		/** The chat's history: only what it waits on from the user is listed. */
+		/** What the chat waits on from the user, as stored (agent_session.waiting_on). */
+		readonly waitingOn?: ChatWaitingOn | null;
+		/** The chat's history, when `waitingOn` is not given: only what it waits on is listed. */
 		readonly items?: unknown;
 		/** When Main's or a helper's active turn started, if one runs. */
 		readonly workingSince?: string | null;
@@ -92,14 +94,16 @@ export function chatsFromAgentSessions(
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
 			...(session.workingSince ? { workingSince: session.workingSince } : {}),
-			...(session.items === undefined
-				? {}
-				: {
-						waitingOn: chatWaitingOn(
-							sessionItemsFromUnknown(session.items),
-							session.turnStatus ?? "idle",
-						),
-					}),
+			...(session.waitingOn !== undefined
+				? { waitingOn: session.waitingOn }
+				: session.items === undefined
+					? {}
+					: {
+							waitingOn: chatWaitingOn(
+								sessionItemsFromUnknown(session.items),
+								session.turnStatus ?? "idle",
+							),
+						}),
 			...(session.workingBranch || session.taskBranch
 				? { workingBranch: session.workingBranch || session.taskBranch }
 				: {}),
