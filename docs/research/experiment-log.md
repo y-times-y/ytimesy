@@ -9,6 +9,7 @@ after every test, including small ones and ones that failed.
 | 2026-10-18 | Code mode `on` vs off (Sol, 5 small tasks x 3) | No gain: same steps, +20% input (tool description) | Session notes; `docs/hard-set.md` |
 | 2026-10-19 | Code mode `on` on hard tasks | Model called `run_code` 0 times; led to `codeMode=primary` | Commit 5ca3e83 |
 | 2026-10-24 | Code mode off vs `on` vs `primary` (heat-pump-warranty, subscription) | `primary` best: $0.55 / 20k out / 8.8 min vs `on` $0.69 / 21k, off $0.71 / 24k; Codex avg $0.69 / 20k | Became the base variant (f50630c) |
+| 2026-10-24 | Code mode off vs `primary` (session-window-debug, subscription) | Even: off $0.29 / 21k out vs `primary` $0.31 / 24k; both pass. `primary` saves on read-heavy tasks, neutral on short fix tasks; 1 of 28 programs failed | Session notes |
 | 2026-10-24 | Checker (review loop) on TB4 | Stopped for TB4 | `checker-learnings-2026-10-24.md` |
 | 2026-10-22 | Fusion lead (Sol + Luna) | 2x cost, 4x time, 4/15 vs 8.8; dropped for TB4 | Session notes |
 | 2026-10-25 | grind, effortMix, envSnapshot, ledger, goal | None beat base on held-out tasks; all off by default | `harness-switches-2026-10-25.md` |
