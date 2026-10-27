@@ -90,6 +90,7 @@ import {
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import type { OpenChatSide } from "#/server/services/open-chat-side";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import { AgentIcon } from "./agent-icon";
@@ -172,7 +173,14 @@ export function SessionLauncher({
 	onRemoveQueued,
 	backgroundRuns,
 	onDraftStarted,
+	loadedCatalog,
 }: {
+	/**
+	 * The model catalog the server read with the page's open chat: shown
+	 * until the browser's own read of it lands, so the model button keeps
+	 * its name and width as the page loads.
+	 */
+	loadedCatalog?: OpenChatSide["catalog"];
 	/** The draft went from empty to some text (a new chat starts its machine then). */
 	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
@@ -266,6 +274,8 @@ export function SessionLauncher({
 		enabled: Boolean(identity.data?.user.id),
 		queryFn: () => loadCatalog({ data: { provider: harnessId } }),
 		staleTime: 60_000,
+		placeholderData:
+			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
 	const models = useMemo(
 		() =>
