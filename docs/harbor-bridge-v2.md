@@ -47,7 +47,7 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 | `YTIMESY_HARBOR_APPROVED` | must equal the route: the operator's billing approval (required) |
 | `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` / `openai.gpt-6.1-sol` (bedrock) |
 | `YTIMESY_HARBOR_EFFORT` | `low` … `max` (default `max`) |
-| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `leadTools` (`thin`, `full`), `leadEffort` (`high`, `inherit`, `low`, `medium`, `xhigh`, `max`), `rigor`, `promptCacheScope`, `grind`, `effortMix`, `envSnapshot`, `ledger`, `goal` (all `on`/`off`, default off; results in `docs/research/harness-switches-2026-10-25.md`), `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
+| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `leadTools` (`thin`, `full`), `leadEffort` (`high`, `inherit`, `low`, `medium`, `xhigh`, `max`), `rigor`, `promptCacheScope`, `grind`, `effortMix`, `envSnapshot`, `ledger`, `goal` (all `on`/`off`, default off; results in `docs/research/harness-switches-2026-10-25.md`), `plan` (`on`: the root builder gets `update_plan`, Codex's step list with pending/in_progress/completed; each update is in the trace's `plan` and the trajectory's extra metrics), `helpers` (`on`: the root builder gets `agent` (role researcher or reviewer, title, brief, wait), `agent_wait` (collect one or all reports) and `agent_send` (stop, or brief a finished helper again); each helper is a read-only reader on its own copy of the checkout, on the builder's model and effort, with web search and its own 60-step/15-minute/1.5M-token budget, counted in the trial's usage, spend cap and ATIF subagent trajectories; at most 4 run at once; the builder stays the only writer), `fetch` (`on`: every agent gets `web_fetch`, one public http(s) page as text: HTML via html-to-text without scripts, styles or images, text/JSON/XML as is, final URL and status, cut at the lean read limit with an `offset` to read on; fetched on the harness side on any route with a 30 s timeout and a 5 MB download cap; no cookies or credentials sent; private, loopback, link-local and metadata hosts refused, on every redirect hop; non-2xx, non-text and oversize pages are errors), `prompt` (`minimal`: the root builder gets identity, tool and run_code guidance, helpers and a brief final answer only; a test variant, default `full`), `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer; use `helpers=on` for read-only subagents), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
 | `YTIMESY_HARBOR_TRIAL_USD_CAP` | per-trial cap; default $20 or the total cap if lower; at most $100 |
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
@@ -347,6 +347,17 @@ no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
 - Bedrock: not a v2 route (`bedrockClaudeRuntime` has no native compaction; Bedrock's
   compaction beta is unverified with our request shape).
 - Transport guard against real cut streams (only synthetic ones).
+
+## Reason Agent parity setup
+
+`YTIMESY_HARBOR_VARIANT=codeMode=on,plan=on,helpers=on,fetch=on` (web search on) matches Reason
+Agent 1.2's TB4 setup as its public trajectories show it (198 TB4 trials, GPT-6 Astra xhigh):
+bash called directly at each step, code mode optional and used mostly for parallel reads (16% of
+calls), a plan tool (12 of 66 tasks), subagents (8 of 66 tasks), web search and web fetch. On
+shadow-relay (o200k token count) Reason's output was 6.6k-9.4k: 4.7k-6.0k tool code and
+1.6k-3.2k thinking. With `codeMode=primary` ours was 11.2k-13.5k, with 6.1k-7.6k code and
+4.9k-5.7k thinking: primary puts every step in one run_code program. `primary` stays the base
+default (cheaper than `on` on Sol, 3 tasks); `on` is the parity setting for Reason comparisons.
 
 ## Minimal smoke test (do not run without approval)
 

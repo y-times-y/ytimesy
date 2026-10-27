@@ -6,6 +6,7 @@ import {
 } from "../../src/domain/code-mode";
 import { fusionPairFor } from "../../src/domain/fusion-pairs";
 import type { HarnessVariant } from "../../src/domain/harness-variant";
+import { primaryCodeModeInstructions } from "../../src/domain/lean-tool-instructions";
 import type { ModelProvider } from "../../src/domain/model-connection";
 import { UNATTENDED_RUN_INSTRUCTIONS } from "../../src/domain/rigor";
 import type { SubagentBudget, SubagentRole } from "../../src/domain/subagent";
@@ -14,6 +15,7 @@ import {
 	type ContextArchiveStorage,
 } from "../../src/server/adapters/context-archives";
 import { nativeWebSearchTools } from "../../src/server/adapters/native-web-search";
+import { nodePublicHost } from "../../src/server/adapters/public-host";
 import { agentContextArchiveTools } from "../../src/server/services/agent-context-archive-tools";
 import { agentOutputArtifacts } from "../../src/server/services/agent-output-artifacts";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
@@ -37,8 +39,9 @@ import type { ModelAgentInput } from "../../src/server/services/model-agent-loop
 import { nodeDebuggerTools } from "../../src/server/services/node-debugger";
 import { repositoryGuidanceTool } from "../../src/server/services/repository-guidance";
 import { thinLeadTools } from "../../src/server/services/thin-lead-tools";
+import { webFetchTool } from "../../src/server/services/web-fetch-tool";
 import { bedrockWebSearchTools } from "./bedrock";
-
+import { AGENT_WAIT_TOOL, HELPER_INSTRUCTIONS } from "./helpers";
 /**
  * The product builder's turn setup (src/server/jobs/api-turn.ts) rebuilt
  * without the database: the same base tools, builderToolSurface for the
@@ -233,9 +236,20 @@ export async function harborHarness(input: {
 				)
 		: {};
 	const trialTools = input.trialTools ?? {};
-	let tools: ToolSet = { ...surface.tools, ...webSearch, ...trialTools };
+	// fetch=on: web_fetch for every agent, fetched here on the harness side
+	// (not in the task container), on any route.
+	const fetchTools: ToolSet =
+		variant.fetch === "on" ? webFetchTool({ checkHost: nodePublicHost }) : {};
+	let tools: ToolSet = {
+		...surface.tools,
+		...webSearch,
+		...fetchTools,
+		...trialTools,
+	};
 	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
-	// deferred tools here: the bridge offers no agent, plan or MCP tools.
+	// deferred tools here: the trial's own tools (helpers=on's agent tools,
+	// plan=on's update_plan) and fetch=on's web_fetch are direct tools that
+	// programs may call too.
 	// lead=fusion's thin lead (leadTools=thin): delegation, a capped read and
 	// a bounded inspection command only (thin-lead-tools.ts), as the product's.
 	const thinLead =
@@ -256,7 +270,7 @@ export async function harborHarness(input: {
 			turnId: workspace.turnId,
 			mode: codeMode,
 			deferred: [],
-			callable: Object.keys(trialTools),
+			callable: [...Object.keys(fetchTools), ...Object.keys(trialTools)],
 			journal: (toolCallId) => ({
 				recorded: async () => journal.get(toolCallId),
 				record: async (result) => {
@@ -272,7 +286,7 @@ export async function harborHarness(input: {
 	}
 	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
 	if (thinLead) tools = { ...thinLeadTools(tools), ...trialTools };
-	const instructions = agentTurnInstructions({
+	const fullInstructions = agentTurnInstructions({
 		session: input.subagent
 			? {
 					agentRole: input.subagent.role,
@@ -298,7 +312,25 @@ export async function harborHarness(input: {
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 		// Only the root builder: a subagent's brief already names what to report.
 		unattended: !input.subagent,
+		...(AGENT_WAIT_TOOL in trialTools
+			? { helperInstructions: HELPER_INSTRUCTIONS }
+			: {}),
 	});
+	// prompt=minimal (root builder only): no rule blocks, to measure what
+	// they cost in thinking.
+	const instructions =
+		variant.prompt === "minimal" && !input.subagent && surface.lean
+			? [
+					`You are a coding agent working in the repository checkout at ${workspace.cwd}; commands start there. Do the task yourself, end to end.`,
+					codeMode === "primary"
+						? primaryCodeModeInstructions(surface.lean.shape)
+						: "",
+					AGENT_WAIT_TOOL in trialTools ? HELPER_INSTRUCTIONS : "",
+					"Your final answer is brief (at most 10 lines): what you delivered and how you checked it.",
+				]
+					.filter(Boolean)
+					.join("\n")
+			: fullInstructions;
 	return {
 		tools,
 		// The root builder of a trial: nobody answers its questions.

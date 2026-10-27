@@ -12,7 +12,13 @@ import type { HarborModel } from "./config";
  * and its reports, one per round.
  */
 
-export type TrialRole = "sidekick" | "checker" | "checkerWorker" | "classifier";
+export type TrialRole =
+	| "sidekick"
+	| "checker"
+	| "checkerWorker"
+	| "classifier"
+	/** helpers=on: a read-only researcher or reviewer the root builder started. */
+	| "helper";
 
 export type TimedEvent = { at: string; event: ApiAgentEvent };
 
