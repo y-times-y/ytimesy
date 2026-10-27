@@ -10,6 +10,7 @@ import {
 	useCallback,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -141,6 +142,7 @@ import {
 } from "../sessions/agent-session.fn";
 import { sentPasteFields } from "../sessions/attachment-tile";
 import { readBackgroundCommandsFn } from "../sessions/background-commands.fn";
+import { chatCacheFor, clearChatCache } from "../sessions/chat-cache";
 import {
 	connectCodexSession,
 	getCodexSession,
@@ -247,6 +249,7 @@ export function WorkspaceHome({
 	initialChats,
 	initialChatView,
 	account,
+	userId,
 	renderedAtMs,
 }: {
 	initialSession: PublicCodexSession;
@@ -255,6 +258,8 @@ export function WorkspaceHome({
 	initialChatView?: PublicCodexSession;
 	/** The signed-in user, for the sidebar's account button. */
 	account?: SidebarAccount;
+	/** The signed-in user: the browser's chat cache is theirs alone. */
+	userId?: string;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
 	initialProjects?: Project[];
@@ -284,6 +289,17 @@ export function WorkspaceHome({
 	}, []);
 	const singlePane = layoutCompact || inspectorCompact || inspectorExpanded;
 	const queryClient = useQueryClient();
+	/** Chats opened before, kept in the browser; never part of the server's page. */
+	const chatCache = useMemo(
+		() => (userId ? chatCacheFor(userId) : null),
+		[userId],
+	);
+	useEffect(() => {
+		if (!chatCache) return;
+		const flush = () => void chatCache.flush();
+		window.addEventListener("pagehide", flush);
+		return () => window.removeEventListener("pagehide", flush);
+	}, [chatCache]);
 	useState(() => {
 		const key = ["agent-sessions", initialChats?.projectId];
 		if (initialChats && !queryClient.getQueryData(key))
@@ -365,6 +381,20 @@ export function WorkspaceHome({
 		project,
 		chats: projectChatLists[index]?.data ?? [],
 	}));
+	// Chats the server no longer lists (deleted elsewhere) leave the browser's cache.
+	const listedChatIds = JSON.stringify(
+		projectChats.flatMap(({ project }, index) =>
+			projectChatLists[index]?.isSuccess
+				? [[project.id, projectChats[index]?.chats.map((chat) => chat.id)]]
+				: [],
+		),
+	);
+	useEffect(() => {
+		if (!chatCache) return;
+		const listed = JSON.parse(listedChatIds) as [string, string[]][];
+		for (const [projectId, chatIds] of listed)
+			void chatCache.keepOnly(projectId, chatIds);
+	}, [chatCache, listedChatIds]);
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
 	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
 	/** The Memory page's view; the graph first, the list kept while open. */
@@ -478,6 +508,10 @@ export function WorkspaceHome({
 		(pending: PendingSend, view: PublicCodexSession) => Promise<void>
 	>(async () => undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
+	/** Held views that came from the browser's cache, not yet read again. */
+	const restoredChats = useRef(new Set<string>());
+	/** The epoch whose open chat has shown a server view (a cached one then stays out). */
+	const serverViewEpoch = useRef(-1);
 	// The chat the server rendered open is held like a read one: nothing reads it again now.
 	useState(() => {
 		if (!openAtLoad || !initialChats) return;
@@ -532,7 +566,9 @@ export function WorkspaceHome({
 				next.agentSessionId,
 				withEarlierPages(sessionViews.current.get(next.agentSessionId), next),
 			);
+			restoredChats.current.delete(next.agentSessionId);
 			if (!selectedProject?.id) return;
+			chatCache?.write(selectedProject.id, next);
 			const chatId = next.agentSessionId;
 			queryClient.setQueryData(
 				["agent-sessions", selectedProject.id],
@@ -540,7 +576,7 @@ export function WorkspaceHome({
 					withChatTurnStatus(current ?? [], chatId, next.turnStatus),
 			);
 		},
-		[queryClient, selectedProject?.id],
+		[queryClient, selectedProject?.id, chatCache],
 	);
 	const liveProgress = useRef<LiveProgressMark>(null);
 	/** The chat whose progress stream is open now (its view is then read rarely). */
@@ -566,6 +602,7 @@ export function WorkspaceHome({
 			) {
 				return;
 			}
+			serverViewEpoch.current = epoch;
 			setSession((current) => {
 				if (
 					next.turnStatus === "running" &&
@@ -1066,7 +1103,9 @@ export function WorkspaceHome({
 			chats: latestChatIds.split(",").map((id) => ({ id })),
 			openChatId: activeSessionId,
 			heldChatIds: new Set([
-				...sessionViews.current.keys(),
+				...[...sessionViews.current.keys()].filter(
+					(id) => !restoredChats.current.has(id),
+				),
 				...viewReads.current.keys(),
 			]),
 		});
@@ -1568,6 +1607,7 @@ export function WorkspaceHome({
 		}
 		removeChat.mutate({ projectId: selectedProject.id, sessionId: chatId });
 		sessionViews.current.delete(chatId);
+		void chatCache?.forget([chatId]);
 		const nextId = selectedChatIdAfterDelete({
 			chats: sidebarChats,
 			selectedChatId: activeSessionId,
@@ -1600,6 +1640,7 @@ export function WorkspaceHome({
 		});
 		removeOwnedProject.mutate(projectId);
 		queryClient.removeQueries({ queryKey: ["agent-sessions", projectId] });
+		void chatCache?.keepOnly(projectId, []);
 		setSelectedProjectId(nextId);
 		if (selectedProject?.id === projectId) {
 			bumpSessionEpoch();
@@ -1624,6 +1665,7 @@ export function WorkspaceHome({
 	}
 
 	async function signOut() {
+		await clearChatCache();
 		await authClient.signOut();
 		window.location.assign("/");
 	}
@@ -1665,6 +1707,40 @@ export function WorkspaceHome({
 			connection: { status: "disconnected" },
 			canSend: false,
 		}));
+		showCachedChat(id);
+	}
+
+	/**
+	 * Shows the browser's copy of a chat opened without a held view, until
+	 * the server's read (already under way) replaces it. A copy that lands
+	 * after the server's view, or after another open, is dropped.
+	 */
+	function showCachedChat(id: string) {
+		const epoch = sessionEpoch.current;
+		void chatCache?.read(id).then((view) => {
+			if (
+				!view ||
+				epoch !== sessionEpoch.current ||
+				serverViewEpoch.current === epoch ||
+				selectedSessionIdRef.current !== id ||
+				composerDraftRef.current
+			)
+				return;
+			setSession((current) =>
+				current.agentSessionId === id && current.items.length === 0
+					? view
+					: current,
+			);
+		});
+	}
+
+	/** A hovered chat's cached copy, held so opening it shows at once. */
+	function holdCachedChat(chatId: string) {
+		void chatCache?.read(chatId).then((view) => {
+			if (!view || sessionViews.current.has(chatId)) return;
+			sessionViews.current.set(chatId, view);
+			restoredChats.current.add(chatId);
+		});
 	}
 
 	/** The open chat's older turns being read, by the oldest item shown then. */
@@ -1703,6 +1779,7 @@ export function WorkspaceHome({
 					});
 					if (epoch !== sessionEpoch.current) return;
 					sessionViews.current.set(chatId, fresh);
+					chatCache?.write(projectId, fresh);
 					setSession((current) =>
 						current.agentSessionId === chatId ? fresh : current,
 					);
@@ -1727,12 +1804,17 @@ export function WorkspaceHome({
 	 * at once; the open reads it again. Never replaces a view the page holds.
 	 */
 	function readAheadChat(chatId: string) {
-		if (sessionViews.current.has(chatId) || viewReads.current.has(chatId))
+		if (
+			(sessionViews.current.has(chatId) &&
+				!restoredChats.current.has(chatId)) ||
+			viewReads.current.has(chatId)
+		)
 			return;
 		const listed = projectChats.find((group) =>
 			group.chats.some((chat) => chat.id === chatId),
 		);
 		if (!listed) return;
+		holdCachedChat(chatId);
 		const read = getCodexSession({
 			data: {
 				projectId: listed.project.id,
@@ -1741,9 +1823,18 @@ export function WorkspaceHome({
 			},
 		})
 			.then((view) => {
-				if (view.agentSessionId !== chatId) return null;
-				if (!sessionViews.current.has(chatId))
+				if (view.agentSessionId !== chatId) {
+					void chatCache?.forget([chatId]);
+					return null;
+				}
+				if (
+					!sessionViews.current.has(chatId) ||
+					restoredChats.current.has(chatId)
+				) {
 					sessionViews.current.set(chatId, view);
+					restoredChats.current.delete(chatId);
+				}
+				chatCache?.write(listed.project.id, view);
 				return view;
 			})
 			.catch(() => null)

@@ -235,6 +235,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			if (!(error instanceof Response) || error.status !== 401) throw error;
 			return {
 				signedIn: false,
+				userId: undefined,
 				session: emptyHarnessSession(),
 				projects: undefined,
 				chats: undefined,
@@ -306,6 +307,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 		const openChatView = settled ? settled.view : streamed;
 		return {
 			signedIn: true,
+			// The browser's chat cache belongs to this user (chat-cache.ts).
+			userId: user.id,
 			projects,
 			chats,
 			// The server renders this chat open, as the browser would open it;

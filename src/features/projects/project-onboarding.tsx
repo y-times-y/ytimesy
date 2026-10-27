@@ -1,6 +1,7 @@
 import { authClient } from "../auth/client";
 import { IdentityGate } from "../auth/identity-gate";
 import { OnboardingShell } from "../auth/onboarding-shell";
+import { clearChatCache } from "../sessions/chat-cache";
 import { AddProjectForm } from "./add-project-form";
 
 export function ProjectOnboarding() {
@@ -38,6 +39,7 @@ function SignOutLink() {
 				type="button"
 				className="setup-back"
 				onClick={async () => {
+					await clearChatCache();
 					await authClient.signOut();
 					window.location.assign("/");
 				}}
