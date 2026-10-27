@@ -46,3 +46,12 @@ cache hits to any request that adds an image and counts an image at ~600 tokens 
 heat-pump-warranty on Bedrock cost $4.75 per run and two runs hit the $6 trial cap; on OpenAI's
 API the same setup cost $2.83 with 89-92% cached. Image-heavy tasks must be compared on OpenAI's
 API; the bridge now leaves `openaiDirectUsd` null for Bedrock trials that read images (db96554).
+
+## Hosted web search overhead
+
+The provider-hosted web search tool adds 2,907 hidden input tokens to every request it is
+offered in (Bedrock Astra: 45 tokens without it, 2,952 with it), searching or not. `search=function`
+(db66dc1) offers a plain `web_search` function instead; each call is one separate low-effort
+request with the hosted tool (about 6k input, about $0.07 per search). shadow-relay: first request
+6,226 -> 3,380 tokens, pass. The panel above ran with hosted search, so its costs include this
+overhead (about $0.05-0.08 per run).
