@@ -27,6 +27,7 @@ export function FileMentionButton({
 			type="button"
 			className="session-file-open"
 			title={`Open ${path}`}
+			data-path={path}
 			onClick={() => onOpenFile(path)}
 		>
 			{chip}

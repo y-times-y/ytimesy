@@ -120,6 +120,7 @@ import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
+import { ReplyMarkdown } from "./settled-markdown";
 import { ShellCommandCode } from "./shell-command-code";
 import { useSmoothText } from "./smooth-text";
 import { useStableActions, useStableCallback } from "./stable-callbacks";
@@ -1024,6 +1025,7 @@ function SessionItemView({
 		case "agentMessage":
 			return (
 				<AgentReply
+					id={item.id}
 					text={item.text}
 					streaming={Boolean(turnRunning && item.streaming)}
 					fileChanges={fileChanges}
@@ -1481,11 +1483,13 @@ function SessionItemView({
 
 /** An agent's reply; while it streams, its text shows at a steady pace (useSmoothText). */
 function AgentReply({
+	id,
 	text,
 	streaming,
 	fileChanges,
 	onOpenFile,
 }: {
+	id: string;
 	text: string;
 	streaming: boolean;
 	fileChanges: readonly FileChangeEntry[];
@@ -1506,9 +1510,10 @@ function AgentReply({
 						items={segment.items}
 					/>
 				) : (
-					<AgentMarkdown
+					<ReplyMarkdown
 						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
 						key={index}
+						segmentKey={`${id}:${index}`}
 						text={segment.text}
 						streaming={streaming}
 						fileChanges={fileChanges}
