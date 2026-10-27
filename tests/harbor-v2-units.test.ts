@@ -620,12 +620,15 @@ describe("transport guard", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("leaves error responses and non-streamed requests alone", async () => {
+	it("hands back an error response once the throttle window is spent, and leaves non-streamed requests alone", async () => {
 		let calls = 0;
-		const fetch = guardedFetch(async () => {
-			calls++;
-			return new Response("overloaded", { status: 529 });
-		});
+		const fetch = guardedFetch(
+			async () => {
+				calls++;
+				return new Response("overloaded", { status: 529 });
+			},
+			{ throttleWindowMs: 0, throttleDelayMs: () => 0 },
+		);
 		const failed = await fetch("https://api.anthropic.com/v1/messages", {
 			method: "POST",
 			body: '{"stream":true}',
@@ -847,5 +850,56 @@ describe("isImageToolResult", () => {
 				output: { image: "x", base64: "y" },
 			}),
 		).toBe(false);
+	});
+});
+
+describe("transport guard throttling", () => {
+	const sse = () =>
+		new Response(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(
+						new TextEncoder().encode(
+							'event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n',
+						),
+					);
+					c.close();
+				},
+			}),
+			{ status: 200, headers: { "content-type": "text/event-stream" } },
+		);
+	const body = JSON.stringify({ model: "m", stream: true, input: [] });
+	it("waits out 429s and 5xx before output, then returns the stream", async () => {
+		const statuses = [429, 503, 200];
+		let calls = 0;
+		const fetch = guardedFetch(
+			async () => {
+				const s = statuses[calls++];
+				return s === 200 ? sse() : new Response("slow down", { status: s });
+			},
+			{ throttleDelayMs: () => 0 },
+		);
+		const res = await fetch("https://x.test/v1/responses", {
+			method: "POST",
+			body,
+		});
+		expect(res.status).toBe(200);
+		expect(calls).toBe(3);
+	});
+	it("hands back the throttled response once the window is spent", async () => {
+		let calls = 0;
+		const fetch = guardedFetch(
+			async () => {
+				calls++;
+				return new Response("slow down", { status: 429 });
+			},
+			{ throttleWindowMs: 0, throttleDelayMs: () => 1 },
+		);
+		const res = await fetch("https://x.test/v1/responses", {
+			method: "POST",
+			body,
+		});
+		expect(res.status).toBe(429);
+		expect(calls).toBe(1);
 	});
 });
