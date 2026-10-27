@@ -34,6 +34,20 @@ export const AGENT_WAIT_TOOL = "agent_wait";
 export const HELPER_ROLES = ["researcher", "reviewer"] as const;
 export type HelperRole = (typeof HELPER_ROLES)[number];
 /** As many live helpers as the product lets a builder run children. */
+/**
+ * The builder's prompt section for helpers=on, in place of the product's
+ * orchestrator section: helpers here are read-only, their reports are
+ * collected with agent_wait (no mailbox), and every helper is paid for, so
+ * the bar is cost, not wall-clock time alone.
+ */
+export const HELPER_INSTRUCTIONS = [
+	"Helpers: `agent` starts a read-only helper (researcher or reviewer) in the background on its own copy of your checkout, with only your brief, and returns its id at once. `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
+	"A helper costs about as much as you do and re-reads what it needs. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
+	"Every brief is self-contained: the goal, the paths and findings it needs, constraints and the report format.",
+	"Keep working while helpers run. Once you have what you need, stop running helpers with agent_send instead of waiting for them.",
+	"A report is a claim: spot-check it before relying on it. A refused start means do the work yourself.",
+].join("\n");
+
 export const MAX_LIVE_HELPERS = liveChildrenAllowed(0);
 const MAX_WAIT_MS = 10 * 60_000;
 

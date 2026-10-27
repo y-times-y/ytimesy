@@ -2409,6 +2409,12 @@ describe("runHarborTrial with plan=on and helpers=on", () => {
 			expect(builderTools).toContain(`"name":"${name}"`);
 		// Under codeMode=primary programs may call them too.
 		expect(builderTools).toContain("tools.update_plan");
+		// helpers=on's own section replaces the product's writer-delegation text.
+		const builderPrompt = JSON.stringify(model.doStreamCalls[0].prompt);
+		expect(builderPrompt).toContain(
+			"independent investigation likely to take over 10 minutes",
+		);
+		expect(builderPrompt).not.toContain("start writers in parallel");
 		// The helper is a reader: no write or edit tool, no agent tools.
 		const helperTools = (model.doStreamCalls[2].tools ?? []).map(
 			(entry: { name: string }) => entry.name,
