@@ -16,8 +16,10 @@ export function nodeClientSocket(socket: WebSocket): ClientSocket {
 				listener(binary ? toBytes(raw) : raw.toString(), binary),
 			),
 		onClose: (listener) => {
-			socket.on("close", listener);
-			socket.on("error", listener);
+			socket.on("close", (code, reason) =>
+				listener({ code, reason: reason.toString() }),
+			);
+			socket.on("error", () => listener({ reason: "error" }));
 		},
 	};
 }
