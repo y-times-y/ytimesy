@@ -61,7 +61,7 @@ export const HELPER_INSTRUCTIONS = [
  */
 export const WRITE_HELPER_INSTRUCTIONS = [
 	"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (in your own checkout, changing only the paths you list in `owns`). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
-	"Writers: decide right after reading the task, before you start the work, and only then. Start writers only when the task splits into independent parts that each take substantial work and the time available is long (about an hour or more). Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. Never start a writer later in the run, or for small, sequential or quick work.",
+	"Writers: decide once, after your first look at the task and its files, and never later. Start writers only when the work splits into two or more parts that can be built and checked separately and each part is a large job on its own (hours of work or thousands of lines). Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. Otherwise do all the work yourself.",
 	...HELPER_INSTRUCTIONS.split("\n").slice(1),
 ].join("\n");
 
