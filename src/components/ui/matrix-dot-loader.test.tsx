@@ -5,14 +5,13 @@ import { MatrixDotLoader } from "./matrix-dot-loader";
 import { Spinner } from "./spinner";
 
 describe("matrix dot loader", () => {
-	it("renders nine fixed cells with clockwise perimeter phases and a static center", () => {
+	it("renders nine pixels phased as a diagonal wave from the top-left", () => {
 		const html = renderToStaticMarkup(createElement(MatrixDotLoader));
 		const cells = html.match(/<i\b[^>]*>/g) ?? [];
 		expect(cells).toHaveLength(9);
 		expect(
-			cells.map((cell) => cell.match(/--t-matrix-step:(\d)/)?.[1] ?? ""),
-		).toEqual(["0", "1", "2", "7", "", "3", "6", "5", "4"]);
-		expect(cells[4]).toContain('class="t-matrix-center"');
+			cells.map((cell) => cell.match(/--t-matrix-diag:(\d)/)?.[1] ?? ""),
+		).toEqual(["0", "1", "2", "1", "2", "3", "2", "3", "4"]);
 		expect(html).toContain('aria-hidden="true"');
 	});
 	it("keeps the shared loading status accessible without a rotating SVG", () => {

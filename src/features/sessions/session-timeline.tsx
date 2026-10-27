@@ -76,8 +76,12 @@ import {
 	type TimelineRow,
 } from "#/domain/timeline-activity";
 import { toolActivity, toolDetailTitle } from "#/domain/tool-detail";
+import {
+	reuseUnchangedItems,
+	reuseUnchangedRows,
+	sameJsonValue,
+} from "#/domain/unchanged-items";
 import { userQuestionReply } from "#/domain/user-question";
-import { TIMELINE_END_SCRIPT, useHydrated } from "../app/first-paint";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
@@ -98,6 +102,7 @@ import {
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { InlineMarkdown } from "./inline-markdown";
+import { LazyDetails } from "./lazy-details";
 import { LiveCollapsible } from "./live-collapsible";
 import { McpServerIcon } from "./mcp-server-icon";
 import {
@@ -115,7 +120,10 @@ import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
+import { ReplyMarkdown } from "./settled-markdown";
 import { ShellCommandCode } from "./shell-command-code";
+import { useSmoothText } from "./smooth-text";
+import { useStableActions, useStableCallback } from "./stable-callbacks";
 import { TodoList } from "./todo-list";
 import {
 	AgentCallView,
@@ -195,30 +203,44 @@ export function SessionTimeline({
 	collapseInstructions?: boolean;
 }) {
 	// Derived once per transcript change, not per render (the composer's
-	// typing renders this again): the rows stay the same objects, so the
-	// mounted ones are not drawn again.
-	const { queued, items, presented, visible, rows, fileChanges } = useMemo(
-		() => timelineRows(allItems, turnStatus),
+	// typing renders this again). Each progress snapshot arrives as new
+	// objects: the items, rows and file list that hold the same data stay the
+	// previous objects, so only the rows that changed are drawn again.
+	const previous = useRef<TimelineRows | null>(null);
+	const derived = useMemo(
+		() => stableTimelineRows(previous.current, allItems, turnStatus),
 		[allItems, turnStatus],
 	);
+	previous.current = derived;
+	const { queued, items, presented, visible, rows, fileChanges } = derived;
+	const openFile = useStableCallback(onOpenFile);
+	const removeQueued = useStableCallback(onRemoveQueued);
+	const readPasted = useStableCallback(readPastedText);
+	const stableMemoryActions = useStableActions(memoryActions);
+	const stableSecretActions = useStableActions(secretActions);
+	const stableQuestionActions = useStableActions(questionActions);
+	const stableFailoverActions = useStableActions(failoverActions);
 	// The same while the helpers are: a new value would give every reply's
 	// Markdown new components, and React would build their DOM again.
 	const selectHelper = useRef(helperLines?.onSelect);
 	selectHelper.current = helperLines?.onSelect;
 	const identities = helperLines?.identities;
 	const selectable = Boolean(helperLines?.onSelect);
-	const mentions = useMemo(
+	const stableHelperLines = useMemo<HelperLines | undefined>(
 		() =>
-			agentMentions(
-				identities && {
-					identities,
-					...(selectable
-						? { onSelect: (id: string) => selectHelper.current?.(id) }
-						: {}),
-				},
-				taskParentId,
-			),
-		[identities, selectable, taskParentId],
+			identities
+				? {
+						identities,
+						...(selectable
+							? { onSelect: (id: string) => selectHelper.current?.(id) }
+							: {}),
+					}
+				: undefined,
+		[identities, selectable],
+	);
+	const mentions = useMemo(
+		() => agentMentions(stableHelperLines, taskParentId),
+		[stableHelperLines, taskParentId],
 	);
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
@@ -246,7 +268,7 @@ export function SessionTimeline({
 		.filter((mark) => mark.start || !olderItems);
 	// A helper's start line stands in for the agent call that started it.
 	const startsHelper = (row: TimelineRow) =>
-		!!helperLines &&
+		!!stableHelperLines &&
 		row.kind === "item" &&
 		row.item.kind === "dynamicToolCall" &&
 		row.item.tool === "agent" &&
@@ -265,8 +287,6 @@ export function SessionTimeline({
 		if (startsTurn(item)) currentTurnIds.clear();
 		else currentTurnIds.add(item.id);
 	}
-
-	const hydrated = useHydrated();
 
 	if (
 		visible.length === 0 &&
@@ -293,26 +313,26 @@ export function SessionTimeline({
 				content: (
 					<>
 						{row.kind === "item" && row.item.kind === "planProposal" ? (
-							<PlanMessage text={row.item.text} onOpenFile={onOpenFile} />
+							<PlanMessage text={row.item.text} onOpenFile={openFile} />
 						) : row.kind === "item" && row.item.kind === "userQuestion" ? (
-							<UserQuestionCard
+							<MemoUserQuestionCard
 								item={row.item}
 								reply={userQuestionReply(items, row.item.id)}
-								actions={questionActions}
+								actions={stableQuestionActions}
 							/>
 						) : row.kind === "item" && row.item.kind === "secretRequest" ? (
-							<SecretRequestCard
+							<MemoSecretRequestCard
 								item={row.item}
 								outcome={secretRequestOutcome(items, row.item.id)}
-								actions={secretActions}
+								actions={stableSecretActions}
 							/>
 						) : row.kind === "item" &&
 							row.item.kind === "modelSwitch" &&
 							row.item.state === "awaitingApproval" ? (
-							<ModelSwitchCard
+							<MemoModelSwitchCard
 								item={row.item}
 								answered={answeredAfter(items, row.item.id)}
-								actions={failoverActions}
+								actions={stableFailoverActions}
 							/>
 						) : (
 							<TimelineRowView
@@ -326,32 +346,37 @@ export function SessionTimeline({
 									visible.at(-1)?.id
 								}
 								fileChanges={fileChanges}
-								onOpenFile={onOpenFile}
+								onOpenFile={openFile}
 							/>
 						)}
-						{row.kind === "item" && row.item.kind === "userMessage"
-							? recoveryControls?.(row.item.id)
-							: null}
+						{row.kind === "item" &&
+						row.item.kind === "userMessage" &&
+						recoveryControls ? (
+							<RecoveryControls
+								messageId={row.item.id}
+								render={recoveryControls}
+							/>
+						) : null}
 					</>
 				),
 			});
 		for (const { task } of helperMarks.filter((mark) =>
 			rowHas(row, mark.start),
 		))
-			add(helperStartEntry(task, helperLines));
+			add(helperStartEntry(task, stableHelperLines));
 		for (const { task } of helperMarks.filter((mark) =>
 			rowHas(row, mark.finish),
 		))
-			add(helperFinishEntry(task, helperLines));
+			add(helperFinishEntry(task, stableHelperLines));
 		for (const record of row.kind === "item"
 			? (evidenceAt.anchored.get(row.item.id) ?? [])
 			: row.items.flatMap((item) => evidenceAt.anchored.get(item.id) ?? []))
 			add(evidenceEntry(record));
 	}
 	for (const { task } of helperMarks.filter((mark) => !mark.start))
-		add(helperStartEntry(task, helperLines));
+		add(helperStartEntry(task, stableHelperLines));
 	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
-		add(helperFinishEntry(task, helperLines));
+		add(helperFinishEntry(task, stableHelperLines));
 	for (const record of evidenceAt.trailing) add(evidenceEntry(record));
 	if (showTurnWorking(items, turnStatus))
 		add({
@@ -370,7 +395,7 @@ export function SessionTimeline({
 			kind: "userMessage",
 			queued: true,
 			estimate: 60,
-			content: <QueuedMessage item={item} onRemove={onRemoveQueued} />,
+			content: <QueuedMessage item={item} onRemove={removeQueued} />,
 		});
 	for (const message of queuedSteering)
 		add({
@@ -412,8 +437,8 @@ export function SessionTimeline({
 
 	return (
 		<TimelineProviders
-			memoryActions={memoryActions}
-			readPastedText={readPastedText}
+			memoryActions={stableMemoryActions}
+			readPastedText={readPasted}
 		>
 			<SenderContext.Provider value={senderName ?? null}>
 				<AgentMentionContext.Provider value={mentions}>
@@ -431,27 +456,58 @@ export function SessionTimeline({
 								: undefined
 						}
 						followEnd={autoScroll}
+						followKey={queued.at(-1)?.id ?? sentMessageId(presented)}
 						onNearStart={
 							olderItems && !olderItems.loading ? olderItems.onLoad : undefined
 						}
 					/>
-					{autoScroll && !hydrated ? (
-						// The server's transcript paints scrolled to its end, where the list keeps it.
-						<script
-							// biome-ignore lint/security/noDangerouslySetInnerHtml: our own constant script, no user input.
-							dangerouslySetInnerHTML={{ __html: TIMELINE_END_SCRIPT }}
-							suppressHydrationWarning
-						/>
-					) : null}
 				</AgentMentionContext.Provider>
 			</SenderContext.Provider>
 		</TimelineProviders>
 	);
 }
 
+type TimelineRows = ReturnType<typeof timelineRows> & {
+	readonly input: readonly SessionItem[];
+	readonly turnStatus: SessionTurnStatus;
+};
+
+/** timelineRows, keeping the previous objects for everything that holds the same data. */
+function stableTimelineRows(
+	previous: TimelineRows | null,
+	allItems: readonly SessionItem[],
+	turnStatus: SessionTurnStatus,
+): TimelineRows {
+	const input = previous
+		? reuseUnchangedItems(previous.input, allItems)
+		: allItems;
+	if (
+		previous &&
+		input === previous.input &&
+		turnStatus === previous.turnStatus
+	)
+		return previous;
+	const next = timelineRows(input, turnStatus, (presented) =>
+		previous ? reuseUnchangedItems(previous.presented, presented) : presented,
+	);
+	if (!previous) return { ...next, input, turnStatus };
+	return {
+		...next,
+		rows: reuseUnchangedRows(previous.rows, next.rows),
+		fileChanges: sameJsonValue(previous.fileChanges, next.fileChanges)
+			? previous.fileChanges
+			: next.fileChanges,
+		input,
+		turnStatus,
+	};
+}
+
 function timelineRows(
 	allItems: readonly SessionItem[],
 	turnStatus: SessionTurnStatus,
+	settle: (presented: readonly SessionItem[]) => readonly SessionItem[] = (
+		presented,
+	) => presented,
 ) {
 	// Waiting messages are not part of the turn yet; they sit below its activity.
 	const queued = allItems.filter(isQueuedUserMessage);
@@ -459,7 +515,7 @@ function timelineRows(
 		? allItems.filter((item) => !isQueuedUserMessage(item))
 		: allItems;
 	// Wake-up turn starts stay in for grouping: they end the turn before them.
-	const presented = childTaskPublicItems(compactTimelineItems(items));
+	const presented = settle(childTaskPublicItems(compactTimelineItems(items)));
 	return {
 		queued,
 		items,
@@ -468,6 +524,33 @@ function timelineRows(
 		rows: groupTimelineRows(presented, turnStatus),
 		fileChanges: fileChangesFromSessionItems(items),
 	};
+}
+
+// Rows are drawn again only when their own data changes, not on every
+// keystroke in the composer or every streamed chunk of another message.
+const MemoUserQuestionCard = memo(UserQuestionCard);
+const MemoSecretRequestCard = memo(SecretRequestCard);
+const MemoModelSwitchCard = memo(ModelSwitchCard);
+const MemoEvidenceCard = memo(EvidenceCard);
+
+/** A user message's recovery controls, drawn again when the controls change. */
+const RecoveryControls = memo(function RecoveryControls({
+	messageId,
+	render,
+}: {
+	messageId: string;
+	render: (messageId: string) => ReactNode;
+}) {
+	return render(messageId);
+});
+
+/** The last message the reader sent: sending one brings the list back to its end. */
+function sentMessageId(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage") return item.id;
+	}
+	return undefined;
 }
 
 /** The row above a chat's loaded turns while it holds older ones (px, styled to match). */
@@ -504,7 +587,7 @@ function evidenceEntry(
 		key: `evidence:${record.id}`,
 		kind: "evidence",
 		estimate: 160,
-		content: <EvidenceCard evidence={record} />,
+		content: <MemoEvidenceCard evidence={record} />,
 	};
 }
 
@@ -599,7 +682,7 @@ function agentMentions(
 }
 
 /** "build-1 started · Fix pricing rounding": one quiet line where it started. */
-function HelperLine({
+const HelperLine = memo(function HelperLine({
 	task,
 	lines,
 }: {
@@ -637,14 +720,14 @@ function HelperLine({
 			{content}
 		</p>
 	);
-}
+});
 
 /**
  * A finished helper in its parent's chat: an outlined card with its name,
  * outcome, task and time over its report's first line. The full report is
  * its hover; a click opens the helper, as its agents-list row does.
  */
-function HelperFinishCard({
+const HelperFinishCard = memo(function HelperFinishCard({
 	task,
 	lines,
 }: {
@@ -702,7 +785,7 @@ function HelperFinishCard({
 			{content}
 		</div>
 	);
-}
+});
 
 function MessageAttachments({
 	attachments,
@@ -737,7 +820,7 @@ function MessageAttachments({
 	);
 }
 
-function QueuedMessage({
+const QueuedMessage = memo(function QueuedMessage({
 	item,
 	onRemove,
 }: {
@@ -766,7 +849,7 @@ function QueuedMessage({
 			</p>
 		</div>
 	);
-}
+});
 
 const TimelineRowView = memo(function TimelineRowView({
 	row,
@@ -785,7 +868,7 @@ const TimelineRowView = memo(function TimelineRowView({
 }) {
 	if (row.kind === "work") {
 		return (
-			<details className="session-work">
+			<LazyDetails className="session-work">
 				<summary>
 					<span title="Elapsed time from dispatch to observed completion">
 						{row.label}
@@ -808,7 +891,7 @@ const TimelineRowView = memo(function TimelineRowView({
 						/>
 					))}
 				</div>
-			</details>
+			</LazyDetails>
 		);
 	}
 	if (row.kind === "exploration") {
@@ -890,7 +973,7 @@ function SessionItemView({
 					<div className="session-message" data-role="user" data-sender="true">
 						<span className="session-message-sender">{message.from}</span>
 						{message.text.length > 600 ? (
-							<details className="session-work child-task-instructions">
+							<LazyDetails className="session-work child-task-instructions">
 								<summary>
 									<span>{firstWords(message.text)}</span>
 									<ChevronRight
@@ -902,7 +985,7 @@ function SessionItemView({
 								<div className="session-work-items">
 									<AgentMarkdown text={message.text} onOpenFile={onOpenFile} />
 								</div>
-							</details>
+							</LazyDetails>
 						) : (
 							<p>
 								<MentionText text={message.text} />
@@ -913,7 +996,7 @@ function SessionItemView({
 			}
 			if (collapseInstructions) {
 				return (
-					<details className="session-work child-task-instructions">
+					<LazyDetails className="session-work child-task-instructions">
 						<summary>
 							<span>Brief</span>
 							<ChevronRight
@@ -925,7 +1008,7 @@ function SessionItemView({
 						<div className="session-work-items">
 							<AgentMarkdown text={item.text} onOpenFile={onOpenFile} />
 						</div>
-					</details>
+					</LazyDetails>
 				);
 			}
 			return (
@@ -941,30 +1024,13 @@ function SessionItemView({
 			return <MemorySaveNote item={item} />;
 		case "agentMessage":
 			return (
-				<div
-					className="session-message"
-					data-role="assistant"
-					data-streaming={turnRunning && item.streaming ? "true" : undefined}
-				>
-					{requirementsSegments(item.text).map((segment, index) =>
-						segment.kind === "requirements" ? (
-							<RequirementsList
-								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-								key={index}
-								items={segment.items}
-							/>
-						) : (
-							<AgentMarkdown
-								// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
-								key={index}
-								text={segment.text}
-								streaming={Boolean(turnRunning && item.streaming)}
-								fileChanges={fileChanges}
-								onOpenFile={onOpenFile}
-							/>
-						),
-					)}
-				</div>
+				<AgentReply
+					id={item.id}
+					text={item.text}
+					streaming={Boolean(turnRunning && item.streaming)}
+					fileChanges={fileChanges}
+					onOpenFile={onOpenFile}
+				/>
 			);
 		case "reasoning": {
 			const summaries = item.summaries.filter((summary) => summary.trim());
@@ -1013,7 +1079,7 @@ function SessionItemView({
 		case "plan":
 			if (item.todos) return <TodoList todos={item.todos} />;
 			return (
-				<details className="session-activity" data-kind="plan">
+				<LazyDetails className="session-activity" data-kind="plan">
 					<summary>
 						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
@@ -1024,7 +1090,7 @@ function SessionItemView({
 						/>
 					</summary>
 					<p>{item.text || "Planning…"}</p>
-				</details>
+				</LazyDetails>
 			);
 		case "userQuestion":
 			return <UserQuestionCard item={item} reply={null} />;
@@ -1035,7 +1101,7 @@ function SessionItemView({
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
@@ -1063,7 +1129,7 @@ function SessionItemView({
 							<p className="session-activity-meta">exit {item.exitCode}</p>
 						) : null}
 					</div>
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "fileChange": {
@@ -1113,7 +1179,7 @@ function SessionItemView({
 				);
 			}
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="fileChange"
 					data-status={item.status}
@@ -1146,7 +1212,7 @@ function SessionItemView({
 							/>
 						</p>
 					))}
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "mcpToolCall":
@@ -1195,7 +1261,7 @@ function SessionItemView({
 			const codeResult = codeModeResult(item);
 			const innerCalls = codeModeCallItems(item);
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="dynamicToolCall"
 					data-status={item.status}
@@ -1261,7 +1327,7 @@ function SessionItemView({
 					</summary>
 					{program !== null ? (
 						<>
-							<details
+							<LazyDetails
 								className="tool-panel session-program"
 								data-kind="program"
 							>
@@ -1278,7 +1344,7 @@ function SessionItemView({
 									/>
 								</summary>
 								<ProgramSource program={program} />
-							</details>
+							</LazyDetails>
 							{innerCalls.length > 0 && (
 								<div className="session-program-calls">
 									{innerCalls.map((call) => (
@@ -1323,7 +1389,7 @@ function SessionItemView({
 					) : (
 						<ToolDetailBody item={item} />
 					)}
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "webSearch":
@@ -1415,6 +1481,50 @@ function SessionItemView({
 	}
 }
 
+/** An agent's reply; while it streams, its text shows at a steady pace (useSmoothText). */
+function AgentReply({
+	id,
+	text,
+	streaming,
+	fileChanges,
+	onOpenFile,
+}: {
+	id: string;
+	text: string;
+	streaming: boolean;
+	fileChanges: readonly FileChangeEntry[];
+	onOpenFile?: (path: string) => void;
+}) {
+	const shown = useSmoothText(text, streaming);
+	return (
+		<div
+			className="session-message"
+			data-role="assistant"
+			data-streaming={streaming ? "true" : undefined}
+		>
+			{requirementsSegments(shown).map((segment, index) =>
+				segment.kind === "requirements" ? (
+					<RequirementsList
+						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+						key={index}
+						items={segment.items}
+					/>
+				) : (
+					<ReplyMarkdown
+						// biome-ignore lint/suspicious/noArrayIndexKey: a message's segments keep their order
+						key={index}
+						segmentKey={`${id}:${index}`}
+						text={segment.text}
+						streaming={streaming}
+						fileChanges={fileChanges}
+						onOpenFile={onOpenFile}
+					/>
+				),
+			)}
+		</div>
+	);
+}
+
 /**
  * A background command's kind tag (the agents list's, helper-names.ts) and,
  * when the command is recorded, its live state: "running 3m", "exited 0",
@@ -1480,7 +1590,7 @@ function programLinesLabel(program: string): string {
 }
 
 /** A proposed plan reads as the agent's reply; the user answers it in the chat. */
-function PlanMessage({
+const PlanMessage = memo(function PlanMessage({
 	text,
 	onOpenFile,
 }: {
@@ -1492,7 +1602,7 @@ function PlanMessage({
 			<AgentMarkdown text={text} onOpenFile={onOpenFile} />
 		</div>
 	);
-}
+});
 
 /** The opening words of a long brief, for its folded summary. */
 function firstWords(text: string) {
