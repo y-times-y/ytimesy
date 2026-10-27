@@ -372,6 +372,7 @@ export function tick(input: {
 		tasks: input.tasks,
 		hosts: input.hosts,
 		unhealthyHosts: unhealthy,
+		maxInFlight: Number(process.env.TB4_MAX_IN_FLIGHT) || undefined,
 	})) {
 		// Journal first: if the controller dies between these two lines, the restart
 		// finds the attempt, sees no unit on the host and marks it infra (never started).
