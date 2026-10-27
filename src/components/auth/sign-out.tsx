@@ -3,6 +3,7 @@
 import { useAuth, useSignOut } from "@better-auth-ui/react";
 import { useEffect, useRef } from "react";
 import { Spinner } from "#/components/ui/spinner.tsx";
+import { clearChatCache } from "#/features/sessions/chat-cache";
 import { cn } from "#/lib/utils.ts";
 
 type SignOutProps = {
@@ -38,7 +39,7 @@ export function SignOut({ className }: SignOutProps) {
 		if (hasSignedOut.current) return;
 		hasSignedOut.current = true;
 
-		signOut();
+		void clearChatCache().finally(() => signOut());
 	}, [signOut]);
 
 	return <Spinner className={cn("mx-auto my-auto", className)} />;

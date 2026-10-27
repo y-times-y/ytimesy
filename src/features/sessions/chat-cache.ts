@@ -250,12 +250,10 @@ function chatCacheStore(): ChatCacheStore | null {
 
 /** The signed-in user's cache; on the server, a cache that never hits. */
 export function chatCacheFor(ownerId: string): ChatCache {
+	if (typeof window === "undefined") return new ChatCache(null, ownerId);
 	if (browserCache?.ownerId !== ownerId) {
 		browserCache?.close();
-		browserCache = new ChatCache(
-			typeof window === "undefined" ? null : chatCacheStore(),
-			ownerId,
-		);
+		browserCache = new ChatCache(chatCacheStore(), ownerId);
 	}
 	return browserCache;
 }

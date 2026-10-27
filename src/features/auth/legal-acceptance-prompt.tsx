@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
 import { CURRENT_LEGAL_VERSIONS } from "#/domain/legal-acceptance";
+import { clearChatCache } from "../sessions/chat-cache";
 import { authClient } from "./client";
 import {
 	acceptLegalTermsFn,
@@ -75,6 +76,7 @@ export function LegalAcceptancePrompt() {
 			error={save.error?.message}
 			onAccept={() => save.mutate()}
 			onSignOut={async () => {
+				await clearChatCache();
 				await authClient.signOut().catch(() => undefined);
 				window.location.assign("/");
 			}}

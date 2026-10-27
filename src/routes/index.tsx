@@ -46,6 +46,7 @@ function HomePage() {
 	const {
 		session,
 		signedIn,
+		userId,
 		projects,
 		chats,
 		openChatView,
@@ -60,6 +61,7 @@ function HomePage() {
 			initialChats={chats}
 			initialChatView={openChat}
 			account={account}
+			userId={userId}
 			renderedAtMs={renderedAtMs}
 		/>
 	);

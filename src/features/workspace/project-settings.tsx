@@ -44,6 +44,7 @@ import { authClient } from "../auth/client";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
+import { clearChatCache } from "../sessions/chat-cache";
 import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
@@ -428,6 +429,7 @@ function DeleteAccount({ email }: { email?: string | null }) {
 			}
 		},
 		onSuccess: async () => {
+			await clearChatCache();
 			await authClient.signOut().catch(() => undefined);
 			window.location.assign("/auth/sign-in");
 		},
