@@ -864,24 +864,26 @@ button:enabled:active {
 .workspace-inspector-expand {
 	right: 44px;
 }
-/* Inside the sidebar beside the logo: only on a phone, where the sidebar
-   opens over the top-left toggle. */
+/* The open sidebar's toggle: in its header, beside the logo. */
 .sidebar-brand-toggle {
-	display: none;
 	position: static;
 	flex-shrink: 0;
 }
-/* The left sidebar's toggle: top left of the chat, as the right sidebar's is
-   top right, moving with the sidebar's edge. <html data-sidebar> places it
-   from the first paint (src/features/app/first-paint.ts). */
+/* The closed sidebar's toggle: top left of the chat, as the right sidebar's
+   is top right. Open, the sidebar's own toggle takes over; closing, this one
+   fades in as the sidebar slides away. <html data-sidebar> picks one from the
+   first paint (src/features/app/first-paint.ts). */
 .left-sidebar-toggle {
 	left: 4px;
 	transition:
 		color 120ms ease,
-		left 280ms cubic-bezier(0.22, 1, 0.36, 1);
+		visibility 0s,
+		opacity 160ms ease 120ms;
 }
 :where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
-	left: calc(var(--sidebar-width) + 4px);
+	visibility: hidden;
+	opacity: 0;
+	transition: none;
 }
 /* The attention dot, while the sidebar is closed; before hydration the
    first-paint rows script may show it. */
@@ -902,16 +904,9 @@ button:enabled:active {
 	display: block;
 }
 @media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
-	.left-sidebar-toggle,
-	:where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
+	.left-sidebar-toggle {
 		top: max(6px, env(safe-area-inset-top));
 		left: max(6px, env(safe-area-inset-left));
-	}
-	:where(:root[data-sidebar="open"]) .workspace-shell .left-sidebar-toggle {
-		visibility: hidden;
-	}
-	.sidebar-brand-toggle {
-		display: grid;
 	}
 }
 .inspector-toolbar {

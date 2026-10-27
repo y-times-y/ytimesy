@@ -271,12 +271,11 @@ export function ProjectSidebar({
 
 	function toggleProjects() {
 		onToggle();
-		requestAnimationFrame(() => {
-			// Opening on a phone: the sidebar's own toggle (the top-left one is
-			// under it); otherwise the top-left toggle stays where it was.
-			const inSidebar = sidebarToggle.current?.getClientRects().length;
-			(!expanded && inSidebar ? sidebarToggle : leftToggle).current?.focus();
-		});
+		// Focus follows the toggle that stays: the sidebar's own once open,
+		// the chat's top-left one once closed.
+		requestAnimationFrame(() =>
+			(expanded ? leftToggle : sidebarToggle).current?.focus(),
+		);
 	}
 
 	/** Main's turn, or a helper's (an active turn the list reports). */
@@ -510,8 +509,9 @@ export function ProjectSidebar({
 	return (
 		// Status tooltips hold no controls: they close as the pointer leaves the row.
 		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
-			{/* Top left of the chat, open or closed (as the right sidebar's toggle
-			    is top right); the attention dot shows while the sidebar is closed. */}
+			{/* Top left of the chat while the sidebar is closed (as the right
+			    sidebar's toggle is top right), with the attention dot; open, the
+			    sidebar's header has its own toggle (CSS picks, from <html data-sidebar>). */}
 			<button
 				ref={leftToggle}
 				type="button"
