@@ -8,6 +8,7 @@ import type {
 } from "#/domain/agent-task";
 import { jsonbText } from "#/domain/jsonb";
 import { sessionTitleFromText } from "#/domain/session-item";
+import type { ChatWaitingOn } from "#/domain/sidebar-chats";
 import type {
 	SubagentBudget,
 	SubagentFork,
@@ -244,35 +245,19 @@ export async function listAgentSessions(userId: string, projectId: string) {
 }
 
 /**
- * The project's chats for the sidebar, each with when its oldest active turn
- * (Main's or a helper's) started: null when none is queued or running.
+ * The project's chats for the sidebar, without their histories: each with
+ * what it waits on from the user and when its oldest active turn (Main's or
+ * a helper's) started (null when none is queued or running).
  */
-/**
- * What a sidebar row needs of a chat's history: chatWaitingOn reads back
- * from the end only to the item that started the last turn (a user message
- * or a wake notice), and only each item's kind, state and wake flag. Whole
- * histories run to megabytes per chat; this sends a few bytes per item of
- * the last turn. A user message keeps an empty text (any user message
- * starts a turn, whatever it says).
- */
-const SIDEBAR_ITEMS = `(case when jsonb_typeof(s.items)='array' then (
-  select coalesce(jsonb_agg(case when jsonb_typeof(t.value)='object'
-   then jsonb_build_object('kind',t.value->'kind','state',t.value->'state','wake',t.value->'wake','text','')
-   else t.value end order by t.n),'[]'::jsonb)
-  from (select x.value,x.n,max(case when x.value->>'kind'='userMessage'
-     or (x.value->>'kind'='notice' and x.value->'wake'='true'::jsonb) then x.n end) over () as last
-   from jsonb_array_elements(s.items) with ordinality x(value,n)) t
-  where t.n >= coalesce(t.last,1)
- ) else '[]'::jsonb end)`;
-
 export async function listSidebarAgentSessions(
 	userId: string,
 	projectId: string,
 ) {
-	// Only each chat's last turn: what the chat waits on from the user
-	// (chatWaitingOn) is read from it, and whole transcripts are large.
+	// No history: what each chat waits on from the user (chatWaitingOn) is
+	// kept on the row (waiting_on, maintained by a trigger on items and
+	// turn_status; supabase/migrations/20261026110000_agent_session_waiting_on.sql).
 	const result = await database().query(
-		`select ${SESSION_COLUMNS.replace(",items,", `,${SIDEBAR_ITEMS} as items,`)},
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.waiting_on,
 		  (select min(t.created_at) from api_turn t
 		   where t.state in ('queued','running')
 		    and t.session_id in (select s.id union all
@@ -283,8 +268,15 @@ export async function listSidebarAgentSessions(
 		[userId, projectId],
 	);
 	return result.rows.map(
-		(row: AgentSessionRow & { working_since: Date | string | null }) => ({
-			...toSession(row),
+		({
+			waiting_on,
+			...row
+		}: AgentSessionRow & {
+			working_since: Date | string | null;
+			waiting_on: ChatWaitingOn | null;
+		}) => ({
+			...withoutItems(toSession(row)),
+			waitingOn: waiting_on,
 			workingSince:
 				row.working_since instanceof Date
 					? row.working_since.toISOString()
@@ -682,6 +674,13 @@ export async function saveAgentSessionItems(
 		],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+function withoutItems(
+	session: AgentSessionRecord,
+): Omit<AgentSessionRecord, "items"> {
+	const { items: _items, ...metadata } = session;
+	return metadata;
 }
 
 function toSession(row: AgentSessionRow): AgentSessionRecord {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listSidebarAgentSessions } from "./agent-sessions";
@@ -10,8 +11,14 @@ let db: PGlite;
 const project = randomUUID();
 beforeEach(async () => {
 	db = new PGlite();
-	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,created_at timestamptz default now(),updated_at timestamptz default now());
+	await db.exec(`create role anon; create role authenticated;
+	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,created_at timestamptz default now(),updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,state text,created_at timestamptz default now());`);
+	for (const file of [
+		"20261026100000_agent_session_item",
+		"20261026110000_agent_session_waiting_on",
+	])
+		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -59,7 +66,7 @@ it("lists when Main's or a helper's active turn started, and nothing for finishe
 	expect(since.Idle).toBeNull();
 });
 
-it("reads only the last turn's item kinds, and finds what each chat waits on as the whole history would", async () => {
+it("lists what each chat waits on from the stored column, as the whole history would say, without reading histories", async () => {
 	const { chatsFromAgentSessions } = await import("#/domain/agent-session");
 	const big = "x".repeat(10_000);
 	const histories: Record<string, unknown> = {
@@ -77,6 +84,15 @@ it("reads only the last turn's item kinds, and finds what each chat waits on as 
 			{ kind: "userMessage", text: "go" },
 			{ kind: "modelSwitch", state: "awaitingApproval", detail: big },
 		],
+		switched: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "modelSwitch", state: "approved" },
+		],
+		planned: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "planProposal", plan: "p" },
+			{ kind: "agentMessage", text: "see the plan" },
+		],
 		woken: [
 			{ kind: "userMessage", text: "go" },
 			{ kind: "secretRequest", name: "X" },
@@ -87,6 +103,7 @@ it("reads only the last turn's item kinds, and finds what each chat waits on as 
 			{ kind: "notice", wake: false, text: "not a turn start" },
 			{ kind: "secretRequest", name: "X" },
 		],
+		running: [{ kind: "userMessage", text: "go" }, { kind: "userQuestion" }],
 		empty: [],
 		notArray: { kind: "userQuestion" },
 	};
@@ -101,15 +118,11 @@ it("reads only the last turn's item kinds, and finds what each chat waits on as 
 	await db.query(
 		"update agent_session set turn_status='failed' where title='answered'",
 	);
+	await db.query(
+		"update agent_session set turn_status='running' where title='running'",
+	);
 	const listed = await listSidebarAgentSessions("alice", project);
-	const byTitle = Object.fromEntries(listed.map((row) => [row.title, row]));
-	// Nothing past the last turn start, and no item bodies.
-	expect(byTitle.question.items).toEqual([
-		{ kind: "userMessage", state: null, wake: null, text: "" },
-		{ kind: "assistantMessage", state: null, wake: null, text: "" },
-		{ kind: "userQuestion", state: null, wake: null, text: "" },
-	]);
-	expect(byTitle.woken.items).toHaveLength(2);
+	expect(listed.every((row) => !("items" in row))).toBe(true);
 	expect(JSON.stringify(listed).includes(big)).toBe(false);
 	const waiting = (rows: readonly { title: string }[]) =>
 		Object.fromEntries(
@@ -118,20 +131,34 @@ it("reads only the last turn's item kinds, and finds what each chat waits on as 
 				row.waitingOn,
 			]),
 		);
-	const full = listed.map((row) => ({
+	const full = listed.map(({ waitingOn: _stored, ...row }) => ({
 		...row,
-		items: Array.isArray(histories[row.title]) ? histories[row.title] : [],
+		items: histories[row.title],
 	}));
 	expect(waiting(listed)).toEqual(waiting(full));
 	expect(waiting(listed)).toMatchObject({
 		question: "question",
 		answered: "failed",
 		paused: "paused",
+		switched: null,
+		planned: "plan",
 		woken: null,
 		secret: "secret",
+		running: null,
 		empty: null,
 		notArray: null,
 	});
+
+	// Each later write keeps it: a reply clears the question, a stop fails it.
+	await db.query(
+		`update agent_session set items=items || '[{"kind":"userMessage","text":"yes"}]'::jsonb where id=$1`,
+		[ids.question],
+	);
+	await db.query("update agent_session set turn_status='failed' where id=$1", [
+		ids.running,
+	]);
+	const after = waiting(await listSidebarAgentSessions("alice", project));
+	expect(after).toMatchObject({ question: null, running: "question" });
 });
 
 it("finds the chat a page opens as the sidebar list would pick it, without reading its history", async () => {

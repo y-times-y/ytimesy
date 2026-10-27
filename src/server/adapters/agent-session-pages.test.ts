@@ -22,7 +22,10 @@ beforeEach(async () => {
 	await db.exec(`create role anon; create role authenticated;
 	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,created_at timestamptz default now(),updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,state text,created_at timestamptz default now());`);
-	for (const file of ["20261026100000_agent_session_item"])
+	for (const file of [
+		"20261026100000_agent_session_item",
+		"20261026110000_agent_session_waiting_on",
+	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
@@ -127,17 +130,15 @@ it("reads an empty chat, a cursor the transcript lost, and nothing of another us
 	expect(await agentSessionPageForOwner("bob", id, { turns: 30 })).toBeNull();
 });
 
-it("lists each chat with only its last turn, enough to say what it waits on", async () => {
+it("lists each chat with what it waits on, not its items", async () => {
 	await chat([
 		...turnItems(0),
 		{ kind: "userMessage", id: "q", text: "pick" },
 		{ kind: "userQuestion", id: "ask", questions: [] },
 	]);
 	const [listed] = await listSidebarAgentSessions("alice", project);
-	// The sidebar reads only item kinds, not bodies or ids.
-	expect(
-		((listed?.items ?? []) as { kind: string }[]).map((item) => item.kind),
-	).toEqual(["userMessage", "userQuestion"]);
+	expect(listed).toMatchObject({ waitingOn: "question" });
+	expect(listed && "items" in listed).toBe(false);
 });
 
 it("keeps one row per item in step with every rewrite of the stored array", async () => {
@@ -201,11 +202,18 @@ it("copies histories stored before the item table existed", async () => {
 		`update agent_session set items=items || '[{"kind":"userQuestion","id":"q"}]'::jsonb where id=$1`,
 		[sessions[3]],
 	);
-	for (const file of ["20261026100000_agent_session_item"])
+	for (const file of [
+		"20261026100000_agent_session_item",
+		"20261026110000_agent_session_waiting_on",
+	])
 		await fresh.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 	const counts = await fresh.query<{ n: number; starts: number }>(
 		"select count(*)::int as n, count(*) filter (where starts_turn)::int as starts from agent_session_item",
 	);
 	expect(counts.rows).toEqual([{ n: 449 * items.length + 1, starts: 449 * 3 }]);
+	const waiting = await fresh.query<{ id: string; waiting_on: string }>(
+		"select id,waiting_on from agent_session where waiting_on is not null",
+	);
+	expect(waiting.rows).toEqual([{ id: sessions[3], waiting_on: "question" }]);
 	await fresh.close();
 });
