@@ -75,9 +75,17 @@ describe("left sidebar", () => {
 		expect(html).not.toContain("Memory graph");
 	});
 
-	it("has one top-left toggle and no rail: the logo is only in the sidebar", () => {
+	it("has a top-left toggle for the closed sidebar, one in its header for the open one, and no rail", () => {
 		const html = render(null);
 		expect(html).toContain("left-sidebar-toggle");
+		// The open sidebar's toggle sits in its header, after the logo.
+		const header = html.slice(html.indexOf('class="sidebar-brand-row"'));
+		expect(header.indexOf("brand-mark")).toBeLessThan(
+			header.indexOf("sidebar-brand-toggle"),
+		);
+		expect(header.indexOf("sidebar-brand-toggle")).toBeLessThan(
+			header.indexOf('class="sidebar-toolbar"'),
+		);
 		expect(html).not.toContain("sidebar-rail");
 		expect(html.match(/class="brand-mark"/g)).toHaveLength(1);
 	});
