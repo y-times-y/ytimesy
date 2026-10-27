@@ -124,7 +124,7 @@ export const UNVERIFIED_SEND_BACK_TIME_LEFT = 0.5;
  * or approves a plan before the work is graded. Given to the root builder.
  */
 export const UNATTENDED_RUN_INSTRUCTIONS =
-	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer.";
+	"Unattended run: nobody will answer a question or approve a plan before this work is graded. Never stop on an apparent contradiction or a missing input: ship the best-supported deliverable at the paths the request names and state the assumption in your final answer. A problem the request reports (a symptom, error or wrong result) is never resolved by calling the current behavior intended: reproduce it, then change the behavior so it no longer happens; an assumption may settle how to fix it, never whether to.";
 
 /** Phrases that ask the user to act, or admit the deliverable is missing or unfinished. */
 const UNFINISHED =

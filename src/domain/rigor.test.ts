@@ -160,3 +160,9 @@ describe("requirementsSegments", () => {
 		]);
 	});
 });
+
+it("never lets an unattended run close a reported problem as intended", () => {
+	expect(UNATTENDED_RUN_INSTRUCTIONS).toContain(
+		"is never resolved by calling the current behavior intended",
+	);
+});
