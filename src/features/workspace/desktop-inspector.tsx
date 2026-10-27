@@ -6,6 +6,7 @@ import {
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import { DesktopStage } from "./desktop-stage";
+import { RetryButton } from "./retry-button";
 
 export function DesktopInspector({
 	desktop,
@@ -51,6 +52,8 @@ export function DesktopInspector({
 	}
 
 	const prompt = desktopInspectorPrompt({ desktop, projectId, sessionId });
+	const failed = desktop.status === "failed";
+	const starting = desktop.status === "starting" || shouldStart || busy;
 
 	return (
 		<section
@@ -59,14 +62,26 @@ export function DesktopInspector({
 			aria-live="polite"
 		>
 			<h2>{prompt.title}</h2>
-			<p>{prompt.description}</p>
-			{desktop.status === "starting" || busy || shouldStart ? (
-				<p className="desktop-inspector-status">Starting…</p>
-			) : prompt.actionLabel ? (
-				<button type="button" className="desktop-start" onClick={onStart}>
-					{prompt.actionLabel}
-				</button>
-			) : null}
+			{failed ? (
+				<p className="desktop-inspector-reason" title={prompt.description}>
+					{prompt.description}
+				</p>
+			) : (
+				<p>{prompt.description}</p>
+			)}
+			{/* One fixed-height slot for the button or the status line, so moving
+			    between failed and starting shifts nothing below the copy. */}
+			<div className="desktop-inspector-action">
+				{prompt.actionLabel ? (
+					<RetryButton
+						label={prompt.actionLabel}
+						busy={busy}
+						onClick={onStart}
+					/>
+				) : starting ? (
+					<p className="desktop-inspector-status">Starting…</p>
+				) : null}
+			</div>
 		</section>
 	);
 }
