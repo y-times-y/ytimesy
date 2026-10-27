@@ -46,6 +46,7 @@ beforeAll(async () => {
 		"20261003024000_infrastructure_zero_runtime",
 		"20261013060000_infrastructure_vm_lease",
 		"20261020130000_infrastructure_usage_windows",
+		"20261026120000_infrastructure_usage_total",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 });
