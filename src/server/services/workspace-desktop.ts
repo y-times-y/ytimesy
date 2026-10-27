@@ -295,12 +295,17 @@ export async function desktopFromRunningGuest(
 
 export async function resolveDesktopRemote(
 	scope: DesktopScope,
+	/**
+	 * Wakes the machine first. An idle chat machine pauses (its desktop
+	 * keeps running inside) and its viewer route stops answering until then.
+	 */
+	machines?: Pick<WorkspaceMachines, "ensureRunning">,
 ): Promise<DesktopRemote | null> {
-	const cached = remotes.get(scopeKey(scope));
-	if (cached) return desktopRemoteFor(cached);
-	const providerRef = await peekSessionMachineRef(scope);
+	const providerRef =
+		remotes.get(scopeKey(scope)) ?? (await peekSessionMachineRef(scope));
 	if (!providerRef) return null;
 	remotes.set(scopeKey(scope), providerRef);
+	await machines?.ensureRunning(WorkspaceId(providerRef));
 	return desktopRemoteFor(providerRef);
 }
 

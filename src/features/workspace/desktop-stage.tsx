@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import {
+	DESKTOP_CONNECT_TIMEOUT_MS,
+	DESKTOP_SOCKET_OPEN_TIMEOUT_MS,
+	desktopClientViewerUrl,
+	desktopDisconnectMessage,
+} from "#/domain/workspace-desktop";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { RetryButton } from "./retry-button";
+
+type StagePhase =
+	| { readonly kind: "connecting" }
+	| { readonly kind: "connected" }
+	| { readonly kind: "disconnected"; readonly message: string };
 
 export function DesktopStage({
 	projectId,
@@ -14,7 +25,7 @@ export function DesktopStage({
 	password?: string;
 }) {
 	const host = useRef<HTMLDivElement>(null);
-	const [disconnected, setDisconnected] = useState<string | null>(null);
+	const [phase, setPhase] = useState<StagePhase>({ kind: "connecting" });
 	const [generation, setGeneration] = useState(0);
 	const pageRestores = usePageRestores();
 
@@ -24,17 +35,42 @@ export function DesktopStage({
 		// The generation dependency reconnects with a fresh RFB client.
 		if (!target || generation < 0) return;
 		let disposed = false;
+		let settled = false;
+		let connected = false;
 		let rfb: { disconnect(): void } | null = null;
-		setDisconnected(null);
+		setPhase({ kind: "connecting" });
+		const fail = (message: string) => {
+			if (disposed || settled) return;
+			settled = true;
+			setPhase({ kind: "disconnected", message });
+			try {
+				rfb?.disconnect();
+			} catch {
+				target.replaceChildren();
+			}
+			rfb = null;
+		};
+		// The panel never waits on a silent socket: the relay closes with a
+		// reason when it fails, and these cover a socket that never answers.
+		const timers: number[] = [];
 
 		void import("@novnc/novnc")
 			.then(({ default: RFB }) => {
 				if (disposed) return;
 				const protocol = window.location.protocol === "https:" ? "wss" : "ws";
 				const path = desktopClientViewerUrl({ projectId, sessionId });
+				// Our own socket, so its close reason (why the relay gave up)
+				// reaches the panel; noVNC only logs it.
+				const socket = new WebSocket(
+					`${protocol}://${window.location.host}${path}`,
+				);
+				let closeReason: string | undefined;
+				socket.addEventListener("close", (event) => {
+					closeReason = event.reason;
+				});
 				const client = new RFB(
 					target,
-					`${protocol}://${window.location.host}${path}`,
+					socket,
 					password ? { credentials: { password } } : undefined,
 				);
 				client.scaleViewport = true;
@@ -42,30 +78,50 @@ export function DesktopStage({
 				client.resizeSession = false;
 				client.showDotCursor = true;
 				client.background = "#111111";
+				client.addEventListener("connect", () => {
+					if (disposed || settled) return;
+					connected = true;
+					for (const timer of timers) window.clearTimeout(timer);
+					setPhase({ kind: "connected" });
+				});
 				// noVNC removes its canvas on disconnect; without this the panel goes black.
 				client.addEventListener("disconnect", (event) => {
-					if (disposed) return;
 					rfb = null;
-					setDisconnected(
-						(event as CustomEvent<{ clean?: boolean }>).detail?.clean
-							? "The desktop connection closed."
-							: "The desktop connection was lost.",
+					fail(
+						desktopDisconnectMessage({
+							reason: closeReason,
+							connected,
+							clean: Boolean(
+								(event as CustomEvent<{ clean?: boolean }>).detail?.clean,
+							),
+						}),
 					);
 				});
 				client.addEventListener("securityfailure", (event) => {
-					if (disposed) return;
 					const reason = (event as CustomEvent<{ reason?: string }>).detail
 						?.reason;
-					setDisconnected(reason || "The desktop refused the connection.");
+					fail(reason || "The desktop refused the connection.");
 				});
+				// Without a handler noVNC waits for a password forever.
+				client.addEventListener("credentialsrequired", () =>
+					fail("The desktop asked for a password it wasn't given."),
+				);
 				rfb = client;
+				timers.push(
+					window.setTimeout(() => {
+						if (socket.readyState === WebSocket.CONNECTING)
+							fail("The desktop didn't answer.");
+					}, DESKTOP_SOCKET_OPEN_TIMEOUT_MS),
+					window.setTimeout(() => {
+						if (!connected) fail("The desktop didn't answer.");
+					}, DESKTOP_CONNECT_TIMEOUT_MS),
+				);
 			})
-			.catch(() => {
-				if (!disposed) setDisconnected("The desktop viewer failed to load.");
-			});
+			.catch(() => fail("The desktop viewer failed to load."));
 
 		return closeOnPageHide(() => {
 			disposed = true;
+			for (const timer of timers) window.clearTimeout(timer);
 			try {
 				rfb?.disconnect();
 			} catch {
@@ -76,15 +132,15 @@ export function DesktopStage({
 
 	return (
 		<>
-			{disconnected ? (
+			{phase.kind === "disconnected" ? (
 				<div
-					className="inspector-empty desktop-inspector-empty"
+					className="inspector-empty desktop-inspector-empty desktop-stage-overlay"
 					data-kind="desktop"
 					role="alert"
 				>
 					<h2>Desktop disconnected</h2>
-					<p className="desktop-inspector-line" title={disconnected}>
-						{disconnected}
+					<p className="desktop-inspector-line" title={phase.message}>
+						{phase.message}
 					</p>
 					<div className="desktop-inspector-action">
 						<RetryButton
@@ -93,12 +149,38 @@ export function DesktopStage({
 						/>
 					</div>
 				</div>
+			) : phase.kind === "connecting" ? (
+				<DesktopConnecting />
 			) : null}
-			<div
-				className="desktop-stage-rfb"
-				hidden={Boolean(disconnected)}
-				ref={host}
-			/>
+			<div className="desktop-stage-rfb" ref={host} />
+		</>
+	);
+}
+
+/** Over the stage until the screen shows; also the server-rendered stand-in. */
+function DesktopConnecting() {
+	return (
+		<div
+			className="inspector-empty desktop-inspector-empty desktop-stage-overlay"
+			data-kind="desktop"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<h2>Connecting to desktop</h2>
+			<p className="desktop-inspector-line" />
+			<div className="desktop-inspector-action">
+				<MatrixDotLoader className="desktop-inspector-spinner" />
+			</div>
+		</div>
+	);
+}
+
+/** The stage before noVNC can mount (server render, hydration). */
+export function DesktopStagePlaceholder() {
+	return (
+		<>
+			<DesktopConnecting />
+			<div className="desktop-stage-rfb" />
 		</>
 	);
 }
