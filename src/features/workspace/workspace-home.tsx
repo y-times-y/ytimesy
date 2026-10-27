@@ -81,6 +81,7 @@ import {
 	WAKE_WATCH_MS,
 	withinTimeout,
 } from "#/domain/session-progress";
+import type { SidebarPullRequest } from "#/domain/sidebar-chat-status";
 import {
 	backgroundTurnPollChatIds,
 	chatsToReadAhead,
@@ -107,6 +108,15 @@ import {
 	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
+import {
+	NO_SAVED_SIDEBAR_PRS,
+	nextSavedSidebarPrs,
+	type SavedSidebarPrs,
+	savedSidebarPr,
+	savedSidebarPrsCookie,
+	savedSidebarPrsFromCookies,
+	savedSidebarPrsValue,
+} from "#/domain/sidebar-pr-cookie";
 import {
 	progressPage,
 	withEarlierPages,
@@ -258,6 +268,7 @@ export function WorkspaceHome({
 	userId,
 	renderedAtMs,
 	savedInspector = CLOSED_INSPECTOR,
+	savedPullRequests = NO_SAVED_SIDEBAR_PRS,
 }: {
 	initialSession: PublicCodexSession;
 	/** The chat the page opens (a linked chat, else the latest), read with
@@ -271,6 +282,8 @@ export function WorkspaceHome({
 	renderedAtMs?: number;
 	/** The right panel as this browser left it (a cookie the server reads). */
 	savedInspector?: SavedInspector;
+	/** The sidebar's PR icons as this browser last read them (a cookie the server reads). */
+	savedPullRequests?: SavedSidebarPrs;
 	initialProjects?: Project[];
 	/** The open project's chats (a linked chat's project, else the first),
 	 * read with the page. */
@@ -782,7 +795,18 @@ export function WorkspaceHome({
 			pullRequests: repositoryPullRequests[index]?.data?.pullRequests,
 		})),
 	);
+	// Until every repository's PR list is read (it comes from GitHub after the
+	// page loads), rows keep the PR this browser saw last, as the server
+	// rendered them; then the live list decides.
+	const pullRequestsRead = projectRepositories.every(
+		(repository, index) =>
+			!(repository.installationId && repository.repositoryId) ||
+			repositoryPullRequests[index]?.data !== undefined ||
+			repositoryPullRequests[index]?.isError,
+	);
 	const sidebarChats = (chats.data ?? []).map((chat) => {
+		if (!pullRequestsRead)
+			return { ...chat, pr: savedSidebarPr(savedPullRequests, chat.id) };
 		const mark = sidebarChatPrMarkForWorkspace({
 			workspaceId: chat.workspaceId,
 			workingBranch: chat.workingBranch,
@@ -790,6 +814,22 @@ export function WorkspaceHome({
 		});
 		return { ...chat, pr: mark?.pr ?? null };
 	});
+	// The next page load renders the rows with the PRs read now.
+	const livePrMarks =
+		pullRequestsRead && chats.data
+			? JSON.stringify(sidebarChats.map((chat) => [chat.id, chat.pr ?? null]))
+			: null;
+	useEffect(() => {
+		if (!livePrMarks) return;
+		const listed = (
+			JSON.parse(livePrMarks) as [string, SidebarPullRequest | null][]
+		).map(([id, pr]) => ({ id, pr }));
+		const saved = savedSidebarPrsFromCookies(document.cookie);
+		const next = nextSavedSidebarPrs(saved, listed);
+		if (savedSidebarPrsValue(next) === savedSidebarPrsValue(saved)) return;
+		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
+		document.cookie = savedSidebarPrsCookie(next);
+	}, [livePrMarks]);
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
