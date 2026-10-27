@@ -55,3 +55,10 @@ offered in (Bedrock Astra: 45 tokens without it, 2,952 with it), searching or no
 request with the hosted tool (about 6k input, about $0.07 per search). shadow-relay: first request
 6,226 -> 3,380 tokens, pass. The panel above ran with hosted search, so its costs include this
 overhead (about $0.05-0.08 per run).
+
+OpenAI's own hosted search adds more: 4,436 hidden input tokens per request (45 vs 4,481, same
+request, gpt-6-astra on OpenAI's API). The panel's OpenAI-billing figures were computed from
+Bedrock token counts (2,907 overhead), so with hosted search on OpenAI they are about $0.03 per run
+low: about $8.70 total instead of $8.55 (Reason $9.05). With `search=function` the overhead is gone
+on both routes; applying the measured saving per run gives $8.21 (-9.3%, below Reason on 6/6), an
+estimate until rerun. Codex uses the hosted search, so it pays this overhead on every request.
