@@ -104,6 +104,12 @@ beforeAll(async () => {
 	);
 	await db.exec(
 		await readFile(
+			"supabase/migrations/20261026100000_agent_session_item.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		await readFile(
 			"supabase/migrations/20261017130000_queued_user_messages.sql",
 			"utf8",
 		),
