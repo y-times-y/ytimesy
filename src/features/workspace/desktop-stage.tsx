@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
+import { RetryButton } from "./retry-button";
 
 export function DesktopStage({
 	projectId,
@@ -82,14 +83,15 @@ export function DesktopStage({
 					role="alert"
 				>
 					<h2>Desktop disconnected</h2>
-					<p>{disconnected}</p>
-					<button
-						type="button"
-						className="desktop-start"
-						onClick={() => setGeneration((value) => value + 1)}
-					>
-						Reconnect
-					</button>
+					<p className="desktop-inspector-reason" title={disconnected}>
+						{disconnected}
+					</p>
+					<div className="desktop-inspector-action">
+						<RetryButton
+							label="Reconnect"
+							onClick={() => setGeneration((value) => value + 1)}
+						/>
+					</div>
 				</div>
 			) : null}
 			<div

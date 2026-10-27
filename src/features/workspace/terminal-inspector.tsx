@@ -12,6 +12,7 @@ import {
 	startInteraction,
 } from "#/features/analytics/web-vitals";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
+import { RetryButton } from "./retry-button";
 
 export function TerminalInspector({
 	projectId,
@@ -190,13 +191,10 @@ export function TerminalInspector({
 						<p className="terminal-inspector-error" role="alert">
 							{error}
 						</p>
-						<button
-							type="button"
-							className="desktop-start"
+						<RetryButton
+							label="Restart terminal"
 							onClick={() => setRetryGeneration((generation) => generation + 1)}
-						>
-							Restart terminal
-						</button>
+						/>
 					</div>
 				) : connected ? null : (
 					<div className="terminal-inspector-notice">

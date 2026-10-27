@@ -48,9 +48,9 @@ export function desktopInspectorPrompt(input: {
 }) {
 	if (input.desktop.status === "failed") {
 		return {
-			title: "Desktop failed to start.",
+			title: "Desktop didn't start",
 			description: input.desktop.reason,
-			actionLabel: "Retry desktop",
+			actionLabel: "Try again",
 		};
 	}
 	if (input.desktop.status === "starting") {
