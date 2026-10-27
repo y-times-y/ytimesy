@@ -157,6 +157,16 @@ describe("readWorkspaceDesktop", () => {
 		expect(withdrawHttpRoutes).toHaveBeenCalledWith("vm-session", ["desk"]);
 	});
 
+	it("wakes the chat's machine before relaying to it", async () => {
+		const ensureRunning = vi.fn(async (id: string) => id);
+		const remote = await resolveDesktopRemote(
+			{ userId: "u", projectId: "p", sessionId: "s3" },
+			{ ensureRunning } as unknown as WorkspaceMachines,
+		);
+		expect(ensureRunning).toHaveBeenCalledWith("vm-session");
+		expect(remote?.origin).toMatch(/^https:\/\/ytimesy-desk-/);
+	});
+
 	it("relays to the chat's machine with its viewer credential", async () => {
 		const remote = await resolveDesktopRemote({
 			userId: "u",

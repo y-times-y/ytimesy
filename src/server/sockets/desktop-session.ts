@@ -1,6 +1,9 @@
+import { Effect } from "effect";
 import { publicFailureMessage } from "#/domain/project-workspace";
+import { FreestyleWorkspaceMachinesLive } from "../adapters/freestyle/live";
 import { projectForOwner } from "../adapters/projects";
 import { requireUser } from "../auth/auth";
+import { WorkspaceMachineService } from "../services/capabilities";
 import {
 	type DesktopRemote,
 	resolveDesktopRemote,
@@ -27,11 +30,18 @@ export async function runDesktopSession(
 			client.close(4000, "Project is not available.");
 			return;
 		}
-		const remote = await resolveDesktopRemote({
-			userId: user.id,
-			projectId,
-			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
-		});
+		const remote = await resolveDesktopRemote(
+			{
+				userId: user.id,
+				projectId,
+				sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
+			},
+			await Effect.runPromise(
+				WorkspaceMachineService.pipe(
+					Effect.provide(FreestyleWorkspaceMachinesLive),
+				),
+			),
+		);
 		if (!remote) {
 			client.close(4000, "Desktop is not ready.");
 			return;

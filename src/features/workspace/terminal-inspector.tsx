@@ -1,6 +1,7 @@
 import { ClientOnly, useHydrated } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
+	TERMINAL_SOCKET_OPEN_TIMEOUT_MS,
 	terminalClosedMessage,
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
@@ -23,7 +24,10 @@ export function TerminalInspector({
 	sessionId?: string;
 	active: boolean;
 }) {
-	const containerRef = useRef<HTMLDivElement>(null);
+	// State, not a ref: the attach effect runs again once xterm's frame is
+	// in the DOM (it mounts after hydration), instead of finding no frame
+	// and never opening the socket.
+	const [container, setContainer] = useState<HTMLDivElement | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [connected, setConnected] = useState(false);
 	const [retryGeneration, setRetryGeneration] = useState(0);
@@ -40,23 +44,23 @@ export function TerminalInspector({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reconnects.
 	useEffect(() => {
-		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
+		if (!attachAttempt || !container || !projectId || !sessionId) {
 			setConnected(false);
 			return;
 		}
-		const container = containerRef.current;
 		// Timed from the open (or a restart) to the shell's first output.
 		if (!interactionPending("terminal_ready"))
 			startInteraction("terminal_ready");
 		let closed = false;
 		let dispose: (() => void) | undefined;
+		let openTimer: number | undefined;
 		void (async () => {
 			const [{ Terminal }, { FitAddon }] = await Promise.all([
 				import("@xterm/xterm"),
 				import("@xterm/addon-fit"),
 			]);
 			await import("@xterm/xterm/css/xterm.css");
-			if (closed || containerRef.current !== container) return;
+			if (closed) return;
 			const term = new Terminal({
 				convertEol: true,
 				cursorBlink: true,
@@ -86,7 +90,14 @@ export function TerminalInspector({
 			const socket = new WebSocket(url);
 			socket.binaryType = "arraybuffer";
 			setError(null);
+			// A socket that never opens would leave "Starting terminal…" up for good.
+			openTimer = window.setTimeout(() => {
+				if (closed || socket.readyState !== WebSocket.CONNECTING) return;
+				setError("The terminal didn't answer.");
+				socket.close();
+			}, TERMINAL_SOCKET_OPEN_TIMEOUT_MS);
 			socket.addEventListener("open", () => {
+				window.clearTimeout(openTimer);
 				if (closed) return;
 				socket.send(
 					JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
@@ -157,15 +168,22 @@ export function TerminalInspector({
 				term.dispose();
 			};
 			if (closed) dispose();
-		})();
+		})().catch(() => {
+			// xterm's code failed to load (a page older than the last deploy)
+			// or failed to start: say so, with Restart, instead of waiting.
+			if (closed) return;
+			setError("The terminal failed to load.");
+			setConnected(false);
+		});
 		return closeOnPageHide(() => {
 			closed = true;
+			window.clearTimeout(openTimer);
 			// Closed before the shell answered: no timing for this open.
 			cancelInteraction("terminal_ready");
 			dispose?.();
 			setConnected(false);
 		});
-	}, [attachAttempt, projectId, sessionId, pageRestores]);
+	}, [attachAttempt, container, projectId, sessionId, pageRestores]);
 
 	if (!shouldAttach) {
 		return (
@@ -202,7 +220,7 @@ export function TerminalInspector({
 					</div>
 				)}
 				<div
-					ref={containerRef}
+					ref={setContainer}
 					className="terminal-inspector-frame"
 					data-connected={connected ? "true" : "false"}
 				/>
