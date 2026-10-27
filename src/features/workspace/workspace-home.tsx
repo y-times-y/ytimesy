@@ -228,6 +228,7 @@ export function WorkspaceHome({
 	initialSession,
 	initialProjects,
 	initialChats,
+	initialProjectChats,
 	initialChatView,
 	account,
 	renderedAtMs,
@@ -250,6 +251,12 @@ export function WorkspaceHome({
 		readonly projectId: string;
 		readonly chats: readonly SidebarChat[];
 	};
+	/** The other projects' chats, read with the page: the sidebar orders
+	 * its projects and the Recent list by them from the first paint. */
+	initialProjectChats?: readonly {
+		readonly projectId: string;
+		readonly chats: readonly SidebarChat[];
+	}[];
 }) {
 	const firstPaint = useFirstPaint();
 	const compact = useCompactLayout(firstPaint.choices.compact);
@@ -274,6 +281,11 @@ export function WorkspaceHome({
 		const key = ["agent-sessions", initialChats?.projectId];
 		if (initialChats && !queryClient.getQueryData(key))
 			queryClient.setQueryData(key, initialChats.chats);
+		for (const group of initialProjectChats ?? []) {
+			const projectKey = ["agent-sessions", group.projectId];
+			if (!queryClient.getQueryData(projectKey))
+				queryClient.setQueryData(projectKey, group.chats);
+		}
 		// The open chat's helper lines, evidence cards and recovery rows,
 		// read with it: they render on the server, not in after the page loads.
 		const side = initialChatView?.side;
@@ -2172,6 +2184,7 @@ export function WorkspaceHome({
 								memoryActions={memoryActions}
 								key={composerKey.current.key}
 								onDraftStarted={prewarmOpenChat}
+								loadedCatalog={initialChatView?.side?.catalog}
 								session={session}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
