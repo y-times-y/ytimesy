@@ -61,53 +61,77 @@ export function useCloudUsageWindows() {
 	}).data?.windows;
 }
 
-/**
- * One compact line at the bottom of the model picker: each usage window's
- * fill. Nothing where usage is not metered.
- */
+export type PickerUsageBar = {
+	readonly id: string;
+	readonly label: string;
+	readonly usedPercent: number;
+	readonly low: boolean;
+	/** The tooltip: when the window refills. */
+	readonly detail?: string;
+};
+
+/** One labelled line of compact usage bars at the bottom of the model picker. */
+export function PickerUsageLine({
+	label,
+	bars,
+}: {
+	label: string;
+	bars: readonly PickerUsageBar[];
+}) {
+	if (!bars.length) return null;
+	return (
+		<section className="model-picker-usage" aria-label={`${label} usage`}>
+			<span className="model-picker-usage-label">{label}</span>
+			{bars.map((bar) => (
+				<div
+					key={bar.id}
+					className="model-picker-usage-window"
+					title={bar.detail}
+				>
+					<span>{bar.label}</span>
+					{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
+					<span
+						className="model-picker-usage-bar"
+						data-tone={bar.low ? "low" : undefined}
+						role="meter"
+						aria-label={`${bar.label} ${label} usage`}
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={bar.usedPercent}
+					>
+						<span style={{ width: `${bar.usedPercent}%` }} />
+					</span>
+					<span>{bar.usedPercent}%</span>
+				</div>
+			))}
+		</section>
+	);
+}
+
+/** The cloud usage windows' line in the model picker. Nothing where usage is not metered. */
 export function ModelPickerUsage({
 	windows,
 }: {
 	windows: readonly UsageWindowState[] | undefined;
 }) {
-	if (!windows?.length) return null;
 	return (
-		<section className="model-picker-usage" aria-label="Cloud usage">
-			{windows.map((window) => {
-				const label =
+		<PickerUsageLine
+			label="Cloud"
+			bars={(windows ?? []).map((window) => ({
+				id: window.id,
+				label:
 					window.id === "five_hour"
 						? "5h"
 						: window.id === "weekly"
 							? "Week"
 							: (USAGE_WINDOWS.find((entry) => entry.id === window.id)?.label ??
-								window.id);
-				return (
-					<div
-						key={window.id}
-						className="model-picker-usage-window"
-						title={
-							window.resetsAt
-								? `${window.exhausted ? "New work resumes" : "Starts to refill"} ${usageResetLabel(window.resetsAt)}`
-								: undefined
-						}
-					>
-						<span>{label}</span>
-						{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
-						<span
-							className="model-picker-usage-bar"
-							data-tone={window.usedPercent >= LOW_PERCENT ? "low" : undefined}
-							role="meter"
-							aria-label={`${label} cloud usage`}
-							aria-valuemin={0}
-							aria-valuemax={100}
-							aria-valuenow={window.usedPercent}
-						>
-							<span style={{ width: `${window.usedPercent}%` }} />
-						</span>
-						<span>{window.usedPercent}%</span>
-					</div>
-				);
-			})}
-		</section>
+								window.id),
+				usedPercent: window.usedPercent,
+				low: window.usedPercent >= LOW_PERCENT,
+				detail: window.resetsAt
+					? `${window.exhausted ? "New work resumes" : "Starts to refill"} ${usageResetLabel(window.resetsAt)}`
+					: undefined,
+			}))}
+		/>
 	);
 }

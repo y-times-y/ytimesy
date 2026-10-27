@@ -129,6 +129,7 @@ import {
 } from "./model-capabilities";
 import { getAgentModelCatalog } from "./model-catalog.fn";
 import { readPastedTextFn } from "./pasted-text.fn";
+import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -538,6 +539,7 @@ export function SessionLauncher({
 		() => visibleSessionItems(session.items, optimisticItems),
 		[session.items, optimisticItems],
 	);
+	useMarkPlanLimitFromSwitches(items);
 	const turnStatus = session.turnStatus;
 	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
 	const agents = agentPanelRows({

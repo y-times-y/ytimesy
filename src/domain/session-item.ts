@@ -173,6 +173,8 @@ export type ModelSwitchItem = {
 	readonly cause?: string;
 	/** The turn's usage before the switch; usage after it was served by `to`. */
 	readonly usageBefore?: ApiTokenUsage;
+	/** A usage-limit switch: when the ChatGPT plan said it resets (epoch ms). */
+	readonly resetsAt?: number;
 };
 
 /** A server note about the turn, such as why its changes were not pushed to GitHub. */
