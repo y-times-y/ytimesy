@@ -6,6 +6,7 @@ import {
 } from "../../src/domain/code-mode";
 import { fusionPairFor } from "../../src/domain/fusion-pairs";
 import type { HarnessVariant } from "../../src/domain/harness-variant";
+import { primaryCodeModeInstructions } from "../../src/domain/lean-tool-instructions";
 import type { ModelProvider } from "../../src/domain/model-connection";
 import { UNATTENDED_RUN_INSTRUCTIONS } from "../../src/domain/rigor";
 import type { SubagentBudget, SubagentRole } from "../../src/domain/subagent";
@@ -285,7 +286,7 @@ export async function harborHarness(input: {
 	}
 	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
 	if (thinLead) tools = { ...thinLeadTools(tools), ...trialTools };
-	const instructions = agentTurnInstructions({
+	const fullInstructions = agentTurnInstructions({
 		session: input.subagent
 			? {
 					agentRole: input.subagent.role,
@@ -315,6 +316,21 @@ export async function harborHarness(input: {
 			? { helperInstructions: HELPER_INSTRUCTIONS }
 			: {}),
 	});
+	// prompt=minimal (root builder only): no rule blocks, to measure what
+	// they cost in thinking.
+	const instructions =
+		variant.prompt === "minimal" && !input.subagent && surface.lean
+			? [
+					`You are a coding agent working in the repository checkout at ${workspace.cwd}; commands start there. Do the task yourself, end to end.`,
+					codeMode === "primary"
+						? primaryCodeModeInstructions(surface.lean.shape)
+						: "",
+					AGENT_WAIT_TOOL in trialTools ? HELPER_INSTRUCTIONS : "",
+					"Your final answer is brief (at most 10 lines): what you delivered and how you checked it.",
+				]
+					.filter(Boolean)
+					.join("\n")
+			: fullInstructions;
 	return {
 		tools,
 		// The root builder of a trial: nobody answers its questions.

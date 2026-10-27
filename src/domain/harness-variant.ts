@@ -234,6 +234,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * default).
 	 */
 	fetch: ["off", "on"],
+	/**
+	 * The Harbor bridge builder's system prompt: full = the product's lean
+	 * prompt (the default); minimal = identity, the tool and run_code
+	 * guidance, helpers when on, and a brief final answer only (a test of how
+	 * much the rule blocks cost in model thinking).
+	 */
+	prompt: ["full", "minimal"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -289,6 +296,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	plan: "off",
 	helpers: "off",
 	fetch: "off",
+	prompt: "full",
 	roleModels: {},
 };
 
