@@ -1461,14 +1461,31 @@ a.session-title-meta:focus-visible {
 	max-width: min(100%, 32em);
 	color: var(--text-muted);
 }
-/* The failure reason: one quiet line; the full text is in its tooltip. */
-.desktop-inspector-empty .desktop-inspector-reason {
+/* The one line under the title (reason, hint or empty): always one line tall,
+   so no state moves the button slot. Long text truncates; full text in title. */
+.desktop-inspector-empty .desktop-inspector-line {
+	min-height: 1lh;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	font-size: var(--list-meta-size);
 }
-/* Holds the button or the status line at the button's height (Button lg). */
+/* Still starting after 20s: the hint fades in (CSS only, nothing to hydrate). */
+.desktop-inspector-empty [data-slow-hint] {
+	opacity: 0;
+	animation: desktop-slow-hint 400ms ease-out 20s forwards;
+}
+@keyframes desktop-slow-hint {
+	to {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.desktop-inspector-empty [data-slow-hint] {
+		animation-duration: 1ms;
+	}
+}
+/* Holds the button or the spinner at the button's height (Button lg). */
 .desktop-inspector-action {
 	display: flex;
 	align-items: center;
@@ -1476,8 +1493,8 @@ a.session-title-meta:focus-visible {
 	min-height: 32px;
 	margin-top: 16px;
 }
-.desktop-inspector-action .desktop-inspector-status {
-	margin: 0;
+.desktop-inspector-spinner {
+	color: var(--list-text-secondary);
 }
 /* The global button reset inherits the font; keep the list text size. */
 .retry-button {
