@@ -86,7 +86,11 @@ type AdmissionContext = {
 	/** The slug's owners; admission requires exactly one. */
 	owners: string[];
 	admission: Admission | undefined;
-	retention: { phase: string | null; vmId: string | null };
+	retention: {
+		phase: string | null;
+		vmId: string | null;
+		sessionVm: string | null;
+	};
 };
 
 /**
@@ -108,23 +112,35 @@ async function admissionContext(
 			owners: string[] | null;
 			retention_phase: string | null;
 			retention_vm_id: string | null;
+			retention_session_vm: string | null;
 		}
 	>(
 		touching
 			? `with ${RETENTION_TOUCH_CTES}
 		 select (select array_agg(user_id) from (${OWNERS_SQL}) o) as owners,
 		 (select phase from retention_prior) as retention_phase,(select vm_id from retention_prior) as retention_vm_id,
+		 (select session_vm from retention_prior) as retention_session_vm,
 		 a.* from (select 1) one left join infrastructure_vm_admission a on a.slug=$1`
 			: `select (select array_agg(user_id) from (${OWNERS_SQL}) o) as owners,
-		 null as retention_phase,null as retention_vm_id,
+		 null as retention_phase,null as retention_vm_id,null as retention_session_vm,
 		 a.* from (select 1) one left join infrastructure_vm_admission a on a.slug=$1`,
 		touching && retention ? retention : [slug],
 	);
-	const { owners, retention_phase, retention_vm_id, ...row } = result.rows[0];
+	const {
+		owners,
+		retention_phase,
+		retention_vm_id,
+		retention_session_vm,
+		...row
+	} = result.rows[0];
 	return {
 		owners: owners ?? [],
 		admission: row.slug ? (row as Admission) : undefined,
-		retention: { phase: retention_phase, vmId: retention_vm_id },
+		retention: {
+			phase: retention_phase,
+			vmId: retention_vm_id,
+			sessionVm: retention_session_vm,
+		},
 	};
 }
 

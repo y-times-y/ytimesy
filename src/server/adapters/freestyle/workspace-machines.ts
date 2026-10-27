@@ -68,7 +68,10 @@ import {
 	waitUntilGuestReady,
 	waitUntilVmRunning,
 } from "./wait-until-running";
-import { restoreRetainedWorkspace } from "./workspace-retention";
+import {
+	rebindWorkspaceRetention,
+	restoreRetainedWorkspace,
+} from "./workspace-retention";
 
 /** The provider refused the machine shape itself, e.g. above the plan's per-VM vCPU cap. */
 class MachineSizeRejected extends Error {
@@ -118,6 +121,7 @@ export function createFreestyleWorkspaceMachines(
 		},
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
+		rebindRetainedSession: rebindWorkspaceRetention,
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {
