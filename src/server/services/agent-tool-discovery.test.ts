@@ -30,3 +30,9 @@ it("sends every tool from the first request with its executor, without mutating 
 it("does not create a tool surface for tool-free turns", () => {
 	expect(discoverableAgentTools({})).toEqual({});
 });
+
+it("sends a set of only provider-hosted tools as given, with no search_tools", async () => {
+	const { openai } = await import("@ai-sdk/openai");
+	const tools = { web_search: openai.tools.webSearch({}) };
+	expect(discoverableAgentTools(tools)).toBe(tools);
+});

@@ -74,7 +74,11 @@ import {
 import { effortMix } from "./effort-mix";
 import { envSnapshot } from "./env-snapshot";
 import { grindNotice } from "./grind-gate";
-import { type HarborWorkspace, harborHarness } from "./harness";
+import {
+	type HarborWorkspace,
+	harborHarness,
+	hostedWebSearchTools,
+} from "./harness";
 import { type HelperRole, helperTools } from "./helpers";
 import {
 	FINISH_CONTINUATIONS_MAX,
@@ -97,6 +101,10 @@ import {
 	ranTranscript,
 	reviewItems,
 } from "./review";
+import {
+	functionWebSearchTool,
+	SEARCH_REQUEST_INSTRUCTIONS,
+} from "./search-tool";
 import {
 	type ChildReport,
 	type ChildSession,
@@ -277,7 +285,7 @@ export function trialEfficiency(input: {
 							agentRole:
 								child.role === "sidekick"
 									? "writer"
-									: child.role === "helper"
+									: child.role === "helper" || child.role === "search"
 										? "researcher"
 										: "checker",
 							...(child.role === "sidekick"
@@ -480,12 +488,15 @@ export async function runHarborTrial(
 		})),
 	];
 	// Bedrock bills each Web Search query on top of tokens (builder and checkers).
+	// search=function: agents' web_search calls are function calls (their
+	// results are text); only each call's own request ran hosted searches.
 	const searchUsd = () =>
 		config.route === "bedrock"
 			? bedrockWebSearchUsd(
-					[events, ...sessions.all().map((child) => child.events)].flatMap(
-						(list) => list.map((entry) => entry.event),
-					),
+					(config.variant.search === "function"
+						? sessions.byRole("search").map((child) => child.events)
+						: [events, ...sessions.all().map((child) => child.events)]
+					).flatMap((list) => list.map((entry) => entry.event)),
 				)
 			: 0;
 	const guard = trialSpendGuard({
@@ -573,6 +584,61 @@ export async function runHarborTrial(
 		};
 		const roleModel = (role: BridgeRole) =>
 			config.roles[role] ?? (role === "checker" ? checkerModel : builderModel);
+		// search=function: each web_search call is its own low-effort request
+		// with the hosted search tool, a child session so its tokens and
+		// queries count in the trial's usage, cap and fees.
+		const searchTool =
+			config.webSearch && config.variant.search === "function"
+				? functionWebSearchTool({
+						search: async (query, callSignal) => {
+							const model: HarborModel = { ...builderModel, effort: "low" };
+							const hosted = hostedWebSearchTools(
+								provider,
+								config.route === "bedrock",
+							);
+							const session = sessions.add({
+								role: "search",
+								parentId: input.trialId,
+								model,
+								brief: query,
+							});
+							session.instructions = SEARCH_REQUEST_INSTRUCTIONS;
+							session.tools = hosted;
+							session.starts.push(session.events.length);
+							log(`search ${session.id}: ${query.slice(0, 160)}`);
+							const out = await runModelAgent(
+								{
+									userId: input.userId,
+									modelId: model.modelId,
+									reasoning: model.effort,
+									toolSurface: "implementation",
+									cacheScopeId: session.id,
+									tools: hosted,
+									instructions: SEARCH_REQUEST_INSTRUCTIONS,
+									signal: AbortSignal.any([
+										signal,
+										AbortSignal.timeout(120_000),
+										...(callSignal ? [callSignal] : []),
+									]),
+									maxSteps: 2,
+									turnTimeoutMs: 120_000,
+									messages: [{ role: "user", content: query }],
+									onEvent: async (event) => {
+										session.events.push({
+											at: new Date(now()).toISOString(),
+											event,
+										});
+									},
+									onStep: async () => {},
+								},
+								await runtimeFor(model),
+							);
+							const answer = finalAnswer(out);
+							session.reports.push({ outcome: "completed", report: answer });
+							return answer;
+						},
+					})
+				: undefined;
 		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
 		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
 		const checkerLastWord = async (
@@ -686,6 +752,7 @@ export async function runHarborTrial(
 				webSearch:
 					config.webSearch && (checkerRole || session.role === "helper"),
 				bedrock: config.route === "bedrock",
+				...(searchTool ? { searchTool } : {}),
 				...(checkerRole || session.role === "helper"
 					? { mcpNote: mcpNoteFor(input.mcpServers) }
 					: {}),
@@ -954,6 +1021,7 @@ export async function runHarborTrial(
 			variant: config.variant,
 			webSearch: config.webSearch,
 			bedrock: config.route === "bedrock",
+			...(searchTool ? { searchTool } : {}),
 			// The first user message, with ledger=on's note: the request itself.
 			instruction: firstMessage,
 			storage: input.storage,

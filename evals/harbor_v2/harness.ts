@@ -155,6 +155,18 @@ export type HarborHarness = {
 	leanShape: string | null;
 };
 
+/** The provider's hosted web search tool, as the bridge offers it on each route. */
+export function hostedWebSearchTools(
+	provider: ModelProvider | "codex-subscription",
+	bedrock?: boolean,
+): ToolSet {
+	return bedrock
+		? bedrockWebSearchTools()
+		: nativeWebSearchTools(
+				provider === "codex-subscription" ? "openai" : provider,
+			);
+}
+
 export async function harborHarness(input: {
 	workspace: HarborWorkspace;
 	userId: string;
@@ -187,6 +199,8 @@ export async function harborHarness(input: {
 	 * direct tools that run_code programs may call too, kept for a thin lead.
 	 */
 	trialTools?: ToolSet;
+	/** search=function: the plain web_search tool that replaces the hosted one. */
+	searchTool?: ToolSet;
 }): Promise<HarborHarness> {
 	const { workspace, variant } = input;
 	const memo = memoryMemo();
@@ -228,12 +242,12 @@ export async function harborHarness(input: {
 			memo,
 		},
 	});
+	// search=function: the trial's plain web_search tool in place of the
+	// provider's hosted one (its call makes its own hosted-search request).
 	const webSearch = input.webSearch
-		? input.bedrock
-			? bedrockWebSearchTools()
-			: nativeWebSearchTools(
-					input.provider === "codex-subscription" ? "openai" : input.provider,
-				)
+		? variant.search === "function" && input.searchTool
+			? input.searchTool
+			: hostedWebSearchTools(input.provider, input.bedrock)
 		: {};
 	const trialTools = input.trialTools ?? {};
 	// fetch=on: web_fetch for every agent, fetched here on the harness side
@@ -270,7 +284,13 @@ export async function harborHarness(input: {
 			turnId: workspace.turnId,
 			mode: codeMode,
 			deferred: [],
-			callable: [...Object.keys(fetchTools), ...Object.keys(trialTools)],
+			callable: [
+				...Object.keys(fetchTools),
+				...Object.keys(trialTools),
+				...(variant.search === "function" && input.webSearch
+					? Object.keys(input.searchTool ?? {})
+					: []),
+			],
 			journal: (toolCallId) => ({
 				recorded: async () => journal.get(toolCallId),
 				record: async (result) => {

@@ -10,6 +10,14 @@ import { isShellSurface } from "#/domain/harness-model-profile";
  */
 export function discoverableAgentTools(tools: ToolSet): ToolSet {
 	if (Object.keys(tools).length === 0) return tools;
+	// Only provider-hosted tools (a search=function call's own request):
+	// nothing to discover, so the set goes as given.
+	if (
+		Object.values(tools).every(
+			(definition) => (definition as { type?: string }).type === "provider",
+		)
+	)
+		return tools;
 	return {
 		...Object.fromEntries(
 			Object.entries(tools).map(([name, definition]) => [

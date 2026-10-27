@@ -241,6 +241,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 * much the rule blocks cost in model thinking).
 	 */
 	prompt: ["full", "minimal"],
+	/**
+	 * Web search on the Harbor bridge: hosted = the provider's search tool in
+	 * every request (the default; it adds ~2.9K hidden input tokens to each
+	 * request on Bedrock Astra, measured 2026-10-27); function = a plain
+	 * web_search function tool whose call makes one separate low-effort
+	 * request with the hosted tool, so that overhead is paid only per search.
+	 */
+	search: ["hosted", "function"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -297,6 +305,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	helpers: "off",
 	fetch: "off",
 	prompt: "full",
+	search: "hosted",
 	roleModels: {},
 };
 

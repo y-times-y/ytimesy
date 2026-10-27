@@ -38,6 +38,7 @@ describe("harness variants", () => {
 			helpers: "off",
 			fetch: "off",
 			prompt: "full",
+			search: "hosted",
 			roleModels: {},
 		});
 	});
@@ -74,6 +75,7 @@ describe("harness variants", () => {
 			helpers: "off",
 			fetch: "off",
 			prompt: "full",
+			search: "hosted",
 			roleModels: {},
 		});
 		expect(
@@ -104,6 +106,7 @@ describe("harness variants", () => {
 			helpers: "off",
 			fetch: "off",
 			prompt: "full",
+			search: "hosted",
 			roleModels: {},
 		});
 		expect(
@@ -154,6 +157,7 @@ describe("harness variants", () => {
 			helpers: "off",
 			fetch: "off",
 			prompt: "full",
+			search: "hosted",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
