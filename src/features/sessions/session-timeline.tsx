@@ -614,7 +614,7 @@ function evidenceSince(
 function rowEstimate(row: TimelineRow): number {
 	if (row.kind !== "item") return 40;
 	const item = row.item;
-	if (item.kind === "userMessage") return 54 + 18 * textLines(item.text, 90);
+	if (item.kind === "userMessage") return 44 + 18 * textLines(item.text, 90);
 	if (item.kind === "agentMessage")
 		return Math.min(14 + 20 * textLines(item.text, 100), 6_000);
 	if (item.kind === "planProposal" || item.kind === "plan")
