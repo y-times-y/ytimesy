@@ -91,6 +91,7 @@ import {
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import type { OpenChatSide } from "#/server/services/open-chat-side";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import { AgentIcon } from "./agent-icon";
@@ -110,9 +111,11 @@ import {
 	pastedTextFile,
 	sentFileFields,
 } from "./attachment-tile";
+import { chatSideKeys } from "./chat-side-queries";
 import { ContextUsage } from "./context-usage";
 import {
 	ConversationRecovery,
+	ConversationRecoverySlot,
 	refreshRecoveredWorkspace,
 } from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
@@ -172,9 +175,16 @@ export function SessionLauncher({
 	backgroundRuns,
 	onDraftStarted,
 	olderItems,
+	loadedCatalog,
 }: {
 	/** The chat holds turns before those shown; they load as the reader scrolls up. */
 	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
+	/**
+	 * The model catalog the server read with the page's open chat: shown
+	 * until the browser's own read of it lands, so the model button keeps
+	 * its name and width as the page loads.
+	 */
+	loadedCatalog?: OpenChatSide["catalog"];
 	/** The draft went from empty to some text (a new chat starts its machine then). */
 	onDraftStarted?: () => void;
 	/** Background commands this chat started (their read model), shown as list rows. */
@@ -268,6 +278,8 @@ export function SessionLauncher({
 		enabled: Boolean(identity.data?.user.id),
 		queryFn: () => loadCatalog({ data: { provider: harnessId } }),
 		staleTime: 60_000,
+		placeholderData:
+			loadedCatalog?.harnessId === harnessId ? loadedCatalog.models : undefined,
 	});
 	const models = useMemo(
 		() =>
@@ -326,18 +338,20 @@ export function SessionLauncher({
 		text || (attachments.length ? ATTACHMENTS_ONLY_TEXT : "");
 	const loadRecovery = useServerFn(getConversationRecoveryPoints);
 	const recoverPoint = useServerFn(restoreConversationPoint);
+	// Known on the server too, so the transcript keeps a recovery row under
+	// each user message from the first paint while the points load.
+	const recoverable =
+		!!selectedProject?.id &&
+		!!session.agentSessionId &&
+		(harnessId === "codex" || harnessId === "api");
 	const recoveryPoints = useQuery({
-		queryKey: [
-			"conversation-recovery",
+		queryKey: chatSideKeys.recoveryPoints(
 			selectedProject?.id,
 			session.agentSessionId,
 			session.items.length,
 			session.turnStatus,
-		],
-		enabled:
-			!!selectedProject?.id &&
-			!!session.agentSessionId &&
-			(harnessId === "codex" || harnessId === "api"),
+		),
+		enabled: recoverable,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId) return [];
 			return loadRecovery({
@@ -414,12 +428,11 @@ export function SessionLauncher({
 	const loadEvidence = useServerFn(listChatEvidence);
 	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
 	const chatEvidence = useQuery({
-		queryKey: [
-			"chat-evidence",
+		queryKey: chatSideKeys.evidence(
 			selectedProject?.id,
 			session.agentSessionId,
 			session.turnStatus,
-		],
+		),
 		enabled: !!selectedProject?.id && !!session.agentSessionId,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId)
@@ -1027,12 +1040,17 @@ export function SessionLauncher({
 					// Another chat opens as a new list, at its end.
 					key={session.agentSessionId ?? "new"}
 					recoveryControls={
-						onRecovered && selectedProject && session.agentSessionId
+						onRecovered &&
+						recoverable &&
+						selectedProject &&
+						session.agentSessionId
 							? (messageId) => {
 									const point = recoveryPoints.data?.find(
 										(point) => point.messageId === messageId,
 									);
-									if (!point) return null;
+									// The row's room stays while the points load or when a
+									// message has none: the transcript's spacing never moves.
+									if (!point) return <ConversationRecoverySlot />;
 									return (
 										<ConversationRecovery
 											codeAvailable={point.codeAvailable}

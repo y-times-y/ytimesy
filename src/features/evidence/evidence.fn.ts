@@ -52,14 +52,6 @@ export const listChatEvidence = createServerFn({ method: "GET" })
 	}))
 	.handler(async ({ data }) => {
 		const user = await requireUser(getRequest().headers);
-		const [{ listSessionEvidence }, { pullRequestEvidenceEnabled }] =
-			await Promise.all([
-				import("#/server/adapters/pr-evidence-records"),
-				import("#/server/services/pr-evidence"),
-			]);
-		const [evidence, enabled] = await Promise.all([
-			listSessionEvidence(user.id, data.projectId, data.sessionId),
-			pullRequestEvidenceEnabled(user.id).catch(() => false),
-		]);
-		return { enabled, evidence };
+		const { chatEvidence } = await import("#/server/services/chat-evidence");
+		return chatEvidence(user.id, data.projectId, data.sessionId);
 	});

@@ -148,10 +148,7 @@ export function ProjectSidebar({
 	account,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
-	const railLogo = useRef<HTMLButtonElement>(null);
-	const mobileToggle = useRef<HTMLButtonElement>(null);
-	const [hovered, setHovered] = useState(false);
-	// The sort menu opens outside the frame; while it is open the peek stays.
+	const leftToggle = useRef<HTMLButtonElement>(null);
 	const [sortMenuOpen, setSortMenuOpen] = useState(false);
 	const [nowMs, setNowMs] = useState(() => renderedAtMs ?? Date.now());
 	const firstPaint = useFirstPaint();
@@ -200,8 +197,6 @@ export function ProjectSidebar({
 		setSort(next);
 		writeStorage(SIDEBAR_SORT_KEY, next);
 	}
-	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const visible = expanded || hovered;
 	const selected = projects.find((project) => project.id === selectedProjectId);
 	const emptyCopy = sidebarChatsEmptyCopy({
 		loading: projectsLoading,
@@ -222,17 +217,6 @@ export function ProjectSidebar({
 			openTurnStatus,
 			seenSinceMs,
 		});
-
-	function cancelClose() {
-		if (closeTimer.current !== null) clearTimeout(closeTimer.current);
-	}
-
-	useEffect(
-		() => () => {
-			if (closeTimer.current !== null) clearTimeout(closeTimer.current);
-		},
-		[],
-	);
 
 	// Hydration renders the server's times; this client's clock takes over before the paint.
 	useLayoutEffect(() => {
@@ -286,14 +270,12 @@ export function ProjectSidebar({
 	}
 
 	function toggleProjects() {
-		cancelClose();
-		setHovered(false);
 		onToggle();
 		requestAnimationFrame(() => {
-			const opener = railLogo.current?.getClientRects().length
-				? railLogo
-				: mobileToggle;
-			(expanded ? opener : sidebarToggle).current?.focus();
+			// Opening on a phone: the sidebar's own toggle (the top-left one is
+			// under it); otherwise the top-left toggle stays where it was.
+			const inSidebar = sidebarToggle.current?.getClientRects().length;
+			(!expanded && inSidebar ? sidebarToggle : leftToggle).current?.focus();
 		});
 	}
 
@@ -528,37 +510,25 @@ export function ProjectSidebar({
 	return (
 		// Status tooltips hold no controls: they close as the pointer leaves the row.
 		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
-			<div
-				className="project-sidebar-frame"
-				data-peek={!expanded && (hovered || sortMenuOpen)}
-				onPointerEnter={(event) => {
-					if (
-						event.pointerType !== "mouse" ||
-						!window.matchMedia(
-							"(hover: hover) and (min-width: 601px) and (min-height: 501px)",
-						).matches
-					)
-						return;
-					cancelClose();
-					if (!expanded) setHovered(true);
-				}}
-				onPointerLeave={() => {
-					cancelClose();
-					closeTimer.current = setTimeout(() => setHovered(false), 140);
-				}}
+			{/* Top left of the chat, open or closed (as the right sidebar's toggle
+			    is top right); the attention dot shows while the sidebar is closed. */}
+			<button
+				ref={leftToggle}
+				type="button"
+				className="workspace-sidebar-toggle left-sidebar-toggle"
+				aria-label={expanded ? "Close left sidebar" : "Open left sidebar"}
+				title={expanded ? "Close left sidebar" : "Open left sidebar"}
+				aria-expanded={expanded}
+				aria-controls="project-sidebar"
+				data-activity={hasAttentionChat ? "attention" : undefined}
+				onClick={toggleProjects}
 			>
-				<button
-					ref={mobileToggle}
-					type="button"
-					className="workspace-sidebar-toggle mobile-projects-toggle"
-					aria-label={expanded ? "Close left sidebar" : "Open left sidebar"}
-					title={expanded ? "Close left sidebar" : "Open left sidebar"}
-					aria-expanded={expanded}
-					aria-controls="project-sidebar"
-					onClick={toggleProjects}
-				>
-					<PanelLeft size={16} strokeWidth={1.5} />
-				</button>
+				<PanelLeft size={16} strokeWidth={1.5} />
+				{hasAttentionChat && !expanded ? (
+					<span className="sr-only">A chat needs attention</span>
+				) : null}
+			</button>
+			<div className="project-sidebar-frame">
 				<button
 					type="button"
 					className="sidebar-backdrop"
@@ -570,8 +540,8 @@ export function ProjectSidebar({
 					id="project-sidebar"
 					className="project-sidebar"
 					aria-label="Projects and chats"
-					inert={!visible}
-					aria-hidden={!visible}
+					inert={!expanded}
+					aria-hidden={!expanded}
 					onKeyDown={(event) => {
 						if (event.key === "Escape" && expanded) {
 							event.preventDefault();
@@ -594,8 +564,8 @@ export function ProjectSidebar({
 							ref={sidebarToggle}
 							type="button"
 							className="workspace-sidebar-toggle sidebar-brand-toggle"
-							aria-label={expanded ? "Collapse chats" : "Keep chats open"}
-							title={expanded ? "Collapse chats" : "Keep chats open"}
+							aria-label="Close left sidebar"
+							title="Close left sidebar"
 							aria-expanded={expanded}
 							aria-controls="project-sidebar"
 							onClick={toggleProjects}
@@ -635,8 +605,6 @@ export function ProjectSidebar({
 								open={sortMenuOpen}
 								onOpenChange={(open) => {
 									setSortMenuOpen(open);
-									// The pointer is back over the sidebar after a pick: keep it open.
-									if (!open) setHovered(true);
 								}}
 								modal={false}
 							>
@@ -832,59 +800,6 @@ export function ProjectSidebar({
 						suppressHydrationWarning
 					/>
 				)}
-				<nav
-					className="sidebar-rail"
-					aria-label="Chat shortcuts"
-					inert={visible}
-					aria-hidden={visible}
-				>
-					<button
-						type="button"
-						className="rail-brand"
-						ref={railLogo}
-						aria-label="Open chats"
-						title="Open chats"
-						aria-expanded={expanded}
-						aria-controls="project-sidebar"
-						data-activity={hasAttentionChat ? "attention" : undefined}
-						onClick={toggleProjects}
-					>
-						<img
-							className="brand-mark"
-							src="/brand/mark.svg"
-							width={28}
-							height={28}
-							alt=""
-						/>
-						{hasAttentionChat ? (
-							<span className="sr-only">A chat needs attention</span>
-						) : null}
-					</button>
-					<button
-						type="button"
-						className="panel-toggle"
-						aria-label="New chat"
-						title="New chat"
-						data-active={newChatActive}
-						onClick={() => onNewChat()}
-					>
-						<Plus size={16} strokeWidth={1.5} />
-					</button>
-					{onOpenMemory ? (
-						<button
-							type="button"
-							className="panel-toggle"
-							aria-label="Memory"
-							title="Memory"
-							data-active={memoryActive}
-							onPointerEnter={onMemoryIntent}
-							onFocus={onMemoryIntent}
-							onClick={onOpenMemory}
-						>
-							<BookMarked size={16} strokeWidth={1.5} />
-						</button>
-					) : null}
-				</nav>
 			</div>
 		</TooltipPrimitive.Provider>
 	);

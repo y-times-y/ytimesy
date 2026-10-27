@@ -1,4 +1,3 @@
-import { Icon } from "@iconify/react";
 import { Box, Server } from "lucide-react";
 import { ClaudeMark } from "./claude-mark";
 import icons from "./model-provider-icons.json";
@@ -30,9 +29,19 @@ export function ModelProviderLogo({
 			</svg>
 		);
 	const key = provider === "google" ? "googlegemini" : provider;
-	const icon = icons[key as keyof typeof icons];
+	const icon: { body: string; width?: number; height?: number } | undefined =
+		icons[key as keyof typeof icons];
+	// Drawn here rather than with Iconify's <Icon>, which renders nothing on
+	// the server and draws after hydration, widening the model button.
 	return icon ? (
-		<Icon icon={icon} width={size} height={size} aria-hidden="true" />
+		<svg
+			width={size}
+			height={size}
+			viewBox={`0 0 ${icon.width ?? 24} ${icon.height ?? 24}`}
+			aria-hidden="true"
+			// biome-ignore lint/security/noDangerouslySetInnerHtml: our own bundled icon paths (model-provider-icons.json), no user input.
+			dangerouslySetInnerHTML={{ __html: icon.body }}
+		/>
 	) : (
 		<Box size={size} aria-hidden="true" />
 	);

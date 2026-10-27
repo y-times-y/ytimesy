@@ -24,3 +24,61 @@ export function inspectorSplitRatio(input: {
 	if (input.custom !== null) return clampInspectorSplit(input.custom);
 	return input.wide ? INSPECTOR_SPLIT_DESKTOP : INSPECTOR_SPLIT_DEFAULT;
 }
+
+/** The right panel's views (workspace-inspector.tsx's InspectorView). */
+const INSPECTOR_VIEWS = [
+	"overview",
+	"files",
+	"diff",
+	"pr",
+	"terminal",
+	"desktop",
+	"preview",
+	"memory",
+] as const;
+export type SavedInspectorView = (typeof INSPECTOR_VIEWS)[number];
+
+/**
+ * The right panel as the user left it: open or closed, its tab and its
+ * width. A cookie, so the server renders the page with it (the tab's
+ * content is markup the browser cannot fix up before the first paint).
+ */
+export type SavedInspector = {
+	readonly open: boolean;
+	readonly view: SavedInspectorView;
+	/** The chat's share of the width after a drag; null for the default. */
+	readonly split: number | null;
+};
+
+export const INSPECTOR_COOKIE = "ytimesy-inspector";
+
+export const CLOSED_INSPECTOR: SavedInspector = {
+	open: false,
+	view: "overview",
+	split: null,
+};
+
+/** The saved panel from a Cookie header; anything unreadable is the closed panel. */
+export function savedInspectorFromCookies(
+	header: string | null | undefined,
+): SavedInspector {
+	const raw = header
+		?.split(";")
+		.map((part) => part.trim())
+		.find((part) => part.startsWith(`${INSPECTOR_COOKIE}=`))
+		?.slice(INSPECTOR_COOKIE.length + 1);
+	const [open, view, split] = decodeURIComponent(raw ?? "").split(".");
+	if (open !== "1" && open !== "0") return CLOSED_INSPECTOR;
+	const ratio = split ? Number(split) / 1000 : Number.NaN;
+	return {
+		open: open === "1",
+		view: INSPECTOR_VIEWS.find((known) => known === view) ?? "overview",
+		split: Number.isFinite(ratio) ? clampInspectorSplit(ratio) : null,
+	};
+}
+
+/** The cookie that keeps the panel as it is for the next page load. */
+export function savedInspectorCookie(saved: SavedInspector): string {
+	const split = saved.split === null ? "" : Math.round(saved.split * 1000);
+	return `${INSPECTOR_COOKIE}=${saved.open ? 1 : 0}.${saved.view}.${split}; path=/; max-age=31536000; samesite=lax`;
+}

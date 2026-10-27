@@ -206,7 +206,7 @@ describe("first-paint rows script", () => {
 		[CHAT_SEEN_SINCE_STORAGE_KEY]: String(Date.parse("2026-10-01T00:00:00Z")),
 	};
 
-	it("marks replies newer than this browser's seen chats, and the rail", () => {
+	it("marks replies newer than this browser's seen chats, and the toggle's dot", () => {
 		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
 		const old = reply("old", "2026-09-01T00:00:00Z");
 		const css = runRowsScript({
@@ -217,7 +217,9 @@ describe("first-paint rows script", () => {
 			'.sidebar-chat-row[data-chat-id="fresh"][data-unread-mark] .sidebar-chat-age{display:none}',
 		);
 		expect(css).not.toContain('data-chat-id="old"');
-		expect(css).toContain(".rail-brand::after{display:block}");
+		expect(css).toContain(
+			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
+		);
 	});
 
 	it("keeps only the marks of a later streamed copy of the sidebar", () => {
@@ -252,7 +254,9 @@ describe("first-paint rows script", () => {
 		};
 		expect(
 			runRowsScript({ rows: { [OPEN_PROJECT_ROWS]: [failed] } }),
-		).toContain(".rail-brand::after{display:block}");
+		).toContain(
+			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
+		);
 		expect(
 			runRowsScript({
 				stored: { [CHAT_SEEN_STORAGE_KEY]: JSON.stringify(["f:failed:"]) },
