@@ -576,4 +576,13 @@ describe("saveErrorMessage", () => {
 		);
 		expect(saveErrorMessage(null)).toBeUndefined();
 	});
+
+	it("still says the save failed when the rejection has no message", () => {
+		expect(saveErrorMessage(new Error(""))).toBe("Couldn't save. Try again.");
+		expect(
+			saveErrorMessage(
+				new Response("Forbidden", { status: 403 }) as unknown as Error,
+			),
+		).toBe("Couldn't save. Try again.");
+	});
 });
