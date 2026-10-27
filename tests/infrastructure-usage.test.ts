@@ -63,6 +63,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261026120000_infrastructure_usage_total.sql",
+			"utf8",
+		),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");
@@ -787,4 +793,62 @@ it("holds back a new turn while a window is exhausted, naming when it reopens", 
 		/reached your weekly cloud usage limit, so new work cannot start until/,
 	);
 	await assertUsageWindowsOpen("bob");
+});
+
+it("keeps the running fleet totals equal to summing every reservation", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	const sums = async () =>
+		(
+			await query(
+				`select
+				 (select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0)
+				  from infrastructure_usage_reservation where period=$1::date or consumed_micro_usd is null)::text as fleet,
+				 (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) from infrastructure_usage_reservation)::text as lifetime`,
+				[utcUsageMonth()],
+			)
+		).rows[0];
+	const totals = async () =>
+		(
+			await query(
+				`select (select coalesce(sum(case when period=$1::date then charged_micro_usd else open_micro_usd end),0)
+				  from infrastructure_usage_total)::text as fleet,
+				 (select coalesce(sum(charged_micro_usd),0) from infrastructure_usage_total)::text as lifetime`,
+				[utcUsageMonth()],
+			)
+		).rows[0];
+	const settled = reservation("alice", 30);
+	await reserveInfrastructureUsage(settled);
+	await settleInfrastructureUsage({
+		id: settled.id,
+		userId: "alice",
+		consumedMicroUsd: 12,
+	});
+	const old = reservation("bob", 40);
+	await reserveInfrastructureUsage(old);
+	await query(
+		"update infrastructure_usage_reservation set period='2020-01-01' where id=$1",
+		[old.id],
+	);
+	const grown = reservation("alice", 20);
+	await reserveInfrastructureUsage(grown);
+	await reserveInfrastructureUsage(
+		{ ...grown, amountMicroUsd: 35 },
+		undefined,
+		"increase",
+	);
+	const removed = reservation("bob", 10);
+	await reserveInfrastructureUsage(removed);
+	await query("delete from infrastructure_usage_reservation where id=$1", [
+		removed.id,
+	]);
+	expect(await sums()).toEqual({ fleet: "87", lifetime: "87" });
+	expect(await totals()).toEqual(await sums());
+	await query(
+		"update infrastructure_usage_reservation set consumed_micro_usd=reserved_micro_usd,settled_at=now() where id=$1",
+		[old.id],
+	);
+	expect(await totals()).toEqual(await sums());
+	expect(await sums()).toEqual({ fleet: "47", lifetime: "87" });
+	await query("truncate infrastructure_usage_reservation cascade");
+	expect(await totals()).toEqual({ fleet: "0", lifetime: "0" });
 });

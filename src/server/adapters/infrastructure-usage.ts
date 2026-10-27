@@ -131,6 +131,17 @@ export async function assertUsageWindowsOpen(
 }
 
 /**
+ * The fleet's spend as `fleet` (the month `period` names, plus holds still
+ * open from earlier months) and `lifetime`, from the running totals in
+ * infrastructure_usage_total (one row per month, kept by a trigger on
+ * infrastructure_usage_reservation).
+ */
+const FLEET_TOTALS_SQL = (period: string) =>
+	`(select coalesce(sum(case when period=${period}::date then charged_micro_usd else open_micro_usd end),0)
+	  from infrastructure_usage_total) as fleet,
+	 (select coalesce(sum(charged_micro_usd),0) from infrastructure_usage_total) as lifetime`;
+
+/**
  * The fleet's monthly and lifetime spend (consumed plus held) against its
  * caps, for the owner's budget alerts. Null when the caps are not configured.
  */
@@ -143,10 +154,7 @@ export async function fleetInfrastructureUsage() {
 	}
 	const period = utcUsageMonth();
 	const result = await database().query<{ fleet: string; lifetime: string }>(
-		`select
-		 (select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0)
-		  from infrastructure_usage_reservation where period=$1::date or consumed_micro_usd is null) as fleet,
-		 (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) from infrastructure_usage_reservation) as lifetime`,
+		`select ${FLEET_TOTALS_SQL("$1")}`,
 		[period],
 	);
 	return {
@@ -248,9 +256,7 @@ export async function reserveInfrastructureUsage(
 		}>(
 			`select e.user_id as existing_user_id,e.resource_key,e.reserved_micro_usd,e.consumed_micro_usd,
 			 exists(select 1 from auth_user where id=$1) as owner,
-			 (select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0)
-			  from infrastructure_usage_reservation where period=$2::date or consumed_micro_usd is null) as fleet,
-			 (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) from infrastructure_usage_reservation) as lifetime
+			 ${FLEET_TOTALS_SQL("$2")}
 			 from (select 1) one
 			 left join infrastructure_usage_reservation e on e.id=$3`,
 			[input.userId, period, input.id],
