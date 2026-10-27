@@ -122,6 +122,16 @@ function statusReason(
 	return undefined;
 }
 
+/** When a spent ChatGPT plan allowance resets (epoch ms), if the failure says. */
+export function subscriptionLimitResetsAt(error: unknown): number | undefined {
+	const spent = failureChain(error).find(
+		(current) => current instanceof SubscriptionUsageLimitReached,
+	);
+	return spent instanceof SubscriptionUsageLimitReached && spent.resetsAt
+		? spent.resetsAt.getTime()
+		: undefined;
+}
+
 /** Why a model step failed in a way another route can fix, or null when it must not move. */
 export function failoverReason(error: unknown): FailoverReason | null {
 	const chain = failureChain(error);

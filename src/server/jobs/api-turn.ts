@@ -58,6 +58,7 @@ import {
 	failoverReason,
 	failureSummary,
 	retriesSameRoute,
+	subscriptionLimitResetsAt,
 } from "#/domain/model-failover-reason";
 import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
@@ -2397,6 +2398,7 @@ async function runApiTurnAttempt(
 							message: failoverNotice(plan.failing.label, next.label, reason),
 							reason,
 							cause: failureSummary(error),
+							resetsAt: subscriptionLimitResetsAt(error),
 							from: plan.failing.label,
 							to: { ...next.label, key: routeKey(next.route) },
 						}),
@@ -2428,6 +2430,7 @@ async function runApiTurnAttempt(
 						message: failoverQuestion(plan.failing.label, to, reason),
 						reason,
 						cause: failureSummary(error),
+						resetsAt: subscriptionLimitResetsAt(error),
 						from: plan.failing.label,
 						to: { ...to, key: routeKey(decision.candidate.route) },
 					});
@@ -2720,16 +2723,19 @@ function modelSwitchItem(
 		from: ModelSwitchItem["from"];
 		to: ModelSwitchItem["to"];
 		cause?: string;
+		resetsAt?: number;
 	},
 ): ModelSwitchItem {
+	const { resetsAt, ...fields } = input;
 	const usageBefore = [...items]
 		.reverse()
 		.find((item) => item.kind === "userMessage")?.apiUsage;
 	return {
 		kind: "modelSwitch",
-		...input,
+		...fields,
 		id: SessionItemId(input.id),
 		...(usageBefore ? { usageBefore } : {}),
+		...(resetsAt !== undefined ? { resetsAt } : {}),
 	};
 }
 

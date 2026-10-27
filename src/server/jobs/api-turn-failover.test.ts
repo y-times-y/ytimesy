@@ -615,6 +615,20 @@ it.each([
 	expect(switchItem(turn)).toMatchObject({ reason });
 });
 
+it("records the plan's reset time on a usage-limit switch", async () => {
+	const resetsAt = new Date("2026-10-26T20:00:00Z");
+	mocks.subscriptionStep.mockRejectedValueOnce(
+		new SubscriptionUsageLimitReached(resetsAt),
+	);
+	let turn = codexTurn();
+	await runApiTurn({} as WorkspaceMachines, turn, step(1));
+	turn = afterCheckpoint(turn);
+	expect(switchItem(turn)).toMatchObject({
+		reason: "usage-limit",
+		resetsAt: resetsAt.getTime(),
+	});
+});
+
 it("keeps the retry count across an executor restart", async () => {
 	mocks.retryDelays = [0, 0];
 	mocks.subscriptionStep.mockImplementationOnce(midStreamFailure());

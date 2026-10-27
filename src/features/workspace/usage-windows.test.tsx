@@ -27,6 +27,7 @@ describe("model picker cloud usage", () => {
 			/>,
 		);
 		expect(html).toContain('aria-label="Cloud usage"');
+		expect(html).toContain(">Cloud</span>");
 		expect(html).toContain("<span>5h</span>");
 		expect(html).toContain("<span>12%</span>");
 		expect(html).toContain('data-tone="low"');

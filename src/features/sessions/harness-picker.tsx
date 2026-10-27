@@ -36,6 +36,11 @@ import {
 } from "./model-picker-favorites";
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
+import {
+	ModelPickerPlanUsage,
+	usePlanUsageBars,
+	usePrefetchPlanUsage,
+} from "./plan-usage";
 
 /** API maker sections; mounted only while the picker is open. */
 function ApiProviderRail({
@@ -103,6 +108,8 @@ export function HarnessPicker({
 	const [open, setOpen] = useState(false);
 	// Read with the composer, so the picker opens at its full height.
 	const usageWindows = useCloudUsageWindows();
+	const planBars = usePlanUsageBars(open);
+	const prefetchPlanUsage = usePrefetchPlanUsage();
 	const [browse, setBrowse] = useState(harnessId === "api");
 	const [apiProvider, setApiProvider] = useState("openai");
 	const [search, setSearch] = useState("");
@@ -146,6 +153,8 @@ export function HarnessPicker({
 				id="session-harness-select"
 				className="composer-select harness-select"
 				aria-label="Model"
+				onPointerEnter={prefetchPlanUsage}
+				onFocus={prefetchPlanUsage}
 				title={`${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}`}
 			>
 				{harnessId === "api" ? (
@@ -382,6 +391,7 @@ export function HarnessPicker({
 						)}
 					</section>
 				</div>
+				<ModelPickerPlanUsage bars={planBars} />
 				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>

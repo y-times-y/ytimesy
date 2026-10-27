@@ -592,7 +592,7 @@
 	flex-shrink: 0;
 }
 
-/* Cloud usage: one quiet line under the models. */
+/* Plan and cloud usage: quiet lines under the models. */
 .model-picker-usage {
 	display: flex;
 	flex-shrink: 0;
@@ -602,6 +602,14 @@
 	color: var(--list-text-muted);
 	font-size: var(--list-meta-size);
 	font-variant-numeric: tabular-nums;
+}
+.model-picker-usage + .model-picker-usage {
+	padding-top: 0;
+	border-top: 0;
+}
+.model-picker-usage-label {
+	flex: 0 0 6.5em;
+	white-space: nowrap;
 }
 .model-picker-usage-window {
 	display: flex;
