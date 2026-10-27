@@ -251,6 +251,12 @@ export const HARNESS_VARIANT_VALUES = {
 	 * request with the hosted tool, so that overhead is paid only per search.
 	 */
 	search: ["hosted", "function"],
+	/**
+	 * The unattended builder's check-in-proportion rule (stop once one run of
+	 * the deliverable confirms the result): proportion = on (the default);
+	 * full = without it, to measure what it costs on hard tasks.
+	 */
+	checks: ["proportion", "full"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -308,6 +314,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	fetch: "off",
 	prompt: "full",
 	search: "hosted",
+	checks: "proportion",
 	roleModels: {},
 };
 

@@ -342,6 +342,7 @@ export async function harborHarness(input: {
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 		// Only the root builder: a subagent's brief already names what to report.
 		unattended: !input.subagent,
+		checkInProportion: variant.checks !== "full",
 		...(helperInstructions ? { helperInstructions } : {}),
 	});
 	// prompt=minimal (root builder only): no rule blocks, to measure what
