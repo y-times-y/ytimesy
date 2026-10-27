@@ -299,8 +299,9 @@ export function nextLaunches(input: {
 	);
 	for (const batch of BATCHES) {
 		if (!state.openBatches.has(batch.id)) continue;
-		// GPU tasks first: they are the long pole.
-		const ordered = [...input.tasks].sort((a, b) => b.gpus - a.gpus);
+		// GPU tasks first: they are the long pole; among them the largest
+		// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
+		const ordered = [...input.tasks].sort((a, b) => b.gpus - a.gpus || (a.gpus > 0 ? b.cpus - a.cpus : 0));
 		for (const task of ordered) {
 			const p = progress(state, task.name, batch.id);
 			const pending = out.filter((d) => d.task === task.name && d.batch === batch.id).length;

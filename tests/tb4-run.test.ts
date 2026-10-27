@@ -374,4 +374,17 @@ describe("tb4 Astra x5 run rules", () => {
 		expect(Object.keys(caps).sort()).toEqual(Object.keys(codex.tasks).sort());
 		expect(Math.max(...Object.values(caps))).toBeLessThanOrEqual(100);
 	});
+	it("launches the largest GPU task first", () => {
+		const gpuTasks: Task[] = [
+			{ name: "fp8", cpus: 4, memoryMb: 16384, gpus: 1, separateVerifier: true },
+			{ name: "jax", cpus: 16, memoryMb: 32768, gpus: 1, separateVerifier: true },
+			{ name: "math", cpus: 8, memoryMb: 16384, gpus: 1, separateVerifier: true },
+		];
+		const { dir, journal } = newRun();
+		const gpuHost: Host = { name: "gpu-0", kind: "gpu", vcpu: 16, memoryMb: 262144, address: "y" };
+		const { ops, launched } = fakeOps(() => "pending");
+		tick({ runDir: dir, journal, hosts: [gpuHost], tasks: gpuTasks, ops, now: () => "t" });
+		expect(launched.length).toBe(1);
+		expect(launched[0]).toContain("jax");
+	});
 });
