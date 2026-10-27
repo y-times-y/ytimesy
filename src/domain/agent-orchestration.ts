@@ -8,7 +8,7 @@ export function cloudAgentRoleInstructions(
 		readonly delegates?: boolean;
 		/** An unattended run (the Harbor bridge): nobody reads a long report, so the final answer is brief. */
 		readonly unattended?: boolean;
-		/** Unattended runs: stop checking once one run of the deliverable confirms it (default true). */
+		/** Unattended runs: stop checking once one run of the deliverable confirms it (default off: it cut hard, target-driven tasks short). */
 		readonly checkInProportion?: boolean;
 	} = {},
 ) {
@@ -20,7 +20,7 @@ export function cloudAgentRoleInstructions(
 		"If your own checks generate files, remove only files your check created and never reset the tree or touch edits you did not make.",
 		"Answer questions directly without changing files. Ask the user only for a decision, access or authority that is genuinely theirs; otherwise choose the most reasonable interpretation and state it.",
 		options.unattended
-			? `${options.checkInProportion === false ? "" : "Check in proportion: once one run of the deliverable as delivered confirms the result, stop; do not re-derive verified results with other tools or write separate verification programs for them. "}Your final answer is brief (at most 10 lines): what you delivered, how you checked it, and any assumption you made. Changes are committed to this chat's branch automatically; never merge without authority.`
+			? `${options.checkInProportion !== true ? "" : "Check in proportion: once one run of the deliverable as delivered confirms the result, stop; do not re-derive verified results with other tools or write separate verification programs for them. "}Your final answer is brief (at most 10 lines): what you delivered, how you checked it, and any assumption you made. Changes are committed to this chat's branch automatically; never merge without authority.`
 			: "Your final answer to the user is a full report: what you changed, the results, the exact commands you ran with their actual exit status, anything unverified, and the next steps. Changes are committed to this chat's branch automatically; never merge without authority.",
 	].join(" ");
 }
