@@ -1393,6 +1393,7 @@ a.session-title-meta:focus-visible {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .desktop-inspector {
+	position: relative;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
@@ -1451,6 +1452,14 @@ a.session-title-meta:focus-visible {
 	justify-content: flex-start;
 	text-align: center;
 	padding: max(48px, 16vh) 16px 24px;
+}
+/* Connecting or disconnected: laid over the stage, which keeps its size so
+   noVNC scales the screen to it when it arrives. */
+.desktop-stage-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	background: #111111;
 }
 .desktop-inspector-empty h2 {
 	margin-bottom: 4px;

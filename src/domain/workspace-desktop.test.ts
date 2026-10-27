@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentDesktopActivityInTurn,
 	desktopClientViewerUrl,
+	desktopDisconnectMessage,
 	desktopInspectorPrompt,
 	desktopInspectorShouldStart,
 } from "./workspace-desktop";
@@ -108,5 +109,30 @@ describe("agentDesktopActivityInTurn", () => {
 		expect(
 			agentDesktopActivityInTurn({ turnStatus: "completed", items }),
 		).toBeNull();
+	});
+});
+
+describe("desktopDisconnectMessage", () => {
+	it("shows the server's close reason when the relay gave one", () => {
+		expect(
+			desktopDisconnectMessage({
+				reason: " Desktop is not ready. ",
+				connected: false,
+				clean: false,
+			}),
+		).toBe("Desktop is not ready.");
+	});
+	it("says the desktop never answered when it closed before connecting", () => {
+		expect(desktopDisconnectMessage({ connected: false, clean: false })).toBe(
+			"The desktop didn't answer.",
+		);
+	});
+	it("tells a lost connection from a closed one", () => {
+		expect(desktopDisconnectMessage({ connected: true, clean: false })).toBe(
+			"The desktop connection was lost.",
+		);
+		expect(desktopDisconnectMessage({ connected: true, clean: true })).toBe(
+			"The desktop connection closed.",
+		);
 	});
 });

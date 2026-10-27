@@ -6,7 +6,7 @@ import {
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
-import { DesktopStage } from "./desktop-stage";
+import { DesktopStage, DesktopStagePlaceholder } from "./desktop-stage";
 import { RetryButton } from "./retry-button";
 
 export function DesktopInspector({
@@ -40,8 +40,8 @@ export function DesktopInspector({
 	if (desktop.status === "running" && projectId && sessionId) {
 		return (
 			<section className="desktop-inspector" aria-label="Workspace desktop">
-				{/* noVNC needs the DOM; the same empty stage stands in until it mounts. */}
-				<ClientOnly fallback={<div className="desktop-stage-rfb" />}>
+				{/* noVNC needs the DOM; the same connecting stage stands in until it mounts. */}
+				<ClientOnly fallback={<DesktopStagePlaceholder />}>
 					<DesktopStage
 						projectId={projectId}
 						sessionId={sessionId}
