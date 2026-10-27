@@ -15,6 +15,7 @@ import {
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
 import { settledTurnItems, withStoppedNotice } from "#/domain/turn-end";
+import { RenderFoldedBodies } from "./lazy-details";
 import { SessionTimeline } from "./session-timeline";
 
 // Replies render through the real Markdown renderer (the app loads it lazily).
@@ -48,7 +49,13 @@ function renderTimeline(
 	items: readonly SessionItem[],
 	turnStatus: "running" | "completed",
 ) {
-	return renderToString(createElement(SessionTimeline, { items, turnStatus }));
+	return renderToString(
+		createElement(
+			RenderFoldedBodies.Provider,
+			{ value: true },
+			createElement(SessionTimeline, { items, turnStatus }),
+		),
+	);
 }
 
 describe("session timeline live collapse", () => {

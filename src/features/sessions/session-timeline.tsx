@@ -102,6 +102,7 @@ import {
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { InlineMarkdown } from "./inline-markdown";
+import { LazyDetails } from "./lazy-details";
 import { LiveCollapsible } from "./live-collapsible";
 import { McpServerIcon } from "./mcp-server-icon";
 import {
@@ -866,7 +867,7 @@ const TimelineRowView = memo(function TimelineRowView({
 }) {
 	if (row.kind === "work") {
 		return (
-			<details className="session-work">
+			<LazyDetails className="session-work">
 				<summary>
 					<span title="Elapsed time from dispatch to observed completion">
 						{row.label}
@@ -889,7 +890,7 @@ const TimelineRowView = memo(function TimelineRowView({
 						/>
 					))}
 				</div>
-			</details>
+			</LazyDetails>
 		);
 	}
 	if (row.kind === "exploration") {
@@ -971,7 +972,7 @@ function SessionItemView({
 					<div className="session-message" data-role="user" data-sender="true">
 						<span className="session-message-sender">{message.from}</span>
 						{message.text.length > 600 ? (
-							<details className="session-work child-task-instructions">
+							<LazyDetails className="session-work child-task-instructions">
 								<summary>
 									<span>{firstWords(message.text)}</span>
 									<ChevronRight
@@ -983,7 +984,7 @@ function SessionItemView({
 								<div className="session-work-items">
 									<AgentMarkdown text={message.text} onOpenFile={onOpenFile} />
 								</div>
-							</details>
+							</LazyDetails>
 						) : (
 							<p>
 								<MentionText text={message.text} />
@@ -994,7 +995,7 @@ function SessionItemView({
 			}
 			if (collapseInstructions) {
 				return (
-					<details className="session-work child-task-instructions">
+					<LazyDetails className="session-work child-task-instructions">
 						<summary>
 							<span>Brief</span>
 							<ChevronRight
@@ -1006,7 +1007,7 @@ function SessionItemView({
 						<div className="session-work-items">
 							<AgentMarkdown text={item.text} onOpenFile={onOpenFile} />
 						</div>
-					</details>
+					</LazyDetails>
 				);
 			}
 			return (
@@ -1076,7 +1077,7 @@ function SessionItemView({
 		case "plan":
 			if (item.todos) return <TodoList todos={item.todos} />;
 			return (
-				<details className="session-activity" data-kind="plan">
+				<LazyDetails className="session-activity" data-kind="plan">
 					<summary>
 						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
@@ -1087,7 +1088,7 @@ function SessionItemView({
 						/>
 					</summary>
 					<p>{item.text || "Planning…"}</p>
-				</details>
+				</LazyDetails>
 			);
 		case "userQuestion":
 			return <UserQuestionCard item={item} reply={null} />;
@@ -1098,7 +1099,7 @@ function SessionItemView({
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
@@ -1126,7 +1127,7 @@ function SessionItemView({
 							<p className="session-activity-meta">exit {item.exitCode}</p>
 						) : null}
 					</div>
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "fileChange": {
@@ -1176,7 +1177,7 @@ function SessionItemView({
 				);
 			}
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="fileChange"
 					data-status={item.status}
@@ -1209,7 +1210,7 @@ function SessionItemView({
 							/>
 						</p>
 					))}
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "mcpToolCall":
@@ -1258,7 +1259,7 @@ function SessionItemView({
 			const codeResult = codeModeResult(item);
 			const innerCalls = codeModeCallItems(item);
 			return (
-				<details
+				<LazyDetails
 					className="session-activity"
 					data-kind="dynamicToolCall"
 					data-status={item.status}
@@ -1324,7 +1325,7 @@ function SessionItemView({
 					</summary>
 					{program !== null ? (
 						<>
-							<details
+							<LazyDetails
 								className="tool-panel session-program"
 								data-kind="program"
 							>
@@ -1341,7 +1342,7 @@ function SessionItemView({
 									/>
 								</summary>
 								<ProgramSource program={program} />
-							</details>
+							</LazyDetails>
 							{innerCalls.length > 0 && (
 								<div className="session-program-calls">
 									{innerCalls.map((call) => (
@@ -1386,7 +1387,7 @@ function SessionItemView({
 					) : (
 						<ToolDetailBody item={item} />
 					)}
-				</details>
+				</LazyDetails>
 			);
 		}
 		case "webSearch":

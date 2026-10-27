@@ -11,6 +11,7 @@ import { helperCallLabel } from "#/domain/helper-names";
 import type { DynamicToolCallItem } from "#/domain/session-item";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
+import { LazyDetails } from "./lazy-details";
 import { ToolFields } from "./tool-value";
 
 /** A tool's JSON arguments (or object result) as labelled fields, not a JSON blob; anything else as text. */
@@ -21,7 +22,7 @@ export function ToolInputFields({ input }: { input: string }) {
 /** The builder's <requirements> block: a collapsed list, not raw tags. */
 export function RequirementsList({ items }: { items: readonly string[] }) {
 	return (
-		<details className="session-requirements">
+		<LazyDetails className="session-requirements">
 			<summary>
 				<ListChecks size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>Requirements</span>
@@ -35,7 +36,7 @@ export function RequirementsList({ items }: { items: readonly string[] }) {
 					<li key={index}>{item}</li>
 				))}
 			</ol>
-		</details>
+		</LazyDetails>
 	);
 }
 
@@ -80,7 +81,7 @@ export function CheckVerdictCard({
 			: null,
 	].filter(Boolean);
 	return (
-		<details
+		<LazyDetails
 			className="session-activity session-check"
 			data-kind="check"
 			data-verdict={summary.verdict ?? "none"}
@@ -147,7 +148,7 @@ export function CheckVerdictCard({
 					<p className="session-activity-meta">{summary.spend}</p>
 				) : null}
 			</div>
-		</details>
+		</LazyDetails>
 	);
 }
 
@@ -193,7 +194,7 @@ export function AgentCallView({
 				? capitalized(call.status)
 				: undefined;
 	return (
-		<details
+		<LazyDetails
 			className="session-activity"
 			data-kind="agentCall"
 			data-status={item.status}
@@ -257,6 +258,6 @@ export function AgentCallView({
 			{!item.input && !item.output ? (
 				<p>Details were not recorded for this call.</p>
 			) : null}
-		</details>
+		</LazyDetails>
 	);
 }

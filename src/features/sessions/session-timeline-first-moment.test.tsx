@@ -36,5 +36,7 @@ it("replaces Thinking with the reply's first words", () => {
 		/>,
 	);
 	expect(html).not.toContain('data-kind="working"');
-	expect(html).toMatch(/data-kind="agentMessage"[^>]*data-follows="userMessage"/);
+	expect(html).toMatch(
+		/data-kind="agentMessage"[^>]*data-follows="userMessage"/,
+	);
 });
