@@ -24,6 +24,12 @@ export function markdownRenderer(): Promise<RendererModule | null> {
 	return rendererLoad;
 }
 
+/**
+ * Server-rendered Markdown that needs the renderer to hydrate. Settled
+ * replies take over their server HTML instead (settled-markdown.tsx).
+ */
+export const LIVE_MARKDOWN = ".session-markdown:not([data-md-settled] *)";
+
 // The signed-in app shows chats: the renderer loads at once. Elsewhere (the
 // landing page) it loads once the page is idle.
 if (typeof window !== "undefined") {
