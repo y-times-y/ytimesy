@@ -20,9 +20,7 @@ export const START_HARNESS_BEFORE_DESKTOP =
 export function desktopStartFailureReason(cause: unknown): string {
 	const message = failureMessage(cause);
 	if (workspaceLooksGone(message)) return START_HARNESS_BEFORE_DESKTOP;
-	return publicFailureMessage(
-		cause instanceof Error ? cause : new Error(message),
-	);
+	return publicFailureMessage(new Error(message));
 }
 
 export function desktopInspectorShouldStart(input: {
