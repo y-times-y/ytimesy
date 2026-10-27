@@ -1443,15 +1443,48 @@ a.session-title-meta:focus-visible {
 	transform-origin: top left;
 	background: #111111;
 }
-.desktop-start {
+/* Desktop not running (starting, failed, disconnected): one calm centred
+   stack. It starts at a fixed offset instead of centring vertically, so the
+   title stays put when the copy below it changes length between states. */
+.inspector-empty.desktop-inspector-empty {
+	align-items: center;
+	justify-content: flex-start;
+	text-align: center;
+	padding: max(48px, 16vh) 16px 24px;
+}
+.desktop-inspector-empty h2 {
+	margin-bottom: 4px;
+	font-size: var(--list-font-size);
+	color: var(--list-text-strong);
+}
+.desktop-inspector-empty p {
+	max-width: min(100%, 32em);
+	color: var(--text-muted);
+}
+/* The failure reason: one quiet line; the full text is in its tooltip. */
+.desktop-inspector-empty .desktop-inspector-reason {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--list-meta-size);
+}
+/* Holds the button or the status line at the button's height (Button lg). */
+.desktop-inspector-action {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 32px;
 	margin-top: 16px;
-	min-height: 44px;
-	padding: 0 14px;
-	border: 1px solid #3d3d3d;
-	border-radius: 8px;
-	background: #282828;
-	color: #eee;
-	font-size: 13px;
+}
+.desktop-inspector-action .desktop-inspector-status {
+	margin: 0;
+}
+/* The global button reset inherits the font; keep the list text size. */
+.retry-button {
+	font-size: var(--list-font-size);
+}
+.terminal-inspector-notice .retry-button {
+	margin-top: 12px;
 }
 .terminal-inspector {
 	position: relative;
