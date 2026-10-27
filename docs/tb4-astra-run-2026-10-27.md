@@ -110,3 +110,16 @@ reports, at any time:
 ## Amendments
 
 None.
+
+## Model rate limits (no quota increase)
+
+Bedrock lists Astra limits only for the cross-region profiles (4M tokens/min each); the
+mantle route this run uses has no published Astra limit. Instead of a quota increase:
+- `TB4_MAX_IN_FLIGHT=30` caps trials in flight across the fleet (16 at once ran clean on
+  2026-10-27). Raise it in steps of 10 only after 30 minutes with no `throttle` lines in the
+  hosts' transport logs.
+- A throttled model request (429, or a 5xx before any output) is resent with backoff and
+  Retry-After for up to 4 minutes per attempt (signed-request lifetime); the SDK's re-signed
+  retries each get the window again (about 20 minutes in all).
+- A trial whose last model call still failed is classified infra and retried under the
+  retry rule, never scored 0.

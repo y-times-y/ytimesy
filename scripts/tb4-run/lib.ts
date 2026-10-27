@@ -321,9 +321,16 @@ export function nextLaunches(input: {
 	tasks: Task[];
 	hosts: Host[];
 	unhealthyHosts?: Set<string>;
+	/** Most trials in flight at once across the fleet (keeps model load under the provider's rate limits). */
+	maxInFlight?: number;
 }): LaunchDecision[] {
 	const { state } = input;
 	if (state.paused || state.stopped || !state.runId) return [];
+	const running = [...state.attempts.values()].filter(
+		(a) => a.status !== "finished",
+	).length;
+	const room = () =>
+		(input.maxInFlight ?? Number.POSITIVE_INFINITY) - running - out.length;
 	const byName = new Map(input.tasks.map((t) => [t.name, t]));
 	const out: LaunchDecision[] = [];
 	const load = new Map(
@@ -343,7 +350,7 @@ export function nextLaunches(input: {
 			).length;
 			let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
 			let attempts = p.attempts + pending;
-			while (need > 0 && attempts < attemptCap(task, batch)) {
+			while (need > 0 && attempts < attemptCap(task, batch) && room() > 0) {
 				const host = input.hosts.find((h) => {
 					if (input.unhealthyHosts?.has(h.name)) return false;
 					if (task.gpus > 0 !== (h.kind === "gpu")) return false;

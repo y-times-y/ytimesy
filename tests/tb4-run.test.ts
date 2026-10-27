@@ -236,6 +236,27 @@ describe("tb4 host CPU budget", () => {
 		);
 	});
 
+	it("never launches past the fleet-wide in-flight cap", () => {
+		const many = Array.from({ length: 40 }, (_, i) => two(i));
+		const { journal } = newRun();
+		for (let i = 0; i < 5; i++)
+			journal.append({
+				at: "t",
+				type: "launch",
+				attemptId: `r1-b1-x${i}-a01`,
+				task: `t${i}`,
+				batch: "b1",
+				host: "cpu-0",
+			});
+		const launches = nextLaunches({
+			state: replay(journal.events()),
+			tasks: many,
+			hosts: [host],
+			maxInFlight: 12,
+		});
+		expect(launches).toHaveLength(7);
+	});
+
 	it("counts running trials from the journal", () => {
 		const { journal } = newRun();
 		for (let i = 0; i < 19; i++)
