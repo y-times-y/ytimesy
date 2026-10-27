@@ -2295,10 +2295,15 @@ a.session-title-meta:focus-visible {
 .project-sidebar-frame {
 	position: relative;
 }
+/* The chat's top bar height, from the sidebar's top edge (over its 16px top
+   padding): the logo and the open sidebar's toggle sit on the line of the
+   closed sidebar's toggle and the right panel's toggle. */
 .sidebar-brand-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	height: 44px;
+	margin: -16px 0 16px;
 }
 .brand-mark {
 	display: block;
