@@ -40,6 +40,7 @@ import { repositoryGuidanceTool } from "../../src/server/services/repository-gui
 import { thinLeadTools } from "../../src/server/services/thin-lead-tools";
 import { webFetchTool } from "../../src/server/services/web-fetch-tool";
 import { bedrockWebSearchTools } from "./bedrock";
+import { AGENT_WAIT_TOOL, HELPER_INSTRUCTIONS } from "./helpers";
 /**
  * The product builder's turn setup (src/server/jobs/api-turn.ts) rebuilt
  * without the database: the same base tools, builderToolSurface for the
@@ -310,6 +311,9 @@ export async function harborHarness(input: {
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 		// Only the root builder: a subagent's brief already names what to report.
 		unattended: !input.subagent,
+		...(AGENT_WAIT_TOOL in trialTools
+			? { helperInstructions: HELPER_INSTRUCTIONS }
+			: {}),
 	});
 	return {
 		tools,
