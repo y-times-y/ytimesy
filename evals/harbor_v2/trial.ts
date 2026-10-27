@@ -362,6 +362,19 @@ export function runsUsage(
 }
 
 /** Where a reader's copy of the checkout goes (outside the checkout). */
+/** A tool result carrying an image (the read tool's { image, base64 } output). */
+export function isImageToolResult(event: unknown) {
+	const e = event as { type?: unknown; output?: unknown } | null;
+	if (e?.type !== "tool-result") return false;
+	const output = e.output as { image?: unknown; base64?: unknown } | null;
+	return (
+		!!output &&
+		typeof output === "object" &&
+		typeof output.image === "string" &&
+		typeof output.base64 === "string"
+	);
+}
+
 export function readerCopyPath(trialId: string, sessionId: string) {
 	const safe = (value: string) => value.replaceAll(/[^a-zA-Z0-9.-]/g, "");
 	return `/tmp/ytimesy-readers/${safe(trialId)}/${safe(sessionId)}/checkout`;
@@ -1337,11 +1350,21 @@ export async function runHarborTrial(
 	}, searchUsd());
 	// The same tokens at OpenAI's own billing (no Bedrock premium or
 	// cache-write charge, no web search): comparable with Codex's Harbor jobs.
-	const openaiDirectUsd = spendParts().reduce<number | null>((total, part) => {
-		if (total === null) return null;
-		const cost = openaiDirectCostUsd(part.usage, part.modelId);
-		return cost === null ? null : total + cost;
-	}, 0);
+	// Not for a Bedrock trial that read images: Bedrock serves no cache hit to
+	// a request that adds an image and counts each image at about 3x OpenAI's
+	// tokens (measured 2026-10-27), so its token counts are not OpenAI's.
+	const bedrockImages =
+		config.route === "bedrock" &&
+		[events, ...sessions.all().map((child) => child.events)].some((list) =>
+			list.some((entry) => isImageToolResult(entry.event)),
+		);
+	const openaiDirectUsd = bedrockImages
+		? null
+		: spendParts().reduce<number | null>((total, part) => {
+				if (total === null) return null;
+				const cost = openaiDirectCostUsd(part.usage, part.modelId);
+				return cost === null ? null : total + cost;
+			}, 0);
 	const efficiency = trialEfficiency({
 		rootId: input.trialId,
 		harness: config.route === "codex-subscription" ? "codex" : "api",

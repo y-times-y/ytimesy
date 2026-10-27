@@ -25,7 +25,7 @@ import {
 	terminalEvent,
 	whitespaceRun,
 } from "../evals/harbor_v2/transport-guard";
-import { harborTurnId } from "../evals/harbor_v2/trial";
+import { harborTurnId, isImageToolResult } from "../evals/harbor_v2/trial";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
 import { commandScopeRoot } from "../src/server/services/api-command-scope";
 
@@ -814,5 +814,26 @@ describe("harbor turn ids", () => {
 		expect(harborTurnId(long, 2)).not.toBe(harborTurnId(long, 3));
 		expect(() => commandScopeRoot(harborTurnId(long, 12))).not.toThrow();
 		expect(harborTurnId("t.1", 2)).toBe("t-1-r2-turn");
+	});
+});
+
+describe("isImageToolResult", () => {
+	it("recognizes the read tool's image output only", () => {
+		expect(
+			isImageToolResult({
+				type: "tool-result",
+				name: "read",
+				output: { image: "image/png", base64: "iVBOR" },
+			}),
+		).toBe(true);
+		expect(
+			isImageToolResult({ type: "tool-result", name: "read", output: "text" }),
+		).toBe(false);
+		expect(
+			isImageToolResult({
+				type: "tool-call",
+				output: { image: "x", base64: "y" },
+			}),
+		).toBe(false);
 	});
 });
