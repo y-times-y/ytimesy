@@ -12,6 +12,7 @@ import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
 import {
 	TRANSCRIPT_PAGE_TURNS,
 	type TranscriptPage,
@@ -403,6 +404,10 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			account: { name: user.name, email: user.email, image: user.image },
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
+			// The sidebar's PR icons as this browser last read them from GitHub.
+			savedPullRequests: savedSidebarPrsFromCookies(
+				getRequest().headers.get("cookie"),
+			),
 			// Relative times render from this on the server and while hydrating.
 			renderedAtMs: Date.now(),
 			session: {
