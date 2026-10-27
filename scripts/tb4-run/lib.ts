@@ -39,16 +39,24 @@ export type Task = {
  * environment and a separate verifier environment, since the verifier runs on
  * the same host after the agent.
  */
-export function taskFromToml(name: string, toml: Record<string, unknown>): Task {
+export function taskFromToml(
+	name: string,
+	toml: Record<string, unknown>,
+): Task {
 	const env = (toml.environment ?? {}) as Record<string, unknown>;
 	const verifier = (toml.verifier ?? {}) as Record<string, unknown>;
 	const venv = (verifier.environment ?? {}) as Record<string, unknown>;
-	const separateVerifier = verifier.environment_mode === "separate" || env.environment_mode === "separate";
+	const separateVerifier =
+		verifier.environment_mode === "separate" ||
+		env.environment_mode === "separate";
 	const num = (v: unknown) => Number(v ?? 0) || 0;
 	return {
 		name,
 		cpus: Math.max(num(env.cpus) || 1, separateVerifier ? num(venv.cpus) : 0),
-		memoryMb: Math.max(num(env.memory_mb), separateVerifier ? num(venv.memory_mb) : 0),
+		memoryMb: Math.max(
+			num(env.memory_mb),
+			separateVerifier ? num(venv.memory_mb) : 0,
+		),
 		gpus: num(env.gpus),
 		separateVerifier,
 	};
@@ -73,7 +81,13 @@ export type TrialOutcome =
 	| { kind: "infra"; reason: string };
 
 export type JournalEvent =
-	| { at: string; type: "run-start"; runId: string; commit: string; bundleSha256: string }
+	| {
+			at: string;
+			type: "run-start";
+			runId: string;
+			commit: string;
+			bundleSha256: string;
+	  }
 	| { at: string; type: "batch-open"; batch: Batch["id"] }
 	| {
 			at: string;
@@ -181,7 +195,8 @@ export function replay(events: JournalEvent[]): RunState {
 				if (a && a.status !== "finished") {
 					a.status = "finished";
 					a.outcome = e.outcome;
-					if (e.outcome.kind === "valid") a.agentStartedAt = e.outcome.agentStartedAt;
+					if (e.outcome.kind === "valid")
+						a.agentStartedAt = e.outcome.agentStartedAt;
 				}
 				break;
 			}
@@ -205,7 +220,12 @@ export function replay(events: JournalEvent[]): RunState {
 }
 
 /** Deterministic, unique attempt ids: the Harbor job name on the host. */
-export function attemptId(runId: string, task: string, batch: Batch["id"], n: number) {
+export function attemptId(
+	runId: string,
+	task: string,
+	batch: Batch["id"],
+	n: number,
+) {
 	return `${runId}-${batch}-${task}-a${String(n).padStart(2, "0")}`;
 }
 
@@ -216,7 +236,11 @@ export type TaskProgress = {
 	inFlight: number;
 	attempts: number;
 };
-export function progress(state: RunState, task: string, batch: Batch["id"]): TaskProgress {
+export function progress(
+	state: RunState,
+	task: string,
+	batch: Batch["id"],
+): TaskProgress {
 	let valid = 0;
 	let inFlight = 0;
 	let attempts = 0;
@@ -229,7 +253,11 @@ export function progress(state: RunState, task: string, batch: Batch["id"]): Tas
 	return { valid, inFlight, attempts };
 }
 
-export function hostLoad(state: RunState, tasks: Map<string, Task>, host: string) {
+export function hostLoad(
+	state: RunState,
+	tasks: Map<string, Task>,
+	host: string,
+) {
 	let vcpu = 0;
 	let memoryMb = 0;
 	let gpus = 0;
@@ -267,7 +295,11 @@ export function trialCpuCost(task: Pick<Task, "cpus">) {
 	return task.cpus + TRIAL_OVERHEAD_VCPU;
 }
 /** Whether one more trial of `task` keeps every trial on `host` at full CPU. */
-export function fitsCpu(host: Pick<Host, "vcpu">, load: { vcpu: number; trials: number }, task: Pick<Task, "cpus">) {
+export function fitsCpu(
+	host: Pick<Host, "vcpu">,
+	load: { vcpu: number; trials: number },
+	task: Pick<Task, "cpus">,
+) {
 	if (load.trials === 0) return true;
 	return load.vcpu + trialCpuCost(task) <= hostCpuBudget(host);
 }
@@ -301,16 +333,20 @@ export function nextLaunches(input: {
 		if (!state.openBatches.has(batch.id)) continue;
 		// GPU tasks first: they are the long pole; among them the largest
 		// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
-		const ordered = [...input.tasks].sort((a, b) => b.gpus - a.gpus || (a.gpus > 0 ? b.cpus - a.cpus : 0));
+		const ordered = [...input.tasks].sort(
+			(a, b) => b.gpus - a.gpus || (a.gpus > 0 ? b.cpus - a.cpus : 0),
+		);
 		for (const task of ordered) {
 			const p = progress(state, task.name, batch.id);
-			const pending = out.filter((d) => d.task === task.name && d.batch === batch.id).length;
+			const pending = out.filter(
+				(d) => d.task === task.name && d.batch === batch.id,
+			).length;
 			let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
 			let attempts = p.attempts + pending;
 			while (need > 0 && attempts < attemptCap(task, batch)) {
 				const host = input.hosts.find((h) => {
 					if (input.unhealthyHosts?.has(h.name)) return false;
-					if ((task.gpus > 0) !== (h.kind === "gpu")) return false;
+					if (task.gpus > 0 !== (h.kind === "gpu")) return false;
 					const l = load.get(h.name)!;
 					const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
 					return (
@@ -368,13 +404,47 @@ export function reconcile(attempt: Attempt, obs: HostObservation): Reconcile {
 	};
 }
 
+/**
+ * The last model call in a trial's transport log, as JSON, when it failed:
+ * an error response handed back (throttling or 5xx past the guard's waits),
+ * a request error, or a stream cut with no resend. null when it succeeded.
+ */
+export function lastModelCallFailed(log: string): string | null {
+	const entries = log.split("\n").flatMap((line) => {
+		try {
+			return [JSON.parse(line) as Record<string, unknown>];
+		} catch {
+			return [];
+		}
+	});
+	const last = entries
+		.filter((e) => e.phase !== "throttle" || e.willRetry === false)
+		.at(-1);
+	if (!last) return null;
+	const failed =
+		(last.phase === "throttle" && last.willRetry === false) ||
+		last.phase === "response" ||
+		last.phase === "request" ||
+		((last.phase === "stream-error" ||
+			last.phase === "stream-cut" ||
+			last.phase === "degenerate") &&
+			!last.willRetry);
+	return failed ? JSON.stringify(last) : null;
+}
+
 /* ---------- classification (port of rerun classify.py, scoring rule 2) ---------- */
 
 export type HarborResult = {
 	trial_name?: string;
-	agent_execution?: { started_at?: string | null; finished_at?: string | null } | null;
+	agent_execution?: {
+		started_at?: string | null;
+		finished_at?: string | null;
+	} | null;
 	verifier_result?: { rewards?: { reward?: number | null } | null } | null;
-	exception_info?: { exception_type?: string; exception_message?: string } | null;
+	exception_info?: {
+		exception_type?: string;
+		exception_message?: string;
+	} | null;
 	/** Added by the collector from artifacts/manifest.json. */
 	appReachedGrader?: boolean;
 	/** Added by the collector from the trial's transport log. */
@@ -390,9 +460,13 @@ export type HarborResult = {
 export function classify(r: HarborResult): TrialOutcome {
 	const started = r.agent_execution?.started_at;
 	if (!started) return { kind: "infra", reason: "agent never started" };
-	if (r.hostKilled) return { kind: "infra", reason: "host killed by the provider" };
+	if (r.hostKilled)
+		return { kind: "infra", reason: "host killed by the provider" };
 	if (r.gpuAsserted === false)
-		return { kind: "infra", reason: "GPU model not asserted as H100 inside the trial (void)" };
+		return {
+			kind: "infra",
+			reason: "GPU model not asserted as H100 inside the trial (void)",
+		};
 	const reward = r.verifier_result?.rewards?.reward;
 	if (reward === null || reward === undefined)
 		return {
@@ -407,19 +481,32 @@ export function classify(r: HarborResult): TrialOutcome {
 			reason: `model transport failure ended the agent: ${r.unrecoveredTransportFailure.slice(0, 200)}`,
 		};
 	// Wrong answer, gave up, agent time limit, a model refusing: always valid.
-	return { kind: "valid", reward, agentStartedAt: started, detail: `reward ${reward}` };
+	return {
+		kind: "valid",
+		reward,
+		agentStartedAt: started,
+		detail: `reward ${reward}`,
+	};
 }
 
 /* ---------- scoring ---------- */
 
-export type ScoredTrial = { attemptId: string; batch: Batch["id"]; reward: number; agentStartedAt: string };
+export type ScoredTrial = {
+	attemptId: string;
+	batch: Batch["id"];
+	reward: number;
+	agentStartedAt: string;
+};
 
 /**
  * Scoring rule 4: batch 1's first valid trial by agent start, then batch 2's
  * first four by agent start; extras are disclosed, never scored.
  */
 export function scoredTrials(state: RunState) {
-	const perTask = new Map<string, { scored: ScoredTrial[]; extra: ScoredTrial[] }>();
+	const perTask = new Map<
+		string,
+		{ scored: ScoredTrial[]; extra: ScoredTrial[] }
+	>();
 	const valid = [...state.attempts.values()]
 		.filter((a) => a.outcome?.kind === "valid")
 		.map((a) => ({
@@ -442,12 +529,18 @@ export function scoredTrials(state: RunState) {
 }
 
 /** pass@1 = mean over tasks of (passes / scored trials), reward >= 1 is a pass. */
-export function passAt1(perTask: Map<string, { scored: ScoredTrial[] }>, tasks: string[]) {
+export function passAt1(
+	perTask: Map<string, { scored: ScoredTrial[] }>,
+	tasks: string[],
+) {
 	const rates = tasks.map((t) => {
 		const s = perTask.get(t)?.scored ?? [];
 		return s.length ? s.filter((x) => x.reward >= 1).length / s.length : 0;
 	});
-	return { pct: (100 * rates.reduce((a, b) => a + b, 0)) / tasks.length, rates };
+	return {
+		pct: (100 * rates.reduce((a, b) => a + b, 0)) / tasks.length,
+		rates,
+	};
 }
 
 /** Unbiased pass@k per task (Chen et al. 2021): 1 - C(n-c, k)/C(n, k). */
@@ -459,8 +552,14 @@ export function passAtK(n: number, c: number, k: number) {
 }
 
 /** Paired comparison over tasks with a seeded bootstrap 95% interval. */
-export function pairedComparison(ours: number[], theirs: number[], seed = 20261021, draws = 10000) {
-	if (ours.length !== theirs.length) throw new Error("paired arrays differ in length");
+export function pairedComparison(
+	ours: number[],
+	theirs: number[],
+	seed = 20261021,
+	draws = 10000,
+) {
+	if (ours.length !== theirs.length)
+		throw new Error("paired arrays differ in length");
 	const d = ours.map((o, i) => o - theirs[i]);
 	const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 	let s = seed >>> 0;
@@ -477,7 +576,10 @@ export function pairedComparison(ours: number[], theirs: number[], seed = 202610
 	boots.sort((a, b) => a - b);
 	return {
 		meanDiffPts: 100 * mean(d),
-		ci95Pts: [100 * boots[Math.floor(0.025 * draws)], 100 * boots[Math.floor(0.975 * draws)]] as [number, number],
+		ci95Pts: [
+			100 * boots[Math.floor(0.025 * draws)],
+			100 * boots[Math.floor(0.975 * draws)],
+		] as [number, number],
 		tasksBetter: d.filter((x) => x > 0).length,
 		tasksWorse: d.filter((x) => x < 0).length,
 		tasksTied: d.filter((x) => x === 0).length,
@@ -506,28 +608,51 @@ export function floorCeiling(
 		floor += passes / trialsPerTask;
 		ceiling += (passes + left) / trialsPerTask;
 	}
-	return { floorPct: (100 * floor) / tasks.length, ceilingPct: (100 * ceiling) / tasks.length, missingTrials: missing };
+	return {
+		floorPct: (100 * floor) / tasks.length,
+		ceilingPct: (100 * ceiling) / tasks.length,
+		missingTrials: missing,
+	};
 }
 
 /** The Astra run's only early stop: the ceiling is below the competitor. */
-export function earlyStopDecision(bounds: ReturnType<typeof floorCeiling>, competitorPct: number) {
+export function earlyStopDecision(
+	bounds: ReturnType<typeof floorCeiling>,
+	competitorPct: number,
+) {
 	if (bounds.ceilingPct < competitorPct)
-		return { stop: true, why: `ceiling ${bounds.ceilingPct.toFixed(1)}% < ${competitorPct.toFixed(1)}%: cannot catch up` };
+		return {
+			stop: true,
+			why: `ceiling ${bounds.ceilingPct.toFixed(1)}% < ${competitorPct.toFixed(1)}%: cannot catch up`,
+		};
 	if (bounds.floorPct > competitorPct)
-		return { stop: false, why: `floor ${bounds.floorPct.toFixed(1)}% > ${competitorPct.toFixed(1)}%: ahead whatever remains; finish the run` };
-	return { stop: false, why: `undecided: ${bounds.floorPct.toFixed(1)}%..${bounds.ceilingPct.toFixed(1)}% vs ${competitorPct.toFixed(1)}%` };
+		return {
+			stop: false,
+			why: `floor ${bounds.floorPct.toFixed(1)}% > ${competitorPct.toFixed(1)}%: ahead whatever remains; finish the run`,
+		};
+	return {
+		stop: false,
+		why: `undecided: ${bounds.floorPct.toFixed(1)}%..${bounds.ceilingPct.toFixed(1)}% vs ${competitorPct.toFixed(1)}%`,
+	};
 }
 
 /** Scoring rule 5: batch 2 runs only when batch 1 is clearly ahead. */
 export function batch2Decision(cmp: ReturnType<typeof pairedComparison>) {
 	return cmp.meanDiffPts >= 3
-		? { go: true, why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts ahead (>= 3)` }
-		: { go: false, why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts vs Codex (< 3): stop, report batch 1` };
+		? {
+				go: true,
+				why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts ahead (>= 3)`,
+			}
+		: {
+				go: false,
+				why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts vs Codex (< 3): stop, report batch 1`,
+			};
 }
 
 /* ---------- spend ---------- */
 
-const envUsd = (name: string, fallback: number) => Number(process.env[name] ?? "") || fallback;
+const envUsd = (name: string, fallback: number) =>
+	Number(process.env[name] ?? "") || fallback;
 export const SPEND = {
 	/** Expected model spend for 330 trials on Bedrock (Sol lead + Luna roles). */
 	modelExpectedUsd: [360, 500] as const,
@@ -547,7 +672,12 @@ export const SPEND = {
 	alertFractions: [0.5, 0.8, 1] as const,
 };
 
-export type LedgerLine = { type?: string; usd?: number; costUsd?: number; trial?: string };
+export type LedgerLine = {
+	type?: string;
+	usd?: number;
+	costUsd?: number;
+	trial?: string;
+};
 /** Settled spend plus open reservations from a bridge ledger (JSON lines). */
 export function ledgerTotals(lines: LedgerLine[]) {
 	let settled = 0;
@@ -564,8 +694,14 @@ export function ledgerTotals(lines: LedgerLine[]) {
 	return { settled, reserved: [...open.values()].reduce((a, b) => a + b, 0) };
 }
 
-export function crossedThresholds(spent: number, cap: number, alreadyAlerted: number[]) {
-	return SPEND.alertFractions.filter((f) => spent >= f * cap && !alreadyAlerted.includes(f));
+export function crossedThresholds(
+	spent: number,
+	cap: number,
+	alreadyAlerted: number[],
+) {
+	return SPEND.alertFractions.filter(
+		(f) => spent >= f * cap && !alreadyAlerted.includes(f),
+	);
 }
 
 /* ---------- watchdog ---------- */
@@ -583,44 +719,101 @@ export type WatchInput = {
 	controllerActive: boolean;
 	lastProgressAt: number;
 };
-export type Alert = { level: "info" | "warn" | "critical"; key: string; text: string };
+export type Alert = {
+	level: "info" | "warn" | "critical";
+	key: string;
+	text: string;
+};
 
-export function watch(input: WatchInput): { alerts: Alert[]; actions: string[] } {
+export function watch(input: WatchInput): {
+	alerts: Alert[];
+	actions: string[];
+} {
 	const alerts: Alert[] = [];
 	const actions: string[] = [];
 	if (!input.controllerActive) {
-		alerts.push({ level: "critical", key: "controller-down", text: "tb4-controller.service not active; restarting it" });
+		alerts.push({
+			level: "critical",
+			key: "controller-down",
+			text: "tb4-controller.service not active; restarting it",
+		});
 		actions.push("restart-controller");
 	}
 	for (const [id, ms] of input.logSilenceMs)
 		if (ms >= 20 * 60_000)
-			alerts.push({ level: "warn", key: `silent:${id}`, text: `${id}: no log output for ${Math.round(ms / 60_000)} min` });
+			alerts.push({
+				level: "warn",
+				key: `silent:${id}`,
+				text: `${id}: no log output for ${Math.round(ms / 60_000)} min`,
+			});
 	for (const h of input.unhealthyHosts)
-		alerts.push({ level: "critical", key: `host:${h}`, text: `host ${h} unhealthy (ssh/docker/disk); no new trials go there` });
+		alerts.push({
+			level: "critical",
+			key: `host:${h}`,
+			text: `host ${h} unhealthy (ssh/docker/disk); no new trials go there`,
+		});
 	const { throttles, serverErrors } = input.bedrockErrorsLast15m;
 	if (throttles >= 20) {
-		alerts.push({ level: "warn", key: "bedrock-throttle", text: `Bedrock throttled ${throttles}x in 15 min; pausing new launches` });
+		alerts.push({
+			level: "warn",
+			key: "bedrock-throttle",
+			text: `Bedrock throttled ${throttles}x in 15 min; pausing new launches`,
+		});
 		actions.push("pause:bedrock-throttle");
 	}
 	if (serverErrors >= 10)
-		alerts.push({ level: "warn", key: "bedrock-5xx", text: `Bedrock 5xx ${serverErrors}x in 15 min` });
-	for (const f of crossedThresholds(input.modelSpendUsd, SPEND.modelTotalCapUsd, input.alerted.model)) {
-		alerts.push({ level: f >= 1 ? "critical" : "warn", key: `model-spend-${f}`, text: `model spend $${input.modelSpendUsd.toFixed(0)} crossed ${f * 100}% of $${SPEND.modelTotalCapUsd}` });
+		alerts.push({
+			level: "warn",
+			key: "bedrock-5xx",
+			text: `Bedrock 5xx ${serverErrors}x in 15 min`,
+		});
+	for (const f of crossedThresholds(
+		input.modelSpendUsd,
+		SPEND.modelTotalCapUsd,
+		input.alerted.model,
+	)) {
+		alerts.push({
+			level: f >= 1 ? "critical" : "warn",
+			key: `model-spend-${f}`,
+			text: `model spend $${input.modelSpendUsd.toFixed(0)} crossed ${f * 100}% of $${SPEND.modelTotalCapUsd}`,
+		});
 		if (f >= 1) actions.push("stop:model-cap");
 	}
 	const stopAt = SPEND.modelTotalCapUsd - SPEND.modelStopMarginUsd;
-	if (SPEND.modelStopMarginUsd > 0 && input.modelSpendUsd >= stopAt && input.modelSpendUsd < SPEND.modelTotalCapUsd) {
-		alerts.push({ level: "critical", key: "model-spend-margin", text: `model spend $${input.modelSpendUsd.toFixed(0)} reached the stop line $${stopAt.toFixed(0)} (cap $${SPEND.modelTotalCapUsd} minus margin for running trials)` });
+	if (
+		SPEND.modelStopMarginUsd > 0 &&
+		input.modelSpendUsd >= stopAt &&
+		input.modelSpendUsd < SPEND.modelTotalCapUsd
+	) {
+		alerts.push({
+			level: "critical",
+			key: "model-spend-margin",
+			text: `model spend $${input.modelSpendUsd.toFixed(0)} reached the stop line $${stopAt.toFixed(0)} (cap $${SPEND.modelTotalCapUsd} minus margin for running trials)`,
+		});
 		actions.push("stop:model-cap");
 	}
 	const infraCap = SPEND.infraExpectedUsd[1];
-	for (const f of crossedThresholds(input.infraSpendUsd, infraCap, input.alerted.infra)) {
-		alerts.push({ level: f >= 1 ? "critical" : "warn", key: `infra-spend-${f}`, text: `infra spend ~$${input.infraSpendUsd.toFixed(0)} crossed ${f * 100}% of $${infraCap}` });
+	for (const f of crossedThresholds(
+		input.infraSpendUsd,
+		infraCap,
+		input.alerted.infra,
+	)) {
+		alerts.push({
+			level: f >= 1 ? "critical" : "warn",
+			key: `infra-spend-${f}`,
+			text: `infra spend ~$${input.infraSpendUsd.toFixed(0)} crossed ${f * 100}% of $${infraCap}`,
+		});
 		if (f >= 1) actions.push("pause:infra-cap");
 	}
-	const inFlight = [...input.state.attempts.values()].filter((a) => a.status !== "finished").length;
+	const inFlight = [...input.state.attempts.values()].filter(
+		(a) => a.status !== "finished",
+	).length;
 	if (inFlight > 0 && input.now - input.lastProgressAt >= 60 * 60_000)
-		alerts.push({ level: "warn", key: "no-progress", text: `no trial finished in ${Math.round((input.now - input.lastProgressAt) / 60_000)} min with ${inFlight} in flight` });
+		alerts.push({
+			level: "warn",
+			key: "no-progress",
+			text: `no trial finished in ${Math.round((input.now - input.lastProgressAt) / 60_000)} min with ${inFlight} in flight`,
+		});
 	return { alerts, actions };
 }
 
@@ -631,9 +824,15 @@ export const HOURLY_USD: Record<string, number> = {
 	// p5.4xlarge (1 H100): fill from the EC2 on-demand pricing page before the run.
 	"p5.4xlarge": Number(process.env.TB4_P5_4XL_HOURLY_USD ?? 0) || 0,
 };
-export function infraSpend(instances: { type: string; launchedAt: number; stoppedAt?: number }[], now: number) {
+export function infraSpend(
+	instances: { type: string; launchedAt: number; stoppedAt?: number }[],
+	now: number,
+) {
 	return instances.reduce(
-		(sum, i) => sum + ((HOURLY_USD[i.type] ?? 0) * ((i.stoppedAt ?? now) - i.launchedAt)) / 3_600_000,
+		(sum, i) =>
+			sum +
+			((HOURLY_USD[i.type] ?? 0) * ((i.stoppedAt ?? now) - i.launchedAt)) /
+				3_600_000,
 		0,
 	);
 }
