@@ -68,7 +68,7 @@ export function planTool(input: {
 	return {
 		[PLAN_TOOL]: tool({
 			description:
-				"Keep a short plan for multi-step work: send the full list of steps, each pending, in_progress or completed, with at most one in_progress. Update it when a step finishes or the plan changes; skip it for simple tasks.",
+				"Keep a short plan for long, multi-part work: send the full list of steps, each pending, in_progress or completed, with at most one in_progress. Update it only when a step finishes or the plan changes, without an explanation. Skip it for work you expect to finish in a few steps.",
 			inputSchema: planInput,
 			execute: async ({ explanation, plan }) => {
 				const active = plan.filter(
