@@ -224,9 +224,11 @@ export const HARNESS_VARIANT_VALUES = {
 	 * on gives the root builder agent / agent_wait / agent_send for
 	 * researcher and reviewer subagents, each on its own read-only copy of
 	 * the checkout, on the builder's model. The builder stays the only
-	 * writer. off = no helpers (the default).
+	 * writer. write = on plus writer helpers: each works in the builder's
+	 * own checkout (no copy) and may change only the paths its brief gives
+	 * it (`owns`). off = no helpers (the default).
 	 */
-	helpers: ["off", "on"],
+	helpers: ["off", "on", "write"],
 	/**
 	 * Web fetch (src/server/services/web-fetch-tool.ts): on gives every agent
 	 * web_fetch, one public http(s) page as text, fetched from the harness

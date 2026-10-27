@@ -133,7 +133,7 @@ export const BRIDGE_ROLES = [
 export type BridgeRole = (typeof BRIDGE_ROLES)[number];
 
 export const MULTI_WRITER_REFUSAL =
-	"several writers at once (subagents=on/force) are product-only: they need the product's database and a VM fork per writer. The bridge runs one writer: lead=fusion with a single sidekick in the lead's own checkout. For read-only subagents the builder starts itself, use helpers=on.";
+	"several writers at once (subagents=on/force) are product-only: they need the product's database and a VM fork per writer. The bridge runs lead=fusion with a single sidekick in the lead's own checkout. For read-only subagents the builder starts itself, use helpers=on; for writers in its own checkout, each limited to the paths its brief gives it, helpers=write.";
 
 /** A model run in the trial: the builder's, or the checker's own (roleModels.checker). */
 export type HarborModel = {

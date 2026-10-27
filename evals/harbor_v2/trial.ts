@@ -79,7 +79,7 @@ import {
 	harborHarness,
 	hostedWebSearchTools,
 } from "./harness";
-import { type HelperRole, helperTools } from "./helpers";
+import { type HelperRole, helperTools, writesOutside } from "./helpers";
 import {
 	FINISH_CONTINUATIONS_MAX,
 	type LedgerGateEntry,
@@ -283,7 +283,7 @@ export function trialEfficiency(input: {
 							listedModelId: child.modelId,
 							// Each role as the product's tree marks it (eval-efficiency.ts).
 							agentRole:
-								child.role === "sidekick"
+								child.role === "sidekick" || child.role === "writer"
 									? "writer"
 									: child.role === "helper" || child.role === "search"
 										? "researcher"
@@ -640,6 +640,10 @@ export async function runHarborTrial(
 					})
 				: undefined;
 		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		// helpers=write: a writer implements a whole part of a long task.
+		const WRITER_BUDGET = { steps: 150, minutes: 45, tokens: 4_000_000 };
+		/** helpers=write: each writer's paths (its budget's sharedWriter). */
+		const writerOwns = new Map<string, readonly string[]>();
 		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
 		const checkerLastWord = async (
 			session: Parameters<RunRound>[0],
@@ -704,7 +708,9 @@ export async function runHarborTrial(
 			const budget =
 				session.role === "checker" || session.role === "checkerWorker"
 					? (checkerBudgets.get(session.id) ?? CHILD_BUDGET)
-					: CHILD_BUDGET;
+					: session.role === "writer"
+						? WRITER_BUDGET
+						: CHILD_BUDGET;
 			const childSignal = AbortSignal.any([
 				signal,
 				stop.signal,
@@ -735,7 +741,15 @@ export async function runHarborTrial(
 								model: session.model.modelId,
 							}),
 						}
-					: budget;
+					: session.role === "writer"
+						? {
+								...budget,
+								sharedWriter: { owns: writerOwns.get(session.id) ?? [] },
+							}
+						: budget;
+			// A checker, helper or writer has the builder's execution access: web search and MCP too.
+			const builderAccess =
+				checkerRole || session.role === "helper" || session.role === "writer";
 			const child = await harborHarness({
 				workspace: {
 					...workspace,
@@ -748,21 +762,19 @@ export async function runHarborTrial(
 				modelId: session.model.modelId,
 				provider,
 				variant: config.variant,
-				// A checker or helper has the builder's execution access: web search and MCP too.
-				webSearch:
-					config.webSearch && (checkerRole || session.role === "helper"),
+				webSearch: config.webSearch && builderAccess,
 				bedrock: config.route === "bedrock",
 				...(searchTool ? { searchTool } : {}),
-				...(checkerRole || session.role === "helper"
-					? { mcpNote: mcpNoteFor(input.mcpServers) }
-					: {}),
+				...(builderAccess ? { mcpNote: mcpNoteFor(input.mcpServers) } : {}),
 				instruction: brief,
 				storage: input.storage,
 				onEvent: onChildEvent,
 				subagent: {
 					role:
 						options.agentRole ??
-						(session.role === "sidekick" ? "writer" : "checker"),
+						(session.role === "sidekick" || session.role === "writer"
+							? "writer"
+							: "checker"),
 					budget: childBudget,
 					readOnly: options.readOnly,
 				},
@@ -931,11 +943,32 @@ export async function runHarborTrial(
 		};
 		// helpers=on: a researcher or reviewer on its own copy of the checkout,
 		// made at each round's start (the builder's work so far), as the checker's.
+		// helpers=write's writer: in the builder's own checkout, limited by its
+		// brief to `owns`; file writes outside them are logged, not blocked.
 		const startHelper = async (
 			session: ChildSession,
 			role: HelperRole,
 			brief: string,
+			owns?: readonly string[],
 		): Promise<ChildReport> => {
+			if (role === "writer") {
+				writerOwns.set(session.id, owns ?? []);
+				const from = session.events.length;
+				const report = await runRound(session, brief, {
+					readOnly: false,
+					agentRole: "writer",
+				});
+				const outside = writesOutside(
+					session.events.slice(from).map((entry) => entry.event),
+					input.cwd,
+					owns ?? [],
+				);
+				if (outside.length)
+					log(
+						`writer ${session.id} wrote outside owns: ${outside.slice(0, 10).join(", ")}`,
+					);
+				return report;
+			}
 			const copy = readerCopyPath(input.trialId, session.id);
 			const made = await input.machines.exec(
 				workspace.vm,
@@ -1044,8 +1077,9 @@ export async function runHarborTrial(
 							},
 						})
 					: {}),
-				...(config.variant.helpers === "on"
+				...(config.variant.helpers !== "off"
 					? helperTools({
+							writers: config.variant.helpers === "write",
 							parentId: input.trialId,
 							sessions,
 							model: builderModel,

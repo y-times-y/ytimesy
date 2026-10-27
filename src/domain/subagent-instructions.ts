@@ -199,8 +199,11 @@ export function subagentRoleInstructions(
 	role: SubagentRole,
 	budget: SubagentBudget | null,
 ) {
+	const shared = role === "writer" ? budget?.sharedWriter : undefined;
 	return [
-		ROLE_WORK[role],
+		shared
+			? `You are a writer subagent working directly in your parent's checkout, alongside your parent and possibly other writers. You may create or change only these paths: ${shared.owns.join(", ")}. Everything else is read-only for you: read it and run commands, but do not edit, move or delete it; put scratch files in $HOME. Make the change your brief asks for and verify it. Leave your work uncommitted: do not commit, stash, reset, switch branches or discard changes.`
+			: ROLE_WORK[role],
 		"You see only your brief, not your parent's conversation; do not ask it questions you can settle yourself. Stay within the brief.",
 		...(budget
 			? [
@@ -209,7 +212,7 @@ export function subagentRoleInstructions(
 			: []),
 		role === "checker"
 			? ""
-			: "Your final message is your report to your parent: what you found or changed, the exact commands you ran with their exit status, and what is unverified. Your parent will check it, so claim only what you verified.",
+			: `Your final message is your report to your parent: what you found or changed,${shared ? " the files you changed, how to run and verify them," : ""} the exact commands you ran with their exit status, and what is unverified. Your parent will check it, so claim only what you verified.`,
 	]
 		.filter(Boolean)
 		.join(" ");

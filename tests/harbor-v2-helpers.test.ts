@@ -4,6 +4,8 @@ import {
 	type HelperRole,
 	helperTools,
 	MAX_LIVE_HELPERS,
+	WRITE_HELPER_INSTRUCTIONS,
+	writesOutside,
 } from "../evals/harbor_v2/helpers";
 import type { ChildReport, ChildSession } from "../evals/harbor_v2/sessions";
 import { trialSessions } from "../evals/harbor_v2/sessions";
@@ -129,6 +131,97 @@ describe("helperTools (helpers=on)", () => {
 		const schema = (tools.agent as { inputSchema: { validate?: unknown } })
 			.inputSchema;
 		expect(JSON.stringify(schema)).not.toContain('"writer"');
+	});
+});
+
+describe("helperTools (helpers=write)", () => {
+	it("starts a writer only with owns, as a writer session, and keeps readers read-only", async () => {
+		const sessions = trialSessions();
+		const owned: (readonly string[] | undefined)[] = [];
+		const { rounds, start } = controlledStart();
+		const tools = helperTools({
+			parentId: "trial",
+			sessions,
+			model,
+			writers: true,
+			start: (session, role, brief, owns) => {
+				owned.push(owns);
+				return start(session, role, brief);
+			},
+		});
+		expect(
+			await run(tools, "agent", {
+				role: "writer",
+				title: "Part A",
+				brief: "Build part A.",
+			}),
+		).toBe(
+			"Refused: a writer needs owns, the files or directories it may change.",
+		);
+		expect(sessions.all()).toHaveLength(0);
+		expect(
+			await run(tools, "agent", {
+				role: "writer",
+				title: "Part A",
+				brief: "Build part A.",
+				owns: [" src/a/ ", ""],
+			}),
+		).toBe(
+			"Started agent trial.1 (writer): Part A. Collect its report with agent_wait.",
+		);
+		expect(
+			await run(tools, "agent", {
+				role: "researcher",
+				title: "R",
+				brief: "Look.",
+				owns: ["ignored.py"],
+			}),
+		).toMatch(/^Started agent trial.2 \(researcher\)/);
+		expect(sessions.all().map((session) => session.role)).toEqual([
+			"writer",
+			"helper",
+		]);
+		expect(owned).toEqual([["src/a/"], undefined]);
+		expect(rounds.map((round) => round.role)).toEqual(["writer", "researcher"]);
+		// Briefed again, a writer keeps its paths.
+		rounds[0].finish({ outcome: "completed", report: "Part A done." });
+		expect(await run(tools, AGENT_WAIT_TOOL, { id: "trial.1" })).toBe(
+			"Agent trial.1 (writer) reported:\nPart A done.",
+		);
+		await run(tools, "agent_send", { id: "trial.1", message: "Fix the test." });
+		expect(owned[2]).toEqual(["src/a/"]);
+		expect(JSON.stringify(tools.agent)).toContain('"owns"');
+	});
+
+	it("gives the builder the writers' section and lists writes outside owns", () => {
+		expect(WRITE_HELPER_INSTRUCTIONS).toContain(
+			"decide right after reading the task",
+		);
+		expect(WRITE_HELPER_INSTRUCTIONS).toContain("Never start a writer later");
+		// The read-only helpers' rules stay.
+		expect(WRITE_HELPER_INSTRUCTIONS).toContain(
+			"independent investigation likely to take over 10 minutes",
+		);
+		const event = (name: string, input: unknown) => ({
+			type: "tool-call" as const,
+			id: name,
+			name,
+			input,
+		});
+		expect(
+			writesOutside(
+				[
+					event("write", { path: "src/a/x.py" }),
+					event("edit", { path: "/app/src/b.py" }),
+					event("run_code", {
+						code: "await tools.write({ path: 'README.md', content: '' }); await tools.edit({path:\"src/a/y.py\"})",
+					}),
+					event("bash", { command: "echo > other.txt" }),
+				],
+				"/app",
+				["src/a"],
+			),
+		).toEqual(["/app/src/b.py", "/app/README.md"]);
 	});
 });
 

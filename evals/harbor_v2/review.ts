@@ -283,6 +283,7 @@ const CHILD_ROLE_LABELS: Record<TrialRole, string> = {
 	checkerWorker: "Checker worker",
 	classifier: "Classifier",
 	helper: "Helper",
+	writer: "Writer",
 	search: "Search",
 };
 
