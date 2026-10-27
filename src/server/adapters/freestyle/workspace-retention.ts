@@ -53,13 +53,19 @@ export function workspaceRetentionEnabled() {
  * The retention touch as SQL common table expressions, so admission can run it
  * in the same round trip as its own reads. Parameters: $1 slug, $2 VM id,
  * $3 resources, $4 enroll (no row yet and created after the cutover), $5 touch
- * (retention applies to this VM). `prior` is the row before the touch; the
- * upsert only runs where touchedRetention would not refuse.
+ * (retention applies to this VM). `prior` is the row before the touch, with
+ * its chat's current VM (`session_vm`); the upsert only runs where
+ * assertRetentionTouched would not refuse. An active row bound to another VM
+ * is rebound only when this VM is the chat's current one: the chat's VM was
+ * replaced without moving the row. A caller holding a VM the chat no longer
+ * names (a stale caller racing a restore) is still refused.
  */
-export const RETENTION_TOUCH_CTES = `retention_prior as (select phase,vm_id from workspace_retention where $5::boolean and slug=$1),
+export const RETENTION_TOUCH_CTES = `retention_prior as (select r.phase,r.vm_id,
+  (select s.provider_ref from agent_session s where s.id=r.session_id) as session_vm
+  from workspace_retention r where $5::boolean and r.slug=$1),
  retention_touched as (insert into workspace_retention(session_id,user_id,vm_id,slug,resources)
   select id,user_id,$2,$1,$3::jsonb from agent_session where $5::boolean and ${sessionSlugMatch("$1")} and (agent_role is null or agent_role='writer')
-  and coalesce((select phase='active' and vm_id=$2 from retention_prior),$4::boolean)
+  and coalesce((select phase='active' and (vm_id=$2 or session_vm=$2) from retention_prior),$4::boolean)
   on conflict(session_id) do update set last_activity_at=now(),vm_id=$2,resources=$3::jsonb where workspace_retention.phase='active' returning 1)`;
 
 /** Parameters $1-$5 of RETENTION_TOUCH_CTES for this VM. */
@@ -74,16 +80,49 @@ export function retentionTouchParams(data: VmData) {
 	return [data.slug, data.id, JSON.stringify(data.resources), enroll, touch];
 }
 
-/** Refuses a touch that found the workspace mid-recovery or bound to another VM. */
+/**
+ * Refuses a touch that found the workspace mid-recovery or bound to another
+ * VM, unless this VM is the chat's current one (the touch rebound the row).
+ */
 export function assertRetentionTouched(
-	prior: { phase: string | null; vmId: string | null },
+	prior: {
+		phase: string | null;
+		vmId: string | null;
+		sessionVm: string | null;
+	},
 	data: VmData,
 ) {
 	if (prior.phase === null) return;
 	if (prior.phase !== "active")
 		throw new Error("Workspace recovery is in progress. Retry shortly.");
-	if (prior.vmId !== data.id)
+	if (prior.vmId === data.id) return;
+	if (prior.sessionVm !== data.id)
 		throw new Error("Workspace recovery binding changed. Retry shortly.");
+	console.warn("Rebound workspace retention to the chat's current VM.", {
+		slug: data.slug,
+		from: prior.vmId,
+		to: data.id,
+	});
+}
+
+/**
+ * Moves an active retention row from a chat's lost VM to its replacement
+ * before the replacement is first used, while the chat still names the lost
+ * VM (or already names the replacement). A row mid-recovery or bound to any
+ * other VM is left alone.
+ */
+export async function rebindWorkspaceRetention(
+	sessionId: string,
+	fromVmId: string,
+	toVmId: string,
+) {
+	if (fromVmId === toVmId) return;
+	await database().query(
+		`update workspace_retention w set vm_id=$3,last_activity_at=now()
+		 where w.session_id=$1 and w.phase='active' and w.vm_id=$2
+		 and exists(select 1 from agent_session s where s.id=$1 and s.provider_ref in ($2,$3))`,
+		[sessionId, fromVmId, toVmId],
+	);
 }
 
 /** Runs under the same per-VM fence as every compute admission. Never enroll templates or operator VMs. */
@@ -96,12 +135,17 @@ export async function touchWorkspaceRetention(
 	const result = await client.query<{
 		phase: string | null;
 		vm_id: string | null;
+		session_vm: string | null;
 	}>(
-		`with ${RETENTION_TOUCH_CTES} select (select phase from retention_prior) as phase,(select vm_id from retention_prior) as vm_id`,
+		`with ${RETENTION_TOUCH_CTES} select (select phase from retention_prior) as phase,(select vm_id from retention_prior) as vm_id,(select session_vm from retention_prior) as session_vm`,
 		params,
 	);
 	assertRetentionTouched(
-		{ phase: result.rows[0].phase, vmId: result.rows[0].vm_id },
+		{
+			phase: result.rows[0].phase,
+			vmId: result.rows[0].vm_id,
+			sessionVm: result.rows[0].session_vm,
+		},
 		data,
 	);
 }
