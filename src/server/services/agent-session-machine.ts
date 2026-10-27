@@ -512,6 +512,7 @@ export async function executeSessionMachinePlan(input: {
 		| "ensureRunning"
 		| "exec"
 		| "writeTextFile"
+		| "rebindRetainedSession"
 	>;
 	readonly sessionId: string;
 	readonly sessionProviderRef: string | null;
@@ -564,6 +565,12 @@ export async function executeSessionMachinePlan(input: {
 					input,
 					snapshotId,
 				);
+				// Before the copy's first admitted use: retention still names the lost VM.
+				await input.machines.rebindRetainedSession?.(
+					input.sessionId,
+					plan.providerRef,
+					replacement,
+				);
 				await resetCopiedSessionScratch(input.machines, replacement);
 				await input.restoreMissingWorkspace(replacement);
 				await input.saveSessionProviderRef(replacement);
@@ -577,6 +584,11 @@ export async function executeSessionMachinePlan(input: {
 				throw cause;
 			}
 			const replacement = await copyAgentSessionFromTemplate(input, snapshotId);
+			await input.machines.rebindRetainedSession?.(
+				input.sessionId,
+				plan.providerRef,
+				replacement,
+			);
 			await input.saveSessionProviderRef(replacement);
 			await resetCopiedSessionScratch(input.machines, replacement);
 			return { providerRef: replacement, planKind: "recover-read-only" };

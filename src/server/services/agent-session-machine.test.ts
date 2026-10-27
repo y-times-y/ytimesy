@@ -200,6 +200,9 @@ describe("executeSessionMachinePlan", () => {
 				ensureRunning: async () => {
 					throw new Error("VM not found");
 				},
+				rebindRetainedSession: async (session, from, to) => {
+					saved.push(`rebind:${session}:${from}:${to}`);
+				},
 			},
 			sessionId: "11111111-2222-3333-4444-555555555555",
 			sessionProviderRef: "missing-vm",
@@ -216,7 +219,11 @@ describe("executeSessionMachinePlan", () => {
 			providerRef: "replacement-vm",
 			planKind: "recover-read-only",
 		});
-		expect(saved).toEqual(["replacement-vm"]);
+		// Retention follows the chat to its copy before the copy is first used.
+		expect(saved).toEqual([
+			"rebind:11111111-2222-3333-4444-555555555555:missing-vm:replacement-vm",
+			"replacement-vm",
+		]);
 		expect(runtime.provisioned).toHaveLength(1);
 	});
 
@@ -228,6 +235,13 @@ describe("executeSessionMachinePlan", () => {
 				...runtime.api,
 				ensureRunning: async () => {
 					throw new Error("VM not found");
+				},
+				exec: async (id, command) => {
+					events.push(`exec:${id}`);
+					return runtime.api.exec(id, command);
+				},
+				rebindRetainedSession: async (_session, from, to) => {
+					events.push(`retention:${from}->${to}`);
 				},
 			},
 			sessionId: "11111111-2222-3333-4444-555555555555",
@@ -244,7 +258,13 @@ describe("executeSessionMachinePlan", () => {
 			},
 		});
 		expect(result.planKind).toBe("recover-checkpoint");
-		expect(events).toEqual(["restore:replacement-vm", "bind:replacement-vm"]);
+		// Retention moves before the copy's first admitted use (scratch reset).
+		expect(events).toEqual([
+			"retention:missing-vm->replacement-vm",
+			"exec:replacement-vm",
+			"restore:replacement-vm",
+			"bind:replacement-vm",
+		]);
 	});
 
 	it("does not bind a replacement when restoring saved work fails", async () => {
