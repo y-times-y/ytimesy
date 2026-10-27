@@ -133,6 +133,7 @@ import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
+import { useStableCallback } from "./stable-callbacks";
 import { TaskInput } from "./task-input";
 
 type InspectorView = "files" | "diff" | "terminal" | "desktop";
@@ -645,6 +646,59 @@ export function SessionLauncher({
 		parentId === session.agentSessionId
 			? MAIN_NAME
 			: (identities.get(parentId)?.name ?? MAIN_NAME);
+	// The same function while typing, so the transcript's rows are not drawn again.
+	const afterRecovery = useStableCallback(onRecovered);
+	const sessionId = session.agentSessionId;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: rebuilt when what the controls show changes.
+	const recoveryControls = useMemo(
+		() =>
+			afterRecovery && recoverable && selectedProject && sessionId
+				? (messageId: string) => {
+						const point = recoveryPoints.data?.find(
+							(point) => point.messageId === messageId,
+						);
+						// The row's room stays while the points load or when a
+						// message has none: the transcript's spacing never moves.
+						if (!point) return <ConversationRecoverySlot />;
+						return (
+							<ConversationRecovery
+								codeAvailable={point.codeAvailable}
+								busy={busy || session.turnStatus === "running"}
+								onRecover={async (mode) => {
+									const recovered = await recoverPoint({
+										data: {
+											projectId: selectedProject.id,
+											sessionId,
+											messageId,
+											mode,
+										},
+									});
+									// The server is done: the prompt and the restored
+									// code show now, not after the chat reloads.
+									if (recovered.prompt) setDraft(recovered.prompt);
+									if (mode === "code" || mode === "both")
+										void refreshRecoveredWorkspace(queryClient);
+									await afterRecovery(
+										recovered.id,
+										recovered.prompt,
+										recovered.items,
+									);
+									await recoveryPoints.refetch();
+								}}
+							/>
+						);
+					}
+				: undefined,
+		[
+			afterRecovery,
+			recoverable,
+			selectedProject,
+			sessionId,
+			recoveryPoints.data,
+			busy,
+			session.turnStatus,
+		],
+	);
 	const helperLines = { identities, onSelect: openAgent };
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
@@ -1039,50 +1093,7 @@ export function SessionLauncher({
 				<SessionTimeline
 					// Another chat opens as a new list, at its end.
 					key={session.agentSessionId ?? "new"}
-					recoveryControls={
-						onRecovered &&
-						recoverable &&
-						selectedProject &&
-						session.agentSessionId
-							? (messageId) => {
-									const point = recoveryPoints.data?.find(
-										(point) => point.messageId === messageId,
-									);
-									// The row's room stays while the points load or when a
-									// message has none: the transcript's spacing never moves.
-									if (!point) return <ConversationRecoverySlot />;
-									return (
-										<ConversationRecovery
-											codeAvailable={point.codeAvailable}
-											busy={busy || session.turnStatus === "running"}
-											onRecover={async (mode) => {
-												if (!session.agentSessionId)
-													throw new Error("Session is unavailable.");
-												const recovered = await recoverPoint({
-													data: {
-														projectId: selectedProject.id,
-														sessionId: session.agentSessionId,
-														messageId,
-														mode,
-													},
-												});
-												// The server is done: the prompt and the restored
-												// code show now, not after the chat reloads.
-												if (recovered.prompt) setDraft(recovered.prompt);
-												if (mode === "code" || mode === "both")
-													void refreshRecoveredWorkspace(queryClient);
-												await onRecovered(
-													recovered.id,
-													recovered.prompt,
-													recovered.items,
-												);
-												await recoveryPoints.refetch();
-											}}
-										/>
-									);
-								}
-							: undefined
-					}
+					recoveryControls={recoveryControls}
 					tasks={childTasks}
 					helperLines={helperLines}
 					evidence={chatEvidence.data?.evidence}
