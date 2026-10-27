@@ -27,6 +27,7 @@ import { BUILDER_SHELL_TOOLS } from "#/server/services/builder-shell-surface";
 import { CODE_MODE_DEFERRED_TOOLS } from "#/server/services/deferred-tools";
 import { pluginSkillTools } from "#/server/services/plugin-skill-tools";
 import { secretRequestTools } from "#/server/services/secret-request-tool";
+import { RenderFoldedBodies } from "./lazy-details";
 import { SessionTimeline } from "./session-timeline";
 
 // Replies render through the real Markdown renderer (the app loads it lazily).
@@ -141,7 +142,13 @@ describe("chat tool mapping", () => {
 });
 
 function render(items: SessionItem[], turnStatus: "running" | "completed") {
-	return renderToString(createElement(SessionTimeline, { items, turnStatus }));
+	return renderToString(
+		createElement(
+			RenderFoldedBodies.Provider,
+			{ value: true },
+			createElement(SessionTimeline, { items, turnStatus }),
+		),
+	);
 }
 
 const prompt: SessionItem = {
