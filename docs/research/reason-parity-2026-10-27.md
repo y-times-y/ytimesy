@@ -62,3 +62,7 @@ Bedrock token counts (2,907 overhead), so with hosted search on OpenAI they are 
 low: about $8.70 total instead of $8.55 (Reason $9.05). With `search=function` the overhead is gone
 on both routes; applying the measured saving per run gives $8.21 (-9.3%, below Reason on 6/6), an
 estimate until rerun. Codex uses the hosted search, so it pays this overhead on every request.
+
+Measured with `search=function` (3 runs each, OpenAI billing): mvcc-lsm-compaction 3/3, $0.69
+(0.56, 0.69, 0.75) vs Reason $0.78; shadow-relay 3/3, $0.98 (0.98, 0.98, 1.17) vs Reason $1.01.
+The parity setup now includes `search=function`. The other four tasks were not rerun with it.
