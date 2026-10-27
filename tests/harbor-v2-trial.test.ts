@@ -2457,3 +2457,36 @@ describe("runHarborTrial with plan=on and helpers=on", () => {
 		);
 	}, 120_000);
 });
+
+describe("runHarborTrial with fetch=on", () => {
+	it("offers web_fetch directly and to run_code programs, and not when off", async () => {
+		const tools = async (variant: string) => {
+			const f = await fixture({ YTIMESY_HARBOR_VARIANT: variant });
+			const { model } = scriptedModel([[...text("d", "Done."), finish(10, 1)]]);
+			const result = await runHarborTrial({
+				config: f.config,
+				trialId: `fetch-${crypto.randomUUID().slice(0, 8)}`,
+				instruction: "Say done.",
+				cwd: f.checkout.root,
+				logsDir: f.logs,
+				deadlineAt: Date.now() + 30 * 60_000,
+				machines: f.side.machines,
+				userId: "harbor",
+				storage: f.archives.storage,
+				runtime: async (wrap) => ({ model: wrap(model) }),
+				harness: {
+					name: "ytimesy",
+					version: "test",
+					commit: null,
+					bundleSha256: null,
+				},
+			});
+			expect(result.failure).toBeNull();
+			return JSON.stringify(model.doStreamCalls[0].tools);
+		};
+		const on = await tools("codeMode=primary,fetch=on");
+		expect(on).toContain('"name":"web_fetch"');
+		expect(on).toContain("tools.web_fetch");
+		expect(await tools("codeMode=primary")).not.toContain("web_fetch");
+	}, 60_000);
+});
