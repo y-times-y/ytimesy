@@ -162,17 +162,17 @@
 	color: #777;
 	transition: transform 160ms ease;
 }
+/* Pixel wave: a bright diagonal wave rolls across nine square pixels. */
 .t-matrix {
 	--t-matrix-cycle: 1200ms;
-	--t-matrix-ease: cubic-bezier(0.4, 0, 0.2, 1);
-	--t-matrix-dot-size: 3px;
-	--t-matrix-gap: 2px;
-	--t-matrix-dim: 0.18;
+	--t-matrix-cell: 4px;
+	--t-matrix-gap: 1.5px;
+	--t-matrix-dim: 0.15;
 	width: 16px;
 	height: 16px;
 	display: inline-grid;
-	grid-template-columns: repeat(3, var(--t-matrix-dot-size));
-	grid-auto-rows: var(--t-matrix-dot-size);
+	grid-template-columns: repeat(3, var(--t-matrix-cell));
+	grid-auto-rows: var(--t-matrix-cell);
 	gap: var(--t-matrix-gap);
 	place-content: center;
 	flex: none;
@@ -181,28 +181,24 @@
 	display: block;
 	background: currentColor;
 	opacity: var(--t-matrix-dim);
-	animation: t-matrix-orbit var(--t-matrix-cycle) var(--t-matrix-ease) infinite;
+	animation: t-matrix-wave var(--t-matrix-cycle) ease-in-out infinite;
+	/* Negative: each pixel starts mid-cycle, so the first frame is never blank. */
 	animation-delay: calc(
-		var(--t-matrix-step, 0) *
+		var(--t-matrix-diag, 0) *
 		var(--t-matrix-cycle) /
 		8 -
 		var(--t-matrix-cycle)
 	);
 }
-.t-matrix > .t-matrix-center {
-	animation: none;
-	opacity: var(--t-matrix-dim);
-}
-@keyframes t-matrix-orbit {
+@keyframes t-matrix-wave {
 	0%,
 	100% {
+		opacity: var(--t-matrix-dim);
+	}
+	35% {
 		opacity: 1;
 	}
-	12.5% {
-		opacity: 0.65;
-	}
-	37.5%,
-	87.5% {
+	70% {
 		opacity: var(--t-matrix-dim);
 	}
 }
