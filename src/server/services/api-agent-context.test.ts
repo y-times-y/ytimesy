@@ -344,6 +344,70 @@ it("retires only complete older turns for provider-specific fallback", async () 
 	expect(result.messages.slice(1)).toEqual([messages[2]]);
 });
 
+it("retires completed steps of one oversized active turn on the whole-turns policy", async () => {
+	const step = (id: string, output: string): ModelMessage[] => [
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "reasoning",
+					text: "",
+					providerOptions: {
+						openai: { itemId: `rs_${id}`, reasoningEncryptedContent: id },
+					},
+				},
+				{ type: "tool-call", toolCallId: id, toolName: "bash", input: {} },
+			],
+		},
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: id,
+					toolName: "bash",
+					output: { type: "text", value: output },
+				},
+			],
+		},
+	];
+	const messages: ModelMessage[] = [
+		{ role: "user", content: "Solve the task" },
+		...step("a", "x".repeat(50_000)),
+		...step("b", "y".repeat(50_000)),
+		...step("c", "done"),
+	];
+	const summarize = vi.fn(async () => "Earlier steps complete.");
+	const result = await compactApiHistory(
+		messages,
+		summarize,
+		undefined,
+		undefined,
+		"whole-turns",
+	);
+	expect(result.compacted).toBe(true);
+	// The latest step keeps its reasoning, call and result together.
+	expect(result.messages.slice(-3)).toEqual([
+		messages[0],
+		...messages.slice(5),
+	]);
+	expect(JSON.stringify(summarize.mock.calls[0][0])).toContain('"a"');
+	expect(JSON.stringify(result.messages)).not.toContain("rs_a");
+	expect(JSON.stringify(result.messages)).not.toContain("rs_b");
+});
+
+it("still refuses one oversized active turn on the bound-prefix policy", async () => {
+	const messages: ModelMessage[] = [
+		{ role: "user", content: "Solve the task" },
+		{ role: "assistant", content: "x".repeat(95_000) },
+		{ role: "user", content: "Continue" },
+		{ role: "assistant", content: "y".repeat(95_000) },
+	];
+	await expect(
+		compactApiHistory(messages, vi.fn(), undefined, undefined, "bound-prefix"),
+	).rejects.toThrow("The active turn cannot be safely compacted");
+});
+
 it("counts an image by a fixed pixel budget, not its base64 length", () => {
 	const image = (bytes: number) => ({
 		type: "file",
