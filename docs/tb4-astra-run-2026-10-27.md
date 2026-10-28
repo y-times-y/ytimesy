@@ -19,15 +19,32 @@ Sol plan in `docs/tb4-scoring-rule.md` only where stated here.
   (1 trial) and b2 (4 trials) at init. There is no batch-2 gate in this run (section 5 has
   the pre-committed early-stop gates).
 
-## 2. Freeze
+## 2. Freeze and fingerprint
 
-1. Merge the final harness into the run branch; `pnpm -s vitest run` on the touched areas
-   and the full suite once; commit; no uncommitted files (`git status --porcelain` empty).
-2. `git tag tb4-astra-2026-10-27 <sha>`; build the bridge bundle from that clean tree and
-   record its SHA-256.
-3. `controller.ts init --run-id tb4-astra-2026-10-27 --commit <sha> --bundle-sha256 <hex> --open-all`.
-   The journal records both; every trial's trace records the commit
-   (`YTIMESY_HARNESS_COMMIT`). Nothing on the hosts is edited after init.
+- Frozen harness: tag `tb4-astra-2026-10-27` = commit `8965702`, git tree
+  `226f4ea0dde6409e50ea9d79edd17210f58ee440`. Hosts run it from source: the tagged tree
+  (`git archive`, SHA-256 `41933ecac9b07b00ef0e41308d45aebe3d523ee3ad8bfe50ca2e931b09101527`) is
+  extracted to `/opt/tb4/ytimesy` with `pnpm install --frozen-lockfile`, and `agent.py` starts the
+  bridge as `node --import tsx evals/harbor_v2/bridge.ts` (`YTIMESY_BRIDGE_BUNDLE` unset).
+- No bridge bundle: in an esbuild single-file bundle every module's `import.meta.url` is the
+  bundle's, so `evals/harbor_v2/preflight.ts`'s command-line entry guard fires inside the bridge
+  and its `parseArgs` rejects the bridge's JSON argument (every pipeline trial with the bundle
+  ended "agent never started"). The fingerprint replaces the bundle hash: commit `8965702` +
+  tree `226f4ea0...` + archive SHA-256 `41933eca...`. Every trial's trace records
+  `harness.commit = 8965702` and `harness.version = tree:226f4ea0...` (`YTIMESY_HARNESS_VERSION`);
+  the journal's `run-start` records the archive SHA-256 in its `bundleSha256` field.
+- Every CPU host's 2,055 tagged files hash identically to the tag (checked 2026-10-28), and
+  `/opt/tb4/check-trial-env.sh` (run under systemd like a trial) prints
+  `TRIAL-ENV-OK commit=8965702 source=tree:226f4ea0...` before a host takes trials.
+- The controller and host run scripts (`scripts/tb4-run/`: controller, early-stop gates,
+  collection, cleanup, GPU capacity loop, `run-trial.sh`, `backup.sh`, `check-trial-env.sh`) run
+  at a newer commit of branch `tb4-astra-run` (pushed to main), fixed after the tag by the
+  pipeline trials. They schedule, collect and back up trials; none of them is part of the
+  harness the model runs in, which is the frozen `8965702` tree.
+- Init: `controller.ts init --run-id tb4-astra-2026-10-27 --commit 8965702 --bundle-sha256 41933eca... --open-all`.
+  Nothing on the hosts' `/opt/tb4/ytimesy` is edited after init.
+- Pipeline trials (`tb4-astra-pipeline-trial-*`, own run dirs, journals and ledgers) tested the
+  path end to end; their results are never part of the scored run.
 
 ## 3. Valid, infra and retries
 
