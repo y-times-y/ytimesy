@@ -55,10 +55,15 @@ export function LazyDetails({
 	);
 }
 
-/** The <summary> child, and the other children when `withBody`. */
+/**
+ * The <summary> child, and the other children when `withBody`. Both go
+ * through Children.toArray so the summary keeps its key: a summary that
+ * remounted on the opening click would swallow that click's toggle.
+ */
 export function summaryAndBody(children: ReactNode, withBody: boolean) {
-	if (withBody) return children;
-	return Children.toArray(children).filter(
+	const all = Children.toArray(children);
+	if (withBody) return all;
+	return all.filter(
 		(child) => isValidElement(child) && child.type === "summary",
 	);
 }
