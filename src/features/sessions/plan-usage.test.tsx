@@ -14,7 +14,7 @@ describe("model picker plan usage", () => {
 		);
 		expect(html).toContain('aria-label="ChatGPT plan usage"');
 		expect(html).toContain(">ChatGPT plan</span>");
-		expect(html).toContain("<span>100%</span>");
+		expect(html).toContain("<span>0% left</span>");
 		expect(html).toContain('title="Resets ');
 		expect(html.match(/data-tone="low"/g)).toHaveLength(1);
 	});
