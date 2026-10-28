@@ -98,13 +98,39 @@ export type JournalEvent =
 			host: string;
 	  }
 	| { at: string; type: "running"; attemptId: string; agentStartedAt?: string }
-	| { at: string; type: "finish"; attemptId: string; outcome: TrialOutcome }
+	| {
+			at: string;
+			type: "finish";
+			attemptId: string;
+			outcome: TrialOutcome;
+			/** Why a non-pass ended (failureCause); absent on a pass and in journals before 2026-10-28. */
+			cause?: TrialCause;
+	  }
+	/** A non-pass whose cause is not benign: new launches wait until the operator acks it. */
+	| {
+			at: string;
+			type: "review-needed";
+			attemptId: string;
+			task: string;
+			cause: string;
+			detail: string;
+	  }
+	/** Stage 1 (one trial of every task) is done: the remaining trials wait for `ack stage1`. */
+	| { at: string; type: "stage-review"; detail: string }
+	/** The operator read a review (an attempt id, "stage1", or "all" pending) and lets launches resume. */
+	| { at: string; type: "ack"; key: string; note: string }
 	| { at: string; type: "synced"; attemptId: string; copies: string[] }
 	| { at: string; type: "pause"; reason: string }
 	| { at: string; type: "resume" }
 	| { at: string; type: "stop"; reason: string }
 	/** A dated, reasoned correction of one attempt's outcome (run doc amendments); it overrides the first finish. */
-	| { at: string; type: "amend"; attemptId: string; outcome: TrialOutcome; reason: string }
+	| {
+			at: string;
+			type: "amend";
+			attemptId: string;
+			outcome: TrialOutcome;
+			reason: string;
+	  }
 	/** The early-stop gates' decisions (docs/tb4-astra-run-2026-10-27.md): gate A passes once, for good. */
 	| {
 			at: string;
@@ -150,7 +176,17 @@ export type Attempt = {
 	status: "launched" | "running" | "finished";
 	agentStartedAt?: string;
 	outcome?: TrialOutcome;
+	/** Journal time of the first finish. */
+	finishedAt?: string;
+	cause?: TrialCause;
 	copies: string[];
+};
+export type Review = {
+	at: string;
+	attemptId?: string;
+	task?: string;
+	cause: string;
+	detail: string;
 };
 export type RunState = {
 	runId?: string;
@@ -162,6 +198,14 @@ export type RunState = {
 	stopped: string | null;
 	/** Gate A passed (>= 6 decisive first-trial passes): it is never evaluated again. */
 	gateAPassed: boolean;
+	/** Reviews not yet acked, by attempt id (or "stage1"): any one blocks new launches. */
+	reviews: Map<string, Review>;
+	/** Every ack, in order (the digest shows the note next to its trial). */
+	acks: { at: string; key: string; note: string }[];
+	/** stage-review journaled (stage 1 finished). */
+	stageReviewed: boolean;
+	/** Trials beyond stage 1 may launch: `ack stage1`, or a b2 trial already launched (older journals). */
+	stage1Released: boolean;
 };
 
 export function replay(events: JournalEvent[]): RunState {
@@ -171,6 +215,10 @@ export function replay(events: JournalEvent[]): RunState {
 		paused: null,
 		stopped: null,
 		gateAPassed: false,
+		reviews: new Map(),
+		acks: [],
+		stageReviewed: false,
+		stage1Released: false,
 	};
 	for (const e of events) {
 		switch (e.type) {
@@ -193,6 +241,7 @@ export function replay(events: JournalEvent[]): RunState {
 						status: "launched",
 						copies: [],
 					});
+				if (e.batch === "b2") state.stage1Released = true;
 				break;
 			case "running": {
 				const a = state.attempts.get(e.attemptId);
@@ -208,6 +257,8 @@ export function replay(events: JournalEvent[]): RunState {
 				if (a && a.status !== "finished") {
 					a.status = "finished";
 					a.outcome = e.outcome;
+					a.finishedAt = e.at;
+					if (e.cause) a.cause = e.cause;
 					if (e.outcome.kind === "valid")
 						a.agentStartedAt = e.outcome.agentStartedAt;
 				}
@@ -231,12 +282,41 @@ export function replay(events: JournalEvent[]): RunState {
 				const a = state.attempts.get(e.attemptId);
 				if (a && a.status === "finished") {
 					a.outcome = e.outcome;
-					if (e.outcome.kind === "valid") a.agentStartedAt = e.outcome.agentStartedAt;
+					if (e.outcome.kind === "valid")
+						a.agentStartedAt = e.outcome.agentStartedAt;
 				}
 				break;
 			}
 			case "gate":
 				if (e.gate === "A" && e.result === "pass") state.gateAPassed = true;
+				break;
+			case "review-needed":
+				state.reviews.set(e.attemptId, {
+					at: e.at,
+					attemptId: e.attemptId,
+					task: e.task,
+					cause: e.cause,
+					detail: e.detail,
+				});
+				break;
+			case "stage-review":
+				state.stageReviewed = true;
+				if (!state.stage1Released)
+					state.reviews.set("stage1", {
+						at: e.at,
+						cause: "stage-review",
+						detail: e.detail,
+					});
+				break;
+			case "ack":
+				state.acks.push({ at: e.at, key: e.key, note: e.note });
+				if (e.key === "all") {
+					if (state.reviews.has("stage1")) state.stage1Released = true;
+					state.reviews.clear();
+				} else {
+					state.reviews.delete(e.key);
+					if (e.key === "stage1") state.stage1Released = true;
+				}
 				break;
 		}
 	}
@@ -353,9 +433,16 @@ export function nextLaunches(input: {
 	frontload?: readonly string[];
 	/** Tasks the controller never launches (run elsewhere and folded in per the run doc). */
 	exclude?: readonly string[];
+	/**
+	 * Staged scaling (TB4_STAGE1): until the operator acks stage 1, only batch 1
+	 * (one trial of every task) launches.
+	 */
+	stage1?: boolean;
 }): LaunchDecision[] {
 	const { state } = input;
-	if (state.paused || state.stopped || !state.runId) return [];
+	// A non-pass awaiting review (or the stage-1 review) holds every new launch.
+	if (state.paused || state.stopped || !state.runId || state.reviews.size)
+		return [];
 	const running = [...state.attempts.values()].filter(
 		(a) => a.status !== "finished",
 	).length;
@@ -373,16 +460,18 @@ export function nextLaunches(input: {
 	// GPU tasks first: they are the long pole; among them the largest
 	// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
 	const excluded = new Set(input.exclude ?? []);
-	const ordered = [...input.tasks].filter((t) => !excluded.has(t.name)).sort(
-		(a, b) =>
-			b.gpus - a.gpus ||
-			(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
-			(rank(a.name) === rank(b.name)
-				? 0
-				: rank(a.name) < rank(b.name)
-					? -1
-					: 1),
-	);
+	const ordered = [...input.tasks]
+		.filter((t) => !excluded.has(t.name))
+		.sort(
+			(a, b) =>
+				b.gpus - a.gpus ||
+				(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
+				(rank(a.name) === rank(b.name)
+					? 0
+					: rank(a.name) < rank(b.name)
+						? -1
+						: 1),
+		);
 	const place = (task: Task, batch: Batch) => {
 		const p = progress(state, task.name, batch.id);
 		const pending = out.filter(
@@ -418,7 +507,11 @@ export function nextLaunches(input: {
 			need--;
 		}
 	};
-	const open = BATCHES.filter((batch) => state.openBatches.has(batch.id));
+	const open = BATCHES.filter(
+		(batch) =>
+			state.openBatches.has(batch.id) &&
+			(batch.id === "b1" || !input.stage1 || state.stage1Released),
+	);
 	// Front-loaded tasks (the longest) get every open batch's trials first, so
 	// none of their runs starts late and sets the finish time.
 	for (const name of input.frontload ?? []) {
@@ -513,6 +606,8 @@ export type HarborResult = {
 	gpuAsserted?: boolean | null;
 	/** Added by the collector: the host was terminated or rebooted by AWS. */
 	hostKilled?: boolean;
+	/** Added by the collector: what the bridge log and the verifier say about how the trial ended. */
+	evidence?: TrialEvidence;
 };
 
 export function classify(r: HarborResult): TrialOutcome {
@@ -545,6 +640,273 @@ export function classify(r: HarborResult): TrialOutcome {
 		agentStartedAt: started,
 		detail: `reward ${reward}`,
 	};
+}
+
+/* ---------- failure causes and the review gate ---------- */
+
+/**
+ * Why a non-pass ended, derived from its artifacts. It never changes the score
+ * (classify decides valid/infra); it decides whether the operator must look
+ * before more money is spent.
+ */
+export type CauseKind =
+	| "agent-finished"
+	| "agent-stopped-abnormally"
+	| "agent-timeout"
+	| "budget-cap"
+	| "verifier-error"
+	| "infra"
+	| "unknown";
+export type TrialCause = {
+	/** A CauseKind, or `infra:<reason>`. */
+	cause: string;
+	/** Sanitized, capped evidence (the bridge's stop line, the exception, failed tests). */
+	detail: string;
+	/** From verifier/ctrf.json when present. */
+	failedTests?: { count: number; names: string[] };
+};
+export const causeKind = (c: Pick<TrialCause, "cause">) =>
+	c.cause.split(":")[0] as CauseKind;
+
+export type TrialEvidence = {
+	/** agent/ytimesy-bridge.log exists: the bridge started. */
+	bridgeLog: boolean;
+	/** The last "builder stopped: ..." line. */
+	stopLine?: string;
+	/** "bridge failed before or outside the trial: ..." or "refused: ...". */
+	bridgeFailure?: string;
+	/** "Model provider failed" lines (the model loop's onError, after the SDK's retries). */
+	providerFailures: number;
+	/** The `code:` of the last such failure ("unknown" when the provider gave no reason). */
+	providerCode?: string;
+	/** The first uncaught exception or Node internal error line. */
+	uncaught?: string;
+	failedTests?: { count: number; names: string[] };
+};
+
+const SECRET_PATTERNS: [RegExp, string][] = [
+	[/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, "<aws-key>"],
+	[/\bsk-[A-Za-z0-9_-]{12,}/g, "<key>"],
+	[/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>"],
+	[
+		/\b(api[_-]?key|secret|token|password|authorization|x-api-key)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi,
+		"$1$2<redacted>",
+	],
+];
+/** One log line made safe for the journal: no credential-looking strings, at most `max` chars. */
+export function sanitizeLine(line: string, max = 300) {
+	// Control characters (terminal escapes, NULs) never reach the journal; tabs stay.
+	let out = [...line]
+		.filter((c) => {
+			const n = c.charCodeAt(0);
+			return n === 9 || (n >= 32 && n !== 127);
+		})
+		.join("")
+		.trim();
+	for (const [re, sub] of SECRET_PATTERNS) out = out.replace(re, sub);
+	return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+}
+
+/** Reads a trial's agent/ytimesy-bridge.log (stderr of the bridge, evals/harbor_v2/bridge.ts). */
+export function bridgeLogEvidence(text: string): TrialEvidence {
+	const lines = text.split("\n");
+	const ev: TrialEvidence = { bridgeLog: true, providerFailures: 0 };
+	lines.forEach((line, i) => {
+		if (line.startsWith("builder stopped:")) ev.stopLine = sanitizeLine(line);
+		else if (
+			line.startsWith("bridge failed before or outside the trial:") ||
+			line.startsWith("refused:")
+		)
+			ev.bridgeFailure = sanitizeLine(line);
+		else if (/^\s*Model provider failed\b/.test(line)) {
+			ev.providerFailures++;
+			// console.warn prints the classification object on the following lines.
+			for (const next of lines.slice(i, i + 15)) {
+				const m = /\bcode:\s*['"]([^'"]{1,40})['"]/.exec(next);
+				if (m) {
+					ev.providerCode = m[1];
+					break;
+				}
+			}
+		} else if (
+			!ev.uncaught &&
+			/^(Uncaught\b|.*\bUnhandledPromiseRejection|(Type|Reference|Range|Syntax)Error: |Error \[ERR_|node:internal\/)/.test(
+				line,
+			)
+		)
+			ev.uncaught = sanitizeLine(line);
+	});
+	return ev;
+}
+
+/** Failed tests from a CTRF report (verifier/ctrf.json); undefined when unreadable. */
+export function ctrfFailures(
+	json: unknown,
+): { count: number; names: string[] } | undefined {
+	const results = (json as { results?: Record<string, unknown> } | null)
+		?.results;
+	if (!results || typeof results !== "object") return undefined;
+	const tests = Array.isArray(results.tests)
+		? (results.tests as { name?: unknown; status?: unknown }[])
+		: [];
+	const failed = tests.filter((t) => t.status === "failed");
+	const summary = results.summary as { failed?: unknown } | undefined;
+	const count =
+		typeof summary?.failed === "number" ? summary.failed : failed.length;
+	return {
+		count,
+		names: failed.slice(0, 10).map((t) => sanitizeLine(String(t.name), 120)),
+	};
+}
+
+/**
+ * The cause of a non-pass (null for a pass). Order: infra, the bridge's own stop
+ * (budget cap or an abnormal end), the agent time limit, a verifier error, then a
+ * normal end with failed tests; no evidence is "unknown".
+ */
+export function failureCause(
+	outcome: TrialOutcome,
+	r?: HarborResult,
+): TrialCause | null {
+	if (outcome.kind === "infra")
+		return {
+			cause: `infra:${sanitizeLine(outcome.reason, 200)}`,
+			detail: sanitizeLine(outcome.reason),
+		};
+	if (outcome.reward >= 1) return null;
+	const ev = r?.evidence;
+	const failedTests = ev?.failedTests;
+	const withTests = (c: TrialCause): TrialCause =>
+		failedTests ? { ...c, failedTests } : c;
+	const exceptionType = r?.exception_info?.exception_type ?? "";
+	const exception = exceptionType
+		? sanitizeLine(
+				`${exceptionType}: ${r?.exception_info?.exception_message ?? ""}`,
+			)
+		: "";
+	const stop = ev?.stopLine ?? ev?.bridgeFailure;
+	if (
+		stop &&
+		/spending cap reached|request limit reached|Total spending cap|spend ledger stop file/i.test(
+			stop,
+		)
+	)
+		return withTests({ cause: "budget-cap", detail: stop });
+	if (stop || ev?.uncaught)
+		return withTests({
+			cause: "agent-stopped-abnormally",
+			detail: [
+				stop ?? ev?.uncaught,
+				ev?.providerFailures
+					? `${ev.providerFailures} "Model provider failed" line(s), last code ${ev.providerCode ?? "?"}`
+					: "",
+			]
+				.filter(Boolean)
+				.join("; "),
+		});
+	if (/AgentTimeout/i.test(exceptionType))
+		return withTests({ cause: "agent-timeout", detail: exception });
+	if (/Verifier|Reward/i.test(exceptionType))
+		return withTests({ cause: "verifier-error", detail: exception });
+	if (exceptionType)
+		return withTests({ cause: "agent-stopped-abnormally", detail: exception });
+	if (ev?.providerFailures)
+		return withTests({
+			cause: "agent-stopped-abnormally",
+			detail: `${ev.providerFailures} "Model provider failed" line(s), last code ${ev.providerCode ?? "?"}; no "builder stopped" line`,
+		});
+	if (ev?.bridgeLog)
+		return withTests({
+			cause: "agent-finished",
+			detail: failedTests
+				? `verifier: ${failedTests.count} failed test(s)${failedTests.names.length ? `: ${failedTests.names.join(", ")}` : ""}`
+				: "agent ended normally; verifier reward 0",
+		});
+	return {
+		cause: "unknown",
+		detail: "no bridge log or exception to explain it",
+	};
+}
+
+/** Review gate settings (TB4_* env, docs/tb4-run-controller.md "Review gate"). */
+export function reviewConfig(env: Record<string, string | undefined>) {
+	const list = (v: string | undefined, d: string[]) =>
+		v === undefined
+			? d
+			: v
+					.split(",")
+					.map((x) => x.trim())
+					.filter(Boolean);
+	const num = (v: string | undefined, d: number) =>
+		v !== undefined && v.trim() !== "" && Number.isFinite(Number(v))
+			? Number(v)
+			: d;
+	const off = (v: string | undefined) => /^(0|off|false|no)$/i.test(v ?? "");
+	return {
+		/** TB4_REVIEW_GATE=off: causes are still journaled, nothing pauses. */
+		gate: !off(env.TB4_REVIEW_GATE),
+		/** Causes that never need a review (TB4_REVIEW_BENIGN). */
+		benign: new Set(
+			list(env.TB4_REVIEW_BENIGN, ["agent-finished", "agent-timeout"]),
+		),
+		/** TB4_SPIKE_COUNT abnormal ends within TB4_SPIKE_MINUTES stop the run (0 = off). */
+		spikeCount: num(env.TB4_SPIKE_COUNT, 3),
+		spikeMinutes: num(env.TB4_SPIKE_MINUTES, 30),
+		/** TB4_STAGE1 (on by default): one trial of every task, then `ack stage1`. */
+		stage1: !off(env.TB4_STAGE1),
+	};
+}
+export type ReviewConfig = ReturnType<typeof reviewConfig>;
+
+/** Whether a cause needs the operator before more trials launch. */
+export function needsReview(cause: TrialCause, cfg: ReviewConfig) {
+	return cfg.gate && !cfg.benign.has(causeKind(cause));
+}
+
+/**
+ * The error-spike stop: abnormal ends (non-benign, non-infra: one dead host ends
+ * many trials at once and infra attempts are retried) whose finish lies within
+ * the last `spikeMinutes`. Returns the stop reason, or null.
+ */
+export function errorSpike(state: RunState, nowMs: number, cfg: ReviewConfig) {
+	if (cfg.spikeCount <= 0 || !Number.isFinite(nowMs)) return null;
+	const since = nowMs - cfg.spikeMinutes * 60_000;
+	const hits = [...state.attempts.values()].filter((a) => {
+		if (!a.cause || !a.finishedAt) return false;
+		const kind = causeKind(a.cause);
+		if (kind === "infra" || cfg.benign.has(kind)) return false;
+		const at = Date.parse(a.finishedAt);
+		return at >= since && at <= nowMs;
+	});
+	if (hits.length < cfg.spikeCount) return null;
+	const kinds = [...new Set(hits.map((a) => causeKind(a.cause!)))].join(", ");
+	return `error spike: ${hits.length} abnormal trial ends (${kinds}) within ${cfg.spikeMinutes} min: ${hits
+		.map((a) => a.attemptId)
+		.slice(0, 5)
+		.join(", ")}${hits.length > 5 ? ", ..." : ""}`;
+}
+
+/**
+ * Stage 1 is done when every scheduled task's batch-1 trial has finished (a
+ * valid one, or the attempt cap reached) and nothing of it is still running.
+ */
+export function stage1Complete(
+	state: RunState,
+	tasks: Task[],
+	exclude: readonly string[] = [],
+) {
+	const skip = new Set(exclude);
+	const b1 = BATCHES[0];
+	return tasks
+		.filter((t) => !skip.has(t.name))
+		.every((t) => {
+			const p = progress(state, t.name, "b1");
+			return (
+				p.attempts > 0 &&
+				p.inFlight === 0 &&
+				(p.valid >= b1.trialsPerTask || p.attempts >= attemptCap(t, b1))
+			);
+		});
 }
 
 /* ---------- scoring ---------- */
@@ -856,6 +1218,19 @@ export function watch(input: WatchInput): {
 		});
 		actions.push("restart-controller");
 	}
+	// The review gate holds launches until someone reads the failure: say so loudly.
+	for (const [key, r] of input.state.reviews)
+		alerts.push({
+			level: "critical",
+			key: `review:${key}`,
+			text: `${key}: ${sanitizeLine(r.cause, 160)}; new launches held until acked (controller.ts failures, then ack ${key} --note ...)`,
+		});
+	if (input.state.stopped)
+		alerts.push({
+			level: "critical",
+			key: "run-stopped",
+			text: `run stopped: ${sanitizeLine(input.state.stopped, 200)}`,
+		});
 	for (const [id, ms] of input.logSilenceMs)
 		if (ms >= 20 * 60_000)
 			alerts.push({

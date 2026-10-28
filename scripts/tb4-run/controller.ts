@@ -9,6 +9,8 @@
  *     status               counts per batch, in flight, paused/stopped
  *     open-batch b2 --owner <name>   only when the batch-2 rule says go (or --override with a dated amendment)
  *     pause <reason> | resume | stop <reason>
+ *     ack <attemptId|stage1|all> --note "<what you read and why launches may resume>"
+ *     failures             every non-pass with its cause, ordered by finish time
  *     score [--codex benchmarks/evaluation/codex-public-job.json] [--reason-job <reason-job.json>]
  *     init ... --open-all            Astra x5 rule: both batches open at init, no batch-2 gate
  *
@@ -33,21 +35,33 @@ import { parseArgs } from "node:util";
 import {
 	BATCHES,
 	batch2Decision,
+	bridgeLogEvidence,
+	causeKind,
+	ctrfFailures,
 	earlyStopDecision,
 	earlyStopGates,
+	errorSpike,
+	failureCause,
 	floorCeiling,
 	type HarborResult,
 	type Host,
 	type HostObservation,
 	Journal,
 	lastModelCallFailed,
+	needsReview,
 	nextLaunches,
 	pairedComparison,
 	passAt1,
+	type ReviewConfig,
+	type RunState,
 	reconcile,
 	replay,
+	reviewConfig,
+	sanitizeLine,
 	scoredTrials,
+	stage1Complete,
 	type Task,
+	type TrialOutcome,
 	taskFromToml,
 } from "./lib.ts";
 
@@ -215,7 +229,25 @@ export function readTrialDir(jobDir: string): HarborResult | undefined {
 		result.gpuAsserted = /NVIDIA H100/.test(readFileSync(gpu, "utf8"));
 	const killed = join(jobDir, "host-killed");
 	if (existsSync(killed)) result.hostKilled = true;
+	result.evidence = trialEvidence(trialDir);
 	return result;
+}
+
+/** The bridge log and the verifier's test report of one trial dir (<task>__<id>). */
+export function trialEvidence(trialDir: string) {
+	const bridgeLog = join(trialDir, "agent", "ytimesy-bridge.log");
+	const evidence = existsSync(bridgeLog)
+		? bridgeLogEvidence(readFileSync(bridgeLog, "utf8"))
+		: { bridgeLog: false, providerFailures: 0 };
+	const ctrf = join(trialDir, "verifier", "ctrf.json");
+	if (existsSync(ctrf))
+		try {
+			const failed = ctrfFailures(JSON.parse(readFileSync(ctrf, "utf8")));
+			if (failed) return { ...evidence, failedTests: failed };
+		} catch {
+			// An unreadable report adds no evidence.
+		}
+	return evidence;
 }
 
 /**
@@ -344,37 +376,66 @@ export function tick(input: {
 	tasks: Task[];
 	ops: HostOps;
 	now?: () => string;
+	/** Review gate, error spike and stage-1 settings; default from TB4_* env (reviewConfig). */
+	review?: ReviewConfig;
 }) {
 	const now = input.now ?? (() => new Date().toISOString());
 	const { journal, ops } = input;
+	const review = input.review ?? reviewConfig(process.env);
 	const hostByName = new Map(input.hosts.map((h) => [h.name, h]));
 	let state = replay(journal.events());
 	const log: string[] = [];
+	const exclude = process.env.TB4_EXCLUDE_TASKS?.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+	// Every finish carries its cause; a cause that is not benign holds new
+	// launches until the operator acks it (the trial still scores as classified).
+	const finish = (
+		attemptId: string,
+		task: string,
+		outcome: TrialOutcome,
+		result?: HarborResult,
+	) => {
+		const cause = failureCause(outcome, result);
+		journal.append({
+			at: now(),
+			type: "finish",
+			attemptId,
+			outcome,
+			...(cause ? { cause } : {}),
+		});
+		if (cause && needsReview(cause, review)) {
+			journal.append({
+				at: now(),
+				type: "review-needed",
+				attemptId,
+				task,
+				cause: cause.cause,
+				detail: cause.detail,
+			});
+			log.push(
+				`REVIEW ${attemptId}: ${cause.cause}: ${cause.detail}; launches held until \`controller.ts ack ${attemptId} --note ...\``,
+			);
+			return true;
+		}
+		return false;
+	};
 	// 1. Reconcile every unfinished attempt (this is also the restart path).
 	for (const a of state.attempts.values()) {
 		if (a.status === "finished") continue;
 		const host = hostByName.get(a.host);
 		if (!host) {
-			journal.append({
-				at: now(),
-				type: "finish",
-				attemptId: a.attemptId,
-				outcome: {
-					kind: "infra",
-					reason: `host ${a.host} no longer in the fleet`,
-				},
+			finish(a.attemptId, a.task, {
+				kind: "infra",
+				reason: `host ${a.host} no longer in the fleet`,
 			});
 			continue;
 		}
-		const r = reconcile(a, ops.observe(host, a.attemptId, a.launchedAt));
+		const obs = ops.observe(host, a.attemptId, a.launchedAt);
+		const r = reconcile(a, obs);
 		if (r.action === "collect") {
 			const copies = ops.collect(host, a.attemptId);
-			journal.append({
-				at: now(),
-				type: "finish",
-				attemptId: a.attemptId,
-				outcome: r.outcome,
-			});
+			finish(a.attemptId, a.task, r.outcome, obs.result);
 			journal.append({
 				at: now(),
 				type: "synced",
@@ -383,12 +444,7 @@ export function tick(input: {
 			});
 			log.push(`finish ${a.attemptId} ${r.outcome.kind}`);
 		} else if (r.action === "mark-infra") {
-			journal.append({
-				at: now(),
-				type: "finish",
-				attemptId: a.attemptId,
-				outcome: { kind: "infra", reason: r.reason },
-			});
+			finish(a.attemptId, a.task, { kind: "infra", reason: r.reason });
 			log.push(`infra ${a.attemptId}: ${r.reason}`);
 			try {
 				const removed = ops.cleanup?.(host, a.attemptId);
@@ -456,8 +512,41 @@ export function tick(input: {
 			);
 		}
 	}
+	// 1c. Error spike: several abnormal ends in a short window stop the run.
+	state = replay(journal.events());
+	const spike = state.stopped
+		? null
+		: errorSpike(state, Date.parse(now()), review);
+	if (spike) {
+		journal.append({ at: now(), type: "stop", reason: spike });
+		log.push(
+			`STOP ${spike}: no new launches; in-flight trials finish and are collected`,
+		);
+	}
+	// 1d. Staged scaling: once every task's batch-1 trial is done, the rest waits for `ack stage1`.
+	state = replay(journal.events());
+	if (
+		review.stage1 &&
+		state.runId &&
+		state.openBatches.has("b2") &&
+		!state.stage1Released &&
+		!state.stageReviewed &&
+		stage1Complete(state, input.tasks, exclude)
+	) {
+		const b1 = [...state.attempts.values()].filter(
+			(a) => a.batch === "b1" && a.status === "finished",
+		);
+		const passes = b1.filter(
+			(a) => a.outcome?.kind === "valid" && a.outcome.reward >= 1,
+		).length;
+		const detail = `stage 1 done: ${passes} of ${b1.length} batch-1 attempts passed; read \`controller.ts failures\`, then \`controller.ts ack stage1 --note ...\``;
+		journal.append({ at: now(), type: "stage-review", detail });
+		log.push(`STAGE-REVIEW ${detail}`);
+	}
 	// 2. Launch what the plan still needs on healthy hosts.
 	state = replay(journal.events());
+	for (const [key, r] of state.reviews)
+		log.push(`held: review ${key} (${r.cause}) not acked`);
 	const unhealthy = new Set<string>();
 	for (const h of input.hosts) {
 		const health = ops.health(h);
@@ -475,9 +564,8 @@ export function tick(input: {
 		priority: process.env.TB4_PRIORITY_TASKS?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean),
-		exclude: process.env.TB4_EXCLUDE_TASKS?.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean),
+		exclude,
+		stage1: review.stage1,
 		frontload: process.env.TB4_FRONTLOAD_TASKS?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean),
@@ -496,18 +584,57 @@ export function tick(input: {
 			ops.launch(hostByName.get(d.host)!, d.attemptId, d.task);
 			log.push(`launch ${d.attemptId} on ${d.host}`);
 		} catch (error) {
-			journal.append({
-				at: now(),
-				type: "finish",
-				attemptId: d.attemptId,
-				outcome: {
-					kind: "infra",
-					reason: `launch failed: ${String(error).slice(0, 160)}`,
-				},
+			const held = finish(d.attemptId, d.task, {
+				kind: "infra",
+				reason: `launch failed: ${String(error).slice(0, 160)}`,
 			});
+			if (held) break;
 		}
 	}
 	return log;
+}
+
+/**
+ * Every non-pass (infra, or a valid reward below 1) with its cause, ordered by
+ * finish time. A trial journaled before causes existed gets one derived from
+ * its collected results dir, marked "derived".
+ */
+export function failureDigest(runDir: string, state: RunState) {
+	const ackNote = new Map<string, string>();
+	for (const a of state.acks) ackNote.set(a.key, a.note);
+	return [...state.attempts.values()]
+		.filter(
+			(a) =>
+				a.status === "finished" &&
+				a.outcome &&
+				(a.outcome.kind === "infra" || a.outcome.reward < 1),
+		)
+		.sort((x, y) => (x.finishedAt ?? "").localeCompare(y.finishedAt ?? ""))
+		.map((a) => {
+			const outcome = a.outcome!;
+			let cause = a.cause;
+			let derived = false;
+			if (!cause) {
+				const result = readTrialDir(join(runDir, "results", a.attemptId));
+				cause = failureCause(outcome, result) ?? undefined;
+				derived = true;
+			}
+			return {
+				finishedAt: a.finishedAt ?? "",
+				attemptId: a.attemptId,
+				task: a.task,
+				outcome: outcome.kind === "infra" ? "infra" : `valid ${outcome.reward}`,
+				cause: cause?.cause ?? "unknown",
+				detail: cause?.detail ?? "",
+				...(cause?.failedTests ? { failedTests: cause.failedTests } : {}),
+				derived,
+				review: state.reviews.has(a.attemptId)
+					? "pending"
+					: ackNote.has(a.attemptId)
+						? `acked: ${ackNote.get(a.attemptId)}`
+						: "",
+			};
+		});
 }
 
 export function scoreReport(
@@ -606,6 +733,8 @@ async function main() {
 			dataset: { type: "string" },
 			"open-all": { type: "boolean", default: false },
 			"reason-job": { type: "string" },
+			note: { type: "string" },
+			json: { type: "boolean", default: false },
 		},
 	});
 	const runDir = values["run-dir"]!;
@@ -703,6 +832,63 @@ async function main() {
 		case "pause":
 			journal.append({ at: at(), type: "pause", reason: arg ?? "operator" });
 			break;
+		case "ack": {
+			const s = replay(journal.events());
+			const note = values.note?.trim();
+			if (!arg || !note)
+				throw new Error(
+					'usage: ack <attemptId|stage1|all> --note "<what you read and why launches may resume>"',
+				);
+			if (
+				arg === "all"
+					? !s.reviews.size
+					: !s.reviews.has(arg) && arg !== "stage1"
+			)
+				throw new Error(
+					`nothing to ack for ${arg}; pending: ${[...s.reviews.keys()].join(", ") || "none"}`,
+				);
+			if (arg === "stage1" && s.stage1Released)
+				throw new Error("stage 1 is already released");
+			journal.append({
+				at: at(),
+				type: "ack",
+				key: arg,
+				note: sanitizeLine(note, 500),
+			});
+			const left = replay(journal.events()).reviews;
+			console.log(
+				`acked ${arg}; ${left.size ? `still pending: ${[...left.keys()].join(", ")}` : "launches resume on the next tick"}`,
+			);
+			break;
+		}
+		case "failures": {
+			const rows = failureDigest(runDir, replay(journal.events()));
+			if (values.json) console.log(JSON.stringify(rows, null, 2));
+			else
+				for (const r of rows)
+					console.log(
+						[
+							r.finishedAt,
+							r.attemptId,
+							r.outcome,
+							`${r.cause}${r.derived ? " (derived)" : ""}`,
+							r.detail,
+							r.review ? `[${r.review}]` : "",
+						]
+							.filter(Boolean)
+							.join("  "),
+					);
+			const counts = new Map<string, number>();
+			for (const r of rows) {
+				const k = causeKind({ cause: r.cause });
+				counts.set(k, (counts.get(k) ?? 0) + 1);
+			}
+			if (!values.json)
+				console.log(
+					`${rows.length} non-pass: ${[...counts].map(([k, n]) => `${k} ${n}`).join(", ") || "none"}`,
+				);
+			break;
+		}
 		case "resume":
 			journal.append({ at: at(), type: "resume" });
 			break;
@@ -718,6 +904,14 @@ async function main() {
 						runId: s.runId,
 						paused: s.paused,
 						stopped: s.stopped,
+						reviewsPending: Object.fromEntries(
+							[...s.reviews].map(([k, r]) => [k, `${r.cause}: ${r.detail}`]),
+						),
+						stage1: s.stage1Released
+							? "released"
+							: s.stageReviewed
+								? "awaiting ack stage1"
+								: "running",
 						batches: [...s.openBatches],
 						inFlight: all.filter((a) => a.status !== "finished").length,
 						valid: all.filter((a) => a.outcome?.kind === "valid").length,
