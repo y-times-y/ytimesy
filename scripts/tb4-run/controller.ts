@@ -111,6 +111,8 @@ export type HostOps = {
 	observe(host: Host, attemptId: string, launchedAt: string): HostObservation;
 	collect(host: Host, attemptId: string): string[];
 	health(host: Host): { ok: boolean; why: string };
+	/** Removes a dead attempt's task containers and networks (a killed unit leaves them running). */
+	cleanup?(host: Host, attemptId: string): string;
 };
 
 const sh = (cmd: string, args: string[], timeoutMs = 60_000) =>
@@ -299,6 +301,13 @@ export function sshHostOps(runDir: string): HostOps {
 			}
 			return copies;
 		},
+		cleanup(host, attemptId) {
+			// Harbor names a trial's compose project after its trial dir (<task>__<id>, lowercased).
+			return ssh(
+				host,
+				`for d in /opt/tb4/jobs/${safeId(attemptId)}/*/*__*/; do [ -d "$d" ] || continue; p=$(basename "$d" | tr A-Z a-z); ids=$(docker ps -aq --filter "name=^\${p}__"); [ -n "$ids" ] && docker rm -f $ids >/dev/null && echo "removed containers of $p"; nets=$(docker network ls -q --filter "name=^\${p}"); [ -n "$nets" ] && docker network rm $nets >/dev/null 2>&1; done; true`,
+			).trim();
+		},
 		health(host) {
 			try {
 				const out = ssh(
@@ -376,6 +385,12 @@ export function tick(input: {
 				outcome: { kind: "infra", reason: r.reason },
 			});
 			log.push(`infra ${a.attemptId}: ${r.reason}`);
+			try {
+				const removed = ops.cleanup?.(host, a.attemptId);
+				if (removed) log.push(`cleanup ${a.attemptId}: ${removed.replaceAll("\n", "; ")}`);
+			} catch (error) {
+				log.push(`cleanup ${a.attemptId} failed: ${String(error).slice(0, 160)}`);
+			}
 		} else if (r.action === "adopt" && a.status === "launched") {
 			journal.append({ at: now(), type: "running", attemptId: a.attemptId });
 		}

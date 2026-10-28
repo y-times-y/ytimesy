@@ -868,3 +868,19 @@ describe("tb4 collection of a real run-trial.sh layout", () => {
 		expect(readProbe(["inactive", boot, ""], at)).toMatchObject({ ready: false, rebootedSinceLaunch: false });
 	});
 });
+
+describe("tb4 dead-attempt cleanup", () => {
+	it("removes a killed attempt's containers when it is marked infra", () => {
+		const { dir, journal } = newRun();
+		journal.append({ at: "2026-10-28T00:00:00Z", type: "launch", attemptId: "r1-b1-cpu-a-a01", task: "cpu-a", batch: "b1", host: "cpu-0" });
+		const cleaned: string[] = [];
+		const { ops } = fakeOps(() => ({ processAlive: false }));
+		ops.cleanup = (_h, id) => {
+			cleaned.push(id);
+			return "removed containers of cpu-a__x";
+		};
+		const log = tick({ runDir: dir, journal, hosts: [hosts[0]], tasks: [tasks[0]], ops, now: () => "t" });
+		expect(cleaned).toEqual(["r1-b1-cpu-a-a01"]);
+		expect(log.some((l) => l.startsWith("cleanup r1-b1-cpu-a-a01: removed"))).toBe(true);
+	});
+});
