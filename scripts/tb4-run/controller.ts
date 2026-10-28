@@ -475,6 +475,9 @@ export function tick(input: {
 		priority: process.env.TB4_PRIORITY_TASKS?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean),
+		exclude: process.env.TB4_EXCLUDE_TASKS?.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean),
 		frontload: process.env.TB4_FRONTLOAD_TASKS?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean),

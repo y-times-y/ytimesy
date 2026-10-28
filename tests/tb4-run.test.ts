@@ -1081,3 +1081,14 @@ describe("tb4 outcome amendments", () => {
 		expect(scoredTrials(st).get("x")?.scored.map((t) => t.reward)).toEqual([0]);
 	});
 });
+
+describe("tb4 excluded tasks", () => {
+	it("never launches an excluded task, even with a free GPU host", () => {
+		const state = replay([
+			{ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) },
+			{ at: "t", type: "batch-open", batch: "b1" },
+		]);
+		const out = nextLaunches({ state, tasks, hosts, exclude: ["gpu-a"] });
+		expect(out.map((d) => d.task).sort()).toEqual(["cpu-a", "cpu-b"]);
+	});
+});
