@@ -53,7 +53,11 @@ import {
 	taskFromToml,
 	watch,
 } from "../scripts/tb4-run/lib.ts";
-import { bedrockErrors, sendAlerts } from "../scripts/tb4-run/watchdog.ts";
+import {
+	bedrockErrors,
+	sendAlerts,
+	spendAlerts,
+} from "../scripts/tb4-run/watchdog.ts";
 
 const tasks: Task[] = [
 	{ name: "cpu-a", cpus: 4, memoryMb: 8192, gpus: 0, separateVerifier: false },
@@ -546,6 +550,21 @@ describe("tb4 watchdog and spend", () => {
 		await sendAlerts(alert, ws, 2000, "https://ntfy.sh/x", post);
 		await sendAlerts(alert, ws, 1000 + 61 * 60_000, "https://ntfy.sh/x", post);
 		expect(posts).toHaveLength(2);
+	});
+
+	it("alerts once per trial that passed its spend alert, and never counts it as spend", () => {
+		const lines = [
+			{ type: "reserve", trial: "a", usd: 20 },
+			{ type: "alert", trial: "a", usd: 41.5, thresholdUsd: 40 },
+			{ type: "alert", trial: "a", usd: 41.5, thresholdUsd: 40 },
+			{ type: "settle", trial: "b", usd: 3 },
+		];
+		const first = spendAlerts(lines, {});
+		expect(first).toHaveLength(1);
+		expect(first[0]).toMatchObject({ level: "critical", key: "trial-spend-a" });
+		expect(first[0].text).toContain("$41.50");
+		expect(spendAlerts(lines, { "trial-spend-a": 1 })).toHaveLength(0);
+		expect(ledgerTotals(lines)).toEqual({ settled: 3, reserved: 20 });
 	});
 });
 

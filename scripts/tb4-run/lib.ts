@@ -1156,6 +1156,8 @@ export type LedgerLine = {
 	usd?: number;
 	costUsd?: number;
 	trial?: string;
+	/** type "alert": the trial's alert threshold. */
+	thresholdUsd?: number;
 };
 /** Settled spend plus open reservations from a bridge ledger (JSON lines). */
 export function ledgerTotals(lines: LedgerLine[]) {

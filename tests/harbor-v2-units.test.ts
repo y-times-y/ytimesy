@@ -12,6 +12,7 @@ import {
 import {
 	committedUsd,
 	ledgerSummary,
+	recordTrialAlert,
 	reserveTrial,
 	SpendCapReached,
 	settleTrial,
@@ -78,6 +79,35 @@ describe("harborBridgeConfig", () => {
 		expect(() =>
 			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_TRIAL_USD_CAP: "0" }),
 		).toThrow(/positive dollar amount/);
+	});
+
+	it("turns the trial cap off only with a ledger reservation, and reads the alert", () => {
+		const off = harborBridgeConfig({
+			...capped,
+			YTIMESY_HARBOR_TRIAL_USD_CAP: "off",
+			YTIMESY_HARBOR_TRIAL_RESERVE_USD: "3",
+			YTIMESY_HARBOR_TRIAL_ALERT_USD: "4",
+		});
+		expect(off).toMatchObject({
+			trialUsdCap: null,
+			trialReserveUsd: 3,
+			trialAlertUsd: 4,
+		});
+		expect(() =>
+			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_TRIAL_USD_CAP: "off" }),
+		).toThrow(/needs YTIMESY_HARBOR_TRIAL_RESERVE_USD/);
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_TRIAL_USD_CAP: "off",
+				YTIMESY_HARBOR_TRIAL_RESERVE_USD: "11",
+			}),
+		).toThrow(/reservation cannot exceed the total cap/);
+		expect(harborBridgeConfig(capped)).toMatchObject({
+			trialUsdCap: 10,
+			trialReserveUsd: null,
+			trialAlertUsd: null,
+		});
 	});
 
 	it("refuses an unpriced model on a paid route", () => {
@@ -361,6 +391,19 @@ describe("spend ledger", () => {
 		).toHaveLength(3);
 		const lines = (await readFile(ledger, "utf8")).trim().split("\n");
 		expect(committedUsd(lines.map((line) => JSON.parse(line)))).toBe(9);
+	});
+
+	it("records spend alerts without counting them as spend or as a reservation", async () => {
+		directory = await mkdtemp(join(tmpdir(), "harbor-ledger-"));
+		const ledger = join(directory, "ledger.jsonl");
+		await reserveTrial({ ledger, totalCapUsd: 10, trial: "a", trialCapUsd: 2 });
+		await recordTrialAlert({ ledger, trial: "a", usd: 5, thresholdUsd: 4 });
+		await recordTrialAlert({ ledger, trial: "z", usd: 6, thresholdUsd: 4 });
+		expect((await ledgerSummary(ledger)).committedUsd).toBe(2);
+		// An alert line for a trial is not a reservation of it.
+		await reserveTrial({ ledger, totalCapUsd: 10, trial: "z", trialCapUsd: 1 });
+		await settleTrial({ ledger, trial: "a", usd: 7 });
+		expect((await ledgerSummary(ledger)).committedUsd).toBe(8);
 	});
 
 	it("refuses every new trial once the stop file exists", async () => {
