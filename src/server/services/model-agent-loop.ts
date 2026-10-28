@@ -55,6 +55,7 @@ import {
 import { instructionProfile } from "#/domain/instruction-profiles";
 import { longContextThreshold } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
+import { redactSecrets } from "#/domain/redact-secrets";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import { withProviderOptionsEffort } from "#/server/adapters/api-reasoning-effort";
 import {
@@ -72,6 +73,7 @@ import {
 	contextTokenPressure,
 	estimateContextTokens,
 	type FallbackContextPolicy,
+	inStreamCompactedHistory,
 	modelContextBudget,
 	retainedUserMessages,
 	STATE_SNAPSHOT_HEADING,
@@ -619,6 +621,13 @@ export type ModelAgentRuntime = {
 	prefetchInitialReads?: boolean;
 	backgroundCompaction?: boolean;
 	fallbackContextPolicy?: FallbackContextPolicy;
+	/**
+	 * When `compact` (the provider's native compaction) fails, compact with
+	 * the harness's own summary under fallbackContextPolicy instead of
+	 * failing the step. Set where native compaction is not a documented
+	 * contract of the route (OpenAI compaction on Bedrock).
+	 */
+	compactFallback?: boolean;
 	compact?: (
 		input: NativeCompactionInput,
 	) => Promise<{ messages: ModelMessage[]; usage: LanguageModelUsage }>;
@@ -1021,12 +1030,12 @@ async function executeModelSteps(
 					}
 					throw new ModelSwitchAtCompaction(switchTarget, switched.compacted);
 				}
-				const compact = async (older: ModelMessage[]) => {
+				const compact = async (older: ModelMessage[], native = true) => {
 					await input.onEvent({ type: "context", compacting: true });
 					try {
 						await input.beforeCompaction?.(older);
 						runSignal.throwIfAborted();
-						if (runtime.compact) {
+						if (native && runtime.compact) {
 							const native = await runtime.compact({
 								messages: older,
 								instructions: input.instructions,
@@ -1059,10 +1068,32 @@ async function executeModelSteps(
 						await input.onEvent({ type: "context", compacting: false });
 					}
 				};
-				let prepared: { messages: ModelMessage[]; compacted: boolean };
-				if (!forced && contextTokens < budget.compactAtTokens) {
-					prepared = { messages: history, compacted: false };
-				} else if (runtime.compact) {
+				// The harness's own summary (fallbackContextPolicy): the route's
+				// compaction when it has no native one, or after a native one failed.
+				const ownCompaction = () =>
+					compactApiHistory(
+						history,
+						async (older) => {
+							const summary = await compact(older, false);
+							if (typeof summary !== "string")
+								throw new Error("Expected a text context summary.");
+							return summary;
+						},
+						{
+							...budget,
+							compactAtTokens: Math.min(
+								budget.compactAtTokens,
+								estimatedHistory,
+							),
+						},
+						input.archiveHistory,
+						runtime.fallbackContextPolicy,
+						input.isUserRequest,
+					);
+				const nativeCompaction = async (): Promise<{
+					messages: ModelMessage[];
+					compacted: boolean;
+				}> => {
 					if (contextTokens > budget.inputLimitTokens)
 						throw new Error(
 							"Conversation exceeds this model's context window; native compaction cannot safely accept it.",
@@ -1101,27 +1132,30 @@ async function executeModelSteps(
 						throw new Error(
 							"Compacted history leaves insufficient context; original checkpoint was preserved.",
 						);
-					prepared = { messages, compacted: true };
+					return { messages, compacted: true };
+				};
+				let prepared: { messages: ModelMessage[]; compacted: boolean };
+				if (!forced && contextTokens < budget.compactAtTokens) {
+					prepared = { messages: history, compacted: false };
+				} else if (runtime.compact) {
+					try {
+						prepared = await nativeCompaction();
+					} catch (error) {
+						if (!runtime.compactFallback || runSignal.aborted) throw error;
+						console.warn(
+							"Native compaction failed; using the harness's own compaction.",
+							{
+								...apiModelFailureClassification(error),
+								message:
+									error instanceof Error
+										? redactSecrets(error.message, 200)
+										: "",
+							},
+						);
+						prepared = await ownCompaction();
+					}
 				} else {
-					prepared = await compactApiHistory(
-						history,
-						async (older) => {
-							const summary = await compact(older);
-							if (typeof summary !== "string")
-								throw new Error("Expected a text context summary.");
-							return summary;
-						},
-						{
-							...budget,
-							compactAtTokens: Math.min(
-								budget.compactAtTokens,
-								estimatedHistory,
-							),
-						},
-						input.archiveHistory,
-						runtime.fallbackContextPolicy,
-						input.isUserRequest,
-					);
+					prepared = await ownCompaction();
 				}
 				const beforeCompaction = history;
 				history = prepared.messages;
@@ -1323,8 +1357,29 @@ async function executeModelSteps(
 				onInFlight?.(undefined);
 				const historyBeforeStep = history;
 				history = [...historyBeforeStep, ...step.response.messages];
+				// The provider compacted this request's input in-stream (OpenAI
+				// context_management): its checkpoint replaces everything before
+				// it. Its cost is in this step's usage, recorded above, once.
+				const inStream = inStreamCompactedHistory(
+					historyBeforeStep,
+					step.response.messages,
+					input.isUserRequest,
+					userMessageBudget(contextBudget(history)),
+				);
+				if (inStream) {
+					try {
+						await input.archiveHistory?.(history);
+					} catch (error) {
+						console.warn("Context archive failed at in-stream compaction.", {
+							message:
+								error instanceof Error ? redactSecrets(error.message, 200) : "",
+						});
+					}
+					history = await afterCompaction(inStream, history);
+				}
 				history = (await input.afterTools?.(history)) ?? history;
-				if (
+				if (inStream) measured = undefined;
+				else if (
 					step.usage.inputTokens !== undefined &&
 					step.usage.outputTokens !== undefined
 				)

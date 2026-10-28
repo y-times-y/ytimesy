@@ -193,3 +193,61 @@ it("reports a compaction it cannot do as the harness's own failure, never a prov
 		expect.anything(),
 	);
 });
+
+it("continues from the provider's in-stream checkpoint without resending what it replaced", async () => {
+	let call = 0;
+	const model = new MockLanguageModelV4({
+		...summary,
+		doStream: async () => {
+			call++;
+			if (call === 2)
+				return stream([
+					// OpenAI context_management: the input was compacted in-stream.
+					{
+						type: "custom",
+						kind: "openai.compaction",
+						providerMetadata: {
+							openai: { itemId: "cmp_1", encryptedContent: "checkpoint" },
+						},
+					},
+					...toolStep(2),
+				]);
+			return stream(call === 1 ? toolStep(1) : answer);
+		},
+	});
+	const run = tool({
+		inputSchema: z.object({ step: z.number() }),
+		execute: async ({ step }) => `output ${step}`,
+	});
+	const archiveHistory = vi.fn(async () => "archive:fixture");
+	const messages = await runModelAgent(
+		{
+			userId: "owner",
+			modelId: "gpt-6-astra",
+			instructions: "Work",
+			messages: [{ role: "user", content: "Solve the task" }],
+			tools: { run },
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+			archiveHistory,
+			isUserRequest: (message) =>
+				message.role === "user" && message.content === "Solve the task",
+		},
+		{ model, contextWindow: 1_050_000, fallbackContextPolicy: "whole-turns" },
+	);
+	expect(model.doGenerateCalls).toHaveLength(0);
+	expect(archiveHistory).toHaveBeenCalledOnce();
+	const third = model.doStreamCalls[2].prompt;
+	expect(pairedToolSequences(third)).toBe(true);
+	const text = JSON.stringify(third);
+	// Step 1 (before the checkpoint) is not resent; the request is, verbatim.
+	expect(text).not.toContain("call_1");
+	expect(text).toContain("Solve the task");
+	const roles = third.map((message) => message.role);
+	expect(roles).toEqual(["system", "user", "assistant", "assistant", "tool"]);
+	expect(third[2].content).toEqual([
+		expect.objectContaining({ type: "custom", kind: "openai.compaction" }),
+	]);
+	expect(messages.at(-1)).toMatchObject({ role: "assistant" });
+});
