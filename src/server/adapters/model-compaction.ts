@@ -15,19 +15,24 @@ export type NativeCompactionInput = {
 	signal: AbortSignal;
 };
 
-/** Reuse the SDK's Responses encoding and decoding; only the documented endpoint differs. */
+/**
+ * Reuse the SDK's Responses encoding and decoding; only the documented
+ * endpoint (POST /responses/compact) differs. `wrapModel` (an evaluation's
+ * spending guard) sees each compaction request as one model request.
+ */
 export function responsesEndpointCompactor(input: {
 	baseUrl: string;
 	apiKey: string;
 	modelId: string;
 	fetch: typeof globalThis.fetch;
+	wrapModel?: (model: LanguageModel) => LanguageModel;
 }) {
 	return async (context: NativeCompactionInput) => {
 		context.signal.throwIfAborted();
 		let retainedOrder: Array<ModelMessage | string> = [];
 		const openaiEndpoint =
 			new URL(input.baseUrl).origin === "https://api.openai.com";
-		const model = createOpenAI({
+		const endpoint = createOpenAI({
 			apiKey: input.apiKey,
 			baseURL: input.baseUrl,
 			fetch: async (url, init) => {
@@ -98,6 +103,7 @@ export function responsesEndpointCompactor(input: {
 				});
 			},
 		}).responses(input.modelId);
+		const model = input.wrapModel ? input.wrapModel(endpoint) : endpoint;
 		const result = await generateText({
 			model,
 			...(openaiEndpoint ? {} : { system: context.instructions }),

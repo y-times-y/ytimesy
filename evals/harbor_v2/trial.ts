@@ -101,6 +101,7 @@ import {
 	ranTranscript,
 	reviewItems,
 } from "./review";
+import { describeRuntime } from "./runtime-description";
 import {
 	functionWebSearchTool,
 	SEARCH_REQUEST_INSTRUCTIONS,
@@ -554,6 +555,8 @@ export async function runHarborTrial(
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
+		// The preflight's egress check reads `context window <n>` from this log.
+		for (const line of describeRuntime(runtime, config)) log(line);
 		// effortMix=on: the root builder's own requests plan and continue at the
 		// turn's effort and execute at high (effort-mix.ts); children keep theirs.
 		const mix = config.variant.effortMix === "on" ? effortMix(log) : null;

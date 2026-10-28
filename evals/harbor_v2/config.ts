@@ -179,6 +179,13 @@ export type HarborBridgeConfig = {
 		endpoint: BedrockEndpoint;
 		baseUrl: string;
 		profile: BedrockInferenceProfile;
+		/**
+		 * OpenAI models: the provider's compaction (in-stream
+		 * context_management and POST /responses/compact) through the signed
+		 * transport, falling back to the harness's own on failure.
+		 * YTIMESY_HARBOR_BEDROCK_NATIVE_COMPACTION=off disables it.
+		 */
+		nativeCompaction: boolean;
 	} | null;
 };
 
@@ -370,11 +377,17 @@ function bedrockSettings(env: Env) {
 		throw new Error(
 			`YTIMESY_HARBOR_BEDROCK_ENDPOINT must be one of ${BEDROCK_ENDPOINTS.join(", ")}.`,
 		);
+	const native = env.YTIMESY_HARBOR_BEDROCK_NATIVE_COMPACTION || "on";
+	if (native !== "on" && native !== "off")
+		throw new Error(
+			"YTIMESY_HARBOR_BEDROCK_NATIVE_COMPACTION must be on or off.",
+		);
 	return {
 		region,
 		endpoint,
 		baseUrl: bedrockBaseUrl(region, endpoint),
 		profile,
+		nativeCompaction: native === "on",
 	};
 }
 

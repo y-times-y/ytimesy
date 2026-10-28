@@ -377,7 +377,9 @@ it("retires completed steps of one oversized active turn on the whole-turns poli
 		...step("b", "y".repeat(50_000)),
 		...step("c", "done"),
 	];
-	const summarize = vi.fn(async () => "Earlier steps complete.");
+	const summarize = vi.fn(
+		async (_older: ModelMessage[]) => "Earlier steps complete.",
+	);
 	const result = await compactApiHistory(
 		messages,
 		summarize,

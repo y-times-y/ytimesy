@@ -389,6 +389,44 @@ export function retainedUserMessages(
 	];
 }
 
+const isCompactionItem = (part: { type: string; kind?: string }) =>
+	part.type === "custom" && part.kind === "openai.compaction";
+
+/**
+ * After a response in which the provider compacted the request's input
+ * in-stream (OpenAI context_management), the history to send next: the
+ * earlier user requests verbatim (as after any compaction), then the
+ * response with its compaction item in the order the provider produced it.
+ * The checkpoint stands for everything before it, so nothing earlier is
+ * resent. Null when the response carries no compaction item.
+ */
+export function inStreamCompactedHistory(
+	before: readonly ModelMessage[],
+	response: readonly ModelMessage[],
+	isUserRequest: UserRequestPredicate | undefined,
+	maxCharacters: number,
+): ModelMessage[] | null {
+	const at = response.findIndex(
+		(message) =>
+			message.role === "assistant" &&
+			Array.isArray(message.content) &&
+			message.content.some(isCompactionItem),
+	);
+	if (at < 0) return null;
+	const message = response[at] as Extract<ModelMessage, { role: "assistant" }>;
+	const content = message.content as Exclude<typeof message.content, string>;
+	let last = content.length - 1;
+	while (!isCompactionItem(content[last])) last--;
+	const rest = content.slice(last + 1);
+	return [
+		...retainedUserMessages(before, [], isUserRequest, maxCharacters),
+		...response.slice(0, at),
+		{ ...message, content: content.slice(0, last + 1) },
+		...(rest.length ? [{ ...message, content: rest }] : []),
+		...response.slice(at + 1),
+	];
+}
+
 /** Bounded by the compaction threshold so retained requests cannot crowd out work. */
 export function userMessageBudget(budget: ContextBudget) {
 	return Math.max(
