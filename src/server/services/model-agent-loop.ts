@@ -782,8 +782,12 @@ async function executeModelSteps(
 			snapshot = (
 				await input.compactionSnapshot?.(original, runSignal)
 			)?.trim();
-		} catch {
+		} catch (error) {
 			// State is best effort; the archive tools and workspace remain available.
+			console.warn("Compaction state snapshot failed; continuing without it.", {
+				message:
+					error instanceof Error ? redactSecrets(error.message, 200) : "",
+			});
 		}
 		if (!snapshot) return restored;
 		const withSnapshot: ModelMessage[] = [
