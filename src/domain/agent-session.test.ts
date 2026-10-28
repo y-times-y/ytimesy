@@ -12,6 +12,27 @@ import {
 	workspaceCopyCapacityRetryDelaysMs,
 } from "./agent-session";
 
+describe("chatsFromAgentSessions branches", () => {
+	it("lists the composer's branch so the chat's first paint shows it", () => {
+		const [picked, working, none] = chatsFromAgentSessions([
+			{
+				id: "a",
+				title: "a",
+				selectedBranch: "release",
+				workingBranch: "ytimesy/a",
+			},
+			{ id: "b", title: "b", workingBranch: "ytimesy/b" },
+			{ id: "c", title: "c" },
+		]);
+		expect(picked).toMatchObject({
+			selectedBranch: "release",
+			workingBranch: "ytimesy/a",
+		});
+		expect(working).toMatchObject({ selectedBranch: "ytimesy/b" });
+		expect(none).not.toHaveProperty("selectedBranch");
+	});
+});
+
 describe("sessionMachinePlan", () => {
 	it("resumes a session that already has its own VM", () => {
 		expect(
