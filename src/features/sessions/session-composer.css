@@ -1858,6 +1858,34 @@ details[open] > summary .session-activity-chevron {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.base-branch-select,
+.base-branch-current {
+	flex: 0 1 auto;
+	max-width: 220px;
+}
+.base-branch-select {
+	cursor: pointer;
+}
+.base-branch-current {
+	cursor: default;
+}
+.base-branch-current:hover {
+	color: rgba(255, 255, 255, 0.5);
+}
+.base-branch-from {
+	flex-shrink: 0;
+	color: rgba(255, 255, 255, 0.35);
+}
+.base-branch-name,
+.base-branch-current span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.base-branch-picker {
+	width: min(320px, calc(100vw - 24px));
+}
 @media (pointer: coarse) {
 	.composer-select,
 	.context-select {
