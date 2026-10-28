@@ -1,6 +1,8 @@
 import type { Project } from "#/domain/projects";
 import {
+	defaultChatBaseBranch,
 	isGeneratedSessionBranch,
+	isValidBranchName,
 	sessionBranchName,
 } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
@@ -25,6 +27,8 @@ export async function commitChatBranchForSubmission(input: {
 	text: string;
 	/** The chat as the caller just read it (by id, for this user), saving a read. */
 	session?: AgentSessionRecord | null;
+	/** The branch a new chat starts from; ignored once the chat has a conversation. */
+	baseBranch?: string;
 }) {
 	const session =
 		input.session !== undefined && input.session?.id === input.sessionId
@@ -61,8 +65,13 @@ export async function commitChatBranchForSubmission(input: {
 		project.installationId,
 		project.repositoryId,
 	);
+	// The branch the person picked for a new chat is its base: its own branch
+	// starts there, its checkout fetches it and its pull requests target it.
+	const chosen = hasConversation
+		? undefined
+		: await existingBaseBranch(input.baseBranch, token, repository.fullName);
 	const selected =
-		session.selectedBranch ?? projectBaseBranch(project, repository);
+		chosen ?? session.selectedBranch ?? projectBaseBranch(project, repository);
 	const branch = hasConversation
 		? selected
 		: await availableChatBranchName({
@@ -81,10 +90,28 @@ export function projectBaseBranch(
 	project: Pick<Project, "branch">,
 	repository: { readonly defaultBranch: string },
 ) {
-	const branch = project.branch?.trim();
-	return branch && !isGeneratedSessionBranch(branch)
-		? branch
-		: repository.defaultBranch;
+	return defaultChatBaseBranch({
+		projectBranch: project.branch,
+		defaultBranch: repository.defaultBranch,
+	});
+}
+
+/**
+ * A picked base branch, checked: a valid name, not another chat's own
+ * branch, and present on GitHub now. No pick is undefined.
+ */
+async function existingBaseBranch(
+	branch: string | undefined,
+	token: string,
+	fullName: string,
+) {
+	const name = branch?.trim();
+	if (!name) return undefined;
+	if (!isValidBranchName(name) || isGeneratedSessionBranch(name))
+		throw new Error("Choose a repository branch to start from.");
+	if (!(await repositoryBranchSha(token, fullName, name)))
+		throw new Error(`${name} is no longer on GitHub. Choose another branch.`);
+	return name;
 }
 
 const CHAT_BRANCH_ATTEMPTS = 6;

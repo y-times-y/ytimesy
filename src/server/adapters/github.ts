@@ -176,18 +176,30 @@ export async function authorizedRepository(
 		);
 	return repository;
 }
+/** Pages of 100 a branch listing reads at most; search narrows the rest. */
+const BRANCH_LIST_PAGES = 10;
+
 export async function listBranches(
 	token: string,
 	repository: RepositoryChoice,
 ) {
 	const [owner, repo] = repository.fullName.split("/");
 	const github = githubClient(token);
-	const branches = await github.paginate(github.repos.listBranches, {
-		owner,
-		repo,
-		per_page: 100,
-	});
-	return branches.map((branch) => branch.name);
+	let pages = 0;
+	let truncated = false;
+	const names = await github.paginate(
+		github.repos.listBranches,
+		{ owner, repo, per_page: 100 },
+		(response, done) => {
+			pages += 1;
+			if (pages >= BRANCH_LIST_PAGES) {
+				truncated = response.data.length === 100;
+				done();
+			}
+			return response.data.map((branch) => branch.name);
+		},
+	);
+	return { names, truncated };
 }
 
 export async function repositoryBranchSha(

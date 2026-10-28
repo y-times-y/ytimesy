@@ -229,6 +229,8 @@ type PendingSend = {
 	/** Continue on the fallback route the user approved after an outage. */
 	readonly continueOn?: string;
 	readonly attachments?: readonly IncomingAttachment[];
+	/** The branch a new chat starts from, when the person picked one. */
+	readonly baseBranch?: string;
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
@@ -2233,6 +2235,7 @@ export function WorkspaceHome({
 						...(pending.attachments?.length
 							? { attachments: [...pending.attachments] }
 							: {}),
+						...(pending.baseBranch ? { baseBranch: pending.baseBranch } : {}),
 					},
 				}),
 				SEND_TIMEOUT_MS,
@@ -2621,6 +2624,9 @@ export function WorkspaceHome({
 												: {}),
 											...(options?.attachments?.length
 												? { attachments: options.attachments }
+												: {}),
+											...(options?.baseBranch
+												? { baseBranch: options.baseBranch }
 												: {}),
 											settle,
 										};
