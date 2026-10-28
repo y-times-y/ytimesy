@@ -3,6 +3,14 @@ import { type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
 import {
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	READER_DELEGATION_POLICY,
+	REFUSED_START,
+	REPORT_IS_A_CLAIM,
+	WRITER_DELEGATION_POLICY,
+} from "../../src/domain/delegation-policy";
+import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
 	liveChildrenAllowed,
@@ -39,32 +47,32 @@ export const HELPER_ROLES = ["researcher", "reviewer"] as const;
 /** helpers=write adds a writer in the builder's own checkout. */
 export const WRITE_HELPER_ROLES = [...HELPER_ROLES, "writer"] as const;
 export type HelperRole = (typeof WRITE_HELPER_ROLES)[number];
-/** As many live helpers as the product lets a builder run children. */
 /**
  * The builder's prompt section for helpers=on, in place of the product's
- * orchestrator section: helpers here are read-only, their reports are
- * collected with agent_wait (no mailbox), and every helper is paid for, so
- * the bar is cost, not wall-clock time alone.
+ * orchestrator section: the product's delegation policy
+ * (src/domain/delegation-policy.ts) with the bridge's mechanics: helpers
+ * here are read-only, on their own copy of the checkout, and their reports
+ * are collected with agent_wait (no mailbox).
  */
 export const HELPER_INSTRUCTIONS = [
 	"Helpers: `agent` starts a read-only helper (researcher or reviewer) in the background on its own copy of your checkout, with only your brief, and returns its id at once. `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
-	"A helper costs about as much as you do and re-reads what it needs. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
-	"Every brief is self-contained: the goal, the paths and findings it needs, constraints and the report format.",
-	"Keep working while helpers run. Once you have what you need, stop running helpers with agent_send instead of waiting for them.",
-	"A report is a claim: spot-check it before relying on it. A refused start means do the work yourself.",
+	READER_DELEGATION_POLICY,
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	`${REPORT_IS_A_CLAIM} ${REFUSED_START}`,
 ].join("\n");
 
 /**
- * helpers=write's section: the read-only helpers' rules plus writers in the
- * builder's own checkout, decided once, right after reading the task, for
- * long work that splits into independent parts, each with its own files.
+ * helpers=write's section: the same policy plus its writer rule; the
+ * mechanic is a writer in the builder's own checkout, limited to `owns`.
  */
 export const WRITE_HELPER_INSTRUCTIONS = [
 	"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (in your own checkout, changing only the paths you list in `owns`). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
-	"Writers: decide once, after your first look at the task and its files, and never later. Start writers only when the work splits into two or more parts that can be built and checked separately and each part is a large job on its own (hours of work or thousands of lines). Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. Otherwise do all the work yourself.",
+	WRITER_DELEGATION_POLICY,
 	...HELPER_INSTRUCTIONS.split("\n").slice(1),
 ].join("\n");
 
+/** As many live helpers as the product lets a builder run children. */
 export const MAX_LIVE_HELPERS = liveChildrenAllowed(0);
 const MAX_WAIT_MS = 10 * 60_000;
 
