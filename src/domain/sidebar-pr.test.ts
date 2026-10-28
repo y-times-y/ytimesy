@@ -3,8 +3,10 @@ import { workspacePublicationBranch } from "./publication";
 import {
 	pullRequestPanelRepository,
 	pullRequestsAcrossRepositories,
+	savedListedPullRequest,
 	sidebarChatPrMarkForWorkspace,
 	sidebarChatPrNeedFromPullRequest,
+	sidebarChatPrNeedLabel,
 } from "./sidebar-pr";
 
 describe("sidebarChatPrNeedFromPullRequest", () => {
@@ -229,5 +231,36 @@ describe("pull requests across a project's repositories", () => {
 			pullRequestPanelRepository({ repositories: [primary, secondary] }),
 		).toEqual({ installationId: 1, repositoryId: 10 });
 		expect(pullRequestPanelRepository({ repositories: [] })).toBeUndefined();
+	});
+});
+
+describe("savedListedPullRequest", () => {
+	const saved = {
+		number: 7,
+		url: "https://github.com/o/r/pull/7",
+		checks: null,
+		failedChecks: 0,
+	} as const;
+	const label = (
+		state: "open" | "draft" | "merged" | "closed",
+		checks: "failed" | null = null,
+	) =>
+		sidebarChatPrNeedLabel(
+			sidebarChatPrNeedFromPullRequest(
+				savedListedPullRequest({ ...saved, state, checks }, "ytimesy/a"),
+			),
+		);
+	it("reads as the PR the sidebar saved until the live list is read", () => {
+		expect(
+			savedListedPullRequest({ ...saved, state: "open" }, "ytimesy/a"),
+		).toMatchObject({
+			number: 7,
+			head: "ytimesy/a",
+		});
+		expect(label("draft")).toBe("Draft pull request");
+		expect(label("merged")).toBe("Pull request merged");
+		expect(label("closed")).toBe("Pull request closed");
+		expect(label("open", "failed")).toBe("Checks failed");
+		expect(label("open")).toBe("Merge readiness not confirmed");
 	});
 });

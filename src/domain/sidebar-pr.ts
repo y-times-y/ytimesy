@@ -150,3 +150,24 @@ export function pullRequestPanelRepository(input: {
 		repositoryId: primary.repositoryId,
 	};
 }
+
+/**
+ * A chat's saved PR (sidebar cookie) as a listed one, shown until the live
+ * list is read. Readiness the save does not hold reads as not confirmed.
+ */
+export function savedListedPullRequest(
+	saved: SidebarPullRequest,
+	head: string,
+): ListedPullRequest {
+	return {
+		number: saved.number,
+		url: saved.url,
+		head,
+		draft: saved.state === "draft",
+		state:
+			saved.state === "merged" || saved.state === "closed" ? "closed" : "open",
+		merged: saved.state === "merged",
+		mergeable: null,
+		mergeableState: saved.checks === "failed" ? "unstable" : null,
+	};
+}
