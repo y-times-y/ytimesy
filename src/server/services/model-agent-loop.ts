@@ -22,6 +22,8 @@ import {
 	type ContextOverflow,
 	ContextWindowExhausted,
 	contextOverflow,
+	HarnessRuntimeFailure,
+	type HarnessRuntimeStage,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	SafeApiModelFailure,
@@ -585,6 +587,23 @@ export function overflowCompactionBudget(
 	};
 }
 
+/**
+ * A plain Error raised while preparing a step is the harness's own (context
+ * compaction, history checks, restored instructions): labelled so it never
+ * reads as a provider failure. Provider, abort and typed errors (budget
+ * stops, model switches, workspace failures) pass through unchanged.
+ */
+function harnessRuntimeError(error: unknown, stage: HarnessRuntimeStage) {
+	if (
+		!(error instanceof Error) ||
+		error.constructor !== Error ||
+		error.name !== "Error" ||
+		isBudgetStop(error)
+	)
+		return error;
+	return new HarnessRuntimeFailure(stage, error);
+}
+
 export type ModelAgentRuntime = {
 	model: LanguageModel;
 	cacheSettings?: ReturnType<typeof apiPromptCacheSettings>;
@@ -768,6 +787,14 @@ async function executeModelSteps(
 			: restored;
 	};
 	const backgroundCompaction = new BackgroundHistoryCompaction();
+	// What the running step preparation is doing, for labelHarnessErrors.
+	let stage: HarnessRuntimeStage = "step-preparation";
+	const labelHarnessErrors =
+		<T>(prepare: () => Promise<T>) =>
+		() =>
+			prepare().catch((error: unknown) => {
+				throw harnessRuntimeError(error, stage);
+			});
 	// Calls of the running step whose execution started. Its assistant message
 	// is saved only after every tool returns, so a stop meanwhile would lose them.
 	let startedCalls: Extract<
@@ -860,7 +887,8 @@ async function executeModelSteps(
 			messages: input.messages,
 			...requestSettings(input.instructions),
 			tools,
-			prepareStep: async () => {
+			prepareStep: labelHarnessErrors(async () => {
+				stage = "context-compaction";
 				startedCalls = [];
 				onInFlight?.(undefined);
 				runSignal.throwIfAborted();
@@ -869,6 +897,7 @@ async function executeModelSteps(
 						contextTokenPressure(history, measured) >=
 							contextBudget(history).compactAtTokens,
 				);
+				stage = "step-preparation";
 				if (runtime.prefetchInitialReads) {
 					const prefetched = await timed("model:prefetch", () =>
 						prefetchInitialAgentReads({
@@ -896,6 +925,7 @@ async function executeModelSteps(
 					? overflowCompactionBudget(contextBudget(history), forced)
 					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
+				stage = "context-compaction";
 				// Each compaction is a chance to switch models (the cache misses anyway).
 				const switchDecision =
 					input.switchAtCompaction &&
@@ -1100,6 +1130,7 @@ async function executeModelSteps(
 					measured = undefined;
 					await input.onStep(history);
 				}
+				stage = "step-preparation";
 				// Legacy observations and restored summaries may end in assistant text.
 				// Append an input boundary, never rewrite signed or encrypted provider history.
 				if (history.at(-1)?.role === "assistant")
@@ -1127,7 +1158,7 @@ async function executeModelSteps(
 					),
 					...(order ? { activeTools: order, toolOrder: order } : {}),
 				};
-			},
+			}),
 			// SDK retries only retryable request-start failures (with backoff, like
 			// native Codex's request retries). Never replay a stream after output/tool execution.
 			maxRetries: 4,
@@ -1145,6 +1176,14 @@ async function executeModelSteps(
 				// A subagent stopped at its budget is the runtime's stop, not the provider's.
 				if (isBudgetStop(error)) {
 					console.warn("Agent budget stop", error.message);
+					return;
+				}
+				// The harness's own failure: its redacted message is the diagnosis.
+				if (error instanceof HarnessRuntimeFailure) {
+					console.warn("Harness runtime failed", {
+						...apiModelFailureClassification(error),
+						message: error.message,
+					});
 					return;
 				}
 				console.warn(
@@ -1412,6 +1451,7 @@ async function executeModelSteps(
 					// recognizes it (and hands the child's last message on) only unwrapped.
 					if (
 						part.error instanceof InitialAgentReadFailure ||
+						part.error instanceof HarnessRuntimeFailure ||
 						part.error instanceof ModelSwitchAtCompaction ||
 						isBudgetStop(part.error)
 					)
