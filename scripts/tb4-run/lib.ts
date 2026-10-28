@@ -351,6 +351,8 @@ export function nextLaunches(input: {
 	priority?: readonly string[];
 	/** Tasks whose trials in every open batch launch before anything else (the longest ones). */
 	frontload?: readonly string[];
+	/** Tasks the controller never launches (run elsewhere and folded in per the run doc). */
+	exclude?: readonly string[];
 }): LaunchDecision[] {
 	const { state } = input;
 	if (state.paused || state.stopped || !state.runId) return [];
@@ -370,7 +372,8 @@ export function nextLaunches(input: {
 	};
 	// GPU tasks first: they are the long pole; among them the largest
 	// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
-	const ordered = [...input.tasks].sort(
+	const excluded = new Set(input.exclude ?? []);
+	const ordered = [...input.tasks].filter((t) => !excluded.has(t.name)).sort(
 		(a, b) =>
 			b.gpus - a.gpus ||
 			(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
