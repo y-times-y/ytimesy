@@ -168,21 +168,31 @@ function historySplit(
 	if (currentUser === undefined)
 		throw new Error("Cannot compact history without a current user request.");
 	const priorUser = userTurns.at(-2);
-	if (policy !== "completed-steps") {
-		if (
-			currentUser === 0 ||
-			estimateContextTokens(messages.slice(currentUser)) >= threshold
-		)
+	const activeTurnFits =
+		currentUser > 0 &&
+		estimateContextTokens(messages.slice(currentUser)) < threshold;
+	if (policy === "bound-prefix") {
+		if (!activeTurnFits)
 			throw new Error(
 				"The active turn cannot be safely compacted by this provider; original reasoning was preserved.",
 			);
 		const recent = messages.slice(currentUser);
-		if (policy === "bound-prefix" && recent.some(hasBoundReasoning))
+		if (recent.some(hasBoundReasoning))
 			throw new Error(
 				"Native compaction is required to preserve this turn's bound reasoning; original history was preserved.",
 			);
 		return { older: messages.slice(0, currentUser), recent };
 	}
+	if (policy === "whole-turns" && activeTurnFits)
+		return {
+			older: messages.slice(0, currentUser),
+			recent: messages.slice(currentUser),
+		};
+	// whole-turns past this point: one active turn (a benchmark task) outgrew
+	// the threshold alone. Its reasoning is not bound to the prefix (that is
+	// bound-prefix), so its completed steps retire as below: each older
+	// assistant message leaves with its own reasoning, tool calls and results,
+	// and the latest assistant/tool cycle stays whole.
 	const split =
 		priorUser !== undefined &&
 		priorUser > 0 &&
