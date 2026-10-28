@@ -25,7 +25,7 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
-import { boundedFreestyleFetch } from "./bounded-fetch";
+import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
 	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
@@ -97,14 +97,14 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const transport = boundedFreestyleFetch();
+	const transport = fastPollFreestyleFetch(boundedFreestyleFetch());
 	const freestyle = new Freestyle({
 		apiKey,
-		...(options.signal
-			? { fetch: abortableFreestyleFetch(options.signal, transport) }
+		fetch: options.signal
+			? abortableFreestyleFetch(options.signal, transport)
 			: stepTimingEnabled()
-				? { fetch: timedFetch("freestyle", transport) }
-				: {}),
+				? timedFetch("freestyle", transport)
+				: transport,
 	});
 
 	const machines: WorkspaceMachines &

@@ -450,19 +450,12 @@ fi
 export function probeWorkspaceDesktop(credentialDigest: string) {
 	if (!/^[a-f0-9]{64}$/.test(credentialDigest))
 		throw new Error("Desktop credential digest must be SHA-256 hex.");
-	return `python3 - <<'PY'
-import socket
-probe = socket.socket()
-probe.settimeout(1)
-try:
-    probe.connect(("127.0.0.1", 6080))
-    with open("${DESKTOP_AUTH_APPLIED}") as applied:
-        current = applied.read().strip() == "${credentialDigest}"
-    print("YTIMESY_DESKTOP_UP" if current else "YTIMESY_DESKTOP_DOWN")
-except Exception:
-    print("YTIMESY_DESKTOP_DOWN")
-finally:
-    probe.close()
-PY
+	// Plain bash: python3 alone took seconds on a just-resumed guest. The
+	// timeout covers bash starting there too, so it is not 1 s.
+	return `if timeout 5 bash -c ': </dev/tcp/127.0.0.1/6080' 2>/dev/null && [ "$(cat ${DESKTOP_AUTH_APPLIED} 2>/dev/null)" = "${credentialDigest}" ]; then
+  echo YTIMESY_DESKTOP_UP
+else
+  echo YTIMESY_DESKTOP_DOWN
+fi
 `;
 }

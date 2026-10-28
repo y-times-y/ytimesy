@@ -110,7 +110,7 @@ it("without a credential, stops an open public proxy and listens on loopback onl
 
 it("probes for the credential it expects and refuses anything but a digest", () => {
 	const digest = "a".repeat(64);
-	expect(probeWorkspaceDesktop(digest)).toContain(`== "${digest}"`);
+	expect(probeWorkspaceDesktop(digest)).toContain(`= "${digest}" ]`);
 	expect(() => probeWorkspaceDesktop("$(reboot)")).toThrow();
 });
 
