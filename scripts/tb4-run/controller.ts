@@ -14,6 +14,10 @@
  *     score [--codex benchmarks/evaluation/codex-public-job.json] [--reason-job <reason-job.json>]
  *     init ... --open-all            Astra x5 rule: both batches open at init, no batch-2 gate
  *
+ *     gpu-status | gpu-budget <usd> | gpu-spent <usd> | gpu-costs [--dataset <dir>]
+ *                          the GPU lane (TB4_GPU_LANE=daytona + TB4_GPU_RUNNER=<host>,
+ *                          or TB4_GPU_LANE=docker + TB4_GPU_HOST=<p5 host>)
+ *
  *     tasks [--dataset <dir>]   write tasks.json from each task.toml (default: Harbor's
  *                          dataset cache ~/.cache/harbor/tasks/packages/terminal-bench)
  *
@@ -33,6 +37,30 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
+	awsGpuHostHourly,
+	type HostMarket,
+	hostTypicalUsd,
+	hostWorstCaseUsd,
+	typicalUsd,
+	worstCaseUsd,
+} from "./gpu-cost.ts";
+import {
+	type BillingInterval,
+	GPU_LANE_JOURNAL,
+	type GpuLaneOps,
+	type GpuTarget,
+	gpuLaneTick,
+	hostIntervals,
+	isLaneHost,
+	type LaneConfig,
+	type LaneEvent,
+	type LiveSandbox,
+	laneConfig,
+	laneStatus,
+	readBudget,
+	writeBudget,
+} from "./gpu-lane.ts";
+import {
 	BATCHES,
 	batch2Decision,
 	bridgeLogEvidence,
@@ -42,13 +70,13 @@ import {
 	earlyStopGates,
 	errorSpike,
 	failureCause,
+	finishAttempt,
 	floorCeiling,
 	type HarborResult,
 	type Host,
 	type HostObservation,
 	Journal,
 	lastModelCallFailed,
-	needsReview,
 	nextLaunches,
 	pairedComparison,
 	passAt1,
@@ -369,6 +397,189 @@ export function sshHostOps(runDir: string): HostOps {
 	};
 }
 
+/** A hosts.json entry as provision.py / gpu-capacity.py write it. */
+type FleetHost = Host & {
+	type?: string;
+	launchedAt?: number | string;
+	stoppedAt?: number | string;
+	market?: HostMarket;
+};
+
+/**
+ * The GPU lane's ops. `daytona`: trials run on a runner host (`TB4_GPU_RUNNER`)
+ * under systemd-run with Harbor's Daytona environment (host/run-gpu-trial.sh);
+ * sandboxes are listed and deleted by host/daytona/daytona-ctl.py there (the key
+ * stays on that host, 0600). `docker`: trials run on the AWS GPU host itself with
+ * run-trial.sh (Harbor's docker environment), exactly as CPU trials do.
+ */
+export function gpuLaneOps(
+	runDir: string,
+	target: GpuTarget,
+	host: Host,
+): GpuLaneOps {
+	const hostOps = sshHostOps(runDir);
+	const base = {
+		target,
+		observe: (attemptId: string, launchedAt: string) =>
+			hostOps.observe(host, attemptId, launchedAt),
+		collect: (attemptId: string) => hostOps.collect(host, attemptId),
+	};
+	if (target.kind === "docker")
+		return {
+			...base,
+			launch: (attemptId, task) => hostOps.launch(host, attemptId, task),
+			cleanup: (attemptId) => hostOps.cleanup?.(host, attemptId) ?? "",
+			sandboxLog: () => [],
+			liveSandboxes() {
+				// The GPU is free when no trial unit runs on the host (one trial at a time).
+				try {
+					const units = ssh(
+						host,
+						"systemctl list-units 'tb4-trial-*' --state=active,activating --no-legend --plain | awk '{print $1}'",
+						30_000,
+					)
+						.split("\n")
+						.map((l) => l.trim())
+						.filter(Boolean);
+					return {
+						ok: true,
+						sandboxes: units.map((u) => ({
+							id: u,
+							state: "active",
+							gpus: 1,
+							cpus: 0,
+							memoryGiB: 0,
+							storageGiB: 0,
+							lane: false,
+						})),
+					};
+				} catch (error) {
+					return { ok: false, why: String(error).slice(0, 160) };
+				}
+			},
+			deleteSandboxes: () => "",
+		};
+	const ctl = (args: string) =>
+		ssh(
+			host,
+			`sudo -u ubuntu /opt/tb4/hd/bin/python -I /opt/tb4/daytona/daytona-ctl.py ${args}`,
+			180_000,
+		);
+	return {
+		...base,
+		launch(attemptId, task) {
+			ssh(
+				host,
+				`sudo systemd-run --unit=tb4-trial-${safeId(attemptId)} --property=Restart=no /opt/tb4/run-gpu-trial.sh ${safeId(task)} ${safeId(attemptId)}`,
+			);
+		},
+		sandboxLog(attemptId) {
+			const local = join(
+				runDir,
+				"results",
+				attemptId,
+				"daytona-sandboxes.jsonl",
+			);
+			try {
+				const text = existsSync(local)
+					? readFileSync(local, "utf8")
+					: ssh(
+							host,
+							`cat /opt/tb4/jobs/${safeId(attemptId)}/daytona-sandboxes.jsonl 2>/dev/null || true`,
+						);
+				return text.split("\n").filter((l) => l.trim());
+			} catch {
+				return [];
+			}
+		},
+		liveSandboxes() {
+			try {
+				return {
+					ok: true,
+					sandboxes: JSON.parse(ctl("list")) as LiveSandbox[],
+				};
+			} catch (error) {
+				return { ok: false, why: String(error).slice(0, 160) };
+			}
+		},
+		deleteSandboxes(ids) {
+			return ctl(`delete ${ids.map(safeId).join(" ")}`).trim();
+		},
+	};
+}
+
+/** Hourly price of a hosts.json GPU host (its `type` and `market`, default on-demand). */
+export function gpuHostHourly(
+	h: FleetHost,
+	env: Record<string, string | undefined> = process.env,
+) {
+	return awsGpuHostHourly(
+		h.type ?? "p5.4xlarge",
+		h.market ?? ((env.TB4_GPU_HOST_MARKET as HostMarket) || "on-demand"),
+		env,
+	);
+}
+
+/** Uptime of every GPU host in hosts.json: billed per host-hour, trials or not. */
+export function gpuHostBilling(
+	hosts: FleetHost[],
+	now: string,
+	env: Record<string, string | undefined> = process.env,
+): BillingInterval[] {
+	return hostIntervals(
+		hosts
+			.filter((h) => h.kind === "gpu")
+			.map((h) => ({
+				name: h.name,
+				launchedAt: h.launchedAt,
+				stoppedAt: h.stoppedAt,
+				hourlyUsd: gpuHostHourly(h, env),
+			})),
+		now,
+	);
+}
+
+/**
+ * The GPU lane from the environment (undefined when TB4_GPU_LANE is unset):
+ * `daytona` needs TB4_GPU_RUNNER, `docker` needs TB4_GPU_HOST (a kind "gpu" host).
+ */
+export function gpuLaneFromEnv(
+	runDir: string,
+	hosts: FleetHost[],
+	env: Record<string, string | undefined> = process.env,
+) {
+	const kind = env.TB4_GPU_LANE;
+	if (!kind) return undefined;
+	let target: GpuTarget;
+	let host: FleetHost | undefined;
+	if (kind === "daytona") {
+		host = hosts.find((h) => h.name === env.TB4_GPU_RUNNER);
+		if (!host)
+			throw new Error(
+				`TB4_GPU_LANE=daytona needs TB4_GPU_RUNNER=<a hosts.json name>; got ${env.TB4_GPU_RUNNER ?? "unset"}`,
+			);
+		target = { kind: "daytona" };
+	} else if (kind === "docker") {
+		host = hosts.find((h) => h.name === env.TB4_GPU_HOST && h.kind === "gpu");
+		if (!host)
+			throw new Error(
+				`TB4_GPU_LANE=docker needs TB4_GPU_HOST=<a kind "gpu" hosts.json name>; got ${env.TB4_GPU_HOST ?? "unset"}`,
+			);
+		target = {
+			kind: "docker",
+			host: host.name,
+			hourlyUsd: gpuHostHourly(host, env),
+		};
+	} else throw new Error(`TB4_GPU_LANE must be daytona or docker; got ${kind}`);
+	return {
+		ops: gpuLaneOps(runDir, target, host),
+		lane: new Journal<LaneEvent>(join(runDir, GPU_LANE_JOURNAL)),
+		config: laneConfig(env, reviewConfig(env).stage1),
+		budget: () => readBudget(runDir, env),
+		hostBilling: (now: string) => gpuHostBilling(hosts, now, env),
+	};
+}
+
 export function tick(input: {
 	runDir: string;
 	journal: Journal;
@@ -378,6 +589,14 @@ export function tick(input: {
 	now?: () => string;
 	/** Review gate, error spike and stage-1 settings; default from TB4_* env (reviewConfig). */
 	review?: ReviewConfig;
+	/** The GPU lane (TB4_GPU_LANE): its tasks leave CPU scheduling and stage 1. */
+	gpuLane?: {
+		ops: GpuLaneOps;
+		lane: Journal<LaneEvent>;
+		config: LaneConfig;
+		budget: () => ReturnType<typeof readBudget>;
+		hostBilling?: (now: string) => BillingInterval[];
+	};
 }) {
 	const now = input.now ?? (() => new Date().toISOString());
 	const { journal, ops } = input;
@@ -385,9 +604,12 @@ export function tick(input: {
 	const hostByName = new Map(input.hosts.map((h) => [h.name, h]));
 	let state = replay(journal.events());
 	const log: string[] = [];
-	const exclude = process.env.TB4_EXCLUDE_TASKS?.split(",")
-		.map((t) => t.trim())
-		.filter(Boolean);
+	const exclude = [
+		...(process.env.TB4_EXCLUDE_TASKS?.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean) ?? []),
+		...(input.gpuLane?.config.order ?? []),
+	];
 	// Every finish carries its cause; a cause that is not benign holds new
 	// launches until the operator acks it (the trial still scores as classified).
 	const finish = (
@@ -396,33 +618,23 @@ export function tick(input: {
 		outcome: TrialOutcome,
 		result?: HarborResult,
 	) => {
-		const cause = failureCause(outcome, result);
-		journal.append({
+		const held = finishAttempt({
+			journal,
+			review,
 			at: now(),
-			type: "finish",
 			attemptId,
+			task,
 			outcome,
-			...(cause ? { cause } : {}),
+			result,
 		});
-		if (cause && needsReview(cause, review)) {
-			journal.append({
-				at: now(),
-				type: "review-needed",
-				attemptId,
-				task,
-				cause: cause.cause,
-				detail: cause.detail,
-			});
-			log.push(
-				`REVIEW ${attemptId}: ${cause.cause}: ${cause.detail}; launches held until \`controller.ts ack ${attemptId} --note ...\``,
-			);
-			return true;
-		}
-		return false;
+		if (held) log.push(held);
+		return !!held;
 	};
 	// 1. Reconcile every unfinished attempt (this is also the restart path).
 	for (const a of state.attempts.values()) {
 		if (a.status === "finished") continue;
+		// GPU-lane attempts are reconciled by the lane (gpuLaneTick), even when it is off.
+		if (isLaneHost(a.host)) continue;
 		const host = hostByName.get(a.host);
 		if (!host) {
 			finish(a.attemptId, a.task, {
@@ -591,6 +803,20 @@ export function tick(input: {
 			if (held) break;
 		}
 	}
+	// 3. The GPU lane: one GPU trial at a time, budget permitting.
+	if (input.gpuLane)
+		for (const line of gpuLaneTick({
+			journal,
+			lane: input.gpuLane.lane,
+			tasks: input.tasks,
+			ops: input.gpuLane.ops,
+			budget: input.gpuLane.budget(),
+			hostBilling: input.gpuLane.hostBilling?.(now()),
+			config: input.gpuLane.config,
+			review,
+			now,
+		}))
+			log.push(line);
 	return log;
 }
 
@@ -789,6 +1015,7 @@ async function main() {
 				hosts: hosts(),
 				tasks: tasks(),
 				ops: sshHostOps(runDir),
+				gpuLane: gpuLaneFromEnv(runDir, hosts()),
 			}))
 				console.log(line);
 			break;
@@ -801,6 +1028,7 @@ async function main() {
 						hosts: hosts(),
 						tasks: tasks(),
 						ops: sshHostOps(runDir),
+						gpuLane: gpuLaneFromEnv(runDir, hosts()),
 					}))
 						console.log(`${at()} ${line}`);
 				} catch (error) {
@@ -926,6 +1154,106 @@ async function main() {
 					2,
 				),
 			);
+			break;
+		}
+		case "gpu-status": {
+			const lane = gpuLaneFromEnv(runDir, hosts());
+			console.log(
+				JSON.stringify(
+					laneStatus({
+						state: replay(journal.events()),
+						tasks: tasks(),
+						events: new Journal<LaneEvent>(
+							join(runDir, GPU_LANE_JOURNAL),
+						).events(),
+						budget: readBudget(runDir),
+						config:
+							lane?.config ??
+							laneConfig(process.env, reviewConfig(process.env).stage1),
+						target: lane?.ops.target,
+						hostBilling: gpuHostBilling(hosts(), at()),
+					}),
+					null,
+					2,
+				),
+			);
+			break;
+		}
+		case "gpu-budget": {
+			// The lane's total GPU budget (all providers), from its first trial; re-read every tick.
+			const usd = Number(arg);
+			if (!arg || !Number.isFinite(usd) || usd < 0)
+				throw new Error("usage: gpu-budget <total GPU budget in USD>");
+			console.log(JSON.stringify(writeBudget(runDir, { budgetUsd: usd })));
+			break;
+		}
+		case "gpu-spent": {
+			// The actual GPU spend so far (Daytona billing + the GPU hosts' cost) replaces the estimate up to now.
+			const usd = Number(arg);
+			if (!arg || !Number.isFinite(usd) || usd < 0)
+				throw new Error("usage: gpu-spent <actual GPU spend in USD>");
+			console.log(
+				JSON.stringify(
+					writeBudget(runDir, { actualSpentUsd: usd, actualAt: at() }),
+				),
+			);
+			break;
+		}
+		case "gpu-costs": {
+			// Worst case (task.toml limits) and typical (Codex's public mean trial time), per target.
+			const cfg = laneConfig(process.env, true);
+			const codexPath = values.codex ?? "";
+			const codex = existsSync(codexPath)
+				? (JSON.parse(readFileSync(codexPath, "utf8")) as {
+						tasks: Record<string, { meanSeconds?: number }>;
+					})
+				: { tasks: {} as Record<string, { meanSeconds?: number }> };
+			const list = values.dataset ? loadTasks(values.dataset) : tasks();
+			const r2 = (x: number) => Math.round(x * 100) / 100;
+			const p5 = gpuHostHourly({
+				name: "p5",
+				kind: "gpu",
+				vcpu: 16,
+				memoryMb: 0,
+				address: "",
+			});
+			for (const t of list) {
+				if (!t.gpuSpec) continue;
+				const w = worstCaseUsd(t.gpuSpec, cfg.overheadSec);
+				const hw = hostWorstCaseUsd(t.gpuSpec, p5, cfg.overheadSec);
+				const mean = codex.tasks[t.name]?.meanSeconds;
+				console.log(
+					JSON.stringify({
+						task: t.name,
+						daytona: {
+							worstCaseUsd: r2(w.usd),
+							worstHours: r2(w.hours),
+							...(mean
+								? {
+										typicalUsd: r2(
+											typicalUsd(t.gpuSpec, mean, cfg.overheadSec),
+										),
+									}
+								: {}),
+						},
+						awsP5: {
+							hourlyUsd: p5,
+							worstCaseUsd: r2(hw.usd),
+							worstHours: r2(hw.hours),
+							...(mean
+								? {
+										typicalUsd: r2(
+											hostTypicalUsd(t.gpuSpec, mean, p5, cfg.overheadSec),
+										),
+									}
+								: {}),
+						},
+						...(mean
+							? { typicalBasis: `Codex public mean ${mean}s per trial` }
+							: {}),
+					}),
+				);
+			}
 			break;
 		}
 		case "score":
