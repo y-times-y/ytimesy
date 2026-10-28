@@ -137,39 +137,17 @@ and the journal records `type: "gate"` and `type: "stop"` with the reason.
 
 ## Amendments
 
-None.
-
-## Model rate limits (no quota increase)
-
-Bedrock lists Astra limits only for the cross-region profiles (4M tokens/min each); the
-mantle route this run uses has no published Astra limit. Instead of a quota increase:
-- `TB4_MAX_IN_FLIGHT=30` caps trials in flight across the fleet (16 at once ran clean on
-  2026-10-27). Raise it in steps of 10 only after 30 minutes with no `throttle` lines in the
-  hosts' transport logs.
-- A throttled model request (429, or a 5xx before any output) is resent with backoff and
-  Retry-After for up to 4 minutes per attempt (signed-request lifetime); the SDK's re-signed
-  retries each get the window again (about 20 minutes in all).
-- A trial whose last model call still failed is classified infra and retried under the
-  retry rule, never scored 0.
-
-## Frozen settings (2026-10-27 evening)
-
-- Variant: `codeMode=on,plan=on,helpers=write,fetch=on,search=function`; `checks` at its default `full`
-  (no check-in-proportion line: it stopped hard, target-driven tasks after the first passing check),
-  plus the unattended rule that a reported problem is never closed as intended (98d6ce7).
-- Model `openai.gpt-6-astra`, effort xhigh, Bedrock mantle, web search on.
-- Caps: per-task caps from `astra-trial-caps.json`; `TB4_MODEL_TOTAL_CAP_USD=2900`,
-  `TB4_MODEL_STOP_MARGIN_USD=300` (no new launches past $2,600 settled); `TB4_MAX_IN_FLIGHT=30`.
-- Order: GPU tasks first when a GPU host exists; then `TB4_PRIORITY_TASKS`, the CPU tasks Codex
-  passes only sometimes (they decide the score), longest first: ctr-optimization,
-  live-database-cutover, takens-embedding-lean, lake-temp-glm, layout-config-recreation,
-  vf2-speedup-networkx, cumulative-layout-shift, distributed-dedup, payments-pipeline-fix,
-  biped-contact-dynamics, music-harmony, freecad-spring-clip, batched-eval-parity,
-  session-window-debug, embedding-drift-monitor, mvcc-lsm-compaction. The early-stop check
-  reads them first.
-- GPU tasks (jax-speedrun-gpu, fp8-rmsnorm-gemm, math-eval-grader) run whenever p5.4xlarge
-  capacity appears, with this same frozen commit; until then the score is reported on the 63
-  CPU tasks against Codex and Reason on the same 63, GPU tasks marked pending.
-
-- Front-load (added before launch, for a 6 AM result): `TB4_FRONTLOAD_TASKS=ctr-optimization,live-database-cutover,takens-embedding-lean,lake-temp-glm,layout-config-recreation`
-  launch all their trials in every batch before anything else, so the longest runs (ctr ~5 h) never start late.
+- 2026-10-28 ~02:40 UTC: Harbor 0.24.0's Docker egress-capability probe timeout raised from 30 s to
+  300 s on every CPU host (and on any GPU host the capacity loop adds;
+  `scripts/tb4-run/host/patch-harbor-probe.py`, original kept as `docker.py.orig-0.24.0`).
+  Enforcement is unchanged: the probe still runs and offline verifiers still get the deny-all
+  sidecar. Why: on a busy host the probe (a `docker run`) timed out, Harbor then rejected the
+  offline verifier of `lake-temp-glm` b2-a02 after the agent ran; that attempt stays infra by the
+  rule and is listed. Trials already running at the change keep the 30 s probe.
+- 2026-10-28: a final model response is a provider failure (infra) only for HTTP 429 and 5xx
+  (`lastModelCallFailed`); a 4xx such as 400 is the harness's own request and scores as the
+  trial's graded result. `takens-embedding-lean` b2-a04 (Bedrock HTTP 400 after 46 ms on a
+  ~174k-token request, well under Astra's input limit; the frozen harness logs no response body;
+  the verifier graded the workspace: reward 0) is reclassified infra -> valid 0 by a journal
+  `amend` event. Its retry b2-a05 started later than b2-a01..a04, so it is an extra valid trial,
+  disclosed, not scored.

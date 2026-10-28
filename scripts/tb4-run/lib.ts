@@ -103,6 +103,8 @@ export type JournalEvent =
 	| { at: string; type: "pause"; reason: string }
 	| { at: string; type: "resume" }
 	| { at: string; type: "stop"; reason: string }
+	/** A dated, reasoned correction of one attempt's outcome (run doc amendments); it overrides the first finish. */
+	| { at: string; type: "amend"; attemptId: string; outcome: TrialOutcome; reason: string }
 	/** The early-stop gates' decisions (docs/tb4-astra-run-2026-10-27.md): gate A passes once, for good. */
 	| {
 			at: string;
@@ -225,6 +227,14 @@ export function replay(events: JournalEvent[]): RunState {
 			case "stop":
 				state.stopped = e.reason;
 				break;
+			case "amend": {
+				const a = state.attempts.get(e.attemptId);
+				if (a && a.status === "finished") {
+					a.outcome = e.outcome;
+					if (e.outcome.kind === "valid") a.agentStartedAt = e.outcome.agentStartedAt;
+				}
+				break;
+			}
 			case "gate":
 				if (e.gate === "A" && e.result === "pass") state.gateAPassed = true;
 				break;
@@ -400,7 +410,7 @@ export function nextLaunches(input: {
 				task: task.name,
 				batch: batch.id,
 				host: host.name,
-				attemptId: attemptId(state.runId, task.name, batch.id, attempts),
+				attemptId: attemptId(state.runId ?? "", task.name, batch.id, attempts),
 			});
 			need--;
 		}
@@ -464,7 +474,11 @@ export function lastModelCallFailed(log: string): string | null {
 	if (!last) return null;
 	const failed =
 		(last.phase === "throttle" && last.willRetry === false) ||
-		last.phase === "response" ||
+		// A final non-ok response is the provider's failure only for 429 and 5xx; a 4xx
+		// such as 400 (request too large, invalid tool payload) is the harness's own
+		// request, scored as the trial's result, never rerun.
+		(last.phase === "response" &&
+			(Number(last.status) === 429 || Number(last.status) >= 500)) ||
 		last.phase === "request" ||
 		((last.phase === "stream-error" ||
 			last.phase === "stream-cut" ||

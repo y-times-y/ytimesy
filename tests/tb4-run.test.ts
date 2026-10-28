@@ -1052,3 +1052,32 @@ describe("tb4 dead-attempt cleanup", () => {
 		).toBe(true);
 	});
 });
+
+describe("tb4 provider-failure classification", () => {
+	const line = (o: Record<string, unknown>) => JSON.stringify({ at: "t", kind: "openai", ...o });
+	const ok = line({ phase: "stream", status: 200, terminal: { type: "response.completed" } });
+	it("a final 429 or 5xx response is a provider failure (infra)", () => {
+		expect(lastModelCallFailed([ok, line({ phase: "response", status: 429 })].join("\n"))).toContain('"status":429');
+		expect(lastModelCallFailed([ok, line({ phase: "response", status: 503 })].join("\n"))).toContain('"status":503');
+		expect(lastModelCallFailed([ok, line({ phase: "request" })].join("\n"))).not.toBeNull();
+	});
+	it("a final 4xx client error is the harness's own failure, not infra", () => {
+		expect(lastModelCallFailed([ok, line({ phase: "response", status: 400 })].join("\n"))).toBeNull();
+		expect(lastModelCallFailed([ok, line({ phase: "response", status: 413 })].join("\n"))).toBeNull();
+	});
+});
+
+describe("tb4 outcome amendments", () => {
+	it("an amend event overrides a finished attempt's outcome", () => {
+		const ev: JournalEvent[] = [
+			{ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) },
+			{ at: "t", type: "batch-open", batch: "b1" },
+			{ at: "t", type: "launch", attemptId: "x-a01", task: "x", batch: "b1", host: "h" },
+			{ at: "t", type: "finish", attemptId: "x-a01", outcome: { kind: "infra", reason: "HTTP 400" } },
+			{ at: "t2", type: "amend", attemptId: "x-a01", outcome: { kind: "valid", reward: 0, agentStartedAt: "2026-10-28T02:06:30Z", detail: "reclassified" }, reason: "4xx is the harness's own failure" },
+		];
+		const st = replay(ev);
+		expect(st.attempts.get("x-a01")?.outcome).toMatchObject({ kind: "valid", reward: 0 });
+		expect(scoredTrials(st).get("x")?.scored.map((t) => t.reward)).toEqual([0]);
+	});
+});
