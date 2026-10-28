@@ -7,20 +7,24 @@
  * limited by `owns`), how reports arrive (messages vs agent_wait) and how a
  * writer's work is integrated (a patch to apply vs edits in place).
  *
- * The wording is the bridge's helpers=write section as measured on
- * Terminal-Bench (2026-10-27); change it only with a new measurement.
+ * The writer and reader rules are the "middle" rule (2026-10-28): between
+ * the bridge's measured helpers=write wording (strict: parts of hours of
+ * work) and the product's old wall-clock triggers. Measured on the product
+ * delegation probe (evals/delegation-probe) and Terminal-Bench trigger runs;
+ * change it only with a new measurement.
  */
 
 /**
- * Writers: decided once, right after the first look, and only for work
- * that splits into large parts that can be built and checked separately.
+ * Writers: decided once, right after the first look, when the work splits
+ * into separate parts that are each a real job; one focused change stays
+ * with the builder.
  */
 export const WRITER_DELEGATION_POLICY =
-	"Writers: decide once, after your first look at the task and its files, and never later. Start writers only when the work splits into two or more parts that can be built and checked separately and each part is a large job on its own (hours of work or thousands of lines). Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. Otherwise do all the work yourself.";
+	"Writers: decide once, after your first look at the task and its files, and never later. Start writers when the work splits into two or more parts that touch different files, can each be built and checked without the others, and are each a real job on its own (their own investigation, change and checks, not a few edits): one writer per part, started together. Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. One focused change, even across several files, or steps that depend on each other, you do yourself.";
 
-/** Readers (researcher, reviewer): the cost bar. */
+/** Readers (researcher, reviewer): the cost bar and when it is worth it. */
 export const READER_DELEGATION_POLICY =
-	"A helper costs about as much as you do and re-reads what it needs. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.";
+	"A helper costs about as much as you do and re-reads what it needs; what it buys is time and a smaller context for you. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile; when a broad investigation splits into several such areas, start one per area together. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.";
 
 /** What every brief carries. */
 export const BRIEF_POLICY =
