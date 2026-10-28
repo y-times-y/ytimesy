@@ -170,3 +170,6 @@ mantle route this run uses has no published Astra limit. Instead of a quota incr
 - GPU tasks (jax-speedrun-gpu, fp8-rmsnorm-gemm, math-eval-grader) run whenever p5.4xlarge
   capacity appears, with this same frozen commit; until then the score is reported on the 63
   CPU tasks against Codex and Reason on the same 63, GPU tasks marked pending.
+
+- Front-load (added before launch, for a 6 AM result): `TB4_FRONTLOAD_TASKS=ctr-optimization,live-database-cutover,takens-embedding-lean,lake-temp-glm,layout-config-recreation`
+  launch all their trials in every batch before anything else, so the longest runs (ctr ~5 h) never start late.

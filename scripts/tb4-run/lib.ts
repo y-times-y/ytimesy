@@ -104,7 +104,13 @@ export type JournalEvent =
 	| { at: string; type: "resume" }
 	| { at: string; type: "stop"; reason: string }
 	/** The early-stop gates' decisions (docs/tb4-astra-run-2026-10-27.md): gate A passes once, for good. */
-	| { at: string; type: "gate"; gate: "A" | "B"; result: "pass" | "stop"; detail: string };
+	| {
+			at: string;
+			type: "gate";
+			gate: "A" | "B";
+			result: "pass" | "stop";
+			detail: string;
+	  };
 
 export class Journal {
 	constructor(readonly path: string) {}
@@ -333,6 +339,8 @@ export function nextLaunches(input: {
 	maxInFlight?: number;
 	/** Tasks to launch first within each batch (after GPU tasks), in this order: the ones that decide the score. */
 	priority?: readonly string[];
+	/** Tasks whose trials in every open batch launch before anything else (the longest ones). */
+	frontload?: readonly string[];
 }): LaunchDecision[] {
 	const { state } = input;
 	if (state.paused || state.stopped || !state.runId) return [];
@@ -346,60 +354,65 @@ export function nextLaunches(input: {
 	const load = new Map(
 		input.hosts.map((h) => [h.name, hostLoad(state, byName, h.name)]),
 	);
-	for (const batch of BATCHES) {
-		if (!state.openBatches.has(batch.id)) continue;
-		// GPU tasks first: they are the long pole; among them the largest
-		// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
-		const rank = (name: string) => {
-			const i = input.priority?.indexOf(name) ?? -1;
-			return i < 0 ? Number.POSITIVE_INFINITY : i;
-		};
-		const ordered = [...input.tasks].sort(
-			(a, b) =>
-				b.gpus - a.gpus ||
-				(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
-				(rank(a.name) === rank(b.name)
-					? 0
-					: rank(a.name) < rank(b.name)
-						? -1
-						: 1),
-		);
-		for (const task of ordered) {
-			const p = progress(state, task.name, batch.id);
-			const pending = out.filter(
-				(d) => d.task === task.name && d.batch === batch.id,
-			).length;
-			let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
-			let attempts = p.attempts + pending;
-			while (need > 0 && attempts < attemptCap(task, batch) && room() > 0) {
-				const host = input.hosts.find((h) => {
-					if (input.unhealthyHosts?.has(h.name)) return false;
-					if (task.gpus > 0 !== (h.kind === "gpu")) return false;
-					const l = load.get(h.name)!;
-					const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
-					return (
-						gpuFree &&
-						fitsCpu(h, l, task) &&
-						l.memoryMb + task.memoryMb <= h.memoryMb * 0.9
-					);
-				});
-				if (!host) break;
-				const l = load.get(host.name)!;
-				l.vcpu += trialCpuCost(task);
-				l.trials++;
-				l.memoryMb += task.memoryMb;
-				l.gpus += task.gpus;
-				attempts++;
-				out.push({
-					task: task.name,
-					batch: batch.id,
-					host: host.name,
-					attemptId: attemptId(state.runId, task.name, batch.id, attempts),
-				});
-				need--;
-			}
+	const rank = (name: string) => {
+		const i = input.priority?.indexOf(name) ?? -1;
+		return i < 0 ? Number.POSITIVE_INFINITY : i;
+	};
+	// GPU tasks first: they are the long pole; among them the largest
+	// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
+	const ordered = [...input.tasks].sort(
+		(a, b) =>
+			b.gpus - a.gpus ||
+			(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
+			(rank(a.name) === rank(b.name)
+				? 0
+				: rank(a.name) < rank(b.name)
+					? -1
+					: 1),
+	);
+	const place = (task: Task, batch: Batch) => {
+		const p = progress(state, task.name, batch.id);
+		const pending = out.filter(
+			(d) => d.task === task.name && d.batch === batch.id,
+		).length;
+		let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
+		let attempts = p.attempts + pending;
+		while (need > 0 && attempts < attemptCap(task, batch) && room() > 0) {
+			const host = input.hosts.find((h) => {
+				if (input.unhealthyHosts?.has(h.name)) return false;
+				if (task.gpus > 0 !== (h.kind === "gpu")) return false;
+				const l = load.get(h.name)!;
+				const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
+				return (
+					gpuFree &&
+					fitsCpu(h, l, task) &&
+					l.memoryMb + task.memoryMb <= h.memoryMb * 0.9
+				);
+			});
+			if (!host) break;
+			const l = load.get(host.name)!;
+			l.vcpu += trialCpuCost(task);
+			l.trials++;
+			l.memoryMb += task.memoryMb;
+			l.gpus += task.gpus;
+			attempts++;
+			out.push({
+				task: task.name,
+				batch: batch.id,
+				host: host.name,
+				attemptId: attemptId(state.runId, task.name, batch.id, attempts),
+			});
+			need--;
 		}
+	};
+	const open = BATCHES.filter((batch) => state.openBatches.has(batch.id));
+	// Front-loaded tasks (the longest) get every open batch's trials first, so
+	// none of their runs starts late and sets the finish time.
+	for (const name of input.frontload ?? []) {
+		const task = byName.get(name);
+		if (task) for (const batch of open) place(task, batch);
 	}
+	for (const batch of open) for (const task of ordered) place(task, batch);
 	return out;
 }
 
@@ -687,19 +700,39 @@ export function earlyStopGates(input: {
 		.filter((x): x is ScoredTrial => !!x);
 	const passes = firsts.filter((x) => x.reward >= 1).length;
 	const gateA = input.state.gateAPassed
-		? { status: "passed" as const, passes, ready: firsts.length, of: input.decisive.length }
+		? {
+				status: "passed" as const,
+				passes,
+				ready: firsts.length,
+				of: input.decisive.length,
+			}
 		: firsts.length < EARLY_STOP.gateAMinTasks
-			? { status: "pending" as const, passes, ready: firsts.length, of: input.decisive.length }
+			? {
+					status: "pending" as const,
+					passes,
+					ready: firsts.length,
+					of: input.decisive.length,
+				}
 			: {
-					status: passes <= EARLY_STOP.gateAMaxPasses ? ("stop" as const) : ("pass" as const),
+					status:
+						passes <= EARLY_STOP.gateAMaxPasses
+							? ("stop" as const)
+							: ("pass" as const),
 					passes,
 					ready: firsts.length,
 					of: input.decisive.length,
 				};
 	const bounds = floorCeiling(perTask, input.cpuTasks, input.trialsPerTask);
 	const codexPct =
-		(100 * input.cpuTasks.reduce((a, t) => a + (input.codexRates.get(t) ?? 0), 0)) / input.cpuTasks.length;
-	const gateB = { stop: bounds.ceilingPct < codexPct, ceilingPct: bounds.ceilingPct, floorPct: bounds.floorPct, codexPct };
+		(100 *
+			input.cpuTasks.reduce((a, t) => a + (input.codexRates.get(t) ?? 0), 0)) /
+		input.cpuTasks.length;
+	const gateB = {
+		stop: bounds.ceilingPct < codexPct,
+		ceilingPct: bounds.ceilingPct,
+		floorPct: bounds.floorPct,
+		codexPct,
+	};
 	return { gateA, gateB };
 }
 
