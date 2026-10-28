@@ -151,3 +151,26 @@ and the journal records `type: "gate"` and `type: "stop"` with the reason.
   the verifier graded the workspace: reward 0) is reclassified infra -> valid 0 by a journal
   `amend` event. Its retry b2-a05 started later than b2-a01..a04, so it is an extra valid trial,
   disclosed, not scored.
+
+## Amendment 2026-10-28 (~05:20 UTC): GPU tasks fp8-rmsnorm-gemm and math-eval-grader on Daytona H100
+
+- No AWS p5 capacity, Nebius limited to 2 instances, Modal capped; these two GPU tasks ran on
+  Daytona (account limit: 1 GPU at a time), one trial at a time, from AWS host cpu-3 (systemd units
+  `tb4-gpu-daytona`, then `tb4-gpu-math-preflight`), same frozen tree 8965702 / tree:226f4ea0..., same
+  run.env (Bedrock openai.gpt-6-astra xhigh, frozen variant), per-task caps from astra-trial-caps.json,
+  own spend ledger `/opt/tb4/ledger-gpu-daytona.jsonl` (total cap $80).
+- Environments: Daytona snapshots built FROM the task's pinned image plus `USER root` (stock Harbor
+  0.24.0's Daytona mode hangs on these non-root prebuilt images): `ytimesy-fp8-root-h100`,
+  `ytimesy-fp8-verifier-h100` (built 2026-10-12, reused), `ytimesy-math-root-h100`,
+  `ytimesy-math-verifier-h100` (built 2026-10-28). Mapping by pinned image digest via
+  `YTIMESY_DAYTONA_SNAPSHOTS` (scratch sitecustomize patch, as in the Oct 13 rerun).
+- H100 asserted before every trial: each snapshot booted and `nvidia-smi` reported NVIDIA H100 80GB HBM3
+  (`gpu-assert.txt` per attempt).
+- Preflight: fp8 oracle 1, nop 0 (2026-10-28 ~03:35 UTC, from the snapshots). math oracle/nop run after
+  the scored trials (1-GPU limit); results appended to `/opt/tb4/run/gpu-daytona.log`.
+- Attempt ids `tb4-astra-2026-10-27-{b1,b2}-<task>-d<slot><try>`; b1 = slot 1, b2 = slots 2-5. Infra
+  attempts (e.g. "Total GPU limit exceeded" while the previous sandbox was still being deleted) were
+  retried, never scored. Outcomes classified with the run's own `readTrialDir` + `classify` (controller
+  scripts d0395d9) into `/opt/tb4/run/gpu-daytona-journal.jsonl`, kept separate from the controller
+  journal; job dirs copied to `/opt/tb4/run/results/<id>` and R2 by `fold-gpu.sh`.
+- jax-speedrun-gpu: not run (needs about 5 H100 in parallel for an 8 h task); pending.
