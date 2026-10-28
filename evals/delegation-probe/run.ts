@@ -52,6 +52,8 @@ import {
 import { harborTurnId, runsUsage } from "../harbor_v2/trial";
 
 const IMAGE = "ytimesy-dprobe-vm:1";
+/** The model's user: the loopback database's owner on the subscription route. */
+const probeUser = { id: "dprobe" };
 const CWD = "/home/ubuntu/ytimesy";
 const REQUEST_LIMIT = 12;
 
@@ -185,7 +187,7 @@ async function oneRun(
 	const sessionId = randomUUID();
 	const archives = localContextArchives(
 		`${logsDir}/context-archives`,
-		"dprobe",
+		probeUser.id,
 		sessionId,
 	);
 	const parts = () => [
@@ -229,7 +231,7 @@ async function oneRun(
 			machines,
 			parent: {
 				id: sessionId,
-				userId: "dprobe",
+				userId: probeUser.id,
 				parentSessionId: null,
 				agentRole: null,
 				items: [],
@@ -279,7 +281,7 @@ async function oneRun(
 		const runtime = await harborRuntime({
 			config,
 			env,
-			userId: "dprobe",
+			userId: probeUser.id,
 			cacheScope: sessionId,
 			// After the first delegation no further request is sent.
 			wrapModel: (model) =>
@@ -298,7 +300,7 @@ async function oneRun(
 		});
 		const harness = await harborHarness({
 			workspace,
-			userId: "dprobe",
+			userId: probeUser.id,
 			modelId: config.modelId,
 			provider: "openai",
 			variant: PRODUCT_HARNESS_VARIANT,
@@ -356,7 +358,7 @@ async function oneRun(
 		try {
 			out = await runModelAgent(
 				{
-					userId: "dprobe",
+					userId: probeUser.id,
 					modelId: config.modelId,
 					reasoning: config.effort,
 					toolSurface: "implementation",
@@ -421,6 +423,21 @@ async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	if (process.env.YTIMESY_HARBOR_ROUTE === "bedrock")
 		await bedrockCredentials(process.env);
+	let closeOperatorDatabase: (() => Promise<void>) | null = null;
+	if (process.env.YTIMESY_HARBOR_ROUTE === "codex-subscription") {
+		// As the bridge does: the subscription transport reads its credential
+		// from a loopback database holding only the access token. Run with
+		// node --env-file=<checkout .env> for the server config it reads.
+		const { createOperatorEvaluationDatabase } = await import(
+			"../../benchmarks/evaluation/operator-database"
+		);
+		await mkdir(args.out, { recursive: true });
+		const local = await createOperatorEvaluationDatabase(args.out);
+		process.env.DATABASE_URL = local.databaseUrl;
+		process.env.BETTER_AUTH_SECRET = local.secret;
+		probeUser.id = local.userId;
+		closeOperatorDatabase = () => local.close();
+	}
 	const list = JSON.parse(
 		await readFile(new URL(`./${args.requests}`, import.meta.url), "utf8"),
 	) as { requests: { id: number; text: string; label: string }[] };
@@ -456,6 +473,7 @@ async function main() {
 	await Promise.all(
 		Array.from({ length: Math.max(1, args.concurrency) }, worker),
 	);
+	await closeOperatorDatabase?.().catch(() => {});
 }
 
 await main();
