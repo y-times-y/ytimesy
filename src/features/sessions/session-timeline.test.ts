@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { applyPlanUpdate } from "#/domain/agent-todos";
 import { withBackgroundCommandExits } from "#/domain/background-command";
 import {
 	type AgentTaskActivity,
@@ -696,5 +697,59 @@ describe("session timeline with server-started wake-up turns", () => {
 		expect(outside).toContain("Started pnpm build.");
 		expect(worked).not.toContain("Started pnpm build.");
 		expect(outside).toContain("The build finished cleanly.");
+	});
+});
+
+describe("session timeline plan checklist", () => {
+	const asked: SessionItem = {
+		kind: "userMessage",
+		id: SessionItemId("user"),
+		text: "Migrate billing",
+	};
+	const updated = (status: "in_progress" | "completed") =>
+		applyPlanUpdate(
+			[asked, readCall("turn:read", "completed", "read")],
+			"turn",
+			{
+				plan: [
+					{ step: "Read the schema", status },
+					{
+						step: "Write the migration",
+						status: status === "completed" ? "in_progress" : "pending",
+					},
+				],
+			},
+		);
+
+	it("shows one live checklist while the turn runs, updated in place", () => {
+		const items = applyPlanUpdate(updated("in_progress"), "turn", {
+			plan: [
+				{ step: "Read the schema", status: "completed" },
+				{ step: "Write the migration", status: "in_progress" },
+			],
+		});
+		const html = renderTimeline(items, "running");
+		expect(html.match(/aria-label="Todos"/g)).toHaveLength(1);
+		expect(html).toContain("<s>Read the schema</s>");
+		expect(html).toContain("Write the migration");
+	});
+
+	it("folds the checklist into Worked once the turn ends", () => {
+		const html = renderTimeline(
+			[
+				...updated("completed"),
+				{
+					kind: "agentMessage",
+					id: SessionItemId("turn:answer"),
+					text: "Migrated.",
+				},
+			],
+			"completed",
+		);
+		// Inside the Worked group, above the answer that stays in view.
+		const todos = html.indexOf('aria-label="Todos"');
+		expect(html.indexOf("Worked")).toBeGreaterThan(-1);
+		expect(html.indexOf("Worked")).toBeLessThan(todos);
+		expect(todos).toBeLessThan(html.indexOf("Migrated."));
 	});
 });

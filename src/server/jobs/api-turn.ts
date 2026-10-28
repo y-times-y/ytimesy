@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
+import { applyPlanUpdate } from "#/domain/agent-todos";
 import {
 	assertApiContextFits,
 	isUserRequestMessage,
@@ -209,6 +210,7 @@ import {
 } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
+import { planTool } from "../services/plan-tool";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
@@ -1331,14 +1333,28 @@ async function runApiTurnAttempt(
 			projectSecrets,
 			redact,
 		});
+		// Harness variant plan (on in the product): the root builder's
+		// update_plan, as the benchmark bridge's plan=on gives it; subagents
+		// get none. Each accepted update replaces the turn's checklist item.
+		const planning: ToolSet =
+			variant.plan === "on" && !owner.parentSessionId && !owner.agentRole
+				? planTool({
+						now: Date.now,
+						onUpdate: (update) => {
+							items = applyPlanUpdate(items, turn.id, update);
+							progress.offer(items);
+						},
+					})
+				: {};
 		// The thin lead only inspects, so a round needs no write guard.
 		const baseTools: ToolSet = thinLead
-			? thinLeadTools({ ...ownTools, ...delegation })
+			? { ...thinLeadTools({ ...ownTools, ...delegation }), ...planning }
 			: {
 					...(leadGate
 						? withSidekickWriteGuard(ownTools, leadWrites)
 						: ownTools),
 					...delegation,
+					...planning,
 				};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
@@ -1364,6 +1380,8 @@ async function runApiTurnAttempt(
 								codeMode === "primary"
 									? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
 									: [],
+							// Its description says it may be sent inside run_code.
+							callable: Object.keys(planning),
 						}
 					: null,
 			),
@@ -2692,6 +2710,7 @@ function withCodeMode(
 		redact: readonly string[];
 		mode: "on" | "primary";
 		deferred: readonly string[];
+		callable: readonly string[];
 	} | null,
 ): ToolSet {
 	if (!codeMode) return tools;

@@ -320,12 +320,14 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 };
 
 /**
- * What real users get: builder subagents on. Evals keep
- * DEFAULT_HARNESS_VARIANT as their baseline, so a run's arms are unchanged.
+ * What real users get: builder subagents on and the root builder's
+ * update_plan (the chat's checklist). Evals keep DEFAULT_HARNESS_VARIANT as
+ * their baseline, so a run's arms are unchanged.
  */
 export const PRODUCT_HARNESS_VARIANT: HarnessVariant = {
 	...DEFAULT_HARNESS_VARIANT,
 	subagents: "on",
+	plan: "on",
 };
 
 /** The outputCap variant's limit in characters; undefined when off. */
