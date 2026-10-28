@@ -69,6 +69,9 @@ export const WRITE_HELPER_INSTRUCTIONS = [
 	...HELPER_INSTRUCTIONS.split("\n").slice(1),
 ].join("\n");
 
+export const MAX_LIVE_HELPERS = liveChildrenAllowed(0);
+const MAX_WAIT_MS = 10 * 60_000;
+
 /**
  * helpers=write-tree's section: helpers=write's policy lines with the
  * product's writer mechanic. Only the mechanics differ: the first line
@@ -83,9 +86,6 @@ export const WORKTREE_WRITER_INSTRUCTIONS = [
 
 /** Where a writer works: the builder's checkout (helpers=write) or its own worktree (write-tree). */
 export type WriterMode = "shared" | "worktree";
-
-export const MAX_LIVE_HELPERS = liveChildrenAllowed(0);
-const MAX_WAIT_MS = 10 * 60_000;
 
 /**
  * Runs one round of a helper: a reader on its own read-only copy, a writer
