@@ -2351,7 +2351,23 @@ export function WorkspaceHome({
 	const sessionPullRequests = listedPullRequests.filter(
 		(pr) => Boolean(activeHead) && pr.head === activeHead,
 	);
+	// Until the live list is read, the header shows the PR this browser saw
+	// last for the chat (the sidebar's saved PR), so it does not pop in.
+	const savedChatPr =
+		!pullRequestsRead &&
+		(activeChat?.pr?.state === "open" || activeChat?.pr?.state === "draft")
+			? activeChat.pr
+			: null;
 	const sessionPullRequest = sessionPullRequests[0];
+	const headerPullRequest =
+		sessionPullRequest ??
+		(savedChatPr
+			? {
+					number: savedChatPr.number,
+					url: savedChatPr.url,
+					draft: savedChatPr.state === "draft",
+				}
+			: undefined);
 	/** A memory's source chat, opened in its project; false when it is not listed. */
 	function openMemoryChat(chatId: string) {
 		const listed = projectChats.find((group) =>
@@ -2505,15 +2521,15 @@ export function WorkspaceHome({
 											{activeChat.workingBranch}
 										</span>
 									)}
-									{sessionPullRequest && (
+									{headerPullRequest && (
 										<a
 											className="session-title-meta"
-											href={sessionPullRequest.url}
+											href={headerPullRequest.url}
 											target="_blank"
 											rel="noreferrer"
 										>
-											{sessionPullRequest.draft ? "Draft PR" : "PR"} #
-											{sessionPullRequest.number}
+											{headerPullRequest.draft ? "Draft PR" : "PR"} #
+											{headerPullRequest.number}
 										</a>
 									)}
 								</div>

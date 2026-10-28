@@ -95,7 +95,16 @@ function HomePage() {
 				// place), and the transcript fills in when the read lands.
 				<Suspense
 					fallback={home(
-						openChatId ? { ...session, agentSessionId: openChatId } : undefined,
+						openChatId
+							? {
+									...session,
+									agentSessionId: openChatId,
+									// The composer's branch shows before the transcript lands.
+									selectedBranch:
+										chats?.chats?.find((chat) => chat.id === openChatId)
+											?.selectedBranch ?? null,
+								}
+							: undefined,
 					)}
 				>
 					<WithOpenChat view={openChatView}>{home}</WithOpenChat>

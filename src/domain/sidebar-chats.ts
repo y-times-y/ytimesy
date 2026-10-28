@@ -21,6 +21,8 @@ export type SidebarChat = {
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
 	readonly workingBranch?: string | null;
+	/** The branch the composer shows (the open chat's selectedBranch), for first paint. */
+	readonly selectedBranch?: string | null;
 	/** The chat's pull request, when the project's PR list has one for its branch. */
 	readonly pr?: SidebarPullRequest | null;
 	/** What the chat waits on from the user, if anything (chatWaitingOn). */
