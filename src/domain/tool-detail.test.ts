@@ -69,3 +69,15 @@ it("marks a command left running as a background start", () => {
 		}).background,
 	).toBe(true);
 });
+
+it("labels a web_fetch call with the page it fetched", () => {
+	expect(
+		toolActivity({
+			kind: "dynamicToolCall",
+			id: SessionItemId("turn:fetch"),
+			tool: "web_fetch",
+			status: "completed",
+			input: JSON.stringify({ url: "https://docs.example.com/api/" }),
+		}),
+	).toMatchObject({ verb: "Fetched", target: "docs.example.com/api" });
+});

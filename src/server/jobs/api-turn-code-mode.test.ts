@@ -4,11 +4,13 @@ import {
 	PRODUCT_HARNESS_VARIANT,
 } from "#/domain/harness-variant";
 import { SessionItemId } from "#/domain/ids";
+import { codeModeInstructions } from "#/domain/lean-tool-instructions";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { planTool } from "../services/plan-tool";
+import { webFetchTool } from "../services/web-fetch-tool";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -323,5 +325,67 @@ it("saves each accepted plan update as the turn's one checklist item", async () 
 				{ text: "Fix branches", status: "in_progress" },
 			],
 		},
+	]);
+});
+
+// The product's variant runs the benchmark harness's codeMode=on and fetch=on.
+it("gives product turns run_code beside the normal tools, with the bridge's text", async () => {
+	const input = await offered(PRODUCT_HARNESS_VARIANT);
+	expect(Object.keys(input.tools)).toEqual(
+		expect.arrayContaining(["bash", "read", "write", "edit", "run_code"]),
+	);
+	// codeMode=on, not primary: tools are direct and nothing is deferred.
+	expect(input.toolOrder).toBeUndefined();
+	expect(Object.keys(input.tools)[0]).not.toBe("run_code");
+	expect(input.instructions).toContain(codeModeInstructions("core"));
+	expect(input.instructions).not.toContain("run_code is your main tool");
+	for (const name of ["bash", "read", "agent", "web_fetch", "update_plan"])
+		expect(input.tools.run_code.description).toContain(`tools.${name}(args)`);
+});
+
+it("gives product agents the bridge's web_fetch, subagents included", async () => {
+	const description = (
+		webFetchTool({ checkHost: async () => true }).web_fetch as {
+			description?: string;
+		}
+	).description;
+	expect(
+		(await offered(PRODUCT_HARNESS_VARIANT)).tools.web_fetch?.description,
+	).toBe(description);
+	expect(Object.keys((await offered({})).tools)).not.toContain("web_fetch");
+	mocks.owner.mockResolvedValue({
+		id: "session",
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		taskAccess: "read_write",
+		parentSessionId: "parent",
+		agentRole: "builder",
+	});
+	expect(Object.keys((await offered(PRODUCT_HARNESS_VARIANT)).tools)).toContain(
+		"web_fetch",
+	);
+});
+
+it("refuses private and metadata hosts from a product turn's web_fetch", async () => {
+	mocks.variant.mockResolvedValue(PRODUCT_HARNESS_VARIANT);
+	mocks.promptSubmit.mockResolvedValue({ block: false });
+	const outcomes: unknown[] = [];
+	mocks.subscriptionRuntime.mockImplementation(async (input) => {
+		for (const url of [
+			"http://169.254.169.254/latest/meta-data/",
+			"http://localhost:8080/",
+		])
+			outcomes.push(
+				await input.tools.web_fetch
+					.execute({ url }, { toolCallId: url, messages: [] })
+					.catch((error: Error) => error.message),
+			);
+		return [];
+	});
+	await runApiTurn({} as WorkspaceMachines, subscriptionTurn);
+	expect(outcomes).toEqual([
+		expect.stringMatching(/169\.254\.169\.254 is not a public host/),
+		expect.stringMatching(/localhost is not a public host/),
 	]);
 });
