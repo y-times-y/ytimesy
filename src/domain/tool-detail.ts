@@ -532,6 +532,11 @@ function harnessToolActivity(
 			};
 		case "browser_open":
 			return { verb: "Opened", target: host(text("url") ?? "page") };
+		case "web_fetch":
+			return {
+				verb: "Fetched",
+				target: text("url") ? clip(host(text("url") as string), 80) : "page",
+			};
 		case "browser_screenshot":
 			return { verb: "Took a browser screenshot" };
 		case "browser_inspect": {
