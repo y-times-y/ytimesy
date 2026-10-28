@@ -457,6 +457,25 @@ export async function adoptChatPublicationBranch(
 	return stored;
 }
 
+/**
+ * Records the branch the agent left a root chat's checkout on, so later
+ * turns stay there and publish it. The base branch is kept: pull requests
+ * still target it. Null when the chat has no branch of its own yet.
+ */
+export async function saveAgentWorkingBranch(
+	userId: string,
+	sessionId: string,
+	branch: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, working_branch=$3, updated_at=now()
+		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is not null
+		 returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
 /** Whether another chat or task in the project already works on or published this branch. */
 export async function projectBranchHeldByOtherSession(
 	userId: string,

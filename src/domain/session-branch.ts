@@ -121,3 +121,79 @@ export function sessionBranchChangeRestartsWorkspace(input: {
 		})
 	);
 }
+
+/** Longest base branch name a new chat accepts. */
+const BASE_BRANCH_MAX_LENGTH = 255;
+
+/**
+ * A branch name `git check-ref-format --branch` accepts (the broker runs
+ * that check again before any fetch or push), so no unprintable or
+ * shell-special character reaches a command.
+ */
+export function isValidBranchName(name: string): boolean {
+	if (!name || name.length > BASE_BRANCH_MAX_LENGTH) return false;
+	if (name === "@" || name === "HEAD" || name.startsWith("-")) return false;
+	// Control characters, space, DEL and ~ ^ : ? * [ \ are never allowed.
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting them is the point.
+	if (/[\u0000- \u007f~^:?*[\\]/.test(name)) return false;
+	if (name.includes("..") || name.includes("@{") || name.includes("//"))
+		return false;
+	if (name.startsWith("/") || name.endsWith("/") || name.endsWith("."))
+		return false;
+	return name
+		.split("/")
+		.every((part) => part && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+/**
+ * The branch a new chat starts from when the person picks none: the
+ * project's connected branch, else the repository default.
+ */
+export function defaultChatBaseBranch(input: {
+	readonly projectBranch?: string | null;
+	readonly defaultBranch: string;
+}): string {
+	const branch = input.projectBranch?.trim();
+	return branch && !isGeneratedSessionBranch(branch)
+		? branch
+		: input.defaultBranch;
+}
+
+/** The repository's branches for the base picker: the default first, each once. */
+export function orderedBaseBranches(
+	branches: readonly string[],
+	defaultBranch: string,
+): string[] {
+	const seen = new Set<string>();
+	const ordered: string[] = [];
+	for (const branch of [defaultBranch, ...branches]) {
+		const name = branch.trim();
+		if (!name || seen.has(name)) continue;
+		seen.add(name);
+		ordered.push(name);
+	}
+	return ordered;
+}
+
+/**
+ * The branch a checkout's `.git/HEAD` names; null when HEAD is detached,
+ * unreadable or not a valid branch.
+ */
+export function branchFromGitHead(head: string | null | undefined) {
+	const match = /^ref: refs\/heads\/(.+)$/.exec(head?.trim() ?? "");
+	const branch = match?.[1];
+	return branch && isValidBranchName(branch) ? branch : null;
+}
+
+/** Branches whose name holds every word of the query, in list order. */
+export function filterBaseBranches(
+	branches: readonly string[],
+	query: string,
+): string[] {
+	const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return [...branches];
+	return branches.filter((branch) => {
+		const name = branch.toLowerCase();
+		return words.every((word) => name.includes(word));
+	});
+}

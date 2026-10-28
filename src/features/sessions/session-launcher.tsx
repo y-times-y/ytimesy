@@ -210,6 +210,8 @@ export function SessionLauncher({
 			readonly continueOn?: string;
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
+			/** The branch a new chat starts from, when the person picked one. */
+			readonly baseBranch?: string;
 		},
 	) => Promise<ComposerSendResult> | undefined;
 	onConnect: () => void;
@@ -303,6 +305,15 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
+	/** The branch picked for a new chat, for the project it was picked in. */
+	const [basePick, setBasePick] = useState<{
+		projectId: string;
+		branch: string;
+	} | null>(null);
+	const baseBranch =
+		basePick && basePick.projectId === selectedProject?.id
+			? basePick.branch
+			: null;
 	/**
 	 * The last send that came back unsent. Sending the same message again reuses
 	 * its id, so a send the server did accept is not queued twice.
@@ -918,6 +929,8 @@ export function SessionLauncher({
 				setAttachments((current) => (current.length ? current : files));
 		};
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
+		// Only a new chat's first message carries a base; the server ignores it later.
+		const startBranch = followUpLayout ? null : baseBranch;
 		const send = (encoded: readonly IncomingAttachment[]) =>
 			onSend(text, modelId, {
 				...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
@@ -925,6 +938,7 @@ export function SessionLauncher({
 				...(continueOn ? { continueOn } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
+				...(startBranch ? { baseBranch: startBranch } : {}),
 			})?.then((result) => {
 				if (result !== "sent") unsend(result === "unsent");
 			});
@@ -1155,6 +1169,12 @@ export function SessionLauncher({
 						repairModelLabel={selectedModel?.label}
 						projectPickerOpen={projectPickerOpen}
 						onProjectPickerOpenChange={onProjectPickerOpenChange}
+						baseBranch={baseBranch}
+						onBaseBranchChange={(branch) => {
+							if (selectedProject)
+								setBasePick({ projectId: selectedProject.id, branch });
+						}}
+						currentBranch={session.selectedBranch}
 					/>
 				) : null}
 				<div className="composer-shell">

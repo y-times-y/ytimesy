@@ -134,6 +134,8 @@ export function sendHarnessWorkspaceTask(
 		readonly storedAttachments?: readonly MessageAttachment[];
 		/** Continue this turn on a fallback route the user approved (`<connection>|<model>`). */
 		readonly continueOn?: string;
+		/** The branch a new chat starts from (its first send only). */
+		readonly baseBranch?: string;
 	},
 	/** The chat as the caller just read it (by id, for this user), saving a read. */
 	known?: AgentSessionRecord | null,
@@ -178,6 +180,7 @@ export function sendHarnessWorkspaceTask(
 							sessionId: scope.sessionId as string,
 							text: input.text,
 							session: previous,
+							baseBranch: input.baseBranch,
 						}),
 					),
 				);
@@ -252,6 +255,7 @@ export function sendHarnessWorkspaceTask(
 								projectId: scope.projectId,
 								sessionId,
 								text: input.text,
+								baseBranch: input.baseBranch,
 							})
 						: undefined,
 				);
