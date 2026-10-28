@@ -1,0 +1,11 @@
+[Unit]
+Description=TB4 GPU capacity: launch p5.4xlarge when available, deploy, add to hosts.json
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/tb4/ytimesy/scripts/tb4-run
+EnvironmentFile=/opt/tb4/gpu-capacity.env
+ExecStart=/usr/local/bin/uv run --with boto3 python gpu-capacity.py --run-id ${TB4_RUN_ID} --east-sg ${TB4_EAST_SG} --west-sg ${TB4_WEST_SG}
+TimeoutStartSec=3600
