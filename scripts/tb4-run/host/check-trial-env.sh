@@ -10,7 +10,15 @@ sudo -u ubuntu -E env PYTHONPATH=/opt/tb4/ytimesy HOME=/home/ubuntu bash -c '
   set -e
   /home/ubuntu/.local/share/uv/tools/harbor/bin/python -c "import evals.harbor_v2.agent" || { echo "FAIL: cannot import evals.harbor_v2.agent"; exit 1; }
   [ -r "$HOME/.aws/credentials" ] && [ "$(stat -c %a "$HOME/.aws/credentials")" = 600 ] || { echo "FAIL: ~/.aws/credentials missing or not 0600"; exit 1; }
-  [ -r "${YTIMESY_BRIDGE_BUNDLE:?}" ] || { echo "FAIL: bridge bundle missing"; exit 1; }
+  if [ -n "${YTIMESY_BRIDGE_BUNDLE:-}" ]; then
+    [ -r "$YTIMESY_BRIDGE_BUNDLE" ] || { echo "FAIL: bridge bundle missing"; exit 1; }
+    fp="bundle=$(sha256sum "$YTIMESY_BRIDGE_BUNDLE" | cut -c1-16)"
+  else
+    # Source path (agent.py runs node --import tsx evals/harbor_v2/bridge.ts): it must start and read its config.
+    out=$(timeout 120 node --import tsx evals/harbor_v2/bridge.ts "{}" < /dev/null 2>&1 | grep -c "@@YTIMESY_HARBOR@@")
+    [ "$out" -ge 1 ] || { echo "FAIL: the bridge did not start from source"; exit 1; }
+    fp="source=${YTIMESY_HARNESS_VERSION:-unset}"
+  fi
   docker info >/dev/null 2>&1 || { echo "FAIL: trial user cannot reach Docker"; exit 1; }
-  echo "TRIAL-ENV-OK commit=$YTIMESY_HARNESS_COMMIT bundle=$(sha256sum "$YTIMESY_BRIDGE_BUNDLE" | cut -c1-16)"
+  echo "TRIAL-ENV-OK commit=$YTIMESY_HARNESS_COMMIT $fp"
 '
