@@ -150,6 +150,13 @@ export function startWorkspaceDesktop(
 			};
 		}
 		desktops.set(key, { status: "starting" });
+		// The route does not depend on the processes; publishing it alongside
+		// saves a round trip. A failed start leaves a route nothing answers.
+		const published = Effect.runPromise(
+			Effect.either(
+				Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
+			),
+		);
 		const started = yield* Effect.tryPromise(() =>
 			ensureDesktopProcesses(machines, providerRef),
 		);
@@ -166,9 +173,7 @@ export function startWorkspaceDesktop(
 			desktops.set(key, failed);
 			return failed;
 		}
-		yield* Effect.either(
-			Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
-		);
+		yield* Effect.promise(() => published);
 		remotes.set(key, providerRef);
 		const running = clientFacingDesktop(
 			{
@@ -209,28 +214,33 @@ export async function ensureDesktopProcesses(
 	);
 	if (probe.exitCode === 0 && desktopPortIsListening(probe.stdout))
 		return probe;
-	await machines.writeTextFile(
-		id,
-		DESKTOP_WALLPAPER_B64_PATH,
-		desktopWallpaperBase64(),
-	);
+	// Independent provider calls run together: each is a 0.4-1 s round trip.
 	// The credential goes only into the builder's verified 0700 directory;
 	// one another user created or linked first is refused.
-	const drop = await machines.exec(id, DESKTOP_CREDENTIAL_DROP_SETUP, 15_000);
+	const [, drop] = await Promise.all([
+		machines.writeTextFile(
+			id,
+			DESKTOP_WALLPAPER_B64_PATH,
+			desktopWallpaperBase64(),
+		),
+		machines.exec(id, DESKTOP_CREDENTIAL_DROP_SETUP, 15_000),
+	]);
 	if (drop.exitCode !== 0 || !drop.stdout.includes(DESKTOP_PRIVATE_READY))
 		throw new Error(
 			`The desktop's private directory could not be secured: ${drop.stderr.slice(-300)}`,
 		);
-	await machines.writeTextFile(
-		id,
-		DESKTOP_VIEWER_CREDENTIAL_PATH,
-		desktopViewerCredential(providerRef),
-	);
-	await machines.writeTextFile(
-		id,
-		DESKTOP_VNC_PASSWORD_PATH,
-		desktopVncPassword(providerRef),
-	);
+	await Promise.all([
+		machines.writeTextFile(
+			id,
+			DESKTOP_VIEWER_CREDENTIAL_PATH,
+			desktopViewerCredential(providerRef),
+		),
+		machines.writeTextFile(
+			id,
+			DESKTOP_VNC_PASSWORD_PATH,
+			desktopVncPassword(providerRef),
+		),
+	]);
 	return machines.exec(id, START_WORKSPACE_DESKTOP, 300_000);
 }
 
