@@ -32,13 +32,18 @@ vi.mock("../src/server/adapters/database", () => ({
 		}),
 	}),
 }));
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({
 		APP_URL: "http://127.0.0.1:3001",
 		BETTER_AUTH_SECRET: "test-only-secret-longer-than-thirty-two-characters",
 		GITHUB_APP_CLIENT_ID: "test-client",
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");

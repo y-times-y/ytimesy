@@ -8,14 +8,19 @@ const store = vi.hoisted(() => ({
 	adapter: undefined as unknown,
 	queries: [] as string[],
 }));
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({
 		APP_URL: "http://127.0.0.1:3000",
 		BETTER_AUTH_SECRET: "s".repeat(32),
 		GITHUB_OAUTH_CLIENT_ID: "id",
 		GITHUB_OAUTH_CLIENT_SECRET: "secret",
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 // Better Auth runs on its in-memory adapter; account deletion's SQL is recorded.
 vi.mock("../src/server/adapters/database", () => ({
 	database: () => store.adapter,

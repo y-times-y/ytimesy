@@ -16,9 +16,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../adapters/preview-grants", () => ({
 	previewGrants: mocks.grants,
 }));
-vi.mock("../config", () => ({
-	serverConfig: () => ({ APP_URL: "https://app.example" }),
-}));
+vi.mock("../config", () => {
+	const serverConfig = () => ({ APP_URL: "https://app.example" });
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 vi.mock("./workspace-desktop", () => ({
 	peekSessionMachineRef: mocks.peek,
 	ensureSessionMachine: mocks.ensure,
