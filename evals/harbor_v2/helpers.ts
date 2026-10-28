@@ -198,7 +198,14 @@ export function helperTools(input: {
 		helper.pending = null;
 		const running = input
 			.start(helper.session, helper.role, brief, helper.owns)
-			.catch((): ChildReport => ({ outcome: "failed", report: "" }))
+			.catch((error: unknown): ChildReport => {
+				// The failure must be visible: an empty report alone read as a
+				// helper that did nothing.
+				input.log?.(
+					`helper ${helper.role}: failed (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`,
+				);
+				return { outcome: "failed", report: "" };
+			})
 			.then((report) => {
 				helper.running = null;
 				helper.pending = report;
