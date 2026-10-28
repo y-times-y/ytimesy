@@ -236,7 +236,9 @@ Re-arming test: `sudo systemctl kill tb4-controller` -> the next watchdog run re
 | Item | Number | Why |
 |---|---|---|
 | Expected models | $360-500 / 330 trials | ~$1.1-1.5 per trial (user estimate) |
-| Bridge trial cap | $12 | ~8x mean; the bridge reserves it per trial before inference |
+| Bridge trial cap | **off** for scored runs (`YTIMESY_HARBOR_TRIAL_USD_CAP=off`) | Codex runs under no per-trial cap. In the 2026-10-27 run per-task caps set from Codex's cost stopped 4 trials mid-task (2 lost passes), mostly image tasks: Bedrock serves 0 cache on a request that adds an image (experiment log 2026-10-27), so those cost more than on OpenAI. Do not copy `astra-trial-caps.json` to hosts for a scored run |
+| Trial reservation | `YTIMESY_HARBOR_TRIAL_RESERVE_USD=20` | Ledger accounting only; a trial without a cap may spend up to what the total cap left when it started |
+| Trial spend alert | `YTIMESY_HARBOR_TRIAL_ALERT_USD=40` | Logs `spend alert:` once and writes a ledger `alert` line; the watchdog sends one critical alert. The trial keeps running; stop it by hand only if it loops, and journal why |
 | Bridge total cap (per host) + global stop | $900 | 1.8x the high estimate; reservations of ~60 concurrent trials (~$720) fit under it |
 | Infra expected | $300-560 | 4 x m7i.16xlarge $3.23/h + p5.4xlarge (price to confirm) + controller $0.02/h |
 | AWS Budget (monthly, account-wide) | $1500, email at 50/80/100% actual + 100% forecast | models + infra high end ($1060) + margin |

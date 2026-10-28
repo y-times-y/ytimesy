@@ -133,6 +133,14 @@ type LedgerEntry =
 			totalCapUsd: number;
 			message: string;
 			at: string;
+	  }
+	/** A running trial passed its alert threshold (never counted as spend). */
+	| {
+			type: "alert";
+			trial: string;
+			usd: number;
+			thresholdUsd: number;
+			at: string;
 	  };
 
 export const LEDGER_WARNING_THRESHOLDS = [0.5, 0.8] as const;
@@ -156,7 +164,7 @@ export function committedUsd(entries: readonly LedgerEntry[]) {
 	const settled = new Map<string, number>();
 	const reserved = new Map<string, number>();
 	for (const entry of entries)
-		if (entry.type !== "warning")
+		if (entry.type === "reserve" || entry.type === "settle")
 			(entry.type === "settle" ? settled : reserved).set(
 				entry.trial,
 				entry.usd,
@@ -244,7 +252,9 @@ export async function reserveTrial(input: {
 		const entries = await readLedger(input.ledger);
 		if (
 			entries.some(
-				(entry) => entry.type !== "warning" && entry.trial === input.trial,
+				(entry) =>
+					(entry.type === "reserve" || entry.type === "settle") &&
+					entry.trial === input.trial,
 			)
 		)
 			throw new Error(`Trial ${input.trial} is already in the spend ledger.`);
@@ -300,6 +310,25 @@ export async function settleTrial(input: {
 							input.totalCapUsd,
 						),
 		};
+	});
+}
+
+/** Records that a running trial passed its alert threshold, for the operator's watchdog. */
+export async function recordTrialAlert(input: {
+	ledger: string;
+	trial: string;
+	usd: number;
+	thresholdUsd: number;
+}) {
+	await withLedgerLock(input.ledger, async () => {
+		const entry: LedgerEntry = {
+			type: "alert",
+			trial: input.trial,
+			usd: input.usd,
+			thresholdUsd: input.thresholdUsd,
+			at: new Date().toISOString(),
+		};
+		await appendFile(input.ledger, `${JSON.stringify(entry)}\n`);
 	});
 }
 

@@ -164,6 +164,10 @@ export type HarborBridgeConfig = {
 	roles: Partial<Record<BridgeRole, HarborModel>>;
 	/** Per-trial dollar cap, checked before every model request; null only on a plan route without one set. */
 	trialUsdCap: number | null;
+	/** Ledger reservation per trial when it has no cap (YTIMESY_HARBOR_TRIAL_USD_CAP=off). */
+	trialReserveUsd: number | null;
+	/** Spend at which a running trial is flagged once for the operator; never stops it. */
+	trialAlertUsd: number | null;
 	/** The shared spend ledger and its total cap (required on paid routes). */
 	total: { ledger: string; capUsd: number } | null;
 	/** Model requests per trial (builder and checker together). */
@@ -308,14 +312,43 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		throw new Error(
 			"A paid route needs a total cap: set YTIMESY_HARBOR_TOTAL_USD_CAP and YTIMESY_HARBOR_SPEND_LEDGER.",
 		);
-	const explicitTrialCap = positiveDollars(
-		"YTIMESY_HARBOR_TRIAL_USD_CAP",
-		env.YTIMESY_HARBOR_TRIAL_USD_CAP,
-	);
+	// "off": no per-trial kill (scored runs; Codex runs under none). The trial
+	// reserves YTIMESY_HARBOR_TRIAL_RESERVE_USD in the ledger and may spend at
+	// most what the total cap leaves when it starts.
+	const trialCapOff = env.YTIMESY_HARBOR_TRIAL_USD_CAP?.trim() === "off";
+	const explicitTrialCap = trialCapOff
+		? undefined
+		: positiveDollars(
+				"YTIMESY_HARBOR_TRIAL_USD_CAP",
+				env.YTIMESY_HARBOR_TRIAL_USD_CAP,
+			);
 	// Unset: $20 per trial (the builder evaluator's default), within the total.
-	const trialUsdCap =
-		explicitTrialCap ??
-		(paid ? Math.min(20, totalCap ?? Number.POSITIVE_INFINITY) : null);
+	const trialUsdCap = trialCapOff
+		? null
+		: (explicitTrialCap ??
+			(paid ? Math.min(20, totalCap ?? Number.POSITIVE_INFINITY) : null));
+	const trialReserveUsd =
+		positiveDollars(
+			"YTIMESY_HARBOR_TRIAL_RESERVE_USD",
+			env.YTIMESY_HARBOR_TRIAL_RESERVE_USD,
+		) ?? null;
+	if (trialCapOff && totalCap !== undefined && trialReserveUsd === null)
+		throw new Error(
+			"YTIMESY_HARBOR_TRIAL_USD_CAP=off needs YTIMESY_HARBOR_TRIAL_RESERVE_USD (each trial's ledger reservation).",
+		);
+	if (
+		totalCap !== undefined &&
+		trialReserveUsd !== null &&
+		trialReserveUsd > totalCap
+	)
+		throw new Error("The trial reservation cannot exceed the total cap.");
+	// A trial that passes this spend is flagged once (log line and ledger
+	// alert) for the operator; it keeps running.
+	const trialAlertUsd =
+		positiveDollars(
+			"YTIMESY_HARBOR_TRIAL_ALERT_USD",
+			env.YTIMESY_HARBOR_TRIAL_ALERT_USD,
+		) ?? null;
 	if (trialUsdCap !== null && trialUsdCap > 100)
 		throw new Error("YTIMESY_HARBOR_TRIAL_USD_CAP must be at most $100.");
 	if (trialUsdCap !== null && !billing.price)
@@ -351,6 +384,8 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		checker,
 		roles,
 		trialUsdCap,
+		trialReserveUsd,
+		trialAlertUsd,
 		total:
 			totalCap !== undefined && ledger ? { ledger, capUsd: totalCap } : null,
 		requestLimit,

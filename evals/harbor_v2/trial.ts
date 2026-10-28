@@ -114,6 +114,7 @@ import {
 } from "./sessions";
 import {
 	guardedLanguageModel,
+	recordTrialAlert,
 	reserveTrial,
 	SpendCapReached,
 	settleTrial,
@@ -422,14 +423,20 @@ export async function runHarborTrial(
 			`${tracePath} already exists; refusing to overwrite another trial's trace.`,
 		);
 	const startedAt = new Date(now()).toISOString();
+	// Without a trial cap the trial may spend what the total leaves when it starts.
+	let headroomUsd: number | null = null;
 	if (config.total) {
 		try {
+			const reservation =
+				config.trialUsdCap ?? config.trialReserveUsd ?? config.total.capUsd;
 			const reserved = await reserveTrial({
 				ledger: config.total.ledger,
 				totalCapUsd: config.total.capUsd,
 				trial: input.trialId,
-				trialCapUsd: config.trialUsdCap ?? config.total.capUsd,
+				trialCapUsd: reservation,
 			});
+			if (config.trialUsdCap === null)
+				headroomUsd = config.total.capUsd - reserved.committedUsd;
 			for (const warning of reserved.warnings) log(`warning: ${warning}`);
 		} catch (error) {
 			if (error instanceof SpendCapReached)
@@ -501,11 +508,12 @@ export async function runHarborTrial(
 				)
 			: 0;
 	const guard = trialSpendGuard({
-		capUsd: config.trialUsdCap,
+		capUsd: config.trialUsdCap ?? headroomUsd,
 		requestLimit: config.requestLimit,
 		parts: spendParts,
 		extraUsd: searchUsd,
 	});
+	let spendAlerted = false;
 	const remainingMs = Math.max(1000, input.deadlineAt - now());
 	const signal = AbortSignal.timeout(remainingMs);
 	const workspace: HarborWorkspace = {
@@ -568,10 +576,33 @@ export async function runHarborTrial(
 			events.push({ at: new Date(now()).toISOString(), event });
 			if (event.type === "tool-call")
 				log(`tool ${event.name} ${JSON.stringify(event.input).slice(0, 160)}`);
-			if (event.type === "usage")
+			if (event.type === "usage") {
+				const spent = guard.spentUsd();
 				log(
-					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${guard.spentUsd().toFixed(4)}`,
+					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${spent.toFixed(4)}`,
 				);
+				if (
+					config.trialAlertUsd !== null &&
+					!spendAlerted &&
+					spent >= config.trialAlertUsd
+				) {
+					spendAlerted = true;
+					log(
+						`spend alert: $${spent.toFixed(2)} passed the $${config.trialAlertUsd} alert; the trial keeps running`,
+					);
+					if (config.total)
+						await recordTrialAlert({
+							ledger: config.total.ledger,
+							trial: input.trialId,
+							usd: spent,
+							thresholdUsd: config.trialAlertUsd,
+						}).catch((error) =>
+							log(
+								`spend alert not recorded in the ledger: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						);
+				}
+			}
 		};
 		const runtimes = new Map<string, Promise<ModelAgentRuntime>>();
 		const runtimeFor = (model: HarborModel) => {
@@ -1498,6 +1529,7 @@ export async function runHarborTrial(
 		variant: harnessVariantLabel(config.variant),
 		billing: config.billing.kind,
 		trialUsdCap: config.trialUsdCap,
+		trialAlertUsd: config.trialAlertUsd,
 		totalUsdCap: config.total?.capUsd ?? null,
 		requestLimit: config.requestLimit,
 		webSearch: config.webSearch,
