@@ -19,9 +19,14 @@ vi.mock("./mcp-oauth", () => ({
 	}),
 	storedOAuthProvider: () => ({ authorizationUrl: undefined }),
 }));
-vi.mock("../config", () => ({
-	serverConfig: () => ({ APP_URL: "http://app" }),
-}));
+vi.mock("../config", () => {
+	const serverConfig = () => ({ APP_URL: "http://app" });
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 vi.mock("../auth/token-vault", () => ({ seal: vi.fn() }));
 vi.mock("../adapters/workers-fetch", () => ({
 	redirectRefusingFetch: () => fetch,

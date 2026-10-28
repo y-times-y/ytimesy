@@ -10,9 +10,14 @@ vi.mock("../src/server/adapters/database", () => ({
 		query: async (sql: string, params: unknown[]) => db.query(sql, params),
 	}),
 }));
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({ APP_URL: "http://127.0.0.1:3999" }),
-}));
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({ APP_URL: "http://127.0.0.1:3999" });
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");
