@@ -112,6 +112,8 @@ interface ProjectSidebarProps {
 	memoryActive?: boolean;
 	/** The pointer or focus reached a chat: it may open next. */
 	onChatIntent?: (chatId: string) => void;
+	/** The pointer or focus reached another project: it may open next. */
+	onProjectIntent?: (projectId: string) => void;
 	/** The pointer or focus reached Memory: it may open next. */
 	onMemoryIntent?: () => void;
 	/** When the server rendered the page: relative times hydrate from it. */
@@ -143,6 +145,7 @@ export function ProjectSidebar({
 	onOpenMemory,
 	memoryActive = false,
 	onChatIntent,
+	onProjectIntent,
 	onMemoryIntent,
 	renderedAtMs,
 	account,
@@ -706,6 +709,16 @@ export function ProjectSidebar({
 												className="sidebar-folder"
 												aria-current={selected ? "page" : undefined}
 												aria-expanded={open}
+												onPointerEnter={
+													selected
+														? undefined
+														: () => onProjectIntent?.(project.id)
+												}
+												onFocus={
+													selected
+														? undefined
+														: () => onProjectIntent?.(project.id)
+												}
 												onClick={() =>
 													selected
 														? toggleProjectFolder(project.id)

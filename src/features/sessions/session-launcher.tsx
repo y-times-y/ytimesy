@@ -354,6 +354,9 @@ export function SessionLauncher({
 			session.turnStatus,
 		),
 		enabled: recoverable,
+		// The key holds the chat's length and turn status; going back to a
+		// chat within the window shows its points without reading them again.
+		staleTime: 30_000,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId) return [];
 			return loadRecovery({
@@ -436,6 +439,8 @@ export function SessionLauncher({
 			session.turnStatus,
 		),
 		enabled: !!selectedProject?.id && !!session.agentSessionId,
+		// Read again on the interval below, not on every switch back to the chat.
+		staleTime: 30_000,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId)
 				return { enabled: false, evidence: [] };
