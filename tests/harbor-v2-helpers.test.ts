@@ -203,12 +203,15 @@ describe("helperTools (helpers=write)", () => {
 	});
 
 	it("composes the helpers=write section from the product's delegation policy, as measured", () => {
-		// The exact text the 2026-10-27 Terminal-Bench runs measured.
+		// The exact text of the middle rule as measured on 2026-10-28 (the
+		// delegation probe and the Terminal-Bench trigger runs); the strict
+		// writer and reader rules measured on 2026-10-27 it replaced are in
+		// docs/research/delegation-middle-rule-2026-10-28.md.
 		expect(WRITE_HELPER_INSTRUCTIONS).toBe(
 			[
 				"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (in your own checkout, changing only the paths you list in `owns`). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
-				"Writers: decide once, after your first look at the task and its files, and never later. Start writers only when the work splits into two or more parts that can be built and checked separately and each part is a large job on its own (hours of work or thousands of lines). Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. Otherwise do all the work yourself.",
-				"A helper costs about as much as you do and re-reads what it needs. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
+				"Writers: decide once, after your first look at the task and its files, and never later. Start writers when the work splits into two or more parts that touch different files, can each be built and checked without the others, and are each a real job on its own (their own investigation, change and checks, not a few edits): one writer per part, started together. Give each writer its own files or directories, never ones another agent changes, and state the interfaces between the parts in the briefs. While they work, do your own part in other files; then integrate their parts and run the final checks yourself. One focused change, even across several files, or steps that depend on each other, you do yourself.",
+				"A helper costs about as much as you do and re-reads what it needs; what it buys is time and a smaller context for you. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile; when a broad investigation splits into several such areas, start one per area together. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
 				"Every brief is self-contained: the goal, the paths and findings it needs, constraints and the report format.",
 				"Keep working while helpers run. Once you have what you need, stop running helpers with agent_send instead of waiting for them.",
 				"A report is a claim: spot-check it before relying on it. A refused start means do the work yourself.",
