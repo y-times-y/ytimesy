@@ -187,7 +187,11 @@ import {
 	SessionLauncher,
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
-import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
+import {
+	getWorkspaceDesktop,
+	prepareWorkspaceDesktopFn,
+	startWorkspaceDesktopFn,
+} from "./desktop.fn";
 import {
 	readWorkspaceChangesFn,
 	resumeWorkspaceMachineFn,
@@ -769,6 +773,7 @@ export function WorkspaceHome({
 	const removeQueued = useServerFn(removeQueuedSessionMessage);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
+	const prepareDesktop = useServerFn(prepareWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
 	const resumeMachine = useServerFn(resumeWorkspaceMachineFn);
 	/** When this page last asked each chat's machine to wake. */
@@ -979,50 +984,61 @@ export function WorkspaceHome({
 		chats.refetch,
 	]);
 	selectedSessionIdRef.current = activeSessionId;
-	const requestDesktop = useCallback(() => {
-		const chatId = activeSessionId;
-		if (!chatId || desktopStartFor.current === chatId) return;
-		if (
-			!desktopInspectorShouldStart({
-				tabActive: true,
-				projectId: selectedProject?.id,
-				sessionId: activeSessionId,
-				desktop,
-				busy: desktopBusy,
-			}) &&
-			desktop.status !== "failed"
-		) {
-			return;
-		}
-		desktopStartFor.current = chatId;
-		setDesktopBusy(true);
-		setDesktop({ status: "starting" });
-		// A result belongs to the chat that asked; a chat opened since keeps its own.
-		const stillOpen = () => selectedSessionIdRef.current === chatId;
-		void startDesktop({
-			data: {
-				projectId: selectedProject?.id,
-				sessionId: chatId,
-			},
-		})
-			.then((next) => {
-				if (stillOpen()) setDesktop(next);
+	/** Starts this chat's desktop; ahead of a click, only on an existing machine. */
+	const requestDesktop = useCallback(
+		(ahead = false) => {
+			const chatId = activeSessionId;
+			if (!chatId || desktopStartFor.current === chatId) return;
+			if (
+				!desktopInspectorShouldStart({
+					tabActive: true,
+					projectId: selectedProject?.id,
+					sessionId: activeSessionId,
+					desktop,
+					busy: desktopBusy,
+				}) &&
+				desktop.status !== "failed"
+			) {
+				return;
+			}
+			desktopStartFor.current = chatId;
+			setDesktopBusy(true);
+			setDesktop({ status: "starting" });
+			// A result belongs to the chat that asked; a chat opened since keeps its own.
+			const stillOpen = () => selectedSessionIdRef.current === chatId;
+			void (ahead ? prepareDesktop : startDesktop)({
+				data: {
+					projectId: selectedProject?.id,
+					sessionId: chatId,
+				},
 			})
-			.catch((cause) => {
-				if (stillOpen())
-					setDesktop({ status: "failed", reason: publicFailureMessage(cause) });
-			})
-			.finally(() => {
-				if (desktopStartFor.current === chatId) desktopStartFor.current = null;
-				if (stillOpen()) setDesktopBusy(false);
-			});
-	}, [
-		activeSessionId,
-		desktop,
-		desktopBusy,
-		selectedProject?.id,
-		startDesktop,
-	]);
+				.then((next) => {
+					if (stillOpen()) setDesktop(next);
+				})
+				.catch((cause) => {
+					if (stillOpen())
+						setDesktop({
+							status: "failed",
+							reason: publicFailureMessage(cause),
+						});
+				})
+				.finally(() => {
+					if (desktopStartFor.current === chatId)
+						desktopStartFor.current = null;
+					if (stillOpen()) setDesktopBusy(false);
+				});
+		},
+		[
+			activeSessionId,
+			desktop,
+			desktopBusy,
+			selectedProject?.id,
+			startDesktop,
+			prepareDesktop,
+		],
+	);
+	const requestDesktopRef = useRef(requestDesktop);
+	requestDesktopRef.current = requestDesktop;
 	useEffect(() => {
 		// Another chat's desktop start never blocks this chat's.
 		void activeSessionId;
@@ -1169,6 +1185,9 @@ export function WorkspaceHome({
 					? current
 					: next,
 			);
+			// Started while the panel is open, so Desktop is up by the time it
+			// is clicked instead of starting then.
+			if (next.status === "stopped") requestDesktopRef.current(true);
 		});
 	}, [
 		loadDesktop,
@@ -2752,7 +2771,7 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							memoryFocus={memoryFocus}
-							onStartDesktop={requestDesktop}
+							onStartDesktop={() => requestDesktop()}
 							onViewIntent={intendView}
 							onOpenChat={(chatId) => {
 								if (!sidebarChats.some((chat) => chat.id === chatId))

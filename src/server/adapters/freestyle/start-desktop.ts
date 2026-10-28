@@ -40,6 +40,20 @@ export const DESKTOP_CREDENTIAL_DROP_SETUP = `${DESKTOP_PRIVATE_DIRECTORY_CHECK}
 rm -f "$dir/viewer.auth" "$dir/vnc.password"
 echo ${DESKTOP_PRIVATE_READY}`;
 
+/**
+ * Waits (up to 5s) for a check to pass. Each desktop piece starts in well
+ * under a second, so fixed one-second sleeps made most of the start time.
+ */
+export const DESKTOP_WAIT_UNTIL = `wait_until() {
+  n=0
+  while [ "$n" -lt 50 ]; do
+    if eval "$1" >/dev/null 2>&1; then return 0; fi
+    sleep 0.1
+    n=$((n + 1))
+  done
+  return 0
+}`;
+
 export const START_WORKSPACE_DESKTOP = `set -eu
 export DEBIAN_FRONTEND=noninteractive
 export HOME="\${HOME:-/root}"
@@ -244,6 +258,7 @@ if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
   pkill -x Xvfb >/dev/null 2>&1 || true
   sleep 1
 fi
+${DESKTOP_WAIT_UNTIL}
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   (umask 077; touch "$XAUTH")
   chmod 600 "$XAUTH"
@@ -251,7 +266,7 @@ if ! pgrep -x Xvfb >/dev/null 2>&1; then
   # printf is a builtin, so the cookie never appears in a process list.
   printf 'add :0 . %s\\n' "$cookie" | xauth -q -f "$XAUTH" source -
   Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp >/tmp/ytimesy-xvfb.log 2>&1 &
-  sleep 1
+  wait_until '[ -S /tmp/.X11-unix/X0 ]'
 fi
 export DISPLAY=:0
 # The builder's own processes reach the display without the cookie too (by
@@ -259,7 +274,6 @@ export DISPLAY=:0
 xhost "+SI:localuser:$(id -un)" >/dev/null 2>&1 || true
 if ! pgrep -x fluxbox >/dev/null 2>&1; then
   fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
-  sleep 1
 fi
 if ! feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1; then
   sleep 1
@@ -302,7 +316,7 @@ if ! pgrep -x x11vnc >/dev/null 2>&1; then
   install -d -m 0700 "$VNC_DIR"
   rm -f "$VNC_SOCKET"
   x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
-  sleep 1
+  wait_until '[ -S "$VNC_SOCKET" ]'
   printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
 fi
 if vnc_on_tcp; then
@@ -345,7 +359,7 @@ if [ -s "$DESK_AUTH_FILE" ]; then
     pkill -x websockify >/dev/null 2>&1 || true
     sleep 1
     PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source "$DESK_AUTH_FILE" --unix-target="$VNC_SOCKET" 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
-    sleep 1
+    wait_until desk_proxy_listening
     printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"
   fi
 else
@@ -355,7 +369,7 @@ else
   fi
   if ! desk_proxy_listening || ! desk_proxy_current; then
     websockify --unix-target="$VNC_SOCKET" 127.0.0.1:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
-    sleep 1
+    wait_until desk_proxy_listening
   fi
 fi
 python3 - <<'PY'
