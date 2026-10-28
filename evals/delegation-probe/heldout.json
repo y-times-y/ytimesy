@@ -1,0 +1,16 @@
+{
+  "frozenAt": "2026-10-28",
+  "purpose": "Held-out set for the middle delegation rule: written before any tuning, run once at the end with the final rule. Same target as requests.json (ytimesy at 5ec2b7c, .ytimesy/ removed). Ids continue from requests.json.",
+  "requests": [
+    { "id": 11, "text": "review the whole app for accessibility problems", "label": "YES", "reason": "Broad audit over many independent pages and components; readers per area run side by side." },
+    { "id": 12, "text": "the auth flow and the realtime worker both throw errors sometimes, figure out why", "label": "YES", "reason": "Two unrelated components, two independent investigations." },
+    { "id": 13, "text": "write tests for the files in src/server/auth and src/server/edge that have none", "label": "YES", "reason": "Two separate directories, many files each; parts are built and checked separately." },
+    { "id": 14, "text": "check every API route for missing input validation and fix them", "label": "YES", "reason": "Many independent routes; a broad sweep that splits by route group." },
+    { "id": 15, "text": "find performance problems in the frontend and the server", "label": "YES", "reason": "Two independent areas named; long investigations in each." },
+    { "id": 16, "text": "change the landing page headline to 'Ship faster'", "label": "NO", "reason": "One small edit in one file." },
+    { "id": 17, "text": "add a --dry-run flag to the db-migrate script", "label": "NO", "reason": "One focused change in one script." },
+    { "id": 18, "text": "how does the turn queue work", "label": "NO", "reason": "A question about one module; reading and answering." },
+    { "id": 19, "text": "bump vitest to the latest version", "label": "NO", "reason": "One dependency bump and a test run; sequential." },
+    { "id": 20, "text": "the terms page has a broken link, fix it", "label": "NO", "reason": "One small fix in one page." }
+  ]
+}
