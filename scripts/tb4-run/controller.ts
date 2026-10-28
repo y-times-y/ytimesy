@@ -142,9 +142,15 @@ const safeId = (id: string) => {
 /** Reads one Harbor job dir (controller copy) into a HarborResult with the collector's fields. */
 export function readTrialDir(jobDir: string): HarborResult | undefined {
 	if (!existsSync(jobDir)) return undefined;
-	const trialDir = readdirSync(jobDir)
-		.map((d) => join(jobDir, d))
-		.find((d) => existsSync(join(d, "result.json")));
+	// run-trial.sh's layout is <jobs-dir>/<job>/<task>__<id>/result.json; <job>/result.json is
+	// Harbor's job-level summary, written when the job starts. Only a trial dir (<task>__<id>)
+	// holds the trial's result; also accept one directly under jobDir.
+	const isTrialDir = (d: string) => /__/.test(d.split("/").pop() ?? "") && existsSync(join(d, "result.json"));
+	const subdirs = (d: string) =>
+		readdirSync(d)
+			.map((x) => join(d, x))
+			.filter((x) => statSync(x).isDirectory());
+	const trialDir = [...subdirs(jobDir), ...subdirs(jobDir).flatMap(subdirs)].find(isTrialDir);
 	if (!trialDir) return undefined;
 	const result = JSON.parse(
 		readFileSync(join(trialDir, "result.json"), "utf8"),
@@ -206,6 +212,20 @@ export function readTrialDir(jobDir: string): HarborResult | undefined {
 	return result;
 }
 
+/**
+ * Reads observe()'s probe output (unit state, host boot time, trial result path):
+ * the trial is ready to collect only when its unit has ended and a trial-level
+ * result exists.
+ */
+export function readProbe(lines: string[], launchedAt: string) {
+	const unitActive = lines[0]?.trim() === "active" || lines[0]?.trim() === "activating";
+	return {
+		unitActive,
+		ready: !unitActive && !!lines[2]?.trim(),
+		rebootedSinceLaunch: Number(lines[1]) * 1000 > Date.parse(launchedAt),
+	};
+}
+
 export function sshHostOps(runDir: string): HostOps {
 	return {
 		launch(host, attemptId, task) {
@@ -227,10 +247,12 @@ export function sshHostOps(runDir: string): HostOps {
 			try {
 				const out = ssh(
 					host,
-					`systemctl is-active tb4-trial-${safeId(attemptId)} || true; date -d "$(uptime -s)" +%s; ls /opt/tb4/jobs/${safeId(attemptId)}/*/result.json 2>/dev/null | head -1`,
+					`systemctl is-active tb4-trial-${safeId(attemptId)} || true; date -d "$(uptime -s)" +%s; ls /opt/tb4/jobs/${safeId(attemptId)}/*/*__*/result.json 2>/dev/null | head -1`,
 				).split("\n");
 				const bootedAt = Number(out[1]) * 1000;
-				if (out[2]?.trim()) {
+				// Collect only once the trial's unit has ended: Harbor writes result files
+				// before the trial finishes.
+				if (readProbe(out, launchedAt).ready) {
 					this.collect(host, attemptId);
 					return {
 						result: readTrialDir(join(runDir, "results", attemptId)),
