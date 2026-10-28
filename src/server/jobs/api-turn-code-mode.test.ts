@@ -1,9 +1,14 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { DEFAULT_HARNESS_VARIANT } from "#/domain/harness-variant";
+import {
+	DEFAULT_HARNESS_VARIANT,
+	PRODUCT_HARNESS_VARIANT,
+} from "#/domain/harness-variant";
 import { SessionItemId } from "#/domain/ids";
+import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
+import { planTool } from "../services/plan-tool";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -234,4 +239,89 @@ it("offers no run_code when codeMode is off or the surface is not lean", async (
 		expect(Object.keys(input.tools)).not.toContain("run_code");
 		expect(input.instructions).not.toContain("run_code");
 	}
+});
+
+// The plan tool (plan=on, the product's default): the root builder gets the
+// benchmark bridge's update_plan as it is, and each update is the chat's checklist.
+const bridgePlanTool = planTool({ now: Date.now, onUpdate: () => {} })
+	.update_plan as { description?: string };
+
+it("offers the product's root builder the bridge's update_plan, byte for byte", async () => {
+	const input = await offered(PRODUCT_HARNESS_VARIANT);
+	expect(input.tools.update_plan?.description).toBe(bridgePlanTool.description);
+	expect(Object.keys(input.tools)).toContain("agent");
+	for (const variant of [{}, { plan: "off" }] as const)
+		expect(Object.keys((await offered(variant)).tools)).not.toContain(
+			"update_plan",
+		);
+});
+
+it("lets run_code programs send update_plan, as its description says", async () => {
+	const input = await offered({ codeMode: "on", plan: "on" });
+	expect(input.tools.run_code.description).toContain("tools.update_plan(args)");
+});
+
+it("gives subagents no plan tool", async () => {
+	mocks.owner.mockResolvedValue({
+		id: "session",
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		taskAccess: "read_write",
+		parentSessionId: "parent",
+		agentRole: "builder",
+	});
+	const input = await offered({ plan: "on", subagents: "on" });
+	expect(Object.keys(input.tools)).not.toContain("update_plan");
+});
+
+it("saves each accepted plan update as the turn's one checklist item", async () => {
+	mocks.variant.mockResolvedValue({ ...DEFAULT_HARNESS_VARIANT, plan: "on" });
+	mocks.promptSubmit.mockResolvedValue({ block: false });
+	const replies: unknown[] = [];
+	mocks.subscriptionRuntime.mockImplementation(async (input) => {
+		const send = (plan: { step: string; status: string }[]) =>
+			input.tools.update_plan.execute(
+				{ plan },
+				{ toolCallId: `call-${replies.length}`, messages: [] },
+			);
+		replies.push(
+			await send([
+				{ step: "Read the code", status: "in_progress" },
+				{ step: "Fix branches", status: "pending" },
+			]),
+		);
+		// Two steps in progress: refused, and the checklist keeps its last state.
+		replies.push(
+			await send([
+				{ step: "Read the code", status: "in_progress" },
+				{ step: "Fix branches", status: "in_progress" },
+			]),
+		);
+		replies.push(
+			await send([
+				{ step: "Read the code", status: "completed" },
+				{ step: "Fix branches", status: "in_progress" },
+			]),
+		);
+		return [];
+	});
+	await runApiTurn({} as WorkspaceMachines, subscriptionTurn);
+	expect(replies).toEqual([
+		"Plan updated: 0 completed, 1 in progress, 1 pending.",
+		"Plan not updated: 2 steps are in_progress; keep at most one.",
+		"Plan updated: 1 completed, 1 in progress, 0 pending.",
+	]);
+	const saved = mocks.progress.mock.calls.at(-1)?.[1] as SessionItem[];
+	expect(saved.filter((item) => item.kind === "plan")).toEqual([
+		{
+			kind: "plan",
+			id: "turn:plan",
+			text: "",
+			todos: [
+				{ text: "Read the code", status: "completed" },
+				{ text: "Fix branches", status: "in_progress" },
+			],
+		},
+	]);
 });
