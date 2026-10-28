@@ -70,7 +70,10 @@ export type PickerUsageBar = {
 	readonly detail?: string;
 };
 
-/** One labelled line of compact usage bars at the bottom of the model picker. */
+/**
+ * One labelled line of compact usage bars at the bottom of the model picker.
+ * Shows what is left, as Codex and ChatGPT do, so the numbers match theirs.
+ */
 export function PickerUsageLine({
 	label,
 	bars,
@@ -82,28 +85,31 @@ export function PickerUsageLine({
 	return (
 		<section className="model-picker-usage" aria-label={`${label} usage`}>
 			<span className="model-picker-usage-label">{label}</span>
-			{bars.map((bar) => (
-				<div
-					key={bar.id}
-					className="model-picker-usage-window"
-					title={bar.detail}
-				>
-					<span>{bar.label}</span>
-					{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
-					<span
-						className="model-picker-usage-bar"
-						data-tone={bar.low ? "low" : undefined}
-						role="meter"
-						aria-label={`${bar.label} ${label} usage`}
-						aria-valuemin={0}
-						aria-valuemax={100}
-						aria-valuenow={bar.usedPercent}
+			{bars.map((bar) => {
+				const left = Math.max(0, Math.min(100, 100 - bar.usedPercent));
+				return (
+					<div
+						key={bar.id}
+						className="model-picker-usage-window"
+						title={bar.detail}
 					>
-						<span style={{ width: `${bar.usedPercent}%` }} />
-					</span>
-					<span>{bar.usedPercent}%</span>
-				</div>
-			))}
+						<span>{bar.label}</span>
+						{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
+						<span
+							className="model-picker-usage-bar"
+							data-tone={bar.low ? "low" : undefined}
+							role="meter"
+							aria-label={`${bar.label} ${label} left`}
+							aria-valuemin={0}
+							aria-valuemax={100}
+							aria-valuenow={left}
+						>
+							<span style={{ width: `${left}%` }} />
+						</span>
+						<span>{left}% left</span>
+					</div>
+				);
+			})}
 		</section>
 	);
 }
