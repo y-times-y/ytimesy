@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
 	backgroundTurnPollChatIds,
+	chatOpenedWithProject,
 	chatsToReadAhead,
 	chatsWithPinnedFirst,
 	composerBusyForOpenChat,
@@ -13,6 +14,7 @@ import {
 	parseSidebarSort,
 	projectFolderIsExpanded,
 	projectsByRecentActivity,
+	projectsLatestChatsToReadAhead,
 	recentSidebarChats,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
@@ -451,6 +453,54 @@ describe("sidebar sort", () => {
 		expect(
 			projectsByRecentActivity([c, a, b], groups).map((project) => project.id),
 		).toEqual(["b", "a", "c"]);
+	});
+});
+
+describe("chatOpenedWithProject", () => {
+	it("opens the project's latest chat", () => {
+		expect(
+			chatOpenedWithProject({
+				chats: [{ id: "new" }, { id: "old" }],
+				composerDraft: false,
+			}),
+		).toBe("new");
+	});
+
+	it("opens nothing over a new-chat draft or for a project without chats", () => {
+		expect(
+			chatOpenedWithProject({ chats: [{ id: "a" }], composerDraft: true }),
+		).toBeUndefined();
+		expect(
+			chatOpenedWithProject({ chats: [], composerDraft: false }),
+		).toBeUndefined();
+		expect(
+			chatOpenedWithProject({ chats: undefined, composerDraft: false }),
+		).toBeUndefined();
+	});
+});
+
+describe("projectsLatestChatsToReadAhead", () => {
+	const projects = [
+		{ projectId: "p1", chats: [{ id: "a1" }, { id: "a2" }] },
+		{ projectId: "p2", chats: [{ id: "b1" }] },
+		{ projectId: "p3", chats: [] },
+		{ projectId: "p4", chats: [{ id: "d1" }] },
+	];
+
+	it("reads each other project's latest chat once", () => {
+		expect(
+			projectsLatestChatsToReadAhead({
+				projects,
+				openProjectId: "p1",
+				heldChatIds: new Set(["d1"]),
+			}),
+		).toEqual(["b1"]);
+	});
+
+	it("reads every project's latest chat when none is open", () => {
+		expect(
+			projectsLatestChatsToReadAhead({ projects, heldChatIds: new Set() }),
+		).toEqual(["a1", "b1", "d1"]);
 	});
 });
 

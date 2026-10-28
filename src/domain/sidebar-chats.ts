@@ -386,6 +386,43 @@ export function chatsToReadAhead(input: {
 		.filter((id) => id !== input.openChatId && !input.heldChatIds.has(id));
 }
 
+/**
+ * The chat a project opens on when the sidebar switches to it: its latest,
+ * unless a new-chat draft is on screen (the draft keeps the composer).
+ */
+export function chatOpenedWithProject(input: {
+	readonly chats: readonly Pick<SidebarChat, "id">[] | undefined;
+	readonly composerDraft: boolean;
+}): string | undefined {
+	if (input.composerDraft) return undefined;
+	return input.chats?.[0]?.id;
+}
+
+/**
+ * The other projects' latest chats worth reading while the page is idle, so
+ * switching to a project shows its chat at once: not the open project's,
+ * nor one the page already holds or is reading.
+ */
+export function projectsLatestChatsToReadAhead(input: {
+	readonly projects: readonly {
+		readonly projectId: string;
+		readonly chats: readonly Pick<SidebarChat, "id">[];
+	}[];
+	readonly openProjectId?: string;
+	readonly heldChatIds: ReadonlySet<string>;
+}): string[] {
+	return input.projects.flatMap(({ projectId, chats }) => {
+		const latest = chats[0]?.id;
+		if (
+			!latest ||
+			projectId === input.openProjectId ||
+			input.heldChatIds.has(latest)
+		)
+			return [];
+		return [latest];
+	});
+}
+
 export function sessionViewAppliesToOpenChat(input: {
 	readonly openChatId?: string;
 	readonly agentSessionId: string | null;
