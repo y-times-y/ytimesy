@@ -1,11 +1,16 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, GitBranch, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import {
+	type SavedDefaultBranches,
+	savedDefaultBranchCookie,
+	savedDefaultBranchesFromCookies,
+} from "#/domain/default-branch-cookie";
 import type { Project } from "#/domain/projects";
 import {
 	defaultChatBaseBranch,
@@ -18,6 +23,11 @@ export type RepositoryBranches = {
 	readonly defaultBranch: string;
 	readonly truncated?: boolean;
 };
+
+/** Each repository's default branch as this browser last read it (default-branch-cookie.ts). */
+export const SavedDefaultBranchesContext = createContext<SavedDefaultBranches>(
+	{},
+);
 
 /** Rows rendered at once; search reaches the rest. */
 const VISIBLE_BRANCHES = 200;
@@ -102,10 +112,26 @@ function NewChatBranchPicker({
 		staleTime: 60_000,
 		placeholderData: keepPreviousData,
 	});
+	const savedDefault = useContext(SavedDefaultBranchesContext)[
+		String(project.repositoryId)
+	];
 	const fallback = defaultChatBaseBranch({
 		projectBranch: project.branch,
-		defaultBranch: branches.data?.defaultBranch ?? project.branch,
+		defaultBranch:
+			branches.data?.defaultBranch ?? savedDefault ?? project.branch,
 	});
+	// The next page load renders this default without waiting on GitHub.
+	const liveDefault = branches.data?.defaultBranch;
+	useEffect(() => {
+		if (!liveDefault) return;
+		const cookie = savedDefaultBranchCookie(
+			savedDefaultBranchesFromCookies(document.cookie),
+			project.repositoryId,
+			liveDefault,
+		);
+		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
+		if (cookie) document.cookie = cookie;
+	}, [liveDefault, project.repositoryId]);
 	const selected = value ?? fallback;
 	const matches = useMemo(
 		() => filterBaseBranches(branches.data?.branches ?? [], query),

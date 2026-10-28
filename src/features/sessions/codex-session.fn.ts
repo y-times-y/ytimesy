@@ -9,8 +9,10 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
+import { openChatFromCookies } from "#/domain/open-chat-cookie";
 import { isValidBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
@@ -240,7 +242,12 @@ const linkedChatInput = z
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 	.validator((data: unknown) => linkedChatInput.parse(data) ?? {})
-	.handler(async ({ data: link }) => {
+	.handler(async ({ data: urlLink }) => {
+		// No link: the chat this browser had open, so a reload stays in it.
+		const link =
+			urlLink.chatId || urlLink.projectId
+				? urlLink
+				: (openChatFromCookies(getRequest().headers.get("cookie")) ?? urlLink);
 		let user: Awaited<ReturnType<typeof requireUser>>;
 		try {
 			user = await requireUser(getRequest().headers);
@@ -405,6 +412,10 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			account: { name: user.name, email: user.email, image: user.image },
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
+			// A new chat's "from <branch>" as this browser last read it from GitHub.
+			savedDefaultBranches: savedDefaultBranchesFromCookies(
+				getRequest().headers.get("cookie"),
+			),
 			// The sidebar's PR icons as this browser last read them from GitHub.
 			savedPullRequests: savedSidebarPrsFromCookies(
 				getRequest().headers.get("cookie"),
