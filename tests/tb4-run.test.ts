@@ -236,6 +236,19 @@ describe("tb4 host CPU budget", () => {
 		);
 	});
 
+	it("launches priority tasks first", () => {
+		const many = Array.from({ length: 6 }, (_, i) => two(i));
+		const { journal } = newRun();
+		const launches = nextLaunches({
+			state: replay(journal.events()),
+			tasks: many,
+			hosts: [host],
+			maxInFlight: 2,
+			priority: ["t4", "t2"],
+		});
+		expect(launches.map((l) => l.task)).toEqual(["t4", "t2"]);
+	});
+
 	it("never launches past the fleet-wide in-flight cap", () => {
 		const many = Array.from({ length: 40 }, (_, i) => two(i));
 		const { journal } = newRun();

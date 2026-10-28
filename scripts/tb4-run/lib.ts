@@ -323,6 +323,8 @@ export function nextLaunches(input: {
 	unhealthyHosts?: Set<string>;
 	/** Most trials in flight at once across the fleet (keeps model load under the provider's rate limits). */
 	maxInFlight?: number;
+	/** Tasks to launch first within each batch (after GPU tasks), in this order: the ones that decide the score. */
+	priority?: readonly string[];
 }): LaunchDecision[] {
 	const { state } = input;
 	if (state.paused || state.stopped || !state.runId) return [];
@@ -340,8 +342,19 @@ export function nextLaunches(input: {
 		if (!state.openBatches.has(batch.id)) continue;
 		// GPU tasks first: they are the long pole; among them the largest
 		// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
+		const rank = (name: string) => {
+			const i = input.priority?.indexOf(name) ?? -1;
+			return i < 0 ? Number.POSITIVE_INFINITY : i;
+		};
 		const ordered = [...input.tasks].sort(
-			(a, b) => b.gpus - a.gpus || (a.gpus > 0 ? b.cpus - a.cpus : 0),
+			(a, b) =>
+				b.gpus - a.gpus ||
+				(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
+				(rank(a.name) === rank(b.name)
+					? 0
+					: rank(a.name) < rank(b.name)
+						? -1
+						: 1),
 		);
 		for (const task of ordered) {
 			const p = progress(state, task.name, batch.id);
