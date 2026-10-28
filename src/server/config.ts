@@ -39,11 +39,29 @@ const configuration = z.object({
 	GOOGLE_CLIENT_ID: optionalSecret,
 	GOOGLE_CLIENT_SECRET: optionalSecret,
 });
-export function serverConfig() {
-	const parsed = configuration.safeParse(process.env);
+function parse<T extends z.ZodType>(schema: T): z.infer<T> {
+	const parsed = schema.safeParse(process.env);
 	if (!parsed.success)
 		throw new Error(
 			`Missing or invalid server configuration: ${parsed.error.issues.map((issue) => issue.path.join(".")).join(", ")}`,
 		);
 	return parsed.data;
+}
+
+export function serverConfig() {
+	return parse(configuration);
+}
+
+/** Only what the database pool reads, so a process without the web app's settings (an eval bridge) can open it. */
+export function databaseConfig() {
+	return parse(
+		configuration.pick({ DATABASE_URL: true, DATABASE_POOL_MAX: true }),
+	);
+}
+
+/** Only the token vault's keys. */
+export function vaultConfig() {
+	return parse(
+		configuration.pick({ BETTER_AUTH_SECRET: true, TOKEN_VAULT_KEY: true }),
+	);
 }

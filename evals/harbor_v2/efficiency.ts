@@ -10,12 +10,12 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
 	type EfficiencyRun,
 	efficiencySummary,
 	formatEfficiencyBlock,
 } from "../../src/domain/eval-efficiency";
+import { isMainModule } from "./main-module";
 import type { TrialEfficiency } from "./trial";
 
 async function json(path: string): Promise<unknown> {
@@ -74,5 +74,4 @@ async function main() {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
-	await main();
+if (isMainModule(import.meta.url, "efficiency")) await main();
