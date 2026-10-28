@@ -7,6 +7,7 @@ import {
 	findTaskTomls,
 	type HostOps,
 	loadTasks,
+	readProbe,
 	readTrialDir,
 	tick,
 } from "../scripts/tb4-run/controller.ts";
@@ -846,5 +847,24 @@ describe("tb4 Astra early-stop gates", () => {
 		} finally {
 			process.env = saved;
 		}
+	});
+});
+
+describe("tb4 collection of a real run-trial.sh layout", () => {
+	it("reads the trial's result, not Harbor's job-level result.json", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tb4nest-"));
+		const job = join(dir, "run-b1-task-a01");
+		mkdirSync(join(job, "task__abc", "artifacts"), { recursive: true });
+		writeFileSync(join(job, "result.json"), JSON.stringify({ id: "job", n_total_trials: 1 }));
+		writeFileSync(join(job, "task__abc", "result.json"), JSON.stringify(started(1)));
+		writeFileSync(join(job, "task__abc", "artifacts", "manifest.json"), JSON.stringify([{ source: "/app", status: "ok" }]));
+		expect(classify(readTrialDir(dir)!)).toMatchObject({ kind: "valid", reward: 1 });
+	});
+	it("never collects while the trial's unit is still active", () => {
+		const at = "2026-10-28T00:00:00Z";
+		const boot = String(Date.parse("2026-10-27T23:00:00Z") / 1000);
+		expect(readProbe(["active", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at)).toMatchObject({ unitActive: true, ready: false });
+		expect(readProbe(["failed", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at)).toMatchObject({ ready: true });
+		expect(readProbe(["inactive", boot, ""], at)).toMatchObject({ ready: false, rebootedSinceLaunch: false });
 	});
 });
