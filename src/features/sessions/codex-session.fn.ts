@@ -11,6 +11,7 @@ import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
+import { isValidBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
 import {
@@ -458,6 +459,11 @@ const messageText = z
 	.string()
 	.max(400_000, "Message is too long; attach long text as a file instead.");
 
+const baseBranchInput = z
+	.string()
+	.trim()
+	.refine(isValidBranchName, "Choose a valid branch to start from.");
+
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
 	.validator(
 		(data: {
@@ -476,6 +482,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			attachments?: unknown;
 			/** The client's id for the message; a replayed send with it is not queued twice. */
 			userMessageId?: string;
+			/** The branch a new chat starts from; the server checks it on GitHub. */
+			baseBranch?: string;
 		}) => {
 			const attachments =
 				data.attachments === undefined
@@ -513,6 +521,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				...(data.userMessageId
 					? { idempotencyKey: z.string().uuid().parse(data.userMessageId) }
 					: {}),
+				...(data.baseBranch === undefined
+					? {}
+					: { baseBranch: baseBranchInput.parse(data.baseBranch) }),
 			};
 		},
 	)
