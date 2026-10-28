@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	failureDigest,
 	findTaskTomls,
 	type HostOps,
 	loadTasks,
@@ -11,12 +13,21 @@ import {
 	readTrialDir,
 	tick,
 } from "../scripts/tb4-run/controller.ts";
-import { startFaultProxy } from "../scripts/tb4-run/faults/fault-proxy.ts";
+import {
+	contextWindowFromLog,
+	egressAllowed,
+	egressPreflightVerdict,
+	startEgressGuard,
+	startFaultProxy,
+} from "../scripts/tb4-run/faults/fault-proxy.ts";
 import {
 	batch2Decision,
+	bridgeLogEvidence,
 	classify,
 	earlyStopDecision,
 	earlyStopGates,
+	errorSpike,
+	failureCause,
 	fitsCpu,
 	floorCeiling,
 	HOST_RESERVED_VCPU,
@@ -27,12 +38,16 @@ import {
 	type JournalEvent,
 	lastModelCallFailed,
 	ledgerTotals,
+	needsReview,
 	nextLaunches,
 	pairedComparison,
 	passAtK,
 	replay,
+	reviewConfig,
 	SPEND,
+	sanitizeLine,
 	scoredTrials,
+	stage1Complete,
 	type Task,
 	TRIAL_OVERHEAD_VCPU,
 	taskFromToml,
@@ -83,6 +98,8 @@ function fakeOps(
 	};
 	return { ops, launched };
 }
+/** Rerun mechanics without the review gate (tested on its own below). */
+const noGate = reviewConfig({ TB4_REVIEW_GATE: "off" });
 function newRun() {
 	const dir = mkdtempSync(join(tmpdir(), "tb4run-"));
 	const journal = new Journal(join(dir, "journal.jsonl"));
@@ -139,7 +156,7 @@ describe("tb4 controller", () => {
 			host: "cpu-0",
 		});
 		const { ops, launched } = fakeOps(() => ({}));
-		tick({ runDir: dir, journal, hosts, tasks, ops });
+		tick({ runDir: dir, journal, hosts, tasks, ops, review: noGate });
 		const s = replay(journal.events());
 		expect(s.attempts.get("r1-b1-cpu-a-a01")?.outcome).toMatchObject({
 			kind: "infra",
@@ -154,8 +171,8 @@ describe("tb4 controller", () => {
 				? { hostRebootedSinceLaunch: true }
 				: { result: started(0) },
 		);
-		tick({ runDir: dir, journal, hosts, tasks, ops });
-		tick({ runDir: dir, journal, hosts, tasks, ops });
+		tick({ runDir: dir, journal, hosts, tasks, ops, review: noGate });
+		tick({ runDir: dir, journal, hosts, tasks, ops, review: noGate });
 		expect(launched.filter((l) => l.includes("cpu-a"))).toEqual([
 			"r1-b1-cpu-a-a01",
 			"r1-b1-cpu-a-a02",
@@ -171,7 +188,14 @@ describe("tb4 controller", () => {
 			result: { agent_execution: { started_at: null } },
 		}));
 		for (let i = 0; i < 10; i++)
-			tick({ runDir: dir, journal, hosts, tasks: [tasks[0]], ops });
+			tick({
+				runDir: dir,
+				journal,
+				hosts,
+				tasks: [tasks[0]],
+				ops,
+				review: noGate,
+			});
 		expect(launched).toHaveLength(4); // 1 trial + 3 infra reruns
 	});
 
@@ -1054,41 +1078,849 @@ describe("tb4 dead-attempt cleanup", () => {
 });
 
 describe("tb4 provider-failure classification", () => {
-	const line = (o: Record<string, unknown>) => JSON.stringify({ at: "t", kind: "openai", ...o });
-	const ok = line({ phase: "stream", status: 200, terminal: { type: "response.completed" } });
+	const line = (o: Record<string, unknown>) =>
+		JSON.stringify({ at: "t", kind: "openai", ...o });
+	const ok = line({
+		phase: "stream",
+		status: 200,
+		terminal: { type: "response.completed" },
+	});
 	it("a final 429 or 5xx response is a provider failure (infra)", () => {
-		expect(lastModelCallFailed([ok, line({ phase: "response", status: 429 })].join("\n"))).toContain('"status":429');
-		expect(lastModelCallFailed([ok, line({ phase: "response", status: 503 })].join("\n"))).toContain('"status":503');
-		expect(lastModelCallFailed([ok, line({ phase: "request" })].join("\n"))).not.toBeNull();
+		expect(
+			lastModelCallFailed(
+				[ok, line({ phase: "response", status: 429 })].join("\n"),
+			),
+		).toContain('"status":429');
+		expect(
+			lastModelCallFailed(
+				[ok, line({ phase: "response", status: 503 })].join("\n"),
+			),
+		).toContain('"status":503');
+		expect(
+			lastModelCallFailed([ok, line({ phase: "request" })].join("\n")),
+		).not.toBeNull();
 	});
 	it("a final 4xx client error is the harness's own failure, not infra", () => {
-		expect(lastModelCallFailed([ok, line({ phase: "response", status: 400 })].join("\n"))).toBeNull();
-		expect(lastModelCallFailed([ok, line({ phase: "response", status: 413 })].join("\n"))).toBeNull();
+		expect(
+			lastModelCallFailed(
+				[ok, line({ phase: "response", status: 400 })].join("\n"),
+			),
+		).toBeNull();
+		expect(
+			lastModelCallFailed(
+				[ok, line({ phase: "response", status: 413 })].join("\n"),
+			),
+		).toBeNull();
 	});
 });
 
 describe("tb4 outcome amendments", () => {
 	it("an amend event overrides a finished attempt's outcome", () => {
 		const ev: JournalEvent[] = [
-			{ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) },
+			{
+				at: "t",
+				type: "run-start",
+				runId: "r",
+				commit: "c",
+				bundleSha256: "0".repeat(64),
+			},
 			{ at: "t", type: "batch-open", batch: "b1" },
-			{ at: "t", type: "launch", attemptId: "x-a01", task: "x", batch: "b1", host: "h" },
-			{ at: "t", type: "finish", attemptId: "x-a01", outcome: { kind: "infra", reason: "HTTP 400" } },
-			{ at: "t2", type: "amend", attemptId: "x-a01", outcome: { kind: "valid", reward: 0, agentStartedAt: "2026-10-28T02:06:30Z", detail: "reclassified" }, reason: "4xx is the harness's own failure" },
+			{
+				at: "t",
+				type: "launch",
+				attemptId: "x-a01",
+				task: "x",
+				batch: "b1",
+				host: "h",
+			},
+			{
+				at: "t",
+				type: "finish",
+				attemptId: "x-a01",
+				outcome: { kind: "infra", reason: "HTTP 400" },
+			},
+			{
+				at: "t2",
+				type: "amend",
+				attemptId: "x-a01",
+				outcome: {
+					kind: "valid",
+					reward: 0,
+					agentStartedAt: "2026-10-28T02:06:30Z",
+					detail: "reclassified",
+				},
+				reason: "4xx is the harness's own failure",
+			},
 		];
 		const st = replay(ev);
-		expect(st.attempts.get("x-a01")?.outcome).toMatchObject({ kind: "valid", reward: 0 });
-		expect(scoredTrials(st).get("x")?.scored.map((t) => t.reward)).toEqual([0]);
+		expect(st.attempts.get("x-a01")?.outcome).toMatchObject({
+			kind: "valid",
+			reward: 0,
+		});
+		expect(
+			scoredTrials(st)
+				.get("x")
+				?.scored.map((t) => t.reward),
+		).toEqual([0]);
 	});
 });
 
 describe("tb4 excluded tasks", () => {
 	it("never launches an excluded task, even with a free GPU host", () => {
 		const state = replay([
-			{ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) },
+			{
+				at: "t",
+				type: "run-start",
+				runId: "r",
+				commit: "c",
+				bundleSha256: "0".repeat(64),
+			},
 			{ at: "t", type: "batch-open", batch: "b1" },
 		]);
 		const out = nextLaunches({ state, tasks, hosts, exclude: ["gpu-a"] });
 		expect(out.map((d) => d.task).sort()).toEqual(["cpu-a", "cpu-b"]);
+	});
+});
+
+/* ---------- run safety: causes, review gate, error spike, staged scaling ---------- */
+
+/** The 2026-10-27 incident's bridge log: a provider failure without a reason, then the builder stops. */
+const INCIDENT_LOG = [
+	'tool exec_command {"cmd":"ls"}',
+	"Model provider failed {",
+	"  kind: 'provider',",
+	"  code: 'unknown',",
+	"  retryable: false",
+	"}",
+	"builder stopped: The model request failed without a usable provider reason. Check the connection and retry. No fallback was used.",
+].join("\n");
+
+/** A run-trial.sh results dir: <attempt>/<attempt>/<task>__<id>/{result.json,trial.log,agent/,verifier/}. */
+function trialDir(opts: {
+	result: Record<string, unknown>;
+	bridgeLog?: string;
+	ctrf?: unknown;
+}) {
+	const root = mkdtempSync(join(tmpdir(), "tb4cause-"));
+	const attempt = "r1-b1-cpu-a-a01";
+	const trial = join(root, attempt, attempt, "cpu-a__Ab12cd");
+	mkdirSync(join(trial, "agent"), { recursive: true });
+	mkdirSync(join(trial, "verifier"), { recursive: true });
+	writeFileSync(join(root, attempt, attempt, "result.json"), "{}");
+	writeFileSync(join(trial, "result.json"), JSON.stringify(opts.result));
+	writeFileSync(join(trial, "trial.log"), "harbor trial log\n");
+	writeFileSync(join(trial, "verifier", "reward.txt"), "0\n");
+	if (opts.bridgeLog !== undefined)
+		writeFileSync(join(trial, "agent", "ytimesy-bridge.log"), opts.bridgeLog);
+	if (opts.ctrf !== undefined)
+		writeFileSync(
+			join(trial, "verifier", "ctrf.json"),
+			JSON.stringify(opts.ctrf),
+		);
+	return { root, jobDir: join(root, attempt) };
+}
+
+describe("tb4 failure causes", () => {
+	it("the incident: a builder stop stays a scored 0 but carries an abnormal cause", () => {
+		const { jobDir } = trialDir({
+			result: started(0),
+			bridgeLog: INCIDENT_LOG,
+		});
+		const result = readTrialDir(jobDir)!;
+		const outcome = classify(result);
+		expect(outcome).toMatchObject({ kind: "valid", reward: 0 });
+		const cause = failureCause(outcome, result)!;
+		expect(cause.cause).toBe("agent-stopped-abnormally");
+		expect(cause.detail).toContain("builder stopped: The model request failed");
+		expect(cause.detail).toContain("last code unknown");
+		expect(needsReview(cause, reviewConfig({}))).toBe(true);
+	});
+	it("a normal end lists the verifier's failed tests and needs no review", () => {
+		const { jobDir } = trialDir({
+			result: started(0),
+			bridgeLog:
+				"tool exec_command {}\nreview round 1: findings returned to the builder\n",
+			ctrf: {
+				results: {
+					summary: { tests: 3, passed: 1, failed: 2 },
+					tests: [
+						{ name: "test_a", status: "passed" },
+						{ name: "test_b", status: "failed" },
+						{ name: "test_c", status: "failed" },
+					],
+				},
+			},
+		});
+		const result = readTrialDir(jobDir)!;
+		const cause = failureCause(classify(result), result)!;
+		expect(cause).toMatchObject({
+			cause: "agent-finished",
+			failedTests: { count: 2, names: ["test_b", "test_c"] },
+		});
+		expect(cause.detail).toBe("verifier: 2 failed test(s): test_b, test_c");
+		expect(needsReview(cause, reviewConfig({}))).toBe(false);
+	});
+	it("timeout, budget cap, verifier error, infra and no evidence", () => {
+		const valid0 = {
+			kind: "valid",
+			reward: 0,
+			agentStartedAt: "x",
+			detail: "",
+		} as const;
+		const ev = (e: Partial<ReturnType<typeof bridgeLogEvidence>>) => ({
+			...started(0),
+			evidence: { bridgeLog: true, providerFailures: 0, ...e },
+		});
+		expect(
+			failureCause(valid0, {
+				...ev({}),
+				exception_info: {
+					exception_type: "AgentTimeoutError",
+					exception_message: "900 s",
+				},
+			})?.cause,
+		).toBe("agent-timeout");
+		expect(
+			failureCause(
+				valid0,
+				ev(
+					bridgeLogEvidence(
+						"builder stopped: Trial spending cap reached: $12.0100 of $12.",
+					),
+				),
+			)?.cause,
+		).toBe("budget-cap");
+		expect(
+			failureCause(valid0, {
+				...ev({}),
+				exception_info: { exception_type: "VerifierTimeoutError" },
+			})?.cause,
+		).toBe("verifier-error");
+		expect(
+			failureCause({ kind: "infra", reason: "host restarted during the trial" })
+				?.cause,
+		).toBe("infra:host restarted during the trial");
+		expect(failureCause(valid0, started(0))?.cause).toBe("unknown");
+		expect(failureCause({ ...valid0, reward: 1 })).toBeNull();
+		// Provider failures with no builder stop still need a look.
+		expect(
+			failureCause(
+				valid0,
+				ev(bridgeLogEvidence(INCIDENT_LOG.split("\nbuilder")[0])),
+			),
+		).toMatchObject({
+			cause: "agent-stopped-abnormally",
+		});
+		expect(
+			bridgeLogEvidence(
+				"TypeError: Cannot read properties of undefined\n    at x",
+			).uncaught,
+		).toContain("TypeError");
+	});
+	it("keeps credentials and long lines out of the journal", () => {
+		const line = sanitizeLine(
+			`builder stopped: failed with Authorization: Bearer abcdefghijklmnop key=AKIAABCDEFGHIJKLMNOP sk-abcdefghijklmnopqrstu api_key=hunter2 ${"x".repeat(500)}`,
+		);
+		expect(line).not.toMatch(
+			/abcdefghijklmnop|AKIAABCDEFGHIJKLMNOP|sk-abc|hunter2/,
+		);
+		expect(line.length).toBeLessThanOrEqual(300);
+	});
+	it("reads the TB4_* review settings", () => {
+		expect(reviewConfig({})).toMatchObject({
+			gate: true,
+			spikeCount: 3,
+			spikeMinutes: 30,
+			stage1: true,
+		});
+		const c = reviewConfig({
+			TB4_REVIEW_GATE: "off",
+			TB4_STAGE1: "0",
+			TB4_SPIKE_COUNT: "5",
+			TB4_SPIKE_MINUTES: "10",
+			TB4_REVIEW_BENIGN: "agent-finished",
+		});
+		expect(c).toMatchObject({
+			gate: false,
+			stage1: false,
+			spikeCount: 5,
+			spikeMinutes: 10,
+		});
+		expect([...c.benign]).toEqual(["agent-finished"]);
+	});
+});
+
+describe("tb4 review gate", () => {
+	const at = (min: number) =>
+		new Date(Date.UTC(2026, 9, 28, 1, min)).toISOString();
+	const gate = reviewConfig({ TB4_STAGE1: "off" });
+	it("an abnormal end holds new launches, in-flight trials keep finishing, and an ack resumes", () => {
+		const { dir, journal } = newRun();
+		const many: Task[] = Array.from({ length: 4 }, (_, i) => ({
+			name: `t${i}`,
+			cpus: 2,
+			memoryMb: 1024,
+			gpus: 0,
+			separateVerifier: false,
+		}));
+		const { jobDir } = trialDir({
+			result: started(0),
+			bridgeLog: INCIDENT_LOG,
+		});
+		const bad = readTrialDir(jobDir)!;
+		let minute = 0;
+		const now = () => at(minute);
+		const { ops, launched } = fakeOps((id) =>
+			id.includes("t0")
+				? { result: bad }
+				: id.includes("t1")
+					? "pending"
+					: { result: started(1) },
+		);
+		process.env.TB4_MAX_IN_FLIGHT = "2";
+		try {
+			tick({
+				runDir: dir,
+				journal,
+				hosts: [hosts[0]],
+				tasks: many,
+				ops,
+				now,
+				review: gate,
+			});
+			expect(launched).toEqual(["r1-b1-t0-a01", "r1-b1-t1-a01"]);
+			minute = 1;
+			const log = tick({
+				runDir: dir,
+				journal,
+				hosts: [hosts[0]],
+				tasks: many,
+				ops,
+				now,
+				review: gate,
+			});
+			expect(
+				log.some((l) =>
+					l.startsWith("REVIEW r1-b1-t0-a01: agent-stopped-abnormally"),
+				),
+			).toBe(true);
+			expect(launched).toHaveLength(2); // room for one more, but held
+			let s = replay(journal.events());
+			expect(s.attempts.get("r1-b1-t0-a01")).toMatchObject({
+				outcome: { kind: "valid", reward: 0 },
+				cause: { cause: "agent-stopped-abnormally" },
+			});
+			expect([...s.reviews.keys()]).toEqual(["r1-b1-t0-a01"]);
+			// The in-flight trial is still observed and collected while held.
+			minute = 2;
+			tick({
+				runDir: dir,
+				journal,
+				hosts: [hosts[0]],
+				tasks: many,
+				ops,
+				now,
+				review: gate,
+			});
+			expect(launched).toHaveLength(2);
+			journal.append({
+				at: at(3),
+				type: "ack",
+				key: "r1-b1-t0-a01",
+				note: "read the log: context-window fallback; fixed",
+			});
+			s = replay(journal.events());
+			expect(s.reviews.size).toBe(0);
+			minute = 4;
+			tick({
+				runDir: dir,
+				journal,
+				hosts: [hosts[0]],
+				tasks: many,
+				ops,
+				now,
+				review: gate,
+			});
+			expect(launched).toContain("r1-b1-t2-a01");
+			const digest = failureDigest(dir, replay(journal.events()));
+			expect(digest).toEqual([
+				expect.objectContaining({
+					attemptId: "r1-b1-t0-a01",
+					outcome: "valid 0",
+					cause: "agent-stopped-abnormally",
+					review: "acked: read the log: context-window fallback; fixed",
+				}),
+			]);
+		} finally {
+			delete process.env.TB4_MAX_IN_FLIGHT;
+		}
+	});
+	it("ack all clears every pending review; the watchdog alerts while one is pending", () => {
+		const ev: JournalEvent[] = [
+			{
+				at: "t",
+				type: "run-start",
+				runId: "r",
+				commit: "c",
+				bundleSha256: "0".repeat(64),
+			},
+			{
+				at: "t",
+				type: "review-needed",
+				attemptId: "a",
+				task: "x",
+				cause: "verifier-error",
+				detail: "",
+			},
+			{
+				at: "t",
+				type: "review-needed",
+				attemptId: "b",
+				task: "y",
+				cause: "unknown",
+				detail: "",
+			},
+		];
+		const pending = replay(ev);
+		expect(nextLaunches({ state: pending, tasks, hosts })).toEqual([]);
+		const w = watch({
+			now: 0,
+			state: pending,
+			logSilenceMs: new Map(),
+			unhealthyHosts: [],
+			bedrockErrorsLast15m: { throttles: 0, serverErrors: 0 },
+			modelSpendUsd: 0,
+			infraSpendUsd: 0,
+			alerted: { model: [], infra: [] },
+			controllerActive: true,
+			lastProgressAt: 0,
+		});
+		expect(w.alerts.map((a) => a.key)).toEqual(["review:a", "review:b"]);
+		expect(
+			replay([...ev, { at: "t", type: "ack", key: "all", note: "both read" }])
+				.reviews.size,
+		).toBe(0);
+	});
+	it("an old journal without causes still replays, and the digest derives causes from results", () => {
+		const { dir, journal } = newRun();
+		journal.append({
+			at: at(0),
+			type: "launch",
+			attemptId: "r1-b1-cpu-a-a01",
+			task: "cpu-a",
+			batch: "b1",
+			host: "cpu-0",
+		});
+		journal.append({
+			at: at(5),
+			type: "launch",
+			attemptId: "r1-b1-cpu-b-a01",
+			task: "cpu-b",
+			batch: "b1",
+			host: "cpu-0",
+		});
+		journal.append({
+			at: at(9),
+			type: "finish",
+			attemptId: "r1-b1-cpu-b-a01",
+			outcome: { kind: "infra", reason: "host restarted during the trial" },
+		});
+		journal.append({
+			at: at(10),
+			type: "finish",
+			attemptId: "r1-b1-cpu-a-a01",
+			outcome: {
+				kind: "valid",
+				reward: 0,
+				agentStartedAt: at(1),
+				detail: "reward 0",
+			},
+		});
+		const { root } = trialDir({ result: started(0), bridgeLog: INCIDENT_LOG });
+		mkdirSync(join(dir, "results"), { recursive: true });
+		renameSync(
+			join(root, "r1-b1-cpu-a-a01"),
+			join(dir, "results", "r1-b1-cpu-a-a01"),
+		);
+		const s = replay(journal.events());
+		expect(s.reviews.size).toBe(0);
+		expect(
+			failureDigest(dir, s).map((r) => [r.attemptId, r.cause, r.derived]),
+		).toEqual([
+			["r1-b1-cpu-b-a01", "infra:host restarted during the trial", true],
+			["r1-b1-cpu-a-a01", "agent-stopped-abnormally", true],
+		]);
+	});
+});
+
+describe("tb4 error-spike stop", () => {
+	const at = (min: number) =>
+		new Date(Date.UTC(2026, 9, 28, 1, 0) + min * 60_000).toISOString();
+	const cfg = reviewConfig({});
+	const abnormal = {
+		cause: "agent-stopped-abnormally",
+		detail: "builder stopped: x",
+	};
+	function finished(rows: [number, { cause: string; detail: string }][]) {
+		const ev: JournalEvent[] = [
+			{
+				at: at(0),
+				type: "run-start",
+				runId: "r",
+				commit: "c",
+				bundleSha256: "0".repeat(64),
+			},
+			{ at: at(0), type: "batch-open", batch: "b1" },
+		];
+		rows.forEach(([min, cause], i) => {
+			ev.push({
+				at: at(0),
+				type: "launch",
+				attemptId: `a${i}`,
+				task: `t${i}`,
+				batch: "b1",
+				host: "h",
+			});
+			ev.push({
+				at: at(min),
+				type: "finish",
+				attemptId: `a${i}`,
+				outcome: cause.cause.startsWith("infra")
+					? { kind: "infra", reason: "x" }
+					: { kind: "valid", reward: 0, agentStartedAt: at(0), detail: "" },
+				cause,
+			});
+		});
+		return replay(ev);
+	}
+	it("stops at 3 abnormal ends within 30 min, not 2, not spread out, not infra", () => {
+		expect(
+			errorSpike(
+				finished([
+					[10, abnormal],
+					[20, abnormal],
+					[35, abnormal],
+				]),
+				Date.parse(at(36)),
+				cfg,
+			),
+		).toContain(
+			"error spike: 3 abnormal trial ends (agent-stopped-abnormally) within 30 min",
+		);
+		expect(
+			errorSpike(
+				finished([
+					[10, abnormal],
+					[20, abnormal],
+				]),
+				Date.parse(at(36)),
+				cfg,
+			),
+		).toBeNull();
+		expect(
+			errorSpike(
+				finished([
+					[0, abnormal],
+					[20, abnormal],
+					[45, abnormal],
+				]),
+				Date.parse(at(46)),
+				cfg,
+			),
+		).toBeNull();
+		const infra = { cause: "infra:host restarted", detail: "" };
+		expect(
+			errorSpike(
+				finished([
+					[10, infra],
+					[11, infra],
+					[12, abnormal],
+				]),
+				Date.parse(at(13)),
+				cfg,
+			),
+		).toBeNull();
+		const benign = { cause: "agent-finished", detail: "" };
+		expect(
+			errorSpike(
+				finished([
+					[10, benign],
+					[11, benign],
+					[12, benign],
+				]),
+				Date.parse(at(13)),
+				cfg,
+			),
+		).toBeNull();
+	});
+	it("the tick journals the stop and launches nothing more", () => {
+		const { dir, journal } = newRun();
+		const many: Task[] = Array.from({ length: 6 }, (_, i) => ({
+			name: `t${i}`,
+			cpus: 2,
+			memoryMb: 1024,
+			gpus: 0,
+			separateVerifier: false,
+		}));
+		const { jobDir } = trialDir({
+			result: started(0),
+			bridgeLog: INCIDENT_LOG,
+		});
+		const bad = readTrialDir(jobDir)!;
+		let minute = 0;
+		const { ops, launched } = fakeOps((id) =>
+			Number(id.match(/-t(\d)-/)?.[1]) < 3 ? { result: bad } : "pending",
+		);
+		// Gate off: the spike alone must stop the run.
+		const review = reviewConfig({ TB4_REVIEW_GATE: "off", TB4_STAGE1: "off" });
+		tick({
+			runDir: dir,
+			journal,
+			hosts: [hosts[0]],
+			tasks: many,
+			ops,
+			now: () => at(minute),
+			review,
+		});
+		expect(launched).toHaveLength(6);
+		minute = 5;
+		const log = tick({
+			runDir: dir,
+			journal,
+			hosts: [hosts[0]],
+			tasks: many,
+			ops,
+			now: () => at(minute),
+			review,
+		});
+		expect(
+			log.some((l) => l.startsWith("STOP error spike: 3 abnormal trial ends")),
+		).toBe(true);
+		expect(replay(journal.events()).stopped).toContain("error spike");
+		minute = 6;
+		tick({
+			runDir: dir,
+			journal,
+			hosts: [hosts[0]],
+			tasks: many,
+			ops,
+			now: () => at(minute),
+			review,
+		});
+		expect(launched).toHaveLength(6);
+	});
+});
+
+describe("tb4 staged scaling", () => {
+	const at = (min: number) =>
+		new Date(Date.UTC(2026, 9, 28, 1, 0) + min * 60_000).toISOString();
+	function openAllRun() {
+		const r = newRun();
+		r.journal.append({ at: "t", type: "batch-open", batch: "b2" });
+		return r;
+	}
+	it("launches one trial per task, journals stage-review when they are done, and waits for ack stage1", () => {
+		const { dir, journal } = openAllRun();
+		const { ops, launched } = fakeOps();
+		const review = reviewConfig({});
+		const run = (min: number) =>
+			tick({
+				runDir: dir,
+				journal,
+				hosts,
+				tasks,
+				ops,
+				now: () => at(min),
+				review,
+			});
+		run(0);
+		expect(launched.sort()).toEqual([
+			"r1-b1-cpu-a-a01",
+			"r1-b1-cpu-b-a01",
+			"r1-b1-gpu-a-a01",
+		]);
+		const log = run(1); // all three pass and are collected
+		expect(
+			log.some((l) => l.startsWith("STAGE-REVIEW stage 1 done: 3 of 3")),
+		).toBe(true);
+		expect(launched).toHaveLength(3);
+		run(2);
+		expect(launched).toHaveLength(3);
+		expect(replay(journal.events()).reviews.has("stage1")).toBe(true);
+		journal.append({
+			at: at(3),
+			type: "ack",
+			key: "stage1",
+			note: "every stage-1 log read",
+		});
+		run(4);
+		expect(launched.filter((l) => l.includes("-b2-")).length).toBeGreaterThan(
+			0,
+		);
+		// The stage review is never journaled twice.
+		run(5);
+		expect(
+			journal.events().filter((e) => e.type === "stage-review"),
+		).toHaveLength(1);
+	});
+	it("front-loaded tasks get only their stage-1 trial first; excluded tasks do not hold stage 1", () => {
+		const two = (i: number): Task => ({
+			name: `t${i}`,
+			cpus: 2,
+			memoryMb: 1024,
+			gpus: 0,
+			separateVerifier: false,
+		});
+		const { journal } = openAllRun();
+		const state = replay(journal.events());
+		const d = nextLaunches({
+			state,
+			tasks: [two(0), two(1)],
+			hosts: [hosts[0]],
+			frontload: ["t1"],
+			stage1: true,
+		});
+		expect(d.map((x) => `${x.task}/${x.batch}`)).toEqual(["t1/b1", "t0/b1"]);
+		for (const x of d) {
+			journal.append({
+				at: "t",
+				type: "launch",
+				attemptId: x.attemptId,
+				task: x.task,
+				batch: x.batch,
+				host: x.host,
+			});
+			if (x.task === "t1")
+				journal.append({
+					at: "t",
+					type: "finish",
+					attemptId: x.attemptId,
+					outcome: {
+						kind: "valid",
+						reward: 1,
+						agentStartedAt: "t",
+						detail: "",
+					},
+				});
+		}
+		expect(stage1Complete(replay(journal.events()), [two(0), two(1)])).toBe(
+			false,
+		);
+		// t0 still running holds stage 1 unless it is excluded (run elsewhere).
+		expect(
+			stage1Complete(replay(journal.events()), [two(0), two(1)], ["t0"]),
+		).toBe(true);
+		expect(
+			stage1Complete(replay(journal.events()), [two(1), two(2)], ["t2"]),
+		).toBe(true);
+	});
+	it("an older journal with batch-2 trials already launched is not held", () => {
+		const { journal } = openAllRun();
+		journal.append({
+			at: "t",
+			type: "launch",
+			attemptId: "r1-b2-cpu-a-a01",
+			task: "cpu-a",
+			batch: "b2",
+			host: "cpu-0",
+		});
+		const state = replay(journal.events());
+		expect(state.stage1Released).toBe(true);
+		expect(
+			nextLaunches({ state, tasks, hosts, stage1: true }).some(
+				(d) => d.batch === "b2",
+			),
+		).toBe(true);
+	});
+});
+
+describe("tb4 egress preflight", () => {
+	it("tunnels only to the model host and records every blocked destination", async () => {
+		const target = createServer((_q, r) => r.end("model"));
+		await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
+		const tp = (target.address() as { port: number }).port;
+		const g = await startEgressGuard({ allow: ["127.0.0.1"] });
+		const tunnel = (host: string) =>
+			new Promise<string>((resolve) => {
+				const s = netConnect(g.port, "127.0.0.1", () =>
+					s.write(`CONNECT ${host}:${tp} HTTP/1.1\r\nHost: ${host}\r\n\r\n`),
+				);
+				s.once("data", (d) => {
+					resolve(d.toString().split("\r\n")[0]);
+					s.destroy();
+				});
+			});
+		expect(await tunnel("127.0.0.1")).toBe(
+			"HTTP/1.1 200 Connection Established",
+		);
+		expect(await tunnel("openrouter.ai")).toBe("HTTP/1.1 403 Forbidden");
+		const plain = await new Promise<number>((resolve) => {
+			const s = netConnect(g.port, "127.0.0.1", () =>
+				s.write(
+					"GET http://models.dev/api.json HTTP/1.1\r\nHost: models.dev\r\nConnection: close\r\n\r\n",
+				),
+			);
+			s.once("data", (d) => {
+				resolve(Number(d.toString().split(" ")[1]));
+				s.destroy();
+			});
+		});
+		expect(plain).toBe(403);
+		expect(g.entries().map((e) => [e.host, e.allowed])).toEqual([
+			["127.0.0.1", true],
+			["openrouter.ai", false],
+			["models.dev", false],
+		]);
+		expect(
+			egressAllowed("bedrock-runtime.us-east-1.amazonaws.com", [
+				".amazonaws.com",
+			]),
+		).toBe(true);
+		g.server.close();
+		target.close();
+	});
+	it("passes only when the trial started, used the guard, and logged the expected context window", () => {
+		const entries = [
+			{
+				at: "t",
+				method: "CONNECT",
+				host: "model.example",
+				port: 443,
+				allowed: true,
+			},
+			{
+				at: "t",
+				method: "CONNECT",
+				host: "openrouter.ai",
+				port: 443,
+				allowed: false,
+			},
+		];
+		const ok = egressPreflightVerdict({
+			bridgeLog: "context window 400000 (catalog)\ntool exec_command {}\n",
+			entries,
+			modelHost: "model.example",
+			expectedContextWindow: 400_000,
+		});
+		expect(ok).toMatchObject({ ok: true, blocked: ["openrouter.ai:443"] });
+		const fallback = egressPreflightVerdict({
+			bridgeLog: `context window 128,000\n${INCIDENT_LOG}`,
+			entries,
+			modelHost: "model.example",
+			expectedContextWindow: 400_000,
+		});
+		expect(fallback.ok).toBe(false);
+		expect(fallback.problems.join("\n")).toMatch(
+			/builder stopped[\s\S]*context window 128000, expected 400000/,
+		);
+		expect(
+			egressPreflightVerdict({
+				bridgeLog: "",
+				entries: [],
+				modelHost: "model.example",
+				expectedContextWindow: 1,
+			}).problems,
+		).toHaveLength(2);
+		expect(contextWindowFromLog("no window here")).toBeNull();
 	});
 });
