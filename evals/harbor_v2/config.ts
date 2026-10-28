@@ -7,6 +7,7 @@ import {
 	type ModelProvider,
 	parseModelRouteId,
 } from "../../src/domain/model-connection";
+import { knownModelLimits } from "../../src/domain/model-context-windows";
 import {
 	type ModelBilling,
 	modelBilling,
@@ -258,6 +259,14 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		throw new Error(
 			`No list price is known for ${modelId}; add it to KNOWN_MODEL_PRICES before a capped run.`,
 		);
+	// Bedrock has no metadata endpoint: a window must be checked in, or
+	// compaction would run on the unknown-window guess (runtime.ts).
+	const unknownWindow = (id: string) =>
+		route === "bedrock" && !knownModelLimits(id);
+	if (unknownWindow(modelId))
+		throw new Error(
+			`No context window is known for ${modelId}; add it to src/domain/model-context-windows.ts before a run.`,
+		);
 	const roles: Partial<Record<BridgeRole, HarborModel>> = {};
 	for (const role of BRIDGE_ROLES) {
 		const model = roleModelOnRoute(
@@ -271,6 +280,10 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		if (paid && !model.billing.price)
 			throw new Error(
 				`No list price is known for roleModels.${role}'s ${model.modelId}; add it to KNOWN_MODEL_PRICES before a capped run.`,
+			);
+		if (unknownWindow(model.modelId))
+			throw new Error(
+				`No context window is known for roleModels.${role}'s ${model.modelId}; add it to src/domain/model-context-windows.ts before a run.`,
 			);
 		roles[role] = model;
 	}

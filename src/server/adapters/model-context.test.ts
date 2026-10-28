@@ -184,20 +184,97 @@ it("reads an unrecorded custom endpoint window from the same model listing disco
 	);
 });
 
-it("reads image input from the public catalog for a listed model's direct id", async () => {
+it("reads image input from the public catalog for a model without a checked-in entry", async () => {
 	browse.mockResolvedValue([
-		{ id: "deepseek/deepseek-v4.1-flash", imageInput: false },
+		{ id: "vendor/text-only", imageInput: false, contextWindow: 64_000 },
 	]);
 	const context = await readModelContext(
 		{
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			apiKey: "fixture",
-			modelId: "deepseek/deepseek-v4.1-flash",
+			modelId: "vendor/text-only",
 			cacheKey: "image-input",
 		},
 		vi.fn(),
 	);
 	expect(context.imageInput).toBe(false);
+	browse.mockReset();
+});
+
+it("uses a routed model's checked-in window and image input without any catalog request", async () => {
+	browse.mockRejectedValue(new Error("catalog down"));
+	const fetch = vi.fn();
+	for (const [provider, baseUrl, modelId] of [
+		[
+			"openai",
+			"https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+			"gpt-6-astra",
+		],
+		["openai", "https://api.openai.com/v1", "gpt-6.1-sol"],
+		["openrouter", "https://openrouter.ai/api/v1", "openai/gpt-6-luna"],
+	] as const) {
+		const context = await readModelContext(
+			{
+				provider,
+				baseUrl,
+				apiKey: "fixture",
+				modelId,
+				cacheKey: `known/${modelId}`,
+			},
+			fetch,
+		);
+		expect(context).toMatchObject({
+			contextWindow: 1_050_000,
+			imageInput: true,
+		});
+	}
+	expect(browse).not.toHaveBeenCalled();
+	expect(fetch).not.toHaveBeenCalled();
+	browse.mockReset();
+});
+
+it("falls back to the checked-in window when owner metadata is unreachable", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	const fetch = vi.fn(async () => {
+		throw new TypeError("fetch failed");
+	});
+	const context = await readModelContext(
+		{
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com/v1",
+			apiKey: "fixture",
+			modelId: "claude-opus-5-5",
+			cacheKey: "anthropic-down",
+		},
+		fetch,
+	);
+	expect(context.contextWindow).toBe(1_000_000);
+	expect(warn).toHaveBeenCalledWith(
+		"Model context metadata unavailable.",
+		expect.objectContaining({ modelId: "claude-opus-5-5", error: "TypeError" }),
+	);
+	warn.mockRestore();
+});
+
+it("warns once per lookup, naming the model, when a window stays unknown", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	browse.mockRejectedValue(new Error("catalog down"));
+	const context = await readModelContext(
+		{
+			provider: "openai",
+			baseUrl: "https://api.openai.com/v1",
+			apiKey: "fixture",
+			modelId: "gpt-unlisted",
+			cacheKey: "unknown-window",
+		},
+		vi.fn(),
+	);
+	expect(context.contextWindow).toBeUndefined();
+	expect(warn).toHaveBeenCalledWith(
+		"Model context window unknown; the run uses the unknown-window budget.",
+		{ provider: "openai", modelId: "gpt-unlisted", assumedWindow: 128_000 },
+	);
+	warn.mockRestore();
 	browse.mockReset();
 });
