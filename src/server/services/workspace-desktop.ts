@@ -289,6 +289,14 @@ export async function desktopFromRunningGuest(
 ): Promise<WorkspaceDesktop | null> {
 	const running = await machines.isRunning(WorkspaceId(providerRef));
 	if (!running) return null;
+	return desktopServing(machines, providerRef);
+}
+
+/** The desktop on a guest known to be running, or null when it is not serving. */
+async function desktopServing(
+	machines: Pick<WorkspaceMachines, "exec">,
+	providerRef: string,
+): Promise<WorkspaceDesktop | null> {
 	const probe = await machines.exec(
 		WorkspaceId(providerRef),
 		probeWorkspaceDesktop(desktopViewerCredentialDigest(providerRef)),
@@ -358,17 +366,24 @@ function recoverRunningDesktop(
 			templateProviderRef: workspace?.providerRef ?? null,
 		});
 		if (!providerRef) return null;
-		const recovered = yield* Effect.tryPromise(() =>
-			desktopFromRunningGuest(machines, providerRef),
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
 		);
-		if (!recovered) {
-			// Asleep or not serving: take the viewer route down until a start republishes it.
+		if (!running) {
+			// Asleep: take the viewer route down so no request to it wakes the
+			// machine; a start republishes it. A running machine keeps its route
+			// even when nothing serves yet: a start publishes it while the
+			// desktop comes up, and withdrawing then raced that start.
 			remotes.delete(scopeKey(scope));
 			yield* Effect.tryPromise(() =>
 				withdrawDesktopViewer(machines, providerRef),
 			).pipe(Effect.catchAll(() => Effect.void));
 			return null;
 		}
+		const recovered = yield* Effect.tryPromise(() =>
+			desktopServing(machines, providerRef),
+		);
+		if (!recovered) return null;
 		remotes.set(scopeKey(scope), providerRef);
 		void machines
 			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)
