@@ -93,11 +93,25 @@ export function worktreeStartScript(input: {
 	return [
 		"set -e",
 		`cd ${quote(input.cwd)}`,
+		// Most task images ship without git (a product VM has it): as root,
+		// install it with the image's package manager; otherwise fail.
+		"if ! command -v git >/dev/null 2>&1; then",
+		'  if [ "$(id -u)" = 0 ]; then',
+		"    { if command -v apt-get >/dev/null; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git; elif command -v dnf >/dev/null; then dnf install -y -q git-core; elif command -v apk >/dev/null; then apk add -q git; fi; } >/dev/null 2>&1 || true",
+		"  fi",
+		"  command -v git >/dev/null 2>&1 || { echo 'git is not installed and the trial user cannot install it' >&2; exit 1; }",
+		"  echo ytimesy-installed-git",
+		"fi",
+		// A task image's non-root user in a root-owned checkout (/app mode 1777):
+		// git refuses the repository as "dubious ownership" for every later
+		// command, the builder's own `git apply -3` included.
+		`if [ ! -O . ] && ! git config --global --get-all safe.directory 2>/dev/null | grep -qxF '*'; then git config --global --add safe.directory '*'; fi`,
 		"created=0",
 		"if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
 		"  git init -q",
 		"  created=1",
-		`  { printf '%s\\n' ${HEAVY_DIRECTORIES.map(quote).join(" ")}; find . -path ./.git -prune -o -type f -size ${LARGE_FILE} -print | sed 's|^\\./|/|'; } >> "$(git rev-parse --git-path info/exclude)"`,
+		// Files the trial user cannot read (an execute-only tool binary) cannot be indexed.
+		`  { printf '%s\\n' ${HEAVY_DIRECTORIES.map(quote).join(" ")}; find . -path ./.git -prune -o -type f -size ${LARGE_FILE} -print | sed 's|^\\./|/|'; find . -path ./.git -prune -o -type f -print | while IFS= read -r f; do [ -r "$f" ] || printf '%s\\n' "\${f#.}"; done; } >> "$(git rev-parse --git-path info/exclude)"`,
 		"fi",
 		`git config user.email >/dev/null || git config user.email ${quote(author.email)}`,
 		`git config user.name >/dev/null || git config user.name ${quote(author.name)}`,
@@ -315,7 +329,7 @@ export function worktreeWriters(input: {
 				next: parsed.base,
 			});
 			log(
-				`writer ${sessionId}: worktree ${path} at ${parsed.base.slice(0, 12)}${parsed.createdRepo ? " (made the checkout a git repository)" : ""}`,
+				`writer ${sessionId}: worktree ${path} at ${parsed.base.slice(0, 12)}${parsed.createdRepo ? " (made the checkout a git repository)" : ""}${started.stdout.includes("ytimesy-installed-git") ? " (installed git)" : ""}`,
 			);
 			return { cwd, label };
 		});
@@ -532,13 +546,16 @@ export function worktreeWriters(input: {
 			const removed = await exec(
 				[
 					`cd ${quote(checkout)} || exit 1`,
+					// rm, then `git worktree prune`, then the branches (a branch still
+					// checked out in a worktree is not deleted): `git worktree remove`
+					// took minutes on a worktree with a copied 7 GB Lean .lake (rm: 2 s).
+					...list.map((writer) => `rm -rf ${quote(writer.path)}`),
+					"git worktree prune",
 					...list.flatMap((writer) => [
-						`git worktree remove --force ${quote(writer.path)} 2>/dev/null || rm -rf ${quote(writer.path)}`,
 						`git branch -D ${quote(`ytimesy/${writer.label}`)} >/dev/null 2>&1 || true`,
 						`git update-ref -d ${quote(writerPatchRef(writer.label))} 2>/dev/null || true`,
 						`git update-ref -d ${quote(`refs/ytimesy/bases/${writer.label}`)} 2>/dev/null || true`,
 					]),
-					"git worktree prune",
 					`rm -rf ${quote(root)}`,
 					// A repository the bridge made only for its writers goes too.
 					...(createdRepo ? ["rm -rf .git"] : []),
