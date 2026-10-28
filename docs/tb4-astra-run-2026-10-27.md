@@ -123,3 +123,22 @@ mantle route this run uses has no published Astra limit. Instead of a quota incr
   retries each get the window again (about 20 minutes in all).
 - A trial whose last model call still failed is classified infra and retried under the
   retry rule, never scored 0.
+
+## Frozen settings (2026-10-27 evening)
+
+- Variant: `codeMode=on,plan=on,helpers=write,fetch=on,search=function`; `checks` at its default `full`
+  (no check-in-proportion line: it stopped hard, target-driven tasks after the first passing check),
+  plus the unattended rule that a reported problem is never closed as intended (98d6ce7).
+- Model `openai.gpt-6-astra`, effort xhigh, Bedrock mantle, web search on.
+- Caps: per-task caps from `astra-trial-caps.json`; `TB4_MODEL_TOTAL_CAP_USD=2900`,
+  `TB4_MODEL_STOP_MARGIN_USD=300` (no new launches past $2,600 settled); `TB4_MAX_IN_FLIGHT=30`.
+- Order: GPU tasks first when a GPU host exists; then `TB4_PRIORITY_TASKS`, the CPU tasks Codex
+  passes only sometimes (they decide the score), longest first: ctr-optimization,
+  live-database-cutover, takens-embedding-lean, lake-temp-glm, layout-config-recreation,
+  vf2-speedup-networkx, cumulative-layout-shift, distributed-dedup, payments-pipeline-fix,
+  biped-contact-dynamics, music-harmony, freecad-spring-clip, batched-eval-parity,
+  session-window-debug, embedding-drift-monitor, mvcc-lsm-compaction. The early-stop check
+  reads them first.
+- GPU tasks (jax-speedrun-gpu, fp8-rmsnorm-gemm, math-eval-grader) run whenever p5.4xlarge
+  capacity appears, with this same frozen commit; until then the score is reported on the 63
+  CPU tasks against Codex and Reason on the same 63, GPU tasks marked pending.
