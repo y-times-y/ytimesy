@@ -23,6 +23,8 @@ if nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name --format=csv,noheader > "$job/gpu-assert.txt"
 fi
 cd /opt/tb4/ytimesy
-exec sudo -u ubuntu -E /home/ubuntu/.local/bin/harbor run -d terminal-bench/terminal-bench@4.0.0 \
+# sudo drops PYTHONPATH (and HOME here, under systemd-run): set both for the trial user so
+# Harbor imports the bridge agent from the frozen repo and the AWS SDK finds ~/.aws.
+exec sudo -u ubuntu -E env PYTHONPATH=/opt/tb4/ytimesy HOME=/home/ubuntu /home/ubuntu/.local/bin/harbor run -d terminal-bench/terminal-bench@4.0.0 \
   -i "terminal-bench/$task" -a evals.harbor_v2.agent:YtimesyHarborV2Agent -e docker \
   -k 1 -n 1 --jobs-dir /opt/tb4/jobs/"$id" --job-name "$id" > "$job/harbor.log" 2>&1
