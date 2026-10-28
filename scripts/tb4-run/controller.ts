@@ -34,6 +34,7 @@ import {
 	BATCHES,
 	batch2Decision,
 	earlyStopDecision,
+	earlyStopGates,
 	floorCeiling,
 	type HarborResult,
 	type Host,
@@ -355,6 +356,34 @@ export function tick(input: {
 			log.push(`infra ${a.attemptId}: ${r.reason}`);
 		} else if (r.action === "adopt" && a.status === "launched") {
 			journal.append({ at: now(), type: "running", attemptId: a.attemptId });
+		}
+	}
+	// 1b. The pre-committed early-stop gates (TB4_EARLY_STOP=on; decisive set =
+	// TB4_PRIORITY_TASKS; Codex per-task rates from TB4_CODEX_JOB). Logged every tick.
+	state = replay(journal.events());
+	if (process.env.TB4_EARLY_STOP === "on" && !state.stopped && state.runId) {
+		const decisive = (process.env.TB4_PRIORITY_TASKS ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+		const codex = JSON.parse(readFileSync(process.env.TB4_CODEX_JOB ?? "benchmarks/evaluation/codex-astra-public-job.json", "utf8")) as {
+			tasks: Record<string, { passes: number; trials: number }>;
+		};
+		const codexRates = new Map(Object.entries(codex.tasks).map(([t, v]) => [t, v.passes / v.trials]));
+		const cpuTasks = input.tasks.filter((t) => t.gpus === 0).map((t) => t.name);
+		const g = earlyStopGates({ state, decisive, cpuTasks, codexRates });
+		log.push(
+			`gates: A ${g.gateA.status} (${g.gateA.passes} passes in ${g.gateA.ready}/${g.gateA.of} decisive first trials); B ceiling ${g.gateB.ceilingPct.toFixed(1)}% vs Codex ${g.gateB.codexPct.toFixed(1)}% on ${cpuTasks.length} CPU tasks${g.gateB.stop ? " -> stop" : ""}`,
+		);
+		if (g.gateA.status === "pass")
+			journal.append({ at: now(), type: "gate", gate: "A", result: "pass", detail: `${g.gateA.passes}/${g.gateA.ready} decisive first-trial passes >= 6` });
+		const reason =
+			g.gateA.status === "stop"
+				? `early-stop gate A: ${g.gateA.passes}/${g.gateA.ready} decisive first-trial passes <= 5`
+				: g.gateB.stop
+					? `early-stop gate B: ceiling ${g.gateB.ceilingPct.toFixed(1)}% < Codex ${g.gateB.codexPct.toFixed(1)}% on the ${cpuTasks.length} CPU tasks`
+					: null;
+		if (reason) {
+			journal.append({ at: now(), type: "gate", gate: g.gateA.status === "stop" ? "A" : "B", result: "stop", detail: reason });
+			journal.append({ at: now(), type: "stop", reason });
+			log.push(`STOP ${reason}: no new launches; in-flight trials finish and are collected`);
 		}
 	}
 	// 2. Launch what the plan still needs on healthy hosts.
