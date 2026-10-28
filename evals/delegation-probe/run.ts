@@ -62,6 +62,8 @@ type Args = {
 	target: string;
 	out: string;
 	concurrency: number;
+	/** The request list beside this file (requests.json or heldout.json). */
+	requests: string;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -81,6 +83,7 @@ function parseArgs(argv: string[]): Args {
 		target,
 		out,
 		concurrency: Number(get("concurrency") ?? 3),
+		requests: get("requests") ?? "requests.json",
 	};
 }
 
@@ -124,7 +127,7 @@ async function oneRun(
 	const config = harborBridgeConfig(env);
 	const total = config.total;
 	if (!total) throw new Error("A total cap and ledger are required.");
-	const runCap = Number(env.YTIMESY_PROBE_RUN_USD_CAP ?? "1.5");
+	const runCap = Number(env.YTIMESY_PROBE_RUN_USD_CAP ?? "2.5");
 	// A short suffix: a rerun never collides with an earlier ledger entry.
 	const runId = `${args.arm}-q${request.id}-r${args.round}-${randomUUID().slice(0, 6)}`;
 	const started = Date.now();
@@ -300,7 +303,7 @@ async function oneRun(
 			provider: "openai",
 			variant: PRODUCT_HARNESS_VARIANT,
 			webSearch: config.webSearch,
-			bedrock: true,
+			bedrock: config.route === "bedrock",
 			instruction: request.text,
 			storage: archives.storage,
 			onEvent,
@@ -416,9 +419,10 @@ async function oneRun(
 
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
-	await bedrockCredentials(process.env);
+	if (process.env.YTIMESY_HARBOR_ROUTE === "bedrock")
+		await bedrockCredentials(process.env);
 	const list = JSON.parse(
-		await readFile(new URL("./requests.json", import.meta.url), "utf8"),
+		await readFile(new URL(`./${args.requests}`, import.meta.url), "utf8"),
 	) as { requests: { id: number; text: string; label: string }[] };
 	const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
 		encoding: "utf8",
