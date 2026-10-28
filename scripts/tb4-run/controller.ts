@@ -147,12 +147,16 @@ export function readTrialDir(jobDir: string): HarborResult | undefined {
 	// run-trial.sh's layout is <jobs-dir>/<job>/<task>__<id>/result.json; <job>/result.json is
 	// Harbor's job-level summary, written when the job starts. Only a trial dir (<task>__<id>)
 	// holds the trial's result; also accept one directly under jobDir.
-	const isTrialDir = (d: string) => /__/.test(d.split("/").pop() ?? "") && existsSync(join(d, "result.json"));
+	const isTrialDir = (d: string) =>
+		/__/.test(d.split("/").pop() ?? "") && existsSync(join(d, "result.json"));
 	const subdirs = (d: string) =>
 		readdirSync(d)
 			.map((x) => join(d, x))
 			.filter((x) => statSync(x).isDirectory());
-	const trialDir = [...subdirs(jobDir), ...subdirs(jobDir).flatMap(subdirs)].find(isTrialDir);
+	const trialDir = [
+		...subdirs(jobDir),
+		...subdirs(jobDir).flatMap(subdirs),
+	].find(isTrialDir);
 	if (!trialDir) return undefined;
 	const result = JSON.parse(
 		readFileSync(join(trialDir, "result.json"), "utf8"),
@@ -220,7 +224,8 @@ export function readTrialDir(jobDir: string): HarborResult | undefined {
  * result exists.
  */
 export function readProbe(lines: string[], launchedAt: string) {
-	const unitActive = lines[0]?.trim() === "active" || lines[0]?.trim() === "activating";
+	const unitActive =
+		lines[0]?.trim() === "active" || lines[0]?.trim() === "activating";
 	return {
 		unitActive,
 		ready: !unitActive && !!lines[2]?.trim(),
@@ -387,9 +392,12 @@ export function tick(input: {
 			log.push(`infra ${a.attemptId}: ${r.reason}`);
 			try {
 				const removed = ops.cleanup?.(host, a.attemptId);
-				if (removed) log.push(`cleanup ${a.attemptId}: ${removed.replaceAll("\n", "; ")}`);
+				if (removed)
+					log.push(`cleanup ${a.attemptId}: ${removed.replaceAll("\n", "; ")}`);
 			} catch (error) {
-				log.push(`cleanup ${a.attemptId} failed: ${String(error).slice(0, 160)}`);
+				log.push(
+					`cleanup ${a.attemptId} failed: ${String(error).slice(0, 160)}`,
+				);
 			}
 		} else if (r.action === "adopt" && a.status === "launched") {
 			journal.append({ at: now(), type: "running", attemptId: a.attemptId });
@@ -399,18 +407,35 @@ export function tick(input: {
 	// TB4_PRIORITY_TASKS; Codex per-task rates from TB4_CODEX_JOB). Logged every tick.
 	state = replay(journal.events());
 	if (process.env.TB4_EARLY_STOP === "on" && !state.stopped && state.runId) {
-		const decisive = (process.env.TB4_PRIORITY_TASKS ?? "").split(",").map((t) => t.trim()).filter(Boolean);
-		const codex = JSON.parse(readFileSync(process.env.TB4_CODEX_JOB ?? "benchmarks/evaluation/codex-astra-public-job.json", "utf8")) as {
+		const decisive = (process.env.TB4_PRIORITY_TASKS ?? "")
+			.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
+		const codex = JSON.parse(
+			readFileSync(
+				process.env.TB4_CODEX_JOB ??
+					"benchmarks/evaluation/codex-astra-public-job.json",
+				"utf8",
+			),
+		) as {
 			tasks: Record<string, { passes: number; trials: number }>;
 		};
-		const codexRates = new Map(Object.entries(codex.tasks).map(([t, v]) => [t, v.passes / v.trials]));
+		const codexRates = new Map(
+			Object.entries(codex.tasks).map(([t, v]) => [t, v.passes / v.trials]),
+		);
 		const cpuTasks = input.tasks.filter((t) => t.gpus === 0).map((t) => t.name);
 		const g = earlyStopGates({ state, decisive, cpuTasks, codexRates });
 		log.push(
 			`gates: A ${g.gateA.status} (${g.gateA.passes} passes in ${g.gateA.ready}/${g.gateA.of} decisive first trials); B ceiling ${g.gateB.ceilingPct.toFixed(1)}% vs Codex ${g.gateB.codexPct.toFixed(1)}% on ${cpuTasks.length} CPU tasks${g.gateB.stop ? " -> stop" : ""}`,
 		);
 		if (g.gateA.status === "pass")
-			journal.append({ at: now(), type: "gate", gate: "A", result: "pass", detail: `${g.gateA.passes}/${g.gateA.ready} decisive first-trial passes >= 6` });
+			journal.append({
+				at: now(),
+				type: "gate",
+				gate: "A",
+				result: "pass",
+				detail: `${g.gateA.passes}/${g.gateA.ready} decisive first-trial passes >= 6`,
+			});
 		const reason =
 			g.gateA.status === "stop"
 				? `early-stop gate A: ${g.gateA.passes}/${g.gateA.ready} decisive first-trial passes <= 5`
@@ -418,9 +443,17 @@ export function tick(input: {
 					? `early-stop gate B: ceiling ${g.gateB.ceilingPct.toFixed(1)}% < Codex ${g.gateB.codexPct.toFixed(1)}% on the ${cpuTasks.length} CPU tasks`
 					: null;
 		if (reason) {
-			journal.append({ at: now(), type: "gate", gate: g.gateA.status === "stop" ? "A" : "B", result: "stop", detail: reason });
+			journal.append({
+				at: now(),
+				type: "gate",
+				gate: g.gateA.status === "stop" ? "A" : "B",
+				result: "stop",
+				detail: reason,
+			});
 			journal.append({ at: now(), type: "stop", reason });
-			log.push(`STOP ${reason}: no new launches; in-flight trials finish and are collected`);
+			log.push(
+				`STOP ${reason}: no new launches; in-flight trials finish and are collected`,
+			);
 		}
 	}
 	// 2. Launch what the plan still needs on healthy hosts.
@@ -440,6 +473,9 @@ export function tick(input: {
 		unhealthyHosts: unhealthy,
 		maxInFlight: Number(process.env.TB4_MAX_IN_FLIGHT) || undefined,
 		priority: process.env.TB4_PRIORITY_TASKS?.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean),
+		frontload: process.env.TB4_FRONTLOAD_TASKS?.split(",")
 			.map((t) => t.trim())
 			.filter(Boolean),
 	})) {

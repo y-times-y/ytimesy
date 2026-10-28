@@ -239,6 +239,26 @@ describe("tb4 host CPU budget", () => {
 		);
 	});
 
+	it("launches every open batch's trials of front-loaded tasks before anything else", () => {
+		const many = Array.from({ length: 6 }, (_, i) => two(i));
+		const { journal } = newRun();
+		journal.append({ at: "t", type: "batch-open", batch: "b2" });
+		const launches = nextLaunches({
+			state: replay(journal.events()),
+			tasks: many,
+			hosts: [host],
+			maxInFlight: 5,
+			frontload: ["t3"],
+		});
+		expect(launches.map((l) => `${l.task}/${l.batch}`)).toEqual([
+			"t3/b1",
+			"t3/b2",
+			"t3/b2",
+			"t3/b2",
+			"t3/b2",
+		]);
+	});
+
 	it("launches priority tasks first", () => {
 		const many = Array.from({ length: 6 }, (_, i) => two(i));
 		const { journal } = newRun();
@@ -762,12 +782,24 @@ describe("last model call", () => {
 
 describe("tb4 Astra early-stop gates", () => {
 	const decisive = Array.from({ length: 16 }, (_, i) => `d${i}`);
-	const cpuTasks = [...decisive, ...Array.from({ length: 47 }, (_, i) => `o${i}`)];
+	const cpuTasks = [
+		...decisive,
+		...Array.from({ length: 47 }, (_, i) => `o${i}`),
+	];
 	const codexRates = new Map(cpuTasks.map((t, i) => [t, i < 16 ? 0.4 : 0.6]));
 	/** Journal events: one finished attempt per (task, reward | "infra"), started in order. */
-	function events(rows: [string, number | "infra"][], extra: JournalEvent[] = []): JournalEvent[] {
+	function events(
+		rows: [string, number | "infra"][],
+		extra: JournalEvent[] = [],
+	): JournalEvent[] {
 		const ev: JournalEvent[] = [
-			{ at: "t", type: "run-start", runId: "r", commit: "c", bundleSha256: "0".repeat(64) },
+			{
+				at: "t",
+				type: "run-start",
+				runId: "r",
+				commit: "c",
+				bundleSha256: "0".repeat(64),
+			},
 			{ at: "t", type: "batch-open", batch: "b1" },
 			{ at: "t", type: "batch-open", batch: "b2" },
 		];
@@ -776,7 +808,14 @@ describe("tb4 Astra early-stop gates", () => {
 			const id = `${task}-${i}`;
 			const n = seen.get(task) ?? 0;
 			if (r !== "infra") seen.set(task, n + 1);
-			ev.push({ at: `t${i}`, type: "launch", attemptId: id, task, batch: n === 0 ? "b1" : "b2", host: "h" });
+			ev.push({
+				at: `t${i}`,
+				type: "launch",
+				attemptId: id,
+				task,
+				batch: n === 0 ? "b1" : "b2",
+				host: "h",
+			});
 			ev.push({
 				at: `t${i}`,
 				type: "finish",
@@ -784,66 +823,160 @@ describe("tb4 Astra early-stop gates", () => {
 				outcome:
 					r === "infra"
 						? { kind: "infra", reason: "host died" }
-						: { kind: "valid", reward: r, agentStartedAt: `2026-10-28T00:${String(i).padStart(2, "0")}:00Z`, detail: "" },
+						: {
+								kind: "valid",
+								reward: r,
+								agentStartedAt: `2026-10-28T00:${String(i).padStart(2, "0")}:00Z`,
+								detail: "",
+							},
 			});
 		});
 		return [...ev, ...extra];
 	}
-	const gates = (ev: JournalEvent[]) => earlyStopGates({ state: replay(ev), decisive, cpuTasks, codexRates });
+	const gates = (ev: JournalEvent[]) =>
+		earlyStopGates({ state: replay(ev), decisive, cpuTasks, codexRates });
 	it("gate A waits for 15 of 16 decisive first trials", () => {
-		const g = gates(events(decisive.slice(0, 14).map((t) => [t, 0] as [string, number])));
+		const g = gates(
+			events(decisive.slice(0, 14).map((t) => [t, 0] as [string, number])),
+		);
 		expect(g.gateA).toMatchObject({ status: "pending", ready: 14 });
 	});
 	it("gate A stops at <= 5 passes and passes at >= 6", () => {
-		const five = decisive.slice(0, 15).map((t, i) => [t, i < 5 ? 1 : 0] as [string, number]);
-		expect(gates(events(five)).gateA).toMatchObject({ status: "stop", passes: 5, ready: 15 });
-		const six = decisive.slice(0, 15).map((t, i) => [t, i < 6 ? 1 : 0] as [string, number]);
-		expect(gates(events(six)).gateA).toMatchObject({ status: "pass", passes: 6 });
+		const five = decisive
+			.slice(0, 15)
+			.map((t, i) => [t, i < 5 ? 1 : 0] as [string, number]);
+		expect(gates(events(five)).gateA).toMatchObject({
+			status: "stop",
+			passes: 5,
+			ready: 15,
+		});
+		const six = decisive
+			.slice(0, 15)
+			.map((t, i) => [t, i < 6 ? 1 : 0] as [string, number]);
+		expect(gates(events(six)).gateA).toMatchObject({
+			status: "pass",
+			passes: 6,
+		});
 		expect(
-			gates(events(five, [{ at: "t", type: "gate", gate: "A", result: "pass", detail: "earlier" }])).gateA.status,
+			gates(
+				events(five, [
+					{
+						at: "t",
+						type: "gate",
+						gate: "A",
+						result: "pass",
+						detail: "earlier",
+					},
+				]),
+			).gateA.status,
 		).toBe("passed");
 	});
 	it("gate A ignores infra attempts and uses the first valid trial by agent start", () => {
-		const rows: [string, number | "infra"][] = decisive.slice(0, 15).map((t) => [t, "infra"]);
-		expect(gates(events(rows)).gateA).toMatchObject({ status: "pending", ready: 0 });
+		const rows: [string, number | "infra"][] = decisive
+			.slice(0, 15)
+			.map((t) => [t, "infra"]);
+		expect(gates(events(rows)).gateA).toMatchObject({
+			status: "pending",
+			ready: 0,
+		});
 		const mixed: [string, number | "infra"][] = [
 			...decisive.slice(0, 15).map((t) => [t, "infra"] as [string, "infra"]),
 			...decisive.slice(0, 15).map((t) => [t, 1] as [string, number]),
 			...decisive.slice(0, 15).map((t) => [t, 0] as [string, number]),
 		];
-		expect(gates(events(mixed)).gateA).toMatchObject({ status: "pass", passes: 15, ready: 15 });
+		expect(gates(events(mixed)).gateA).toMatchObject({
+			status: "pass",
+			passes: 15,
+			ready: 15,
+		});
 	});
 	it("gate B stops when the CPU-task ceiling falls below Codex on the same tasks", () => {
 		// Codex here: (16 x 0.4 + 47 x 0.6) / 63 = 54.9%. Fail every trial of 29 tasks -> ceiling 54.0%.
-		const failed = cpuTasks.slice(0, 29).flatMap((t) => Array.from({ length: 5 }, () => [t, 0] as [string, number]));
+		const failed = cpuTasks
+			.slice(0, 29)
+			.flatMap((t) =>
+				Array.from({ length: 5 }, () => [t, 0] as [string, number]),
+			);
 		const g = gates(events(failed));
 		expect(g.gateB.codexPct).toBeCloseTo((100 * (16 * 0.4 + 47 * 0.6)) / 63);
 		expect(g.gateB.ceilingPct).toBeCloseTo((100 * 34) / 63);
 		expect(g.gateB.stop).toBe(true);
-		const g2 = gates(events(cpuTasks.slice(0, 28).flatMap((t) => Array.from({ length: 5 }, () => [t, 0] as [string, number]))));
+		const g2 = gates(
+			events(
+				cpuTasks
+					.slice(0, 28)
+					.flatMap((t) =>
+						Array.from({ length: 5 }, () => [t, 0] as [string, number]),
+					),
+			),
+		);
 		expect(g2.gateB.stop).toBe(false);
 	});
 	it("a stop in the tick journals the gate and blocks new launches", () => {
 		const { dir, journal } = newRun();
 		journal.append({ at: "t", type: "batch-open", batch: "b2" });
-		const ts: Task[] = decisive.map((name) => ({ name, cpus: 2, memoryMb: 4096, gpus: 0, separateVerifier: false }));
+		const ts: Task[] = decisive.map((name) => ({
+			name,
+			cpus: 2,
+			memoryMb: 4096,
+			gpus: 0,
+			separateVerifier: false,
+		}));
 		for (const [i, t] of ts.slice(0, 15).entries()) {
 			const id = `${t.name}-x`;
-			journal.append({ at: "t", type: "launch", attemptId: id, task: t.name, batch: "b1", host: "cpu-0" });
-			journal.append({ at: "t", type: "finish", attemptId: id, outcome: { kind: "valid", reward: i < 3 ? 1 : 0, agentStartedAt: `2026-10-28T00:${String(i).padStart(2, "0")}:00Z`, detail: "" } });
+			journal.append({
+				at: "t",
+				type: "launch",
+				attemptId: id,
+				task: t.name,
+				batch: "b1",
+				host: "cpu-0",
+			});
+			journal.append({
+				at: "t",
+				type: "finish",
+				attemptId: id,
+				outcome: {
+					kind: "valid",
+					reward: i < 3 ? 1 : 0,
+					agentStartedAt: `2026-10-28T00:${String(i).padStart(2, "0")}:00Z`,
+					detail: "",
+				},
+			});
 		}
 		const saved = { ...process.env };
-		Object.assign(process.env, { TB4_EARLY_STOP: "on", TB4_PRIORITY_TASKS: decisive.join(",") });
+		Object.assign(process.env, {
+			TB4_EARLY_STOP: "on",
+			TB4_PRIORITY_TASKS: decisive.join(","),
+		});
 		const codexPath = join(dir, "codex.json");
-		writeFileSync(codexPath, JSON.stringify({ tasks: Object.fromEntries(decisive.map((t) => [t, { passes: 2, trials: 5 }])) }));
+		writeFileSync(
+			codexPath,
+			JSON.stringify({
+				tasks: Object.fromEntries(
+					decisive.map((t) => [t, { passes: 2, trials: 5 }]),
+				),
+			}),
+		);
 		process.env.TB4_CODEX_JOB = codexPath;
 		try {
 			const { ops, launched } = fakeOps(() => "pending");
-			const log = tick({ runDir: dir, journal, hosts: [hosts[0]], tasks: ts, ops, now: () => "t" });
-			expect(log.some((l) => l.startsWith("gates: A stop (3 passes in 15/16"))).toBe(true);
+			const log = tick({
+				runDir: dir,
+				journal,
+				hosts: [hosts[0]],
+				tasks: ts,
+				ops,
+				now: () => "t",
+			});
+			expect(
+				log.some((l) => l.startsWith("gates: A stop (3 passes in 15/16")),
+			).toBe(true);
 			expect(launched).toEqual([]);
 			const st = replay(journal.events());
-			expect(st.stopped).toBe("early-stop gate A: 3/15 decisive first-trial passes <= 5");
+			expect(st.stopped).toBe(
+				"early-stop gate A: 3/15 decisive first-trial passes <= 5",
+			);
 		} finally {
 			process.env = saved;
 		}
@@ -855,32 +988,67 @@ describe("tb4 collection of a real run-trial.sh layout", () => {
 		const dir = mkdtempSync(join(tmpdir(), "tb4nest-"));
 		const job = join(dir, "run-b1-task-a01");
 		mkdirSync(join(job, "task__abc", "artifacts"), { recursive: true });
-		writeFileSync(join(job, "result.json"), JSON.stringify({ id: "job", n_total_trials: 1 }));
-		writeFileSync(join(job, "task__abc", "result.json"), JSON.stringify(started(1)));
-		writeFileSync(join(job, "task__abc", "artifacts", "manifest.json"), JSON.stringify([{ source: "/app", status: "ok" }]));
-		expect(classify(readTrialDir(dir)!)).toMatchObject({ kind: "valid", reward: 1 });
+		writeFileSync(
+			join(job, "result.json"),
+			JSON.stringify({ id: "job", n_total_trials: 1 }),
+		);
+		writeFileSync(
+			join(job, "task__abc", "result.json"),
+			JSON.stringify(started(1)),
+		);
+		writeFileSync(
+			join(job, "task__abc", "artifacts", "manifest.json"),
+			JSON.stringify([{ source: "/app", status: "ok" }]),
+		);
+		expect(classify(readTrialDir(dir)!)).toMatchObject({
+			kind: "valid",
+			reward: 1,
+		});
 	});
 	it("never collects while the trial's unit is still active", () => {
 		const at = "2026-10-28T00:00:00Z";
 		const boot = String(Date.parse("2026-10-27T23:00:00Z") / 1000);
-		expect(readProbe(["active", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at)).toMatchObject({ unitActive: true, ready: false });
-		expect(readProbe(["failed", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at)).toMatchObject({ ready: true });
-		expect(readProbe(["inactive", boot, ""], at)).toMatchObject({ ready: false, rebootedSinceLaunch: false });
+		expect(
+			readProbe(["active", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at),
+		).toMatchObject({ unitActive: true, ready: false });
+		expect(
+			readProbe(["failed", boot, "/opt/tb4/jobs/x/x/t__1/result.json"], at),
+		).toMatchObject({ ready: true });
+		expect(readProbe(["inactive", boot, ""], at)).toMatchObject({
+			ready: false,
+			rebootedSinceLaunch: false,
+		});
 	});
 });
 
 describe("tb4 dead-attempt cleanup", () => {
 	it("removes a killed attempt's containers when it is marked infra", () => {
 		const { dir, journal } = newRun();
-		journal.append({ at: "2026-10-28T00:00:00Z", type: "launch", attemptId: "r1-b1-cpu-a-a01", task: "cpu-a", batch: "b1", host: "cpu-0" });
+		journal.append({
+			at: "2026-10-28T00:00:00Z",
+			type: "launch",
+			attemptId: "r1-b1-cpu-a-a01",
+			task: "cpu-a",
+			batch: "b1",
+			host: "cpu-0",
+		});
 		const cleaned: string[] = [];
 		const { ops } = fakeOps(() => ({ processAlive: false }));
 		ops.cleanup = (_h, id) => {
 			cleaned.push(id);
 			return "removed containers of cpu-a__x";
 		};
-		const log = tick({ runDir: dir, journal, hosts: [hosts[0]], tasks: [tasks[0]], ops, now: () => "t" });
+		const log = tick({
+			runDir: dir,
+			journal,
+			hosts: [hosts[0]],
+			tasks: [tasks[0]],
+			ops,
+			now: () => "t",
+		});
 		expect(cleaned).toEqual(["r1-b1-cpu-a-a01"]);
-		expect(log.some((l) => l.startsWith("cleanup r1-b1-cpu-a-a01: removed"))).toBe(true);
+		expect(
+			log.some((l) => l.startsWith("cleanup r1-b1-cpu-a-a01: removed")),
+		).toBe(true);
 	});
 });
