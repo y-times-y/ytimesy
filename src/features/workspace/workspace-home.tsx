@@ -109,6 +109,7 @@ import {
 	type ListedPullRequest,
 	pullRequestPanelRepository,
 	pullRequestsAcrossRepositories,
+	savedListedPullRequest,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
@@ -2359,6 +2360,12 @@ export function WorkspaceHome({
 			? activeChat.pr
 			: null;
 	const sessionPullRequest = sessionPullRequests[0];
+	// The Overview's PR row likewise stands in from the saved PR until the live
+	// list is read; readiness the save does not hold reads as not confirmed.
+	const overviewPullRequests: readonly ListedPullRequest[] =
+		pullRequestsRead || !activeChat?.pr || !activeHead
+			? sessionPullRequests
+			: [savedListedPullRequest(activeChat.pr, activeHead)];
 	const headerPullRequest =
 		sessionPullRequest ??
 		(savedChatPr
@@ -2808,7 +2815,7 @@ export function WorkspaceHome({
 									desktop={desktop}
 									onOpen={openInspector}
 									onIntent={intendView}
-									pullRequests={sessionPullRequests}
+									pullRequests={overviewPullRequests}
 								/>
 							}
 						/>
