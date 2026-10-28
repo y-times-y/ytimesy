@@ -174,3 +174,23 @@ and the journal records `type: "gate"` and `type: "stop"` with the reason.
   scripts d0395d9) into `/opt/tb4/run/gpu-daytona-journal.jsonl`, kept separate from the controller
   journal; job dirs copied to `/opt/tb4/run/results/<id>` and R2 by `fold-gpu.sh`.
 - jax-speedrun-gpu: not run (needs about 5 H100 in parallel for an 8 h task); pending.
+
+## Amendment 2026-10-28 05:28 UTC: jax-speedrun-gpu on Modal H100
+
+No AWS p5 capacity was available all night, so the 5 scored jax-speedrun-gpu trials run on
+Modal (Harbor 0.24.0 `-e modal`), orchestrated from a dedicated EC2 host
+(`tb4-astra-2026-10-27-modal-orch-0`, i-09ce61864a9574d51, c7i.4xlarge, 4 TB gp3) with the same
+frozen tree (archive SHA-256 41933eca…, commit 8965702), the scored run.env settings
+(openai.gpt-6-astra xhigh, codeMode=on,plan=on,helpers=write,fetch=on,search=function), the
+per-task cap ($100) and its own spend ledger.
+- Attempt ids: tb4-astra-2026-10-27-b1-jax-speedrun-gpu-modal-a01 and
+  tb4-astra-2026-10-27-b2-jax-speedrun-gpu-modal-a01..a04, launched together at 05:28 UTC.
+- Two operational patches to Harbor's Modal environment (`/opt/tb4/modalpatch/sitecustomize.py`):
+  the GPU request is `H100!` (Modal never substitutes an H200; tasks require H100), and every
+  sandbox's create/stop is logged with its id and the in-sandbox `nvidia-smi` name to the trial's
+  `modal-sandboxes.jsonl`. All 5 agent sandboxes reported "NVIDIA H100 80GB HBM3".
+- Preflight on Modal: nop = 0 through the separate H100 verifier; the oracle's verifier was still
+  grading at launch. The verifier image's first pull took ~15 min (cached afterwards).
+- Modal GPU sandboxes are preemptible (Modal docs); a preempted trial is infra and retried if time allows.
+- Trial dirs are synced to R2 every 5 minutes (`tb4/tb4-astra-2026-10-27/modal-jax/`), excluding secrets;
+  they are folded into the controller's results and journal when graded.
