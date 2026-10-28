@@ -72,6 +72,7 @@ function HomePage() {
 		renderedAtMs,
 		inspector,
 		savedPullRequests,
+		savedDefaultBranches,
 	} = Route.useLoaderData();
 	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
@@ -85,6 +86,7 @@ function HomePage() {
 			renderedAtMs={renderedAtMs}
 			savedInspector={inspector}
 			savedPullRequests={savedPullRequests}
+			savedDefaultBranches={savedDefaultBranches}
 		/>
 	);
 	return (
