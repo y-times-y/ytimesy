@@ -18,6 +18,7 @@ import {
 	DESKTOP_CREDENTIAL_DROP_SETUP,
 	DESKTOP_PRIVATE_DIRECTORY,
 	DESKTOP_PRIVATE_READY,
+	DESKTOP_WAIT_UNTIL,
 	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
 } from "./start-desktop";
@@ -26,7 +27,7 @@ import {
 function viewerBlock(dir: string) {
 	const start = START_WORKSPACE_DESKTOP.indexOf("DESK_AUTH_DROP=");
 	const end = START_WORKSPACE_DESKTOP.indexOf("python3 - <<'PY'", start);
-	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${START_WORKSPACE_DESKTOP.slice(
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${DESKTOP_WAIT_UNTIL}\n${START_WORKSPACE_DESKTOP.slice(
 		start,
 		end,
 	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
@@ -234,7 +235,7 @@ it("never matches its own command line when it looks for or stops processes", ()
 function vncBlock() {
 	const start = START_WORKSPACE_DESKTOP.indexOf('VNC_DIR="');
 	const end = START_WORKSPACE_DESKTOP.indexOf("# The viewer port", start);
-	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nXAUTH=${dir}/Xauthority\n${START_WORKSPACE_DESKTOP.slice(
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nXAUTH=${dir}/Xauthority\n${DESKTOP_WAIT_UNTIL}\n${START_WORKSPACE_DESKTOP.slice(
 		start,
 		end,
 	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
