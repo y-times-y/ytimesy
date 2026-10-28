@@ -17,7 +17,7 @@ Sol plan in `docs/tb4-scoring-rule.md` only where stated here.
   writers in the builder's workspace).
 - All 5 trials per task start together: `controller.ts init --open-all` opens batches b1
   (1 trial) and b2 (4 trials) at init. There is no batch-2 gate in this run (section 5 has
-  the only early stop).
+  the pre-committed early-stop gates).
 
 ## 2. Freeze
 
@@ -60,17 +60,28 @@ ledger. A CPU host runs at most ~15 trials under the CPU budget; even with the l
 ($100 x 3 tasks, $78, $64, ...) its open reservations stay under $1,500, inside the $2,400
 host ledger. The global stop uses settled spend summed over hosts.
 
-## 5. Monitoring and the only early stop
+## 5. Monitoring and the pre-committed early stop
 
 `controller.ts score --codex benchmarks/evaluation/codex-astra-public-job.json --reason-job benchmarks/evaluation/reason-astra-public-job.json`
-reports, at any time:
+reports at any time `bounds.floorPct` (every missing scored trial counted as a fail) and
+`bounds.ceilingPct` (counted as a pass), and where we stand against Codex and Reason.
 
-- `bounds.floorPct`: pass@1 if every missing trial fails; `bounds.ceilingPct`: if every
-  missing trial passes.
-- `vsCodex` / `vsReason`: "ahead whatever remains" once the floor is above their score,
-  "undecided" while the bounds straddle it.
-- The only allowed early stop: the ceiling falls below Codex (57.9%) or Reason (59.1%).
-  Being ahead never stops the run; the published number is always the complete run.
+The run stops early only by these two gates, fixed before launch (decided 2026-10-27). The
+controller evaluates them on every tick with `TB4_EARLY_STOP=on` (`earlyStopGates` in
+`scripts/tb4-run/lib.ts`, tested in `tests/tb4-run.test.ts`) and logs each evaluation to its
+journal (`gates: ...`). A stop means no new launches: in-flight trials finish and are collected,
+and the journal records `type: "gate"` and `type: "stop"` with the reason.
+
+- Decisive set: the 16 `TB4_PRIORITY_TASKS` CPU tasks (Codex passes each 1-4 of 5).
+- Gate A: once the first scored trial (earliest agent start among the task's valid scored
+  trials; infra outcomes never count) exists for at least 15 of the 16 decisive tasks
+  (ctr-optimization may still be running), count our passes among those first trials.
+  5 or fewer: stop, reason `early-stop gate A: <n>/<m> decisive first-trial passes <= 5`.
+  6 or more: gate A is passed for good (journaled once, never evaluated again).
+- Gate B, at any time: the ceiling over the 63 CPU tasks falls below Codex Astra's pass@1 on
+  the same 63 tasks: stop, reason `early-stop gate B: ...`.
+- Otherwise the run completes; the budget caps (section 4) still apply. Being ahead never stops
+  the run, and a stopped run is reported as stopped, with the scores of the trials it has.
 
 ## 6. Baselines (public, labeled as such)
 

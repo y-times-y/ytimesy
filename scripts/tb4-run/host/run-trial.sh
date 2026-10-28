@@ -7,7 +7,7 @@ task="$1"; id="$2"
 [[ "$task" =~ ^[a-z0-9-]+$ && "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 2
 job=/opt/tb4/jobs/$id
 [ -e "$job" ] && { echo "attempt $id already exists; refusing to rerun it" >&2; exit 3; }
-mkdir -p "$job"
+mkdir -p "$job" && chown ubuntu:ubuntu "$job"   # Harbor runs as ubuntu below and writes here
 set -a; . /opt/tb4/run.env; set +a   # route, variant, caps, ledger, bundle (no secrets printed)
 export YTIMESY_TRANSPORT_LOG="$job/transport.log" YTIMESY_HARBOR_SPEND_LEDGER=/opt/tb4/ledger.jsonl
 # Per-task trial cap (Astra run: scripts/tb4-run/astra-trial-caps.json copied to

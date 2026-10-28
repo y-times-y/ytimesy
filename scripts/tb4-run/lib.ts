@@ -102,7 +102,9 @@ export type JournalEvent =
 	| { at: string; type: "synced"; attemptId: string; copies: string[] }
 	| { at: string; type: "pause"; reason: string }
 	| { at: string; type: "resume" }
-	| { at: string; type: "stop"; reason: string };
+	| { at: string; type: "stop"; reason: string }
+	/** The early-stop gates' decisions (docs/tb4-astra-run-2026-10-27.md): gate A passes once, for good. */
+	| { at: string; type: "gate"; gate: "A" | "B"; result: "pass" | "stop"; detail: string };
 
 export class Journal {
 	constructor(readonly path: string) {}
@@ -150,6 +152,8 @@ export type RunState = {
 	attempts: Map<string, Attempt>;
 	paused: string | null;
 	stopped: string | null;
+	/** Gate A passed (>= 6 decisive first-trial passes): it is never evaluated again. */
+	gateAPassed: boolean;
 };
 
 export function replay(events: JournalEvent[]): RunState {
@@ -158,6 +162,7 @@ export function replay(events: JournalEvent[]): RunState {
 		attempts: new Map(),
 		paused: null,
 		stopped: null,
+		gateAPassed: false,
 	};
 	for (const e of events) {
 		switch (e.type) {
@@ -213,6 +218,9 @@ export function replay(events: JournalEvent[]): RunState {
 				break;
 			case "stop":
 				state.stopped = e.reason;
+				break;
+			case "gate":
+				if (e.gate === "A" && e.result === "pass") state.gateAPassed = true;
 				break;
 		}
 	}
@@ -654,6 +662,45 @@ export function earlyStopDecision(
 		stop: false,
 		why: `undecided: ${bounds.floorPct.toFixed(1)}%..${bounds.ceilingPct.toFixed(1)}% vs ${competitorPct.toFixed(1)}%`,
 	};
+}
+
+/**
+ * The Astra run's pre-committed early stop (docs/tb4-astra-run-2026-10-27.md).
+ * Gate A: once the first scored trial (earliest agent start among the task's
+ * valid scored trials; infra attempts never count) exists for at least
+ * `gateAMinTasks` of the decisive tasks, our passes among those first trials
+ * <= `gateAMaxPasses` stops the run; more passes pass gate A for good.
+ * Gate B (any time): the ceiling over the CPU tasks (every missing scored
+ * trial counted as a pass) below Codex's pass@1 on the same tasks stops it.
+ */
+export const EARLY_STOP = { gateAMinTasks: 15, gateAMaxPasses: 5 };
+export function earlyStopGates(input: {
+	state: RunState;
+	decisive: string[];
+	cpuTasks: string[];
+	codexRates: Map<string, number>;
+	trialsPerTask?: number;
+}) {
+	const perTask = scoredTrials(input.state);
+	const firsts = input.decisive
+		.map((t) => perTask.get(t)?.scored[0])
+		.filter((x): x is ScoredTrial => !!x);
+	const passes = firsts.filter((x) => x.reward >= 1).length;
+	const gateA = input.state.gateAPassed
+		? { status: "passed" as const, passes, ready: firsts.length, of: input.decisive.length }
+		: firsts.length < EARLY_STOP.gateAMinTasks
+			? { status: "pending" as const, passes, ready: firsts.length, of: input.decisive.length }
+			: {
+					status: passes <= EARLY_STOP.gateAMaxPasses ? ("stop" as const) : ("pass" as const),
+					passes,
+					ready: firsts.length,
+					of: input.decisive.length,
+				};
+	const bounds = floorCeiling(perTask, input.cpuTasks, input.trialsPerTask);
+	const codexPct =
+		(100 * input.cpuTasks.reduce((a, t) => a + (input.codexRates.get(t) ?? 0), 0)) / input.cpuTasks.length;
+	const gateB = { stop: bounds.ceilingPct < codexPct, ceilingPct: bounds.ceilingPct, floorPct: bounds.floorPct, codexPct };
+	return { gateA, gateB };
 }
 
 /** Scoring rule 5: batch 2 runs only when batch 1 is clearly ahead. */
