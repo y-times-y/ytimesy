@@ -190,7 +190,10 @@ function NewChatBranchPicker({
 					{!branches.isPending && matches.length === 0 ? (
 						<p className="project-picker-empty">
 							{branches.error
-								? branches.error.message
+								? branches.error.message.replace(
+										"choose repositories",
+										"see branches",
+									)
 								: query.trim()
 									? "No branches match."
 									: "No branches."}
