@@ -136,6 +136,10 @@ def deploy(address, key, staged):
         r = ssh(address, key, "umask 077; mkdir -p ~/.aws && cat > ~/.aws/credentials && chmod 600 ~/.aws/credentials && printf '[profile harbor]\\nregion = us-east-1\\n' > ~/.aws/config", stdin=f.read(), timeout=60)
     if r.returncode:
         return False, "credentials copy failed"
+    with open(os.path.join(HERE, "host", "patch-harbor-probe.py"), "rb") as f:
+        r = ssh(address, key, "/home/ubuntu/.local/share/uv/tools/harbor/bin/python - ", stdin=f.read(), timeout=120)
+    if r.returncode:
+        return False, "harbor probe patch failed: " + r.stdout.decode()[-160:]
     r = ssh(address, key, "sudo touch /opt/tb4/ledger.jsonl && sudo chown ubuntu:ubuntu /opt/tb4/ledger.jsonl /opt/tb4/jobs; nvidia-smi --query-gpu=name --format=csv,noheader; sudo systemd-run --wait --pipe --quiet /opt/tb4/check-trial-env.sh 2>&1 | tail -1", timeout=600)
     out = r.stdout.decode()
     if "H100" not in out:
