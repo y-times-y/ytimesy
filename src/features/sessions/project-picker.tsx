@@ -64,6 +64,10 @@ export function ProjectPicker({
 				installationUrl: string;
 			}>("/api/github/repositories"),
 		retry: false,
+		// An answer of "connect GitHub first" stays until the connect flow
+		// reloads the page: the composer remounting (each chat or project
+		// switch) does not ask GitHub again.
+		retryOnMount: false,
 		// Loaded with the composer and cached, so opening the picker never waits on GitHub.
 		staleTime: 5 * 60_000,
 		placeholderData: keepPreviousData,

@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import {
@@ -22,6 +22,17 @@ interface WorkspaceView {
 	updatedAt: string;
 }
 
+/** A project's environment status; read ahead of a project switch too. */
+export function workspaceStatusQuery(projectId: string) {
+	return queryOptions({
+		queryKey: ["workspace", projectId],
+		queryFn: () =>
+			requestJson<WorkspaceView | null>(
+				`/api/workspaces?projectId=${projectId}`,
+			),
+	});
+}
+
 export function WorkspaceStatus({
 	projectId,
 	repairModel,
@@ -32,11 +43,7 @@ export function WorkspaceStatus({
 	repairModelLabel?: string;
 }) {
 	const workspace = useQuery({
-		queryKey: ["workspace", projectId],
-		queryFn: () =>
-			requestJson<WorkspaceView | null>(
-				`/api/workspaces?projectId=${projectId}`,
-			),
+		...workspaceStatusQuery(projectId),
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
 			return status &&
