@@ -391,10 +391,17 @@ export function readerCopyPath(trialId: string, sessionId: string) {
 	return `/tmp/ytimesy-readers/${safe(trialId)}/${safe(sessionId)}/checkout`;
 }
 
-/** Copies the checkout (with .git and the review refs) for a reader. */
+/**
+ * Copies the checkout (with .git and the review refs) for a reader. Files
+ * the trial user may not read (rs-archive-clone ships an execute-only
+ * binary) are left out: cp copies everything else and only permission
+ * errors are tolerated; the reader can still run such a file by its
+ * original path, as the builder can.
+ */
 export function readerCopyCommand(cwd: string, copy: string) {
 	const q = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-	return `rm -rf ${q(copy)} && mkdir -p "$(dirname ${q(copy)})" && cp -a ${q(cwd)} ${q(copy)}`;
+	const errors = q(`${copy}.cp-errors`);
+	return `(rm -rf ${q(copy)} && mkdir -p "$(dirname ${q(copy)})" || exit 1; if cp -a ${q(cwd)} ${q(copy)} 2>${errors}; then status=0; elif [ -d ${q(copy)} ] && ! grep -iv 'permission denied' ${errors} | grep -q .; then echo "skipped $(grep -ic 'permission denied' ${errors}) unreadable file(s)" >&2; status=0; else cat ${errors} >&2; status=1; fi; rm -f ${errors}; exit $status)`;
 }
 
 function mcpNoteFor(servers: readonly string[] | undefined) {
