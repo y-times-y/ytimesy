@@ -29,6 +29,7 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	const text = html.replace(/<[^>]+>/g, " ");
 	expect(text).toContain("AI Software Engineer in the Cloud");
 	expect(text).toContain("Time per task");
+	expect(text).toContain("Terminal-Bench 4");
 	expect(text).toContain("19.3 min");
 	expect(html).toContain('href="/auth/sign-in"');
 	expect(html).toContain('href="/auth/sign-up"');

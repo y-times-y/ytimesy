@@ -481,107 +481,60 @@
 	border-radius: 20px;
 	background: linear-gradient(180deg, #0f0f0f, #070707);
 }
-.bench-legend {
-	display: flex;
-	align-items: center;
-	gap: 20px;
-	color: #8a8a8a;
-	font-size: 13px;
-}
-.bench-legend > span:not(.landing-chip) {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-}
-.bench-legend > span:not(.landing-chip)::before {
-	content: "";
-	width: 10px;
-	height: 10px;
-	border-radius: 3px;
-	background: #3a3a3a;
-}
-.bench-legend > span[data-ours]::before {
-	background: #fff;
-}
-.bench-legend > span[data-ours] {
-	color: #fff;
-}
-.bench-legend .landing-chip {
-	margin-left: auto;
-}
-.bench-metrics {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 40px;
-	margin-top: 32px;
-}
-.bench-metric {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-.bench-metric-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 12px;
-	margin-bottom: 4px;
-	color: #8a8a8a;
-	font-size: 13px;
-}
-.bench-metric-head strong {
-	color: #fff;
-	font-size: 22px;
-	font-weight: 600;
-	letter-spacing: -0.02em;
-}
-.bench-bar {
-	display: grid;
-	grid-template-columns: 1fr 64px;
-	align-items: center;
-	gap: 12px;
-	color: #7d7d7d;
-	font-size: 13px;
-}
-.bench-bar[data-ours] {
-	color: #fff;
-	font-weight: 550;
-}
-.bench-track {
-	height: 10px;
-	border-radius: 999px;
-	background: #ffffff08;
-	overflow: hidden;
-}
-.bench-fill {
-	display: block;
-	height: 100%;
-	border-radius: inherit;
-	background: #3a3a3a;
-	transform-origin: left;
-}
-.bench-bar[data-ours] .bench-fill {
-	background: linear-gradient(90deg, #cfcfcf, #fff);
-	box-shadow: 0 0 22px #ffffff40;
-}
-.bench-value {
-	text-align: right;
+.bench-table {
+	width: 100%;
+	border-collapse: collapse;
 	font-variant-numeric: tabular-nums;
 }
-/* Bars grow as the card scrolls in, where the browser supports it; else they stand still. */
-@supports (animation-timeline: view()) {
-	@media (prefers-reduced-motion: no-preference) {
-		.bench-fill {
-			animation: bench-grow linear both;
-			animation-timeline: view();
-			animation-range: entry 10% cover 35%;
-		}
-	}
+.bench-table th,
+.bench-table td {
+	padding: 18px 20px;
+	border-bottom: 1px solid var(--landing-line);
+	text-align: left;
+	font-weight: 400;
+	vertical-align: middle;
 }
-@keyframes bench-grow {
-	from {
-		transform: scaleX(0);
-	}
+.bench-table tbody tr:last-child th,
+.bench-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+.bench-table thead th {
+	padding-top: 6px;
+	color: #a3a3a3;
+	font-size: 14px;
+	font-weight: 500;
+}
+.bench-table small {
+	display: block;
+	margin-top: 4px;
+	color: #6b6b6b;
+	font-size: 12px;
+	font-weight: 400;
+}
+.bench-table tbody th {
+	width: 40%;
+	color: #d4d4d4;
+	font-size: 15px;
+}
+.bench-table td {
+	width: 30%;
+	color: #a3a3a3;
+	font-size: 22px;
+	letter-spacing: -0.01em;
+}
+.bench-table [data-ours] {
+	background: #ffffff08;
+	color: #fff;
+}
+.bench-table thead [data-ours] {
+	border-radius: 12px 12px 0 0;
+	color: #fff;
+}
+.bench-table tbody tr:last-child [data-ours] {
+	border-radius: 0 0 12px 12px;
+}
+.bench-table td[data-lead] {
+	font-weight: 600;
 }
 .bench-foot {
 	display: flex;
@@ -1005,10 +958,6 @@
 	.as-inspector {
 		display: none;
 	}
-	.bench-metrics {
-		grid-template-columns: 1fr;
-		gap: 28px;
-	}
 	.tiles {
 		grid-template-columns: repeat(2, 1fr);
 	}
@@ -1064,7 +1013,17 @@
 		padding-bottom: 112px;
 	}
 	.bench-card {
-		padding: 20px;
+		padding: 12px 8px;
+	}
+	.bench-table th,
+	.bench-table td {
+		padding: 14px 10px;
+	}
+	.bench-table td {
+		font-size: 17px;
+	}
+	.bench-table tbody th {
+		font-size: 13px;
 	}
 	.tiles {
 		grid-template-columns: 1fr;
