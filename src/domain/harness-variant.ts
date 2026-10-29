@@ -226,9 +226,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * the checkout, on the builder's model. The builder stays the only
 	 * writer. write = on plus writer helpers: each works in the builder's
 	 * own checkout (no copy) and may change only the paths its brief gives
-	 * it (`owns`). off = no helpers (the default).
+	 * it (`owns`). write-tree = write with the product's writer mechanic:
+	 * each writer works on its own git worktree of the builder's checkout
+	 * (uncommitted work included) and returns a patch and git ref the builder
+	 * reviews and applies with `git apply -3`, as a product writer on a VM
+	 * fork. off = no helpers (the default).
 	 */
-	helpers: ["off", "on", "write"],
+	helpers: ["off", "on", "write", "write-tree"],
 	/**
 	 * Web fetch (src/server/services/web-fetch-tool.ts): on gives every agent
 	 * web_fetch, one public http(s) page as text, fetched from the harness
