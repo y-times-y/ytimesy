@@ -120,6 +120,7 @@ import {
 	settleTrial,
 	trialSpendGuard,
 } from "./spend";
+import { type WorktreeWritersTrace, worktreeWriters } from "./worktree-writers";
 
 /**
  * One Harbor trial of the current harness (docs/harbor-bridge-v2.md): spend
@@ -458,6 +459,8 @@ export async function runHarborTrial(
 	const notices: TimedNotice[] = [];
 	const sessions = trialSessions(now);
 	const readerCopies: { sessionId: string; copy: string; ok: boolean }[] = [];
+	// helpers=write-tree's writers (set once the tools are built).
+	let worktreeTrace: ReturnType<typeof worktreeWriters> | null = null;
 	const fusionTrace: FusionTrace = {
 		decisions: [],
 		rounds: [],
@@ -678,6 +681,18 @@ export async function runHarborTrial(
 		const WRITER_BUDGET = { steps: 150, minutes: 45, tokens: 4_000_000 };
 		/** helpers=write: each writer's paths (its budget's sharedWriter). */
 		const writerOwns = new Map<string, readonly string[]>();
+		// helpers=write-tree: each writer on its own git worktree, returning a patch.
+		const worktrees =
+			config.variant.helpers === "write-tree"
+				? worktreeWriters({
+						machines: input.machines,
+						vm: workspace.vm,
+						cwd: input.cwd,
+						trialId: input.trialId,
+						log,
+					})
+				: null;
+		worktreeTrace = worktrees;
 		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
 		const checkerLastWord = async (
 			session: Parameters<RunRound>[0],
@@ -775,7 +790,7 @@ export async function runHarborTrial(
 								model: session.model.modelId,
 							}),
 						}
-					: session.role === "writer"
+					: session.role === "writer" && writerOwns.has(session.id)
 						? {
 								...budget,
 								sharedWriter: { owns: writerOwns.get(session.id) ?? [] },
@@ -979,12 +994,52 @@ export async function runHarborTrial(
 		// made at each round's start (the builder's work so far), as the checker's.
 		// helpers=write's writer: in the builder's own checkout, limited by its
 		// brief to `owns`; file writes outside them are logged, not blocked.
+		// helpers=write-tree's writer: on its own worktree (the product's role
+		// prompt for a writer on a fork); its report carries the patch block.
 		const startHelper = async (
 			session: ChildSession,
 			role: HelperRole,
 			brief: string,
 			owns?: readonly string[],
 		): Promise<ChildReport> => {
+			if (role === "writer" && worktrees) {
+				let tree: { cwd: string };
+				try {
+					tree = await worktrees.open(session.id);
+				} catch (error) {
+					const reason = error instanceof Error ? error.message : String(error);
+					log(`writer ${session.id}: ${reason.slice(0, 300)}`);
+					const failed = {
+						outcome: "failed" as const,
+						report: `No writer started: ${reason.slice(0, 400)}. Do this part yourself.`,
+					};
+					session.reports.push(failed);
+					return failed;
+				}
+				const from = session.events.length;
+				const report = await runRound(
+					session,
+					brief.split(input.cwd).join(tree.cwd),
+					{ readOnly: false, cwd: tree.cwd, agentRole: "writer" },
+				);
+				// Writes into the builder's checkout bypass the patch: logged, not blocked.
+				const stray = writesOutside(
+					session.events.slice(from).map((entry) => entry.event),
+					tree.cwd,
+					[tree.cwd],
+				).filter(
+					(path) => path === input.cwd || path.startsWith(`${input.cwd}/`),
+				);
+				if (stray.length)
+					log(
+						`writer ${session.id} wrote in the builder's checkout: ${stray.slice(0, 10).join(", ")}`,
+					);
+				const patch = await worktrees.finish(
+					session.id,
+					session.briefs.join("\n"),
+				);
+				return { ...report, patch };
+			}
 			if (role === "writer") {
 				writerOwns.set(session.id, owns ?? []);
 				const from = session.events.length;
@@ -1113,7 +1168,10 @@ export async function runHarborTrial(
 					: {}),
 				...(config.variant.helpers !== "off"
 					? helperTools({
-							writers: config.variant.helpers === "write",
+							writers:
+								config.variant.helpers === "write-tree"
+									? "worktree"
+									: config.variant.helpers === "write",
 							parentId: input.trialId,
 							sessions,
 							model: builderModel,
@@ -1476,6 +1534,17 @@ export async function runHarborTrial(
 		).catch(() => {});
 		for (const child of sessions.all()) child.stop();
 	}
+	// helpers=write-tree: what became of each patch, then the worktrees go.
+	const worktreeWriterTrace: WorktreeWritersTrace | null = worktreeTrace
+		? await (worktreeTrace as ReturnType<typeof worktreeWriters>)
+				.close(events.map((entry) => entry.event))
+				.catch((error: unknown) => {
+					log(
+						`warning: writer worktrees not closed: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					return (worktreeTrace as ReturnType<typeof worktreeWriters>).trace();
+				})
+		: null;
 	const usage = totalUsage();
 	// Each run at its own model's price; unknown when any price is unknown.
 	const costUsd = spendParts().reduce<number | null>((total, part) => {
@@ -1569,6 +1638,8 @@ export async function runHarborTrial(
 			// plan=on: each update_plan the root builder sent.
 			plan: config.variant.plan === "on" ? planUpdates : null,
 			fusion: config.variant.lead === "fusion" ? fusionTrace : null,
+			// helpers=write-tree: per writer its base, ref, patch size and fate.
+			worktreeWriters: worktreeWriterTrace,
 			roleModels: Object.fromEntries(
 				Object.entries(config.roles).map(([role, model]) => [
 					role,
@@ -1632,6 +1703,7 @@ export async function runHarborTrial(
 			efficiency,
 			...(goalState ? { goal: goalState.goal } : {}),
 			...(config.variant.plan === "on" ? { plan: planUpdates } : {}),
+			...(worktreeWriterTrace ? { worktreeWriters: worktreeWriterTrace } : {}),
 		},
 		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
 	});

@@ -19,7 +19,7 @@ export type TrialRole =
 	| "classifier"
 	/** helpers=on: a read-only researcher or reviewer the root builder started. */
 	| "helper"
-	/** helpers=write: a writer the root builder started in its own checkout. */
+	/** helpers=write: a writer the root builder started in its own checkout (write-tree: on its own worktree). */
 	| "writer"
 	/** search=function: one web_search call's own request with the hosted search tool. */
 	| "search";
@@ -31,6 +31,8 @@ export type ChildReport = {
 	readonly report: string;
 	/** Set when the round stopped at its token budget: why (a failed round otherwise failed). */
 	readonly budgetUsed?: string;
+	/** helpers=write-tree: the writer's patch block (writerPatchBlock), shown after its capped report. */
+	readonly patch?: string;
 };
 
 export type ChildSession = {
