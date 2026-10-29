@@ -245,6 +245,45 @@ const FLEET = [
 	},
 ] as const;
 
+/** A small settings page, as the agent's screenshots and browser show it. */
+function MiniSettings({
+	theme,
+	large,
+}: {
+	theme: "light" | "dark";
+	large?: boolean;
+}) {
+	return (
+		<div
+			className="mini-app"
+			data-theme={theme}
+			data-large={large || undefined}
+		>
+			<div className="mini-nav">
+				<span className="mini-logo" />
+				<span>Acme</span>
+			</div>
+			<div className="mini-body">
+				<p className="mini-title">Settings</p>
+				<p className="mini-row">
+					Dark mode
+					<span className="tv-toggle" data-on={theme === "dark" || undefined} />
+				</p>
+				<p className="mini-row">
+					Email alerts
+					<span className="tv-toggle" data-on="true" />
+				</p>
+				{large ? (
+					<p className="mini-row">
+						Language
+						<span className="mini-value">English</span>
+					</p>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
 const MEMORIES = [
 	"Use pnpm, not npm",
 	"Every API route checks the session first",
@@ -311,22 +350,26 @@ function Features() {
 						))}
 					</div>
 				</Tile>
-				<Tile title="Screenshots and video in the pull request">
+				<Tile title="Screenshots and video in your PR">
 					<div className="tv-proof">
 						<p className="tv-proof-head">
 							<GitPullRequest size={14} />
 							Evidence
 						</p>
 						<div className="tv-proof-shots">
-							<div className="tv-shot tv-shot-light">
-								<span className="tv-w60" />
-								<span className="tv-toggle" />
-							</div>
-							<div className="tv-shot tv-shot-dark">
-								<span className="tv-w60" />
-								<span className="tv-toggle" data-on="true" />
-								<Play size={16} className="tv-play" />
-							</div>
+							<figure>
+								<figcaption>Before</figcaption>
+								<div className="tv-shot">
+									<MiniSettings theme="light" />
+								</div>
+							</figure>
+							<figure>
+								<figcaption>After</figcaption>
+								<div className="tv-shot">
+									<MiniSettings theme="dark" />
+									<Play size={14} className="tv-play" />
+								</div>
+							</figure>
 						</div>
 					</div>
 				</Tile>
@@ -361,13 +404,8 @@ function Features() {
 								<span />
 								<span className="tv-url">localhost:3000/settings</span>
 							</p>
-							<div className="tv-page">
-								<span className="tv-w40" />
-								<span className="tv-w60" />
-								<span className="tv-row">
-									Dark mode
-									<span className="tv-toggle" data-on="true" />
-								</span>
+							<div className="tv-browser-page">
+								<MiniSettings theme="dark" large />
 								<MousePointer2 size={16} className="tv-cursor" />
 							</div>
 						</div>
