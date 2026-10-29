@@ -4,7 +4,6 @@ import {
 	Brain,
 	Check,
 	GitPullRequest,
-	Globe,
 	Hammer,
 	Search,
 	SquareTerminal,
@@ -54,7 +53,7 @@ export function LandingPage() {
 				<section className="landing-hero" aria-labelledby="landing-title">
 					<span className="landing-chip">Free beta</span>
 					<h1 id="landing-title">
-						The ytimesy agent.
+						The AI software engineer.
 						<br />
 						<span className="landing-dim">A third faster than Codex.</span>
 					</h1>
@@ -254,20 +253,7 @@ function Features() {
 						</p>
 					</div>
 				</Tile>
-				<Tile title="Live previews">
-					<div className="tv-browser">
-						<p>
-							<Globe size={11} />
-							preview
-						</p>
-						<div>
-							<span className="tv-w60" />
-							<span className="tv-w40" />
-							<span className="tv-block" />
-						</div>
-					</div>
-				</Tile>
-				<Tile title="Its own cloud machine">
+				<Tile title="Its own cloud machine" className="tile-wide">
 					<div className="tv-terminal">
 						<p>
 							<SquareTerminal size={12} />

@@ -881,43 +881,6 @@ svg.tv-amber {
 	gap: 4px;
 	color: var(--tone-green);
 }
-.tv-browser {
-	border: 1px solid #ffffff14;
-	border-radius: 12px;
-	overflow: hidden;
-}
-.tv-browser p {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 7px 10px;
-	border-bottom: 1px solid #ffffff10;
-	color: #6b6b6b;
-	font-size: 11px;
-}
-.tv-browser div {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 14px;
-	background: #f4f4f5;
-}
-.tv-browser span {
-	height: 8px;
-	border-radius: 4px;
-	background: #d4d4d8;
-}
-.tv-w60 {
-	width: 60%;
-}
-.tv-w40 {
-	width: 40%;
-}
-.tv-browser .tv-block {
-	height: 44px;
-	border-radius: 6px;
-	background: #e4e4e7;
-}
 .tv-terminal {
 	display: flex;
 	flex-direction: column;
