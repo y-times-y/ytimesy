@@ -103,6 +103,7 @@ import {
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sessionWithoutOpenChat,
+	sidebarChatIsRunning,
 	sidebarPinnedStorageValue,
 	unsentSendReturnsHere,
 	withBusyChat,
@@ -212,6 +213,10 @@ import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
 import { chatRemoval, projectRemoval } from "./sidebar-removals";
 import { useCompactLayout } from "./use-compact-layout";
+import {
+	askForFinishNotifications,
+	useTurnFinishAlerts,
+} from "./use-turn-finish-alerts";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -1678,6 +1683,24 @@ export function WorkspaceHome({
 		}
 	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
+	useTurnFinishAlerts(
+		sidebarChats.map((chat) => ({
+			id: chat.id,
+			title: chat.title,
+			running: sidebarChatIsRunning({
+				chatId: chat.id,
+				turnStatus: chat.turnStatus,
+				busyChatIds,
+				openChatId: activeSessionId,
+				openTurnStatus,
+			}),
+			turnStatus:
+				chat.id === activeSessionId ? openTurnStatus : chat.turnStatus,
+			waitingOn: chat.waitingOn,
+		})),
+		openChat,
+	);
+
 	function openInspector(view: ToolsView) {
 		if (
 			view === "files" ||
@@ -2656,6 +2679,7 @@ export function WorkspaceHome({
 											});
 									}}
 									onSend={(text, modelId, options) => {
+										askForFinishNotifications();
 										const epoch = sessionEpoch.current;
 										const previousTurnStatus = session.turnStatus;
 										// The new-chat draft starts a new chat. Forget the previously open

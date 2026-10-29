@@ -55,11 +55,9 @@ import {
 	type SidebarSort,
 	type SidebarStatusGroup,
 	seenChatStorageValue,
-	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
-	sidebarHasAttentionChat,
 	sidebarStatusGroup,
 	sidebarStatusSections,
 	toggleCollapsedProjectIds,
@@ -209,17 +207,6 @@ export function ProjectSidebar({
 		projectSelected: Boolean(selected),
 		hasUserMessage,
 	});
-	// Before hydration the rows script shows the rail's dot (data-attention on rows).
-	const hasAttentionChat =
-		hydrated &&
-		sidebarHasAttentionChat({
-			chats,
-			selectedChatId,
-			seenKeys,
-			busyChatIds,
-			openTurnStatus,
-			seenSinceMs,
-		});
 
 	// Hydration renders the server's times; this client's clock takes over before the paint.
 	useLayoutEffect(() => {
@@ -342,24 +329,10 @@ export function ProjectSidebar({
 		const unseenReply =
 			rowStatus(chat, { keys: [], sinceMs: Number.NEGATIVE_INFINITY }).kind ===
 			"unread";
-		const attention = sidebarChatAttention({
-			running: sidebarChatIsRunning({
-				chatId: chat.id,
-				turnStatus: chat.turnStatus,
-				busyChatIds,
-				openChatId: selectedChatId,
-				openTurnStatus,
-			}),
-			turnStatus: chat.turnStatus,
-			selected: chat.id === selectedChatId,
-			seen: false,
-		});
 		return {
 			"data-seen-key": sidebarChatSeenKey(chat),
 			"data-updated-at": chat.updatedAt ?? undefined,
 			"data-unread-mark": unseenReply ? "true" : undefined,
-			"data-attention":
-				attention === "attention" ? (chat.turnStatus ?? undefined) : undefined,
 		};
 	}
 
@@ -513,7 +486,7 @@ export function ProjectSidebar({
 		// Status tooltips hold no controls: they close as the pointer leaves the row.
 		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
 			{/* Top left of the chat while the sidebar is closed (as the right
-			    sidebar's toggle is top right), with the attention dot; open, the
+			    sidebar's toggle is top right); open, the
 			    sidebar's header has its own toggle (CSS picks, from <html data-sidebar>). */}
 			<button
 				ref={leftToggle}
@@ -523,13 +496,9 @@ export function ProjectSidebar({
 				title={expanded ? "Close left sidebar" : "Open left sidebar"}
 				aria-expanded={expanded}
 				aria-controls="project-sidebar"
-				data-activity={hasAttentionChat ? "attention" : undefined}
 				onClick={toggleProjects}
 			>
 				<PanelLeft size={16} strokeWidth={1.5} />
-				{hasAttentionChat && !expanded ? (
-					<span className="sr-only">A chat needs attention</span>
-				) : null}
 			</button>
 			<div className="project-sidebar-frame">
 				<button
