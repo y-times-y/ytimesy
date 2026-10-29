@@ -70,7 +70,9 @@ export function LandingPage() {
 				<Models />
 				<Features />
 				<section className="landing-close" aria-labelledby="landing-close">
-					<h2 id="landing-close">Hand it the next task.</h2>
+					<h2 id="landing-close">
+						Build Ambitious Software Without Constraints
+					</h2>
 					<SignUp
 						className="landing-button landing-button-large"
 						label="Start building"
