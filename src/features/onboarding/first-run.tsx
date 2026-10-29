@@ -83,9 +83,15 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 				) : (
 					<AddProjectForm
 						variant="page"
-						onAdded={() =>
-							state.modelReady ? enterWorkspace() : setProjectAdded(true)
-						}
+						onAdded={(project) => {
+							if (state.modelReady) return enterWorkspace();
+							// The project's machine builds while the model is chosen;
+							// the workspace finds it under way instead of starting it.
+							void requestJson("/api/workspaces", {
+								projectId: project.id,
+							}).catch(() => undefined);
+							setProjectAdded(true);
+						}}
 					/>
 				)}
 			</section>
