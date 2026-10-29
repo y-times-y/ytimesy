@@ -110,6 +110,7 @@ export function worktreeStartScript(input: {
 		"if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then",
 		"  git init -q",
 		"  created=1",
+		"  echo ytimesy-initialized",
 		// Files the trial user cannot read (an execute-only tool binary) cannot be indexed.
 		`  { printf '%s\\n' ${HEAVY_DIRECTORIES.map(quote).join(" ")}; find . -path ./.git -prune -o -type f -size ${LARGE_FILE} -print | sed 's|^\\./|/|'; find . -path ./.git -prune -o -type f -print | while IFS= read -r f; do [ -r "$f" ] || printf '%s\\n' "\${f#.}"; done; } >> "$(git rev-parse --git-path info/exclude)"`,
 		"fi",
@@ -233,8 +234,18 @@ type Writer = {
 	next: string;
 };
 
+/** Where each writer ran: its own worktree, the builder's checkout on its owns (fallback), or nowhere. */
+export type WriterRunMode = {
+	sessionId: string;
+	mode: "worktree" | "shared" | "failed";
+	/** shared or failed: why its worktree could not be made. */
+	reason?: string;
+	owns?: readonly string[];
+};
+
 export type WorktreeWritersTrace = {
 	createdRepo: boolean;
+	modes: WriterRunMode[];
 	writers: {
 		sessionId: string;
 		label: string;
@@ -276,8 +287,12 @@ export function worktreeWriters(input: {
 	let createdRepo = false;
 	let top: string | null = null;
 	const failures: string[] = [];
+	const modes: WriterRunMode[] = [];
+	// Once one writer's worktree could not be made, later writers do not retry.
+	let unavailable: string | null = null;
 	const result: WorktreeWritersTrace = {
 		createdRepo: false,
+		modes,
 		writers: [],
 		applyCommands: 0,
 		applyConflicts: 0,
@@ -304,14 +319,29 @@ export function worktreeWriters(input: {
 			if (existing) return { cwd: existing.cwd, label: existing.label };
 			const label = writerLabel(sessionId);
 			const path = `${root}/${label}/checkout`;
+			if (unavailable) {
+				failures.push(`${sessionId}: ${unavailable}`);
+				throw new Error(unavailable);
+			}
 			const started = await exec(
 				worktreeStartScript({ cwd: input.cwd, path, label }),
 				600_000,
-			);
+			).catch((error: unknown) => ({
+				exitCode: 1,
+				stdout: "",
+				stderr: error instanceof Error ? error.message : String(error),
+			}));
 			if (started.exitCode !== 0) {
 				// Recorded: a writer that never started is otherwise absent from the trace.
 				const failure = `its worktree could not be made: ${(started.stderr || started.stdout).slice(-400)}`;
 				failures.push(`${sessionId}: ${failure}`);
+				unavailable = failure;
+				// A repository the bridge half-made goes at once (the checkout
+				// may now be the writers' shared one).
+				if (started.stdout.includes("ytimesy-initialized"))
+					await exec(`rm -rf ${quote(`${input.cwd}/.git`)}`, 60_000).catch(
+						() => undefined,
+					);
 				throw new Error(failure);
 			}
 			const parsed = parseWorktreeStart(started.stdout);
@@ -320,6 +350,7 @@ export function worktreeWriters(input: {
 			const cwd = parsed.prefix
 				? `${path}/${parsed.prefix.replace(/\/$/, "")}`
 				: path;
+			modes.push({ sessionId, mode: "worktree" });
 			writers.set(sessionId, {
 				sessionId,
 				label,
@@ -581,10 +612,24 @@ export function worktreeWriters(input: {
 			return result;
 		});
 
+	/** A writer whose worktree could not be made: where it ran instead. */
+	const fellBack = (
+		sessionId: string,
+		reason: string,
+		owns: readonly string[] | null,
+	) => {
+		modes.push(
+			owns?.length
+				? { sessionId, mode: "shared", reason, owns }
+				: { sessionId, mode: "failed", reason },
+		);
+	};
+
 	return {
 		open,
 		finish,
 		close,
+		fellBack,
 		/** The trace so far (complete after close). */
 		trace: () => result,
 	};

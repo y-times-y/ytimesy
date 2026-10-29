@@ -376,10 +376,26 @@ describe("worktreeWriters (helpers=write-tree)", () => {
 		await expect(writers.open(`${trialId}.1`)).rejects.toThrow(
 			"its worktree could not be made",
 		);
+		// A later writer does not retry; the caller records where each ran.
+		await expect(writers.open(`${trialId}.2`)).rejects.toThrow(
+			"its worktree could not be made",
+		);
+		writers.fellBack(`${trialId}.1`, "no worktree", ["a/"]);
+		writers.fellBack(`${trialId}.2`, "no worktree", null);
 		const trace = await writers.close([]);
 		expect(trace.writers).toEqual([]);
 		expect(trace.failures).toEqual([
 			expect.stringContaining(`${trialId}.1: its worktree could not be made`),
+			expect.stringContaining(`${trialId}.2: its worktree could not be made`),
+		]);
+		expect(trace.modes).toEqual([
+			{
+				sessionId: `${trialId}.1`,
+				mode: "shared",
+				reason: "no worktree",
+				owns: ["a/"],
+			},
+			{ sessionId: `${trialId}.2`, mode: "failed", reason: "no worktree" },
 		]);
 	}, 60_000);
 
@@ -429,7 +445,7 @@ const call = (tools: Record<string, unknown>, name: string, input: unknown) =>
 	).execute(input, { toolCallId: "t", messages: [] });
 
 describe("helperTools (helpers=write-tree)", () => {
-	it("starts a writer without owns and appends its patch block after the report", async () => {
+	it("starts a writer only with owns and appends its patch block after the report", async () => {
 		const sessions = trialSessions();
 		const started: { session: ChildSession; owns?: readonly string[] }[] = [];
 		const tools = helperTools({
@@ -446,7 +462,7 @@ describe("helperTools (helpers=write-tree)", () => {
 				};
 			},
 		});
-		expect(JSON.stringify(tools.agent)).not.toContain('"owns"');
+		expect(JSON.stringify(tools.agent)).toContain('"owns"');
 		expect(
 			await call(tools, "agent", {
 				role: "writer",
@@ -454,9 +470,19 @@ describe("helperTools (helpers=write-tree)", () => {
 				brief: "Build part A.",
 			}),
 		).toBe(
+			"Refused: a writer needs owns, the files or directories it may change.",
+		);
+		expect(
+			await call(tools, "agent", {
+				role: "writer",
+				title: "Part A",
+				brief: "Build part A.",
+				owns: ["a/"],
+			}),
+		).toBe(
 			"Started agent trial.1 (writer): Part A. Collect its report with agent_wait.",
 		);
-		expect(started[0]?.owns).toBeUndefined();
+		expect(started[0]?.owns).toEqual(["a/"]);
 		expect(started[0]?.session.role).toBe("writer");
 		const report = await call(tools, AGENT_WAIT_TOOL, {});
 		// The report is capped; the patch block still arrives, last.
@@ -472,7 +498,10 @@ describe("helperTools (helpers=write-tree)", () => {
 		);
 		expect(lines.at(-1)).toBe(WRITER_PATCH_INTEGRATION);
 		expect(lines[0]).toContain("on its own git worktree of your checkout");
-		expect(WORKTREE_WRITER_INSTRUCTIONS).not.toContain("owns");
+		// One added sentence: the fallback to the builder's checkout on owns.
+		expect(lines[0]).toContain(
+			"If a writer's copy can't be made, it works in your checkout on the paths you list in `owns` instead and its report says there is nothing to apply.",
+		);
 		// helpers=write is unchanged: no patch integration, writers limited by owns.
 		expect(WRITE_HELPER_INSTRUCTIONS).not.toContain("git apply -3");
 		expect(WRITE_HELPER_INSTRUCTIONS).toContain(

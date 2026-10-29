@@ -35,8 +35,10 @@ import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
  *   builder's own checkout and may change only the paths in `owns`
  *   (ownership by brief, as Reason Agent's subagents; no file locking).
  *   helpers=write-tree runs each writer on its own git worktree instead
- *   (worktree-writers.ts): no `owns`; its report carries a patch and git
- *   ref the builder applies with `git apply -3`, as the product's writer.
+ *   (worktree-writers.ts): its report carries a patch and git ref the
+ *   builder applies with `git apply -3`, as the product's writer. `owns` is
+ *   required there too: a writer whose worktree cannot be made works in
+ *   the builder's checkout on its owns paths instead (helpers=write).
  * - The product delivers a reader's report as a message; a trial has no
  *   mailbox, so `agent_wait` collects reports instead (one id, or every
  *   report not yet collected), waiting up to 10 minutes.
@@ -87,7 +89,7 @@ const MAX_WAIT_MS = 10 * 60_000;
  * with the product (writer-integration.ts), never a paraphrase.
  */
 export const WORKTREE_WRITER_INSTRUCTIONS = [
-	"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (on its own git worktree of your checkout, your uncommitted work included; its report gives its work as a patch and a git ref). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
+	"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (on its own git worktree of your checkout, your uncommitted work included; its report gives its work as a patch and a git ref). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again. If a writer's copy can't be made, it works in your checkout on the paths you list in `owns` instead and its report says there is nothing to apply.",
 	...WRITE_HELPER_INSTRUCTIONS.split("\n").slice(1),
 	WRITER_PATCH_INTEGRATION,
 ].join("\n");
@@ -126,7 +128,7 @@ const agentInput = (writers: WriterMode | null) =>
 					.enum(WRITE_HELPER_ROLES)
 					.describe(
 						writers === "worktree"
-							? `${READER_ROLES_TEXT} writer: implements its part on its own git worktree of your checkout and returns a patch and git ref.`
+							? `${READER_ROLES_TEXT} writer: implements its part on its own git worktree of your checkout and returns a patch and git ref (if the worktree can't be made, in your checkout on owns).`
 							: `${READER_ROLES_TEXT} writer: implements its part in your checkout, changing only the paths in owns.`,
 					)
 			: z.enum(HELPER_ROLES).describe(READER_ROLES_TEXT),
@@ -142,7 +144,7 @@ const agentInput = (writers: WriterMode | null) =>
 			.describe(
 				"Self-contained: goal, context (paths, findings, working commands), constraints, report format",
 			),
-		...(writers === "shared"
+		...(writers
 			? {
 					owns: z
 						.array(z.string().min(1).max(300))
@@ -281,7 +283,7 @@ export function helperTools(input: {
 		[AGENT_TOOL]: tool({
 			description:
 				writers === "worktree"
-					? "Start a helper in the background. A researcher or reviewer works on its own read-only copy of your checkout; a writer works on its own git worktree of your checkout and reports its work as a patch and git ref for you to review and apply. It sees only your brief (never this conversation) and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id."
+					? "Start a helper in the background. A researcher or reviewer works on its own read-only copy of your checkout; a writer works on its own git worktree of your checkout and reports its work as a patch and git ref for you to review and apply (if its worktree can't be made, it works in your checkout on owns and there is nothing to apply). It sees only your brief (never this conversation) and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id."
 					: writers
 						? "Start a helper in the background. A researcher or reviewer works on its own read-only copy of your checkout; a writer works in your checkout and may change only the paths in owns. It sees only your brief (never this conversation) and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id."
 						: "Start a read-only helper (researcher or reviewer) in the background on its own copy of your checkout. It sees only your brief (never this conversation), cannot change your files, and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id.",
@@ -294,7 +296,7 @@ export function helperTools(input: {
 				)
 					?.map((path) => path.trim())
 					.filter(Boolean);
-				if (role === "writer" && writers === "shared" && !owns?.length)
+				if (role === "writer" && writers && !owns?.length)
 					return "Refused: a writer needs owns, the files or directories it may change.";
 				if (live() >= MAX_LIVE_HELPERS)
 					return `Refused: ${MAX_LIVE_HELPERS} helpers are already running; collect or stop one first, or do the work yourself.`;
@@ -308,7 +310,7 @@ export function helperTools(input: {
 					session,
 					role,
 					title,
-					...(role === "writer" && writers === "shared" ? { owns } : {}),
+					...(role === "writer" && writers ? { owns } : {}),
 					running: null,
 					pending: null,
 				};
