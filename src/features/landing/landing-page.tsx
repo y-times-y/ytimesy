@@ -6,8 +6,6 @@ import {
 	CornerDownRight,
 	GitPullRequest,
 	Monitor,
-	MousePointer2,
-	Play,
 	Terminal,
 	X,
 } from "lucide-react";
@@ -245,48 +243,12 @@ const FLEET = [
 	},
 ] as const;
 
-/** A small settings page, as the agent's screenshots and browser show it. */
-function MiniSettings({
-	theme,
-	large,
-}: {
-	theme: "light" | "dark";
-	large?: boolean;
-}) {
-	return (
-		<div
-			className="mini-app"
-			data-theme={theme}
-			data-large={large || undefined}
-		>
-			<div className="mini-nav">
-				<span className="mini-logo" />
-				<span className="mini-tab">Home</span>
-				<span className="mini-tab">Projects</span>
-				<span className="mini-tab" data-active="true">
-					Settings
-				</span>
-			</div>
-			<div className="mini-body">
-				<p className="mini-title">Settings</p>
-				<p className="mini-row">
-					Dark mode
-					<span className="tv-toggle" data-on={theme === "dark" || undefined} />
-				</p>
-				<p className="mini-row">
-					Email alerts
-					<span className="tv-toggle" data-on="true" />
-				</p>
-				{large ? (
-					<p className="mini-row">
-						Language
-						<span className="mini-value">English</span>
-					</p>
-				) : null}
-			</div>
-		</div>
-	);
-}
+const FLOW = [
+	"Open localhost:3000/settings",
+	"Turn on Dark mode",
+	"Reload: the setting stays",
+	"Screenshot each step",
+];
 
 const MEMORIES = [
 	"Use pnpm, not npm",
@@ -354,26 +316,21 @@ function Features() {
 						))}
 					</div>
 				</Tile>
-				<Tile title="Screenshots and video in your PR">
-					<div className="tv-proof">
-						<p className="tv-proof-head">
+				<Tile title="Verified proof on your PR">
+					<div className="tv-gh">
+						<p className="tv-gh-head">
 							<GitPullRequest size={14} />
-							Evidence
+							Add dark mode toggle
+							<span>#128</span>
 						</p>
-						<div className="tv-proof-shots">
-							<figure>
-								<figcaption>Before</figcaption>
-								<div className="tv-shot">
-									<MiniSettings theme="light" />
-								</div>
-							</figure>
-							<figure>
-								<figcaption>After</figcaption>
-								<div className="tv-shot">
-									<MiniSettings theme="dark" />
-									<Play size={14} className="tv-play" />
-								</div>
-							</figure>
+						<div className="tv-gh-body">
+							<p className="tv-gh-h2">Evidence</p>
+							<p>
+								Verified by the ytimesy harness from a clean checkout of{" "}
+								<code>4f2a9c1</code>, the pull request head: 3 screenshots, 14 s
+								screen recording.
+							</p>
+							<p className="tv-gh-link">View the evidence in ytimesy</p>
 						</div>
 					</div>
 				</Tile>
@@ -396,23 +353,23 @@ function Features() {
 					</div>
 				</Tile>
 				<Tile title="Tests in a real browser" className="tile-wide">
-					<div className="tv-desktop">
-						<p className="tv-window">
+					<div className="tv-flow">
+						<p className="tv-flow-head">
 							<Monitor size={13} />
 							Desktop
+							<span className="tv-rec">
+								<span />
+								Recording 0:14
+							</span>
 						</p>
-						<div className="tv-browser">
-							<p className="tv-browser-bar">
-								<span />
-								<span />
-								<span />
-								<span className="tv-url">localhost:3000/settings</span>
-							</p>
-							<div className="tv-browser-page">
-								<MiniSettings theme="dark" large />
-								<MousePointer2 size={16} className="tv-cursor" />
-							</div>
-						</div>
+						<ol>
+							{FLOW.map((step) => (
+								<li key={step}>
+									<Check size={13} strokeWidth={2.6} />
+									{step}
+								</li>
+							))}
+						</ol>
 					</div>
 				</Tile>
 			</ul>
