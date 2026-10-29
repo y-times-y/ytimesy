@@ -20,7 +20,10 @@ import {
 import { WorkspaceId } from "../src/domain/ids";
 import { modelBilling } from "../src/domain/model-pricing";
 import { orchestratorInstructions } from "../src/domain/subagent-instructions";
-import { WRITER_PATCH_INTEGRATION } from "../src/domain/writer-integration";
+import {
+	WRITER_PATCH_APPLY,
+	WRITER_PATCH_INTEGRATION,
+} from "../src/domain/writer-integration";
 import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
 
 const run = promisify(execFile);
@@ -129,7 +132,9 @@ describe("worktreeWriters (helpers=write-tree)", () => {
 		expect(blockA).toMatch(
 			new RegExp(`Ref: +refs/ytimesy/agents/${trialId}-1 +Base: [0-9a-f]{40}`),
 		);
-		expect(blockA).toContain(`apply with \`git apply -3 ${patchA}\``);
+		expect(blockA).toContain(
+			`apply with \`git add -A && git apply -3 ${patchA}\``,
+		);
 		expect(blockB).toContain("(2 files, +2 −1");
 		// Refs are reachable from the builder's checkout: git diff <base> <ref> works there.
 		const base = /Base: ([0-9a-f]{40})/.exec(blockA)?.[1] as string;
@@ -254,6 +259,95 @@ describe("worktreeWriters (helpers=write-tree)", () => {
 		});
 	}, 60_000);
 
+	it("unstaged builder edits in the patched file: plain `git apply -3` refuses, staging first applies both", async () => {
+		const box = await container(true);
+		// A file the builder made after its last commit, before the writer started.
+		await writeFile(join(box.root, "draft.txt"), "a\nb\nc\nd\ne\nf\n");
+		const { writers, trialId } = writersFor(box);
+		const a = await writers.open(`${trialId}.1`);
+		await box.sh(
+			"sed -i.bak 's/^seven$/SEVEN-W/' f.txt && sed -i.bak 's/^f$/F-W/' draft.txt && rm f.txt.bak draft.txt.bak",
+			a.cwd,
+		);
+		await writers.finish(`${trialId}.1`, "");
+		const patch = `${worktreeRoot(trialId)}/patches/${trialId}-1.patch`;
+		// Meanwhile the builder edits other lines of both files, unstaged.
+		await box.sh(
+			"sed -i.bak 's/^one$/ONE-B/' f.txt && sed -i.bak 's/^a$/A-B/' draft.txt && rm f.txt.bak draft.txt.bak",
+		);
+		const plain = await box.sh(`git apply -3 ${patch}`);
+		expect(plain.exitCode).not.toBe(0);
+		expect(plain.stderr).toMatch(
+			/does not match index|does not exist in index/,
+		);
+		const staged = await box.sh(WRITER_PATCH_APPLY(patch));
+		expect(staged.exitCode).toBe(0);
+		expect(await readFile(join(box.root, "f.txt"), "utf8")).toBe(
+			"ONE-B\ntwo\nthree\nfour\nfive\nsix\nSEVEN-W\neight\n",
+		);
+		expect(await readFile(join(box.root, "draft.txt"), "utf8")).toBe(
+			"A-B\nb\nc\nd\ne\nF-W\n",
+		);
+		const trace = await writers.close([
+			{
+				type: "tool-call" as const,
+				id: "c1",
+				name: "bash",
+				input: { command: WRITER_PATCH_APPLY(patch) },
+			},
+			{ type: "tool-result" as const, id: "c1", name: "bash", output: "" },
+		]);
+		expect(trace.applyCommands).toBe(1);
+		expect(trace.writers[0]?.rounds[0]).toMatchObject({
+			inFinal: true,
+			applyCommands: 1,
+			conflictedApplies: 0,
+		});
+		expect(trace.unmergedAtEnd).toEqual([]);
+	}, 60_000);
+
+	it("unstaged builder edits on the patched lines: staging first gives a conflict the builder resolves", async () => {
+		const box = await container(true);
+		const { writers, trialId } = writersFor(box);
+		const a = await writers.open(`${trialId}.1`);
+		await box.sh("sed -i.bak 's/^four$/FOUR-W/' f.txt && rm f.txt.bak", a.cwd);
+		await writers.finish(`${trialId}.1`, "");
+		const patch = `${worktreeRoot(trialId)}/patches/${trialId}-1.patch`;
+		await box.sh("sed -i.bak 's/^four$/FOUR-B/' f.txt && rm f.txt.bak");
+		const applied = await box.sh(WRITER_PATCH_APPLY(patch));
+		expect(applied.exitCode).not.toBe(0);
+		expect(applied.stderr + applied.stdout).toContain(
+			"Applied patch to 'f.txt' with conflicts",
+		);
+		const text = await readFile(join(box.root, "f.txt"), "utf8");
+		expect(text).toContain("FOUR-B");
+		expect(text).toContain("FOUR-W");
+		expect(text).toMatch(/^<<<<<<< /m);
+		// The builder resolves and marks it resolved.
+		await writeFile(
+			join(box.root, "f.txt"),
+			"one\ntwo\nthree\nFOUR-B FOUR-W\nfive\nsix\nseven\neight\n",
+		);
+		await box.sh("git add f.txt");
+		const trace = await writers.close([
+			{
+				type: "tool-call" as const,
+				id: "c1",
+				name: "bash",
+				input: { command: WRITER_PATCH_APPLY(patch) },
+			},
+			{
+				type: "tool-result" as const,
+				id: "c1",
+				name: "bash",
+				output: `${applied.stderr}${applied.stdout}\nexit code 1`,
+			},
+		]);
+		expect(trace.applyConflicts).toBe(1);
+		expect(trace.unmergedAtEnd).toEqual([]);
+		expect(trace.conflictMarkersAtEnd).toEqual([]);
+	}, 60_000);
+
 	it("records unmerged paths and conflict markers left at the end", async () => {
 		const box = await container(true);
 		const { writers, trialId, lines } = writersFor(box);
@@ -370,6 +464,9 @@ describe("helperTools (helpers=write-tree)", () => {
 		// The product's orchestration block names the same integration commands.
 		const product = orchestratorInstructions();
 		expect(product).toContain("`git diff <base> <ref>`");
-		expect(product).toContain("`git apply -3`");
+		expect(product).toContain(WRITER_PATCH_INTEGRATION);
+		expect(WRITER_PATCH_INTEGRATION).toContain(
+			"`git add -A && git apply -3 <patch>`",
+		);
 	});
 });
