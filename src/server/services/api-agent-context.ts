@@ -168,21 +168,31 @@ function historySplit(
 	if (currentUser === undefined)
 		throw new Error("Cannot compact history without a current user request.");
 	const priorUser = userTurns.at(-2);
-	if (policy !== "completed-steps") {
-		if (
-			currentUser === 0 ||
-			estimateContextTokens(messages.slice(currentUser)) >= threshold
-		)
+	const activeTurnFits =
+		currentUser > 0 &&
+		estimateContextTokens(messages.slice(currentUser)) < threshold;
+	if (policy === "bound-prefix") {
+		if (!activeTurnFits)
 			throw new Error(
 				"The active turn cannot be safely compacted by this provider; original reasoning was preserved.",
 			);
 		const recent = messages.slice(currentUser);
-		if (policy === "bound-prefix" && recent.some(hasBoundReasoning))
+		if (recent.some(hasBoundReasoning))
 			throw new Error(
 				"Native compaction is required to preserve this turn's bound reasoning; original history was preserved.",
 			);
 		return { older: messages.slice(0, currentUser), recent };
 	}
+	if (policy === "whole-turns" && activeTurnFits)
+		return {
+			older: messages.slice(0, currentUser),
+			recent: messages.slice(currentUser),
+		};
+	// whole-turns past this point: one active turn (a benchmark task) outgrew
+	// the threshold alone. Its reasoning is not bound to the prefix (that is
+	// bound-prefix), so its completed steps retire as below: each older
+	// assistant message leaves with its own reasoning, tool calls and results,
+	// and the latest assistant/tool cycle stays whole.
 	const split =
 		priorUser !== undefined &&
 		priorUser > 0 &&
@@ -376,6 +386,44 @@ export function retainedUserMessages(
 				...listed,
 			].join("\n"),
 		},
+	];
+}
+
+const isCompactionItem = (part: { type: string; kind?: string }) =>
+	part.type === "custom" && part.kind === "openai.compaction";
+
+/**
+ * After a response in which the provider compacted the request's input
+ * in-stream (OpenAI context_management), the history to send next: the
+ * earlier user requests verbatim (as after any compaction), then the
+ * response with its compaction item in the order the provider produced it.
+ * The checkpoint stands for everything before it, so nothing earlier is
+ * resent. Null when the response carries no compaction item.
+ */
+export function inStreamCompactedHistory(
+	before: readonly ModelMessage[],
+	response: readonly ModelMessage[],
+	isUserRequest: UserRequestPredicate | undefined,
+	maxCharacters: number,
+): ModelMessage[] | null {
+	const at = response.findIndex(
+		(message) =>
+			message.role === "assistant" &&
+			Array.isArray(message.content) &&
+			message.content.some(isCompactionItem),
+	);
+	if (at < 0) return null;
+	const message = response[at] as Extract<ModelMessage, { role: "assistant" }>;
+	const content = message.content as Exclude<typeof message.content, string>;
+	let last = content.length - 1;
+	while (!isCompactionItem(content[last])) last--;
+	const rest = content.slice(last + 1);
+	return [
+		...retainedUserMessages(before, [], isUserRequest, maxCharacters),
+		...response.slice(0, at),
+		{ ...message, content: content.slice(0, last + 1) },
+		...(rest.length ? [{ ...message, content: rest }] : []),
+		...response.slice(at + 1),
 	];
 }
 

@@ -2,6 +2,14 @@ import { tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	READER_DELEGATION_POLICY,
+	REFUSED_START,
+	REPORT_IS_A_CLAIM,
+	WRITER_DELEGATION_POLICY,
+} from "#/domain/delegation-policy";
+import {
 	type FusionPairProfile,
 	fusionPairProfile,
 } from "#/domain/fusion-pairs";
@@ -167,23 +175,28 @@ describe("subagent instructions", () => {
 		});
 		// agent is an ordinary tool: no loading, no deferred list.
 		expect(withAgent).toContain(
-			"Subagents: `agent` starts a background agent with only your brief and returns its id at once;",
+			"Subagents: `agent` starts a helper (a background agent) with only your brief and returns its id at once;",
 		);
 		expect(withAgent).not.toMatch(/find_tools|searchTools|More tools/);
-		// Concrete triggers and one parallel example (arguments come from the schema).
-		expect(withAgent).toContain(
-			"two or more independent parts, each likely to take over 5 minutes, or a long build or test run beside a fix: start writers in parallel",
+		// The shared delegation policy, as the Harbor bridge measures it.
+		expect(withAgent).toContain(WRITER_DELEGATION_POLICY);
+		expect(withAgent).toContain(READER_DELEGATION_POLICY);
+		expect(withAgent).toContain(BRIEF_POLICY);
+		expect(withAgent).toContain(KEEP_WORKING_POLICY);
+		expect(withAgent).toContain(REPORT_IS_A_CLAIM);
+		expect(withAgent).toContain(REFUSED_START);
+		// The earlier, looser product triggers are gone.
+		expect(withAgent).not.toContain("Delegate when it saves wall-clock time");
+		expect(withAgent).not.toContain("each likely to take over 5 minutes");
+		expect(withAgent).not.toContain(
+			"after a hard fix, a reviewer can check it",
 		);
+		expect(withAgent).not.toContain("isolation: a risky or exploratory change");
+		// One parallel example (arguments come from the schema).
 		expect(withAgent).toContain(
-			'start them together from one run_code program: await Promise.all([tools.agent({ role: "writer"',
+			'Start helpers that run side by side together, in one run_code program: await Promise.all([tools.agent({ role: "writer"',
 		);
 		expect(withAgent).not.toContain("Arguments: agent(");
-		expect(withAgent).toContain(
-			"after a hard fix, a reviewer can check it while you run the suite yourself",
-		);
-		expect(withAgent).toContain(
-			"small, quick or sequential work, or anything you would finish in a few steps, you do yourself",
-		);
 		expect(withAgent).not.toContain("Cost first");
 		// The root role line allows what the block describes.
 		expect(withAgent).toContain(
@@ -192,13 +205,15 @@ describe("subagent instructions", () => {
 		expect(withAgent).not.toContain("work directly in this workspace");
 		expect(without).toContain("work directly in this workspace");
 		expect(without).not.toContain("delegating");
+		// The product's own mechanics: forks returning patches, reports as messages.
 		expect(withAgent).toContain("what not to touch");
-		expect(withAgent).toContain("disjoint file set");
-		expect(withAgent).toContain("a report is a claim, not a fact");
+		expect(withAgent).toContain("returns a patch and git ref");
 		expect(withAgent).toContain("git apply -3");
+		expect(withAgent).not.toContain("agent_wait");
+		expect(withAgent).not.toContain("`owns`");
 		// Reports wake the builder; no progress pings; the root posts each finish.
 		expect(withAgent).toContain(
-			"Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it.",
+			"Their reports arrive on their own and wake you; message a running helper only to change its course or stop it, never to ask for progress or to hurry it.",
 		);
 		expect(withAgent).toContain(ROOT_HELPER_UPDATES);
 		const writer = agentTurnInstructions({
@@ -284,7 +299,7 @@ describe("subagent instructions", () => {
 			tools: { bash: stub, agent: stub },
 		});
 		expect(direct).toContain(
-			"start them together: call agent once per part in the same step",
+			"Start helpers that run side by side together, with one agent call per helper in the same step.",
 		);
 		expect(direct).not.toContain("run_code");
 		const researcher = agentTurnInstructions({
@@ -302,6 +317,9 @@ describe("subagent instructions", () => {
 		);
 		expect(researcher).toContain('tools.agent({ role: "researcher"');
 		expect(researcher).not.toMatch(/writer|git apply/);
+		// Readers start readers under the same cost bar, never the writer rule.
+		expect(researcher).toContain(READER_DELEGATION_POLICY);
+		expect(researcher).not.toContain(WRITER_DELEGATION_POLICY);
 	});
 });
 
@@ -369,12 +387,12 @@ describe("lead mode fusion instructions", () => {
 		);
 		expect(fusion).toContain("across the user's messages");
 		// Not the default block's delegation policy.
-		expect(fusion).not.toContain("Delegate when it saves wall-clock time");
+		expect(fusion).not.toContain(WRITER_DELEGATION_POLICY);
 		expect(fusion).toContain(
 			"answer the user yourself, delegating only as below.",
 		);
 		const off = lead("core", { bash: stub, edit: stub, agent: stub }, "off");
-		expect(off).toContain("Delegate when it saves wall-clock time");
+		expect(off).toContain(WRITER_DELEGATION_POLICY);
 		expect(off).not.toContain("you are Main");
 	});
 

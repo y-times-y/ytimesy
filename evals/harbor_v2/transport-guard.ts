@@ -296,9 +296,21 @@ export function guardedFetch(
 		delayMs?: (attempt: number) => number;
 		/** Whitespace run in streamed output that cuts the response (DEGENERATE_RUN_CHARS). */
 		degenerateRunChars?: number;
+		/** How long throttling (429) or a 5xx before any output is waited out before the response is handed back. */
+		throttleWindowMs?: number;
+		/** Wait before resending a throttled request; tests pass 0. */
+		throttleDelayMs?: (attempt: number, retryAfterMs: number | null) => number;
 	} = {},
 ): typeof globalThis.fetch {
 	const maxAttempts = options.maxAttempts ?? 3;
+	// Resends reuse the signed request: Bedrock's SigV4 signatures expire
+	// after 5 minutes, so the guard waits at most 4; the SDK's own retries
+	// (re-signed) each get this window again.
+	const throttleWindowMs = options.throttleWindowMs ?? 4 * 60_000;
+	const throttleDelayMs =
+		options.throttleDelayMs ??
+		((attempt: number, retryAfterMs: number | null) =>
+			Math.min(60_000, Math.max(retryAfterMs ?? 0, 5000 * 2 ** (attempt - 1))));
 	const degenerateRunChars = options.degenerateRunChars ?? DEGENERATE_RUN_CHARS;
 	const delayMs = options.delayMs ?? ((attempt: number) => 2000 * attempt);
 	const record = (entry: Record<string, unknown>) => {
@@ -333,6 +345,8 @@ export function guardedFetch(
 		const path = new URL(url).pathname;
 		const effort = requestBodyEffort(body);
 		let last: { response: Response; drained: Drained } | null = null;
+		const firstStarted = Date.now();
+		let throttles = 0;
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const started = Date.now();
 			let response: Response;
@@ -351,6 +365,37 @@ export function guardedFetch(
 				throw error;
 			}
 			const requestId = requestIdOf(response.headers);
+			// Throttling or a provider 5xx before any output: nothing reached
+			// the agent, so the same request is sent again after a wait, for up
+			// to throttleWindowMs; a run is slowed by provider load, not ended.
+			if (
+				!response.ok &&
+				(response.status === 429 || response.status >= 500) &&
+				init?.signal?.aborted !== true
+			) {
+				throttles += 1;
+				const retryAfterMs = retryAfterOf(response.headers);
+				const wait = throttleDelayMs(throttles, retryAfterMs);
+				const willRetry = Date.now() + wait - firstStarted < throttleWindowMs;
+				record({
+					phase: "throttle",
+					kind,
+					effort,
+					path,
+					attempt: throttles,
+					requestId,
+					status: response.status,
+					ms: Date.now() - started,
+					willRetry,
+				});
+				if (willRetry) {
+					await response.body?.cancel().catch(() => {});
+					await new Promise((resolve) => setTimeout(resolve, wait));
+					attempt -= 1;
+					continue;
+				}
+				return response;
+			}
 			if (!response.ok || !response.body) {
 				record({
 					phase: "response",
@@ -407,6 +452,16 @@ export function guardedFetch(
 		const { response, drained } = last as NonNullable<typeof last>;
 		return replay(response, drained.chunks, drained.error || undefined);
 	};
+}
+
+/** A Retry-After header (seconds or an HTTP date) in ms, or null. */
+function retryAfterOf(headers: Headers) {
+	const value = headers.get("retry-after");
+	if (!value) return null;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+	const at = Date.parse(value);
+	return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
 }
 
 let installed = false;

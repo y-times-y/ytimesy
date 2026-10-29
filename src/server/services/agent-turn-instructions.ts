@@ -84,6 +84,8 @@ export function agentTurnInstructions(input: {
 	forceDelegation?: boolean;
 	/** The Harbor bridge's root builder: brief final answer, no desktop browser block. */
 	unattended?: boolean;
+	/** Unattended runs: the check-in-proportion rule (default on). */
+	checkInProportion?: boolean;
 	/** Replaces the subagent section (the Harbor bridge's read-only helpers). */
 	helperInstructions?: string;
 }) {
@@ -136,7 +138,7 @@ function leanTurnInstructions(
 		input.leadTools === "thin" &&
 		AGENT_TOOL in input.tools;
 	return [
-		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, AGENT_TOOL in input.tools, input.unattended)}`,
+		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, AGENT_TOOL in input.tools, input.unattended, input.checkInProportion)}`,
 		thinLead
 			? ""
 			: leanToolInstructions(input.leanShape, {
@@ -221,10 +223,11 @@ function roleInstructions(
 	session: Parameters<typeof agentTurnInstructions>[0]["session"],
 	delegates: boolean,
 	unattended?: boolean,
+	checkInProportion?: boolean,
 ) {
 	if (session.agentRole === "writer" && session.agentBudget?.sidekick)
 		return sidekickRoleInstructions(session.agentBudget);
 	return session.agentRole
 		? subagentRoleInstructions(session.agentRole, session.agentBudget ?? null)
-		: cloudAgentRoleInstructions({ delegates, unattended });
+		: cloudAgentRoleInstructions({ delegates, unattended, checkInProportion });
 }

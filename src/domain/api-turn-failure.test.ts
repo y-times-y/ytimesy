@@ -8,6 +8,7 @@ import {
 	CodexReconnectRequired,
 	ContextWindowExhausted,
 	contextOverflow,
+	HarnessRuntimeFailure,
 	MachineUsageLimitReached,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
@@ -475,4 +476,42 @@ it("never reports a repository guidance scan failure as a provider failure", () 
 	expect(message).toContain("Could not safely inspect repository guidance");
 	expect(message).toContain("not a model or provider failure");
 	expect(message).not.toContain("without a usable provider reason");
+});
+
+it("words the harness's own failures as such, redacted, and classifies them apart from providers", () => {
+	const failure = new HarnessRuntimeFailure(
+		"context-compaction",
+		new Error(
+			"Earlier history exceeds this model's context window; token=sk-live-abcdefghijklmnop",
+		),
+	);
+	const message = apiModelFailureMessage(failure);
+	expect(message).toMatch(
+		/^Context compaction failed: Earlier history exceeds this model's context window; token=\[redacted\]/,
+	);
+	expect(message).toContain("not a model or provider failure");
+	expect(message).not.toContain("sk-live");
+	expect(apiTurnFailureMessage("model", failure)).toBe(message);
+	expect(apiModelFailureClassification(failure)).toMatchObject({
+		name: "HarnessRuntimeFailure",
+		stage: "context-compaction",
+		httpStatus: null,
+	});
+	expect(JSON.stringify(failure)).not.toContain("sk-live");
+	// A runtime condition with its own wording keeps it.
+	expect(
+		apiModelFailureMessage(
+			new HarnessRuntimeFailure(
+				"context-compaction",
+				new Error("Private checkpoint storage is not configured."),
+			),
+		),
+	).toMatch(
+		/^Private checkpoint storage is not configured\. .*harness configuration failure/,
+	);
+	expect(
+		apiModelFailureMessage(
+			new HarnessRuntimeFailure("step-preparation", new Error("disk full")),
+		),
+	).toMatch(/^Run step preparation failed: disk full/);
 });

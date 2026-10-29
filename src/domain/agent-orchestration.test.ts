@@ -19,3 +19,14 @@ it("softens the root line only when the builder can delegate", () => {
 	expect(delegating).not.toContain("work directly");
 	expect(cloudAgentRoleInstructions()).toContain("work directly");
 });
+
+it("adds the check-in-proportion rule only when asked", () => {
+	const on = cloudAgentRoleInstructions({
+		unattended: true,
+		checkInProportion: true,
+	});
+	const off = cloudAgentRoleInstructions({ unattended: true });
+	expect(on).toContain("Check in proportion");
+	expect(off).not.toContain("Check in proportion");
+	expect(off).toContain("Your final answer is brief");
+});

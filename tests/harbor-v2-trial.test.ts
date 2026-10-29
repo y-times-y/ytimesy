@@ -2464,6 +2464,150 @@ describe("runHarborTrial with plan=on and helpers=on", () => {
 	}, 120_000);
 });
 
+describe("runHarborTrial with helpers=write", () => {
+	it("runs two writers in the builder's checkout, each on its own files, and counts their usage", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "codeMode=primary,helpers=write",
+		});
+		// Builder and writers run at once on one model: each request is
+		// answered from its own agent's script, told apart by its prompt.
+		const scripts: Record<string, Part[][]> = {
+			builder: [
+				[
+					call("a1", "agent", {
+						role: "writer",
+						title: "Part A",
+						brief: "Create part_a.py printing A.",
+						owns: ["part_a.py"],
+					}),
+					call("a2", "agent", {
+						role: "writer",
+						title: "Part B",
+						brief: "Create part_b.py printing B.",
+						owns: ["part_b.py"],
+					}),
+					finish(100, 10, true),
+				],
+				[call("w1", "agent_wait", {}), finish(100, 10, true)],
+				[...text("b3", "Done: both parts in place."), finish(100, 10)],
+			],
+			a: [
+				[
+					call("x1", "write", { path: "part_a.py", content: "print('A')\n" }),
+					finish(40, 4, true),
+				],
+				[
+					...text("x2", "Wrote part_a.py; run python3 part_a.py."),
+					finish(40, 4),
+				],
+			],
+			b: [
+				[
+					call("y1", "write", { path: "part_b.py", content: "print('B')\n" }),
+					call("y2", "write", { path: "notes/b.txt", content: "stray\n" }),
+					finish(40, 4, true),
+				],
+				[
+					...text("y3", "Wrote part_b.py; run python3 part_b.py."),
+					finish(40, 4),
+				],
+			],
+		};
+		const served: Record<string, number> = { builder: 0, a: 0, b: 0 };
+		const prompts: Record<string, string[]> = { builder: [], a: [], b: [] };
+		const tools: Record<string, string[][]> = { builder: [], a: [], b: [] };
+		const model = new MockLanguageModelV4({
+			provider: "anthropic.messages",
+			modelId: "claude-opus-5-5",
+			doStream: async (options) => {
+				const prompt = JSON.stringify(options.prompt);
+				const who = prompt.includes("only these paths: part_a.py")
+					? "a"
+					: prompt.includes("only these paths: part_b.py")
+						? "b"
+						: "builder";
+				prompts[who]?.push(prompt);
+				tools[who]?.push(
+					(options.tools ?? []).map((entry: { name: string }) => entry.name),
+				);
+				const script = scripts[who] as Part[][];
+				const index = served[who] ?? 0;
+				served[who] = index + 1;
+				return {
+					stream: simulateReadableStream({
+						chunks: script[Math.min(index, script.length - 1)] as never[],
+						initialDelayInMs: null,
+						chunkDelayInMs: null,
+					}),
+				};
+			},
+		});
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: "trial-writers",
+			instruction: "Create part_a.py and part_b.py.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			log: (line) => lines.push(line),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(served).toEqual({ builder: 3, a: 2, b: 2 });
+		// The builder's section is the writers' one; its agent tool takes owns.
+		expect(prompts.builder?.[0]).toContain(
+			"decide once, after your first look at the task",
+		);
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"owns"');
+		// Writers: the shared-checkout role with their paths, write tools, no agent tools.
+		expect(prompts.a?.[0]).toContain(
+			"working directly in your parent's checkout",
+		);
+		for (const names of [tools.a?.[0], tools.b?.[0]]) {
+			expect(names).toContain("write");
+			expect(names).toContain("edit");
+			expect(names).not.toContain("agent");
+			expect(names).not.toContain("agent_wait");
+		}
+		// Both parts landed in the builder's own checkout (no copy).
+		expect(await readFile(join(f.checkout.root, "part_a.py"), "utf8")).toBe(
+			"print('A')\n",
+		);
+		expect(await readFile(join(f.checkout.root, "part_b.py"), "utf8")).toBe(
+			"print('B')\n",
+		);
+		// The reports reached the builder through agent_wait.
+		expect(prompts.builder?.[2]).toContain("Wrote part_a.py");
+		expect(prompts.builder?.[2]).toContain("Wrote part_b.py");
+		// A write outside owns is logged, not blocked.
+		expect(
+			lines.some((line) => /wrote outside owns: .*notes\/b\.txt/.test(line)),
+		).toBe(true);
+		// Usage: 3 builder and 4 writer requests, writers labelled as writers.
+		expect(result.usage?.requests).toBe(7);
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.checkers.map((child: { role: string }) => child.role)).toEqual(
+			["writer", "writer"],
+		);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		expect(trajectory.subagent_trajectories).toHaveLength(2);
+	}, 120_000);
+});
+
 describe("runHarborTrial with fetch=on", () => {
 	it("offers web_fetch directly and to run_code programs, and not when off", async () => {
 		const tools = async (variant: string) => {

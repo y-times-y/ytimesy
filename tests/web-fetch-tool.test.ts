@@ -140,6 +140,30 @@ describe("webFetch", () => {
 		expect(await nodePublicHost("localhost")).toBe(false);
 	});
 
+	// The product offers web_fetch to every user's agents (multi-tenant).
+	it("refuses disguised private and metadata addresses", async () => {
+		for (const address of [
+			"::ffff:127.0.0.1",
+			"::ffff:169.254.169.254",
+			"64:ff9b::a9fe:a9fe",
+			"2002:a9fe:a9fe::",
+			"fd00:ec2::254",
+			"fe80::1",
+			"100.64.0.1",
+			"0.0.0.0",
+			"::",
+		])
+			expect(isPublicAddress(address)).toBe(false);
+		for (const url of [
+			"http://2130706433/",
+			"http://0x7f.1/",
+			"http://[::ffff:7f00:1]/",
+		])
+			await expect(
+				webFetch({ url, checkHost: async () => true }),
+			).rejects.toThrow(/not a public host/);
+	});
+
 	it("is a tool with a fixed description and a url/offset input", async () => {
 		const tools = webFetchTool({ checkHost });
 		const fetchTool = tools[WEB_FETCH_TOOL] as unknown as {

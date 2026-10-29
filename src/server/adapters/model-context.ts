@@ -1,5 +1,7 @@
 import { listedOpenRouterId } from "#/domain/api-model-list";
 import type { ModelProvider } from "#/domain/model-connection";
+import { knownModelLimits } from "#/domain/model-context-windows";
+import { UNKNOWN_CONTEXT_WINDOW } from "#/server/services/api-agent-context";
 import { browseModels } from "./browse-models";
 import { readModelCatalogBody } from "./model-catalog";
 
@@ -30,6 +32,7 @@ export async function readModelContext(
 	const saved = cached.get(input.cacheKey);
 	if (saved && saved.expires > Date.now()) return saved.value;
 	let contextWindow = input.contextWindow;
+	const known = knownModelLimits(input.modelId);
 	const origin = new URL(input.baseUrl).origin;
 	let nativeCompaction: ModelContext["nativeCompaction"] =
 		input.provider === "openai" &&
@@ -90,16 +93,38 @@ export async function readModelContext(
 				input.provider === "openai" && origin !== "https://openrouter.ai"
 					? `openai/${input.modelId}`
 					: input.modelId;
-			contextWindow ??= await openRouterContextWindow(
-				catalogId,
-				origin === "https://openrouter.ai" ? fetch : undefined,
-			);
+			// A routed model's window is checked in (model-context-windows.ts):
+			// no third-party catalog request, and no guess when it is down.
+			contextWindow ??=
+				known?.contextWindow ??
+				(await openRouterContextWindow(
+					catalogId,
+					origin === "https://openrouter.ai" ? fetch : undefined,
+				));
 		} else if (contextWindow === undefined && input.provider === "compatible")
 			contextWindow = await listedContextWindow(input, fetch);
-	} catch {
-		// Missing metadata uses the shared unknown-window budget, not an invented model limit.
+	} catch (error) {
+		// An unreachable or malformed metadata endpoint: a routed model falls
+		// back to its checked-in window below; any other model stays unknown.
+		console.warn("Model context metadata unavailable.", {
+			provider: input.provider,
+			modelId: input.modelId,
+			error: error instanceof Error ? error.name : "unknown",
+		});
 	}
-	const imageInput = await catalogImageInput(input).catch(() => undefined);
+	contextWindow ??= known?.contextWindow;
+	if (contextWindow === undefined)
+		console.warn(
+			"Model context window unknown; the run uses the unknown-window budget.",
+			{
+				provider: input.provider,
+				modelId: input.modelId,
+				assumedWindow: UNKNOWN_CONTEXT_WINDOW,
+			},
+		);
+	const imageInput =
+		known?.imageInput ??
+		(await catalogImageInput(input).catch(() => undefined));
 	const value = {
 		contextWindow,
 		nativeCompaction,

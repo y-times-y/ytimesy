@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { serverConfig } from "../config";
+import { databaseConfig } from "../config";
 import { scopedDatabase } from "./database-scope";
 
 const processDatabase = globalThis as typeof globalThis & {
@@ -9,7 +9,7 @@ export function database() {
 	const scoped = scopedDatabase();
 	if (scoped) return scoped;
 	if (!processDatabase.ytimesyDatabasePool) {
-		const config = serverConfig();
+		const config = databaseConfig();
 		const pool = new Pool({
 			connectionString: config.DATABASE_URL,
 			max: config.DATABASE_POOL_MAX,

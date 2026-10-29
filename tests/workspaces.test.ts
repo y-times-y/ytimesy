@@ -15,12 +15,17 @@ vi.mock("../src/server/adapters/database", () => ({
 		},
 	}),
 }));
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({
 		APP_URL: "[REDACTED]",
 		BETTER_AUTH_SECRET: "test-only-secret-longer-than-thirty-two-characters",
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");

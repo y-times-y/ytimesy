@@ -19,6 +19,8 @@ export type TrialRole =
 	| "classifier"
 	/** helpers=on: a read-only researcher or reviewer the root builder started. */
 	| "helper"
+	/** helpers=write: a writer the root builder started in its own checkout. */
+	| "writer"
 	/** search=function: one web_search call's own request with the hosted search tool. */
 	| "search";
 

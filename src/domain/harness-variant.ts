@@ -224,9 +224,11 @@ export const HARNESS_VARIANT_VALUES = {
 	 * on gives the root builder agent / agent_wait / agent_send for
 	 * researcher and reviewer subagents, each on its own read-only copy of
 	 * the checkout, on the builder's model. The builder stays the only
-	 * writer. off = no helpers (the default).
+	 * writer. write = on plus writer helpers: each works in the builder's
+	 * own checkout (no copy) and may change only the paths its brief gives
+	 * it (`owns`). off = no helpers (the default).
 	 */
-	helpers: ["off", "on"],
+	helpers: ["off", "on", "write"],
 	/**
 	 * Web fetch (src/server/services/web-fetch-tool.ts): on gives every agent
 	 * web_fetch, one public http(s) page as text, fetched from the harness
@@ -249,6 +251,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * request with the hosted tool, so that overhead is paid only per search.
 	 */
 	search: ["hosted", "function"],
+	/**
+	 * The unattended builder's check-in-proportion rule (stop once one run of
+	 * the deliverable confirms the result): full = without it (the default
+	 * since 2026-10-27: it stopped hard, target-driven tasks after the first
+	 * passing check); proportion = with it (about 10% cheaper on easy tasks).
+	 */
+	checks: ["full", "proportion"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -306,16 +315,22 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	fetch: "off",
 	prompt: "full",
 	search: "hosted",
+	checks: "full",
 	roleModels: {},
 };
 
 /**
- * What real users get: builder subagents on. Evals keep
+ * What real users get: builder subagents on, and the benchmark harness's
+ * code mode (run_code beside the normal tools), web_fetch and the root
+ * builder's update_plan (the chat's checklist). Evals keep
  * DEFAULT_HARNESS_VARIANT as their baseline, so a run's arms are unchanged.
  */
 export const PRODUCT_HARNESS_VARIANT: HarnessVariant = {
 	...DEFAULT_HARNESS_VARIANT,
 	subagents: "on",
+	codeMode: "on",
+	fetch: "on",
+	plan: "on",
 };
 
 /** The outputCap variant's limit in characters; undefined when off. */

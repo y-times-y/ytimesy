@@ -1,0 +1,14 @@
+biped-contact-dynamics         neg  no helper  req 10 $2.05
+distributed-dedup              neg  no helper  req 10 $1.72
+hof-topology-interpenetration  neg  SPAWN ['writer: Analyze HOF-3 periodic hydrogen-bond net', 'writer: Analyze HOF-7 framework and cluster nodes']  req 10 $1.05
+kv-live-surgery                neg  no helper  req 10 $1.26
+lake-temp-glm                  POS  SPAWN ['researcher: Investigate a generic lake-physics simulator']  req 10 $0.97
+mvcc-lsm-compaction            neg  no helper  req 8 $1.13
+retro-console-soc              POS  SPAWN ['writer: Implement synthesizable NES CPU core', 'writer: Implement synthesizable NES PPU']  req 8 $0.48
+rs-archive-clone               POS  SPAWN ['writer: Implement archive format and recovery', 'writer: Implement package format and transforms']  req 10 $0.46
+session-window-debug           neg  no helper  req 10 $1.39
+sglang-qwen-burst              POS  no helper  req 10 $0.85
+shadow-relay                   neg  no helper  req 10 $1.02
+takens-embedding-lean          POS  SPAWN ['writer: Low-dimensional affine avoidance', 'writer: Periodic cyclic covector lemma']  req 10 $0.84
+telecom-entity-resolution      neg  SPAWN ['researcher: Investigate ambiguous household identity evidence']  req 10 $0.42
+round cost 13.64

@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { LanguageModel } from "ai";
+import { knownModelLimits } from "../../src/domain/model-context-windows";
 import { pricedModelId } from "../../src/domain/model-pricing";
 import { codexSubscriptionModel } from "../../src/server/adapters/codex-subscription";
-import { nativeModelCompactor } from "../../src/server/adapters/model-compaction";
+import {
+	nativeModelCompactor,
+	responsesEndpointCompactor,
+} from "../../src/server/adapters/model-compaction";
+import { modelContextBudget } from "../../src/server/services/api-agent-context";
 import { apiModelRuntime } from "../../src/server/services/api-agent-runtime";
 import type { ModelAgentRuntime } from "../../src/server/services/model-agent-loop";
 import {
@@ -44,6 +49,23 @@ export async function routeApiKey(
 }
 
 /**
+ * A benchmark trial never runs on the unknown-window guess: compaction
+ * thresholds follow the window, so a guessed 128K on a 1M model compacts a
+ * long single task early (and a Responses-route turn could not be compacted
+ * at all). Fails at startup, before the trial does any work.
+ */
+export function requireContextWindow(
+	runtime: ModelAgentRuntime,
+	modelId: string,
+): ModelAgentRuntime {
+	if (!runtime.contextWindow)
+		throw new Error(
+			`The context window of ${modelId} is unknown (no stated window, provider metadata or checked-in entry in src/domain/model-context-windows.ts); a benchmark run never guesses it.`,
+		);
+	return runtime;
+}
+
+/**
  * The product's model runtime for the configured route, with every model
  * request (native compaction included) passed through `wrapModel` (the
  * trial's spending guard). API routes use apiModelRuntime, the same builder
@@ -53,6 +75,17 @@ export async function routeApiKey(
  * prepares.
  */
 export async function harborRuntime(input: {
+	config: HarborBridgeConfig;
+	env: Record<string, string | undefined>;
+	userId: string;
+	cacheScope: string;
+	wrapModel: (model: LanguageModel) => LanguageModel;
+	fetch?: typeof globalThis.fetch;
+}): Promise<ModelAgentRuntime> {
+	return requireContextWindow(await routeRuntime(input), input.config.modelId);
+}
+
+async function routeRuntime(input: {
 	config: HarborBridgeConfig;
 	env: Record<string, string | undefined>;
 	userId: string;
@@ -197,7 +230,8 @@ export const BEDROCK_MAX_OUTPUT_TOKENS = 64_000;
  * Responses runtime pointed at bedrock-mantle (or bedrock-runtime), every request SigV4-signed
  * from the operator's AWS credentials. The OpenAI client is given the bare
  * model id (gpt-6-luna) so it treats the model exactly as on the openai-api
- * route (reasoning effort, developer instructions, catalog context window);
+ * route (reasoning effort, developer instructions); its context window is
+ * the checked-in one (model-context-windows.ts), never a catalog lookup;
  * the signer sends the Bedrock id (openai.gpt-6-luna on mantle,
  * global.openai.gpt-6-luna on bedrock-runtime) in
  * its place. Prompt caching keys requests to the trial's cache scope as the
@@ -216,6 +250,23 @@ async function bedrockRuntime(input: {
 	if (!bedrock) throw new Error("The bedrock route needs its settings.");
 	const credentials = await bedrockCredentials(input.env);
 	const clientModel = pricedModelId(config.modelId);
+	const contextWindow = knownModelLimits(clientModel)?.contextWindow;
+	if (!contextWindow)
+		throw new Error(
+			`"${config.modelId}" has no checked-in context window (src/domain/model-context-windows.ts).`,
+		);
+	const signed = bedrockSigningFetch({
+		credentials,
+		region: bedrock.region,
+		endpoint: bedrock.endpoint,
+		// One request's wall time is bounded (responseTimeLimitFetch).
+		fetch: responseTimeLimitFetch(
+			input.fetch ?? globalThis.fetch.bind(globalThis),
+		),
+		model: { client: clientModel, profile: config.modelId },
+	});
+	const native = bedrock.nativeCompaction;
+	const fetch = native ? contextManagementFallback(signed) : signed;
 	const runtime = await apiModelRuntime({
 		provider: "openai",
 		baseUrl: bedrock.baseUrl,
@@ -226,19 +277,20 @@ async function bedrockRuntime(input: {
 		connectionId: `harbor:${config.route}`,
 		cacheScopeId: input.cacheScope,
 		contextCacheKey: JSON.stringify(["harbor", config.route, config.modelId]),
+		contextWindow,
 		reasoning: config.effort,
-		fetch: bedrockSigningFetch({
-			credentials,
-			region: bedrock.region,
-			endpoint: bedrock.endpoint,
-			// One request's wall time is bounded (responseTimeLimitFetch).
-			fetch: responseTimeLimitFetch(
-				input.fetch ?? globalThis.fetch.bind(globalThis),
-			),
-			model: { client: clientModel, profile: config.modelId },
-		}),
+		fetch,
 		wrapModel: input.wrapModel,
 	});
+	// In-stream compaction starts below the loop's own threshold, so the
+	// provider compacts a long turn first; the loop's compaction (the
+	// compact endpoint, then its own summary) stays the backstop.
+	const compactThreshold = Math.floor(
+		modelContextBudget({
+			contextWindow,
+			maxOutputTokens: BEDROCK_MAX_OUTPUT_TOKENS,
+		}).compactAtTokens * 0.9,
+	);
 	const promptCacheKey = createHash("sha256")
 		.update(`ytimesy:harbor:${input.userId}:${input.cacheScope}`)
 		.digest("hex");
@@ -261,10 +313,67 @@ async function bedrockRuntime(input: {
 							openai: {
 								...settings.providerOptions?.openai,
 								promptCacheKey,
+								...(native
+									? {
+											contextManagement: [
+												{ type: "compaction", compactThreshold },
+											],
+										}
+									: {}),
 							},
 						},
 					};
 				}
 			: undefined,
+		...(native
+			? {
+					// POST /responses/compact through the same signed transport
+					// and the trial's guard; its usage is recorded as a
+					// compaction request.
+					compact: responsesEndpointCompactor({
+						baseUrl: bedrock.baseUrl,
+						apiKey: "aws-sigv4",
+						modelId: clientModel,
+						fetch,
+						wrapModel: input.wrapModel,
+					}),
+					compactFallback: true,
+				}
+			: {}),
+	};
+}
+
+/**
+ * OpenAI's compaction on Bedrock works (live check on mantle, 2026-10-28)
+ * but is not in AWS's documentation. A request Bedrock refuses for its
+ * context_management field (HTTP 400/404/422) is sent once more without
+ * it, and no later request of this runtime carries it: the run continues
+ * on the loop's own compaction instead of failing.
+ */
+export function contextManagementFallback(
+	fetch: typeof globalThis.fetch,
+	warn: (message: string) => void = (message) => console.warn(message),
+): typeof globalThis.fetch {
+	let refused = false;
+	const without = (body: string) => {
+		const parsed = JSON.parse(body) as Record<string, unknown>;
+		delete parsed.context_management;
+		return JSON.stringify(parsed);
+	};
+	return async (request, init) => {
+		const body = init?.body;
+		if (typeof body !== "string" || !body.includes('"context_management"'))
+			return fetch(request, init);
+		if (refused) return fetch(request, { ...init, body: without(body) });
+		const response = await fetch(request, init);
+		if (![400, 404, 422].includes(response.status)) return response;
+		const detail = await response.clone().text();
+		if (!/context_management|compaction|compact_threshold/i.test(detail))
+			return response;
+		refused = true;
+		warn(
+			`Bedrock refused in-stream compaction (HTTP ${response.status}); continuing without it.`,
+		);
+		return fetch(request, { ...init, body: without(body) });
 	};
 }

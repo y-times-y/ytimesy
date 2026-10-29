@@ -18,11 +18,11 @@ import { harborRuntime } from "../evals/harbor_v2/runtime";
 import { trialSpendGuard } from "../evals/harbor_v2/spend";
 import { usageCostUsd } from "../src/domain/model-pricing";
 
+// A run never reads the public catalog (model-context-windows.ts).
 vi.mock("../src/server/adapters/browse-models", () => ({
-	browseModels: async () => [
-		{ id: "openai/gpt-6.1-sol", contextWindow: 1_050_000 },
-		{ id: "openai/gpt-6-luna", contextWindow: 400_000 },
-	],
+	browseModels: async () => {
+		throw new Error("The bedrock route must not read the model catalog.");
+	},
 }));
 
 // Fake, well-formed keys: never real credentials.
@@ -411,7 +411,8 @@ describe("bedrock runtime request", () => {
 			wrapModel: (model) => model,
 			fetch,
 		});
-		expect(runtime.contextWindow).toBe(400_000);
+		// The checked-in window, with the catalog unreachable.
+		expect(runtime.contextWindow).toBe(1_050_000);
 		// Above the 8K API default that cut max-effort steps, but finite.
 		expect(runtime.maxOutputTokens).toBe(64_000);
 		const result = streamText({

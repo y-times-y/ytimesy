@@ -79,7 +79,7 @@ import {
 	harborHarness,
 	hostedWebSearchTools,
 } from "./harness";
-import { type HelperRole, helperTools } from "./helpers";
+import { type HelperRole, helperTools, writesOutside } from "./helpers";
 import {
 	FINISH_CONTINUATIONS_MAX,
 	type LedgerGateEntry,
@@ -101,6 +101,7 @@ import {
 	ranTranscript,
 	reviewItems,
 } from "./review";
+import { describeRuntime } from "./runtime-description";
 import {
 	functionWebSearchTool,
 	SEARCH_REQUEST_INSTRUCTIONS,
@@ -113,6 +114,7 @@ import {
 } from "./sessions";
 import {
 	guardedLanguageModel,
+	recordTrialAlert,
 	reserveTrial,
 	SpendCapReached,
 	settleTrial,
@@ -283,7 +285,7 @@ export function trialEfficiency(input: {
 							listedModelId: child.modelId,
 							// Each role as the product's tree marks it (eval-efficiency.ts).
 							agentRole:
-								child.role === "sidekick"
+								child.role === "sidekick" || child.role === "writer"
 									? "writer"
 									: child.role === "helper" || child.role === "search"
 										? "researcher"
@@ -421,14 +423,20 @@ export async function runHarborTrial(
 			`${tracePath} already exists; refusing to overwrite another trial's trace.`,
 		);
 	const startedAt = new Date(now()).toISOString();
+	// Without a trial cap the trial may spend what the total leaves when it starts.
+	let headroomUsd: number | null = null;
 	if (config.total) {
 		try {
+			const reservation =
+				config.trialUsdCap ?? config.trialReserveUsd ?? config.total.capUsd;
 			const reserved = await reserveTrial({
 				ledger: config.total.ledger,
 				totalCapUsd: config.total.capUsd,
 				trial: input.trialId,
-				trialCapUsd: config.trialUsdCap ?? config.total.capUsd,
+				trialCapUsd: reservation,
 			});
+			if (config.trialUsdCap === null)
+				headroomUsd = config.total.capUsd - reserved.committedUsd;
 			for (const warning of reserved.warnings) log(`warning: ${warning}`);
 		} catch (error) {
 			if (error instanceof SpendCapReached)
@@ -500,11 +508,12 @@ export async function runHarborTrial(
 				)
 			: 0;
 	const guard = trialSpendGuard({
-		capUsd: config.trialUsdCap,
+		capUsd: config.trialUsdCap ?? headroomUsd,
 		requestLimit: config.requestLimit,
 		parts: spendParts,
 		extraUsd: searchUsd,
 	});
+	let spendAlerted = false;
 	const remainingMs = Math.max(1000, input.deadlineAt - now());
 	const signal = AbortSignal.timeout(remainingMs);
 	const workspace: HarborWorkspace = {
@@ -554,6 +563,8 @@ export async function runHarborTrial(
 		const wrapModel = (model: LanguageModel) =>
 			guardedLanguageModel(model, guard, signal);
 		const runtime = await input.runtime(wrapModel);
+		// The preflight's egress check reads `context window <n>` from this log.
+		for (const line of describeRuntime(runtime, config)) log(line);
 		// effortMix=on: the root builder's own requests plan and continue at the
 		// turn's effort and execute at high (effort-mix.ts); children keep theirs.
 		const mix = config.variant.effortMix === "on" ? effortMix(log) : null;
@@ -565,10 +576,33 @@ export async function runHarborTrial(
 			events.push({ at: new Date(now()).toISOString(), event });
 			if (event.type === "tool-call")
 				log(`tool ${event.name} ${JSON.stringify(event.input).slice(0, 160)}`);
-			if (event.type === "usage")
+			if (event.type === "usage") {
+				const spent = guard.spentUsd();
 				log(
-					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${guard.spentUsd().toFixed(4)}`,
+					`usage in=${event.usage.inputTokens} out=${event.usage.outputTokens} usd=${spent.toFixed(4)}`,
 				);
+				if (
+					config.trialAlertUsd !== null &&
+					!spendAlerted &&
+					spent >= config.trialAlertUsd
+				) {
+					spendAlerted = true;
+					log(
+						`spend alert: $${spent.toFixed(2)} passed the $${config.trialAlertUsd} alert; the trial keeps running`,
+					);
+					if (config.total)
+						await recordTrialAlert({
+							ledger: config.total.ledger,
+							trial: input.trialId,
+							usd: spent,
+							thresholdUsd: config.trialAlertUsd,
+						}).catch((error) =>
+							log(
+								`spend alert not recorded in the ledger: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						);
+				}
+			}
 		};
 		const runtimes = new Map<string, Promise<ModelAgentRuntime>>();
 		const runtimeFor = (model: HarborModel) => {
@@ -640,6 +674,10 @@ export async function runHarborTrial(
 					})
 				: undefined;
 		const CHILD_BUDGET = { steps: 60, minutes: 15, tokens: 1_500_000 };
+		// helpers=write: a writer implements a whole part of a long task.
+		const WRITER_BUDGET = { steps: 150, minutes: 45, tokens: 4_000_000 };
+		/** helpers=write: each writer's paths (its budget's sharedWriter). */
+		const writerOwns = new Map<string, readonly string[]>();
 		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
 		const checkerLastWord = async (
 			session: Parameters<RunRound>[0],
@@ -704,7 +742,9 @@ export async function runHarborTrial(
 			const budget =
 				session.role === "checker" || session.role === "checkerWorker"
 					? (checkerBudgets.get(session.id) ?? CHILD_BUDGET)
-					: CHILD_BUDGET;
+					: session.role === "writer"
+						? WRITER_BUDGET
+						: CHILD_BUDGET;
 			const childSignal = AbortSignal.any([
 				signal,
 				stop.signal,
@@ -735,7 +775,15 @@ export async function runHarborTrial(
 								model: session.model.modelId,
 							}),
 						}
-					: budget;
+					: session.role === "writer"
+						? {
+								...budget,
+								sharedWriter: { owns: writerOwns.get(session.id) ?? [] },
+							}
+						: budget;
+			// A checker, helper or writer has the builder's execution access: web search and MCP too.
+			const builderAccess =
+				checkerRole || session.role === "helper" || session.role === "writer";
 			const child = await harborHarness({
 				workspace: {
 					...workspace,
@@ -748,21 +796,19 @@ export async function runHarborTrial(
 				modelId: session.model.modelId,
 				provider,
 				variant: config.variant,
-				// A checker or helper has the builder's execution access: web search and MCP too.
-				webSearch:
-					config.webSearch && (checkerRole || session.role === "helper"),
+				webSearch: config.webSearch && builderAccess,
 				bedrock: config.route === "bedrock",
 				...(searchTool ? { searchTool } : {}),
-				...(checkerRole || session.role === "helper"
-					? { mcpNote: mcpNoteFor(input.mcpServers) }
-					: {}),
+				...(builderAccess ? { mcpNote: mcpNoteFor(input.mcpServers) } : {}),
 				instruction: brief,
 				storage: input.storage,
 				onEvent: onChildEvent,
 				subagent: {
 					role:
 						options.agentRole ??
-						(session.role === "sidekick" ? "writer" : "checker"),
+						(session.role === "sidekick" || session.role === "writer"
+							? "writer"
+							: "checker"),
 					budget: childBudget,
 					readOnly: options.readOnly,
 				},
@@ -931,11 +977,32 @@ export async function runHarborTrial(
 		};
 		// helpers=on: a researcher or reviewer on its own copy of the checkout,
 		// made at each round's start (the builder's work so far), as the checker's.
+		// helpers=write's writer: in the builder's own checkout, limited by its
+		// brief to `owns`; file writes outside them are logged, not blocked.
 		const startHelper = async (
 			session: ChildSession,
 			role: HelperRole,
 			brief: string,
+			owns?: readonly string[],
 		): Promise<ChildReport> => {
+			if (role === "writer") {
+				writerOwns.set(session.id, owns ?? []);
+				const from = session.events.length;
+				const report = await runRound(session, brief, {
+					readOnly: false,
+					agentRole: "writer",
+				});
+				const outside = writesOutside(
+					session.events.slice(from).map((entry) => entry.event),
+					input.cwd,
+					owns ?? [],
+				);
+				if (outside.length)
+					log(
+						`writer ${session.id} wrote outside owns: ${outside.slice(0, 10).join(", ")}`,
+					);
+				return report;
+			}
 			const copy = readerCopyPath(input.trialId, session.id);
 			const made = await input.machines.exec(
 				workspace.vm,
@@ -1044,8 +1111,9 @@ export async function runHarborTrial(
 							},
 						})
 					: {}),
-				...(config.variant.helpers === "on"
+				...(config.variant.helpers !== "off"
 					? helperTools({
+							writers: config.variant.helpers === "write",
 							parentId: input.trialId,
 							sessions,
 							model: builderModel,
@@ -1461,6 +1529,7 @@ export async function runHarborTrial(
 		variant: harnessVariantLabel(config.variant),
 		billing: config.billing.kind,
 		trialUsdCap: config.trialUsdCap,
+		trialAlertUsd: config.trialAlertUsd,
 		totalUsdCap: config.total?.capUsd ?? null,
 		requestLimit: config.requestLimit,
 		webSearch: config.webSearch,

@@ -16,9 +16,14 @@ vi.mock("@octokit/rest", () => ({
 		paginate = api.paginate;
 	},
 }));
-vi.mock("../config", () => ({
-	serverConfig: () => ({ GITHUB_APP_SLUG: "ytimesy" }),
-}));
+vi.mock("../config", () => {
+	const serverConfig = () => ({ GITHUB_APP_SLUG: "ytimesy" });
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 
 const installation = (id: number, login: string, selection = "selected") => ({
 	id,

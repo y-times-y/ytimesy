@@ -31,7 +31,9 @@ FLEET = [
     # role, count, type, vcpu, memory MB, root GB
     ("controller", 1, "t3.small", 2, 2048, 200),
     ("cpu", 4, "m7i.16xlarge", 64, 262144, 1000),
-    ("gpu", 1, "p5.4xlarge", 16, 262144, 1000),
+    # TB4_GPU_HOSTS: the Astra x5 run uses 5 (the us-east-1 P quota, 80 vCPU = 5 x 16):
+    # jax-speedrun-gpu alone is 5 trials x ~7.6 h, so 1 host would take ~40 h.
+    ("gpu", int(os.environ.get("TB4_GPU_HOSTS", "1")), "p5.4xlarge", 16, 262144, 1000),
 ]
 HOURLY = {"t3.small": 0.0208, "m7i.16xlarge": 3.2256, "t3.micro": 0.0104}
 # The IAM user lacks ssm:GetParameter: resolve the AMI by owner + name instead.
