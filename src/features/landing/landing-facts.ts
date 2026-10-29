@@ -7,7 +7,8 @@
 export const BENCHMARK = {
 	final: false,
 	runUrl: null as string | null,
-	setup: "Terminal-Bench 4 · GPT-6 Astra xhigh for both · same 64 tasks",
+	setup:
+		"Terminal-Bench 4 · ytimesy harness vs Codex · GPT-6 Astra xhigh for both · same 64 tasks",
 	ours: { minutes: 19.3, score: 57.8, cost: 6.3 },
 	codex: { minutes: 29.1, score: 57.2, cost: 6.52 },
 };

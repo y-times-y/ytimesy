@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { CodexMark } from "#/features/sessions/codex-mark";
+import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { AppShot } from "./landing-app-shot";
 import { BENCHMARK } from "./landing-facts";
 import "./landing-page.css";
@@ -62,6 +64,7 @@ export function LandingPage() {
 					</div>
 				</section>
 				<Benchmark />
+				<Models />
 				<Features />
 				<section className="landing-close" aria-labelledby="landing-close">
 					<h2 id="landing-close">Hand it the next task.</h2>
@@ -113,13 +116,15 @@ function Benchmark() {
 	return (
 		<section className="landing-bench" aria-labelledby="landing-bench-title">
 			<h2 id="landing-bench-title">
-				Same model. Same score.
+				Our own harness.
 				<br />
-				<span className="landing-dim">A third less time.</span>
+				<span className="landing-dim">
+					Same model as Codex. A third less time.
+				</span>
 			</h2>
 			<div className="bench-card">
 				<div className="bench-legend">
-					<span data-ours="true">ytimesy</span>
+					<span data-ours="true">ytimesy harness</span>
 					<span>Codex</span>
 					{BENCHMARK.final ? null : (
 						<span className="landing-chip landing-chip-small">Preliminary</span>
@@ -172,6 +177,36 @@ function Benchmark() {
 	);
 }
 
+const API_PROVIDERS = ["openai", "anthropic", "google", "openrouter"];
+
+function Models() {
+	return (
+		<section className="landing-models" aria-labelledby="landing-models">
+			<h2 id="landing-models">
+				Bring your own model.
+				<br />
+				<span className="landing-dim">On our harness.</span>
+			</h2>
+			<ul className="models">
+				<li className="model-card">
+					<span className="model-logos">
+						<CodexMark size={30} />
+					</span>
+					<h3>Your Codex subscription</h3>
+				</li>
+				<li className="model-card">
+					<span className="model-logos">
+						{API_PROVIDERS.map((provider) => (
+							<ModelProviderLogo key={provider} provider={provider} size={26} />
+						))}
+					</span>
+					<h3>Your API keys</h3>
+				</li>
+			</ul>
+		</section>
+	);
+}
+
 function Tile({
 	title,
 	className,
@@ -194,11 +229,7 @@ function Tile({
 function Features() {
 	return (
 		<section className="landing-features" aria-labelledby="landing-features">
-			<h2 id="landing-features">
-				Not just a model in the cloud.
-				<br />
-				<span className="landing-dim">Our own harness, end to end.</span>
-			</h2>
+			<h2 id="landing-features">What's inside.</h2>
 			<ul className="tiles">
 				<Tile title="Remembers your project" className="tile-wide">
 					<div className="tv-memory">
