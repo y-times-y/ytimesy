@@ -1029,11 +1029,21 @@
 .mini-app[data-large] .mini-nav {
 	padding: 9px 14px;
 }
+.mini-nav {
+	gap: 10px;
+	font-weight: 400;
+	color: var(--mini-muted);
+}
+.mini-tab[data-active] {
+	color: var(--mini-text);
+	font-weight: 500;
+}
 .mini-logo {
-	width: 9px;
-	height: 9px;
-	border-radius: 3px;
-	background: #6366f1;
+	width: 10px;
+	height: 10px;
+	margin-right: 2px;
+	border-radius: 50%;
+	background: linear-gradient(135deg, #a1a1aa, var(--mini-text));
 }
 .mini-body {
 	display: flex;

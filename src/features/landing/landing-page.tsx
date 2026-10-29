@@ -261,7 +261,11 @@ function MiniSettings({
 		>
 			<div className="mini-nav">
 				<span className="mini-logo" />
-				<span>Acme</span>
+				<span className="mini-tab">Home</span>
+				<span className="mini-tab">Projects</span>
+				<span className="mini-tab" data-active="true">
+					Settings
+				</span>
 			</div>
 			<div className="mini-body">
 				<p className="mini-title">Settings</p>
@@ -304,7 +308,7 @@ function Features() {
 							<p className="tv-vm-head">
 								<span className="tv-main-dot" />
 								<strong>Main</strong>
-								<span>acme/web</span>
+								<span>web</span>
 							</p>
 							<p className="tv-vm-line">Splits the work</p>
 							<p className="tv-vm-line">Reviews each patch</p>
