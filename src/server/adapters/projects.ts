@@ -99,6 +99,30 @@ export async function refreshProjectRepository(
 		throw new Response("Project is not available.", { status: 404 });
 	return project;
 }
+/**
+ * A project saved on an agent's own `ytimesy/` branch (from before new
+ * projects refused them) takes the repository's default, read from GitHub.
+ * The new-chat picker then renders it from the first paint instead of
+ * swapping once GitHub answers. Returns how many rows changed.
+ */
+export async function healGeneratedProjectBranches(
+	userId: string,
+	repositoryId: number,
+	defaultBranch: string,
+): Promise<number> {
+	const result = await database().query(
+		`with healed as (
+    update project_repository r set branch=$3
+    from project p
+    where r.project_id=p.id and p.user_id=$1 and r.repository_id=$2
+      and (r.branch='ytimesy' or r.branch like 'ytimesy/%')
+    returning r.project_id
+  ) update project set branch=$3
+    where user_id=$1 and repository_id=$2 and (branch='ytimesy' or branch like 'ytimesy/%')`,
+		[userId, repositoryId, defaultBranch],
+	);
+	return result.rowCount ?? 0;
+}
 export async function projectForRepository(
 	userId: string,
 	repositoryId: number,
