@@ -97,7 +97,7 @@ function Benchmark() {
 	const { ours, codex } = BENCHMARK;
 	const rows: Row[] = [
 		{
-			label: "Terminal-Bench 4",
+			label: "Score",
 			detail: "Tasks solved",
 			ours: `${ours.score.toFixed(1)}%`,
 			codex: `${codex.score.toFixed(1)}%`,
@@ -121,10 +121,10 @@ function Benchmark() {
 	return (
 		<section className="landing-bench" aria-labelledby="landing-bench-title">
 			<h2 id="landing-bench-title">
-				Our own harness.
+				Terminal-Bench 4
 				<br />
-				<span className="landing-dim">
-					Same model as Codex. A third less time.
+				<span className="landing-dim bench-sub">
+					The ytimesy harness vs Codex, on the same model.
 				</span>
 			</h2>
 			<div className="bench-card">
