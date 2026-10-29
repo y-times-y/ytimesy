@@ -366,6 +366,23 @@ describe("worktreeWriters (helpers=write-tree)", () => {
 		expect(lines.some((line) => line.includes("1 unmerged paths"))).toBe(true);
 	}, 60_000);
 
+	it("records a writer whose worktree could not be made in the trace's failures", async () => {
+		const box = await container(true);
+		// A file the trial user cannot read in an existing repository (the
+		// live rs-archive-clone case: an execute-only tool under a root-owned .git).
+		await box.sh("echo tool > tool.bin && chmod 000 tool.bin");
+		cleanups.push(() => box.sh("chmod 644 tool.bin"));
+		const { writers, trialId } = writersFor(box);
+		await expect(writers.open(`${trialId}.1`)).rejects.toThrow(
+			"its worktree could not be made",
+		);
+		const trace = await writers.close([]);
+		expect(trace.writers).toEqual([]);
+		expect(trace.failures).toEqual([
+			expect.stringContaining(`${trialId}.1: its worktree could not be made`),
+		]);
+	}, 60_000);
+
 	it("makes a plain directory a repository for its writers and removes it at the end", async () => {
 		const box = await container(false);
 		await box.sh(
