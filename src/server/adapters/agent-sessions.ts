@@ -238,6 +238,7 @@ export async function listAgentSessions(userId: string, projectId: string) {
 		`select ${SESSION_COLUMNS}
 		 from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		   and archived_at is null
 		 order by updated_at desc`,
 		[userId, projectId],
 	);
@@ -264,6 +265,7 @@ export async function listSidebarAgentSessions(
 		     select c.id from agent_session c where c.parent_session_id=s.id)) as working_since
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+		   and s.archived_at is null
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);
@@ -366,6 +368,7 @@ export async function latestAgentSessionMetadata(
 	const result = await database().query(
 		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		   and archived_at is null
 		 order by updated_at desc limit 1`,
 		[userId, projectId],
 	);
@@ -385,8 +388,19 @@ export async function chatToOpenMetadata(
 	linkedChatId?: string,
 ): Promise<Omit<AgentSessionRecord, "items"> | null> {
 	if (linkedChatId) {
-		const linked = await agentSessionMetadataForOwner(userId, linkedChatId);
-		if (linked?.projectId === projectId && !linked.parentSessionId)
+		const [linked, archived] = await Promise.all([
+			agentSessionMetadataForOwner(userId, linkedChatId),
+			database().query(
+				"select 1 from agent_session where id=$1 and user_id=$2 and archived_at is not null",
+				[linkedChatId, userId],
+			),
+		]);
+		// An archived chat stays out of the app until it is restored.
+		if (
+			linked?.projectId === projectId &&
+			!linked.parentSessionId &&
+			!archived.rows[0]
+		)
 			return linked;
 	}
 	return latestAgentSessionMetadata(userId, projectId);

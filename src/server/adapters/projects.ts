@@ -11,7 +11,7 @@ const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.
    from project_repository r where r.project_id=p.id) as repositories`;
 export async function listProjects(userId: string): Promise<Project[]> {
 	const result = await database().query(
-		`select ${projectColumns} from project p where p.user_id=$1 order by p.created_at`,
+		`select ${projectColumns} from project p where p.user_id=$1 and p.archived_at is null order by p.created_at`,
 		[userId],
 	);
 	return result.rows.map(projectFromRow);

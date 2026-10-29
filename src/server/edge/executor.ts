@@ -769,6 +769,14 @@ export default {
 					action: "evidence-expiry",
 				}),
 			);
+		if (minute % 360 === 45)
+			jobs.push(
+				backgroundJob.parse({
+					id: backgroundJobId(`cron:${minute}:archive-expiry`),
+					kind: "maintenance",
+					action: "archive-expiry",
+				}),
+			);
 		if (minute % 60 === 0)
 			jobs.push(
 				backgroundJob.parse({
