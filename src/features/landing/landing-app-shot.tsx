@@ -186,9 +186,9 @@ function Sidebar() {
 				mark={<span className="as-unread" />}
 			/>
 			<div className="as-account">
-				<span className="as-initials">AL</span>
+				<span className="as-initials">Y</span>
 				<span>
-					Ada Lovelace
+					You
 					<small>Settings</small>
 				</span>
 			</div>
