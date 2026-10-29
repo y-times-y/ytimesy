@@ -8,6 +8,7 @@ import {
 	authorizedRepository,
 	listBranches,
 } from "../../../server/adapters/github";
+import { healGeneratedProjectBranches } from "../../../server/adapters/projects";
 import { requireUser } from "../../../server/auth/auth";
 import { githubAccessToken } from "../../../server/auth/github-connection";
 import { endpoint } from "../../../server/http";
@@ -36,7 +37,16 @@ export const Route = createFileRoute("/api/github/branches")({
 						params.installationId,
 						params.repositoryId,
 					);
-					const listed = await listBranches(token, repository);
+					const [listed] = await Promise.all([
+						listBranches(token, repository),
+						isGeneratedSessionBranch(repository.defaultBranch)
+							? undefined
+							: healGeneratedProjectBranches(
+									user.id,
+									params.repositoryId,
+									repository.defaultBranch,
+								).catch(() => 0),
+					]);
 					return {
 						branches: orderedBaseBranches(
 							listed.names.filter((name) => !isGeneratedSessionBranch(name)),
