@@ -84,38 +84,38 @@ export function LandingPage() {
 	);
 }
 
-type Metric = {
+type Row = {
 	label: string;
-	verdict: string;
-	ours: number;
-	codex: number;
-	format: (value: number) => string;
+	detail: string;
+	ours: string;
+	codex: string;
+	/** Which side reads better, if either. */
+	lead: "ours" | "codex" | null;
 };
 
 function Benchmark() {
 	const { ours, codex } = BENCHMARK;
-	const lessTime = Math.round((1 - ours.minutes / codex.minutes) * 100);
-	const metrics: Metric[] = [
+	const rows: Row[] = [
 		{
-			label: "Time per task",
-			verdict: `${lessTime}% less`,
-			ours: ours.minutes,
-			codex: codex.minutes,
-			format: (value) => `${value.toFixed(1)} min`,
+			label: "Terminal-Bench 4",
+			detail: "Tasks solved",
+			ours: `${ours.score.toFixed(1)}%`,
+			codex: `${codex.score.toFixed(1)}%`,
+			lead: null,
 		},
 		{
-			label: "Score",
-			verdict: "On par",
-			ours: ours.score,
-			codex: codex.score,
-			format: (value) => `${value.toFixed(1)}%`,
+			label: "Time per task",
+			detail: "Agent working time",
+			ours: `${ours.minutes.toFixed(1)} min`,
+			codex: `${codex.minutes.toFixed(1)} min`,
+			lead: "ours",
 		},
 		{
 			label: "Cost per task",
-			verdict: "Similar",
-			ours: ours.cost,
-			codex: codex.cost,
-			format: (value) => `$${value.toFixed(2)}`,
+			detail: "At OpenAI list prices",
+			ours: `$${ours.cost.toFixed(2)}`,
+			codex: `$${codex.cost.toFixed(2)}`,
+			lead: null,
 		},
 	];
 	return (
@@ -128,46 +128,46 @@ function Benchmark() {
 				</span>
 			</h2>
 			<div className="bench-card">
-				<div className="bench-legend">
-					<span data-ours="true">ytimesy harness</span>
-					<span>Codex</span>
-					{BENCHMARK.final ? null : (
-						<span className="landing-chip landing-chip-small">Preliminary</span>
-					)}
-				</div>
-				<div className="bench-metrics">
-					{metrics.map((metric) => {
-						const top = Math.max(metric.ours, metric.codex);
-						return (
-							<div key={metric.label} className="bench-metric">
-								<div className="bench-metric-head">
-									<span>{metric.label}</span>
-									<strong>{metric.verdict}</strong>
-								</div>
-								{(
-									[
-										["ytimesy", metric.ours, true],
-										["Codex", metric.codex, false],
-									] as const
-								).map(([name, value, isOurs]) => (
-									<div
-										key={name}
-										className="bench-bar"
-										data-ours={isOurs || undefined}
-									>
-										<span className="bench-track">
-											<span
-												className="bench-fill"
-												style={{ width: `${(value / top) * 100}%` }}
-											/>
-										</span>
-										<span className="bench-value">{metric.format(value)}</span>
-									</div>
-								))}
-							</div>
-						);
-					})}
-				</div>
+				<table className="bench-table">
+					<thead>
+						<tr>
+							<th scope="col">
+								{BENCHMARK.final ? null : (
+									<span className="landing-chip landing-chip-small">
+										Preliminary
+									</span>
+								)}
+							</th>
+							<th scope="col" data-ours="true">
+								ytimesy
+								<small>GPT-6 Astra xhigh</small>
+							</th>
+							<th scope="col">
+								Codex
+								<small>GPT-6 Astra xhigh</small>
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						{rows.map((row) => (
+							<tr key={row.label}>
+								<th scope="row">
+									{row.label}
+									<small>{row.detail}</small>
+								</th>
+								<td
+									data-ours="true"
+									data-lead={row.lead === "ours" || undefined}
+								>
+									{row.ours}
+								</td>
+								<td data-lead={row.lead === "codex" || undefined}>
+									{row.codex}
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
 				<div className="bench-foot">
 					<span>{BENCHMARK.setup}</span>
 					{BENCHMARK.runUrl ? (
