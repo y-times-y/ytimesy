@@ -308,10 +308,12 @@ export function worktreeWriters(input: {
 				worktreeStartScript({ cwd: input.cwd, path, label }),
 				600_000,
 			);
-			if (started.exitCode !== 0)
-				throw new Error(
-					`its worktree could not be made: ${(started.stderr || started.stdout).slice(-400)}`,
-				);
+			if (started.exitCode !== 0) {
+				// Recorded: a writer that never started is otherwise absent from the trace.
+				const failure = `its worktree could not be made: ${(started.stderr || started.stdout).slice(-400)}`;
+				failures.push(`${sessionId}: ${failure}`);
+				throw new Error(failure);
+			}
 			const parsed = parseWorktreeStart(started.stdout);
 			createdRepo ||= parsed.createdRepo;
 			top = parsed.top;
