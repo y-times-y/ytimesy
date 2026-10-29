@@ -52,11 +52,7 @@ export function LandingPage() {
 			<main>
 				<section className="landing-hero" aria-labelledby="landing-title">
 					<span className="landing-chip">Free beta</span>
-					<h1 id="landing-title">
-						The AI software engineer.
-						<br />
-						<span className="landing-dim">A third faster than Codex.</span>
-					</h1>
+					<h1 id="landing-title">Cloud coding agent.</h1>
 					<SignUp
 						className="landing-button landing-button-large"
 						label="Start building"
