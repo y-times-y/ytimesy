@@ -10,6 +10,7 @@ import {
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
+import type { FirstRunState } from "#/domain/first-run";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { openChatFromCookies } from "#/domain/open-chat-cookie";
@@ -28,11 +29,17 @@ import {
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { listModelConnections } from "#/server/adapters/model-connections";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
+import { loadAgentAccount } from "#/server/auth/agent-account";
 import { requireUser } from "#/server/auth/auth";
-import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
+import {
+	advanceCodexDeviceLogin,
+	startCodexDeviceLogin,
+} from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
+import { githubConnectionExists } from "#/server/auth/github-connection";
 import { requireSameOrigin } from "#/server/http";
 import { agentModelCatalog } from "#/server/services/agent-model-catalog";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
@@ -374,12 +381,19 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		const [snapshotAvailable, projects, chats, projectChats] =
+		// A new account (no project yet) opens the first-run steps at the right one.
+		const firstRun = listed.then((projects) =>
+			projects && projects.length === 0
+				? firstRunState(user.id).catch(() => undefined)
+				: undefined,
+		);
+		const [snapshotAvailable, projects, chats, projectChats, firstRunAt] =
 			await Promise.all([
 				hasManagedCodexAuth(user.id),
 				listed,
 				firstChats,
 				otherChats.catch(() => []),
+				firstRun,
 			]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
@@ -410,6 +424,7 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			),
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
+			firstRun: firstRunAt,
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
 			// A new chat's "from <branch>" as this browser last read it from GitHub.
@@ -439,6 +454,28 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 					: {}),
 			},
 		};
+	});
+
+/** Where a new account stands: GitHub connected, and a model to run chats on. */
+async function firstRunState(userId: string): Promise<FirstRunState> {
+	const [githubConnected, account, connections] = await Promise.all([
+		githubConnectionExists(userId),
+		loadAgentAccount(userId),
+		listModelConnections(userId),
+	]);
+	return {
+		githubConnected,
+		modelReady: account.status === "connected" || connections.length > 0,
+	};
+}
+
+/** Starts ChatGPT sign-in for the account, outside any chat (first run, settings). */
+export const startChatgptSignIn = createServerFn({ method: "POST" })
+	.validator((data: unknown) => z.object({}).strict().parse(data))
+	.handler(async () => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		return startCodexDeviceLogin(user.id);
 	});
 
 /** Advances a pending ChatGPT sign-in; the composer polls this while it waits. */
