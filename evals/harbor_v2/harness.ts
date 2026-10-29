@@ -44,6 +44,7 @@ import { bedrockWebSearchTools } from "./bedrock";
 import {
 	AGENT_WAIT_TOOL,
 	HELPER_INSTRUCTIONS,
+	WORKTREE_WRITER_INSTRUCTIONS,
 	WRITE_HELPER_INSTRUCTIONS,
 } from "./helpers";
 /**
@@ -258,7 +259,9 @@ export async function harborHarness(input: {
 		AGENT_WAIT_TOOL in trialTools
 			? variant.helpers === "write"
 				? WRITE_HELPER_INSTRUCTIONS
-				: HELPER_INSTRUCTIONS
+				: variant.helpers === "write-tree"
+					? WORKTREE_WRITER_INSTRUCTIONS
+					: HELPER_INSTRUCTIONS
 			: "";
 	// fetch=on: web_fetch for every agent, fetched here on the harness side
 	// (not in the task container), on any route.

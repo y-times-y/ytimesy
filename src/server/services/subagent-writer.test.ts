@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import { overlappingWriters } from "#/domain/subagent";
+import { WRITER_PATCH_APPLY } from "#/domain/writer-integration";
 import { localVms } from "./local-vms.testing";
 import {
 	forkWriterWorkspace,
@@ -175,6 +176,48 @@ describe("writer subagent git round trip", () => {
 		).toThrow();
 		expect(readFileSync(join(vms.parentRepo, "shared.ts"), "utf8")).toMatch(
 			/<<<<<<<|first/,
+		);
+	});
+
+	it("applies a writer's patch over the parent's unstaged edits to the same file once the parent stages its work", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		const parent = WorkspaceId("parent");
+		// The parent's uncommitted file, inherited by the fork.
+		const lines = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8"];
+		writeFileSync(join(vms.parentRepo, "draft.ts"), `${lines.join("\n")}\n`);
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: parent,
+			slug: "fork-1",
+		});
+		writeFileSync(
+			join(fork.cwd, "draft.ts"),
+			`${lines.map((line) => (line === "l7" ? "writer" : line)).join("\n")}\n`,
+		);
+		const patch = await transferWriterPatch({
+			machines: vms.machines,
+			forkVm: fork.vm,
+			parentVm: parent,
+			label: "1",
+			base: fork.base,
+			parentHead: fork.parentHead,
+		});
+		expect(patch?.files).toEqual(["draft.ts"]);
+		// Meanwhile the parent edits another line of the same file, unstaged.
+		writeFileSync(
+			join(vms.parentRepo, "draft.ts"),
+			`${lines.map((line) => (line === "l2" ? "parent" : line)).join("\n")}\n`,
+		);
+		const bash = (command: string) =>
+			execFileSync("bash", ["-c", command], {
+				cwd: vms.parentRepo,
+				stdio: "pipe",
+			});
+		expect(() => bash(`git apply -3 ${patch?.path}`)).toThrow();
+		bash(WRITER_PATCH_APPLY(patch?.path ?? ""));
+		expect(readFileSync(join(vms.parentRepo, "draft.ts"), "utf8")).toBe(
+			"l1\nparent\nl3\nl4\nl5\nl6\nwriter\nl8\n",
 		);
 	});
 

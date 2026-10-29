@@ -1,0 +1,29 @@
+{
+  "frozenAt": "2026-10-28",
+  "target": {
+    "repo": "https://github.com/y-times-y/ytimesy",
+    "commit": "5ec2b7c",
+    "notes": [
+      "Fresh gh clone, checked out at 5ec2b7c; the tracked .ytimesy/ folder was removed in one local commit so the workspace has no .env, .secrets or .ytimesy. The working tree is clean.",
+      "The repo has no README file at this commit; request 5 is kept verbatim (a user may misremember), its label stays NO.",
+      "Request 8's X = resolveToolWorkspace (src/server/services/agent-tool-workspace.ts), referenced in 14 files."
+    ]
+  },
+  "arms": {
+    "strict": "8717fc6 (helper-policy-in-product): shared delegation policy in the product orchestrator block",
+    "current": "5ec2b7c (origin/main): today's product delegation wording"
+  },
+  "stop": "first agent tool call (role, step, title recorded; the child is never started) or 12 model requests",
+  "requests": [
+    { "id": 1, "text": "can you find bugs in this codebase", "label": "YES" },
+    { "id": 2, "text": "the eval runner and the edge executor both have flaky tests, fix them", "label": "YES" },
+    { "id": 3, "text": "audit security across the server and the frontend", "label": "YES" },
+    { "id": 4, "text": "upgrade all dependencies and fix whatever breaks", "label": "YES" },
+    { "id": 5, "text": "fix the typo in the README title", "label": "NO" },
+    { "id": 6, "text": "add a dark mode toggle to settings", "label": "NO" },
+    { "id": 7, "text": "what does this project do", "label": "NO" },
+    { "id": 8, "text": "rename the function resolveToolWorkspace everywhere", "label": "NO" },
+    { "id": 9, "text": "why are the tests slow, make them faster", "label": "EITHER" },
+    { "id": 10, "text": "clean up the code", "label": "EITHER" }
+  ]
+}

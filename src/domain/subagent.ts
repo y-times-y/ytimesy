@@ -1,4 +1,5 @@
 import type { SidekickState } from "./sidekick";
+import { WRITER_PATCH_APPLY } from "./writer-integration";
 
 /**
  * Builder subagents (docs/subagents.md, decision 2026-10-17): the builder is
@@ -461,7 +462,7 @@ export function writerPatchBlock(
 					`Overlaps with: ${overlaps.map((overlap) => `agent ${overlap.label} (${overlap.files.slice(0, 4).join(", ")}${overlap.files.length > 4 ? ", …" : ""})`).join("; ")}`,
 				]
 			: []),
-		`Review with \`git diff ${patch.base} ${patch.ref}\`; apply with \`git apply -3 ${patch.path}\` (or merge the ref).`,
+		`Review with \`git diff ${patch.base} ${patch.ref}\`; apply with \`${WRITER_PATCH_APPLY(patch.path)}\` (or merge the ref).`,
 	].join("\n");
 }
 

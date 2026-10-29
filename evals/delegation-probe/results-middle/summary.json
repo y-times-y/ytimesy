@@ -1,0 +1,42 @@
+{
+ "middle-final": {
+  "yesHit": "5/5",
+  "noFalseAlarm": "0/5",
+  "usd": 11.9,
+  "runs": [
+   "q11 r1 YES: reviewer@3 Audit chat and model settings accessibility, reviewer@3 Audit workspace and inspector accessibility",
+   "q12 r1 YES: researcher@4 Trace intermittent auth failures",
+   "q13 r1 YES: writer@5 Add missing auth tests",
+   "q14 r1 YES: writer@4 Validate GitHub and OAuth API inputs, writer@4 Validate delegated API and socket boundaries",
+   "q15 r1 YES: researcher@3 Audit frontend rendering and update costs, researcher@3 Audit server queries and streaming persistence",
+   "q16 r1 NO: no (12 req)",
+   "q17 r1 NO: no (11 req)",
+   "q18 r1 NO: no (8 req)",
+   "q19 r2 NO: no (12 req)",
+   "q20 r2 NO: no (12 req)"
+  ]
+ },
+ "middle-v1": {
+  "yesHit": "6/8",
+  "noFalseAlarm": "0/8",
+  "usd": 16.73,
+  "runs": [
+   "q1 r1 YES: reviewer@3 Review authentication and access boundaries, reviewer@3 Review durable jobs and cancellation",
+   "q1 r2 YES: reviewer@4 Review authentication and tenant isolation, reviewer@4 Review durable turn execution",
+   "q2 r1 YES: writer@6 Fix edge executor test flakiness",
+   "q2 r2 YES: writer@8 Fix edge executor test flakiness, writer@8 Fix eval runner test flakiness",
+   "q3 r1 YES: reviewer@3 Audit authentication and tenant authorization, reviewer@3 Audit frontend trust and data boundaries",
+   "q3 r2 YES: reviewer@3 Audit server access controls, reviewer@3 Audit frontend security boundaries",
+   "q4 r1 YES: no (12 req)",
+   "q4 r2 YES: no (12 req)",
+   "q5 r1 NO: no (4 req)",
+   "q5 r2 NO: no (4 req)",
+   "q6 r1 NO: no (12 req)",
+   "q6 r2 NO: no (12 req)",
+   "q7 r1 NO: no (5 req)",
+   "q7 r2 NO: no (4 req)",
+   "q8 r1 NO: no (12 req)",
+   "q8 r2 NO: no (8 req)"
+  ]
+ }
+}
