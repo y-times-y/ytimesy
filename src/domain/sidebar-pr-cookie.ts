@@ -26,6 +26,12 @@ const STATES = {
 	m: "merged",
 	c: "closed",
 } as const satisfies Record<string, SidebarPullRequest["state"]>;
+const MERGES = {
+	r: "ready",
+	x: "conflict",
+	b: "blocked",
+	u: null,
+} as const satisfies Record<string, SidebarPullRequest["merge"]>;
 const CHECKS = { p: "passed", f: "failed", n: null } as const satisfies Record<
 	string,
 	SidebarPullRequest["checks"]
@@ -39,7 +45,7 @@ function letterOf<T>(table: Record<string, T>, value: T): string {
 	return Object.entries(table).find(([, known]) => known === value)?.[0] ?? "";
 }
 
-/** `key~number~state~checks~failed~owner~repo`; null when the URL is not a GitHub PR's. */
+/** `key~number~state~checks~failed~owner~repo~merge`; null when the URL is not a GitHub PR's. */
 function encodeMark(key: string, pr: SidebarPullRequest): string | null {
 	const match = GITHUB_PULL.exec(pr.url);
 	if (!match || Number(match[3]) !== pr.number) return null;
@@ -51,11 +57,13 @@ function encodeMark(key: string, pr: SidebarPullRequest): string | null {
 		pr.failedChecks,
 		match[1],
 		match[2],
+		letterOf(MERGES, pr.merge ?? null),
 	].join("~");
 }
 
 function decodeMark(raw: string): [string, SidebarPullRequest] | null {
-	const [key, number, state, checks, failed, owner, repo] = raw.split("~");
+	const [key, number, state, checks, failed, owner, repo, merge] =
+		raw.split("~");
 	const pullNumber = Number(number);
 	const failedChecks = Number(failed);
 	if (!key || !KEY.test(key) || !owner || !repo) return null;
@@ -72,6 +80,10 @@ function decodeMark(raw: string): [string, SidebarPullRequest] | null {
 			state: STATES[state as keyof typeof STATES],
 			checks: CHECKS[checks as keyof typeof CHECKS],
 			failedChecks,
+			// Marks saved before the merge answer was kept have none.
+			...(merge && merge in MERGES && MERGES[merge as keyof typeof MERGES]
+				? { merge: MERGES[merge as keyof typeof MERGES] }
+				: {}),
 		},
 	];
 }

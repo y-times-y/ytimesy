@@ -9,7 +9,23 @@ export type SidebarPullRequest = {
 	readonly checks: "passed" | "failed" | null;
 	/** How many checks failed, when `checks` is "failed". */
 	readonly failedChecks: number;
+	/** Whether GitHub could merge an open PR, when it had worked that out. */
+	readonly merge?: SidebarPullRequestMerge | null;
 };
+
+export type SidebarPullRequestMerge = "ready" | "conflict" | "blocked";
+
+/** GitHub's merge answer for an open PR; null while it has not computed one. */
+export function sidebarPullRequestMerge(pr: {
+	readonly mergeable?: boolean | null;
+	readonly mergeableState?: string | null;
+}): SidebarPullRequestMerge | null {
+	const state = pr.mergeableState?.trim().toLowerCase() ?? "";
+	if (pr.mergeable === false || state === "dirty") return "conflict";
+	if (state === "blocked" || state === "behind") return "blocked";
+	if (pr.mergeable === true && state === "clean") return "ready";
+	return null;
+}
 
 /** The one status a sidebar row shows on its right, by priority. */
 export type SidebarChatStatus =
@@ -130,6 +146,8 @@ export function sidebarPullRequest(pr: {
 	readonly draft: boolean;
 	readonly state: string;
 	readonly merged: boolean;
+	readonly mergeable?: boolean | null;
+	readonly mergeableState?: string | null;
 	readonly checks?: PullRequestChecksSummary | null;
 }): SidebarPullRequest {
 	const state = pr.merged
@@ -141,12 +159,14 @@ export function sidebarPullRequest(pr: {
 				: "open";
 	const finished = state === "merged" || state === "closed";
 	const checks = finished ? null : sidebarPullRequestChecks(pr.checks);
+	const merge = finished ? null : sidebarPullRequestMerge(pr);
 	return {
 		number: pr.number,
 		url: pr.url,
 		state,
 		checks,
 		failedChecks: checks === "failed" ? (pr.checks?.failed ?? 0) : 0,
+		...(merge ? { merge } : {}),
 	};
 }
 

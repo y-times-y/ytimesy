@@ -112,6 +112,7 @@ import {
 } from "#/domain/sidebar-chats";
 import {
 	type ListedPullRequest,
+	mergeAnswerPending,
 	pullRequestPanelRepository,
 	pullRequestsAcrossRepositories,
 	savedListedPullRequest,
@@ -285,6 +286,10 @@ function withoutSearchParam(name: string) {
 	);
 }
 
+/** Re-reads of a PR list while GitHub has not said whether an open PR can merge. */
+const MERGE_ANSWER_READS = 5;
+const MERGE_ANSWER_POLL_MS = 3_000;
+
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
@@ -446,6 +451,18 @@ export function WorkspaceHome({
 					`/api/github/pull-requests?installationId=${repository.installationId}&repositoryId=${repository.repositoryId}`,
 				),
 			enabled: Boolean(repository.installationId && repository.repositoryId),
+			// GitHub works out whether an open PR can merge after the first
+			// read; until it has, ask again soon instead of on the next refresh.
+			refetchInterval: (query: {
+				state: {
+					data?: { pullRequests: ListedPullRequest[] };
+					dataUpdateCount: number;
+				};
+			}) =>
+				query.state.dataUpdateCount < MERGE_ANSWER_READS &&
+				query.state.data?.pullRequests.some(mergeAnswerPending)
+					? MERGE_ANSWER_POLL_MS
+					: false,
 		})),
 	});
 	const refetchPullRequests = useCallback(
