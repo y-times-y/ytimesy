@@ -2629,11 +2629,13 @@ describe("runHarborTrial with helpers=write-tree", () => {
 						role: "writer",
 						title: "Part A",
 						brief: "PART-A: set source.txt to 'from A'.",
+						owns: ["source.txt"],
 					}),
 					call("a2", "agent", {
 						role: "writer",
 						title: "Part B",
 						brief: "PART-B: set source.txt to 'from B' and add b.txt.",
+						owns: ["source.txt", "b.txt"],
 					}),
 					finish(100, 10, true),
 				],
@@ -2729,9 +2731,8 @@ describe("runHarborTrial with helpers=write-tree", () => {
 		expect(prompts.builder?.[0]).not.toContain(
 			"changing only the paths you list",
 		);
-		expect(JSON.stringify(model.doStreamCalls[0].tools)).not.toContain(
-			'"owns"',
-		);
+		// owns is required: the fallback when a worktree cannot be made.
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"owns"');
 		// Writers get the product's fork-writer role, not the shared-checkout one.
 		expect(prompts.a?.[0]).toContain("working on a fork of your parent's VM");
 		expect(prompts.a?.[0]).not.toContain(
@@ -2752,6 +2753,10 @@ describe("runHarborTrial with helpers=write-tree", () => {
 		);
 		expect(trace.worktreeWriters).toMatchObject({
 			createdRepo: false,
+			modes: [
+				{ sessionId: `${trialId}.1`, mode: "worktree" },
+				{ sessionId: `${trialId}.2`, mode: "worktree" },
+			],
 			applyCommands: 1,
 			applyConflicts: 1,
 			unmergedAtEnd: [],
@@ -2790,6 +2795,136 @@ describe("runHarborTrial with helpers=write-tree", () => {
 		expect(trajectory.final_metrics.extra.worktreeWriters.applyConflicts).toBe(
 			1,
 		);
+	}, 120_000);
+
+	it("runs a writer whose worktree cannot be made in the builder's checkout on its owns", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "codeMode=primary,helpers=write-tree",
+		});
+		const trialId = `trial-wtf-${crypto.randomUUID().slice(0, 8)}`;
+		cleanups.push(() =>
+			rm(worktreeRoot(trialId), { recursive: true, force: true }),
+		);
+		// A file the trial user cannot read (the live rs-archive-clone case):
+		// the writer's base cannot be indexed, so no worktree.
+		execFileSync("bash", ["-c", "echo tool > tool.bin && chmod 000 tool.bin"], {
+			cwd: f.checkout.root,
+		});
+		cleanups.push(async () =>
+			execFileSync("bash", [
+				"-c",
+				`chmod 644 ${join(f.checkout.root, "tool.bin")} 2>/dev/null || true`,
+			]),
+		);
+		const scripts: Record<string, Part[][]> = {
+			builder: [
+				[
+					call("a0", "agent", {
+						role: "writer",
+						title: "No owns",
+						brief: "PART-A: add a.txt.",
+					}),
+					call("a1", "agent", {
+						role: "writer",
+						title: "Part A",
+						brief: "PART-A: add a.txt.",
+						owns: ["a.txt"],
+					}),
+					finish(100, 10, true),
+				],
+				[call("w1", "agent_wait", {}), finish(100, 10, true)],
+				[...text("b3", "Done."), finish(100, 10)],
+			],
+			a: [
+				[
+					call("x1", "write", { path: "a.txt", content: "A\n" }),
+					finish(40, 4, true),
+				],
+				[...text("x2", "Added a.txt."), finish(40, 4)],
+			],
+		};
+		const served: Record<string, number> = { builder: 0, a: 0 };
+		const prompts: Record<string, string[]> = { builder: [], a: [] };
+		const model = new MockLanguageModelV4({
+			provider: "anthropic.messages",
+			modelId: "claude-opus-5-5",
+			doStream: async (options) => {
+				const prompt = JSON.stringify(options.prompt);
+				const who = prompt.includes("You are a writer subagent")
+					? "a"
+					: "builder";
+				prompts[who]?.push(prompt);
+				const script = scripts[who] as Part[][];
+				const index = served[who] ?? 0;
+				served[who] = index + 1;
+				return {
+					stream: simulateReadableStream({
+						chunks: script[Math.min(index, script.length - 1)] as never[],
+						initialDelayInMs: null,
+						chunkDelayInMs: null,
+					}),
+				};
+			},
+		});
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId,
+			instruction: "Add a.txt.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			log: (line) => lines.push(line),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(served).toEqual({ builder: 3, a: 2 });
+		// The builder's mechanics line names the fallback.
+		expect(prompts.builder?.[0]).toContain(
+			"If a writer's copy can't be made, it works in your checkout",
+		);
+		// A writer without owns is refused (no fallback would be possible).
+		expect(prompts.builder?.[1]).toContain("Refused: a writer needs owns");
+		// The fallback writer: helpers=write's shared role with its paths, in the checkout.
+		expect(prompts.a?.[0]).toContain(
+			"working directly in your parent's checkout",
+		);
+		expect(prompts.a?.[0]).toContain("only these paths: a.txt");
+		expect(await readFile(join(f.checkout.root, "a.txt"), "utf8")).toBe("A\n");
+		// Its report says plainly there is nothing to apply; no patch block.
+		expect(prompts.builder?.[2]).toContain(
+			"Worked directly in your checkout on a.txt; nothing to apply.",
+		);
+		expect(prompts.builder?.[2]).not.toContain("Patch: ");
+		expect(
+			lines.some((line) =>
+				line.includes("in the builder's checkout on its owns"),
+			),
+		).toBe(true);
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.worktreeWriters).toMatchObject({
+			writers: [],
+			modes: [
+				{
+					sessionId: `${trialId}.1`,
+					mode: "shared",
+					owns: ["a.txt"],
+					reason: expect.stringContaining("its worktree could not be made"),
+				},
+			],
+			failures: [expect.stringContaining(`${trialId}.1: its worktree`)],
+		});
 	}, 120_000);
 });
 

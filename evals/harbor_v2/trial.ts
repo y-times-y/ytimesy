@@ -693,6 +693,8 @@ export async function runHarborTrial(
 					})
 				: null;
 		worktreeTrace = worktrees;
+		/** helpers=write-tree: writers whose worktree could not be made (in the builder's checkout on owns). */
+		const sharedFallback = new Set<string>();
 		/** A cut-off checker's verdict: its brief, what it ran and its findings file, no tools. */
 		const checkerLastWord = async (
 			session: Parameters<RunRound>[0],
@@ -1002,43 +1004,53 @@ export async function runHarborTrial(
 			brief: string,
 			owns?: readonly string[],
 		): Promise<ChildReport> => {
-			if (role === "writer" && worktrees) {
-				let tree: { cwd: string };
+			if (role === "writer" && worktrees && !sharedFallback.has(session.id)) {
+				let tree: { cwd: string } | null = null;
 				try {
 					tree = await worktrees.open(session.id);
 				} catch (error) {
 					const reason = error instanceof Error ? error.message : String(error);
-					log(`writer ${session.id}: ${reason.slice(0, 300)}`);
-					const failed = {
-						outcome: "failed" as const,
-						report: `No writer started: ${reason.slice(0, 400)}. Do this part yourself.`,
-					};
-					session.reports.push(failed);
-					return failed;
-				}
-				const from = session.events.length;
-				const report = await runRound(
-					session,
-					brief.split(input.cwd).join(tree.cwd),
-					{ readOnly: false, cwd: tree.cwd, agentRole: "writer" },
-				);
-				// Writes into the builder's checkout bypass the patch: logged, not blocked.
-				const stray = writesOutside(
-					session.events.slice(from).map((entry) => entry.event),
-					tree.cwd,
-					[tree.cwd],
-				).filter(
-					(path) => path === input.cwd || path.startsWith(`${input.cwd}/`),
-				);
-				if (stray.length)
+					worktrees.fellBack(session.id, reason, owns ?? null);
+					if (!owns?.length) {
+						log(`writer ${session.id}: ${reason.slice(0, 300)}`);
+						const failed = {
+							outcome: "failed" as const,
+							report: `No writer started: ${reason.slice(0, 400)}. Do this part yourself.`,
+						};
+						session.reports.push(failed);
+						return failed;
+					}
+					// helpers=write's mechanic: the builder's checkout, limited to owns.
+					sharedFallback.add(session.id);
 					log(
-						`writer ${session.id} wrote in the builder's checkout: ${stray.slice(0, 10).join(", ")}`,
+						`writer ${session.id}: in the builder's checkout on its owns (${reason.slice(0, 300)})`,
 					);
-				const patch = await worktrees.finish(
-					session.id,
-					session.briefs.join("\n"),
-				);
-				return { ...report, patch };
+				}
+				if (tree) {
+					const from = session.events.length;
+					const report = await runRound(
+						session,
+						brief.split(input.cwd).join(tree.cwd),
+						{ readOnly: false, cwd: tree.cwd, agentRole: "writer" },
+					);
+					// Writes into the builder's checkout bypass the patch: logged, not blocked.
+					const stray = writesOutside(
+						session.events.slice(from).map((entry) => entry.event),
+						tree.cwd,
+						[tree.cwd],
+					).filter(
+						(path) => path === input.cwd || path.startsWith(`${input.cwd}/`),
+					);
+					if (stray.length)
+						log(
+							`writer ${session.id} wrote in the builder's checkout: ${stray.slice(0, 10).join(", ")}`,
+						);
+					const patch = await worktrees.finish(
+						session.id,
+						session.briefs.join("\n"),
+					);
+					return { ...report, patch };
+				}
 			}
 			if (role === "writer") {
 				writerOwns.set(session.id, owns ?? []);
@@ -1056,7 +1068,13 @@ export async function runHarborTrial(
 					log(
 						`writer ${session.id} wrote outside owns: ${outside.slice(0, 10).join(", ")}`,
 					);
-				return report;
+				// write-tree's fallback: said plainly, after the report's cap.
+				return sharedFallback.has(session.id)
+					? {
+							...report,
+							patch: `Worked directly in your checkout on ${(owns ?? []).join(", ")}; nothing to apply.`,
+						}
+					: report;
 			}
 			const copy = readerCopyPath(input.trialId, session.id);
 			const made = await input.machines.exec(
