@@ -1,0 +1,296 @@
+{
+ "strict": {
+  "yesHit": {
+   "delegated": 2,
+   "runs": 4
+  },
+  "noFalseAlarm": {
+   "delegated": 0,
+   "runs": 4
+  },
+  "either": {
+   "delegated": 0,
+   "runs": 2
+  },
+  "usd": 10.81,
+  "seconds": 558,
+  "runs": [
+   {
+    "id": 1,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 3,
+    "usd": 0.4907,
+    "delegations": [
+     [
+      "reviewer",
+      3,
+      "Audit request authorization and input boundaries"
+     ],
+     [
+      "reviewer",
+      3,
+      "Audit workspace persistence and publication"
+     ]
+    ]
+   },
+   {
+    "id": 2,
+    "round": 1,
+    "label": "YES",
+    "outcome": "run-cap",
+    "requests": 10,
+    "usd": 1.5536,
+    "delegations": []
+   },
+   {
+    "id": 3,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 4,
+    "usd": 0.5665,
+    "delegations": [
+     [
+      "reviewer",
+      4,
+      "Audit frontend browser security"
+     ],
+     [
+      "reviewer",
+      4,
+      "Audit server identity and tenancy"
+     ]
+    ]
+   },
+   {
+    "id": 4,
+    "round": 1,
+    "label": "YES",
+    "outcome": "run-cap",
+    "requests": 10,
+    "usd": 1.615,
+    "delegations": []
+   },
+   {
+    "id": 5,
+    "round": 1,
+    "label": "NO",
+    "outcome": "finished",
+    "requests": 5,
+    "usd": 0.3152,
+    "delegations": []
+   },
+   {
+    "id": 6,
+    "round": 1,
+    "label": "NO",
+    "outcome": "run-cap",
+    "requests": 9,
+    "usd": 1.6828,
+    "delegations": []
+   },
+   {
+    "id": 7,
+    "round": 1,
+    "label": "NO",
+    "outcome": "finished",
+    "requests": 3,
+    "usd": 0.3554,
+    "delegations": []
+   },
+   {
+    "id": 8,
+    "round": 1,
+    "label": "NO",
+    "outcome": "finished",
+    "requests": 9,
+    "usd": 1.1448,
+    "delegations": []
+   },
+   {
+    "id": 9,
+    "round": 1,
+    "label": "EITHER",
+    "outcome": "run-cap",
+    "requests": 11,
+    "usd": 1.5546,
+    "delegations": []
+   },
+   {
+    "id": 10,
+    "round": 1,
+    "label": "EITHER",
+    "outcome": "run-cap",
+    "requests": 10,
+    "usd": 1.5362,
+    "delegations": []
+   }
+  ]
+ },
+ "current": {
+  "yesHit": {
+   "delegated": 4,
+   "runs": 4
+  },
+  "noFalseAlarm": {
+   "delegated": 1,
+   "runs": 4
+  },
+  "either": {
+   "delegated": 1,
+   "runs": 2
+  },
+  "usd": 8.12,
+  "seconds": 439,
+  "runs": [
+   {
+    "id": 1,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 3,
+    "usd": 0.5363,
+    "delegations": [
+     [
+      "reviewer",
+      3,
+      "Review HTTP authorization boundaries"
+     ],
+     [
+      "reviewer",
+      3,
+      "Review durable turn lifecycle"
+     ]
+    ]
+   },
+   {
+    "id": 2,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 4,
+    "usd": 0.7294,
+    "delegations": [
+     [
+      "writer",
+      4,
+      "Fix eval runner flaky tests"
+     ],
+     [
+      "writer",
+      4,
+      "Fix edge executor flaky tests"
+     ]
+    ]
+   },
+   {
+    "id": 3,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 3,
+    "usd": 0.5492,
+    "delegations": [
+     [
+      "reviewer",
+      3,
+      "Audit authentication and tenant isolation"
+     ],
+     [
+      "reviewer",
+      3,
+      "Audit frontend trust boundaries"
+     ],
+     [
+      "reviewer",
+      3,
+      "Audit outbound requests and workspace isolation"
+     ]
+    ]
+   },
+   {
+    "id": 4,
+    "round": 1,
+    "label": "YES",
+    "outcome": "delegated",
+    "requests": 5,
+    "usd": 0.8315,
+    "delegations": [
+     [
+      "writer",
+      5,
+      "Upgrade CI and Python dependencies"
+     ]
+    ]
+   },
+   {
+    "id": 5,
+    "round": 1,
+    "label": "NO",
+    "outcome": "finished",
+    "requests": 4,
+    "usd": 0.2818,
+    "delegations": []
+   },
+   {
+    "id": 6,
+    "round": 1,
+    "label": "NO",
+    "outcome": "delegated",
+    "requests": 5,
+    "usd": 0.9267,
+    "delegations": [
+     [
+      "writer",
+      5,
+      "Add light palette for theme switching"
+     ]
+    ]
+   },
+   {
+    "id": 7,
+    "round": 1,
+    "label": "NO",
+    "outcome": "finished",
+    "requests": 4,
+    "usd": 0.476,
+    "delegations": []
+   },
+   {
+    "id": 8,
+    "round": 1,
+    "label": "NO",
+    "outcome": "request-limit",
+    "requests": 12,
+    "usd": 1.4984,
+    "delegations": []
+   },
+   {
+    "id": 9,
+    "round": 1,
+    "label": "EITHER",
+    "outcome": "run-cap",
+    "requests": 9,
+    "usd": 1.5438,
+    "delegations": []
+   },
+   {
+    "id": 10,
+    "round": 1,
+    "label": "EITHER",
+    "outcome": "delegated",
+    "requests": 6,
+    "usd": 0.7514,
+    "delegations": [
+     [
+      "writer",
+      6,
+      "Reuse shell quoting in server services"
+     ]
+    ]
+   }
+  ]
+ }
+}
