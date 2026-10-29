@@ -159,6 +159,9 @@
 	gap: 16px;
 }
 .first-run-primary {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
 	height: 40px;
 	padding: 0 22px;
 	border: 0;

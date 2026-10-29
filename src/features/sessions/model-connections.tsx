@@ -56,7 +56,12 @@ export function modelConnectionRemove(
 	};
 }
 
-export function ModelConnections() {
+/** `startAdding` opens the add form at once (first run's "Add a key"). */
+export function ModelConnections({
+	startAdding = false,
+}: {
+	startAdding?: boolean;
+} = {}) {
 	const queryClient = useQueryClient();
 	const getConnections = useServerFn(getModelConnections);
 	const getCodingModels = useServerFn(getBrowseModels);
@@ -110,7 +115,7 @@ export function ModelConnections() {
 		onSuccess: update,
 	});
 	const busy = save.isPending || verify.isPending;
-	const [adding, setAdding] = useState(false);
+	const [adding, setAdding] = useState(startAdding);
 	const formOpen = adding || Boolean(replacing);
 	function closeForm() {
 		setAdding(false);

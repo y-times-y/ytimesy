@@ -16,6 +16,9 @@ vi.mock("../sessions/model-connections.fn", () => ({
 vi.mock("../sessions/model-connections", () => ({
 	ModelConnections: () => null,
 }));
+vi.mock("../projects/github-connection-notice", () => ({
+	useGithubConnectionNotice: () => [null],
+}));
 vi.mock("../projects/add-project-form", () => ({
 	AddProjectForm: () => <div data-testid="add-project" />,
 }));
