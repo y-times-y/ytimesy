@@ -2,10 +2,9 @@ import { Link } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
 	BookmarkPlus,
+	Camera,
 	Check,
 	CornerDownRight,
-	GitPullRequest,
-	Monitor,
 	Terminal,
 	X,
 } from "lucide-react";
@@ -243,12 +242,14 @@ const FLEET = [
 	},
 ] as const;
 
-const FLOW = [
-	"Open localhost:3000/settings",
-	"Turn on Dark mode",
-	"Reload: the setting stays",
+/** A real run: our own front page, tested and recorded in Chrome (public/landing). */
+const RUN_STEPS = [
+	"Open the front page",
+	"Scroll to the benchmark",
+	"Open Sign in",
 	"Screenshot each step",
 ];
+const EVIDENCE_SHOTS = ["1-front", "2-benchmark", "3-signin"];
 
 const MEMORIES = [
 	"Use pnpm, not npm",
@@ -299,39 +300,37 @@ function Features() {
 						</div>
 					</div>
 				</Tile>
-				<Tile title="Remembers how you work" className="tile-wide">
-					<div className="tv-memory">
-						<p className="tv-memory-head">
-							<BookmarkPlus size={14} strokeWidth={1.5} />
-							Saved 3 memories
-						</p>
-						{MEMORIES.map((line) => (
-							<p key={line} className="tv-memory-line">
-								<span>{line}</span>
-								<span className="tv-memory-meta">
-									MEMORY.md
-									<span>Undo</span>
+				<Tile title="Tests in a real browser" className="tile-wide">
+					<div className="tv-run">
+						<div className="tv-run-video">
+							<p className="tv-browser-bar">
+								<span />
+								<span />
+								<span />
+								<span className="tv-url">localhost:8793</span>
+								<span className="tv-rec">
+									<span />
+									REC
 								</span>
 							</p>
-						))}
-					</div>
-				</Tile>
-				<Tile title="Verified proof on your PR">
-					<div className="tv-gh">
-						<p className="tv-gh-head">
-							<GitPullRequest size={14} />
-							Add dark mode toggle
-							<span>#128</span>
-						</p>
-						<div className="tv-gh-body">
-							<p className="tv-gh-h2">Evidence</p>
-							<p>
-								Verified by the ytimesy harness from a clean checkout of{" "}
-								<code>4f2a9c1</code>, the pull request head: 3 screenshots, 14 s
-								screen recording.
-							</p>
-							<p className="tv-gh-link">View the evidence in ytimesy</p>
+							<video
+								src="/landing/run.mp4"
+								poster="/landing/poster.jpg"
+								autoPlay
+								muted
+								loop
+								playsInline
+								preload="metadata"
+							/>
 						</div>
+						<ol className="tv-run-steps">
+							{RUN_STEPS.map((step) => (
+								<li key={step}>
+									<Check size={13} strokeWidth={2.6} />
+									{step}
+								</li>
+							))}
+						</ol>
 					</div>
 				</Tile>
 				<Tile title="Fixes failing checks on its own">
@@ -352,25 +351,45 @@ function Features() {
 						</p>
 					</div>
 				</Tile>
-				<Tile title="Tests in a real browser" className="tile-wide">
-					<div className="tv-flow">
-						<p className="tv-flow-head">
-							<Monitor size={13} />
-							Desktop
-							<span className="tv-rec">
-								<span />
-								Recording 0:14
-							</span>
+				<Tile title="Remembers how you work">
+					<div className="tv-memory">
+						<p className="tv-memory-head">
+							<BookmarkPlus size={14} strokeWidth={1.5} />
+							Saved 3 memories
 						</p>
-						<ol>
-							{FLOW.map((step) => (
-								<li key={step}>
-									<Check size={13} strokeWidth={2.6} />
-									{step}
-								</li>
-							))}
-						</ol>
+						{MEMORIES.map((line) => (
+							<p key={line} className="tv-memory-line">
+								<span>{line}</span>
+								<span className="tv-memory-meta">
+									MEMORY.md
+									<span>Undo</span>
+								</span>
+							</p>
+						))}
 					</div>
+				</Tile>
+				<Tile title="Screenshots and video in your PR" className="tile-wide">
+					<section className="evidence-card" data-status="captured">
+						<header className="evidence-header">
+							<Camera size={14} />
+							<strong>Evidence for web#131</strong>
+							<span className="evidence-status" data-status="captured">
+								Captured
+							</span>
+						</header>
+						<div className="evidence-body">
+							<p className="evidence-note">
+								3 screenshots, 9 s screen recording
+							</p>
+							<ul className="evidence-thumbnails">
+								{EVIDENCE_SHOTS.map((shot) => (
+									<li key={shot}>
+										<img src={`/landing/${shot}.webp`} alt="" loading="lazy" />
+									</li>
+								))}
+							</ul>
+						</div>
+					</section>
 				</Tile>
 			</ul>
 		</section>
