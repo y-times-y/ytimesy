@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { workspacePublicationBranch } from "./publication";
 import {
+	mergeAnswerPending,
 	pullRequestPanelRepository,
 	pullRequestsAcrossRepositories,
 	savedListedPullRequest,
@@ -166,6 +167,7 @@ describe("sidebarChatPrMarkForWorkspace", () => {
 				state: "open",
 				checks: null,
 				failedChecks: 0,
+				merge: "conflict",
 			},
 		});
 		expect(
@@ -262,5 +264,42 @@ describe("savedListedPullRequest", () => {
 		expect(label("closed")).toBe("Pull request closed");
 		expect(label("open", "failed")).toBe("Checks failed");
 		expect(label("open")).toBe("Merge readiness not confirmed");
+	});
+});
+
+describe("saved merge answers", () => {
+	const saved = {
+		number: 9,
+		url: "https://github.com/o/r/pull/9",
+		state: "open",
+		checks: null,
+		failedChecks: 0,
+	} as const;
+	it("paints the merge answer the browser saved, not 'not confirmed'", () => {
+		const need = (merge?: "ready" | "conflict" | "blocked") =>
+			sidebarChatPrNeedFromPullRequest(
+				savedListedPullRequest({ ...saved, merge }, "ytimesy/a"),
+			);
+		expect(need("ready")).toBe("ready");
+		expect(need("conflict")).toBe("conflict");
+		expect(need("blocked")).toBe("blocked");
+		expect(need()).toBe("pending");
+	});
+	it("asks GitHub again only while an open PR's answer is pending", () => {
+		const pr = {
+			number: 9,
+			url: saved.url,
+			head: "ytimesy/a",
+			draft: false,
+			state: "open",
+			merged: false,
+			mergeable: null,
+			mergeableState: "unknown",
+		};
+		expect(mergeAnswerPending(pr)).toBe(true);
+		expect(
+			mergeAnswerPending({ ...pr, mergeable: true, mergeableState: "clean" }),
+		).toBe(false);
+		expect(mergeAnswerPending({ ...pr, draft: true })).toBe(false);
 	});
 });
