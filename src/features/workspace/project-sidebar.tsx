@@ -447,8 +447,8 @@ export function ProjectSidebar({
 						<button
 							type="button"
 							className="sidebar-chat-archive"
-							aria-label={`Remove ${chat.title}`}
-							title="Remove chat"
+							aria-label={`Archive ${chat.title}`}
+							title="Archive chat"
 							onClick={(event) => {
 								event.stopPropagation();
 								onDeleteChat(chat.id);
@@ -706,8 +706,8 @@ export function ProjectSidebar({
 													<button
 														type="button"
 														className="sidebar-folder-remove"
-														aria-label={`Remove ${projectDisplayName(project)}`}
-														title="Remove project"
+														aria-label={`Archive ${projectDisplayName(project)}`}
+														title="Archive project"
 														onClick={(event) => {
 															event.stopPropagation();
 															onDeleteProject(project.id);

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
+	Archive,
 	Blocks,
 	BookMarked,
 	Bot,
@@ -52,6 +53,7 @@ import { getModelConnections } from "../sessions/model-connections.fn";
 import { getModelFailoverSettings } from "../sessions/model-failover.fn";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
+import { ArchivedSettings } from "./archived-settings";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { readMachineSizeFn } from "./machine-size.fn";
@@ -89,6 +91,7 @@ const sectionIcon = {
 	agents: Bot,
 	plugins: Blocks,
 	mcp: Plug,
+	archived: Archive,
 } as const;
 
 export function ProjectSettings({
@@ -231,6 +234,7 @@ export function ProjectSettings({
 								) : null}
 								{section === "privacy" ? <TrainingConsentSettings /> : null}
 								{section === "memory" ? <MemorySettings /> : null}
+								{section === "archived" ? <ArchivedSettings /> : null}
 								{section === "github" ? (
 									<GithubSection
 										loading={account.isPending}

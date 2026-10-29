@@ -10,7 +10,8 @@ export type SettingsSection =
 	| "project"
 	| "agents"
 	| "plugins"
-	| "mcp";
+	| "mcp"
+	| "archived";
 
 export function settingsNavItems(): readonly {
 	readonly id: SettingsSection;
@@ -25,6 +26,7 @@ export function settingsNavItems(): readonly {
 		{ id: "agents", label: "Agents" },
 		{ id: "plugins", label: "Plugins" },
 		{ id: "mcp", label: "MCP servers" },
+		{ id: "archived", label: "Archived" },
 	];
 }
 

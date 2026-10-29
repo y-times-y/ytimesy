@@ -27,6 +27,7 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
+import { purgeExpiredArchives } from "./archive";
 import {
 	wakeChatForBackgroundCommands,
 	wakeChatsForBackgroundCommands,
@@ -132,6 +133,10 @@ export async function deliverBackgroundJob(
 				case "evidence-expiry":
 					// Pull request evidence past retention or of closed pull requests.
 					await expirePullRequestEvidence();
+					break;
+				case "archive-expiry":
+					// Archived chats and projects past their 30 days.
+					await purgeExpiredArchives(machines);
 					break;
 			}
 			break;
