@@ -1,5 +1,6 @@
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { LoaderCircle } from "lucide-react";
+import { createContext, useContext, useEffect, useRef } from "react";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import {
 	workspacePrepareShowsStatus,
@@ -8,7 +9,19 @@ import {
 import { requestJson } from "./api";
 import { GithubSetupLink } from "./github-setup-link";
 
-interface WorkspaceView {
+/** Projects with a message waiting for their environment (workspace-home.tsx). */
+export const HeldForSetupContext = createContext<ReadonlySet<string>>(
+	new Set(),
+);
+
+const SETUP_STEPS = {
+	queued: "Starting",
+	provisioning: "Starting the machine",
+	cloning: "Cloning the repository",
+	installing: "Installing dependencies",
+} as const;
+
+export interface WorkspaceView {
 	id: string;
 	projectId: string;
 	status:
@@ -42,6 +55,7 @@ export function WorkspaceStatus({
 	repairModel?: EnvironmentModelRequest;
 	repairModelLabel?: string;
 }) {
+	const held = useContext(HeldForSetupContext);
 	const workspace = useQuery({
 		...workspaceStatusQuery(projectId),
 		refetchInterval: (query) => {
@@ -90,6 +104,16 @@ export function WorkspaceStatus({
 	if (!current) return null;
 	// Polling while queued re-renders this, so the stall check advances with time.
 	const stalled = workspacePrepareStalled(current, Date.now());
+	if (!stalled && current.status !== "ready" && current.status !== "failed")
+		return (
+			<p className="workspace-status workspace-status-progress" role="status">
+				<LoaderCircle size={13} className="workspace-status-spin" />
+				<span>
+					Setting up the project · {SETUP_STEPS[current.status]}
+					{held.has(projectId) ? ". Your message sends when it's ready." : ""}
+				</span>
+			</p>
+		);
 	if (!stalled && !workspacePrepareShowsStatus(current.status)) return null;
 	return (
 		<p className="workspace-status" role="alert">
