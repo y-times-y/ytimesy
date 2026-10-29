@@ -276,10 +276,10 @@ function Inspector() {
 						{ text: "Open the pull request", status: "pending" },
 					]}
 				/>
-				<section className="task-panel" aria-label="Helpers">
+				<section className="task-panel" aria-label="Agents">
 					<header className="task-panel-header">
 						<h2>
-							Helpers <span className="task-count">3</span>
+							Agents <span className="task-count">3</span>
 						</h2>
 						<span className="task-count">2/3 completed</span>
 					</header>

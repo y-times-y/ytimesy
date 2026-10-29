@@ -3,8 +3,13 @@ import {
 	ArrowUpRight,
 	BookmarkPlus,
 	Check,
+	CornerDownRight,
+	GitPullRequest,
 	Monitor,
+	MousePointer2,
+	Play,
 	Terminal,
+	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
@@ -252,7 +257,7 @@ function Features() {
 			<h2 id="landing-features">What's inside.</h2>
 			<ul className="tiles">
 				<Tile
-					title="Helpers in parallel, each on its own machine"
+					title="Agents work in parallel, each in its own machine"
 					className="tile-full"
 				>
 					<div className="tv-fleet">
@@ -306,16 +311,65 @@ function Features() {
 						))}
 					</div>
 				</Tile>
-				<Tile title="Watch its desktop live">
+				<Tile title="Screenshots and video in the pull request">
+					<div className="tv-proof">
+						<p className="tv-proof-head">
+							<GitPullRequest size={14} />
+							Evidence
+						</p>
+						<div className="tv-proof-shots">
+							<div className="tv-shot tv-shot-light">
+								<span className="tv-w60" />
+								<span className="tv-toggle" />
+							</div>
+							<div className="tv-shot tv-shot-dark">
+								<span className="tv-w60" />
+								<span className="tv-toggle" data-on="true" />
+								<Play size={16} className="tv-play" />
+							</div>
+						</div>
+					</div>
+				</Tile>
+				<Tile title="Fixes failing checks on its own">
+					<div className="tv-checks">
+						<p data-state="failed">
+							<X size={13} strokeWidth={2.6} />
+							test
+							<span>failed</span>
+						</p>
+						<p className="tv-wake">
+							<CornerDownRight size={13} />
+							Picked up by the chat
+						</p>
+						<p data-state="passed">
+							<Check size={13} strokeWidth={2.6} />
+							test
+							<span>passed</span>
+						</p>
+					</div>
+				</Tile>
+				<Tile title="Tests in a real browser" className="tile-wide">
 					<div className="tv-desktop">
 						<p className="tv-window">
 							<Monitor size={13} />
 							Desktop
 						</p>
-						<div className="tv-screen">
-							<span className="tv-w60" />
-							<span className="tv-w40" />
-							<span className="tv-block" />
+						<div className="tv-browser">
+							<p className="tv-browser-bar">
+								<span />
+								<span />
+								<span />
+								<span className="tv-url">localhost:3000/settings</span>
+							</p>
+							<div className="tv-page">
+								<span className="tv-w40" />
+								<span className="tv-w60" />
+								<span className="tv-row">
+									Dark mode
+									<span className="tv-toggle" data-on="true" />
+								</span>
+								<MousePointer2 size={16} className="tv-cursor" />
+							</div>
 						</div>
 					</div>
 				</Tile>
