@@ -1,7 +1,8 @@
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { PLAN_TOOL } from "#/domain/agent-todos";
 
-export const PLAN_TOOL = "update_plan";
+export { PLAN_TOOL };
 
 export const PLAN_STEP_STATUSES = [
 	"pending",

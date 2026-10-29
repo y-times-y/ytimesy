@@ -39,16 +39,24 @@ export type Task = {
  * environment and a separate verifier environment, since the verifier runs on
  * the same host after the agent.
  */
-export function taskFromToml(name: string, toml: Record<string, unknown>): Task {
+export function taskFromToml(
+	name: string,
+	toml: Record<string, unknown>,
+): Task {
 	const env = (toml.environment ?? {}) as Record<string, unknown>;
 	const verifier = (toml.verifier ?? {}) as Record<string, unknown>;
 	const venv = (verifier.environment ?? {}) as Record<string, unknown>;
-	const separateVerifier = verifier.environment_mode === "separate" || env.environment_mode === "separate";
+	const separateVerifier =
+		verifier.environment_mode === "separate" ||
+		env.environment_mode === "separate";
 	const num = (v: unknown) => Number(v ?? 0) || 0;
 	return {
 		name,
 		cpus: Math.max(num(env.cpus) || 1, separateVerifier ? num(venv.cpus) : 0),
-		memoryMb: Math.max(num(env.memory_mb), separateVerifier ? num(venv.memory_mb) : 0),
+		memoryMb: Math.max(
+			num(env.memory_mb),
+			separateVerifier ? num(venv.memory_mb) : 0,
+		),
 		gpus: num(env.gpus),
 		separateVerifier,
 	};
@@ -73,7 +81,13 @@ export type TrialOutcome =
 	| { kind: "infra"; reason: string };
 
 export type JournalEvent =
-	| { at: string; type: "run-start"; runId: string; commit: string; bundleSha256: string }
+	| {
+			at: string;
+			type: "run-start";
+			runId: string;
+			commit: string;
+			bundleSha256: string;
+	  }
 	| { at: string; type: "batch-open"; batch: Batch["id"] }
 	| {
 			at: string;
@@ -84,11 +98,47 @@ export type JournalEvent =
 			host: string;
 	  }
 	| { at: string; type: "running"; attemptId: string; agentStartedAt?: string }
-	| { at: string; type: "finish"; attemptId: string; outcome: TrialOutcome }
+	| {
+			at: string;
+			type: "finish";
+			attemptId: string;
+			outcome: TrialOutcome;
+			/** Why a non-pass ended (failureCause); absent on a pass and in journals before 2026-10-28. */
+			cause?: TrialCause;
+	  }
+	/** A non-pass whose cause is not benign: new launches wait until the operator acks it. */
+	| {
+			at: string;
+			type: "review-needed";
+			attemptId: string;
+			task: string;
+			cause: string;
+			detail: string;
+	  }
+	/** Stage 1 (one trial of every task) is done: the remaining trials wait for `ack stage1`. */
+	| { at: string; type: "stage-review"; detail: string }
+	/** The operator read a review (an attempt id, "stage1", or "all" pending) and lets launches resume. */
+	| { at: string; type: "ack"; key: string; note: string }
 	| { at: string; type: "synced"; attemptId: string; copies: string[] }
 	| { at: string; type: "pause"; reason: string }
 	| { at: string; type: "resume" }
-	| { at: string; type: "stop"; reason: string };
+	| { at: string; type: "stop"; reason: string }
+	/** A dated, reasoned correction of one attempt's outcome (run doc amendments); it overrides the first finish. */
+	| {
+			at: string;
+			type: "amend";
+			attemptId: string;
+			outcome: TrialOutcome;
+			reason: string;
+	  }
+	/** The early-stop gates' decisions (docs/tb4-astra-run-2026-10-27.md): gate A passes once, for good. */
+	| {
+			at: string;
+			type: "gate";
+			gate: "A" | "B";
+			result: "pass" | "stop";
+			detail: string;
+	  };
 
 export class Journal {
 	constructor(readonly path: string) {}
@@ -126,7 +176,17 @@ export type Attempt = {
 	status: "launched" | "running" | "finished";
 	agentStartedAt?: string;
 	outcome?: TrialOutcome;
+	/** Journal time of the first finish. */
+	finishedAt?: string;
+	cause?: TrialCause;
 	copies: string[];
+};
+export type Review = {
+	at: string;
+	attemptId?: string;
+	task?: string;
+	cause: string;
+	detail: string;
 };
 export type RunState = {
 	runId?: string;
@@ -136,6 +196,16 @@ export type RunState = {
 	attempts: Map<string, Attempt>;
 	paused: string | null;
 	stopped: string | null;
+	/** Gate A passed (>= 6 decisive first-trial passes): it is never evaluated again. */
+	gateAPassed: boolean;
+	/** Reviews not yet acked, by attempt id (or "stage1"): any one blocks new launches. */
+	reviews: Map<string, Review>;
+	/** Every ack, in order (the digest shows the note next to its trial). */
+	acks: { at: string; key: string; note: string }[];
+	/** stage-review journaled (stage 1 finished). */
+	stageReviewed: boolean;
+	/** Trials beyond stage 1 may launch: `ack stage1`, or a b2 trial already launched (older journals). */
+	stage1Released: boolean;
 };
 
 export function replay(events: JournalEvent[]): RunState {
@@ -144,6 +214,11 @@ export function replay(events: JournalEvent[]): RunState {
 		attempts: new Map(),
 		paused: null,
 		stopped: null,
+		gateAPassed: false,
+		reviews: new Map(),
+		acks: [],
+		stageReviewed: false,
+		stage1Released: false,
 	};
 	for (const e of events) {
 		switch (e.type) {
@@ -166,6 +241,7 @@ export function replay(events: JournalEvent[]): RunState {
 						status: "launched",
 						copies: [],
 					});
+				if (e.batch === "b2") state.stage1Released = true;
 				break;
 			case "running": {
 				const a = state.attempts.get(e.attemptId);
@@ -181,7 +257,10 @@ export function replay(events: JournalEvent[]): RunState {
 				if (a && a.status !== "finished") {
 					a.status = "finished";
 					a.outcome = e.outcome;
-					if (e.outcome.kind === "valid") a.agentStartedAt = e.outcome.agentStartedAt;
+					a.finishedAt = e.at;
+					if (e.cause) a.cause = e.cause;
+					if (e.outcome.kind === "valid")
+						a.agentStartedAt = e.outcome.agentStartedAt;
 				}
 				break;
 			}
@@ -199,13 +278,58 @@ export function replay(events: JournalEvent[]): RunState {
 			case "stop":
 				state.stopped = e.reason;
 				break;
+			case "amend": {
+				const a = state.attempts.get(e.attemptId);
+				if (a && a.status === "finished") {
+					a.outcome = e.outcome;
+					if (e.outcome.kind === "valid")
+						a.agentStartedAt = e.outcome.agentStartedAt;
+				}
+				break;
+			}
+			case "gate":
+				if (e.gate === "A" && e.result === "pass") state.gateAPassed = true;
+				break;
+			case "review-needed":
+				state.reviews.set(e.attemptId, {
+					at: e.at,
+					attemptId: e.attemptId,
+					task: e.task,
+					cause: e.cause,
+					detail: e.detail,
+				});
+				break;
+			case "stage-review":
+				state.stageReviewed = true;
+				if (!state.stage1Released)
+					state.reviews.set("stage1", {
+						at: e.at,
+						cause: "stage-review",
+						detail: e.detail,
+					});
+				break;
+			case "ack":
+				state.acks.push({ at: e.at, key: e.key, note: e.note });
+				if (e.key === "all") {
+					if (state.reviews.has("stage1")) state.stage1Released = true;
+					state.reviews.clear();
+				} else {
+					state.reviews.delete(e.key);
+					if (e.key === "stage1") state.stage1Released = true;
+				}
+				break;
 		}
 	}
 	return state;
 }
 
 /** Deterministic, unique attempt ids: the Harbor job name on the host. */
-export function attemptId(runId: string, task: string, batch: Batch["id"], n: number) {
+export function attemptId(
+	runId: string,
+	task: string,
+	batch: Batch["id"],
+	n: number,
+) {
 	return `${runId}-${batch}-${task}-a${String(n).padStart(2, "0")}`;
 }
 
@@ -216,7 +340,11 @@ export type TaskProgress = {
 	inFlight: number;
 	attempts: number;
 };
-export function progress(state: RunState, task: string, batch: Batch["id"]): TaskProgress {
+export function progress(
+	state: RunState,
+	task: string,
+	batch: Batch["id"],
+): TaskProgress {
 	let valid = 0;
 	let inFlight = 0;
 	let attempts = 0;
@@ -229,7 +357,11 @@ export function progress(state: RunState, task: string, batch: Batch["id"]): Tas
 	return { valid, inFlight, attempts };
 }
 
-export function hostLoad(state: RunState, tasks: Map<string, Task>, host: string) {
+export function hostLoad(
+	state: RunState,
+	tasks: Map<string, Task>,
+	host: string,
+) {
 	let vcpu = 0;
 	let memoryMb = 0;
 	let gpus = 0;
@@ -267,7 +399,11 @@ export function trialCpuCost(task: Pick<Task, "cpus">) {
 	return task.cpus + TRIAL_OVERHEAD_VCPU;
 }
 /** Whether one more trial of `task` keeps every trial on `host` at full CPU. */
-export function fitsCpu(host: Pick<Host, "vcpu">, load: { vcpu: number; trials: number }, task: Pick<Task, "cpus">) {
+export function fitsCpu(
+	host: Pick<Host, "vcpu">,
+	load: { vcpu: number; trials: number },
+	task: Pick<Task, "cpus">,
+) {
 	if (load.trials === 0) return true;
 	return load.vcpu + trialCpuCost(task) <= hostCpuBudget(host);
 }
@@ -289,52 +425,100 @@ export function nextLaunches(input: {
 	tasks: Task[];
 	hosts: Host[];
 	unhealthyHosts?: Set<string>;
+	/** Most trials in flight at once across the fleet (keeps model load under the provider's rate limits). */
+	maxInFlight?: number;
+	/** Tasks to launch first within each batch (after GPU tasks), in this order: the ones that decide the score. */
+	priority?: readonly string[];
+	/** Tasks whose trials in every open batch launch before anything else (the longest ones). */
+	frontload?: readonly string[];
+	/** Tasks the controller never launches (run elsewhere and folded in per the run doc). */
+	exclude?: readonly string[];
+	/**
+	 * Staged scaling (TB4_STAGE1): until the operator acks stage 1, only batch 1
+	 * (one trial of every task) launches.
+	 */
+	stage1?: boolean;
 }): LaunchDecision[] {
 	const { state } = input;
-	if (state.paused || state.stopped || !state.runId) return [];
+	// A non-pass awaiting review (or the stage-1 review) holds every new launch.
+	if (state.paused || state.stopped || !state.runId || state.reviews.size)
+		return [];
+	const running = [...state.attempts.values()].filter(
+		(a) => a.status !== "finished",
+	).length;
+	const room = () =>
+		(input.maxInFlight ?? Number.POSITIVE_INFINITY) - running - out.length;
 	const byName = new Map(input.tasks.map((t) => [t.name, t]));
 	const out: LaunchDecision[] = [];
 	const load = new Map(
 		input.hosts.map((h) => [h.name, hostLoad(state, byName, h.name)]),
 	);
-	for (const batch of BATCHES) {
-		if (!state.openBatches.has(batch.id)) continue;
-		// GPU tasks first: they are the long pole.
-		const ordered = [...input.tasks].sort((a, b) => b.gpus - a.gpus);
-		for (const task of ordered) {
-			const p = progress(state, task.name, batch.id);
-			const pending = out.filter((d) => d.task === task.name && d.batch === batch.id).length;
-			let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
-			let attempts = p.attempts + pending;
-			while (need > 0 && attempts < attemptCap(task, batch)) {
-				const host = input.hosts.find((h) => {
-					if (input.unhealthyHosts?.has(h.name)) return false;
-					if ((task.gpus > 0) !== (h.kind === "gpu")) return false;
-					const l = load.get(h.name)!;
-					const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
-					return (
-						gpuFree &&
-						fitsCpu(h, l, task) &&
-						l.memoryMb + task.memoryMb <= h.memoryMb * 0.9
-					);
-				});
-				if (!host) break;
-				const l = load.get(host.name)!;
-				l.vcpu += trialCpuCost(task);
-				l.trials++;
-				l.memoryMb += task.memoryMb;
-				l.gpus += task.gpus;
-				attempts++;
-				out.push({
-					task: task.name,
-					batch: batch.id,
-					host: host.name,
-					attemptId: attemptId(state.runId, task.name, batch.id, attempts),
-				});
-				need--;
-			}
+	const rank = (name: string) => {
+		const i = input.priority?.indexOf(name) ?? -1;
+		return i < 0 ? Number.POSITIVE_INFINITY : i;
+	};
+	// GPU tasks first: they are the long pole; among them the largest
+	// (jax-speedrun-gpu, ~7.6 h) first, so the short GPU tasks fill in after.
+	const excluded = new Set(input.exclude ?? []);
+	const ordered = [...input.tasks]
+		.filter((t) => !excluded.has(t.name))
+		.sort(
+			(a, b) =>
+				b.gpus - a.gpus ||
+				(a.gpus > 0 ? b.cpus - a.cpus : 0) ||
+				(rank(a.name) === rank(b.name)
+					? 0
+					: rank(a.name) < rank(b.name)
+						? -1
+						: 1),
+		);
+	const place = (task: Task, batch: Batch) => {
+		const p = progress(state, task.name, batch.id);
+		const pending = out.filter(
+			(d) => d.task === task.name && d.batch === batch.id,
+		).length;
+		let need = batch.trialsPerTask - p.valid - p.inFlight - pending;
+		let attempts = p.attempts + pending;
+		while (need > 0 && attempts < attemptCap(task, batch) && room() > 0) {
+			const host = input.hosts.find((h) => {
+				if (input.unhealthyHosts?.has(h.name)) return false;
+				if (task.gpus > 0 !== (h.kind === "gpu")) return false;
+				const l = load.get(h.name)!;
+				const gpuFree = h.kind === "gpu" ? l.gpus + task.gpus <= 1 : true;
+				return (
+					gpuFree &&
+					fitsCpu(h, l, task) &&
+					l.memoryMb + task.memoryMb <= h.memoryMb * 0.9
+				);
+			});
+			if (!host) break;
+			const l = load.get(host.name)!;
+			l.vcpu += trialCpuCost(task);
+			l.trials++;
+			l.memoryMb += task.memoryMb;
+			l.gpus += task.gpus;
+			attempts++;
+			out.push({
+				task: task.name,
+				batch: batch.id,
+				host: host.name,
+				attemptId: attemptId(state.runId ?? "", task.name, batch.id, attempts),
+			});
+			need--;
 		}
+	};
+	const open = BATCHES.filter(
+		(batch) =>
+			state.openBatches.has(batch.id) &&
+			(batch.id === "b1" || !input.stage1 || state.stage1Released),
+	);
+	// Front-loaded tasks (the longest) get every open batch's trials first, so
+	// none of their runs starts late and sets the finish time.
+	for (const name of input.frontload ?? []) {
+		const task = byName.get(name);
+		if (task) for (const batch of open) place(task, batch);
 	}
+	for (const batch of open) for (const task of ordered) place(task, batch);
 	return out;
 }
 
@@ -367,13 +551,51 @@ export function reconcile(attempt: Attempt, obs: HostObservation): Reconcile {
 	};
 }
 
+/**
+ * The last model call in a trial's transport log, as JSON, when it failed:
+ * an error response handed back (throttling or 5xx past the guard's waits),
+ * a request error, or a stream cut with no resend. null when it succeeded.
+ */
+export function lastModelCallFailed(log: string): string | null {
+	const entries = log.split("\n").flatMap((line) => {
+		try {
+			return [JSON.parse(line) as Record<string, unknown>];
+		} catch {
+			return [];
+		}
+	});
+	const last = entries
+		.filter((e) => e.phase !== "throttle" || e.willRetry === false)
+		.at(-1);
+	if (!last) return null;
+	const failed =
+		(last.phase === "throttle" && last.willRetry === false) ||
+		// A final non-ok response is the provider's failure only for 429 and 5xx; a 4xx
+		// such as 400 (request too large, invalid tool payload) is the harness's own
+		// request, scored as the trial's result, never rerun.
+		(last.phase === "response" &&
+			(Number(last.status) === 429 || Number(last.status) >= 500)) ||
+		last.phase === "request" ||
+		((last.phase === "stream-error" ||
+			last.phase === "stream-cut" ||
+			last.phase === "degenerate") &&
+			!last.willRetry);
+	return failed ? JSON.stringify(last) : null;
+}
+
 /* ---------- classification (port of rerun classify.py, scoring rule 2) ---------- */
 
 export type HarborResult = {
 	trial_name?: string;
-	agent_execution?: { started_at?: string | null; finished_at?: string | null } | null;
+	agent_execution?: {
+		started_at?: string | null;
+		finished_at?: string | null;
+	} | null;
 	verifier_result?: { rewards?: { reward?: number | null } | null } | null;
-	exception_info?: { exception_type?: string; exception_message?: string } | null;
+	exception_info?: {
+		exception_type?: string;
+		exception_message?: string;
+	} | null;
 	/** Added by the collector from artifacts/manifest.json. */
 	appReachedGrader?: boolean;
 	/** Added by the collector from the trial's transport log. */
@@ -384,14 +606,20 @@ export type HarborResult = {
 	gpuAsserted?: boolean | null;
 	/** Added by the collector: the host was terminated or rebooted by AWS. */
 	hostKilled?: boolean;
+	/** Added by the collector: what the bridge log and the verifier say about how the trial ended. */
+	evidence?: TrialEvidence;
 };
 
 export function classify(r: HarborResult): TrialOutcome {
 	const started = r.agent_execution?.started_at;
 	if (!started) return { kind: "infra", reason: "agent never started" };
-	if (r.hostKilled) return { kind: "infra", reason: "host killed by the provider" };
+	if (r.hostKilled)
+		return { kind: "infra", reason: "host killed by the provider" };
 	if (r.gpuAsserted === false)
-		return { kind: "infra", reason: "GPU model not asserted as H100 inside the trial (void)" };
+		return {
+			kind: "infra",
+			reason: "GPU model not asserted as H100 inside the trial (void)",
+		};
 	const reward = r.verifier_result?.rewards?.reward;
 	if (reward === null || reward === undefined)
 		return {
@@ -406,19 +634,299 @@ export function classify(r: HarborResult): TrialOutcome {
 			reason: `model transport failure ended the agent: ${r.unrecoveredTransportFailure.slice(0, 200)}`,
 		};
 	// Wrong answer, gave up, agent time limit, a model refusing: always valid.
-	return { kind: "valid", reward, agentStartedAt: started, detail: `reward ${reward}` };
+	return {
+		kind: "valid",
+		reward,
+		agentStartedAt: started,
+		detail: `reward ${reward}`,
+	};
+}
+
+/* ---------- failure causes and the review gate ---------- */
+
+/**
+ * Why a non-pass ended, derived from its artifacts. It never changes the score
+ * (classify decides valid/infra); it decides whether the operator must look
+ * before more money is spent.
+ */
+export type CauseKind =
+	| "agent-finished"
+	| "agent-stopped-abnormally"
+	| "agent-timeout"
+	| "budget-cap"
+	| "verifier-error"
+	| "infra"
+	| "unknown";
+export type TrialCause = {
+	/** A CauseKind, or `infra:<reason>`. */
+	cause: string;
+	/** Sanitized, capped evidence (the bridge's stop line, the exception, failed tests). */
+	detail: string;
+	/** From verifier/ctrf.json when present. */
+	failedTests?: { count: number; names: string[] };
+};
+export const causeKind = (c: Pick<TrialCause, "cause">) =>
+	c.cause.split(":")[0] as CauseKind;
+
+export type TrialEvidence = {
+	/** agent/ytimesy-bridge.log exists: the bridge started. */
+	bridgeLog: boolean;
+	/** The last "builder stopped: ..." line. */
+	stopLine?: string;
+	/** "bridge failed before or outside the trial: ..." or "refused: ...". */
+	bridgeFailure?: string;
+	/** "Model provider failed" lines (the model loop's onError, after the SDK's retries). */
+	providerFailures: number;
+	/** The `code:` of the last such failure ("unknown" when the provider gave no reason). */
+	providerCode?: string;
+	/** The first uncaught exception or Node internal error line. */
+	uncaught?: string;
+	failedTests?: { count: number; names: string[] };
+};
+
+const SECRET_PATTERNS: [RegExp, string][] = [
+	[/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, "<aws-key>"],
+	[/\bsk-[A-Za-z0-9_-]{12,}/g, "<key>"],
+	[/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>"],
+	[
+		/\b(api[_-]?key|secret|token|password|authorization|x-api-key)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi,
+		"$1$2<redacted>",
+	],
+];
+/** One log line made safe for the journal: no credential-looking strings, at most `max` chars. */
+export function sanitizeLine(line: string, max = 300) {
+	// Control characters (terminal escapes, NULs) never reach the journal; tabs stay.
+	let out = [...line]
+		.filter((c) => {
+			const n = c.charCodeAt(0);
+			return n === 9 || (n >= 32 && n !== 127);
+		})
+		.join("")
+		.trim();
+	for (const [re, sub] of SECRET_PATTERNS) out = out.replace(re, sub);
+	return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+}
+
+/** Reads a trial's agent/ytimesy-bridge.log (stderr of the bridge, evals/harbor_v2/bridge.ts). */
+export function bridgeLogEvidence(text: string): TrialEvidence {
+	const lines = text.split("\n");
+	const ev: TrialEvidence = { bridgeLog: true, providerFailures: 0 };
+	lines.forEach((line, i) => {
+		if (line.startsWith("builder stopped:")) ev.stopLine = sanitizeLine(line);
+		else if (
+			line.startsWith("bridge failed before or outside the trial:") ||
+			line.startsWith("refused:")
+		)
+			ev.bridgeFailure = sanitizeLine(line);
+		else if (/^\s*Model provider failed\b/.test(line)) {
+			ev.providerFailures++;
+			// console.warn prints the classification object on the following lines.
+			for (const next of lines.slice(i, i + 15)) {
+				const m = /\bcode:\s*['"]([^'"]{1,40})['"]/.exec(next);
+				if (m) {
+					ev.providerCode = m[1];
+					break;
+				}
+			}
+		} else if (
+			!ev.uncaught &&
+			/^(Uncaught\b|.*\bUnhandledPromiseRejection|(Type|Reference|Range|Syntax)Error: |Error \[ERR_|node:internal\/)/.test(
+				line,
+			)
+		)
+			ev.uncaught = sanitizeLine(line);
+	});
+	return ev;
+}
+
+/** Failed tests from a CTRF report (verifier/ctrf.json); undefined when unreadable. */
+export function ctrfFailures(
+	json: unknown,
+): { count: number; names: string[] } | undefined {
+	const results = (json as { results?: Record<string, unknown> } | null)
+		?.results;
+	if (!results || typeof results !== "object") return undefined;
+	const tests = Array.isArray(results.tests)
+		? (results.tests as { name?: unknown; status?: unknown }[])
+		: [];
+	const failed = tests.filter((t) => t.status === "failed");
+	const summary = results.summary as { failed?: unknown } | undefined;
+	const count =
+		typeof summary?.failed === "number" ? summary.failed : failed.length;
+	return {
+		count,
+		names: failed.slice(0, 10).map((t) => sanitizeLine(String(t.name), 120)),
+	};
+}
+
+/**
+ * The cause of a non-pass (null for a pass). Order: infra, the bridge's own stop
+ * (budget cap or an abnormal end), the agent time limit, a verifier error, then a
+ * normal end with failed tests; no evidence is "unknown".
+ */
+export function failureCause(
+	outcome: TrialOutcome,
+	r?: HarborResult,
+): TrialCause | null {
+	if (outcome.kind === "infra")
+		return {
+			cause: `infra:${sanitizeLine(outcome.reason, 200)}`,
+			detail: sanitizeLine(outcome.reason),
+		};
+	if (outcome.reward >= 1) return null;
+	const ev = r?.evidence;
+	const failedTests = ev?.failedTests;
+	const withTests = (c: TrialCause): TrialCause =>
+		failedTests ? { ...c, failedTests } : c;
+	const exceptionType = r?.exception_info?.exception_type ?? "";
+	const exception = exceptionType
+		? sanitizeLine(
+				`${exceptionType}: ${r?.exception_info?.exception_message ?? ""}`,
+			)
+		: "";
+	const stop = ev?.stopLine ?? ev?.bridgeFailure;
+	if (
+		stop &&
+		/spending cap reached|request limit reached|Total spending cap|spend ledger stop file/i.test(
+			stop,
+		)
+	)
+		return withTests({ cause: "budget-cap", detail: stop });
+	if (stop || ev?.uncaught)
+		return withTests({
+			cause: "agent-stopped-abnormally",
+			detail: [
+				stop ?? ev?.uncaught,
+				ev?.providerFailures
+					? `${ev.providerFailures} "Model provider failed" line(s), last code ${ev.providerCode ?? "?"}`
+					: "",
+			]
+				.filter(Boolean)
+				.join("; "),
+		});
+	if (/AgentTimeout/i.test(exceptionType))
+		return withTests({ cause: "agent-timeout", detail: exception });
+	if (/Verifier|Reward/i.test(exceptionType))
+		return withTests({ cause: "verifier-error", detail: exception });
+	if (exceptionType)
+		return withTests({ cause: "agent-stopped-abnormally", detail: exception });
+	if (ev?.providerFailures)
+		return withTests({
+			cause: "agent-stopped-abnormally",
+			detail: `${ev.providerFailures} "Model provider failed" line(s), last code ${ev.providerCode ?? "?"}; no "builder stopped" line`,
+		});
+	if (ev?.bridgeLog)
+		return withTests({
+			cause: "agent-finished",
+			detail: failedTests
+				? `verifier: ${failedTests.count} failed test(s)${failedTests.names.length ? `: ${failedTests.names.join(", ")}` : ""}`
+				: "agent ended normally; verifier reward 0",
+		});
+	return {
+		cause: "unknown",
+		detail: "no bridge log or exception to explain it",
+	};
+}
+
+/** Review gate settings (TB4_* env, docs/tb4-run-controller.md "Review gate"). */
+export function reviewConfig(env: Record<string, string | undefined>) {
+	const list = (v: string | undefined, d: string[]) =>
+		v === undefined
+			? d
+			: v
+					.split(",")
+					.map((x) => x.trim())
+					.filter(Boolean);
+	const num = (v: string | undefined, d: number) =>
+		v !== undefined && v.trim() !== "" && Number.isFinite(Number(v))
+			? Number(v)
+			: d;
+	const off = (v: string | undefined) => /^(0|off|false|no)$/i.test(v ?? "");
+	return {
+		/** TB4_REVIEW_GATE=off: causes are still journaled, nothing pauses. */
+		gate: !off(env.TB4_REVIEW_GATE),
+		/** Causes that never need a review (TB4_REVIEW_BENIGN). */
+		benign: new Set(
+			list(env.TB4_REVIEW_BENIGN, ["agent-finished", "agent-timeout"]),
+		),
+		/** TB4_SPIKE_COUNT abnormal ends within TB4_SPIKE_MINUTES stop the run (0 = off). */
+		spikeCount: num(env.TB4_SPIKE_COUNT, 3),
+		spikeMinutes: num(env.TB4_SPIKE_MINUTES, 30),
+		/** TB4_STAGE1 (on by default): one trial of every task, then `ack stage1`. */
+		stage1: !off(env.TB4_STAGE1),
+	};
+}
+export type ReviewConfig = ReturnType<typeof reviewConfig>;
+
+/** Whether a cause needs the operator before more trials launch. */
+export function needsReview(cause: TrialCause, cfg: ReviewConfig) {
+	return cfg.gate && !cfg.benign.has(causeKind(cause));
+}
+
+/**
+ * The error-spike stop: abnormal ends (non-benign, non-infra: one dead host ends
+ * many trials at once and infra attempts are retried) whose finish lies within
+ * the last `spikeMinutes`. Returns the stop reason, or null.
+ */
+export function errorSpike(state: RunState, nowMs: number, cfg: ReviewConfig) {
+	if (cfg.spikeCount <= 0 || !Number.isFinite(nowMs)) return null;
+	const since = nowMs - cfg.spikeMinutes * 60_000;
+	const hits = [...state.attempts.values()].filter((a) => {
+		if (!a.cause || !a.finishedAt) return false;
+		const kind = causeKind(a.cause);
+		if (kind === "infra" || cfg.benign.has(kind)) return false;
+		const at = Date.parse(a.finishedAt);
+		return at >= since && at <= nowMs;
+	});
+	if (hits.length < cfg.spikeCount) return null;
+	const kinds = [...new Set(hits.map((a) => causeKind(a.cause!)))].join(", ");
+	return `error spike: ${hits.length} abnormal trial ends (${kinds}) within ${cfg.spikeMinutes} min: ${hits
+		.map((a) => a.attemptId)
+		.slice(0, 5)
+		.join(", ")}${hits.length > 5 ? ", ..." : ""}`;
+}
+
+/**
+ * Stage 1 is done when every scheduled task's batch-1 trial has finished (a
+ * valid one, or the attempt cap reached) and nothing of it is still running.
+ */
+export function stage1Complete(
+	state: RunState,
+	tasks: Task[],
+	exclude: readonly string[] = [],
+) {
+	const skip = new Set(exclude);
+	const b1 = BATCHES[0];
+	return tasks
+		.filter((t) => !skip.has(t.name))
+		.every((t) => {
+			const p = progress(state, t.name, "b1");
+			return (
+				p.attempts > 0 &&
+				p.inFlight === 0 &&
+				(p.valid >= b1.trialsPerTask || p.attempts >= attemptCap(t, b1))
+			);
+		});
 }
 
 /* ---------- scoring ---------- */
 
-export type ScoredTrial = { attemptId: string; batch: Batch["id"]; reward: number; agentStartedAt: string };
+export type ScoredTrial = {
+	attemptId: string;
+	batch: Batch["id"];
+	reward: number;
+	agentStartedAt: string;
+};
 
 /**
  * Scoring rule 4: batch 1's first valid trial by agent start, then batch 2's
  * first four by agent start; extras are disclosed, never scored.
  */
 export function scoredTrials(state: RunState) {
-	const perTask = new Map<string, { scored: ScoredTrial[]; extra: ScoredTrial[] }>();
+	const perTask = new Map<
+		string,
+		{ scored: ScoredTrial[]; extra: ScoredTrial[] }
+	>();
 	const valid = [...state.attempts.values()]
 		.filter((a) => a.outcome?.kind === "valid")
 		.map((a) => ({
@@ -441,12 +949,18 @@ export function scoredTrials(state: RunState) {
 }
 
 /** pass@1 = mean over tasks of (passes / scored trials), reward >= 1 is a pass. */
-export function passAt1(perTask: Map<string, { scored: ScoredTrial[] }>, tasks: string[]) {
+export function passAt1(
+	perTask: Map<string, { scored: ScoredTrial[] }>,
+	tasks: string[],
+) {
 	const rates = tasks.map((t) => {
 		const s = perTask.get(t)?.scored ?? [];
 		return s.length ? s.filter((x) => x.reward >= 1).length / s.length : 0;
 	});
-	return { pct: (100 * rates.reduce((a, b) => a + b, 0)) / tasks.length, rates };
+	return {
+		pct: (100 * rates.reduce((a, b) => a + b, 0)) / tasks.length,
+		rates,
+	};
 }
 
 /** Unbiased pass@k per task (Chen et al. 2021): 1 - C(n-c, k)/C(n, k). */
@@ -458,8 +972,14 @@ export function passAtK(n: number, c: number, k: number) {
 }
 
 /** Paired comparison over tasks with a seeded bootstrap 95% interval. */
-export function pairedComparison(ours: number[], theirs: number[], seed = 20261021, draws = 10000) {
-	if (ours.length !== theirs.length) throw new Error("paired arrays differ in length");
+export function pairedComparison(
+	ours: number[],
+	theirs: number[],
+	seed = 20261021,
+	draws = 10000,
+) {
+	if (ours.length !== theirs.length)
+		throw new Error("paired arrays differ in length");
 	const d = ours.map((o, i) => o - theirs[i]);
 	const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 	let s = seed >>> 0;
@@ -476,37 +996,169 @@ export function pairedComparison(ours: number[], theirs: number[], seed = 202610
 	boots.sort((a, b) => a - b);
 	return {
 		meanDiffPts: 100 * mean(d),
-		ci95Pts: [100 * boots[Math.floor(0.025 * draws)], 100 * boots[Math.floor(0.975 * draws)]] as [number, number],
+		ci95Pts: [
+			100 * boots[Math.floor(0.025 * draws)],
+			100 * boots[Math.floor(0.975 * draws)],
+		] as [number, number],
 		tasksBetter: d.filter((x) => x > 0).length,
 		tasksWorse: d.filter((x) => x < 0).length,
 		tasksTied: d.filter((x) => x === 0).length,
 	};
 }
 
+/**
+ * Live bounds on the final pass@1 while trials are running: the floor counts
+ * every missing trial as a fail, the ceiling as a pass. Once the floor is
+ * above a competitor's score no remaining trial can change the order; once
+ * the ceiling is below it, we cannot catch up.
+ */
+export function floorCeiling(
+	perTask: Map<string, { scored: ScoredTrial[] }>,
+	tasks: string[],
+	trialsPerTask = SCORED_TRIALS_PER_TASK,
+) {
+	let floor = 0;
+	let ceiling = 0;
+	let missing = 0;
+	for (const t of tasks) {
+		const s = (perTask.get(t)?.scored ?? []).slice(0, trialsPerTask);
+		const passes = s.filter((x) => x.reward >= 1).length;
+		const left = trialsPerTask - s.length;
+		missing += left;
+		floor += passes / trialsPerTask;
+		ceiling += (passes + left) / trialsPerTask;
+	}
+	return {
+		floorPct: (100 * floor) / tasks.length,
+		ceilingPct: (100 * ceiling) / tasks.length,
+		missingTrials: missing,
+	};
+}
+
+/** The Astra run's only early stop: the ceiling is below the competitor. */
+export function earlyStopDecision(
+	bounds: ReturnType<typeof floorCeiling>,
+	competitorPct: number,
+) {
+	if (bounds.ceilingPct < competitorPct)
+		return {
+			stop: true,
+			why: `ceiling ${bounds.ceilingPct.toFixed(1)}% < ${competitorPct.toFixed(1)}%: cannot catch up`,
+		};
+	if (bounds.floorPct > competitorPct)
+		return {
+			stop: false,
+			why: `floor ${bounds.floorPct.toFixed(1)}% > ${competitorPct.toFixed(1)}%: ahead whatever remains; finish the run`,
+		};
+	return {
+		stop: false,
+		why: `undecided: ${bounds.floorPct.toFixed(1)}%..${bounds.ceilingPct.toFixed(1)}% vs ${competitorPct.toFixed(1)}%`,
+	};
+}
+
+/**
+ * The Astra run's pre-committed early stop (docs/tb4-astra-run-2026-10-27.md).
+ * Gate A: once the first scored trial (earliest agent start among the task's
+ * valid scored trials; infra attempts never count) exists for at least
+ * `gateAMinTasks` of the decisive tasks, our passes among those first trials
+ * <= `gateAMaxPasses` stops the run; more passes pass gate A for good.
+ * Gate B (any time): the ceiling over the CPU tasks (every missing scored
+ * trial counted as a pass) below Codex's pass@1 on the same tasks stops it.
+ */
+export const EARLY_STOP = { gateAMinTasks: 15, gateAMaxPasses: 5 };
+export function earlyStopGates(input: {
+	state: RunState;
+	decisive: string[];
+	cpuTasks: string[];
+	codexRates: Map<string, number>;
+	trialsPerTask?: number;
+}) {
+	const perTask = scoredTrials(input.state);
+	const firsts = input.decisive
+		.map((t) => perTask.get(t)?.scored[0])
+		.filter((x): x is ScoredTrial => !!x);
+	const passes = firsts.filter((x) => x.reward >= 1).length;
+	const gateA = input.state.gateAPassed
+		? {
+				status: "passed" as const,
+				passes,
+				ready: firsts.length,
+				of: input.decisive.length,
+			}
+		: firsts.length < EARLY_STOP.gateAMinTasks
+			? {
+					status: "pending" as const,
+					passes,
+					ready: firsts.length,
+					of: input.decisive.length,
+				}
+			: {
+					status:
+						passes <= EARLY_STOP.gateAMaxPasses
+							? ("stop" as const)
+							: ("pass" as const),
+					passes,
+					ready: firsts.length,
+					of: input.decisive.length,
+				};
+	const bounds = floorCeiling(perTask, input.cpuTasks, input.trialsPerTask);
+	const codexPct =
+		(100 *
+			input.cpuTasks.reduce((a, t) => a + (input.codexRates.get(t) ?? 0), 0)) /
+		input.cpuTasks.length;
+	const gateB = {
+		stop: bounds.ceilingPct < codexPct,
+		ceilingPct: bounds.ceilingPct,
+		floorPct: bounds.floorPct,
+		codexPct,
+	};
+	return { gateA, gateB };
+}
+
 /** Scoring rule 5: batch 2 runs only when batch 1 is clearly ahead. */
 export function batch2Decision(cmp: ReturnType<typeof pairedComparison>) {
 	return cmp.meanDiffPts >= 3
-		? { go: true, why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts ahead (>= 3)` }
-		: { go: false, why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts vs Codex (< 3): stop, report batch 1` };
+		? {
+				go: true,
+				why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts ahead (>= 3)`,
+			}
+		: {
+				go: false,
+				why: `batch 1 is ${cmp.meanDiffPts.toFixed(1)} pts vs Codex (< 3): stop, report batch 1`,
+			};
 }
 
 /* ---------- spend ---------- */
 
+const envUsd = (name: string, fallback: number) =>
+	Number(process.env[name] ?? "") || fallback;
 export const SPEND = {
 	/** Expected model spend for 330 trials on Bedrock (Sol lead + Luna roles). */
 	modelExpectedUsd: [360, 500] as const,
 	/** Expected infra (EC2 hosts + p5 + EBS + egress). */
-	infraExpectedUsd: [300, 560] as const,
+	infraExpectedUsd: [300, envUsd("TB4_INFRA_CAP_USD", 560)] as const,
 	/** Bridge per-trial cap: ~8x the expected mean ($1.1-1.5), below the bridge max $100. */
-	trialCapUsd: 12,
+	trialCapUsd: envUsd("TB4_TRIAL_CAP_USD", 12),
 	/** Bridge total cap per host ledger and the controller's global model stop. */
-	modelTotalCapUsd: 900,
+	modelTotalCapUsd: envUsd("TB4_MODEL_TOTAL_CAP_USD", 900),
+	/**
+	 * Launches stop this much below the total cap, so trials already running
+	 * can finish without the settled total passing the cap (0 = stop at the cap).
+	 */
+	modelStopMarginUsd: envUsd("TB4_MODEL_STOP_MARGIN_USD", 0),
 	/** AWS Budget (monthly, account-wide: EC2 + Bedrock + Marketplace). */
-	awsBudgetUsd: 1500,
+	awsBudgetUsd: envUsd("TB4_AWS_BUDGET_USD", 1500),
 	alertFractions: [0.5, 0.8, 1] as const,
 };
 
-export type LedgerLine = { type?: string; usd?: number; costUsd?: number; trial?: string };
+export type LedgerLine = {
+	type?: string;
+	usd?: number;
+	costUsd?: number;
+	trial?: string;
+	/** type "alert": the trial's alert threshold. */
+	thresholdUsd?: number;
+};
 /** Settled spend plus open reservations from a bridge ledger (JSON lines). */
 export function ledgerTotals(lines: LedgerLine[]) {
 	let settled = 0;
@@ -523,8 +1175,14 @@ export function ledgerTotals(lines: LedgerLine[]) {
 	return { settled, reserved: [...open.values()].reduce((a, b) => a + b, 0) };
 }
 
-export function crossedThresholds(spent: number, cap: number, alreadyAlerted: number[]) {
-	return SPEND.alertFractions.filter((f) => spent >= f * cap && !alreadyAlerted.includes(f));
+export function crossedThresholds(
+	spent: number,
+	cap: number,
+	alreadyAlerted: number[],
+) {
+	return SPEND.alertFractions.filter(
+		(f) => spent >= f * cap && !alreadyAlerted.includes(f),
+	);
 }
 
 /* ---------- watchdog ---------- */
@@ -542,39 +1200,114 @@ export type WatchInput = {
 	controllerActive: boolean;
 	lastProgressAt: number;
 };
-export type Alert = { level: "info" | "warn" | "critical"; key: string; text: string };
+export type Alert = {
+	level: "info" | "warn" | "critical";
+	key: string;
+	text: string;
+};
 
-export function watch(input: WatchInput): { alerts: Alert[]; actions: string[] } {
+export function watch(input: WatchInput): {
+	alerts: Alert[];
+	actions: string[];
+} {
 	const alerts: Alert[] = [];
 	const actions: string[] = [];
 	if (!input.controllerActive) {
-		alerts.push({ level: "critical", key: "controller-down", text: "tb4-controller.service not active; restarting it" });
+		alerts.push({
+			level: "critical",
+			key: "controller-down",
+			text: "tb4-controller.service not active; restarting it",
+		});
 		actions.push("restart-controller");
 	}
+	// The review gate holds launches until someone reads the failure: say so loudly.
+	for (const [key, r] of input.state.reviews)
+		alerts.push({
+			level: "critical",
+			key: `review:${key}`,
+			text: `${key}: ${sanitizeLine(r.cause, 160)}; new launches held until acked (controller.ts failures, then ack ${key} --note ...)`,
+		});
+	if (input.state.stopped)
+		alerts.push({
+			level: "critical",
+			key: "run-stopped",
+			text: `run stopped: ${sanitizeLine(input.state.stopped, 200)}`,
+		});
 	for (const [id, ms] of input.logSilenceMs)
 		if (ms >= 20 * 60_000)
-			alerts.push({ level: "warn", key: `silent:${id}`, text: `${id}: no log output for ${Math.round(ms / 60_000)} min` });
+			alerts.push({
+				level: "warn",
+				key: `silent:${id}`,
+				text: `${id}: no log output for ${Math.round(ms / 60_000)} min`,
+			});
 	for (const h of input.unhealthyHosts)
-		alerts.push({ level: "critical", key: `host:${h}`, text: `host ${h} unhealthy (ssh/docker/disk); no new trials go there` });
+		alerts.push({
+			level: "critical",
+			key: `host:${h}`,
+			text: `host ${h} unhealthy (ssh/docker/disk); no new trials go there`,
+		});
 	const { throttles, serverErrors } = input.bedrockErrorsLast15m;
 	if (throttles >= 20) {
-		alerts.push({ level: "warn", key: "bedrock-throttle", text: `Bedrock throttled ${throttles}x in 15 min; pausing new launches` });
+		alerts.push({
+			level: "warn",
+			key: "bedrock-throttle",
+			text: `Bedrock throttled ${throttles}x in 15 min; pausing new launches`,
+		});
 		actions.push("pause:bedrock-throttle");
 	}
 	if (serverErrors >= 10)
-		alerts.push({ level: "warn", key: "bedrock-5xx", text: `Bedrock 5xx ${serverErrors}x in 15 min` });
-	for (const f of crossedThresholds(input.modelSpendUsd, SPEND.modelTotalCapUsd, input.alerted.model)) {
-		alerts.push({ level: f >= 1 ? "critical" : "warn", key: `model-spend-${f}`, text: `model spend $${input.modelSpendUsd.toFixed(0)} crossed ${f * 100}% of $${SPEND.modelTotalCapUsd}` });
+		alerts.push({
+			level: "warn",
+			key: "bedrock-5xx",
+			text: `Bedrock 5xx ${serverErrors}x in 15 min`,
+		});
+	for (const f of crossedThresholds(
+		input.modelSpendUsd,
+		SPEND.modelTotalCapUsd,
+		input.alerted.model,
+	)) {
+		alerts.push({
+			level: f >= 1 ? "critical" : "warn",
+			key: `model-spend-${f}`,
+			text: `model spend $${input.modelSpendUsd.toFixed(0)} crossed ${f * 100}% of $${SPEND.modelTotalCapUsd}`,
+		});
 		if (f >= 1) actions.push("stop:model-cap");
 	}
+	const stopAt = SPEND.modelTotalCapUsd - SPEND.modelStopMarginUsd;
+	if (
+		SPEND.modelStopMarginUsd > 0 &&
+		input.modelSpendUsd >= stopAt &&
+		input.modelSpendUsd < SPEND.modelTotalCapUsd
+	) {
+		alerts.push({
+			level: "critical",
+			key: "model-spend-margin",
+			text: `model spend $${input.modelSpendUsd.toFixed(0)} reached the stop line $${stopAt.toFixed(0)} (cap $${SPEND.modelTotalCapUsd} minus margin for running trials)`,
+		});
+		actions.push("stop:model-cap");
+	}
 	const infraCap = SPEND.infraExpectedUsd[1];
-	for (const f of crossedThresholds(input.infraSpendUsd, infraCap, input.alerted.infra)) {
-		alerts.push({ level: f >= 1 ? "critical" : "warn", key: `infra-spend-${f}`, text: `infra spend ~$${input.infraSpendUsd.toFixed(0)} crossed ${f * 100}% of $${infraCap}` });
+	for (const f of crossedThresholds(
+		input.infraSpendUsd,
+		infraCap,
+		input.alerted.infra,
+	)) {
+		alerts.push({
+			level: f >= 1 ? "critical" : "warn",
+			key: `infra-spend-${f}`,
+			text: `infra spend ~$${input.infraSpendUsd.toFixed(0)} crossed ${f * 100}% of $${infraCap}`,
+		});
 		if (f >= 1) actions.push("pause:infra-cap");
 	}
-	const inFlight = [...input.state.attempts.values()].filter((a) => a.status !== "finished").length;
+	const inFlight = [...input.state.attempts.values()].filter(
+		(a) => a.status !== "finished",
+	).length;
 	if (inFlight > 0 && input.now - input.lastProgressAt >= 60 * 60_000)
-		alerts.push({ level: "warn", key: "no-progress", text: `no trial finished in ${Math.round((input.now - input.lastProgressAt) / 60_000)} min with ${inFlight} in flight` });
+		alerts.push({
+			level: "warn",
+			key: "no-progress",
+			text: `no trial finished in ${Math.round((input.now - input.lastProgressAt) / 60_000)} min with ${inFlight} in flight`,
+		});
 	return { alerts, actions };
 }
 
@@ -585,9 +1318,15 @@ export const HOURLY_USD: Record<string, number> = {
 	// p5.4xlarge (1 H100): fill from the EC2 on-demand pricing page before the run.
 	"p5.4xlarge": Number(process.env.TB4_P5_4XL_HOURLY_USD ?? 0) || 0,
 };
-export function infraSpend(instances: { type: string; launchedAt: number; stoppedAt?: number }[], now: number) {
+export function infraSpend(
+	instances: { type: string; launchedAt: number; stoppedAt?: number }[],
+	now: number,
+) {
 	return instances.reduce(
-		(sum, i) => sum + ((HOURLY_USD[i.type] ?? 0) * ((i.stoppedAt ?? now) - i.launchedAt)) / 3_600_000,
+		(sum, i) =>
+			sum +
+			((HOURLY_USD[i.type] ?? 0) * ((i.stoppedAt ?? now) - i.launchedAt)) /
+				3_600_000,
 		0,
 	);
 }

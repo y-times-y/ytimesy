@@ -12,12 +12,17 @@ vi.mock("pg", () => ({
 		}
 	},
 }));
-vi.mock("../config", () => ({
-	serverConfig: () => ({
+vi.mock("../config", () => {
+	const serverConfig = () => ({
 		DATABASE_URL: "postgres://test",
 		DATABASE_POOL_MAX: 2,
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 afterEach(() => {
 	delete (globalThis as { ytimesyDatabasePool?: unknown }).ytimesyDatabasePool;
 	vi.resetModules();

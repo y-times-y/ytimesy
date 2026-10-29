@@ -12,6 +12,7 @@ import {
 import {
 	committedUsd,
 	ledgerSummary,
+	recordTrialAlert,
 	reserveTrial,
 	SpendCapReached,
 	settleTrial,
@@ -78,6 +79,35 @@ describe("harborBridgeConfig", () => {
 		expect(() =>
 			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_TRIAL_USD_CAP: "0" }),
 		).toThrow(/positive dollar amount/);
+	});
+
+	it("turns the trial cap off only with a ledger reservation, and reads the alert", () => {
+		const off = harborBridgeConfig({
+			...capped,
+			YTIMESY_HARBOR_TRIAL_USD_CAP: "off",
+			YTIMESY_HARBOR_TRIAL_RESERVE_USD: "3",
+			YTIMESY_HARBOR_TRIAL_ALERT_USD: "4",
+		});
+		expect(off).toMatchObject({
+			trialUsdCap: null,
+			trialReserveUsd: 3,
+			trialAlertUsd: 4,
+		});
+		expect(() =>
+			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_TRIAL_USD_CAP: "off" }),
+		).toThrow(/needs YTIMESY_HARBOR_TRIAL_RESERVE_USD/);
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_TRIAL_USD_CAP: "off",
+				YTIMESY_HARBOR_TRIAL_RESERVE_USD: "11",
+			}),
+		).toThrow(/reservation cannot exceed the total cap/);
+		expect(harborBridgeConfig(capped)).toMatchObject({
+			trialUsdCap: 10,
+			trialReserveUsd: null,
+			trialAlertUsd: null,
+		});
 	});
 
 	it("refuses an unpriced model on a paid route", () => {
@@ -207,6 +237,18 @@ describe("harborBridgeConfig", () => {
 			helpers: "on",
 			fetch: "on",
 		});
+		expect(
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "codeMode=on,helpers=write",
+			}).variant.helpers,
+		).toBe("write");
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "helpers=many",
+			}),
+		).toThrow();
 		expect(harborBridgeConfig(capped).variant).toMatchObject({
 			plan: "off",
 			helpers: "off",
@@ -349,6 +391,19 @@ describe("spend ledger", () => {
 		).toHaveLength(3);
 		const lines = (await readFile(ledger, "utf8")).trim().split("\n");
 		expect(committedUsd(lines.map((line) => JSON.parse(line)))).toBe(9);
+	});
+
+	it("records spend alerts without counting them as spend or as a reservation", async () => {
+		directory = await mkdtemp(join(tmpdir(), "harbor-ledger-"));
+		const ledger = join(directory, "ledger.jsonl");
+		await reserveTrial({ ledger, totalCapUsd: 10, trial: "a", trialCapUsd: 2 });
+		await recordTrialAlert({ ledger, trial: "a", usd: 5, thresholdUsd: 4 });
+		await recordTrialAlert({ ledger, trial: "z", usd: 6, thresholdUsd: 4 });
+		expect((await ledgerSummary(ledger)).committedUsd).toBe(2);
+		// An alert line for a trial is not a reservation of it.
+		await reserveTrial({ ledger, totalCapUsd: 10, trial: "z", trialCapUsd: 1 });
+		await settleTrial({ ledger, trial: "a", usd: 7 });
+		expect((await ledgerSummary(ledger)).committedUsd).toBe(8);
 	});
 
 	it("refuses every new trial once the stop file exists", async () => {
@@ -608,12 +663,15 @@ describe("transport guard", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("leaves error responses and non-streamed requests alone", async () => {
+	it("hands back an error response once the throttle window is spent, and leaves non-streamed requests alone", async () => {
 		let calls = 0;
-		const fetch = guardedFetch(async () => {
-			calls++;
-			return new Response("overloaded", { status: 529 });
-		});
+		const fetch = guardedFetch(
+			async () => {
+				calls++;
+				return new Response("overloaded", { status: 529 });
+			},
+			{ throttleWindowMs: 0, throttleDelayMs: () => 0 },
+		);
 		const failed = await fetch("https://api.anthropic.com/v1/messages", {
 			method: "POST",
 			body: '{"stream":true}',
@@ -835,5 +893,56 @@ describe("isImageToolResult", () => {
 				output: { image: "x", base64: "y" },
 			}),
 		).toBe(false);
+	});
+});
+
+describe("transport guard throttling", () => {
+	const sse = () =>
+		new Response(
+			new ReadableStream({
+				start(c) {
+					c.enqueue(
+						new TextEncoder().encode(
+							'event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n',
+						),
+					);
+					c.close();
+				},
+			}),
+			{ status: 200, headers: { "content-type": "text/event-stream" } },
+		);
+	const body = JSON.stringify({ model: "m", stream: true, input: [] });
+	it("waits out 429s and 5xx before output, then returns the stream", async () => {
+		const statuses = [429, 503, 200];
+		let calls = 0;
+		const fetch = guardedFetch(
+			async () => {
+				const s = statuses[calls++];
+				return s === 200 ? sse() : new Response("slow down", { status: s });
+			},
+			{ throttleDelayMs: () => 0 },
+		);
+		const res = await fetch("https://x.test/v1/responses", {
+			method: "POST",
+			body,
+		});
+		expect(res.status).toBe(200);
+		expect(calls).toBe(3);
+	});
+	it("hands back the throttled response once the window is spent", async () => {
+		let calls = 0;
+		const fetch = guardedFetch(
+			async () => {
+				calls++;
+				return new Response("slow down", { status: 429 });
+			},
+			{ throttleWindowMs: 0, throttleDelayMs: () => 1 },
+		);
+		const res = await fetch("https://x.test/v1/responses", {
+			method: "POST",
+			body,
+		});
+		expect(res.status).toBe(429);
+		expect(calls).toBe(1);
 	});
 });

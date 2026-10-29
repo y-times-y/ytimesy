@@ -617,6 +617,8 @@ function rowEstimate(row: TimelineRow): number {
 	if (item.kind === "userMessage") return 44 + 18 * textLines(item.text, 90);
 	if (item.kind === "agentMessage")
 		return Math.min(14 + 20 * textLines(item.text, 100), 6_000);
+	if (item.kind === "plan" && item.todos)
+		return Math.min(60 + 28 * item.todos.length, 3_000);
 	if (item.kind === "planProposal" || item.kind === "plan")
 		return Math.min(60 + 20 * textLines(item.text, 100), 3_000);
 	if (item.kind === "userQuestion" || item.kind === "secretRequest") return 160;

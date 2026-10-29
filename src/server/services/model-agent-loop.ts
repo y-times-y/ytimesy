@@ -22,6 +22,8 @@ import {
 	type ContextOverflow,
 	ContextWindowExhausted,
 	contextOverflow,
+	HarnessRuntimeFailure,
+	type HarnessRuntimeStage,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	SafeApiModelFailure,
@@ -53,6 +55,7 @@ import {
 import { instructionProfile } from "#/domain/instruction-profiles";
 import { longContextThreshold } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
+import { redactSecrets } from "#/domain/redact-secrets";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import { withProviderOptionsEffort } from "#/server/adapters/api-reasoning-effort";
 import {
@@ -70,6 +73,7 @@ import {
 	contextTokenPressure,
 	estimateContextTokens,
 	type FallbackContextPolicy,
+	inStreamCompactedHistory,
 	modelContextBudget,
 	retainedUserMessages,
 	STATE_SNAPSHOT_HEADING,
@@ -585,6 +589,23 @@ export function overflowCompactionBudget(
 	};
 }
 
+/**
+ * A plain Error raised while preparing a step is the harness's own (context
+ * compaction, history checks, restored instructions): labelled so it never
+ * reads as a provider failure. Provider, abort and typed errors (budget
+ * stops, model switches, workspace failures) pass through unchanged.
+ */
+function harnessRuntimeError(error: unknown, stage: HarnessRuntimeStage) {
+	if (
+		!(error instanceof Error) ||
+		error.constructor !== Error ||
+		error.name !== "Error" ||
+		isBudgetStop(error)
+	)
+		return error;
+	return new HarnessRuntimeFailure(stage, error);
+}
+
 export type ModelAgentRuntime = {
 	model: LanguageModel;
 	cacheSettings?: ReturnType<typeof apiPromptCacheSettings>;
@@ -600,6 +621,13 @@ export type ModelAgentRuntime = {
 	prefetchInitialReads?: boolean;
 	backgroundCompaction?: boolean;
 	fallbackContextPolicy?: FallbackContextPolicy;
+	/**
+	 * When `compact` (the provider's native compaction) fails, compact with
+	 * the harness's own summary under fallbackContextPolicy instead of
+	 * failing the step. Set where native compaction is not a documented
+	 * contract of the route (OpenAI compaction on Bedrock).
+	 */
+	compactFallback?: boolean;
 	compact?: (
 		input: NativeCompactionInput,
 	) => Promise<{ messages: ModelMessage[]; usage: LanguageModelUsage }>;
@@ -754,8 +782,12 @@ async function executeModelSteps(
 			snapshot = (
 				await input.compactionSnapshot?.(original, runSignal)
 			)?.trim();
-		} catch {
+		} catch (error) {
 			// State is best effort; the archive tools and workspace remain available.
+			console.warn("Compaction state snapshot failed; continuing without it.", {
+				message:
+					error instanceof Error ? redactSecrets(error.message, 200) : "",
+			});
 		}
 		if (!snapshot) return restored;
 		const withSnapshot: ModelMessage[] = [
@@ -768,6 +800,14 @@ async function executeModelSteps(
 			: restored;
 	};
 	const backgroundCompaction = new BackgroundHistoryCompaction();
+	// What the running step preparation is doing, for labelHarnessErrors.
+	let stage: HarnessRuntimeStage = "step-preparation";
+	const labelHarnessErrors =
+		<T>(prepare: () => Promise<T>) =>
+		() =>
+			prepare().catch((error: unknown) => {
+				throw harnessRuntimeError(error, stage);
+			});
 	// Calls of the running step whose execution started. Its assistant message
 	// is saved only after every tool returns, so a stop meanwhile would lose them.
 	let startedCalls: Extract<
@@ -860,7 +900,8 @@ async function executeModelSteps(
 			messages: input.messages,
 			...requestSettings(input.instructions),
 			tools,
-			prepareStep: async () => {
+			prepareStep: labelHarnessErrors(async () => {
+				stage = "context-compaction";
 				startedCalls = [];
 				onInFlight?.(undefined);
 				runSignal.throwIfAborted();
@@ -869,6 +910,7 @@ async function executeModelSteps(
 						contextTokenPressure(history, measured) >=
 							contextBudget(history).compactAtTokens,
 				);
+				stage = "step-preparation";
 				if (runtime.prefetchInitialReads) {
 					const prefetched = await timed("model:prefetch", () =>
 						prefetchInitialAgentReads({
@@ -896,6 +938,7 @@ async function executeModelSteps(
 					? overflowCompactionBudget(contextBudget(history), forced)
 					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
+				stage = "context-compaction";
 				// Each compaction is a chance to switch models (the cache misses anyway).
 				const switchDecision =
 					input.switchAtCompaction &&
@@ -991,12 +1034,12 @@ async function executeModelSteps(
 					}
 					throw new ModelSwitchAtCompaction(switchTarget, switched.compacted);
 				}
-				const compact = async (older: ModelMessage[]) => {
+				const compact = async (older: ModelMessage[], native = true) => {
 					await input.onEvent({ type: "context", compacting: true });
 					try {
 						await input.beforeCompaction?.(older);
 						runSignal.throwIfAborted();
-						if (runtime.compact) {
+						if (native && runtime.compact) {
 							const native = await runtime.compact({
 								messages: older,
 								instructions: input.instructions,
@@ -1029,10 +1072,32 @@ async function executeModelSteps(
 						await input.onEvent({ type: "context", compacting: false });
 					}
 				};
-				let prepared: { messages: ModelMessage[]; compacted: boolean };
-				if (!forced && contextTokens < budget.compactAtTokens) {
-					prepared = { messages: history, compacted: false };
-				} else if (runtime.compact) {
+				// The harness's own summary (fallbackContextPolicy): the route's
+				// compaction when it has no native one, or after a native one failed.
+				const ownCompaction = () =>
+					compactApiHistory(
+						history,
+						async (older) => {
+							const summary = await compact(older, false);
+							if (typeof summary !== "string")
+								throw new Error("Expected a text context summary.");
+							return summary;
+						},
+						{
+							...budget,
+							compactAtTokens: Math.min(
+								budget.compactAtTokens,
+								estimatedHistory,
+							),
+						},
+						input.archiveHistory,
+						runtime.fallbackContextPolicy,
+						input.isUserRequest,
+					);
+				const nativeCompaction = async (): Promise<{
+					messages: ModelMessage[];
+					compacted: boolean;
+				}> => {
 					if (contextTokens > budget.inputLimitTokens)
 						throw new Error(
 							"Conversation exceeds this model's context window; native compaction cannot safely accept it.",
@@ -1071,27 +1136,30 @@ async function executeModelSteps(
 						throw new Error(
 							"Compacted history leaves insufficient context; original checkpoint was preserved.",
 						);
-					prepared = { messages, compacted: true };
+					return { messages, compacted: true };
+				};
+				let prepared: { messages: ModelMessage[]; compacted: boolean };
+				if (!forced && contextTokens < budget.compactAtTokens) {
+					prepared = { messages: history, compacted: false };
+				} else if (runtime.compact) {
+					try {
+						prepared = await nativeCompaction();
+					} catch (error) {
+						if (!runtime.compactFallback || runSignal.aborted) throw error;
+						console.warn(
+							"Native compaction failed; using the harness's own compaction.",
+							{
+								...apiModelFailureClassification(error),
+								message:
+									error instanceof Error
+										? redactSecrets(error.message, 200)
+										: "",
+							},
+						);
+						prepared = await ownCompaction();
+					}
 				} else {
-					prepared = await compactApiHistory(
-						history,
-						async (older) => {
-							const summary = await compact(older);
-							if (typeof summary !== "string")
-								throw new Error("Expected a text context summary.");
-							return summary;
-						},
-						{
-							...budget,
-							compactAtTokens: Math.min(
-								budget.compactAtTokens,
-								estimatedHistory,
-							),
-						},
-						input.archiveHistory,
-						runtime.fallbackContextPolicy,
-						input.isUserRequest,
-					);
+					prepared = await ownCompaction();
 				}
 				const beforeCompaction = history;
 				history = prepared.messages;
@@ -1100,6 +1168,7 @@ async function executeModelSteps(
 					measured = undefined;
 					await input.onStep(history);
 				}
+				stage = "step-preparation";
 				// Legacy observations and restored summaries may end in assistant text.
 				// Append an input boundary, never rewrite signed or encrypted provider history.
 				if (history.at(-1)?.role === "assistant")
@@ -1127,7 +1196,7 @@ async function executeModelSteps(
 					),
 					...(order ? { activeTools: order, toolOrder: order } : {}),
 				};
-			},
+			}),
 			// SDK retries only retryable request-start failures (with backoff, like
 			// native Codex's request retries). Never replay a stream after output/tool execution.
 			maxRetries: 4,
@@ -1145,6 +1214,14 @@ async function executeModelSteps(
 				// A subagent stopped at its budget is the runtime's stop, not the provider's.
 				if (isBudgetStop(error)) {
 					console.warn("Agent budget stop", error.message);
+					return;
+				}
+				// The harness's own failure: its redacted message is the diagnosis.
+				if (error instanceof HarnessRuntimeFailure) {
+					console.warn("Harness runtime failed", {
+						...apiModelFailureClassification(error),
+						message: error.message,
+					});
 					return;
 				}
 				console.warn(
@@ -1284,8 +1361,29 @@ async function executeModelSteps(
 				onInFlight?.(undefined);
 				const historyBeforeStep = history;
 				history = [...historyBeforeStep, ...step.response.messages];
+				// The provider compacted this request's input in-stream (OpenAI
+				// context_management): its checkpoint replaces everything before
+				// it. Its cost is in this step's usage, recorded above, once.
+				const inStream = inStreamCompactedHistory(
+					historyBeforeStep,
+					step.response.messages,
+					input.isUserRequest,
+					userMessageBudget(contextBudget(history)),
+				);
+				if (inStream) {
+					try {
+						await input.archiveHistory?.(history);
+					} catch (error) {
+						console.warn("Context archive failed at in-stream compaction.", {
+							message:
+								error instanceof Error ? redactSecrets(error.message, 200) : "",
+						});
+					}
+					history = await afterCompaction(inStream, history);
+				}
 				history = (await input.afterTools?.(history)) ?? history;
-				if (
+				if (inStream) measured = undefined;
+				else if (
 					step.usage.inputTokens !== undefined &&
 					step.usage.outputTokens !== undefined
 				)
@@ -1412,6 +1510,7 @@ async function executeModelSteps(
 					// recognizes it (and hands the child's last message on) only unwrapped.
 					if (
 						part.error instanceof InitialAgentReadFailure ||
+						part.error instanceof HarnessRuntimeFailure ||
 						part.error instanceof ModelSwitchAtCompaction ||
 						isBudgetStop(part.error)
 					)

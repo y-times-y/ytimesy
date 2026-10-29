@@ -1,5 +1,15 @@
+import { posix } from "node:path";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
+import {
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	READER_DELEGATION_POLICY,
+	REFUSED_START,
+	REPORT_IS_A_CLAIM,
+	WRITER_DELEGATION_POLICY,
+} from "../../src/domain/delegation-policy";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -18,9 +28,11 @@ import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
  * and mailboxes.
  *
  * - `agent` starts a researcher or reviewer (the product's tool name and
- *   input; writers and checkers are refused: the builder stays the trial's
- *   only writer). It runs in the background on its own copy of the
- *   checkout, on the builder's model, unless `wait` blocks for its report.
+ *   input; checkers are refused). It runs in the background on its own
+ *   copy of the checkout, on the builder's model, unless `wait` blocks for
+ *   its report. helpers=write also allows a writer: it works in the
+ *   builder's own checkout and may change only the paths in `owns`
+ *   (ownership by brief, as Reason Agent's subagents; no file locking).
  * - The product delivers a reader's report as a message; a trial has no
  *   mailbox, so `agent_wait` collects reports instead (one id, or every
  *   report not yet collected), waiting up to 10 minutes.
@@ -32,66 +44,142 @@ import type { ChildReport, ChildSession, TrialSessions } from "./sessions";
 
 export const AGENT_WAIT_TOOL = "agent_wait";
 export const HELPER_ROLES = ["researcher", "reviewer"] as const;
-export type HelperRole = (typeof HELPER_ROLES)[number];
-/** As many live helpers as the product lets a builder run children. */
+/** helpers=write adds a writer in the builder's own checkout. */
+export const WRITE_HELPER_ROLES = [...HELPER_ROLES, "writer"] as const;
+export type HelperRole = (typeof WRITE_HELPER_ROLES)[number];
 /**
  * The builder's prompt section for helpers=on, in place of the product's
- * orchestrator section: helpers here are read-only, their reports are
- * collected with agent_wait (no mailbox), and every helper is paid for, so
- * the bar is cost, not wall-clock time alone.
+ * orchestrator section: the product's delegation policy
+ * (src/domain/delegation-policy.ts) with the bridge's mechanics: helpers
+ * here are read-only, on their own copy of the checkout, and their reports
+ * are collected with agent_wait (no mailbox).
  */
 export const HELPER_INSTRUCTIONS = [
 	"Helpers: `agent` starts a read-only helper (researcher or reviewer) in the background on its own copy of your checkout, with only your brief, and returns its id at once. `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
-	"A helper costs about as much as you do and re-reads what it needs. Start one only for an independent investigation likely to take over 10 minutes, while you have other work to do meanwhile. Small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
-	"Every brief is self-contained: the goal, the paths and findings it needs, constraints and the report format.",
-	"Keep working while helpers run. Once you have what you need, stop running helpers with agent_send instead of waiting for them.",
-	"A report is a claim: spot-check it before relying on it. A refused start means do the work yourself.",
+	READER_DELEGATION_POLICY,
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	`${REPORT_IS_A_CLAIM} ${REFUSED_START}`,
 ].join("\n");
 
+/**
+ * helpers=write's section: the same policy plus its writer rule; the
+ * mechanic is a writer in the builder's own checkout, limited to `owns`.
+ */
+export const WRITE_HELPER_INSTRUCTIONS = [
+	"Helpers: `agent` starts a helper in the background with only your brief and returns its id at once: a researcher or reviewer (read-only, on its own copy of your checkout) or a writer (in your own checkout, changing only the paths you list in `owns`). `agent_wait` collects reports; `agent_send` stops a helper or briefs a finished one again.",
+	WRITER_DELEGATION_POLICY,
+	...HELPER_INSTRUCTIONS.split("\n").slice(1),
+].join("\n");
+
+/** As many live helpers as the product lets a builder run children. */
 export const MAX_LIVE_HELPERS = liveChildrenAllowed(0);
 const MAX_WAIT_MS = 10 * 60_000;
 
-/** Runs one round of a helper on its own read-only copy; resolves with its report. */
+/**
+ * Runs one round of a helper: a reader on its own read-only copy, a writer
+ * in the builder's checkout limited to `owns`; resolves with its report.
+ */
 export type StartHelper = (
 	session: ChildSession,
 	role: HelperRole,
 	brief: string,
+	owns?: readonly string[],
 ) => Promise<ChildReport>;
 
 type Helper = {
 	session: ChildSession;
 	role: HelperRole;
 	title: string;
+	owns?: readonly string[];
 	running: Promise<ChildReport> | null;
 	/** The latest report not yet returned to the builder. */
 	pending: ChildReport | null;
 };
 
-const agentInput = z.object({
-	role: z
-		.enum(HELPER_ROLES)
-		.describe(
-			"researcher: reads, searches and runs commands to answer a question; reviewer: inspects your current work and reports problems. Both are read-only.",
+const READER_ROLES_TEXT =
+	"researcher: reads, searches and runs commands to answer a question; reviewer: inspects your current work and reports problems. Both are read-only.";
+
+const agentInput = (writers: boolean) =>
+	z.object({
+		role: writers
+			? z
+					.enum(WRITE_HELPER_ROLES)
+					.describe(
+						`${READER_ROLES_TEXT} writer: implements its part in your checkout, changing only the paths in owns.`,
+					)
+			: z.enum(HELPER_ROLES).describe(READER_ROLES_TEXT),
+		title: z
+			.string()
+			.min(1)
+			.max(SUBAGENT_TITLE_MAX)
+			.describe('Its task in a few plain words, e.g. "Find the config loader"'),
+		brief: z
+			.string()
+			.min(1)
+			.max(SUBAGENT_BRIEF_MAX)
+			.describe(
+				"Self-contained: goal, context (paths, findings, working commands), constraints, report format",
+			),
+		...(writers
+			? {
+					owns: z
+						.array(z.string().min(1).max(300))
+						.max(40)
+						.optional()
+						.describe(
+							"writer only, required: the files or directories it may create or change; nothing another agent changes",
+						),
+				}
+			: {}),
+		wait: z
+			.boolean()
+			.optional()
+			.describe(
+				"Block until its report (default false: keep working and collect it with agent_wait)",
+			),
+	});
+
+/**
+ * The file paths a writer's write and edit calls touched outside its `owns`
+ * (direct calls, and literal paths in run_code's tools.write/edit calls).
+ * For the log only: bash writes are not seen, and nothing is blocked.
+ */
+export function writesOutside(
+	events: readonly ApiAgentEvent[],
+	cwd: string,
+	owns: readonly string[],
+) {
+	const absolute = (path: string) =>
+		posix.normalize(path.startsWith("/") ? path : posix.join(cwd, path));
+	const owned = owns.map(absolute);
+	const paths: string[] = [];
+	for (const event of events) {
+		if (event.type !== "tool-call") continue;
+		const input = event.input as { path?: unknown; code?: unknown } | null;
+		if (WRITE_TOOLS.has(event.name) && typeof input?.path === "string")
+			paths.push(input.path);
+		if (typeof input?.code === "string")
+			for (const match of input.code.matchAll(
+				/tools\.(?:write|edit)\(\s*\{\s*path\s*:\s*["'`]([^"'`]+)["'`]/g,
+			))
+				paths.push(match[1] as string);
+	}
+	return [
+		...new Set(
+			paths
+				.map(absolute)
+				.filter(
+					(path) =>
+						!owned.some(
+							(own) =>
+								path === own || path.startsWith(`${own.replace(/\/$/, "")}/`),
+						),
+				),
 		),
-	title: z
-		.string()
-		.min(1)
-		.max(SUBAGENT_TITLE_MAX)
-		.describe('Its task in a few plain words, e.g. "Find the config loader"'),
-	brief: z
-		.string()
-		.min(1)
-		.max(SUBAGENT_BRIEF_MAX)
-		.describe(
-			"Self-contained: goal, context (paths, findings, working commands), constraints, report format",
-		),
-	wait: z
-		.boolean()
-		.optional()
-		.describe(
-			"Block until its report (default false: keep working and collect it with agent_wait)",
-		),
-});
+	];
+}
+const WRITE_TOOLS = new Set(["write", "edit"]);
 
 function reportText(helper: Helper, report: ChildReport) {
 	const head = report.budgetUsed
@@ -106,7 +194,10 @@ export function helperTools(input: {
 	model: HarborModel;
 	start: StartHelper;
 	log?: (line: string) => void;
+	/** helpers=write: the writer role too. */
+	writers?: boolean;
 }): ToolSet {
+	const writers = input.writers ?? false;
 	const helpers = new Map<string, Helper>();
 	const live = () =>
 		[...helpers.values()].filter((helper) => helper.running).length;
@@ -114,8 +205,15 @@ export function helperTools(input: {
 	const launch = (helper: Helper, brief: string) => {
 		helper.pending = null;
 		const running = input
-			.start(helper.session, helper.role, brief)
-			.catch((): ChildReport => ({ outcome: "failed", report: "" }))
+			.start(helper.session, helper.role, brief, helper.owns)
+			.catch((error: unknown): ChildReport => {
+				// The failure must be visible: an empty report alone read as a
+				// helper that did nothing.
+				input.log?.(
+					`helper ${helper.role}: failed (${error instanceof Error ? error.message.slice(0, 200) : String(error)})`,
+				);
+				return { outcome: "failed", report: "" };
+			})
 			.then((report) => {
 				helper.running = null;
 				helper.pending = report;
@@ -157,14 +255,24 @@ export function helperTools(input: {
 
 	return {
 		[AGENT_TOOL]: tool({
-			description:
-				"Start a read-only helper (researcher or reviewer) in the background on its own copy of your checkout. It sees only your brief (never this conversation), cannot change your files, and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id.",
-			inputSchema: agentInput,
-			execute: async ({ role, title, brief, wait }) => {
+			description: writers
+				? "Start a helper in the background. A researcher or reviewer works on its own read-only copy of your checkout; a writer works in your checkout and may change only the paths in owns. It sees only your brief (never this conversation) and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id."
+				: "Start a read-only helper (researcher or reviewer) in the background on its own copy of your checkout. It sees only your brief (never this conversation), cannot change your files, and reports back; keep working and collect the report with agent_wait, or pass wait: true. Returns its id.",
+			inputSchema: agentInput(writers),
+			execute: async (args) => {
+				const { title, brief, wait } = args;
+				const role = args.role as HelperRole;
+				const owns = (
+					"owns" in args ? (args.owns as string[] | undefined) : undefined
+				)
+					?.map((path) => path.trim())
+					.filter(Boolean);
+				if (role === "writer" && !owns?.length)
+					return "Refused: a writer needs owns, the files or directories it may change.";
 				if (live() >= MAX_LIVE_HELPERS)
 					return `Refused: ${MAX_LIVE_HELPERS} helpers are already running; collect or stop one first, or do the work yourself.`;
 				const session = input.sessions.add({
-					role: "helper",
+					role: role === "writer" ? "writer" : "helper",
 					parentId: input.parentId,
 					model: input.model,
 					brief,
@@ -173,6 +281,7 @@ export function helperTools(input: {
 					session,
 					role,
 					title,
+					...(role === "writer" ? { owns } : {}),
 					running: null,
 					pending: null,
 				};

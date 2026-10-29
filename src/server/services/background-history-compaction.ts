@@ -39,8 +39,12 @@ export class BackgroundHistoryCompaction {
 			.then((checkpoint) => {
 				pending.checkpoint = checkpoint;
 			})
-			.catch(() => {
-				/* Keep the original on any speculative failure. */
+			.catch((error: unknown) => {
+				// Keep the original on any speculative failure; the step's own
+				// compaction runs when it is needed.
+				console.warn("Background compaction failed; history kept.", {
+					name: error instanceof Error ? error.name : "unknown",
+				});
 			})
 			.finally(() => {
 				pending.settled = true;

@@ -1,4 +1,5 @@
 import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
+import { PLAN_TOOL } from "./agent-todos";
 import type { ApiAgentEvent } from "./api-agent-event";
 import { backgroundCommandLabel } from "./background-command";
 import {
@@ -120,6 +121,13 @@ export function applyApiProgress(
 		if (!questions) return [...items];
 		next = { kind: "userQuestion", id, questions };
 	} else if (event.type === "tool-call" && event.name === ASK_USER_TOOL)
+		return [...items];
+	else if (
+		(event.type === "tool-call" || event.type === "tool-result") &&
+		event.name === PLAN_TOOL
+	)
+		// The turn's checklist item shows each accepted update (applyPlanUpdate),
+		// so the calls themselves add no cards.
 		return [...items];
 	else if (event.type === "tool-call" || event.type === "tool-result") {
 		// A generic MCP call shows as the MCP tool it named, as a direct call would.

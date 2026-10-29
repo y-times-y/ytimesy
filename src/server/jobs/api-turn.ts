@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
+import { applyPlanUpdate } from "#/domain/agent-todos";
 import {
 	assertApiContextFits,
 	isUserRequestMessage,
@@ -136,6 +137,7 @@ import {
 	savePreparedCheckoutDirectory,
 	saveSessionDerivedValue,
 } from "../adapters/prepared-checkout";
+import { nodePublicHost } from "../adapters/public-host";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -209,6 +211,7 @@ import {
 } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
+import { planTool } from "../services/plan-tool";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
@@ -260,6 +263,7 @@ import {
 	withTurnTimingMarks,
 } from "../services/turn-timing";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
+import { webFetchTool } from "../services/web-fetch-tool";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
 
@@ -1321,24 +1325,44 @@ async function runApiTurnAttempt(
 			surface.lean && variant.codeMode !== "off" && !thinLead
 				? variant.codeMode
 				: null;
+		// Harness variant fetch (on in the product): web_fetch for every agent,
+		// as the benchmark bridge's fetch=on, fetched from here (never the VM);
+		// private, loopback, link-local and metadata hosts are refused.
+		const webFetch: ToolSet =
+			variant.fetch === "on" ? webFetchTool({ checkHost: nodePublicHost }) : {};
 		const ownTools = turnTools({
 			surfaceTools,
 			mcp,
 			plugins,
 			webSearch,
+			webFetch,
 			hooks,
 			rootChat,
 			projectSecrets,
 			redact,
 		});
+		// Harness variant plan (on in the product): the root builder's
+		// update_plan, as the benchmark bridge's plan=on gives it; subagents
+		// get none. Each accepted update replaces the turn's checklist item.
+		const planning: ToolSet =
+			variant.plan === "on" && !owner.parentSessionId && !owner.agentRole
+				? planTool({
+						now: Date.now,
+						onUpdate: (update) => {
+							items = applyPlanUpdate(items, turn.id, update);
+							progress.offer(items);
+						},
+					})
+				: {};
 		// The thin lead only inspects, so a round needs no write guard.
 		const baseTools: ToolSet = thinLead
-			? thinLeadTools({ ...ownTools, ...delegation })
+			? { ...thinLeadTools({ ...ownTools, ...delegation }), ...planning }
 			: {
 					...(leadGate
 						? withSidekickWriteGuard(ownTools, leadWrites)
 						: ownTools),
 					...delegation,
+					...planning,
 				};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
@@ -1364,6 +1388,9 @@ async function runApiTurnAttempt(
 								codeMode === "primary"
 									? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
 									: [],
+							// As the bridge: web_fetch and update_plan (whose description
+							// says it may be sent inside run_code) are callable too.
+							callable: [...Object.keys(webFetch), ...Object.keys(planning)],
 						}
 					: null,
 			),
@@ -1640,7 +1667,8 @@ async function runApiTurnAttempt(
 					leanReadOnly: surface.lean?.readOnly,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,
-					codeMode: codeMode ?? undefined,
+					// As the bridge: only when run_code was built.
+					codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
 					lead: variant.lead,
 					leadTools: thinLead ? "thin" : "full",
@@ -2603,14 +2631,15 @@ function turnHarnessVariant(turnId: string, userId: string) {
 
 /**
  * The tools a turn offers: its surface's tools, the user's MCP servers,
- * plugin skills and hosted web search, wrapped in lifecycle hooks, secret
- * redaction and (in root chats) the project-secret request.
+ * plugin skills, hosted web search and web_fetch, wrapped in lifecycle
+ * hooks, secret redaction and (in root chats) the project-secret request.
  */
 function turnTools(input: {
 	surfaceTools: ToolSet;
 	mcp: Awaited<ReturnType<typeof connectMcpTools>>;
 	plugins: Awaited<ReturnType<typeof enabledPluginComponents>>;
 	webSearch: ToolSet;
+	webFetch: ToolSet;
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
 	rootChat: boolean;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
@@ -2622,6 +2651,7 @@ function turnTools(input: {
 		...mcp.tools,
 		...pluginSkillTools(input.plugins),
 		...input.webSearch,
+		...input.webFetch,
 	};
 	// Only a person in a root chat can paste a secret into the card.
 	const secretTools =
@@ -2692,6 +2722,7 @@ function withCodeMode(
 		redact: readonly string[];
 		mode: "on" | "primary";
 		deferred: readonly string[];
+		callable: readonly string[];
 	} | null,
 ): ToolSet {
 	if (!codeMode) return tools;

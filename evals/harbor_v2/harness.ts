@@ -41,7 +41,11 @@ import { repositoryGuidanceTool } from "../../src/server/services/repository-gui
 import { thinLeadTools } from "../../src/server/services/thin-lead-tools";
 import { webFetchTool } from "../../src/server/services/web-fetch-tool";
 import { bedrockWebSearchTools } from "./bedrock";
-import { AGENT_WAIT_TOOL, HELPER_INSTRUCTIONS } from "./helpers";
+import {
+	AGENT_WAIT_TOOL,
+	HELPER_INSTRUCTIONS,
+	WRITE_HELPER_INSTRUCTIONS,
+} from "./helpers";
 /**
  * The product builder's turn setup (src/server/jobs/api-turn.ts) rebuilt
  * without the database: the same base tools, builderToolSurface for the
@@ -250,6 +254,12 @@ export async function harborHarness(input: {
 			: hostedWebSearchTools(input.provider, input.bedrock)
 		: {};
 	const trialTools = input.trialTools ?? {};
+	const helperInstructions =
+		AGENT_WAIT_TOOL in trialTools
+			? variant.helpers === "write"
+				? WRITE_HELPER_INSTRUCTIONS
+				: HELPER_INSTRUCTIONS
+			: "";
 	// fetch=on: web_fetch for every agent, fetched here on the harness side
 	// (not in the task container), on any route.
 	const fetchTools: ToolSet =
@@ -332,9 +342,8 @@ export async function harborHarness(input: {
 		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 		// Only the root builder: a subagent's brief already names what to report.
 		unattended: !input.subagent,
-		...(AGENT_WAIT_TOOL in trialTools
-			? { helperInstructions: HELPER_INSTRUCTIONS }
-			: {}),
+		checkInProportion: variant.checks === "proportion",
+		...(helperInstructions ? { helperInstructions } : {}),
 	});
 	// prompt=minimal (root builder only): no rule blocks, to measure what
 	// they cost in thinking.
@@ -345,7 +354,7 @@ export async function harborHarness(input: {
 					codeMode === "primary"
 						? primaryCodeModeInstructions(surface.lean.shape)
 						: "",
-					AGENT_WAIT_TOOL in trialTools ? HELPER_INSTRUCTIONS : "",
+					helperInstructions,
 					"Your final answer is brief (at most 10 lines): what you delivered and how you checked it.",
 				]
 					.filter(Boolean)

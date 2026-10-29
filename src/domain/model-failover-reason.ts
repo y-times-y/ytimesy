@@ -5,6 +5,7 @@ import {
 	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	ContextWindowExhausted,
+	HarnessRuntimeFailure,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	LifecycleHookRefusal,
@@ -24,6 +25,8 @@ const NEVER_FAIL_OVER = [
 	UnsupportedEdgeModelEndpoint,
 	InitialAgentReadFailure,
 	LifecycleHookRefusal,
+	// The harness's own bug: another route would hide it, not fix it.
+	HarnessRuntimeFailure,
 ];
 
 /** Provider codes for caller problems, including permanent quota and refusals. */

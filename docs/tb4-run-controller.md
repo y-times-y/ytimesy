@@ -71,6 +71,148 @@ node --import tsx scripts/tb4-run/controller.ts open-batch b2 --owner <name>   #
 python provision.py down --run-id tb4b-<date> --confirm tb4b-<date>          # after the R2 copy is verified
 ```
 
+## Failure causes and the review gate
+
+Why: on 2026-10-28 a harness bug (the context-window lookup from openrouter.ai failed
+under load, the 128k fallback led to a fatal compaction error) ended 65 trials with
+`builder stopped: The model request failed without a usable provider reason...` in
+`agent/ytimesy-bridge.log`. The verifier graded the unfinished workspace, the controller
+journaled each as a plain valid 0, and nothing paused: the first one landed ~1 h in, ten
+by ~2 h 15 m, and gate B stopped the run at 3 h after ~$1,900. Reading the first failing
+log would have stopped it at ~$200.
+
+The score does not change: `classify` still decides valid/infra, and a trial our harness
+broke is still a scored 0 (our product failed). What changes is that spending stops and
+the operator looks.
+
+- **Cause** (`failureCause` in `lib.ts`): every `finish` of a non-pass carries
+  `cause: { cause, detail, failedTests? }`, derived from the collected trial dir
+  `results/<attempt>/<attempt>/<task>__<id>/` (`agent/ytimesy-bridge.log`,
+  `verifier/ctrf.json`, `result.json` `exception_info`). Details are sanitized
+  (credential-looking strings redacted, control characters dropped, <= 300 chars).
+  Journals written before this change have no `cause` and still replay.
+
+  | Cause | Evidence | Review |
+  |---|---|---|
+  | `agent-finished` | bridge log present, no stop line; detail = failed tests from `ctrf.json` | no (benign) |
+  | `agent-timeout` | `exception_info` `AgentTimeoutError` (graded at the time limit) | no (benign) |
+  | `agent-stopped-abnormally` | a `builder stopped:` / `bridge failed before or outside the trial:` / `refused:` line, an uncaught exception, another exception type, or `Model provider failed` lines | yes |
+  | `budget-cap` | the stop line is the trial spending cap, the request limit, the total cap or the ledger stop file | yes |
+  | `verifier-error` | `exception_info` type mentions Verifier/Reward | yes |
+  | `infra:<reason>` | the classify infra reason (host restart, no reward, launch failed, ...) | yes |
+  | `unknown` | reward 0 and no bridge log or exception | yes |
+
+  `agent-timeout` is benign because a hard task running to its limit is normal (the public
+  baselines hit it too); everything else either spends money unexpectedly or means a
+  broken setup. `TB4_REVIEW_BENIGN` overrides the list.
+- **Review gate**: a non-benign cause journals `review-needed` and every new launch waits
+  (trials in flight keep running and are collected). The watchdog sends a critical ntfy
+  alert per pending review every hour until it is acked.
+
+  ```sh
+  node --import tsx scripts/tb4-run/controller.ts failures --run-dir /opt/tb4/run   # every non-pass + cause, by finish time (--json)
+  less /opt/tb4/run/results/<attempt>/<attempt>/<task>__*/agent/ytimesy-bridge.log    # read the log itself
+  node --import tsx scripts/tb4-run/controller.ts ack <attemptId> --note "read: <what it was, why it is safe to go on>"
+  node --import tsx scripts/tb4-run/controller.ts ack all --note "..."             # every pending review at once
+  node --import tsx scripts/tb4-run/controller.ts status                           # reviewsPending, stage1
+  ```
+
+  `ack` refuses without `--note` or for an id that is not pending. `resume` clears only a
+  `pause`, never a review. For a journal from before causes existed, `failures` derives
+  causes from `results/<attempt>` and marks them `(derived)`.
+- **Error spike**: `TB4_SPIKE_COUNT` (default 3) abnormal ends within `TB4_SPIKE_MINUTES`
+  (default 30) journal `stop` with the reason `error spike: ...` (a stop, not a pause: it
+  holds even if someone acks the reviews). Counted: every non-benign cause except
+  `infra:*` (one dead host ends many trials at once, and infra attempts are retried, not
+  scored). `TB4_SPIKE_COUNT=0` turns it off. The stop does not kill trials in flight.
+- **Staged scaling** (`TB4_STAGE1`, on unless `0`/`off`): with batch 2 open (`init
+  --open-all`), only batch 1 (one trial of every task) launches. When every scheduled task
+  has its batch-1 trial finished (valid, or at the attempt cap), the controller journals
+  `stage-review`; batch 2 starts only after `controller.ts ack stage1 --note ...`. An early
+  `ack stage1` (before every stage-1 trial is done, e.g. while the 8 h GPU task still runs)
+  releases batch 2 at once. Priority, front-load, exclude and `TB4_MAX_IN_FLIGHT` keep their
+  meaning inside each stage (front-loaded tasks get their batch-1 trial first, their batch-2
+  trials first after the ack); excluded tasks never hold stage 1. A journal that already
+  has batch-2 launches is never held.
+- **Settings** (controller environment, e.g. a systemd drop-in for tb4-controller.service):
+  `TB4_REVIEW_GATE` (on; `off` journals causes but never holds), `TB4_REVIEW_BENIGN`
+  (`agent-finished,agent-timeout`), `TB4_SPIKE_COUNT` (3), `TB4_SPIKE_MINUTES` (30),
+  `TB4_STAGE1` (on).
+
+## Preflight: outside dependencies and long context
+
+Both checks run on one capped smoke trial before any scored launch.
+
+**(a) Everything but the model API blocked.** The bridge must still start and resolve the
+right context window with no outside service other than the model endpoint (the
+2026-10-28 failure was an openrouter.ai lookup failing and a silent 128k fallback).
+
+```sh
+# on the smoke host: a guard that tunnels only to the model API host
+node --import tsx scripts/tb4-run/faults/fault-proxy.ts --egress-allow <model host, e.g. bedrock-mantle.us-east-1.api.aws> \
+  --port 8788 --log /opt/tb4/egress.log &
+# smoke run.env additions (bridge only; Docker pulls are not proxied):
+#   HTTPS_PROXY=http://127.0.0.1:8788 HTTP_PROXY=http://127.0.0.1:8788 NODE_USE_ENV_PROXY=1 NO_PROXY=127.0.0.1,localhost
+/opt/tb4/run-trial.sh <short task> preflight-egress-1
+node --import tsx scripts/tb4-run/faults/fault-proxy.ts --verify-egress /opt/tb4/jobs/preflight-egress-1/preflight-egress-1/<task>__* \
+  --egress-log /opt/tb4/egress.log --model-host <model host> --expect-window <the model's window, e.g. 400000>
+```
+
+Pass = exit 0: the bridge log has no `builder stopped:` / `bridge failed` line, at least
+one request to the model host went through the guard (otherwise the bridge bypassed the
+proxy and the check proves nothing: Node needs `NODE_USE_ENV_PROXY=1`, Node >= 22.21 or
+24), and the bridge log's last `context window <tokens>` line equals the expected window.
+The verdict lists every blocked destination (each is an outside dependency to remove or
+to add to the checklist below). Offline tests: `tests/tb4-run.test.ts` "tb4 egress preflight".
+
+Harness hook needed: the bridge does not log its resolved window yet. The harness must
+write one line to stderr (`agent/ytimesy-bridge.log`) once the model runtime is built,
+matching `context window <tokens>` (e.g. `context window 400000 (catalog)` or
+`context window 128000 (fallback)`); `contextWindowFromLog` reads the last one. Until it
+does, `--verify-egress` fails with "the bridge log has no context window line".
+
+**(b) One turn past the compaction threshold.** Not offline-testable from the controller;
+plan:
+
+1. Scripted rehearsal first (no model spend): the harness's mock-model trial tests
+   (`tests/harbor-v2-trial.test.ts`) with the runtime's context window set to the
+   production value and its lookup failing (fetch rejects for every host but the model),
+   and a tool result that pushes one turn past the compaction threshold (e.g. a command
+   printing ~1.2x the threshold in tokens). Pass: compaction runs and the builder
+   continues; the trace shows the compaction step; no `builder stopped:`.
+2. Then one capped real smoke under the egress guard above, on a task whose agent reads a
+   large file in one turn (or a scratch task that `cat`s a generated ~600 KB file), with
+   `--expect-window` set. Pass: (a) passes, the trace shows a compaction, and the trial
+   ends `agent-finished` in `controller.ts failures` (or passes).
+
+## Before paying for a run
+
+Every outside dependency and limit, verified the day of the run, before any spend:
+
+- **Instance limits and GPU quotas, per provider**: AWS EC2 vCPU quotas per family
+  (Standard L-1216C47A; P instances) minus what other sessions already run, p5 capacity
+  in the region (a DryRun is not capacity), Nebius instance limit, Modal GPU caps, Daytona
+  GPU limit (1 at a time on our account). Fleet size and `TB4_MAX_IN_FLIGHT` must fit.
+- **Spending and usage limits, and when charges land**: AWS Budget alarms (account-wide;
+  Bedrock and Marketplace charges show up hours later, so the ledger, not the bill, is the
+  live number), the bridge ledger caps (`YTIMESY_HARBOR_TRIAL_USD_CAP`, per-task caps,
+  `YTIMESY_HARBOR_TOTAL_USD_CAP`) and the watchdog's `TB4_MODEL_TOTAL_CAP_USD` /
+  `TB4_MODEL_STOP_MARGIN_USD`, infra cap and `TB4_P5_4XL_HOURLY_USD`.
+- **Credits remaining**: AWS credits, OpenRouter credit, Modal and Daytona credits, any
+  search/fetch provider credit the variant uses.
+- **Model API rate limits**: Bedrock requests- and tokens-per-minute quotas for the exact
+  model and region, at the planned concurrency (30 trials plus subagents), not one trial.
+- **Subscription usage limits**: if any route or helper uses a subscription (Codex plan
+  5 h and weekly windows), it will run out under parallel load.
+- **Other outside services the trial touches**: model catalog lookups (openrouter.ai),
+  web search/fetch providers, Docker Hub / registry pull rate limits for task images,
+  Harbor's dataset registry, R2 (backup), ntfy.sh (alerts). Preflight (a) above must pass:
+  nothing but the model API on the critical path.
+- **Stage-1 review**: run with `TB4_STAGE1` on; read every stage-1 failure in
+  `controller.ts failures` and its bridge log before `ack stage1`.
+- **Read every failure's log as it lands**: each `review-needed` alert means a log to
+  read, not a box to tick; the ack note says what it was. Do not `ack all` unread.
+
 ## Alerts (no new paid service)
 
 The watchdog POSTs to an [ntfy.sh](https://ntfy.sh) topic: free, no account. Pick an
@@ -84,7 +226,8 @@ the alternative but the `harbor-runner` user cannot use SNS.
 Watchdog checks: controller service active (restarts it), 20 min log silence per trial,
 host health, Bedrock 429/Throttling >= 20 in 15 min (pauses launches) and 5xx >= 10,
 model spend at 50/80/100% of $900 (100%: stop), infra spend at 50/80/100% of $560
-(100%: pause), no trial finished in 60 min, and an info line per finished batch of trials.
+(100%: pause), no trial finished in 60 min, every pending review (critical, until acked),
+a stopped run (critical), and an info line per finished batch of trials.
 Re-arming test: `sudo systemctl kill tb4-controller` -> the next watchdog run restarts it;
 `systemctl list-timers | grep tb4` shows the timers (Persistent, survive reboot).
 
@@ -93,7 +236,9 @@ Re-arming test: `sudo systemctl kill tb4-controller` -> the next watchdog run re
 | Item | Number | Why |
 |---|---|---|
 | Expected models | $360-500 / 330 trials | ~$1.1-1.5 per trial (user estimate) |
-| Bridge trial cap | $12 | ~8x mean; the bridge reserves it per trial before inference |
+| Bridge trial cap | **off** for scored runs (`YTIMESY_HARBOR_TRIAL_USD_CAP=off`) | Codex runs under no per-trial cap. In the 2026-10-27 run per-task caps set from Codex's cost stopped 4 trials mid-task (2 lost passes), mostly image tasks: Bedrock serves 0 cache on a request that adds an image (experiment log 2026-10-27), so those cost more than on OpenAI. Do not copy `astra-trial-caps.json` to hosts for a scored run |
+| Trial reservation | `YTIMESY_HARBOR_TRIAL_RESERVE_USD=20` | Ledger accounting only; a trial without a cap may spend up to what the total cap left when it started |
+| Trial spend alert | `YTIMESY_HARBOR_TRIAL_ALERT_USD=40` | Logs `spend alert:` once and writes a ledger `alert` line; the watchdog sends one critical alert. The trial keeps running; stop it by hand only if it loops, and journal why |
 | Bridge total cap (per host) + global stop | $900 | 1.8x the high estimate; reservations of ~60 concurrent trials (~$720) fit under it |
 | Infra expected | $300-560 | 4 x m7i.16xlarge $3.23/h + p5.4xlarge (price to confirm) + controller $0.02/h |
 | AWS Budget (monthly, account-wide) | $1500, email at 50/80/100% actual + 100% forecast | models + infra high end ($1060) + margin |

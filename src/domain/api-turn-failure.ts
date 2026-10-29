@@ -6,6 +6,7 @@ import {
 	usageCapFailureMessage,
 } from "./failure-message";
 import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
+import { redactSecrets } from "./redact-secrets";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
 export class ApiTurnCancelled extends Error {
@@ -33,6 +34,7 @@ const FAILURE_NAMES = new Set([
 	"ApiModelPreparationFailure",
 	"UnsupportedEdgeModelEndpoint",
 	"InitialAgentReadFailure",
+	"HarnessRuntimeFailure",
 	"APICallError",
 	"AI_APICallError",
 	"RetryableCoordinationFailure",
@@ -70,6 +72,8 @@ const FAILURE_CODES = new Set([
 
 /** Only predefined diagnostic categories may leave the worker; error text never does. */
 export function apiTurnFailureClassification(error: unknown) {
+	if (error instanceof HarnessRuntimeFailure)
+		return { name: error.name, code: "unknown", stage: error.stage };
 	if (error instanceof VerificationPolicyFailure)
 		return { name: error.name, code: "unknown", reason: error.reason };
 	if (error instanceof CoordinationFailure)
@@ -344,6 +348,32 @@ export class InitialAgentReadFailure extends Error {
 	}
 }
 
+export type HarnessRuntimeStage = "context-compaction" | "step-preparation";
+
+/**
+ * The harness's own failure inside a model run (compacting the context,
+ * preparing a step): no provider rejected anything, so it must never read
+ * or log as one. The message is ours, redacted of credential-shaped text.
+ */
+export class HarnessRuntimeFailure extends Error {
+	constructor(
+		readonly stage: HarnessRuntimeStage,
+		error: unknown,
+	) {
+		const detail = redactSecrets(
+			error instanceof Error ? error.message : String(error),
+			500,
+		);
+		super(
+			`${stage === "context-compaction" ? "Context compaction failed" : "Run step preparation failed"}: ${detail} This is a harness failure, not a model or provider failure. Work is preserved.`,
+		);
+		this.name = "HarnessRuntimeFailure";
+		// Its own message decides wording first (apiModelFailureMessage);
+		// not `cause` and not enumerable, so it is never serialized.
+		Object.defineProperty(this, "runtimeError", { value: error });
+	}
+}
+
 type ApiModelFailureClassification = ReturnType<
 	typeof apiTurnFailureClassification
 > & {
@@ -551,6 +581,9 @@ const WORKSPACE_STEP_FAILURES = [
 	"Commit or stash this chat's uncommitted changes before switching branches.",
 ] as const;
 
+const UNKNOWN_MODEL_FAILURE =
+	"The model request failed without a usable provider reason. Check the connection and retry. No fallback was used.";
+
 export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
@@ -567,6 +600,13 @@ export function apiModelFailureMessage(error: unknown): string {
 		// a workspace condition, never a provider failure.
 		if (error.name === "RepositoryGuidanceUnavailable")
 			return `${error.message} This is a workspace problem, not a model or provider failure.`;
+	}
+	if (error instanceof HarnessRuntimeFailure) {
+		// A runtime error this function already words (a workspace or storage
+		// condition) keeps that wording; anything else is the harness's own.
+		const inner = (error as { runtimeError?: unknown }).runtimeError;
+		const known = inner === undefined ? null : apiModelFailureMessage(inner);
+		return known && known !== UNKNOWN_MODEL_FAILURE ? known : error.message;
 	}
 	if (error instanceof ContextWindowExhausted)
 		return "The model ran out of context room for its answer, even after compacting this conversation. Start a new chat with a handoff summary. No fallback was used.";
@@ -661,7 +701,7 @@ export function apiModelFailureMessage(error: unknown): string {
 		)
 			return "The provider could not be reached. Check the connection and retry. No fallback was used.";
 	}
-	return "The model request failed without a usable provider reason. Check the connection and retry. No fallback was used.";
+	return UNKNOWN_MODEL_FAILURE;
 }
 
 /** A repository UserPromptSubmit hook refused the turn; shown to the user verbatim. */
