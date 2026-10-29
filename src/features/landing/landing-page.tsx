@@ -1,98 +1,239 @@
 import { Link } from "@tanstack/react-router";
+import {
+	Check,
+	GitPullRequest,
+	Globe,
+	Layers,
+	LoaderCircle,
+	Server,
+	SquareTerminal,
+} from "lucide-react";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { BENCHMARK } from "./landing-facts";
+import "./landing-page.css";
 
 /** The auth route's optional search parameters, all unset. */
 const NO_SEARCH = { error: undefined, redirectTo: undefined };
 
-const FEATURES = [
-	{
-		title: "A real machine for every chat",
-		body: "Each chat gets its own private cloud workspace with your GitHub repository checked out. The agent reads, edits, runs commands and tests there, not on your laptop.",
-	},
-	{
-		title: "Bring your own model",
-		body: "Connect your own model provider account or API key. You pay your provider directly for model usage; ytimesy never marks it up.",
-	},
-	{
-		title: "Changes you review",
-		body: "Work lands on its own branch and a pull request. Nothing is merged without you, and you can open the workspace's terminal, files and desktop at any time.",
-	},
-] as const;
+function SignUp({ className, label }: { className: string; label: string }) {
+	return (
+		<Link
+			to="/auth/$path"
+			params={{ path: "sign-up" }}
+			search={NO_SEARCH}
+			className={className}
+		>
+			{label}
+		</Link>
+	);
+}
 
 /** What signed-out visitors see at `/`. Signed-in users get the app. */
 export function LandingPage() {
 	return (
 		<div className="landing">
 			<header className="landing-header">
-				<YtimesyBrand />
-				<nav className="landing-nav" aria-label="Account">
-					<Link
-						to="/auth/$path"
-						params={{ path: "sign-in" }}
-						search={NO_SEARCH}
-					>
-						Sign in
-					</Link>
-					<Link
-						to="/auth/$path"
-						params={{ path: "sign-up" }}
-						search={NO_SEARCH}
-						className="landing-button"
-					>
-						Sign up
-					</Link>
-				</nav>
-			</header>
-			<main className="landing-main">
-				<section className="landing-hero" aria-labelledby="landing-title">
-					<p className="landing-badge">Free beta — bring your own model</p>
-					<h1 id="landing-title">
-						Coding agents that work in their own cloud workspace.
-					</h1>
-					<p className="landing-lede">
-						ytimesy runs an agent on a private cloud machine connected to your
-						GitHub repository. It writes and tests the change, then opens a pull
-						request for you to review.
-					</p>
-					<div className="landing-actions">
-						<Link
-							to="/auth/$path"
-							params={{ path: "sign-up" }}
-							search={NO_SEARCH}
-							className="landing-button landing-button-large"
-						>
-							Get started free
-						</Link>
+				<div className="landing-header-inner">
+					<YtimesyBrand />
+					<nav className="landing-nav" aria-label="Account">
 						<Link
 							to="/auth/$path"
 							params={{ path: "sign-in" }}
 							search={NO_SEARCH}
-							className="landing-link-large"
 						>
 							Sign in
 						</Link>
+						<SignUp className="landing-button" label="Get started" />
+					</nav>
+				</div>
+			</header>
+			<main>
+				<section className="landing-hero" aria-labelledby="landing-title">
+					<span className="landing-chip">Free beta</span>
+					<h1 id="landing-title">
+						Coding agents
+						<br />
+						in their own cloud.
+					</h1>
+					<div className="landing-actions">
+						<SignUp
+							className="landing-button landing-button-large"
+							label="Start building"
+						/>
 					</div>
+					<ProductShot />
 				</section>
-				<section className="landing-features" aria-label="How it works">
-					{FEATURES.map((feature) => (
-						<article key={feature.title} className="landing-feature">
-							<h2>{feature.title}</h2>
-							<p>{feature.body}</p>
-						</article>
-					))}
-				</section>
-				<section className="landing-beta" aria-labelledby="landing-beta-title">
-					<h2 id="landing-beta-title">About the beta</h2>
-					<p>
-						During the beta, every account gets a monthly allowance of cloud
-						machine minutes at no cost. Model usage is billed by the provider
-						you connect. Things may change or break while we build; tell us at{" "}
-						<a href="mailto:support@ytimesy.com">support@ytimesy.com</a>.
-					</p>
+				<Benchmark />
+				<Features />
+				<section className="landing-close" aria-labelledby="landing-close">
+					<h2 id="landing-close">Hand it the next task.</h2>
+					<SignUp
+						className="landing-button landing-button-large"
+						label="Start building"
+					/>
 				</section>
 			</main>
 			<SiteFooter />
 		</div>
+	);
+}
+
+/** The app at work, drawn in markup: chats, a turn, and its live preview. */
+function ProductShot() {
+	return (
+		<div className="shot" aria-hidden="true">
+			<div className="shot-bar">
+				<span />
+				<span />
+				<span />
+			</div>
+			<div className="shot-body">
+				<aside className="shot-sidebar">
+					<p className="shot-heading">Working</p>
+					<div className="shot-row shot-row-active">
+						<span className="shot-shimmer">Add dark mode</span>
+						<LoaderCircle size={12} className="shot-spin" />
+					</div>
+					<div className="shot-row">
+						<span className="shot-shimmer">Speed up search</span>
+						<LoaderCircle size={12} className="shot-spin" />
+					</div>
+					<p className="shot-heading">Done</p>
+					<div className="shot-row">
+						<span>Fix login redirect</span>
+						<span className="shot-pr">
+							<GitPullRequest size={12} />
+							<Check size={12} />
+						</span>
+					</div>
+					<div className="shot-row">
+						<span>Upgrade the router</span>
+						<span className="shot-pr shot-pr-merged">
+							<GitPullRequest size={12} />
+						</span>
+					</div>
+				</aside>
+				<div className="shot-chat">
+					<p className="shot-user">Add a dark mode toggle to settings.</p>
+					<p className="shot-step">
+						<SquareTerminal size={13} />
+						Read 6 files
+					</p>
+					<p className="shot-step">
+						<SquareTerminal size={13} />
+						Edited 3 files
+						<span className="shot-add">+48</span>
+						<span className="shot-del">-12</span>
+					</p>
+					<p className="shot-step">
+						<SquareTerminal size={13} />
+						npm test
+						<span className="shot-pass">214 passed</span>
+					</p>
+					<p className="shot-answer">
+						Done. The toggle is in Settings and remembers your choice.
+					</p>
+					<div className="shot-prcard">
+						<GitPullRequest size={14} />
+						<span>PR #128 open</span>
+						<span className="shot-pass">Checks passed</span>
+					</div>
+				</div>
+				<div className="shot-preview">
+					<div className="shot-url">
+						<Globe size={11} />
+						preview
+					</div>
+					<div className="shot-page">
+						<div className="shot-page-nav" />
+						<div className="shot-page-line shot-w70" />
+						<div className="shot-page-line shot-w45" />
+						<div className="shot-toggle">
+							<span />
+						</div>
+						<div className="shot-page-grid">
+							<span />
+							<span />
+							<span />
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function Benchmark() {
+	const slowest = Math.max(...BENCHMARK.agents.map((agent) => agent.minutes));
+	const ours = BENCHMARK.agents.find((agent) => agent.ours);
+	return (
+		<section className="landing-bench" aria-labelledby="landing-bench-title">
+			<h2 id="landing-bench-title">
+				Same score.
+				<br />
+				<span className="landing-dim">A third less time.</span>
+			</h2>
+			<div className="bench-card">
+				<div className="bench-head">
+					<span>Minutes per task</span>
+					{BENCHMARK.final ? null : (
+						<span className="landing-chip landing-chip-small">Preliminary</span>
+					)}
+				</div>
+				<ul className="bench-bars">
+					{BENCHMARK.agents.map((agent) => (
+						<li key={agent.name} data-ours={agent.ours || undefined}>
+							<span className="bench-name">{agent.name}</span>
+							<span className="bench-track">
+								<span
+									className="bench-fill"
+									style={{ width: `${(agent.minutes / slowest) * 100}%` }}
+								/>
+							</span>
+							<span className="bench-value">{agent.minutes.toFixed(1)}</span>
+						</li>
+					))}
+				</ul>
+				<div className="bench-stats">
+					<div>
+						<strong>{ours?.score.toFixed(1)}%</strong>
+						<span>Score, on par</span>
+					</div>
+					<div>
+						<strong>${BENCHMARK.costPerTask.ours.toFixed(2)}</strong>
+						<span>Per task, similar cost</span>
+					</div>
+				</div>
+				<p className="bench-setup">{BENCHMARK.setup}</p>
+			</div>
+		</section>
+	);
+}
+
+const FEATURES = [
+	{ icon: Server, title: "A cloud machine per chat" },
+	{ icon: GitPullRequest, title: "Branches and pull requests" },
+	{ icon: Globe, title: "Live previews" },
+	{ icon: Layers, title: "Parallel sub-agents" },
+] as const;
+
+function Features() {
+	return (
+		<section className="landing-features" aria-labelledby="landing-features">
+			<h2 id="landing-features">
+				The agent we benchmark.
+				<br />
+				<span className="landing-dim">The agent you get.</span>
+			</h2>
+			<ul className="feature-grid">
+				{FEATURES.map(({ icon: Icon, title }) => (
+					<li key={title} className="feature-tile">
+						<Icon size={20} strokeWidth={1.5} />
+						<span>{title}</span>
+					</li>
+				))}
+			</ul>
+		</section>
 	);
 }
 
