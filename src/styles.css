@@ -4471,3 +4471,20 @@ a.session-title-meta:focus-visible {
 		padding: 18px 16px 32px;
 	}
 }
+
+/* The project's environment while it is being set up (workspace-status.tsx). */
+.workspace-status-progress {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: #a3a3a3;
+}
+.workspace-status-spin {
+	flex: none;
+	animation: workspace-status-spin 1.1s linear infinite;
+}
+@keyframes workspace-status-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
