@@ -27,7 +27,7 @@ import { LandingPage } from "./landing-page";
 it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and support", () => {
 	const html = renderToStaticMarkup(<LandingPage />);
 	const text = html.replace(/<[^>]+>/g, " ");
-	expect(text).toContain("Cloud coding agent.");
+	expect(text).toContain("AI Software Engineer in the Cloud");
 	expect(text).toContain("Time per task");
 	expect(text).toContain("19.3 min");
 	expect(html).toContain('href="/auth/sign-in"');
