@@ -3,13 +3,12 @@ import {
 	ArrowUpRight,
 	BookmarkPlus,
 	Check,
-	ChevronRight,
-	GitPullRequest,
 	Monitor,
 	Terminal,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import { HELPER_COLORS } from "#/domain/helper-names";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { AgentIcon } from "#/features/sessions/agent-icon";
 import { CodexMark } from "#/features/sessions/codex-mark";
@@ -228,6 +227,19 @@ function Tile({
 	);
 }
 
+const FLEET = [
+	{ ...SHOT_HELPERS[0], command: "pnpm test tokens", done: true },
+	{ ...SHOT_HELPERS[1], command: "pnpm test settings", done: false },
+	{
+		name: "build-3",
+		icon: SHOT_HELPERS[0].icon,
+		color: HELPER_COLORS[1],
+		task: "Dark mode emails",
+		command: "pnpm build",
+		done: false,
+	},
+] as const;
+
 const MEMORIES = [
 	"Use pnpm, not npm",
 	"Every API route checks the session first",
@@ -239,6 +251,44 @@ function Features() {
 		<section className="landing-features" aria-labelledby="landing-features">
 			<h2 id="landing-features">What's inside.</h2>
 			<ul className="tiles">
+				<Tile
+					title="Helpers in parallel, each on its own machine"
+					className="tile-full"
+				>
+					<div className="tv-fleet">
+						<div className="tv-vm tv-vm-main">
+							<p className="tv-vm-head">
+								<span className="tv-main-dot" />
+								<strong>Main</strong>
+								<span>acme/web</span>
+							</p>
+							<p className="tv-vm-line">Splits the work</p>
+							<p className="tv-vm-line">Reviews each patch</p>
+						</div>
+						<div className="tv-links" />
+						<div className="tv-vms">
+							{FLEET.map((vm) => (
+								<div key={vm.name} className="tv-vm">
+									<p className="tv-vm-head">
+										<AgentIcon icon={vm.icon} color={vm.color} />
+										<strong>{vm.name}</strong>
+										<span
+											className="tv-vm-status"
+											data-done={vm.done || undefined}
+										>
+											{vm.done ? <Check size={13} /> : <MatrixDotLoader />}
+										</span>
+									</p>
+									<p className="tv-vm-task">{vm.task}</p>
+									<p className="tv-vm-term">
+										<Terminal size={12} />
+										{vm.command}
+									</p>
+								</div>
+							))}
+						</div>
+					</div>
+				</Tile>
 				<Tile title="Remembers how you work" className="tile-wide">
 					<div className="tv-memory">
 						<p className="tv-memory-head">
@@ -256,67 +306,16 @@ function Features() {
 						))}
 					</div>
 				</Tile>
-				<Tile title="Helpers in parallel">
-					<div className="tv-helpers">
-						{SHOT_HELPERS.map((helper, index) => (
-							<p key={helper.name}>
-								<span
-									className="task-status"
-									data-status={index === 0 ? "done" : "working"}
-								>
-									{index === 0 ? <Check size={14} /> : <MatrixDotLoader />}
-								</span>
-								<AgentIcon icon={helper.icon} color={helper.color} />
-								<strong>{helper.name}</strong>
-								<span>{helper.task}</span>
-							</p>
-						))}
-					</div>
-				</Tile>
-				<Tile title="Opens the pull request">
-					<div className="tv-pr">
-						<p className="tv-pr-head">
-							<GitPullRequest size={16} />
-							<span>
-								<strong>#128</strong> ytimesy/dark-mode
-								<small>Ready to merge</small>
-							</span>
-							<ChevronRight size={14} />
+				<Tile title="Watch its desktop live">
+					<div className="tv-desktop">
+						<p className="tv-window">
+							<Monitor size={13} />
+							Desktop
 						</p>
-						{["build", "test", "lint"].map((check) => (
-							<p key={check} className="tv-check">
-								<Check size={12} strokeWidth={2.6} />
-								{check}
-							</p>
-						))}
-					</div>
-				</Tile>
-				<Tile title="Its own cloud machine" className="tile-wide">
-					<div className="tv-machine">
-						<div className="tv-terminal">
-							<p className="tv-window">
-								<Terminal size={13} />
-								Terminal
-							</p>
-							<p>
-								<span className="tv-prompt">$</span> pnpm install
-							</p>
-							<p className="tv-dim">Done in 3.1s</p>
-							<p>
-								<span className="tv-prompt">$</span> pnpm test
-							</p>
-							<p className="tv-green">412 passed</p>
-						</div>
-						<div className="tv-desktop">
-							<p className="tv-window">
-								<Monitor size={13} />
-								Desktop
-							</p>
-							<div className="tv-screen">
-								<span className="tv-w60" />
-								<span className="tv-w40" />
-								<span className="tv-block" />
-							</div>
+						<div className="tv-screen">
+							<span className="tv-w60" />
+							<span className="tv-w40" />
+							<span className="tv-block" />
 						</div>
 					</div>
 				</Tile>
