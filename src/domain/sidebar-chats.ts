@@ -7,10 +7,7 @@ import {
 	sessionTitleFromText,
 	UNTITLED_SESSION_TITLE,
 } from "./session-item";
-import {
-	type SidebarPullRequest,
-	sidebarChatUnread,
-} from "./sidebar-chat-status";
+import type { SidebarPullRequest } from "./sidebar-chat-status";
 
 export type SidebarChat = {
 	readonly id: string;
@@ -30,8 +27,6 @@ export type SidebarChat = {
 	/** When Main's or a helper's active turn started, if one runs. */
 	readonly workingSince?: string | null;
 };
-
-type SidebarChatAttention = "running" | "attention" | "idle";
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
 /** When this browser started tracking seen chats: older replies count as read. */
@@ -90,61 +85,6 @@ export function seenChatStorageValue(keys: readonly string[]) {
 /** Seen chat keys to store: unique, newest last, the oldest dropped past a cap. */
 export function trimmedSeenChatKeys(keys: readonly string[]): string[] {
 	return [...new Set(keys)].slice(-CHAT_SEEN_KEYS_KEPT);
-}
-
-export function sidebarChatAttention(input: {
-	readonly running: boolean;
-	readonly turnStatus?: SessionTurnStatus;
-	readonly selected: boolean;
-	readonly seen: boolean;
-}): SidebarChatAttention {
-	if (input.running) return "running";
-	if (input.selected || input.seen) return "idle";
-	if (input.turnStatus === "completed" || input.turnStatus === "failed") {
-		return "attention";
-	}
-	return "idle";
-}
-
-export function sidebarHasAttentionChat(input: {
-	readonly chats: readonly SidebarChat[];
-	readonly selectedChatId?: string;
-	readonly seenKeys: readonly string[];
-	readonly busyChatIds?: readonly string[];
-	readonly openTurnStatus?: SessionTurnStatus;
-	/** Replies older than this count as read; undefined keeps every reply. */
-	readonly seenSinceMs?: number | null;
-}): boolean {
-	const seen = new Set(input.seenKeys);
-	return input.chats.some((chat) => {
-		const running = sidebarChatIsRunning({
-			chatId: chat.id,
-			turnStatus: chat.turnStatus,
-			busyChatIds: input.busyChatIds ?? [],
-			openChatId: input.selectedChatId,
-			openTurnStatus: input.openTurnStatus,
-		});
-		const attention =
-			sidebarChatAttention({
-				running,
-				turnStatus: chat.turnStatus,
-				selected: chat.id === input.selectedChatId,
-				seen: seen.has(sidebarChatSeenKey(chat)),
-			}) === "attention";
-		if (!attention || input.seenSinceMs === undefined) return attention;
-		// A failed turn stays attention; a completed one only while unread.
-		return (
-			chat.turnStatus === "failed" ||
-			sidebarChatUnread({
-				selected: false,
-				running,
-				turnStatus: chat.turnStatus,
-				updatedAt: chat.updatedAt,
-				seen: false,
-				seenSinceMs: input.seenSinceMs,
-			})
-		);
-	});
 }
 
 export function sidebarChatsEmptyCopy(input: {

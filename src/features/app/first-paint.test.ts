@@ -188,8 +188,6 @@ function runRowsScript(input: {
 }
 
 const UNREAD_ROWS = "[data-unread-mark]";
-const OPEN_PROJECT_ROWS =
-	'.sidebar-folder-row[data-selected="true"] + .sidebar-chats [data-attention]';
 const DONE_ROWS = '.sidebar-recent [data-group="done"] .sidebar-chat-row';
 const reply = (id: string, updatedAt: string): FakeRow => ({
 	dataset: {
@@ -197,7 +195,6 @@ const reply = (id: string, updatedAt: string): FakeRow => ({
 		seenKey: `${id}:completed:${updatedAt}`,
 		updatedAt,
 		unreadMark: "true",
-		attention: "completed",
 	},
 });
 
@@ -206,27 +203,25 @@ describe("first-paint rows script", () => {
 		[CHAT_SEEN_SINCE_STORAGE_KEY]: String(Date.parse("2026-10-01T00:00:00Z")),
 	};
 
-	it("marks replies newer than this browser's seen chats, and the toggle's dot", () => {
+	it("marks replies newer than this browser's seen chats", () => {
 		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
 		const old = reply("old", "2026-09-01T00:00:00Z");
 		const css = runRowsScript({
 			stored: seenSince,
-			rows: { [UNREAD_ROWS]: [fresh, old], [OPEN_PROJECT_ROWS]: [fresh, old] },
+			rows: { [UNREAD_ROWS]: [fresh, old] },
 		});
 		expect(css).toContain(
 			'.sidebar-chat-row[data-chat-id="fresh"][data-unread-mark] .sidebar-chat-age{display:none}',
 		);
 		expect(css).not.toContain('data-chat-id="old"');
-		expect(css).toContain(
-			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
-		);
+		expect(css).not.toContain("left-sidebar-toggle");
 	});
 
 	it("keeps only the marks of a later streamed copy of the sidebar", () => {
 		const fresh = reply("fresh", "2026-10-20T00:00:00Z");
 		const css = runRowsScript({
 			stored: seenSince,
-			rows: { [UNREAD_ROWS]: [fresh], [OPEN_PROJECT_ROWS]: [fresh] },
+			rows: { [UNREAD_ROWS]: [fresh] },
 			// The copy with the chat open: an open chat is never unread.
 			laterCopy: {},
 		});
@@ -243,26 +238,9 @@ describe("first-paint rows script", () => {
 			expect(
 				runRowsScript({
 					stored,
-					rows: { [UNREAD_ROWS]: [fresh], [OPEN_PROJECT_ROWS]: [fresh] },
+					rows: { [UNREAD_ROWS]: [fresh] },
 				}),
 			).toBe("");
-	});
-
-	it("shows a failed chat's attention dot until it is seen", () => {
-		const failed: FakeRow = {
-			dataset: { chatId: "f", seenKey: "f:failed:", attention: "failed" },
-		};
-		expect(
-			runRowsScript({ rows: { [OPEN_PROJECT_ROWS]: [failed] } }),
-		).toContain(
-			":root:not([data-sidebar=open]) .left-sidebar-toggle::after{display:block}",
-		);
-		expect(
-			runRowsScript({
-				stored: { [CHAT_SEEN_STORAGE_KEY]: JSON.stringify(["f:failed:"]) },
-				rows: { [OPEN_PROJECT_ROWS]: [failed] },
-			}),
-		).toBe("");
 	});
 
 	it("shows a saved pin past the Done fold in place of the fold's last row", () => {
