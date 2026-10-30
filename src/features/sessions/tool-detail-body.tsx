@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import { commandOutputLanguage } from "#/domain/command-output-language";
+import {
+	commandOutputLanguage,
+	diffOutputFiles,
+} from "#/domain/command-output-language";
 import { fileBasename } from "#/domain/file-kind";
 import type { McpBlock } from "#/domain/mcp-call-view";
 import type { DynamicToolCallItem } from "#/domain/session-item";
@@ -162,15 +165,10 @@ export function CommandOutput({
 	if (language === "diff")
 		return (
 			<pre className={className}>
-				{output.split("\n").map((line, index) => (
-					<span
-						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
-						key={index}
-						className="tool-output-line"
-						data-sign={diffLineKind(line)}
-					>
-						{line || " "}
-					</span>
+				{diffOutputFiles(output).map((file, index) => (
+					// Files are positional in the output.
+					// biome-ignore lint/suspicious/noArrayIndexKey: positional files
+					<DiffFileOutput key={index} {...file} />
 				))}
 			</pre>
 		);
@@ -189,17 +187,35 @@ export function CommandOutput({
 	);
 }
 
-/** Added, removed, or header (diff --git, ---/+++, @@) lines of diff output. */
-function diffLineKind(line: string) {
-	if (
-		/^(?:diff |index |---|\+\+\+|@@|new file|deleted file|similarity|rename )/.test(
-			line,
-		)
-	)
-		return "meta";
-	if (line.startsWith("+")) return "added";
-	if (line.startsWith("-")) return "removed";
-	return undefined;
+/** One file's part of diff output: its code coloured, its lines tinted. */
+function DiffFileOutput({
+	language,
+	lines,
+}: ReturnType<typeof diffOutputFiles>[number]) {
+	const tokens = useHighlightedLines(
+		lines.map((line) => (line.kind === "meta" ? "" : line.code)).join("\n"),
+		language,
+	);
+	return lines.map((line, index) => (
+		<span
+			// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
+			key={index}
+			className="tool-output-line"
+			data-sign={line.kind === "context" ? undefined : line.kind}
+		>
+			{line.kind === "meta" ? (
+				line.text || " "
+			) : (
+				<>
+					<span className="tool-output-marker">
+						{line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}
+					</span>
+					<HighlightedTokens text={line.code} tokens={tokens?.[index]} />
+					{line.code ? null : " "}
+				</>
+			)}
+		</span>
+	));
 }
 
 /** Source lines with a line-number gutter, highlighted for the file's language. */
