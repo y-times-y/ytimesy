@@ -90,7 +90,8 @@ function ExitTag({
 				Failed
 			</span>
 		);
-	if (exit === null) return null;
+	// A command that worked needs no tag; only a failing exit is news.
+	if (exit === null || exit === 0) return null;
 	if (exit === "running")
 		return <span className="tool-panel-tag">Running</span>;
 	if (exit === "timeout")
@@ -100,8 +101,8 @@ function ExitTag({
 			</span>
 		);
 	return (
-		<span className="tool-panel-tag" data-tone={exit === 0 ? "good" : "bad"}>
-			exit {exit}
+		<span className="tool-panel-tag" data-tone="bad">
+			Exit {exit}
 		</span>
 	);
 }
@@ -140,38 +141,44 @@ function CommandPanel({
 	);
 }
 
-/** A command's output, coloured when it is plainly one file or a diff. */
-function CommandOutput({
+/**
+ * A command's output. One file printed (cat, sed -n) is coloured as its
+ * language; a diff is plain text with added and removed lines tinted.
+ */
+export function CommandOutput({
 	command,
 	output,
+	className = "tool-panel-body tool-panel-output",
 }: {
 	command: string;
 	output: string;
+	className?: string;
 }) {
 	const language = commandOutputLanguage(command);
-	const tokens = useHighlightedLines(output, language);
+	const tokens = useHighlightedLines(
+		output,
+		language === "diff" ? "text" : language,
+	);
 	if (language === "diff")
 		return (
-			<pre className="tool-panel-body tool-panel-output">
+			<pre className={className}>
 				{output.split("\n").map((line, index) => (
-					// Output lines are positional: their place is their identity.
 					<span
-						// biome-ignore lint/suspicious/noArrayIndexKey: positional output lines
+						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
 						key={index}
 						className="tool-output-line"
-						data-sign={diffLineSign(line)}
+						data-sign={diffLineKind(line)}
 					>
-						<HighlightedTokens text={line} tokens={tokens?.[index]} />
-						{line ? null : " "}
+						{line || " "}
 					</span>
 				))}
 			</pre>
 		);
 	return (
-		<pre className="tool-panel-body tool-panel-output">
+		<pre className={className}>
 			{tokens
 				? output.split("\n").map((line, index) => (
-						// biome-ignore lint/suspicious/noArrayIndexKey: positional output lines
+						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
 						<span key={index}>
 							{index ? "\n" : null}
 							<HighlightedTokens text={line} tokens={tokens[index]} />
@@ -182,9 +189,14 @@ function CommandOutput({
 	);
 }
 
-/** Added and removed lines of diff output; file headers (+++/---) are neither. */
-function diffLineSign(line: string) {
-	if (line.startsWith("+++") || line.startsWith("---")) return undefined;
+/** Added, removed, or header (diff --git, ---/+++, @@) lines of diff output. */
+function diffLineKind(line: string) {
+	if (
+		/^(?:diff |index |---|\+\+\+|@@|new file|deleted file|similarity|rename )/.test(
+			line,
+		)
+	)
+		return "meta";
 	if (line.startsWith("+")) return "added";
 	if (line.startsWith("-")) return "removed";
 	return undefined;

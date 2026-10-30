@@ -130,7 +130,11 @@ import {
 	CheckVerdictCard,
 	RequirementsList,
 } from "./tool-cards";
-import { ProgramSource, ToolDetailBody } from "./tool-detail-body";
+import {
+	CommandOutput,
+	ProgramSource,
+	ToolDetailBody,
+} from "./tool-detail-body";
 import {
 	type UserQuestionActions,
 	UserQuestionCard,
@@ -1125,10 +1129,14 @@ function SessionItemView({
 					<div className="session-command-detail">
 						<ShellCommandCode command={item.command} />
 						{item.output ? (
-							<pre className="session-output">{item.output}</pre>
+							<CommandOutput
+								command={item.command}
+								output={item.output}
+								className="session-output"
+							/>
 						) : null}
-						{item.exitCode !== null ? (
-							<p className="session-activity-meta">exit {item.exitCode}</p>
+						{item.exitCode !== null && item.exitCode !== 0 ? (
+							<p className="session-activity-meta">Exit {item.exitCode}</p>
 						) : null}
 					</div>
 				</LazyDetails>
