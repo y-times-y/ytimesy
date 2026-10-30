@@ -231,6 +231,106 @@ a stopped run (critical), and an info line per finished batch of trials.
 Re-arming test: `sudo systemctl kill tb4-controller` -> the next watchdog run restarts it;
 `systemctl list-timers | grep tb4` shows the timers (Persistent, survive reboot).
 
+## GPU lane (Daytona or an AWS GPU host)
+
+`scripts/tb4-run/gpu-lane.ts`, costs in `gpu-cost.ts`, tests `tests/tb4-gpu-lane.test.ts`.
+The three GPU tasks (`fp8-rmsnorm-gemm`, `math-eval-grader`, `jax-speedrun-gpu`) each need
+one H100 for the agent and another for the separate verifier. With `TB4_GPU_LANE` set,
+the controller's tick takes them out of CPU scheduling and stage 1 and runs them in the
+GPU lane: **strictly one trial at a time**, in task order (fp8 x5, then math x5, then
+jax x5; `TB4_GPU_LANE_TASKS` changes the order). Batch 1 then batch 2 per task; with
+`TB4_STAGE1` on the lane waits for `ack stage1` before a task's batch-2 trials.
+
+| Target | `TB4_GPU_LANE` | Where Harbor runs | Billed | Paid by |
+|---|---|---|---|---|
+| Daytona | `daytona` + `TB4_GPU_RUNNER=<hosts.json name>` | `host/run-gpu-trial.sh` on the runner, `-e daytona` | per sandbox-second: H100 $2.27/h, vCPU $0.0504/h, GiB $0.0162/h, storage $0.000108/GiB-h over 5 GiB | **money** (Daytona's free credits do not cover GPU sandboxes) |
+| AWS GPU host | `docker` + `TB4_GPU_HOST=<kind "gpu" host>` | `run-trial.sh` on the p5.4xlarge, `-e docker` (agent and verifier containers share its one H100) | per host-hour while the host runs, trials or not: $5.97/h on-demand and Capacity Block (`TB4_P5_4XL_HOURLY_USD`, `TB4_P5_4XL_CB_HOURLY_USD`; `market` in hosts.json or `TB4_GPU_HOST_MARKET`) | AWS credits |
+
+**One GPU at a time.** Before each launch the lane requires the GPU to be free: on
+Daytona, no sandbox listed on the account (`daytona-ctl.py list`; the last verifier's
+sandbox is often still `destroying`, which is what ended two fp8 trials with "GPU limit"
+on 2026-10-28); on the host, no `tb4-trial-*` unit active. Leftover lane sandboxes
+(label `ytimesy-lane=tb4-gpu`) are deleted and charged; anything else holding the GPU
+journals `gpu-blocked` and waits. Inside a Daytona trial the Harbor patch
+(`host/daytona/sitecustomize.py`, `YTIMESY_DAYTONA_ONE_GPU=1`) waits after each delete until
+the sandbox is gone and before each GPU create until no GPU sandbox is listed, so the agent
+sandbox is gone before the verifier's starts.
+
+**H100 asserted before a scored trial.** Daytona: the patch runs `nvidia-smi` inside every
+GPU sandbox right after it starts and raises on anything but an H100; a trial without an
+agent-sandbox H100 line is infra (void). Docker host: `run-trial.sh` writes the host's
+`nvidia-smi` to `gpu-assert.txt`; missing or not H100 is infra.
+
+**Budget (one GPU budget, all providers).** Before each launch:
+`spent + worst case of the next trial <= budget - buffer ($5, TB4_GPU_BUFFER_USD)`.
+
+- Budget: `<run-dir>/gpu-budget.json`, re-read every tick, else `TB4_GPU_BUDGET_USD`. It
+  is the total GPU spend the lane may reach, counted from its first trial. No budget or an
+  unreadable file pauses (never "unlimited").
+- Spent: Daytona sandbox lifetimes from each trial's `daytona-sandboxes.jsonl`
+  (create .. gone, x resources; reruns included), deleted orphans, plus every GPU host's
+  uptime from hosts.json (`launchedAt`..`stoppedAt`/now). An actual figure from the billing
+  pages replaces everything before the moment it is recorded.
+- Worst case: every sandbox (or the host) held to the task.toml limits (`[agent].timeout_sec`,
+  `[verifier].timeout_sec`, each environment's cpus/memory/storage/gpus) plus 10 min per
+  sandbox (`TB4_GPU_OVERHEAD_MIN`). On Daytona each resource is raised to what the task's
+  sandboxes actually got (a snapshot built bigger than the task.toml bills at its size).
+
+| Task (limits) | Daytona worst | Daytona typical | p5 host worst | p5 host typical |
+|---|---|---|---|---|
+| fp8-rmsnorm-gemm (8 h + 5 h; 4 cpu, 16 GiB, 30 GiB) | $36.45 ($35.54 without allowance) | $2.84 | $79.60 | $6.20 |
+| math-eval-grader (8 h + 15 min; 8 cpu, 16 GiB, 30 GiB) | $25.19 ($24.21) | $2.48 | $51.24 | $5.03 |
+| jax-speedrun-gpu (8 h + 2 h; 16 cpu, 32 GiB, 1000 GiB) | $38.26 ($37.02) | $23.24 | $61.69 | $37.47 |
+
+Typical = Codex Astra's public mean trial time (2,536 s, 1,836 s, 21,395 s) plus the
+allowance; `controller.ts gpu-costs --dataset <dir> --codex <job.json>` prints this table
+from task.toml files. Five trials of all three: ~$143 typical / ~$500 worst on Daytona; the
+p5 host also bills while idle.
+
+```sh
+# controller env (systemd drop-in for tb4-controller.service)
+TB4_GPU_LANE=daytona TB4_GPU_RUNNER=cpu-3        # or: TB4_GPU_LANE=docker TB4_GPU_HOST=gpu-0
+node --import tsx scripts/tb4-run/controller.ts tasks --run-dir /opt/tb4/run   # tasks.json needs gpuSpec (rerun after this change)
+node --import tsx scripts/tb4-run/controller.ts gpu-budget 120   # set or raise the total GPU budget (USD)
+node --import tsx scripts/tb4-run/controller.ts gpu-spent 41.20  # record the actual GPU spend so far
+node --import tsx scripts/tb4-run/controller.ts gpu-status       # budget, spent, next trial, pause, per task
+node --import tsx scripts/tb4-run/controller.ts failures         # GPU trials appear like CPU ones
+```
+
+Runner for Daytona (once): `/opt/tb4/hd` (venv with `harbor[daytona]==0.24.0`),
+`/opt/tb4/daytona/` (`sitecustomize.py`, `daytona-ctl.py` from `scripts/tb4-run/host/daytona/`),
+`/opt/tb4/run-gpu-trial.sh`, `/opt/tb4/daytona-snapshots.json` (from
+`scripts/tb4-run/daytona-snapshots.json`: pinned image digest -> root H100 snapshot),
+`/opt/tb4/daytona-key` (0600, never printed), run.env and the frozen tree as on CPU hosts.
+Build a missing snapshot with `daytona-ctl.py snapshot <name> <image> <cpus> <GiB> <disk GiB>`
+(task.toml resources) and check it with `daytona-ctl.py gpucheck <snapshot>...` (boots each
+alone, prints the GPU and the sandbox's billed resources).
+
+**Journals.** Trials go into the run journal like CPU trials (`launch` with host
+`gpu-lane:daytona` or `gpu-lane:<host>`, `finish` + cause, `review-needed`, `synced`), so
+`score`, `failures`, `ack` and the review gate are unchanged: a non-benign end (infra
+included) holds both lanes until acked. The CPU tick never reconciles `gpu-lane:*` attempts.
+Billing detail goes to `<run-dir>/gpu-lane-journal.jsonl`: `gpu-budget` (every change),
+`gpu-launch` (worst case, spent, budget), `gpu-pause` / `gpu-resume`, `gpu-spend` (sandboxes
+per attempt), `gpu-orphans`, `gpu-blocked`.
+
+**Preemption.** The patch logs `lost` when a sandbox is not running at Harbor's stop
+(Harbor's auto-stop is off, so only the provider stops one); a lost sandbox, a Daytona
+exception naming a stopped/destroyed/not-found sandbox, or the GPU limit makes the attempt
+infra even if the verifier graded the leftover workspace: rerun (after the ack), never
+scored. Its sandbox time still counts as spent. On a docker host, a reboot or a killed
+host is infra as on CPU hosts.
+
+**Alerts** (watchdog, critical, repeated hourly until it changes):
+
+- `GPU lane paused before <attempt> (...): add budget to continue: need $X (budget $B,
+  spent ~$S, worst case $W + $5 buffer)`: add money on Daytona (or AWS budget), then
+  `controller.ts gpu-budget <new total>`; the next tick re-reads it and journals
+  `gpu-resume`. On a docker host the pause line also says the host keeps billing: stop the
+  host if no budget is coming.
+- `GPU lane blocked: something it did not start holds the GPU (...)`: a sandbox without the
+  lane label (another session) or a stray trial unit on the host; delete it or wait.
+
 ## Spend numbers
 
 | Item | Number | Why |

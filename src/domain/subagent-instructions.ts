@@ -14,6 +14,7 @@ import {
 	type SubagentBudget,
 	type SubagentRole,
 } from "./subagent";
+import { WRITER_PATCH_INTEGRATION } from "./writer-integration";
 
 /**
  * The orchestration block (subagents=on): when to delegate, how to call
@@ -59,7 +60,7 @@ export function orchestratorInstructions(
 		...(main ? [ROOT_HELPER_UPDATES, HANDOFF_INSTRUCTIONS] : []),
 		readOnly
 			? REPORT_IS_A_CLAIM
-			: `${REPORT_IS_A_CLAIM} Integrate a writer's part by reviewing its patch (\`git diff <base> <ref>\`), applying it with \`git apply -3\` and rerunning its checks yourself.`,
+			: `${REPORT_IS_A_CLAIM} ${WRITER_PATCH_INTEGRATION}`,
 		REFUSED_START,
 		...(force ? [FORCED_DELEGATION] : []),
 	].join("\n");
