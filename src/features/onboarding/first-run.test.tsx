@@ -6,6 +6,9 @@ vi.mock("@tanstack/react-start", () => ({
 	useServerFn: (fn: unknown) => fn,
 	createServerFn: () => ({}),
 }));
+vi.mock("../sessions/chatgpt-sign-in", () => ({
+	ChatgptSignIn: () => <button type="button">Sign in with ChatGPT</button>,
+}));
 vi.mock("../sessions/codex-session.fn", () => ({
 	pollCodexLogin: vi.fn(),
 	startChatgptSignIn: vi.fn(),

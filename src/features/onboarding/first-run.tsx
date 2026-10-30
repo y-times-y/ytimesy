@@ -1,19 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowUpRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { useState } from "react";
 import { type FirstRunState, firstRunStep } from "#/domain/first-run";
 import type { RepositoryChoice } from "#/domain/projects";
-import type { CodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { YtimesyBrand } from "../auth/onboarding-shell";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
+import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
 import { CodexMark } from "../sessions/codex-mark";
-import {
-	pollCodexLogin,
-	startChatgptSignIn,
-} from "../sessions/codex-session.fn";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
@@ -143,32 +139,13 @@ function GitHubMark() {
 }
 
 export function ModelStep({ ready: readyAtLoad }: { ready: boolean }) {
-	const start = useServerFn(startChatgptSignIn);
-	const poll = useServerFn(pollCodexLogin);
 	const readConnections = useServerFn(getModelConnections);
-	const [login, setLogin] = useState<CodexDeviceLogin | null>(null);
+	const [chatgptConnected, setChatgptConnected] = useState(false);
 	const [addingKey, setAddingKey] = useState(false);
-	const signIn = useMutation({
-		mutationFn: () => start({ data: {} }),
-		onSuccess: setLogin,
-	});
-	useQuery({
-		queryKey: ["first-run-chatgpt-login"],
-		queryFn: async () => {
-			const next = await poll({ data: {} });
-			setLogin(next);
-			return next;
-		},
-		enabled: login?.status === "pending",
-		refetchInterval: 3_000,
-		refetchIntervalInBackground: true,
-		gcTime: 0,
-	});
 	const connections = useQuery({
 		queryKey: ["model-connections"],
 		queryFn: () => readConnections(),
 	});
-	const chatgptConnected = login?.status === "connected";
 	const keySaved = (connections.data?.length ?? 0) > 0;
 	const ready = readyAtLoad || chatgptConnected || keySaved;
 	return (
@@ -182,34 +159,7 @@ export function ModelStep({ ready: readyAtLoad }: { ready: boolean }) {
 						<CodexMark size={26} />
 					</span>
 					<strong>Your Codex subscription</strong>
-					{chatgptConnected ? (
-						<span className="first-run-connected">
-							<Check size={14} strokeWidth={2.6} />
-							Connected
-						</span>
-					) : login?.status === "pending" ? (
-						<div className="first-run-code">
-							<code>{login.userCode}</code>
-							<a href={login.verificationUrl} target="_blank" rel="noreferrer">
-								Enter it at ChatGPT
-								<ArrowUpRight size={13} />
-							</a>
-						</div>
-					) : (
-						<button
-							type="button"
-							className="first-run-secondary"
-							disabled={signIn.isPending}
-							onClick={() => signIn.mutate()}
-						>
-							{signIn.isPending ? "Starting…" : "Sign in with ChatGPT"}
-						</button>
-					)}
-					{login?.status === "failed" ? (
-						<small role="alert">{login.message}</small>
-					) : signIn.error ? (
-						<small role="alert">{signIn.error.message}</small>
-					) : null}
+					<ChatgptSignIn onConnected={() => setChatgptConnected(true)} />
 				</div>
 				<div className="first-run-model" data-done={keySaved || undefined}>
 					<span className="first-run-logos">
