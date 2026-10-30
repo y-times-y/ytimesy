@@ -29,8 +29,10 @@ import {
 import { briefFindingsPath, ranTranscript } from "../evals/harbor_v2/review";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { harborTurnId, runHarborTrial } from "../evals/harbor_v2/trial";
+import { worktreeRoot, writerLabel } from "../evals/harbor_v2/worktree-writers";
 import { WorkspaceId } from "../src/domain/ids";
 import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
+import { WRITER_PATCH_INTEGRATION } from "../src/domain/writer-integration";
 import { agentOutputDirectory } from "../src/server/services/agent-output-artifacts";
 import {
 	COMMAND_TMUX_SOCKET,
@@ -2605,6 +2607,324 @@ describe("runHarborTrial with helpers=write", () => {
 			await readFile(join(f.logs, "trajectory.json"), "utf8"),
 		);
 		expect(trajectory.subagent_trajectories).toHaveLength(2);
+	}, 120_000);
+});
+
+describe("runHarborTrial with helpers=write-tree", () => {
+	it("runs writers on their own worktrees; the builder applies their patches with git apply -3 and resolves the conflict", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "codeMode=primary,helpers=write-tree",
+		});
+		const trialId = `trial-wt-${crypto.randomUUID().slice(0, 8)}`;
+		cleanups.push(() =>
+			rm(worktreeRoot(trialId), { recursive: true, force: true }),
+		);
+		const patch = (n: number) =>
+			`${worktreeRoot(trialId)}/patches/${writerLabel(`${trialId}.${n}`)}.patch`;
+		// Both writers change source.txt's one line; B also adds b.txt.
+		const scripts: Record<string, Part[][]> = {
+			builder: [
+				[
+					call("a1", "agent", {
+						role: "writer",
+						title: "Part A",
+						brief: "PART-A: set source.txt to 'from A'.",
+						owns: ["source.txt"],
+					}),
+					call("a2", "agent", {
+						role: "writer",
+						title: "Part B",
+						brief: "PART-B: set source.txt to 'from B' and add b.txt.",
+						owns: ["source.txt", "b.txt"],
+					}),
+					finish(100, 10, true),
+				],
+				[call("w1", "agent_wait", {}), finish(100, 10, true)],
+				[
+					call("g1", "bash", {
+						command: `git apply -3 ${patch(1)}; git apply -3 ${patch(2)}; git status --short`,
+					}),
+					finish(100, 10, true),
+				],
+				[
+					call("r1", "write", {
+						path: "source.txt",
+						content: "from A and B\n",
+					}),
+					finish(100, 10, true),
+				],
+				[
+					call("r2", "bash", {
+						command: "git add source.txt && git status --short",
+					}),
+					finish(100, 10, true),
+				],
+				[...text("b6", "Done: both parts integrated."), finish(100, 10)],
+			],
+			a: [
+				[
+					call("x1", "write", { path: "source.txt", content: "from A\n" }),
+					finish(40, 4, true),
+				],
+				[...text("x2", "Set source.txt to 'from A'."), finish(40, 4)],
+			],
+			b: [
+				[
+					call("y1", "write", { path: "source.txt", content: "from B\n" }),
+					call("y2", "write", { path: "b.txt", content: "B\n" }),
+					finish(40, 4, true),
+				],
+				[
+					...text("y3", "Set source.txt to 'from B'; added b.txt."),
+					finish(40, 4),
+				],
+			],
+		};
+		const served: Record<string, number> = { builder: 0, a: 0, b: 0 };
+		const prompts: Record<string, string[]> = { builder: [], a: [], b: [] };
+		const model = new MockLanguageModelV4({
+			provider: "anthropic.messages",
+			modelId: "claude-opus-5-5",
+			doStream: async (options) => {
+				const prompt = JSON.stringify(options.prompt);
+				const writer = prompt.includes("You are a writer subagent");
+				const who = !writer ? "builder" : prompt.includes("PART-A") ? "a" : "b";
+				prompts[who]?.push(prompt);
+				const script = scripts[who] as Part[][];
+				const index = served[who] ?? 0;
+				served[who] = index + 1;
+				return {
+					stream: simulateReadableStream({
+						chunks: script[Math.min(index, script.length - 1)] as never[],
+						initialDelayInMs: null,
+						chunkDelayInMs: null,
+					}),
+				};
+			},
+		});
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId,
+			instruction: "Set source.txt from both parts and add b.txt.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			log: (line) => lines.push(line),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(served).toEqual({ builder: 6, a: 2, b: 2 });
+		// The builder's section: write-tree mechanics with the product's integration sentence.
+		expect(prompts.builder?.[0]).toContain(
+			JSON.stringify(WRITER_PATCH_INTEGRATION).slice(1, -1),
+		);
+		expect(prompts.builder?.[0]).not.toContain(
+			"changing only the paths you list",
+		);
+		// owns is required: the fallback when a worktree cannot be made.
+		expect(JSON.stringify(model.doStreamCalls[0].tools)).toContain('"owns"');
+		// Writers get the product's fork-writer role, not the shared-checkout one.
+		expect(prompts.a?.[0]).toContain("working on a fork of your parent's VM");
+		expect(prompts.a?.[0]).not.toContain(
+			"working directly in your parent's checkout",
+		);
+		// The reports carry the product's patch block.
+		expect(prompts.builder?.[2]).toContain(`Patch: ${patch(1)}`);
+		expect(prompts.builder?.[2]).toContain("Ref:   refs/ytimesy/agents/");
+		expect(prompts.builder?.[2]).toContain("Overlaps with: agent");
+		// The second apply conflicted; the builder saw it and resolved it.
+		expect(prompts.builder?.[3]).toContain("with conflicts");
+		expect(await readFile(join(f.checkout.root, "source.txt"), "utf8")).toBe(
+			"from A and B\n",
+		);
+		expect(await readFile(join(f.checkout.root, "b.txt"), "utf8")).toBe("B\n");
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.worktreeWriters).toMatchObject({
+			createdRepo: false,
+			modes: [
+				{ sessionId: `${trialId}.1`, mode: "worktree" },
+				{ sessionId: `${trialId}.2`, mode: "worktree" },
+			],
+			applyCommands: 1,
+			applyConflicts: 1,
+			unmergedAtEnd: [],
+			conflictMarkersAtEnd: [],
+			cleanup: { ok: true },
+		});
+		expect(
+			trace.worktreeWriters.writers
+				.map(
+					(writer: {
+						rounds: { files: string[]; ref: string; base: string }[];
+					}) => writer.rounds[0]?.files.length,
+				)
+				.sort(),
+		).toEqual([1, 2]);
+		for (const writer of trace.worktreeWriters.writers)
+			expect(writer.rounds[0]).toMatchObject({
+				base: expect.stringMatching(/^[0-9a-f]{40}$/),
+				ref: expect.stringMatching(/^refs\/ytimesy\/agents\//),
+				patchBytes: expect.any(Number),
+				applyCommands: 1,
+			});
+		// Worktrees, branches and refs are gone; the checkout is not left mid-merge.
+		const git = (command: string) =>
+			execFileSync("bash", ["-c", command], {
+				cwd: f.checkout.root,
+			}).toString();
+		expect(git("git worktree list | wc -l").trim()).toBe("1");
+		expect(git("git branch --list 'ytimesy/*'")).toBe("");
+		expect(git("git for-each-ref refs/ytimesy/agents refs/ytimesy/bases")).toBe(
+			"",
+		);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		expect(trajectory.final_metrics.extra.worktreeWriters.applyConflicts).toBe(
+			1,
+		);
+	}, 120_000);
+
+	it("runs a writer whose worktree cannot be made in the builder's checkout on its owns", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT: "codeMode=primary,helpers=write-tree",
+		});
+		const trialId = `trial-wtf-${crypto.randomUUID().slice(0, 8)}`;
+		cleanups.push(() =>
+			rm(worktreeRoot(trialId), { recursive: true, force: true }),
+		);
+		// A file the trial user cannot read (the live rs-archive-clone case):
+		// the writer's base cannot be indexed, so no worktree.
+		execFileSync("bash", ["-c", "echo tool > tool.bin && chmod 000 tool.bin"], {
+			cwd: f.checkout.root,
+		});
+		cleanups.push(async () =>
+			execFileSync("bash", [
+				"-c",
+				`chmod 644 ${join(f.checkout.root, "tool.bin")} 2>/dev/null || true`,
+			]),
+		);
+		const scripts: Record<string, Part[][]> = {
+			builder: [
+				[
+					call("a0", "agent", {
+						role: "writer",
+						title: "No owns",
+						brief: "PART-A: add a.txt.",
+					}),
+					call("a1", "agent", {
+						role: "writer",
+						title: "Part A",
+						brief: "PART-A: add a.txt.",
+						owns: ["a.txt"],
+					}),
+					finish(100, 10, true),
+				],
+				[call("w1", "agent_wait", {}), finish(100, 10, true)],
+				[...text("b3", "Done."), finish(100, 10)],
+			],
+			a: [
+				[
+					call("x1", "write", { path: "a.txt", content: "A\n" }),
+					finish(40, 4, true),
+				],
+				[...text("x2", "Added a.txt."), finish(40, 4)],
+			],
+		};
+		const served: Record<string, number> = { builder: 0, a: 0 };
+		const prompts: Record<string, string[]> = { builder: [], a: [] };
+		const model = new MockLanguageModelV4({
+			provider: "anthropic.messages",
+			modelId: "claude-opus-5-5",
+			doStream: async (options) => {
+				const prompt = JSON.stringify(options.prompt);
+				const who = prompt.includes("You are a writer subagent")
+					? "a"
+					: "builder";
+				prompts[who]?.push(prompt);
+				const script = scripts[who] as Part[][];
+				const index = served[who] ?? 0;
+				served[who] = index + 1;
+				return {
+					stream: simulateReadableStream({
+						chunks: script[Math.min(index, script.length - 1)] as never[],
+						initialDelayInMs: null,
+						chunkDelayInMs: null,
+					}),
+				};
+			},
+		});
+		const lines: string[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId,
+			instruction: "Add a.txt.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap) => ({ model: wrap(model) }),
+			log: (line) => lines.push(line),
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(served).toEqual({ builder: 3, a: 2 });
+		// The builder's mechanics line names the fallback.
+		expect(prompts.builder?.[0]).toContain(
+			"If a writer's copy can't be made, it works in your checkout",
+		);
+		// A writer without owns is refused (no fallback would be possible).
+		expect(prompts.builder?.[1]).toContain("Refused: a writer needs owns");
+		// The fallback writer: helpers=write's shared role with its paths, in the checkout.
+		expect(prompts.a?.[0]).toContain(
+			"working directly in your parent's checkout",
+		);
+		expect(prompts.a?.[0]).toContain("only these paths: a.txt");
+		expect(await readFile(join(f.checkout.root, "a.txt"), "utf8")).toBe("A\n");
+		// Its report says plainly there is nothing to apply; no patch block.
+		expect(prompts.builder?.[2]).toContain(
+			"Worked directly in your checkout on a.txt; nothing to apply.",
+		);
+		expect(prompts.builder?.[2]).not.toContain("Patch: ");
+		expect(
+			lines.some((line) =>
+				line.includes("in the builder's checkout on its owns"),
+			),
+		).toBe(true);
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.worktreeWriters).toMatchObject({
+			writers: [],
+			modes: [
+				{
+					sessionId: `${trialId}.1`,
+					mode: "shared",
+					owns: ["a.txt"],
+					reason: expect.stringContaining("its worktree could not be made"),
+				},
+			],
+			failures: [expect.stringContaining(`${trialId}.1: its worktree`)],
+		});
 	}, 120_000);
 });
 

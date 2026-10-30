@@ -5,7 +5,8 @@
  *
  * Checks: controller service alive (restarts it), stalled trials (20 min log
  * silence), host health, Bedrock throttles/5xx in the transport logs, model
- * spend (all hosts' bridge ledgers) and infra spend vs budget. Alerts go to an
+ * spend (all hosts' bridge ledgers) and infra spend vs budget, and the GPU
+ * lane's budget pause (gpu-lane-journal.jsonl). Alerts go to an
  * ntfy.sh topic (free, no account): TB4_ALERT_WEBHOOK=https://ntfy.sh/<random>
  * in /opt/tb4/watchdog.env. Alerts carry counts and ids only, never secrets.
  *
@@ -16,6 +17,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { sshHostOps } from "./controller.ts";
+import { GPU_LANE_JOURNAL, gpuLaneAlerts, type LaneEvent } from "./gpu-lane.ts";
 import {
 	type Alert,
 	type Host,
@@ -219,6 +221,13 @@ async function main() {
 		lastProgressAt: ws.lastProgressAt,
 	});
 	alerts.push(...spendAlerts(ledgerLines, ws.lastSent));
+	// The GPU lane: a budget pause ("add budget to continue: need $X") or the
+	// GPU held by something the lane did not start.
+	alerts.push(
+		...gpuLaneAlerts(
+			new Journal<LaneEvent>(join(runDir, GPU_LANE_JOURNAL)).events(),
+		),
+	);
 	if (newlyFinished > 0)
 		alerts.push({
 			level: "info",
