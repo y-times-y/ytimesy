@@ -40,6 +40,7 @@ import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
+	failoverChainFailure,
 	failoverExhaustedDetail,
 	failoverNotice,
 	failoverQuestion,
@@ -2485,11 +2486,11 @@ async function runApiTurnAttempt(
 						: abort.signal.aborted
 							? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
 							: exhausted
-								? apiTurnFailureMessage(failureStage, error).replace(
-										" No fallback was used.",
-										"",
-									) +
-									exhausted +
+								? (failoverChainFailure(
+										items,
+										turn.id,
+										apiTurnFailureMessage(failureStage, error),
+									) ?? apiTurnFailureMessage(failureStage, error) + exhausted) +
 									developmentFailureDetail(error)
 								: (paused?.message ??
 										apiTurnFailureMessage(failureStage, error)) +

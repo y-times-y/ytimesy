@@ -29,7 +29,9 @@ import { listModelConnections } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 
-export const SUBSCRIPTION_LABEL = "Codex";
+export { SUBSCRIPTION_LABEL } from "#/domain/model-failover";
+
+import { SUBSCRIPTION_LABEL } from "#/domain/model-failover";
 
 /** The ChatGPT plan's models; empty while its catalog is unreachable (often the outage itself). */
 async function subscriptionConnection(

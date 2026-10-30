@@ -473,7 +473,7 @@ it("stops at a spent plan allowance instead of retrying a rate limit", async () 
 	}
 	expect(caught).toBeInstanceOf(SubscriptionUsageLimitReached);
 	expect((caught as Error).message).toMatch(
-		/usage limit is used up\. It resets in 2 h 1[45] min/,
+		/usage is used up\. It resets in 2 h 1[45] min/,
 	);
 	expect(apiModelFailureMessage(caught)).toBe((caught as Error).message);
 	expect(
