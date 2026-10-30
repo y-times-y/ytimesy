@@ -267,7 +267,7 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
-/* Diff output: whole lines tinted, edge to edge, like the edit view. */
+/* Diff output: whole lines tinted edge to edge, GitHub's dark diff colours. */
 .tool-output-line {
 	display: block;
 }
@@ -275,15 +275,47 @@
 	margin: 0 -12px;
 	padding: 0 12px;
 }
-/* Codex's dark diff tints: solid enough to read at a glance. */
+/* Numbered lines start at the edge so the number's own tint reaches it. */
+.tool-panel-output .tool-output-line:has(> .tool-output-number) {
+	padding-left: 0;
+}
 .tool-output-line[data-sign="added"] {
-	background: #213a2b;
+	background: rgba(46, 160, 67, 0.15);
 }
 .tool-output-line[data-sign="removed"] {
-	background: #4a221d;
+	background: rgba(248, 81, 73, 0.15);
 }
 .tool-output-line[data-sign="other"] {
 	color: #8a8a8a;
+}
+.tool-output-number {
+	display: inline-block;
+	min-width: 4ch;
+	padding: 0 1.5ch 0 12px;
+	color: #4d4d4d;
+	text-align: right;
+	user-select: none;
+}
+.tool-output-marker {
+	display: inline-block;
+	width: 2ch;
+	padding-left: 1ch;
+	color: #6b6b6b;
+	user-select: none;
+}
+.tool-output-line[data-sign="added"] .tool-output-number {
+	background: rgba(63, 185, 80, 0.3);
+	color: #e6edf3;
+}
+.tool-output-line[data-sign="removed"] .tool-output-number {
+	background: rgba(248, 81, 73, 0.3);
+	color: #e6edf3;
+}
+.tool-output-line[data-sign="added"] .tool-output-marker {
+	color: #3fb950;
+}
+.tool-output-line[data-sign="removed"] .tool-output-marker {
+	color: #f85149;
 }
 .tool-output-file {
 	display: flex;
@@ -306,46 +338,10 @@
 	font-variant-numeric: tabular-nums;
 }
 .tool-output-counts [data-sign="added"] {
-	color: #4ade80;
+	color: #3fb950;
 }
 .tool-output-counts [data-sign="removed"] {
-	color: #f87171;
-}
-.tool-output-number {
-	display: inline-block;
-	min-width: 4ch;
-	padding-right: 1.5ch;
-	color: #4d4d4d;
-	text-align: right;
-	user-select: none;
-}
-.tool-output-marker {
-	display: inline-block;
-	width: 2ch;
-	color: #6b6b6b;
-	user-select: none;
-}
-.tool-output-line[data-sign="added"] .tool-output-number {
-	display: inline-block;
-	min-width: 4ch;
-	padding-right: 1.5ch;
-	color: #4d4d4d;
-	text-align: right;
-	user-select: none;
-}
-.tool-output-marker {
-	color: #4ade80;
-}
-.tool-output-line[data-sign="removed"] .tool-output-number {
-	display: inline-block;
-	min-width: 4ch;
-	padding-right: 1.5ch;
-	color: #4d4d4d;
-	text-align: right;
-	user-select: none;
-}
-.tool-output-marker {
-	color: #f87171;
+	color: #f85149;
 }
 .tool-panel-output[data-tone="bad"],
 .tool-panel-note[data-tone="bad"] {
