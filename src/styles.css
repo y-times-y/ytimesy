@@ -4873,5 +4873,8 @@ a.session-title-meta:focus-visible {
 }
 .settings-body .settings-danger-zone {
 	margin-top: auto;
-	padding-top: 32px;
+}
+.settings-section:has(.settings-danger-zone)
+	> .settings-group:not(.settings-danger-zone) {
+	margin-bottom: 32px;
 }
