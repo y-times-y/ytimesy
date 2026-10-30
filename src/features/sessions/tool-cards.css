@@ -270,6 +270,8 @@
 /* Diff output: whole lines tinted, edge to edge, like the edit view. */
 .tool-output-line {
 	display: block;
+}
+.tool-panel-output .tool-output-line {
 	margin: 0 -12px;
 	padding: 0 12px;
 }
@@ -278,6 +280,9 @@
 }
 .tool-output-line[data-sign="removed"] {
 	background: rgba(248, 113, 113, 0.07);
+}
+.tool-output-line[data-sign="meta"] {
+	color: #6b6b6b;
 }
 .tool-panel-output[data-tone="bad"],
 .tool-panel-note[data-tone="bad"] {
