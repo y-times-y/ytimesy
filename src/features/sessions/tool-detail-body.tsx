@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import {
 	commandOutputLanguage,
 	type DiffOutputFile,
@@ -240,7 +240,11 @@ function DiffFileOutput({
 										? "-"
 										: " "}
 							</span>
-							<HighlightedTokens text={line.code} tokens={tokens?.[index]} />
+							<ChangedWords
+								text={line.code}
+								tokens={tokens?.[index]}
+								changed={line.changed}
+							/>
 							{line.code ? null : " "}
 						</>
 					)}
@@ -248,6 +252,59 @@ function DiffFileOutput({
 			))}
 		</>
 	);
+}
+
+type LineTokens = NonNullable<
+	ComponentProps<typeof HighlightedTokens>["tokens"]
+>;
+
+/** A diff line's code, its changed words on a stronger tint. */
+function ChangedWords({
+	text,
+	tokens,
+	changed,
+}: {
+	text: string;
+	tokens: LineTokens | undefined;
+	changed: readonly [number, number] | undefined;
+}) {
+	if (!changed) return <HighlightedTokens text={text} tokens={tokens} />;
+	const [start, end] = changed;
+	const part = (from: number, to: number) => ({
+		text: text.slice(from, to),
+		tokens: tokens ? sliceTokens(tokens, from, to) : undefined,
+	});
+	const before = part(0, start);
+	const word = part(start, end);
+	const after = part(end, text.length);
+	return (
+		<>
+			<HighlightedTokens {...before} />
+			<span className="tool-output-word">
+				<HighlightedTokens {...word} />
+			</span>
+			<HighlightedTokens {...after} />
+		</>
+	);
+}
+
+/** The tokens covering [from, to) of their line, cut at both ends. */
+function sliceTokens(tokens: LineTokens, from: number, to: number) {
+	const sliced: LineTokens = [];
+	let at = 0;
+	for (const token of tokens) {
+		const tokenEnd = at + token.content.length;
+		const cutStart = Math.max(from, at);
+		const cutEnd = Math.min(to, tokenEnd);
+		if (cutStart < cutEnd)
+			sliced.push({
+				...token,
+				offset: token.offset + (cutStart - at),
+				content: token.content.slice(cutStart - at, cutEnd - at),
+			});
+		at = tokenEnd;
+	}
+	return sliced;
 }
 
 /** Source lines with a line-number gutter, highlighted for the file's language. */

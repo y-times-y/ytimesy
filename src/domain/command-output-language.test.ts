@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+	changedWords,
 	commandOutputLanguage,
 	diffOutputFiles,
 } from "./command-output-language";
@@ -96,4 +97,24 @@ it("keeps git show's commit header as plain lines before the files", () => {
 		"",
 	]);
 	expect(file?.path).toBe("x.ts");
+});
+
+it("marks the words that changed inside an edited line", () => {
+	expect(changedWords("\tconst limit = 10;", "\tconst limit = 20;")).toEqual([
+		[15, 17],
+		[15, 17],
+	]);
+	expect(changedWords("return true;", "return row.rowCount > 0;")).toEqual(
+		null,
+	);
+	expect(changedWords("a", "a")).toBeNull();
+	const [file] = diffOutputFiles(
+		"diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,3 @@\n-const limit = 10;\n+const limit = 20;\n+log();",
+	);
+	// One removed line, two added: no pairing, no marks.
+	expect(file?.lines.map((line) => line.changed ?? null)).toEqual([
+		null,
+		null,
+		null,
+	]);
 });
