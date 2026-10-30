@@ -23,6 +23,7 @@ import { sessionCloneBranch } from "#/domain/session-branch";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
+import { latestEnvironmentRecipes } from "../adapters/environment-recipes";
 import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
@@ -64,7 +65,11 @@ export type EnvironmentBuildInput = {
 	secretRevision: string;
 	inputHash: string;
 	baseSnapshotId: string | null;
-	repositories: (ProjectRepository & { commit: string })[];
+	repositories: (ProjectRepository & {
+		commit: string;
+		/** The setup saved in Settings > Project > Environment; it wins over the repo's file. */
+		savedRecipe?: EnvironmentRecipe;
+	})[];
 	/**
 	 * Rebuild on top of the active template instead of from the base image: only
 	 * the repositories' commits changed since it was built. Maps repositoryId to
@@ -87,6 +92,10 @@ export async function resolveEnvironmentBuildInput(
 	const project = await projectForOwner(workspace.userId, workspace.projectId);
 	if (!project) throw new Error("Project is unavailable.");
 	const token = await githubAccessToken(workspace.userId);
+	const savedRecipes = await latestEnvironmentRecipes(
+		workspace.userId,
+		project.id,
+	);
 	const repositories = [];
 	for (const repo of repositoriesForProject(project)) {
 		const authorized = await authorizedRepository(
@@ -106,11 +115,14 @@ export async function resolveEnvironmentBuildInput(
 			branch,
 		);
 		if (!commit) throw new Error("Cannot resolve the repository revision.");
+		const savedRecipe = savedRecipes.get(repo.repositoryId)?.recipe;
 		repositories.push({
 			...repo,
 			fullName: authorized.fullName,
 			branch,
 			commit,
+			// Part of the input hash: a new saved setup rebuilds the image.
+			...(savedRecipe ? { savedRecipe } : {}),
 		});
 	}
 	const baseSnapshotId =
@@ -371,18 +383,28 @@ export async function prepareEnvironmentRepositories(
 			install: false,
 			commit: repo.commit,
 		});
-		const recipeResult = await host.exec(
-			`if [ -f ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)} ]; then cat ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)}; fi`,
-			15_000,
-		);
-		if (recipeResult.exitCode !== 0)
-			throw new Error("Could not read environment configuration.");
-		let recipe = recipeResult.stdout.trim()
-			? parseEnvironmentRecipe(recipeResult.stdout)
-			: environmentRecipe.parse({});
+		// As Cursor does: the setup saved in ytimesy wins; without one, the
+		// repository's own .ytimesy/environment.json is used as it is.
+		let fileText = "";
+		if (!repo.savedRecipe) {
+			const recipeResult = await host.exec(
+				`if [ -f ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)} ]; then cat ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)}; fi`,
+				15_000,
+			);
+			if (recipeResult.exitCode !== 0)
+				throw new Error("Could not read environment configuration.");
+			fileText = recipeResult.stdout.trim();
+		}
+		let recipe =
+			repo.savedRecipe ??
+			(fileText
+				? parseEnvironmentRecipe(fileText)
+				: environmentRecipe.parse({}));
+		if (repo.savedRecipe)
+			await event(`${repo.fullName}: using the saved environment setup.`);
 		const listing = await host.exec(`ls -1 ${quote(directory)}`, 15_000);
 		const files = listing.stdout.split("\n");
-		if (!recipeResult.stdout.trim() && files.includes("package.json")) {
+		if (!repo.savedRecipe && !fileText && files.includes("package.json")) {
 			const manifest = await host.exec(
 				`cat ${quote(`${directory}/package.json`)}`,
 				15_000,

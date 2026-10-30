@@ -180,6 +180,7 @@ import {
 	deferredToolSurface,
 	loadedDeferredTools,
 } from "../services/deferred-tools";
+import { environmentSetupTools } from "../services/environment-setup-tool";
 import {
 	FIRST_REQUEST_WORKSPACE_WAIT_MS,
 	type PromptCheck,
@@ -1341,6 +1342,13 @@ async function runApiTurnAttempt(
 			rootChat,
 			projectSecrets,
 			redact,
+			environmentSetup:
+				rootChat && owner.projectId
+					? environmentSetupTools({
+							userId: owner.userId,
+							projectId: owner.projectId,
+						})
+					: {},
 		});
 		// Harness variant plan (on in the product): the root builder's
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
@@ -2645,6 +2653,8 @@ function turnTools(input: {
 	rootChat: boolean;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
 	redact: readonly string[];
+	/** save_project_environment, in a person's root chats (not evaluations). */
+	environmentSetup: ToolSet;
 }) {
 	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
@@ -2665,7 +2675,12 @@ function turnTools(input: {
 	return mcpToolSurface({
 		tools: hooks.wrap(
 			withRedactedResults(
-				{ ...withMcp, ...secretTools, ...questionTools },
+				{
+					...withMcp,
+					...secretTools,
+					...questionTools,
+					...input.environmentSetup,
+				},
 				redact,
 			),
 		),

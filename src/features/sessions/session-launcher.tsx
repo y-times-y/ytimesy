@@ -165,6 +165,8 @@ export function SessionLauncher({
 	onOpenFile,
 	onRecovered,
 	initialDraft = "",
+	prefill,
+	onSetUpEnvironment,
 	childTasks = [],
 	projects,
 	selectedProject,
@@ -224,6 +226,9 @@ export function SessionLauncher({
 		items: readonly SessionItem[] | null,
 	) => Promise<void>;
 	initialDraft?: string;
+	/** Text put in the message box (focused) whenever `at` changes. */
+	prefill?: { readonly text: string; readonly at: number };
+	onSetUpEnvironment?: () => void;
 	childTasks?: readonly AgentTaskActivity[];
 	projects: Project[];
 	selectedProject?: Project;
@@ -487,6 +492,13 @@ export function SessionLauncher({
 		if (typedBeforeHydration)
 			setDraft((current) => current || typedBeforeHydration);
 	}, [typedBeforeHydration]);
+	const prefillAt = prefill?.at;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new request (its time), not each render.
+	useEffect(() => {
+		if (!prefill) return;
+		setDraft(prefill.text);
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, [prefillAt]);
 	// Saved as it is typed, under the chat it was typed in; cleared at once
 	// when it empties (a send). Moving to another chat or unmounting saves
 	// the pending text right away, still under its own chat.
@@ -1162,6 +1174,7 @@ export function SessionLauncher({
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
 						projectLocked={followUpLayout}
+						onSetUpEnvironment={onSetUpEnvironment}
 						repairModel={
 							selectedModel && (harnessId === "api" || harnessId === "codex")
 								? {

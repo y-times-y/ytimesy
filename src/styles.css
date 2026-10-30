@@ -4762,3 +4762,78 @@ a.session-title-meta:focus-visible {
 	background: #ffffff0a;
 	color: #ededed;
 }
+
+/* Settings > Project > Environment (environment-settings.tsx). */
+.environment-setup-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+}
+.environment-recipe {
+	display: grid;
+	gap: 10px;
+	margin: 0;
+	padding: 4px 16px 16px;
+}
+.environment-recipe > div {
+	display: grid;
+	grid-template-columns: 76px minmax(0, 1fr);
+	gap: 12px;
+}
+.environment-recipe dt {
+	color: #8f8f8f;
+	font-size: 12.5px;
+}
+.environment-recipe dd {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
+	margin: 0;
+	min-width: 0;
+}
+.environment-recipe code {
+	max-width: 100%;
+	padding: 2px 6px;
+	border-radius: 5px;
+	background: #ffffff0a;
+	color: #d4d4d4;
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.environment-editor textarea {
+	width: 100%;
+	min-height: 200px;
+	padding: 10px 12px;
+	border: 1px solid #ffffff17;
+	border-radius: 8px;
+	background: #ffffff05;
+	color: #e6e6e6;
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	resize: vertical;
+}
+.environment-editor .settings-form-actions {
+	margin-top: 10px;
+}
+
+/* "Set up environment" beside the repository and branch (project-context.tsx). */
+.environment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid #ffffff1a;
+	border-radius: 999px;
+	background: transparent;
+	color: #bdbdbd;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.environment-chip:hover {
+	border-color: #ffffff3a;
+	color: #fff;
+}
