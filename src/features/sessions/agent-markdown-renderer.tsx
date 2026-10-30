@@ -17,11 +17,16 @@ import {
 import {
 	agentNameInCode,
 	agentNameSegments,
+	echoedTaskLength,
 	type MentionAgent,
 } from "#/domain/agent-mentions";
 import { withoutDanglingMarker } from "#/domain/markdown-text";
 import type { FileChangeEntry } from "#/domain/session-item";
-import { workspaceFileMention } from "#/domain/workspace-file-mention";
+import {
+	type FileReference,
+	fileReferenceLabel,
+	workspaceFileReference,
+} from "#/domain/workspace-file-mention";
 import { AgentChip, AgentMentionContext } from "./agent-chip";
 import { codeHighlighter } from "./code-highlighter";
 import { FileMentionButton, mentionedFileChange } from "./file-mention";
@@ -54,17 +59,31 @@ type HastNode = {
  * buttons keep their text. Streamdown caches processors by plugin name and
  * options, so the names go in as options.
  */
+function hastText(node: HastNode): string {
+	return node.value ?? (node.children ?? []).map(hastText).join("");
+}
+
 function rehypeAgentNames(options: { readonly names: readonly string[] }) {
 	const names = new Set(options.names);
 	const skip = new Set(["code", "pre", "a", "button"]);
 	const visit = (node: HastNode) => {
 		if (!node.children) return;
+		let previous: HastNode | undefined;
 		node.children = node.children.flatMap((child): HastNode[] => {
+			const before = previous;
+			previous = child;
 			if (child.type === "element") {
 				if (!skip.has(child.tagName ?? "")) visit(child);
 				return [child];
 			}
 			if (child.type !== "text" || !child.value) return [child];
+			// `review-2` ("Audit chat lifecycle"): the chip already names it.
+			if (
+				before?.type === "element" &&
+				before.tagName === "code" &&
+				agentNameInCode(hastText(before), names)
+			)
+				child.value = child.value.slice(echoedTaskLength(child.value));
 			const segments = agentNameSegments(child.value, names);
 			if (segments.length === 1 && segments[0]?.kind === "text") return [child];
 			return segments.map((segment) =>
@@ -132,21 +151,27 @@ export function AgentMarkdown({
 			const agent = agentByName.get(name);
 			return agent ? <AgentChip agent={agent} onOpen={onOpenAgent} /> : null;
 		}
-		function fileLink(path: string, label: string) {
-			const change = mentionedFileChange(path, fileChanges);
+		function fileLink(reference: FileReference, label?: string) {
+			const change = mentionedFileChange(reference.path, fileChanges);
 			return (
 				<FileMentionButton
-					path={change?.path ?? path}
-					name={label}
+					path={change?.path ?? reference.path}
+					name={label ?? fileReferenceLabel(reference)}
+					lines={reference.lines}
 					onOpenFile={onOpenFile}
 				/>
 			);
 		}
 		return {
 			a: ({ href, children }) => {
-				const file = fileMentions && workspaceFileMention(href ?? "");
+				const file = fileMentions && workspaceFileReference(href ?? "");
 				if (file)
-					return fileLink(file, typeof children === "string" ? children : file);
+					return fileLink(
+						file,
+						typeof children === "string" && children !== href
+							? children
+							: undefined,
+					);
 				const safe = safeExternalLink(href);
 				return safe ? (
 					<a href={safe} target="_blank" rel="noopener noreferrer">
@@ -160,8 +185,8 @@ export function AgentMarkdown({
 				const { children, className } = props;
 				const text = markdownChildText(children);
 				if (!("data-block" in props)) {
-					const file = fileMentions && workspaceFileMention(text);
-					if (file) return fileLink(file, text);
+					const file = fileMentions && workspaceFileReference(text);
+					if (file) return fileLink(file);
 					const agent = agentNameInCode(text, agentNames);
 					return (agent && agentChip(agent)) || <code>{children}</code>;
 				}

@@ -5,11 +5,14 @@ import { FileTypeIcon } from "./file-type-icon";
 export function FileMentionButton({
 	path,
 	name,
+	lines,
 	change,
 	onOpenFile,
 }: {
 	path: string;
 	name: string;
+	/** The lines the reference points at ("510–525"), shown in its tooltip. */
+	lines?: string | null;
 	change?: FileChangeEntry["change"];
 	onOpenFile?: (path: string) => void;
 }) {
@@ -26,7 +29,7 @@ export function FileMentionButton({
 		<button
 			type="button"
 			className="session-file-open"
-			title={`Open ${path}`}
+			title={`Open ${path}${lines ? ` (lines ${lines})` : ""}`}
 			data-path={path}
 			onClick={() => onOpenFile(path)}
 		>
