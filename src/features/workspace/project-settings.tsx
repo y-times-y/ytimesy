@@ -94,7 +94,6 @@ const sectionIcon = {
 } as const;
 
 export function ProjectSettings({
-	codexUsage,
 	open,
 	projectId,
 	projects,
@@ -121,7 +120,8 @@ export function ProjectSettings({
 	}, [open, initialSection]);
 	const [settingsProjectId, setSettingsProjectId] = useState<string>();
 	const readSubscriptionUsage = useServerFn(codexSubscriptionUsageFn);
-	const subscriptionUsage = useQuery({
+	// Shared with the model picker's plan line (plan-usage.tsx).
+	useQuery({
 		queryKey: ["codex-subscription-usage"],
 		queryFn: () => readSubscriptionUsage(),
 		// Read with the panel, so Agents shows at its full height when picked.
@@ -276,7 +276,6 @@ export function ProjectSettings({
 								{section === "mcp" ? <McpServers /> : null}
 								{section === "agents" ? (
 									<AgentsSection
-										usage={subscriptionUsage.data ?? codexUsage}
 										account={
 											account.data?.agentAccount ?? { status: "disconnected" }
 										}
@@ -840,13 +839,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	);
 }
 
-function AgentsSection({
-	account,
-	usage,
-}: {
-	account: UserAgentAccount;
-	usage?: CodexUsage;
-}) {
+function AgentsSection({ account }: { account: UserAgentAccount }) {
 	const queryClient = useQueryClient();
 	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 	const refreshAccount = () =>
@@ -938,7 +931,7 @@ function AgentsSection({
 					</li>
 				</ul>
 				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
-				{connected ? <CodexSubscriptionUsage usage={usage} /> : null}
+				{connected ? <CodexSubscriptionUsage /> : null}
 			</section>
 			<ModelConnections />
 			<ModelFailoverSettings />
