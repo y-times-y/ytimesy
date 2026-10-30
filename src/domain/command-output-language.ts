@@ -37,59 +37,87 @@ export function commandOutputLanguage(command: string): SourceLanguage {
 }
 
 export type DiffOutputLine = {
-	readonly kind: "meta" | "added" | "removed" | "context";
-	readonly text: string;
-	/** The line without its +, - or space marker; the whole line for meta. */
+	/**
+	 * "break" stands between two hunks; "other" is text outside any hunk
+	 * (git show's commit header). Git's own headers (diff --git, index,
+	 * ---/+++, @@) are not lines: the file's path and counts replace them.
+	 */
+	readonly kind: "added" | "removed" | "context" | "break" | "other";
+	/** The line without its +, - or space marker. */
 	readonly code: string;
-	/** Its line in the new file (the old file for removed lines), inside a hunk. */
+	/** Its line in the new file (the old file for removed lines). */
 	readonly number?: number;
 };
 
-const DIFF_META =
-	/^(?:diff |index |---|\+\+\+|@@|new file|deleted file|similarity|rename |old mode|new mode|Binary )/;
+export type DiffOutputFile = {
+	/** Null for text before the first file (git show's commit header). */
+	path: string | null;
+	language: SourceLanguage;
+	added: number;
+	removed: number;
+	lines: DiffOutputLine[];
+};
+
+const GIT_HEADER =
+	/^(?:diff --git |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode|Binary )/;
 
 /**
- * Diff output split per file, each with the language its path names, so
- * the code in its lines can be coloured as that language.
+ * Diff output split per file the way Codex draws it: each file's path,
+ * language and +/- counts, then its lines numbered, with hunks separated by
+ * a break instead of git's @@ headers.
  */
-export function diffOutputFiles(output: string) {
-	const files: { language: SourceLanguage; lines: DiffOutputLine[] }[] = [];
+export function diffOutputFiles(output: string): DiffOutputFile[] {
+	const files: DiffOutputFile[] = [];
+	const lines = output.replace(/\n+$/, "").split("\n");
 	let oldLine = 0;
 	let newLine = 0;
 	let inHunk = false;
-	for (const text of output.split("\n")) {
-		if (!files.length || text.startsWith("diff --git "))
-			files.push({ language: "text", lines: [] });
-		const file = files[files.length - 1] as (typeof files)[number];
+	for (const text of lines) {
+		const startsFile = text.startsWith("diff --git ");
+		if (!files.length || startsFile) {
+			files.push({
+				path: startsFile ? (text.match(/ b\/(.+)$/)?.[1] ?? null) : null,
+				language: "text",
+				added: 0,
+				removed: 0,
+				lines: [],
+			});
+			inHunk = false;
+		}
+		const file = files[files.length - 1] as DiffOutputFile;
 		const path = text.match(/^(?:\+\+\+|---) (?:[ab]\/)?(.+)$/)?.[1];
-		if (path && path !== "/dev/null" && file.language === "text")
+		if (path && path !== "/dev/null") {
+			file.path = path;
 			file.language = sourceLanguageFromPath(path);
-		const kind = DIFF_META.test(text)
-			? "meta"
-			: text.startsWith("+")
-				? "added"
-				: text.startsWith("-")
-					? "removed"
-					: "context";
+		}
 		const hunk = text.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)/);
 		if (hunk) {
+			if (file.lines.some((line) => line.number !== undefined))
+				file.lines.push({ kind: "break", code: "" });
 			oldLine = Number(hunk[1]);
 			newLine = Number(hunk[2]);
 			inHunk = true;
-		} else if (kind === "meta") inHunk = false;
-		const marked = kind !== "meta" && /^[+\- ]/.test(text);
-		let number: number | undefined;
-		if (inHunk && marked) {
-			number = kind === "removed" ? oldLine : newLine;
-			if (kind !== "added") oldLine++;
-			if (kind !== "removed") newLine++;
+			continue;
 		}
-		file.lines.push({
-			kind,
-			text,
-			code: marked ? text.slice(1) : text,
-			...(number === undefined ? {} : { number }),
-		});
+		if (file.path !== null && GIT_HEADER.test(text)) {
+			inHunk = false;
+			continue;
+		}
+		if (!inHunk || (!/^[+\- ]/.test(text) && text !== "")) {
+			file.lines.push({ kind: "other", code: text });
+			continue;
+		}
+		const kind = text.startsWith("+")
+			? "added"
+			: text.startsWith("-")
+				? "removed"
+				: "context";
+		const number = kind === "removed" ? oldLine : newLine;
+		if (kind !== "added") oldLine++;
+		if (kind !== "removed") newLine++;
+		if (kind === "added") file.added++;
+		if (kind === "removed") file.removed++;
+		file.lines.push({ kind, code: text.slice(1), number });
 	}
-	return files;
+	return files.filter((file) => file.path !== null || file.lines.length);
 }

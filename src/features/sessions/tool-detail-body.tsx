@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
 	commandOutputLanguage,
+	type DiffOutputFile,
 	diffOutputFiles,
 } from "#/domain/command-output-language";
 import { fileBasename } from "#/domain/file-kind";
@@ -187,36 +188,66 @@ export function CommandOutput({
 	);
 }
 
-/** One file's part of diff output: its code coloured, its lines tinted. */
+/**
+ * One file of diff output, drawn as Codex draws it: the path with its +/-
+ * counts, then numbered lines coloured as the file's language on green and
+ * red tints, with a ⋮ between hunks instead of git's headers.
+ */
 function DiffFileOutput({
+	path,
 	language,
+	added,
+	removed,
 	lines,
-}: ReturnType<typeof diffOutputFiles>[number]) {
+}: DiffOutputFile) {
 	const tokens = useHighlightedLines(
-		lines.map((line) => (line.kind === "meta" ? "" : line.code)).join("\n"),
+		lines
+			.map((line) =>
+				line.kind === "other" || line.kind === "break" ? "" : line.code,
+			)
+			.join("\n"),
 		language,
 	);
-	return lines.map((line, index) => (
-		<span
-			// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
-			key={index}
-			className="tool-output-line"
-			data-sign={line.kind === "context" ? undefined : line.kind}
-		>
-			{line.kind === "meta" ? (
-				line.text || " "
-			) : (
-				<>
-					<span className="tool-output-number">{line.number ?? ""}</span>
-					<span className="tool-output-marker">
-						{line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}
+	return (
+		<>
+			{path ? (
+				<span className="tool-output-file">
+					<PathHead path={path} />
+					<span className="tool-output-counts">
+						<span data-sign="added">+{added}</span>
+						<span data-sign="removed">−{removed}</span>
 					</span>
-					<HighlightedTokens text={line.code} tokens={tokens?.[index]} />
-					{line.code ? null : " "}
-				</>
-			)}
-		</span>
-	));
+				</span>
+			) : null}
+			{lines.map((line, index) => (
+				<span
+					// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
+					key={index}
+					className="tool-output-line"
+					data-sign={line.kind === "context" ? undefined : line.kind}
+				>
+					{line.kind === "other" ? (
+						line.code || " "
+					) : line.kind === "break" ? (
+						<span className="tool-output-number">⋮</span>
+					) : (
+						<>
+							<span className="tool-output-number">{line.number}</span>
+							<span className="tool-output-marker">
+								{line.kind === "added"
+									? "+"
+									: line.kind === "removed"
+										? "-"
+										: " "}
+							</span>
+							<HighlightedTokens text={line.code} tokens={tokens?.[index]} />
+							{line.code ? null : " "}
+						</>
+					)}
+				</span>
+			))}
+		</>
+	);
 }
 
 /** Source lines with a line-number gutter, highlighted for the file's language. */
