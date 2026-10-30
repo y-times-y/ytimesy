@@ -1,6 +1,7 @@
 import { backgroundReadChatIds } from "#/domain/agent-panel";
 import { parseSteering } from "#/domain/agent-steering";
 import { agentTaskTree } from "#/domain/agent-task";
+import { recordedContextUsage } from "#/domain/api-progress";
 import {
 	type RunningBackgroundCommand,
 	runningBackgroundCommands,
@@ -70,12 +71,13 @@ export async function projectAgentTasksAndBackground(
 			const steering = parseSteering(row.message);
 			return steering ? [{ id: row.id, ...steering }] : [];
 		});
+		const items = sessionItemsFromUnknown(byId.get(task.id)?.items);
+		const contextUsage = recordedContextUsage(items);
 		return {
 			...task,
 			...(queuedSteering.length ? { queuedSteering } : {}),
-			items: childTaskPublicItems(
-				sessionItemsFromUnknown(byId.get(task.id)?.items),
-			),
+			...(contextUsage ? { contextUsage } : {}),
+			items: childTaskPublicItems(items),
 			turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
 			...(subagent ? { subagent } : {}),
 		};
