@@ -510,6 +510,7 @@ const messageText = z
 const baseBranchInput = z
 	.string()
 	.trim()
+	.max(255)
 	.refine(isValidBranchName, "Choose a valid branch to start from.");
 
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
