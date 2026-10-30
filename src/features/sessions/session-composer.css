@@ -1190,7 +1190,12 @@ button.attachment-tile-body[data-state="open"] {
 	border-bottom: 1px solid #ffffff12;
 	text-align: start;
 	vertical-align: top;
-	overflow-wrap: anywhere;
+	/* Long words still wrap, but only when a whole word cannot fit, so the
+	   column is never squeezed narrower than a file name. */
+	overflow-wrap: break-word;
+}
+.session-markdown td .session-file-name {
+	white-space: nowrap;
 }
 .session-markdown :is(th, td):last-child {
 	padding-right: 0;

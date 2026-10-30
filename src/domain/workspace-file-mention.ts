@@ -29,9 +29,41 @@ export function workspaceFileMention(value: string): string | null {
 	return workspaceFileReference(value)?.path ?? null;
 }
 
-/** "executor.ts:510–525": the file's name and lines, for a chip. */
-export function fileReferenceLabel(reference: FileReference): string {
-	const name =
-		reference.path.split("/").filter(Boolean).at(-1) ?? reference.path;
-	return reference.lines ? `${name}:${reference.lines}` : name;
+function fileName(path: string): string {
+	return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+/**
+ * "executor.ts:510–525": the file's name and lines, for a chip. A name that
+ * two different paths share (`shared`) keeps its folder: "services/archive.ts".
+ */
+export function fileReferenceLabel(
+	reference: FileReference,
+	shared: ReadonlySet<string> = new Set(),
+): string {
+	const parts = reference.path.split("/").filter(Boolean);
+	const name = fileName(reference.path);
+	const label =
+		shared.has(name) && parts.length > 1 ? parts.slice(-2).join("/") : name;
+	return reference.lines ? `${label}:${reference.lines}` : label;
+}
+
+/** File names that more than one path in this markdown ends with. */
+export function sharedFileNames(markdown: string): Set<string> {
+	const paths = new Map<string, Set<string>>();
+	const candidates = [
+		...markdown.matchAll(/`([^`\n]+)`/g),
+		...markdown.matchAll(/\]\(([^)\s]+)\)/g),
+	];
+	for (const [, value] of candidates) {
+		const reference = workspaceFileReference(value ?? "");
+		if (!reference) continue;
+		const name = fileName(reference.path);
+		const seen = paths.get(name) ?? new Set();
+		seen.add(reference.path.replace(/^\.?\//, ""));
+		paths.set(name, seen);
+	}
+	return new Set(
+		[...paths].filter(([, seen]) => seen.size > 1).map(([name]) => name),
+	);
 }
