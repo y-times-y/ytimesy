@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { commandOutputLanguage } from "#/domain/command-output-language";
 import { fileBasename } from "#/domain/file-kind";
 import type { McpBlock } from "#/domain/mcp-call-view";
 import type { DynamicToolCallItem } from "#/domain/session-item";
@@ -126,7 +127,7 @@ function CommandPanel({
 			aside={<ExitTag exit={view.exit} failed={failed} />}
 		>
 			{view.output ? (
-				<pre className="tool-panel-body tool-panel-output">{view.output}</pre>
+				<CommandOutput command={view.command} output={view.output} />
 			) : !failed && view.exit !== "running" ? (
 				<p className="tool-panel-empty">No output</p>
 			) : null}
@@ -136,6 +137,32 @@ function CommandPanel({
 				</p>
 			) : null}
 		</Panel>
+	);
+}
+
+/** A command's output, coloured when it is plainly one file or a diff. */
+function CommandOutput({
+	command,
+	output,
+}: {
+	command: string;
+	output: string;
+}) {
+	const language = commandOutputLanguage(command);
+	const tokens = useHighlightedLines(output, language);
+	return (
+		<pre className="tool-panel-body tool-panel-output">
+			{tokens
+				? output.split("\n").map((line, index) => (
+						// Output lines are positional: their place is their identity.
+						// biome-ignore lint/suspicious/noArrayIndexKey: positional output lines
+						<span key={index}>
+							{index ? "\n" : null}
+							<HighlightedTokens text={line} tokens={tokens[index]} />
+						</span>
+					))
+				: output}
+		</pre>
 	);
 }
 
