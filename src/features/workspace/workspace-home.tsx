@@ -31,6 +31,7 @@ import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
 } from "#/domain/default-branch-cookie";
+import { ENVIRONMENT_SETUP_PROMPT } from "#/domain/environment-setup";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -655,6 +656,15 @@ export function WorkspaceHome({
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	/** A send waiting for the ChatGPT device code to be entered. */
 	const pendingSendRef = useRef<PendingSend | null>(null);
+	const [composerPrefill, setComposerPrefill] = useState<{
+		readonly text: string;
+		readonly at: number;
+	}>();
+	// The message box takes it in its own effect (children's run first); it
+	// must not come back when another chat's box mounts later.
+	useEffect(() => {
+		if (composerPrefill) setComposerPrefill(undefined);
+	}, [composerPrefill]);
 	// A message sent while the project's environment is still being set up
 	// waits for it, then goes as usual (or is dropped if the setup fails).
 	const heldForSetupRef = useRef<PendingSend | null>(null);
@@ -1852,6 +1862,13 @@ export function WorkspaceHome({
 		if (compact) setProjectsOpen(false);
 	}
 
+	/** A new chat in that project, its message box holding the setup request. */
+	function startEnvironmentSetup(projectId: string) {
+		setSettingsOpen(false);
+		startNewChat(projectId);
+		setComposerPrefill({ text: ENVIRONMENT_SETUP_PROMPT, at: Date.now() });
+	}
+
 	function startNewChat(projectId?: string) {
 		setMemoryPageOpen(false);
 		const targetProjectId = projectId ?? selectedProject?.id;
@@ -2527,6 +2544,7 @@ export function WorkspaceHome({
 						account={account}
 					/>
 					<ProjectSettings
+						onSetUpEnvironment={startEnvironmentSetup}
 						codexUsage={session.usage}
 						open={settingsOpen}
 						projectId={selectedProject?.id}
@@ -2647,6 +2665,11 @@ export function WorkspaceHome({
 									data-layout={followUpLayout ? "chat" : "empty"}
 								>
 									<SessionLauncher
+										prefill={composerPrefill}
+										onSetUpEnvironment={() =>
+											selectedProject &&
+											startEnvironmentSetup(selectedProject.id)
+										}
 										initialDraft={
 											recoveryDraft?.id === session.agentSessionId
 												? recoveryDraft.prompt

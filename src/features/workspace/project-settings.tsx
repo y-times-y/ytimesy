@@ -53,6 +53,7 @@ import { getModelFailoverSettings } from "../sessions/model-failover.fn";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
 import { ArchivedSettings } from "./archived-settings";
+import { EnvironmentSettings } from "./environment-settings";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { readMachineSizeFn } from "./machine-size.fn";
@@ -101,6 +102,7 @@ export function ProjectSettings({
 	selectedProject,
 	onProjectAdded,
 	onSignOut,
+	onSetUpEnvironment,
 	onClose,
 	initialSection,
 }: {
@@ -113,6 +115,8 @@ export function ProjectSettings({
 	selectedProject?: Project;
 	onProjectAdded: (project: Project) => void;
 	onSignOut: () => void;
+	/** Starts a new chat in that project with the environment setup request. */
+	onSetUpEnvironment?: (projectId: string) => void;
 	onClose: () => void;
 }) {
 	const [section, setSection] = useState<SettingsSection>("account");
@@ -256,6 +260,17 @@ export function ProjectSettings({
 												project={settingsProject}
 												projects={projects}
 												onSelect={setSettingsProjectId}
+											/>
+										) : null}
+										{settingsProject ? (
+											<EnvironmentSettings
+												key={`environment-${settingsProject.id}`}
+												projectId={settingsProject.id}
+												onSetUpWithAgent={
+													onSetUpEnvironment
+														? () => onSetUpEnvironment(settingsProject.id)
+														: undefined
+												}
 											/>
 										) : null}
 										{settingsProject ? (
