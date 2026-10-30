@@ -1,72 +1,53 @@
-import type { CodexUsage } from "#/domain/codex-usage";
 import { usageResetLabel } from "#/domain/usage-warning";
+import { usePlanUsageBars } from "./plan-usage";
 
-function windowLabel(minutes?: number | null) {
-	if (!minutes) return "Usage window";
-	if (minutes % (60 * 24 * 7) === 0) return "Weekly limit";
-	if (minutes % 60 === 0) return `${minutes / 60}-hour limit`;
-	return `${minutes}-minute limit`;
-}
+const LOW_PERCENT = 85;
 
-function resetLabel(resetsAt?: number | null) {
-	if (!resetsAt) return null;
-	return `Resets ${usageResetLabel(resetsAt * 1000)}`;
-}
-
-export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {
-	const buckets = usage?.limits?.rateLimitsByLimitId;
-	const limits =
-		buckets && Object.keys(buckets).length
-			? Object.entries(buckets)
-			: usage?.limits?.rateLimits
-				? [["codex", usage.limits.rateLimits] as const]
-				: [];
+/**
+ * Settings' ChatGPT plan usage: the same windows the model picker shows
+ * (including a limit a turn just hit), each with its reset time.
+ */
+export function CodexSubscriptionUsage() {
+	const bars = usePlanUsageBars(true);
 	return (
 		<section
 			className="settings-group settings-group-body codex-subscription-usage"
-			aria-label="Codex subscription usage"
+			aria-label="ChatGPT plan usage"
 		>
-			<p className="settings-row-title">ChatGPT subscription limits</p>
-			{limits.length ? (
-				limits.map(([id, bucket]) => (
-					<div key={id}>
-						{limits.length > 1 ? (
-							<p className="settings-row-meta">{bucket.limitName ?? id}</p>
-						) : null}
-						{[bucket.primary, bucket.secondary].map((window, index) =>
-							window ? (
-								<div
-									key={index === 0 ? "primary" : "secondary"}
-									className="codex-usage-window"
-								>
-									<div className="codex-usage-line">
-										<span>{windowLabel(window.windowDurationMins)}</span>
-										<span>{window.usedPercent}% used</span>
-									</div>
-									{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
-									<div
-										className="settings-meter"
-										data-tone={window.usedPercent >= 85 ? "low" : undefined}
-										role="meter"
-										aria-label="Subscription usage"
-										aria-valuemin={0}
-										aria-valuemax={100}
-										aria-valuenow={window.usedPercent}
-									>
-										<span style={{ width: `${window.usedPercent}%` }} />
-									</div>
-									{window.resetsAt ? (
-										<p className="settings-row-meta">
-											{resetLabel(window.resetsAt)}
-										</p>
-									) : null}
-								</div>
-							) : null,
-						)}
-					</div>
-				))
+			<p className="settings-row-title">ChatGPT plan usage</p>
+			{bars.length ? (
+				bars.map((bar) => {
+					const used = Math.min(100, Math.max(0, bar.usedPercent));
+					return (
+						<div key={bar.id} className="codex-usage-window">
+							<div className="codex-usage-line">
+								<span>{bar.label}</span>
+								<strong data-low={used >= LOW_PERCENT || undefined}>
+									{used >= 100 ? "Used up" : `${used}% used`}
+								</strong>
+							</div>
+							{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
+							<div
+								className="codex-usage-meter"
+								data-low={used >= LOW_PERCENT || undefined}
+								role="meter"
+								aria-label={`${bar.label} used`}
+								aria-valuemin={0}
+								aria-valuemax={100}
+								aria-valuenow={used}
+							>
+								<span style={{ width: `${used}%` }} />
+							</div>
+							<p className="codex-usage-reset">
+								{bar.resetsAt
+									? `Resets ${usageResetLabel(bar.resetsAt)}`
+									: "Reset time unknown"}
+							</p>
+						</div>
+					);
+				})
 			) : (
-				<p className="settings-row-meta">Subscription usage unavailable.</p>
+				<p className="settings-row-meta">Plan usage unavailable right now.</p>
 			)}
 		</section>
 	);
