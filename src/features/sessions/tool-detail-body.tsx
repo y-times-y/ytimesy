@@ -150,11 +150,27 @@ function CommandOutput({
 }) {
 	const language = commandOutputLanguage(command);
 	const tokens = useHighlightedLines(output, language);
+	if (language === "diff")
+		return (
+			<pre className="tool-panel-body tool-panel-output">
+				{output.split("\n").map((line, index) => (
+					// Output lines are positional: their place is their identity.
+					<span
+						// biome-ignore lint/suspicious/noArrayIndexKey: positional output lines
+						key={index}
+						className="tool-output-line"
+						data-sign={diffLineSign(line)}
+					>
+						<HighlightedTokens text={line} tokens={tokens?.[index]} />
+						{line ? null : " "}
+					</span>
+				))}
+			</pre>
+		);
 	return (
 		<pre className="tool-panel-body tool-panel-output">
 			{tokens
 				? output.split("\n").map((line, index) => (
-						// Output lines are positional: their place is their identity.
 						// biome-ignore lint/suspicious/noArrayIndexKey: positional output lines
 						<span key={index}>
 							{index ? "\n" : null}
@@ -164,6 +180,14 @@ function CommandOutput({
 				: output}
 		</pre>
 	);
+}
+
+/** Added and removed lines of diff output; file headers (+++/---) are neither. */
+function diffLineSign(line: string) {
+	if (line.startsWith("+++") || line.startsWith("---")) return undefined;
+	if (line.startsWith("+")) return "added";
+	if (line.startsWith("-")) return "removed";
+	return undefined;
 }
 
 /** Source lines with a line-number gutter, highlighted for the file's language. */
