@@ -39,6 +39,8 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	// 20261029200000_archive.sql's project half (this schema has no chats).
+	await db.exec("alter table project add column archived_at timestamptz");
 });
 afterAll(() => db.close());
 
