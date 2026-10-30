@@ -1114,7 +1114,7 @@ it("does not log or retry unclassified failures and never falls back", async () 
 	});
 	mocks.model.mockReturnValue(model);
 	try {
-		await expect(run([])).rejects.toThrow("No fallback was used");
+		await expect(run([])).rejects.toThrow("didn't say why");
 		expect(model.doStreamCalls).toHaveLength(1);
 		expect(log).not.toHaveBeenCalled();
 		expect(mocks.close).toHaveBeenCalledOnce();
@@ -1228,7 +1228,7 @@ it("retries a provider rate limit with backoff, then reports an actionable error
 		await vi.advanceTimersByTimeAsync(120_000);
 		const message = await pending;
 		expect(attempts).toBe(5);
-		expect(message).toContain("rate limit");
+		expect(message).toContain("limiting requests");
 		expect(message).not.toContain("secret-provider-response");
 	} finally {
 		vi.useRealTimers();

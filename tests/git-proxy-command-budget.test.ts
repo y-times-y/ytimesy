@@ -72,7 +72,7 @@ it("says the repository could not be fetched only when the fetch itself failed",
 			(error: unknown) => apiModelFailureMessage(error),
 		);
 	expect(await receive("fetch --no-tags")).toContain(
-		"could not fetch its repository",
+		"get this chat's code from GitHub",
 	);
 	for (const local of [
 		"check-ref-format",
@@ -80,6 +80,6 @@ it("says the repository could not be fetched only when the fetch itself failed",
 		"merge --ff-only",
 	])
 		expect(await receive(local)).not.toContain(
-			"could not fetch its repository",
+			"get this chat's code from GitHub",
 		);
 });

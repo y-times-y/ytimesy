@@ -7,6 +7,7 @@ import {
 	isCustomConnection,
 	type ModelProvider,
 } from "./model-connection";
+import type { ModelSwitchItem, SessionItem } from "./session-item";
 import {
 	subscriptionTurnRevision,
 	subscriptionTurnSettings,
@@ -34,8 +35,25 @@ const REASON_TEXT: Record<FailoverReason, string> = {
 	timeout: "timed out",
 };
 
+/** Why a route stopped, for the person reading the chat. */
+function failingSentence(from: RouteLabel, reason: FailoverReason) {
+	if (reason === "usage-limit")
+		return from.connection === SUBSCRIPTION_LABEL
+			? "Your ChatGPT plan's Codex usage is used up"
+			: `${from.connection} is out of usage`;
+	return {
+		outage: `${from.connection} is down right now`,
+		overloaded: `${from.connection} is overloaded right now`,
+		"rate-limited": `${from.connection} is limiting requests right now`,
+		timeout: `${from.connection} stopped responding`,
+	}[reason];
+}
+
 /** The transcript text a "Continue on …" answer sends. */
 export const FAILOVER_CONTINUE_TEXT = "Continue on the fallback model.";
+
+/** The ChatGPT plan's connection as the chat names it. */
+export const SUBSCRIPTION_LABEL = "Codex";
 
 /** The Codex (ChatGPT plan) connection's key; API connections use their id. */
 export const SUBSCRIPTION_KEY = "codex";
@@ -505,7 +523,7 @@ export function failoverNotice(
 	to: RouteLabel,
 	reason: FailoverReason,
 ) {
-	return `${from.connection} is unavailable (${REASON_TEXT[reason]}); continued on ${routeLabelText(to)}.`;
+	return `${failingSentence(from, reason)}, so this chat continued on ${routeLabelText(to)}.`;
 }
 
 export function failoverQuestion(
@@ -513,14 +531,43 @@ export function failoverQuestion(
 	to: RouteLabel,
 	reason: FailoverReason,
 ) {
-	return `${from.connection} is unavailable (${REASON_TEXT[reason]}). Continuing on ${routeLabelText(to)} bills your API key, and you asked to be asked first.`;
+	return `${failingSentence(from, reason)}. Continue on ${routeLabelText(to)}? It bills your API key, and you asked to be asked first.`;
 }
 
 /** Appended to the turn's failure once it had moved at least once. */
 export function failoverExhaustedDetail(failover: TurnFailover | null) {
 	return failover && failover.triedLabels.length > 1
-		? ` Automatic failover tried: ${failover.triedLabels.join(", ")}.`
+		? ` Tried: ${failover.triedLabels.join(", ")}.`
 		: "";
+}
+
+/**
+ * The turn's failure after a failover chain ran out, leading with why the
+ * first route stopped (often the real reason, such as a spent ChatGPT plan)
+ * rather than only the last fallback's error.
+ */
+export function failoverChainFailure(
+	items: readonly SessionItem[],
+	turnId: string,
+	lastFailure: string,
+	now = Date.now(),
+) {
+	const first = items.find(
+		(item): item is ModelSwitchItem =>
+			item.kind === "modelSwitch" &&
+			item.state === "switched" &&
+			item.id.startsWith(`${turnId}:switch-`) &&
+			item.reason !== "sidekick-escalation",
+	);
+	if (!first || first.reason === "sidekick-escalation") return null;
+	const minutes = first.resetsAt
+		? Math.max(1, Math.ceil((first.resetsAt - now) / 60_000))
+		: null;
+	const resets =
+		minutes === null
+			? ""
+			: ` (resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`})`;
+	return `${failingSentence(first.from, first.reason)}${resets}. Switching to ${first.to.connection} didn't work either: ${lastFailure}`;
 }
 
 /** The runtime note the next model reads after a switch; its earlier reasoning is gone. */
