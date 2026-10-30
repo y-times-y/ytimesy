@@ -38,7 +38,7 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 	},
 	repositories: {
 		title: "Choose repositories",
-		lede: "They become your first project. You can add more later.",
+		lede: "Pick the ones for your first project.",
 	},
 	model: {
 		title: "Choose a model",
@@ -185,7 +185,7 @@ function GithubStep({
 						<small>
 							{installOpened
 								? "Finish on GitHub. This page updates on its own."
-								: "Pick the repositories it can work in"}
+								: "Give it access to your repositories"}
 						</small>
 					</span>
 					{signedIn && installationUrl ? (
