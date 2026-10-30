@@ -284,16 +284,40 @@
 .tool-output-line[data-sign="meta"] {
 	color: #6b6b6b;
 }
+.tool-output-number {
+	display: inline-block;
+	min-width: 4ch;
+	padding-right: 1.5ch;
+	color: #4d4d4d;
+	text-align: right;
+	user-select: none;
+}
 .tool-output-marker {
 	display: inline-block;
 	width: 2ch;
 	color: #6b6b6b;
 	user-select: none;
 }
-.tool-output-line[data-sign="added"] .tool-output-marker {
+.tool-output-line[data-sign="added"] .tool-output-number {
+	display: inline-block;
+	min-width: 4ch;
+	padding-right: 1.5ch;
+	color: #4d4d4d;
+	text-align: right;
+	user-select: none;
+}
+.tool-output-marker {
 	color: #4ade80;
 }
-.tool-output-line[data-sign="removed"] .tool-output-marker {
+.tool-output-line[data-sign="removed"] .tool-output-number {
+	display: inline-block;
+	min-width: 4ch;
+	padding-right: 1.5ch;
+	color: #4d4d4d;
+	text-align: right;
+	user-select: none;
+}
+.tool-output-marker {
 	color: #f87171;
 }
 .tool-panel-output[data-tone="bad"],

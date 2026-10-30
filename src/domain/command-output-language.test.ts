@@ -48,10 +48,21 @@ it("splits diff output per file with each file's language", () => {
 			"new file mode 100644",
 			"--- /dev/null",
 			"+++ b/app.py",
+			"@@ -0,0 +1 @@",
 			"+print('hi')",
 		].join("\n"),
 	);
 	expect(files.map((file) => file.language)).toEqual(["typescript", "python"]);
+	expect(files[0]?.lines.map((line) => line.number)).toEqual([
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1,
+		2,
+		2,
+	]);
+	expect(files[1]?.lines.at(-1)?.number).toBe(1);
 	expect(files[0]?.lines.map((line) => [line.kind, line.code])).toEqual([
 		["meta", "diff --git a/src/a.ts b/src/a.ts"],
 		["meta", "--- a/src/a.ts"],

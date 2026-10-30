@@ -207,6 +207,7 @@ function DiffFileOutput({
 				line.text || " "
 			) : (
 				<>
+					<span className="tool-output-number">{line.number ?? ""}</span>
 					<span className="tool-output-marker">
 						{line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}
 					</span>
