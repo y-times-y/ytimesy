@@ -16,6 +16,7 @@ import {
 import { harborBridgeConfig, routeProvider } from "../evals/harbor_v2/config";
 import { harborRuntime } from "../evals/harbor_v2/runtime";
 import { trialSpendGuard } from "../evals/harbor_v2/spend";
+import { guardedFetch } from "../evals/harbor_v2/transport-guard";
 import { usageCostUsd } from "../src/domain/model-pricing";
 
 // A run never reads the public catalog (model-context-windows.ts).
@@ -289,6 +290,43 @@ describe("SigV4 signing", () => {
 			"x-amz-content-sha256": hash(body),
 			authorization: `AWS4-HMAC-SHA256 Credential=${FAKE_KEY}/${scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=${signature}`,
 		});
+	});
+
+	it("signs every transport-guard resend again, so a resend after a long cut attempt is not stale", async () => {
+		// Three trials stopped on a 401: a degenerate attempt streamed 9-15
+		// minutes, then the guard resent it with the first attempt's signature.
+		let clock = Date.UTC(2026, 9, 29, 19, 0, 0);
+		const sent: Headers[] = [];
+		const cut = 'data: {"type":"response.output_text.delta","delta":"x"}\n\n';
+		const done =
+			'data: {"type":"response.completed","response":{"status":"completed"}}\n\n';
+		const fetch = bedrockSigningFetch({
+			credentials: { accessKeyId: FAKE_KEY, secretAccessKey: FAKE_SECRET },
+			region: "us-east-1",
+			endpoint: "mantle",
+			now: () => new Date(clock),
+			fetch: guardedFetch(
+				async (_url, init) => {
+					sent.push(new Headers(init?.headers));
+					const first = sent.length === 1;
+					// The first attempt streams for 10 minutes and is cut.
+					if (first) clock += 10 * 60_000;
+					return new Response(first ? cut : done, {
+						headers: { "content-type": "text/event-stream" },
+					});
+				},
+				{ delayMs: () => 0 },
+			),
+		});
+		const response = await fetch(
+			"https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses",
+			{ method: "POST", body: '{"model":"m","stream":true}' },
+		);
+		expect(await response.text()).toContain("response.completed");
+		expect(sent).toHaveLength(2);
+		expect(sent[0].get("x-amz-date")).toBe("20261029T190000Z");
+		expect(sent[1].get("x-amz-date")).toBe("20261029T191000Z");
+		expect(sent[1].get("authorization")).not.toBe(sent[0].get("authorization"));
 	});
 
 	it("replaces the client's bearer header and refuses other hosts", async () => {

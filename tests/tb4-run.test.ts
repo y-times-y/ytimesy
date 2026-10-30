@@ -1581,6 +1581,9 @@ describe("tb4 error-spike stop", () => {
 		detail: "builder stopped: x",
 	};
 	function finished(rows: [number, { cause: string; detail: string }][]) {
+		return replay(finishedEvents(rows));
+	}
+	function finishedEvents(rows: [number, { cause: string; detail: string }][]) {
 		const ev: JournalEvent[] = [
 			{
 				at: at(0),
@@ -1610,7 +1613,7 @@ describe("tb4 error-spike stop", () => {
 				cause,
 			});
 		});
-		return replay(ev);
+		return ev;
 	}
 	it("stops at 3 abnormal ends within 30 min, not 2, not spread out, not infra", () => {
 		expect(
@@ -1671,6 +1674,22 @@ describe("tb4 error-spike stop", () => {
 				cfg,
 			),
 		).toBeNull();
+	});
+	it("an operator resume clears the stop, and only ends after it count toward a new spike", () => {
+		const ends = finishedEvents([
+			[10, abnormal],
+			[20, abnormal],
+			[25, abnormal],
+		]);
+		expect(errorSpike(replay(ends), Date.parse(at(26)), cfg)).not.toBeNull();
+		const ev: JournalEvent[] = [
+			{ at: at(26), type: "stop", reason: "error spike" },
+			{ at: at(27), type: "resume" },
+		];
+		const resumed = replay([...ends, ...ev]);
+		expect(resumed.stopped).toBeNull();
+		expect(resumed.resumedAt).toBe(at(27));
+		expect(errorSpike(resumed, Date.parse(at(28)), cfg)).toBeNull();
 	});
 	it("the tick journals the stop and launches nothing more", () => {
 		const { dir, journal } = newRun();

@@ -29,6 +29,7 @@ import {
 	type GpuTarget,
 	gpuLaneAlerts,
 	gpuLaneTick,
+	type LaneConfig,
 	type LaneEvent,
 	type LiveSandbox,
 	laneConfig,
@@ -258,7 +259,7 @@ const clock = () => new Date(Date.UTC(2026, 9, 29, 0, minute++)).toISOString();
 function laneTick(
 	run: ReturnType<typeof newRun>,
 	ops: GpuLaneOps,
-	extra: { budgetUsd?: number; tasks?: Task[] } = {},
+	extra: { budgetUsd?: number; tasks?: Task[]; config?: LaneConfig } = {},
 ) {
 	if (extra.budgetUsd !== undefined)
 		writeBudget(run.dir, { budgetUsd: extra.budgetUsd });
@@ -268,7 +269,7 @@ function laneTick(
 		tasks: extra.tasks ?? gpuTasks,
 		ops,
 		budget: readBudget(run.dir, {}),
-		config: cfg,
+		config: extra.config ?? cfg,
 		review: noStage1,
 		now: clock,
 	});
@@ -426,6 +427,23 @@ describe("tb4 GPU lane", () => {
 			expect(open).toBeLessThanOrEqual(1);
 		}
 		expect(laneTick(run, ops).at(-1)).toContain("lane done");
+	});
+
+	it("under the stage-1 hold, runs every task's batch-1 trial before waiting", () => {
+		const run = newRun();
+		const { ops, launched } = fakeLane(daytona, {
+			trial: () => ({ result: graded(1) }),
+		});
+		const stage1 = laneConfig({}, true);
+		laneTick(run, ops, { budgetUsd: 10_000, config: stage1 });
+		let last: string[] = [];
+		for (let i = 0; i < 30; i++) last = laneTick(run, ops, { config: stage1 });
+		expect(launched).toEqual([
+			"r-b1-fp8-rmsnorm-gemm-a01",
+			"r-b1-math-eval-grader-a01",
+			"r-b1-jax-speedrun-gpu-a01",
+		]);
+		expect(last.join("\n")).toContain("waits for `controller.ts ack stage1`");
 	});
 
 	it("deletes leftover lane sandboxes (and charges them) before launching", () => {
