@@ -25,7 +25,6 @@ import {
 	accountDeletionConfirmed,
 	accountDeletionPhrase,
 } from "#/domain/account-deletion";
-import { offeredAgentProviders } from "#/domain/agent-provider";
 import type { CodexUsage } from "#/domain/codex-usage";
 import type {
 	ProjectSecretKind,
@@ -37,15 +36,15 @@ import {
 	accountDisplayName,
 	accountInitials,
 	githubConnectionCopy,
-	harnessSettingsCopy,
 	type SettingsSection,
 	settingsNavItems,
 } from "#/domain/workspace-settings";
 import { authClient } from "../auth/client";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
-import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import { clearChatCache } from "../sessions/chat-cache";
+import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
+import { CodexMark } from "../sessions/codex-mark";
 import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
@@ -848,117 +847,98 @@ function AgentsSection({
 	account: UserAgentAccount;
 	usage?: CodexUsage;
 }) {
-	const readConnections = useServerFn(getModelConnections);
-	const connections = useQuery({
-		queryKey: ["model-connections"],
-		queryFn: () => readConnections(),
-	});
-	const apiKeyCount = connections.data?.length ?? 0;
 	const queryClient = useQueryClient();
 	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+	const refreshAccount = () =>
+		Promise.all(
+			[["account"], ["codex-subscription-usage"], ["agent-model-catalog"]].map(
+				(queryKey) => queryClient.invalidateQueries({ queryKey }),
+			),
+		);
 	const signOut = useMutation({
 		mutationFn: () =>
 			requestJson<{ status: "disconnected" }>("/api/agent/account", {}),
 		onSuccess: async () => {
 			setConfirmingSignOut(false);
-			await Promise.all(
-				[
-					["account"],
-					["codex-subscription-usage"],
-					["agent-model-catalog"],
-				].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-			);
+			await refreshAccount();
 		},
 	});
+	const connected = account.status === "connected";
+	const meta = connected
+		? [account.planType ? `${account.planType} plan` : null, account.email]
+				.filter(Boolean)
+				.join(" · ") || "Connected"
+		: account.status === "expired"
+			? "Sign-in expired. Your chats are kept."
+			: "Use your ChatGPT plan for Codex models.";
 	return (
 		<>
 			<section className="settings-section">
 				<SettingsHeader
-					title="Coding agents"
-					description="Sign in to an agent from the agent picker in the composer."
+					title="Models"
+					description="Your Codex subscription or your API keys."
 				/>
 				<ul className="settings-group">
-					{offeredAgentProviders().map((provider) => {
-						const connected =
-							provider.id === "codex"
-								? account.status === "connected"
-								: provider.id === "api"
-									? apiKeyCount > 0
-									: false;
-						const expired =
-							provider.id === "codex" && account.status === "expired";
-						return (
-							<li key={provider.id} className="settings-row">
-								<div className="settings-row-main">
-									<span className="settings-row-icon">
-										<AgentProviderMark provider={provider.id} size={16} />
-									</span>
-									<div className="settings-row-text">
-										<span className="settings-row-title">{provider.name}</span>
-										<span className="settings-row-meta">
-											{provider.id === "api"
-												? apiKeyCount > 0
-													? `${apiKeyCount} API ${apiKeyCount === 1 ? "key" : "keys"} saved below.`
-													: "Add an API key below to use your own model account."
-												: harnessSettingsCopy({ id: provider.id, account })}
+					<li className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-icon">
+								<CodexMark size={18} />
+							</span>
+							<div className="settings-row-text">
+								<span className="settings-row-title">Codex subscription</span>
+								<span className="settings-row-meta">{meta}</span>
+							</div>
+						</div>
+						<div className="settings-row-actions">
+							{connected ? (
+								confirmingSignOut ? (
+									<>
+										<button
+											type="button"
+											className="settings-secondary"
+											disabled={signOut.isPending}
+											onClick={() => setConfirmingSignOut(false)}
+										>
+											Cancel
+										</button>
+										<button
+											type="button"
+											className="settings-danger"
+											disabled={signOut.isPending}
+											onClick={() => signOut.mutate()}
+										>
+											{signOut.isPending ? "Signing out…" : "Sign out"}
+										</button>
+									</>
+								) : (
+									<>
+										<span className="settings-badge" data-tone="ok">
+											Connected
 										</span>
-									</div>
-								</div>
-								<div className="settings-row-actions">
-									<span
-										className="settings-badge"
-										data-tone={connected ? "ok" : undefined}
-									>
-										{connected
-											? "Connected"
-											: expired
-												? "Expired"
-												: "Not connected"}
-									</span>
-									{provider.id === "codex" &&
-									account.status !== "disconnected" &&
-									!confirmingSignOut ? (
 										<button
 											type="button"
 											className="settings-secondary"
 											onClick={() => setConfirmingSignOut(true)}
 										>
-											Sign out of ChatGPT
+											Sign out
 										</button>
-									) : null}
-								</div>
-								{provider.id === "codex" && confirmingSignOut ? (
-									<div className="settings-confirm">
-										<span className="settings-row-meta">
-											Sign out of ChatGPT? Chats using your ChatGPT plan stop
-											until you sign in again from the agent picker.
-										</span>
-										<div className="settings-row-actions">
-											<button
-												type="button"
-												className="settings-secondary"
-												disabled={signOut.isPending}
-												onClick={() => setConfirmingSignOut(false)}
-											>
-												Cancel
-											</button>
-											<button
-												type="button"
-												className="settings-danger"
-												disabled={signOut.isPending}
-												onClick={() => signOut.mutate()}
-											>
-												{signOut.isPending ? "Signing out…" : "Sign out"}
-											</button>
-										</div>
-									</div>
-								) : null}
-							</li>
-						);
-					})}
+									</>
+								)
+							) : (
+								<ChatgptSignIn
+									label={
+										account.status === "expired"
+											? "Sign in again"
+											: "Sign in with ChatGPT"
+									}
+									onConnected={() => void refreshAccount()}
+								/>
+							)}
+						</div>
+					</li>
 				</ul>
 				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
-				<CodexSubscriptionUsage usage={usage} />
+				{connected ? <CodexSubscriptionUsage usage={usage} /> : null}
 			</section>
 			<ModelConnections />
 			<ModelFailoverSettings />
