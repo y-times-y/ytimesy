@@ -41,6 +41,8 @@ export type DiffOutputLine = {
 	readonly text: string;
 	/** The line without its +, - or space marker; the whole line for meta. */
 	readonly code: string;
+	/** Its line in the new file (the old file for removed lines), inside a hunk. */
+	readonly number?: number;
 };
 
 const DIFF_META =
@@ -52,6 +54,9 @@ const DIFF_META =
  */
 export function diffOutputFiles(output: string) {
 	const files: { language: SourceLanguage; lines: DiffOutputLine[] }[] = [];
+	let oldLine = 0;
+	let newLine = 0;
+	let inHunk = false;
 	for (const text of output.split("\n")) {
 		if (!files.length || text.startsWith("diff --git "))
 			files.push({ language: "text", lines: [] });
@@ -66,8 +71,25 @@ export function diffOutputFiles(output: string) {
 				: text.startsWith("-")
 					? "removed"
 					: "context";
+		const hunk = text.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)/);
+		if (hunk) {
+			oldLine = Number(hunk[1]);
+			newLine = Number(hunk[2]);
+			inHunk = true;
+		} else if (kind === "meta") inHunk = false;
 		const marked = kind !== "meta" && /^[+\- ]/.test(text);
-		file.lines.push({ kind, text, code: marked ? text.slice(1) : text });
+		let number: number | undefined;
+		if (inHunk && marked) {
+			number = kind === "removed" ? oldLine : newLine;
+			if (kind !== "added") oldLine++;
+			if (kind !== "removed") newLine++;
+		}
+		file.lines.push({
+			kind,
+			text,
+			code: marked ? text.slice(1) : text,
+			...(number === undefined ? {} : { number }),
+		});
 	}
 	return files;
 }
