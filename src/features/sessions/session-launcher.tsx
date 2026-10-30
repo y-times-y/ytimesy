@@ -1329,8 +1329,13 @@ export function SessionLauncher({
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
-									harnessId === "codex" ||
-									recordedContextUsage(session.items) ? (
+									selectedTask ? (
+										// A sub-agent has its own context window: show its own.
+										selectedTask.contextUsage ? (
+											<ContextUsage {...selectedTask.contextUsage} />
+										) : null
+									) : harnessId === "codex" ||
+										recordedContextUsage(session.items) ? (
 										<ContextUsage
 											context={
 												session.usage?.context ??
