@@ -385,7 +385,7 @@ export function bedrockSigningFetch(input: {
 			headers: sign(),
 			body,
 			[RESIGN]: sign,
-		} as RequestInit);
+		} as unknown as RequestInit);
 	};
 }
 

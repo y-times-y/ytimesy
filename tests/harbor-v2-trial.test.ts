@@ -2810,12 +2810,12 @@ describe("runHarborTrial with helpers=write-tree", () => {
 		execFileSync("bash", ["-c", "echo tool > tool.bin && chmod 000 tool.bin"], {
 			cwd: f.checkout.root,
 		});
-		cleanups.push(async () =>
+		cleanups.push(async () => {
 			execFileSync("bash", [
 				"-c",
 				`chmod 644 ${join(f.checkout.root, "tool.bin")} 2>/dev/null || true`,
-			]),
-		);
+			]);
+		});
 		const scripts: Record<string, Part[][]> = {
 			builder: [
 				[
