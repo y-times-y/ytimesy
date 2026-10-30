@@ -1,14 +1,26 @@
 import { expect, it } from "vitest";
-import { firstRunStep } from "./first-run";
+import { firstRunStage, firstRunStep } from "./first-run";
 
-it("goes GitHub, then repositories, then the model", () => {
-	expect(firstRunStep({ githubConnected: false, projectAdded: false })).toBe(
-		"github",
-	);
-	expect(firstRunStep({ githubConnected: true, projectAdded: false })).toBe(
-		"repositories",
-	);
-	expect(firstRunStep({ githubConnected: true, projectAdded: true })).toBe(
-		"model",
-	);
+const at = (
+	githubConnected: boolean,
+	repositoryCount: number | null,
+	projectAdded = false,
+) => firstRunStep({ githubConnected, repositoryCount, projectAdded });
+
+it("goes GitHub, then the app install, then repositories, then the model", () => {
+	expect(at(false, null)).toBe("github");
+	expect(at(true, 0)).toBe("install");
+	expect(at(true, 3)).toBe("repositories");
+	expect(at(true, 3, true)).toBe("model");
+});
+
+it("does not ask for the install before the repository list has loaded", () => {
+	expect(at(true, null)).toBe("repositories");
+});
+
+it("counts the install as part of the GitHub stage", () => {
+	expect(firstRunStage("github")).toBe(0);
+	expect(firstRunStage("install")).toBe(0);
+	expect(firstRunStage("repositories")).toBe(1);
+	expect(firstRunStage("model")).toBe(2);
 });

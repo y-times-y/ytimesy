@@ -1,8 +1,14 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check } from "lucide-react";
+import { ArrowUpRight, Check } from "lucide-react";
 import { useState } from "react";
-import { type FirstRunState, firstRunStep } from "#/domain/first-run";
+import {
+	FIRST_RUN_STAGES,
+	type FirstRunState,
+	type FirstRunStep,
+	firstRunStage,
+	firstRunStep,
+} from "#/domain/first-run";
 import type { RepositoryChoice } from "#/domain/projects";
 import { YtimesyBrand } from "../auth/onboarding-shell";
 import { AddProjectForm } from "../projects/add-project-form";
@@ -15,26 +21,39 @@ import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
 import "./first-run.css";
 
-const STEPS = [
-	{ id: "github", label: "GitHub" },
-	{ id: "repositories", label: "Repositories" },
-	{ id: "model", label: "Model" },
-] as const;
-
-const TITLES = {
-	github: "Connect GitHub",
-	repositories: "Pick your repositories",
-	model: "Choose your model",
+const STAGE_LABELS = {
+	github: "GitHub",
+	repositories: "Repositories",
+	model: "Model",
 } as const;
+
+const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
+	github: {
+		title: "Connect GitHub",
+		lede: "ytimesy works in your repositories through its GitHub app.",
+	},
+	install: {
+		title: "Connect GitHub",
+		lede: "ytimesy works in your repositories through its GitHub app.",
+	},
+	repositories: {
+		title: "Choose repositories",
+		lede: "They become your first project. You can add more later.",
+	},
+	model: {
+		title: "Choose a model",
+		lede: "Use your Codex subscription or your own API key.",
+	},
+};
 
 function enterWorkspace() {
 	window.location.assign("/");
 }
 
 /**
- * A new account's first run, before its first project: GitHub, then the
- * repositories, then a model (skippable). The server says where it stands,
- * so the right step paints first.
+ * A new account's first run, before its first project: GitHub (sign in and
+ * install the app), then the repositories, then a model (skippable). The
+ * server says where it stands, so the right step paints first.
  */
 export function FirstRun({ state }: { state: FirstRunState }) {
 	const [projectAdded, setProjectAdded] = useState(false);
@@ -47,38 +66,51 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 				installationUrl: string;
 			}>("/api/github/repositories"),
 		retry: false,
+		// The app is installed in another tab; pick it up on return.
+		refetchOnWindowFocus: true,
 	});
 	const githubConnected = repositories.isPending
 		? state.githubConnected
 		: Boolean(repositories.data);
-	const step = firstRunStep({ githubConnected, projectAdded });
-	const at = STEPS.findIndex((item) => item.id === step);
+	const step = firstRunStep({
+		githubConnected,
+		repositoryCount: repositories.data?.repositories.length ?? null,
+		projectAdded,
+	});
+	const stage = firstRunStage(step);
 	return (
 		<main className="first-run">
 			<header className="first-run-top">
 				<YtimesyBrand />
 			</header>
 			<section className="first-run-card" aria-labelledby="first-run-title">
-				<ol className="first-run-steps" aria-label="Setup">
-					{STEPS.map((item, index) => (
+				<ol
+					className="first-run-progress"
+					aria-label={`Setup, ${STAGE_LABELS[FIRST_RUN_STAGES[stage]]}`}
+				>
+					{FIRST_RUN_STAGES.map((id, index) => (
 						<li
-							key={item.id}
+							key={id}
 							data-state={
-								index < at ? "done" : index === at ? "current" : undefined
+								index < stage ? "done" : index === stage ? "current" : undefined
 							}
+							aria-current={index === stage ? "step" : undefined}
 						>
-							<span className="first-run-dot">
-								{index < at ? <Check size={12} strokeWidth={2.6} /> : index + 1}
-							</span>
-							{item.label}
+							{STAGE_LABELS[id]}
 						</li>
 					))}
 				</ol>
-				<h1 id="first-run-title">{TITLES[step]}</h1>
+				<div className="first-run-heading">
+					<h1 id="first-run-title">{HEADINGS[step].title}</h1>
+					<p>{HEADINGS[step].lede}</p>
+				</div>
 				{step === "model" ? (
 					<ModelStep ready={state.modelReady} />
-				) : step === "github" ? (
-					<GithubStep />
+				) : step === "github" || step === "install" ? (
+					<GithubStep
+						signedIn={step === "install"}
+						installationUrl={repositories.data?.installationUrl}
+					/>
 				) : (
 					<AddProjectForm
 						variant="page"
@@ -98,28 +130,82 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 	);
 }
 
-/** One button: GitHub installs the app and comes back to the repositories. */
-function GithubStep() {
+/**
+ * Two parts: sign in with GitHub (OAuth through the app), then install the
+ * app on the repositories ytimesy may work in. Signing in alone reaches none.
+ */
+function GithubStep({
+	signedIn,
+	installationUrl,
+}: {
+	signedIn: boolean;
+	installationUrl: string | undefined;
+}) {
 	const [notice] = useGithubConnectionNotice();
 	const connect = useMutation({
 		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
 		onSuccess: ({ url }) => window.location.assign(url),
 	});
+	const [installOpened, setInstallOpened] = useState(false);
 	return (
 		<>
 			{notice ? <p role="alert">{notice}</p> : null}
 			{connect.error ? <p role="alert">{connect.error.message}</p> : null}
-			<div className="first-run-actions">
-				<button
-					type="button"
-					className="first-run-primary"
-					disabled={connect.isPending}
-					onClick={() => connect.mutate()}
-				>
-					<GitHubMark />
-					{connect.isPending ? "Opening GitHub…" : "Connect GitHub"}
-				</button>
-			</div>
+			<ol className="first-run-tasks">
+				<li data-done={signedIn || undefined}>
+					<span className="first-run-task-icon">
+						<GitHubMark />
+					</span>
+					<span className="first-run-task-copy">
+						<strong>Sign in with GitHub</strong>
+						<small>Links your GitHub account</small>
+					</span>
+					{signedIn ? (
+						<span className="first-run-connected">
+							<Check size={14} strokeWidth={2.6} />
+							Connected
+						</span>
+					) : (
+						<button
+							type="button"
+							className="first-run-primary"
+							disabled={connect.isPending}
+							onClick={() => connect.mutate()}
+						>
+							{connect.isPending ? "Opening GitHub…" : "Connect"}
+						</button>
+					)}
+				</li>
+				<li data-pending={!signedIn || undefined}>
+					<span className="first-run-task-icon">
+						<img src="/brand/mark.svg" width={16} height={16} alt="" />
+					</span>
+					<span className="first-run-task-copy">
+						<strong>Install the ytimesy app</strong>
+						<small>
+							{installOpened
+								? "Finish on GitHub. This page updates on its own."
+								: "Pick the repositories it can work in"}
+						</small>
+					</span>
+					{signedIn && installationUrl ? (
+						<a
+							className={
+								installOpened ? "first-run-secondary" : "first-run-primary"
+							}
+							href={installationUrl}
+							target="_blank"
+							rel="noreferrer"
+							onClick={() => setInstallOpened(true)}
+						>
+							Install
+							<ArrowUpRight size={14} />
+						</a>
+					) : (
+						<span className="first-run-task-wait">After sign-in</span>
+					)}
+				</li>
+			</ol>
 		</>
 	);
 }
