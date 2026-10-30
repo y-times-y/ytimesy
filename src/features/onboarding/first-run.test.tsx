@@ -39,9 +39,11 @@ function render(state: { githubConnected: boolean; modelReady: boolean }) {
 it("opens at GitHub, or at the repositories once GitHub is connected", () => {
 	const fresh = render({ githubConnected: false, modelReady: false });
 	expect(fresh).toContain("Connect GitHub");
-	expect(fresh).toContain('data-state="current"><span class="first-run-dot">1');
+	expect(fresh).toContain('aria-current="step">GitHub');
+	expect(fresh).toContain("Install the ytimesy app");
+	expect(fresh).toContain("After sign-in");
 	const connected = render({ githubConnected: true, modelReady: false });
-	expect(connected).toContain("Pick your repositories");
+	expect(connected).toContain("Choose repositories");
 	expect(connected).toContain('data-state="done"');
 });
 
