@@ -6,6 +6,7 @@ import {
 	BookMarked,
 	Bot,
 	Folder,
+	Gauge,
 	Plug,
 	Shield,
 	User,
@@ -35,7 +36,6 @@ import type { UserAgentAccount } from "#/domain/user-agent-account";
 import {
 	accountDisplayName,
 	accountInitials,
-	githubConnectionCopy,
 	type SettingsSection,
 	settingsNavItems,
 } from "#/domain/workspace-settings";
@@ -90,6 +90,7 @@ const sectionIcon = {
 	agents: Bot,
 	plugins: Blocks,
 	mcp: Plug,
+	usage: Gauge,
 	archived: Archive,
 } as const;
 
@@ -228,12 +229,18 @@ export function ProjectSettings({
 											user={user}
 											onSignOut={onSignOut}
 										/>
-										<InfrastructureUsage />
 									</>
 								) : null}
 								{section === "privacy" ? <TrainingConsentSettings /> : null}
 								{section === "memory" ? <MemorySettings /> : null}
 								{section === "archived" ? <ArchivedSettings /> : null}
+								{section === "usage" ? (
+									<UsageSection
+										planConnected={
+											account.data?.agentAccount.status === "connected"
+										}
+									/>
+								) : null}
 								{section === "github" ? (
 									<GithubSection
 										loading={account.isPending}
@@ -536,7 +543,7 @@ function GithubSection({
 			<section className="settings-section">
 				<SettingsHeader
 					title="GitHub"
-					description="ytimesy clones and pushes only the repositories you grant its GitHub App."
+					description="Repository access for your projects."
 				/>
 				<div className="settings-group">
 					<div className="settings-row">
@@ -545,11 +552,11 @@ function GithubSection({
 								<GithubMark size={16} />
 							</span>
 							<div className="settings-row-text">
-								<span className="settings-row-title">GitHub</span>
+								<span className="settings-row-title">ytimesy GitHub App</span>
 								<span className="settings-row-meta">
 									{connected
-										? "Repositories you granted can be added below."
-										: githubConnectionCopy(false)}
+										? "Clones and pushes only the repositories you grant."
+										: "Connect to add repositories."}
 								</span>
 							</div>
 						</div>
@@ -839,6 +846,27 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	);
 }
 
+function UsageSection({ planConnected }: { planConnected: boolean }) {
+	return (
+		<>
+			<section className="settings-section">
+				<SettingsHeader
+					title="Usage"
+					description="What you've used and when it resets."
+				/>
+				{planConnected ? (
+					<CodexSubscriptionUsage />
+				) : (
+					<div className="settings-group settings-empty">
+						Sign in with ChatGPT in Agents to see your plan's usage.
+					</div>
+				)}
+			</section>
+			<InfrastructureUsage />
+		</>
+	);
+}
+
 function AgentsSection({ account }: { account: UserAgentAccount }) {
 	const queryClient = useQueryClient();
 	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -931,7 +959,6 @@ function AgentsSection({ account }: { account: UserAgentAccount }) {
 					</li>
 				</ul>
 				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
-				{connected ? <CodexSubscriptionUsage /> : null}
 			</section>
 			<ModelConnections />
 			<ModelFailoverSettings />

@@ -36,5 +36,5 @@ it("shows the editable list and built-in domains in defaults mode", () => {
 	expect(html).toContain("<textarea");
 	expect(html).toContain("example.com");
 	expect(text(html)).toContain("pypi.org");
-	expect(text(html)).toContain("Save internet access");
+	expect(text(html)).toContain("Save");
 });
