@@ -595,6 +595,8 @@ export function WorkspaceHome({
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	/** The chat whose desktop is starting; another chat may still start its own. */
 	const desktopStartFor = useRef<string | null>(null);
+	/** A chat whose Desktop was clicked while its quiet warm-up was running. */
+	const desktopClickedWhileWarming = useRef<string | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>();
 	// Back from an MCP provider's sign-in page: reopen the panel that started it.
@@ -1044,7 +1046,16 @@ export function WorkspaceHome({
 	const requestDesktop = useCallback(
 		(ahead = false) => {
 			const chatId = activeSessionId;
-			if (!chatId || desktopStartFor.current === chatId) return;
+			if (!chatId) return;
+			if (desktopStartFor.current === chatId) {
+				// A click during the quiet warm-up shows the start; the warm-up's
+				// result lands, or a real start follows if it found no machine.
+				if (!ahead) {
+					desktopClickedWhileWarming.current = chatId;
+					setDesktop({ status: "starting" });
+				}
+				return;
+			}
 			if (
 				!desktopInspectorShouldStart({
 					tabActive: true,
@@ -1059,15 +1070,20 @@ export function WorkspaceHome({
 			}
 			desktopStartFor.current = chatId;
 			setDesktopBusy(true);
-			setDesktop({ status: "starting" });
+			// A warm-up ahead of a click runs quietly: nobody asked for the
+			// desktop yet, so the panel keeps saying it is not running.
+			if (!ahead) setDesktop({ status: "starting" });
 			// A result belongs to the chat that asked; a chat opened since keeps its own.
 			const stillOpen = () => selectedSessionIdRef.current === chatId;
-			void (ahead ? prepareDesktop : startDesktop)({
-				data: {
-					projectId: selectedProject?.id,
-					sessionId: chatId,
-				},
-			})
+			const data = { projectId: selectedProject?.id, sessionId: chatId };
+			void (ahead ? prepareDesktop : startDesktop)({ data })
+				.then((next) => {
+					const clicked = desktopClickedWhileWarming.current === chatId;
+					desktopClickedWhileWarming.current = null;
+					if (clicked && next.status === "stopped")
+						return startDesktop({ data });
+					return next;
+				})
 				.then((next) => {
 					if (stillOpen()) setDesktop(next);
 				})

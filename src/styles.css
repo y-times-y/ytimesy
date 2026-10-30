@@ -4209,12 +4209,23 @@ a.session-title-meta:focus-visible {
 	background: #ffffff0d;
 }
 .settings-meter {
-	height: 4px;
+	height: 6px;
 	margin: 8px 0 6px;
 	background: #ffffff14;
 }
 .settings-meter > span {
 	background: #d4d4d4;
+}
+/* Every usage bar: one height, and a flat fill end the track clips, so a
+   small share reads as a sliver of bar rather than a dot. */
+.codex-usage-meter,
+.codex-usage-window .settings-meter {
+	height: 6px;
+}
+.codex-usage-meter > span,
+.settings-meter > span {
+	min-width: 0;
+	border-radius: 0;
 }
 .settings-usage-figure {
 	font-size: 15px;

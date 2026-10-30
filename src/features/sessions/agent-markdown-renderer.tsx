@@ -25,6 +25,7 @@ import type { FileChangeEntry } from "#/domain/session-item";
 import {
 	type FileReference,
 	fileReferenceLabel,
+	sharedFileNames,
 	workspaceFileReference,
 } from "#/domain/workspace-file-mention";
 import { AgentChip, AgentMentionContext } from "./agent-chip";
@@ -133,6 +134,13 @@ export function AgentMarkdown({
 		() => new Set(agents?.map((agent) => agent.name) ?? []),
 		[agents],
 	);
+	// Keyed by the names, so a streaming answer rebuilds its chips only when
+	// a new shared name appears.
+	const sharedKey = [...sharedFileNames(text)].sort().join("\n");
+	const sharedNames = useMemo(
+		() => new Set(sharedKey ? sharedKey.split("\n") : []),
+		[sharedKey],
+	);
 	const rehypePlugins = useMemo<RehypePlugins>(
 		() =>
 			agentNames.size
@@ -156,7 +164,7 @@ export function AgentMarkdown({
 			return (
 				<FileMentionButton
 					path={change?.path ?? reference.path}
-					name={label ?? fileReferenceLabel(reference)}
+					name={label ?? fileReferenceLabel(reference, sharedNames)}
 					lines={reference.lines}
 					onOpenFile={onOpenFile}
 				/>
@@ -217,7 +225,15 @@ export function AgentMarkdown({
 				);
 			},
 		};
-	}, [fileChanges, onOpenFile, fileMentions, agents, agentNames, onOpenAgent]);
+	}, [
+		fileChanges,
+		onOpenFile,
+		fileMentions,
+		agents,
+		agentNames,
+		onOpenAgent,
+		sharedNames,
+	]);
 	return (
 		<Streamdown
 			className="session-markdown"
