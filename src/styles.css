@@ -4857,3 +4857,21 @@ a.session-title-meta:focus-visible {
 	align-items: flex-start;
 	gap: 6px;
 }
+
+/* Delete account sits alone at the bottom of the panel, away from the
+   everyday rows (Radix wraps the viewport's content in a table div). */
+.settings-scroll-viewport > div:has(.settings-danger-zone) {
+	display: flex !important;
+	flex-direction: column;
+	min-height: 100%;
+}
+.settings-body:has(.settings-danger-zone),
+.settings-body > .settings-section:has(.settings-danger-zone) {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+}
+.settings-body .settings-danger-zone {
+	margin-top: auto;
+	padding-top: 32px;
+}
