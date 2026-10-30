@@ -202,6 +202,8 @@ export type RunState = {
 	attempts: Map<string, Attempt>;
 	paused: string | null;
 	stopped: string | null;
+	/** The last operator `resume`: it clears a pause or a stop, and the error-spike window starts after it. */
+	resumedAt: string | null;
 	/** Gate A passed (>= 6 decisive first-trial passes): it is never evaluated again. */
 	gateAPassed: boolean;
 	/** Reviews not yet acked, by attempt id (or "stage1"): any one blocks new launches. */
@@ -220,6 +222,7 @@ export function replay(events: JournalEvent[]): RunState {
 		attempts: new Map(),
 		paused: null,
 		stopped: null,
+		resumedAt: null,
 		gateAPassed: false,
 		reviews: new Map(),
 		acks: [],
@@ -280,6 +283,8 @@ export function replay(events: JournalEvent[]): RunState {
 				break;
 			case "resume":
 				state.paused = null;
+				state.stopped = null;
+				state.resumedAt = e.at;
 				break;
 			case "stop":
 				state.stopped = e.reason;
@@ -911,7 +916,11 @@ export function needsReview(cause: TrialCause, cfg: ReviewConfig) {
  */
 export function errorSpike(state: RunState, nowMs: number, cfg: ReviewConfig) {
 	if (cfg.spikeCount <= 0 || !Number.isFinite(nowMs)) return null;
-	const since = nowMs - cfg.spikeMinutes * 60_000;
+	// Ends before the operator's last resume were already read and cleared.
+	const since = Math.max(
+		nowMs - cfg.spikeMinutes * 60_000,
+		state.resumedAt ? Date.parse(state.resumedAt) : Number.NEGATIVE_INFINITY,
+	);
 	const hits = [...state.attempts.values()].filter((a) => {
 		if (!a.cause || !a.finishedAt) return false;
 		const kind = causeKind(a.cause);

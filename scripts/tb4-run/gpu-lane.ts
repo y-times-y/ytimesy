@@ -510,8 +510,9 @@ export type NextGpuTrial =
 /**
  * The next GPU trial in strict task order: a task's trials (batch 1, then batch 2)
  * all run before the next task starts. A batch that is not open is skipped (it is not
- * part of the plan yet); an open batch 2 held by stage 1 makes the lane wait. A task
- * at its attempt cap is done (reported, never scored as 0).
+ * part of the plan yet); an open batch 2 held by stage 1 is skipped too, so the next
+ * task's batch-1 trial still runs, and the lane waits only when nothing else can. A
+ * task at its attempt cap is done (reported, never scored as 0).
  */
 export function nextGpuTrial(
 	state: RunState,
@@ -519,6 +520,7 @@ export function nextGpuTrial(
 	cfg: LaneConfig,
 ): NextGpuTrial {
 	const byName = new Map(tasks.map((t) => [t.name, t]));
+	let held: string | undefined;
 	for (const name of cfg.order) {
 		const task = byName.get(name);
 		if (!task) continue;
@@ -527,11 +529,10 @@ export function nextGpuTrial(
 			const p = progress(state, name, batch.id);
 			if (batch.trialsPerTask - p.valid - p.inFlight <= 0) continue;
 			if (p.attempts >= attemptCap(task, batch)) continue;
-			if (batch.id !== "b1" && cfg.stage1 && !state.stage1Released)
-				return {
-					kind: "wait",
-					why: `${name} batch 2 waits for \`controller.ts ack stage1\``,
-				};
+			if (batch.id !== "b1" && cfg.stage1 && !state.stage1Released) {
+				held ??= `${name} batch 2 waits for \`controller.ts ack stage1\``;
+				break;
+			}
 			return {
 				kind: "launch",
 				task,
@@ -545,7 +546,7 @@ export function nextGpuTrial(
 			};
 		}
 	}
-	return { kind: "done" };
+	return held ? { kind: "wait", why: held } : { kind: "done" };
 }
 
 /* ---------- the lane's tick ---------- */
