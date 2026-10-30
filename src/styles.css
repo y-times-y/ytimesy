@@ -4745,3 +4745,20 @@ a.session-title-meta:focus-visible {
 		animation: none;
 	}
 }
+
+/* "Show 12 more done" under a long helper or todo list. */
+.list-fold-toggle {
+	display: block;
+	margin: 2px 0 0;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: #8f8f8f;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.list-fold-toggle:hover {
+	background: #ffffff0a;
+	color: #ededed;
+}
