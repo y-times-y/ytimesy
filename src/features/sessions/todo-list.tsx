@@ -1,4 +1,4 @@
-import { Circle, CircleCheck } from "lucide-react";
+import { Circle, CircleCheck, LoaderCircle } from "lucide-react";
 import type { AgentTodo } from "#/domain/agent-todos";
 
 export function TodoList({ todos }: { todos: readonly AgentTodo[] }) {
@@ -28,6 +28,8 @@ export function TodoList({ todos }: { todos: readonly AgentTodo[] }) {
 						>
 							{todo.status === "completed" ? (
 								<CircleCheck size={16} />
+							) : todo.status === "in_progress" ? (
+								<LoaderCircle size={16} className="todo-status-spin" />
 							) : (
 								<Circle size={16} />
 							)}
