@@ -47,6 +47,8 @@ export type DiffOutputLine = {
 	readonly code: string;
 	/** Its line in the new file (the old file for removed lines). */
 	readonly number?: number;
+	/** [start, end) of the words that changed, against its paired line. */
+	readonly changed?: readonly [number, number];
 };
 
 export type DiffOutputFile = {
@@ -119,5 +121,86 @@ export function diffOutputFiles(output: string): DiffOutputFile[] {
 		if (kind === "removed") file.removed++;
 		file.lines.push({ kind, code: text.slice(1), number });
 	}
+	for (const file of files) markChangedWords(file.lines);
 	return files.filter((file) => file.path !== null || file.lines.length);
+}
+
+/**
+ * Pairs each run of removed lines with the run of added lines right after
+ * it (when the counts match) and marks the words that differ, so an edit
+ * inside a line stands out from the lines around it.
+ */
+function markChangedWords(lines: DiffOutputLine[]) {
+	for (let start = 0; start < lines.length; ) {
+		let removedEnd = start;
+		while (lines[removedEnd]?.kind === "removed") removedEnd++;
+		let addedEnd = removedEnd;
+		while (lines[addedEnd]?.kind === "added") addedEnd++;
+		const count = removedEnd - start;
+		if (count > 0 && addedEnd - removedEnd === count)
+			for (let index = 0; index < count; index++) {
+				const removed = lines[start + index] as DiffOutputLine;
+				const added = lines[removedEnd + index] as DiffOutputLine;
+				const ranges = changedWords(removed.code, added.code);
+				if (!ranges) continue;
+				lines[start + index] = { ...removed, changed: ranges[0] };
+				lines[removedEnd + index] = { ...added, changed: ranges[1] };
+			}
+		start = Math.max(addedEnd, start + 1);
+	}
+}
+
+const WORD = /\w/;
+
+/**
+ * The differing middle of two lines (after their common start and end),
+ * widened to whole words. Null when the lines match or differ almost
+ * everywhere: a rewritten line needs no word marks.
+ */
+export function changedWords(
+	before: string,
+	after: string,
+): readonly [readonly [number, number], readonly [number, number]] | null {
+	if (before === after) return null;
+	let prefix = 0;
+	while (
+		prefix < before.length &&
+		prefix < after.length &&
+		before[prefix] === after[prefix]
+	)
+		prefix++;
+	let suffix = 0;
+	while (
+		suffix < before.length - prefix &&
+		suffix < after.length - prefix &&
+		before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+	)
+		suffix++;
+	const widen = (text: string, from: number, to: number) => {
+		let start = from;
+		let end = to;
+		while (
+			start > 0 &&
+			WORD.test(text[start - 1] ?? "") &&
+			WORD.test(text[start] ?? text[start - 1] ?? "")
+		)
+			start--;
+		while (
+			end < text.length &&
+			end > 0 &&
+			WORD.test(text[end] ?? "") &&
+			WORD.test(text[end - 1] ?? "")
+		)
+			end++;
+		return [start, end] as const;
+	};
+	const old = widen(before, prefix, before.length - suffix);
+	const next = widen(after, prefix, after.length - suffix);
+	const content = (text: string) => text.trim().length || 1;
+	if (
+		(old[1] - old[0]) / content(before) > 0.6 ||
+		(next[1] - next[0]) / content(after) > 0.6
+	)
+		return null;
+	return [old, next];
 }
