@@ -35,3 +35,39 @@ export function commandOutputLanguage(command: string): SourceLanguage {
 		? sourceLanguageFromPath(files[0] as string)
 		: "text";
 }
+
+export type DiffOutputLine = {
+	readonly kind: "meta" | "added" | "removed" | "context";
+	readonly text: string;
+	/** The line without its +, - or space marker; the whole line for meta. */
+	readonly code: string;
+};
+
+const DIFF_META =
+	/^(?:diff |index |---|\+\+\+|@@|new file|deleted file|similarity|rename |old mode|new mode|Binary )/;
+
+/**
+ * Diff output split per file, each with the language its path names, so
+ * the code in its lines can be coloured as that language.
+ */
+export function diffOutputFiles(output: string) {
+	const files: { language: SourceLanguage; lines: DiffOutputLine[] }[] = [];
+	for (const text of output.split("\n")) {
+		if (!files.length || text.startsWith("diff --git "))
+			files.push({ language: "text", lines: [] });
+		const file = files[files.length - 1] as (typeof files)[number];
+		const path = text.match(/^(?:\+\+\+|---) (?:[ab]\/)?(.+)$/)?.[1];
+		if (path && path !== "/dev/null" && file.language === "text")
+			file.language = sourceLanguageFromPath(path);
+		const kind = DIFF_META.test(text)
+			? "meta"
+			: text.startsWith("+")
+				? "added"
+				: text.startsWith("-")
+					? "removed"
+					: "context";
+		const marked = kind !== "meta" && /^[+\- ]/.test(text);
+		file.lines.push({ kind, text, code: marked ? text.slice(1) : text });
+	}
+	return files;
+}

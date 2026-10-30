@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { commandOutputLanguage } from "./command-output-language";
+import {
+	commandOutputLanguage,
+	diffOutputFiles,
+} from "./command-output-language";
 
 it("colours a command that prints one file as that file's language", () => {
 	expect(commandOutputLanguage("cat src/server/services/archive.ts")).toBe(
@@ -29,4 +32,33 @@ it("leaves mixed or unknown output plain", () => {
 	expect(commandOutputLanguage("cat notes")).toBe("text");
 	expect(commandOutputLanguage("pnpm test")).toBe("text");
 	expect(commandOutputLanguage("rg -n archive src")).toBe("text");
+});
+
+it("splits diff output per file with each file's language", () => {
+	const files = diffOutputFiles(
+		[
+			"diff --git a/src/a.ts b/src/a.ts",
+			"--- a/src/a.ts",
+			"+++ b/src/a.ts",
+			"@@ -1,2 +1,2 @@",
+			" const a = 1;",
+			"-const b = 2;",
+			"+const b = 3;",
+			"diff --git a/app.py b/app.py",
+			"new file mode 100644",
+			"--- /dev/null",
+			"+++ b/app.py",
+			"+print('hi')",
+		].join("\n"),
+	);
+	expect(files.map((file) => file.language)).toEqual(["typescript", "python"]);
+	expect(files[0]?.lines.map((line) => [line.kind, line.code])).toEqual([
+		["meta", "diff --git a/src/a.ts b/src/a.ts"],
+		["meta", "--- a/src/a.ts"],
+		["meta", "+++ b/src/a.ts"],
+		["meta", "@@ -1,2 +1,2 @@"],
+		["context", "const a = 1;"],
+		["removed", "const b = 2;"],
+		["added", "const b = 3;"],
+	]);
 });

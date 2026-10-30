@@ -284,6 +284,18 @@
 .tool-output-line[data-sign="meta"] {
 	color: #6b6b6b;
 }
+.tool-output-marker {
+	display: inline-block;
+	width: 2ch;
+	color: #6b6b6b;
+	user-select: none;
+}
+.tool-output-line[data-sign="added"] .tool-output-marker {
+	color: #4ade80;
+}
+.tool-output-line[data-sign="removed"] .tool-output-marker {
+	color: #f87171;
+}
 .tool-panel-output[data-tone="bad"],
 .tool-panel-note[data-tone="bad"] {
 	color: #f3a3a3;
