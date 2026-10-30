@@ -304,7 +304,7 @@ export function McpServers() {
 					})}
 				</ul>
 			) : servers.data && !adding ? (
-				<p className="integration-desc">No MCP servers yet.</p>
+				<p className="settings-group settings-empty">No MCP servers yet.</p>
 			) : null}
 		</section>
 	);

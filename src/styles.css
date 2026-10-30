@@ -4580,3 +4580,158 @@ a.session-title-meta:focus-visible {
 	color: #4ade80;
 	font-size: 13px;
 }
+
+/* Settings, final look: titled sections over rounded card groups. These
+   come last so they win over the earlier flat-list rules. */
+.settings-body {
+	max-width: 700px;
+	padding: 28px 32px 48px;
+}
+.settings-body h3,
+.settings-section-head h3 {
+	color: #f2f2f2;
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+.settings-section-head {
+	align-items: flex-end;
+	margin-bottom: 12px;
+}
+.settings-section-head p {
+	margin-top: 4px;
+	color: #8f8f8f;
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-section + .settings-section,
+.settings-section-gap {
+	margin-top: 36px;
+}
+.settings-group,
+.machine-size-list {
+	margin: 0 0 12px;
+	overflow: hidden;
+	border: 1px solid #ffffff10;
+	border-radius: 12px;
+	background: #ffffff05;
+}
+.settings-row {
+	min-height: 58px;
+	padding: 12px 16px;
+}
+.settings-row + .settings-row,
+.model-connection-item + .model-connection-item,
+.machine-size-option + .machine-size-option {
+	border-top: 1px solid #ffffff0b;
+}
+.settings-row-title {
+	font-size: 13.5px;
+}
+.settings-row-meta {
+	font-size: 12.5px;
+}
+.settings-row-icon {
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
+	background: #ffffff08;
+	color: #d4d4d4;
+}
+.settings-group-body,
+.settings-form-grid {
+	padding: 16px;
+}
+.settings-empty {
+	padding: 18px 16px;
+	color: #8f8f8f;
+	font-size: 13px;
+}
+.settings-group.settings-empty {
+	display: block;
+}
+.settings-form-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+.settings-primary {
+	min-height: 30px;
+	padding: 0 14px;
+	border: 0;
+	border-radius: 8px;
+	background: #ededed;
+	color: #0a0a0a;
+	font-size: 12.5px;
+	font-weight: 550;
+}
+.settings-secondary {
+	min-height: 30px;
+	padding: 0 12px;
+	border-radius: 8px;
+	font-size: 12.5px;
+}
+/* The account's delete row: quiet until it is meant. */
+.settings-danger-zone .settings-row-title {
+	color: #ededed;
+}
+.settings-danger {
+	min-height: 30px;
+	border-color: #f8717159;
+	background: transparent;
+	color: #fca5a5;
+}
+.settings-danger:hover {
+	background: #f871711a;
+}
+/* Long descriptions wrap to two lines instead of cutting off. */
+.settings-row-meta {
+	display: -webkit-box;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	white-space: normal;
+	line-height: 17px;
+}
+@media (max-width: 640px) {
+	.settings-body {
+		padding: 20px 16px 36px;
+	}
+}
+/* Plugins and MCP servers in the same cards and titles as the rest of Settings. */
+.settings-panel .integrations-head h3,
+.settings-panel .integrations-head h4 {
+	color: #f2f2f2;
+	font-size: 15px;
+	font-weight: 600;
+}
+.settings-panel .integrations-head p {
+	margin-top: 4px;
+	font-size: 13px;
+}
+.settings-panel .integration-grid,
+.settings-panel .integration-list {
+	overflow: hidden;
+	border: 1px solid #ffffff10;
+	border-radius: 12px;
+	background: #ffffff05;
+}
+.settings-panel .integration-card,
+.settings-panel .integration-row {
+	padding: 12px 16px;
+}
+.settings-panel .integration-card + .integration-card,
+.settings-panel .integration-row + .integration-row {
+	border-top: 1px solid #ffffff0b;
+}
+.settings-panel .integration-card .integration-desc {
+	font-size: 12.5px;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+}
+.settings-panel .integration-card-head strong {
+	font-size: 13.5px;
+}
+.model-connection-verify {
+	padding: 0 16px 14px;
+}

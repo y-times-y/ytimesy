@@ -11,6 +11,7 @@ export type SettingsSection =
 	| "agents"
 	| "plugins"
 	| "mcp"
+	| "usage"
 	| "archived";
 
 export function settingsNavItems(): readonly {
@@ -26,6 +27,7 @@ export function settingsNavItems(): readonly {
 		{ id: "agents", label: "Agents" },
 		{ id: "plugins", label: "Plugins" },
 		{ id: "mcp", label: "MCP servers" },
+		{ id: "usage", label: "Usage" },
 		{ id: "archived", label: "Archived" },
 	];
 }
