@@ -276,16 +276,16 @@
 	padding: 0 12px;
 }
 .tool-output-line[data-sign="added"] {
-	background: #032800;
+	background: var(--diff-added-bg);
 }
 .tool-output-line[data-sign="removed"] {
-	background: #3d0100;
+	background: var(--diff-removed-bg);
 }
 .tool-output-line[data-sign="added"] .tool-output-word {
-	background: #044701;
+	background: var(--diff-added-word);
 }
 .tool-output-line[data-sign="removed"] .tool-output-word {
-	background: #5c0200;
+	background: var(--diff-removed-word);
 }
 .tool-output-line[data-sign="other"] {
 	color: #8a8a8a;
@@ -306,11 +306,11 @@
 }
 .tool-output-line[data-sign="added"]
 	:is(.tool-output-number, .tool-output-marker) {
-	color: #46b546;
+	color: var(--diff-added-fg);
 }
 .tool-output-line[data-sign="removed"]
 	:is(.tool-output-number, .tool-output-marker) {
-	color: #dc5a5a;
+	color: var(--diff-removed-fg);
 }
 .tool-output-file {
 	display: flex;
@@ -333,10 +333,10 @@
 	font-variant-numeric: tabular-nums;
 }
 .tool-output-counts [data-sign="added"] {
-	color: #46b546;
+	color: var(--diff-added-fg);
 }
 .tool-output-counts [data-sign="removed"] {
-	color: #dc5a5a;
+	color: var(--diff-removed-fg);
 }
 .tool-panel-output[data-tone="bad"],
 .tool-panel-note[data-tone="bad"] {

@@ -30,6 +30,14 @@
 	color-scheme: dark;
 	--text-muted: #939393;
 	--accent-blue: #3b82f6;
+	/* Diff colours, ours: every diff (chat, edits, pull requests) and every
+	   +/- count uses these. */
+	--diff-added-bg: #032800;
+	--diff-removed-bg: #3d0100;
+	--diff-added-word: #044701;
+	--diff-removed-word: #5c0200;
+	--diff-added-fg: #46b546;
+	--diff-removed-fg: #dc5a5a;
 	/* Main's and background commands' colours; helpers have their own (src/domain/helper-names.ts). */
 	--agent-main: #e5e5e5;
 	--agent-background: #8a8f98;

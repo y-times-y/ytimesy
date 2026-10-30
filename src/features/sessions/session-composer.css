@@ -3051,3 +3051,11 @@ button.helper-card:hover {
 		animation: none;
 	}
 }
+
+/* Our code theme's italics (types, storage, parameters) in Markdown code
+   blocks: Streamdown passes them as a variable it does not apply itself. */
+.dark
+	[data-streamdown="code-block"]
+	span[style*="--shiki-dark-font-style"][style*="italic"] {
+	font-style: italic;
+}
