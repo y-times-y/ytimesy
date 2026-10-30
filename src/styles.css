@@ -4837,3 +4837,12 @@ a.session-title-meta:focus-visible {
 	border-color: #ffffff3a;
 	color: #fff;
 }
+/* The sign-in code never breaks; in a narrow card the link goes under it. */
+.chatgpt-sign-in-code code {
+	white-space: nowrap;
+}
+.first-run-model .chatgpt-sign-in-code {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+}
