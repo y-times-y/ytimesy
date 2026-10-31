@@ -125,9 +125,13 @@ write_desktop_launchers() {
 Type=Application
 Name=Chrome
 Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile'
-Icon=google-chrome
+Icon=chrome
 Terminal=false
 EOF
+  cat > "$DESK_DIR/chrome.svg" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#DB4437" d="M24 24L4.947 13A22 22 0 0 1 43.053 13Z"/><path fill="#F4B400" d="M24 24L43.053 13A22 22 0 0 1 24 46Z"/><path fill="#0F9D58" d="M24 24L24 46A22 22 0 0 1 4.947 13Z"/><circle cx="24" cy="24" r="10.5" fill="#fff"/><circle cx="24" cy="24" r="8.5" fill="#4285F4"/></svg>
+SVG
+  sed -i "s#^Icon=.*#Icon=$DESK_DIR/chrome.svg#" "$DESK_DIR/chrome.desktop"
   cat > "$DESK_DIR/terminal.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -335,7 +339,7 @@ fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
-  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --restore-last-session --window-position=0,0 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
+  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --restore-last-session --window-size=1240,780 --window-position=100,19 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
 fi
 # VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
 # or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
@@ -403,9 +407,13 @@ cat > "$DESK_DIR/chrome.desktop" <<'EOF'
 Type=Application
 Name=Chrome
 Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile'
-Icon=google-chrome
+Icon=chrome
 Terminal=false
 EOF
+cat > "$DESK_DIR/chrome.svg" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#DB4437" d="M24 24L4.947 13A22 22 0 0 1 43.053 13Z"/><path fill="#F4B400" d="M24 24L43.053 13A22 22 0 0 1 24 46Z"/><path fill="#0F9D58" d="M24 24L24 46A22 22 0 0 1 4.947 13Z"/><circle cx="24" cy="24" r="10.5" fill="#fff"/><circle cx="24" cy="24" r="8.5" fill="#4285F4"/></svg>
+SVG
+sed -i "s#^Icon=.*#Icon=$DESK_DIR/chrome.svg#" "$DESK_DIR/chrome.desktop"
 cat > "$DESK_DIR/terminal.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
