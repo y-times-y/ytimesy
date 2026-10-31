@@ -1,24 +1,16 @@
-import {
-	Files,
-	FileText,
-	FolderTree,
-	MessagesSquare,
-	Monitor,
-	RotateCcw,
-	Sparkles,
-	type Square,
-	SquareTerminal,
-} from "lucide-react";
+import { FileText, type LucideIcon, RotateCcw, Sparkles } from "lucide-react";
 import type { SlashCommand, SlashCommandId } from "#/domain/slash-command";
+import { VIEW_ICONS } from "../workspace/view-icons";
 
-const icons: Record<SlashCommandId, typeof Square> = {
+/** Commands that open a right-sidebar view use that view's icon. */
+const icons: Record<SlashCommandId, LucideIcon> = {
 	retry: RotateCcw,
 	model: Sparkles,
-	files: FolderTree,
-	diff: Files,
-	terminal: SquareTerminal,
-	desktop: Monitor,
-	side: MessagesSquare,
+	files: VIEW_ICONS.files,
+	diff: VIEW_ICONS.diff,
+	terminal: VIEW_ICONS.terminal,
+	desktop: VIEW_ICONS.desktop,
+	side: VIEW_ICONS.side,
 	custom: FileText,
 };
 

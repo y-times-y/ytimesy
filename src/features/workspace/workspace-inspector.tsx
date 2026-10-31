@@ -1,16 +1,4 @@
-import {
-	BookMarked,
-	Check,
-	Files,
-	FolderTree,
-	GitPullRequest,
-	ListTodo,
-	MessagesSquare,
-	Monitor,
-	Plus,
-	SquareTerminal,
-	X,
-} from "lucide-react";
+import { Check, ListTodo, Plus, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
@@ -25,6 +13,7 @@ import {
 	type PullRequestRepository,
 } from "./pull-request-inspector";
 import { TerminalInspector } from "./terminal-inspector";
+import { VIEW_ICONS } from "./view-icons";
 
 export type ToolsView =
 	| "files"
@@ -39,45 +28,45 @@ export type InspectorView = ToolsView | "overview";
 const views = {
 	files: {
 		label: "Files",
-		icon: FolderTree,
+		icon: VIEW_ICONS.files,
 		title: "No files yet.",
 		description: "The workspace tree will appear here.",
 	},
 	diff: {
 		label: "Diff",
-		icon: Files,
+		icon: VIEW_ICONS.diff,
 		title: "No changes yet.",
 		description: "Changes from this turn will appear here.",
 	},
 	pr: {
 		label: "Pull request",
-		icon: GitPullRequest,
+		icon: VIEW_ICONS.pr,
 		title: "No repository connected.",
 		description:
 			"Connect this project to a GitHub repository to review its pull requests here.",
 	},
 	terminal: {
 		label: "Terminal",
-		icon: SquareTerminal,
+		icon: VIEW_ICONS.terminal,
 		title: "No terminal connected.",
 		description: "Start a workspace to use the terminal.",
 	},
 	desktop: {
 		label: "Desktop",
-		icon: Monitor,
+		icon: VIEW_ICONS.desktop,
 		title: "Shared desktop",
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
 	memory: {
 		label: "Memory",
-		icon: BookMarked,
+		icon: VIEW_ICONS.memory,
 		title: "Memory",
 		description: "What the agent remembers about you across chats.",
 	},
 	side: {
 		label: "Side chat",
-		icon: MessagesSquare,
+		icon: VIEW_ICONS.side,
 		title: "Side chat",
 		description: "Open a chat first; the side chat talks beside it.",
 	},
@@ -173,6 +162,7 @@ export function WorkspaceInspector({
 								onPointerEnter={() => onViewIntent?.(view)}
 								onClick={() => onActiveViewChange(view)}
 							>
+								<TabIcon view={view} />
 								{views[view].label}
 							</button>
 							<button
@@ -307,4 +297,9 @@ export function WorkspaceInspector({
 			) : null}
 		</aside>
 	);
+}
+
+function TabIcon({ view }: { view: ToolsView }) {
+	const Icon = views[view].icon;
+	return <Icon size={16} aria-hidden="true" />;
 }
