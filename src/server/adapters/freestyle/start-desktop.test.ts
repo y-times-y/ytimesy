@@ -136,9 +136,14 @@ it("starts the desktop and Chrome outside the agent command's process group", ()
 	expect(chromeOpenCommand("'https://example.com'")).not.toMatch(/&$/);
 	// On screen, where the Desktop tab shows it (it once opened at x=-1050).
 	expect(chromeOpenCommand("'https://example.com'")).toContain(
-		"--window-position=0,0",
+		"--window-position=100,19",
 	);
-	expect(START_WORKSPACE_DESKTOP).toContain("--window-position=0,0");
+	expect(START_WORKSPACE_DESKTOP).toContain("--window-position=100,19");
+	// tint2 here loads SVG icons only, so the dock gets Chrome's mark as SVG.
+	for (const script of [START_WORKSPACE_DESKTOP, ENSURE_WORKSPACE_DESKTOP]) {
+		expect(script).toContain('cat > "$DESK_DIR/chrome.svg"');
+		expect(script).toContain("Icon=$DESK_DIR/chrome.svg");
+	}
 	// No "--no-sandbox" warning bar across the page.
 	expect(chromeOpenCommand("'https://example.com'")).toContain("--test-type");
 });
