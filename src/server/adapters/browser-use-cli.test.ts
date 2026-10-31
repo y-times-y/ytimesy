@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { expect, it } from "vitest";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
+	BROWSER_USE_INSTALL,
 	browserUseCommand,
 	PINNED_BROWSER_USE_VERSION,
 } from "./browser-use-cli";
@@ -24,6 +25,22 @@ it("pins the maintained CLI and scopes it to local guest Chrome without telemetr
 	expect(command).not.toContain("BROWSER_USE_API_KEY");
 	expect(browserUseCommand("sibling", "print(1)")).not.toContain(
 		command.match(/BH_HOME=(.*)/)?.[1],
+	);
+});
+
+it("is baked into the tools image so the first browser command does not download it", () => {
+	const recipe = readFileSync("scripts/build-tools-snapshot.ts", "utf8");
+	expect(recipe).toContain(
+		'import { BROWSER_USE_INSTALL } from "#/server/adapters/browser-use-cli"',
+	);
+	expect(recipe).toContain(
+		'await run(vm, "browser-use (ubuntu)", BROWSER_USE_STEP)',
+	);
+	expect(BROWSER_USE_INSTALL).toContain(
+		`browser-use==${PINNED_BROWSER_USE_VERSION}`,
+	);
+	expect(browserUseCommand("session", "print(1)")).toContain(
+		BROWSER_USE_INSTALL,
 	);
 });
 

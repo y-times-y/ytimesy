@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Freestyle, type Vm } from "freestyle";
 import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
 import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
+import { BROWSER_USE_INSTALL } from "#/server/adapters/browser-use-cli";
 import { boundedFreestyleFetch } from "#/server/adapters/freestyle/bounded-fetch";
 import { DESKTOP_IMAGE_SCRIPT } from "#/server/adapters/freestyle/desktop-image";
 import {
@@ -91,7 +92,13 @@ EOF`,
 	},
 	{
 		name: "pnpm and yarn",
-		script: `corepack enable --install-directory /usr/local/bin pnpm yarn`,
+		// Newer Node releases no longer bundle corepack; install it when missing.
+		script: `
+if ! command -v corepack >/dev/null 2>&1; then
+  npm install -g --silent corepack >/dev/null
+  ln -sf "$(npm prefix -g)/bin/corepack" /usr/local/bin/corepack
+fi
+corepack enable --install-directory /usr/local/bin pnpm yarn`,
 	},
 	{
 		// Docker Hub rate-limits the shared VM IPs; pulls go through a mirror.
@@ -110,18 +117,22 @@ EOF`,
 	},
 ];
 
-// Run per user so pnpm and yarn need no download on the first command.
+// Run per user so pnpm and yarn need no download on the first command, and
+// the agent's first browser command finds Browser Use installed.
 const USER_STEP = `
 cd /tmp
 pnpm --version >/dev/null
 yarn --version >/dev/null`;
+const BROWSER_USE_STEP = `${BROWSER_USE_INSTALL}
+"$UV_TOOL_BIN_DIR/browser-use" --help >/dev/null`;
 
 const VERSIONS = `
 for c in "node --version" "npm --version" "corepack --version" "pnpm --version" "yarn --version" "bun --version" \\
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
   "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version" \\
-  "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version"; do
+  "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version" \\
+  "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done
@@ -130,7 +141,14 @@ printf '%-24s %s\\n' "docker mirrors" "$(cat /etc/docker/daemon.json 2>/dev/null
 const TIMING = `bash -c 'TIMEFORMAT=%R; for i in 1 2 3; do time bash -lc true; done; for i in 1 2 3; do time bash -c true; done' 2>&1 | tr '\\n' ' '`;
 
 const recipeHash = createHash("sha256")
-	.update(JSON.stringify({ CHEAP_BASE_SNAPSHOT, ROOT_STEPS, USER_STEP }))
+	.update(
+		JSON.stringify({
+			CHEAP_BASE_SNAPSHOT,
+			ROOT_STEPS,
+			USER_STEP,
+			BROWSER_USE_STEP,
+		}),
+	)
 	.digest("hex")
 	.slice(0, 12);
 const SNAPSHOT_SLUG = `ytimesy-tools-${recipeHash}`;
@@ -242,6 +260,7 @@ async function build() {
 			await run(vm, step.name, step.script, "root");
 		await run(vm, "pnpm/yarn cache (ubuntu)", USER_STEP);
 		await run(vm, "pnpm/yarn cache (root)", USER_STEP, "root");
+		await run(vm, "browser-use (ubuntu)", BROWSER_USE_STEP);
 		await report(vm);
 		await run(
 			vm,
