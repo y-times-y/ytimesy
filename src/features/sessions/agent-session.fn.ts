@@ -21,10 +21,7 @@ import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import { relayConversationDeliveriesOnce } from "#/server/jobs/conversation-delivery";
 import { withPublicFailure } from "#/server/public-failure";
-import {
-	deleteAgentSessionMachine,
-	openAgentSession,
-} from "#/server/services/agent-session-machine";
+import { openAgentSession } from "#/server/services/agent-session-machine";
 import { projectAgentTasks } from "#/server/services/agent-task-activity";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import { prewarmChatMachine } from "#/server/services/machine-prewarm";
@@ -184,13 +181,9 @@ export const deleteProjectAgentSession = createServerFn({ method: "POST" })
 	})
 	.handler(async ({ data }): Promise<{ id: string }> => {
 		const user = await requireUser(getRequest().headers);
-		await runWithMachines("Chat deletion", publicFailureMessage, (machines) =>
-			deleteAgentSessionMachine(machines, {
-				userId: user.id,
-				projectId: data.projectId,
-				sessionId: data.sessionId,
-			}),
-		);
+		// Archived, not deleted: Settings > Archived restores it for 30 days.
+		const { archiveOwned } = await import("#/server/services/archive");
+		await archiveOwned(user.id, "chat", data.sessionId);
 		return { id: data.sessionId };
 	});
 

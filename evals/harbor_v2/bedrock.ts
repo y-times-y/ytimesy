@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import type { ToolSet } from "ai";
+import { RESIGN } from "./transport-guard";
 
 /**
  * OpenAI models in Amazon Bedrock for the Harbor bridge (route `bedrock`).
@@ -324,8 +325,9 @@ export function signAwsRequest(input: {
 /**
  * A fetch that signs each Bedrock request (replacing the OpenAI client's
  * bearer header) and refuses any other host, so AWS credentials never leave
- * for another origin. The transport guard sits underneath: its resends of a
- * cut stream reuse the signature, well inside AWS's 5-minute window.
+ * for another origin. The transport guard sits underneath; the request carries
+ * RESIGN, so each resend of a cut or degenerate stream is signed again (a
+ * reused signature expires after 5 minutes, and one attempt can stream for 20).
  */
 export function bedrockSigningFetch(input: {
 	credentials: AwsCredentials;
@@ -360,21 +362,30 @@ export function bedrockSigningFetch(input: {
 			}
 		}
 		const method = init?.method ?? "GET";
-		const headers = new Headers(init?.headers);
-		headers.delete("authorization");
-		for (const [name, value] of Object.entries(
-			signAwsRequest({
-				method,
-				url,
-				body,
-				credentials: input.credentials,
-				region: input.region,
-				service: bedrockSigningService(input.endpoint),
-				now: input.now?.(),
-			}),
-		))
-			headers.set(name, value);
-		return input.fetch(url, { ...init, method, headers, body });
+		const sign = () => {
+			const headers = new Headers(init?.headers);
+			headers.delete("authorization");
+			for (const [name, value] of Object.entries(
+				signAwsRequest({
+					method,
+					url,
+					body,
+					credentials: input.credentials,
+					region: input.region,
+					service: bedrockSigningService(input.endpoint),
+					now: input.now?.(),
+				}),
+			))
+				headers.set(name, value);
+			return headers;
+		};
+		return input.fetch(url, {
+			...init,
+			method,
+			headers: sign(),
+			body,
+			[RESIGN]: sign,
+		} as unknown as RequestInit);
 	};
 }
 

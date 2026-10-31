@@ -73,6 +73,10 @@ export function ProjectPicker({
 		// A dropped fetch (Safari "Load failed") is not a missing GitHub connection.
 		retry: retryTransientRead,
 		retryDelay: transientReadRetryDelay,
+		// An answer of "connect GitHub first" stays until the connect flow
+		// reloads the page: the composer remounting (each chat or project
+		// switch) does not ask GitHub again.
+		retryOnMount: false,
 		// Loaded with the composer and cached, so opening the picker never waits on GitHub.
 		staleTime: 5 * 60_000,
 		placeholderData: keepPreviousData,

@@ -6,6 +6,7 @@ import {
 	type OpenDesktopRemote,
 	runDesktopSession,
 } from "./desktop-session";
+import { logRelay } from "./relay-log";
 import {
 	SOCKET_ORIGIN_REFUSED,
 	socketOriginAllowed,
@@ -15,6 +16,10 @@ import { runTerminalSession, TERMINAL_PATH } from "./terminal-session";
 
 /** Adapts a Workers WebSocket (already accepted) to the shared session code. */
 function workerSocket(socket: WebSocket): ClientSocket {
+	// From compatibility date 2026-10-08 a Workers WebSocket hands binary
+	// frames over as Blob, which `new Uint8Array(...)` turns into zero bytes:
+	// every VNC frame and keystroke arrived empty and both panels sat blank.
+	socket.binaryType = "arraybuffer";
 	return {
 		get open() {
 			return socket.readyState === WebSocket.OPEN;
@@ -37,24 +42,41 @@ function workerSocket(socket: WebSocket): ClientSocket {
 					: listener(new Uint8Array(event.data as ArrayBuffer), true),
 			),
 		onClose: (listener) => {
-			socket.addEventListener("close", listener);
-			socket.addEventListener("error", listener);
+			socket.addEventListener("close", (event) =>
+				listener({ code: event.code, reason: event.reason }),
+			);
+			socket.addEventListener("error", () => listener({ reason: "error" }));
 		},
 	};
 }
 
+/** How long the VM's viewer may take to answer the upgrade. */
+const REMOTE_HANDSHAKE_MS = 8_000;
+
 const openWorkerRemoteSocket: OpenDesktopRemote = async (url, auth) => {
-	const response = await fetch(url.replace(/^ws/i, "http"), {
-		headers: {
-			Upgrade: "websocket",
-			"Sec-WebSocket-Protocol": "binary",
-			Authorization: auth.authorization,
-		},
-		signal: AbortSignal.timeout(8_000),
-	});
-	if (!response.webSocket) throw new Error("Desktop is not ready.");
-	response.webSocket.accept();
-	return workerSocket(response.webSocket);
+	// Times the handshake only: a fetch signal stays bound to the upgraded
+	// socket, so AbortSignal.timeout here cut every desktop off after 8s.
+	const handshake = new AbortController();
+	const timer = setTimeout(() => handshake.abort(), REMOTE_HANDSHAKE_MS);
+	try {
+		const response = await fetch(url.replace(/^ws/i, "http"), {
+			headers: {
+				Upgrade: "websocket",
+				"Sec-WebSocket-Protocol": "binary",
+				Authorization: auth.authorization,
+			},
+			signal: handshake.signal,
+		});
+		if (!response.webSocket) {
+			logRelay("desktop", "upstream-status", { status: response.status });
+			await response.body?.cancel();
+			throw new Error("Desktop is not ready.");
+		}
+		response.webSocket.accept();
+		return workerSocket(response.webSocket);
+	} finally {
+		clearTimeout(timer);
+	}
 };
 
 /**

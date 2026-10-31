@@ -1,4 +1,5 @@
 import {
+	type QueryClient,
 	useMutation,
 	useQueries,
 	useQuery,
@@ -27,6 +28,11 @@ import {
 } from "#/domain/agent-provider";
 import { shouldPollSubagents } from "#/domain/agent-task";
 import {
+	NO_SAVED_DEFAULT_BRANCHES,
+	type SavedDefaultBranches,
+} from "#/domain/default-branch-cookie";
+import { ENVIRONMENT_SETUP_PROMPT } from "#/domain/environment-setup";
+import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
 	sendAfterConnect,
@@ -47,6 +53,7 @@ import {
 	type IncomingAttachment,
 	safeAttachmentName,
 } from "#/domain/message-attachment";
+import { openChatCookie } from "#/domain/open-chat-cookie";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type Project,
@@ -88,17 +95,20 @@ import {
 import type { SidebarPullRequest } from "#/domain/sidebar-chat-status";
 import {
 	backgroundTurnPollChatIds,
+	chatOpenedWithProject,
 	chatsToReadAhead,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
+	projectsLatestChatsToReadAhead,
 	SIDEBAR_PINNED_STORAGE_KEY,
 	type SidebarChat,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sessionWithoutOpenChat,
+	sidebarChatIsRunning,
 	sidebarPinnedStorageValue,
 	unsentSendReturnsHere,
 	withBusyChat,
@@ -108,8 +118,10 @@ import {
 } from "#/domain/sidebar-chats";
 import {
 	type ListedPullRequest,
+	mergeAnswerPending,
 	pullRequestPanelRepository,
 	pullRequestsAcrossRepositories,
+	savedListedPullRequest,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
@@ -140,6 +152,7 @@ import {
 	interactionTag,
 	startInteraction,
 } from "#/features/analytics/web-vitals";
+import { SavedDefaultBranchesContext } from "#/features/sessions/base-branch-picker";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
 	readSavedChoices,
@@ -159,6 +172,10 @@ import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
+import {
+	HeldForSetupContext,
+	workspaceStatusQuery,
+} from "../projects/workspace-status";
 import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
@@ -199,7 +216,11 @@ import {
 	SessionLauncher,
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
-import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
+import {
+	getWorkspaceDesktop,
+	prepareWorkspaceDesktopFn,
+	startWorkspaceDesktopFn,
+} from "./desktop.fn";
 import {
 	readWorkspaceChangesFn,
 	resumeWorkspaceMachineFn,
@@ -212,6 +233,10 @@ import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
 import { chatRemoval, projectRemoval } from "./sidebar-removals";
 import { useCompactLayout } from "./use-compact-layout";
+import {
+	askForFinishNotifications,
+	useTurnFinishAlerts,
+} from "./use-turn-finish-alerts";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -241,12 +266,24 @@ type PendingSend = {
 	/** Continue on the fallback route the user approved after an outage. */
 	readonly continueOn?: string;
 	readonly attachments?: readonly IncomingAttachment[];
+	/** The branch a new chat starts from, when the person picked one. */
+	readonly baseBranch?: string;
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
 
 /** How long after the open chat shows the project's other chats are read ahead. */
 const READ_AHEAD_DELAY_MS = 800;
+/** How long after the open chat shows the other projects' latest chats are read ahead. */
+const PROJECTS_READ_AHEAD_DELAY_MS = 1_500;
+
+/** A project's environment status, read before a switch shows it (at most every 30 s). */
+function readAheadProjectStatus(queryClient: QueryClient, projectId: string) {
+	void queryClient.prefetchQuery({
+		...workspaceStatusQuery(projectId),
+		staleTime: 30_000,
+	});
+}
 
 /** How long after the inspector opens (or the chat changes) Files reads ahead. */
 const FILES_READ_AHEAD_MS = 100;
@@ -274,6 +311,10 @@ function withoutSearchParam(name: string) {
 	);
 }
 
+/** Re-reads of a PR list while GitHub has not said whether an open PR can merge. */
+const MERGE_ANSWER_READS = 5;
+const MERGE_ANSWER_POLL_MS = 3_000;
+
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
@@ -285,6 +326,7 @@ export function WorkspaceHome({
 	renderedAtMs,
 	savedInspector = CLOSED_INSPECTOR,
 	savedPullRequests = NO_SAVED_SIDEBAR_PRS,
+	savedDefaultBranches = NO_SAVED_DEFAULT_BRANCHES,
 }: {
 	initialSession: PublicCodexSession;
 	/** The chat the page opens (a linked chat, else the latest), read with
@@ -300,6 +342,8 @@ export function WorkspaceHome({
 	savedInspector?: SavedInspector;
 	/** The sidebar's PR icons as this browser last read them (a cookie the server reads). */
 	savedPullRequests?: SavedSidebarPrs;
+	/** Repositories' default branches as this browser last read them. */
+	savedDefaultBranches?: SavedDefaultBranches;
 	initialProjects?: Project[];
 	/** The open project's chats (a linked chat's project, else the first),
 	 * read with the page. */
@@ -432,6 +476,18 @@ export function WorkspaceHome({
 					`/api/github/pull-requests?installationId=${repository.installationId}&repositoryId=${repository.repositoryId}`,
 				),
 			enabled: Boolean(repository.installationId && repository.repositoryId),
+			// GitHub works out whether an open PR can merge after the first
+			// read; until it has, ask again soon instead of on the next refresh.
+			refetchInterval: (query: {
+				state: {
+					data?: { pullRequests: ListedPullRequest[] };
+					dataUpdateCount: number;
+				};
+			}) =>
+				query.state.dataUpdateCount < MERGE_ANSWER_READS &&
+				query.state.data?.pullRequests.some(mergeAnswerPending)
+					? MERGE_ANSWER_POLL_MS
+					: false,
 		})),
 	});
 	const refetchPullRequests = useCallback(
@@ -448,6 +504,9 @@ export function WorkspaceHome({
 				data: { projectId: selectedProject?.id },
 			}),
 		enabled: Boolean(selectedProject?.id),
+		// The sidebar reads every project's list (below); switching to a
+		// project does not read its list again within that window.
+		staleTime: 30_000,
 	});
 	// Every project's chats, for the sidebar's Recent list and project order;
 	// the open project's list shares its cache entry with the query above.
@@ -552,6 +611,8 @@ export function WorkspaceHome({
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	/** The chat whose desktop is starting; another chat may still start its own. */
 	const desktopStartFor = useRef<string | null>(null);
+	/** A chat whose Desktop was clicked while its quiet warm-up was running. */
+	const desktopClickedWhileWarming = useRef<string | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>();
 	// Back from an MCP provider's sign-in page: reopen the panel that started it.
@@ -613,6 +674,21 @@ export function WorkspaceHome({
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	/** A send waiting for the ChatGPT device code to be entered. */
 	const pendingSendRef = useRef<PendingSend | null>(null);
+	const [composerPrefill, setComposerPrefill] = useState<{
+		readonly text: string;
+		readonly at: number;
+	}>();
+	// The message box takes it in its own effect (children's run first); it
+	// must not come back when another chat's box mounts later.
+	useEffect(() => {
+		if (composerPrefill) setComposerPrefill(undefined);
+	}, [composerPrefill]);
+	// A message sent while the project's environment is still being set up
+	// waits for it, then goes as usual (or is dropped if the setup fails).
+	const heldForSetupRef = useRef<PendingSend | null>(null);
+	const [heldForSetup, setHeldForSetup] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
 	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
 	const stopRequestedFor = useRef<string | null>(null);
 	const abandonSendRef = useRef<
@@ -768,6 +844,7 @@ export function WorkspaceHome({
 	const releaseQueued = useServerFn(releaseQueuedSessionMessage);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
+	const prepareDesktop = useServerFn(prepareWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
 	const resumeMachine = useServerFn(resumeWorkspaceMachineFn);
 	/** When this page last asked each chat's machine to wake. */
@@ -779,24 +856,36 @@ export function WorkspaceHome({
 	 */
 	const [firstChatRead, setFirstChatRead] = useState(false);
 	// Git in the workspace is the source of truth for what changed; the
-	// transcript only fills in while the machine is asleep.
+	// transcript only fills in while the machine is asleep. Only the right
+	// panel shows git's changes: while it is closed, a switch reads none.
 	const gitChanges = useQuery({
 		queryKey: ["workspace-changes", selectedProject?.id, selectedSessionId],
 		queryFn: () =>
 			readChanges({
 				data: { projectId: selectedProject?.id, sessionId: selectedSessionId },
 			}),
-		enabled: Boolean(selectedProject?.id && selectedSessionId && firstChatRead),
+		enabled: Boolean(
+			selectedProject?.id &&
+				selectedSessionId &&
+				firstChatRead &&
+				inspectorOpen,
+		),
 		refetchInterval: session.turnStatus === "running" ? 10_000 : 60_000,
 		staleTime: 5_000,
 	});
 	const refetchChanges = gitChanges.refetch;
+	const gitChangesShown = useRef(inspectorOpen);
+	gitChangesShown.current = inspectorOpen;
 	const changesTurnStatus = useRef(session.turnStatus);
 	useEffect(() => {
 		const was = changesTurnStatus.current;
 		changesTurnStatus.current = session.turnStatus;
 		// A finished turn is when the agent's edits settle; show them right away.
-		if (isTurnRunning(was) && !isTurnRunning(session.turnStatus))
+		if (
+			gitChangesShown.current &&
+			isTurnRunning(was) &&
+			!isTurnRunning(session.turnStatus)
+		)
 			void refetchChanges();
 	}, [session.turnStatus, refetchChanges]);
 	const fileChanges =
@@ -851,6 +940,11 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
+	// A reload opens this chat again (open-chat-cookie.ts).
+	useEffect(() => {
+		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
+		document.cookie = openChatCookie(activeProjectId, activeSessionId);
+	}, [activeProjectId, activeSessionId]);
 	const agentTasks = useQuery({
 		queryKey: chatSideKeys.tasks(activeProjectId, activeSessionId),
 		queryFn: () =>
@@ -966,50 +1060,75 @@ export function WorkspaceHome({
 		chats.refetch,
 	]);
 	selectedSessionIdRef.current = activeSessionId;
-	const requestDesktop = useCallback(() => {
-		const chatId = activeSessionId;
-		if (!chatId || desktopStartFor.current === chatId) return;
-		if (
-			!desktopInspectorShouldStart({
-				tabActive: true,
-				projectId: selectedProject?.id,
-				sessionId: activeSessionId,
-				desktop,
-				busy: desktopBusy,
-			}) &&
-			desktop.status !== "failed"
-		) {
-			return;
-		}
-		desktopStartFor.current = chatId;
-		setDesktopBusy(true);
-		setDesktop({ status: "starting" });
-		// A result belongs to the chat that asked; a chat opened since keeps its own.
-		const stillOpen = () => selectedSessionIdRef.current === chatId;
-		void startDesktop({
-			data: {
-				projectId: selectedProject?.id,
-				sessionId: chatId,
-			},
-		})
-			.then((next) => {
-				if (stillOpen()) setDesktop(next);
-			})
-			.catch((cause) => {
-				if (stillOpen())
-					setDesktop({ status: "failed", reason: publicFailureMessage(cause) });
-			})
-			.finally(() => {
-				if (desktopStartFor.current === chatId) desktopStartFor.current = null;
-				if (stillOpen()) setDesktopBusy(false);
-			});
-	}, [
-		activeSessionId,
-		desktop,
-		desktopBusy,
-		selectedProject?.id,
-		startDesktop,
-	]);
+	/** Starts this chat's desktop; ahead of a click, only on an existing machine. */
+	const requestDesktop = useCallback(
+		(ahead = false) => {
+			const chatId = activeSessionId;
+			if (!chatId) return;
+			if (desktopStartFor.current === chatId) {
+				// A click during the quiet warm-up shows the start; the warm-up's
+				// result lands, or a real start follows if it found no machine.
+				if (!ahead) {
+					desktopClickedWhileWarming.current = chatId;
+					setDesktop({ status: "starting" });
+				}
+				return;
+			}
+			if (
+				!desktopInspectorShouldStart({
+					tabActive: true,
+					projectId: selectedProject?.id,
+					sessionId: activeSessionId,
+					desktop,
+					busy: desktopBusy,
+				}) &&
+				desktop.status !== "failed"
+			) {
+				return;
+			}
+			desktopStartFor.current = chatId;
+			setDesktopBusy(true);
+			// A warm-up ahead of a click runs quietly: nobody asked for the
+			// desktop yet, so the panel keeps saying it is not running.
+			if (!ahead) setDesktop({ status: "starting" });
+			// A result belongs to the chat that asked; a chat opened since keeps its own.
+			const stillOpen = () => selectedSessionIdRef.current === chatId;
+			const data = { projectId: selectedProject?.id, sessionId: chatId };
+			void (ahead ? prepareDesktop : startDesktop)({ data })
+				.then((next) => {
+					const clicked = desktopClickedWhileWarming.current === chatId;
+					desktopClickedWhileWarming.current = null;
+					if (clicked && next.status === "stopped")
+						return startDesktop({ data });
+					return next;
+				})
+				.then((next) => {
+					if (stillOpen()) setDesktop(next);
+				})
+				.catch((cause) => {
+					if (stillOpen())
+						setDesktop({
+							status: "failed",
+							reason: publicFailureMessage(cause),
+						});
+				})
+				.finally(() => {
+					if (desktopStartFor.current === chatId)
+						desktopStartFor.current = null;
+					if (stillOpen()) setDesktopBusy(false);
+				});
+		},
+		[
+			activeSessionId,
+			desktop,
+			desktopBusy,
+			selectedProject?.id,
+			startDesktop,
+			prepareDesktop,
+		],
+	);
+	const requestDesktopRef = useRef(requestDesktop);
+	requestDesktopRef.current = requestDesktop;
 	useEffect(() => {
 		// Another chat's desktop start never blocks this chat's.
 		void activeSessionId;
@@ -1136,8 +1255,16 @@ export function WorkspaceHome({
 		}
 	}, [chats.data, composerDraft, selectedSessionId]);
 
+	// The desktop's state shows in the right panel only: read it once the
+	// panel is open, not on every chat or project switch.
 	useEffect(() => {
-		if (!activeProjectId || !activeSessionId || !firstChatRead) return;
+		if (
+			!activeProjectId ||
+			!activeSessionId ||
+			!firstChatRead ||
+			!inspectorOpen
+		)
+			return;
 		void loadDesktop({
 			data: { projectId: activeProjectId, sessionId: activeSessionId },
 		}).then((next) => {
@@ -1148,8 +1275,17 @@ export function WorkspaceHome({
 					? current
 					: next,
 			);
+			// Started while the panel is open, so Desktop is up by the time it
+			// is clicked instead of starting then.
+			if (next.status === "stopped") requestDesktopRef.current(true);
 		});
-	}, [loadDesktop, activeProjectId, activeSessionId, firstChatRead]);
+	}, [
+		loadDesktop,
+		activeProjectId,
+		activeSessionId,
+		firstChatRead,
+		inspectorOpen,
+	]);
 
 	// A desktop-use streak opens this panel on Desktop. Closing the sidebar
 	// records that streak, so later frames of it stay closed; the next streak
@@ -1289,6 +1425,46 @@ export function WorkspaceHome({
 			window.clearTimeout(timer);
 		};
 	}, [latestChatIds, activeSessionId]);
+	// Then each other project's latest chat, one at a time: switching
+	// projects opens it from the held view instead of waiting for a read.
+	const otherProjectsLatest = sessionRead.data
+		? projectChats
+				.filter(({ project }) => project.id !== activeProjectId)
+				.map(({ chats }) => chats[0]?.id ?? "")
+				.join(",")
+		: "";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the listed ids; the lists are read when the timer fires.
+	useEffect(() => {
+		if (!otherProjectsLatest) return;
+		let stopped = false;
+		const timer = window.setTimeout(async () => {
+			for (const { project } of projectChats)
+				if (project.id !== activeProjectId)
+					readAheadProjectStatus(queryClient, project.id);
+			const queue = projectsLatestChatsToReadAhead({
+				projects: projectChats.map(({ project, chats }) => ({
+					projectId: project.id,
+					chats,
+				})),
+				openProjectId: activeProjectId,
+				heldChatIds: new Set([
+					...[...sessionViews.current.keys()].filter(
+						(id) => !restoredChats.current.has(id),
+					),
+					...viewReads.current.keys(),
+				]),
+			});
+			for (const id of queue) {
+				if (stopped) return;
+				readAheadRef.current(id);
+				await viewReads.current.get(id);
+			}
+		}, PROJECTS_READ_AHEAD_DELAY_MS);
+		return () => {
+			stopped = true;
+			window.clearTimeout(timer);
+		};
+	}, [otherProjectsLatest, activeProjectId]);
 	// The Memory page reads a git snapshot (about a second); read it once the
 	// page has settled, and the workspace tools' code, so each opens at once.
 	const pageSettled = Boolean(sessionRead.data) || !activeSessionId;
@@ -1580,6 +1756,53 @@ export function WorkspaceHome({
 		}
 	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
+	useTurnFinishAlerts(
+		sidebarChats.map((chat) => ({
+			id: chat.id,
+			title: chat.title,
+			running: sidebarChatIsRunning({
+				chatId: chat.id,
+				turnStatus: chat.turnStatus,
+				busyChatIds,
+				openChatId: activeSessionId,
+				openTurnStatus,
+			}),
+			turnStatus:
+				chat.id === activeSessionId ? openTurnStatus : chat.turnStatus,
+			waitingOn: chat.waitingOn,
+		})),
+		openChat,
+	);
+
+	// The open project's environment; WorkspaceStatus polls it while it is set up.
+	const projectSetup = useQuery({
+		...workspaceStatusQuery(selectedProject?.id ?? ""),
+		enabled: Boolean(selectedProject?.id),
+	});
+	const projectSetupStatus = projectSetup.data?.status;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runs as the setup status changes; the held send carries its own scope.
+	useEffect(() => {
+		const held = heldForSetupRef.current;
+		if (!held) return;
+		if (projectSetupStatus !== "ready" && projectSetupStatus !== "failed")
+			return;
+		heldForSetupRef.current = null;
+		setHeldForSetup(new Set());
+		if (projectSetupStatus === "failed") {
+			abandonSend(
+				held,
+				"The project could not be set up. Retry it, then send again.",
+			);
+			return;
+		}
+		if (session.connection.status === "authenticated")
+			void deliverSend(
+				held,
+				held.startsNewChat ? { ...session, agentSessionId: null } : session,
+			);
+		else void connectThenSend(held);
+	}, [projectSetupStatus]);
+
 	function openInspector(view: ToolsView) {
 		if (
 			view === "files" ||
@@ -1650,14 +1873,28 @@ export function WorkspaceHome({
 		setMemoryPageOpen(false);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
+		// The project change below is this one: it keeps the chat opened here.
+		chatsProjectId.current = projectId;
 		bumpSessionEpoch();
 		pendingNewChatRef.current = false;
-		selectedSessionIdRef.current = undefined;
-		setSelectedSessionId(undefined);
 		setInspectorView("overview");
 		setSelectedFilePath(undefined);
 		setDesktop({ status: "stopped" });
+		// The project's latest chat opens now, from the view the page holds or
+		// the browser's copy, like a clicked chat; not after its list re-reads.
+		const listed =
+			queryClient.getQueryData<readonly SidebarChat[]>([
+				"agent-sessions",
+				projectId,
+			]) ?? [];
+		const latest = chatOpenedWithProject({
+			chats: listed,
+			composerDraft: composerDraftRef.current,
+		});
+		selectedSessionIdRef.current = latest;
+		setSelectedSessionId(latest);
 		setSession((current) => sessionWithoutOpenChat(current));
+		if (latest) showChatView(latest, listed);
 	}
 
 	function openAddProject() {
@@ -1677,6 +1914,13 @@ export function WorkspaceHome({
 		setComposerDraft(true);
 		setProjectPickerOpen(true);
 		if (compact) setProjectsOpen(false);
+	}
+
+	/** A new chat in that project, its message box holding the setup request. */
+	function startEnvironmentSetup(projectId: string) {
+		setSettingsOpen(false);
+		startNewChat(projectId);
+		setComposerPrefill({ text: ENVIRONMENT_SETUP_PROMPT, at: Date.now() });
 	}
 
 	function startNewChat(projectId?: string) {
@@ -1844,10 +2088,23 @@ export function WorkspaceHome({
 		setInspectorView("overview");
 		setSelectedFilePath(undefined);
 		setDesktop({ status: "stopped" });
+		showChatView(
+			id,
+			projectChats.find((group) => group.chats.some((chat) => chat.id === id))
+				?.chats ?? sidebarChats,
+		);
+	}
+
+	/**
+	 * Puts an opened chat on screen at once: the view the page holds, else
+	 * an empty view the browser's cached copy fills; the open chat's server
+	 * read (sessionRead) then replaces either. The epoch was bumped already.
+	 */
+	function showChatView(id: string, listed: readonly SidebarChat[]) {
 		const cached = sessionViews.current.get(id);
 		setHarnessId(
 			composerHarnessForChat({
-				listedHarnessId: sidebarChats.find((chat) => chat.id === id)?.harnessId,
+				listedHarnessId: listed.find((chat) => chat.id === id)?.harnessId,
 				connectionProvider: cached
 					? connectedProviderId(cached.connection)
 					: null,
@@ -1858,8 +2115,8 @@ export function WorkspaceHome({
 			setSession(cached);
 			return;
 		}
-		const listedTurn = listedChatTurnStatus(sidebarChats, id);
-		const listedModelId = listedChatModelId(sidebarChats, id);
+		const listedTurn = listedChatTurnStatus(listed, id);
+		const listedModelId = listedChatModelId(listed, id);
 		setSession((current) => ({
 			...current,
 			agentSessionId: id,
@@ -2161,6 +2418,7 @@ export function WorkspaceHome({
 						...(pending.attachments?.length
 							? { attachments: [...pending.attachments] }
 							: {}),
+						...(pending.baseBranch ? { baseBranch: pending.baseBranch } : {}),
 					},
 				}),
 				SEND_TIMEOUT_MS,
@@ -2257,7 +2515,29 @@ export function WorkspaceHome({
 	const sessionPullRequests = listedPullRequests.filter(
 		(pr) => Boolean(activeHead) && pr.head === activeHead,
 	);
+	// Until the live list is read, the header shows the PR this browser saw
+	// last for the chat (the sidebar's saved PR), so it does not pop in.
+	const savedChatPr =
+		!pullRequestsRead &&
+		(activeChat?.pr?.state === "open" || activeChat?.pr?.state === "draft")
+			? activeChat.pr
+			: null;
 	const sessionPullRequest = sessionPullRequests[0];
+	// The Overview's PR row likewise stands in from the saved PR until the live
+	// list is read; readiness the save does not hold reads as not confirmed.
+	const overviewPullRequests: readonly ListedPullRequest[] =
+		pullRequestsRead || !activeChat?.pr || !activeHead
+			? sessionPullRequests
+			: [savedListedPullRequest(activeChat.pr, activeHead)];
+	const headerPullRequest =
+		sessionPullRequest ??
+		(savedChatPr
+			? {
+					number: savedChatPr.number,
+					url: savedChatPr.url,
+					draft: savedChatPr.state === "draft",
+				}
+			: undefined);
 	/** A memory's source chat, opened in its project; false when it is not listed. */
 	function openMemoryChat(chatId: string) {
 		const listed = projectChats.find((group) =>
@@ -2479,510 +2759,562 @@ export function WorkspaceHome({
 	];
 
 	return (
-		<div className="workspace-shell">
-			<CommandPalette
-				open={paletteOpen}
-				onOpenChange={setPaletteOpen}
-				items={paletteItems}
-			/>
-			<ShortcutHelpDialog
-				open={shortcutsOpen}
-				onOpenChange={setShortcutsOpen}
-			/>
-			<ProjectSidebar
-				projects={projects.data ?? []}
-				projectsLoading={projects.isPending}
-				selectedProjectId={selectedProject?.id}
-				onSelectProject={selectProject}
-				expanded={shownProjectsOpen}
-				onToggle={() => setProjectsOpen((open) => !open)}
-				onAddProject={openAddProject}
-				chats={sidebarChats}
-				selectedChatId={activeSessionId}
-				busyChatIds={busyChatIds}
-				openTurnStatus={openTurnStatus}
-				hasUserMessage={hasUserMessage}
-				onSelectChat={openChat}
-				onNewChat={startNewChat}
-				onDeleteChat={deleteChat}
-				onDeleteProject={removeProject}
-				onOpenSettings={openSettings}
-				projectChats={projectChats}
-				onSelectChatInProject={(projectId, chatId) => {
-					selectProject(projectId);
-					openChat(chatId);
-				}}
-				onOpenMemory={() => {
-					setMemoryPageOpen(true);
-					if (compact) setProjectsOpen(false);
-				}}
-				memoryActive={memoryPageOpen}
-				onChatIntent={readAheadChat}
-				onMemoryIntent={() => prefetchMemoryPage(queryClient)}
-				renderedAtMs={renderedAtMs}
-				account={account}
-			/>
-			<ProjectSettings
-				codexUsage={session.usage}
-				open={settingsOpen}
-				projectId={selectedProject?.id}
-				projects={projects.data ?? []}
-				selectedProject={selectedProject}
-				onProjectAdded={(project) => {
-					selectProject(project.id);
-					void projects.refetch();
-				}}
-				onSignOut={() => {
-					void signOut();
-				}}
-				onClose={() => setSettingsOpen(false)}
-				initialSection={settingsSection}
-			/>
-			<UsageWarningBanner />
-			<main
-				ref={workspaceMainRef}
-				className="workspace-main"
-				data-memory-page={memoryPageOpen ? "true" : undefined}
-				inert={layoutCompact && shownProjectsOpen}
-				data-can-expand-inspector={
-					inspectorOpen && !layoutCompact && !inspectorCompact
-				}
-			>
-				{inspectorOpen && !layoutCompact && !inspectorCompact ? (
-					<button
-						type="button"
-						className="workspace-sidebar-toggle workspace-inspector-expand"
-						aria-label={
-							inspectorExpanded ? "Restore split view" : "Expand workspace"
-						}
-						title={
-							inspectorExpanded ? "Restore split view" : "Expand workspace"
-						}
-						onClick={() => setInspectorExpanded((value) => !value)}
-					>
-						{inspectorExpanded ? (
-							<Minimize2 size={16} />
-						) : (
-							<Maximize2 size={16} />
-						)}
-					</button>
-				) : null}
-				<button
-					type="button"
-					className="workspace-sidebar-toggle workspace-inspector-toggle"
-					aria-label={
-						inspectorOpen ? "Close right sidebar" : "Open right sidebar"
-					}
-					title={titleWithShortcut(
-						inspectorOpen ? "Close right sidebar" : "Open right sidebar",
-						inspectorShortcutHint,
-					)}
-					aria-expanded={inspectorOpen}
-					aria-controls="workspace-inspector"
-					onClick={toggleInspectorPanel}
-				>
-					<PanelRight size={16} />
-				</button>
-				{memoryPageOpen ? (
-					<MemoryPage
-						view={memoryView}
-						onViewChange={setMemoryView}
-						projects={projects.data}
-						onOpenChat={openMemoryChat}
+		<SavedDefaultBranchesContext.Provider value={savedDefaultBranches}>
+			<HeldForSetupContext.Provider value={heldForSetup}>
+				<div className="workspace-shell">
+					<CommandPalette
+						open={paletteOpen}
+						onOpenChange={setPaletteOpen}
+						items={paletteItems}
 					/>
-				) : null}
-				<WorkspacePanes
-					open={inspectorOpen}
-					compact={singlePane}
-					ratio={splitRatio}
-					view={inspectorView}
-					layout={followUpLayout ? "chat" : "empty"}
-					onResize={setCustomSplit}
-					onReset={() => setCustomSplit(null)}
-				>
-					<section
-						className="welcome-panel"
-						aria-label="Get started"
-						data-layout={followUpLayout ? "chat" : "empty"}
-						inert={singlePane && inspectorOpen}
-						aria-hidden={singlePane && inspectorOpen}
+					<ShortcutHelpDialog
+						open={shortcutsOpen}
+						onOpenChange={setShortcutsOpen}
+					/>
+					<ProjectSidebar
+						projects={projects.data ?? []}
+						projectsLoading={projects.isPending}
+						selectedProjectId={selectedProject?.id}
+						onSelectProject={selectProject}
+						expanded={shownProjectsOpen}
+						onToggle={() => setProjectsOpen((open) => !open)}
+						onAddProject={openAddProject}
+						chats={sidebarChats}
+						selectedChatId={activeSessionId}
+						busyChatIds={busyChatIds}
+						openTurnStatus={openTurnStatus}
+						hasUserMessage={hasUserMessage}
+						onSelectChat={openChat}
+						onNewChat={startNewChat}
+						onDeleteChat={deleteChat}
+						onDeleteProject={removeProject}
+						onOpenSettings={openSettings}
+						projectChats={projectChats}
+						onSelectChatInProject={(projectId, chatId) => {
+							selectProject(projectId);
+							openChat(chatId);
+						}}
+						onOpenMemory={() => {
+							setMemoryPageOpen(true);
+							if (compact) setProjectsOpen(false);
+						}}
+						memoryActive={memoryPageOpen}
+						onChatIntent={readAheadChat}
+						onProjectIntent={(projectId) => {
+							readAheadProjectStatus(queryClient, projectId);
+							const latest = queryClient.getQueryData<readonly SidebarChat[]>([
+								"agent-sessions",
+								projectId,
+							])?.[0];
+							if (latest) readAheadChat(latest.id);
+						}}
+						onMemoryIntent={() => prefetchMemoryPage(queryClient)}
+						renderedAtMs={renderedAtMs}
+						account={account}
+					/>
+					<ProjectSettings
+						onSetUpEnvironment={startEnvironmentSetup}
+						codexUsage={session.usage}
+						open={settingsOpen}
+						projectId={selectedProject?.id}
+						projects={projects.data ?? []}
+						selectedProject={selectedProject}
+						onProjectAdded={(project) => {
+							selectProject(project.id);
+							void projects.refetch();
+						}}
+						onSignOut={() => {
+							void signOut();
+						}}
+						onClose={() => setSettingsOpen(false)}
+						initialSection={settingsSection}
+					/>
+					<UsageWarningBanner />
+					<main
+						ref={workspaceMainRef}
+						className="workspace-main"
+						data-memory-page={memoryPageOpen ? "true" : undefined}
+						inert={layoutCompact && shownProjectsOpen}
+						data-can-expand-inspector={
+							inspectorOpen && !layoutCompact && !inspectorCompact
+						}
 					>
-						{followUpLayout ? (
-							<div className="session-title-row">
-								<div className="session-title-copy">
-									<span className="session-title">
-										{chatHeaderTitle(listedTitle, sessionTitle)}
-									</span>
-									{activeChat?.workingBranch && (
-										<span
-											className="session-title-meta"
-											title="This chat's branch: each turn that changes code is committed and pushed here"
-										>
-											{activeChat.workingBranch}
-										</span>
-									)}
-									{sessionPullRequest && (
-										<a
-											className="session-title-meta"
-											href={sessionPullRequest.url}
-											target="_blank"
-											rel="noreferrer"
-										>
-											{sessionPullRequest.draft ? "Draft PR" : "PR"} #
-											{sessionPullRequest.number}
-										</a>
-									)}
-								</div>
-							</div>
-						) : inspectorOpen ? null : (
-							<div className="session-title-row session-title-row-empty">
-								<div className="session-title-copy" />
-							</div>
-						)}
-						<div
-							className="welcome-content"
-							data-layout={followUpLayout ? "chat" : "empty"}
-						>
-							<SessionLauncher
-								initialDraft={
-									recoveryDraft?.id === session.agentSessionId
-										? recoveryDraft.prompt
-										: ""
+						{inspectorOpen && !layoutCompact && !inspectorCompact ? (
+							<button
+								type="button"
+								className="workspace-sidebar-toggle workspace-inspector-expand"
+								aria-label={
+									inspectorExpanded ? "Restore split view" : "Expand workspace"
 								}
-								onRecovered={async (id, prompt, items) => {
-									const projectId = selectedProject?.id;
-									if (!projectId) return;
-									setRecoveryDraft({ id, prompt: prompt ?? "" });
-									sessionViews.current.delete(id);
-									// A restore of this chat shows its transcript now; the
-									// full reload below can take a while (it reconnects).
-									const restored = sessionViewAfterRecovery(
-										currentSessionRef.current,
-										{ id, items },
-									);
-									if (restored) setSession(restored);
-									else openChat(id);
-									const epoch = sessionEpoch.current;
-									try {
-										const next = await getCodexSession({
-											data: { projectId, sessionId: id, harnessId },
-										});
-										if (epoch !== sessionEpoch.current) return;
-										rememberSessionView(next);
-										setSession(next);
-										await chats.refetch();
-										await agentTasks.refetch();
-									} catch (cause) {
-										// The recovery itself is done; live updates catch up.
-										console.warn("Reloading the recovered chat failed.", cause);
-									}
-								}}
-								childTasks={agentTasks.data ?? []}
-								backgroundRuns={backgroundRuns}
-								memoryActions={memoryActions}
-								key={composerKey.current.key}
-								onDraftStarted={prewarmOpenChat}
-								loadedCatalog={initialChatView?.side?.catalog}
-								session={session}
-								busy={composerBusy}
-								listedTitle={composerDraft ? undefined : listedTitle}
-								harnessId={harnessId}
-								onHarnessIdChange={(id) => {
-									if (session.turnStatus === "running") return;
-									setHarnessId(id);
-								}}
-								onConnect={() => {
-									const epoch = sessionEpoch.current;
-									const scope = sessionScope();
-									const chatId = activeSessionId;
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void connect({ data: scope })
-										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => {
-											if (epoch !== sessionEpoch.current) return;
-											setSession((current) => ({
-												...current,
-												connection: {
-													status: "failed",
-													provider: harnessId,
-													message: publicFailureMessage(cause),
-												},
-											}));
-										})
-										.finally(() => {
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-										});
-								}}
-								onSend={(text, modelId, options) => {
-									const epoch = sessionEpoch.current;
-									const previousTurnStatus = session.turnStatus;
-									// A running chat keeps the follow-up. Clearing its id here is
-									// what opened a second thread.
-									const openChatId = session.agentSessionId ?? activeSessionId;
-									const target = composerSubmitTarget({
-										newChatDraft: composerDraftRef.current,
-										openChatId,
-										turnStatus: session.turnStatus,
-									});
-									if (target.waitForChat) {
-										toast(
-											"This chat is still opening. Send that message again in a moment.",
-										);
-										return Promise.resolve("unsent");
-									}
-									// The new-chat draft starts a new chat. Forget the previously open
-									// one first: applySessionView drops updates while the draft flag is
-									// set or when they belong to a different open chat.
-									const startsNewChat = target.startsNewChat;
-									if (startsNewChat) {
-										pendingNewChatRef.current = true;
-										composerDraftRef.current = false;
-										selectedSessionIdRef.current = undefined;
-										setComposerDraft(false);
-										setProjectPickerOpen(false);
-										setSelectedSessionId(undefined);
-										setSession((current) => ({
-											...current,
-											agentSessionId: null,
-											items: [],
-										}));
-									}
-									const scope = startsNewChat
-										? { ...sessionScope(), sessionId: undefined }
-										: {
-												...sessionScope(),
-												...(target.sessionId
-													? { sessionId: target.sessionId }
-													: {}),
-											};
-									const chatId = startsNewChat
-										? undefined
-										: (target.sessionId ?? activeSessionId);
-									const messageId =
-										options?.userMessageId ?? crypto.randomUUID();
-									return new Promise<ComposerSendResult>((settle) => {
-										const pending: PendingSend = {
-											epoch,
-											scope,
-											chatId,
-											startsNewChat,
-											previousTurnStatus,
-											messageId,
-											text,
-											modelId,
-											...(options?.reasoningId
-												? { variant: options.reasoningId }
-												: {}),
-											...(options?.speed ? { speed: options.speed } : {}),
-											...(options?.approvesPlan ? { approvesPlan: true } : {}),
-											...(options?.continueOn
-												? { continueOn: options.continueOn }
-												: {}),
-											...(options?.attachments?.length
-												? { attachments: options.attachments }
-												: {}),
-											settle,
-										};
-										// A newer send replaces one still waiting for sign-in.
-										if (pendingSendRef.current)
-											abandonSend(pendingSendRef.current, null);
-										if (session.connection.status === "authenticated") {
-											// A new chat's first message never falls back to the old chat.
-											void deliverSend(
-												pending,
-												startsNewChat
-													? { ...session, agentSessionId: null }
-													: session,
-											);
-											return;
-										}
-										void connectThenSend(pending);
-									});
-								}}
-								onStop={stopOpenTurn}
-								olderItems={
-									session.hasOlderItems
-										? { loading: olderLoading, onLoad: loadOlderItems }
-										: undefined
+								title={
+									inspectorExpanded ? "Restore split view" : "Expand workspace"
 								}
-								onRemoveQueued={(messageId) => {
-									const epoch = sessionEpoch.current;
-									const index = session.items.findIndex(
-										(item) => item.id === messageId,
-									);
-									const removed = session.items[index];
-									setSession((current) => ({
-										...current,
-										items: current.items.filter(
-											(item) => item.id !== messageId,
-										),
-									}));
-									void removeQueued({ data: { ...sessionScope(), messageId } })
-										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => {
-											toast.error(publicFailureMessage(cause));
-											// Put the queued message back where it was, in the same chat.
-											if (!removed || epoch !== sessionEpoch.current) return;
-											setSession((current) =>
-												current.items.some((item) => item.id === messageId)
-													? current
-													: {
-															...current,
-															items: [
-																...current.items.slice(0, index),
-																removed,
-																...current.items.slice(index),
-															],
-														},
-											);
-										});
-								}}
-								onEditQueued={(messageId, text) => {
-									const epoch = sessionEpoch.current;
-									const previous = session.items.find(
-										(item) => item.id === messageId,
-									);
-									setSession((current) => ({
-										...current,
-										items: current.items.map((item) =>
-											item.kind === "userMessage" && item.id === messageId
-												? { ...item, text }
-												: item,
-										),
-									}));
-									void updateQueued({
-										data: { ...sessionScope(), messageId, text },
-									})
-										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => {
-											toast.error(publicFailureMessage(cause));
-											if (!previous || epoch !== sessionEpoch.current) return;
-											setSession((current) => ({
-												...current,
-												items: current.items.map((item) =>
-													item.id === messageId ? previous : item,
-												),
-											}));
-										});
-								}}
-								onSendQueued={(messageId, text) => {
-									const epoch = sessionEpoch.current;
-									const previous = session.items.find(
-										(item) => item.id === messageId,
-									);
-									setSession((current) => ({
-										...current,
-										items: current.items.map((item) =>
-											item.kind === "userMessage" && item.id === messageId
-												? {
-														...item,
-														...(text ? { text } : {}),
-														released: true as const,
-													}
-												: item,
-										),
-									}));
-									void releaseQueued({
-										data: {
-											...sessionScope(),
-											messageId,
-											...(text ? { text } : {}),
-										},
-									})
-										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => {
-											toast.error(publicFailureMessage(cause));
-											if (!previous || epoch !== sessionEpoch.current) return;
-											setSession((current) => ({
-												...current,
-												items: current.items.map((item) =>
-													item.id === messageId ? previous : item,
-												),
-											}));
-										});
-								}}
-								onOpenInspector={openInspector}
-								onOpenFile={openMentionedFile}
-								projects={projects.data ?? []}
-								selectedProject={selectedProject}
-								onSelectProject={(id) => {
-									selectProject(id);
-									setProjectPickerOpen(false);
-								}}
-								projectPickerOpen={projectPickerOpen}
-								onProjectPickerOpenChange={setProjectPickerOpen}
-							/>
-							{projects.error && !projects.data && (
-								<p role="alert">
-									Unable to load projects.{" "}
-									<button type="button" onClick={() => void projects.refetch()}>
-										Retry
-									</button>
-								</p>
-							)}
-							{!projects.isPending &&
-								!projects.error &&
-								!projects.data?.length && (
-									<button
-										type="button"
-										className="setup-back"
-										onClick={openAddProject}
-									>
-										Add your first project
-									</button>
+								onClick={() => setInspectorExpanded((value) => !value)}
+							>
+								{inspectorExpanded ? (
+									<Minimize2 size={16} />
+								) : (
+									<Maximize2 size={16} />
 								)}
-						</div>
-					</section>
-					<div className="inspector-frame">
-						<WorkspaceInspector
-							key={activeSessionId ?? "new-session"}
-							collapsed={!inspectorOpen}
-							activeView={inspectorView}
-							onActiveViewChange={(view) => {
-								setInspectorView(view);
-							}}
-							fileChanges={fileChanges}
-							selectedFilePath={selectedFilePath}
-							onSelectFilePath={setSelectedFilePath}
-							desktop={desktop}
-							desktopBusy={desktopBusy}
-							projectId={selectedProject?.id}
-							sessionId={activeSessionId}
-							harnessId={harnessId}
-							modelId={session.listedModelId}
-							onReviewStarted={(sessionId) => {
-								void chats.refetch();
-								openChat(sessionId);
-							}}
-							memoryFocus={memoryFocus}
-							onStartDesktop={requestDesktop}
-							onViewIntent={intendView}
-							onOpenChat={(chatId) => {
-								if (!sidebarChats.some((chat) => chat.id === chatId))
-									return false;
-								openChat(chatId);
-								return true;
-							}}
-							pullRequest={pullRequestPanelRepository({
-								repositories: projectRepositories,
-								chatPullRequest: sessionPullRequest,
-							})}
-							overview={
-								<WorkspaceOverview
-									tasks={agentTasks.data ?? []}
-									items={session.items}
-									changes={fileChanges}
-									repository={selectedProject?.fullName}
-									desktop={desktop}
-									onOpen={openInspector}
-									onIntent={intendView}
-									pullRequests={sessionPullRequests}
-								/>
+							</button>
+						) : null}
+						<button
+							type="button"
+							className="workspace-sidebar-toggle workspace-inspector-toggle"
+							aria-label={
+								inspectorOpen ? "Close right sidebar" : "Open right sidebar"
 							}
-						/>
-					</div>
-				</WorkspacePanes>
-			</main>
-		</div>
+							title={titleWithShortcut(
+								inspectorOpen ? "Close right sidebar" : "Open right sidebar",
+								inspectorShortcutHint,
+							)}
+							aria-expanded={inspectorOpen}
+							aria-controls="workspace-inspector"
+							onClick={toggleInspectorPanel}
+						>
+							<PanelRight size={16} />
+						</button>
+						{memoryPageOpen ? (
+							<MemoryPage
+								view={memoryView}
+								onViewChange={setMemoryView}
+								projects={projects.data}
+								onOpenChat={openMemoryChat}
+							/>
+						) : null}
+						<WorkspacePanes
+							open={inspectorOpen}
+							compact={singlePane}
+							ratio={splitRatio}
+							view={inspectorView}
+							layout={followUpLayout ? "chat" : "empty"}
+							onResize={setCustomSplit}
+							onReset={() => setCustomSplit(null)}
+						>
+							<section
+								className="welcome-panel"
+								aria-label="Get started"
+								data-layout={followUpLayout ? "chat" : "empty"}
+								inert={singlePane && inspectorOpen}
+								aria-hidden={singlePane && inspectorOpen}
+							>
+								{followUpLayout ? (
+									<div className="session-title-row">
+										<div className="session-title-copy">
+											<span className="session-title">
+												{chatHeaderTitle(listedTitle, sessionTitle)}
+											</span>
+											{activeChat?.workingBranch && (
+												<span
+													className="session-title-meta"
+													title="This chat's branch: each turn that changes code is committed and pushed here"
+												>
+													{activeChat.workingBranch}
+												</span>
+											)}
+											{headerPullRequest && (
+												<a
+													className="session-title-meta"
+													href={headerPullRequest.url}
+													target="_blank"
+													rel="noreferrer"
+												>
+													{headerPullRequest.draft ? "Draft PR" : "PR"} #
+													{headerPullRequest.number}
+												</a>
+											)}
+										</div>
+									</div>
+								) : inspectorOpen ? null : (
+									<div className="session-title-row session-title-row-empty">
+										<div className="session-title-copy" />
+									</div>
+								)}
+								<div
+									className="welcome-content"
+									data-layout={followUpLayout ? "chat" : "empty"}
+								>
+									<SessionLauncher
+										prefill={composerPrefill}
+										onSetUpEnvironment={() =>
+											selectedProject &&
+											startEnvironmentSetup(selectedProject.id)
+										}
+										initialDraft={
+											recoveryDraft?.id === session.agentSessionId
+												? recoveryDraft.prompt
+												: ""
+										}
+										onRecovered={async (id, prompt, items) => {
+											const projectId = selectedProject?.id;
+											if (!projectId) return;
+											setRecoveryDraft({ id, prompt: prompt ?? "" });
+											sessionViews.current.delete(id);
+											// A restore of this chat shows its transcript now; the
+											// full reload below can take a while (it reconnects).
+											const restored = sessionViewAfterRecovery(
+												currentSessionRef.current,
+												{ id, items },
+											);
+											if (restored) setSession(restored);
+											else openChat(id);
+											const epoch = sessionEpoch.current;
+											try {
+												const next = await getCodexSession({
+													data: { projectId, sessionId: id, harnessId },
+												});
+												if (epoch !== sessionEpoch.current) return;
+												rememberSessionView(next);
+												setSession(next);
+												await chats.refetch();
+												await agentTasks.refetch();
+											} catch (cause) {
+												// The recovery itself is done; live updates catch up.
+												console.warn(
+													"Reloading the recovered chat failed.",
+													cause,
+												);
+											}
+										}}
+										childTasks={agentTasks.data ?? []}
+										backgroundRuns={backgroundRuns}
+										memoryActions={memoryActions}
+										key={composerKey.current.key}
+										onDraftStarted={prewarmOpenChat}
+										loadedCatalog={initialChatView?.side?.catalog}
+										session={session}
+										busy={composerBusy}
+										listedTitle={composerDraft ? undefined : listedTitle}
+										harnessId={harnessId}
+										onHarnessIdChange={(id) => {
+											if (session.turnStatus === "running") return;
+											setHarnessId(id);
+										}}
+										onConnect={() => {
+											const epoch = sessionEpoch.current;
+											const scope = sessionScope();
+											const chatId = activeSessionId;
+											setBusyChatIds((ids) => withBusyChat(ids, chatId));
+											void connect({ data: scope })
+												.then((next) => applySessionView(epoch, next))
+												.catch((cause) => {
+													if (epoch !== sessionEpoch.current) return;
+													setSession((current) => ({
+														...current,
+														connection: {
+															status: "failed",
+															provider: harnessId,
+															message: publicFailureMessage(cause),
+														},
+													}));
+												})
+												.finally(() => {
+													setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+												});
+										}}
+										onSend={(text, modelId, options) => {
+											askForFinishNotifications();
+											const epoch = sessionEpoch.current;
+											const previousTurnStatus = session.turnStatus;
+											// A running chat keeps the follow-up. Clearing its id here is
+											// what opened a second thread.
+											const openChatId =
+												session.agentSessionId ?? activeSessionId;
+											const target = composerSubmitTarget({
+												newChatDraft: composerDraftRef.current,
+												openChatId,
+												turnStatus: session.turnStatus,
+											});
+											if (target.waitForChat) {
+												toast(
+													"This chat is still opening. Send that message again in a moment.",
+												);
+												return Promise.resolve("unsent");
+											}
+											// The new-chat draft starts a new chat. Forget the previously open
+											// one first: applySessionView drops updates while the draft flag is
+											// set or when they belong to a different open chat.
+											const startsNewChat = target.startsNewChat;
+											if (startsNewChat) {
+												pendingNewChatRef.current = true;
+												composerDraftRef.current = false;
+												selectedSessionIdRef.current = undefined;
+												setComposerDraft(false);
+												setProjectPickerOpen(false);
+												setSelectedSessionId(undefined);
+												setSession((current) => ({
+													...current,
+													agentSessionId: null,
+													items: [],
+												}));
+											}
+											const scope = startsNewChat
+												? { ...sessionScope(), sessionId: undefined }
+												: {
+														...sessionScope(),
+														...(target.sessionId
+															? { sessionId: target.sessionId }
+															: {}),
+													};
+											const chatId = startsNewChat
+												? undefined
+												: (target.sessionId ?? activeSessionId);
+											const messageId =
+												options?.userMessageId ?? crypto.randomUUID();
+											return new Promise<ComposerSendResult>((settle) => {
+												const pending: PendingSend = {
+													epoch,
+													scope,
+													chatId,
+													startsNewChat,
+													previousTurnStatus,
+													messageId,
+													text,
+													modelId,
+													...(options?.reasoningId
+														? { variant: options.reasoningId }
+														: {}),
+													...(options?.speed ? { speed: options.speed } : {}),
+													...(options?.approvesPlan
+														? { approvesPlan: true }
+														: {}),
+													...(options?.continueOn
+														? { continueOn: options.continueOn }
+														: {}),
+													...(options?.attachments?.length
+														? { attachments: options.attachments }
+														: {}),
+													...(options?.baseBranch
+														? { baseBranch: options.baseBranch }
+														: {}),
+													settle,
+												};
+												const setupStatus =
+													projectSetup.data === null
+														? "missing"
+														: projectSetup.data?.status;
+												if (
+													selectedProject &&
+													setupStatus &&
+													setupStatus !== "ready" &&
+													setupStatus !== "failed"
+												) {
+													if (heldForSetupRef.current)
+														abandonSend(heldForSetupRef.current, null);
+													heldForSetupRef.current = pending;
+													setHeldForSetup(new Set([selectedProject.id]));
+													return;
+												}
+												// A newer send replaces one still waiting for sign-in.
+												if (pendingSendRef.current)
+													abandonSend(pendingSendRef.current, null);
+												if (session.connection.status === "authenticated") {
+													// A new chat's first message never falls back to the old chat.
+													void deliverSend(
+														pending,
+														startsNewChat
+															? { ...session, agentSessionId: null }
+															: session,
+													);
+													return;
+												}
+												void connectThenSend(pending);
+											});
+										}}
+										onStop={stopOpenTurn}
+										olderItems={
+											session.hasOlderItems
+												? { loading: olderLoading, onLoad: loadOlderItems }
+												: undefined
+										}
+										onRemoveQueued={(messageId) => {
+											const epoch = sessionEpoch.current;
+											const index = session.items.findIndex(
+												(item) => item.id === messageId,
+											);
+											const removed = session.items[index];
+											setSession((current) => ({
+												...current,
+												items: current.items.filter(
+													(item) => item.id !== messageId,
+												),
+											}));
+											void removeQueued({
+												data: { ...sessionScope(), messageId },
+											})
+												.then((next) => applySessionView(epoch, next))
+												.catch((cause) => {
+													toast.error(publicFailureMessage(cause));
+													// Put the queued message back where it was, in the same chat.
+													if (!removed || epoch !== sessionEpoch.current)
+														return;
+													setSession((current) =>
+														current.items.some((item) => item.id === messageId)
+															? current
+															: {
+																	...current,
+																	items: [
+																		...current.items.slice(0, index),
+																		removed,
+																		...current.items.slice(index),
+																	],
+																},
+													);
+												});
+										}}
+										onEditQueued={(messageId, text) => {
+											const epoch = sessionEpoch.current;
+											const previous = session.items.find(
+												(item) => item.id === messageId,
+											);
+											setSession((current) => ({
+												...current,
+												items: current.items.map((item) =>
+													item.kind === "userMessage" && item.id === messageId
+														? { ...item, text }
+														: item,
+												),
+											}));
+											void updateQueued({
+												data: { ...sessionScope(), messageId, text },
+											})
+												.then((next) => applySessionView(epoch, next))
+												.catch((cause) => {
+													toast.error(publicFailureMessage(cause));
+													if (!previous || epoch !== sessionEpoch.current)
+														return;
+													setSession((current) => ({
+														...current,
+														items: current.items.map((item) =>
+															item.id === messageId ? previous : item,
+														),
+													}));
+												});
+										}}
+										onSendQueued={(messageId, text) => {
+											const epoch = sessionEpoch.current;
+											const previous = session.items.find(
+												(item) => item.id === messageId,
+											);
+											setSession((current) => ({
+												...current,
+												items: current.items.map((item) =>
+													item.kind === "userMessage" && item.id === messageId
+														? {
+																...item,
+																...(text ? { text } : {}),
+																released: true as const,
+															}
+														: item,
+												),
+											}));
+											void releaseQueued({
+												data: {
+													...sessionScope(),
+													messageId,
+													...(text ? { text } : {}),
+												},
+											})
+												.then((next) => applySessionView(epoch, next))
+												.catch((cause) => {
+													toast.error(publicFailureMessage(cause));
+													if (!previous || epoch !== sessionEpoch.current)
+														return;
+													setSession((current) => ({
+														...current,
+														items: current.items.map((item) =>
+															item.id === messageId ? previous : item,
+														),
+													}));
+												});
+										}}
+										onOpenInspector={openInspector}
+										onOpenFile={openMentionedFile}
+										projects={projects.data ?? []}
+										selectedProject={selectedProject}
+										onSelectProject={(id) => {
+											selectProject(id);
+											setProjectPickerOpen(false);
+										}}
+										projectPickerOpen={projectPickerOpen}
+										onProjectPickerOpenChange={setProjectPickerOpen}
+									/>
+									{projects.error && !projects.data && (
+										<p role="alert">
+											Unable to load projects.{" "}
+											<button
+												type="button"
+												onClick={() => void projects.refetch()}
+											>
+												Retry
+											</button>
+										</p>
+									)}
+									{!projects.isPending &&
+										!projects.error &&
+										!projects.data?.length && (
+											<button
+												type="button"
+												className="setup-back"
+												onClick={openAddProject}
+											>
+												Add your first project
+											</button>
+										)}
+								</div>
+							</section>
+							<div className="inspector-frame">
+								<WorkspaceInspector
+									key={activeSessionId ?? "new-session"}
+									collapsed={!inspectorOpen}
+									activeView={inspectorView}
+									onActiveViewChange={(view) => {
+										setInspectorView(view);
+									}}
+									fileChanges={fileChanges}
+									selectedFilePath={selectedFilePath}
+									onSelectFilePath={setSelectedFilePath}
+									desktop={desktop}
+									desktopBusy={desktopBusy}
+									projectId={selectedProject?.id}
+									sessionId={activeSessionId}
+									harnessId={harnessId}
+									modelId={session.listedModelId}
+									onReviewStarted={(sessionId) => {
+										void chats.refetch();
+										openChat(sessionId);
+									}}
+									memoryFocus={memoryFocus}
+									onStartDesktop={() => requestDesktop()}
+									onViewIntent={intendView}
+									onOpenChat={(chatId) => {
+										if (!sidebarChats.some((chat) => chat.id === chatId))
+											return false;
+										openChat(chatId);
+										return true;
+									}}
+									pullRequest={pullRequestPanelRepository({
+										repositories: projectRepositories,
+										chatPullRequest: sessionPullRequest,
+									})}
+									overview={
+										<WorkspaceOverview
+											tasks={agentTasks.data ?? []}
+											items={session.items}
+											changes={fileChanges}
+											repository={selectedProject?.fullName}
+											desktop={desktop}
+											onOpen={openInspector}
+											onIntent={intendView}
+											pullRequests={overviewPullRequests}
+										/>
+									}
+								/>
+							</div>
+						</WorkspacePanes>
+					</main>
+				</div>
+			</HeldForSetupContext.Provider>
+		</SavedDefaultBranchesContext.Provider>
 	);
 }

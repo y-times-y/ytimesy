@@ -3,6 +3,7 @@ import { Freestyle, type Vm } from "freestyle";
 import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
 import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
 import { boundedFreestyleFetch } from "#/server/adapters/freestyle/bounded-fetch";
+import { DESKTOP_IMAGE_SCRIPT } from "#/server/adapters/freestyle/desktop-image";
 import {
 	CHEAP_BASE_RESOURCES,
 	CHEAP_BASE_SNAPSHOT,
@@ -102,6 +103,11 @@ EOF`,
 		name: "reader user",
 		script: READER_USER_SETUP_SCRIPT,
 	},
+	{
+		// Without it, the first Desktop open on each VM spent 70-100s in apt.
+		name: "desktop",
+		script: DESKTOP_IMAGE_SCRIPT,
+	},
 ];
 
 // Run per user so pnpm and yarn need no download on the first command.
@@ -114,7 +120,8 @@ const VERSIONS = `
 for c in "node --version" "npm --version" "corepack --version" "pnpm --version" "yarn --version" "bun --version" \\
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
-  "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version"; do
+  "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version" \\
+  "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done

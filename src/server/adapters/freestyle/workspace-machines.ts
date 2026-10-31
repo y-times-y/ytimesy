@@ -25,7 +25,7 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
-import { boundedFreestyleFetch } from "./bounded-fetch";
+import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
 	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
@@ -68,7 +68,10 @@ import {
 	waitUntilGuestReady,
 	waitUntilVmRunning,
 } from "./wait-until-running";
-import { restoreRetainedWorkspace } from "./workspace-retention";
+import {
+	rebindWorkspaceRetention,
+	restoreRetainedWorkspace,
+} from "./workspace-retention";
 
 /** The provider refused the machine shape itself, e.g. above the plan's per-VM vCPU cap. */
 class MachineSizeRejected extends Error {
@@ -94,14 +97,14 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const transport = boundedFreestyleFetch();
+	const transport = fastPollFreestyleFetch(boundedFreestyleFetch());
 	const freestyle = new Freestyle({
 		apiKey,
-		...(options.signal
-			? { fetch: abortableFreestyleFetch(options.signal, transport) }
+		fetch: options.signal
+			? abortableFreestyleFetch(options.signal, transport)
 			: stepTimingEnabled()
-				? { fetch: timedFetch("freestyle", transport) }
-				: {}),
+				? timedFetch("freestyle", transport)
+				: transport,
 	});
 
 	const machines: WorkspaceMachines &
@@ -118,6 +121,7 @@ export function createFreestyleWorkspaceMachines(
 		},
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
+		rebindRetainedSession: rebindWorkspaceRetention,
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {

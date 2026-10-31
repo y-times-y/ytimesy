@@ -80,16 +80,7 @@ export function WorkspaceOverview({
 	] as const;
 	return (
 		<section className="workspace-overview" aria-label="Overview">
-			{todoPlan?.kind === "plan" && todoPlan.todos?.length ? (
-				<TodoList todos={todoPlan.todos} />
-			) : null}
-			{plan?.text && !todoPlan ? (
-				<section className="overview-section">
-					<h2>Plan</h2>
-					<AgentMarkdown text={plan.text} />
-				</section>
-			) : null}
-			{tasks.length ? <TaskPanel tasks={tasks} /> : null}
+			{/* The pull request first: it stays in view however long the lists get. */}
 			{pullRequests.length > 0 ? (
 				<section className="overview-section">
 					<h2>
@@ -114,6 +105,16 @@ export function WorkspaceOverview({
 					))}
 				</section>
 			) : null}
+			{todoPlan?.kind === "plan" && todoPlan.todos?.length ? (
+				<TodoList todos={todoPlan.todos} />
+			) : null}
+			{plan?.text && !todoPlan ? (
+				<section className="overview-section">
+					<h2>Plan</h2>
+					<AgentMarkdown text={plan.text} />
+				</section>
+			) : null}
+			{tasks.length ? <TaskPanel tasks={tasks} /> : null}
 			<div className="overview-cards">
 				{cards.map((card) => (
 					<button

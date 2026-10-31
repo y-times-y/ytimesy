@@ -40,6 +40,7 @@ import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
+	failoverChainFailure,
 	failoverExhaustedDetail,
 	failoverNotice,
 	failoverQuestion,
@@ -180,6 +181,7 @@ import {
 	deferredToolSurface,
 	loadedDeferredTools,
 } from "../services/deferred-tools";
+import { environmentSetupTools } from "../services/environment-setup-tool";
 import {
 	FIRST_REQUEST_WORKSPACE_WAIT_MS,
 	type PromptCheck,
@@ -642,11 +644,17 @@ async function runApiTurnAttempt(
 						loadAgentProjectSecrets(
 							owner.userId,
 							owner.projectId as string,
-						).catch(() => ({
-							envFile: agentSecretsEnvFile([]),
-							redact: [],
-							names: [],
-						})),
+						).catch((error) => {
+							// The turn goes on without them; say so in the logs.
+							console.warn("Project secrets could not be loaded.", {
+								message: (error as Error).message,
+							});
+							return {
+								envFile: agentSecretsEnvFile([]),
+								redact: [],
+								names: [],
+							};
+						}),
 					),
 				)
 			: Promise.resolve(null);
@@ -1345,6 +1353,13 @@ async function runApiTurnAttempt(
 			rootChat,
 			projectSecrets,
 			redact,
+			environmentSetup:
+				rootChat && owner.projectId
+					? environmentSetupTools({
+							userId: owner.userId,
+							projectId: owner.projectId,
+						})
+					: {},
 		});
 		// Harness variant plan (on in the product): the root builder's
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
@@ -2491,11 +2506,11 @@ async function runApiTurnAttempt(
 						: abort.signal.aborted
 							? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
 							: exhausted
-								? apiTurnFailureMessage(failureStage, error).replace(
-										" No fallback was used.",
-										"",
-									) +
-									exhausted +
+								? (failoverChainFailure(
+										items,
+										turn.id,
+										apiTurnFailureMessage(failureStage, error),
+									) ?? apiTurnFailureMessage(failureStage, error) + exhausted) +
 									developmentFailureDetail(error)
 								: (paused?.message ??
 										apiTurnFailureMessage(failureStage, error)) +
@@ -2650,6 +2665,8 @@ function turnTools(input: {
 	rootChat: boolean;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
 	redact: readonly string[];
+	/** save_project_environment, in a person's root chats (not evaluations). */
+	environmentSetup: ToolSet;
 }) {
 	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
@@ -2670,7 +2687,12 @@ function turnTools(input: {
 	return mcpToolSurface({
 		tools: hooks.wrap(
 			withRedactedResults(
-				{ ...withMcp, ...secretTools, ...questionTools },
+				{
+					...withMcp,
+					...secretTools,
+					...questionTools,
+					...input.environmentSetup,
+				},
 				redact,
 			),
 		),

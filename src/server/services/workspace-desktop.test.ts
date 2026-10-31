@@ -157,6 +157,37 @@ describe("readWorkspaceDesktop", () => {
 		expect(withdrawHttpRoutes).toHaveBeenCalledWith("vm-session", ["desk"]);
 	});
 
+	it("keeps the route of a running machine whose desktop is still starting", async () => {
+		const withdrawHttpRoutes = vi.fn(async () => 1);
+		const machines = {
+			isRunning: async () => true,
+			exec: vi.fn(async () => ({
+				exitCode: 0,
+				stdout: "YTIMESY_DESKTOP_DOWN",
+				stderr: "",
+			})),
+			withdrawHttpRoutes,
+		} as unknown as WorkspaceMachines;
+		await Effect.runPromise(
+			readWorkspaceDesktop(machines, {
+				userId: "u",
+				projectId: "p",
+				sessionId: "s4",
+			}),
+		);
+		expect(withdrawHttpRoutes).not.toHaveBeenCalled();
+	});
+
+	it("wakes the chat's machine before relaying to it", async () => {
+		const ensureRunning = vi.fn(async (id: string) => id);
+		const remote = await resolveDesktopRemote(
+			{ userId: "u", projectId: "p", sessionId: "s3" },
+			{ ensureRunning } as unknown as WorkspaceMachines,
+		);
+		expect(ensureRunning).toHaveBeenCalledWith("vm-session");
+		expect(remote?.origin).toMatch(/^https:\/\/ytimesy-desk-/);
+	});
+
 	it("relays to the chat's machine with its viewer credential", async () => {
 		const remote = await resolveDesktopRemote({
 			userId: "u",

@@ -238,6 +238,7 @@ export async function listAgentSessions(userId: string, projectId: string) {
 		`select ${SESSION_COLUMNS}
 		 from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		   and archived_at is null
 		 order by updated_at desc`,
 		[userId, projectId],
 	);
@@ -264,6 +265,7 @@ export async function listSidebarAgentSessions(
 		     select c.id from agent_session c where c.parent_session_id=s.id)) as working_since
 		 from agent_session s
 		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+		   and s.archived_at is null
 		 order by s.updated_at desc`,
 		[userId, projectId],
 	);
@@ -366,6 +368,7 @@ export async function latestAgentSessionMetadata(
 	const result = await database().query(
 		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		   and archived_at is null
 		 order by updated_at desc limit 1`,
 		[userId, projectId],
 	);
@@ -385,8 +388,19 @@ export async function chatToOpenMetadata(
 	linkedChatId?: string,
 ): Promise<Omit<AgentSessionRecord, "items"> | null> {
 	if (linkedChatId) {
-		const linked = await agentSessionMetadataForOwner(userId, linkedChatId);
-		if (linked?.projectId === projectId && !linked.parentSessionId)
+		const [linked, archived] = await Promise.all([
+			agentSessionMetadataForOwner(userId, linkedChatId),
+			database().query(
+				"select 1 from agent_session where id=$1 and user_id=$2 and archived_at is not null",
+				[linkedChatId, userId],
+			),
+		]);
+		// An archived chat stays out of the app until it is restored.
+		if (
+			linked?.projectId === projectId &&
+			!linked.parentSessionId &&
+			!archived.rows[0]
+		)
 			return linked;
 	}
 	return latestAgentSessionMetadata(userId, projectId);
@@ -455,6 +469,25 @@ export async function adoptChatPublicationBranch(
 	const stored = await agentSessionForOwner(userId, sessionId);
 	if (!stored) throw new Error("This chat is no longer available.");
 	return stored;
+}
+
+/**
+ * Records the branch the agent left a root chat's checkout on, so later
+ * turns stay there and publish it. The base branch is kept: pull requests
+ * still target it. Null when the chat has no branch of its own yet.
+ */
+export async function saveAgentWorkingBranch(
+	userId: string,
+	sessionId: string,
+	branch: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, working_branch=$3, updated_at=now()
+		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is not null
+		 returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
 /** Whether another chat or task in the project already works on or published this branch. */

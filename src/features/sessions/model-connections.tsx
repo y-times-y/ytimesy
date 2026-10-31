@@ -33,6 +33,7 @@ import {
 	saveModelConnectionFn,
 	verifyModelConnectionFn,
 } from "./model-connections.fn";
+import { ModelProviderLogo } from "./model-provider-logo";
 
 const CONNECTIONS_KEY = ["model-connections"];
 
@@ -56,7 +57,17 @@ export function modelConnectionRemove(
 	};
 }
 
-export function ModelConnections() {
+/** `startAdding` opens the add form at once (first run's "Add a key"). */
+/** The logo ModelProviderLogo draws for a connection's provider. */
+function providerLogo(provider: ModelProvider) {
+	return provider === "compatible" ? "custom" : provider;
+}
+
+export function ModelConnections({
+	startAdding = false,
+}: {
+	startAdding?: boolean;
+} = {}) {
 	const queryClient = useQueryClient();
 	const getConnections = useServerFn(getModelConnections);
 	const getCodingModels = useServerFn(getBrowseModels);
@@ -110,7 +121,7 @@ export function ModelConnections() {
 		onSuccess: update,
 	});
 	const busy = save.isPending || verify.isPending;
-	const [adding, setAdding] = useState(false);
+	const [adding, setAdding] = useState(startAdding);
 	const formOpen = adding || Boolean(replacing);
 	function closeForm() {
 		setAdding(false);
@@ -163,14 +174,22 @@ export function ModelConnections() {
 						return (
 							<li key={connection.id} className="model-connection-item">
 								<div className="settings-row">
-									<div className="settings-row-text">
-										<span className="settings-row-title">
-											{connection.label}
+									<div className="settings-row-main">
+										<span className="settings-row-icon">
+											<ModelProviderLogo
+												provider={providerLogo(connection.provider)}
+												size={16}
+											/>
 										</span>
-										<span className="settings-row-meta">
-											{MODEL_PROVIDERS[connection.provider].label} ·{" "}
-											{visibleModels.length} coding models
-										</span>
+										<div className="settings-row-text">
+											<span className="settings-row-title">
+												{connection.label}
+											</span>
+											<span className="settings-row-meta">
+												{MODEL_PROVIDERS[connection.provider].label} ·{" "}
+												{visibleModels.length} coding models
+											</span>
+										</div>
 									</div>
 									<div className="settings-row-actions">
 										<button
@@ -261,27 +280,31 @@ export function ModelConnections() {
 						save.mutate();
 					}}
 				>
-					<div className="settings-field">
+					<div className="settings-field settings-field-wide">
 						<span>Provider</span>
-						<Select
-							value={provider}
-							disabled={busy || Boolean(replacing)}
-							onValueChange={(value) => {
-								setProvider(value as ModelProvider);
-								setApiKey("");
-							}}
-						>
-							<SelectTrigger aria-label="Provider">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								{Object.entries(MODEL_PROVIDERS).map(([id, row]) => (
-									<SelectItem key={id} value={id}>
-										{row.label}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+						<fieldset className="provider-choices" aria-label="Provider">
+							{(
+								Object.entries(MODEL_PROVIDERS) as [
+									ModelProvider,
+									(typeof MODEL_PROVIDERS)[ModelProvider],
+								][]
+							).map(([id, row]) => (
+								<button
+									key={id}
+									type="button"
+									aria-pressed={provider === id}
+									className="provider-choice"
+									disabled={busy || Boolean(replacing)}
+									onClick={() => {
+										setProvider(id);
+										setApiKey("");
+									}}
+								>
+									<ModelProviderLogo provider={providerLogo(id)} size={16} />
+									{id === "compatible" ? "Custom endpoint" : row.label}
+								</button>
+							))}
+						</fieldset>
 					</div>
 					<label className="settings-field">
 						<span>Name</span>

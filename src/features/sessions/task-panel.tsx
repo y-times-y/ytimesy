@@ -5,10 +5,11 @@ import {
 	Clock3,
 	CornerDownRight,
 } from "lucide-react";
-import { type CSSProperties, useMemo } from "react";
+import { type CSSProperties, useMemo, useState } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { helperIdentities } from "#/domain/agent-panel";
 import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
+import { foldFinished } from "#/domain/folded-list";
 import { helperName, KIND_ICONS } from "#/domain/helper-names";
 import type { SubagentTaskView } from "#/domain/subagent-tree";
 import { formatSpend, totalSpend } from "#/domain/subagent-usage";
@@ -24,6 +25,9 @@ const statusLabels: Record<AgentTaskStatus, string> = {
 };
 
 type PanelTask = AgentTask & { readonly subagent?: SubagentTaskView };
+
+/** Finished helpers that stay in view; older ones fold behind "Show N more". */
+const FINISHED_HELPERS_SHOWN = 3;
 
 /** `writer · fork · 41/150 steps · 6/30 min · 380k tok · $0.76 · 9.0 VM min` */
 export function subagentUsageLine(view: SubagentTaskView) {
@@ -48,6 +52,13 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 	// Short names and colours as the agents list gives them.
 	const identities = useMemo(() => helperIdentities(tasks), [tasks]);
 	const completed = tasks.filter((task) => task.status === "done").length;
+	const [showAll, setShowAll] = useState(false);
+	const folded = foldFinished(
+		tasks,
+		(task) => task.status === "done",
+		FINISHED_HELPERS_SHOWN,
+	);
+	const shown = showAll ? tasks : folded.shown;
 	const subagents = tasks.flatMap((task) =>
 		task.subagent ? [task.subagent.spend] : [],
 	);
@@ -70,7 +81,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 				<p className="task-empty">Helpers appear here when Main starts them.</p>
 			) : (
 				<ol className="task-list">
-					{tasks.map((task) => {
+					{shown.map((task) => {
 						const identity = identities.get(task.id);
 						return (
 							<li
@@ -138,6 +149,15 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 					})}
 				</ol>
 			)}
+			{folded.hidden ? (
+				<button
+					type="button"
+					className="list-fold-toggle"
+					onClick={() => setShowAll((all) => !all)}
+				>
+					{showAll ? "Show less" : `Show ${folded.hidden} more done`}
+				</button>
+			) : null}
 			{treeSpend ? (
 				<p className="task-usage task-usage-total">
 					Helpers {subagents.length} ·{" "}

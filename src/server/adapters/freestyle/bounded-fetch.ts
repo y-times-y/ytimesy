@@ -173,3 +173,64 @@ async function timed(
 		clearTimeout(timer);
 	}
 }
+
+/** Poll waits for a backgrounded call: quick at first, then the SDK's own 2 s. */
+export const FAST_POLL_DELAYS_MS = [250, 250, 500, 500, 1_000, 1_000] as const;
+const SLOW_POLL_MS = 2_000;
+
+/**
+ * Follows a backgrounded call (202) here, so the SDK sees its final answer.
+ * The SDK polls every 2 s, which added up to 2 s to every wake, desktop start
+ * and exec past 5 s; this polls sooner, then as often as the SDK did. Install
+ * it outside boundedFreestyleFetch, which still ends a poll at its budget.
+ */
+export function fastPollFreestyleFetch(
+	transport: typeof fetch,
+	delays: readonly number[] = FAST_POLL_DELAYS_MS,
+): typeof fetch {
+	return async (input, init) => {
+		const response = await transport(input, init);
+		if (response.status !== 202) return response;
+		const url = new URL(input instanceof Request ? input.url : String(input));
+		if (url.pathname.startsWith(POLL_PREFIX)) return response;
+		const id =
+			response.headers.get(BACKGROUND_ID_HEADER) ??
+			(
+				(await response
+					.clone()
+					.json()
+					.catch(() => ({}))) as { requestId?: string }
+			).requestId;
+		if (!id) return response;
+		const poll = new URL(`${POLL_PREFIX}${encodeURIComponent(id)}`, url);
+		const headers = new Headers(
+			init?.headers ?? (input instanceof Request ? input.headers : undefined),
+		);
+		headers.delete(BACKGROUND_AFTER_HEADER);
+		headers.delete("content-type");
+		for (let attempt = 0; ; attempt++) {
+			await sleep(delays[attempt] ?? SLOW_POLL_MS, init?.signal);
+			const next = await transport(poll, {
+				method: "GET",
+				headers,
+				signal: init?.signal,
+			});
+			if (next.status !== 202) return next;
+		}
+	};
+}
+
+function sleep(ms: number, signal?: AbortSignal | null) {
+	return new Promise<void>((resolve, reject) => {
+		if (signal?.aborted) return reject(signal.reason);
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", stop);
+			resolve();
+		}, ms);
+		function stop() {
+			clearTimeout(timer);
+			reject(signal?.reason);
+		}
+		signal?.addEventListener("abort", stop, { once: true });
+	});
+}

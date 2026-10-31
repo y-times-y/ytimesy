@@ -261,23 +261,13 @@
 	font-size: 12px;
 	line-height: 1.6;
 }
-.tool-panel,
-.session-command-detail {
-	/* Diff tints for chat tool output. */
-	--diff-added-bg: #032800;
-	--diff-removed-bg: #3d0100;
-	--diff-added-word: #044701;
-	--diff-removed-word: #5c0200;
-	--diff-added-fg: #46b546;
-	--diff-removed-fg: #dc5a5a;
-}
 .tool-panel-output {
 	padding: 8px 12px;
 	color: #bdbdbd;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
-/* Diff output: coloured code on green and red lines, markers in the gutter. */
+/* Diff output, coloured as Claude Code draws its own diffs. */
 .tool-output-line {
 	display: block;
 }
@@ -285,6 +275,7 @@
 	margin: 0 -12px;
 	padding: 0 12px;
 }
+/* A wrapped line continues after the gutter, not under the +/- marker. */
 .tool-output-line[data-gutter] {
 	--gutter: 2ch;
 	padding-left: var(--gutter);
@@ -293,6 +284,7 @@
 .tool-output-line[data-gutter="numbered"] {
 	--gutter: 7ch;
 }
+/* Inline blocks inherit text-indent; the gutter's own cells must not. */
 .tool-output-line[data-gutter] > * {
 	text-indent: 0;
 }
@@ -385,27 +377,6 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 	color: #c6c6c6;
-}
-.tool-line[data-sign="added"] {
-	background: rgba(74, 222, 128, 0.07);
-}
-.tool-line[data-sign="added"] .tool-line-number {
-	color: #4ade80;
-}
-.tool-line[data-sign="removed"] {
-	background: rgba(248, 113, 113, 0.07);
-}
-.tool-line[data-sign="removed"] .tool-line-number {
-	color: #f87171;
-}
-.tool-panel[data-kind="patch"] .tool-line {
-	grid-template-columns: minmax(0, 1fr);
-	padding-left: 12px;
-}
-.tool-hunk + .tool-hunk {
-	margin-top: 6px;
-	padding-top: 6px;
-	border-top: 1px dashed rgba(255, 255, 255, 0.06);
 }
 .tool-panel-note,
 .tool-panel-empty {

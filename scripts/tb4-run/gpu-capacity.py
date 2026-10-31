@@ -217,7 +217,12 @@ def main():
             log("deploy", region, inst["InstanceId"], address, "ok" if ok else "pending", why)
             if ok:
                 name = f"gpu-{region}-{inst['InstanceId'][-6:]}"
-                if add_host(a.hosts_file, {"name": name, "kind": "gpu", "vcpu": 16, "memoryMb": 262144, "address": address}):
+                # type + launchedAt: the GPU lane bills the host per host-hour from its launch.
+                entry = {"name": name, "kind": "gpu", "vcpu": 16, "memoryMb": 262144, "address": address,
+                         "type": ITYPE, "instanceId": inst["InstanceId"]}
+                if inst.get("LaunchTime"):
+                    entry["launchedAt"] = int(inst["LaunchTime"].timestamp() * 1000)
+                if add_host(a.hosts_file, entry):
                     log("added host", name, address)
 
 

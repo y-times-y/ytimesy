@@ -15,6 +15,7 @@ import {
 	openSync,
 	readFileSync,
 } from "node:fs";
+import { type GpuTaskSpec, gpuTaskSpec } from "./gpu-cost.ts";
 
 /* ---------- plan ---------- */
 
@@ -33,6 +34,8 @@ export type Task = {
 	memoryMb: number;
 	gpus: number;
 	separateVerifier: boolean;
+	/** GPU tasks only: per-sandbox resources and time limits (the Daytona lane's worst case). */
+	gpuSpec?: GpuTaskSpec;
 };
 /**
  * A Task from a parsed task.toml. cpus and memory are the larger of the agent
@@ -50,6 +53,7 @@ export function taskFromToml(
 		verifier.environment_mode === "separate" ||
 		env.environment_mode === "separate";
 	const num = (v: unknown) => Number(v ?? 0) || 0;
+	const gpuSpec = gpuTaskSpec(toml);
 	return {
 		name,
 		cpus: Math.max(num(env.cpus) || 1, separateVerifier ? num(venv.cpus) : 0),
@@ -59,6 +63,7 @@ export function taskFromToml(
 		),
 		gpus: num(env.gpus),
 		separateVerifier,
+		...(gpuSpec ? { gpuSpec } : {}),
 	};
 }
 export type Batch = { id: "b1" | "b2"; trialsPerTask: number };
@@ -140,15 +145,16 @@ export type JournalEvent =
 			detail: string;
 	  };
 
-export class Journal {
+/** An append-only, fsynced JSON-lines journal (the run's, or the GPU lane's own). */
+export class Journal<E extends { at: string; type: string } = JournalEvent> {
 	constructor(readonly path: string) {}
-	events(): JournalEvent[] {
+	events(): E[] {
 		if (!existsSync(this.path)) return [];
-		const out: JournalEvent[] = [];
+		const out: E[] = [];
 		for (const line of readFileSync(this.path, "utf8").split("\n")) {
 			if (!line.trim()) continue;
 			try {
-				out.push(JSON.parse(line) as JournalEvent);
+				out.push(JSON.parse(line) as E);
 			} catch {
 				// A torn last line (power loss mid-write) is ignored; every earlier
 				// line was fsynced before its action ran.
@@ -156,7 +162,7 @@ export class Journal {
 		}
 		return out;
 	}
-	append(event: JournalEvent) {
+	append(event: E) {
 		const fd = openSync(this.path, "a");
 		try {
 			appendFileSync(fd, `${JSON.stringify(event)}\n`);
@@ -196,6 +202,8 @@ export type RunState = {
 	attempts: Map<string, Attempt>;
 	paused: string | null;
 	stopped: string | null;
+	/** The last operator `resume`: it clears a pause or a stop, and the error-spike window starts after it. */
+	resumedAt: string | null;
 	/** Gate A passed (>= 6 decisive first-trial passes): it is never evaluated again. */
 	gateAPassed: boolean;
 	/** Reviews not yet acked, by attempt id (or "stage1"): any one blocks new launches. */
@@ -214,6 +222,7 @@ export function replay(events: JournalEvent[]): RunState {
 		attempts: new Map(),
 		paused: null,
 		stopped: null,
+		resumedAt: null,
 		gateAPassed: false,
 		reviews: new Map(),
 		acks: [],
@@ -274,6 +283,8 @@ export function replay(events: JournalEvent[]): RunState {
 				break;
 			case "resume":
 				state.paused = null;
+				state.stopped = null;
+				state.resumedAt = e.at;
 				break;
 			case "stop":
 				state.stopped = e.reason;
@@ -828,6 +839,41 @@ export function failureCause(
 	};
 }
 
+/**
+ * Journals one attempt's finish with its cause; a cause that is not benign also
+ * journals `review-needed`, which holds every new launch (CPU and GPU lanes) until
+ * the operator acks it. Returns the REVIEW log line when it held launches.
+ */
+export function finishAttempt(input: {
+	journal: Journal;
+	review: ReviewConfig;
+	at: string;
+	attemptId: string;
+	task: string;
+	outcome: TrialOutcome;
+	result?: HarborResult;
+}): string | null {
+	const { journal, attemptId, task, outcome, at } = input;
+	const cause = failureCause(outcome, input.result);
+	journal.append({
+		at,
+		type: "finish",
+		attemptId,
+		outcome,
+		...(cause ? { cause } : {}),
+	});
+	if (!cause || !needsReview(cause, input.review)) return null;
+	journal.append({
+		at,
+		type: "review-needed",
+		attemptId,
+		task,
+		cause: cause.cause,
+		detail: cause.detail,
+	});
+	return `REVIEW ${attemptId}: ${cause.cause}: ${cause.detail}; launches held until \`controller.ts ack ${attemptId} --note ...\``;
+}
+
 /** Review gate settings (TB4_* env, docs/tb4-run-controller.md "Review gate"). */
 export function reviewConfig(env: Record<string, string | undefined>) {
 	const list = (v: string | undefined, d: string[]) =>
@@ -870,7 +916,11 @@ export function needsReview(cause: TrialCause, cfg: ReviewConfig) {
  */
 export function errorSpike(state: RunState, nowMs: number, cfg: ReviewConfig) {
 	if (cfg.spikeCount <= 0 || !Number.isFinite(nowMs)) return null;
-	const since = nowMs - cfg.spikeMinutes * 60_000;
+	// Ends before the operator's last resume were already read and cleared.
+	const since = Math.max(
+		nowMs - cfg.spikeMinutes * 60_000,
+		state.resumedAt ? Date.parse(state.resumedAt) : Number.NEGATIVE_INFINITY,
+	);
 	const hits = [...state.attempts.values()].filter((a) => {
 		if (!a.cause || !a.finishedAt) return false;
 		const kind = causeKind(a.cause);

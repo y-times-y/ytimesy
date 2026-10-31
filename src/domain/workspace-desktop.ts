@@ -22,9 +22,7 @@ export const START_HARNESS_BEFORE_DESKTOP =
 export function desktopStartFailureReason(cause: unknown): string {
 	const message = failureMessage(cause);
 	if (workspaceLooksGone(message)) return START_HARNESS_BEFORE_DESKTOP;
-	return publicFailureMessage(
-		cause instanceof Error ? cause : new Error(message),
-	);
+	return publicFailureMessage(new Error(message));
 }
 
 export function desktopInspectorShouldStart(input: {
@@ -43,54 +41,65 @@ export function desktopInspectorShouldStart(input: {
 	);
 }
 
+/** What the desktop panel says while the desktop is not on screen: a short
+ *  title, at most one line under it, and the button or the starting spinner. */
+export type DesktopInspectorPrompt = {
+	readonly title: string;
+	/** One line (the failure reason, or why there is no desktop yet). */
+	readonly description: string | null;
+	readonly actionLabel: string | null;
+	/** Starting: the spinner shows; `slowHint` fades in if it takes a while. */
+	readonly starting: boolean;
+	readonly slowHint: string | null;
+};
+
+const startingPrompt: DesktopInspectorPrompt = {
+	title: "Starting desktop",
+	description: null,
+	actionLabel: null,
+	starting: true,
+	slowHint: "First start can take a minute",
+};
+
 export function desktopInspectorPrompt(input: {
 	readonly desktop: WorkspaceDesktop;
 	readonly projectId?: string;
 	readonly sessionId?: string;
-}) {
+}): DesktopInspectorPrompt {
+	const idle = { actionLabel: null, starting: false, slowHint: null };
 	if (input.desktop.status === "failed") {
 		return {
-			title: "Desktop failed to start.",
+			...idle,
+			title: "Desktop didn't start",
 			description: input.desktop.reason,
-			actionLabel: "Retry desktop",
+			actionLabel: "Try again",
 		};
 	}
-	if (input.desktop.status === "starting") {
-		return {
-			title: "Starting desktop…",
-			description:
-				"Getting this chat's computer ready. A new or forked chat gets its own copy the first time, which takes a minute or two.",
-			actionLabel: null,
-		};
-	}
+	if (input.desktop.status === "starting") return startingPrompt;
 	if (!input.projectId) {
 		return {
+			...idle,
 			title: "Shared desktop",
 			description: "Select a project to use the desktop.",
-			actionLabel: null,
 		};
 	}
 	if (!input.sessionId) {
 		return {
+			...idle,
 			title: "Shared desktop",
 			description: "Connect an agent before opening the desktop.",
-			actionLabel: null,
 		};
 	}
 	if (input.desktop.status === "running") {
 		return {
+			...idle,
 			title: "Desktop is running.",
 			description:
 				input.desktop.message ?? "You and the agent share this screen.",
-			actionLabel: null,
 		};
 	}
-	return {
-		title: "Starting desktop…",
-		description:
-			"This is the desktop the agent uses for QA. You watch and control the same screen.",
-		actionLabel: null,
-	};
+	// Stopped with a chat open: the panel starts it straight away.
+	return startingPrompt;
 }
 
 export function desktopClientViewerUrl(input: {
@@ -100,6 +109,28 @@ export function desktopClientViewerUrl(input: {
 	const params = new URLSearchParams({ projectId: input.projectId });
 	if (input.sessionId) params.set("sessionId", input.sessionId);
 	return `/api/desktop?${params}`;
+}
+
+/** How long the desktop socket may take to open before the panel says so. */
+export const DESKTOP_SOCKET_OPEN_TIMEOUT_MS = 15_000;
+/** How long the viewer may take to show the screen (the relay may wake the machine first). */
+export const DESKTOP_CONNECT_TIMEOUT_MS = 120_000;
+
+/**
+ * The one line under "Desktop disconnected": the server's close reason when
+ * it gave one (its relay closes with why), else what the viewer saw.
+ */
+export function desktopDisconnectMessage(input: {
+	readonly reason?: string;
+	readonly connected: boolean;
+	readonly clean: boolean;
+}) {
+	const reason = input.reason?.trim();
+	if (reason) return reason;
+	if (!input.connected) return "The desktop didn't answer.";
+	return input.clean
+		? "The desktop connection closed."
+		: "The desktop connection was lost.";
 }
 
 export function desktopRemoteOrigin(hostname: string) {

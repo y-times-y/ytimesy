@@ -185,6 +185,16 @@ const escapeRegExp = (text: string) =>
  * ("build-1", "@research-2", "Main"): exact, case-sensitive whole words,
  * never part of a path, URL, address or longer name.
  */
+/**
+ * The length of a quoted task right after an agent's name, as models echo
+ * the report header: ' ("Audit chat lifecycle")' or ' (“Audit chat lifecycle”)'.
+ */
+export function echoedTaskLength(after: string): number {
+	return (
+		/^\s*\(\s*[“"‘'][^()\n]{1,160}?[”"’']\s*\)/.exec(after)?.[0].length ?? 0
+	);
+}
+
 export function agentNameSegments(
 	text: string,
 	names: ReadonlySet<string>,
@@ -206,6 +216,8 @@ export function agentNameSegments(
 			segments.push({ kind: "text", text: text.slice(at, start) });
 		segments.push({ kind: "mention", name });
 		at = start + (match[2] ?? "").length + name.length;
+		// The chip names the agent; a quoted task right after it repeats it.
+		at += echoedTaskLength(text.slice(at));
 	}
 	if (at === 0) return [{ kind: "text", text }];
 	if (at < text.length) segments.push({ kind: "text", text: text.slice(at) });

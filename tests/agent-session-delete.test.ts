@@ -60,12 +60,17 @@ vi.mock(
 		},
 	}),
 );
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({
 		APP_URL: "[REDACTED]",
 		BETTER_AUTH_SECRET: "test-only-secret-longer-than-thirty-two-characters",
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 
 beforeAll(async () => {
 	db = new PGlite();
@@ -92,6 +97,7 @@ beforeAll(async () => {
 		"20260930220000_chat_branches.sql",
 		"20261018010000_builder_subagents.sql",
 		"20261003022000_workspace_retention.sql",
+		"20261029200000_archive.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	// The harness constraint from 20260927203000_api_turns (this schema builds api_turn itself).

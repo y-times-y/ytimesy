@@ -1,8 +1,13 @@
 import { expect, it, vi } from "vitest";
 
-vi.mock("../config", () => ({
-	serverConfig: () => ({ APP_URL: "https://app.example" }),
-}));
+vi.mock("../config", () => {
+	const serverConfig = () => ({ APP_URL: "https://app.example" });
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 vi.mock("../adapters/invocation-tasks", () => ({
 	trackInvocationTask: vi.fn(),
 }));

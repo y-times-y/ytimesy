@@ -367,7 +367,7 @@ describe("left sidebar", () => {
 		);
 		expect(serverHtml).toContain("Show 2 more");
 		expect(serverHtml).toContain(
-			'data-seen-key="d9:completed:2026-10-19T00:00:00Z" data-updated-at="2026-10-19T00:00:00Z" data-unread-mark="true" data-attention="completed"',
+			'data-seen-key="d9:completed:2026-10-19T00:00:00Z" data-updated-at="2026-10-19T00:00:00Z" data-unread-mark="true"',
 		);
 		expect(serverHtml).toContain("<script>");
 		// The account button renders from the page's user, not after its read.

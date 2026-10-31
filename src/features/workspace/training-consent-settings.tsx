@@ -232,8 +232,7 @@ function ReplayConsentRow() {
 					Session recording
 				</label>
 				<span className="settings-row-meta">
-					Record how you use ytimesy in this browser, with all text, code, chats
-					and inputs hidden, to help us improve it.
+					Records how you use ytimesy here. Text, code and chats stay hidden.
 				</span>
 			</div>
 			<div className="settings-row-actions">

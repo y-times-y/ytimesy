@@ -18,6 +18,7 @@ import {
 	DESKTOP_CREDENTIAL_DROP_SETUP,
 	DESKTOP_PRIVATE_DIRECTORY,
 	DESKTOP_PRIVATE_READY,
+	DESKTOP_WAIT_UNTIL,
 	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
 } from "./start-desktop";
@@ -25,11 +26,14 @@ import {
 /** The viewer-proxy block of the start script, run against stub commands in a scratch dir. */
 function viewerBlock(dir: string) {
 	const start = START_WORKSPACE_DESKTOP.indexOf("DESK_AUTH_DROP=");
-	const end = START_WORKSPACE_DESKTOP.indexOf("python3 - <<'PY'", start);
-	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${START_WORKSPACE_DESKTOP.slice(
-		start,
-		end,
-	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
+	const end = START_WORKSPACE_DESKTOP.indexOf("# A desktop started", start);
+	// The proxy starts early; its wait and applied digest come at the end.
+	const finish = START_WORKSPACE_DESKTOP.indexOf("# The proxy started above");
+	const done = START_WORKSPACE_DESKTOP.indexOf(
+		"printf 'YTIMESY_DESKTOP",
+		finish,
+	);
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nVNC_SOCKET=${dir}/rfb.sock\nDESK_PROXY_STARTED=0\n${DESKTOP_WAIT_UNTIL}\n${`${START_WORKSPACE_DESKTOP.slice(start, end)}${START_WORKSPACE_DESKTOP.slice(finish, done)}`.replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
 }
 
 let dir: string;
@@ -109,7 +113,7 @@ it("without a credential, stops an open public proxy and listens on loopback onl
 
 it("probes for the credential it expects and refuses anything but a digest", () => {
 	const digest = "a".repeat(64);
-	expect(probeWorkspaceDesktop(digest)).toContain(`== "${digest}"`);
+	expect(probeWorkspaceDesktop(digest)).toContain(`= "${digest}" ]`);
 	expect(() => probeWorkspaceDesktop("$(reboot)")).toThrow();
 });
 
@@ -232,9 +236,12 @@ it("never matches its own command line when it looks for or stops processes", ()
 
 /** The x11vnc block of the start script, run against stub commands. */
 function vncBlock() {
-	const start = START_WORKSPACE_DESKTOP.indexOf('VNC_DIR="');
-	const end = START_WORKSPACE_DESKTOP.indexOf("# The viewer port", start);
-	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nXAUTH=${dir}/Xauthority\n${START_WORKSPACE_DESKTOP.slice(
+	const start = START_WORKSPACE_DESKTOP.indexOf("VNC_PASS_DROP=");
+	const end = START_WORKSPACE_DESKTOP.indexOf(
+		"# The proxy started above",
+		start,
+	);
+	return `HOME=${dir}\nDESK_PRIVATE=${dir}\nXAUTH=${dir}/Xauthority\nVNC_DIR="\${HOME}/.ytimesy/vnc"\nVNC_SOCKET="$VNC_DIR/rfb.sock"\n${DESKTOP_WAIT_UNTIL}\n${START_WORKSPACE_DESKTOP.slice(
 		start,
 		end,
 	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;

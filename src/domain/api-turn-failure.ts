@@ -173,7 +173,7 @@ function machineFailureReason(message: string) {
  * provider-inference failure. Null when the error is not a machine failure.
  */
 const REPOSITORY_FETCH_FAILURE =
-	"The chat could not fetch its repository from GitHub. Check that ytimesy still has access to the repository, then retry; your work is preserved.";
+	"Couldn't get this chat's code from GitHub. Retry in a moment. If it keeps happening, check that ytimesy still has access to the repository. Your work is saved.";
 
 /** A Git proxy clone or update failed; the model was never asked. */
 function repositoryFetchFailed(error: unknown, depth = 0): boolean {
@@ -233,8 +233,8 @@ export function subscriptionUsageLimitMessage(
 	const wait =
 		minutes === null
 			? "It resets when your plan's usage window renews."
-			: `It resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`} (${resetsAt?.toISOString().slice(11, 16)} UTC).`;
-	return `Your ChatGPT plan's Codex usage limit is used up. ${wait} To keep going now, choose a model on an API key. Work is preserved.`;
+			: `It resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`}.`;
+	return `Your ChatGPT plan's Codex usage is used up. ${wait} To keep going now, pick a model on an API key. Your work is saved.`;
 }
 
 /** The plan's reset time when a 429 body reports a spent allowance; undefined otherwise. */
@@ -582,7 +582,7 @@ const WORKSPACE_STEP_FAILURES = [
 ] as const;
 
 const UNKNOWN_MODEL_FAILURE =
-	"The model request failed without a usable provider reason. Check the connection and retry. No fallback was used.";
+	"The model request failed and the provider didn't say why. Retry, or pick another model. Your work is saved.";
 
 export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
@@ -609,7 +609,7 @@ export function apiModelFailureMessage(error: unknown): string {
 		return known && known !== UNKNOWN_MODEL_FAILURE ? known : error.message;
 	}
 	if (error instanceof ContextWindowExhausted)
-		return "The model ran out of context room for its answer, even after compacting this conversation. Start a new chat with a handoff summary. No fallback was used.";
+		return "This chat is too long for the model, even after compacting it. Start a new chat with a summary of this one.";
 	if (
 		error instanceof SafeApiModelFailure ||
 		error instanceof SubscriptionUsageLimitReached ||
@@ -638,13 +638,13 @@ export function apiModelFailureMessage(error: unknown): string {
 		if (error.statusCode === 400 && rejectsAssistantPrefill(detail))
 			return "The provider rejected an assistant-prefill request (HTTP 400). This is a conversation-format failure, not an API-key or credit problem. Work is preserved; retry the turn. No fallback was used.";
 		if (code === "insufficient_quota" || code === "insufficient_credits")
-			return "The provider account has insufficient credit or quota. Add credit or choose a funded connection. No fallback was used.";
+			return "Your API provider account is out of credit. Add credit with that provider, or pick another model. Your work is saved.";
 		if (code === "rate_limit_exceeded")
-			return "The provider rate limit was reached. Wait and retry. No fallback was used.";
+			return "Your model provider is limiting requests right now. Wait a minute, then retry.";
 		if (code === "invalid_api_key")
-			return "The provider rejected this API key. Update the key in Model connections. No fallback was used.";
+			return "Your API key was rejected. Replace it in Settings > Agents.";
 		if (code === "model_not_found" || code === "invalid_model")
-			return "The selected model is unavailable from this provider. Choose another model. No fallback was used.";
+			return "This model isn't available from your provider. Pick another model.";
 		if (
 			code === "context_length_exceeded" ||
 			(inspectDetails &&
@@ -652,7 +652,7 @@ export function apiModelFailureMessage(error: unknown): string {
 					detail,
 				))
 		)
-			return "The model rejected this conversation because it exceeds its context window, even after compacting it. Start a new chat with a handoff summary. No fallback was used.";
+			return "This chat is too long for the model, even after compacting it. Start a new chat with a summary of this one.";
 		if (
 			code === "unsupported_tool" ||
 			(inspectDetails &&
@@ -660,46 +660,46 @@ export function apiModelFailureMessage(error: unknown): string {
 					detail,
 				))
 		)
-			return "This model does not support the tool calls needed for coding. Choose another model. No fallback was used.";
+			return "This model can't use the tools needed for coding. Pick another model.";
 		switch (error.statusCode) {
 			case 200:
-				return "The provider accepted the request but its response stream failed. Work is preserved; inspect it before continuing. No fallback or stream replay was used.";
+				return "The model's answer was cut off partway. Your work is saved; check it, then retry.";
 			case 401:
-				return "The provider rejected this API key (HTTP 401). Update the key in Model connections. No fallback was used.";
+				return "Your API key was rejected. Replace it in Settings > Agents.";
 			case 402:
-				return "The provider reported insufficient credit (HTTP 402). Add credit to that provider account. No fallback was used.";
+				return "Your API provider account is out of credit. Add credit with that provider, or pick another model. Your work is saved.";
 			case 403:
-				return "This API key does not have access to the selected model (HTTP 403). Check the account or choose another model. No fallback was used.";
+				return "This API key can't use the selected model. Pick another model, or check your provider account.";
 			case 404:
-				return "The selected model is unavailable from this provider (HTTP 404). Choose another model. No fallback was used.";
+				return "This model isn't available from your provider. Pick another model.";
 			case 408:
 			case 504:
-				return "The provider timed out. Retry this turn. No fallback was used.";
+				return "The model took too long to respond. Retry in a moment.";
 			case 413:
-				return "The provider rejected the request because it is too large (HTTP 413). Shorten the conversation or start a new chat. No fallback was used.";
+				return "This request is too large for the model. Start a new chat with a summary of this one.";
 			case 429:
-				return "The provider rate limit was reached (HTTP 429). Wait and retry. No fallback was used.";
+				return "Your model provider is limiting requests right now. Wait a minute, then retry.";
 		}
 		if (error.statusCode && error.statusCode >= 500)
-			return `The provider is unavailable (HTTP ${error.statusCode}). Retry later. No fallback was used.`;
+			return "Your model provider is having problems right now. Retry in a few minutes. Your work is saved.";
 		if (error.statusCode)
-			return `The provider rejected this request (HTTP ${error.statusCode}). Check model access, context size, and tool support. No fallback was used.`;
+			return "Your model provider turned this request down. Retry, or pick another model.";
 		if (error.isRetryable)
-			return "The provider could not be reached or returned a temporary error. Retry this turn. No fallback was used.";
+			return "Couldn't reach your model provider. Retry in a moment.";
 	}
 	if (error instanceof Error) {
 		// Streamed provider errors arrive without an HTTP status; only their wording says why.
 		if (/overloaded|over capacity|capacity constraints/i.test(error.message))
-			return "The provider is overloaded right now. Work is preserved; retry this turn in a minute. No fallback was used.";
+			return "The model is overloaded right now. Retry in a minute. Your work is saved.";
 		if (error.message.includes("selected model is no longer available"))
-			return "The selected model is no longer available on this connection. Choose another model. No fallback was used.";
+			return "This model is no longer available on your connection. Pick another model.";
 		if (error.name === "TimeoutError")
-			return "The model request timed out. Retry this turn. No fallback was used.";
+			return "The model took too long to respond. Retry in a moment.";
 		if (
 			error instanceof TypeError &&
 			/fetch failed|network error/i.test(error.message)
 		)
-			return "The provider could not be reached. Check the connection and retry. No fallback was used.";
+			return "Couldn't reach your model provider. Check your connection, then retry.";
 	}
 	return UNKNOWN_MODEL_FAILURE;
 }
@@ -747,8 +747,8 @@ export function apiTurnFailureMessage(
 					error.message,
 				)
 			)
-				return "The workspace VM limit or compute allowance was reached. Free capacity or wait for the allowance to reset.";
-			return "The workspace could not start or its prepared repository is unavailable. Check the workspace and retry.";
+				return "You've reached your cloud machine allowance for now. It frees up as the usage window resets.";
+			return "This chat's cloud machine couldn't start. Retry in a moment. Your work is saved.";
 		case "budget":
 			if (
 				error instanceof Error &&

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	desktopClientViewerUrl,
+	desktopDisconnectMessage,
 	desktopInspectorPrompt,
 	desktopInspectorShouldStart,
 	desktopSidebarShouldOpen,
@@ -57,9 +58,19 @@ describe("workspace desktop", () => {
 				sessionId: "session-1",
 			}),
 		).toMatchObject({
-			title: "Starting desktop…",
+			title: "Starting desktop",
+			description: null,
 			actionLabel: null,
+			starting: true,
+			slowHint: "First start can take a minute",
 		});
+		expect(
+			desktopInspectorPrompt({
+				desktop: { status: "starting" },
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toMatchObject({ title: "Starting desktop", starting: true });
 		expect(
 			desktopInspectorPrompt({
 				desktop: { status: "failed", reason: "VM not found" },
@@ -67,7 +78,10 @@ describe("workspace desktop", () => {
 				sessionId: "session-1",
 			}),
 		).toMatchObject({
-			actionLabel: "Retry desktop",
+			title: "Desktop didn't start",
+			description: "VM not found",
+			actionLabel: "Try again",
+			starting: false,
 		});
 	});
 });
@@ -204,5 +218,30 @@ describe("desktop sidebar auto-open", () => {
 				dismissedStreakId: null,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("desktopDisconnectMessage", () => {
+	it("shows the server's close reason when the relay gave one", () => {
+		expect(
+			desktopDisconnectMessage({
+				reason: " Desktop is not ready. ",
+				connected: false,
+				clean: false,
+			}),
+		).toBe("Desktop is not ready.");
+	});
+	it("says the desktop never answered when it closed before connecting", () => {
+		expect(desktopDisconnectMessage({ connected: false, clean: false })).toBe(
+			"The desktop didn't answer.",
+		);
+	});
+	it("tells a lost connection from a closed one", () => {
+		expect(desktopDisconnectMessage({ connected: true, clean: false })).toBe(
+			"The desktop connection was lost.",
+		);
+		expect(desktopDisconnectMessage({ connected: true, clean: true })).toBe(
+			"The desktop connection closed.",
+		);
 	});
 });

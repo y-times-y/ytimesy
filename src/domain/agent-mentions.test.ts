@@ -176,3 +176,26 @@ describe("agent names in replies", () => {
 		expect(agentNameInCode("build-1 --fix", names)).toBeNull();
 	});
 });
+
+it("folds a quoted task echoed after an agent's name into its chip", () => {
+	const names = new Set(["review-2"]);
+	expect(
+		agentNameSegments(
+			"review-2 (“Audit chat lifecycle”) found two issues.",
+			names,
+		),
+	).toEqual([
+		{ kind: "mention", name: "review-2" },
+		{ kind: "text", text: " found two issues." },
+	]);
+	expect(agentNameSegments('Ask review-2 ("Audit") again', names)).toEqual([
+		{ kind: "text", text: "Ask " },
+		{ kind: "mention", name: "review-2" },
+		{ kind: "text", text: " again" },
+	]);
+	// A parenthesis that is not a quoted task stays.
+	expect(agentNameSegments("review-2 (done)", names)).toEqual([
+		{ kind: "mention", name: "review-2" },
+		{ kind: "text", text: " (done)" },
+	]);
+});

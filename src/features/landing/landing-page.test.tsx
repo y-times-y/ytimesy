@@ -24,11 +24,13 @@ vi.mock("@tanstack/react-router", () => ({
 
 import { LandingPage } from "./landing-page";
 
-it("explains ytimesy and offers sign-in, sign-up, terms, privacy and support", () => {
+it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and support", () => {
 	const html = renderToStaticMarkup(<LandingPage />);
 	const text = html.replace(/<[^>]+>/g, " ");
-	expect(text).toContain("Free beta — bring your own model");
-	expect(text).toContain("ytimesy runs an agent on a private cloud machine");
+	expect(text).toContain("AI Software Engineer in the Cloud");
+	expect(text).toContain("Time per task");
+	expect(text).toContain("Terminal-Bench 4");
+	expect(text).toContain("19.3 min");
 	expect(html).toContain('href="/auth/sign-in"');
 	expect(html).toContain('href="/auth/sign-up"');
 	expect(html).toContain('href="/terms"');

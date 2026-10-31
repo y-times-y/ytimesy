@@ -55,9 +55,9 @@ it("logs only recognized failure classifications, never arbitrary error properti
 });
 
 it("distinguishes safe failure stages without exposing provider details", () => {
-	expect(apiTurnFailureMessage("workspace")).toContain("workspace");
+	expect(apiTurnFailureMessage("workspace")).toContain("cloud machine");
 	expect(apiTurnFailureMessage("budget")).toContain("before a model request");
-	expect(apiTurnFailureMessage("model")).toContain("No fallback was used");
+	expect(apiTurnFailureMessage("model")).toContain("Retry");
 });
 
 it("reports a project secrets failure as a workspace failure, never a connection change", () => {
@@ -102,11 +102,11 @@ it("explains provider age confirmation without blaming the key or exposing raw e
 
 it.each([
 	[401, "API key"],
-	[402, "insufficient credit"],
-	[403, "does not have access"],
-	[404, "unavailable"],
-	[429, "rate limit"],
-	[503, "provider is unavailable"],
+	[402, "out of credit"],
+	[403, "can't use the selected model"],
+	[404, "isn't available"],
+	[429, "limiting requests"],
+	[503, "having problems"],
 ])(
 	"explains provider HTTP %i without exposing request data",
 	(status, reason) => {
@@ -120,7 +120,7 @@ it("uses structured provider codes when HTTP 400 is too broad", () => {
 	const error = providerFailure(400, {
 		error: { code: "context_length_exceeded" },
 	});
-	expect(apiTurnFailureMessage("model", error)).toContain("context window");
+	expect(apiTurnFailureMessage("model", error)).toContain("too long");
 });
 
 it.each([
@@ -153,9 +153,7 @@ it("classifies accepted-request stream failures without leaking payloads", () =>
 		httpStatus: 200,
 		providerCode: "internal_error",
 	});
-	expect(apiTurnFailureMessage("model", error)).toContain(
-		"response stream failed",
-	);
+	expect(apiTurnFailureMessage("model", error)).toContain("cut off partway");
 	expect(JSON.stringify(apiModelFailureClassification(error))).not.toContain(
 		"secret",
 	);
@@ -200,7 +198,7 @@ it("bounds cyclic cause chains and excludes arbitrary codes", () => {
 
 it("never stores raw provider text in the safe failure", () => {
 	const failure = new SafeApiModelFailure(providerFailure(429));
-	expect(failure.message).toContain("rate limit");
+	expect(failure.message).toContain("limiting requests");
 	expect(failure.message).not.toContain("sk-fixture-do-not-show");
 	expect(apiTurnFailureMessage("model", failure)).toBe(failure.message);
 });
@@ -246,10 +244,10 @@ it("says the provider is overloaded when a streamed error reports it", () => {
 	);
 	overloaded.name = "AI_StreamProviderError";
 	expect(apiModelFailureMessage(overloaded)).toBe(
-		"The provider is overloaded right now. Work is preserved; retry this turn in a minute. No fallback was used.",
+		"The model is overloaded right now. Retry in a minute. Your work is saved.",
 	);
 	expect(apiModelFailureMessage(new Error("something else"))).toContain(
-		"without a usable provider reason",
+		"didn't say why",
 	);
 });
 
@@ -356,7 +354,7 @@ it("keeps unknown machine error text out of the user message", () => {
 
 it("leaves non-machine failures to the existing provider wording", () => {
 	expect(apiModelFailureMessage(new Error("something odd"))).toContain(
-		"without a usable provider reason",
+		"didn't say why",
 	);
 });
 
@@ -369,7 +367,7 @@ it("says the repository could not be fetched when a Git proxy transfer fails", (
 		new SafeApiModelFailure(new Error("fiber failure", { cause: fetch })),
 	]) {
 		const message = apiModelFailureMessage(error);
-		expect(message).toContain("could not fetch its repository from GitHub");
+		expect(message).toContain("get this chat's code from GitHub");
 		expect(message).not.toContain("model request failed");
 	}
 });
@@ -475,7 +473,7 @@ it("never reports a repository guidance scan failure as a provider failure", () 
 	const message = apiModelFailureMessage(error);
 	expect(message).toContain("Could not safely inspect repository guidance");
 	expect(message).toContain("not a model or provider failure");
-	expect(message).not.toContain("without a usable provider reason");
+	expect(message).not.toContain("didn't say why");
 });
 
 it("words the harness's own failures as such, redacted, and classifies them apart from providers", () => {

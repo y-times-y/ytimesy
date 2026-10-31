@@ -3,6 +3,7 @@ import { type ReactNode, Suspense, use } from "react";
 import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
 import { LandingPage } from "../features/landing/landing-page";
+import { FirstRun } from "../features/onboarding/first-run";
 import {
 	getWorkspaceBootstrap,
 	type OpenChatView,
@@ -72,6 +73,8 @@ function HomePage() {
 		renderedAtMs,
 		inspector,
 		savedPullRequests,
+		savedDefaultBranches,
+		firstRun,
 	} = Route.useLoaderData();
 	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
@@ -85,8 +88,16 @@ function HomePage() {
 			renderedAtMs={renderedAtMs}
 			savedInspector={inspector}
 			savedPullRequests={savedPullRequests}
+			savedDefaultBranches={savedDefaultBranches}
 		/>
 	);
+	// A new account (no project yet) sets up before it sees the workspace.
+	if (firstRun)
+		return (
+			<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
+				<FirstRun state={firstRun} />
+			</IdentityGate>
+		);
 	return (
 		<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
 			{openChatView instanceof Promise ? (
@@ -95,7 +106,16 @@ function HomePage() {
 				// place), and the transcript fills in when the read lands.
 				<Suspense
 					fallback={home(
-						openChatId ? { ...session, agentSessionId: openChatId } : undefined,
+						openChatId
+							? {
+									...session,
+									agentSessionId: openChatId,
+									// The composer's branch shows before the transcript lands.
+									selectedBranch:
+										chats?.chats?.find((chat) => chat.id === openChatId)
+											?.selectedBranch ?? null,
+								}
+							: undefined,
 					)}
 				>
 					<WithOpenChat view={openChatView}>{home}</WithOpenChat>

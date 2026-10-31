@@ -7,6 +7,7 @@ import { requireUser } from "#/server/auth/auth";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import {
 	type DesktopScope,
+	peekSessionMachineRef,
 	readWorkspaceDesktop,
 	startWorkspaceDesktop,
 } from "#/server/services/workspace-desktop";
@@ -68,6 +69,22 @@ export const startWorkspaceDesktopFn = createServerFn({
 	.validator(optionalProjectId)
 	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
 		const scope = await requireScope(data.projectId, data.sessionId);
+		return runWithMachines((machines) =>
+			startWorkspaceDesktop(machines, scope),
+		);
+	});
+
+/**
+ * Starts the desktop ahead of a click, only on a chat that already has its
+ * machine: a chat without one stays without (stopped), never gets one here.
+ */
+export const prepareWorkspaceDesktopFn = createServerFn({
+	method: "POST",
+})
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
+		const scope = await requireScope(data.projectId, data.sessionId);
+		if (!(await peekSessionMachineRef(scope))) return { status: "stopped" };
 		return runWithMachines((machines) =>
 			startWorkspaceDesktop(machines, scope),
 		);

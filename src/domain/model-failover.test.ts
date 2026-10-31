@@ -17,6 +17,7 @@ import {
 	decideFailover,
 	type FailoverConnection,
 	failoverCandidates,
+	failoverChainFailure,
 	failoverExhaustedDetail,
 	failoverNotice,
 	forcedDevelopmentOutage,
@@ -549,10 +550,10 @@ describe("stickiness", () => {
 			tried: [routeKey(codexSol), `${OPENROUTER}|openai/gpt-6.1-sol`],
 		});
 		expect(failoverNotice(failover.label, failover.label, "outage")).toContain(
-			"(outage)",
+			"is down right now",
 		);
 		expect(failoverExhaustedDetail(failover)).toBe(
-			" Automatic failover tried: GPT-6.1-Sol via Codex, GPT-6.1 Sol via OpenRouter.",
+			" Tried: GPT-6.1-Sol via Codex, GPT-6.1 Sol via OpenRouter.",
 		);
 	});
 
@@ -564,7 +565,16 @@ describe("stickiness", () => {
 				"outage",
 			),
 		).toBe(
-			"Codex is unavailable (outage); continued on GPT-6.1 Sol via OpenRouter.",
+			"Codex is down right now, so this chat continued on GPT-6.1 Sol via OpenRouter.",
+		);
+		expect(
+			failoverNotice(
+				{ model: "GPT-6.1-Sol", connection: "Codex" },
+				{ model: "GPT-6.1 Sol", connection: "OpenRouter" },
+				"usage-limit",
+			),
+		).toBe(
+			"Your ChatGPT plan's Codex usage is used up, so this chat continued on GPT-6.1 Sol via OpenRouter.",
 		);
 	});
 });
@@ -697,5 +707,32 @@ describe("failureSummary", () => {
 		expect(failureSummary(new IncompleteAgentTurn("error"))).toMatch(
 			/^IncompleteAgentTurn \(error\): /,
 		);
+	});
+});
+
+describe("failoverChainFailure", () => {
+	it("leads with a spent ChatGPT plan, then why the fallback failed", () => {
+		const now = Date.parse("2026-10-30T00:40:00Z");
+		const message = failoverChainFailure(
+			[
+				{
+					kind: "modelSwitch",
+					id: "t1:switch-1",
+					state: "switched",
+					reason: "usage-limit",
+					message: "",
+					from: { model: "GPT-6.1-Sol", connection: "Codex" },
+					to: { model: "GPT-6.1 Sol", connection: "OpenRouter", key: "or" },
+					resetsAt: now + 225 * 60_000,
+				} as never,
+			],
+			"t1",
+			"Your API provider account is out of credit.",
+			now,
+		);
+		expect(message).toBe(
+			"Your ChatGPT plan's Codex usage is used up (resets in 3 h 45 min). Switching to OpenRouter didn't work either: Your API provider account is out of credit.",
+		);
+		expect(failoverChainFailure([], "t1", "x", now)).toBeNull();
 	});
 });

@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { workspaceFileMention } from "./workspace-file-mention";
+import {
+	fileReferenceLabel,
+	sharedFileNames,
+	workspaceFileMention,
+	workspaceFileReference,
+} from "./workspace-file-mention";
 
 it("distinguishes workspace paths from external URLs and fragments", () => {
 	for (const path of [
@@ -17,4 +22,46 @@ it("distinguishes workspace paths from external URLs and fragments", () => {
 		"plain text",
 	])
 		expect(workspaceFileMention(url)).toBeNull();
+});
+
+it("opens the file a line reference names, and labels it short", () => {
+	for (const [text, path, lines] of [
+		[
+			"src/server/edge/executor.ts:510–525",
+			"src/server/edge/executor.ts",
+			"510–525",
+		],
+		["src/a.ts:12-34", "src/a.ts", "12–34"],
+		["src/a.ts:12", "src/a.ts", "12"],
+		["src/a.ts:12:5", "src/a.ts", "12"],
+		["src/a.ts#L3-L9", "src/a.ts", "3–9"],
+		["src/a.ts", "src/a.ts", null],
+	] as const) {
+		const reference = workspaceFileReference(text);
+		expect(reference).toEqual({ path, lines });
+		expect(workspaceFileMention(text)).toBe(path);
+	}
+	expect(
+		fileReferenceLabel({
+			path: "src/server/edge/executor.ts",
+			lines: "510–525",
+		}),
+	).toBe("executor.ts:510–525");
+	expect(fileReferenceLabel({ path: "src/", lines: null })).toBe("src");
+});
+
+it("keeps the folder when two files in one answer share a name", () => {
+	const shared = sharedFileNames(
+		"| `src/server/services/archive.ts` | x |\n| `src/server/adapters/archive.ts:4` | y |\n`src/a.ts` and [a](./src/a.ts)",
+	);
+	expect([...shared]).toEqual(["archive.ts"]);
+	expect(
+		fileReferenceLabel(
+			{ path: "src/server/adapters/archive.ts", lines: "4" },
+			shared,
+		),
+	).toBe("adapters/archive.ts:4");
+	expect(fileReferenceLabel({ path: "src/a.ts", lines: null }, shared)).toBe(
+		"a.ts",
+	);
 });

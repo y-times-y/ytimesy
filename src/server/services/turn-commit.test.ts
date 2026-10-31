@@ -17,6 +17,10 @@ vi.mock("../adapters/harness-evaluation", () => ({
 	evaluationRunForTask: evaluation,
 }));
 vi.mock("../adapters/projects", () => ({ projectForOwner: lookup }));
+const branchStore = vi.hoisted(() => ({ save: vi.fn() }));
+vi.mock("../adapters/agent-sessions", () => ({
+	saveAgentWorkingBranch: branchStore.save,
+}));
 const publication = vi.hoisted(() => ({
 	publish: vi.fn(),
 	excluded: vi.fn(async () => false),
@@ -238,4 +242,60 @@ it("rethrows when the turn was aborted while publishing", async () => {
 			abort.signal,
 		),
 	).rejects.toThrow("turn stopped");
+});
+
+/** A machine whose checkouts report `head` as their `.git/HEAD`. */
+class CheckoutRuntime extends MemoryWorkspaceRuntime {
+	constructor(private readonly head: string) {
+		super();
+	}
+	async readTextFile(_providerRef: string, path: string) {
+		return path.endsWith("/.git/HEAD") ? this.head : null;
+	}
+}
+
+it("follows the branch the agent switched the chat to and publishes it", async () => {
+	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	branchStore.save.mockClear();
+	publication.publish.mockClear();
+	publication.publish.mockResolvedValue({
+		branch: "agent/hotfix",
+		pullRequestUrl: null,
+	});
+	const switched = {
+		...chat,
+		selectedBranch: "agent/hotfix",
+		workingBranch: "agent/hotfix",
+		baseBranch: "release",
+	} as AgentSessionRecord;
+	branchStore.save.mockResolvedValueOnce(switched);
+	await commitCompletedSessionTurn(
+		{ ...chat, baseBranch: "release" } as AgentSessionRecord,
+		items,
+		new CheckoutRuntime("ref: refs/heads/agent/hotfix\n"),
+	);
+	expect(branchStore.save).toHaveBeenCalledWith(
+		"alice",
+		"chat-root",
+		"agent/hotfix",
+	);
+	expect(publication.publish.mock.calls[0][0]).toMatchObject({
+		workingBranch: "agent/hotfix",
+		baseBranch: "release",
+		providerRef: "writer-vm",
+	});
+});
+
+it("leaves the chat's branch alone when the checkout stays on it or HEAD is detached", async () => {
+	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	for (const head of [
+		`ref: refs/heads/${chat.workingBranch}\n`,
+		`${"c".repeat(40)}\n`,
+	]) {
+		branchStore.save.mockClear();
+		publication.publish.mockClear();
+		await commitCompletedSessionTurn(chat, items, new CheckoutRuntime(head));
+		expect(branchStore.save).not.toHaveBeenCalled();
+		expect(publication.publish.mock.calls[0][0]).toEqual(chat);
+	}
 });

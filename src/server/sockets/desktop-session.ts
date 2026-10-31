@@ -1,11 +1,15 @@
+import { Effect } from "effect";
 import { publicFailureMessage } from "#/domain/project-workspace";
+import { FreestyleWorkspaceMachinesLive } from "../adapters/freestyle/live";
 import { projectForOwner } from "../adapters/projects";
 import { requireUser } from "../auth/auth";
+import { WorkspaceMachineService } from "../services/capabilities";
 import {
 	type DesktopRemote,
 	resolveDesktopRemote,
 } from "../services/workspace-desktop";
 import type { ClientSocket, RemoteSocket } from "./client-socket";
+import { logRelay } from "./relay-log";
 
 export const DESKTOP_PATH = "/api/desktop";
 
@@ -27,12 +31,20 @@ export async function runDesktopSession(
 			client.close(4000, "Project is not available.");
 			return;
 		}
-		const remote = await resolveDesktopRemote({
-			userId: user.id,
-			projectId,
-			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
-		});
+		const remote = await resolveDesktopRemote(
+			{
+				userId: user.id,
+				projectId,
+				sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
+			},
+			await Effect.runPromise(
+				WorkspaceMachineService.pipe(
+					Effect.provide(FreestyleWorkspaceMachinesLive),
+				),
+			),
+		);
 		if (!remote) {
+			logRelay("desktop", "no-machine");
 			client.close(4000, "Desktop is not ready.");
 			return;
 		}
@@ -42,6 +54,7 @@ export async function runDesktopSession(
 			cause instanceof Response && cause.status === 401
 				? "Sign in required."
 				: publicFailureMessage(cause);
+		logRelay("desktop", "failed", { reason: message });
 		client.close(4000, message || "Desktop failed to connect.");
 	}
 }
@@ -58,10 +71,23 @@ async function connectRemote(
 ) {
 	const base = remote.origin.replace(/^http/i, "ws");
 	let lastError: unknown;
-	for (const url of [base, `${base}/websockify`]) {
+	for (const path of ["", "/websockify"]) {
+		const started = Date.now();
 		try {
-			return await openRemote(url, { authorization: remote.authorization });
+			const socket = await openRemote(`${base}${path}`, {
+				authorization: remote.authorization,
+			});
+			logRelay("desktop", "upstream-open", {
+				path: path || "/",
+				ms: Date.now() - started,
+			});
+			return socket;
 		} catch (cause) {
+			logRelay("desktop", "upstream-refused", {
+				path: path || "/",
+				ms: Date.now() - started,
+				reason: cause instanceof Error ? cause.message : String(cause),
+			});
 			lastError = cause;
 		}
 	}
@@ -77,6 +103,12 @@ function pipe(client: ClientSocket, remote: RemoteSocket) {
 	remote.onMessage((data) => {
 		if (client.open) client.send(data);
 	});
-	client.onClose(() => remote.close());
-	remote.onClose(() => client.close());
+	client.onClose((close) => {
+		logRelay("desktop", "client-closed", { ...close });
+		remote.close();
+	});
+	remote.onClose((close) => {
+		logRelay("desktop", "upstream-closed", { ...close });
+		client.close();
+	});
 }

@@ -6,6 +6,7 @@ import { snapshotSupportsRetention } from "../src/domain/workspace-retention";
 import { SCRUB_WORKSPACE_SECRETS } from "../src/server/adapters/freestyle/scrub-agent-secrets";
 import {
 	expireRetainedWorkspace,
+	rebindWorkspaceRetention,
 	recycleWorkspace,
 	restoreRetainedWorkspace,
 	retainedTreeDigest,
@@ -271,6 +272,63 @@ it("protects machines created before the fixed rollout cutover", async () => {
 	expect((await query("select * from workspace_retention")).rows).toHaveLength(
 		1,
 	);
+});
+it("self-heals a touch only for the chat's current VM while active", async () => {
+	const connection = { query } as unknown as Parameters<
+		typeof touchWorkspaceRetention
+	>[0];
+	const data = {
+		...(await provider().source.data()),
+		id: "replacement",
+		resources: { cpu: 4, memory: 8192, storage: 16384 },
+	} as Parameters<typeof touchWorkspaceRetention>[1];
+	const row = async () =>
+		(await query("select phase,vm_id,resources from workspace_retention"))
+			.rows[0];
+	// The chat still names "source": a caller holding another VM is stale.
+	await expect(touchWorkspaceRetention(connection, data)).rejects.toThrow(
+		"binding changed",
+	);
+	expect(await row()).toMatchObject({ vm_id: "source" });
+	// Mid-recovery stays refused even for the chat's current VM.
+	await query("update agent_session set provider_ref='replacement'");
+	await query("update workspace_retention set phase='capturing'");
+	await expect(touchWorkspaceRetention(connection, data)).rejects.toThrow(
+		"in progress",
+	);
+	expect(await row()).toMatchObject({ phase: "capturing", vm_id: "source" });
+	// Active and the chat's VM was replaced: the row follows it.
+	await query("update workspace_retention set phase='active'");
+	await touchWorkspaceRetention(connection, data);
+	expect(await row()).toMatchObject({
+		phase: "active",
+		vm_id: "replacement",
+		resources: data.resources,
+	});
+	// A stale caller on the old VM is now refused.
+	await expect(
+		touchWorkspaceRetention(connection, { ...data, id: "source" }),
+	).rejects.toThrow("binding changed");
+});
+it("rebinds retention to a replacement only from the chat's lost VM", async () => {
+	const row = async () =>
+		(await query("select vm_id from workspace_retention")).rows[0];
+	// Bound to some other VM: untouched.
+	await rebindWorkspaceRetention(session, "elsewhere", "replacement");
+	expect(await row()).toMatchObject({ vm_id: "source" });
+	// The chat no longer names either VM: untouched.
+	await query("update agent_session set provider_ref='third'");
+	await rebindWorkspaceRetention(session, "source", "replacement");
+	expect(await row()).toMatchObject({ vm_id: "source" });
+	// Mid-recovery: untouched.
+	await query("update agent_session set provider_ref='source'");
+	await query("update workspace_retention set phase='capturing'");
+	await rebindWorkspaceRetention(session, "source", "replacement");
+	expect(await row()).toMatchObject({ vm_id: "source" });
+	// Active, chat still on the lost VM: moves to the replacement.
+	await query("update workspace_retention set phase='active'");
+	await rebindWorkspaceRetention(session, "source", "replacement");
+	expect(await row()).toMatchObject({ vm_id: "replacement" });
 });
 it("backs off failed retirement so other idle workspaces can proceed", async () => {
 	await expect(
