@@ -275,6 +275,22 @@
 	margin: 0 -12px;
 	padding: 0 12px;
 }
+/* A wrapped line continues after the gutter, not under the +/- marker. */
+.tool-output-line[data-gutter] {
+	--gutter: 2ch;
+	padding-left: var(--gutter);
+	text-indent: calc(var(--gutter) * -1);
+}
+.tool-output-line[data-gutter="numbered"] {
+	--gutter: 7ch;
+}
+/* Inline blocks inherit text-indent; the gutter's own cells must not. */
+.tool-output-line[data-gutter] > * {
+	text-indent: 0;
+}
+.tool-panel-output .tool-output-line[data-gutter] {
+	padding-left: calc(12px + var(--gutter));
+}
 .tool-output-line[data-sign="added"] {
 	background: var(--diff-added-bg);
 }
