@@ -51,13 +51,12 @@ it("lists /side in the slash menu and opens a side chat", () => {
 	expect(html).toContain("/side");
 	expect(html).toContain("Side");
 	const pane = renderToStaticMarkup(
-		<SideChatFrame parentTurnStatus="running" onClose={() => {}}>
+		<SideChatFrame parentTurnStatus="running">
 			<p>Main chat composer</p>
 		</SideChatFrame>,
 	);
 	expect(pane).toContain('aria-label="Side chat"');
 	expect(pane).toContain("Main is working. This chat does not interrupt it.");
-	expect(pane).toContain('aria-label="Close side chat"');
 	// The side chat holds the same chat view as Main, not a separate form.
 	expect(pane).toContain("Main chat composer");
 });

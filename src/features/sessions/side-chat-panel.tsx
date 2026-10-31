@@ -135,37 +135,22 @@ export function useSideChat({
 	};
 }
 
-/** The side column's frame: a header with Close, then the side composer. */
+/** The Side chat tab of the right sidebar: one status line, then the chat. */
 export function SideChatFrame({
 	parentTurnStatus,
-	onClose,
 	children,
 }: {
 	parentTurnStatus: SessionTurnStatus;
-	onClose: () => void;
 	children: ReactNode;
 }) {
 	return (
-		<aside className="side-chat" aria-label="Side chat">
-			<header className="side-chat-header">
-				<div className="side-chat-heading">
-					<strong>Side chat</strong>
-					<span>
-						{parentTurnStatus === "running"
-							? "Main is working. This chat does not interrupt it."
-							: "Same agent as Main, in a separate conversation."}
-					</span>
-				</div>
-				<button
-					type="button"
-					className="side-chat-close"
-					aria-label="Close side chat"
-					onClick={onClose}
-				>
-					Close
-				</button>
-			</header>
+		<section className="side-chat" aria-label="Side chat">
+			<p className="side-chat-note">
+				{parentTurnStatus === "running"
+					? "Main is working. This chat does not interrupt it."
+					: "Same agent as Main, in a separate conversation."}
+			</p>
 			<div className="side-chat-body">{children}</div>
-		</aside>
+		</section>
 	);
 }

@@ -214,6 +214,7 @@ import {
 	COMPOSER_INPUT_ID,
 	type ComposerSendResult,
 	SessionLauncher,
+	SideChat,
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import {
@@ -2538,6 +2539,29 @@ export function WorkspaceHome({
 					draft: savedChatPr.state === "draft",
 				}
 			: undefined);
+	function connectHarness() {
+		const epoch = sessionEpoch.current;
+		const scope = sessionScope();
+		const chatId = activeSessionId;
+		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		void connect({ data: scope })
+			.then((next) => applySessionView(epoch, next))
+			.catch((cause) => {
+				if (epoch !== sessionEpoch.current) return;
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => {
+				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+			});
+	}
+
 	/** A memory's source chat, opened in its project; false when it is not listed. */
 	function openMemoryChat(chatId: string) {
 		const listed = projectChats.find((group) =>
@@ -2675,6 +2699,13 @@ export function WorkspaceHome({
 			shortcut: "openPullRequest",
 			disabled: !chatPullRequestRepository,
 			run: () => openInspector("pr"),
+		},
+		{
+			id: "side",
+			group: "Actions",
+			label: "Open side chat",
+			disabled: !session.agentSessionId,
+			run: () => openInspector("side"),
 		},
 		{
 			id: "diff",
@@ -2990,28 +3021,7 @@ export function WorkspaceHome({
 											if (session.turnStatus === "running") return;
 											setHarnessId(id);
 										}}
-										onConnect={() => {
-											const epoch = sessionEpoch.current;
-											const scope = sessionScope();
-											const chatId = activeSessionId;
-											setBusyChatIds((ids) => withBusyChat(ids, chatId));
-											void connect({ data: scope })
-												.then((next) => applySessionView(epoch, next))
-												.catch((cause) => {
-													if (epoch !== sessionEpoch.current) return;
-													setSession((current) => ({
-														...current,
-														connection: {
-															status: "failed",
-															provider: harnessId,
-															message: publicFailureMessage(cause),
-														},
-													}));
-												})
-												.finally(() => {
-													setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-												});
-										}}
+										onConnect={connectHarness}
 										onSend={(text, modelId, options) => {
 											askForFinishNotifications();
 											const epoch = sessionEpoch.current;
@@ -3265,6 +3275,26 @@ export function WorkspaceHome({
 							</section>
 							<div className="inspector-frame">
 								<WorkspaceInspector
+									sideChat={
+										session.agentSessionId ? (
+											<SideChat
+												projectId={selectedProject?.id}
+												parent={session}
+												parentTurnStatus={session.turnStatus}
+												harnessId={harnessId}
+												onHarnessIdChange={(id) => {
+													if (session.turnStatus === "running") return;
+													setHarnessId(id);
+												}}
+												onConnect={connectHarness}
+												onOpenInspector={openInspector}
+												onOpenFile={openMentionedFile}
+												projects={projects.data ?? []}
+												selectedProject={selectedProject}
+												loadedCatalog={initialChatView?.side?.catalog}
+											/>
+										) : undefined
+									}
 									key={activeSessionId ?? "new-session"}
 									collapsed={!inspectorOpen}
 									activeView={inspectorView}

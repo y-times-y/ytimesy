@@ -1,47 +1,19 @@
+/* The Side chat tab fills the right sidebar below its tabs. */
 .side-chat {
 	display: flex;
+	flex: 1;
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	border-left: 1px solid rgba(255, 255, 255, 0.08);
-	background: #0c0c0c;
 }
-.side-chat-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-height: 42px;
-	padding: 8px 10px 8px 14px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.side-chat-heading {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
-}
-.side-chat-heading strong {
-	font-size: 13px;
-	font-weight: 600;
-}
-.side-chat-heading span {
-	color: #939393;
+.side-chat-note {
+	margin: 0;
+	padding: 10px 14px 0;
+	color: #8d8d8d;
 	font-size: 12px;
-	line-height: 1.3;
+	line-height: 1.4;
 }
-.side-chat-close {
-	margin-left: auto;
-	border: 0;
-	background: transparent;
-	color: #ededed;
-	font-size: 13px;
-	padding: 6px 8px;
-	border-radius: 6px;
-}
-.side-chat-close:hover {
-	background: rgba(255, 255, 255, 0.06);
-}
-/* The same chat view as Main fills the column below the header. */
+/* The same chat view as Main fills the tab. */
 .side-chat-body {
 	display: flex;
 	flex: 1;
@@ -53,41 +25,4 @@
 	min-height: 0;
 	height: 100%;
 	padding-inline: 14px;
-}
-
-.session-launcher[data-layout="chat"][data-side-chat="open"] {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) min(400px, 42%);
-	grid-template-rows: auto minmax(0, 1fr) auto;
-	height: 100%;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"] > .side-chat {
-	grid-column: 2;
-	grid-row: 1 / -1;
-	width: auto;
-	max-width: none;
-	margin: 0;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"]
-	> .session-timeline,
-.session-launcher[data-layout="chat"][data-side-chat="open"]
-	> .helper-view-header {
-	grid-column: 1;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"]
-	> .session-timeline {
-	grid-row: 1 / 3;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"]
-	> .helper-view-header {
-	grid-row: 1;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"]
-	> .helper-view-header
-	~ .session-timeline {
-	grid-row: 2;
-}
-.session-launcher[data-layout="chat"][data-side-chat="open"] > .session-dock {
-	grid-column: 1;
-	grid-row: 3;
 }

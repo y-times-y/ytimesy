@@ -150,7 +150,7 @@ import { SlashCommandPalette } from "./slash-command-palette";
 import { useStableCallback } from "./stable-callbacks";
 import { TaskInput } from "./task-input";
 
-type InspectorView = "files" | "diff" | "terminal" | "desktop";
+type InspectorView = "files" | "diff" | "terminal" | "desktop" | "side";
 
 const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
 
@@ -594,7 +594,6 @@ export function SessionLauncher({
 	const [slashMenuDismissed, setSlashMenuDismissed] = useState<string | null>(
 		null,
 	);
-	const [sideChatOpen, setSideChatOpen] = useState(false);
 	// Kept while the person types, so the transcript does not render again.
 	const items = useMemo(
 		() => visibleSessionItems(session.items, optimisticItems),
@@ -803,18 +802,19 @@ export function SessionLauncher({
 			turnStatus,
 		],
 	);
-	const allSlashCommands = [
-		...(side
-			? slashCommands.filter((command) => command.id !== "side")
-			: slashCommands),
-		...(projectCommands.data ?? []).map((command) => ({
-			...command,
-			availability: composerReady
-				? command.availability
-				: ("unavailable" as const),
-			unavailableReason: "Wait for the current run to finish",
-		})),
-	];
+	// The side chat sits in the right sidebar, whose tabs these commands open.
+	const allSlashCommands = side
+		? []
+		: [
+				...slashCommands,
+				...(projectCommands.data ?? []).map((command) => ({
+					...command,
+					availability: composerReady
+						? command.availability
+						: ("unavailable" as const),
+					unavailableReason: "Wait for the current run to finish",
+				})),
+			];
 	// Only an exact command runs; any other slash text is an ordinary message.
 	const draftCommand = slashDraft
 		? exactSlashCommand(slashDraft, allSlashCommands)
@@ -1028,7 +1028,7 @@ export function SessionLauncher({
 	function runSlashCommand(command: SlashCommand) {
 		if (command.availability !== "ready") return;
 		if (slashCommandOpensSideChat(command)) {
-			setSideChatOpen(true);
+			onOpenInspector("side");
 			setDraft("");
 			return;
 		}
@@ -1118,7 +1118,6 @@ export function SessionLauncher({
 			className="session-launcher"
 			aria-labelledby="session-title"
 			data-layout={followUpLayout ? "chat" : "empty"}
-			data-side-chat={sideChatOpen ? "open" : undefined}
 		>
 			<h1 id="session-title" className="sr-only">
 				Session
@@ -1533,22 +1532,6 @@ export function SessionLauncher({
 					/>
 				)}
 			</div>
-			{sideChatOpen && !side ? (
-				<SideChat
-					projectId={selectedProject?.id}
-					parent={session}
-					parentTurnStatus={turnStatus}
-					harnessId={harnessId}
-					onHarnessIdChange={onHarnessIdChange}
-					onConnect={onConnect}
-					onOpenInspector={onOpenInspector}
-					onOpenFile={onOpenFile}
-					projects={projects}
-					selectedProject={selectedProject}
-					loadedCatalog={loadedCatalog}
-					onClose={() => setSideChatOpen(false)}
-				/>
-			) : null}
 		</section>
 	);
 }
@@ -1566,7 +1549,7 @@ function sameSend(
 }
 
 /** The side chat: the same chat view as Main, sending to its own session. */
-function SideChat({
+export function SideChat({
 	projectId,
 	parent,
 	parentTurnStatus,
@@ -1578,7 +1561,6 @@ function SideChat({
 	projects,
 	selectedProject,
 	loadedCatalog,
-	onClose,
 }: {
 	projectId?: string;
 	parent: PublicCodexSession;
@@ -1591,14 +1573,13 @@ function SideChat({
 	projects: Project[];
 	selectedProject?: Project;
 	loadedCatalog?: OpenChatSide["catalog"];
-	onClose: () => void;
 }) {
 	const chat = useSideChat({ projectId, parent, harnessId });
 	useEffect(() => {
 		document.getElementById(SIDE_COMPOSER_INPUT_ID)?.focus();
 	}, []);
 	return (
-		<SideChatFrame parentTurnStatus={parentTurnStatus} onClose={onClose}>
+		<SideChatFrame parentTurnStatus={parentTurnStatus}>
 			<SessionLauncher
 				variant="side"
 				session={chat.session}

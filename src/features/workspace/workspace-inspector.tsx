@@ -5,6 +5,7 @@ import {
 	FolderTree,
 	GitPullRequest,
 	ListTodo,
+	MessagesSquare,
 	Monitor,
 	Plus,
 	SquareTerminal,
@@ -31,7 +32,8 @@ export type ToolsView =
 	| "pr"
 	| "terminal"
 	| "desktop"
-	| "memory";
+	| "memory"
+	| "side";
 export type InspectorView = ToolsView | "overview";
 
 const views = {
@@ -73,6 +75,12 @@ const views = {
 		title: "Memory",
 		description: "What the agent remembers about you across chats.",
 	},
+	side: {
+		label: "Side chat",
+		icon: MessagesSquare,
+		title: "Side chat",
+		description: "Open a chat first; the side chat talks beside it.",
+	},
 } as const;
 
 export function WorkspaceInspector({
@@ -95,7 +103,10 @@ export function WorkspaceInspector({
 	onOpenChat,
 	memoryFocus,
 	onViewIntent,
+	sideChat,
 }: {
+	/** The side chat beside Main, shown in the Side chat tab. */
+	sideChat?: ReactNode;
 	/** The pointer or focus reached a view's entry: it may open next. */
 	onViewIntent?: (view: ToolsView) => void;
 	/** A memory file to show when the Memory tab opens from a chat marker. */
@@ -259,6 +270,8 @@ export function WorkspaceInspector({
 					currentSessionId={sessionId}
 					onReviewStarted={onReviewStarted}
 				/>
+			) : activeView === "side" && sideChat ? (
+				sideChat
 			) : activeView === "memory" ? (
 				<MemoryInspector
 					active={!collapsed && activeView === "memory"}
