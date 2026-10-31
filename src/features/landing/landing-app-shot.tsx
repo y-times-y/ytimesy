@@ -6,10 +6,10 @@ import {
 	Check,
 	ChevronDown,
 	ChevronRight,
+	CornerDownRight,
 	GitMerge,
 	GitPullRequest,
 	ListTodo,
-	MessageCircleQuestion,
 	PanelLeft,
 	Paperclip,
 	Plus,
@@ -105,14 +105,8 @@ function Sidebar({
 	onOpen: (id: string) => void;
 }) {
 	const groups = [
-		["Needs you", chats.filter((chat) => chat.status === "asking")],
 		["Working", chats.filter((chat) => chat.status === "working")],
-		[
-			"Done",
-			chats.filter(
-				(chat) => chat.status !== "asking" && chat.status !== "working",
-			),
-		],
+		["Done", chats.filter((chat) => chat.status !== "working")],
 	] as const;
 	return (
 		<aside className="as-sidebar">
@@ -186,12 +180,6 @@ function Sidebar({
 
 function RowMark({ chat, active }: { chat: DemoChat; active: boolean }) {
 	switch (chat.status) {
-		case "asking":
-			return (
-				<span className="as-mark as-mark-asking">
-					<MessageCircleQuestion size={14} strokeWidth={2} />
-				</span>
-			);
 		case "working":
 			return <span className="as-age">{chat.age}</span>;
 		case "open":
@@ -321,6 +309,26 @@ function TurnItem({
 	switch (item.kind) {
 		case "user":
 			return <p className="as-user">{item.text}</p>;
+		case "step":
+			return (
+				<p className="as-step">
+					<ActivityIcon glyph={item.glyph} />
+					{item.label}
+					{item.additions || item.deletions ? (
+						<FileChangeCounts
+							additions={item.additions ?? 0}
+							deletions={item.deletions ?? 0}
+						/>
+					) : null}
+				</p>
+			);
+		case "wake":
+			return (
+				<p className="as-step as-wake">
+					<CornerDownRight size={14} />
+					{item.text}
+				</p>
+			);
 		case "text":
 			return <p className="as-text">{item.text}</p>;
 		case "explored":
