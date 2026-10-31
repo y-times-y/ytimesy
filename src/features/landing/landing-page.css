@@ -373,7 +373,16 @@
 	border-radius: 16px;
 	background: #141414;
 }
-.as-placeholder {
+.as-input {
+	width: 100%;
+	padding: 0;
+	border: 0;
+	outline: none;
+	background: none;
+	color: #ededed;
+	font: inherit;
+}
+.as-input::placeholder {
 	color: #707070;
 }
 .as-composer-bar {
@@ -452,6 +461,134 @@
 }
 .as-overview .overview-card {
 	margin-top: 8px;
+}
+
+/* The preview is clickable: rows, steps, options and the composer. */
+.app-shot button {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.app-shot button:focus-visible,
+.as-input:focus-visible {
+	outline: 2px solid #ffffff40;
+	outline-offset: 2px;
+	border-radius: 6px;
+}
+.as-row {
+	width: 100%;
+	transition: background-color 120ms ease;
+}
+.as-row:hover {
+	background: #ffffff0a;
+}
+.as-timeline {
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: #ffffff1f transparent;
+}
+.as-step {
+	transition: color 120ms ease;
+}
+.as-step:hover {
+	color: #c6c6c6;
+}
+.as-step-chevron {
+	color: #5c5c5c;
+	transition: transform 150ms ease;
+}
+.as-step-chevron[data-open] {
+	transform: rotate(90deg);
+}
+.as-files {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 8px 0 2px 22px;
+	padding: 0;
+	list-style: none;
+	color: #a3a3a3;
+	font:
+		12px / 1.5 ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		monospace;
+}
+.as-file {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.as-detail {
+	margin-top: 8px;
+}
+.as-detail .tool-panel-output {
+	max-height: none;
+}
+.as-memory-line {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	margin: 6px 0 0 22px;
+	color: #c6c6c6;
+	line-height: 1.5;
+}
+.as-memory-line span {
+	color: #6b6b6b;
+	font-size: 12px;
+}
+.as-question {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.as-options {
+	display: flex;
+	gap: 8px;
+}
+.app-shot .as-option {
+	height: 32px;
+	padding: 0 14px;
+	border: 1px solid #ffffff24;
+	border-radius: 999px;
+	color: #ededed;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease;
+}
+.app-shot .as-option:hover:not(:disabled) {
+	border-color: #ffffff4d;
+	background: #ffffff0a;
+}
+.app-shot .as-option:disabled {
+	cursor: default;
+	opacity: 0.45;
+}
+.app-shot .as-option[aria-pressed="true"] {
+	border-color: #ededed;
+	opacity: 1;
+}
+.as-wake {
+	color: #a3a3a3;
+}
+.as-preview-note a {
+	color: #ededed;
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.app-shot .as-send:disabled {
+	cursor: default;
+	opacity: 0.35;
+}
+.as-overview .overview-pr small[data-tone="bad"] {
+	color: var(--diff-removed-fg);
+}
+.as-empty {
+	color: #6b6b6b;
 }
 
 /* Sections */

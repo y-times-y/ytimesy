@@ -269,3 +269,15 @@ export function patchDiffFiles(patch: string): DiffOutputFile[] {
 	for (const file of files) markChangedWords(file.lines);
 	return files;
 }
+
+/**
+ * The text highlighted for a run of diff lines: each line's code, blank for
+ * breaks and text outside hunks, so token lines match diff lines one to one.
+ */
+export function diffHighlightSource(lines: readonly DiffOutputLine[]) {
+	return lines
+		.map((line) =>
+			line.kind === "other" || line.kind === "break" ? "" : line.code,
+		)
+		.join("\n");
+}

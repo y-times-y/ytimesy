@@ -3,6 +3,7 @@ import {
 	commandOutputLanguage,
 	type DiffOutputFile,
 	type DiffOutputLine,
+	diffHighlightSource,
 	diffOutputFiles,
 	editDiffLines,
 	patchDiffFiles,
@@ -234,14 +235,7 @@ export function DiffLines({
 	language: SourceLanguage;
 	lines: readonly DiffOutputLine[];
 }) {
-	const tokens = useHighlightedLines(
-		lines
-			.map((line) =>
-				line.kind === "other" || line.kind === "break" ? "" : line.code,
-			)
-			.join("\n"),
-		language,
-	);
+	const tokens = useHighlightedLines(diffHighlightSource(lines), language);
 	const numbered = lines.some((line) => line.number !== undefined);
 	return lines.map((line, index) => (
 		<span
@@ -249,6 +243,13 @@ export function DiffLines({
 			key={index}
 			className="tool-output-line"
 			data-sign={line.kind === "context" ? undefined : line.kind}
+			data-gutter={
+				line.kind === "other" || line.kind === "break"
+					? undefined
+					: numbered
+						? "numbered"
+						: "marker"
+			}
 		>
 			{line.kind === "other" ? (
 				line.code || " "

@@ -3,18 +3,40 @@ import { useEffect, useState } from "react";
 import type { SourceLanguage } from "#/domain/source-language";
 import { highlightCode } from "./highlight-off-thread";
 
+type Tokens = HighlightResult["tokens"];
+
+/** Tokens known before the page runs (the front page's preview), by language and text. */
+const primed = new Map<string, Tokens>();
+const primedKey = (text: string, language: SourceLanguage) =>
+	`${language}\u0000${text}`;
+
+/**
+ * Lets code whose colours were worked out ahead of time paint coloured on
+ * the server render and the first client paint, instead of plain and then
+ * coloured once the highlighter has run.
+ */
+export function primeHighlightedLines(
+	text: string,
+	language: SourceLanguage,
+	tokens: Tokens,
+) {
+	primed.set(primedKey(text, language), tokens);
+}
+
 export function useHighlightedLines(text: string, language: SourceLanguage) {
+	const ready = primed.get(primedKey(text, language));
 	const [result, setResult] = useState<{
 		text: string;
 		language: SourceLanguage;
-		tokens: HighlightResult["tokens"];
+		tokens: Tokens;
 	}>();
 	useEffect(() => {
-		if (language === "text") return;
+		if (language === "text" || ready) return;
 		return highlightCode(text, language, (tokens) =>
 			setResult({ text, language, tokens }),
 		);
-	}, [text, language]);
+	}, [text, language, ready]);
+	if (ready) return ready;
 	return result?.text === text && result.language === language
 		? result.tokens
 		: undefined;
