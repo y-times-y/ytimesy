@@ -15,7 +15,13 @@ import {
 	Plus,
 	TriangleAlert,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { SessionItemId } from "#/domain/ids";
 import type { DynamicToolCallItem } from "#/domain/session-item";
@@ -210,6 +216,8 @@ function RowMark({ chat, active }: { chat: DemoChat; active: boolean }) {
 
 function Chat({ chat }: { chat: DemoChat }) {
 	const [draft, setDraft] = useState("");
+	const [sent, setSent] = useState<string[]>([]);
+	const timeline = useRef<HTMLDivElement>(null);
 	// The edit is the one step the preview opens by default.
 	const [open, setOpen] = useState<Record<number, boolean>>(() =>
 		Object.fromEntries(
@@ -218,9 +226,15 @@ function Chat({ chat }: { chat: DemoChat }) {
 	);
 	const toggle = (index: number) =>
 		setOpen((current) => ({ ...current, [index]: !current[index] }));
+	// A sent message and its reply come into view.
+	useEffect(() => {
+		if (!sent.length) return;
+		const element = timeline.current;
+		element?.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+	}, [sent]);
 	return (
 		<section className="as-chat">
-			<div className="as-timeline">
+			<div className="as-timeline" ref={timeline}>
 				{chat.turn.map((item, index) => (
 					<TurnItem
 						// biome-ignore lint/suspicious/noArrayIndexKey: a turn's items keep their order
@@ -230,17 +244,23 @@ function Chat({ chat }: { chat: DemoChat }) {
 						onToggle={() => toggle(index)}
 					/>
 				))}
+				{sent.map((text, index) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: sent messages keep their order
+					<SentMessage key={index} text={text} />
+				))}
 			</div>
-			{/* A plain form: sending signs you up, scripts or not. The input has
-			    no name, so the message is not put in the address. */}
+			{/* Without scripts the form still works: sending opens sign-up. The
+			    input has no name, so the message is not put in the address. */}
 			<form
 				className="as-composer"
 				method="get"
 				action="/auth/sign-up"
 				onSubmit={(event: FormEvent) => {
-					// With scripts running, skip the form's empty "?" in the address.
 					event.preventDefault();
-					if (draft.trim()) window.location.assign("/auth/sign-up");
+					const text = draft.trim();
+					if (!text) return;
+					setSent((current) => [...current, text]);
+					setDraft("");
 				}}
 			>
 				<input
@@ -268,6 +288,26 @@ function Chat({ chat }: { chat: DemoChat }) {
 				</div>
 			</form>
 		</section>
+	);
+}
+
+/** A message sent from the preview and the reply: sign in to run it. */
+function SentMessage({ text }: { text: string }) {
+	return (
+		<>
+			<p className="as-user">{text}</p>
+			<div className="as-signin">
+				<p className="as-text">Sign in and I'll run this on your repo.</p>
+				<div className="as-signin-actions">
+					<a className="landing-button" href="/auth/sign-up">
+						Get started
+					</a>
+					<a className="as-signin-secondary" href="/auth/sign-in">
+						Sign in
+					</a>
+				</div>
+			</div>
+		</>
 	);
 }
 

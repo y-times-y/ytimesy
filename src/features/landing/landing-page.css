@@ -552,6 +552,30 @@
 .as-overview .overview-pr small[data-tone="bad"] {
 	color: var(--diff-removed-fg);
 }
+.as-signin {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	animation: as-arrive 220ms ease-out;
+}
+.as-signin-actions {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+.as-signin-secondary {
+	color: #a3a3a3;
+	font-size: 14px;
+}
+.as-signin-secondary:hover {
+	color: #fff;
+}
+@keyframes as-arrive {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+}
 .as-wake {
 	color: #a3a3a3;
 }
