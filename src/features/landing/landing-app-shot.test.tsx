@@ -9,4 +9,6 @@ it("server-renders the open edit already coloured, and every chat as a button", 
 	expect(html).toContain("Edited appearance.tsx");
 	expect(html.match(/class="as-row"/g)?.length).toBe(7);
 	expect(html).toContain('aria-current="true"');
+	// Sending from the preview goes to sign-up.
+	expect(html).toContain('action="/auth/sign-up"');
 });

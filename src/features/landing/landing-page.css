@@ -541,45 +541,6 @@
 	color: #6b6b6b;
 	font-size: 12px;
 }
-.as-question {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-}
-.as-options {
-	display: flex;
-	gap: 8px;
-}
-.app-shot .as-option {
-	height: 32px;
-	padding: 0 14px;
-	border: 1px solid #ffffff24;
-	border-radius: 999px;
-	color: #ededed;
-	transition:
-		background-color 120ms ease,
-		border-color 120ms ease;
-}
-.app-shot .as-option:hover:not(:disabled) {
-	border-color: #ffffff4d;
-	background: #ffffff0a;
-}
-.app-shot .as-option:disabled {
-	cursor: default;
-	opacity: 0.45;
-}
-.app-shot .as-option[aria-pressed="true"] {
-	border-color: #ededed;
-	opacity: 1;
-}
-.as-wake {
-	color: #a3a3a3;
-}
-.as-preview-note a {
-	color: #ededed;
-	text-decoration: underline;
-	text-underline-offset: 3px;
-}
 .app-shot .as-send:disabled {
 	cursor: default;
 	opacity: 0.35;
