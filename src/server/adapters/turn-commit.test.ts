@@ -228,3 +228,21 @@ it("retains the review base and completion receipts through checkpoint restorati
 		).toContain("tracked.txt");
 	});
 });
+
+it("credits the ytimesy app as co-author beside the user", () => {
+	const argv = automaticTurnCommitArgv(
+		"/repo",
+		"a".repeat(64),
+		"Agent: add dark mode",
+		"",
+		{ name: "Het Patel", email: "het@example.com" },
+		{
+			name: "ytimesy[bot]",
+			email: "123+ytimesy[bot]@users.noreply.github.com",
+		},
+	);
+	expect(argv.join(" ")).toContain(
+		"Co-authored-by: ytimesy[bot] <123+ytimesy[bot]@users.noreply.github.com>",
+	);
+	expect(argv.join(" ")).toContain("GIT_AUTHOR_NAME='Het Patel'");
+});

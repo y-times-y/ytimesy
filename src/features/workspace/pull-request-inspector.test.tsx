@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DropdownMenu } from "radix-ui";
+import { Children, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { PullRequestDetail } from "#/domain/pull-request-review";
@@ -10,6 +12,7 @@ import {
 import {
 	PullRequestInspector,
 	PullRequestOption,
+	PullRequestPickerRow,
 } from "./pull-request-inspector";
 
 vi.mock("@tanstack/react-start", async (importOriginal) => {
@@ -51,6 +54,100 @@ describe("pull request picker", () => {
 		expect(botRow).toContain("dependabot");
 		expect(botRow).not.toContain("<img");
 		expect(botRow).toContain("Draft");
+	});
+
+	it("gives every row a review button for its own pull request", () => {
+		const html = renderToStaticMarkup(
+			<DropdownMenu.Root open>
+				<DropdownMenu.Content>
+					{[named, bot].map((pr) => (
+						<PullRequestPickerRow
+							key={pr.number}
+							pr={pr}
+							selected={pr.number === 12}
+							reviewing={false}
+							reviewDisabled={false}
+							onOpen={() => {}}
+							onReview={() => {}}
+						/>
+					))}
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>,
+		);
+		expect(html).toContain('aria-label="Review #12 with ytimesy"');
+		expect(html).toContain('aria-label="Review #4 with ytimesy"');
+		expect(html.match(/role="menuitem"/g)).toHaveLength(4);
+	});
+
+	it("reviews the row's pull request without opening it", () => {
+		const onOpen = vi.fn();
+		const onReview = vi.fn();
+		const row = PullRequestPickerRow({
+			pr: bot,
+			selected: false,
+			reviewing: false,
+			reviewDisabled: false,
+			onOpen,
+			onReview,
+		});
+		const [openItem, reviewItem] = Children.toArray(
+			row.props.children,
+		) as ReactElement<{
+			onSelect: (event: { preventDefault: () => void }) => void;
+		}>[];
+		const preventDefault = vi.fn();
+		reviewItem?.props.onSelect({ preventDefault });
+		expect(onReview).toHaveBeenCalledTimes(1);
+		expect(onOpen).not.toHaveBeenCalled();
+		expect(preventDefault).toHaveBeenCalled();
+		openItem?.props.onSelect({ preventDefault: () => {} });
+		expect(onOpen).toHaveBeenCalledTimes(1);
+		expect(onReview).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows the pending row and blocks another review while a chat is created", () => {
+		const html = renderToStaticMarkup(
+			<DropdownMenu.Root open>
+				<DropdownMenu.Content>
+					<PullRequestPickerRow
+						pr={named}
+						selected={false}
+						reviewing
+						reviewDisabled
+						onOpen={() => {}}
+						onReview={() => {}}
+					/>
+					<PullRequestPickerRow
+						pr={bot}
+						selected={false}
+						reviewing={false}
+						reviewDisabled
+						onOpen={() => {}}
+						onReview={() => {}}
+					/>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>,
+		);
+		expect(html).toContain("Starting…");
+		expect(html.match(/data-pending="true"/g)).toHaveLength(1);
+		expect(html.match(/aria-disabled="true"/g)).toHaveLength(2);
+	});
+
+	it("hides row review without a project", () => {
+		const html = renderToStaticMarkup(
+			<DropdownMenu.Root open>
+				<DropdownMenu.Content>
+					<PullRequestPickerRow
+						pr={named}
+						selected
+						reviewing={false}
+						reviewDisabled={false}
+						onOpen={() => {}}
+					/>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>,
+		);
+		expect(html).not.toContain("Review");
 	});
 
 	it("offers Review with ytimesy on the open pull request", () => {

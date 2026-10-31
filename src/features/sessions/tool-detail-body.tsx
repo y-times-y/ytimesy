@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useMemo } from "react";
 import {
 	commandOutputLanguage,
 	type DiffOutputFile,
@@ -8,6 +8,7 @@ import {
 	editDiffLines,
 	patchDiffFiles,
 } from "#/domain/command-output-language";
+import { commandOutputTones } from "#/domain/command-output-tone";
 import { fileBasename } from "#/domain/file-kind";
 import type { McpBlock } from "#/domain/mcp-call-view";
 import type { DynamicToolCallItem } from "#/domain/session-item";
@@ -154,7 +155,9 @@ function CommandPanel({
 
 /**
  * A command's output. One file printed (cat, sed -n) is coloured as its
- * language; a diff is plain text with added and removed lines tinted.
+ * language; a diff is plain text with added and removed lines tinted; any
+ * other output is coloured by what the command prints (search hits, test
+ * results, errors, listings, git status).
  */
 export function CommandOutput({
 	command,
@@ -180,6 +183,14 @@ export function CommandOutput({
 				))}
 			</pre>
 		);
+	if (language === "text")
+		return (
+			<TonedCommandOutput
+				command={command}
+				output={output}
+				className={className}
+			/>
+		);
 	return (
 		<pre className={className}>
 			{tokens
@@ -191,6 +202,50 @@ export function CommandOutput({
 						</span>
 					))
 				: output}
+		</pre>
+	);
+}
+
+function TonedCommandOutput({
+	command,
+	output,
+	className,
+}: {
+	command: string;
+	output: string;
+	className: string;
+}) {
+	const { lines, rest } = useMemo(
+		() => commandOutputTones(command, output),
+		[command, output],
+	);
+	return (
+		<pre className={className}>
+			{lines.map((line, index) => (
+				<span
+					// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
+					key={index}
+					className="tool-tone-line"
+					data-tone={line.tone}
+				>
+					{index ? "\n" : null}
+					{line.spans.map((span, spanIndex) =>
+						span.tone ? (
+							<span
+								// biome-ignore lint/suspicious/noArrayIndexKey: spans are positional
+								key={spanIndex}
+								className="tool-tone"
+								data-tone={span.tone}
+							>
+								{span.text}
+							</span>
+						) : (
+							span.text
+						),
+					)}
+				</span>
+			))}
+			{rest ? `\n${rest}` : null}
 		</pre>
 	);
 }

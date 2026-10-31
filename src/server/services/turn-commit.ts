@@ -10,6 +10,7 @@ import {
 } from "#/domain/projects";
 import {
 	type PublicationAuthor,
+	publicationCoAuthor,
 	publicationCommitAuthor,
 } from "#/domain/publication";
 import { handoffFactsFromItems } from "#/domain/pull-request-handoff";
@@ -21,6 +22,7 @@ import {
 } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
+import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
@@ -84,7 +86,12 @@ async function commitChatTurn(
 		};
 	const turn = turnIdentity(session, items);
 	const description = turnDescription(session, items);
-	const authorship = await commitAuthorForUser(session.userId);
+	const [authorship, bot] = await Promise.all([
+		commitAuthorForUser(session.userId),
+		// GitHub shows the app beside the user, as a Co-authored-by trailer.
+		resolveGithubAppBot().catch(() => null),
+	]);
+	const coAuthor = publicationCoAuthor({ author: authorship.author, bot });
 	const host = runtime ?? workspaceRuntimeFromEnv();
 	const repositories = await turnRepositories(
 		host,
@@ -108,6 +115,7 @@ async function commitChatTurn(
 				`Agent: ${description || "Update workspace"}`,
 				"",
 				authorship.author,
+				coAuthor,
 			),
 			{},
 			60_000,
