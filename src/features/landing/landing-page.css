@@ -379,6 +379,12 @@
 	color: #ededed;
 	font: inherit;
 }
+.as-composer {
+	transition: border-color 120ms ease;
+}
+.as-composer:focus-within {
+	border-color: #ffffff2e;
+}
 .as-input::placeholder {
 	color: #707070;
 }
@@ -471,8 +477,7 @@
 	text-align: left;
 	cursor: pointer;
 }
-.app-shot button:focus-visible,
-.as-input:focus-visible {
+.app-shot button:focus-visible {
 	outline: 2px solid #ffffff40;
 	outline-offset: 2px;
 	border-radius: 6px;
