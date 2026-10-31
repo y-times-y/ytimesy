@@ -27,14 +27,27 @@ describe("slash commands", () => {
 	});
 
 	it("filters commands from the first token", () => {
-		const draft = parseSlashDraft("/st");
+		const draft = parseSlashDraft("/te");
 		expect(draft).not.toBeNull();
 		expect(
 			matchingSlashCommands(
 				draft ?? { query: "", argument: "" },
 				connected,
 			).map((command) => command.trigger),
-		).toEqual(["/stop"]);
+		).toEqual(["/terminal"]);
+	});
+
+	it("has no /stop: the Stop button, Esc and Mod+. stop a run", () => {
+		expect(
+			composerSlashCommands({
+				authenticated: true,
+				requiresAccountLogin: true,
+				turnRunning: true,
+				canSend: false,
+				hasLastUserMessage: true,
+				hasModels: true,
+			}).map((command) => command.trigger),
+		).not.toContain("/stop");
 	});
 
 	it("asks OpenCode to connect instead of signing in", () => {

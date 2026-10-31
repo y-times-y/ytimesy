@@ -1,5 +1,4 @@
 export type SlashCommandId =
-	| "stop"
 	| "retry"
 	| "model"
 	| "files"
@@ -109,14 +108,6 @@ export function composerSlashCommands(
 		? "Sign in to an agent"
 		: "Connect an agent";
 	return [
-		{
-			id: "stop",
-			trigger: "/stop",
-			label: "Stop",
-			description: "Cancel the run you are viewing",
-			availability: context.turnRunning ? "ready" : "unavailable",
-			unavailableReason: "No run is in progress",
-		},
 		{
 			id: "retry",
 			trigger: "/retry",

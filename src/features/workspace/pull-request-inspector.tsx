@@ -14,10 +14,12 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	githubPullFullName,
 	type ListedRepositoryPullRequest,
@@ -113,6 +115,57 @@ export function PullRequestOption({ pr }: { pr: ListedRepositoryPullRequest }) {
 				</span>
 			</span>
 		</>
+	);
+}
+
+/**
+ * A picker row: opening the pull request and reviewing it are sibling menu
+ * items, so arrow keys reach both and choosing one never triggers the other.
+ */
+export function PullRequestPickerRow({
+	pr,
+	selected,
+	reviewing,
+	reviewDisabled,
+	onOpen,
+	onReview,
+}: {
+	pr: ListedRepositoryPullRequest;
+	selected: boolean;
+	/** This row's review chat is being created. */
+	reviewing: boolean;
+	reviewDisabled: boolean;
+	onOpen: () => void;
+	/** Omitted when no project is selected to review in. */
+	onReview?: () => void;
+}) {
+	return (
+		<div className="pr-picker-row" data-selected={selected || undefined}>
+			<DropdownMenu.Item className="pr-picker-item" onSelect={onOpen}>
+				<PullRequestOption pr={pr} />
+				{selected ? <Check size={14} /> : null}
+			</DropdownMenu.Item>
+			{onReview ? (
+				<DropdownMenu.Item
+					asChild
+					disabled={reviewDisabled}
+					onSelect={(event) => {
+						// The menu stays open to show the pending row until the chat opens.
+						event.preventDefault();
+						onReview();
+					}}
+				>
+					<button
+						type="button"
+						className="pr-button pr-picker-review"
+						data-pending={reviewing || undefined}
+						aria-label={`Review #${pr.number} with ytimesy`}
+					>
+						{reviewing ? "Starting…" : "Review with ytimesy"}
+					</button>
+				</DropdownMenu.Item>
+			) : null}
+		</div>
 	);
 }
 
@@ -370,36 +423,45 @@ function Checks({ checks }: { checks: readonly PullRequestCheck[] }) {
 	);
 }
 
-function ReviewWithYtimesy({
-	pull,
-	projectId,
-	harnessId,
-	modelId,
-	currentSessionId,
-	onReviewStarted,
-}: {
-	pull: {
-		readonly number: number;
-		readonly title: string;
-		readonly url: string;
-	};
-} & ReviewChat) {
+type ReviewedPull = {
+	readonly number: number;
+	readonly title: string;
+	readonly url: string;
+};
+
+/** Starts a new chat reviewing a pull request; retrying the same pull request reuses its request id. */
+function useStartPullRequestReview(
+	{
+		projectId,
+		harnessId,
+		modelId,
+		currentSessionId,
+		onReviewStarted,
+	}: ReviewChat,
+	{
+		onStarted,
+		onError,
+	}: { onStarted?: () => void; onError?: (error: Error) => void } = {},
+) {
 	const startReview = useServerFn(startPullRequestReviewChat);
-	const requestId = useRef(crypto.randomUUID());
-	const review = useMutation({
-		mutationFn: () => {
+	const requestIds = useRef(new Map<number, string>());
+	return useMutation({
+		mutationFn: (pull: ReviewedPull) => {
 			if (!projectId)
 				throw new Error("Select a project before starting a review.");
 			const fullName = githubPullFullName(pull.url);
 			if (!fullName)
 				throw new Error("This pull request cannot be reviewed from here.");
+			const requestId =
+				requestIds.current.get(pull.number) ?? crypto.randomUUID();
+			requestIds.current.set(pull.number, requestId);
 			return startPullRequestReviewThread({
 				currentSessionId,
 				request: pullRequestReviewStart({
 					projectId,
 					harnessId: harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
 					modelId: modelId ?? "",
-					requestId: requestId.current,
+					requestId,
 					pull: {
 						fullName,
 						number: pull.number,
@@ -413,16 +475,27 @@ function ReviewWithYtimesy({
 				},
 			});
 		},
-		onSuccess: (sessionId) => onReviewStarted?.(sessionId),
+		onSuccess: (sessionId) => {
+			onStarted?.();
+			onReviewStarted?.(sessionId);
+		},
+		onError,
 	});
-	if (!projectId) return null;
+}
+
+function ReviewWithYtimesy({
+	pull,
+	...chat
+}: { pull: ReviewedPull } & ReviewChat) {
+	const review = useStartPullRequestReview(chat);
+	if (!chat.projectId) return null;
 	return (
 		<div className="pr-review">
 			<button
 				type="button"
 				className="pr-button"
 				disabled={review.isPending || review.isSuccess}
-				onClick={() => review.mutate()}
+				onClick={() => review.mutate(pull)}
 			>
 				{review.isPending || review.isSuccess
 					? "Starting review…"
@@ -468,6 +541,21 @@ export function PullRequestInspector({
 			),
 	});
 	const [picked, setPicked] = useState<number | undefined>();
+	const [menuOpen, setMenuOpen] = useState(false);
+	const reviewChat = {
+		projectId,
+		harnessId,
+		modelId,
+		currentSessionId,
+		onReviewStarted,
+	};
+	const rowReview = useStartPullRequestReview(reviewChat, {
+		onStarted: () => setMenuOpen(false),
+		onError: (error) => toast.error(publicFailureMessage(error)),
+	});
+	const reviewingNumber = rowReview.isPending
+		? rowReview.variables?.number
+		: undefined;
 	const open = list.data?.pullRequests ?? [];
 	const number = picked ?? repository.number ?? open[0]?.number;
 	if (number === undefined)
@@ -480,7 +568,7 @@ export function PullRequestInspector({
 			</p>
 		);
 	const picker = open.length ? (
-		<DropdownMenu.Root>
+		<DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
 			<DropdownMenu.Trigger asChild>
 				<button type="button" className="pr-ghost">
 					{open.length} open
@@ -494,15 +582,15 @@ export function PullRequestInspector({
 					align="end"
 				>
 					{open.map((pr) => (
-						<DropdownMenu.Item
+						<PullRequestPickerRow
 							key={pr.number}
-							className="pr-picker-item"
-							data-selected={pr.number === number || undefined}
-							onSelect={() => setPicked(pr.number)}
-						>
-							<PullRequestOption pr={pr} />
-							{pr.number === number ? <Check size={14} /> : null}
-						</DropdownMenu.Item>
+							pr={pr}
+							selected={pr.number === number}
+							reviewing={pr.number === reviewingNumber}
+							reviewDisabled={rowReview.isPending}
+							onOpen={() => setPicked(pr.number)}
+							onReview={projectId ? () => rowReview.mutate(pr) : undefined}
+						/>
 					))}
 				</DropdownMenu.Content>
 			</DropdownMenu.Portal>

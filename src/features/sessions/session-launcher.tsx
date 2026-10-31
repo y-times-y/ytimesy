@@ -1023,11 +1023,6 @@ export function SessionLauncher({
 			);
 			return;
 		}
-		if (command.id === "stop") {
-			onStop();
-			setDraft("");
-			return;
-		}
 		if (command.id === "retry" && lastUserText) {
 			setDraft("");
 			sendText(lastUserText);

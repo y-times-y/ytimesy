@@ -354,6 +354,40 @@
 .tool-output-counts [data-sign="removed"] {
 	color: var(--diff-removed-fg);
 }
+/* Plain command output, coloured by line and span in the code theme's palette. */
+:is(.tool-tone-line, .tool-tone)[data-tone="bad"] {
+	color: #ff6f7d;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="warn"] {
+	color: #ffcc4d;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="good"] {
+	color: #b8e986;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="path"] {
+	color: #6cb6ff;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="accent"] {
+	color: #ffb38a;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="muted"] {
+	color: #737373;
+}
+:is(.tool-tone-line, .tool-tone)[data-tone="strong"] {
+	color: #ededed;
+	font-weight: 600;
+}
+.tool-tone[data-tone="match"] {
+	border-radius: 2px;
+	background: rgba(255, 204, 77, 0.16);
+	color: #ffcc4d;
+}
+.tool-tone[data-tone="added"] {
+	color: var(--diff-added-fg);
+}
+.tool-tone[data-tone="removed"] {
+	color: var(--diff-removed-fg);
+}
 .tool-panel-output[data-tone="bad"],
 .tool-panel-note[data-tone="bad"] {
 	color: #f3a3a3;

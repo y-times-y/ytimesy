@@ -6,13 +6,12 @@ import {
 	Monitor,
 	RotateCcw,
 	Sparkles,
-	Square,
+	type Square,
 	SquareTerminal,
 } from "lucide-react";
 import type { SlashCommand, SlashCommandId } from "#/domain/slash-command";
 
 const icons: Record<SlashCommandId, typeof Square> = {
-	stop: Square,
 	retry: RotateCcw,
 	model: Sparkles,
 	files: FolderTree,

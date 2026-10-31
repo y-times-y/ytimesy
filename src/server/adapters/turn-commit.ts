@@ -41,12 +41,13 @@ export function automaticTurnCommitArgv(
 	message: string,
 	expectedTree = "",
 	author: PublicationAuthor = publicationCommitAuthor({}),
+	coAuthor: PublicationAuthor | null = null,
 ) {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn commit identity.");
 	if (expectedTree && !/^[a-f0-9]{40,64}$/.test(expectedTree))
 		throw new Error("Invalid verified tree identity.");
-	const command = commitAllArgv(directory, message, author)[2];
+	const command = commitAllArgv(directory, message, author, coAuthor)[2];
 	return [
 		"python3",
 		"-c",
