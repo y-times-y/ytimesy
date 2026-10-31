@@ -497,16 +497,16 @@
 	user-select: none;
 }
 .pr-hunk [data-sign="add"] {
-	background: #3fb95014;
+	background: var(--diff-added-bg);
 }
 .pr-hunk [data-sign="add"] i {
-	color: #6fcf8e;
+	color: var(--diff-added-fg);
 }
 .pr-hunk [data-sign="del"] {
-	background: #f8514914;
+	background: var(--diff-removed-bg);
 }
 .pr-hunk [data-sign="del"] i {
-	color: #f08a8a;
+	color: var(--diff-removed-fg);
 }
 .pr-hunk [data-target] {
 	box-shadow: inset 2px 0 0 #d9b45a;
