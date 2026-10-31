@@ -41,54 +41,18 @@
 .side-chat-close:hover {
 	background: rgba(255, 255, 255, 0.06);
 }
-.side-chat .session-timeline {
-	flex: 1;
-	padding-inline: 14px;
-}
-.side-chat-empty {
-	margin: 0;
-	padding: 16px 14px 0;
-	color: #939393;
-	font-size: 13px;
-	line-height: 1.4;
-}
-.side-chat-composer {
+/* The same chat view as Main fills the column below the header. */
+.side-chat-body {
 	display: flex;
-	gap: 8px;
-	align-items: flex-end;
-	padding: 10px;
-	border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-.side-chat-composer textarea {
 	flex: 1;
-	min-height: 40px;
-	max-height: 160px;
-	resize: none;
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	border-radius: 8px;
-	background: #111;
-	color: #ededed;
-	padding: 8px 10px;
-	font: inherit;
-	font-size: 14px;
+	flex-direction: column;
+	min-height: 0;
 }
-.side-chat-send {
-	border: 0;
-	border-radius: 8px;
-	background: #ededed;
-	color: #111;
-	font-size: 13px;
-	font-weight: 600;
-	padding: 8px 12px;
-}
-.side-chat-send:disabled {
-	opacity: 0.45;
-}
-.side-chat-error {
-	margin: 0;
-	padding: 0 14px 8px;
-	color: #f0a8a8;
-	font-size: 13px;
+.side-chat-body > .session-launcher {
+	flex: 1;
+	min-height: 0;
+	height: 100%;
+	padding-inline: 14px;
 }
 
 .session-launcher[data-layout="chat"][data-side-chat="open"] {

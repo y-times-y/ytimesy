@@ -1,46 +1,48 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
+import { toast } from "sonner";
 import type { AgentProviderId } from "#/domain/agent-provider";
-import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
-import { SessionTimeline } from "./session-timeline";
+import { publicFailureMessage } from "#/domain/project-workspace";
+import type { SessionTurnStatus } from "#/domain/session-item";
+import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import {
+	releaseQueuedSessionMessage,
+	removeQueuedSessionMessage,
+	stopCodexSessionTurn,
+	updateQueuedSessionMessage,
+} from "./codex-session.fn";
 import { readSideChatFn, sendSideChatFn } from "./side-chat.fn";
 import "./side-chat.css";
 
-type SideChatSpeed = "fast" | "ultrafast";
+type SideSend = "sent" | "unsent";
 
 /**
- * Closing unmounts this column only. The side session's turn keeps running,
- * and the main turn is not stopped.
+ * The side conversation's view and actions, for a second composer beside
+ * Main. Sends go to the side session only; Main's turn and queue are never
+ * touched.
  */
-export function SideChatColumn({
+export function useSideChat({
 	projectId,
-	parentSessionId,
+	parent,
 	harnessId,
-	modelId,
-	parentTurnStatus,
-	reasoningId,
-	speed,
-	onClose,
 }: {
 	projectId?: string;
-	parentSessionId: string | null;
+	parent: PublicCodexSession;
 	harnessId: AgentProviderId;
-	modelId: string;
-	parentTurnStatus: SessionTurnStatus;
-	reasoningId?: string;
-	speed?: SideChatSpeed;
-	onClose: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const read = useServerFn(readSideChatFn);
 	const send = useServerFn(sendSideChatFn);
-	const [draft, setDraft] = useState("");
+	const stop = useServerFn(stopCodexSessionTurn);
+	const remove = useServerFn(removeQueuedSessionMessage);
+	const update = useServerFn(updateQueuedSessionMessage);
+	const release = useServerFn(releaseQueuedSessionMessage);
 	const [pending, setPending] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const ready = Boolean(projectId && parentSessionId && modelId);
+	const parentSessionId = parent.agentSessionId;
+	const key = ["side-chat", projectId, parentSessionId] as const;
 	const query = useQuery({
-		queryKey: ["side-chat", projectId, parentSessionId],
+		queryKey: key,
 		enabled: Boolean(projectId && parentSessionId),
 		queryFn: () =>
 			read({
@@ -53,14 +55,39 @@ export function SideChatColumn({
 		refetchInterval: (current) =>
 			current.state.data?.view?.turnStatus === "running" ? 1000 : false,
 	});
-	useEffect(() => {
-		document.getElementById("side-chat-draft")?.focus();
-	}, []);
-	async function submit() {
-		const text = draft.trim();
-		if (!text || !ready || pending || !projectId || !parentSessionId) return;
+	const view = query.data?.view ?? null;
+	const sideSessionId = query.data?.sessionId ?? null;
+	// Main's connection, models and readiness; the side chat's own transcript.
+	const session: PublicCodexSession = {
+		...parent,
+		agentSessionId: sideSessionId,
+		items: view?.items ?? [],
+		turnStatus: view?.turnStatus ?? "idle",
+		hasOlderItems: false,
+		usage: view?.usage,
+		listedModelId: view?.listedModelId || parent.listedModelId,
+	};
+	const apply = (next: { sessionId: string | null; view: unknown }) =>
+		queryClient.setQueryData(key, next);
+	const scope = () => ({
+		projectId,
+		harnessId,
+		sessionId: sideSessionId ?? undefined,
+	});
+	const failed = (cause: unknown) => toast.error(publicFailureMessage(cause));
+	const refresh = () => void queryClient.invalidateQueries({ queryKey: key });
+
+	async function sendMessage(
+		text: string,
+		modelId: string,
+		options?: {
+			readonly reasoningId?: string;
+			readonly speed?: string;
+			readonly userMessageId?: string;
+		},
+	): Promise<SideSend> {
+		if (!projectId || !parentSessionId) return "unsent";
 		setPending(true);
-		setError(null);
 		try {
 			const sent = await send({
 				data: {
@@ -69,64 +96,55 @@ export function SideChatColumn({
 					harnessId,
 					modelId,
 					text,
-					userMessageId: crypto.randomUUID(),
-					...(reasoningId ? { variant: reasoningId } : {}),
-					...(speed ? { speed } : {}),
+					userMessageId: options?.userMessageId ?? crypto.randomUUID(),
+					...(options?.reasoningId ? { variant: options.reasoningId } : {}),
+					...(options?.speed === "fast" || options?.speed === "ultrafast"
+						? { speed: options.speed }
+						: {}),
 				},
 			});
-			queryClient.setQueryData(["side-chat", projectId, parentSessionId], {
-				sessionId: sent.sideSessionId,
-				view: sent.view,
-			});
-			setDraft("");
+			apply({ sessionId: sent.sideSessionId, view: sent.view });
+			return "sent";
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not send.");
+			failed(cause);
+			return "unsent";
 		} finally {
 			setPending(false);
 		}
 	}
-	return (
-		<SideChatPane
-			items={query.data?.view?.items ?? []}
-			turnStatus={query.data?.view?.turnStatus ?? "idle"}
-			parentTurnStatus={parentTurnStatus}
-			draft={draft}
-			pending={pending}
-			error={
-				error ?? (query.error instanceof Error ? query.error.message : null)
-			}
-			canSend={ready}
-			onDraft={setDraft}
-			onSend={() => void submit()}
-			onClose={onClose}
-		/>
-	);
+
+	return {
+		session,
+		pending,
+		send: sendMessage,
+		stop: () => {
+			if (!sideSessionId) return;
+			void stop({ data: scope() }).then(refresh, failed);
+		},
+		removeQueued: (messageId: string) =>
+			void remove({ data: { ...scope(), messageId } }).then(refresh, failed),
+		editQueued: (messageId: string, text: string) =>
+			void update({ data: { ...scope(), messageId, text } }).then(
+				refresh,
+				failed,
+			),
+		sendQueued: (messageId: string, text?: string) =>
+			void release({
+				data: { ...scope(), messageId, ...(text ? { text } : {}) },
+			}).then(refresh, failed),
+	};
 }
 
-export function SideChatPane({
-	items,
-	turnStatus,
+/** The side column's frame: a header with Close, then the side composer. */
+export function SideChatFrame({
 	parentTurnStatus,
-	draft,
-	pending,
-	error,
-	canSend,
-	onDraft,
-	onSend,
 	onClose,
+	children,
 }: {
-	items: readonly SessionItem[];
-	turnStatus: SessionTurnStatus;
 	parentTurnStatus: SessionTurnStatus;
-	draft: string;
-	pending: boolean;
-	error: string | null;
-	canSend: boolean;
-	onDraft: (value: string) => void;
-	onSend: () => void;
 	onClose: () => void;
+	children: ReactNode;
 }) {
-	const idle = items.length === 0 && turnStatus !== "running";
 	return (
 		<aside className="side-chat" aria-label="Side chat">
 			<header className="side-chat-header">
@@ -135,7 +153,7 @@ export function SideChatPane({
 					<span>
 						{parentTurnStatus === "running"
 							? "Main is working. This chat does not interrupt it."
-							: "Same tools as Main, in a separate conversation."}
+							: "Same agent as Main, in a separate conversation."}
 					</span>
 				</div>
 				<button
@@ -147,50 +165,7 @@ export function SideChatPane({
 					Close
 				</button>
 			</header>
-			{idle ? (
-				<p className="side-chat-empty">
-					{canSend
-						? "Ask about the work in progress. Main keeps its own turn."
-						: "Send a message in the main chat before using side chat."}
-				</p>
-			) : (
-				<SessionTimeline items={items} turnStatus={turnStatus} fill />
-			)}
-			{error ? (
-				<p className="side-chat-error" role="alert">
-					{error}
-				</p>
-			) : null}
-			<form
-				className="side-chat-composer"
-				onSubmit={(event) => {
-					event.preventDefault();
-					onSend();
-				}}
-			>
-				<textarea
-					id="side-chat-draft"
-					value={draft}
-					placeholder="Ask beside Main…"
-					rows={2}
-					disabled={!canSend || pending}
-					onChange={(event) => onDraft(event.target.value)}
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && !event.shiftKey) {
-							event.preventDefault();
-							onSend();
-						}
-					}}
-				/>
-				<button
-					type="submit"
-					className="side-chat-send"
-					aria-label="Send to side chat"
-					disabled={!canSend || pending || !draft.trim()}
-				>
-					Send
-				</button>
-			</form>
+			<div className="side-chat-body">{children}</div>
 		</aside>
 	);
 }
