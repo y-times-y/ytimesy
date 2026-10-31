@@ -74,6 +74,7 @@ import {
 import {
 	lastUserMessageText,
 	type SessionItem,
+	type SessionTurnStatus,
 	sessionUsesFollowUpLayout,
 	visibleSessionItems,
 } from "#/domain/session-item";
@@ -144,7 +145,7 @@ import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
-import { SideChatColumn } from "./side-chat-panel";
+import { SideChatFrame, useSideChat } from "./side-chat-panel";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { useStableCallback } from "./stable-callbacks";
 import { TaskInput } from "./task-input";
@@ -154,6 +155,7 @@ type InspectorView = "files" | "diff" | "terminal" | "desktop";
 const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
 
 export const COMPOSER_INPUT_ID = "composer-draft";
+const SIDE_COMPOSER_INPUT_ID = "side-chat-draft";
 
 /** How long typing pauses before the draft is saved for a reload. */
 const DRAFT_SAVE_DELAY_MS = 300;
@@ -194,7 +196,13 @@ export function SessionLauncher({
 	onDraftStarted,
 	olderItems,
 	loadedCatalog,
+	variant = "main",
 }: {
+	/**
+	 * "side": the composer beside Main in a side chat. Same transcript,
+	 * composer and controls, without the project picker, helpers or /side.
+	 */
+	variant?: "main" | "side";
 	/** The chat holds turns before those shown; they load as the reader scrolls up. */
 	olderItems?: { readonly loading: boolean; readonly onLoad: () => void };
 	/**
@@ -499,11 +507,15 @@ export function SessionLauncher({
 	// before the next paint, so what the draft drives (the send button)
 	// updates too: hydration leaves server attributes as they are. A composer
 	// mounted later reads its saved draft itself.
-	const draftKey = composerDraftKey(session.agentSessionId);
+	const side = variant === "side";
+	const inputId = side ? SIDE_COMPOSER_INPUT_ID : COMPOSER_INPUT_ID;
+	const draftKey = side
+		? `side:${session.agentSessionId ?? "new"}`
+		: composerDraftKey(session.agentSessionId);
 	const hydrating = useHydrating();
 	const hydrated = useHydrated();
 	const stopShortcutHint = useShortcutHint("stop");
-	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
+	const typedBeforeHydration = useTypedBeforeHydration(inputId);
 	const [draft, setDraft] = useState(
 		() => initialDraft || (hydrating ? "" : loadComposerDraft(draftKey)),
 	);
@@ -751,11 +763,13 @@ export function SessionLauncher({
 	);
 	const helperLines = { identities, onSelect: openAgent };
 	const lastUserText = lastUserMessageText(items);
-	const followUpLayout = sessionUsesFollowUpLayout({
-		items,
-		turnStatus,
-		listedTitle,
-	});
+	const followUpLayout =
+		side ||
+		sessionUsesFollowUpLayout({
+			items,
+			turnStatus,
+			listedTitle,
+		});
 	function composerCanSend(text: string, slashCommand: boolean) {
 		return composerSendIsEnabled({
 			harnessId,
@@ -790,7 +804,9 @@ export function SessionLauncher({
 		],
 	);
 	const allSlashCommands = [
-		...slashCommands,
+		...(side
+			? slashCommands.filter((command) => command.id !== "side")
+			: slashCommands),
 		...(projectCommands.data ?? []).map((command) => ({
 			...command,
 			availability: composerReady
@@ -1208,7 +1224,9 @@ export function SessionLauncher({
 				/>
 			)}
 			<div className="session-dock">
-				{visibleSlashCommands.length === 0 && visibleMentions.length === 0 ? (
+				{!side &&
+				visibleSlashCommands.length === 0 &&
+				visibleMentions.length === 0 ? (
 					<ProjectContext
 						projects={projects}
 						selectedProject={selectedProject}
@@ -1289,7 +1307,7 @@ export function SessionLauncher({
 							</ul>
 						)}
 						<TaskInput
-							id={COMPOSER_INPUT_ID}
+							id={inputId}
 							draftKey={draftKey}
 							textareaRef={textareaRef}
 							onCaretChange={setCaret}
@@ -1303,13 +1321,15 @@ export function SessionLauncher({
 							placeholder={
 								selectedHelper
 									? `Message ${selectedHelper.name}…`
-									: agents.lead.status === "free"
-										? agents.helpers.some((row) => row.status === "working")
-											? "Ask Main anything while helpers work"
-											: "Ask Main anything while commands run"
-										: followUpLayout
-											? "Follow up…"
-											: "What would you like to work on?"
+									: side
+										? "Ask while Main works…"
+										: agents.lead.status === "free"
+											? agents.helpers.some((row) => row.status === "working")
+												? "Ask Main anything while helpers work"
+												: "Ask Main anything while commands run"
+											: followUpLayout
+												? "Follow up…"
+												: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
 								handleMentionKey(event) ||
@@ -1503,23 +1523,29 @@ export function SessionLauncher({
 						) : null}
 					</div>
 				</div>
-				<AgentPanel
-					lead={agents.lead}
-					helpers={agents.helpers}
-					background={agents.background}
-					selectedId={selectedHelper ? selectedHelper.id : LEAD_ROW_ID}
-					onSelect={openAgent}
-				/>
+				{side ? null : (
+					<AgentPanel
+						lead={agents.lead}
+						helpers={agents.helpers}
+						background={agents.background}
+						selectedId={selectedHelper ? selectedHelper.id : LEAD_ROW_ID}
+						onSelect={openAgent}
+					/>
+				)}
 			</div>
-			{sideChatOpen ? (
-				<SideChatColumn
+			{sideChatOpen && !side ? (
+				<SideChat
 					projectId={selectedProject?.id}
-					parentSessionId={session.agentSessionId}
-					harnessId={harnessId}
-					modelId={modelId || session.listedModelId || ""}
+					parent={session}
 					parentTurnStatus={turnStatus}
-					reasoningId={reasoningId || undefined}
-					speed={speed === "fast" || speed === "ultrafast" ? speed : undefined}
+					harnessId={harnessId}
+					onHarnessIdChange={onHarnessIdChange}
+					onConnect={onConnect}
+					onOpenInspector={onOpenInspector}
+					onOpenFile={onOpenFile}
+					projects={projects}
+					selectedProject={selectedProject}
+					loadedCatalog={loadedCatalog}
 					onClose={() => setSideChatOpen(false)}
 				/>
 			) : null}
@@ -1536,5 +1562,72 @@ function sameSend(
 		send.text === text &&
 		send.files.length === files.length &&
 		send.files.every((file, index) => file === files[index])
+	);
+}
+
+/** The side chat: the same chat view as Main, sending to its own session. */
+function SideChat({
+	projectId,
+	parent,
+	parentTurnStatus,
+	harnessId,
+	onHarnessIdChange,
+	onConnect,
+	onOpenInspector,
+	onOpenFile,
+	projects,
+	selectedProject,
+	loadedCatalog,
+	onClose,
+}: {
+	projectId?: string;
+	parent: PublicCodexSession;
+	parentTurnStatus: SessionTurnStatus;
+	harnessId: AgentProviderId;
+	onHarnessIdChange: (id: AgentProviderId) => void;
+	onConnect: () => void;
+	onOpenInspector: (view: InspectorView) => void;
+	onOpenFile?: (path: string) => void;
+	projects: Project[];
+	selectedProject?: Project;
+	loadedCatalog?: OpenChatSide["catalog"];
+	onClose: () => void;
+}) {
+	const chat = useSideChat({ projectId, parent, harnessId });
+	useEffect(() => {
+		document.getElementById(SIDE_COMPOSER_INPUT_ID)?.focus();
+	}, []);
+	return (
+		<SideChatFrame parentTurnStatus={parentTurnStatus} onClose={onClose}>
+			<SessionLauncher
+				variant="side"
+				session={chat.session}
+				busy={chat.pending}
+				harnessId={harnessId}
+				onHarnessIdChange={onHarnessIdChange}
+				onSend={(text, modelId, options) =>
+					chat.send(text, modelId, {
+						...(options?.reasoningId
+							? { reasoningId: options.reasoningId }
+							: {}),
+						...(options?.speed ? { speed: options.speed } : {}),
+						...(options?.userMessageId
+							? { userMessageId: options.userMessageId }
+							: {}),
+					})
+				}
+				onConnect={onConnect}
+				onStop={chat.stop}
+				onOpenInspector={onOpenInspector}
+				onOpenFile={onOpenFile}
+				projects={projects}
+				selectedProject={selectedProject}
+				onSelectProject={() => {}}
+				loadedCatalog={loadedCatalog}
+				onRemoveQueued={chat.removeQueued}
+				onEditQueued={chat.editQueued}
+				onSendQueued={chat.sendQueued}
+			/>
+		</SideChatFrame>
 	);
 }
