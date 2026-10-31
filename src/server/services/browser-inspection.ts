@@ -35,6 +35,7 @@ export const browserInspection = z.object({
 });
 
 // Trusted guest program: no arbitrary page evaluation, request headers, cookies or form values.
+// The page asked for matches Chrome's own URL ignoring a trailing "/" and a #fragment.
 export const BROWSER_INSPECTION_SOURCE = `
 import { createRequire } from 'node:module';
 const require = createRequire(process.argv[1] + '/package.json');
@@ -42,8 +43,10 @@ const { chromium } = require('playwright-core');
 const input = JSON.parse(process.argv[2]);
 const browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: 10000 });
 try {
-  const page = browser.contexts().flatMap(context => context.pages()).find(page => page.url() === input.url);
-  if (!page) throw new Error('The requested page is not open in the shared browser.');
+  const same = (value) => { try { const url = new URL(value); url.hash = ''; return url.href.endsWith('/') ? url.href.slice(0, -1) : url.href; } catch { return value; } };
+  const pages = browser.contexts().flatMap(context => context.pages());
+  const page = pages.find(page => page.url() === input.url) ?? pages.find(page => same(page.url()) === same(input.url));
+  if (!page) throw new Error('The requested page is not open in the shared browser. Open pages: ' + (pages.map(page => page.url()).filter(url => /^https?:/.test(url)).join(', ') || 'none') + '.');
   const cleanUrl = value => { const url = new URL(value); if (!['http:', 'https:'].includes(url.protocol)) return url.protocol; url.search = ''; url.hash = ''; url.username = ''; url.password = ''; return url.href; };
   const consoleEntries = [];
   const network = [];

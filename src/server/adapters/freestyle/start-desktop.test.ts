@@ -123,3 +123,15 @@ describe("start workspace desktop", () => {
 		expect(ENSURE_WORKSPACE_DESKTOP).toContain("chrome.desktop");
 	});
 });
+
+it("starts the desktop and Chrome outside the agent command's process group", () => {
+	expect(chromeOpenCommand("'https://example.com'")).toContain(
+		'setsid -f nohup "$browser"',
+	);
+	expect(chromeOpenCommand("'https://example.com'")).not.toMatch(/&$/);
+	// On screen, where the Desktop tab shows it (it once opened at x=-1050).
+	expect(chromeOpenCommand("'https://example.com'")).toContain(
+		"--window-position=0,0",
+	);
+	expect(START_WORKSPACE_DESKTOP).toContain("--window-position=0,0");
+});

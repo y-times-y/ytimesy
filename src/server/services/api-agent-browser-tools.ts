@@ -47,9 +47,19 @@ export async function safeBrowserUrl(value: string): Promise<string> {
 	return url.href;
 }
 
-/** Opens a URL (already shell-quoted, or a shell expansion) in the shared desktop's Chrome; exit 127 when Chrome never appears. */
+/**
+ * Chrome can open its window unmapped or off screen (x=-1050), where the
+ * Desktop tab shows nothing: wait for it, then map, raise and place it.
+ */
+const CHROME_WINDOW_SHOWN = `windows=''; for attempt in $(seq 1 30); do windows=$(xdotool search --name ' - Google Chrome$' 2>/dev/null || true); test -n "$windows" && break; sleep 0.5; done; for window in $windows; do xdotool windowmap "$window" windowmove "$window" 0 0 >/dev/null 2>&1 || true; done; test -z "$windows" || xdotool windowactivate "$(printf '%s\\n' $windows | tail -n 1)" >/dev/null 2>&1 || true`;
+
+/**
+ * Opens a URL (already shell-quoted, or a shell expansion) in the shared
+ * desktop's Chrome; exit 127 when Chrome never appears. Chrome starts in its
+ * own session so it outlives the agent command that opened it.
+ */
 export function chromeOpenCommand(quotedUrl: string) {
-	return `${DESKTOP_X_ENVIRONMENT}; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
+	return `${DESKTOP_X_ENVIRONMENT}; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; setsid -f nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --window-position=0,0 --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null; ${CHROME_WINDOW_SHOWN}`;
 }
 
 export function apiAgentBrowserTools(

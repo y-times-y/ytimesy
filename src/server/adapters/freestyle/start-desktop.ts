@@ -335,7 +335,7 @@ fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
-  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
+  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --window-position=0,0 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
 fi
 # VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
 # or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
