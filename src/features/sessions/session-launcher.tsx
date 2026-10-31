@@ -49,6 +49,10 @@ import {
 import { MAIN_NAME } from "#/domain/helper-names";
 import { SessionItemId } from "#/domain/ids";
 import {
+	shortcutMatches,
+	titleWithShortcut,
+} from "#/domain/keyboard-shortcuts";
+import {
 	composerModelIdForCatalog,
 	listedModelDisplayName,
 } from "#/domain/listed-model";
@@ -73,6 +77,7 @@ import {
 	sessionUsesFollowUpLayout,
 	visibleSessionItems,
 } from "#/domain/session-item";
+import { slashCommandOpensSideChat } from "#/domain/side-chat";
 import {
 	composerSlashCommands,
 	exactSlashCommand,
@@ -88,6 +93,11 @@ import {
 	useHydrating,
 	useTypedBeforeHydration,
 } from "#/features/app/first-paint";
+import {
+	currentShortcutPlatform,
+	keyFocusOf,
+	useShortcutHint,
+} from "#/features/app/keyboard-shortcuts";
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -119,6 +129,7 @@ import {
 	refreshRecoveredWorkspace,
 } from "./conversation-recovery";
 import { ComposerSignIn } from "./harness-login";
+import { MODEL_PICKER_ID } from "./harness-picker";
 import type { MemoryMarkerActions } from "./memory-markers";
 import { MentionPopover } from "./mention-popover";
 import {
@@ -133,6 +144,7 @@ import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
+import { SideChatColumn } from "./side-chat-panel";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { useStableCallback } from "./stable-callbacks";
 import { TaskInput } from "./task-input";
@@ -174,6 +186,8 @@ export function SessionLauncher({
 	onProjectPickerOpenChange,
 	memoryActions,
 	onRemoveQueued,
+	onEditQueued,
+	onSendQueued,
 	backgroundRuns,
 	onDraftStarted,
 	olderItems,
@@ -195,6 +209,10 @@ export function SessionLauncher({
 	memoryActions?: MemoryMarkerActions;
 	/** Takes back a message still waiting behind the running turn. */
 	onRemoveQueued?: (messageId: string) => void;
+	/** Replaces a waiting message's text. */
+	onEditQueued?: (messageId: string, text: string) => void;
+	/** Delivers a waiting message after the current step, or now if the turn ended. */
+	onSendQueued?: (messageId: string, text?: string) => void;
 	session: PublicCodexSession;
 	busy: boolean;
 	harnessId: AgentProviderId;
@@ -463,6 +481,7 @@ export function SessionLauncher({
 	const draftKey = composerDraftKey(session.agentSessionId);
 	const hydrating = useHydrating();
 	const hydrated = useHydrated();
+	const stopShortcutHint = useShortcutHint("stop");
 	const typedBeforeHydration = useTypedBeforeHydration(COMPOSER_INPUT_ID);
 	const [draft, setDraft] = useState(
 		() => initialDraft || (hydrating ? "" : loadComposerDraft(draftKey)),
@@ -535,6 +554,7 @@ export function SessionLauncher({
 	const [slashMenuDismissed, setSlashMenuDismissed] = useState<string | null>(
 		null,
 	);
+	const [sideChatOpen, setSideChatOpen] = useState(false);
 	// Kept while the person types, so the transcript does not render again.
 	const items = useMemo(
 		() => visibleSessionItems(session.items, optimisticItems),
@@ -960,6 +980,11 @@ export function SessionLauncher({
 
 	function runSlashCommand(command: SlashCommand) {
 		if (command.availability !== "ready") return;
+		if (slashCommandOpensSideChat(command)) {
+			setSideChatOpen(true);
+			setDraft("");
+			return;
+		}
 		if (command.id === "custom" && command.template) {
 			setDraft("");
 			sendText(
@@ -979,7 +1004,7 @@ export function SessionLauncher({
 		}
 		if (command.id === "model") {
 			setDraft("");
-			document.getElementById("session-model-select")?.focus();
+			document.getElementById(MODEL_PICKER_ID)?.click();
 			return;
 		}
 		if (
@@ -991,6 +1016,23 @@ export function SessionLauncher({
 			onOpenInspector(command.id);
 			setDraft("");
 		}
+	}
+
+	/** Esc in an empty composer stops the running turn, as in Codex and Claude Code. */
+	function handleStopKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (turnStatus !== "running" || attachments.length) return false;
+		if (
+			!shortcutMatches(
+				"stopFromComposer",
+				event.nativeEvent,
+				keyFocusOf(event.currentTarget),
+				currentShortcutPlatform(),
+			)
+		)
+			return false;
+		event.preventDefault();
+		onStop();
+		return true;
 	}
 
 	function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1034,6 +1076,7 @@ export function SessionLauncher({
 			className="session-launcher"
 			aria-labelledby="session-title"
 			data-layout={followUpLayout ? "chat" : "empty"}
+			data-side-chat={sideChatOpen ? "open" : undefined}
 		>
 			<h1 id="session-title" className="sr-only">
 				Session
@@ -1132,6 +1175,8 @@ export function SessionLauncher({
 						onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
 					}}
 					onRemoveQueued={onRemoveQueued}
+					onEditQueued={onEditQueued}
+					onSendQueued={onSendQueued}
 					readPastedText={loadPastedText}
 					olderItems={olderItems}
 				/>
@@ -1235,7 +1280,8 @@ export function SessionLauncher({
 							}
 							onKeyDown={(event) =>
 								handleMentionKey(event) ||
-								(!selectedHelper && handleComposerKey(event))
+								(!selectedHelper && handleComposerKey(event)) ||
+								(!selectedHelper && handleStopKey(event))
 							}
 							onPaste={(event) => {
 								// Helpers take text only; a large paste there stays inline.
@@ -1340,7 +1386,7 @@ export function SessionLauncher({
 									type="button"
 									className="session-send"
 									aria-label="Stop"
-									title="Stop this run"
+									title={titleWithShortcut("Stop this run", stopShortcutHint)}
 									onClick={onStop}
 								>
 									<span className="send-face send-face-stop">
@@ -1386,7 +1432,7 @@ export function SessionLauncher({
 									}
 									title={
 										turnStatus === "running"
-											? "Queue this message for the running turn"
+											? "Queue in this chat"
 											: canResumeFollowUp
 												? "Resume and send"
 												: harnessReady
@@ -1427,6 +1473,18 @@ export function SessionLauncher({
 					onSelect={openAgent}
 				/>
 			</div>
+			{sideChatOpen ? (
+				<SideChatColumn
+					projectId={selectedProject?.id}
+					parentSessionId={session.agentSessionId}
+					harnessId={harnessId}
+					modelId={modelId || session.listedModelId || ""}
+					parentTurnStatus={turnStatus}
+					reasoningId={reasoningId || undefined}
+					speed={speed === "fast" || speed === "ultrafast" ? speed : undefined}
+					onClose={() => setSideChatOpen(false)}
+				/>
+			) : null}
 		</section>
 	);
 }

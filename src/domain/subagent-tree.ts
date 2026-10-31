@@ -15,6 +15,7 @@ import {
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
 } from "./session-item";
+import { sessionsInSubagentTree } from "./side-chat";
 import {
 	type SubagentBudget,
 	type SubagentFork,
@@ -125,9 +126,10 @@ function sessionSpend(
  */
 export function subagentTree(
 	rootId: string,
-	sessions: readonly SubagentTreeSession[],
+	allSessions: readonly SubagentTreeSession[],
 	now: number,
 ): SubagentTree {
+	const sessions = sessionsInSubagentTree(rootId, allSessions);
 	const byId = new Map(sessions.map((session) => [session.id, session]));
 	// Budgets are in the builder's tokens: each agent's tokens are weighted by
 	// its model's price relative to the builder's.

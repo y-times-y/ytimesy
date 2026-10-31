@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import {
 	ensureDraftPullRequest,
+	listOpenPullRequests,
 	listSessionPullRequests,
 	mergePullRequest,
 } from "./github";
@@ -9,6 +10,7 @@ const api = vi.hoisted(() => ({
 	list: vi.fn(),
 	create: vi.fn(),
 	get: vi.fn(),
+	update: vi.fn(),
 	paginate: vi.fn(),
 	merge: vi.fn(),
 	repository: vi.fn(),
@@ -19,6 +21,7 @@ vi.mock("@octokit/rest", () => ({
 			list: api.list,
 			create: api.create,
 			get: api.get,
+			update: api.update,
 			merge: api.merge,
 		};
 		repos = { get: api.repository };
@@ -42,13 +45,17 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	api.list.mockResolvedValue({ data: [] });
 	api.create.mockResolvedValue({ data: pull });
+	api.update.mockResolvedValue({ data: pull });
 });
-it("reuses the existing open PR on follow-up handoffs", async () => {
+it("reuses the existing open PR on follow-up handoffs and refreshes its description", async () => {
 	api.list.mockResolvedValue({ data: [pull] });
 	expect((await ensureDraftPullRequest("token", "owner/repo", draft)).url).toBe(
 		pull.html_url,
 	);
 	expect(api.create).not.toHaveBeenCalled();
+	expect(api.update).toHaveBeenCalledWith(
+		expect.objectContaining({ pull_number: 1, body: "Evidence" }),
+	);
 	expect(api.list).toHaveBeenCalledWith(
 		expect.objectContaining({
 			head: `owner:${draft.head}`,
@@ -56,6 +63,41 @@ it("reuses the existing open PR on follow-up handoffs", async () => {
 			state: "open",
 		}),
 	);
+});
+it("keeps an evidence section and does not wipe a real description with a placeholder", async () => {
+	const evidence =
+		"<!-- ytimesy-evidence:start sha=abc plan=auto -->\n## Evidence\n\nKept.\n<!-- ytimesy-evidence:end -->";
+	api.list.mockResolvedValue({
+		data: [
+			{
+				...pull,
+				body: `Automatic draft handoff from ytimesy.\n\n${evidence}`,
+			},
+		],
+	});
+	await ensureDraftPullRequest("token", "owner/repo", {
+		...draft,
+		body: "The parser rejects an empty token and reports the line number.",
+	});
+	expect(api.update).toHaveBeenCalledWith(
+		expect.objectContaining({
+			body: `The parser rejects an empty token and reports the line number.\n\n${evidence}`,
+		}),
+	);
+	api.update.mockClear();
+	api.list.mockResolvedValue({
+		data: [
+			{
+				...pull,
+				body: "The parser rejects an empty token and reports the line number.",
+			},
+		],
+	});
+	await ensureDraftPullRequest("token", "owner/repo", {
+		...draft,
+		body: "No description of this change was available from this turn, so none was invented.",
+	});
+	expect(api.update).not.toHaveBeenCalled();
 });
 it("creates a draft and recovers a simultaneous creation race", async () => {
 	await ensureDraftPullRequest("token", "owner/repo", draft);
@@ -216,4 +258,32 @@ it("explains GitHub's merge refusals instead of failing generically", async () =
 	await expect(
 		mergePullRequest("token", "owner/repo", 1, "abc"),
 	).rejects.toMatchObject({ status: 409 });
+});
+it("lists open pull requests with the author name and avatar GitHub returns", async () => {
+	api.list.mockResolvedValue({
+		data: [
+			{
+				number: 4,
+				title: "Add picker",
+				html_url: "https://github.com/owner/repo/pull/4",
+				draft: false,
+				user: {
+					login: "ada",
+					avatar_url: "https://avatars.githubusercontent.com/u/1",
+					name: "Ada Lovelace",
+				},
+			},
+		],
+	});
+	await expect(listOpenPullRequests("token", "owner/repo")).resolves.toEqual([
+		{
+			number: 4,
+			title: "Add picker",
+			url: "https://github.com/owner/repo/pull/4",
+			author: "ada",
+			authorName: "Ada Lovelace",
+			authorAvatarUrl: "https://avatars.githubusercontent.com/u/1",
+			draft: false,
+		},
+	]);
 });

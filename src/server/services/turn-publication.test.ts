@@ -111,6 +111,10 @@ it("pushes the completed revision for each repository and returns the primary dr
 		expect(input.revision).toBe(`refs/ytimesy/turn-commits/${turn}`);
 	}
 	expect(deps.pull).toHaveBeenCalledTimes(2);
+	for (const call of deps.pull.mock.calls) {
+		expect(call[2].body).not.toContain("Automatic draft handoff");
+		expect(call[4]).toBe("owner-token");
+	}
 	// Each pull request is recorded as the project's, for GitHub wake-ups.
 	expect(deps.pull.mock.calls.map((call) => call[3])).toEqual([
 		{
@@ -223,6 +227,13 @@ it("pushes a root chat's own branch, opens its draft PR with the Fix link origin
 		head: "ytimesy/fix-parser-00abcd",
 		base: "main",
 	});
+	expect(deps.pull.mock.calls[0][2].body).toBe(
+		"No description of this change was available from this turn, so none was invented.",
+	);
+	expect(deps.pull.mock.calls[0][2].body).not.toContain(
+		"Automatic draft handoff",
+	);
+	expect(deps.pull.mock.calls[0][4]).toBe("owner-token");
 	expect(deps.pull.mock.calls[0][3]).toEqual({
 		userId: "alice",
 		projectId: "project",
@@ -243,6 +254,26 @@ it("pushes a root chat's own branch, opens its draft PR with the Fix link origin
 			),
 		),
 	).toBe(true);
+});
+
+it("publishes the turn's description, files, and checks instead of a generic handoff", async () => {
+	await publishCompletedSessionTurn(chat, changed(), turn, {
+		description:
+			"The parser rejects an empty token and reports the line number, so invalid input fails at the source.",
+		finalAnswer: null,
+		files: ["src/parser.ts"],
+		verification: [{ command: "pnpm test", exitCode: 0 }],
+	});
+	const body = deps.pull.mock.calls[0][2].body as string;
+	expect(body).toContain("rejects an empty token");
+	expect(body).toContain("`src/parser.ts`");
+	expect(body).toContain("`pnpm test` (exit 0)");
+	expect(body).toContain("@ytimesy");
+	expect(body.indexOf("rejects an empty token")).toBeLessThan(
+		body.indexOf("@ytimesy"),
+	);
+	expect(body).not.toContain("Automatic draft handoff");
+	expect(deps.pull.mock.calls[0][4]).toBe("owner-token");
 });
 
 it("pushes nothing for a chat turn whose revision was already pushed or changed nothing", async () => {

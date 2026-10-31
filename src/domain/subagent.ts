@@ -101,6 +101,11 @@ export type SubagentBudget = {
 	readonly sharedWriter?: { readonly owns: readonly string[] };
 	/** checkerMode=pair: a worker the judge started on its own model (`model: "strong"`). */
 	readonly checkerStrong?: true;
+	/**
+	 * A side chat (src/domain/side-chat.ts): a conversational agent bound to
+	 * this chat. It is not a helper, so the tree, reports and budgets skip it.
+	 */
+	readonly sideChat?: true;
 };
 
 type Level = 1 | 2 | 3;

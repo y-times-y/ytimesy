@@ -22,12 +22,19 @@ import {
 } from "#/components/ui/popover";
 import {
 	addedProjectBranch,
+	GITHUB_LIST_UNREACHABLE,
+	githubRepositoryListMessage,
 	projectPickerSections,
 	scratchRepositoryName,
 } from "#/domain/add-project";
 import type { Project, RepositoryChoice } from "#/domain/projects";
 import { AddProjectForm } from "../projects/add-project-form";
-import { requestJson } from "../projects/api";
+import {
+	isUnreachableRead,
+	requestJson,
+	retryTransientRead,
+	transientReadRetryDelay,
+} from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
 
 export function ProjectPicker({
@@ -63,7 +70,9 @@ export function ProjectPicker({
 				repositories: RepositoryChoice[];
 				installationUrl: string;
 			}>("/api/github/repositories"),
-		retry: false,
+		// A dropped fetch (Safari "Load failed") is not a missing GitHub connection.
+		retry: retryTransientRead,
+		retryDelay: transientReadRetryDelay,
 		// Loaded with the composer and cached, so opening the picker never waits on GitHub.
 		staleTime: 5 * 60_000,
 		placeholderData: keepPreviousData,
@@ -243,12 +252,12 @@ export function ProjectPicker({
 							)}
 							{!repositories.isPending && sections.repositories.length === 0 ? (
 								<p className="project-picker-empty">
-									{query.trim()
-										? "No repositories match."
-										: repositories.data
-											? "Every repository is already a project."
-											: (repositories.error?.message ??
-												"Connect GitHub to see repositories.")}
+									{githubRepositoryListMessage({
+										query,
+										loaded: Boolean(repositories.data),
+										unreachable: isUnreachableRead(repositories.error),
+										errorMessage: repositories.error?.message,
+									})}
 								</p>
 							) : null}
 						</div>
@@ -291,6 +300,15 @@ export function ProjectPicker({
 									<ExternalLink size={16} />
 									Add from GitHub
 								</a>
+							) : isUnreachableRead(repositories.error) ? (
+								<button
+									type="button"
+									disabled={repositories.isFetching}
+									onClick={() => void repositories.refetch()}
+								>
+									<RefreshCw size={16} />
+									{repositories.isFetching ? "Retrying…" : "Retry"}
+								</button>
 							) : (
 								<button
 									type="button"
@@ -312,9 +330,9 @@ export function ProjectPicker({
 						connection.error ||
 						connectionNotice ? (
 							<p className="project-picker-error" role="alert">
-								{save.error?.message ||
-									create.error?.message ||
-									connection.error?.message ||
+								{shownReadError(save.error) ||
+									shownReadError(create.error) ||
+									shownReadError(connection.error) ||
 									connectionNotice}
 							</p>
 						) : null}
@@ -365,4 +383,9 @@ function PickerRow({
 			) : null}
 		</button>
 	);
+}
+
+function shownReadError(error: Error | null | undefined) {
+	if (!error) return undefined;
+	return isUnreachableRead(error) ? GITHUB_LIST_UNREACHABLE : error.message;
 }

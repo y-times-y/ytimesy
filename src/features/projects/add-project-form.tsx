@@ -8,7 +8,12 @@ import {
 	filterRepositories,
 } from "#/domain/add-project";
 import type { Project, RepositoryChoice } from "../../domain/projects";
-import { requestJson } from "./api";
+import {
+	isUnreachableRead,
+	requestJson,
+	retryTransientRead,
+	transientReadRetryDelay,
+} from "./api";
 import { useGithubConnectionNotice } from "./github-connection-notice";
 import "./add-project-form.css";
 
@@ -37,7 +42,8 @@ export function AddProjectForm({
 				repositories: RepositoryChoice[];
 				installationUrl: string;
 			}>("/api/github/repositories"),
-		retry: false,
+		retry: retryTransientRead,
+		retryDelay: transientReadRetryDelay,
 	});
 	const connection = useMutation({
 		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
@@ -60,6 +66,7 @@ export function AddProjectForm({
 	const phase = addProjectPhase({
 		loading: repositories.isPending,
 		githubReady: Boolean(repositories.data),
+		unreachable: isUnreachableRead(repositories.error),
 	});
 	const copy = addProjectCopy(phase);
 	const visibleRepos = useMemo(
@@ -81,10 +88,14 @@ export function AddProjectForm({
 			<div className="project-create-header">
 				<div>
 					{compact ? (
-						<h2>{phase === "connect" ? copy.title : "New project"}</h2>
+						<h2>
+							{phase === "connect" || phase === "retry"
+								? copy.title
+								: "New project"}
+						</h2>
 					) : null}
 					<p>
-						{phase === "connect"
+						{phase === "connect" || phase === "retry"
 							? copy.description
 							: "Choose the repositories you’ll work with."}
 					</p>
@@ -104,6 +115,16 @@ export function AddProjectForm({
 			</div>
 			{connectionNotice ? <p role="alert">{connectionNotice}</p> : null}
 			{phase === "loading" ? <p role="status">Loading repositories…</p> : null}
+			{phase === "retry" ? (
+				<button
+					type="button"
+					className="setup-primary"
+					disabled={repositories.isFetching}
+					onClick={() => void repositories.refetch()}
+				>
+					{repositories.isFetching ? "Retrying…" : "Retry"}
+				</button>
+			) : null}
 			{phase === "connect" ? (
 				<>
 					{repositories.error ? (

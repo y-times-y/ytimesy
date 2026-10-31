@@ -168,6 +168,24 @@ describe("subagent tree", () => {
 		});
 	});
 
+	it("leaves a side chat out of the helper tree", () => {
+		const tree = subagentTree(
+			"root",
+			[
+				session("root", null),
+				session("side", "root", {
+					agentRole: "writer",
+					turnStatus: "running",
+					taskState: "working",
+					agentBudget: { sideChat: true, steps: 10, minutes: 10, tokens: 10 },
+				}),
+				session("helper", "root", { agentRole: "researcher" }),
+			],
+			NOW,
+		);
+		expect(tree.nodes.map((node) => node.id)).toEqual(["helper"]);
+	});
+
 	it("prices a plan-billed tree at list price and labels it an estimate", () => {
 		const plan = sessions().map((entry) => ({
 			...entry,

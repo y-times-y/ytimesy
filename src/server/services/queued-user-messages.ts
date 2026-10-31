@@ -19,11 +19,14 @@ import {
 	agentSessionPageForOwner,
 } from "../adapters/agent-sessions";
 import {
+	type QueuedUserSend,
 	queuedUserMessageItems,
 	queueUserMessageWhileRunning,
+	releaseQueuedUserMessage,
 	removeQueuedUserMessage,
 	restoreQueuedUserMessage,
 	takeNextQueuedUserMessage,
+	updateQueuedUserMessage,
 } from "../adapters/queued-user-messages";
 import { mentionNoteFor } from "./agent-mentions";
 import type { PublicCodexSession } from "./codex-workspace-session";
@@ -37,12 +40,26 @@ import { storeMessageAttachments } from "./message-attachments";
 import { timed } from "./step-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-type ComposerSend = Parameters<typeof sendHarnessWorkspaceTask>[2];
+type ComposerSend = Parameters<typeof sendHarnessWorkspaceTask>[2] & {
+	/**
+	 * A message the turn-end drain or Send already took. If the turn is running
+	 * again by the time it is stored, it stays marked for the next step.
+	 */
+	readonly released?: boolean;
+};
+
+function harnessTask(
+	input: ComposerSend,
+): Parameters<typeof sendHarnessWorkspaceTask>[2] {
+	const { released: _released, ...task } = input;
+	return task;
+}
 
 /**
- * The person's own send: while the chat's turn runs it waits for that turn's
- * next model step; otherwise it starts a turn. Runtime sends (notices, plan
- * approvals, fallback continuations) never queue.
+ * The person's own send: while the chat's turn runs it waits in that chat
+ * (editable until Send; the turn's end sends it too). Otherwise it starts a
+ * turn. Runtime sends (notices, plan approvals, fallback continuations) never
+ * queue.
  */
 export function sendComposerMessage(
 	machines: WorkspaceMachines,
@@ -60,7 +77,7 @@ export function sendComposerMessage(
 						machines,
 						scope,
 						{
-							...input,
+							...harnessTask(input),
 							...(queued.storedAttachments
 								? {
 										attachments: undefined,
@@ -94,7 +111,6 @@ async function queueBehindRunningTurn(
 	const session = await agentSessionForOwner(scope.userId, scope.sessionId);
 	if (
 		session?.turnStatus !== "running" ||
-		session.harness !== scope.harnessId ||
 		(scope.projectId && session.projectId !== scope.projectId)
 	)
 		return { session };
@@ -124,6 +140,9 @@ async function queueBehindRunningTurn(
 		...(input.variant ? { variant: input.variant } : {}),
 		...(input.speed ? { speed: input.speed } : {}),
 		...(input.fast !== undefined ? { fast: input.fast } : {}),
+		// Send, or the turn ending, is what the model receives. Until then it
+		// stays out of the next step so Edit can still change it.
+		released: input.released === true,
 	});
 	// The turn ended meanwhile: this send starts the next one with the stored files.
 	if (outcome === "not-running") return { storedAttachments: attachments };
@@ -155,9 +174,26 @@ export async function startQueuedUserTurn(
 ) {
 	const next = await takeNextQueuedUserMessage(userId, sessionId);
 	if (!next) return;
+	await deliverQueuedSend(machines, userId, sessionId, next);
+}
+
+/**
+ * Starts a turn with one waiting message. A failure puts that message back
+ * at the front of the queue. Send and the turn-end drain share this.
+ * Returns whether the turn started.
+ */
+async function deliverQueuedSend(
+	machines: WorkspaceMachines,
+	userId: string,
+	sessionId: string,
+	next: QueuedUserSend,
+): Promise<boolean> {
 	try {
 		const session = await agentSessionForOwner(userId, sessionId);
-		if (!session) return;
+		if (!session) {
+			await restoreQueuedUserMessage(sessionId, next).catch(() => {});
+			return false;
+		}
 		const view = await Effect.runPromise(
 			sendComposerMessage(
 				machines,
@@ -176,17 +212,20 @@ export async function startQueuedUserTurn(
 					...(next.fast !== undefined ? { fast: next.fast } : {}),
 					idempotencyKey: next.item.id,
 					storedAttachments: next.item.attachments ?? [],
+					released: true,
 				},
 			),
 		);
 		if (view.connection.status === "failed")
 			throw new Error(view.connection.message);
+		return true;
 	} catch (cause) {
 		await restoreQueuedUserMessage(sessionId, next).catch(() => {});
 		console.warn(
 			"A queued message could not start its turn; it waits in the chat.",
 			cause instanceof Error ? cause.name : "unknown",
 		);
+		return false;
 	}
 }
 
@@ -218,6 +257,79 @@ export function removeQueuedComposerMessage(
 			throw new Error("That message was already delivered.");
 		return publicSessionView(scope);
 	});
+}
+
+/** Replaces the text of a message the model has not received yet. */
+export function updateQueuedComposerMessage(
+	scope: HarnessSessionScope,
+	messageId: string,
+	text: string,
+): Effect.Effect<PublicCodexSession> {
+	return Effect.promise(async () => {
+		await rewriteQueuedText(scope, messageId, text);
+		return publicSessionView(scope);
+	});
+}
+
+/**
+ * Send on a queued message. A running turn keeps the tool call; the message
+ * is marked for the next step. A finished turn starts now.
+ */
+export function releaseQueuedComposerMessage(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	messageId: string,
+	text?: string,
+): Effect.Effect<PublicCodexSession> {
+	return Effect.promise(async () => {
+		if (!scope.sessionId) throw new Error("Select a chat first.");
+		if (text !== undefined) await rewriteQueuedText(scope, messageId, text);
+		const outcome = await releaseQueuedUserMessage(
+			scope.userId,
+			scope.sessionId,
+			messageId,
+		);
+		if (outcome.status === "missing")
+			throw new Error("That message was already delivered.");
+		if (outcome.status === "taken") {
+			const started = await deliverQueuedSend(
+				machines,
+				scope.userId,
+				scope.sessionId,
+				outcome.send,
+			);
+			if (!started) throw new Error("That message could not be sent.");
+		}
+		return publicSessionView(scope);
+	});
+}
+
+async function rewriteQueuedText(
+	scope: HarnessSessionScope,
+	messageId: string,
+	text: string,
+) {
+	if (!scope.sessionId) throw new Error("Select a chat first.");
+	const trimmed = text.trim();
+	if (!trimmed) throw new Error("Message text is required.");
+	const waiting = await queuedUserMessageItems(scope.sessionId);
+	const current = waiting.find((item) => item.id === messageId);
+	if (!current) throw new Error("That message was already delivered.");
+	const { queued: _queued, released: _released, ...item } = current;
+	const message = await queuedModelText(scope.userId, scope.sessionId, {
+		...item,
+		text: trimmed,
+	});
+	if (
+		!(await updateQueuedUserMessage(
+			scope.userId,
+			scope.sessionId,
+			messageId,
+			trimmed,
+			message,
+		))
+	)
+		throw new Error("That message was already delivered.");
 }
 
 /**

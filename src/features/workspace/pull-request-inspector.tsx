@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import {
 	Check,
 	ChevronDown,
@@ -13,15 +14,24 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import type {
-	ListedRepositoryPullRequest,
-	PullRequestCheck,
-	PullRequestComment,
-	PullRequestDetail,
-	PullRequestPerson,
+import {
+	type AgentProviderId,
+	DEFAULT_COMPOSER_HARNESS_ID,
+} from "#/domain/agent-provider";
+import {
+	githubPullFullName,
+	type ListedRepositoryPullRequest,
+	listedPullRequestAuthor,
+	type PullRequestCheck,
+	type PullRequestComment,
+	type PullRequestDetail,
+	type PullRequestPerson,
+	pullRequestReviewStart,
+	startPullRequestReviewThread,
 } from "#/domain/pull-request-review";
 import { sourceLanguageFromPath } from "#/domain/source-language";
 import { requestJson } from "../projects/api";
+import { startPullRequestReviewChat } from "../pull-requests/pull-request-review.fn";
 import { AgentMarkdown } from "../sessions/agent-markdown";
 import {
 	HighlightedTokens,
@@ -65,25 +75,45 @@ function CheckIcon({ state }: { state: PullRequestCheck["state"] }) {
 function Avatar({
 	person,
 	size = 20,
+	className,
 }: {
 	person: PullRequestPerson;
 	size?: number;
+	className?: string;
 }) {
+	const classes = className ? `pr-avatar ${className}` : "pr-avatar";
 	return person.avatarUrl ? (
 		<img
-			className="pr-avatar"
+			className={classes}
 			src={`${person.avatarUrl}${person.avatarUrl.includes("?") ? "&" : "?"}s=${size * 2}`}
 			alt=""
 			width={size}
 			height={size}
 		/>
 	) : (
-		<span className="pr-avatar" style={{ width: size, height: size }} />
+		<span className={classes} style={{ width: size, height: size }} />
 	);
 }
 
 function displayName(person: PullRequestPerson) {
 	return person.login.replace(/\[bot\]$/, "");
+}
+
+/** One open pull request in the picker: title, author, and avatar. */
+export function PullRequestOption({ pr }: { pr: ListedRepositoryPullRequest }) {
+	const author = listedPullRequestAuthor(pr);
+	return (
+		<>
+			<Avatar person={author} size={20} className="pr-picker-avatar" />
+			<span className="pr-picker-text">
+				<span className="pr-picker-title">{pr.title}</span>
+				<span className="pr-picker-meta">
+					#{pr.number} · <span className="pr-picker-author">{author.name}</span>
+					{pr.draft ? " · Draft" : ""}
+				</span>
+			</span>
+		</>
+	);
 }
 
 function timeAgo(iso: string) {
@@ -340,12 +370,93 @@ function Checks({ checks }: { checks: readonly PullRequestCheck[] }) {
 	);
 }
 
+function ReviewWithYtimesy({
+	pull,
+	projectId,
+	harnessId,
+	modelId,
+	currentSessionId,
+	onReviewStarted,
+}: {
+	pull: {
+		readonly number: number;
+		readonly title: string;
+		readonly url: string;
+	};
+} & ReviewChat) {
+	const startReview = useServerFn(startPullRequestReviewChat);
+	const requestId = useRef(crypto.randomUUID());
+	const review = useMutation({
+		mutationFn: () => {
+			if (!projectId)
+				throw new Error("Select a project before starting a review.");
+			const fullName = githubPullFullName(pull.url);
+			if (!fullName)
+				throw new Error("This pull request cannot be reviewed from here.");
+			return startPullRequestReviewThread({
+				currentSessionId,
+				request: pullRequestReviewStart({
+					projectId,
+					harnessId: harnessId ?? DEFAULT_COMPOSER_HARNESS_ID,
+					modelId: modelId ?? "",
+					requestId: requestId.current,
+					pull: {
+						fullName,
+						number: pull.number,
+						title: pull.title,
+						url: pull.url,
+					},
+				}),
+				start: async (request) => {
+					const chat = await startReview({ data: request });
+					return { sessionId: chat.sessionId };
+				},
+			});
+		},
+		onSuccess: (sessionId) => onReviewStarted?.(sessionId),
+	});
+	if (!projectId) return null;
+	return (
+		<div className="pr-review">
+			<button
+				type="button"
+				className="pr-button"
+				disabled={review.isPending || review.isSuccess}
+				onClick={() => review.mutate()}
+			>
+				{review.isPending || review.isSuccess
+					? "Starting review…"
+					: "Review with ytimesy"}
+			</button>
+			{review.error ? (
+				<p className="pr-review-error" role="alert">
+					{review.error.message}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+type ReviewChat = {
+	readonly projectId?: string;
+	readonly harnessId?: AgentProviderId;
+	readonly modelId?: string;
+	/** The chat already open. A review must not continue it. */
+	readonly currentSessionId?: string;
+	readonly onReviewStarted?: (sessionId: string) => void;
+};
+
 /** Review any open pull request of the project's repository without leaving ytimesy. */
 export function PullRequestInspector({
 	repository,
+	projectId,
+	harnessId,
+	modelId,
+	currentSessionId,
+	onReviewStarted,
 }: {
 	repository: PullRequestRepository;
-}) {
+} & ReviewChat) {
 	const list = useQuery({
 		queryKey: ["pull-requests", "open", repository.repositoryId],
 		queryFn: () =>
@@ -389,13 +500,7 @@ export function PullRequestInspector({
 							data-selected={pr.number === number || undefined}
 							onSelect={() => setPicked(pr.number)}
 						>
-							<span className="pr-picker-text">
-								<span className="pr-picker-title">{pr.title}</span>
-								<span className="pr-picker-meta">
-									#{pr.number} · {pr.author}
-									{pr.draft ? " · Draft" : ""}
-								</span>
-							</span>
+							<PullRequestOption pr={pr} />
 							{pr.number === number ? <Check size={14} /> : null}
 						</DropdownMenu.Item>
 					))}
@@ -408,6 +513,11 @@ export function PullRequestInspector({
 			key={number}
 			source={{ ...repository, number }}
 			picker={picker}
+			projectId={projectId}
+			harnessId={harnessId}
+			modelId={modelId}
+			currentSessionId={currentSessionId}
+			onReviewStarted={onReviewStarted}
 		/>
 	);
 }
@@ -415,10 +525,15 @@ export function PullRequestInspector({
 function PullRequestReview({
 	source,
 	picker,
+	projectId,
+	harnessId,
+	modelId,
+	currentSessionId,
+	onReviewStarted,
 }: {
 	source: PullRequestSource;
 	picker: ReactNode;
-}) {
+} & ReviewChat) {
 	const cache = useQueryClient();
 	const key = ["pull-request", source.repositoryId, source.number] as const;
 	const query = new URLSearchParams({
@@ -599,6 +714,14 @@ function PullRequestReview({
 					</span>
 					<span className="pr-muted">#{pr.number}</span>
 					<span className="pr-head-spacer" />
+					<ReviewWithYtimesy
+						pull={{ number: pr.number, title: pr.title, url: pr.url }}
+						projectId={projectId}
+						harnessId={harnessId}
+						modelId={modelId}
+						currentSessionId={currentSessionId}
+						onReviewStarted={onReviewStarted}
+					/>
 					{picker}
 					<a
 						className="pr-ghost"

@@ -10,6 +10,7 @@ import {
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { isSideChat } from "#/domain/side-chat";
 import { subagentTaskViews } from "#/domain/subagent-tree";
 import {
 	agentSessionForOwner,
@@ -51,7 +52,9 @@ export async function projectAgentTasksAndBackground(
 	}
 	// Subagents only: rows of the retired lead/child architecture (no
 	// agent role) and anything under them are not shown.
-	const descendants = all.filter((session) => session.agentRole);
+	const descendants = all.filter(
+		(session) => session.agentRole && !isSideChat(session),
+	);
 	const byId = new Map(descendants.map((session) => [session.id, session]));
 	const subagents = subagentTaskViews(
 		root.id,

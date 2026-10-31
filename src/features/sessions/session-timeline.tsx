@@ -1,6 +1,13 @@
 import { ChevronRight, Clock3, LoaderCircle, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { createContext, memo, useContext, useMemo, useRef } from "react";
+import {
+	createContext,
+	memo,
+	useContext,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { agentCall } from "#/domain/agent-call";
 import {
 	MAIN_MENTION_ID,
@@ -130,7 +137,11 @@ import {
 	CheckVerdictCard,
 	RequirementsList,
 } from "./tool-cards";
-import { ProgramSource, ToolDetailBody } from "./tool-detail-body";
+import {
+	CommandOutput,
+	ProgramSource,
+	ToolDetailBody,
+} from "./tool-detail-body";
 import {
 	type UserQuestionActions,
 	UserQuestionCard,
@@ -152,6 +163,8 @@ export function SessionTimeline({
 	failoverActions,
 	memoryActions,
 	onRemoveQueued,
+	onEditQueued,
+	onSendQueued,
 	evidence = [],
 	helperLines,
 	senderName,
@@ -184,6 +197,10 @@ export function SessionTimeline({
 	evidence?: readonly EvidenceRecord[];
 	/** Takes back a message still waiting behind the running turn. */
 	onRemoveQueued?: (messageId: string) => void;
+	/** Replaces a waiting message's text. */
+	onEditQueued?: (messageId: string, text: string) => void;
+	/** Delivers a waiting message after the current step, or now if the turn ended. */
+	onSendQueued?: (messageId: string, text?: string) => void;
 	/** Opens, undoes and checks the memory lines a turn recalled or saved. */
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
@@ -215,6 +232,8 @@ export function SessionTimeline({
 	const { queued, items, presented, visible, rows, fileChanges } = derived;
 	const openFile = useStableCallback(onOpenFile);
 	const removeQueued = useStableCallback(onRemoveQueued);
+	const editQueued = useStableCallback(onEditQueued);
+	const sendQueued = useStableCallback(onSendQueued);
 	const readPasted = useStableCallback(readPastedText);
 	const stableMemoryActions = useStableActions(memoryActions);
 	const stableSecretActions = useStableActions(secretActions);
@@ -395,7 +414,14 @@ export function SessionTimeline({
 			kind: "userMessage",
 			queued: true,
 			estimate: 60,
-			content: <QueuedMessage item={item} onRemove={removeQueued} />,
+			content: (
+				<QueuedMessage
+					item={item}
+					onRemove={removeQueued}
+					onEdit={editQueued}
+					onSend={sendQueued}
+				/>
+			),
 		});
 	for (const message of queuedSteering)
 		add({
@@ -825,19 +851,91 @@ function MessageAttachments({
 const QueuedMessage = memo(function QueuedMessage({
 	item,
 	onRemove,
+	onEdit,
+	onSend,
 }: {
 	item: UserMessageItem;
 	onRemove?: (messageId: string) => void;
+	onEdit?: (messageId: string, text: string) => void;
+	onSend?: (messageId: string, text?: string) => void;
 }) {
+	const [draft, setDraft] = useState<string | null>(null);
+	const editing = draft !== null;
+	const shown = (draft ?? item.text).trim();
 	return (
 		<div className="session-message" data-role="user" data-queued="true">
 			<MessageAttachments attachments={item.attachments} />
-			<p>
-				<MentionText text={item.text} />
-			</p>
+			{editing ? (
+				<textarea
+					className="session-queued-edit"
+					aria-label="Edit queued message"
+					rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+					value={draft}
+					onChange={(event) => setDraft(event.currentTarget.value)}
+				/>
+			) : (
+				<p>
+					<MentionText text={item.text} />
+				</p>
+			)}
 			<p className="session-queued-note" role="status">
 				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
-				<span>Queued for the agent's next step</span>
+				<span>
+					{item.released ? "Sends after this step" : "Queued in this chat"}
+				</span>
+				{onEdit ? (
+					editing ? (
+						<>
+							<button
+								type="button"
+								className="session-queued-action"
+								onClick={() => {
+									if (!shown) return;
+									onEdit(item.id, shown);
+									setDraft(null);
+								}}
+							>
+								Save
+							</button>
+							<button
+								type="button"
+								className="session-queued-action"
+								onClick={() => setDraft(null)}
+							>
+								Cancel
+							</button>
+						</>
+					) : (
+						<button
+							type="button"
+							className="session-queued-action"
+							aria-label="Edit queued message"
+							onClick={() => setDraft(item.text)}
+						>
+							Edit
+						</button>
+					)
+				) : null}
+				{onSend ? (
+					<button
+						type="button"
+						className="session-queued-action"
+						aria-label="Send queued message"
+						title={
+							item.released
+								? "Sends when the current step finishes"
+								: "Send after the current step, or now if the turn already finished"
+						}
+						disabled={!shown}
+						onClick={() => {
+							if (!shown) return;
+							onSend(item.id, editing ? shown : undefined);
+							setDraft(null);
+						}}
+					>
+						Send
+					</button>
+				) : null}
 				{onRemove ? (
 					<button
 						type="button"
@@ -1125,7 +1223,11 @@ function SessionItemView({
 					<div className="session-command-detail">
 						<ShellCommandCode command={item.command} />
 						{item.output ? (
-							<pre className="session-output">{item.output}</pre>
+							<CommandOutput
+								command={item.command}
+								output={item.output}
+								className="session-output"
+							/>
 						) : null}
 						{item.exitCode !== null ? (
 							<p className="session-activity-meta">exit {item.exitCode}</p>

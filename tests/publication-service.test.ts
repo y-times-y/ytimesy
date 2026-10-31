@@ -111,6 +111,7 @@ it("publishes the chat working branch against its selected starting branch", asy
 		expect.objectContaining({ head: "ytimesy/task-sess", base: "feature" }),
 		// Recorded as this project's pull request so GitHub events can wake the chat.
 		{ userId: "alice", projectId, repositoryId: 2, sessionId: "sess" },
+		"user-token",
 	);
 });
 
@@ -229,6 +230,7 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 			base: "master",
 		},
 		expect.objectContaining({ userId: "alice", projectId, repositoryId: 2 }),
+		"user-token",
 	);
 	expect(published).toEqual({
 		number: 4,
@@ -267,5 +269,6 @@ it("publishes a workspace branch when the project is on the default branch", asy
 			base: "master",
 		},
 		expect.objectContaining({ userId: "alice", projectId, sessionId: null }),
+		"user-token",
 	);
 });

@@ -1,6 +1,11 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
-import { HttpRequestError, requestJson, retryTransientRead } from "./api";
+import {
+	HttpRequestError,
+	isUnreachableRead,
+	requestJson,
+	retryTransientRead,
+} from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -40,6 +45,17 @@ it("bounds retries and does not retry authorization failures", () => {
 		false,
 	);
 	expect(retryTransientRead(0, new TypeError("Failed to fetch"))).toBe(true);
+	expect(retryTransientRead(0, new TypeError("Load failed"))).toBe(true);
+	expect(isUnreachableRead(new TypeError("Load failed"))).toBe(true);
+	expect(isUnreachableRead(new DOMException("aborted", "AbortError"))).toBe(
+		true,
+	);
+	expect(
+		isUnreachableRead(new HttpRequestError("Reconnect GitHub.", 409)),
+	).toBe(false);
+	expect(
+		retryTransientRead(0, new HttpRequestError("Reconnect GitHub.", 409)),
+	).toBe(false);
 });
 
 it("retains previously loaded projects when a refresh fails", async () => {

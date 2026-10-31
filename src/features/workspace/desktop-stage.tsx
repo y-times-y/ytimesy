@@ -2,6 +2,53 @@ import { useEffect, useRef, useState } from "react";
 import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 
+type DesktopFrameDisplay = {
+	imageRect: (
+		x: number,
+		y: number,
+		width: number,
+		height: number,
+		mime: string,
+		pixels: Uint8Array,
+	) => void;
+	_renderQPush?: (action: {
+		type: "img";
+		img: HTMLImageElement;
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	}) => void;
+};
+
+/**
+ * noVNC base64-encodes every JPEG rect on the main thread before decoding it.
+ * A blob URL copies the bytes once and lets the browser decode the image.
+ */
+function showDesktopFramesAsBlobs(display: DesktopFrameDisplay) {
+	const push = display._renderQPush?.bind(display);
+	if (!push) return;
+	const original = display.imageRect.bind(display);
+	display.imageRect = (x, y, width, height, mime, pixels) => {
+		if (width === 0 || height === 0) return;
+		try {
+			const copy = new Uint8Array(pixels.byteLength);
+			copy.set(pixels);
+			const url = URL.createObjectURL(new Blob([copy.buffer], { type: mime }));
+			const img = new Image();
+			const release = () => {
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+			};
+			img.addEventListener("load", release);
+			img.addEventListener("error", () => URL.revokeObjectURL(url));
+			img.src = url;
+			push({ type: "img", img, x, y, width, height });
+		} catch {
+			original(x, y, width, height, mime, pixels);
+		}
+	};
+}
+
 export function DesktopStage({
 	projectId,
 	sessionId,
@@ -41,6 +88,12 @@ export function DesktopStage({
 				client.resizeSession = false;
 				client.showDotCursor = true;
 				client.background = "#111111";
+				// The canvas is positioned by CSS. Scrollbars would change the
+				// measured size and make every frame lay out the chat.
+				const screen = target.firstElementChild;
+				if (screen instanceof HTMLElement) screen.style.overflow = "hidden";
+				const display = (client as { _display?: DesktopFrameDisplay })._display;
+				if (display) showDesktopFramesAsBlobs(display);
 				// noVNC removes its canvas on disconnect; without this the panel goes black.
 				client.addEventListener("disconnect", (event) => {
 					if (disposed) return;

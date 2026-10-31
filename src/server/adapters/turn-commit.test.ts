@@ -60,6 +60,30 @@ async function commit(repo: string, turn = "a".repeat(64)) {
 	return exec(binary, args);
 }
 
+it("records the given GitHub user as both author and committer", async () => {
+	await repository(async (repo) => {
+		await writeFile(join(repo, "tracked.txt"), "attributed\n");
+		const [binary, ...args] = automaticTurnCommitArgv(
+			repo,
+			"d".repeat(64),
+			"Attribute the change",
+			"",
+			{ name: "Het Patel", email: "7+het@users.noreply.github.com" },
+		);
+		await exec(binary, args);
+		expect(
+			(
+				await exec("git", ["-C", repo, "log", "-1", "--format=%an <%ae>"])
+			).stdout.trim(),
+		).toBe("Het Patel <7+het@users.noreply.github.com>");
+		expect(
+			(
+				await exec("git", ["-C", repo, "log", "-1", "--format=%cn <%ce>"])
+			).stdout.trim(),
+		).toBe("Het Patel <7+het@users.noreply.github.com>");
+	});
+});
+
 it("commits tracked and new files once under concurrent completion observations and retains the review diff", async () => {
 	await repository(async (repo) => {
 		await writeFile(join(repo, "tracked.txt"), "fixed\n");

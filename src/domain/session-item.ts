@@ -35,8 +35,10 @@ export type UserMessageItem = {
 	readonly approvesPlan?: true;
 	/** Cross-chat memory read for this request; the model saw it as a separate part. */
 	readonly memory?: MemoryRecall;
-	/** Sent while a turn ran; it waits for that turn's next model step (or the next turn). */
+	/** Sent while a turn ran; it waits in this chat until Send or the turn's end. */
 	readonly queued?: true;
+	/** Send was pressed; the next model step takes it. Only set on a waiting message. */
+	readonly released?: true;
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -222,6 +224,34 @@ export type SessionItem =
 
 export function isTurnRunning(status: SessionTurnStatus): boolean {
 	return status === "running";
+}
+
+/**
+ * Where the composer submit goes. A running chat keeps the follow-up: treating
+ * it as a new-chat draft dropped the session id and the server opened another
+ * chat. A turn already on screen whose id has not landed yet is held, so a
+ * second send does not open one either.
+ */
+export function composerSubmitTarget(input: {
+	readonly newChatDraft: boolean;
+	readonly openChatId?: string;
+	readonly turnStatus: SessionTurnStatus;
+}): {
+	readonly startsNewChat: boolean;
+	readonly sessionId?: string;
+	readonly waitForChat?: boolean;
+} {
+	if (input.openChatId && isTurnRunning(input.turnStatus)) {
+		return { startsNewChat: false, sessionId: input.openChatId };
+	}
+	if (isTurnRunning(input.turnStatus)) {
+		return { startsNewChat: false, waitForChat: true };
+	}
+	if (input.newChatDraft) return { startsNewChat: true };
+	return {
+		startsNewChat: false,
+		...(input.openChatId ? { sessionId: input.openChatId } : {}),
+	};
 }
 
 export function liveActivityStatus(

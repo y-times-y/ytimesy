@@ -27,6 +27,7 @@ import {
 	RIGOR_LEAD_REQUIREMENTS,
 	RIGOR_REQUIREMENTS_INSTRUCTIONS,
 } from "#/domain/rigor";
+import { isSideChat, sideChatInstructions } from "#/domain/side-chat";
 import {
 	AGENT_TOOL,
 	isReaderRole,
@@ -225,6 +226,7 @@ function roleInstructions(
 	unattended?: boolean,
 	checkInProportion?: boolean,
 ) {
+	if (isSideChat(session)) return sideChatInstructions();
 	if (session.agentRole === "writer" && session.agentBudget?.sidekick)
 		return sidekickRoleInstructions(session.agentBudget);
 	return session.agentRole

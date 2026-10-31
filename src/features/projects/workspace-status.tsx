@@ -5,7 +5,12 @@ import {
 	workspacePrepareShowsStatus,
 	workspacePrepareStalled,
 } from "#/domain/project-workspace";
-import { requestJson } from "./api";
+import {
+	isUnreachableRead,
+	requestJson,
+	retryTransientRead,
+	transientReadRetryDelay,
+} from "./api";
 import { GithubSetupLink } from "./github-setup-link";
 
 interface WorkspaceView {
@@ -37,6 +42,8 @@ export function WorkspaceStatus({
 			requestJson<WorkspaceView | null>(
 				`/api/workspaces?projectId=${projectId}`,
 			),
+		retry: retryTransientRead,
+		retryDelay: transientReadRetryDelay,
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
 			return status &&
@@ -73,6 +80,19 @@ export function WorkspaceStatus({
 		prepare.mutate();
 	}, [current, prepare, projectId, workspace.error, workspace.isPending]);
 	if (workspace.isPending) return null;
+	if (workspace.error && isUnreachableRead(workspace.error))
+		return (
+			<p className="workspace-status">
+				<span>Couldn't refresh the workspace.</span>
+				<button
+					type="button"
+					disabled={workspace.isFetching}
+					onClick={() => void workspace.refetch()}
+				>
+					{workspace.isFetching ? "Retrying…" : "Retry"}
+				</button>
+			</p>
+		);
 	if (workspace.error)
 		return (
 			<p className="workspace-status" role="alert">

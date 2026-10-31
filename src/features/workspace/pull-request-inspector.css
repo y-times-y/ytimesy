@@ -30,9 +30,23 @@
 .pr-head-bar {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 8px;
 	min-height: 26px;
 	font-size: 12px;
+}
+.pr-review {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 4px;
+}
+.pr-review-error {
+	margin: 0;
+	max-width: 280px;
+	color: #f08a8a;
+	font-size: 12px;
+	text-align: right;
 }
 .pr-head-spacer {
 	flex: 1;
@@ -170,6 +184,9 @@
 	flex-shrink: 0;
 	color: var(--list-text-strong);
 }
+.pr-picker-author {
+	color: var(--list-text);
+}
 
 /* Avatars */
 .pr-avatar {
@@ -179,6 +196,9 @@
 	border-radius: 50%;
 	background: #2a2a2a;
 	object-fit: cover;
+}
+.pr-picker-avatar {
+	align-self: center;
 }
 .pr-avatars {
 	display: inline-flex;

@@ -33,8 +33,12 @@ export function HighlightedTokens({
 					key={token.offset}
 					style={{
 						color: token.htmlStyle?.["--shiki-dark"] ?? token.color,
+						// Two themes: the dark theme's italics arrive as a variable, not fontStyle.
 						fontStyle:
-							token.fontStyle && token.fontStyle & 1 ? "italic" : undefined,
+							token.htmlStyle?.["--shiki-dark-font-style"] === "italic" ||
+							(token.fontStyle && token.fontStyle & 1)
+								? "italic"
+								: undefined,
 						fontWeight:
 							token.fontStyle && token.fontStyle & 2 ? "bold" : undefined,
 						textDecoration:

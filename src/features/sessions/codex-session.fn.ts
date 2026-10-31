@@ -45,9 +45,11 @@ import {
 } from "#/server/services/open-chat-side";
 import {
 	publicSessionView,
+	releaseQueuedComposerMessage,
 	removeQueuedComposerMessage,
 	sendComposerMessage,
 	stopTurnKeepingQueue,
+	updateQueuedComposerMessage,
 	withQueuedMessages,
 } from "#/server/services/queued-user-messages";
 import { timed, withStepTrace } from "#/server/services/step-timing";
@@ -569,5 +571,62 @@ export const removeQueuedSessionMessage = createServerFn({ method: "POST" })
 		);
 		return Effect.runPromise(
 			removeQueuedComposerMessage(scope, data.messageId),
+		);
+	});
+
+/** Replaces a waiting message's text. A step that already took it is unchanged. */
+export const updateQueuedSessionMessage = createServerFn({ method: "POST" })
+	.validator(
+		(
+			data: Parameters<typeof optionalSessionInput>[0] & {
+				messageId: string;
+				text: string;
+			},
+		) => ({
+			...optionalSessionInput(data),
+			messageId: z.string().uuid().parse(data.messageId),
+			text: messageText.parse(data.text),
+		}),
+	)
+	.handler(async ({ data }): Promise<PublicCodexSession> => {
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
+		return Effect.runPromise(
+			updateQueuedComposerMessage(scope, data.messageId, data.text),
+		);
+	});
+
+/**
+ * Send on a waiting message. A running turn is not interrupted; the message
+ * goes out at the next step. A finished turn starts now.
+ */
+export const releaseQueuedSessionMessage = createServerFn({ method: "POST" })
+	.validator(
+		(
+			data: Parameters<typeof optionalSessionInput>[0] & {
+				messageId: string;
+				text?: string;
+			},
+		) => ({
+			...optionalSessionInput(data),
+			messageId: z.string().uuid().parse(data.messageId),
+			...(data.text !== undefined
+				? { text: messageText.parse(data.text) }
+				: {}),
+		}),
+	)
+	.handler(async ({ data }): Promise<PublicCodexSession> => {
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
+		return runWithMachines((machines) =>
+			releaseQueuedComposerMessage(machines, scope, data.messageId, data.text),
 		);
 	});

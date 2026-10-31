@@ -7,6 +7,7 @@ import {
 	cachedSourceEvidence,
 	sourceEvidenceMatches,
 } from "#/domain/project-source-evidence";
+import { isSideChat } from "#/domain/side-chat";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { saveAgentTaskBlockedEvent } from "../adapters/agent-task-events";
 import { enqueueAgentTaskEvent } from "../jobs/queue";
@@ -132,7 +133,8 @@ export function apiAgentTools(
 		}),
 	};
 	// A subagent asks its parent for a missing decision; the parent is woken.
-	if (session.parentSessionId)
+	// A side chat answers the user itself and does not wake Main.
+	if (session.parentSessionId && !isSideChat(session))
 		tools[reportTaskBlockedDefinition.name] = tool({
 			description: reportTaskBlockedDefinition.description,
 			inputSchema: jsonSchema<{ question?: unknown }>(

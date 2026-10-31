@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { childTaskEventQueueText } from "#/domain/child-task-activity";
+import { isSideChat } from "#/domain/side-chat";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -62,6 +63,8 @@ async function deliverAgentTaskEvent(
 	if (!parent || !child || parent.projectId !== child.projectId) {
 		throw new Error("The task event hierarchy is no longer available.");
 	}
+	// A side chat is a separate conversation. Its result stays in that column.
+	if (isSideChat(child)) return;
 	// A subagent's report (agent tool) arrives as a queued message: its
 	// header, its own report and, for a writer, the patch and ref. Events of
 	// retired lead/child tasks (no role) are dropped.

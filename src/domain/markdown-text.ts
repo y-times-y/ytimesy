@@ -12,6 +12,17 @@ export function withoutDanglingMarker(text: string) {
 	return text.replace(/(^|\s)(?:\*{1,3}|_{1,3}|`{1,3}|~~)\s*$/, "$1");
 }
 
+/**
+ * A reply without its `<pull-request>` description, which is published to
+ * GitHub rather than shown in the chat. A block still streaming in (no close
+ * tag yet) is hidden from its open tag on.
+ */
+export function withoutPullRequestBlock(text: string) {
+	return text
+		.replace(/<pull-request>[\s\S]*?(?:<\/pull-request>|$)/gi, "")
+		.trimEnd();
+}
+
 /** A line without its list, quote or heading prefix. */
 function plainLine(line: string) {
 	return line.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)*/, "").trim();

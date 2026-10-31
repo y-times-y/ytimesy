@@ -9,6 +9,7 @@ import {
 } from "#/domain/session-item";
 import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
 import { database } from "./database";
+import { queuedTimelineItemSql } from "./queued-user-messages";
 import {
 	LATEST_PAGE_HAS_OLDER_SQL,
 	LATEST_PAGE_ITEMS_SQL,
@@ -50,7 +51,7 @@ function snapshot(row: DeliveryRow): ConversationSnapshot {
 export async function conversationSnapshot(userId: string, sessionId: string) {
 	const result = await database().query<DeliveryRow>(
 		`select s.user_id,s.id session_id,d.revision::text,${SNAPSHOT_ITEMS},s.turn_status,
-	 (select jsonb_agg(q.queued_send->'item' order by q.created_at,q.id) from agent_peer_inbox q
+	 (select jsonb_agg(${queuedTimelineItemSql} order by q.created_at,q.id) from agent_peer_inbox q
 	  where q.recipient_id=s.id and not q.accepted and q.queued_send is not null) as queued
 	 from agent_session s join conversation_delivery d on d.session_id=s.id ${SNAPSHOT_PAGE}
 	 where s.id=$1 and s.user_id=$2`,
@@ -73,7 +74,7 @@ export async function claimConversationDeliveries(
 	 and ($3::uuid is null or session_id=$3::uuid)
 	 order by retry_at for update skip locked limit $2) returning session_id,revision)
 	 select s.user_id,s.id session_id,c.revision::text,${SNAPSHOT_ITEMS},s.turn_status,
-	 (select jsonb_agg(q.queued_send->'item' order by q.created_at,q.id) from agent_peer_inbox q
+	 (select jsonb_agg(${queuedTimelineItemSql} order by q.created_at,q.id) from agent_peer_inbox q
 	  where q.recipient_id=s.id and not q.accepted and q.queued_send is not null) as queued
 	 from claimed c join agent_session s on s.id=c.session_id ${SNAPSHOT_PAGE}`,
 		[leaseId, limit, sessionId ?? null],

@@ -52,6 +52,9 @@ export function commitAllArgv(
 	const trailer = coAuthor
 		? ` -m ${shellSingleQuote(commitCoAuthorTrailer(coAuthor))}`
 		: "";
+	const name = shellSingleQuote(author.name);
+	const email = shellSingleQuote(author.email);
+	const identity = `GIT_AUTHOR_NAME=${name} GIT_AUTHOR_EMAIL=${email} GIT_COMMITTER_NAME=${name} GIT_COMMITTER_EMAIL=${email}`;
 	return [
 		"bash",
 		"-lc",
@@ -59,7 +62,9 @@ export function commitAllArgv(
 			`cd ${shellSingleQuote(directory)}`,
 			"git add -A",
 			SECRET_COMMIT_GUARD,
-			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else git -c user.name=${shellSingleQuote(author.name)} -c user.email=${shellSingleQuote(author.email)} commit -m ${shellSingleQuote(message)}${trailer}; fi`,
+			`git config user.name ${name}`,
+			`git config user.email ${email}`,
+			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else ${identity} git -c user.name=${name} -c user.email=${email} commit -m ${shellSingleQuote(message)}${trailer}; fi`,
 		].join(" && "),
 	];
 }

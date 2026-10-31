@@ -51,6 +51,14 @@ describe("saved right panel", () => {
 		).toEqual(closed);
 	});
 
+	it("opens a saved Preview tab on Desktop", () => {
+		expect(savedInspectorFromCookies("ytimesy-inspector=1.preview.")).toEqual({
+			open: true,
+			view: "desktop",
+			split: null,
+		});
+	});
+
 	it("is the closed panel when missing or unreadable", () => {
 		expect(savedInspectorFromCookies(null)).toEqual(CLOSED_INSPECTOR);
 		expect(savedInspectorFromCookies("ytimesy-inspector=junk")).toEqual(

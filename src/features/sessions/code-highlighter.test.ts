@@ -26,5 +26,11 @@ describe("shared Shiki highlighter", () => {
 			result.tokens[1][0].htmlStyle?.["--shiki-dark"],
 		);
 		expect(result.tokens[2].length).toBeGreaterThan(3);
+		// `const` is a storage type in Ember Dusk (sky blue), not GitHub Dark's red.
+		expect(
+			result.tokens[2]
+				?.find((token) => token.content === "const")
+				?.htmlStyle?.["--shiki-dark"]?.toLowerCase(),
+		).toBe("#6cb6ff");
 	});
 });

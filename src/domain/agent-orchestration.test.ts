@@ -11,6 +11,23 @@ it("makes the root chat the builder, in plain words", () => {
 	expect(direct).not.toContain("create_task");
 });
 
+it("asks for links labelled by what they open, not by their domain", () => {
+	expect(cloudAgentRoleInstructions()).toContain(
+		"never a bare domain like github.com",
+	);
+});
+
+it("tells the agent to write the pull request description from the change", () => {
+	const attended = cloudAgentRoleInstructions();
+	expect(attended).toContain("<pull-request>");
+	expect(attended).toContain("what changed and why");
+	expect(attended).toContain("how you checked it");
+	expect(attended).not.toContain("Automatic draft handoff");
+	expect(cloudAgentRoleInstructions({ unattended: true })).not.toContain(
+		"<pull-request>",
+	);
+});
+
 it("softens the root line only when the builder can delegate", () => {
 	const delegating = cloudAgentRoleInstructions({ delegates: true });
 	expect(delegating).toContain(

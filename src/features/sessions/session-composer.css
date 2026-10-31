@@ -1040,6 +1040,33 @@ button.attachment-tile-body[data-state="open"] {
 	color: #fff;
 	background: rgba(255, 255, 255, 0.08);
 }
+.session-queued-note button.session-queued-action {
+	padding: 1px 6px;
+	font-size: 12px;
+	line-height: 16px;
+}
+.session-queued-note button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.session-message[data-role="user"] textarea.session-queued-edit {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 100%;
+	margin: 0;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: #1a1a1a;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+	color: #fff;
+	font: inherit;
+	font-size: 13px;
+	line-height: 18px;
+	resize: vertical;
+	min-height: 36px;
+}
 .session-message[data-role="assistant"] {
 	max-width: 42em;
 }

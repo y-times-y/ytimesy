@@ -13,16 +13,18 @@ export type PullRequestOrigin = {
 };
 
 /**
- * Attribute PR creation to the installed app, with permission limited to this
- * repository. With an origin, a new PR's description links to "Fix with
- * ytimesy" and the PR is recorded as the project's, so GitHub events on it
- * (failed checks, @ytimesy comments) can wake its chat.
+ * Opens or updates the draft pull request as the signed-in user: GitHub sets
+ * the author to whoever the token authenticates as. Without a user token the
+ * installed app opens it instead, so the work still ships under the app's
+ * name. With an origin, the description links to "Fix with ytimesy" and the
+ * pull request is recorded for GitHub wake-ups.
  */
 export async function ensureAppDraftPullRequest(
 	installationId: number | string,
 	fullName: string,
 	draft: { title: string; body: string; head: string; base: string },
 	origin?: PullRequestOrigin,
+	userAccessToken?: string,
 ) {
 	const parts = fullName.split("/");
 	if (
@@ -30,11 +32,17 @@ export async function ensureAppDraftPullRequest(
 		parts.some((part) => !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part))
 	)
 		throw new Error("Invalid pull request repository.");
-	const token = await githubInstallationAccessToken(installationId, {
-		repositoryNames: [parts[1]],
-		contents: "read",
-		pullRequests: "write",
-	});
+	let token = userAccessToken?.trim() ?? "";
+	if (!token) {
+		console.warn(
+			"Signed-in GitHub token unavailable; opening the pull request as the GitHub App.",
+		);
+		token = await githubInstallationAccessToken(installationId, {
+			repositoryNames: [parts[1]],
+			contents: "read",
+			pullRequests: "write",
+		});
+	}
 	const linkId = randomUUID();
 	const app = process.env.APP_URL?.replace(/\/+$/, "");
 	const body =

@@ -2,7 +2,12 @@ import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import type { RepositoryChoice } from "../../domain/projects";
 import {
+	descriptionKeepingEvidence,
+	shouldReplacePullRequestBody,
+} from "../../domain/pull-request-handoff";
+import {
 	checkState,
+	githubUserName,
 	type ListedRepositoryPullRequest,
 	type PullRequestComment,
 	type PullRequestDetail,
@@ -416,20 +421,59 @@ export async function ensureDraftPullRequest(
 					number: existing.number,
 					url: existing.html_url,
 					draft: Boolean(existing.draft),
+					body: existing.body ?? "",
 				}
 			: null;
 	};
+	const reuse = async (found: {
+		number: number;
+		url: string;
+		draft: boolean;
+		body: string;
+	}) => {
+		await refreshPullRequestDescription(
+			token,
+			fullName,
+			found,
+			draft.body,
+		).catch((error) => {
+			console.warn("Pull request description could not be updated.", {
+				message:
+					error instanceof Error ? error.message.slice(0, 300) : "unknown",
+			});
+		});
+		return { number: found.number, url: found.url, draft: found.draft };
+	};
 	const existing = await find();
-	if (existing) return existing;
+	if (existing) return reuse(existing);
 	try {
 		return await createDraftPullRequest(token, fullName, draft);
 	} catch (error) {
 		if (error instanceof Response && error.status === 409) {
 			const raced = await find();
-			if (raced) return raced;
+			if (raced) return reuse(raced);
 		}
 		throw error;
 	}
+}
+
+/** Replaces the description of an open pull request and keeps its evidence section. */
+async function refreshPullRequestDescription(
+	token: string,
+	fullName: string,
+	existing: { number: number; body: string },
+	description: string,
+) {
+	if (!shouldReplacePullRequestBody(existing.body, description)) return;
+	const body = descriptionKeepingEvidence(existing.body, description);
+	if (body === existing.body) return;
+	const { owner, repo } = repositoryOwnerName(fullName);
+	await githubClient(token).pulls.update({
+		owner,
+		repo,
+		pull_number: existing.number,
+		body,
+	});
 }
 
 export async function listSessionPullRequests(token: string, fullName: string) {
@@ -630,12 +674,18 @@ export async function listOpenPullRequests(
 		state: "open",
 		per_page: 50,
 	});
-	return pulls.data.map((pull) => ({
-		number: pull.number,
-		title: pull.title,
-		author: pull.user?.login ?? "",
-		draft: Boolean(pull.draft),
-	}));
+	return pulls.data.map((pull) => {
+		const author = pullRequestPerson(pull.user);
+		return {
+			number: pull.number,
+			title: pull.title,
+			url: pull.html_url,
+			author: author.login,
+			authorName: githubUserName(pull.user),
+			authorAvatarUrl: author.avatarUrl,
+			draft: Boolean(pull.draft),
+		};
+	});
 }
 
 export async function markPullRequestReady(

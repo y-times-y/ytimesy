@@ -266,11 +266,19 @@ describe("left sidebar", () => {
 		};
 		expect(row("Asks")).toContain('aria-label="Asking you a question"');
 		expect(row("Asks")).toContain("lucide-message-circle-question");
-		// Working beats the PR: no icon, the title shimmers, the time stays.
+		// Working beats the PR: no PR icon, a still title, and the spinner in
+		// the time's place (the tooltip carries the working time).
 		expect(row("Busy")).toContain('data-status="working"');
 		expect(row("Busy")).not.toContain("sidebar-chat-pr");
-		expect(row("Busy")).toContain("sidebar-chat-age");
+		expect(row("Busy")).not.toContain("sidebar-chat-age");
+		expect(row("Busy")).toContain(
+			'<span class="sidebar-chat-title">Busy</span>',
+		);
+		expect(row("Busy")).toContain("sidebar-chat-working");
+		expect(row("Busy")).toContain("t-matrix");
+		expect(row("Busy")).not.toContain("sidebar-title-shimmer");
 		expect(row("Helper busy")).toContain('data-status="working"');
+		expect(row("Helper busy")).toContain("sidebar-chat-working");
 		expect(row("Broke")).toContain('aria-label="Last turn failed"');
 		expect(row("Broke")).toContain("lucide-triangle-alert");
 		expect(row("Passing")).toContain(
