@@ -4,7 +4,9 @@ import type { SessionItem } from "./session-item";
 import {
 	isSideChat,
 	sessionsInSubagentTree,
+	sideChatInstructions,
 	sideChatModelText,
+	sideChatReadOnly,
 	sideChatSendTarget,
 	slashCommandOpensSideChat,
 } from "./side-chat";
@@ -109,4 +111,13 @@ describe("side chat", () => {
 			sessionsInSubagentTree("root", sessions).map((session) => session.id),
 		).toEqual(["root", "helper"]);
 	});
+});
+
+it("reads but never writes the checkout while Main's turn runs", () => {
+	expect(sideChatReadOnly("running")).toBe(true);
+	for (const status of ["idle", "completed", "failed", undefined] as const)
+		expect(sideChatReadOnly(status)).toBe(false);
+	expect(sideChatInstructions()).toContain(
+		"While Main is working, your tools are read-only",
+	);
 });

@@ -77,7 +77,7 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { isSideChat } from "#/domain/side-chat";
+import { isSideChat, sideChatReadOnly } from "#/domain/side-chat";
 import {
 	isActiveSidekick,
 	sidekickState,
@@ -631,6 +631,19 @@ async function runApiTurnAttempt(
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
 		sideConversation = isSideChat(owner);
+		// While Main's turn runs, a side turn reads the shared checkout but
+		// cannot write it, so it can never undo or break Main's work.
+		const sideReadOnly =
+			sideConversation && owner.parentSessionId
+				? sideChatReadOnly(
+						(
+							await agentSessionMetadataForOwner(
+								owner.userId,
+								owner.parentSessionId,
+							)
+						)?.turnStatus,
+					)
+				: false;
 		// A child without a subagent role belongs to the retired lead/child
 		// architecture; only the root builder and its subagents run.
 		if (owner.parentSessionId && !owner.agentRole)
@@ -718,7 +731,7 @@ async function runApiTurnAttempt(
 			role: analyticsAgentRole(owner),
 		};
 		// The root chat is the builder itself; writer subagents build too.
-		const writable = writesOwnCheckout(owner);
+		const writable = writesOwnCheckout(owner) && !sideReadOnly;
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
 		memoryLoading =
@@ -974,7 +987,7 @@ async function runApiTurnAttempt(
 		// A read-only subagent's commands run as the reader Linux user, which
 		// cannot write the checkout (reader-workspace-machines.ts), so it gets
 		// the command runner its shell surface is built on.
-		const reader = isReaderRole(owner.agentRole);
+		const reader = isReaderRole(owner.agentRole) || sideReadOnly;
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
