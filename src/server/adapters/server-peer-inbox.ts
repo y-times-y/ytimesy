@@ -76,15 +76,21 @@ export async function injectServerPeerMessages(
 	const result = await database().query<{
 		id: string;
 		message: string;
-		queued_send: { item: UserMessageItem } | null;
+		queued_send: { item: UserMessageItem; released?: boolean } | null;
 	}>(
 		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
 		[recipientId],
 	);
 	if (!result.rows.length) return history;
+	// A queued follow-up stays editable until Send. The turn's end takes it
+	// whether or not Send was pressed; this step does not.
+	const delivering = result.rows.filter(
+		(row) => !(row.queued_send?.item && row.queued_send.released === false),
+	);
+	if (!delivering.length) return history;
 	const injected = [...history];
 	const users: UserMessageItem[] = [];
-	for (const row of result.rows) {
+	for (const row of delivering) {
 		const item = row.queued_send?.item;
 		if (item) {
 			if (delivered(item.id)) continue;
@@ -104,7 +110,7 @@ export async function injectServerPeerMessages(
 	await checkpoint(injected, users);
 	await database().query(
 		"update agent_peer_inbox set accepted=true where recipient_id=$1 and id=any($2::text[])",
-		[recipientId, result.rows.map((row) => row.id)],
+		[recipientId, delivering.map((row) => row.id)],
 	);
 	return injected;
 }

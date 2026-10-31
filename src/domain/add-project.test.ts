@@ -4,6 +4,7 @@ import {
 	addProjectCopy,
 	addProjectPhase,
 	filterRepositories,
+	githubRepositoryListMessage,
 	projectPickerRows,
 	projectPickerSections,
 	repositoryChoiceValue,
@@ -104,6 +105,41 @@ describe("add project", () => {
 		expect(filterRepositories(repositories, "yti")).toEqual([repositories[0]]);
 		expect(repositoryChoiceValue(repositories[0])).toBe("1:11");
 		expect(addProjectCopy("connect").title).toBe("Connect GitHub");
+	});
+
+	it("does not present a dropped repository read as a GitHub connection failure", () => {
+		expect(
+			addProjectPhase({
+				loading: false,
+				githubReady: false,
+				unreachable: true,
+			}),
+		).toBe("retry");
+		expect(addProjectCopy("retry").description).toBe("Couldn't reach GitHub.");
+		expect(
+			githubRepositoryListMessage({
+				query: "",
+				loaded: false,
+				unreachable: true,
+				errorMessage: "Load failed",
+			}),
+		).toBe("Couldn't reach GitHub.");
+		expect(
+			githubRepositoryListMessage({
+				query: "",
+				loaded: false,
+				unreachable: false,
+				errorMessage: "Reconnect GitHub.",
+			}),
+		).toBe("Reconnect GitHub.");
+		expect(
+			githubRepositoryListMessage({
+				query: "",
+				loaded: false,
+				unreachable: false,
+				errorMessage: "Connect GitHub to choose repositories.",
+			}),
+		).toBe("Connect GitHub to choose repositories.");
 	});
 });
 

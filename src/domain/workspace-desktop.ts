@@ -1,4 +1,6 @@
+import { CODE_MODE_TOOL } from "./code-mode";
 import { failureMessage, workspaceLooksGone } from "./failure-message";
+import { leanToolNames } from "./harness-model-profile";
 import { publicFailureMessage } from "./project-workspace";
 
 export type WorkspaceDesktop =
@@ -108,25 +110,127 @@ export function desktopPortIsListening(output: string) {
 	return output.includes("YTIMESY_DESKTOP_UP");
 }
 
+const SHELL_TOOLS = new Set<string>([
+	...leanToolNames(["command"]),
+	"execute_command",
+	"bash",
+	"shell",
+]);
+const EDIT_TOOLS = new Set<string>([
+	...leanToolNames(["write", "edit"]),
+	"apply_patches",
+	"create_file",
+	"replace_text",
+	"rename_symbol",
+	"rename_file",
+]);
+const IMAGE_TOOLS = new Set<string>(leanToolNames(["image"]));
+/** Work that means the desktop went idle, unless that call is itself desktop use. */
+const STREAK_BREAK_TOOLS = new Set<string>([
+	...SHELL_TOOLS,
+	...EDIT_TOOLS,
+	CODE_MODE_TOOL,
+]);
+const DESKTOP_COMMAND = /\bytimesy-browser\b|\bxdotool\b|\bscrot\b|DISPLAY=:0/;
+const DESKTOP_SCREENSHOT = /ytimesy-(?:api-)?screenshot/;
+const COMPUTER_TOOL = /^computer(?:$|[_-])/;
+
+export type DesktopActivityItem = {
+	readonly kind: string;
+	readonly id: string;
+	readonly tool?: string;
+	readonly command?: string;
+	readonly input?: string;
+};
+
+function mentionsDesktop(text: string) {
+	return (
+		text.includes("ytimesy-browser") ||
+		text.includes("xdotool") ||
+		text.includes("scrot") ||
+		text.includes("DISPLAY=:0") ||
+		text.includes("ytimesy-screenshot") ||
+		text.includes("ytimesy-api-screenshot")
+	);
+}
+
+/** The shell or program text inside a tool call's JSON input. */
+function commandText(input: string) {
+	try {
+		const parsed = JSON.parse(input) as {
+			command?: unknown;
+			cmd?: unknown;
+			code?: unknown;
+		};
+		const command = parsed?.command ?? parsed?.cmd ?? parsed?.code;
+		return typeof command === "string" ? command : input;
+	} catch {
+		return input;
+	}
+}
+
+function isDesktopCommand(text: string) {
+	return mentionsDesktop(text) && DESKTOP_COMMAND.test(text);
+}
+
+function isDesktopUse(item: DesktopActivityItem) {
+	if (item.kind === "commandExecution")
+		return Boolean(item.command && isDesktopCommand(item.command));
+	if (item.kind !== "dynamicToolCall" || !item.tool) return false;
+	if (item.tool.startsWith("browser_") || COMPUTER_TOOL.test(item.tool))
+		return true;
+	if (!item.input || !mentionsDesktop(item.input)) return false;
+	if (SHELL_TOOLS.has(item.tool) || item.tool === CODE_MODE_TOOL)
+		return isDesktopCommand(commandText(item.input));
+	if (IMAGE_TOOLS.has(item.tool))
+		return DESKTOP_SCREENSHOT.test(item.input) || isDesktopCommand(item.input);
+	return false;
+}
+
+/** An edit or a non-desktop command: the desktop is idle after this. */
+function breaksDesktopStreak(item: DesktopActivityItem) {
+	if (item.kind === "fileChange" || item.kind === "commandExecution")
+		return true;
+	return (
+		item.kind === "dynamicToolCall" &&
+		Boolean(item.tool && STREAK_BREAK_TOOLS.has(item.tool))
+	);
+}
+
 /**
- * The agent's first shared-desktop tool call in the running turn: the moment
- * the Desktop tab should catch up with a desktop the agent started itself.
+ * The desktop-use streak still in progress, or null when the desktop is idle.
+ * Screenshots and frames keep the id of the call that started the streak.
+ * The streak ends when the turn stops, or when the agent edits or runs a
+ * command that is not the desktop; the next desktop call is a new streak.
  */
-export function agentDesktopActivityInTurn(input: {
+export function desktopUseStreakId(input: {
 	readonly turnStatus: string | undefined;
-	readonly items: readonly { kind: string; id: string; tool?: string }[];
+	readonly items: readonly DesktopActivityItem[];
 }): string | null {
 	if (input.turnStatus !== "running") return null;
 	let turnStart = 0;
 	input.items.forEach((item, index) => {
 		if (item.kind === "userMessage") turnStart = index;
 	});
-	return (
-		input.items
-			.slice(turnStart)
-			.find(
-				(item) =>
-					item.kind === "dynamicToolCall" && item.tool?.startsWith("browser_"),
-			)?.id ?? null
-	);
+	let streak: string | null = null;
+	for (const item of input.items.slice(turnStart)) {
+		if (isDesktopUse(item)) {
+			if (streak === null) streak = item.id;
+			continue;
+		}
+		if (breaksDesktopStreak(item)) streak = null;
+	}
+	return streak;
+}
+
+/**
+ * Open the desktop sidebar for a streak the user has not closed.
+ * A dismissed streak stays closed through its later frames; a different
+ * streak id (the desktop went idle, then started again) opens it.
+ */
+export function desktopSidebarShouldOpen(input: {
+	readonly streakId: string | null;
+	readonly dismissedStreakId: string | null;
+}): boolean {
+	return input.streakId !== null && input.streakId !== input.dismissedStreakId;
 }

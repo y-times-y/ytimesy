@@ -3,6 +3,7 @@ import { SessionItemId } from "./ids";
 import {
 	chatHeaderTitle,
 	compactTimelineItems,
+	composerSubmitTarget,
 	fileChangesFromSessionItems,
 	isQueuedUserMessage,
 	isTurnRunning,
@@ -475,6 +476,41 @@ describe("message identity", () => {
 				nextItems: open,
 			}),
 		).toBe(true);
+	});
+});
+
+describe("composer submit target", () => {
+	it("keeps a follow-up in the chat whose turn is running", () => {
+		expect(
+			composerSubmitTarget({
+				newChatDraft: true,
+				openChatId: "chat",
+				turnStatus: "running",
+			}),
+		).toEqual({ startsNewChat: false, sessionId: "chat" });
+	});
+	it("does not open a second chat while a turn is on screen without an id yet", () => {
+		expect(
+			composerSubmitTarget({
+				newChatDraft: false,
+				turnStatus: "running",
+			}),
+		).toEqual({ startsNewChat: false, waitForChat: true });
+	});
+	it("starts a chat from the new-chat draft once nothing is running", () => {
+		expect(
+			composerSubmitTarget({
+				newChatDraft: true,
+				turnStatus: "idle",
+			}),
+		).toEqual({ startsNewChat: true });
+		expect(
+			composerSubmitTarget({
+				newChatDraft: false,
+				openChatId: "chat",
+				turnStatus: "completed",
+			}),
+		).toEqual({ startsNewChat: false, sessionId: "chat" });
 	});
 });
 

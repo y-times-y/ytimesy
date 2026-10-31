@@ -2,8 +2,10 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import {
 	queueUserMessageWhileRunning,
+	releaseQueuedUserMessage,
 	removeQueuedUserMessage,
 	takeNextQueuedUserMessage,
+	updateQueuedUserMessage,
 } from "./queued-user-messages";
 import { injectServerPeerMessages } from "./server-peer-inbox";
 
@@ -113,4 +115,51 @@ it("delivers queued user messages by id, even when their words repeat earlier on
 		"chat",
 		["notice", "queued-user:a", "queued-user:b"],
 	]);
+});
+
+it("keeps an unreleased queued message out of the next step", async () => {
+	mocks.query.mockResolvedValueOnce({
+		rows: [
+			{
+				id: "queued-user:a",
+				message: "later",
+				queued_send: {
+					item: { ...send.item, id: "a", text: "later" },
+					released: false,
+				},
+			},
+		],
+	});
+	const checkpoint = vi.fn(async () => {});
+	const history = await injectServerPeerMessages("chat", [], checkpoint);
+	expect(history).toEqual([]);
+	expect(checkpoint).not.toHaveBeenCalled();
+	expect(mocks.query).toHaveBeenCalledOnce();
+});
+
+it("edits a waiting message and marks Send without taking it while the turn runs", async () => {
+	mocks.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "chat" }] });
+	expect(
+		await updateQueuedUserMessage(
+			"owner",
+			"chat",
+			send.item.id,
+			"Next",
+			"Next",
+		),
+	).toBe(true);
+	expect(mocks.query.mock.calls[0][0]).toContain(
+		"jsonb_set(q.queued_send, '{item,text}'",
+	);
+	expect(mocks.query.mock.calls[0][0]).toContain("not q.accepted");
+
+	mocks.query.mockResolvedValueOnce({
+		rows: [{ turn_status: "running", message: null, queued_send: null }],
+	});
+	expect(await releaseQueuedUserMessage("owner", "chat", send.item.id)).toEqual(
+		{ status: "running" },
+	);
+	expect(mocks.query.mock.calls[1][0]).toContain("turn_status='running'");
+	expect(mocks.query.mock.calls[1][0]).toContain("turn_status<>'running'");
+	expect(mocks.wake).toHaveBeenCalled();
 });

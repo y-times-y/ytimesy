@@ -3,6 +3,7 @@ import {
 	inlineMarkdownSegments,
 	reportSummaryLine,
 	withoutDanglingMarker,
+	withoutPullRequestBlock,
 } from "./markdown-text";
 
 describe("a streaming reply", () => {
@@ -59,5 +60,19 @@ describe("a line's inline Markdown", () => {
 		expect(inlineMarkdownSegments("Ran `pnpm te…")).toEqual([
 			{ kind: "text", text: "Ran pnpm te…" },
 		]);
+	});
+});
+
+describe("withoutPullRequestBlock", () => {
+	it("hides the pull request description, closed or still streaming", () => {
+		expect(
+			withoutPullRequestBlock(
+				"Done.\n\n<pull-request>\n## Summary\nAdds dark mode.\n</pull-request>",
+			),
+		).toBe("Done.");
+		expect(withoutPullRequestBlock("Done.\n\n<pull-request>\n## Summ")).toBe(
+			"Done.",
+		);
+		expect(withoutPullRequestBlock("No block here.")).toBe("No block here.");
 	});
 });

@@ -1,19 +1,27 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { turnPublicationRole } from "#/domain/agent-task";
+import { UNATTRIBUTED_COMMIT_NOTICE } from "#/domain/github-commit-identity";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type Project,
 	projectFolderName,
 	repositoriesForProject,
 } from "#/domain/projects";
+import {
+	type PublicationAuthor,
+	publicationCommitAuthor,
+} from "#/domain/publication";
+import { handoffFactsFromItems } from "#/domain/pull-request-handoff";
 import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
+import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { automaticTurnCommitArgv } from "../adapters/turn-commit";
+import { githubAccessToken } from "../auth/github-connection";
 import {
 	ChatPublicationSkipped,
 	publishCompletedSessionTurn,
@@ -51,9 +59,11 @@ export async function commitCompletedSessionTurn(
 /**
  * A root chat commits whatever its turn left in each checkout (no
  * server-owned verification gate, as before), then pushes its branch and
- * keeps its draft PR open. GitHub trouble never fails the user's turn: the
- * commit stays in the chat and the chat says why it was not pushed.
- * Evaluation runs and eval users neither commit nor push.
+ * keeps its draft PR open. The commit author is the user's GitHub identity
+ * when that login is known; otherwise the ytimesy author is kept and the
+ * chat says why. GitHub trouble never fails the user's turn: the commit
+ * stays in the chat and the chat says why it was not pushed. Evaluation
+ * runs and eval users neither commit nor push.
  */
 async function commitChatTurn(
 	session: AgentSessionRecord & { providerRef: string },
@@ -70,6 +80,7 @@ async function commitChatTurn(
 		};
 	const turn = turnIdentity(session, items);
 	const description = turnDescription(session, items);
+	const authorship = await commitAuthorForUser(session.userId);
 	const host = runtime ?? workspaceRuntimeFromEnv();
 	for (const { repo, directory } of await turnRepositories(
 		host,
@@ -83,6 +94,8 @@ async function commitChatTurn(
 				directory,
 				turn,
 				`Agent: ${description || "Update workspace"}`,
+				"",
+				authorship.author,
 			),
 			{},
 			60_000,
@@ -93,11 +106,48 @@ async function commitChatTurn(
 			};
 	}
 	try {
-		const publication = await publishCompletedSessionTurn(session, host, turn);
-		return publication ? { publication } : {};
+		const publication = await publishCompletedSessionTurn(
+			session,
+			host,
+			turn,
+			handoffFactsFromItems(items),
+		);
+		if (!publication)
+			return authorship.unattributed ? { notice: authorship.unattributed } : {};
+		return authorship.unattributed
+			? { publication, notice: authorship.unattributed }
+			: { publication };
 	} catch (error) {
 		signal?.throwIfAborted();
-		return { notice: await chatPublicationNotice(error) };
+		const notice = await chatPublicationNotice(error);
+		return {
+			notice: authorship.unattributed
+				? `${notice} ${authorship.unattributed}`
+				: notice,
+		};
+	}
+}
+
+/** GitHub name and email for the commit, or the ytimesy author when the login is unknown. */
+async function commitAuthorForUser(userId: string): Promise<{
+	author: PublicationAuthor;
+	unattributed: string | null;
+}> {
+	const fallback = publicationCommitAuthor({});
+	try {
+		const token = await githubAccessToken(userId);
+		const author = await githubCommitIdentityForToken(token);
+		if (author) return { author, unattributed: null };
+		return { author: fallback, unattributed: UNATTRIBUTED_COMMIT_NOTICE };
+	} catch (error) {
+		// A missing connection is reported when the push is refused.
+		if (error instanceof Response)
+			return { author: fallback, unattributed: null };
+		return {
+			author: fallback,
+			unattributed:
+				"Commits use the ytimesy author because the GitHub profile could not be read.",
+		};
 	}
 }
 

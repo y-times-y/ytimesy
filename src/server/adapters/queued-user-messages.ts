@@ -17,7 +17,15 @@ export type QueuedUserSend = {
 	readonly variant?: string;
 	readonly speed?: "standard" | "fast" | "ultrafast";
 	readonly fast?: boolean;
+	/**
+	 * Send was pressed. Absent or false waits for Send or the turn's end;
+	 * true is taken at the next model step.
+	 */
+	readonly released?: boolean;
 };
+
+/** A waiting message as the timeline sees it. `released` is set only after Send. */
+export const queuedTimelineItemSql = `case when q.queued_send->>'released' = 'true' then jsonb_set(q.queued_send->'item', '{released}', 'true'::jsonb) else q.queued_send->'item' end`;
 
 const inboxId = (messageId: string) => `queued-user:${messageId}`;
 
@@ -51,8 +59,8 @@ export async function queuedUserMessageItems(
 	sessionId: string,
 ): Promise<UserMessageItem[]> {
 	const result = await database().query<{ item: UserMessageItem }>(
-		`select queued_send->'item' as item from agent_peer_inbox
-		 where recipient_id=$1 and not accepted and queued_send is not null order by created_at,id`,
+		`select ${queuedTimelineItemSql} as item from agent_peer_inbox q
+		 where q.recipient_id=$1 and not q.accepted and q.queued_send is not null order by q.created_at,q.id`,
 		[sessionId],
 	);
 	return result.rows.map((row) => row.item);
@@ -72,8 +80,94 @@ export async function removeQueuedUserMessage(
 		[sessionId, userId, inboxId(messageId)],
 	);
 	if (!result.rowCount) return false;
+	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();
 	return true;
+}
+
+/** Rewrites a waiting message. A step that already took it is left alone. */
+export async function updateQueuedUserMessage(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+	text: string,
+	modelMessage: string,
+): Promise<boolean> {
+	const result = await database().query(
+		`with edited as (
+		  update agent_peer_inbox q
+		  set message=$4,
+		      queued_send=jsonb_set(q.queued_send, '{item,text}', to_jsonb($5::text))
+		  from agent_session s
+		  where q.id=$3 and q.recipient_id=s.id and s.id=$1 and s.user_id=$2
+		    and not q.accepted and q.queued_send is not null
+		  returning q.recipient_id)
+		 update agent_session set items=items where id in (select recipient_id from edited) returning id`,
+		[sessionId, userId, inboxId(messageId), modelMessage, text],
+	);
+	if (!result.rowCount) return false;
+	forgetPeerInboxObservation(sessionId);
+	await wakeConversationProgress();
+	return true;
+}
+
+/**
+ * Send on a waiting message. While the turn runs it is marked for the next
+ * model step (the in-flight tool call is not interrupted). Once nothing is
+ * running, this message is taken so the caller can start its turn now.
+ */
+export async function releaseQueuedUserMessage(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+): Promise<
+	| { readonly status: "running" }
+	| { readonly status: "taken"; readonly send: QueuedUserSend }
+	| { readonly status: "missing" }
+> {
+	const result = await database().query<{
+		turn_status: string;
+		message: string | null;
+		queued_send: Omit<QueuedUserSend, "message"> | null;
+	}>(
+		`with locked as (
+		  select q.id, q.message, q.queued_send, s.turn_status
+		  from agent_peer_inbox q
+		  join agent_session s on s.id=q.recipient_id
+		  where q.id=$3 and s.id=$1 and s.user_id=$2
+		    and not q.accepted and q.queued_send is not null
+		  for update of q, s),
+		 marked as (
+		  update agent_peer_inbox q
+		  set queued_send=jsonb_set(q.queued_send, '{released}', 'true'::jsonb)
+		  from locked
+		  where q.id=locked.id and locked.turn_status='running'
+		  returning q.recipient_id),
+		 touched as (
+		  update agent_session set items=items
+		  where id in (select recipient_id from marked)
+		  returning id),
+		 taken as (
+		  delete from agent_peer_inbox q
+		  using locked
+		  where q.id=locked.id and locked.turn_status<>'running'
+		  returning q.message, q.queued_send)
+		 select locked.turn_status, taken.message, taken.queued_send,
+		  (select count(*) from touched) as republished
+		 from locked left join taken on true`,
+		[sessionId, userId, inboxId(messageId)],
+	);
+	const row = result.rows[0];
+	if (!row) return { status: "missing" };
+	forgetPeerInboxObservation(sessionId);
+	await wakeConversationProgress();
+	if (row.turn_status === "running" || !row.queued_send || !row.message) {
+		return { status: "running" };
+	}
+	return {
+		status: "taken",
+		send: { ...row.queued_send, message: row.message, released: true },
+	};
 }
 
 /**

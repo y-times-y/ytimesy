@@ -76,6 +76,7 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
+import { isSideChat } from "#/domain/side-chat";
 import {
 	isActiveSidekick,
 	sidekickState,
@@ -441,6 +442,8 @@ async function runApiTurnAttempt(
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
 	let subagentSession: AgentSessionRecord | undefined;
+	/** A side chat's failure stays in its column; it does not report to Main. */
+	let sideConversation = false;
 	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
 	let fusionLead: { userId: string; id: string } | undefined;
 	/** Lead mode fusion: the variant's role models (a sidekick's classifier and escalation model). */
@@ -625,6 +628,7 @@ async function runApiTurnAttempt(
 		timing?.mark("leaseRenewed");
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
+		sideConversation = isSideChat(owner);
 		// A child without a subagent role belongs to the retired lead/child
 		// architecture; only the root builder and its subagents run.
 		if (owner.parentSessionId && !owner.agentRole)
@@ -648,7 +652,7 @@ async function runApiTurnAttempt(
 			: Promise.resolve(null);
 		loadingSecrets.catch(() => {});
 		const variant = await loadingVariant;
-		if (owner.agentRole) subagentSession = owner;
+		if (owner.agentRole && !sideConversation) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
 		// Lead mode fusion implies them: the lead delegates to its sidekick.
@@ -1253,6 +1257,7 @@ async function runApiTurnAttempt(
 		const delegates =
 			subagentsOn &&
 			!!surface.lean &&
+			!isSideChat(owner) &&
 			(owner.agentRole
 				? owner.agentRole !== "checker" &&
 					// A sidekick does the work itself (lead mode fusion).
@@ -1345,7 +1350,8 @@ async function runApiTurnAttempt(
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
 		// get none. Each accepted update replaces the turn's checklist item.
 		const planning: ToolSet =
-			variant.plan === "on" && !owner.parentSessionId && !owner.agentRole
+			variant.plan === "on" &&
+			((!owner.parentSessionId && !owner.agentRole) || isSideChat(owner))
 				? planTool({
 						now: Date.now,
 						onUpdate: (update) => {
@@ -1708,7 +1714,7 @@ async function runApiTurnAttempt(
 				// run; durable steps wait before their one call instead (below).
 				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
 				if (!step && judgeGate) await judgeGate(Number.POSITIVE_INFINITY);
-				if (owner.agentRole) {
+				if (owner.agentRole && !isSideChat(owner)) {
 					// Counted and checked before every model step: a wrap-up
 					// notice at 90%, the turn stops at 100% (reported as such).
 					failureStage = "budget";
@@ -2183,7 +2189,7 @@ async function runApiTurnAttempt(
 				"Completed turn saved, but its project report needs recovery.",
 			);
 		});
-		if (owner.parentSessionId) {
+		if (owner.parentSessionId && !isSideChat(owner)) {
 			const finalText = items
 				.slice(lastUser + 1)
 				.filter((item) => item.kind === "agentMessage")
@@ -2537,7 +2543,7 @@ async function runApiTurnAttempt(
 				fusionLead,
 				saved === "cancelled" ? "Main was stopped" : "Main's turn failed",
 			).catch(() => {});
-		if (saved === "failed") {
+		if (saved === "failed" && !sideConversation) {
 			// A subagent still reports: what it said so far and, for a writer,
 			// the partial patch (its work in progress is committed for it).
 			const summary = subagentSession

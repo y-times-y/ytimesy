@@ -1,5 +1,4 @@
 import {
-	AppWindow,
 	BookMarked,
 	Check,
 	Files,
@@ -13,13 +12,13 @@ import {
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
+import type { AgentProviderId } from "#/domain/agent-provider";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
 import { MemoryInspector } from "./memory-inspector";
-import { PreviewInspector } from "./preview-inspector";
 import {
 	PullRequestInspector,
 	type PullRequestRepository,
@@ -32,7 +31,6 @@ export type ToolsView =
 	| "pr"
 	| "terminal"
 	| "desktop"
-	| "preview"
 	| "memory";
 export type InspectorView = ToolsView | "overview";
 
@@ -69,12 +67,6 @@ const views = {
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
-	preview: {
-		label: "Preview",
-		icon: AppWindow,
-		title: "Preview",
-		description: "Open the apps running in this chat's workspace.",
-	},
 	memory: {
 		label: "Memory",
 		icon: BookMarked,
@@ -95,6 +87,9 @@ export function WorkspaceInspector({
 	onStartDesktop,
 	projectId,
 	sessionId,
+	harnessId,
+	modelId,
+	onReviewStarted,
 	overview,
 	pullRequest,
 	onOpenChat,
@@ -116,6 +111,10 @@ export function WorkspaceInspector({
 	onStartDesktop: () => void;
 	projectId?: string;
 	sessionId?: string;
+	harnessId?: AgentProviderId;
+	modelId?: string;
+	/** Opens the new chat a pull-request review started. */
+	onReviewStarted?: (sessionId: string) => void;
 	overview: ReactNode;
 	pullRequest?: PullRequestRepository;
 	/** Opens a chat linked from memory; false when it is not in this project's list. */
@@ -254,6 +253,11 @@ export function WorkspaceInspector({
 				<PullRequestInspector
 					key={`${pullRequest.repositoryId}:${pullRequest.number ?? ""}`}
 					repository={pullRequest}
+					projectId={projectId}
+					harnessId={harnessId}
+					modelId={modelId}
+					currentSessionId={sessionId}
+					onReviewStarted={onReviewStarted}
 				/>
 			) : activeView === "memory" ? (
 				<MemoryInspector
@@ -261,14 +265,17 @@ export function WorkspaceInspector({
 					focus={memoryFocus}
 					onOpenChat={onOpenChat ?? (() => false)}
 				/>
-			) : activeView === "preview" ? (
-				<PreviewInspector
+			) : activeView === "desktop" && !collapsed ? (
+				<DesktopInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}
+					desktop={desktop}
+					busy={desktopBusy}
 					projectId={projectId}
 					sessionId={sessionId}
-					active={!collapsed && activeView === "preview"}
+					onStart={onStartDesktop}
+					active
 				/>
-			) : activeView === "desktop" ? null : activeView === "terminal" ? (
+			) : activeView === "terminal" ? (
 				<TerminalInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}
 					projectId={projectId}
@@ -285,27 +292,6 @@ export function WorkspaceInspector({
 					<p>{currentView.description}</p>
 				</section>
 			) : null}
-			{(activeView === "desktop" || openedViews.includes("desktop")) && (
-				<div
-					key={`desktop:${projectId ?? ""}:${sessionId ?? ""}`}
-					style={{
-						display: activeView === "desktop" ? "flex" : "none",
-						flex: 1,
-						minHeight: 0,
-						minWidth: 0,
-						overflow: "hidden",
-					}}
-				>
-					<DesktopInspector
-						desktop={desktop}
-						busy={desktopBusy}
-						projectId={projectId}
-						sessionId={sessionId}
-						onStart={onStartDesktop}
-						active={!collapsed && activeView === "desktop"}
-					/>
-				</div>
-			)}
 		</aside>
 	);
 }

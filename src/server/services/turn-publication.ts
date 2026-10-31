@@ -1,6 +1,11 @@
 import { turnPublicationRole } from "#/domain/agent-task";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
+import {
+	changedPathsFromDiff,
+	type PullRequestHandoffFacts,
+	pullRequestHandoffBody,
+} from "#/domain/pull-request-handoff";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { adoptChatPublicationBranch } from "../adapters/agent-sessions";
 import { isDevEvalUser } from "../adapters/dev-eval-users";
@@ -47,10 +52,18 @@ export async function turnPublicationExcluded(
  * task. A root chat pushes its own `ytimesy/` branch and keeps one draft PR
  * open on it; follow-up turns push to the same branch, updating the PR.
  */
+const EMPTY_HANDOFF: PullRequestHandoffFacts = {
+	description: null,
+	finalAnswer: null,
+	files: [],
+	verification: [],
+};
+
 export async function publishCompletedSessionTurn(
 	session: AgentSessionRecord,
 	runtime: TurnGitRuntime,
 	turn: string,
+	facts: PullRequestHandoffFacts = EMPTY_HANDOFF,
 ): Promise<TurnPublication | undefined> {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn handoff identity.");
@@ -168,6 +181,12 @@ export async function publishCompletedSessionTurn(
 			if (primary) published = { branch: head, pullRequestUrl: null };
 			continue;
 		}
+		const files = await changedFilesOnBranch(
+			runtime,
+			providerRef,
+			directory,
+			revision,
+		);
 		const pull = await ensureAppDraftPullRequest(
 			repo.installationId,
 			repo.fullName,
@@ -175,7 +194,12 @@ export async function publishCompletedSessionTurn(
 				title:
 					session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
 					"Agent changes",
-				body: "Automatic draft handoff from ytimesy. Review the changes and verification evidence before merging.",
+				body: pullRequestHandoffBody({
+					description: facts.description,
+					finalAnswer: facts.finalAnswer,
+					files: [...facts.files, ...files],
+					verification: facts.verification,
+				}),
 				head,
 				base,
 			},
@@ -185,6 +209,7 @@ export async function publishCompletedSessionTurn(
 				repositoryId: repo.repositoryId,
 				sessionId: session.id,
 			},
+			token,
 		);
 		// Harness-captured evidence (prEvidence=on) runs as a background job after
 		// the handoff; queueing never blocks or fails the turn.
@@ -206,6 +231,29 @@ export async function publishCompletedSessionTurn(
 		if (primary) published = { branch: head, pullRequestUrl: pull.url };
 	}
 	return published;
+}
+
+/** Paths this branch changed since its base. A failed listing does not block the pull request. */
+async function changedFilesOnBranch(
+	runtime: TurnGitRuntime,
+	providerRef: string,
+	directory: string,
+	revision: string,
+) {
+	const diff = await runtime
+		.exec(
+			providerRef,
+			[
+				"bash",
+				"-lc",
+				`git -C ${posixShellQuoted(directory)} diff --name-only -z ${posixShellQuoted(`refs/ytimesy/base..${revision}`)}`,
+			],
+			{},
+			15_000,
+		)
+		.catch(() => null);
+	if (diff?.exitCode !== 0) return [];
+	return changedPathsFromDiff(diff.stdout);
 }
 
 /** The chat's first request names its branch, like a new chat's first send. */

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
@@ -21,6 +21,15 @@ const publication = vi.hoisted(() => ({
 	publish: vi.fn(),
 	excluded: vi.fn(async () => false),
 }));
+const identity = vi.hoisted(() => ({
+	forToken: vi.fn(),
+}));
+vi.mock("../auth/github-connection", () => ({
+	githubAccessToken: vi.fn(async () => "user-token"),
+}));
+vi.mock("../adapters/github/commit-identity", () => ({
+	githubCommitIdentityForToken: identity.forToken,
+}));
 vi.mock("./turn-publication", async (original) => ({
 	ChatPublicationSkipped: (
 		await original<typeof import("./turn-publication")>()
@@ -38,6 +47,13 @@ const session = {
 	title: "Fix parser",
 	agentRole: "writer",
 } as AgentSessionRecord;
+beforeEach(() => {
+	identity.forToken.mockResolvedValue({
+		name: "Het",
+		email: "7+het@users.noreply.github.com",
+	});
+});
+
 const items: SessionItem[] = [
 	{
 		kind: "userMessage",
@@ -74,6 +90,10 @@ const chat = {
 
 it("commits a root chat's turn without the verification gate and returns where it was pushed", async () => {
 	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	identity.forToken.mockResolvedValue({
+		name: "Het",
+		email: "7+het@users.noreply.github.com",
+	});
 	verification.mockClear();
 	publication.publish.mockResolvedValue({
 		branch: "ytimesy/fix-parser-0c4a1e",
@@ -87,10 +107,17 @@ it("commits a root chat's turn without the verification gate and returns where i
 	// No verified tree: the commit takes whatever the turn left.
 	expect(runtime.commands[0].argv[6]).toBe("");
 	expect(runtime.commands[0].argv[5]).toContain("Agent: Fix parser");
+	expect(runtime.commands[0].argv[5]).toContain(
+		"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
+	);
+	expect(runtime.commands[0].argv[5]).toContain(
+		"GIT_COMMITTER_EMAIL='7+het@users.noreply.github.com'",
+	);
 	expect(publication.publish).toHaveBeenCalledWith(
 		chat,
 		runtime,
 		runtime.commands[0].argv[4],
+		expect.objectContaining({ description: null, files: [] }),
 	);
 	expect(outcome).toEqual({
 		publication: {
@@ -134,6 +161,24 @@ it("neither commits nor pushes a root chat of an eval user or evaluation run", a
 	expect(lookup).not.toHaveBeenCalled();
 	expect(runtime.commands).toHaveLength(0);
 	expect(publication.publish).not.toHaveBeenCalled();
+});
+
+it("says why a commit kept the ytimesy author when GitHub returned no login", async () => {
+	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	identity.forToken.mockResolvedValue(null);
+	publication.publish.mockResolvedValue({
+		branch: "ytimesy/fix-parser-0c4a1e",
+		pullRequestUrl: "https://github.com/owner/primary/pull/3",
+	});
+	const outcome = await commitCompletedSessionTurn(
+		chat,
+		items,
+		new MemoryWorkspaceRuntime(),
+	);
+	expect(outcome?.publication?.pullRequestUrl).toContain("/pull/3");
+	expect(outcome?.notice).toMatch(/ytimesy author/);
+	expect(outcome?.notice).toMatch(/login/);
+	expect(outcome?.notice).not.toMatch(/noreply@ytimesy.com/);
 });
 
 it("keeps a chat's turn successful and explains when GitHub refuses the push", async () => {

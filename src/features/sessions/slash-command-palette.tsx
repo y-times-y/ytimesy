@@ -2,6 +2,7 @@ import {
 	Files,
 	FileText,
 	FolderTree,
+	MessagesSquare,
 	Monitor,
 	RotateCcw,
 	Sparkles,
@@ -18,6 +19,7 @@ const icons: Record<SlashCommandId, typeof Square> = {
 	diff: Files,
 	terminal: SquareTerminal,
 	desktop: Monitor,
+	side: MessagesSquare,
 	custom: FileText,
 };
 

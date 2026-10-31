@@ -40,6 +40,7 @@ import {
 	savedInspectorCookie,
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
+import { adjacentChatId, titleWithShortcut } from "#/domain/keyboard-shortcuts";
 import { memoryHoldsLine } from "#/domain/memory-marker";
 import {
 	base64ByteLength,
@@ -49,14 +50,17 @@ import {
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	type Project,
+	projectDisplayName,
 	repositoriesForProject,
 	selectedProjectIdAfterDelete,
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
 import {
 	chatHeaderTitle,
+	composerSubmitTarget,
 	fileChangesFromSessionItems,
 	isTurnRunning,
+	lastAgentMessageText,
 	lastUserMessageText,
 	markedQueuedSend,
 	type SessionTurnStatus,
@@ -124,8 +128,9 @@ import {
 } from "#/domain/transcript-page";
 import { replyStartedAfter } from "#/domain/web-vitals";
 import {
-	agentDesktopActivityInTurn,
 	desktopInspectorShouldStart,
+	desktopSidebarShouldOpen,
+	desktopUseStreakId,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import type { SettingsSection } from "#/domain/workspace-settings";
@@ -142,6 +147,14 @@ import {
 	useFirstPaint,
 	useTypedBeforeHydration,
 } from "../app/first-paint";
+import {
+	CommandPalette,
+	type CommandPaletteItem,
+	ShortcutHelpDialog,
+	sidebarChatIdsInOrder,
+	useGlobalShortcuts,
+	useShortcutHint,
+} from "../app/keyboard-shortcuts";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
@@ -163,10 +176,13 @@ import {
 	getOlderSessionItems,
 	type OpenChatView,
 	pollCodexLogin,
+	releaseQueuedSessionMessage,
 	removeQueuedSessionMessage,
 	sendCodexSessionTask,
 	stopCodexSessionTurn,
+	updateQueuedSessionMessage,
 } from "../sessions/codex-session.fn";
+import { MODEL_PICKER_ID } from "../sessions/harness-picker";
 import {
 	mcpSignInResult,
 	takeMcpSignInReturn,
@@ -748,6 +764,8 @@ export function WorkspaceHome({
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const removeQueued = useServerFn(removeQueuedSessionMessage);
+	const updateQueued = useServerFn(updateQueuedSessionMessage);
+	const releaseQueued = useServerFn(releaseQueuedSessionMessage);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
@@ -1133,29 +1151,39 @@ export function WorkspaceHome({
 		});
 	}, [loadDesktop, activeProjectId, activeSessionId, firstChatRead]);
 
-	// The agent starts the desktop itself for visual QA; show it working.
-	const agentDesktopActivity = agentDesktopActivityInTurn({
+	// A desktop-use streak opens this panel on Desktop. Closing the sidebar
+	// records that streak, so later frames of it stay closed; the next streak
+	// (the desktop went idle, then the agent used it again) opens it.
+	const desktopStreak = desktopUseStreakId({
 		turnStatus: session.turnStatus,
 		items: session.items,
 	});
-	const followedAgentDesktop = useRef<string | null>(null);
-	const inspectorOpenRef = useRef(inspectorOpen);
-	inspectorOpenRef.current = inspectorOpen;
+	const desktopStreakRef = useRef(desktopStreak);
+	desktopStreakRef.current = desktopStreak;
+	const dismissedDesktopStreak = useRef(new Map<string, string>());
+	const followedDesktopStreak = useRef<string | null>(null);
 	const followedSessionId = useRef(activeSessionId);
 	followedSessionId.current = activeSessionId;
 	useEffect(() => {
-		if (
-			!agentDesktopActivity ||
-			!activeProjectId ||
-			followedAgentDesktop.current === agentDesktopActivity
-		)
-			return;
-		followedAgentDesktop.current = agentDesktopActivity;
-		if (!inspectorOpenRef.current) {
-			setInspectorView("desktop");
-			setInspectorOpen(true);
+		if (!desktopStreak || !activeProjectId || !activeSessionId) return;
+		const followKey = `${activeSessionId}\n${desktopStreak}`;
+		// Once per streak: a later frame must not pull the panel back open,
+		// and a re-run (a new desktop read) must not skip catching the desktop up.
+		if (followedDesktopStreak.current !== followKey) {
+			followedDesktopStreak.current = followKey;
+			if (
+				desktopSidebarShouldOpen({
+					streakId: desktopStreak,
+					dismissedStreakId:
+						dismissedDesktopStreak.current.get(activeSessionId) ?? null,
+				})
+			) {
+				setInspectorView("desktop");
+				setInspectorOpen(true);
+			}
 		}
 		let attempts = 0;
+		let timer = 0;
 		const refresh = () =>
 			void loadDesktop({
 				data: { projectId: activeProjectId, sessionId: activeSessionId },
@@ -1163,10 +1191,20 @@ export function WorkspaceHome({
 				if (followedSessionId.current !== activeSessionId) return;
 				if (next.status === "running") setDesktop(next);
 				// The desktop may still be starting when the first tool call shows.
-				else if (++attempts < 12) window.setTimeout(refresh, 5_000);
+				else if (++attempts < 12) timer = window.setTimeout(refresh, 5_000);
 			});
 		refresh();
-	}, [agentDesktopActivity, activeProjectId, activeSessionId, loadDesktop]);
+		return () => window.clearTimeout(timer);
+	}, [desktopStreak, activeProjectId, activeSessionId, loadDesktop]);
+	function toggleInspectorPanel() {
+		setInspectorOpen((open) => {
+			const streak = desktopStreakRef.current;
+			const sessionId = followedSessionId.current;
+			if (open && streak && sessionId)
+				dismissedDesktopStreak.current.set(sessionId, streak);
+			return !open;
+		});
+	}
 
 	const pollSession =
 		harnessLoginIsPending(session.connection) ||
@@ -1561,7 +1599,7 @@ export function WorkspaceHome({
 
 	/**
 	 * The pointer or focus reached a workspace view: Files reads its tree and
-	 * first file, Memory its files; Terminal, Desktop and Preview wake the
+	 * first file, Memory its files; Terminal and Desktop wake the
 	 * chat's machine (if it has one; never creating one) so they connect
 	 * without that wait.
 	 */
@@ -1581,7 +1619,7 @@ export function WorkspaceHome({
 			});
 			return;
 		}
-		if (view !== "terminal" && view !== "desktop" && view !== "preview") return;
+		if (view !== "terminal" && view !== "desktop") return;
 		const asked = resumedMachines.current.get(sessionId) ?? 0;
 		if (Date.now() - asked < MACHINE_RESUME_INTERVAL_MS) return;
 		resumedMachines.current.set(sessionId, Date.now());
@@ -2231,8 +2269,226 @@ export function WorkspaceHome({
 		return true;
 	}
 
+	const [paletteOpen, setPaletteOpen] = useState(false);
+	const [shortcutsOpen, setShortcutsOpen] = useState(false);
+	const inspectorShortcutHint = useShortcutHint("toggleInspector");
+	const chatPullRequestRepository = pullRequestPanelRepository({
+		repositories: projectRepositories,
+		chatPullRequest: sessionPullRequest,
+	});
+
+	function openSettings() {
+		setSettingsSection(undefined);
+		setSettingsOpen(true);
+	}
+
+	/** Opens the view, or closes the panel when it already shows it (VS Code's Ctrl+`). */
+	function toggleInspectorView(view: ToolsView) {
+		if (inspectorOpen && inspectorView === view) toggleInspectorPanel();
+		else openInspector(view);
+	}
+
+	function openSidebarChat(chatId: string | undefined) {
+		if (chatId && chatId !== activeSessionId) openMemoryChat(chatId);
+	}
+
+	function stopOpenTurn() {
+		const chatId = activeSessionId;
+		const epoch = sessionEpoch.current;
+		// The stopped turn ends idle; accept that view even if the
+		// live progress stream never reports the stop.
+		stopRequestedFor.current = chatId ?? null;
+		// The turn settles on the server after this answers; keep
+		// listening so its "Stopped" marker shows without a reload.
+		if (chatId) setWakeWatch({ sessionId: chatId, since: Date.now() });
+		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		void stopTurn({
+			data: sessionScope(),
+		})
+			.then((next) => applySessionView(epoch, next))
+			.catch((cause) => toast.error(publicFailureMessage(cause)))
+			.finally(() => {
+				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+				void chats.refetch();
+			});
+	}
+
+	function copyLastReply() {
+		const text = lastAgentMessageText(session.items);
+		if (!text) return;
+		navigator.clipboard.writeText(text).then(
+			() => toast.success("Copied the last reply."),
+			() => toast.error("Couldn't copy to the clipboard."),
+		);
+	}
+
+	const turnRunning = session.turnStatus === "running";
+	useGlobalShortcuts({
+		commandPalette: () => setPaletteOpen((open) => !open),
+		shortcuts: () => setShortcutsOpen((open) => !open),
+		openSettings,
+		toggleSidebar: () => setProjectsOpen((open) => !open),
+		toggleInspector: () => toggleInspectorPanel(),
+		toggleTerminal: () => toggleInspectorView("terminal"),
+		toggleDesktop: () => toggleInspectorView("desktop"),
+		openPullRequest: () => {
+			if (chatPullRequestRepository) openInspector("pr");
+		},
+		newChat: () => startNewChat(),
+		previousChat: () =>
+			openSidebarChat(
+				adjacentChatId(sidebarChatIdsInOrder(), activeSessionId, -1),
+			),
+		nextChat: () =>
+			openSidebarChat(
+				adjacentChatId(sidebarChatIdsInOrder(), activeSessionId, 1),
+			),
+		jumpToChat: (index) => openSidebarChat(sidebarChatIdsInOrder()[index]),
+		copyLastReply,
+		focusComposer: () => document.getElementById(COMPOSER_INPUT_ID)?.focus(),
+		modelPicker: () => document.getElementById(MODEL_PICKER_ID)?.click(),
+		stop: () => {
+			if (turnRunning) stopOpenTurn();
+		},
+	});
+
+	const paletteItems: CommandPaletteItem[] = [
+		{
+			id: "new-chat",
+			group: "Actions",
+			label: "New chat",
+			shortcut: "newChat",
+			run: () => startNewChat(),
+		},
+		{
+			id: "toggle-sidebar",
+			group: "Actions",
+			label: "Toggle left sidebar",
+			shortcut: "toggleSidebar",
+			run: () => setProjectsOpen((open) => !open),
+		},
+		{
+			id: "toggle-inspector",
+			group: "Actions",
+			label: "Toggle right panel",
+			shortcut: "toggleInspector",
+			run: () => toggleInspectorPanel(),
+		},
+		{
+			id: "terminal",
+			group: "Actions",
+			label: "Open terminal",
+			shortcut: "toggleTerminal",
+			run: () => openInspector("terminal"),
+		},
+		{
+			id: "desktop",
+			group: "Actions",
+			label: "Open desktop",
+			shortcut: "toggleDesktop",
+			run: () => openInspector("desktop"),
+		},
+		{
+			id: "pr",
+			group: "Actions",
+			label: "Open pull request",
+			shortcut: "openPullRequest",
+			disabled: !chatPullRequestRepository,
+			run: () => openInspector("pr"),
+		},
+		{
+			id: "diff",
+			group: "Actions",
+			label: "Open diff",
+			run: () => openInspector("diff"),
+		},
+		{
+			id: "files",
+			group: "Actions",
+			label: "Open files",
+			run: () => openInspector("files"),
+		},
+		{
+			id: "memory",
+			group: "Actions",
+			label: "Open memory",
+			run: () => setMemoryPageOpen(true),
+		},
+		{
+			id: "model",
+			group: "Actions",
+			label: "Choose model",
+			shortcut: "modelPicker",
+			run: () => document.getElementById(MODEL_PICKER_ID)?.click(),
+		},
+		{
+			id: "copy-reply",
+			group: "Actions",
+			label: "Copy last reply",
+			shortcut: "copyLastReply",
+			disabled: !lastAgentMessageText(session.items),
+			run: copyLastReply,
+		},
+		{
+			id: "stop",
+			group: "Actions",
+			label: "Stop the running turn",
+			shortcut: "stop",
+			disabled: !turnRunning,
+			run: stopOpenTurn,
+		},
+		{
+			id: "add-project",
+			group: "Actions",
+			label: "Add project",
+			run: openAddProject,
+		},
+		{
+			id: "settings",
+			group: "Actions",
+			label: "Open settings",
+			shortcut: "openSettings",
+			run: openSettings,
+		},
+		{
+			id: "shortcuts",
+			group: "Actions",
+			label: "Keyboard shortcuts",
+			shortcut: "shortcuts",
+			run: () => setShortcutsOpen(true),
+		},
+		...projectChats.flatMap(({ project, chats: listed }) =>
+			listed.map(
+				(chat): CommandPaletteItem => ({
+					id: `chat:${chat.id}`,
+					group: "Chats",
+					label: chat.title,
+					detail: projectDisplayName(project),
+					run: () => openSidebarChat(chat.id),
+				}),
+			),
+		),
+		...(projects.data ?? []).map(
+			(project): CommandPaletteItem => ({
+				id: `project:${project.id}`,
+				group: "Projects",
+				label: projectDisplayName(project),
+				run: () => selectProject(project.id),
+			}),
+		),
+	];
+
 	return (
 		<div className="workspace-shell">
+			<CommandPalette
+				open={paletteOpen}
+				onOpenChange={setPaletteOpen}
+				items={paletteItems}
+			/>
+			<ShortcutHelpDialog
+				open={shortcutsOpen}
+				onOpenChange={setShortcutsOpen}
+			/>
 			<ProjectSidebar
 				projects={projects.data ?? []}
 				projectsLoading={projects.isPending}
@@ -2250,10 +2506,7 @@ export function WorkspaceHome({
 				onNewChat={startNewChat}
 				onDeleteChat={deleteChat}
 				onDeleteProject={removeProject}
-				onOpenSettings={() => {
-					setSettingsSection(undefined);
-					setSettingsOpen(true);
-				}}
+				onOpenSettings={openSettings}
 				projectChats={projectChats}
 				onSelectChatInProject={(projectId, chatId) => {
 					selectProject(projectId);
@@ -2320,10 +2573,13 @@ export function WorkspaceHome({
 					aria-label={
 						inspectorOpen ? "Close right sidebar" : "Open right sidebar"
 					}
-					title={inspectorOpen ? "Close right sidebar" : "Open right sidebar"}
+					title={titleWithShortcut(
+						inspectorOpen ? "Close right sidebar" : "Open right sidebar",
+						inspectorShortcutHint,
+					)}
 					aria-expanded={inspectorOpen}
 					aria-controls="workspace-inspector"
-					onClick={() => setInspectorOpen((open) => !open)}
+					onClick={toggleInspectorPanel}
 				>
 					<PanelRight size={16} />
 				</button>
@@ -2460,10 +2716,24 @@ export function WorkspaceHome({
 								onSend={(text, modelId, options) => {
 									const epoch = sessionEpoch.current;
 									const previousTurnStatus = session.turnStatus;
+									// A running chat keeps the follow-up. Clearing its id here is
+									// what opened a second thread.
+									const openChatId = session.agentSessionId ?? activeSessionId;
+									const target = composerSubmitTarget({
+										newChatDraft: composerDraftRef.current,
+										openChatId,
+										turnStatus: session.turnStatus,
+									});
+									if (target.waitForChat) {
+										toast(
+											"This chat is still opening. Send that message again in a moment.",
+										);
+										return Promise.resolve("unsent");
+									}
 									// The new-chat draft starts a new chat. Forget the previously open
 									// one first: applySessionView drops updates while the draft flag is
 									// set or when they belong to a different open chat.
-									const startsNewChat = composerDraftRef.current;
+									const startsNewChat = target.startsNewChat;
 									if (startsNewChat) {
 										pendingNewChatRef.current = true;
 										composerDraftRef.current = false;
@@ -2479,8 +2749,15 @@ export function WorkspaceHome({
 									}
 									const scope = startsNewChat
 										? { ...sessionScope(), sessionId: undefined }
-										: sessionScope();
-									const chatId = startsNewChat ? undefined : activeSessionId;
+										: {
+												...sessionScope(),
+												...(target.sessionId
+													? { sessionId: target.sessionId }
+													: {}),
+											};
+									const chatId = startsNewChat
+										? undefined
+										: (target.sessionId ?? activeSessionId);
 									const messageId =
 										options?.userMessageId ?? crypto.randomUUID();
 									return new Promise<ComposerSendResult>((settle) => {
@@ -2522,27 +2799,7 @@ export function WorkspaceHome({
 										void connectThenSend(pending);
 									});
 								}}
-								onStop={() => {
-									const chatId = activeSessionId;
-									const epoch = sessionEpoch.current;
-									// The stopped turn ends idle; accept that view even if the
-									// live progress stream never reports the stop.
-									stopRequestedFor.current = chatId ?? null;
-									// The turn settles on the server after this answers; keep
-									// listening so its "Stopped" marker shows without a reload.
-									if (chatId)
-										setWakeWatch({ sessionId: chatId, since: Date.now() });
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void stopTurn({
-										data: sessionScope(),
-									})
-										.then((next) => applySessionView(epoch, next))
-										.catch((cause) => toast.error(publicFailureMessage(cause)))
-										.finally(() => {
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-											void chats.refetch();
-										});
-								}}
+								onStop={stopOpenTurn}
 								olderItems={
 									session.hasOlderItems
 										? { loading: olderLoading, onLoad: loadOlderItems }
@@ -2578,6 +2835,70 @@ export function WorkspaceHome({
 															],
 														},
 											);
+										});
+								}}
+								onEditQueued={(messageId, text) => {
+									const epoch = sessionEpoch.current;
+									const previous = session.items.find(
+										(item) => item.id === messageId,
+									);
+									setSession((current) => ({
+										...current,
+										items: current.items.map((item) =>
+											item.kind === "userMessage" && item.id === messageId
+												? { ...item, text }
+												: item,
+										),
+									}));
+									void updateQueued({
+										data: { ...sessionScope(), messageId, text },
+									})
+										.then((next) => applySessionView(epoch, next))
+										.catch((cause) => {
+											toast.error(publicFailureMessage(cause));
+											if (!previous || epoch !== sessionEpoch.current) return;
+											setSession((current) => ({
+												...current,
+												items: current.items.map((item) =>
+													item.id === messageId ? previous : item,
+												),
+											}));
+										});
+								}}
+								onSendQueued={(messageId, text) => {
+									const epoch = sessionEpoch.current;
+									const previous = session.items.find(
+										(item) => item.id === messageId,
+									);
+									setSession((current) => ({
+										...current,
+										items: current.items.map((item) =>
+											item.kind === "userMessage" && item.id === messageId
+												? {
+														...item,
+														...(text ? { text } : {}),
+														released: true as const,
+													}
+												: item,
+										),
+									}));
+									void releaseQueued({
+										data: {
+											...sessionScope(),
+											messageId,
+											...(text ? { text } : {}),
+										},
+									})
+										.then((next) => applySessionView(epoch, next))
+										.catch((cause) => {
+											toast.error(publicFailureMessage(cause));
+											if (!previous || epoch !== sessionEpoch.current) return;
+											setSession((current) => ({
+												...current,
+												items: current.items.map((item) =>
+													item.id === messageId ? previous : item,
+												),
+											}));
 										});
 								}}
 								onOpenInspector={openInspector}
@@ -2627,6 +2948,12 @@ export function WorkspaceHome({
 							desktopBusy={desktopBusy}
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
+							harnessId={harnessId}
+							modelId={session.listedModelId}
+							onReviewStarted={(sessionId) => {
+								void chats.refetch();
+								openChat(sessionId);
+							}}
 							memoryFocus={memoryFocus}
 							onStartDesktop={requestDesktop}
 							onViewIntent={intendView}

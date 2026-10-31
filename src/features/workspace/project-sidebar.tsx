@@ -24,6 +24,8 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
+import { titleWithShortcut } from "#/domain/keyboard-shortcuts";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
@@ -76,6 +78,7 @@ import {
 	FIRST_PAINT_ROWS_SCRIPT,
 	useFirstPaint,
 } from "../app/first-paint";
+import { useShortcutHint } from "../app/keyboard-shortcuts";
 import { requestJson } from "../projects/api";
 
 /** Who is signed in, as the account button shows them. */
@@ -149,6 +152,8 @@ export function ProjectSidebar({
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const leftToggle = useRef<HTMLButtonElement>(null);
+	const sidebarHint = useShortcutHint("toggleSidebar");
+	const newChatHint = useShortcutHint("newChat");
 	const [sortMenuOpen, setSortMenuOpen] = useState(false);
 	const [nowMs, setNowMs] = useState(() => renderedAtMs ?? Date.now());
 	const firstPaint = useFirstPaint();
@@ -517,7 +522,10 @@ export function ProjectSidebar({
 				type="button"
 				className="workspace-sidebar-toggle left-sidebar-toggle"
 				aria-label={expanded ? "Close left sidebar" : "Open left sidebar"}
-				title={expanded ? "Close left sidebar" : "Open left sidebar"}
+				title={titleWithShortcut(
+					expanded ? "Close left sidebar" : "Open left sidebar",
+					sidebarHint,
+				)}
 				aria-expanded={expanded}
 				aria-controls="project-sidebar"
 				data-activity={hasAttentionChat ? "attention" : undefined}
@@ -565,7 +573,7 @@ export function ProjectSidebar({
 							type="button"
 							className="workspace-sidebar-toggle sidebar-brand-toggle"
 							aria-label="Close left sidebar"
-							title="Close left sidebar"
+							title={titleWithShortcut("Close left sidebar", sidebarHint)}
 							aria-expanded={expanded}
 							aria-controls="project-sidebar"
 							onClick={toggleProjects}
@@ -751,7 +759,7 @@ export function ProjectSidebar({
 													type="button"
 													className="sidebar-folder-add"
 													aria-label={`New chat in ${projectDisplayName(project)}`}
-													title="New chat"
+													title={titleWithShortcut("New chat", newChatHint)}
 													data-active={
 														selected && newChatActive ? "true" : undefined
 													}
@@ -886,12 +894,13 @@ function SidebarAccountButton({
 	});
 	const user = account.data?.user ?? initial ?? {};
 	const name = accountDisplayName(user);
+	const settingsHint = useShortcutHint("openSettings");
 	return (
 		<button
 			type="button"
 			className="sidebar-account"
 			aria-label={`Settings for ${name}`}
-			title="Settings"
+			title={titleWithShortcut("Settings", settingsHint)}
 			onClick={onOpen}
 		>
 			{user.image ? (
@@ -909,7 +918,11 @@ function SidebarAccountButton({
 	);
 }
 
-/** The row's one status on the right: an icon, an unread dot, or the relative time. */
+/**
+ * The row's one status on the right: an icon, an unread dot, or the relative
+ * time. A working chat shows the spinner instead of a time; its tooltip
+ * carries the one clock, the time it has been working.
+ */
 function SidebarChatStatusMark({
 	status,
 	label,
@@ -954,6 +967,11 @@ function SidebarChatStatusMark({
 				/>
 			);
 		case "working":
+			return (
+				<span className="sidebar-chat-status" data-status="working">
+					<MatrixDotLoader className="sidebar-chat-working" />
+				</span>
+			);
 		case "idle":
 			return time;
 	}

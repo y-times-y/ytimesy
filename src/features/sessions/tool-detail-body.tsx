@@ -1,8 +1,20 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import {
+	commandOutputLanguage,
+	type DiffOutputFile,
+	type DiffOutputLine,
+	diffHighlightSource,
+	diffOutputFiles,
+	editDiffLines,
+	patchDiffFiles,
+} from "#/domain/command-output-language";
 import { fileBasename } from "#/domain/file-kind";
 import type { McpBlock } from "#/domain/mcp-call-view";
 import type { DynamicToolCallItem } from "#/domain/session-item";
-import { sourceLanguageFromPath } from "#/domain/source-language";
+import {
+	type SourceLanguage,
+	sourceLanguageFromPath,
+} from "#/domain/source-language";
 import { type ToolDetailView, toolDetailView } from "#/domain/tool-detail-view";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileTypeIcon } from "./file-type-icon";
@@ -126,7 +138,7 @@ function CommandPanel({
 			aside={<ExitTag exit={view.exit} failed={failed} />}
 		>
 			{view.output ? (
-				<pre className="tool-panel-body tool-panel-output">{view.output}</pre>
+				<CommandOutput command={view.command} output={view.output} />
 			) : !failed && view.exit !== "running" ? (
 				<p className="tool-panel-empty">No output</p>
 			) : null}
@@ -139,17 +151,208 @@ function CommandPanel({
 	);
 }
 
+/**
+ * A command's output. One file printed (cat, sed, head, tail, nl) is
+ * coloured as that file's language. git diff and git show are a diff:
+ * each file's code coloured, added and removed lines tinted, changed
+ * words marked. Anything else stays as the recorded text.
+ */
+export function CommandOutput({
+	command,
+	output,
+	className = "tool-panel-body tool-panel-output",
+}: {
+	command: string;
+	output: string;
+	className?: string;
+}) {
+	const language = commandOutputLanguage(command);
+	if (language === "diff")
+		return (
+			<pre className={className}>
+				{diffOutputFiles(output).map((file, index) => (
+					// Files are positional in the output.
+					// biome-ignore lint/suspicious/noArrayIndexKey: positional files
+					<DiffFileOutput key={index} {...file} />
+				))}
+			</pre>
+		);
+	return (
+		<HighlightedOutput
+			text={output}
+			language={language}
+			className={className}
+		/>
+	);
+}
+
+/** One file of diff output: path and counts, then its coloured lines. */
+function DiffFileOutput({
+	path,
+	language,
+	added,
+	removed,
+	lines,
+}: DiffOutputFile) {
+	return (
+		<>
+			{path ? (
+				<span className="tool-output-file">
+					<PathHead path={path} />
+					<span className="tool-output-counts">
+						<span data-sign="added">+{added}</span>
+						<span data-sign="removed">−{removed}</span>
+					</span>
+				</span>
+			) : null}
+			<DiffLines language={language} lines={lines} />
+		</>
+	);
+}
+
+/**
+ * Diff lines coloured as the file's language, with added and removed
+ * lines tinted, changed words marked, and a break between hunks. The
+ * number column shows when the lines carry numbers.
+ */
+export function DiffLines({
+	language,
+	lines,
+}: {
+	language: SourceLanguage;
+	lines: readonly DiffOutputLine[];
+}) {
+	const tokens = useHighlightedLines(diffHighlightSource(lines), language);
+	const numbered = lines.some((line) => line.number !== undefined);
+	return lines.map((line, index) => (
+		<span
+			// biome-ignore lint/suspicious/noArrayIndexKey: diff lines are positional
+			key={index}
+			className="tool-output-line"
+			data-sign={line.kind === "context" ? undefined : line.kind}
+			data-gutter={
+				line.kind === "other" || line.kind === "break"
+					? undefined
+					: numbered
+						? "numbered"
+						: "marker"
+			}
+		>
+			{line.kind === "other" ? (
+				line.code || " "
+			) : line.kind === "break" ? (
+				<span className="tool-output-number">⋮</span>
+			) : (
+				<>
+					{numbered ? (
+						<span className="tool-output-number">{line.number}</span>
+					) : null}
+					<span className="tool-output-marker">
+						{line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}
+					</span>
+					<ChangedWords
+						text={line.code}
+						tokens={tokens?.[index]}
+						changed={line.changed}
+					/>
+					{line.code ? null : " "}
+				</>
+			)}
+		</span>
+	));
+}
+
+type LineTokens = NonNullable<
+	ComponentProps<typeof HighlightedTokens>["tokens"]
+>;
+
+/** A diff line's code, its changed words on a stronger tint. */
+function ChangedWords({
+	text,
+	tokens,
+	changed,
+}: {
+	text: string;
+	tokens: LineTokens | undefined;
+	changed: readonly [number, number] | undefined;
+}) {
+	if (!changed) return <HighlightedTokens text={text} tokens={tokens} />;
+	const [start, end] = changed;
+	const part = (from: number, to: number) => ({
+		text: text.slice(from, to),
+		tokens: tokens ? sliceTokens(tokens, from, to) : undefined,
+	});
+	const before = part(0, start);
+	const word = part(start, end);
+	const after = part(end, text.length);
+	return (
+		<>
+			<HighlightedTokens {...before} />
+			<span className="tool-output-word">
+				<HighlightedTokens {...word} />
+			</span>
+			<HighlightedTokens {...after} />
+		</>
+	);
+}
+
+/** The tokens covering [from, to) of their line, cut at both ends. */
+function sliceTokens(tokens: LineTokens, from: number, to: number) {
+	const sliced: LineTokens = [];
+	let at = 0;
+	for (const token of tokens) {
+		const tokenEnd = at + token.content.length;
+		const cutStart = Math.max(from, at);
+		const cutEnd = Math.min(to, tokenEnd);
+		if (cutStart < cutEnd)
+			sliced.push({
+				...token,
+				offset: token.offset + (cutStart - at),
+				content: token.content.slice(cutStart - at, cutEnd - at),
+			});
+		at = tokenEnd;
+	}
+	return sliced;
+}
+
+/**
+ * Text coloured as `language`, one span per line so a highlight that
+ * arrives later replaces the plain text without moving it.
+ */
+function HighlightedOutput({
+	text,
+	language,
+	className,
+}: {
+	text: string;
+	language: SourceLanguage;
+	className: string;
+}) {
+	const tokens = useHighlightedLines(text, language);
+	return (
+		<pre className={className}>
+			{tokens
+				? text.split("\n").map((line, index) => (
+						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
+						<span key={index}>
+							{index ? "\n" : null}
+							<HighlightedTokens text={line} tokens={tokens[index]} />
+						</span>
+					))
+				: text}
+		</pre>
+	);
+}
+
 /** Source lines with a line-number gutter, highlighted for the file's language. */
 function NumberedCode({
 	path,
 	lines,
 	startLine,
-	sign,
 }: {
 	path: string;
 	lines: string[];
 	startLine?: number;
-	sign?: "added" | "removed";
 }) {
 	const tokens = useHighlightedLines(
 		lines.join("\n"),
@@ -160,14 +363,8 @@ function NumberedCode({
 			{lines.map((line, index) => (
 				// Lines are positional: their place in the file is their identity.
 				// biome-ignore lint/suspicious/noArrayIndexKey: positional source lines
-				<div key={index} className="tool-line" data-sign={sign}>
-					<span className="tool-line-number">
-						{sign === "added"
-							? "+"
-							: sign === "removed"
-								? "−"
-								: (startLine ?? 1) + index}
-					</span>
+				<div key={index} className="tool-line">
+					<span className="tool-line-number">{(startLine ?? 1) + index}</span>
 					<span className="tool-line-code">
 						<HighlightedTokens text={line} tokens={tokens?.[index]} />
 						{line ? null : " "}
@@ -250,23 +447,12 @@ function EditPanel({
 				)
 			}
 		>
-			<div className="tool-panel-body tool-panel-code">
-				{view.hunks.map((hunk, index) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: edits keep their order
-					<div key={index} className="tool-hunk">
-						<NumberedCode
-							path={view.path}
-							lines={splitLines(hunk.removed)}
-							sign="removed"
-						/>
-						<NumberedCode
-							path={view.path}
-							lines={splitLines(hunk.added)}
-							sign="added"
-						/>
-					</div>
-				))}
-			</div>
+			<pre className="tool-panel-body tool-panel-output">
+				<DiffLines
+					language={sourceLanguageFromPath(view.path)}
+					lines={editDiffLines(view.hunks)}
+				/>
+			</pre>
 			{note ? (
 				<p className="tool-panel-note" data-tone={failed ? "bad" : undefined}>
 					{note}
@@ -317,21 +503,12 @@ function WritePanel({
 function PatchPanel({ diff }: { diff: string }) {
 	return (
 		<Panel kind="patch" head={<span className="tool-panel-meta">Patch</span>}>
-			<div className="tool-panel-body tool-panel-code">
-				{diff.split("\n").map((line, index) => {
-					const sign = line.startsWith("+")
-						? "added"
-						: line.startsWith("-")
-							? "removed"
-							: undefined;
-					return (
-						// biome-ignore lint/suspicious/noArrayIndexKey: positional patch lines
-						<div key={index} className="tool-line" data-sign={sign}>
-							<span className="tool-line-code">{line || " "}</span>
-						</div>
-					);
-				})}
-			</div>
+			<pre className="tool-panel-body tool-panel-output">
+				{patchDiffFiles(diff).map((file, index) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: files keep their order
+					<DiffFileOutput key={index} {...file} />
+				))}
+			</pre>
 		</Panel>
 	);
 }

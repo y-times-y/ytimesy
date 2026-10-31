@@ -1,4 +1,7 @@
-import { publicationCommitAuthor } from "#/domain/publication";
+import {
+	type PublicationAuthor,
+	publicationCommitAuthor,
+} from "#/domain/publication";
 import { commitAllArgv } from "./repository-setup";
 
 const lockedTurnCommitScript = `import fcntl, os, pathlib, subprocess, sys, tempfile
@@ -37,16 +40,13 @@ export function automaticTurnCommitArgv(
 	turn: string,
 	message: string,
 	expectedTree = "",
+	author: PublicationAuthor = publicationCommitAuthor({}),
 ) {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn commit identity.");
 	if (expectedTree && !/^[a-f0-9]{40,64}$/.test(expectedTree))
 		throw new Error("Invalid verified tree identity.");
-	const command = commitAllArgv(
-		directory,
-		message,
-		publicationCommitAuthor({}),
-	)[2];
+	const command = commitAllArgv(directory, message, author)[2];
 	return [
 		"python3",
 		"-c",

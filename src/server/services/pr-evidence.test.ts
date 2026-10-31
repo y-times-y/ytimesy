@@ -162,8 +162,11 @@ const input = (rt: ReturnType<typeof runtime>) => ({
 });
 const pageUrl = `https://app.ytimesy.test/projects/${projectId}/evidence/${evidenceId}`;
 
+const handoffBody =
+	"The parser rejects an empty token and reports the line number.\n\nChecked with `pnpm test` (exit 0).";
+
 beforeEach(() => {
-	body = "Automatic draft handoff from ytimesy.";
+	body = handoffBody;
 	headSha = sha;
 	const write = vi.fn(async (next: string) => {
 		body = next;
@@ -274,9 +277,7 @@ describe("pull request evidence", () => {
 			],
 		});
 		// Nothing in the repository: only the description changes, with a link.
-		expect(body.startsWith("Automatic draft handoff from ytimesy.\n\n")).toBe(
-			true,
-		);
+		expect(body.startsWith(`${handoffBody}\n\n`)).toBe(true);
 		expect(body).toContain(`[View the evidence](${pageUrl})`);
 		expect(body).toContain(": 1 screenshot, 6 s screen recording.");
 		expect(body).toContain("6 s screen recording");
@@ -457,7 +458,7 @@ describe("pull request evidence", () => {
 		).toEqual({ kind: "closed" });
 		expect(storage.store.put).not.toHaveBeenCalled();
 		expect(records.remove).toHaveBeenCalledWith([evidenceId]);
-		expect(body).toBe("Automatic draft handoff from ytimesy.");
+		expect(body).toBe(handoffBody);
 	});
 
 	it("leaves no half-stored media when storage fails, and reports the capture failed", async () => {
@@ -479,7 +480,7 @@ describe("pull request evidence", () => {
 			headSha: null,
 			files: [],
 		});
-		expect(body).toBe("Automatic draft handoff from ytimesy.");
+		expect(body).toBe(handoffBody);
 	});
 });
 

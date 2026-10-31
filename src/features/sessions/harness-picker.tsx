@@ -42,6 +42,9 @@ import {
 	usePrefetchPlanUsage,
 } from "./plan-usage";
 
+/** The composer's model button; Cmd+Shift+M clicks it. */
+export const MODEL_PICKER_ID = "session-harness-select";
+
 /** API maker sections; mounted only while the picker is open. */
 function ApiProviderRail({
 	selected,
@@ -150,7 +153,7 @@ export function HarnessPicker({
 			}}
 		>
 			<PopoverTrigger
-				id="session-harness-select"
+				id={MODEL_PICKER_ID}
 				className="composer-select harness-select"
 				aria-label="Model"
 				onPointerEnter={prefetchPlanUsage}

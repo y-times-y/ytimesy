@@ -719,38 +719,14 @@ button:enabled:active {
 	color: var(--chat-unread-color);
 	font-weight: var(--chat-unread-weight);
 }
-/* Working: the title shimmers slowly, like "Thinking" in the chat. */
-.sidebar-chat[data-status="working"] .sidebar-chat-title {
-	background-image: linear-gradient(
-		90deg,
-		#bdbdbd 0%,
-		#bdbdbd 40%,
-		#fff 50%,
-		#bdbdbd 60%,
-		#bdbdbd 100%
-	);
-	background-size: 250% 100%;
-	background-clip: text;
-	-webkit-background-clip: text;
-	color: transparent;
-	-webkit-text-fill-color: transparent;
-	animation: sidebar-title-shimmer 2.2s linear infinite;
-}
-@keyframes sidebar-title-shimmer {
-	from {
-		background-position: 100% 0;
-	}
-	to {
-		background-position: -150% 0;
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.sidebar-chat[data-status="working"] .sidebar-chat-title {
-		background-image: none;
-		color: #f4f4f4;
-		-webkit-text-fill-color: currentColor;
-		animation: none;
-	}
+/* Working: the title stays the normal still label; the pixel spinner (the
+   same loader as elsewhere) takes the time's place. */
+.t-matrix.sidebar-chat-working {
+	--t-matrix-cell: 3px;
+	--t-matrix-gap: 1.5px;
+	width: 14px;
+	height: 14px;
+	color: #d4d4d4;
 }
 .sidebar-status-tooltip {
 	z-index: 120;

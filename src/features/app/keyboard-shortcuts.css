@@ -1,0 +1,140 @@
+/* The shortcuts sheet and the command palette: the settings overlay's
+   backdrop, the shared menu surface and list tokens (styles.css :root). */
+.shortcut-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 210;
+	background: #000000b3;
+	backdrop-filter: blur(2px);
+}
+.shortcut-dialog {
+	position: fixed;
+	top: 12vh;
+	left: 50%;
+	z-index: 211;
+	display: flex;
+	flex-direction: column;
+	width: min(560px, calc(100vw - 32px));
+	max-height: min(560px, 76vh);
+	overflow: hidden;
+	padding: var(--menu-pad);
+	border: 1px solid var(--menu-border);
+	border-radius: var(--menu-radius);
+	background: var(--menu-bg);
+	color: var(--list-text);
+	box-shadow: var(--menu-shadow);
+	transform: translateX(-50%);
+	outline: none;
+}
+.shortcut-dialog-title {
+	margin: 0;
+	padding: 8px var(--list-row-pad-x) 6px;
+	color: var(--list-text-strong);
+	font-size: 14px;
+	font-weight: 550;
+}
+.shortcut-sheet {
+	overflow-y: auto;
+	padding-bottom: 4px;
+}
+.shortcut-sheet h3,
+.command-palette-heading {
+	margin: 0;
+	padding: var(--list-heading-pad);
+	color: var(--list-heading-color);
+	font-size: var(--list-heading-size);
+	font-weight: var(--list-heading-weight);
+}
+.shortcut-sheet ul,
+.command-palette-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.shortcut-sheet li,
+.command-palette-item {
+	display: flex;
+	align-items: center;
+	gap: var(--list-row-gap);
+	min-height: var(--list-row-height);
+	padding: var(--list-row-pad);
+	border-radius: var(--list-row-radius);
+	font-size: var(--list-font-size);
+}
+.shortcut-keys {
+	display: inline-flex;
+	flex: 0 0 auto;
+	gap: 3px;
+	margin-left: auto;
+}
+.shortcut-keys-alt {
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+}
+.shortcut-keys kbd {
+	display: inline-grid;
+	place-items: center;
+	min-width: 20px;
+	height: 20px;
+	padding: 0 5px;
+	border: 1px solid var(--menu-border);
+	border-radius: 5px;
+	background: #ffffff08;
+	color: var(--list-text-secondary);
+	font-family: inherit;
+	font-size: 11px;
+	line-height: 1;
+}
+/* A menu row's hint: quiet text, as macOS menus show them. */
+.menu-row-shortcut {
+	flex: 0 0 auto;
+	margin-left: auto;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+}
+.command-palette-search {
+	width: 100%;
+	height: 40px;
+	padding: 0 var(--list-row-pad-x);
+	border: 0;
+	border-bottom: 1px solid var(--menu-divider);
+	background: transparent;
+	color: var(--list-text-strong);
+	font-size: 14px;
+	outline: none;
+}
+.command-palette-results {
+	overflow-y: auto;
+	padding-top: 4px;
+}
+.command-palette-item {
+	width: 100%;
+	border: 0;
+	background: transparent;
+	color: var(--list-text);
+	text-align: left;
+	cursor: pointer;
+}
+.command-palette-item[data-active="true"] {
+	background: var(--list-hover-bg);
+	color: var(--list-text-strong);
+}
+.command-palette-item:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.command-palette-detail {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.command-palette-empty {
+	margin: 0;
+	padding: 12px var(--list-row-pad-x);
+	color: var(--list-text-muted);
+	font-size: var(--list-font-size);
+}

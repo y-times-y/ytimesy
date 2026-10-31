@@ -19,7 +19,11 @@ import {
 	agentNameSegments,
 	type MentionAgent,
 } from "#/domain/agent-mentions";
-import { withoutDanglingMarker } from "#/domain/markdown-text";
+import { linkLabel } from "#/domain/link-label";
+import {
+	withoutDanglingMarker,
+	withoutPullRequestBlock,
+} from "#/domain/markdown-text";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { workspaceFileMention } from "#/domain/workspace-file-mention";
 import { AgentChip, AgentMentionContext } from "./agent-chip";
@@ -149,8 +153,8 @@ export function AgentMarkdown({
 					return fileLink(file, typeof children === "string" ? children : file);
 				const safe = safeExternalLink(href);
 				return safe ? (
-					<a href={safe} target="_blank" rel="noopener noreferrer">
-						{children}
+					<a href={safe} title={safe} target="_blank" rel="noopener noreferrer">
+						{linkLabel(markdownChildText(children), safe) ?? children}
 					</a>
 				) : (
 					<span>{children}</span>
@@ -206,7 +210,9 @@ export function AgentMarkdown({
 			skipHtml
 			urlTransform={defaultUrlTransform}
 		>
-			{streaming ? withoutDanglingMarker(text) : text}
+			{streaming
+				? withoutDanglingMarker(withoutPullRequestBlock(text))
+				: withoutPullRequestBlock(text)}
 		</Streamdown>
 	);
 }

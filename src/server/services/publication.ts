@@ -224,6 +224,7 @@ export function publishProject(
 					repositoryId: project.repositoryId,
 					sessionId: input.sessionId ?? null,
 				},
+				token,
 			),
 		);
 		void captureServerAnalytics(

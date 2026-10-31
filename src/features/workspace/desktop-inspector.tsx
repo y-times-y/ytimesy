@@ -1,13 +1,14 @@
 import { ClientOnly } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import {
 	desktopInspectorPrompt,
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import { DesktopStage } from "./desktop-stage";
+import "./desktop-inspector.css";
 
-export function DesktopInspector({
+export const DesktopInspector = memo(function DesktopInspector({
 	desktop,
 	busy,
 	projectId,
@@ -69,4 +70,4 @@ export function DesktopInspector({
 			) : null}
 		</section>
 	);
-}
+});

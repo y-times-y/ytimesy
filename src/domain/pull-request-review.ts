@@ -1,3 +1,4 @@
+import type { AgentProviderId } from "./agent-provider";
 import type { FileChangeEntry } from "./session-item";
 
 export type PullRequestCheck = {
@@ -61,15 +62,128 @@ export type PullRequestDetail = {
 export type ListedRepositoryPullRequest = {
 	readonly number: number;
 	readonly title: string;
+	readonly url: string;
+	/** GitHub login. */
 	readonly author: string;
+	/** Profile name when the list payload includes one; otherwise null. */
+	readonly authorName: string | null;
+	readonly authorAvatarUrl: string | null;
 	readonly draft: boolean;
 };
 
 type GithubUser = {
 	login?: string;
 	avatar_url?: string;
+	name?: string | null;
 	type?: string;
 } | null;
+
+/** Profile name from a GitHub user, when that payload includes one. */
+export function githubUserName(user: GithubUser): string | null {
+	const name = user?.name?.trim();
+	return name ? name : null;
+}
+
+/** The person shown on a pull-request row: profile name when GitHub sent one, otherwise the login. */
+export function listedPullRequestAuthor(pr: {
+	readonly author: string;
+	readonly authorName: string | null;
+	readonly authorAvatarUrl: string | null;
+}): PullRequestPerson & { readonly name: string } {
+	const login = pr.author.trim() || "ghost";
+	return {
+		login,
+		avatarUrl: pr.authorAvatarUrl,
+		bot: login.endsWith("[bot]"),
+		name: pr.authorName?.trim() || login.replace(/\[bot\]$/, ""),
+	};
+}
+
+const GITHUB_PULL_URL =
+	/^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/\d+\/?$/;
+
+/** `owner/repo` from a github.com pull request URL. */
+export function githubPullFullName(url: string): string | null {
+	return GITHUB_PULL_URL.exec(url.trim())?.[1] ?? null;
+}
+
+/** The first message of a review chat: which pull request, and to read the diff and comment. */
+export function pullRequestReviewMessage(pull: {
+	readonly fullName: string;
+	readonly number: number;
+	readonly title: string;
+	readonly url: string;
+}): string {
+	const title = pull.title.replace(/\s+/g, " ").trim().slice(0, 200);
+	return `Review pull request #${pull.number} "${title}" in ${pull.fullName} (${pull.url}). Read the diff and comment on issues.`;
+}
+
+/** What a review chat is started with. The open chat is not a field: the review does not continue it. */
+export type PullRequestReviewStart = {
+	readonly projectId: string;
+	readonly harnessId: AgentProviderId;
+	readonly modelId: string;
+	readonly requestId: string;
+	readonly fullName: string;
+	readonly number: number;
+	readonly title: string;
+	readonly url: string;
+};
+
+export function pullRequestReviewStart(input: {
+	readonly projectId: string;
+	readonly harnessId: AgentProviderId;
+	readonly modelId: string;
+	readonly requestId: string;
+	readonly pull: {
+		readonly fullName: string;
+		readonly number: number;
+		readonly title: string;
+		readonly url: string;
+	};
+}): PullRequestReviewStart {
+	return {
+		projectId: input.projectId,
+		harnessId: input.harnessId,
+		modelId: input.modelId,
+		requestId: input.requestId,
+		fullName: input.pull.fullName,
+		number: input.pull.number,
+		title: input.pull.title,
+		url: input.pull.url,
+	};
+}
+
+/**
+ * The chat a review opened. Refuses the chat that was already open: posting
+ * the review there would run it inside that thread.
+ */
+export function pullRequestReviewSession(input: {
+	readonly openedSessionId: string;
+	readonly currentSessionId?: string;
+}): { readonly sessionId: string } {
+	if (
+		input.currentSessionId &&
+		input.openedSessionId === input.currentSessionId
+	)
+		throw new Error("A pull request review starts a new chat.");
+	return { sessionId: input.openedSessionId };
+}
+
+/** Asks the server to open the review, then keeps only a session that is not the open chat. */
+export async function startPullRequestReviewThread(input: {
+	readonly currentSessionId?: string;
+	readonly request: PullRequestReviewStart;
+	readonly start: (
+		request: PullRequestReviewStart,
+	) => Promise<{ readonly sessionId: string }>;
+}): Promise<string> {
+	const chat = await input.start(input.request);
+	return pullRequestReviewSession({
+		openedSessionId: chat.sessionId,
+		currentSessionId: input.currentSessionId,
+	}).sessionId;
+}
 
 export function pullRequestPerson(user: GithubUser): PullRequestPerson {
 	const login = user?.login ?? "ghost";

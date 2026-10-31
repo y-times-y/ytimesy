@@ -1,0 +1,13 @@
+/* Frame updates stay inside this pane. noVNC sizes its canvas in pixels;
+   in normal flow that canvas grows the inspector and lays the chat out again. */
+.desktop-inspector {
+	contain: layout paint;
+}
+.desktop-stage-rfb {
+	position: relative;
+	overflow: hidden;
+}
+.desktop-stage-rfb > div {
+	position: absolute;
+	inset: 0;
+}

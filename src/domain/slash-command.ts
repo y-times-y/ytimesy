@@ -6,6 +6,7 @@ export type SlashCommandId =
 	| "diff"
 	| "terminal"
 	| "desktop"
+	| "side"
 	| "custom";
 
 export type SlashCommandAvailability = "ready" | "unavailable";
@@ -33,6 +34,7 @@ const BUILT_IN_TRIGGERS = new Set([
 	"diff",
 	"terminal",
 	"desktop",
+	"side",
 ]);
 
 /** Parses optional `description` / `argument-hint` frontmatter; the rest is the template. */
@@ -160,6 +162,13 @@ export function composerSlashCommands(
 			trigger: "/desktop",
 			label: "Desktop",
 			description: "Show the shared workspace desktop",
+			availability: "ready",
+		},
+		{
+			id: "side",
+			trigger: "/side",
+			label: "Side",
+			description: "Chat beside Main without interrupting it",
 			availability: "ready",
 		},
 	];

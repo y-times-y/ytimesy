@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 	take: vi.fn(),
 	restore: vi.fn(async () => {}),
 	remove: vi.fn(async () => true),
+	update: vi.fn(async () => true),
+	release: vi.fn(async () => ({ status: "running" as const })),
 	send: vi.fn(),
 	read: vi.fn(),
 	stop: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock("../adapters/queued-user-messages", () => ({
 	takeNextQueuedUserMessage: mocks.take,
 	restoreQueuedUserMessage: mocks.restore,
 	removeQueuedUserMessage: mocks.remove,
+	updateQueuedUserMessage: mocks.update,
+	releaseQueuedUserMessage: mocks.release,
 }));
 vi.mock("./harness-workspace-session", () => ({
 	sendHarnessWorkspaceTask: mocks.send,
@@ -35,10 +39,12 @@ vi.mock("./message-attachments", () => ({
 }));
 
 const {
+	releaseQueuedComposerMessage,
 	removeQueuedComposerMessage,
 	sendComposerMessage,
 	startQueuedUserTurn,
 	stopTurnKeepingQueue,
+	updateQueuedComposerMessage,
 } = await import("./queued-user-messages");
 
 const machines = {} as WorkspaceMachines;
@@ -61,6 +67,8 @@ beforeEach(() => {
 	mocks.queued.mockResolvedValue([]);
 	mocks.store.mockResolvedValue([]);
 	mocks.remove.mockResolvedValue(true);
+	mocks.update.mockResolvedValue(true);
+	mocks.release.mockResolvedValue({ status: "running" });
 	mocks.read.mockReturnValue(Effect.succeed(view()));
 	mocks.send.mockReturnValue(Effect.succeed(view()));
 	mocks.session.mockResolvedValue({
@@ -105,6 +113,7 @@ it("queues a send behind the running turn instead of rejecting it", async () => 
 		harnessId: "api",
 		modelId: "connection|model",
 		speed: "fast",
+		released: false,
 	});
 	expect(queued.message).toContain("Also the README");
 	expect(queued.message).toContain("/tmp/ytimesy-attachments/");
@@ -262,4 +271,56 @@ it("removes a waiting message, and says so when it was already delivered", async
 	await expect(
 		Effect.runPromise(removeQueuedComposerMessage(scope, messageId)),
 	).rejects.toThrow("already delivered");
+});
+
+it("edits a waiting message in place", async () => {
+	mocks.queued.mockResolvedValue([
+		{ kind: "userMessage", id: messageId, text: "Old" },
+	]);
+	await Effect.runPromise(
+		updateQueuedComposerMessage(scope, messageId, " Also the README "),
+	);
+	expect(mocks.update).toHaveBeenCalledWith(
+		"owner",
+		"chat",
+		messageId,
+		"Also the README",
+		expect.stringContaining("Also the README"),
+	);
+});
+
+it("marks Send for the next step while the turn runs, and starts it once the turn has ended", async () => {
+	await Effect.runPromise(
+		releaseQueuedComposerMessage(machines, scope, messageId),
+	);
+	expect(mocks.send).not.toHaveBeenCalled();
+	mocks.release.mockResolvedValue({
+		status: "taken",
+		send: {
+			item: { kind: "userMessage", id: messageId, text: "Then deploy" },
+			message: "Then deploy",
+			harnessId: "api",
+			modelId: "connection|model",
+			released: true,
+		},
+	});
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	});
+	await Effect.runPromise(
+		releaseQueuedComposerMessage(machines, scope, messageId),
+	);
+	expect(mocks.send).toHaveBeenCalledWith(
+		machines,
+		expect.objectContaining({ sessionId: "chat", createNew: false }),
+		expect.objectContaining({
+			text: "Then deploy",
+			idempotencyKey: messageId,
+		}),
+		expect.objectContaining({ id: "chat", turnStatus: "idle" }),
+	);
 });

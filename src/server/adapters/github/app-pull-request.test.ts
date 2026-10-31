@@ -12,37 +12,36 @@ vi.mock("./installation-token", () => ({
 }));
 vi.mock("../github", () => ({ ensureDraftPullRequest: api.pull }));
 
-it("creates or reuses PRs as the installed app with repository-scoped PR permissions", async () => {
-	api.token.mockResolvedValue("installation-token-fixture");
+it("opens the pull request as the signed-in user, and as the app only without one", async () => {
 	api.pull.mockResolvedValue({
 		url: "https://github.com/owner/repo/pull/1",
 		draft: true,
 	});
 	const draft = {
 		title: "Fix parser",
-		body: "Evidence",
+		body: "The parser rejects an empty token.",
 		head: "ytimesy/fix-parser-abcd",
 		base: "main",
 	};
+	await ensureAppDraftPullRequest(
+		123,
+		"owner/repo",
+		draft,
+		undefined,
+		"user-token",
+	);
+	expect(api.token).not.toHaveBeenCalled();
+	expect(api.pull).toHaveBeenCalledWith("user-token", "owner/repo", draft);
+	api.pull.mockClear();
+	api.token.mockResolvedValue("app-token");
+	vi.spyOn(console, "warn").mockImplementation(() => {});
 	await ensureAppDraftPullRequest(123, "owner/repo", draft);
 	expect(api.token).toHaveBeenCalledWith(123, {
 		repositoryNames: ["repo"],
 		contents: "read",
 		pullRequests: "write",
 	});
-	expect(api.pull).toHaveBeenCalledWith(
-		"installation-token-fixture",
-		"owner/repo",
-		draft,
-	);
-	api.pull.mockClear();
-	api.token.mockRejectedValueOnce(
-		new Error("App pull request permission missing"),
-	);
-	await expect(
-		ensureAppDraftPullRequest(123, "owner/repo", draft),
-	).rejects.toThrow("permission missing");
-	expect(api.pull).not.toHaveBeenCalled();
+	expect(api.pull).toHaveBeenCalledWith("app-token", "owner/repo", draft);
 });
 
 afterEach(() => {
@@ -52,7 +51,6 @@ afterEach(() => {
 
 it("links a project's pull request to Fix with ytimesy and records it for GitHub wake-ups", async () => {
 	vi.stubEnv("APP_URL", "https://app.example/");
-	api.token.mockResolvedValue("installation-token-fixture");
 	api.pull.mockResolvedValue({
 		number: 7,
 		url: "https://github.com/owner/repo/pull/7",
@@ -65,12 +63,18 @@ it("links a project's pull request to Fix with ytimesy and records it for GitHub
 		head: "ytimesy/x-ab12",
 		base: "main",
 	};
-	await ensureAppDraftPullRequest(123, "owner/repo", draft, {
-		userId: "alice",
-		projectId: "project",
-		repositoryId: 9,
-		sessionId: "chat",
-	});
+	await ensureAppDraftPullRequest(
+		123,
+		"owner/repo",
+		draft,
+		{
+			userId: "alice",
+			projectId: "project",
+			repositoryId: 9,
+			sessionId: "chat",
+		},
+		"user-token",
+	);
 	const sent = api.pull.mock.calls[0]?.[2];
 	const linkId = api.record.mock.calls[0]?.[0].id;
 	expect(sent.body).toContain(
@@ -92,12 +96,18 @@ it("links a project's pull request to Fix with ytimesy and records it for GitHub
 	api.record.mockRejectedValueOnce(new Error("db down"));
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	await expect(
-		ensureAppDraftPullRequest(123, "owner/repo", draft, {
-			userId: "alice",
-			projectId: "project",
-			repositoryId: 9,
-			sessionId: null,
-		}),
+		ensureAppDraftPullRequest(
+			123,
+			"owner/repo",
+			draft,
+			{
+				userId: "alice",
+				projectId: "project",
+				repositoryId: 9,
+				sessionId: null,
+			},
+			"user-token",
+		),
 	).resolves.toMatchObject({ number: 7 });
 	warn.mockRestore();
 });

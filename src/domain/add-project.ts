@@ -4,13 +4,19 @@ import {
 	repositoriesForProject,
 } from "./projects";
 
-type AddProjectPhase = "loading" | "connect" | "choose";
+type AddProjectPhase = "loading" | "connect" | "choose" | "retry";
+
+/** Shown when the repository list request died in the browser, not when GitHub refused. */
+export const GITHUB_LIST_UNREACHABLE = "Couldn't reach GitHub.";
 
 export function addProjectPhase(input: {
 	readonly loading: boolean;
 	readonly githubReady: boolean;
+	/** The list request never got a response. Not a reason to ask for a new connection. */
+	readonly unreachable?: boolean;
 }): AddProjectPhase {
 	if (input.loading) return "loading";
+	if (!input.githubReady && input.unreachable) return "retry";
 	if (!input.githubReady) return "connect";
 	return "choose";
 }
@@ -23,10 +29,29 @@ export function addProjectCopy(phase: AddProjectPhase) {
 				"Grant ytimesy access to the repositories you want to work on.",
 		};
 	}
+	if (phase === "retry") {
+		return {
+			title: "GitHub",
+			description: GITHUB_LIST_UNREACHABLE,
+		};
+	}
 	return {
 		title: "Add project",
 		description: "Select repositories to share one project environment.",
 	};
+}
+
+/** Empty-state copy for the repository list beside the composer. */
+export function githubRepositoryListMessage(input: {
+	readonly query: string;
+	readonly loaded: boolean;
+	readonly unreachable: boolean;
+	readonly errorMessage?: string;
+}): string {
+	if (input.query.trim()) return "No repositories match.";
+	if (input.loaded) return "Every repository is already a project.";
+	if (input.unreachable) return GITHUB_LIST_UNREACHABLE;
+	return input.errorMessage || "Connect GitHub to see repositories.";
 }
 
 export function addedProjectBranch(

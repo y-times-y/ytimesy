@@ -33,7 +33,6 @@ const INSPECTOR_VIEWS = [
 	"pr",
 	"terminal",
 	"desktop",
-	"preview",
 	"memory",
 ] as const;
 export type SavedInspectorView = (typeof INSPECTOR_VIEWS)[number];
@@ -70,9 +69,11 @@ export function savedInspectorFromCookies(
 	const [open, view, split] = decodeURIComponent(raw ?? "").split(".");
 	if (open !== "1" && open !== "0") return CLOSED_INSPECTOR;
 	const ratio = split ? Number(split) / 1000 : Number.NaN;
+	// The side panel no longer has a Preview tab; a saved one opens on Desktop.
+	const named = view === "preview" ? "desktop" : view;
 	return {
 		open: open === "1",
-		view: INSPECTOR_VIEWS.find((known) => known === view) ?? "overview",
+		view: INSPECTOR_VIEWS.find((known) => known === named) ?? "overview",
 		split: Number.isFinite(ratio) ? clampInspectorSplit(ratio) : null,
 	};
 }
