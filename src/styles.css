@@ -1662,12 +1662,14 @@ a.session-title-meta:focus-visible {
 	--diff-background-color: #141414;
 	--diff-text-color: #ededed;
 	--diff-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	--diff-gutter-insert-background-color: #3fb9501f;
-	--diff-gutter-insert-text-color: #8ddb9d;
-	--diff-gutter-delete-background-color: #f851491f;
-	--diff-gutter-delete-text-color: #ffa5a2;
-	--diff-code-insert-background-color: #3fb95014;
-	--diff-code-delete-background-color: #f8514914;
+	--diff-gutter-insert-background-color: var(--diff-added-bg);
+	--diff-gutter-insert-text-color: var(--diff-added-fg);
+	--diff-gutter-delete-background-color: var(--diff-removed-bg);
+	--diff-gutter-delete-text-color: var(--diff-removed-fg);
+	--diff-code-insert-background-color: var(--diff-added-bg);
+	--diff-code-insert-edit-background-color: var(--diff-added-word);
+	--diff-code-delete-background-color: var(--diff-removed-bg);
+	--diff-code-delete-edit-background-color: var(--diff-removed-word);
 	margin: 0;
 	padding: 8px 0;
 	overflow: auto;
@@ -1701,12 +1703,12 @@ a.session-title-meta:focus-visible {
 	display: none;
 }
 .diff-preview .diff-gutter-insert {
-	color: #78b675;
-	border-left-color: #65a660;
+	color: var(--diff-added-fg);
+	border-left-color: var(--diff-added-fg);
 }
 .diff-preview .diff-gutter-delete {
-	color: #dc7673;
-	border-left-color: #cf6460;
+	color: var(--diff-removed-fg);
+	border-left-color: var(--diff-removed-fg);
 }
 .diff-preview .diff-gutter-col {
 	width: 56px;
