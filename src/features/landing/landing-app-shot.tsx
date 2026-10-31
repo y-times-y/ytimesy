@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import {
 	ArrowUp,
 	ArrowUpDown,
@@ -7,7 +6,6 @@ import {
 	Check,
 	ChevronDown,
 	ChevronRight,
-	CornerDownRight,
 	GitMerge,
 	GitPullRequest,
 	ListTodo,
@@ -77,49 +75,21 @@ const EDIT_ITEM = toolItem(
 	"Updated appearance.tsx: 2 edits applied.",
 );
 
-type Extra =
-	| { kind: "user"; text: string }
-	| { kind: "preview" }
-	| { kind: "answered"; option: string };
-
 /**
  * The whole app at work, drawn with the product's own icons, activity rows,
- * tool views and Overview components. Clicks work: chats open, steps
- * expand, the question can be answered and the composer sends. Nothing
- * runs; a sent message says so and links to sign-up.
+ * tool views and Overview components. Chats open (the others show their
+ * opening message), the dark mode chat's steps expand, and sending from the
+ * composer goes to sign-up.
  */
 export function AppShot() {
 	const [activeId, setActiveId] = useState("dark");
-	const [answers, setAnswers] = useState<Record<string, string>>({});
-	const [extras, setExtras] = useState<Record<string, Extra[]>>({});
-	const chats = DEMO_CHATS.map((chat) =>
-		answers[chat.id]
-			? { ...chat, status: "working" as const, age: "now" }
-			: chat,
-	);
-	const active = chats.find((chat) => chat.id === activeId) ?? chats[0];
-	const add = (chatId: string, ...items: Extra[]) =>
-		setExtras((current) => ({
-			...current,
-			[chatId]: [...(current[chatId] ?? []), ...items],
-		}));
+	const active =
+		DEMO_CHATS.find((chat) => chat.id === activeId) ?? DEMO_CHATS[0];
 	if (!active) return null;
 	return (
 		<section className="app-shot" aria-label="Product preview">
-			<Sidebar chats={chats} activeId={active.id} onOpen={setActiveId} />
-			<Chat
-				key={active.id}
-				chat={active}
-				answer={answers[active.id]}
-				extras={extras[active.id] ?? []}
-				onAnswer={(option) => {
-					setAnswers((current) => ({ ...current, [active.id]: option }));
-					add(active.id, { kind: "answered", option });
-				}}
-				onSend={(text) =>
-					add(active.id, { kind: "user", text }, { kind: "preview" })
-				}
-			/>
+			<Sidebar chats={DEMO_CHATS} activeId={active.id} onOpen={setActiveId} />
+			<Chat key={active.id} chat={active} />
 			<Inspector chat={active} />
 		</section>
 	);
@@ -250,19 +220,7 @@ function RowMark({ chat, active }: { chat: DemoChat; active: boolean }) {
 	}
 }
 
-function Chat({
-	chat,
-	answer,
-	extras,
-	onAnswer,
-	onSend,
-}: {
-	chat: DemoChat;
-	answer: string | undefined;
-	extras: readonly Extra[];
-	onAnswer: (option: string) => void;
-	onSend: (text: string) => void;
-}) {
+function Chat({ chat }: { chat: DemoChat }) {
 	const [draft, setDraft] = useState("");
 	// The edit is the one step the preview opens by default.
 	const [open, setOpen] = useState<Record<number, boolean>>(() =>
@@ -272,13 +230,6 @@ function Chat({
 	);
 	const toggle = (index: number) =>
 		setOpen((current) => ({ ...current, [index]: !current[index] }));
-	const send = (event: FormEvent) => {
-		event.preventDefault();
-		const text = draft.trim();
-		if (!text) return;
-		onSend(text);
-		setDraft("");
-	};
 	return (
 		<section className="as-chat">
 			<div className="as-timeline">
@@ -289,16 +240,21 @@ function Chat({
 						item={item}
 						open={Boolean(open[index])}
 						onToggle={() => toggle(index)}
-						answer={answer}
-						onAnswer={onAnswer}
 					/>
 				))}
-				{extras.map((extra, index) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: added messages keep their order
-					<ExtraItem key={index} extra={extra} />
-				))}
 			</div>
-			<form className="as-composer" onSubmit={send}>
+			{/* A plain form: sending signs you up, scripts or not. The input has
+			    no name, so the message is not put in the address. */}
+			<form
+				className="as-composer"
+				method="get"
+				action="/auth/sign-up"
+				onSubmit={(event: FormEvent) => {
+					// With scripts running, skip the form's empty "?" in the address.
+					event.preventDefault();
+					if (draft.trim()) window.location.assign("/auth/sign-up");
+				}}
+			>
 				<input
 					className="as-input"
 					value={draft}
@@ -324,31 +280,6 @@ function Chat({
 				</div>
 			</form>
 		</section>
-	);
-}
-
-function ExtraItem({ extra }: { extra: Extra }) {
-	if (extra.kind === "user") return <p className="as-user">{extra.text}</p>;
-	if (extra.kind === "answered")
-		return (
-			<>
-				<p className="as-user">{extra.option}</p>
-				<p className="as-text">
-					Going with {extra.option}. Adding it to the dashboard now.
-				</p>
-			</>
-		);
-	return (
-		<p className="as-text as-preview-note">
-			This is a preview, so nothing runs here.{" "}
-			<Link
-				to="/auth/$path"
-				params={{ path: "sign-up" }}
-				search={{ error: undefined, redirectTo: undefined }}
-			>
-				Run it on your repo
-			</Link>
-		</p>
 	);
 }
 
@@ -382,14 +313,10 @@ function TurnItem({
 	item,
 	open,
 	onToggle,
-	answer,
-	onAnswer,
 }: {
 	item: DemoItem;
 	open: boolean;
 	onToggle: () => void;
-	answer: string | undefined;
-	onAnswer: (option: string) => void;
 }) {
 	switch (item.kind) {
 		case "user":
@@ -482,33 +409,6 @@ function TurnItem({
 						</p>
 					) : null}
 				</div>
-			);
-		case "question":
-			return (
-				<div className="as-question">
-					<p className="as-text">{item.text}</p>
-					<div className="as-options">
-						{item.options.map((option) => (
-							<button
-								key={option}
-								type="button"
-								className="as-option"
-								aria-pressed={answer === option}
-								disabled={Boolean(answer)}
-								onClick={() => onAnswer(option)}
-							>
-								{option}
-							</button>
-						))}
-					</div>
-				</div>
-			);
-		case "wake":
-			return (
-				<p className="as-step as-wake">
-					<CornerDownRight size={14} />
-					{item.text}
-				</p>
 			);
 	}
 }

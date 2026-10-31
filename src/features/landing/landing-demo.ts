@@ -1,8 +1,9 @@
 import { HELPER_COLORS, KIND_ICONS } from "#/domain/helper-names";
 
 /**
- * What the front page's clickable preview shows: a few chats, each with one
- * turn drawn by the product's own components. Plain data; nothing runs.
+ * What the front page's preview shows: the dark mode chat's full turn, drawn
+ * by the product's own components, and the other chats' opening messages.
+ * Plain data; nothing runs.
  */
 
 export const DEMO_AGENTS = [
@@ -60,9 +61,7 @@ export type DemoItem =
 	| { kind: "agent"; agent: DemoAgent }
 	| { kind: "edit" }
 	| { kind: "ran"; command: string; output: string; failed?: boolean }
-	| { kind: "memory"; text: string }
-	| { kind: "question"; text: string; options: readonly string[] }
-	| { kind: "wake"; text: string };
+	| { kind: "memory"; text: string };
 
 export type DemoTodo = {
 	text: string;
@@ -87,22 +86,7 @@ export const DEMO_CHATS: readonly DemoChat[] = [
 		title: "Pick a chart library",
 		project: "web",
 		status: "asking",
-		turn: [
-			{ kind: "user", text: "Add charts to the usage dashboard." },
-			{
-				kind: "explored",
-				files: [
-					"src/dashboard/usage.tsx",
-					"src/dashboard/usage-data.ts",
-					"package.json",
-				],
-			},
-			{
-				kind: "question",
-				text: "Two good fits for this dashboard. Which one should I use?",
-				options: ["Recharts", "visx"],
-			},
-		],
+		turn: [{ kind: "user", text: "Add charts to the usage dashboard." }],
 	},
 	{
 		id: "dark",
@@ -166,25 +150,10 @@ export const DEMO_CHATS: readonly DemoChat[] = [
 		project: "api",
 		status: "working",
 		age: "2m",
-		todos: [
-			{ text: "Profile the slow query", status: "completed" },
-			{ text: "Add an index on title", status: "in_progress" },
-			{ text: "Compare before and after", status: "pending" },
-		],
 		turn: [
-			{ kind: "user", text: "Search takes 2 seconds on big projects." },
 			{
-				kind: "explored",
-				files: ["src/search/query.ts", "db/schema.sql", "src/search/rank.ts"],
-			},
-			{
-				kind: "ran",
-				command: "pnpm bench search",
-				output: "search: p50 1,840 ms, p95 2,310 ms (10k rows)",
-			},
-			{
-				kind: "text",
-				text: "The query scans every row for the title match. Adding an index now.",
+				kind: "user",
+				text: "Search takes 2 seconds on big projects. Make it fast.",
 			},
 		],
 	},
@@ -199,19 +168,9 @@ export const DEMO_CHATS: readonly DemoChat[] = [
 			state: "Checks passed",
 		},
 		turn: [
-			{ kind: "user", text: "After login you always land on the home page." },
 			{
-				kind: "explored",
-				files: ["src/auth/login.tsx", "src/auth/redirect.ts"],
-			},
-			{
-				kind: "ran",
-				command: "pnpm test auth",
-				output: " Test Files  6 passed (6)\n      Tests  41 passed (41)",
-			},
-			{
-				kind: "text",
-				text: "Login now returns you to the page you came from. Pull request #127 is ready.",
+				kind: "user",
+				text: "After login you always land on the home page. Send people back where they were.",
 			},
 		],
 	},
@@ -221,13 +180,7 @@ export const DEMO_CHATS: readonly DemoChat[] = [
 		project: "api",
 		status: "merged",
 		pr: { number: 124, branch: "ytimesy/router-v7", state: "Merged" },
-		turn: [
-			{ kind: "user", text: "Upgrade the router to v7." },
-			{
-				kind: "text",
-				text: "Upgraded, with the two breaking changes fixed. #124 is merged.",
-			},
-		],
+		turn: [{ kind: "user", text: "Upgrade the router to v7." }],
 	},
 	{
 		id: "cache",
@@ -235,33 +188,13 @@ export const DEMO_CHATS: readonly DemoChat[] = [
 		project: "api",
 		status: "failed",
 		pr: { number: 126, branch: "ytimesy/api-cache", state: "1 check failing" },
-		turn: [
-			{ kind: "user", text: "Cache the list endpoints for 60 seconds." },
-			{
-				kind: "ran",
-				command: "pnpm test src/cache",
-				output:
-					"FAIL src/cache/list.test.ts\n  expected stale entry to be evicted",
-				failed: true,
-			},
-			{ kind: "wake", text: "The failing check woke this chat up" },
-			{
-				kind: "text",
-				text: "The cache kept entries past their 60 seconds. Fixing the expiry and rerunning the check.",
-			},
-		],
+		turn: [{ kind: "user", text: "Cache the list endpoints for 60 seconds." }],
 	},
 	{
 		id: "emails",
 		title: "Write onboarding emails",
 		project: "web",
 		status: "unread",
-		turn: [
-			{ kind: "user", text: "Draft the three onboarding emails." },
-			{
-				kind: "text",
-				text: "Drafted all three in emails/onboarding/, in your product's voice.",
-			},
-		],
+		turn: [{ kind: "user", text: "Draft the three onboarding emails." }],
 	},
 ];
