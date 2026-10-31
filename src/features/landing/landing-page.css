@@ -271,9 +271,6 @@
 	font-size: 11px;
 	font-variant-numeric: tabular-nums;
 }
-.as-mark-asking {
-	color: #e5e5e5;
-}
 .as-mark-open {
 	color: #4ade80;
 }
@@ -464,7 +461,8 @@
 }
 
 /* The preview is clickable: rows, steps, options and the composer. */
-.app-shot button {
+/* Zero specificity, so each control's own padding and shape win. */
+:where(.app-shot button) {
 	padding: 0;
 	border: 0;
 	background: none;
@@ -542,11 +540,15 @@
 	font-size: 12px;
 }
 .app-shot .as-send:disabled {
+	background: #262626;
+	color: #6b6b6b;
 	cursor: default;
-	opacity: 0.35;
 }
 .as-overview .overview-pr small[data-tone="bad"] {
 	color: var(--diff-removed-fg);
+}
+.as-wake {
+	color: #a3a3a3;
 }
 .as-empty {
 	color: #6b6b6b;

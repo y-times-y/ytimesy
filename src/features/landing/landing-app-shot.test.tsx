@@ -7,7 +7,7 @@ it("server-renders the open edit already coloured, and every chat as a button", 
 	// Ember Dusk's rose-coral keyword colour on `import`, before any script runs.
 	expect(html).toMatch(/<span style="color:#FF6F7D[^"]*">import<\/span>/i);
 	expect(html).toContain("Edited appearance.tsx");
-	expect(html.match(/class="as-row"/g)?.length).toBe(7);
+	expect(html.match(/class="as-row"/g)?.length).toBe(6);
 	expect(html).toContain('aria-current="true"');
 	// Sending from the preview goes to sign-up.
 	expect(html).toContain('action="/auth/sign-up"');
