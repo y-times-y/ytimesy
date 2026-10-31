@@ -150,3 +150,48 @@ export function pullRequestPanelRepository(input: {
 		repositoryId: primary.repositoryId,
 	};
 }
+
+/**
+ * A chat's saved PR (sidebar cookie) as a listed one, shown until the live
+ * list is read. A mark saved before merge answers were kept reads as not
+ * confirmed.
+ */
+export function savedListedPullRequest(
+	saved: SidebarPullRequest,
+	head: string,
+): ListedPullRequest {
+	return {
+		number: saved.number,
+		url: saved.url,
+		head,
+		draft: saved.state === "draft",
+		state:
+			saved.state === "merged" || saved.state === "closed" ? "closed" : "open",
+		merged: saved.state === "merged",
+		mergeable:
+			saved.merge === "conflict"
+				? false
+				: saved.merge === "ready"
+					? true
+					: null,
+		mergeableState:
+			saved.merge === "ready"
+				? "clean"
+				: saved.merge === "blocked"
+					? "blocked"
+					: saved.checks === "failed"
+						? "unstable"
+						: null,
+	};
+}
+
+/** An open PR GitHub has not yet said it can or cannot merge (it computes that after the first read). */
+export function mergeAnswerPending(pr: ListedPullRequest): boolean {
+	return (
+		pr.state === "open" &&
+		!pr.merged &&
+		!pr.draft &&
+		(pr.mergeable === null ||
+			(pr.mergeableState?.trim().toLowerCase() ?? "unknown") === "unknown")
+	);
+}

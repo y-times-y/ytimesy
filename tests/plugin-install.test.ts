@@ -23,11 +23,16 @@ vi.mock("../src/server/adapters/database", () => ({
 		query: (sql: string, params: unknown[]) => db.query(sql, params),
 	}),
 }));
-vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({
+vi.mock("../src/server/config", () => {
+	const serverConfig = () => ({
 		BETTER_AUTH_SECRET: "fixture-secret-longer-than-thirty-two-characters",
-	}),
-}));
+	});
+	return {
+		serverConfig,
+		databaseConfig: serverConfig,
+		vaultConfig: serverConfig,
+	};
+});
 
 const sha = "0123456789abcdef0123456789abcdef01234567";
 const entry = {

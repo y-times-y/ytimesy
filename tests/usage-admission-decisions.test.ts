@@ -341,7 +341,12 @@ it("tops up a running VM past an exhausted usage window, so its turn finishes", 
 
 it.each([
 	["recovering retention", { phase: "capturing" }],
-	["rebound retention", { retentionVm: "vm-0" }],
+	// A stale caller: retention and the chat both moved to another VM.
+	["rebound retention", { retentionVm: "vm-0", sessionVm: "vm-0" }],
+	[
+		"recovering retention on the chat's VM",
+		{ phase: "capturing", retentionVm: "vm-0" },
+	],
 	["another owner", { userId: "bob" }],
 	["another generation", { vmId: "vm-0" }],
 	["changed resources", { hourlyMicroUsd: 1 }],
@@ -351,6 +356,7 @@ it.each([
 	async (_name, input: {
 		phase?: string;
 		retentionVm?: string;
+		sessionVm?: string;
 		userId?: string;
 		vmId?: string;
 		hourlyMicroUsd?: number;
@@ -364,6 +370,10 @@ it.each([
 			hourlyMicroUsd: input.hourlyMicroUsd,
 		});
 		await seedRetention(input.phase, input.retentionVm);
+		if (input.sessionVm)
+			await query("update agent_session set provider_ref=$1", [
+				input.sessionVm,
+			]);
 		if (input.noOwner) await query("delete from agent_session");
 		const { vm, updates } = machine();
 		expect(await outcome(() => resume(vm))).toMatchSnapshot();
@@ -371,6 +381,21 @@ it.each([
 		expect(await decisions()).toMatchSnapshot();
 	},
 );
+
+it("rebinds retention left on a lost VM when the chat's current VM is admitted", async () => {
+	await seedAdmission({ cap: 1000, baseline: 100 });
+	// The chat names vm-1; retention still names the VM it replaced.
+	await seedRetention("active", "vm-0");
+	const { vm, updates } = machine();
+	expect(await outcome(() => resume(vm))).toBe(null);
+	expect(updates).toEqual([]);
+	expect((await decisions()).retention).toEqual([
+		{ vm_id: "vm-1", phase: "active", touched: true },
+	]);
+	// The next admission sees an ordinary bound row.
+	forgetRecentAdmission();
+	expect(await outcome(() => resume(vm))).toBe(null);
+});
 
 it("buys a new VM's cap before creating it and binds the VM after", async () => {
 	const created: (number | undefined)[] = [];

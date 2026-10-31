@@ -308,7 +308,7 @@ it("continues the same turn on the fallback after a provider 503, with a notice 
 		state: "switched",
 		reason: "outage",
 		message:
-			"Codex is unavailable (outage); continued on GPT-6.1 Sol via OpenRouter.",
+			"Codex is down right now, so this chat continued on GPT-6.1 Sol via OpenRouter.",
 		usageBefore: usage(100),
 	});
 	expect(turn.items.some((item) => item.kind === "agentMessage")).toBe(false);
@@ -451,8 +451,9 @@ it("lists what it tried when the fallback fails too, and never loops back", asyn
 	const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
 	expect(items.at(-1)).toMatchObject({
 		kind: "error",
+		// Leads with why Codex stopped, then why the fallback failed too.
 		message: expect.stringContaining(
-			"Automatic failover tried: GPT-6.1-Sol via Codex, GPT-6.1 Sol via OpenRouter.",
+			"Codex is down right now. Switching to OpenRouter didn't work either:",
 		),
 	});
 });

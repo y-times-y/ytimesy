@@ -11,7 +11,7 @@ const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.
    from project_repository r where r.project_id=p.id) as repositories`;
 export async function listProjects(userId: string): Promise<Project[]> {
 	const result = await database().query(
-		`select ${projectColumns} from project p where p.user_id=$1 order by p.created_at`,
+		`select ${projectColumns} from project p where p.user_id=$1 and p.archived_at is null order by p.created_at`,
 		[userId],
 	);
 	return result.rows.map(projectFromRow);
@@ -98,6 +98,30 @@ export async function refreshProjectRepository(
 	if (!project)
 		throw new Response("Project is not available.", { status: 404 });
 	return project;
+}
+/**
+ * A project saved on an agent's own `ytimesy/` branch (from before new
+ * projects refused them) takes the repository's default, read from GitHub.
+ * The new-chat picker then renders it from the first paint instead of
+ * swapping once GitHub answers. Returns how many rows changed.
+ */
+export async function healGeneratedProjectBranches(
+	userId: string,
+	repositoryId: number,
+	defaultBranch: string,
+): Promise<number> {
+	const result = await database().query(
+		`with healed as (
+    update project_repository r set branch=$3
+    from project p
+    where r.project_id=p.id and p.user_id=$1 and r.repository_id=$2
+      and (r.branch='ytimesy' or r.branch like 'ytimesy/%')
+    returning r.project_id
+  ) update project set branch=$3
+    where user_id=$1 and repository_id=$2 and (branch='ytimesy' or branch like 'ytimesy/%')`,
+		[userId, repositoryId, defaultBranch],
+	);
+	return result.rowCount ?? 0;
 }
 export async function projectForRepository(
 	userId: string,

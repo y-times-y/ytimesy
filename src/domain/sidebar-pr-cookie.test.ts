@@ -93,3 +93,28 @@ describe("saved sidebar PR marks", () => {
 		expect(savedSidebarPrsCookie({})).toContain("max-age=0");
 	});
 });
+
+describe("saved merge answer", () => {
+	it("round-trips, and reads marks saved before it was kept", () => {
+		const ready = {
+			...open,
+			checks: "passed" as const,
+			failedChecks: 0,
+			merge: "ready" as const,
+		};
+		const value = savedSidebarPrsValue({ "47c7a3e8cfea": ready });
+		expect(
+			savedSidebarPr(
+				savedSidebarPrsFromCookies(`${SIDEBAR_PR_COOKIE}=${value}`),
+				CHAT,
+			),
+		).toEqual(ready);
+		const old = value.split("~").slice(0, 7).join("~");
+		expect(
+			savedSidebarPr(
+				savedSidebarPrsFromCookies(`${SIDEBAR_PR_COOKIE}=${old}`),
+				CHAT,
+			),
+		).toEqual({ ...open, checks: "passed", failedChecks: 0 });
+	});
+});

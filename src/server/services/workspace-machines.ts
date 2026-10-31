@@ -46,6 +46,12 @@ export interface WorkspaceMachines {
 		sessionId: string,
 		oldVmId: string,
 	) => Promise<string | null>;
+	/** Moves the chat's recovery binding from its lost VM to the replacement copy. */
+	readonly rebindRetainedSession?: (
+		sessionId: string,
+		fromVmId: string,
+		toVmId: string,
+	) => Promise<void>;
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;

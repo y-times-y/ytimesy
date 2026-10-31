@@ -20,18 +20,22 @@ type Snapshot = readonly { queryKey: QueryKey; data: unknown }[];
 const CROSS_TAB_CHANNEL = "ytimesy-cache";
 
 export const SAVE_FAILED_OFFLINE = "Couldn't save. Check your connection.";
+export const SAVE_FAILED = "Couldn't save. Try again.";
 
 /** A failed save as the control says it: a request that never reached the server reads plainly. */
 export function saveErrorMessage(
 	error: Error | null | undefined,
 ): string | undefined {
 	if (!error) return undefined;
+	// A server function can reject with a bare Response or an empty Error;
+	// the control still says the save failed.
+	const message = typeof error.message === "string" ? error.message : "";
 	return error instanceof TypeError ||
 		/failed to fetch|networkerror|load failed|network request failed/i.test(
-			error.message,
+			message,
 		)
 		? SAVE_FAILED_OFFLINE
-		: error.message;
+		: message.trim() || SAVE_FAILED;
 }
 
 /**

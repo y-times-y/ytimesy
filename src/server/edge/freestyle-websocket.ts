@@ -68,6 +68,10 @@ export default class FreestyleWorkerWebSocket extends EventEmitter {
 			return;
 		}
 		this.socket = socket;
+		// Binary frames as ArrayBuffer: the runtime's default (Blob, from
+		// compatibility date 2026-10-08) became zero bytes below and the
+		// terminal never showed its shell.
+		(socket as unknown as { binaryType: string }).binaryType = "arraybuffer";
 		socket.addEventListener("message", (event) => {
 			const binary = typeof event.data !== "string";
 			this.deliver(

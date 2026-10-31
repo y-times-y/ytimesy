@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { copiedAgentMachineRef } from "#/domain/agent-session";
+import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
@@ -149,6 +150,13 @@ export function startWorkspaceDesktop(
 			};
 		}
 		desktops.set(key, { status: "starting" });
+		// The route does not depend on the processes; publishing it alongside
+		// saves a round trip. A failed start leaves a route nothing answers.
+		const published = Effect.runPromise(
+			Effect.either(
+				Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
+			),
+		);
 		const started = yield* Effect.tryPromise(() =>
 			ensureDesktopProcesses(machines, providerRef),
 		);
@@ -165,9 +173,7 @@ export function startWorkspaceDesktop(
 			desktops.set(key, failed);
 			return failed;
 		}
-		yield* Effect.either(
-			Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
-		);
+		yield* Effect.promise(() => published);
 		remotes.set(key, providerRef);
 		const running = clientFacingDesktop(
 			{
@@ -185,6 +191,7 @@ export function startWorkspaceDesktop(
 		return running;
 	}).pipe(
 		Effect.catchAll((cause) => {
+			console.error("desktop start failed", failureMessage(cause));
 			const failed: WorkspaceDesktop = {
 				status: "failed",
 				reason: desktopStartFailureReason(cause),
@@ -207,28 +214,33 @@ export async function ensureDesktopProcesses(
 	);
 	if (probe.exitCode === 0 && desktopPortIsListening(probe.stdout))
 		return probe;
-	await machines.writeTextFile(
-		id,
-		DESKTOP_WALLPAPER_B64_PATH,
-		desktopWallpaperBase64(),
-	);
+	// Independent provider calls run together: each is a 0.4-1 s round trip.
 	// The credential goes only into the builder's verified 0700 directory;
 	// one another user created or linked first is refused.
-	const drop = await machines.exec(id, DESKTOP_CREDENTIAL_DROP_SETUP, 15_000);
+	const [, drop] = await Promise.all([
+		machines.writeTextFile(
+			id,
+			DESKTOP_WALLPAPER_B64_PATH,
+			desktopWallpaperBase64(),
+		),
+		machines.exec(id, DESKTOP_CREDENTIAL_DROP_SETUP, 15_000),
+	]);
 	if (drop.exitCode !== 0 || !drop.stdout.includes(DESKTOP_PRIVATE_READY))
 		throw new Error(
 			`The desktop's private directory could not be secured: ${drop.stderr.slice(-300)}`,
 		);
-	await machines.writeTextFile(
-		id,
-		DESKTOP_VIEWER_CREDENTIAL_PATH,
-		desktopViewerCredential(providerRef),
-	);
-	await machines.writeTextFile(
-		id,
-		DESKTOP_VNC_PASSWORD_PATH,
-		desktopVncPassword(providerRef),
-	);
+	await Promise.all([
+		machines.writeTextFile(
+			id,
+			DESKTOP_VIEWER_CREDENTIAL_PATH,
+			desktopViewerCredential(providerRef),
+		),
+		machines.writeTextFile(
+			id,
+			DESKTOP_VNC_PASSWORD_PATH,
+			desktopVncPassword(providerRef),
+		),
+	]);
 	return machines.exec(id, START_WORKSPACE_DESKTOP, 300_000);
 }
 
@@ -277,6 +289,14 @@ export async function desktopFromRunningGuest(
 ): Promise<WorkspaceDesktop | null> {
 	const running = await machines.isRunning(WorkspaceId(providerRef));
 	if (!running) return null;
+	return desktopServing(machines, providerRef);
+}
+
+/** The desktop on a guest known to be running, or null when it is not serving. */
+async function desktopServing(
+	machines: Pick<WorkspaceMachines, "exec">,
+	providerRef: string,
+): Promise<WorkspaceDesktop | null> {
 	const probe = await machines.exec(
 		WorkspaceId(providerRef),
 		probeWorkspaceDesktop(desktopViewerCredentialDigest(providerRef)),
@@ -293,12 +313,17 @@ export async function desktopFromRunningGuest(
 
 export async function resolveDesktopRemote(
 	scope: DesktopScope,
+	/**
+	 * Wakes the machine first. An idle chat machine pauses (its desktop
+	 * keeps running inside) and its viewer route stops answering until then.
+	 */
+	machines?: Pick<WorkspaceMachines, "ensureRunning">,
 ): Promise<DesktopRemote | null> {
-	const cached = remotes.get(scopeKey(scope));
-	if (cached) return desktopRemoteFor(cached);
-	const providerRef = await peekSessionMachineRef(scope);
+	const providerRef =
+		remotes.get(scopeKey(scope)) ?? (await peekSessionMachineRef(scope));
 	if (!providerRef) return null;
 	remotes.set(scopeKey(scope), providerRef);
+	await machines?.ensureRunning(WorkspaceId(providerRef));
 	return desktopRemoteFor(providerRef);
 }
 
@@ -341,17 +366,24 @@ function recoverRunningDesktop(
 			templateProviderRef: workspace?.providerRef ?? null,
 		});
 		if (!providerRef) return null;
-		const recovered = yield* Effect.tryPromise(() =>
-			desktopFromRunningGuest(machines, providerRef),
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
 		);
-		if (!recovered) {
-			// Asleep or not serving: take the viewer route down until a start republishes it.
+		if (!running) {
+			// Asleep: take the viewer route down so no request to it wakes the
+			// machine; a start republishes it. A running machine keeps its route
+			// even when nothing serves yet: a start publishes it while the
+			// desktop comes up, and withdrawing then raced that start.
 			remotes.delete(scopeKey(scope));
 			yield* Effect.tryPromise(() =>
 				withdrawDesktopViewer(machines, providerRef),
 			).pipe(Effect.catchAll(() => Effect.void));
 			return null;
 		}
+		const recovered = yield* Effect.tryPromise(() =>
+			desktopServing(machines, providerRef),
+		);
+		if (!recovered) return null;
 		remotes.set(scopeKey(scope), providerRef);
 		void machines
 			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)

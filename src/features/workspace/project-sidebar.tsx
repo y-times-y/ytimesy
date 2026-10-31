@@ -57,11 +57,9 @@ import {
 	type SidebarSort,
 	type SidebarStatusGroup,
 	seenChatStorageValue,
-	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
-	sidebarHasAttentionChat,
 	sidebarStatusGroup,
 	sidebarStatusSections,
 	toggleCollapsedProjectIds,
@@ -115,6 +113,8 @@ interface ProjectSidebarProps {
 	memoryActive?: boolean;
 	/** The pointer or focus reached a chat: it may open next. */
 	onChatIntent?: (chatId: string) => void;
+	/** The pointer or focus reached another project: it may open next. */
+	onProjectIntent?: (projectId: string) => void;
 	/** The pointer or focus reached Memory: it may open next. */
 	onMemoryIntent?: () => void;
 	/** When the server rendered the page: relative times hydrate from it. */
@@ -146,6 +146,7 @@ export function ProjectSidebar({
 	onOpenMemory,
 	memoryActive = false,
 	onChatIntent,
+	onProjectIntent,
 	onMemoryIntent,
 	renderedAtMs,
 	account,
@@ -211,17 +212,6 @@ export function ProjectSidebar({
 		projectSelected: Boolean(selected),
 		hasUserMessage,
 	});
-	// Before hydration the rows script shows the rail's dot (data-attention on rows).
-	const hasAttentionChat =
-		hydrated &&
-		sidebarHasAttentionChat({
-			chats,
-			selectedChatId,
-			seenKeys,
-			busyChatIds,
-			openTurnStatus,
-			seenSinceMs,
-		});
 
 	// Hydration renders the server's times; this client's clock takes over before the paint.
 	useLayoutEffect(() => {
@@ -344,24 +334,10 @@ export function ProjectSidebar({
 		const unseenReply =
 			rowStatus(chat, { keys: [], sinceMs: Number.NEGATIVE_INFINITY }).kind ===
 			"unread";
-		const attention = sidebarChatAttention({
-			running: sidebarChatIsRunning({
-				chatId: chat.id,
-				turnStatus: chat.turnStatus,
-				busyChatIds,
-				openChatId: selectedChatId,
-				openTurnStatus,
-			}),
-			turnStatus: chat.turnStatus,
-			selected: chat.id === selectedChatId,
-			seen: false,
-		});
 		return {
 			"data-seen-key": sidebarChatSeenKey(chat),
 			"data-updated-at": chat.updatedAt ?? undefined,
 			"data-unread-mark": unseenReply ? "true" : undefined,
-			"data-attention":
-				attention === "attention" ? (chat.turnStatus ?? undefined) : undefined,
 		};
 	}
 
@@ -476,8 +452,8 @@ export function ProjectSidebar({
 						<button
 							type="button"
 							className="sidebar-chat-archive"
-							aria-label={`Remove ${chat.title}`}
-							title="Remove chat"
+							aria-label={`Archive ${chat.title}`}
+							title="Archive chat"
 							onClick={(event) => {
 								event.stopPropagation();
 								onDeleteChat(chat.id);
@@ -515,7 +491,7 @@ export function ProjectSidebar({
 		// Status tooltips hold no controls: they close as the pointer leaves the row.
 		<TooltipPrimitive.Provider delayDuration={300} disableHoverableContent>
 			{/* Top left of the chat while the sidebar is closed (as the right
-			    sidebar's toggle is top right), with the attention dot; open, the
+			    sidebar's toggle is top right); open, the
 			    sidebar's header has its own toggle (CSS picks, from <html data-sidebar>). */}
 			<button
 				ref={leftToggle}
@@ -528,13 +504,9 @@ export function ProjectSidebar({
 				)}
 				aria-expanded={expanded}
 				aria-controls="project-sidebar"
-				data-activity={hasAttentionChat ? "attention" : undefined}
 				onClick={toggleProjects}
 			>
 				<PanelLeft size={16} strokeWidth={1.5} />
-				{hasAttentionChat && !expanded ? (
-					<span className="sr-only">A chat needs attention</span>
-				) : null}
 			</button>
 			<div className="project-sidebar-frame">
 				<button
@@ -714,6 +686,16 @@ export function ProjectSidebar({
 												className="sidebar-folder"
 												aria-current={selected ? "page" : undefined}
 												aria-expanded={open}
+												onPointerEnter={
+													selected
+														? undefined
+														: () => onProjectIntent?.(project.id)
+												}
+												onFocus={
+													selected
+														? undefined
+														: () => onProjectIntent?.(project.id)
+												}
 												onClick={() =>
 													selected
 														? toggleProjectFolder(project.id)
@@ -732,8 +714,8 @@ export function ProjectSidebar({
 													<button
 														type="button"
 														className="sidebar-folder-remove"
-														aria-label={`Remove ${projectDisplayName(project)}`}
-														title="Remove project"
+														aria-label={`Archive ${projectDisplayName(project)}`}
+														title="Archive project"
 														onClick={(event) => {
 															event.stopPropagation();
 															onDeleteProject(project.id);

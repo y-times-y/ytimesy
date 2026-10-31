@@ -18,6 +18,8 @@ describe("workspace settings", () => {
 			"agents",
 			"plugins",
 			"mcp",
+			"usage",
+			"archived",
 		]);
 	});
 

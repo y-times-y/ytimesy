@@ -7,12 +7,12 @@ import {
 	sealVersioned,
 	vaultKeys,
 } from "#/domain/sealed-token";
-import { serverConfig } from "../config";
+import { vaultConfig } from "../config";
 
 export type { SealBinding };
 
 const keys = () => {
-	const config = serverConfig();
+	const config = vaultConfig();
 	return vaultKeys({
 		BETTER_AUTH_SECRET: config.BETTER_AUTH_SECRET,
 		TOKEN_VAULT_KEY: config.TOKEN_VAULT_KEY,
@@ -27,7 +27,7 @@ export const seal = async (data: string, binding?: SealBinding) =>
 export const unseal = async (data: string, binding?: SealBinding) =>
 	isVersionedSeal(data)
 		? openVersioned(keys(), data, binding)
-		: symmetricDecrypt({ key: serverConfig().BETTER_AUTH_SECRET, data });
+		: symmetricDecrypt({ key: vaultConfig().BETTER_AUTH_SECRET, data });
 
 export const githubCredentials = z.object({
 	accessToken: z.string().min(1),

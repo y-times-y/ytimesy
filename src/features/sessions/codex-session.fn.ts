@@ -9,8 +9,12 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
+import type { FirstRunState } from "#/domain/first-run";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
+import { openChatFromCookies } from "#/domain/open-chat-cookie";
+import { isValidBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
 import {
@@ -25,11 +29,17 @@ import {
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { listModelConnections } from "#/server/adapters/model-connections";
 import { listProjects } from "#/server/adapters/projects";
 import { consumeUserAction } from "#/server/adapters/user-action-rate";
+import { loadAgentAccount } from "#/server/auth/agent-account";
 import { requireUser } from "#/server/auth/auth";
-import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
+import {
+	advanceCodexDeviceLogin,
+	startCodexDeviceLogin,
+} from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
+import { githubConnectionExists } from "#/server/auth/github-connection";
 import { requireSameOrigin } from "#/server/http";
 import { agentModelCatalog } from "#/server/services/agent-model-catalog";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
@@ -241,7 +251,12 @@ const linkedChatInput = z
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 	.validator((data: unknown) => linkedChatInput.parse(data) ?? {})
-	.handler(async ({ data: link }) => {
+	.handler(async ({ data: urlLink }) => {
+		// No link: the chat this browser had open, so a reload stays in it.
+		const link =
+			urlLink.chatId || urlLink.projectId
+				? urlLink
+				: (openChatFromCookies(getRequest().headers.get("cookie")) ?? urlLink);
 		let user: Awaited<ReturnType<typeof requireUser>>;
 		try {
 			user = await requireUser(getRequest().headers);
@@ -368,12 +383,19 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		const [snapshotAvailable, projects, chats, projectChats] =
+		// A new account (no project yet) opens the first-run steps at the right one.
+		const firstRun = listed.then((projects) =>
+			projects && projects.length === 0
+				? firstRunState(user.id).catch(() => undefined)
+				: undefined,
+		);
+		const [snapshotAvailable, projects, chats, projectChats, firstRunAt] =
 			await Promise.all([
 				hasManagedCodexAuth(user.id),
 				listed,
 				firstChats,
 				otherChats.catch(() => []),
+				firstRun,
 			]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
@@ -404,8 +426,13 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			),
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
+			firstRun: firstRunAt,
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
+			// A new chat's "from <branch>" as this browser last read it from GitHub.
+			savedDefaultBranches: savedDefaultBranchesFromCookies(
+				getRequest().headers.get("cookie"),
+			),
 			// The sidebar's PR icons as this browser last read them from GitHub.
 			savedPullRequests: savedSidebarPrsFromCookies(
 				getRequest().headers.get("cookie"),
@@ -429,6 +456,28 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 					: {}),
 			},
 		};
+	});
+
+/** Where a new account stands: GitHub connected, and a model to run chats on. */
+async function firstRunState(userId: string): Promise<FirstRunState> {
+	const [githubConnected, account, connections] = await Promise.all([
+		githubConnectionExists(userId),
+		loadAgentAccount(userId),
+		listModelConnections(userId),
+	]);
+	return {
+		githubConnected,
+		modelReady: account.status === "connected" || connections.length > 0,
+	};
+}
+
+/** Starts ChatGPT sign-in for the account, outside any chat (first run, settings). */
+export const startChatgptSignIn = createServerFn({ method: "POST" })
+	.validator((data: unknown) => z.object({}).strict().parse(data))
+	.handler(async () => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		return startCodexDeviceLogin(user.id);
 	});
 
 /** Advances a pending ChatGPT sign-in; the composer polls this while it waits. */
@@ -460,6 +509,12 @@ const messageText = z
 	.string()
 	.max(400_000, "Message is too long; attach long text as a file instead.");
 
+const baseBranchInput = z
+	.string()
+	.trim()
+	.max(255)
+	.refine(isValidBranchName, "Choose a valid branch to start from.");
+
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
 	.validator(
 		(data: {
@@ -478,6 +533,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			attachments?: unknown;
 			/** The client's id for the message; a replayed send with it is not queued twice. */
 			userMessageId?: string;
+			/** The branch a new chat starts from; the server checks it on GitHub. */
+			baseBranch?: string;
 		}) => {
 			const attachments =
 				data.attachments === undefined
@@ -515,6 +572,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				...(data.userMessageId
 					? { idempotencyKey: z.string().uuid().parse(data.userMessageId) }
 					: {}),
+				...(data.baseBranch === undefined
+					? {}
+					: { baseBranch: baseBranchInput.parse(data.baseBranch) }),
 			};
 		},
 	)

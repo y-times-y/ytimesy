@@ -122,11 +122,16 @@ export async function writeAgentProjectSecrets(
 	);
 	if (prepared.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
 	await machines.writeTextFile(vm, AGENT_SECRETS_ENV_PATH, secrets.envFile);
-	await machines.exec(
-		vm,
-		`chmod 600 ${posixShellQuoted(AGENT_SECRETS_ENV_PATH)}`,
-		10_000,
-	);
+	// The provider writes files as root, while commands run as the default
+	// user; a file only root can read was skipped silently by every command.
+	const owned = await machines.exec(vm, agentSecretsOwnershipShell(), 10_000);
+	if (owned.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
+}
+
+/** Hands the env file to the command user (0600) and proves it can read it. */
+export function agentSecretsOwnershipShell() {
+	const file = posixShellQuoted(AGENT_SECRETS_ENV_PATH);
+	return `{ [ -O ${file} ] || sudo -n chown "$(id -u):$(id -g)" ${file}; } && chmod 600 ${file} && [ -r ${file} ]`;
 }
 
 export async function loadProjectSecretEnvironment(

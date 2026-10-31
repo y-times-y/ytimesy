@@ -85,6 +85,43 @@ describe("Memory graph page", () => {
 		expect(html).not.toContain("memory-blocks-chips");
 	});
 
+	it("keeps the memory on screen when a refetch after an edit fails", () => {
+		const client = new QueryClient();
+		client.setQueryData(["memory"], { available: true, mode: "full", files });
+		client
+			.getQueryCache()
+			.find({ queryKey: ["memory"] })
+			?.setState({ status: "error", error: new Error("Network lost") });
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={client}>
+				<MemoryGraphPage active onOpenChat={() => true} />
+			</QueryClientProvider>,
+		);
+		expect(html).toContain("Memory blocks: 3 memories");
+		expect(html).not.toContain("unavailable");
+	});
+
+	it("offers a retry, not 'unavailable', when the first read fails", () => {
+		const client = new QueryClient();
+		// As after its retries: the failed read stays failed on render.
+		client.setQueryDefaults(["memory"], { retryOnMount: false });
+		client
+			.getQueryCache()
+			.build(client, { queryKey: ["memory"] })
+			.setState({
+				status: "error",
+				error: new Error("Repository not found"),
+			});
+		const html = renderToStaticMarkup(
+			<QueryClientProvider client={client}>
+				<MemoryGraphPage active onOpenChat={() => true} />
+			</QueryClientProvider>,
+		);
+		expect(html).toContain("Couldn&#x27;t load memory.");
+		expect(html).toContain(">Retry<");
+		expect(html).not.toContain("unavailable");
+	});
+
 	it("explains every mark in the key with the same mark", () => {
 		const html = renderToStaticMarkup(<MemoryBlocksKey hatch="h" />);
 		for (const label of ["Pinned", "Memory", "Inferred", "Archived", "New"])

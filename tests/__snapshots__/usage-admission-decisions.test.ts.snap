@@ -353,6 +353,41 @@ exports[`refuses recovering retention before touching the provider 2`] = `
 }
 `;
 
+exports[`refuses recovering retention on the chat's VM before touching the provider 1`] = `"Workspace recovery is in progress. Retry shortly."`;
+
+exports[`refuses recovering retention on the chat's VM before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "capturing",
+      "touched": false,
+      "vm_id": "vm-0",
+    },
+  ],
+}
+`;
+
 exports[`replays a reservation idempotently and refuses a changed identity 1`] = `
 {
   "admission": [],

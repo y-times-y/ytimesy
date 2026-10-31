@@ -1,9 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import {
+	isGeneratedSessionBranch,
+	orderedBaseBranches,
+} from "../../../domain/session-branch";
+import {
 	authorizedRepository,
 	listBranches,
 } from "../../../server/adapters/github";
+import { healGeneratedProjectBranches } from "../../../server/adapters/projects";
 import { requireUser } from "../../../server/auth/auth";
 import { githubAccessToken } from "../../../server/auth/github-connection";
 import { endpoint } from "../../../server/http";
@@ -12,6 +17,11 @@ const selection = z.object({
 	installationId: z.coerce.number().int().positive().safe(),
 	repositoryId: z.coerce.number().int().positive().safe(),
 });
+
+/**
+ * The branches a new chat can start from: the repository default first,
+ * without other chats' own `ytimesy/` branches.
+ */
 export const Route = createFileRoute("/api/github/branches")({
 	server: {
 		handlers: {
@@ -27,9 +37,23 @@ export const Route = createFileRoute("/api/github/branches")({
 						params.installationId,
 						params.repositoryId,
 					);
+					const [listed] = await Promise.all([
+						listBranches(token, repository),
+						isGeneratedSessionBranch(repository.defaultBranch)
+							? undefined
+							: healGeneratedProjectBranches(
+									user.id,
+									params.repositoryId,
+									repository.defaultBranch,
+								).catch(() => 0),
+					]);
 					return {
-						branches: await listBranches(token, repository),
+						branches: orderedBaseBranches(
+							listed.names.filter((name) => !isGeneratedSessionBranch(name)),
+							repository.defaultBranch,
+						),
 						defaultBranch: repository.defaultBranch,
+						truncated: listed.truncated,
 					};
 				}),
 		},

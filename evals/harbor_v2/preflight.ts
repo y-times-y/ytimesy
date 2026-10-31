@@ -14,8 +14,8 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { isMainModule } from "./main-module";
 
 export type PreflightArm = "oracle" | "nop";
 export type ArmResult = {
@@ -231,5 +231,4 @@ async function main() {
 		process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
-	await main();
+if (isMainModule(import.meta.url, "preflight")) await main();

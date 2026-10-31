@@ -25,3 +25,45 @@
 	width: 28px;
 	padding: 0;
 }
+
+/* The provider of a new key, by logo (model-connections.tsx). */
+.provider-choices {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.provider-choice {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	height: 34px;
+	padding: 0 12px;
+	border: 1px solid #ffffff1a;
+	border-radius: 9px;
+	background: #ffffff05;
+	color: #d4d4d4;
+	font-size: 13px;
+	cursor: pointer;
+	transition:
+		border-color 120ms ease-out,
+		background-color 120ms ease-out;
+}
+.provider-choice svg {
+	fill: currentColor;
+}
+.provider-choice:hover:not(:disabled) {
+	border-color: #ffffff38;
+}
+.provider-choice[aria-pressed="true"] {
+	border-color: #ededed;
+	background: #ffffff10;
+	color: #fff;
+}
+.provider-choice:disabled:not([aria-pressed="true"]) {
+	opacity: 0.45;
+	cursor: default;
+}

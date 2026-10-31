@@ -287,6 +287,16 @@ const requestIdOf = (headers: Headers) =>
 	headers.get("x-amzn-requestid") ??
 	null;
 
+/**
+ * A fetch init may carry a function under this key that signs the request
+ * again (bedrockSigningFetch sets it). The guard calls it before every resend,
+ * so a resend never carries a signature older than its own attempt: SigV4
+ * signatures expire after 5 minutes, and one cut or degenerate attempt can
+ * stream for up to 20.
+ */
+export const RESIGN = Symbol.for("ytimesy.transport.resign");
+type Resign = () => Headers;
+
 export function guardedFetch(
 	original: typeof globalThis.fetch,
 	options: {
@@ -303,9 +313,8 @@ export function guardedFetch(
 	} = {},
 ): typeof globalThis.fetch {
 	const maxAttempts = options.maxAttempts ?? 3;
-	// Resends reuse the signed request: Bedrock's SigV4 signatures expire
-	// after 5 minutes, so the guard waits at most 4; the SDK's own retries
-	// (re-signed) each get this window again.
+	// Resends are signed again when the request carries RESIGN (Bedrock); the
+	// throttle window stays at 4 minutes for requests that cannot be.
 	const throttleWindowMs = options.throttleWindowMs ?? 4 * 60_000;
 	const throttleDelayMs =
 		options.throttleDelayMs ??
@@ -347,11 +356,18 @@ export function guardedFetch(
 		let last: { response: Response; drained: Drained } | null = null;
 		const firstStarted = Date.now();
 		let throttles = 0;
+		const resign = (init as Record<symbol, unknown> | undefined)?.[RESIGN] as
+			| Resign
+			| undefined;
+		let sends = 0;
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const started = Date.now();
 			let response: Response;
+			const sendInit =
+				sends > 0 && resign ? { ...init, headers: resign() } : init;
+			sends += 1;
 			try {
-				response = await original(input, init);
+				response = await original(input, sendInit);
 			} catch (error) {
 				record({
 					phase: "request",

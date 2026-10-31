@@ -174,6 +174,39 @@ export async function readReceivePackCommands(
  * Fixed-origin Git smart HTTP only. Packs and responses are streamed; a push
  * may update only the grant's branch, never delete it, and consumes the grant.
  */
+/**
+ * A gzip request body as plain bytes: gunzipped when it starts with the gzip
+ * magic bytes, as is when something on the way already decoded it.
+ */
+async function plainBody(
+	body: ReadableStream<Uint8Array>,
+): Promise<ReadableStream<Uint8Array>> {
+	const reader = body.getReader();
+	const first = await reader.read();
+	const head = first.value ?? new Uint8Array();
+	const rest = new ReadableStream<Uint8Array>({
+		start(controller) {
+			if (head.length) controller.enqueue(head);
+			if (first.done) controller.close();
+		},
+		async pull(controller) {
+			const next = await reader.read();
+			if (next.done) controller.close();
+			else controller.enqueue(next.value);
+		},
+		cancel(reason) {
+			return reader.cancel(reason);
+		},
+	});
+	if (head[0] !== 0x1f || head[1] !== 0x8b) return rest;
+	return rest.pipeThrough(
+		new DecompressionStream("gzip") as unknown as ReadableWritablePair<
+			Uint8Array,
+			Uint8Array
+		>,
+	);
+}
+
 export async function proxyGithubGit(
 	request: Request,
 	secret: string,
@@ -242,14 +275,16 @@ export async function proxyGithubGit(
 			authorization: `Basic ${btoa(`x-access-token:${token}`)}`,
 			"user-agent": "ytimesy-git-proxy",
 		});
-		for (const name of [
-			"content-type",
-			"git-protocol",
-			"accept",
-			"content-encoding",
-		])
+		for (const name of ["content-type", "git-protocol", "accept"])
 			if (request.headers.has(name))
 				headers.set(name, request.headers.get(name) ?? "");
+		// Git gzips fetch requests over 1 KB (a checkout with history sends
+		// many "have" lines); a fresh clone's are smaller. GitHub gets the
+		// request plain, so the body it reads is the body Git meant.
+		const encoding = request.headers.get("content-encoding")?.toLowerCase();
+		if (body && encoding === "gzip") body = await plainBody(body);
+		else if (encoding && encoding !== "identity")
+			headers.set("content-encoding", encoding);
 		const response = await upstream(target, {
 			method: request.method,
 			headers,
@@ -258,6 +293,13 @@ export async function proxyGithubGit(
 			signal: request.signal,
 			duplex: "half",
 		} as RequestInit);
+		if (!response.ok)
+			// What GitHub answered, so a failed fetch or push can be told apart.
+			console.warn("Git proxy upstream refused.", {
+				status: response.status,
+				service: target.slice(target.lastIndexOf("/") + 1).split("?")[0],
+				encoding: encoding ?? "none",
+			});
 		if (response.status >= 300 && response.status < 400) {
 			await response.body?.cancel();
 			return new Response(null, { status: 502 });

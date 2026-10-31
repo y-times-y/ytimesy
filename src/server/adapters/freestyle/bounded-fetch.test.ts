@@ -2,6 +2,7 @@ import { Freestyle, FreestyleApiError } from "freestyle";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	boundedFreestyleFetch,
+	fastPollFreestyleFetch,
 	PROVIDER_OPERATION_MS,
 	PROVIDER_TIMEOUT_CODE,
 	providerOperationBudgetMs,
@@ -109,4 +110,27 @@ it("budgets each kind of call", () => {
 	expect(providerOperationBudgetMs("GET", "/v5/vms/vm-1", undefined)).toBe(
 		PROVIDER_OPERATION_MS,
 	);
+});
+
+it("follows a backgrounded call itself, sooner than the SDK's 2 s polls", async () => {
+	vi.useFakeTimers();
+	const started = Date.now();
+	const polls: number[] = [];
+	const transport = vi.fn<typeof fetch>(async (input) => {
+		if (!String(input).includes("/v5/background-requests/")) return accepted();
+		polls.push(Date.now() - started);
+		return polls.length < 3
+			? accepted()
+			: new Response(JSON.stringify({ state: "running" }), {
+					headers: { "content-type": "application/json" },
+				});
+	});
+	const sdk = new Freestyle({
+		apiKey: "fixture-only",
+		fetch: fastPollFreestyleFetch(boundedFreestyleFetch(transport)),
+	});
+	const start = sdk.vms.ref("vm-a").start();
+	await vi.advanceTimersByTimeAsync(5_000);
+	await start;
+	expect(polls).toEqual([250, 500, 1_000]);
 });

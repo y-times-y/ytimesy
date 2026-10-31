@@ -1,11 +1,96 @@
 import { describe, expect, it } from "vitest";
 import {
+	branchFromGitHead,
+	defaultChatBaseBranch,
+	filterBaseBranches,
 	isGeneratedSessionBranch,
+	isValidBranchName,
+	orderedBaseBranches,
 	sessionBranchChangeRestartsWorkspace,
 	sessionBranchName,
 	sessionCloneBranch,
 	sessionWorkingBranch,
 } from "./session-branch";
+
+describe("new chat base branch", () => {
+	it("accepts what git check-ref-format --branch accepts", () => {
+		for (const name of ["main", "release/2.1", "feat-x_y", "v1.2.3", "a@b"])
+			expect(isValidBranchName(name)).toBe(true);
+		for (const name of [
+			"",
+			"-main",
+			"HEAD",
+			"@",
+			"a..b",
+			"a b",
+			"a~1",
+			"a^",
+			"a:b",
+			"a?",
+			"a*",
+			"a[b",
+			"a\\b",
+			"a@{1}",
+			"/main",
+			"main/",
+			"a//b",
+			"main.",
+			".hidden",
+			"x/.y",
+			"x.lock",
+			"x/y.lock/z",
+			"tab\there",
+			"$(rm -rf ~)",
+			"x".repeat(256),
+		])
+			expect(isValidBranchName(name), name).toBe(false);
+	});
+
+	it("defaults to the project's branch, else the repository default", () => {
+		expect(
+			defaultChatBaseBranch({
+				projectBranch: "develop",
+				defaultBranch: "main",
+			}),
+		).toBe("develop");
+		expect(
+			defaultChatBaseBranch({
+				projectBranch: "ytimesy/old-chat-123456",
+				defaultBranch: "main",
+			}),
+		).toBe("main");
+		expect(
+			defaultChatBaseBranch({ projectBranch: " ", defaultBranch: "main" }),
+		).toBe("main");
+	});
+
+	it("lists the default branch first and each branch once", () => {
+		expect(
+			orderedBaseBranches(["alpha", "main", "beta", "alpha"], "main"),
+		).toEqual(["main", "alpha", "beta"]);
+		expect(orderedBaseBranches([], "trunk")).toEqual(["trunk"]);
+	});
+
+	it("searches branches by every word, case-insensitively", () => {
+		const branches = ["main", "release/2.1", "Release/3.0", "fix-login"];
+		expect(filterBaseBranches(branches, "")).toEqual(branches);
+		expect(filterBaseBranches(branches, "release")).toEqual([
+			"release/2.1",
+			"Release/3.0",
+		]);
+		expect(filterBaseBranches(branches, "rel 3")).toEqual(["Release/3.0"]);
+		expect(filterBaseBranches(branches, "nope")).toEqual([]);
+	});
+
+	it("reads the branch a checkout's HEAD names", () => {
+		expect(branchFromGitHead("ref: refs/heads/agent/hotfix\n")).toBe(
+			"agent/hotfix",
+		);
+		expect(branchFromGitHead(`${"a".repeat(40)}\n`)).toBeNull();
+		expect(branchFromGitHead("ref: refs/heads/bad..name")).toBeNull();
+		expect(branchFromGitHead(null)).toBeNull();
+	});
+});
 
 describe("session working branch", () => {
 	it("names a new chat with a description and stable id suffix", () => {

@@ -27,6 +27,7 @@ import {
 	CELL,
 	CELL_GAP,
 	memoryBlocks,
+	nodeId,
 	PERSONAL_HUE,
 	recencyTint,
 } from "#/domain/memory-graph";
@@ -371,6 +372,8 @@ export function MemoryGraphPage({
 		},
 		onError: (error, data, snapshot) => {
 			editSave.onError(error, data, snapshot);
+			// The card of the line that failed shows the error, a delete too.
+			if (data.op !== "add") setSelected(nodeId(data.ref));
 			const reopen = editorToReopen(data);
 			if (reopen) {
 				setSelected(reopen.key);
@@ -380,7 +383,18 @@ export function MemoryGraphPage({
 	});
 
 	if (memory.isPending) return <MemoryGraphLoading />;
-	if (memory.isError || !memory.data?.available)
+	// A failed refetch keeps the last memory on screen; only a first read
+	// that failed has nothing to show.
+	if (!memory.data)
+		return (
+			<section className="memory-graph-page memory-graph-empty">
+				Couldn't load memory.
+				<button type="button" onClick={() => void memory.refetch()}>
+					Retry
+				</button>
+			</section>
+		);
+	if (!memory.data.available)
 		return (
 			<section className="memory-graph-page memory-graph-empty">
 				Memory is unavailable.

@@ -1,3 +1,11 @@
+import {
+	BRIEF_POLICY,
+	KEEP_WORKING_POLICY,
+	READER_DELEGATION_POLICY,
+	REFUSED_START,
+	REPORT_IS_A_CLAIM,
+	WRITER_DELEGATION_POLICY,
+} from "./delegation-policy";
 import type { FusionPairProfile } from "./fusion-pairs";
 import { SIDEKICK_MAX_RESTARTS } from "./sidekick";
 import {
@@ -6,13 +14,17 @@ import {
 	type SubagentBudget,
 	type SubagentRole,
 } from "./subagent";
+import { WRITER_PATCH_INTEGRATION } from "./writer-integration";
 
 /**
  * The orchestration block (subagents=on): when to delegate, how to call
  * the agent tool, how to brief, coordinate and verify. Shown to every agent
  * that has the agent tool (never a checker). agent and agent_send are
  * ordinary tools in the tool list, so their arguments come from their
- * schemas; this block says when and how to use them.
+ * schemas; this block says when and how to use them. The decision rules are
+ * the shared delegation policy (delegation-policy.ts), as the Harbor bridge
+ * measures them; only the mechanics here are the product's own: writers on
+ * forks returning patches, readers on this VM, reports as messages.
  */
 export function orchestratorInstructions(
 	options: {
@@ -31,42 +43,25 @@ export function orchestratorInstructions(
 	const { codeMode, readOnly, force, main } = options;
 	const parallel = readOnly
 		? 'await Promise.all([tools.agent({ role: "researcher", title: "Map the parser", brief: "…" }), tools.agent({ role: "researcher", title: "Map the cache", brief: "…" })])'
-		: 'await Promise.all([tools.agent({ role: "writer", title: "Fix pricing rounding", brief: "…" }), tools.agent({ role: "writer", title: "Build the release bundle", brief: "…" })])';
+		: 'await Promise.all([tools.agent({ role: "writer", title: "Build the parser", brief: "…" }), tools.agent({ role: "writer", title: "Build the storage engine", brief: "…" })])';
 	const howParallel = codeMode
-		? `start them together from one run_code program: ${parallel}`
-		: "start them together: call agent once per part in the same step";
+		? `in one run_code program: ${parallel}`
+		: "with one agent call per helper in the same step";
 	return [
-		`Subagents: \`agent\` starts a background agent with only your brief and returns its id at once; \`agent_send\` steers or stops one. Their reports arrive as messages.${readOnly ? " You may start only researchers, reviewers and checkers." : ""}`,
-		"Delegate when it saves wall-clock time:",
-		readOnly
-			? `- two or more independent investigations, each likely to take over 5 minutes: ${howParallel};`
-			: `- two or more independent parts, each likely to take over 5 minutes, or a long build or test run beside a fix: start writers in parallel; ${howParallel};`,
-		readOnly
-			? "- a fresh context: a long investigation whose findings you need, not its trail."
-			: "- after a hard fix, a reviewer can check it while you run the suite yourself;",
-		...(readOnly
-			? []
-			: [
-					"- isolation: a risky or exploratory change on a writer's fork, away from your working tree.",
-				]),
-		"Every agent re-reads the code it needs and spends its own tokens: small, quick or sequential work, or anything you would finish in a few steps, you do yourself.",
+		`Subagents: \`agent\` starts a helper (a background agent) with only your brief and returns its id at once; \`agent_send\` steers or stops one. Their reports arrive as messages.${readOnly ? " You may start only researchers, reviewers and checkers." : ""}`,
 		readOnly
 			? "Roles: researcher and reviewer read your VM and cannot change it; checker gets only the user's task and the current work and returns pass or fail."
 			: "Roles: writer edits on a fork of your VM (your uncommitted work included) and returns a patch and git ref; researcher and reviewer read your VM and cannot change it; checker gets only the user's task and your current work and returns pass or fail.",
-		`Every brief is self-contained: the goal; the context it needs (paths, findings, commands that work); constraints; what not to touch (files owned by others, shared ports, the dev server); and the report format.${readOnly ? "" : " Writers report what changed, how it was verified and what is unverified."}`,
-		...(readOnly
-			? []
-			: [
-					"Coordinate shared resources: give each writer a disjoint file set and each process its own port. Never run two writers on the same files at once; run them one after another.",
-				]),
-		main
-			? "Keep working on what does not depend on them. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed."
-			: "Keep working while agents run. Their reports arrive on their own and wake you; message a running agent only to change its course or stop it, never to ask for progress or to hurry it. Stop one that is no longer needed.",
+		...(readOnly ? [] : [WRITER_DELEGATION_POLICY]),
+		READER_DELEGATION_POLICY,
+		`Start helpers that run side by side together, ${howParallel}.`,
+		`${BRIEF_POLICY} Also name what not to touch (shared ports, the dev server).${readOnly ? "" : " Writers report what changed, how it was verified and what is unverified."}`,
+		`${KEEP_WORKING_POLICY} Their reports arrive on their own and wake you; message a running helper only to change its course or stop it, never to ask for progress or to hurry it.`,
 		...(main ? [ROOT_HELPER_UPDATES, HANDOFF_INSTRUCTIONS] : []),
 		readOnly
-			? "Verify before relying on an agent: a report is a claim, not a fact; spot-check its findings before you report them."
-			: "Verify before relying on an agent: a report is a claim, not a fact. Review a writer's patch (`git diff <base> <ref>`), apply it with `git apply -3`, rerun its checks yourself; spot-check a reader's findings before they drive edits.",
-		"A refused spawn (depth, budget or concurrency) means do the work yourself.",
+			? REPORT_IS_A_CLAIM
+			: `${REPORT_IS_A_CLAIM} ${WRITER_PATCH_INTEGRATION}`,
+		REFUSED_START,
 		...(force ? [FORCED_DELEGATION] : []),
 	].join("\n");
 }

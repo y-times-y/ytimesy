@@ -101,7 +101,8 @@ function ExitTag({
 				Failed
 			</span>
 		);
-	if (exit === null) return null;
+	// A command that worked needs no tag; only a failing exit is news.
+	if (exit === null || exit === 0) return null;
 	if (exit === "running")
 		return <span className="tool-panel-tag">Running</span>;
 	if (exit === "timeout")
@@ -111,8 +112,8 @@ function ExitTag({
 			</span>
 		);
 	return (
-		<span className="tool-panel-tag" data-tone={exit === 0 ? "good" : "bad"}>
-			exit {exit}
+		<span className="tool-panel-tag" data-tone="bad">
+			Exit {exit}
 		</span>
 	);
 }
@@ -152,10 +153,8 @@ function CommandPanel({
 }
 
 /**
- * A command's output. One file printed (cat, sed, head, tail, nl) is
- * coloured as that file's language. git diff and git show are a diff:
- * each file's code coloured, added and removed lines tinted, changed
- * words marked. Anything else stays as the recorded text.
+ * A command's output. One file printed (cat, sed -n) is coloured as its
+ * language; a diff is plain text with added and removed lines tinted.
  */
 export function CommandOutput({
 	command,
@@ -167,6 +166,10 @@ export function CommandOutput({
 	className?: string;
 }) {
 	const language = commandOutputLanguage(command);
+	const tokens = useHighlightedLines(
+		output,
+		language === "diff" ? "text" : language,
+	);
 	if (language === "diff")
 		return (
 			<pre className={className}>
@@ -178,15 +181,25 @@ export function CommandOutput({
 			</pre>
 		);
 	return (
-		<HighlightedOutput
-			text={output}
-			language={language}
-			className={className}
-		/>
+		<pre className={className}>
+			{tokens
+				? output.split("\n").map((line, index) => (
+						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
+						<span key={index}>
+							{index ? "\n" : null}
+							<HighlightedTokens text={line} tokens={tokens[index]} />
+						</span>
+					))
+				: output}
+		</pre>
 	);
 }
 
-/** One file of diff output: path and counts, then its coloured lines. */
+/**
+ * One file of diff output, drawn as Codex draws it: the path with its +/-
+ * counts, then numbered lines coloured as the file's language on green and
+ * red tints, with a ⋮ between hunks instead of git's headers.
+ */
 function DiffFileOutput({
 	path,
 	language,
@@ -211,9 +224,9 @@ function DiffFileOutput({
 }
 
 /**
- * Diff lines coloured as the file's language, with added and removed
- * lines tinted, changed words marked, and a break between hunks. The
- * number column shows when the lines carry numbers.
+ * Diff lines as every diff in the app draws them: coloured as the file's
+ * language, added and removed lines tinted, changed words marked, a ⋮
+ * between hunks. The number column shows only when the lines carry numbers.
  */
 export function DiffLines({
 	language,
@@ -313,35 +326,6 @@ function sliceTokens(tokens: LineTokens, from: number, to: number) {
 		at = tokenEnd;
 	}
 	return sliced;
-}
-
-/**
- * Text coloured as `language`, one span per line so a highlight that
- * arrives later replaces the plain text without moving it.
- */
-function HighlightedOutput({
-	text,
-	language,
-	className,
-}: {
-	text: string;
-	language: SourceLanguage;
-	className: string;
-}) {
-	const tokens = useHighlightedLines(text, language);
-	return (
-		<pre className={className}>
-			{tokens
-				? text.split("\n").map((line, index) => (
-						// biome-ignore lint/suspicious/noArrayIndexKey: output lines are positional
-						<span key={index}>
-							{index ? "\n" : null}
-							<HighlightedTokens text={line} tokens={tokens[index]} />
-						</span>
-					))
-				: text}
-		</pre>
-	);
 }
 
 /** Source lines with a line-number gutter, highlighted for the file's language. */

@@ -13,8 +13,12 @@ import {
 	publicationCommitAuthor,
 } from "#/domain/publication";
 import { handoffFactsFromItems } from "#/domain/pull-request-handoff";
+import { branchFromGitHead } from "#/domain/session-branch";
 import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
-import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	saveAgentWorkingBranch,
+} from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { githubCommitIdentityForToken } from "../adapters/github/commit-identity";
@@ -82,11 +86,19 @@ async function commitChatTurn(
 	const description = turnDescription(session, items);
 	const authorship = await commitAuthorForUser(session.userId);
 	const host = runtime ?? workspaceRuntimeFromEnv();
-	for (const { repo, directory } of await turnRepositories(
+	const repositories = await turnRepositories(
 		host,
 		session.providerRef,
 		project,
-	)) {
+	);
+	// The agent may move the chat onto another branch; the chat follows it.
+	const current = await followAgentBranch(
+		session,
+		host,
+		repositories.find(({ repo }) => repo.fullName === project.fullName)
+			?.directory,
+	);
+	for (const { repo, directory } of repositories) {
 		signal?.throwIfAborted();
 		const result = await host.exec(
 			session.providerRef,
@@ -107,7 +119,7 @@ async function commitChatTurn(
 	}
 	try {
 		const publication = await publishCompletedSessionTurn(
-			session,
+			current,
 			host,
 			turn,
 			handoffFactsFromItems(items),
@@ -149,6 +161,34 @@ async function commitAuthorForUser(userId: string): Promise<{
 				"Commits use the ytimesy author because the GitHub profile could not be read.",
 		};
 	}
+}
+
+/**
+ * When the agent left the chat's checkout on a different branch than the
+ * chat records, records that branch as the chat's own: the next turn's
+ * checkout keeps it instead of switching back, publication pushes it, and
+ * the composer shows it. The base branch (the pull request target) stays.
+ * A chat without its own branch yet, a detached HEAD or an unreadable
+ * checkout leaves the chat as it was.
+ */
+async function followAgentBranch(
+	session: AgentSessionRecord & { providerRef: string },
+	host: TurnGitRuntime,
+	directory: string | undefined,
+): Promise<AgentSessionRecord & { providerRef: string }> {
+	if (!directory || !session.workingBranch || !host.readTextFile)
+		return session;
+	const head = await host
+		.readTextFile(session.providerRef, posix.join(directory, ".git/HEAD"))
+		.catch(() => null);
+	const branch = branchFromGitHead(head);
+	if (!branch || branch === session.workingBranch) return session;
+	const saved = await saveAgentWorkingBranch(
+		session.userId,
+		session.id,
+		branch,
+	).catch(() => null);
+	return saved ? { ...saved, providerRef: session.providerRef } : session;
 }
 
 /** Why a chat's committed changes were not pushed, in words the person can act on. */

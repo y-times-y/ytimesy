@@ -177,6 +177,8 @@ export function SessionLauncher({
 	onOpenFile,
 	onRecovered,
 	initialDraft = "",
+	prefill,
+	onSetUpEnvironment,
 	childTasks = [],
 	projects,
 	selectedProject,
@@ -228,6 +230,8 @@ export function SessionLauncher({
 			readonly continueOn?: string;
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
+			/** The branch a new chat starts from, when the person picked one. */
+			readonly baseBranch?: string;
 		},
 	) => Promise<ComposerSendResult> | undefined;
 	onConnect: () => void;
@@ -240,6 +244,9 @@ export function SessionLauncher({
 		items: readonly SessionItem[] | null,
 	) => Promise<void>;
 	initialDraft?: string;
+	/** Text put in the message box (focused) whenever `at` changes. */
+	prefill?: { readonly text: string; readonly at: number };
+	onSetUpEnvironment?: () => void;
 	childTasks?: readonly AgentTaskActivity[];
 	projects: Project[];
 	selectedProject?: Project;
@@ -321,6 +328,15 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
+	/** The branch picked for a new chat, for the project it was picked in. */
+	const [basePick, setBasePick] = useState<{
+		projectId: string;
+		branch: string;
+	} | null>(null);
+	const baseBranch =
+		basePick && basePick.projectId === selectedProject?.id
+			? basePick.branch
+			: null;
 	/**
 	 * The last send that came back unsent. Sending the same message again reuses
 	 * its id, so a send the server did accept is not queued twice.
@@ -372,6 +388,9 @@ export function SessionLauncher({
 			session.turnStatus,
 		),
 		enabled: recoverable,
+		// The key holds the chat's length and turn status; going back to a
+		// chat within the window shows its points without reading them again.
+		staleTime: 30_000,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId) return [];
 			return loadRecovery({
@@ -454,6 +473,8 @@ export function SessionLauncher({
 			session.turnStatus,
 		),
 		enabled: !!selectedProject?.id && !!session.agentSessionId,
+		// Read again on the interval below, not on every switch back to the chat.
+		staleTime: 30_000,
 		queryFn: () => {
 			if (!selectedProject || !session.agentSessionId)
 				return { enabled: false, evidence: [] };
@@ -490,6 +511,13 @@ export function SessionLauncher({
 		if (typedBeforeHydration)
 			setDraft((current) => current || typedBeforeHydration);
 	}, [typedBeforeHydration]);
+	const prefillAt = prefill?.at;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new request (its time), not each render.
+	useEffect(() => {
+		if (!prefill) return;
+		setDraft(prefill.text);
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, [prefillAt]);
 	// Saved as it is typed, under the chat it was typed in; cleared at once
 	// when it empties (a send). Moving to another chat or unmounting saves
 	// the pending text right away, still under its own chat.
@@ -938,6 +966,8 @@ export function SessionLauncher({
 				setAttachments((current) => (current.length ? current : files));
 		};
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
+		// Only a new chat's first message carries a base; the server ignores it later.
+		const startBranch = followUpLayout ? null : baseBranch;
 		const send = (encoded: readonly IncomingAttachment[]) =>
 			onSend(text, modelId, {
 				...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
@@ -945,6 +975,7 @@ export function SessionLauncher({
 				...(continueOn ? { continueOn } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
+				...(startBranch ? { baseBranch: startBranch } : {}),
 			})?.then((result) => {
 				if (result !== "sent") unsend(result === "unsent");
 			});
@@ -1188,6 +1219,7 @@ export function SessionLauncher({
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
 						projectLocked={followUpLayout}
+						onSetUpEnvironment={onSetUpEnvironment}
 						repairModel={
 							selectedModel && (harnessId === "api" || harnessId === "codex")
 								? {
@@ -1200,6 +1232,12 @@ export function SessionLauncher({
 						repairModelLabel={selectedModel?.label}
 						projectPickerOpen={projectPickerOpen}
 						onProjectPickerOpenChange={onProjectPickerOpenChange}
+						baseBranch={baseBranch}
+						onBaseBranchChange={(branch) => {
+							if (selectedProject)
+								setBasePick({ projectId: selectedProject.id, branch });
+						}}
+						currentBranch={session.selectedBranch}
 					/>
 				) : null}
 				<div className="composer-shell">
@@ -1337,8 +1375,13 @@ export function SessionLauncher({
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
-									harnessId === "codex" ||
-									recordedContextUsage(session.items) ? (
+									selectedTask ? (
+										// A sub-agent has its own context window: show its own.
+										selectedTask.contextUsage ? (
+											<ContextUsage {...selectedTask.contextUsage} />
+										) : null
+									) : harnessId === "codex" ||
+										recordedContextUsage(session.items) ? (
 										<ContextUsage
 											context={
 												session.usage?.context ??

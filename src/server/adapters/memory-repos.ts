@@ -445,8 +445,18 @@ function isRejectedPush(error: unknown) {
 	return code === "PushRejectedError" || code === "GitPushError";
 }
 
-function artifactsCode(error: unknown) {
-	return (error as { code?: string } | null)?.code;
+/**
+ * The Artifacts error code. A remote binding (local `wrangler dev`) passes
+ * only the message ("ArtifactsError: Repository not found: …"), so the code
+ * is read from the message when it is missing.
+ */
+export function artifactsCode(error: unknown) {
+	const code = (error as { code?: unknown } | null)?.code;
+	if (typeof code === "string") return code;
+	const message = error instanceof Error ? error.message : String(error ?? "");
+	if (/\bnot found\b/i.test(message)) return "NOT_FOUND";
+	if (/\balready exists\b/i.test(message)) return "ALREADY_EXISTS";
+	return undefined;
 }
 
 function tokenFields(created: { id?: string; plaintext: string }) {

@@ -40,16 +40,32 @@ export const DESKTOP_CREDENTIAL_DROP_SETUP = `${DESKTOP_PRIVATE_DIRECTORY_CHECK}
 rm -f "$dir/viewer.auth" "$dir/vnc.password"
 echo ${DESKTOP_PRIVATE_READY}`;
 
+/**
+ * Waits (up to 5s) for a check to pass. Each desktop piece starts in well
+ * under a second, so fixed one-second sleeps made most of the start time.
+ */
+export const DESKTOP_WAIT_UNTIL = `wait_until() {
+  n=0
+  while [ "$n" -lt 50 ]; do
+    if eval "$1" >/dev/null 2>&1; then return 0; fi
+    sleep 0.1
+    n=$((n + 1))
+  done
+  return 0
+}`;
+
 export const START_WORKSPACE_DESKTOP = `set -eu
 export DEBIAN_FRONTEND=noninteractive
 export HOME="\${HOME:-/root}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH:-}"
 
+# Chrome installs in the background while later installs run in the
+# foreground; each waits for the other's dpkg lock instead of failing on it.
 apt_get() {
   if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    sudo -n apt-get "$@"
+    sudo -n apt-get -o DPkg::Lock::Timeout=180 "$@"
   else
-    apt-get "$@"
+    apt-get -o DPkg::Lock::Timeout=180 "$@"
   fi
 }
 
@@ -74,6 +90,14 @@ find_chrome_bin() {
 }
 
 apply_guest_identity() {
+  # The name resolves before it is set, so sudo never warns it cannot.
+  if ! grep -q '[[:space:]]ytimesy$' /etc/hosts 2>/dev/null; then
+    if [ -w /etc/hosts ]; then
+      printf '127.0.1.1 ytimesy\\n' >> /etc/hosts
+    elif command -v sudo >/dev/null 2>&1; then
+      printf '127.0.1.1 ytimesy\\n' | sudo -n tee -a /etc/hosts >/dev/null 2>&1 || true
+    fi
+  fi
   if command -v sudo >/dev/null 2>&1; then
     sudo -n hostname ytimesy >/dev/null 2>&1 || true
     printf 'ytimesy\\n' | sudo -n tee /etc/hostname >/dev/null 2>&1 || true
@@ -82,9 +106,6 @@ apply_guest_identity() {
   export HOSTNAME=ytimesy
   if [ -w /etc/hostname ]; then
     printf 'ytimesy\\n' > /etc/hostname
-  fi
-  if [ -w /etc/hosts ] && ! grep -q '[[:space:]]ytimesy$' /etc/hosts 2>/dev/null; then
-    printf '127.0.1.1 ytimesy\\n' >> /etc/hosts
   fi
   PROFILE="\${HOME}/.bashrc"
   touch "$PROFILE"
@@ -166,6 +187,11 @@ fi
 if ! command -v xdotool >/dev/null 2>&1 || ! command -v scrot >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends xdotool scrot x11-utils dbus-x11 fonts-liberation || true
 fi
+# Every foreground install finishes before Chrome's background one starts,
+# so the desktop never waits behind Chrome's download for the dpkg lock.
+if ! command -v xhost >/dev/null 2>&1; then
+  apt_get install -y -qq --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || true
+fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   (
     if ! install_google_chrome; then
@@ -218,89 +244,13 @@ fi
 printf 'session.screen0.rootCommand: feh --bg-fill %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
 write_desktop_launchers
 
-# A desktop started before access control (-ac, a TCP viewer without a
-# password) restarts locked down. Chrome cannot outlive its display: it is
-# closed first (its profile keeps the tabs) and reopened on the new one.
-CHROME_REOPEN=0
-if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
-  if pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
-    CHROME_REOPEN=1
-    pkill -TERM -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1 || true
-    sleep 2
-  fi
-  pkill -x x11vnc >/dev/null 2>&1 || true
-  pkill -x Xvfb >/dev/null 2>&1 || true
-  sleep 1
-fi
-if ! pgrep -x Xvfb >/dev/null 2>&1; then
-  (umask 077; touch "$XAUTH")
-  chmod 600 "$XAUTH"
-  cookie="$(mcookie 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
-  # printf is a builtin, so the cookie never appears in a process list.
-  printf 'add :0 . %s\\n' "$cookie" | xauth -q -f "$XAUTH" source -
-  Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp >/tmp/ytimesy-xvfb.log 2>&1 &
-  sleep 1
-fi
-export DISPLAY=:0
-# The builder's own processes reach the display without the cookie too (by
-# uid over the local socket); any other user still needs the cookie.
-if ! command -v xhost >/dev/null 2>&1; then
-  apt_get install -y -qq --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || true
-fi
-xhost "+SI:localuser:$(id -un)" >/dev/null 2>&1 || true
-if ! pgrep -x fluxbox >/dev/null 2>&1; then
-  fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
-  sleep 1
-fi
-if ! feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1; then
-  sleep 1
-  feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1
-fi
-if command -v tint2 >/dev/null 2>&1; then
-  pkill -x tint2 >/dev/null 2>&1 || true
-  tint2 -c "\${HOME}/.config/tint2/tint2rc" >/tmp/ytimesy-dock.log 2>&1 &
-fi
-if ! find_chrome_bin >/dev/null 2>&1; then
-  echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
-elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
-  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
-fi
-# VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
-# or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
-# for the VNC password the runtime drops (the owner's viewer gets it from the
-# server); the proxy below is its one client. A desktop on TCP, or on an
-# older password, restarts its x11vnc; the display and Chrome stay.
+${DESKTOP_WAIT_UNTIL}
+# websockify (Python) takes about 2 s to listen on a cold guest, so the proxy
+# starts first and comes up while the display does; it only reaches the VNC
+# socket when a viewer connects.
 VNC_DIR="\${HOME}/.ytimesy/vnc"
 VNC_SOCKET="$VNC_DIR/rfb.sock"
-VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
-VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
-VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
-if [ -f "$VNC_PASS_DROP" ] && [ ! -L "$VNC_PASS_DROP" ]; then
-  (umask 077; head -n 1 "$VNC_PASS_DROP" > "$VNC_PASS_FILE.new")
-  mv -f "$VNC_PASS_FILE.new" "$VNC_PASS_FILE"
-  rm -f "$VNC_PASS_DROP"
-fi
-if [ ! -s "$VNC_PASS_FILE" ]; then
-  (umask 077; od -An -tx1 -N4 /dev/urandom | tr -d ' \\n' > "$VNC_PASS_FILE")
-fi
-VNC_PASS_DIGEST="$(sha256sum "$VNC_PASS_FILE" | cut -d' ' -f1)"
-vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
-if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || [ "$(cat "$VNC_APPLIED" 2>/dev/null)" != "$VNC_PASS_DIGEST" ]; }; then
-  pkill -x x11vnc >/dev/null 2>&1 || true
-  sleep 1
-fi
-if ! pgrep -x x11vnc >/dev/null 2>&1; then
-  install -d -m 0700 "$VNC_DIR"
-  rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
-  sleep 1
-  printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
-fi
-if vnc_on_tcp; then
-  pkill -x x11vnc >/dev/null 2>&1 || true
-  echo "ytimesy: x11vnc listened on TCP; it was stopped and the desktop refused" >&2
-  exit 1
-fi
+DESK_PROXY_STARTED=0
 # The viewer port is published at the edge, so it only listens publicly behind
 # the server-held credential (BasicHTTPAuth). Without one it stays local. The
 # credential is read from its 0600 file by a small plugin, never put in argv
@@ -333,26 +283,100 @@ desk_proxy_current() { pgrep -f "[w]ebsockify.*--unix-target=$VNC_SOCKET" >/dev/
 if [ -s "$DESK_AUTH_FILE" ]; then
   DESK_AUTH_DIGEST="$(sha256sum "$DESK_AUTH_FILE" | cut -d' ' -f1)"
   if ! desk_proxy_listening || ! desk_proxy_current || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
-    pkill -x websockify >/dev/null 2>&1 || true
-    sleep 1
+    if pkill -x websockify >/dev/null 2>&1; then wait_until '! desk_proxy_listening'; fi
     PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source "$DESK_AUTH_FILE" --unix-target="$VNC_SOCKET" 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
-    sleep 1
-    printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"
+    DESK_PROXY_STARTED=1
   fi
 else
   if ss -ltn | grep -qF -e '0.0.0.0:6080 ' -e '*:6080 ' -e '[::]:6080 ' || { desk_proxy_listening && ! desk_proxy_current; }; then
-    pkill -x websockify >/dev/null 2>&1 || true
-    sleep 1
+    if pkill -x websockify >/dev/null 2>&1; then wait_until '! desk_proxy_listening'; fi
   fi
   if ! desk_proxy_listening || ! desk_proxy_current; then
     websockify --unix-target="$VNC_SOCKET" 127.0.0.1:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
-    sleep 1
+    DESK_PROXY_STARTED=1
   fi
 fi
-python3 - <<'PY'
-import json
-print("YTIMESY_DESKTOP=" + json.dumps({"display": ":0", "port": 6080}))
-PY
+# A desktop started before access control (-ac, a TCP viewer without a
+# password) restarts locked down. Chrome cannot outlive its display: it is
+# closed first (its profile keeps the tabs) and reopened on the new one.
+CHROME_REOPEN=0
+if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
+  if pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
+    CHROME_REOPEN=1
+    pkill -TERM -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1 || true
+    sleep 2
+  fi
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  pkill -x Xvfb >/dev/null 2>&1 || true
+  sleep 1
+fi
+if ! pgrep -x Xvfb >/dev/null 2>&1; then
+  (umask 077; touch "$XAUTH")
+  chmod 600 "$XAUTH"
+  cookie="$(mcookie 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+  # printf is a builtin, so the cookie never appears in a process list.
+  printf 'add :0 . %s\\n' "$cookie" | xauth -q -f "$XAUTH" source -
+  Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp >/tmp/ytimesy-xvfb.log 2>&1 &
+  wait_until '[ -S /tmp/.X11-unix/X0 ]'
+fi
+export DISPLAY=:0
+# The builder's own processes reach the display without the cookie too (by
+# uid over the local socket); any other user still needs the cookie.
+xhost "+SI:localuser:$(id -un)" >/dev/null 2>&1 || true
+if ! pgrep -x fluxbox >/dev/null 2>&1; then
+  fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
+fi
+# Nothing waits on the wallpaper (it took about a second on a cold guest).
+( feh --bg-fill "$WALLPAPER" || { sleep 1; feh --bg-fill "$WALLPAPER"; } ) >/tmp/ytimesy-wallpaper.log 2>&1 &
+if command -v tint2 >/dev/null 2>&1; then
+  pkill -x tint2 >/dev/null 2>&1 || true
+  tint2 -c "\${HOME}/.config/tint2/tint2rc" >/tmp/ytimesy-dock.log 2>&1 &
+fi
+if ! find_chrome_bin >/dev/null 2>&1; then
+  echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
+elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
+  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
+fi
+# VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
+# or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
+# for the VNC password the runtime drops (the owner's viewer gets it from the
+# server); the proxy below is its one client. A desktop on TCP, or on an
+# older password, restarts its x11vnc; the display and Chrome stay.
+VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
+VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
+VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
+if [ -f "$VNC_PASS_DROP" ] && [ ! -L "$VNC_PASS_DROP" ]; then
+  (umask 077; head -n 1 "$VNC_PASS_DROP" > "$VNC_PASS_FILE.new")
+  mv -f "$VNC_PASS_FILE.new" "$VNC_PASS_FILE"
+  rm -f "$VNC_PASS_DROP"
+fi
+if [ ! -s "$VNC_PASS_FILE" ]; then
+  (umask 077; od -An -tx1 -N4 /dev/urandom | tr -d ' \\n' > "$VNC_PASS_FILE")
+fi
+VNC_PASS_DIGEST="$(sha256sum "$VNC_PASS_FILE" | cut -d' ' -f1)"
+vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
+if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || [ "$(cat "$VNC_APPLIED" 2>/dev/null)" != "$VNC_PASS_DIGEST" ]; }; then
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  sleep 1
+fi
+if ! pgrep -x x11vnc >/dev/null 2>&1; then
+  install -d -m 0700 "$VNC_DIR"
+  rm -f "$VNC_SOCKET"
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
+  wait_until '[ -S "$VNC_SOCKET" ]'
+  printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
+fi
+if vnc_on_tcp; then
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  echo "ytimesy: x11vnc listened on TCP; it was stopped and the desktop refused" >&2
+  exit 1
+fi
+# The proxy started above has had the display's startup to come up.
+if [ "$DESK_PROXY_STARTED" = 1 ]; then
+  wait_until desk_proxy_listening
+  if [ -n "\${DESK_AUTH_DIGEST:-}" ]; then printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"; fi
+fi
+printf 'YTIMESY_DESKTOP={"display": ":0", "port": 6080}\\n'
 `;
 
 export const ENSURE_WORKSPACE_DESKTOP = `set -eu
@@ -427,19 +451,12 @@ fi
 export function probeWorkspaceDesktop(credentialDigest: string) {
 	if (!/^[a-f0-9]{64}$/.test(credentialDigest))
 		throw new Error("Desktop credential digest must be SHA-256 hex.");
-	return `python3 - <<'PY'
-import socket
-probe = socket.socket()
-probe.settimeout(1)
-try:
-    probe.connect(("127.0.0.1", 6080))
-    with open("${DESKTOP_AUTH_APPLIED}") as applied:
-        current = applied.read().strip() == "${credentialDigest}"
-    print("YTIMESY_DESKTOP_UP" if current else "YTIMESY_DESKTOP_DOWN")
-except Exception:
-    print("YTIMESY_DESKTOP_DOWN")
-finally:
-    probe.close()
-PY
+	// Plain bash: python3 alone took seconds on a just-resumed guest. The
+	// timeout covers bash starting there too, so it is not 1 s.
+	return `if timeout 5 bash -c ': </dev/tcp/127.0.0.1/6080' 2>/dev/null && [ "$(cat ${DESKTOP_AUTH_APPLIED} 2>/dev/null)" = "${credentialDigest}" ]; then
+  echo YTIMESY_DESKTOP_UP
+else
+  echo YTIMESY_DESKTOP_DOWN
+fi
 `;
 }

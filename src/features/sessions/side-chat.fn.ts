@@ -19,7 +19,7 @@ import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 const sideChatInput = z.object({
 	projectId: z.uuid(),
 	parentSessionId: z.uuid(),
-	harnessId: z.string(),
+	harnessId: z.string().max(64),
 });
 
 function runWithMachines<A>(run: (machines: WorkspaceMachines) => Promise<A>) {
@@ -48,10 +48,10 @@ export const sendSideChatFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) => {
 		const parsed = sideChatInput
 			.extend({
-				modelId: z.string().trim().min(1),
+				modelId: z.string().trim().min(1).max(512),
 				text: z.string().trim().min(1).max(400_000),
 				userMessageId: z.uuid(),
-				variant: z.string().trim().optional(),
+				variant: z.string().trim().max(64).optional(),
 				speed: z.enum(["standard", "fast", "ultrafast"]).optional(),
 			})
 			.parse(data);

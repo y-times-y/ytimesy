@@ -1,10 +1,14 @@
 import type { AgentTask } from "./agent-task";
+import type { CodexUsage } from "./codex-usage";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 import type { SubagentTaskView } from "./subagent-tree";
 
 export type AgentTaskActivity = AgentTask & {
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;
+	/** Its own context window's use, from its latest turn (its task message
+	 *  is hidden from `items`, so it travels here). */
+	readonly contextUsage?: Pick<CodexUsage, "context" | "compacting">;
 	/** Set for children started through the agent tool (subagents=on). */
 	readonly subagent?: SubagentTaskView;
 	/** Steering (agent_send, or the user from the agents list) its next step has not taken yet. */

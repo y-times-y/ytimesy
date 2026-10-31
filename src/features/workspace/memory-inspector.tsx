@@ -261,7 +261,18 @@ export function MemoryInspector({
 				Loading memory…
 			</section>
 		);
-	if (memory.isError || !memory.data?.available)
+	// A failed refetch keeps the last memory on screen; only a first read
+	// that failed has nothing to show.
+	if (!memory.data)
+		return (
+			<section className="inspector-empty" aria-live="polite">
+				<h2>Couldn't load memory.</h2>
+				<button type="button" onClick={() => void memory.refetch()}>
+					Retry
+				</button>
+			</section>
+		);
+	if (!memory.data.available)
 		return (
 			<section className="inspector-empty" aria-live="polite">
 				<h2>Memory is unavailable.</h2>

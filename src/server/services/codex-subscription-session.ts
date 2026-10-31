@@ -209,6 +209,8 @@ export async function sendSubscriptionTask(
 		storedAttachments?: readonly MessageAttachment[];
 		/** A fallback route the user approved for this turn (`<connection>|<model>`). */
 		continueOn?: string;
+		/** The branch a new chat starts from (its first send only). */
+		baseBranch?: string;
 	},
 	preparedTask = false,
 	/** The chat as the caller just read or wrote it (by id, for this user). */
@@ -256,6 +258,7 @@ export async function sendSubscriptionTask(
 						sessionId: opened.id,
 						text: input.text,
 						session: opened,
+						baseBranch: input.baseBranch,
 					}),
 				),
 		);

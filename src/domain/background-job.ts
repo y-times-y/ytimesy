@@ -17,6 +17,7 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 				"infrastructure",
 				"memory-dreams",
 				"evidence-expiry",
+				"archive-expiry",
 			]),
 		})
 		.strict(),

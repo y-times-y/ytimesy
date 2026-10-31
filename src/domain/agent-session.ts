@@ -75,6 +75,7 @@ export function chatsFromAgentSessions(
 		readonly workspaceId?: string | null;
 		readonly workingBranch?: string | null;
 		readonly taskBranch?: string | null;
+		readonly selectedBranch?: string | null;
 		/** What the chat waits on from the user, as stored (agent_session.waiting_on). */
 		readonly waitingOn?: ChatWaitingOn | null;
 		/** The chat's history, when `waitingOn` is not given: only what it waits on is listed. */
@@ -106,6 +107,14 @@ export function chatsFromAgentSessions(
 						}),
 			...(session.workingBranch || session.taskBranch
 				? { workingBranch: session.workingBranch || session.taskBranch }
+				: {}),
+			...(session.selectedBranch || session.workingBranch || session.taskBranch
+				? {
+						selectedBranch:
+							session.selectedBranch ||
+							session.workingBranch ||
+							session.taskBranch,
+					}
 				: {}),
 		}));
 }

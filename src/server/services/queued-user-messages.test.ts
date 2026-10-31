@@ -10,7 +10,13 @@ const mocks = vi.hoisted(() => ({
 	restore: vi.fn(async () => {}),
 	remove: vi.fn(async () => true),
 	update: vi.fn(async () => true),
-	release: vi.fn(async () => ({ status: "running" as const })),
+	release: vi.fn(
+		async (): Promise<
+			| { status: "running" }
+			| { status: "taken"; send: Record<string, unknown> }
+			| { status: "missing" }
+		> => ({ status: "running" }),
+	),
 	send: vi.fn(),
 	read: vi.fn(),
 	stop: vi.fn(),

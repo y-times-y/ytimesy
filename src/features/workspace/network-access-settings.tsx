@@ -216,13 +216,15 @@ export function NetworkAccessView({
 					HTTPS to the listed names only.
 				</p>
 			)}
-			<button
-				type="submit"
-				className="settings-secondary"
-				disabled={save.isPending}
-			>
-				{save.isPending ? "Saving…" : "Save internet access"}
-			</button>
+			<div className="settings-form-actions">
+				<button
+					type="submit"
+					className="settings-primary"
+					disabled={save.isPending}
+				>
+					{save.isPending ? "Saving…" : "Save"}
+				</button>
+			</div>
 		</form>
 	);
 }
