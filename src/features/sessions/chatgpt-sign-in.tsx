@@ -83,7 +83,7 @@ function DeviceCodeHint() {
 			className="chatgpt-sign-in-hint"
 			title="On a ChatGPT Business or Enterprise workspace, an admin turns this on in the workspace permissions."
 		>
-			If you haven't yet, turn on device code sign-in in{" "}
+			<strong>Turn on device code sign-in</strong> in{" "}
 			<a
 				href="https://chatgpt.com/#settings/Security"
 				target="_blank"
@@ -91,6 +91,7 @@ function DeviceCodeHint() {
 			>
 				ChatGPT Settings → Security
 			</a>
+			, if you haven't already.
 		</p>
 	);
 }
