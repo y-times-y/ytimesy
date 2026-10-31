@@ -640,11 +640,17 @@ async function runApiTurnAttempt(
 						loadAgentProjectSecrets(
 							owner.userId,
 							owner.projectId as string,
-						).catch(() => ({
-							envFile: agentSecretsEnvFile([]),
-							redact: [],
-							names: [],
-						})),
+						).catch((error) => {
+							// The turn goes on without them; say so in the logs.
+							console.warn("Project secrets could not be loaded.", {
+								message: (error as Error).message,
+							});
+							return {
+								envFile: agentSecretsEnvFile([]),
+								redact: [],
+								names: [],
+							};
+						}),
 					),
 				)
 			: Promise.resolve(null);
