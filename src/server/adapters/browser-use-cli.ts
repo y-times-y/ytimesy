@@ -11,18 +11,12 @@ export function browserUseCommand(sessionId: string, code: string) {
 printf '%s' ${posixShellQuoted(code)} | ${posixShellCommand(["browser-use"])}`;
 }
 
-/** Installs the pinned CLI once and exports its environment; the caller pipes code into `browser-use`. */
-export function browserUseSetup(sessionId: string) {
-	const identity = createHash("sha256")
-		.update(sessionId)
-		.digest("hex")
-		.slice(0, 24);
-	return `set -eu
-${DESKTOP_X_ENVIRONMENT}
-export BH_HOME=/tmp/yb-${identity}
-export BU_CDP_URL=http://127.0.0.1:9222
-export BH_TELEMETRY=0 ANONYMIZED_TELEMETRY=false BH_RECORD=0 BH_TAB_MARKER=0 BU_AUTOSPAWN=0
-export UV_TOOL_DIR="$HOME/.ytimesy-cli/browser-use-tools" UV_TOOL_BIN_DIR="$HOME/.ytimesy-cli/browser-use-bin"
+/**
+ * Installs the pinned CLI under ~/.ytimesy-cli unless that version is there.
+ * The tools image runs it at build time (scripts/build-tools-snapshot.ts), so
+ * the first browser command on a VM finds it installed.
+ */
+export const BROWSER_USE_INSTALL = `export UV_TOOL_DIR="$HOME/.ytimesy-cli/browser-use-tools" UV_TOOL_BIN_DIR="$HOME/.ytimesy-cli/browser-use-bin"
 mkdir -p "$HOME/.ytimesy-cli" "$UV_TOOL_BIN_DIR"
 export PATH="$UV_TOOL_BIN_DIR:$HOME/.ytimesy-cli/uv:$HOME/.local/bin:$PATH"
 (
@@ -34,4 +28,17 @@ export PATH="$UV_TOOL_BIN_DIR:$HOME/.ytimesy-cli/uv:$HOME/.local/bin:$PATH"
     uv tool install --python 3.12 --upgrade --force browser-use==${PINNED_BROWSER_USE_VERSION}
   fi
 ) 9>"$HOME/.ytimesy-cli/browser-use.install.lock"`;
+
+/** Installs the pinned CLI once and exports its environment; the caller pipes code into `browser-use`. */
+export function browserUseSetup(sessionId: string) {
+	const identity = createHash("sha256")
+		.update(sessionId)
+		.digest("hex")
+		.slice(0, 24);
+	return `set -eu
+${DESKTOP_X_ENVIRONMENT}
+export BH_HOME=/tmp/yb-${identity}
+export BU_CDP_URL=http://127.0.0.1:9222
+export BH_TELEMETRY=0 ANONYMIZED_TELEMETRY=false BH_RECORD=0 BH_TAB_MARKER=0 BU_AUTOSPAWN=0
+${BROWSER_USE_INSTALL}`;
 }
