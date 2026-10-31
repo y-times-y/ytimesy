@@ -66,7 +66,8 @@ it.skipIf(!existsSync(browserPath))(
 					),
 					process.cwd(),
 					JSON.stringify({
-						url,
+						// Asked without the "/" Chrome reports: still the open page.
+						url: url.replace(/\/$/, ""),
 						observeMilliseconds: 300,
 						assertions: [
 							{ selector: "h1", expectedText: "Ready", visible: true },

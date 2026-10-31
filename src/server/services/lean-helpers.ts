@@ -176,7 +176,9 @@ EOF
 desktop() {
   if python3 -c 'import socket, sys; s = socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(("127.0.0.1", 6080)) == 0 else 1)'; then return 0; fi
   test -s /tmp/ytimesy-desktop-wallpaper.b64 || cp "$HOME/.ytimesy/lib/desktop-wallpaper.b64" /tmp/ytimesy-desktop-wallpaper.b64
-  if ! bash "$HOME/.ytimesy/lib/start-desktop.sh" >/tmp/ytimesy-desktop-start.log 2>&1; then
+  # Its own session: the command runner kills the command's process group when
+  # the command ends, and the display, VNC and Chrome must outlive it.
+  if ! setsid -w bash "$HOME/.ytimesy/lib/start-desktop.sh" >/tmp/ytimesy-desktop-start.log 2>&1 </dev/null; then
     echo "The shared desktop could not start; last lines of /tmp/ytimesy-desktop-start.log:" >&2
     tail -n 20 /tmp/ytimesy-desktop-start.log >&2
     exit 1
