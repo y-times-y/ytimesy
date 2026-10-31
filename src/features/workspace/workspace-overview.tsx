@@ -1,11 +1,4 @@
-import {
-	ChevronRight,
-	Files,
-	GitCompare,
-	GitPullRequest,
-	Monitor,
-	Terminal,
-} from "lucide-react";
+import { ChevronRight, GitPullRequest } from "lucide-react";
 import type { AgentTask } from "#/domain/agent-task";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import type { FileChangeEntry, SessionItem } from "#/domain/session-item";
@@ -18,6 +11,7 @@ import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { AgentMarkdown } from "../sessions/agent-markdown";
 import { TaskPanel } from "../sessions/task-panel";
 import { TodoList } from "../sessions/todo-list";
+import { VIEW_ICONS } from "./view-icons";
 import type { ToolsView } from "./workspace-inspector";
 
 export function WorkspaceOverview({
@@ -50,13 +44,13 @@ export function WorkspaceOverview({
 			view: "diff",
 			title: "Diffs",
 			detail: `${changes.length} ${changes.length === 1 ? "file" : "files"} changed`,
-			icon: GitCompare,
+			icon: VIEW_ICONS.diff,
 		},
 		{
 			view: "files",
 			title: "Files",
 			detail: repository ?? "Workspace files",
-			icon: Files,
+			icon: VIEW_ICONS.files,
 		},
 		{
 			view: "desktop",
@@ -69,13 +63,13 @@ export function WorkspaceOverview({
 						: desktop.status === "starting"
 							? "Starting"
 							: "Unavailable",
-			icon: Monitor,
+			icon: VIEW_ICONS.desktop,
 		},
 		{
 			view: "terminal",
 			title: "Terminal",
 			detail: "Workspace shell",
-			icon: Terminal,
+			icon: VIEW_ICONS.terminal,
 		},
 	] as const;
 	return (
