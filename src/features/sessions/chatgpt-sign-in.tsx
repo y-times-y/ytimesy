@@ -63,11 +63,35 @@ export function ChatgptSignIn({
 					{signIn.isPending ? "Starting…" : label}
 				</button>
 			)}
+			<DeviceCodeHint />
 			{login?.status === "failed" ? (
 				<small role="alert">{login.message}</small>
 			) : signIn.error ? (
 				<small role="alert">{signIn.error.message}</small>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * ChatGPT refuses the code until device code sign-in is on for the account
+ * (Settings > Security). On a workspace, an admin turns it on instead.
+ */
+function DeviceCodeHint() {
+	return (
+		<p
+			className="chatgpt-sign-in-hint"
+			title="On a ChatGPT Business or Enterprise workspace, an admin turns this on in the workspace permissions."
+		>
+			<strong>Turn on device code sign-in</strong> in{" "}
+			<a
+				href="https://chatgpt.com/#settings/Security"
+				target="_blank"
+				rel="noreferrer"
+			>
+				ChatGPT Settings → Security
+			</a>
+			, if you haven't already.
+		</p>
 	);
 }

@@ -3,6 +3,8 @@ import {
 	changedWords,
 	commandOutputLanguage,
 	diffOutputFiles,
+	editDiffLines,
+	patchDiffFiles,
 } from "./command-output-language";
 
 it("colours a command that prints one file as that file's language", () => {
@@ -111,10 +113,46 @@ it("marks the words that changed inside an edited line", () => {
 	const [file] = diffOutputFiles(
 		"diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,3 @@\n-const limit = 10;\n+const limit = 20;\n+log();",
 	);
-	// One removed line, two added: no pairing, no marks.
+	// One removed line, two added: the first pair is compared.
 	expect(file?.lines.map((line) => line.changed ?? null)).toEqual([
-		null,
-		null,
+		[14, 16],
+		[14, 16],
 		null,
 	]);
+});
+
+it("turns an edit's hunks into diff lines with the changed words marked", () => {
+	expect(
+		editDiffLines([
+			{ removed: "const limit = 10;\n", added: "const limit = 20;\nlog();\n" },
+			{ removed: "a", added: "b" },
+		]).map((line) => [line.kind, line.code, line.changed ?? null]),
+	).toEqual([
+		["removed", "const limit = 10;", [14, 16]],
+		["added", "const limit = 20;", [14, 16]],
+		["added", "log();", null],
+		["break", "", null],
+		["removed", "a", null],
+		["added", "b", null],
+	]);
+	expect(
+		editDiffLines([
+			{ removed: "const limit = 10;", added: "const limit = 20;" },
+		])[1]?.changed,
+	).toEqual([14, 16]);
+});
+
+it("reads apply_patch's format into files", () => {
+	const [file] = patchDiffFiles(
+		"*** Begin Patch\n*** Update File: src/a.ts\n@@ function f() {\n x();\n-const limit = 10;\n+const limit = 20;\n*** End Patch",
+	);
+	expect(file?.path).toBe("src/a.ts");
+	expect(file?.language).toBe("typescript");
+	expect([file?.added, file?.removed]).toEqual([1, 1]);
+	expect(file?.lines.map((line) => [line.kind, line.code])).toEqual([
+		["context", "x();"],
+		["removed", "const limit = 10;"],
+		["added", "const limit = 20;"],
+	]);
+	expect(file?.lines[2]?.changed).toEqual([14, 16]);
 });
