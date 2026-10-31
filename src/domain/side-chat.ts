@@ -14,6 +14,13 @@ export function isSideChat(session: {
 	return session.agentBudget?.sideChat === true;
 }
 
+/** A side turn started while Main's turn runs may read the checkout but not write it. */
+export function sideChatReadOnly(
+	parentTurnStatus: SessionTurnStatus | null | undefined,
+) {
+	return parentTurnStatus === "running";
+}
+
 /** Large enough that the helper budget guard is not what bounds a side chat. */
 export function sideChatBudget(): SubagentBudget {
 	return {
@@ -92,7 +99,7 @@ export function sideChatInstructions() {
 	return [
 		"You are the coding agent in a side chat beside Main. You have the same tools, repository, and model as Main, and you answer the user in this side conversation.",
 		"Main keeps working on its own turn. Never message Main, stop it, steer it, or put anything into its queue. A snapshot of Main's chat is included with the user's message so you can talk about the work in progress; verify anything you rely on against the checkout.",
-		"You share Main's checkout. Read and change files and run commands as the work needs. Do not commit, push, reset, stash, or switch branches: Main publishes this checkout, and doing that yourself would interrupt its run.",
+		"You share Main's checkout. While Main is working, your tools are read-only: read files and run commands that do not write, and when the user asks for a change, describe it or offer to make it once Main finishes. When Main is idle you may change files. Never commit, push, reset, stash, or switch branches: Main publishes this checkout, and doing that yourself would interrupt its run.",
 		"Answer the user directly. Ask only for a decision that is genuinely theirs.",
 	].join(" ");
 }
