@@ -52,9 +52,14 @@ describe("start workspace desktop", () => {
 		);
 		expect(START_WORKSPACE_DESKTOP).toContain("desktop-wallpaper.png");
 		expect(START_WORKSPACE_DESKTOP).toContain("tint2");
-		expect(START_WORKSPACE_DESKTOP).toContain("panel_size = 0 64");
+		expect(START_WORKSPACE_DESKTOP).toContain("panel_size = 204 64");
 		expect(START_WORKSPACE_DESKTOP).toContain("bottom center horizontal");
 		expect(START_WORKSPACE_DESKTOP).not.toContain("panel_size = 100%");
+		// As wide as its three icons and placed by tint2 itself (not fluxbox's
+		// bottom-right slit), so "bottom center" centers them.
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("panel_size = 204 64");
+		expect(START_WORKSPACE_DESKTOP).toContain("panel_dock = 0");
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("panel_dock = 0");
 		expect(START_WORKSPACE_DESKTOP).toContain("pcmanfm");
 		expect(START_WORKSPACE_DESKTOP).toContain("chrome.desktop");
 		expect(START_WORKSPACE_DESKTOP).toContain("terminal.desktop");
@@ -134,4 +139,6 @@ it("starts the desktop and Chrome outside the agent command's process group", ()
 		"--window-position=0,0",
 	);
 	expect(START_WORKSPACE_DESKTOP).toContain("--window-position=0,0");
+	// No "--no-sandbox" warning bar across the page.
+	expect(chromeOpenCommand("'https://example.com'")).toContain("--test-type");
 });

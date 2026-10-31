@@ -152,13 +152,13 @@ background_color = #1a1a1a 90
 border_color = #000000 0
 panel_monitor = all
 panel_position = bottom center horizontal
-panel_size = 0 64
+panel_size = 204 64
 panel_margin = 0 18
 panel_padding = 14 10 16
 panel_background_id = 1
 panel_items = L
 wm_menu = 0
-panel_dock = 1
+panel_dock = 0
 autohide = 0
 launcher_padding = 8 6 14
 launcher_background_id = 0
@@ -335,7 +335,7 @@ fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
-  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --restore-last-session --window-position=0,0 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
+  nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --restore-last-session --window-position=0,0 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
 fi
 # VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
 # or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
@@ -429,12 +429,12 @@ background_color = #1a1a1a 90
 border_color = #000000 0
 panel_monitor = all
 panel_position = bottom center horizontal
-panel_size = 0 64
+panel_size = 204 64
 panel_margin = 0 18
 panel_padding = 14 10 16
 panel_background_id = 1
 panel_items = L
-panel_dock = 1
+panel_dock = 0
 launcher_padding = 8 6 14
 launcher_icon_size = 40
 launcher_item_app = $DESK_DIR/chrome.desktop

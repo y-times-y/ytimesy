@@ -59,7 +59,7 @@ const CHROME_WINDOW_SHOWN = `windows=''; for attempt in $(seq 1 30); do windows=
  * own session so it outlives the agent command that opened it.
  */
 export function chromeOpenCommand(quotedUrl: string) {
-	return `${DESKTOP_X_ENVIRONMENT}; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; setsid -f nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --window-position=0,0 --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null; ${CHROME_WINDOW_SHOWN}`;
+	return `${DESKTOP_X_ENVIRONMENT}; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; setsid -f nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --test-type --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --window-position=0,0 --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null; ${CHROME_WINDOW_SHOWN}`;
 }
 
 export function apiAgentBrowserTools(
