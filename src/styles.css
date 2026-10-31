@@ -4594,6 +4594,20 @@ a.session-title-meta:focus-visible {
 	color: #f87171;
 	font-size: 12px;
 }
+.chatgpt-sign-in-hint {
+	margin: 0;
+	color: #8a8a8a;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.chatgpt-sign-in-hint a {
+	color: #bdbdbd;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.chatgpt-sign-in-hint a:hover {
+	color: #fff;
+}
 .chatgpt-sign-in-done {
 	display: inline-flex;
 	align-items: center;
