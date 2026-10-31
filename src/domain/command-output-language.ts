@@ -127,8 +127,9 @@ export function diffOutputFiles(output: string): DiffOutputFile[] {
 
 /**
  * Pairs each run of removed lines with the run of added lines right after
- * it (when the counts match) and marks the words that differ, so an edit
- * inside a line stands out from the lines around it.
+ * it, line by line, and marks the words that differ, so an edit inside a
+ * line stands out from the lines around it. Lines that differ almost
+ * everywhere stay unmarked (changedWords returns null).
  */
 function markChangedWords(lines: DiffOutputLine[]) {
 	for (let start = 0; start < lines.length; ) {
@@ -136,16 +137,15 @@ function markChangedWords(lines: DiffOutputLine[]) {
 		while (lines[removedEnd]?.kind === "removed") removedEnd++;
 		let addedEnd = removedEnd;
 		while (lines[addedEnd]?.kind === "added") addedEnd++;
-		const count = removedEnd - start;
-		if (count > 0 && addedEnd - removedEnd === count)
-			for (let index = 0; index < count; index++) {
-				const removed = lines[start + index] as DiffOutputLine;
-				const added = lines[removedEnd + index] as DiffOutputLine;
-				const ranges = changedWords(removed.code, added.code);
-				if (!ranges) continue;
-				lines[start + index] = { ...removed, changed: ranges[0] };
-				lines[removedEnd + index] = { ...added, changed: ranges[1] };
-			}
+		const pairs = Math.min(removedEnd - start, addedEnd - removedEnd);
+		for (let index = 0; index < pairs; index++) {
+			const removed = lines[start + index] as DiffOutputLine;
+			const added = lines[removedEnd + index] as DiffOutputLine;
+			const ranges = changedWords(removed.code, added.code);
+			if (!ranges) continue;
+			lines[start + index] = { ...removed, changed: ranges[0] };
+			lines[removedEnd + index] = { ...added, changed: ranges[1] };
+		}
 		start = Math.max(addedEnd, start + 1);
 	}
 }
@@ -203,4 +203,81 @@ export function changedWords(
 	)
 		return null;
 	return [old, next];
+}
+
+/**
+ * An edit's hunks (old text replaced by new) as diff lines: each hunk's
+ * removed lines, then its added ones, with the changed words marked and a
+ * break between hunks. Edits carry no line numbers.
+ */
+export function editDiffLines(
+	hunks: readonly { readonly removed: string; readonly added: string }[],
+): DiffOutputLine[] {
+	const lines: DiffOutputLine[] = [];
+	const split = (text: string) =>
+		text ? text.replace(/\n$/, "").split("\n") : [];
+	hunks.forEach((hunk, index) => {
+		if (index) lines.push({ kind: "break", code: "" });
+		for (const code of split(hunk.removed))
+			lines.push({ kind: "removed", code });
+		for (const code of split(hunk.added)) lines.push({ kind: "added", code });
+	});
+	markChangedWords(lines);
+	return lines;
+}
+
+/**
+ * A patch as files of diff lines. apply_patch's own format (`*** Update
+ * File: path`, `@@`, then +, - and space lines) carries paths but no line
+ * numbers; a unified diff goes through diffOutputFiles.
+ */
+export function patchDiffFiles(patch: string): DiffOutputFile[] {
+	if (!/^\*\*\* (?:Begin Patch|Update File|Add File|Delete File)/m.test(patch))
+		return diffOutputFiles(patch);
+	const files: DiffOutputFile[] = [];
+	for (const text of patch.replace(/\n+$/, "").split("\n")) {
+		const header = text.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/);
+		if (header) {
+			const path = (header[1] as string).trim();
+			files.push({
+				path,
+				language: sourceLanguageFromPath(path),
+				added: 0,
+				removed: 0,
+				lines: [],
+			});
+			continue;
+		}
+		const file = files[files.length - 1];
+		if (!file || text.startsWith("***")) continue;
+		if (text.startsWith("@@")) {
+			if (file.lines.length) file.lines.push({ kind: "break", code: "" });
+			continue;
+		}
+		const kind = text.startsWith("+")
+			? "added"
+			: text.startsWith("-")
+				? "removed"
+				: "context";
+		if (kind === "added") file.added++;
+		if (kind === "removed") file.removed++;
+		file.lines.push({
+			kind,
+			code: /^[+\- ]/.test(text) ? text.slice(1) : text,
+		});
+	}
+	for (const file of files) markChangedWords(file.lines);
+	return files;
+}
+
+/**
+ * The text highlighted for a run of diff lines: each line's code, blank for
+ * breaks and text outside hunks, so token lines match diff lines one to one.
+ */
+export function diffHighlightSource(lines: readonly DiffOutputLine[]) {
+	return lines
+		.map((line) =>
+			line.kind === "other" || line.kind === "break" ? "" : line.code,
+		)
+		.join("\n");
 }
