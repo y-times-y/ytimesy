@@ -4600,6 +4600,12 @@ a.session-title-meta:focus-visible {
 	font-size: 12px;
 	line-height: 1.5;
 }
+/* Beats the cards' own bold (first-run .first-run-model strong). */
+.chatgpt-sign-in .chatgpt-sign-in-hint strong {
+	color: #ededed;
+	font-size: inherit;
+	font-weight: 550;
+}
 .chatgpt-sign-in-hint a {
 	color: #bdbdbd;
 	text-decoration: underline;
