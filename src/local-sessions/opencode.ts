@@ -82,6 +82,7 @@ function discoverInDatabase(
 	root: string,
 	rawRoot: string,
 	databasePath: string,
+	limit: number,
 ): SessionRef[] {
 	const columns = sessionColumns(database);
 	if (!columns.has("directory")) return [];
@@ -90,21 +91,18 @@ function discoverInDatabase(
 	];
 	if (columns.has("parent_id")) filters.push("parent_id IS NULL");
 	if (columns.has("time_archived")) filters.push("time_archived IS NULL");
-	const sql = `SELECT id, directory, time_updated FROM session WHERE ${filters.join(" AND ")} ORDER BY time_updated DESC LIMIT 1`;
+	const sql = `SELECT id, directory, time_updated FROM session WHERE ${filters.join(" AND ")} ORDER BY time_updated DESC LIMIT ${Math.max(1, Math.floor(limit))}`;
 	try {
-		const row = database
+		return database
 			.prepare(sql)
-			.get(root, likePrefix(root), rawRoot, likePrefix(rawRoot));
-		if (!row) return [];
-		return [
-			{
-				tool: "opencode",
+			.all(root, likePrefix(root), rawRoot, likePrefix(rawRoot))
+			.map((row) => ({
+				tool: "opencode" as const,
 				id: String(row.id),
 				cwd: String(row.directory),
 				updatedAt: Number(row.time_updated) || 0,
 				location: databasePath,
-			},
-		];
+			}));
 	} catch {
 		return [];
 	}
@@ -154,6 +152,7 @@ function discoverInLegacyStorage(root: string, home: string): SessionRef[] {
 export function discoverOpencodeSessions(
 	repoRoot: string,
 	home = os.homedir(),
+	limit = 1,
 ): SessionRef[] {
 	const root = canonicalPath(repoRoot);
 	const databasePath = opencodeDatabasePath(home);
@@ -165,6 +164,7 @@ export function discoverOpencodeSessions(
 				root,
 				path.resolve(repoRoot),
 				databasePath,
+				limit,
 			);
 		} finally {
 			database.close();

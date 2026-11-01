@@ -1,4 +1,13 @@
-export type AgentTool = "claude" | "codex" | "opencode" | "pi" | "grok";
+/** `cursor-agent` is the Cursor CLI; `cursor` is the Cursor app (editor agent / composer chats). */
+export type AgentTool =
+	| "claude"
+	| "codex"
+	| "opencode"
+	| "pi"
+	| "grok"
+	| "gemini"
+	| "cursor-agent"
+	| "cursor";
 
 export const AGENT_TOOLS: readonly AgentTool[] = [
 	"claude",
@@ -6,6 +15,9 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
 	"opencode",
 	"pi",
 	"grok",
+	"gemini",
+	"cursor-agent",
+	"cursor",
 ];
 
 export type ToolCallKind =
@@ -77,6 +89,11 @@ export interface LocalSession {
 	readFromStart: boolean;
 	/** Lines (or rows) that were read but could not be parsed; they are skipped. */
 	unparsedRecords: number;
+	/**
+	 * Set when the store is in a shape this reader does not recognize (for example a
+	 * newer private Cursor format); `turns` is then empty rather than guessed.
+	 */
+	unsupported?: string;
 }
 
 export interface ReadOptions {

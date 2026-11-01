@@ -68,10 +68,11 @@ function sessionUpdatedAt(sessionDirectory: string): number | undefined {
 export function discoverGrokSessions(
 	repoRoot: string,
 	home = os.homedir(),
+	limit = 1,
 ): SessionRef[] {
 	const root = canonicalPath(repoRoot);
 	const sessionsDirectory = grokSessionsDirectory(home);
-	let newest: SessionRef | undefined;
+	const refs: SessionRef[] = [];
 	for (const cwdEntry of listDirectory(sessionsDirectory)) {
 		if (!cwdEntry.isDirectory()) continue;
 		const cwd = decodeDirectoryName(cwdEntry.name);
@@ -87,18 +88,16 @@ export function discoverGrokSessions(
 			const location = path.join(cwdDirectory, sessionEntry.name);
 			const updatedAt = sessionUpdatedAt(location);
 			if (updatedAt === undefined) continue;
-			if (!newest || updatedAt > newest.updatedAt) {
-				newest = {
-					tool: "grok",
-					id: sessionEntry.name,
-					cwd,
-					updatedAt,
-					location,
-				};
-			}
+			refs.push({
+				tool: "grok",
+				id: sessionEntry.name,
+				cwd,
+				updatedAt,
+				location,
+			});
 		}
 	}
-	return newest ? [newest] : [];
+	return refs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
 }
 
 export function extractUserQuery(text: string): string {
