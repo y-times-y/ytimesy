@@ -3,6 +3,10 @@ import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { BackgroundCommandRecord } from "./background-command";
 import type { CodexUsage } from "./codex-usage";
+import {
+	ENVIRONMENT_SETUP_TITLE,
+	isEnvironmentSetupPrompt,
+} from "./environment-setup";
 import { SessionItemId } from "./ids";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
@@ -517,6 +521,7 @@ export const UNTITLED_SESSION_TITLE = "New session";
 
 export function sessionTitleFromText(text: string): string {
 	if (!text) return UNTITLED_SESSION_TITLE;
+	if (isEnvironmentSetupPrompt(text)) return ENVIRONMENT_SETUP_TITLE;
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
 	if (!line) return UNTITLED_SESSION_TITLE;
 	return line.length > 48 ? `${line.slice(0, 47)}…` : line;

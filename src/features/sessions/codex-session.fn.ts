@@ -10,6 +10,7 @@ import {
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
+import { isEnvironmentSetupPrompt } from "#/domain/environment-setup";
 import type { FirstRunState } from "#/domain/first-run";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
@@ -535,6 +536,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			userMessageId?: string;
 			/** The branch a new chat starts from; the server checks it on GitHub. */
 			baseBranch?: string;
+			/** Sent from "Set up environment": the chat becomes a setup chat. */
+			environmentSetup?: boolean;
 		}) => {
 			const attachments =
 				data.attachments === undefined
@@ -575,6 +578,10 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				...(data.baseBranch === undefined
 					? {}
 					: { baseBranch: baseBranchInput.parse(data.baseBranch) }),
+				// The chip's request sent unedited counts too (an older tab, the API).
+				...(data.environmentSetup === true || isEnvironmentSetupPrompt(text)
+					? { environmentSetup: true }
+					: {}),
 			};
 		},
 	)

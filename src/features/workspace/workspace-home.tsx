@@ -269,6 +269,8 @@ type PendingSend = {
 	readonly attachments?: readonly IncomingAttachment[];
 	/** The branch a new chat starts from, when the person picked one. */
 	readonly baseBranch?: string;
+	/** Sent from the chat "Set up environment" opened: it becomes a setup chat. */
+	readonly environmentSetup?: boolean;
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
@@ -684,6 +686,11 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (composerPrefill) setComposerPrefill(undefined);
 	}, [composerPrefill]);
+	/**
+	 * The chat view "Set up environment" opened (its session epoch): its sends
+	 * are flagged as a setup chat. Opening another chat moves the epoch on.
+	 */
+	const environmentSetupEpochRef = useRef<number | null>(null);
 	// A message sent while the project's environment is still being set up
 	// waits for it, then goes as usual (or is dropped if the setup fails).
 	const heldForSetupRef = useRef<PendingSend | null>(null);
@@ -1921,6 +1928,7 @@ export function WorkspaceHome({
 	function startEnvironmentSetup(projectId: string) {
 		setSettingsOpen(false);
 		startNewChat(projectId);
+		environmentSetupEpochRef.current = sessionEpoch.current;
 		setComposerPrefill({ text: ENVIRONMENT_SETUP_PROMPT, at: Date.now() });
 	}
 
@@ -2420,6 +2428,7 @@ export function WorkspaceHome({
 							? { attachments: [...pending.attachments] }
 							: {}),
 						...(pending.baseBranch ? { baseBranch: pending.baseBranch } : {}),
+						...(pending.environmentSetup ? { environmentSetup: true } : {}),
 					},
 				}),
 				SEND_TIMEOUT_MS,
@@ -3071,6 +3080,10 @@ export function WorkspaceHome({
 												: (target.sessionId ?? activeSessionId);
 											const messageId =
 												options?.userMessageId ?? crypto.randomUUID();
+											// Every send in the chat "Set up environment" opened says so
+											// (a failed first send is retried flagged too).
+											const environmentSetup =
+												environmentSetupEpochRef.current === epoch;
 											return new Promise<ComposerSendResult>((settle) => {
 												const pending: PendingSend = {
 													epoch,
@@ -3096,6 +3109,9 @@ export function WorkspaceHome({
 														: {}),
 													...(options?.baseBranch
 														? { baseBranch: options.baseBranch }
+														: {}),
+													...(environmentSetup
+														? { environmentSetup: true }
 														: {}),
 													settle,
 												};
