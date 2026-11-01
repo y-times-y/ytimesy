@@ -19,9 +19,20 @@
  *   calls come from them and the wrapper calls are skipped. `compacted` with an empty
  *   `message` is a remote (encrypted) compaction with no plaintext summary.
  * An empty rollout file (created before the first turn was written) is skipped.
+ * Compressed rollouts (`.jsonl.zst`, which Codex writes for older sessions) are read
+ * the same way: discovery partly decompresses the head, a read decompresses the file.
+ * Codex Desktop runs some sessions in its own git worktrees
+ * (`$CODEX_HOME/worktrees/<id>/<repo>`); those match the repository they were made from
+ * by git common directory, or by `origin` remote when the worktree is gone.
  */
 import os from "node:os";
 import path from "node:path";
+import {
+	type GitIdentity,
+	gitIdentity,
+	normalizeRemote,
+	sameRepository,
+} from "./git.ts";
 import {
 	asArray,
 	asNumber,
@@ -96,6 +107,8 @@ export interface CodexSessionMeta {
 	cwd?: string;
 	cliVersion?: string;
 	gitBranch?: string;
+	/** `git.repository_url` (older Codex builds record it; newer ones do not). */
+	repositoryUrl?: string;
 	startedAt?: string;
 }
 
@@ -115,6 +128,7 @@ export function readCodexSessionMeta(
 		cwd: asString(payload.cwd),
 		cliVersion: asString(payload.cli_version),
 		gitBranch: asString(asObject(payload.git)?.branch),
+		repositoryUrl: asString(asObject(payload.git)?.repository_url),
 		startedAt: asString(payload.timestamp) ?? asString(first.timestamp),
 	};
 	if (!meta.cwd) {
@@ -128,10 +142,15 @@ export function readCodexSessionMeta(
 
 function rolloutIdFromFileName(file: string): string {
 	const match =
-		/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(
+		/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/.exec(
 			file,
 		);
-	return match?.[1] ?? path.basename(file, ".jsonl");
+	return match?.[1] ?? path.basename(file).replace(/\.jsonl(?:\.zst)?$/, "");
+}
+
+/** `rollout-*.jsonl`, or `rollout-*.jsonl.zst` once Codex has compressed an older rollout. */
+export function isRolloutFileName(name: string): boolean {
+	return name.endsWith(".jsonl") || name.endsWith(".jsonl.zst");
 }
 
 export function listCodexRolloutFiles(
@@ -142,7 +161,7 @@ export function listCodexRolloutFiles(
 		for (const entry of listDirectory(directory)) {
 			const full = path.join(directory, entry.name);
 			if (entry.isDirectory() && depth < 3) walk(full, depth + 1);
-			else if (entry.isFile() && entry.name.endsWith(".jsonl"))
+			else if (entry.isFile() && isRolloutFileName(entry.name))
 				files.push({ file: full, mtime: fileMtimeMs(full) ?? 0 });
 		}
 	};
@@ -165,19 +184,57 @@ export function codexSessionRefForFile(
 	};
 }
 
-/** Newest rollout whose cwd is the repo root or inside it; reads only first lines, newest file first. */
+export function codexWorktreesDirectory(home = os.homedir()): string {
+	return path.join(path.dirname(codexSessionsDirectory(home)), "worktrees");
+}
+
+/**
+ * Whether a rollout made in a Codex Desktop worktree belongs to the repository: the
+ * worktree shares its git common directory (or `origin`); when the worktree has been
+ * removed, the rollout's recorded repository URL is compared with `origin`.
+ */
+function codexWorktreeMatches(
+	cwd: string,
+	file: string,
+	repo: GitIdentity | undefined,
+	worktreesDirectory: string,
+): boolean {
+	if (!repo || !isPathInside(cwd, worktreesDirectory)) return false;
+	const identity = gitIdentity(cwd);
+	if (identity) return sameRepository(identity, repo);
+	const recorded = normalizeRemote(readCodexSessionMeta(file)?.repositoryUrl);
+	return recorded !== undefined && recorded === repo.remote;
+}
+
+/**
+ * Newest rollouts (up to `limit`) whose cwd is the repo root or inside it, or a Codex
+ * Desktop worktree of the same repository. Reads only first lines, newest file first.
+ */
 export function discoverCodexSessions(
 	repoRoot: string,
 	home = os.homedir(),
+	limit = 1,
 ): SessionRef[] {
 	const root = canonicalPath(repoRoot);
+	const worktreesDirectory = canonicalPath(codexWorktreesDirectory(home));
+	let repo: GitIdentity | undefined | null = null;
+	const refs: SessionRef[] = [];
 	for (const { file, mtime } of listCodexRolloutFiles(
 		codexSessionsDirectory(home),
 	)) {
 		const ref = codexSessionRefForFile(file, mtime);
-		if (ref && isPathInside(canonicalPath(ref.cwd), root)) return [ref];
+		if (!ref) continue;
+		const cwd = canonicalPath(ref.cwd);
+		let matches = isPathInside(cwd, root);
+		if (!matches && isPathInside(cwd, worktreesDirectory)) {
+			if (repo === null) repo = gitIdentity(root);
+			matches = codexWorktreeMatches(cwd, file, repo, worktreesDirectory);
+		}
+		if (!matches) continue;
+		refs.push(ref);
+		if (refs.length >= limit) break;
 	}
-	return [];
+	return refs;
 }
 
 export function unwrapRecord(
@@ -262,21 +319,59 @@ const codexScan: TranscriptScan = {
 		!!asString(asObject(record.payload)?.message)?.trim(),
 };
 
-/** Whether this rollout reports tool work as item_completed events (codex 0.16x+). */
-export function rolloutUsesItemEvents(file: string): boolean {
-	if (
-		readHeadText(file, ITEM_EVENT_PROBE_BYTES).includes(
-			'"type":"item_completed"',
-		)
-	)
-		return true;
+const CODE_MODE_WRAPPERS = new Set(["exec", "js"]);
+
+/** A code-mode wrapper call (`exec` / `js`) whose real work is reported as items. */
+export function isCodeModeWrapper(payload: JsonObject): boolean {
+	return (
+		(payload.type === "function_call" || payload.type === "custom_tool_call") &&
+		CODE_MODE_WRAPPERS.has(asString(payload.name) ?? "")
+	);
+}
+
+function probeRollout(file: string, test: (text: string) => boolean): boolean {
+	if (test(readHeadText(file, ITEM_EVENT_PROBE_BYTES))) return true;
 	let scanned = 0;
 	for (const line of linesBackward(file, 128 * 1024)) {
-		if (line.includes('"type":"item_completed"')) return true;
+		if (test(line)) return true;
 		scanned += line.length;
 		if (scanned > ITEM_EVENT_PROBE_BYTES) return false;
 	}
 	return false;
+}
+
+/**
+ * Whether this rollout is in code mode (0.153+): `exec` / `js` wrapper calls whose
+ * shell commands are reported only as CommandExecution items. Earlier builds (0.117+)
+ * also write item_completed events, but those repeat a response call with the same id
+ * and are merged into it instead.
+ */
+export function rolloutUsesItemEvents(file: string): boolean {
+	return (
+		probeRollout(file, (text) => text.includes('"type":"CommandExecution"')) &&
+		probeRollout(
+			file,
+			(text) => text.includes('"name":"exec"') || text.includes('"name":"js"'),
+		)
+	);
+}
+
+/** Folds a completed item into the response call it repeats (same id). */
+export function mergeItemIntoCall(call: ToolCall, item: JsonObject): void {
+	const fromItem = toolCallFromItem(item);
+	if (!fromItem) return;
+	if (fromItem.exitCode !== undefined) {
+		call.exitCode = fromItem.exitCode;
+		call.isError = fromItem.exitCode !== 0;
+	} else if (fromItem.isError !== undefined && call.isError === undefined) {
+		call.isError = fromItem.isError;
+	}
+	if (!call.output && fromItem.output) call.output = fromItem.output;
+	if (!call.command && fromItem.command) call.command = fromItem.command;
+	for (const file of fromItem.changedPaths)
+		if (!call.changedPaths.includes(file)) call.changedPaths.push(file);
+	for (const file of fromItem.paths)
+		if (!call.paths.includes(file)) call.paths.push(file);
 }
 
 /** `{"output": "...", "metadata": {"exit_code": 0}}` JSON text, plain text, or content arrays. */
@@ -402,6 +497,12 @@ function toolCallFromItem(item: JsonObject): ToolCall | undefined {
 				input: { query: item.query },
 				kind: "other",
 			});
+		case "WebSearch":
+			return createToolCall({
+				name: "web_search",
+				input: { query: item.query },
+				kind: "other",
+			});
 		case "ImageView":
 			return createToolCall({
 				name: "view_image",
@@ -481,9 +582,16 @@ export function readCodexSession(
 		if (type === "event_msg") {
 			if (payload.type === "item_completed") {
 				const item = asObject(payload.item);
-				const call = itemMode && item ? toolCallFromItem(item) : undefined;
+				if (!item) return;
+				const existing = assembler.toolCall(asString(item.id));
+				if (existing) {
+					mergeItemIntoCall(existing, item);
+					assembler.resultApplied(existing);
+					return;
+				}
+				const call = toolCallFromItem(item);
 				if (call) {
-					assembler.addToolCall(call, undefined, at);
+					assembler.addToolCall(call, asString(item.id), at);
 					assembler.resultApplied(call);
 				}
 				return;
@@ -522,7 +630,7 @@ export function readCodexSession(
 			}
 			return;
 		}
-		if (itemMode) return;
+		if (itemMode && isCodeModeWrapper(payload)) return;
 		const call = toolCallFromResponseItem(payload);
 		if (call) {
 			assembler.addToolCall(

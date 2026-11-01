@@ -21,6 +21,7 @@ const SHELL_TOOLS = new Set([
 	"run_terminal_command",
 	"run_terminal_cmd",
 	"run_shell_command",
+	"run_terminal_command_v2",
 	"terminal",
 	"powershell",
 ]);
@@ -37,6 +38,12 @@ const EDIT_TOOLS = new Set([
 	"edit_file",
 	"notebookedit",
 	"notebook_edit",
+	"replace",
+	"strreplace",
+	"applypatch",
+	"edit_file_v2",
+	"delete_file",
+	"delete",
 ]);
 const WRITE_TOOLS = new Set(["write", "write_file", "create_file", "create"]);
 const READ_TOOLS = new Set([
@@ -49,6 +56,8 @@ const READ_TOOLS = new Set([
 	"view_image",
 	"read_image",
 	"read_many_files",
+	"read_file_v2",
+	"readfile",
 ]);
 const SEARCH_TOOLS = new Set([
 	"grep",
@@ -64,6 +73,12 @@ const SEARCH_TOOLS = new Set([
 	"file_search",
 	"codebase_search",
 	"search_files",
+	"search_file_content",
+	"grep_search",
+	"ripgrep_raw_search",
+	"glob_file_search",
+	"rg",
+	"semanticsearch",
 ]);
 
 const PATH_KEYS = [
@@ -76,6 +91,10 @@ const PATH_KEYS = [
 	"dir_path",
 	"target_directory",
 	"absolute_path",
+	"relativeWorkspacePath",
+	"targetFile",
+	"targetDirectory",
+	"directoryPath",
 ];
 
 export function classifyToolName(name: string): ToolCallKind {
@@ -169,7 +188,7 @@ export function pathsFromInput(input: JsonObject | undefined): string[] {
 export function exitCodeFromText(text: string | undefined): number | undefined {
 	if (!text) return undefined;
 	const match =
-		/^(?:Error: )?Exit code:? (-?\d+)/m.exec(text) ??
+		/^(?:Error: )?Exit code:? (-?\d+)/im.exec(text) ??
 		/Process exited with code (-?\d+)/.exec(text) ??
 		/Command exited with code (-?\d+)/.exec(text);
 	return match?.[1] === undefined ? undefined : Number(match[1]);
