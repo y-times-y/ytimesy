@@ -13,12 +13,17 @@ import path from "node:path";
 import { humanPromptText, toolResultText } from "./claude.ts";
 import {
 	codexUserPromptText,
+	isCodeModeWrapper,
 	messageText,
 	parseCallOutput,
 	readCodexSessionMeta,
 	rolloutUsesItemEvents,
 	unwrapRecord,
 } from "./codex.ts";
+import { cursorAgentConversation } from "./cursor-agent.ts";
+import { cursorComposerConversation } from "./cursor-app.ts";
+import type { SessionEvent } from "./events.ts";
+import { parseGeminiSession } from "./gemini.ts";
 import { extractUserQuery, readSummary, updateOf } from "./grok.ts";
 import {
 	asArray,
@@ -494,6 +499,8 @@ function* codexEvents(
 	includeThinking: boolean,
 ): Generator<TranscriptEvent> {
 	const itemMode = rolloutUsesItemEvents(ref.location);
+	const seenCallIds = new Set<string>();
+	const skippedCallIds = new Set<string>();
 	const noise = [
 		'"token_usage_record"',
 		'"world_state"',
@@ -515,7 +522,12 @@ function* codexEvents(
 		}
 		if (type === "event_msg") {
 			const item = asObject(payload.item);
-			if (itemMode && payload.type === "item_completed" && item)
+			// Items that repeat a response call (same id) are already written.
+			if (
+				payload.type === "item_completed" &&
+				item &&
+				!seenCallIds.has(asString(item.id) ?? "")
+			)
 				yield* codexItemEvents(item, at);
 			continue;
 		}
@@ -546,8 +558,13 @@ function* codexEvents(
 			yield { type: "thinking", text: summary, at };
 			continue;
 		}
-		if (itemMode) continue;
 		const callId = asString(payload.call_id);
+		if (itemMode && isCodeModeWrapper(payload)) {
+			if (callId) skippedCallIds.add(callId);
+			continue;
+		}
+		if (callId && skippedCallIds.has(callId)) continue;
+		if (callId) seenCallIds.add(callId);
 		if (payload.type === "function_call") {
 			yield {
 				type: "tool_call",
@@ -860,6 +877,42 @@ function* grokEvents(ref: SessionRef): Generator<TranscriptEvent> {
 	yield* flush();
 }
 
+/** Gemini and Cursor readers already produce events; inputs are written untruncated. */
+function* sharedEvents(events: SessionEvent[]): Generator<TranscriptEvent> {
+	for (const event of events) {
+		if (event.type === "tool_call") {
+			yield {
+				type: "tool_call",
+				callId: event.callId,
+				name: event.name,
+				input:
+					typeof event.input === "string"
+						? event.input
+						: JSON.stringify(event.input ?? {}),
+				at: event.at,
+			};
+		} else if (event.type === "tool_result") {
+			yield {
+				type: "tool_result",
+				callId: event.callId,
+				output: event.output,
+				isError: event.isError,
+				exitCode: event.exitCode,
+				at: event.at,
+			};
+		} else {
+			yield event;
+		}
+	}
+}
+
+function readerEvents(ref: SessionRef): SessionEvent[] {
+	if (ref.tool === "gemini") return parseGeminiSession(ref).events;
+	if (ref.tool === "cursor-agent")
+		return cursorAgentConversation(ref.location).events;
+	return cursorComposerConversation(ref.location, ref.id).events;
+}
+
 function sessionHeader(ref: SessionRef): string[] {
 	const lines = [`# ${ref.tool} session ${ref.id}`, "", `- cwd: ${ref.cwd}`];
 	if (ref.tool === "codex") {
@@ -897,16 +950,24 @@ export function exportFullTranscript(
 	const writer = new MarkdownTranscriptWriter(options, imagesDirectory);
 	try {
 		writer.header(sessionHeader(ref));
-		const events =
-			ref.tool === "claude"
-				? claudeEvents(ref)
-				: ref.tool === "codex"
-					? codexEvents(ref, includeThinking)
-					: ref.tool === "opencode"
-						? opencodeEvents(ref, home)
-						: ref.tool === "pi"
-							? piEvents(ref)
-							: grokEvents(ref);
+		const events = (() => {
+			switch (ref.tool) {
+				case "claude":
+					return claudeEvents(ref);
+				case "codex":
+					return codexEvents(ref, includeThinking);
+				case "opencode":
+					return opencodeEvents(ref, home);
+				case "pi":
+					return piEvents(ref);
+				case "grok":
+					return grokEvents(ref);
+				case "gemini":
+				case "cursor-agent":
+				case "cursor":
+					return sharedEvents(readerEvents(ref));
+			}
+		})();
 		for (const event of events) writer.event(event);
 	} finally {
 		writer.close();

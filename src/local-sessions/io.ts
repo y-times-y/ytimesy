@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const NEWLINE = 0x0a;
 const DEFAULT_CHUNK_BYTES = 256 * 1024;
@@ -53,19 +54,124 @@ export function listDirectory(dir: string): fs.Dirent[] {
 	}
 }
 
-/** Reads at most `maxBytes` from the start of a file; never the whole file. */
+/** Reads at most `maxBytes` from the start of a file; never the whole file (a `.zst` file is partly decompressed). */
 export function readHeadText(file: string, maxBytes: number): string {
 	let fd: number | undefined;
 	try {
 		fd = fs.openSync(file, "r");
 		const buffer = Buffer.alloc(maxBytes);
 		const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
-		return buffer.subarray(0, bytesRead).toString("utf8");
+		const head = buffer.subarray(0, bytesRead);
+		if (!isCompressedFile(file)) return head.toString("utf8");
+		return zstdPrefix(head).subarray(0, maxBytes).toString("utf8");
 	} catch {
 		return "";
 	} finally {
 		if (fd !== undefined) fs.closeSync(fd);
 	}
+}
+
+/**
+ * Decompressed text of the first `compressedBytes` of a `.zst` file (not cut to a
+ * length), with how many compressed bytes were read.
+ */
+export function readCompressedHead(
+	file: string,
+	compressedBytes: number,
+): { text: string; compressedRead: number } {
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(file, "r");
+		const buffer = Buffer.alloc(compressedBytes);
+		const bytesRead = fs.readSync(fd, buffer, 0, compressedBytes, 0);
+		return {
+			text: zstdPrefix(buffer.subarray(0, bytesRead)).toString("utf8"),
+			compressedRead: bytesRead,
+		};
+	} catch {
+		return { text: "", compressedRead: 0 };
+	} finally {
+		if (fd !== undefined) fs.closeSync(fd);
+	}
+}
+
+/** Codex compresses older rollouts to `.jsonl.zst`; readers treat them like the plain file. */
+export function isCompressedFile(file: string): boolean {
+	return file.endsWith(".zst");
+}
+
+/** Decompresses as much of a zstd prefix as is complete; the rest is ignored. */
+function zstdPrefix(compressed: Buffer): Buffer {
+	const decompress = (zlib as { zstdDecompressSync?: typeof zlib.inflateSync })
+		.zstdDecompressSync;
+	if (!decompress) return Buffer.alloc(0);
+	try {
+		return decompress(compressed, {
+			finishFlush: (zlib.constants as Record<string, number>).ZSTD_e_flush,
+		} as zlib.ZlibOptions);
+	} catch {
+		return Buffer.alloc(0);
+	}
+}
+
+let decompressedCache: { key: string; data: Buffer } | undefined;
+
+/**
+ * The whole decompressed content of a `.zst` file. Node has no synchronous streaming
+ * zstd API, so the file is decompressed at once; the newest result is cached because
+ * a reader passes over the same rollout more than once.
+ */
+function decompressedFile(file: string): Buffer | undefined {
+	const mtime = fileMtimeMs(file);
+	const key = `${file}:${mtime}`;
+	if (decompressedCache?.key === key) return decompressedCache.data;
+	const decompress = (zlib as { zstdDecompressSync?: typeof zlib.inflateSync })
+		.zstdDecompressSync;
+	if (!decompress) return undefined;
+	try {
+		const data = decompress(fs.readFileSync(file));
+		decompressedCache = { key, data };
+		return data;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Random-access bytes: a plain file, or a decompressed `.zst` file held in memory. */
+interface ByteSource {
+	size: number;
+	read(target: Buffer, length: number, position: number): number;
+	close(): void;
+}
+
+function openByteSource(file: string): ByteSource | undefined {
+	if (isCompressedFile(file)) {
+		const data = decompressedFile(file);
+		if (!data) return undefined;
+		return {
+			size: data.length,
+			read: (target, length, position) =>
+				data.copy(
+					target,
+					0,
+					position,
+					Math.min(data.length, position + length),
+				),
+			close: () => {},
+		};
+	}
+	let fd: number;
+	try {
+		fd = fs.openSync(file, "r");
+	} catch {
+		return undefined;
+	}
+	return {
+		size: fs.fstatSync(fd).size,
+		read: (target, length, position) =>
+			fs.readSync(fd, target, 0, length, position),
+		close: () => fs.closeSync(fd),
+	};
 }
 
 /** Complete lines from the first `maxBytes` of a file (a cut-off last line is dropped). */
@@ -78,6 +184,18 @@ export function readHeadLines(file: string, maxBytes: number): string[] {
 
 /** The first non-empty line of a file, reading forward in small chunks until a newline. */
 export function readFirstLine(file: string): string | undefined {
+	if (isCompressedFile(file)) {
+		// Partial decompression of a growing prefix; never the whole rollout.
+		for (const bytes of [64 * 1024, 1024 * 1024, 16 * 1024 * 1024]) {
+			const text = readHeadText(file, bytes);
+			const lines = text.split("\n");
+			const complete = lines.length > 1 || text.length < bytes;
+			const first = (complete ? lines : []).find((line) => line.trim());
+			if (first) return first;
+			if (text.length < bytes) return undefined;
+		}
+		return undefined;
+	}
 	for (const line of linesForward(file, 64 * 1024)) {
 		return line;
 	}
@@ -89,18 +207,14 @@ export function* linesForward(
 	file: string,
 	chunkBytes = DEFAULT_CHUNK_BYTES,
 ): Generator<string> {
-	let fd: number;
-	try {
-		fd = fs.openSync(file, "r");
-	} catch {
-		return;
-	}
+	const source = openByteSource(file);
+	if (!source) return;
 	try {
 		const buffer = Buffer.alloc(chunkBytes);
 		let carry: Buffer[] = [];
 		let position = 0;
 		while (true) {
-			const bytesRead = fs.readSync(fd, buffer, 0, chunkBytes, position);
+			const bytesRead = source.read(buffer, chunkBytes, position);
 			if (bytesRead === 0) break;
 			position += bytesRead;
 			let start = 0;
@@ -124,7 +238,7 @@ export function* linesForward(
 			if (line.trim().length > 0) yield line;
 		}
 	} finally {
-		fs.closeSync(fd);
+		source.close();
 	}
 }
 
@@ -136,22 +250,16 @@ export function* linesBackward(
 	file: string,
 	chunkBytes = DEFAULT_CHUNK_BYTES,
 ): Generator<string> {
-	let fd: number;
-	let size: number;
+	const source = openByteSource(file);
+	if (!source) return;
 	try {
-		fd = fs.openSync(file, "r");
-		size = fs.fstatSync(fd).size;
-	} catch {
-		return;
-	}
-	try {
-		let position = size;
+		let position = source.size;
 		let carry: Buffer = Buffer.alloc(0);
 		while (position > 0) {
 			const readBytes = Math.min(chunkBytes, position);
 			position -= readBytes;
 			const chunk = Buffer.alloc(readBytes);
-			fs.readSync(fd, chunk, 0, readBytes, position);
+			source.read(chunk, readBytes, position);
 			const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
 			let end = combined.length;
 			let newline = combined.lastIndexOf(NEWLINE, end - 1);
@@ -168,7 +276,7 @@ export function* linesBackward(
 			if (line.trim().length > 0) yield line;
 		}
 	} finally {
-		fs.closeSync(fd);
+		source.close();
 	}
 }
 

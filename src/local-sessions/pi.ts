@@ -93,6 +93,7 @@ export function piSessionRefForFile(file: string): SessionRef | undefined {
 export function discoverPiSessions(
 	repoRoot: string,
 	home = os.homedir(),
+	limit = 1,
 ): SessionRef[] {
 	const root = canonicalPath(repoRoot);
 	const encodedRoot = encodePiSessionDirectory(root);
@@ -112,12 +113,13 @@ export function discoverPiSessions(
 			.map((file) => path.join(directory, file.name))
 			.map((file) => ({ file, mtime: fileMtimeMs(file) ?? 0 }))
 			.sort((a, b) => b.mtime - a.mtime)
-			.slice(0, MAX_FILES_VERIFIED_PER_DIRECTORY);
+			.slice(0, Math.max(MAX_FILES_VERIFIED_PER_DIRECTORY, limit));
+		let found = 0;
 		for (const { file } of files) {
 			const ref = piSessionRefForFile(file);
 			if (ref && isPathInside(canonicalPath(ref.cwd), root)) {
 				refs.push(ref);
-				break;
+				if (++found >= limit) break;
 			}
 		}
 	}

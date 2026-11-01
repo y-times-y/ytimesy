@@ -1,10 +1,23 @@
 /**
- * Reads local coding-agent sessions (Claude Code, Codex, OpenCode, Pi, Grok) into one
- * normalized model, for handing a local session off to the cloud agent. Pure Node.
+ * Reads local coding-agent sessions (Claude Code, Codex, OpenCode, Pi, Grok, Gemini CLI,
+ * Cursor CLI, Cursor app) into one normalized model, for handing a local session off to
+ * the cloud agent. Pure Node.
  */
 import os from "node:os";
+import {
+	type CallingAgent,
+	type DetectOptions,
+	detectCallingAgent,
+	findSessionById,
+} from "./caller.ts";
 import { discoverClaudeSessions, readClaudeSession } from "./claude.ts";
 import { discoverCodexSessions, readCodexSession } from "./codex.ts";
+import {
+	discoverCursorAgentSessions,
+	readCursorAgentSession,
+} from "./cursor-agent.ts";
+import { discoverCursorSessions, readCursorSession } from "./cursor-app.ts";
+import { discoverGeminiSessions, readGeminiSession } from "./gemini.ts";
 import { discoverGrokSessions, readGrokSession } from "./grok.ts";
 import {
 	successfulCommands,
@@ -38,18 +51,26 @@ export interface DiscoveryOptions {
 	home?: string;
 	/** Defaults to every supported tool. */
 	tools?: readonly AgentTool[];
+	/** Newest candidates kept per tool (per project folder for Claude and Pi); default 1. */
+	perToolLimit?: number;
 }
 
 const discoverers: Record<
 	AgentTool,
-	(root: string, home: string) => SessionRef[]
+	(root: string, home: string, limit: number) => SessionRef[]
 > = {
 	claude: discoverClaudeSessions,
 	codex: discoverCodexSessions,
 	opencode: discoverOpencodeSessions,
 	pi: discoverPiSessions,
 	grok: discoverGrokSessions,
+	gemini: discoverGeminiSessions,
+	"cursor-agent": discoverCursorAgentSessions,
+	cursor: discoverCursorSessions,
 };
+
+/** Candidates per tool looked at when the newest ones turn out to be empty. */
+const EMPTY_SKIP_CANDIDATES = 5;
 
 /** The git work tree root containing `repoPath`, or the path itself when it is not in a repo. */
 export function resolveRepositoryRoot(repoPath: string): string {
@@ -69,7 +90,7 @@ export function discoverSessions(
 	const refs: SessionRef[] = [];
 	for (const tool of options.tools ?? AGENT_TOOLS) {
 		try {
-			refs.push(...discoverers[tool](root, home));
+			refs.push(...discoverers[tool](root, home, options.perToolLimit ?? 1));
 		} catch {
 			// One unreadable store must not hide sessions from the others.
 		}
@@ -77,12 +98,100 @@ export function discoverSessions(
 	return refs.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** The most recently updated session, across all tools, for the repository containing `repoPath`. */
+/**
+ * Whether a session has at least one user or assistant message (a turn with text or a
+ * tool call). Reads only the end of large transcripts.
+ */
+export function sessionHasMessages(
+	ref: SessionRef,
+	home = os.homedir(),
+): boolean {
+	try {
+		const session = readSession(ref, { budgetChars: 4000 }, home);
+		return (
+			!session.unsupported &&
+			session.turns.some(
+				(turn) =>
+					!turn.synthetic &&
+					(turn.text.trim().length > 0 || turn.toolCalls.length > 0),
+			)
+		);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The most recently updated session, across all tools, for the repository containing
+ * `repoPath`; sessions with no user or assistant message are skipped.
+ */
 export function findLatestSession(
 	repoPath: string,
 	options: DiscoveryOptions = {},
 ): SessionRef | undefined {
-	return discoverSessions(repoPath, options)[0];
+	const home = options.home ?? os.homedir();
+	return discoverSessions(repoPath, {
+		...options,
+		perToolLimit: options.perToolLimit ?? EMPTY_SKIP_CANDIDATES,
+	}).find((ref) => sessionHasMessages(ref, home));
+}
+
+export interface ImportSelection {
+	ref: SessionRef;
+	/** The agent running us, when detected. */
+	caller?: CallingAgent;
+	/** `caller-session`: the caller's own session by id; `caller-latest`: its newest
+	 * session in the repo; `latest`: newest session of any tool. */
+	reason: "caller-session" | "caller-latest" | "latest";
+}
+
+export interface ImportSelectionOptions
+	extends DiscoveryOptions,
+		DetectOptions {
+	/** Defaults to process.env. */
+	env?: Record<string, string | undefined>;
+}
+
+/**
+ * The session to import: the calling agent's own session when its environment names
+ * it, else that agent's newest non-empty session in the repo, else the newest
+ * non-empty session of any tool.
+ */
+export function findSessionToImport(
+	repoPath: string,
+	options: ImportSelectionOptions = {},
+): ImportSelection | undefined {
+	const home = options.home ?? os.homedir();
+	const caller = detectCallingAgent(options.env ?? process.env, options);
+	const allowed = (tool: AgentTool) =>
+		!options.tools || options.tools.includes(tool);
+	if (
+		caller &&
+		allowed(caller.tool) &&
+		(caller.sessionId || caller.sessionFile)
+	) {
+		const ref = findSessionById(caller, home);
+		if (ref && allowed(ref.tool))
+			return { ref, caller, reason: "caller-session" };
+	}
+	const candidates = discoverSessions(repoPath, {
+		...options,
+		perToolLimit: options.perToolLimit ?? EMPTY_SKIP_CANDIDATES,
+	});
+	if (caller) {
+		const sameTool = (tool: AgentTool) =>
+			tool === caller.tool ||
+			(caller.tool.startsWith("cursor") && tool.startsWith("cursor"));
+		const ref = candidates.find(
+			(candidate) =>
+				sameTool(candidate.tool) && sessionHasMessages(candidate, home),
+		);
+		if (ref) return { ref, caller, reason: "caller-latest" };
+	}
+	const ref = candidates.find((candidate) =>
+		sessionHasMessages(candidate, home),
+	);
+	return ref ? { ref, caller, reason: "latest" } : undefined;
 }
 
 /**
@@ -106,6 +215,12 @@ export function readSession(
 			return readPiSession(ref, options);
 		case "grok":
 			return readGrokSession(ref, options);
+		case "gemini":
+			return readGeminiSession(ref, options);
+		case "cursor-agent":
+			return readCursorAgentSession(ref, options);
+		case "cursor":
+			return readCursorSession(ref, options);
 	}
 }
 
@@ -141,6 +256,12 @@ export function readSessionActivity(
 				return readPiSession(ref, { activityOnly: true });
 			case "grok":
 				return readGrokSession(ref, { activityOnly: true });
+			case "gemini":
+				return readGeminiSession(ref, { activityOnly: true });
+			case "cursor-agent":
+				return readCursorAgentSession(ref, { activityOnly: true });
+			case "cursor":
+				return readCursorSession(ref, { activityOnly: true });
 		}
 	})();
 	return {
@@ -155,6 +276,14 @@ export function readSessionActivity(
 	};
 }
 
+export {
+	agentsFromEnvironment,
+	type CallingAgent,
+	detectCallingAgent,
+	findSessionById,
+	type ImportTailOptions,
+	trimImportTail,
+} from "./caller.ts";
 export { claudeProjectsDirectory, claudeSessionRefForFile } from "./claude.ts";
 export {
 	codexSessionRefForFile,
@@ -162,10 +291,32 @@ export {
 	listCodexRolloutFiles,
 } from "./codex.ts";
 export {
+	cursorAgentSessionRefForDirectory,
+	cursorChatsDirectory,
+	listCursorAgentSessionRefs,
+} from "./cursor-agent.ts";
+export {
+	cursorUserDirectories,
+	listCursorComposers,
+	listCursorSessionRefs,
+} from "./cursor-app.ts";
+export {
 	exportFullTranscript,
 	type FullTranscriptOptions,
 	type FullTranscriptResult,
 } from "./full-transcript.ts";
+export {
+	geminiCheckpointRef,
+	geminiTempDirectory,
+	listGeminiSessionRefs,
+} from "./gemini.ts";
+export { type GitIdentity, gitIdentity, normalizeRemote } from "./git.ts";
 export { grokSessionRefForDirectory, grokSessionsDirectory } from "./grok.ts";
+export {
+	discoverAllSessions,
+	type FolderGit,
+	type MachineDiscovery,
+	type MachineSession,
+} from "./machine.ts";
 export { listOpencodeSessionRefs } from "./opencode.ts";
 export { piSessionRefForFile, piSessionsDirectory } from "./pi.ts";

@@ -1,7 +1,8 @@
 /**
  * Local-only check: runs the local-session readers over this machine's real sessions
- * (~/.claude, ~/.codex, OpenCode, Pi, Grok) and prints counts and timings only — never
- * transcript text, paths or titles. Not a test; writes nothing.
+ * (~/.claude, ~/.codex, OpenCode, Pi, Grok, Gemini CLI, Cursor CLI, Cursor app) and prints
+ * counts and timings only — never transcript text, paths or titles. Not a test; writes
+ * nothing.
  *
  *   node --import tsx scripts/local-sessions-check.ts [repo path for the discovery timing]
  */
@@ -15,12 +16,17 @@ import {
 	claudeSessionRefForFile,
 	codexSessionRefForFile,
 	codexSessionsDirectory,
+	discoverAllSessions,
 	exportFullTranscript,
 	findLatestSession,
+	findSessionToImport,
 	grokSessionRefForDirectory,
 	grokSessionsDirectory,
 	type LocalSession,
 	listCodexRolloutFiles,
+	listCursorAgentSessionRefs,
+	listCursorSessionRefs,
+	listGeminiSessionRefs,
 	listOpencodeSessionRefs,
 	piSessionRefForFile,
 	piSessionsDirectory,
@@ -43,6 +49,10 @@ interface Tally {
 	compactionSummaries: number;
 	readFailures: number;
 	noMetadata: number;
+	unsupported: number;
+	empty: number;
+	changedFiles: number;
+	readMs: number;
 }
 
 function emptyTally(): Tally {
@@ -57,6 +67,10 @@ function emptyTally(): Tally {
 		compactionSummaries: 0,
 		readFailures: 0,
 		noMetadata: 0,
+		unsupported: 0,
+		empty: 0,
+		changedFiles: 0,
+		readMs: 0,
 	};
 }
 
@@ -108,6 +122,9 @@ function allSessionRefs(): Record<AgentTool, (SessionRef | undefined)[]> {
 		grok: grokDirectories.map((directory) =>
 			grokSessionRefForDirectory(directory),
 		),
+		gemini: listGeminiSessionRefs(),
+		"cursor-agent": listCursorAgentSessionRefs(),
+		cursor: listCursorSessionRefs(),
 	};
 }
 
@@ -120,6 +137,8 @@ function versionBucket(session: LocalSession): string {
 
 function addSession(tally: Tally, session: LocalSession): void {
 	tally.sessions++;
+	if (session.unsupported) tally.unsupported++;
+	if (session.turns.length === 0) tally.empty++;
 	tally.turns += session.turns.length;
 	tally.unparsedRecords += session.unparsedRecords;
 	for (const turn of session.turns) {
@@ -129,6 +148,7 @@ function addSession(tally: Tally, session: LocalSession): void {
 			if (call.kind === "shell") tally.shellCalls++;
 			if (call.exitCode !== undefined) tally.exitCodes++;
 			if (call.isError) tally.errors++;
+			tally.changedFiles += call.changedPaths.length;
 		}
 	}
 }
@@ -148,6 +168,10 @@ function printTallies(byKey: Map<string, Tally>): void {
 			"unparsed",
 			"noMeta",
 			"readFail",
+			"unsupported",
+			"empty",
+			"changedPaths",
+			"readMs",
 		].join("\t"),
 	);
 	for (const [key, tally] of rows) {
@@ -164,6 +188,10 @@ function printTallies(byKey: Map<string, Tally>): void {
 				tally.unparsedRecords,
 				tally.noMetadata,
 				tally.readFailures,
+				tally.unsupported,
+				tally.empty,
+				tally.changedFiles,
+				Math.round(tally.readMs),
 			].join("\t"),
 		);
 	}
@@ -203,8 +231,11 @@ function main(): void {
 				continue;
 			}
 			try {
+				const started = performance.now();
 				const session = readSession(ref);
-				addSession(tallyFor(`${tool}@${versionBucket(session)}`), session);
+				const tally = tallyFor(`${tool}@${versionBucket(session)}`);
+				addSession(tally, session);
+				tally.readMs += performance.now() - started;
 			} catch {
 				tallyFor(`${tool}@read-failed`).readFailures++;
 			}
@@ -217,6 +248,62 @@ function main(): void {
 	console.log(
 		`\ndiscovery (findLatestSession): ${discovery.ms} ms, found=${discovery.value?.tool ?? "none"}`,
 	);
+	const selection = timeMs(() => findSessionToImport(repoPath));
+	console.log(
+		`import selection (findSessionToImport, this process's env): ${selection.ms} ms, caller=${selection.value?.caller?.tool ?? "none"} (${selection.value?.caller?.evidence.join("+") ?? "-"}), picked=${selection.value?.ref.tool ?? "none"} via ${selection.value?.reason ?? "-"}`,
+	);
+
+	const machine = timeMs(() => discoverAllSessions());
+	const perTool = new Map<
+		string,
+		{
+			sessions: number;
+			repos: number;
+			noRepo: number;
+			noCwd: number;
+			github: number;
+			messages: number;
+			bytes: number;
+		}
+	>();
+	const folders = new Set<string>();
+	const repos = new Set<string>();
+	for (const session of machine.value.sessions) {
+		const row = perTool.get(session.tool) ?? {
+			sessions: 0,
+			repos: 0,
+			noRepo: 0,
+			noCwd: 0,
+			github: 0,
+			messages: 0,
+			bytes: 0,
+		};
+		row.sessions++;
+		row.messages += session.messageCount;
+		row.bytes += session.sizeBytes;
+		if (!session.cwd) row.noCwd++;
+		if (session.git === "none") row.noRepo++;
+		else {
+			row.repos++;
+			repos.add(session.git.root);
+			if (session.git.remote && !session.git.remote.includes(".")) row.github++;
+		}
+		if (session.cwd) folders.add(session.cwd);
+		perTool.set(session.tool, row);
+	}
+	console.log(
+		`\nmachine-wide discovery (discoverAllSessions): ${machine.ms} ms total, sessions=${machine.value.sessions.length}, folders=${folders.size}, repo roots=${repos.size}`,
+	);
+	console.log(`  timings ms: ${JSON.stringify(machine.value.timingsMs)}`);
+	if (Object.keys(machine.value.errors).length > 0)
+		console.log(`  errors: ${Object.keys(machine.value.errors).join(", ")}`);
+	console.log(
+		"  tool\tsessions\tinRepo\tnoRepo\tnoCwd\tgithubRemote\tmessagesEst\tMB",
+	);
+	for (const [tool, row] of [...perTool].sort(([a], [b]) => a.localeCompare(b)))
+		console.log(
+			`  ${tool}\t${row.sessions}\t${row.repos}\t${row.noRepo}\t${row.noCwd}\t${row.github}\t${row.messages}\t${(row.bytes / 1024 / 1024).toFixed(1)}`,
+		);
 
 	const largest = largestClaudeTranscript();
 	if (!largest) return;
