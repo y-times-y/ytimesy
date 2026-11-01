@@ -155,8 +155,14 @@ export function snapshotWorkTree(input: {
 	try {
 		const indexFile = path.join(temporary, "index");
 		const indexed = { ...env, GIT_INDEX_FILE: indexFile };
-		if (fs.existsSync(realIndex)) fs.copyFileSync(realIndex, indexFile);
-		else if (head) git(["read-tree", head], { cwd: root, env: indexed });
+		if (fs.existsSync(realIndex)) {
+			fs.copyFileSync(realIndex, indexFile);
+			// Git re-reads a file whose mtime is not older than the index's
+			// ("racily clean"): a fresh mtime on the copy would hide an edit made
+			// in the same second as the last index write, with the same size.
+			const stat = fs.statSync(realIndex);
+			fs.utimesSync(indexFile, stat.atimeMs / 1000, stat.mtimeMs / 1000);
+		} else if (head) git(["read-tree", head], { cwd: root, env: indexed });
 		const trackedChanged = head ? changedTrackedFiles(root, env) : [];
 		git(["add", "--update"], { cwd: root, env: indexed });
 		addFiles(input.untracked, root, indexed);

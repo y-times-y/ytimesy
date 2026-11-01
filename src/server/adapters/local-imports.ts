@@ -238,3 +238,52 @@ export async function projectImportedSessions(
 	);
 	return result.rows;
 }
+
+/**
+ * Stops an import that has not finished: the card reads it as failed with
+ * `message`, its code can no longer be spent and its token stops working.
+ * Null when it already finished (or is not this user's).
+ */
+export async function cancelLocalImportRow(
+	userId: string,
+	id: string,
+	message: string,
+): Promise<LocalImportRow | null> {
+	const result = await database().query<LocalImportRow>(
+		`update local_import
+		 set status = 'failed', message = $3, token_expires_at = least(token_expires_at, now()),
+		     updated_at = now()
+		 where id = $1 and user_id = $2 and status in ('waiting', 'connected', 'importing')
+		 returning ${COLUMNS}`,
+		[id, userId, message.slice(0, 300)],
+	);
+	return result.rows[0] ?? null;
+}
+
+export type FinishedImportRow = {
+	readonly id: string;
+	readonly finishedAt: Date;
+	readonly agent: string | null;
+	readonly sessionsImported: number;
+	readonly projectId: string;
+	readonly projectName: string | null;
+	readonly projectFullName: string;
+	readonly sessionId: string | null;
+};
+
+/** The user's finished imports, newest first (Settings > Import). */
+export async function finishedLocalImports(
+	userId: string,
+	limit = 20,
+): Promise<FinishedImportRow[]> {
+	const result = await database().query<FinishedImportRow>(
+		`select i.id, i.updated_at as "finishedAt", i.agent,
+		   i.sessions_imported as "sessionsImported", i.project_id as "projectId",
+		   p.name as "projectName", p.full_name as "projectFullName", i.session_id as "sessionId"
+		 from local_import i join project p on p.id = i.project_id and p.user_id = i.user_id
+		 where i.user_id = $1 and i.status = 'ready'
+		 order by i.updated_at desc limit $2`,
+		[userId, limit],
+	);
+	return result.rows;
+}

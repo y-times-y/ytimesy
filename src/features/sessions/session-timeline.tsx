@@ -57,7 +57,6 @@ import {
 	KIND_ICONS,
 	KIND_TAGS,
 } from "#/domain/helper-names";
-import { handoffCardLabel } from "#/domain/local-import-view";
 import { mcpResult } from "#/domain/mcp-call-view";
 import { isPastedText } from "#/domain/pasted-text";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
@@ -92,7 +91,7 @@ import {
 import { userQuestionReply } from "#/domain/user-question";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
-import { LocalAgentMark } from "../local-import/local-agent-mark";
+import { HandoffCard } from "../local-import/handoff-card";
 import { ActivityIcon } from "./activity-icon";
 import {
 	AgentMentionContext,
@@ -1573,26 +1572,8 @@ function SessionItemView({
 			);
 		case "handoff":
 			// The local session's conversation is in the model's context; the
-			// timeline shows only where it came from.
-			return (
-				<div
-					className="session-activity session-system-notice session-handoff"
-					data-kind="handoff"
-					role="status"
-				>
-					<p>
-						<span className="session-handoff-mark" aria-hidden="true">
-							<LocalAgentMark agent={item.tool} size={14} />
-						</span>
-						<span
-							className="session-activity-title"
-							title={`${item.title || "Untitled session"}. The agent has this conversation; full transcripts are on its machine in ~/.ytimesy/handoff/.`}
-						>
-							{handoffCardLabel(item)}
-						</span>
-					</p>
-				</div>
-			);
+			// timeline shows a short summary of where it came from.
+			return <HandoffCard item={item} />;
 		case "unknown":
 			return (
 				<div

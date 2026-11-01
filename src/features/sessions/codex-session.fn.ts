@@ -390,22 +390,14 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				? firstRunState(user.id).catch(() => undefined)
 				: undefined,
 		);
-		const [
-			snapshotAvailable,
-			projects,
-			chats,
-			projectChats,
-			firstRunAt,
-			githubConnected,
-		] = await Promise.all([
-			hasManagedCodexAuth(user.id),
-			listed,
-			firstChats,
-			otherChats.catch(() => []),
-			firstRun,
-			// The new chat's "Continue your agent session" card needs GitHub.
-			githubConnectionExists(user.id).catch(() => false),
-		]);
+		const [snapshotAvailable, projects, chats, projectChats, firstRunAt] =
+			await Promise.all([
+				hasManagedCodexAuth(user.id),
+				listed,
+				firstChats,
+				otherChats.catch(() => []),
+				firstRun,
+			]);
 		// Landed in time, the view comes as a value: the browser hydrates it
 		// without waiting on a promise.
 		let landed: { view: OpenChatView | undefined } | undefined;
@@ -436,7 +428,6 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			// The sidebar's account button renders from this.
 			account: { name: user.name, email: user.email, image: user.image },
 			firstRun: firstRunAt,
-			githubConnected,
 			// The right panel as this browser left it.
 			inspector: savedInspectorFromCookies(getRequest().headers.get("cookie")),
 			// A new chat's "from <branch>" as this browser last read it from GitHub.

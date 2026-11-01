@@ -32,21 +32,40 @@ export type ImportStatus =
 	| "ready"
 	| "failed";
 
+/** "Oct 31": the same text on the server and in the browser (UTC). */
+export function shortDay(iso: string) {
+	const date = new Date(iso);
+	return Number.isNaN(date.getTime())
+		? iso.slice(0, 10)
+		: date.toLocaleDateString("en-US", {
+				month: "short",
+				day: "numeric",
+				timeZone: "UTC",
+			});
+}
+
 /** The compact card's line: "Continued from Claude Code · 42 turns · Oct 31". */
 export function handoffCardLabel(input: {
 	readonly tool: LocalAgent;
 	readonly turns: number;
 	readonly at: string;
 }) {
-	const date = new Date(input.at);
-	const day = Number.isNaN(date.getTime())
-		? input.at.slice(0, 10)
-		: date.toLocaleDateString("en-US", {
-				month: "short",
-				day: "numeric",
-				timeZone: "UTC",
-			});
-	return `Continued from ${LOCAL_AGENT_NAMES[input.tool] ?? input.tool} · ${input.turns} ${input.turns === 1 ? "turn" : "turns"} · ${day}`;
+	return `Continued from ${LOCAL_AGENT_NAMES[input.tool] ?? input.tool} · ${input.turns} ${input.turns === 1 ? "turn" : "turns"} · ${shortDay(input.at)}`;
+}
+
+/** The summary card's footer: "221 turns · Nov 1 · main". */
+export function handoffCardMeta(input: {
+	readonly turns: number;
+	readonly at: string;
+	readonly branch?: string | null;
+}) {
+	return [
+		`${input.turns} ${input.turns === 1 ? "turn" : "turns"}`,
+		shortDay(input.at),
+		input.branch || null,
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 export type LocalImportView = {
@@ -57,6 +76,17 @@ export type LocalImportView = {
 	readonly projectId: string | null;
 	readonly sessionId: string | null;
 	readonly message: string | null;
+};
+
+/** Settings > Import: one finished import and its chat. */
+export type FinishedImportView = {
+	readonly id: string;
+	readonly finishedAt: string;
+	readonly agent: LocalAgent | null;
+	readonly sessions: number;
+	readonly projectId: string;
+	readonly projectName: string;
+	readonly sessionId: string | null;
 };
 
 /** The import card's one status line. */

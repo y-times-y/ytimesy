@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 	byCode: vi.fn(),
 	byToken: vi.fn(),
 	progress: vi.fn(),
+	cancelRow: vi.fn(),
+	forOwner: vi.fn(),
 	bySource: vi.fn(),
 	readObject: vi.fn(),
 	storeObject: vi.fn(),
@@ -55,7 +57,9 @@ vi.mock("../adapters/local-imports", () => ({
 	redeemLocalImportCode: mocks.redeem,
 	localImportByCodeHash: mocks.byCode,
 	localImportByTokenHash: mocks.byToken,
-	localImportForOwner: vi.fn(),
+	localImportForOwner: mocks.forOwner,
+	cancelLocalImportRow: mocks.cancelRow,
+	finishedLocalImports: vi.fn(),
 	saveLocalImportProgress: mocks.progress,
 	importedSessionBySource: mocks.bySource,
 	importedSessionOfImport: vi.fn(),
@@ -99,6 +103,7 @@ vi.mock("./queued-user-messages", () => ({
 }));
 
 const {
+	cancelLocalImport,
 	createLocalImport,
 	finishImport,
 	importSession,
@@ -344,6 +349,8 @@ describe("finish", () => {
 		branch: "ytimesy/continue-login",
 		pushedFiles: 12,
 		skippedFiles: 1,
+		pushedPaths: ["src/auth.ts", "src/login.tsx"],
+		skippedPaths: [".env"],
 	};
 	const pushed = { branchExists: vi.fn(async () => true) };
 
@@ -387,6 +394,23 @@ describe("finish", () => {
 			at: "2026-10-31T18:30:00Z",
 		});
 		expect(items[0].context).toContain("The login page loops.");
+		// The card's summary and details, from the handoff alone.
+		expect(items[0]).toMatchObject({
+			branch: "ytimesy/continue-login",
+			summary: {
+				goal: "The login page loops.",
+				stopped: null,
+				edited: ["src/auth.ts"],
+				commands: ["pnpm install", "pnpm test"],
+				transcript: "~/.ytimesy/handoff/claude-local-1/transcript.md",
+			},
+			files: {
+				pushed: ["src/auth.ts", "src/login.tsx"],
+				pushedCount: 12,
+				skipped: [".env"],
+				skippedCount: 1,
+			},
+		});
 		expect(items[0].context).toContain("~/.ytimesy/handoff/");
 		expect(mocks.sendMessage).not.toHaveBeenCalled();
 		expect(mocks.progress).toHaveBeenCalledWith("imp", {
@@ -454,5 +478,49 @@ describe("finish", () => {
 			sessionId: "chat-1",
 		});
 		expect(mocks.insertChat).not.toHaveBeenCalled();
+	});
+});
+
+describe("cancel", () => {
+	it("stops an unfinished import and shows it as cancelled", async () => {
+		mocks.cancelRow.mockResolvedValue(
+			importRow({ status: "failed", message: "Import cancelled." }),
+		);
+		await expect(cancelLocalImport("alice", "imp")).resolves.toMatchObject({
+			status: "failed",
+			message: "Import cancelled.",
+		});
+		expect(mocks.cancelRow).toHaveBeenCalledWith(
+			"alice",
+			"imp",
+			"Import cancelled.",
+		);
+	});
+
+	it("leaves a finished import as it is", async () => {
+		mocks.cancelRow.mockResolvedValue(null);
+		mocks.forOwner.mockResolvedValue(
+			importRow({ status: "ready", projectId: PROJECT, sessionId: "chat-1" }),
+		);
+		await expect(cancelLocalImport("alice", "imp")).resolves.toMatchObject({
+			status: "ready",
+			sessionId: "chat-1",
+		});
+	});
+
+	it("tells the CLI a cancelled import's token no longer works", async () => {
+		const token = newImportToken();
+		mocks.byToken.mockResolvedValue(
+			importRow({ status: "failed", message: "Import cancelled." }),
+		);
+		const refused = await requireImportCaller(
+			new Request("https://ytimesy.test/api/local-import/plan", {
+				headers: { authorization: `Bearer ${token}` },
+			}),
+		).catch((e) => e);
+		expect(refused.status).toBe(401);
+		expect(await refused.text()).toBe(
+			"Import cancelled. Copy a new prompt in ytimesy.",
+		);
 	});
 });

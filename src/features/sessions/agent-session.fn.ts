@@ -38,6 +38,7 @@ type PublicAgentChat = {
 	readonly workingBranch?: string | null;
 	readonly waitingOn?: ChatWaitingOn | null;
 	readonly workingSince?: string | null;
+	readonly unused?: boolean;
 };
 
 /**

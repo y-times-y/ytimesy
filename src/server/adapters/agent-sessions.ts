@@ -261,6 +261,11 @@ export async function listSidebarAgentSessions(
 	// turn_status; supabase/migrations/20261026110000_agent_session_waiting_on.sql).
 	const result = await database().query(
 		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")},s.waiting_on,
+		  -- Opened but never used (as reusableEmptyChat): the sidebar lists it only while open.
+		  case when s.title='New session' and s.turn_status <> 'running' then
+		    coalesce(jsonb_array_length(s.items),0)=0
+		    and not exists (select 1 from api_turn t where t.session_id=s.id)
+		  else false end as unused,
 		  (select min(t.created_at) from api_turn t
 		   where t.state in ('queued','running')
 		    and t.session_id in (select s.id union all
@@ -274,13 +279,16 @@ export async function listSidebarAgentSessions(
 	return result.rows.map(
 		({
 			waiting_on,
+			unused,
 			...row
 		}: AgentSessionRow & {
 			working_since: Date | string | null;
 			waiting_on: ChatWaitingOn | null;
+			unused: boolean | null;
 		}) => ({
 			...withoutItems(toSession(row)),
 			waitingOn: waiting_on,
+			...(unused ? { unused: true as const } : {}),
 			workingSince:
 				row.working_since instanceof Date
 					? row.working_since.toISOString()

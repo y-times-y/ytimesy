@@ -26,7 +26,21 @@ export type SidebarChat = {
 	readonly waitingOn?: ChatWaitingOn | null;
 	/** When Main's or a helper's active turn started, if one runs. */
 	readonly workingSince?: string | null;
+	/** Opened but nothing sent: "New chat" reuses it; listed only while open. */
+	readonly unused?: boolean;
 };
+
+/**
+ * The chats the sidebar shows: an opened chat nothing was sent to (a new
+ * chat the user left, e.g. for an import's chat) is listed only while it
+ * is the open one. "New chat" reuses it, so it is never lost.
+ */
+export function visibleSidebarChats<Chat extends SidebarChat>(
+	chats: readonly Chat[],
+	openChatId: string | undefined,
+): Chat[] {
+	return chats.filter((chat) => !chat.unused || chat.id === openChatId);
+}
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
 /** When this browser started tracking seen chats: older replies count as read. */
@@ -251,6 +265,7 @@ export function withChatSent(
 			? {
 					...chat,
 					turnStatus: "running",
+					...(chat.unused ? { unused: false } : {}),
 					title:
 						chat.title === UNTITLED_SESSION_TITLE
 							? sessionTitleFromText(text)

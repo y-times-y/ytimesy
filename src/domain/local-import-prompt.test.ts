@@ -27,6 +27,7 @@ it("states what the agent must and must not do", () => {
 		"untracked files the CLI lists (--yes-untracked)",
 		"In a public repository, ask before pushing any untracked file (--yes-public)",
 		"list the files pushed and anything skipped",
+		"run that command with --cancel",
 		'"Done — open <link>"',
 	])
 		expect(prompt).toContain(rule);

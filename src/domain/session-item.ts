@@ -7,6 +7,7 @@ import {
 	ENVIRONMENT_SETUP_TITLE,
 	isEnvironmentSetupPrompt,
 } from "./environment-setup";
+import type { HandoffFiles, HandoffSummary } from "./handoff-summary";
 import { SessionItemId } from "./ids";
 import type { LocalAgent } from "./local-import-view";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
@@ -218,6 +219,12 @@ export type HandoffSessionItem = {
 	readonly at: string;
 	/** The handoff as the model reads it (handoffContextText); never rendered. */
 	readonly context: string;
+	/** The ytimesy/... branch the CLI pushed (the chat's branch). */
+	readonly branch?: string;
+	/** The card's goal / where it stopped / next lines and its details (older chats have none). */
+	readonly summary?: HandoffSummary;
+	/** What the CLI pushed and left out, paths only and bounded. */
+	readonly files?: HandoffFiles;
 };
 
 export type UnknownSessionItem = {
@@ -662,4 +669,12 @@ function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
 	};
 	if (!remainder) return [files];
 	return [files, { ...item, command: remainder }];
+}
+
+/** A chat continued from a local agent session, before the user's first message in it. */
+export function continuedChatAwaitsMessage(items: readonly SessionItem[]) {
+	return (
+		items.some((item) => item.kind === "handoff") &&
+		!items.some((item) => item.kind === "userMessage")
+	);
 }

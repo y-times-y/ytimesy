@@ -37,6 +37,7 @@ import {
 	listDirectory,
 	parseJsonObject,
 } from "./io.ts";
+import { loadSqlite } from "./sqlite.ts";
 import { titleFromPrompt } from "./transcript.ts";
 import type { LocalSession, ReaderOptions, SessionRef } from "./types.ts";
 
@@ -59,9 +60,7 @@ export function cursorChatFolderHash(cwd: string): string {
 
 export function openSqliteReadOnly(file: string): DatabaseSync | undefined {
 	if (!fs.existsSync(file)) return undefined;
-	const sqlite = process.getBuiltinModule?.("node:sqlite") as
-		| typeof import("node:sqlite")
-		| undefined;
+	const sqlite = loadSqlite();
 	if (!sqlite) return undefined;
 	try {
 		return new sqlite.DatabaseSync(file, { readOnly: true });

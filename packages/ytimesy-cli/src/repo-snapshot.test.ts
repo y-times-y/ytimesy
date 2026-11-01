@@ -257,3 +257,27 @@ describe("snapshotFolder", () => {
 		).toEqual([".gitignore", "index.html"]);
 	});
 });
+
+it("sees an edit made in the same second as the last index write (racily clean)", () => {
+	// Same size, same mtime as the indexed entry, index written that second:
+	// only git's racy-entry check notices, and it needs the index's own mtime.
+	run(repo, "config", "core.trustctime", "false");
+	const file = path.join(repo, "src/app.ts");
+	const second = new Date("2026-01-01T00:00:00Z");
+	fs.utimesSync(file, second, second);
+	run(repo, "add", "src/app.ts");
+	const index = path.join(repo, ".git", "index");
+	fs.utimesSync(index, second, second);
+	fs.writeFileSync(file, "export const a = 2;\n");
+	fs.utimesSync(file, second, second);
+	const snapshot = snapshotRepository({
+		root: repo,
+		env,
+		message: "snapshot",
+		includeUntracked: false,
+	});
+	expect(snapshot.changed).toBe(true);
+	expect(run(repo, "show", `${snapshot.sha}:src/app.ts`)).toBe(
+		"export const a = 2;",
+	);
+});

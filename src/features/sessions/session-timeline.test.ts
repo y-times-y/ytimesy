@@ -59,6 +59,40 @@ function renderTimeline(
 	);
 }
 
+describe("a continued chat's first item", () => {
+	it("renders the handoff summary card before the first message", () => {
+		const html = renderTimeline(
+			[
+				{
+					kind: "handoff",
+					id: SessionItemId("handoff-1"),
+					tool: "codex",
+					title: "Add retries",
+					turns: 12,
+					at: "2026-10-30T09:00:00Z",
+					context: "MODEL-ONLY CONTEXT",
+					summary: {
+						goal: "Add retries to the uploader.",
+						stopped: "Retries are in; one test still flakes.",
+						next: null,
+						localBranch: "retries",
+						edited: ["src/upload.ts"],
+						editedCount: 1,
+						commands: [],
+						transcript: "~/.ytimesy/handoff/codex-x/transcript.md",
+					},
+				},
+			],
+			"completed",
+		);
+		expect(html).toContain('data-kind="handoff"');
+		expect(html).toContain("Continued from Codex");
+		expect(html).toContain("Add retries to the uploader.");
+		expect(html).toContain("12 turns · Oct 30 · retries");
+		expect(html).not.toContain("MODEL-ONLY CONTEXT");
+	});
+});
+
 describe("session timeline live collapse", () => {
 	it("renders inspectable shell inputs and results rather than a bare tool label", () => {
 		const html = renderTimeline(

@@ -47,6 +47,8 @@ export type ImportState = {
 		{ importedSessionId: string; transcript: boolean; updatedAt: number }
 	>;
 	secrets?: { projectId: string; names: string[] };
+	/** Set by --cancel: the server stopped this import. */
+	cancelled?: boolean;
 	/** The finished import; a re-run prints its report again. */
 	finished?: {
 		openUrl: string;

@@ -21,6 +21,7 @@ The code works once and expires in ${minutes} minutes. That first run only plans
 - Never open, print or read .env files yourself. The CLI lists their variable names; ask me which ones the cloud agent needs (--secrets NAME,NAME, or --no-secrets) and it uploads only those values directly.
 - Ask me before pushing anything from a repository other than this one, and before creating a new repository.
 - Ask me before pushing the untracked files the CLI lists (--yes-untracked). In a public repository, ask before pushing any untracked file (--yes-public).
+- If I decide not to import, run that command with --cancel.
 - When it finishes, list the files pushed and anything skipped.
 - Then tell me "Done — open <link>" with the link the CLI prints.`;
 }

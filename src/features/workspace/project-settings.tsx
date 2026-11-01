@@ -7,6 +7,7 @@ import {
 	Bot,
 	Folder,
 	Gauge,
+	Import,
 	Plug,
 	Shield,
 	User,
@@ -40,6 +41,8 @@ import {
 	settingsNavItems,
 } from "#/domain/workspace-settings";
 import { authClient } from "../auth/client";
+import { ContinueSessionCard } from "../local-import/continue-session-card";
+import { PastImports } from "../local-import/past-imports";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { clearChatCache } from "../sessions/chat-cache";
@@ -87,6 +90,7 @@ const sectionIcon = {
 	privacy: Shield,
 	memory: BookMarked,
 	github: GithubMark,
+	import: Import,
 	project: Folder,
 	agents: Bot,
 	plugins: Blocks,
@@ -252,6 +256,21 @@ export function ProjectSettings({
 										projects={projects}
 										onProjectAdded={onProjectAdded}
 									/>
+								) : null}
+								{section === "import" ? (
+									<section className="settings-section">
+										<SettingsHeader
+											title="Import"
+											description="Continue local agent sessions here."
+											details="Copy the prompt into Claude Code, Codex, Cursor or another local agent. It runs one command that pushes your work to a ytimesy branch and opens a chat with the session's history."
+										/>
+										{account.isPending ? (
+											<p className="settings-copy">Loading…</p>
+										) : (
+											<ContinueSessionCard githubConnected={githubConnected} />
+										)}
+										<PastImports />
+									</section>
 								) : null}
 								{section === "project" ? (
 									<>

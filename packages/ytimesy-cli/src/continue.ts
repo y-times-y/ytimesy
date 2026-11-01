@@ -4,6 +4,7 @@ import path from "node:path";
 import { LOCAL_AGENT_NAMES } from "../../../src/domain/local-import-view.ts";
 import type { AgentTool } from "../../../src/local-sessions/index.ts";
 import { canonicalPath } from "../../../src/local-sessions/io.ts";
+import { sqliteWarning } from "../../../src/local-sessions/machine.ts";
 import { ApiError, ImportApi, type PlanEntry } from "./api.ts";
 import { type EnvVariable, readEnvFiles, redactionValues } from "./env-file.ts";
 import {
@@ -53,6 +54,8 @@ export type Io = {
 	readonly stderr: (text: string) => void;
 	/** Ancestor agent processes (tests pin this; default walks `ps`). */
 	readonly ancestors?: () => AgentTool[];
+	/** Whether node:sqlite works (tests pin this; default: detected). */
+	readonly sqlite?: boolean;
 	readonly version: string;
 };
 
@@ -72,6 +75,8 @@ export type ContinueOptions = {
 	readonly noSecrets: boolean;
 	/** --secrets A,B: upload only these .env names (the user's choice). */
 	readonly secretNames: readonly string[];
+	/** --cancel: stop this import (the ytimesy card stops waiting). */
+	readonly cancel?: boolean;
 };
 
 /** A failure with what the agent should do next; exit code 3 means "ask the user". */
@@ -608,23 +613,77 @@ function progress(io: Io, options: ContinueOptions, text: string) {
 	else io.stdout(text);
 }
 
+/**
+ * `--cancel`: stops the import this code started, so the card stops showing
+ * it as running. A code that was never used has nothing to stop: it expires
+ * on its own (or the user presses Cancel on the card).
+ */
+async function cancelImport(
+	options: ContinueOptions,
+	store: StateStore,
+	io: Io,
+): Promise<number> {
+	const saved = store.load();
+	const done = (message: string, status: string) => {
+		print(io, options, { step: "cancelled", status, message }, message);
+		return 0;
+	};
+	if (saved?.finished)
+		throw new CliError(
+			"This import already finished; there is nothing to cancel.",
+			`Its chat: ${saved.finished.openUrl}`,
+		);
+	if (!saved)
+		return done(
+			"This code was not used, so nothing was imported. It expires 15 minutes after it was copied; Cancel on the ytimesy card stops it now.",
+			"unused",
+		);
+	if (saved.cancelled) return done("Import cancelled.", "cancelled");
+	const api = new ImportApi(
+		saved.api,
+		saved.token,
+		`ytimesy-cli/${io.version}`,
+	);
+	try {
+		await api.cancel();
+	} catch (error) {
+		// A token that no longer works means the import already stopped.
+		if (!(error instanceof ApiError && error.status === 401))
+			apiFailure(error, "Could not cancel the import");
+	}
+	saved.cancelled = true;
+	store.save(saved);
+	return done("Import cancelled. Nothing more is uploaded.", "cancelled");
+}
+
 export async function runContinue(
 	options: ContinueOptions,
 	io: Io,
 ): Promise<number> {
 	const store = new StateStore(stateDirectories(io.env), options.code);
-	const finished = store.load()?.finished?.report as DoneReport | undefined;
+	if (options.cancel) return cancelImport(options, store, io);
+	const saved = store.load();
+	const finished = saved?.finished?.report as DoneReport | undefined;
 	if (finished) {
 		print(io, options, finished, renderDone(finished));
 		return 0;
 	}
+	if (saved?.cancelled)
+		throw new CliError(
+			"This import was cancelled.",
+			"Copy a new prompt in ytimesy and run the new command.",
+		);
 
 	const discovery = discover({
 		cwd: io.cwd,
 		home: io.home,
 		env: io.env,
 		...(io.ancestors ? { ancestors: io.ancestors } : {}),
+		...(io.sqlite === undefined ? {} : { sqlite: io.sqlite }),
 	});
+	// Not a silent skip: say which agents' sessions this Node cannot read.
+	const nodeWarning = sqliteWarning(discovery.needsNewerNode);
+	if (nodeWarning) io.stderr(nodeWarning);
 	const continued = discovery.continued;
 	if (!continued)
 		throw new CliError(
@@ -737,6 +796,24 @@ export async function runContinue(
 		envVariables,
 		continued: continued.candidate,
 	});
+}
+
+/** Finish takes at most this many pushed and skipped paths (the chat's details). */
+export const FINISH_LISTED_FILES = 200;
+
+/** The pushed and skipped paths finish takes: unique, bounded, paths only. */
+export function finishPaths(
+	pushed: readonly string[],
+	skipped: readonly { path: string }[],
+) {
+	const bounded = (paths: readonly string[]) =>
+		[...new Set(paths)]
+			.filter((file) => file.length > 0 && file.length <= 1024)
+			.slice(0, FINISH_LISTED_FILES);
+	return {
+		pushedPaths: bounded(pushed),
+		skippedPaths: bounded(skipped.map((file) => file.path)),
+	};
 }
 
 function print(io: Io, options: ContinueOptions, data: unknown, text: string) {
@@ -1203,6 +1280,7 @@ async function execute(input: {
 			...(repository ? { repository } : {}),
 			pushedFiles: pushed.length,
 			skippedFiles: skipped.length,
+			...finishPaths(pushed, skipped),
 		})
 		.catch((error) => apiFailure(error, "Could not open the chat"));
 	const report: DoneReport = {

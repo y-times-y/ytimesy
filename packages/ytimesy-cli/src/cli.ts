@@ -22,6 +22,8 @@ Usage:
                                                  scopes and folders, upload nothing.
   ytimesy continue --code <code> --scope <s>     Import: push the work to a ytimesy/
                                                  branch, upload sessions, open the chat.
+  ytimesy continue --code <code> --cancel        Stop this import (the user changed
+                                                 their mind); the ytimesy card stops waiting.
 
 Scopes: session (this session, the default), project (every session of this
 repository), machine (every session on this computer).
@@ -75,6 +77,7 @@ export function parseContinueOptions(argv: readonly string[]): ContinueOptions {
 			"yes-public": { type: "boolean", default: false },
 			secrets: { type: "string" },
 			"no-secrets": { type: "boolean", default: false },
+			cancel: { type: "boolean", default: false },
 		},
 	});
 	if (positionals.length) usage(`Unexpected argument: ${positionals[0]}`);
@@ -108,6 +111,7 @@ export function parseContinueOptions(argv: readonly string[]): ContinueOptions {
 		noUntracked: values["no-untracked"],
 		yesPublic: values["yes-public"],
 		noSecrets: values["no-secrets"],
+		...(values.cancel ? { cancel: true } : {}),
 		secretNames: (values.secrets ?? "")
 			.split(",")
 			.map((name) => name.trim())
