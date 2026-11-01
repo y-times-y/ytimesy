@@ -71,6 +71,7 @@ describe("a continued chat's first item", () => {
 					turns: 12,
 					at: "2026-10-30T09:00:00Z",
 					context: "MODEL-ONLY CONTEXT",
+					branch: "ytimesy/retries-1a2b",
 					summary: {
 						goal: "Add retries to the uploader.",
 						stopped: "Retries are in; one test still flakes.",
@@ -88,7 +89,8 @@ describe("a continued chat's first item", () => {
 		expect(html).toContain('data-kind="handoff"');
 		expect(html).toContain("Continued from Codex");
 		expect(html).toContain("Add retries to the uploader.");
-		expect(html).toContain("12 turns · Oct 30 · retries");
+		// The top line shows the chat's own branch; the local one is in the details.
+		expect(html).toContain("12 turns · Oct 30 · ytimesy/retries-1a2b");
 		expect(html).not.toContain("MODEL-ONLY CONTEXT");
 	});
 });
