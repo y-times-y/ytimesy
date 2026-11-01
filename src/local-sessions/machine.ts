@@ -23,6 +23,7 @@ import {
 } from "./codex.ts";
 import {
 	cursorAgentMessageCount,
+	cursorChatsDirectory,
 	listCursorAgentSessionRefs,
 } from "./cursor-agent.ts";
 import {
@@ -51,6 +52,7 @@ import {
 } from "./io.ts";
 import { opencodeDatabasePath, openOpencodeDatabase } from "./opencode.ts";
 import { piSessionRefForFile, piSessionsDirectory, textBlocks } from "./pi.ts";
+import { SQLITE_MIN_NODE, sqliteAvailable } from "./sqlite.ts";
 import { titleFromPrompt } from "./transcript.ts";
 import { AGENT_TOOLS, type AgentTool, type SessionRef } from "./types.ts";
 
@@ -90,11 +92,44 @@ export interface MachineDiscovery {
 	totalMs: number;
 	/** Tools whose store could not be read, with the reason. */
 	errors: Partial<Record<AgentTool, string>>;
+	/** Tools with sessions on this machine that this Node cannot read (no node:sqlite). */
+	needsNewerNode: AgentTool[];
 }
 
 export interface MachineDiscoveryOptions {
 	home?: string;
 	tools?: readonly AgentTool[];
+	/** Whether node:sqlite works here (default: detected); tests pin it. */
+	sqlite?: boolean;
+}
+
+/** The SQLite-backed stores that exist on this machine, by tool. */
+export function sqliteStoresPresent(home: string): AgentTool[] {
+	const present: AgentTool[] = [];
+	if (fs.existsSync(opencodeDatabasePath(home))) present.push("opencode");
+	if (cursorUserDirectories(home).length) present.push("cursor");
+	if (fs.existsSync(cursorChatsDirectory(home))) present.push("cursor-agent");
+	return present;
+}
+
+/** One line saying which agents' sessions were left out, or null. */
+export function sqliteWarning(
+	tools: readonly AgentTool[],
+	nodeVersion: string = process.versions.node,
+) {
+	if (!tools.length) return null;
+	const names = [
+		...new Set(
+			tools.map((tool) =>
+				tool === "opencode"
+					? "OpenCode"
+					: tool.startsWith("cursor")
+						? "Cursor"
+						: tool,
+			),
+		),
+	];
+	return `Warning: ${names.join(" and ")} sessions were skipped: reading them needs Node ${SQLITE_MIN_NODE} or newer (this is Node ${nodeVersion}).`;
 }
 
 function fileSize(file: string): number {
@@ -591,8 +626,16 @@ export function discoverAllSessions(
 	const timingsMs: Record<string, number> = {};
 	const errors: Partial<Record<AgentTool, string>> = {};
 	const collected: Partial3[] = [];
+	const sqlite = options.sqlite ?? sqliteAvailable();
+	const needsNewerNode = sqlite
+		? []
+		: sqliteStoresPresent(home).filter((tool) => tools.includes(tool));
 	const run = (tool: AgentTool, list: () => Partial3[]) => {
 		if (!tools.includes(tool)) return;
+		if (needsNewerNode.includes(tool)) {
+			errors[tool] = `needs Node ${SQLITE_MIN_NODE} or newer`;
+			return;
+		}
 		const start = performance.now();
 		try {
 			collected.push(...list());
@@ -631,5 +674,6 @@ export function discoverAllSessions(
 		timingsMs,
 		totalMs: Math.round((performance.now() - started) * 10) / 10,
 		errors,
+		needsNewerNode,
 	};
 }

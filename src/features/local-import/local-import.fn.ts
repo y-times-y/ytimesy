@@ -1,12 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
-import type { LocalImportView } from "#/domain/local-import-view";
+import type {
+	FinishedImportView,
+	LocalImportView,
+} from "#/domain/local-import-view";
 import { UserActionRateLimited } from "#/domain/user-action-rate";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
 import {
+	cancelLocalImport,
 	createLocalImport,
+	listFinishedImports,
 	localImportStatus,
 } from "#/server/services/local-import";
 
@@ -35,3 +40,22 @@ export const localImportStatusFn = createServerFn({ method: "GET" })
 		const user = await requireUser(getRequest().headers);
 		return localImportStatus(user.id, data.importId);
 	});
+
+/** The card's Cancel: the import stops and its code or token stops working. */
+export const cancelLocalImportFn = createServerFn({ method: "POST" })
+	.validator((data: unknown) =>
+		z.object({ importId: z.uuid() }).strict().parse(data),
+	)
+	.handler(async ({ data }): Promise<LocalImportView> => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		return cancelLocalImport(user.id, data.importId);
+	});
+
+/** Settings > Import: past imports, each with a link to its chat. */
+export const finishedLocalImportsFn = createServerFn({ method: "GET" }).handler(
+	async (): Promise<FinishedImportView[]> => {
+		const user = await requireUser(getRequest().headers);
+		return listFinishedImports(user.id);
+	},
+);

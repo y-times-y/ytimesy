@@ -22,6 +22,11 @@ vi.mock("../sessions/model-connections", () => ({
 vi.mock("../projects/github-connection-notice", () => ({
 	useGithubConnectionNotice: () => [null],
 }));
+vi.mock("../local-import/local-import.fn", () => ({
+	createLocalImportFn: vi.fn(),
+	localImportStatusFn: vi.fn(),
+	cancelLocalImportFn: vi.fn(),
+}));
 vi.mock("../projects/add-project-form", () => ({
 	AddProjectForm: () => <div data-testid="add-project" />,
 }));
@@ -65,4 +70,18 @@ it("offers the Codex subscription or an API key, and Later until one is set", ()
 		</QueryClientProvider>,
 	);
 	expect(ready).not.toContain("Later");
+});
+
+import { SessionsStep } from "./first-run";
+
+it("offers the agent-session import as an optional last step that never blocks", () => {
+	const html = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<SessionsStep />
+		</QueryClientProvider>,
+	);
+	expect(html).toContain("Copy prompt");
+	expect(html).toContain('aria-label="Supported agents"');
+	expect(html).toContain("Continue");
+	expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Continue/);
 });

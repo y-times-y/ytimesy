@@ -14,6 +14,7 @@ describe("workspace settings", () => {
 			"privacy",
 			"memory",
 			"github",
+			"import",
 			"project",
 			"agents",
 			"plugins",

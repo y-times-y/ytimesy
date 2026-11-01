@@ -11,6 +11,7 @@ import {
 } from "#/domain/first-run";
 import type { RepositoryChoice } from "#/domain/projects";
 import { YtimesyBrand } from "../auth/onboarding-shell";
+import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
@@ -25,6 +26,7 @@ const STAGE_LABELS = {
 	github: "GitHub",
 	repositories: "Repositories",
 	model: "Model",
+	sessions: "Sessions",
 } as const;
 
 const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
@@ -44,6 +46,10 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 		title: "Choose a model",
 		lede: "Use your Codex subscription or your own API key.",
 	},
+	sessions: {
+		title: "Bring your agent sessions",
+		lede: "Optional. Continue a local agent's work here.",
+	},
 };
 
 function enterWorkspace() {
@@ -52,11 +58,13 @@ function enterWorkspace() {
 
 /**
  * A new account's first run, before its first project: GitHub (sign in and
- * install the app), then the repositories, then a model (skippable). The
+ * install the app), then the repositories, then a model and local agent
+ * sessions (both skippable). The
  * server says where it stands, so the right step paints first.
  */
 export function FirstRun({ state }: { state: FirstRunState }) {
 	const [projectAdded, setProjectAdded] = useState(false);
+	const [modelDone, setModelDone] = useState(false);
 	// Same read as the repository picker: connected once it lists repositories.
 	const repositories = useQuery({
 		queryKey: ["github", "repositories"],
@@ -76,6 +84,7 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 		githubConnected,
 		repositoryCount: repositories.data?.repositories.length ?? null,
 		projectAdded,
+		modelDone,
 	});
 	const stage = firstRunStage(step);
 	return (
@@ -104,8 +113,13 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 					<h1 id="first-run-title">{HEADINGS[step].title}</h1>
 					<p>{HEADINGS[step].lede}</p>
 				</div>
-				{step === "model" ? (
-					<ModelStep ready={state.modelReady} />
+				{step === "sessions" ? (
+					<SessionsStep />
+				) : step === "model" ? (
+					<ModelStep
+						ready={state.modelReady}
+						onDone={() => setModelDone(true)}
+					/>
 				) : step === "github" || step === "install" ? (
 					<GithubStep
 						signedIn={step === "install"}
@@ -115,12 +129,12 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 					<AddProjectForm
 						variant="page"
 						onAdded={(project) => {
-							if (state.modelReady) return enterWorkspace();
-							// The project's machine builds while the model is chosen;
+							// The project's machine builds during the next steps;
 							// the workspace finds it under way instead of starting it.
 							void requestJson("/api/workspaces", {
 								projectId: project.id,
 							}).catch(() => undefined);
+							if (state.modelReady) setModelDone(true);
 							setProjectAdded(true);
 						}}
 					/>
@@ -224,7 +238,33 @@ function GitHubMark() {
 	);
 }
 
-export function ModelStep({ ready: readyAtLoad }: { ready: boolean }) {
+/** Optional: the same import card as Settings > Import; Skip never waits on it. */
+export function SessionsStep() {
+	return (
+		<>
+			<ContinueSessionCard githubConnected heading={false} />
+			<div className="first-run-actions">
+				<button
+					type="button"
+					className="first-run-primary"
+					onClick={enterWorkspace}
+					title="Skip or finish later: import any time from Settings > Import."
+				>
+					Continue
+				</button>
+			</div>
+		</>
+	);
+}
+
+export function ModelStep({
+	ready: readyAtLoad,
+	onDone = enterWorkspace,
+}: {
+	ready: boolean;
+	/** After Continue or Later: the next step (default: the workspace). */
+	onDone?: () => void;
+}) {
 	const readConnections = useServerFn(getModelConnections);
 	const [chatgptConnected, setChatgptConnected] = useState(false);
 	const [addingKey, setAddingKey] = useState(false);
@@ -281,16 +321,12 @@ export function ModelStep({ ready: readyAtLoad }: { ready: boolean }) {
 					type="button"
 					className="first-run-primary"
 					disabled={!ready}
-					onClick={enterWorkspace}
+					onClick={onDone}
 				>
 					Continue
 				</button>
 				{ready ? null : (
-					<button
-						type="button"
-						className="first-run-later"
-						onClick={enterWorkspace}
-					>
+					<button type="button" className="first-run-later" onClick={onDone}>
 						Later
 					</button>
 				)}

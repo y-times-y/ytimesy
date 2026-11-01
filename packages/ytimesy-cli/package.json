@@ -8,7 +8,7 @@
 	},
 	"files": ["dist/ytimesy.mjs", "README.md"],
 	"engines": {
-		"node": ">=22"
+		"node": ">=22.13"
 	},
 	"license": "UNLICENSED",
 	"homepage": "https://ytimesy.com",

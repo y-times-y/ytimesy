@@ -3,16 +3,20 @@ import { Effect } from "effect";
 import type { z } from "zod";
 import { scratchRepositoryName } from "#/domain/add-project";
 import { DEFAULT_COMPOSER_HARNESS_ID } from "#/domain/agent-provider";
+import { handoffSummary } from "#/domain/handoff-summary";
 import { SessionItemId } from "#/domain/ids";
 import {
 	bearerImportToken,
 	type createProjectRequest,
 	draftEnvironmentRecipe,
+	type FinishedImportView,
 	type finishRequest,
 	HANDOFF_DIRECTORY,
 	handoffBranch,
 	handoffContextText,
 	handoffDocument,
+	handoffFolderName,
+	IMPORT_CANCELLED_MESSAGE,
 	IMPORT_CODE_TTL_MS,
 	IMPORT_TOKEN_TTL_MS,
 	importCodeRefusal,
@@ -20,6 +24,8 @@ import {
 	importSecretHash,
 	importTokenUsable,
 	LOCAL_AGENT_NAMES,
+	LOCAL_AGENTS,
+	type LocalAgent,
 	type LocalImportView,
 	localImportViewStatus,
 	looksGzipped,
@@ -57,6 +63,8 @@ import {
 	storeHandoffObject,
 } from "../adapters/handoff-store";
 import {
+	cancelLocalImportRow,
+	finishedLocalImports,
 	importedSessionBySource,
 	importedSessionOfImport,
 	insertLocalImport,
@@ -142,6 +150,42 @@ export async function localImportStatus(userId: string, importId: string) {
 	return localImportView(row);
 }
 
+/**
+ * The card's Cancel (by the owner) or `ytimesy continue --cancel` (by the
+ * token): an unfinished import stops, so the card stops waiting. A finished
+ * import is left as it is.
+ */
+export async function cancelLocalImport(userId: string, importId: string) {
+	const cancelled = await cancelLocalImportRow(
+		userId,
+		importId,
+		IMPORT_CANCELLED_MESSAGE,
+	);
+	if (cancelled) return localImportView(cancelled);
+	return localImportStatus(userId, importId);
+}
+
+/** Settings > Import: the user's finished imports, newest first. */
+export async function listFinishedImports(
+	userId: string,
+): Promise<FinishedImportView[]> {
+	const rows = await finishedLocalImports(userId);
+	return rows.map((row) => ({
+		id: row.id,
+		finishedAt: new Date(row.finishedAt).toISOString(),
+		agent: (LOCAL_AGENTS as readonly string[]).includes(row.agent ?? "")
+			? (row.agent as LocalAgent)
+			: null,
+		sessions: row.sessionsImported,
+		projectId: row.projectId,
+		projectName: projectDisplayName({
+			name: row.projectName ?? undefined,
+			fullName: row.projectFullName,
+		}),
+		sessionId: row.sessionId,
+	}));
+}
+
 // ---- the CLI ------------------------------------------------------------------
 
 export type ImportCaller = {
@@ -175,7 +219,9 @@ export async function requireImportCaller(
 		refuse(
 			row.status === "ready"
 				? "This import already finished."
-				: "This import expired. Copy a new prompt in ytimesy.",
+				: row.status === "failed" && row.message
+					? `${row.message} Copy a new prompt in ytimesy.`
+					: "This import expired. Copy a new prompt in ytimesy.",
 			401,
 		);
 	await requireUserAction(row.userId, "local-import-call");
@@ -523,6 +569,16 @@ export async function finishImport(
 		turns: handoff.totalTurns,
 		at: handoff.updatedAt,
 		context: handoffContextText(handoff),
+		branch: branch as string,
+		summary: handoffSummary(handoff, {
+			transcript: `${HANDOFF_DIRECTORY}/${handoffFolderName(handoff.tool, handoff.sessionId)}/transcript.md`,
+		}),
+		files: {
+			pushed: request.pushedPaths,
+			pushedCount: Math.max(request.pushedFiles, request.pushedPaths.length),
+			skipped: request.skippedPaths,
+			skippedCount: Math.max(request.skippedFiles, request.skippedPaths.length),
+		},
 	};
 	await saveAgentSessionItems(chat.id, [item]);
 	await saveLocalImportProgress(caller.importId, {

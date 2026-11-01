@@ -82,6 +82,8 @@ export function chatsFromAgentSessions(
 		readonly items?: unknown;
 		/** When Main's or a helper's active turn started, if one runs. */
 		readonly workingSince?: string | null;
+		/** Opened but never used: the sidebar lists it only while it is open. */
+		readonly unused?: boolean;
 	}[],
 ) {
 	return sessions
@@ -95,6 +97,7 @@ export function chatsFromAgentSessions(
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
 			...(session.workingSince ? { workingSince: session.workingSince } : {}),
+			...(session.unused ? { unused: true as const } : {}),
 			...(session.waitingOn !== undefined
 				? { waitingOn: session.waitingOn }
 				: session.items === undefined

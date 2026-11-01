@@ -4,6 +4,7 @@ import {
 	chatHeaderTitle,
 	compactTimelineItems,
 	composerSubmitTarget,
+	continuedChatAwaitsMessage,
 	fileChangesFromSessionItems,
 	isQueuedUserMessage,
 	isTurnRunning,
@@ -582,5 +583,27 @@ describe("sessionViewAfterRecovery", () => {
 		expect(
 			sessionViewAfterRecovery(open, { id: "fork-1", items: [] }),
 		).toBeNull();
+	});
+});
+
+describe("continued chats", () => {
+	const handoff = {
+		kind: "handoff" as const,
+		id: SessionItemId("handoff-1"),
+		tool: "claude" as const,
+		title: "",
+		turns: 3,
+		at: "2026-11-01T00:00:00Z",
+		context: "",
+	};
+	it("invite continuing until the first message is sent", () => {
+		expect(continuedChatAwaitsMessage([handoff])).toBe(true);
+		expect(
+			continuedChatAwaitsMessage([
+				handoff,
+				{ kind: "userMessage", id: SessionItemId("u1"), text: "Go on" },
+			]),
+		).toBe(false);
+		expect(continuedChatAwaitsMessage([])).toBe(false);
 	});
 });

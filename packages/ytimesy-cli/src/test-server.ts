@@ -47,6 +47,10 @@ export type FakeServer = {
 		{ projectId: string; handoff: HandoffDocument; transcript?: Buffer }
 	>;
 	readonly secrets: { projectId: string; names: string[] }[];
+	/** Answers the nth call of a route (counted from the start) with this status. */
+	fail(route: string, call: number, status: number): void;
+	/** Whether the import was cancelled. */
+	cancelled(): boolean;
 	close(): Promise<void>;
 };
 
@@ -84,6 +88,8 @@ export async function startFakeServer(
 	const secrets: FakeServer["secrets"] = [];
 	const projects = options.projects;
 	let codeUsed = false;
+	let cancelled = false;
+	const failures = [...(options.failures ?? [])];
 	let finished: { projectId: string; sessionId: string } | null = null;
 	let url = "";
 
@@ -102,6 +108,11 @@ export async function startFakeServer(
 				throw Object.assign(new Error("This import already finished."), {
 					status: 401,
 				});
+			if (cancelled)
+				throw Object.assign(
+					new Error("Import cancelled. Copy a new prompt in ytimesy."),
+					{ status: 401 },
+				);
 		}
 		switch (`${request.method} ${route}`) {
 			case "POST start": {
@@ -122,6 +133,10 @@ export async function startFakeServer(
 					canCreateRepository: true,
 					repositoryOwner: options.owner,
 				};
+			}
+			case "POST cancel": {
+				cancelled = true;
+				return { status: "failed" };
 			}
 			case "POST plan": {
 				const input = parse(planRequest, raw);
@@ -274,7 +289,7 @@ export async function startFakeServer(
 				: raw.byteLength,
 		});
 		const nth = calls.filter((call) => call.route === route).length;
-		const failure = options.failures?.find(
+		const failure = failures.find(
 			(item) => item.route === route && item.call === nth,
 		);
 		try {
@@ -298,6 +313,10 @@ export async function startFakeServer(
 		calls,
 		sessions,
 		secrets,
+		fail: (route, call, status) => {
+			failures.push({ route, call, status });
+		},
+		cancelled: () => cancelled,
 		close: () =>
 			new Promise((resolve) => {
 				server.closeAllConnections();

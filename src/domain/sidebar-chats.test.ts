@@ -26,12 +26,42 @@ import {
 	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
 	unsentSendReturnsHere,
+	visibleSidebarChats,
 	withBusyChat,
 	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
 	withProjectExpanded,
 } from "./sidebar-chats";
+
+describe("unused chats", () => {
+	const chats = [
+		{ id: "draft", title: "New session", unused: true },
+		{ id: "handoff", title: "Continued from Claude Code" },
+		{ id: "used", title: "Fix the parser" },
+	];
+
+	it("lists a chat nothing was sent to only while it is open", () => {
+		expect(
+			visibleSidebarChats(chats, "handoff").map((chat) => chat.id),
+		).toEqual(["handoff", "used"]);
+		expect(visibleSidebarChats(chats, "draft").map((chat) => chat.id)).toEqual([
+			"draft",
+			"handoff",
+			"used",
+		]);
+		expect(visibleSidebarChats(chats, undefined)).toHaveLength(2);
+	});
+
+	it("keeps a chat listed once its first message is sent", () => {
+		const sent = withChatSent(chats, "draft", "Fix the build");
+		expect(visibleSidebarChats(sent, "used").map((chat) => chat.id)).toEqual([
+			"draft",
+			"handoff",
+			"used",
+		]);
+	});
+});
 
 describe("sidebar empty copy", () => {
 	it("asks for a repository before showing chats", () => {

@@ -232,7 +232,9 @@ afterEach(async () => {
 	fs.rmSync(base, { recursive: true, force: true });
 });
 
-describe("ytimesy continue", () => {
+// Each test runs the CLI end to end (git, a local HTTP server) several times;
+// under a loaded parallel run that takes longer than vitest's 5 s default.
+describe("ytimesy continue", { timeout: 60_000 }, () => {
 	it("plans, asks for decisions, imports, and replays the result on a re-run", async () => {
 		const statusBefore = git(repo, "status", "--porcelain=v2", "--branch");
 
@@ -327,6 +329,8 @@ describe("ytimesy continue", () => {
 			repository: "acme/app",
 			pushedFiles: 2,
 			skippedFiles: 2,
+			pushedPaths: ["src/app.ts", "notes.md"],
+			skippedPaths: [".env", ".env.local"],
 		});
 
 		// The branch has the work; the checkout is untouched.
@@ -390,15 +394,12 @@ describe("ytimesy continue", () => {
 	});
 
 	it("resumes after a failed upload without redoing finished steps", async () => {
-		await server.close();
-		server = await startFakeServer({
-			code: CODE,
-			owner: "acme",
-			projects: [{ id: projectId, name: "app", repositories: ["acme/app"] }],
-			reachable: new Map([["acme/app", true]]),
-			remotes: new Map([["acme/app", remotes.app]]),
-			failures: [{ route: "transcript", call: 1, status: 500 }],
-		});
+		// The server stays up: only its first transcript upload fails. Both runs
+		// commit at fixed times, so the second one makes a different commit
+		// that the CLI must recognize as the same content.
+		server.fail("transcript", 1, 500);
+		env.GIT_COMMITTER_DATE = "2029-01-01T00:00:00Z";
+		env.GIT_AUTHOR_DATE = "2029-01-01T00:00:00Z";
 		const failed = await run(
 			"--scope",
 			"session",
@@ -472,6 +473,47 @@ describe("ytimesy continue", () => {
 			/Branch ytimesy\/wt-branch-[0-9a-f]{4} on acme\/app, from wt-branch/,
 		);
 		expect(text).toContain("    src/app.ts");
+	});
+
+	it("cancels after the plan; a re-run then refuses", async () => {
+		expect((await run()).code).toBe(0);
+		const cancelled = await run("--cancel");
+		expect(cancelled.code, cancelled.output).toBe(0);
+		expect(cancelled.output).toContain("Import cancelled.");
+		expect(server.cancelled()).toBe(true);
+		expect(routes()).toEqual(["start", "plan", "cancel"]);
+		const again = await run("--scope", "session", "--no-secrets");
+		expect(again.code).toBe(1);
+		expect(again.output).toContain("This import was cancelled.");
+		expect(again.output).toContain("Copy a new prompt");
+		expect(routes()).toEqual(["start", "plan", "cancel"]);
+	});
+
+	it("says a code that was never used has nothing to cancel", async () => {
+		const result = await run("--cancel", "--json");
+		expect(result.code).toBe(0);
+		expect(JSON.parse(result.output)).toMatchObject({
+			step: "cancelled",
+			status: "unused",
+		});
+		expect(routes()).toEqual([]);
+	});
+
+	it("warns in one line when this Node cannot read OpenCode or Cursor sessions", async () => {
+		write(home, ".local/share/opencode/opencode.db", "");
+		const output: string[] = [];
+		const progress: string[] = [];
+		const code = await main(["continue", "--code", CODE, "--api", server.url], {
+			...io(output, progress),
+			sqlite: false,
+		});
+		expect(code, output.join("\n")).toBe(0);
+		const warnings = progress.filter((line) => line.startsWith("Warning:"));
+		expect(warnings).toEqual([
+			expect.stringMatching(
+				/^Warning: OpenCode sessions were skipped: reading them needs Node 22\.13 or newer \(this is Node [\d.]+\)\.$/,
+			),
+		]);
 	});
 
 	it("refuses an unknown folder and prints usage errors", async () => {

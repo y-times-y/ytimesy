@@ -29,6 +29,7 @@ import {
 	listDirectory,
 	parseJsonObject,
 } from "./io.ts";
+import { loadSqlite } from "./sqlite.ts";
 import { createToolCall, setToolOutput } from "./tool-calls.ts";
 import { TurnAssembler, titleFromPrompt } from "./transcript.ts";
 import type { LocalSession, ReaderOptions, SessionRef } from "./types.ts";
@@ -49,9 +50,7 @@ export function openOpencodeDatabase(
 	databasePath: string,
 ): DatabaseSync | undefined {
 	if (!fs.existsSync(databasePath)) return undefined;
-	const sqlite = process.getBuiltinModule?.("node:sqlite") as
-		| typeof import("node:sqlite")
-		| undefined;
+	const sqlite = loadSqlite();
 	if (!sqlite) return undefined;
 	try {
 		return new sqlite.DatabaseSync(databasePath, { readOnly: true });

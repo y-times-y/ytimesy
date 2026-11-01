@@ -202,7 +202,13 @@ export class ImportApi {
 		repository?: string;
 		pushedFiles: number;
 		skippedFiles: number;
+		pushedPaths: readonly string[];
+		skippedPaths: readonly string[];
 	}) {
 		return this.json<FinishResponse>("/api/local-import/finish", body);
+	}
+
+	cancel() {
+		return this.json<{ status: string }>("/api/local-import/cancel", {});
 	}
 }

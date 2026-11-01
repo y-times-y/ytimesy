@@ -67,6 +67,8 @@ export type Discovery = {
 	readonly all: readonly Candidate[];
 	/** Sessions left out because their store does not record a folder. */
 	readonly withoutFolder: number;
+	/** Agents whose sessions this Node cannot read (needs node:sqlite). */
+	readonly needsNewerNode: readonly AgentTool[];
 };
 
 /** The server knows the Cursor CLI and the Cursor app as one agent. */
@@ -118,8 +120,13 @@ export function discover(input: {
 	readonly home: string;
 	readonly env: Record<string, string | undefined>;
 	readonly ancestors?: () => AgentTool[];
+	/** Whether node:sqlite works (default: detected); tests pin it. */
+	readonly sqlite?: boolean;
 }): Discovery {
-	const machine = discoverAllSessions({ home: input.home });
+	const machine = discoverAllSessions({
+		home: input.home,
+		...(input.sqlite === undefined ? {} : { sqlite: input.sqlite }),
+	});
 	const all: Candidate[] = [];
 	let withoutFolder = 0;
 	for (const session of machine.sessions) {
@@ -173,6 +180,7 @@ export function discover(input: {
 		folder,
 		all,
 		withoutFolder,
+		needsNewerNode: machine.needsNewerNode,
 	};
 }
 

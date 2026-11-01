@@ -72,6 +72,7 @@ import {
 	secretProvidedText,
 } from "#/domain/secret-request";
 import {
+	continuedChatAwaitsMessage,
 	lastUserMessageText,
 	type SessionItem,
 	type SessionTurnStatus,
@@ -1326,9 +1327,11 @@ export function SessionLauncher({
 											? agents.helpers.some((row) => row.status === "working")
 												? "Ask Main anything while helpers work"
 												: "Ask Main anything while commands run"
-											: followUpLayout
-												? "Follow up…"
-												: "What would you like to work on?"
+											: continuedChatAwaitsMessage(items)
+												? "Continue where you left off…"
+												: followUpLayout
+													? "Follow up…"
+													: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
 								handleMentionKey(event) ||

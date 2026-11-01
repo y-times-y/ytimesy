@@ -263,6 +263,12 @@ export const sessionUploadRequest = z
 	})
 	.strict();
 
+/** Pushed and skipped paths finish takes, each list. */
+export const FINISH_LISTED_FILES = 200;
+
+/** What the card and the CLI say once an import was cancelled. */
+export const IMPORT_CANCELLED_MESSAGE = "Import cancelled.";
+
 export const finishRequest = z
 	.object({
 		projectId: z.uuid(),
@@ -277,6 +283,9 @@ export const finishRequest = z
 		/** How many files the CLI pushed and skipped (the card's tooltip says so). */
 		pushedFiles: z.number().int().min(0).max(1_000_000).default(0),
 		skippedFiles: z.number().int().min(0).max(1_000_000).default(0),
+		/** Their paths, at most FINISH_LISTED_FILES each (the handoff card's details). */
+		pushedPaths: z.array(localPath).max(FINISH_LISTED_FILES).default([]),
+		skippedPaths: z.array(localPath).max(FINISH_LISTED_FILES).default([]),
 	})
 	.strict();
 

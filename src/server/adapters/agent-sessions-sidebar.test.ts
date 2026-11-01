@@ -196,3 +196,32 @@ it("finds the chat a page opens as the sidebar list would pick it, without readi
 	}
 	expect(await chatToOpenMetadata("bob", project, older)).toBeNull();
 });
+
+it("marks only opened, never-used chats as unused", async () => {
+	const { chatsFromAgentSessions } = await import("#/domain/agent-session");
+	const draft = await chat("New session");
+	const queued = await chat("New session");
+	await turn(queued, "queued", "2026-10-22T10:00:00Z");
+	const withItems = await chat("New session");
+	await db.query("update agent_session set items=$2 where id=$1", [
+		withItems,
+		JSON.stringify([{ kind: "userMessage", text: "" }]),
+	]);
+	const handoff = await chat("Continued from Claude Code");
+	await db.query("update agent_session set items=$2 where id=$1", [
+		handoff,
+		JSON.stringify([{ kind: "handoff", tool: "claude" }]),
+	]);
+	const listed = chatsFromAgentSessions(
+		await listSidebarAgentSessions("alice", project),
+	);
+	const unused = Object.fromEntries(
+		listed.map((row) => [row.id, row.unused === true]),
+	);
+	expect(unused).toEqual({
+		[draft]: true,
+		[queued]: false,
+		[withItems]: false,
+		[handoff]: false,
+	});
+});

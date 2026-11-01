@@ -7,6 +7,7 @@ export type SettingsSection =
 	| "privacy"
 	| "memory"
 	| "github"
+	| "import"
 	| "project"
 	| "agents"
 	| "plugins"
@@ -23,6 +24,7 @@ export function settingsNavItems(): readonly {
 		{ id: "privacy", label: "Privacy" },
 		{ id: "memory", label: "Memory" },
 		{ id: "github", label: "GitHub" },
+		{ id: "import", label: "Import" },
 		{ id: "project", label: "Project" },
 		{ id: "agents", label: "Agents" },
 		{ id: "plugins", label: "Plugins" },

@@ -1,0 +1,115 @@
+/* A continued chat's first item: where it came from, three short lines, details folded. */
+.handoff-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 4px 0 12px;
+	padding: 12px 14px;
+	border: 1px solid #262626;
+	border-radius: 12px;
+	background: #121212;
+	font-size: 13px;
+}
+.handoff-card-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	color: #d6d6d6;
+	font-weight: 500;
+}
+.handoff-card-lines {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0;
+}
+.handoff-card-lines > div {
+	display: flex;
+	gap: 10px;
+	min-width: 0;
+}
+.handoff-card-lines dt {
+	flex-shrink: 0;
+	width: 56px;
+	color: #6f6f6f;
+	font-size: 12px;
+	line-height: 18px;
+}
+.handoff-card-lines dd {
+	overflow: hidden;
+	min-width: 0;
+	margin: 0;
+	color: #c4c4c4;
+	font-size: 12px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.handoff-card-details > summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	color: #6f6f6f;
+	font-size: 12px;
+	list-style: none;
+	cursor: pointer;
+}
+.handoff-card-details > summary::-webkit-details-marker {
+	display: none;
+}
+.handoff-card-meta {
+	overflow: hidden;
+	min-width: 0;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.handoff-card-toggle {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 2px;
+}
+.handoff-card-toggle > svg {
+	transition: transform 120ms ease;
+}
+.handoff-card-details[open] .handoff-card-toggle > svg {
+	transform: rotate(90deg);
+}
+.handoff-card-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-height: 280px;
+	margin-top: 8px;
+	overflow-y: auto;
+}
+.handoff-card-group {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.handoff-card-group-label {
+	color: #6f6f6f;
+	font-size: 11px;
+}
+.handoff-card-group ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.handoff-card-group li,
+.handoff-card-group code {
+	overflow: hidden;
+	color: #a3a3a3;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+	line-height: 17px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.handoff-card-more {
+	color: #6f6f6f;
+}
