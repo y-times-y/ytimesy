@@ -100,6 +100,7 @@ export function claudeSessionCwd(file: string): string | undefined {
 export function discoverClaudeSessions(
 	repoRoot: string,
 	home = os.homedir(),
+	limit = 1,
 ): SessionRef[] {
 	const root = canonicalPath(repoRoot);
 	const encodedRoot = encodeClaudeProjectDirectory(root);
@@ -121,7 +122,8 @@ export function discoverClaudeSessions(
 				};
 			})
 			.sort((a, b) => b.mtime - a.mtime)
-			.slice(0, MAX_FILES_VERIFIED_PER_DIRECTORY);
+			.slice(0, Math.max(MAX_FILES_VERIFIED_PER_DIRECTORY, limit));
+		let found = 0;
 		for (const file of files) {
 			const cwd = claudeSessionCwd(file.location);
 			if (!cwd || !isPathInside(canonicalPath(cwd), root)) continue;
@@ -132,7 +134,7 @@ export function discoverClaudeSessions(
 				updatedAt: file.mtime,
 				location: file.location,
 			});
-			break;
+			if (++found >= limit) break;
 		}
 	}
 	return refs;
