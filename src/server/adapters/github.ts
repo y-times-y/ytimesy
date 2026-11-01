@@ -119,10 +119,7 @@ export async function createAuthorizedRepository(
 				status: 409,
 			});
 		if (status === 403)
-			throw new Response(
-				"GitHub denied creating a repository. Check the app permissions.",
-				{ status: 409 },
-			);
+			throw new Response(REPOSITORY_CREATION_DENIED, { status: 409 });
 		throw error;
 	}
 	const installations = await github.paginate(
@@ -166,9 +163,15 @@ export async function createAuthorizedRepository(
 	};
 }
 
+/** What the picker says when GitHub refuses to create a repository for ytimesy. */
+export const REPOSITORY_CREATION_DENIED =
+	"ytimesy's GitHub app cannot create repositories. Create it on GitHub, then add it here.";
+
 /**
  * Whether createAuthorizedRepository can succeed for this user: the ytimesy
- * app is installed on their own account with write access to contents.
+ * app is installed on their own account with write access to contents and
+ * the Administration permission, which creating a repository with the app's
+ * user token needs (POST /user/repos). Without it GitHub answers 403.
  */
 export async function githubRepositoryCreation(token: string) {
 	const github = githubClient(token);
@@ -184,6 +187,7 @@ export async function githubRepositoryCreation(token: string) {
 			!row.suspended_at &&
 			row.app_slug === serverConfig().GITHUB_APP_SLUG &&
 			row.permissions.contents === "write" &&
+			row.permissions.administration === "write" &&
 			row.account !== null &&
 			"login" in row.account &&
 			row.account.login.toLowerCase() === owner.toLowerCase(),

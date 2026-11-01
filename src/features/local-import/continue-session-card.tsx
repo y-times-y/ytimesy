@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Check, Copy } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
 	LOCAL_AGENT_NAMES,
 	LOCAL_AGENTS,
@@ -15,9 +15,16 @@ import {
 	createLocalImportFn,
 	localImportStatusFn,
 } from "./local-import.fn";
+import {
+	clearPendingImport,
+	markImportPending,
+	useCardWatchesImport,
+} from "./use-import-finish-alert";
 import "./continue-session-card.css";
 
 const POLL_MS = 2000;
+/** How long the button reads "Copied" before "Copy again". */
+const COPIED_MS = 1800;
 
 /**
  * "Continue your agent session", in onboarding and in Settings > Import: Copy prompt puts
@@ -42,6 +49,7 @@ export function ContinueSessionCard({
 	const [importId, setImportId] = useState<string | null>(null);
 	const [codeExpiresAt, setCodeExpiresAt] = useState<number | null>(null);
 	const [copyFailed, setCopyFailed] = useState(false);
+	const [justCopied, setJustCopied] = useState(false);
 	const copy = useMutation({
 		mutationFn: async () => {
 			const created = await createImport({ data: {} });
@@ -50,12 +58,21 @@ export function ContinueSessionCard({
 			try {
 				await navigator.clipboard.writeText(created.prompt);
 				setCopyFailed(false);
+				setJustCopied(true);
 			} catch {
 				setCopyFailed(true);
 			}
+			// The workspace says so if it finishes after the user leaves this card.
+			markImportPending(created.importId);
 			return created;
 		},
 	});
+	useEffect(() => {
+		if (!justCopied) return;
+		const timer = window.setTimeout(() => setJustCopied(false), COPIED_MS);
+		return () => window.clearTimeout(timer);
+	}, [justCopied]);
+	useCardWatchesImport(importId);
 	const status = useQuery({
 		queryKey: ["local-import", importId],
 		queryFn: () => readStatus({ data: { importId: importId as string } }),
@@ -72,8 +89,10 @@ export function ContinueSessionCard({
 	});
 	const cancel = useMutation({
 		mutationFn: (id: string) => cancelImport({ data: { importId: id } }),
-		onSuccess: (next) =>
-			queryClient.setQueryData(["local-import", next.id], next),
+		onSuccess: (next) => {
+			queryClient.setQueryData(["local-import", next.id], next);
+			clearPendingImport(next.id);
+		},
 	});
 	// A code nobody used reads as expired even if a status read is missing.
 	const view =
@@ -84,6 +103,11 @@ export function ContinueSessionCard({
 			: status.data;
 	const waiting =
 		importId !== null && !(view && localImportSettled(view.status));
+	const settledHere = Boolean(view && localImportSettled(view.status));
+	// Seen here, so the workspace does not announce it again.
+	useEffect(() => {
+		if (settledHere && importId) clearPendingImport(importId);
+	}, [settledHere, importId]);
 	const ready = view?.status === "ready" && view.projectId && view.sessionId;
 	const line = cancel.isError
 		? "Could not cancel. Try again."
@@ -114,7 +138,7 @@ export function ContinueSessionCard({
 				<ul className="continue-card-agents" aria-label="Supported agents">
 					{LOCAL_AGENTS.map((agent) => (
 						<li key={agent} title={LOCAL_AGENT_NAMES[agent]}>
-							<LocalAgentMark agent={agent} size={14} />
+							<LocalAgentMark agent={agent} size={18} />
 							<span className="sr-only">{LOCAL_AGENT_NAMES[agent]}</span>
 						</li>
 					))}
@@ -129,12 +153,12 @@ export function ContinueSessionCard({
 						disabled={copy.isPending}
 						title="The prompt has a one-time code (15 minutes). Your agent runs one command, asks what to import, then pushes your work to a ytimesy branch."
 					>
-						{copy.isSuccess && !copyFailed ? (
+						{justCopied ? (
 							<Check size={14} aria-hidden="true" />
 						) : (
 							<Copy size={14} aria-hidden="true" />
 						)}
-						{importId ? "Copy new prompt" : "Copy prompt"}
+						{copyButtonLabel({ copied: importId !== null, justCopied })}
 					</button>
 					<span
 						className="continue-card-status"
@@ -186,4 +210,13 @@ export function ContinueSessionCard({
 			)}
 		</section>
 	);
+}
+
+/** "Copy prompt", then "Copied" for a moment, then "Copy again" (a new code). */
+export function copyButtonLabel(input: {
+	readonly copied: boolean;
+	readonly justCopied: boolean;
+}) {
+	if (input.justCopied) return "Copied";
+	return input.copied ? "Copy again" : "Copy prompt";
 }

@@ -25,14 +25,20 @@
 	display: flex;
 	flex-shrink: 0;
 	align-items: center;
-	gap: 8px;
+	gap: 10px;
 	margin: 0;
 	padding: 0;
 	color: #8a8a8a;
 	list-style: none;
 }
+/* Each mark names its agent in a tooltip (title). */
 .continue-card-agents li {
 	display: inline-flex;
+	cursor: default;
+	transition: color 0.15s ease;
+}
+.continue-card-agents li:hover {
+	color: #ededed;
 }
 .continue-card-row {
 	display: flex;

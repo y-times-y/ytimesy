@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	handoffSummary,
+	isAcknowledgement,
 	plainSummaryText,
+	repositoryRelativePath,
 	SUMMARY_FILES,
 	shortened,
 } from "./handoff-summary";
@@ -126,5 +128,95 @@ describe("handoff summary", () => {
 			),
 		).toBe("Fixed the parser in a.ts: done");
 		expect(shortened("one two three four", 10)).toBe("one two…");
+	});
+
+	it("skips greetings and approvals for the goal, falling back to the title", () => {
+		const summary = handoffSummary(
+			handoff({
+				turns: [
+					user("hi"),
+					agent("Hello! What should I work on?"),
+					user("check then please i approve"),
+					user("Yes, go ahead."),
+					user("The checkout total ignores the coupon. Fix it."),
+					agent("Fixed the coupon math."),
+					user("ok"),
+				],
+			}),
+			{ transcript },
+		);
+		expect(summary.goal).toBe("The checkout total ignores the coupon.");
+		// A trailing "ok" is not an unanswered request.
+		expect(summary.next).toBeNull();
+		const onlyAcks = handoffSummary(
+			handoff({ turns: [user("yes"), agent("Done."), user("thanks!")] }),
+			{ transcript },
+		);
+		expect(onlyAcks.goal).toBe("Fix the login redirect");
+	});
+
+	it("tells acknowledgements from requests", () => {
+		for (const text of [
+			"yes",
+			"OK",
+			"ok go ahead",
+			"Thanks!",
+			"lgtm",
+			"continue",
+			"Sounds good, do it",
+			"check then please i approve",
+			"hey",
+			"",
+		])
+			expect(isAcknowledgement(text), text).toBe(true);
+		for (const text of [
+			"yes, fix the tests",
+			"continue with the migration",
+			"Add a dark mode toggle",
+			"hi, the build fails on CI",
+			"ok but rename the helper first",
+		])
+			expect(isAcknowledgement(text), text).toBe(false);
+	});
+
+	it("lists paths relative to the repository, including worktrees", () => {
+		const cwd = "/Users/alice/.codex/worktrees/a1b2/app";
+		expect(repositoryRelativePath(cwd, `${cwd}/src/a.ts`)).toBe("src/a.ts");
+		expect(
+			repositoryRelativePath(
+				"/Users/alice/app",
+				"/Users/alice/.codex/worktrees/c3d4/app/src/b.ts",
+			),
+		).toBe("src/b.ts");
+		expect(
+			repositoryRelativePath(
+				"/Users/alice/app",
+				"/Users/alice/app/.claude/worktrees/feature/src/c.ts",
+			),
+		).toBe("src/c.ts");
+		expect(repositoryRelativePath("/Users/alice/app/", "./src/d.ts")).toBe(
+			"src/d.ts",
+		);
+		expect(repositoryRelativePath("/Users/alice/app", "src/e.ts")).toBe(
+			"src/e.ts",
+		);
+		expect(
+			repositoryRelativePath("/Users/alice/app", "/Users/alice/notes/todo.md"),
+		).toBe("~/notes/todo.md");
+		expect(repositoryRelativePath("/home/bob/app", "/etc/hosts")).toBe(
+			"/etc/hosts",
+		);
+		const summary = handoffSummary(
+			handoff({
+				cwd,
+				files: {
+					edited: [`${cwd}/src/a.ts`, "src/a.ts"],
+					written: [`${cwd}/README.md`],
+					read: [],
+				},
+			}),
+			{ transcript },
+		);
+		expect(summary.edited).toEqual(["src/a.ts", "README.md"]);
 	});
 });

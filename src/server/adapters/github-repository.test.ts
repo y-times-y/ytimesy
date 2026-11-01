@@ -1,14 +1,20 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createAuthorizedRepository } from "./github";
+import {
+	createAuthorizedRepository,
+	githubRepositoryCreation,
+	REPOSITORY_CREATION_DENIED,
+} from "./github";
 
 const api = vi.hoisted(() => ({
 	create: vi.fn(),
 	paginate: vi.fn(),
 	addRepo: vi.fn(),
+	user: vi.fn(),
 }));
 vi.mock("@octokit/rest", () => ({
 	Octokit: class {
 		repos = { createForAuthenticatedUser: api.create };
+		users = { getAuthenticated: api.user };
 		apps = {
 			listInstallationsForAuthenticatedUser: vi.fn(),
 			addRepoToInstallationForAuthenticatedUser: api.addRepo,
@@ -80,4 +86,29 @@ it("explains when the app is installed only on other accounts", async () => {
 		(error: Response) => error,
 	)) as Response;
 	expect(await failure.text()).toMatch(/not installed on Alice/);
+});
+
+it("says GitHub refused to create the repository (the app lacks Administration)", async () => {
+	api.create.mockRejectedValue({ status: 403 });
+	const failure = (await createAuthorizedRepository("token", "scratch").catch(
+		(error: Response) => error,
+	)) as Response;
+	expect(failure.status).toBe(409);
+	expect(await failure.text()).toBe(REPOSITORY_CREATION_DENIED);
+});
+
+it("claims repository creation only with the Administration permission", async () => {
+	api.user.mockResolvedValue({ data: { login: "Alice" } });
+	api.paginate.mockResolvedValue([installation(2, "alice")]);
+	expect(await githubRepositoryCreation("token")).toEqual({
+		owner: "Alice",
+		canCreate: false,
+	});
+	api.paginate.mockResolvedValue([
+		{
+			...installation(2, "alice"),
+			permissions: { contents: "write", administration: "write" },
+		},
+	]);
+	expect((await githubRepositoryCreation("token")).canCreate).toBe(true);
 });

@@ -28,10 +28,14 @@
 	font-weight: 600;
 	letter-spacing: -0.03em;
 }
-/* Three thin segments with their names under them: no numbers, no circles. */
+/*
+ * Thin segments with their names under them: no numbers, no circles. One
+ * column per stage, however many there are, so the row never wraps.
+ */
 .first-run-progress {
 	display: grid;
-	grid-template-columns: repeat(3, 1fr);
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
 	gap: 6px;
 	margin: 0;
 	padding: 0;
@@ -44,6 +48,9 @@
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
 }
 .first-run-progress li::before {
 	content: "";

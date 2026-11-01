@@ -272,7 +272,7 @@ describe("planLocalImport", () => {
 		{ id: "p2", name: "stack", repositories: ["acme/api", "acme/web"] },
 	];
 	const base = { sessions: 3, bytes: 100, tools: ["claude" as const] };
-	const plan = (groups: PlanGroup[], canCreateRepository = true) =>
+	const plan = (groups: PlanGroup[]) =>
 		planLocalImport({
 			groups,
 			projects,
@@ -280,9 +280,8 @@ describe("planLocalImport", () => {
 				["acme/app", true],
 				["acme/web", false],
 				["acme/new", undefined],
+				["acme/fresh", true],
 			]),
-			canCreateRepository,
-			connectUrl: "https://ytimesy.test/?addProject=1",
 			installationUrl: "https://github.com/apps/ytimesy/installations/new",
 		});
 
@@ -307,6 +306,7 @@ describe("planLocalImport", () => {
 				action: "import",
 				projectId: "p1",
 				projectName: "app",
+				newProject: false,
 				repository: "acme/app",
 				visibility: "private",
 			},
@@ -316,14 +316,15 @@ describe("planLocalImport", () => {
 				action: "import",
 				projectId: "p2",
 				projectName: "stack",
+				newProject: false,
 				repository: "acme/web",
 				visibility: "public",
 			},
 		]);
 	});
 
-	it("links to connecting a reachable repository, or to granting access", () => {
-		const [reachable, unreachable] = plan([
+	it("imports a repository the app reaches into a new project of its own", () => {
+		const [reachable, privateOne, unreachable] = plan([
 			{
 				...base,
 				folder: "/code/new",
@@ -331,39 +332,55 @@ describe("planLocalImport", () => {
 			},
 			{
 				...base,
+				folder: "/code/fresh",
+				git: { repository: "Acme/Fresh", host: null, branch: "main" },
+			},
+			{
+				...base,
 				folder: "/code/secret",
 				git: { repository: "other/secret", host: null, branch: "main" },
 			},
 		]);
-		expect(reachable).toMatchObject({
-			action: "connect-repository",
+		expect(reachable).toEqual({
+			folder: "/code/new",
+			sessions: 3,
+			action: "import",
+			projectId: null,
+			projectName: "new",
+			newProject: true,
 			repository: "acme/new",
 			visibility: "unknown",
-			connectUrl: "https://ytimesy.test/?addProject=1",
 		});
+		expect(privateOne).toMatchObject({
+			action: "import",
+			projectId: null,
+			projectName: "Fresh",
+			newProject: true,
+			repository: "Acme/Fresh",
+			visibility: "private",
+		});
+		// Only a repository the app really cannot see links to granting access.
 		expect(unreachable).toMatchObject({
 			action: "grant-access",
+			repository: "other/secret",
 			connectUrl: "https://github.com/apps/ytimesy/installations/new",
 		});
 	});
 
-	it("offers a new private repository, attaching or skipping without one", () => {
-		const entries = plan(
-			[
-				{ ...base, folder: "/Users/me/my scratch!", git: null },
-				{
-					...base,
-					folder: "/code/local",
-					git: { repository: null, host: null, branch: "main" },
-				},
-				{
-					...base,
-					folder: "/code/lab",
-					git: { repository: null, host: "gitlab.com", branch: "main" },
-				},
-			],
-			false,
-		);
+	it("offers a new private repository, attaching or skipping without one (never claiming ytimesy creates it)", () => {
+		const entries = plan([
+			{ ...base, folder: "/Users/me/my scratch!", git: null },
+			{
+				...base,
+				folder: "/code/local",
+				git: { repository: null, host: null, branch: "main" },
+			},
+			{
+				...base,
+				folder: "/code/lab",
+				git: { repository: null, host: "gitlab.com", branch: "main" },
+			},
+		]);
 		expect(entries.map((entry) => entry.action)).toEqual([
 			"no-repository",
 			"no-repository",
@@ -371,13 +388,13 @@ describe("planLocalImport", () => {
 		]);
 		expect(entries[0]).toMatchObject({
 			reason: "no-git",
-			canCreateRepository: false,
 			suggestedName: "my-scratch",
 			attachTo: [
 				{ id: "p1", name: "app" },
 				{ id: "p2", name: "stack" },
 			],
 		});
+		expect(entries[0]).not.toHaveProperty("canCreateRepository");
 		expect(entries[1]).toMatchObject({ reason: "no-remote" });
 		expect(entries[2]).toMatchObject({ reason: "other-host" });
 	});

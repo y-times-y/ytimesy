@@ -7,15 +7,18 @@ import type { HandoffDocument } from "./local-import";
  * details (files, commands, transcript) sit behind a fold.
  */
 export type HandoffSummary = {
-	/** The user's request: the first one sent, or the title when earlier turns were trimmed. */
+	/**
+	 * The user's request: the first substantive one sent (greetings and
+	 * approvals skipped), or the title when earlier turns were trimmed or none is.
+	 */
 	readonly goal: string | null;
 	/** The gist of the agent's last message. */
 	readonly stopped: string | null;
 	/** An unanswered last request, or the "next steps" the agent named. */
 	readonly next: string | null;
-	/** The local branch the session worked on. */
+	/** The local branch the session worked on (the card shows it as "from <branch>"). */
 	readonly localBranch: string | null;
-	/** Edited and created files, relative to the folder (at most SUMMARY_FILES). */
+	/** Edited and created files, relative to the repository (at most SUMMARY_FILES). */
 	readonly edited: readonly string[];
 	readonly editedCount: number;
 	/** Commands that succeeded (at most SUMMARY_COMMANDS). */
@@ -106,11 +109,55 @@ function namedNextStep(text: string) {
 	return null;
 }
 
-function relativeTo(cwd: string, file: string) {
+const ACKNOWLEDGEMENT_WORDS = new Set(
+	(
+		"yes yeah yea yep yup y ya ok okay okey k kk sure fine great good nice cool perfect " +
+		"awesome excellent thanks thank you thx ty please pls plz go ahead proceed continue " +
+		"carry on keep going do it approve approved approval accept accepted i we agree agreed " +
+		"lgtm sounds looks good right correct alright alrighty hi hello hey yo morning then " +
+		"and so now that this it check confirm confirmed done let's lets got sgtm works " +
+		"makes sense true exactly indeed absolutely definitely"
+	).split(" "),
+);
+
+/**
+ * A greeting, approval or short acknowledgement ("yes", "ok go ahead",
+ * "check then please i approve"): every word is one of those, and there are
+ * only a few. Anything naming a thing to do ("yes, fix the tests") is a request.
+ */
+export function isAcknowledgement(text: string) {
+	const words = text
+		.toLowerCase()
+		.replace(/[^a-z' ]+/g, " ")
+		.split(/\s+/)
+		.filter(Boolean);
+	if (!words.length) return true;
+	return (
+		words.length <= 12 && words.every((word) => ACKNOWLEDGEMENT_WORDS.has(word))
+	);
+}
+
+/** A request worth naming as the goal: spoken, and not an acknowledgement. */
+function substantive(turn: Turn) {
+	const text = spoken(turn);
+	return text && !isAcknowledgement(text) ? text : "";
+}
+
+/**
+ * A file the session touched, relative to its repository: the session's own
+ * folder is stripped, and so is a worktree's (Codex keeps them at
+ * ~/.codex/worktrees/<name>/<repo>/, Claude Code at .claude/worktrees/<name>/).
+ * Relative paths stay; other absolute paths keep their home as ~.
+ */
+export function repositoryRelativePath(cwd: string, file: string) {
 	const root = cwd.replace(/\/+$/, "");
-	return root && file.startsWith(`${root}/`)
-		? file.slice(root.length + 1)
-		: file;
+	let path = file.replace(/^\.\//, "");
+	if (root && path.startsWith(`${root}/`)) path = path.slice(root.length + 1);
+	const worktree =
+		/(?:^|\/)\.codex\/worktrees\/[^/]+\/[^/]+\/(.+)$/.exec(path) ??
+		/(?:^|\/)\.claude\/worktrees\/[^/]+\/(.+)$/.exec(path);
+	if (worktree) return worktree[1] as string;
+	return path.replace(/^\/(?:Users|home)\/[^/]+\//, "~/");
 }
 
 /** The summary card's content, from the handoff the CLI uploaded. */
@@ -120,24 +167,28 @@ export function handoffSummary(
 ): HandoffSummary {
 	const turns = handoff.turns;
 	const title = handoff.title ? plainSummaryText(handoff.title) : "";
-	const firstUser = turns.find((turn) => turn.role === "user" && spoken(turn));
+	const firstUser = turns.find(
+		(turn) => turn.role === "user" && substantive(turn),
+	);
 	// Turns before the first sent one were trimmed: the title names the session better.
 	const trimmed = turns[0]?.synthetic !== undefined;
 	const goalText =
-		(trimmed && title) || (firstUser ? spoken(firstUser) : "") || title;
+		(trimmed && title) || (firstUser ? substantive(firstUser) : "") || title;
 	const spokenTurns = turns.filter((turn) => spoken(turn));
 	const lastAgent = [...spokenTurns]
 		.reverse()
 		.find((turn) => turn.role === "assistant");
 	const last = spokenTurns.at(-1);
 	const unanswered =
-		last?.role === "user" && last !== firstUser ? spoken(last) : null;
+		last?.role === "user" && last !== firstUser
+			? substantive(last) || null
+			: null;
 	const nextText =
 		unanswered ?? (lastAgent ? namedNextStep(lastAgent.text) : null);
 	const edited = [
 		...new Set(
 			[...handoff.files.edited, ...handoff.files.written].map((file) =>
-				relativeTo(handoff.cwd, file),
+				repositoryRelativePath(handoff.cwd, file),
 			),
 		),
 	];

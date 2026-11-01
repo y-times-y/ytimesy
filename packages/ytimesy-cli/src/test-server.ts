@@ -33,6 +33,11 @@ export type FakeServerOptions = {
 	/** `owner/name` → local bare repository the CLI's pushes land in. */
 	readonly remotes: Map<string, string>;
 	readonly owner: string;
+	/**
+	 * Repositories the app cannot see until the test says so (an install on
+	 * selected repositories); every other one with a remote it sees at once.
+	 */
+	readonly hidden?: Set<string>;
 	/** Answer the nth call of a route with this status instead. */
 	readonly failures?: { route: string; call: number; status: number }[];
 };
@@ -42,6 +47,10 @@ export type FakeCall = { method: string; route: string; body: unknown };
 export type FakeServer = {
 	readonly url: string;
 	readonly calls: FakeCall[];
+	/** The user's projects (create-project adds to them). */
+	readonly projects: FakeProject[];
+	/** Repositories the app cannot see yet; delete one to "add" it to the install. */
+	readonly hidden: Set<string>;
 	readonly sessions: Map<
 		string,
 		{ projectId: string; handoff: HandoffDocument; transcript?: Buffer }
@@ -87,6 +96,7 @@ export async function startFakeServer(
 	const sessions: FakeServer["sessions"] = new Map();
 	const secrets: FakeServer["secrets"] = [];
 	const projects = options.projects;
+	const hidden = options.hidden ?? new Set<string>();
 	let codeUsed = false;
 	let cancelled = false;
 	const failures = [...(options.failures ?? [])];
@@ -130,8 +140,6 @@ export async function startFakeServer(
 					expiresAt: new Date(Date.now() + 7_200_000).toISOString(),
 					appUrl: url,
 					projects,
-					canCreateRepository: true,
-					repositoryOwner: options.owner,
 				};
 			}
 			case "POST cancel": {
@@ -145,23 +153,37 @@ export async function startFakeServer(
 						groups: input.groups,
 						projects,
 						reachable: options.reachable,
-						canCreateRepository: true,
-						connectUrl: `${url}/?addProject=1`,
 						installationUrl:
 							"https://github.com/apps/ytimesy/installations/new",
 					}),
 				};
 			}
 			case "POST create-project": {
+				// Like the app: a project for a repository it can see, never a new repository.
 				const input = parse(createProjectRequest, raw);
-				const repository = `${options.owner}/${input.name}`;
-				const project = {
+				const repository = input.repository.toLowerCase();
+				const sees =
+					!hidden.has(repository) &&
+					(options.reachable.has(repository) ||
+						options.remotes.has(repository));
+				if (!sees)
+					throw Object.assign(
+						new Error(
+							`The ytimesy GitHub app cannot see ${input.repository} yet. Add it to the app's repositories at https://github.com/apps/ytimesy/installations/new, then re-run.`,
+						),
+						{ status: 409 },
+					);
+				const existing = projects.find((project) =>
+					project.repositories.includes(repository),
+				);
+				const project = existing ?? {
 					id: randomUUID(),
-					name: input.name,
+					name: repository.split("/")[1] ?? repository,
 					repositories: [repository],
 				};
-				projects.push(project);
-				options.reachable.set(repository, true);
+				if (!existing) projects.push(project);
+				if (!options.reachable.has(repository))
+					options.reachable.set(repository, true);
 				return {
 					projectId: project.id,
 					repository,
@@ -311,6 +333,8 @@ export async function startFakeServer(
 	return {
 		url,
 		calls,
+		projects,
+		hidden,
 		sessions,
 		secrets,
 		fail: (route, call, status) => {

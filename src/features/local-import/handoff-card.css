@@ -110,6 +110,17 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.handoff-card-branch {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 8px;
+	min-width: 0;
+}
+.handoff-card-branch small {
+	color: #6f6f6f;
+	font-size: 11px;
+}
 .handoff-card-more {
 	color: #6f6f6f;
 }

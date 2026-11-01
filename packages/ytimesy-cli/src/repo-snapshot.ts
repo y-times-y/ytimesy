@@ -220,6 +220,101 @@ export const FOLDER_IGNORES = [
 ];
 export const FOLDER_MAX_FILES = 20_000;
 
+/** A temporary Git directory whose work tree is `folder` (the folder itself is never written). */
+function folderGit(folder: string, env: Env) {
+	const gitDir = fs.mkdtempSync(path.join(os.tmpdir(), "ytimesy-folder-"));
+	const gitEnv: Env = {
+		...env,
+		GIT_DIR: gitDir,
+		GIT_WORK_TREE: folder,
+		GIT_INDEX_FILE: path.join(gitDir, "ytimesy-index"),
+	};
+	try {
+		git(["init", "--quiet"], { cwd: folder, env: gitEnv });
+	} catch (error) {
+		fs.rmSync(gitDir, { recursive: true, force: true });
+		throw error;
+	}
+	return { gitDir, env: gitEnv };
+}
+
+const FOLDER_EXCLUDES = FOLDER_IGNORES.flatMap((name) => ["--exclude", name]);
+
+function listFolder(folder: string, env: Env) {
+	return git(
+		["ls-files", "--others", "--exclude-standard", "-z", ...FOLDER_EXCLUDES],
+		{ cwd: folder, env },
+	)
+		.split("\0")
+		.filter(Boolean);
+}
+
+export type FolderPlan = {
+	/** Files the first commit carries (when not too many). */
+	readonly included: readonly Extract<FileVerdict, { include: true }>[];
+	/** Files and folders left out, each with its reason. */
+	readonly skipped: readonly { path: string; reason: string }[];
+	/** Files git would add before the filters; over FOLDER_MAX_FILES nothing is pushed. */
+	readonly listed: number;
+	readonly tooMany: boolean;
+};
+
+/**
+ * What snapshotFolder would push from a folder that is not a Git
+ * repository, by the same rules (its .gitignore, FOLDER_IGNORES, the
+ * untracked-file filters, the FOLDER_MAX_FILES cap), with nothing committed:
+ * the plan's preview. Ignored folders are listed once each, not file by file.
+ */
+export function folderPlan(folder: string, env: Env): FolderPlan {
+	const { gitDir, env: gitEnv } = folderGit(folder, env);
+	try {
+		const listed = listFolder(folder, gitEnv);
+		const ignored = git(
+			[
+				"ls-files",
+				"--others",
+				"--ignored",
+				"--exclude-standard",
+				"--directory",
+				"-z",
+				...FOLDER_EXCLUDES,
+			],
+			{ cwd: folder, env: gitEnv },
+		)
+			.split("\0")
+			.filter(Boolean)
+			.map((entry) => ({
+				path: entry,
+				reason: FOLDER_IGNORES.includes(path.basename(entry.replace(/\/$/, "")))
+					? "always left out"
+					: "ignored by .gitignore",
+			}));
+		if (listed.length > FOLDER_MAX_FILES)
+			return {
+				included: [],
+				skipped: ignored,
+				listed: listed.length,
+				tooMany: true,
+			};
+		const { included, skipped } = filterUntrackedFiles(folder, listed);
+		return {
+			included,
+			skipped: [
+				...skipped.map((file) => ({ path: file.path, reason: file.reason })),
+				...ignored,
+			],
+			listed: listed.length,
+			tooMany: false,
+		};
+	} finally {
+		fs.rmSync(gitDir, { recursive: true, force: true });
+	}
+}
+
+export function tooManyFiles(folder: string, count: number) {
+	return `${folder} has ${count} files (more than ${FOLDER_MAX_FILES}). Add a .gitignore for build output and dependencies, or skip it.`;
+}
+
 /**
  * A folder that is not a Git repository, as one initial commit in a
  * temporary Git directory (the folder itself is never written). Its
@@ -231,31 +326,11 @@ export function snapshotFolder(input: {
 	readonly env: Env;
 	readonly message: string;
 }) {
-	const gitDir = fs.mkdtempSync(path.join(os.tmpdir(), "ytimesy-folder-"));
-	const env: Env = {
-		...input.env,
-		GIT_DIR: gitDir,
-		GIT_WORK_TREE: input.folder,
-		GIT_INDEX_FILE: path.join(gitDir, "ytimesy-index"),
-	};
+	const { gitDir, env } = folderGit(input.folder, input.env);
 	try {
-		git(["init", "--quiet"], { cwd: input.folder, env });
-		const listed = git(
-			[
-				"ls-files",
-				"--others",
-				"--exclude-standard",
-				"-z",
-				...FOLDER_IGNORES.flatMap((name) => ["--exclude", name]),
-			],
-			{ cwd: input.folder, env },
-		)
-			.split("\0")
-			.filter(Boolean);
+		const listed = listFolder(input.folder, env);
 		if (listed.length > FOLDER_MAX_FILES)
-			throw new Error(
-				`${input.folder} has ${listed.length} files (more than ${FOLDER_MAX_FILES}). Add a .gitignore for build output and dependencies, or skip it.`,
-			);
+			throw new Error(tooManyFiles(input.folder, listed.length));
 		const { included, skipped } = filterUntrackedFiles(input.folder, listed);
 		const files = included.map((file) => file.path);
 		if (!files.length) throw new Error(`${input.folder} has no files to push.`);

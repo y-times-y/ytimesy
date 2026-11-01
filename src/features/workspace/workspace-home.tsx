@@ -171,6 +171,7 @@ import {
 } from "../app/keyboard-shortcuts";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
+import { useImportFinishAlert } from "../local-import/use-import-finish-alert";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
@@ -1765,6 +1766,8 @@ export function WorkspaceHome({
 		}
 	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
+	// An import started in onboarding or Settings that finishes meanwhile.
+	useImportFinishAlert();
 	useTurnFinishAlerts(
 		sidebarChats.map((chat) => ({
 			id: chat.id,

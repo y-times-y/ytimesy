@@ -32,7 +32,8 @@ Options:
   --scope session|project|machine
   --plan                        Print the plan for --scope without importing.
   --create-repo <folder>=<name> Create a private GitHub repository for a folder
-                                that has none, and push the folder to it.
+                                that has none (with your GitHub CLI login, gh),
+                                and push the folder to it.
   --attach <folder>=<project>   Import a folder's sessions into an existing project
                                 (id or name from the plan).
   --skip <folder>               Leave a folder out.

@@ -138,6 +138,32 @@ async function run(...args: string[]) {
 	return { code, output: output.join("\n"), progress: progress.join("\n") };
 }
 
+/**
+ * A stand-in for the GitHub CLI, first on PATH so no test reaches a real
+ * `gh`: `api user/repos` "creates" acme/<name> and logs the call;
+ * FAKE_GH_MISSING and FAKE_GH_SIGNED_OUT act out the two failures.
+ */
+const FAKE_GH = `#!/bin/sh
+[ -n "$FAKE_GH_MISSING" ] && exit 127
+case "$1" in
+  --version) echo "gh version 2.99.0"; exit 0 ;;
+  auth) [ -n "$FAKE_GH_SIGNED_OUT" ] && { echo "You are not logged into any GitHub hosts." >&2; exit 1; }; exit 0 ;;
+  api)
+    for arg in "$@"; do case "$arg" in name=*) name="\${arg#name=}" ;; esac; done
+    echo "$*" >> "$FAKE_GH_LOG"
+    printf '{"full_name":"acme/%s","default_branch":"main","clone_url":"https://github.com/acme/%s.git","ssh_url":"git@github.com:acme/%s.git"}' "$name" "$name" "$name"
+    exit 0 ;;
+esac
+exit 1
+`;
+
+function ghCalls() {
+	const log = env.FAKE_GH_LOG as string;
+	return fs.existsSync(log)
+		? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
+		: [];
+}
+
 function routes() {
 	return server.calls.map((call) => call.route);
 }
@@ -175,8 +201,12 @@ beforeEach(async () => {
 			"",
 		].join("\n"),
 	);
+	const bin = path.join(base, "bin");
+	fs.mkdirSync(bin);
+	fs.writeFileSync(path.join(bin, "gh"), FAKE_GH, { mode: 0o755 });
 	env = {
-		PATH: process.env.PATH,
+		PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+		FAKE_GH_LOG: path.join(base, "gh.log"),
 		HOME: home,
 		GIT_CONFIG_GLOBAL: path.join(base, "gitconfig"),
 		GIT_CONFIG_NOSYSTEM: "1",
@@ -309,6 +339,11 @@ describe("ytimesy continue", { timeout: 60_000 }, () => {
 			new RegExp(`^${server.url}/\\?project=${projectId}&chat=`),
 		);
 		expect(done.progress).toContain("Session 1/2");
+		// The repository was made with the user's gh login, never by ytimesy.
+		expect(done.progress).toContain("Creating private repository scratch for");
+		expect(ghCalls()).toEqual([
+			"api --method POST user/repos -f name=scratch -F private=true",
+		]);
 		expect(routes()).toEqual([
 			"start",
 			"plan",
@@ -473,6 +508,124 @@ describe("ytimesy continue", { timeout: 60_000 }, () => {
 			/Branch ytimesy\/wt-branch-[0-9a-f]{4} on acme\/app, from wt-branch/,
 		);
 		expect(text).toContain("    src/app.ts");
+	});
+
+	it("imports a repository the app reaches but no project holds into a new project", async () => {
+		server.projects.splice(0);
+		const plan = await run();
+		expect(plan.code, plan.output).toBe(0);
+		expect(plan.output).toContain('-> import (new project "app")');
+		expect(plan.output).not.toContain("add acme/app as a project");
+		const done = await run(
+			"--scope",
+			"session",
+			"--no-untracked",
+			"--no-secrets",
+			"--json",
+		);
+		expect(done.code, done.output).toBe(0);
+		const created = server.calls.find(
+			(call) => call.route === "create-project",
+		);
+		expect(created?.body).toEqual({ folder: repo, repository: "acme/app" });
+		const project = server.projects.find((item) =>
+			item.repositories.includes("acme/app"),
+		);
+		expect(project).toBeDefined();
+		expect(server.calls.at(-1)?.body).toMatchObject({
+			projectId: project?.id,
+			repository: "acme/app",
+		});
+		expect(ghCalls()).toEqual([]);
+	});
+
+	it("without gh, says how to create the repository instead of offering --create-repo", async () => {
+		env.FAKE_GH_MISSING = "1";
+		const needs = await run(
+			"--scope",
+			"machine",
+			"--yes-untracked",
+			"--no-secrets",
+		);
+		expect(needs.code).toBe(3);
+		expect(needs.output).toContain(
+			`${scratch} has no GitHub repository: --attach ${scratch}=<project id> or --skip ${scratch} (to create a private repository for it: Install the GitHub CLI (https://cli.github.com) and run \`gh auth login\``,
+		);
+		expect(needs.output).toContain("https://github.com/new");
+		const refused = await run(
+			"--scope",
+			"machine",
+			"--yes-untracked",
+			"--no-secrets",
+			"--create-repo",
+			`${scratch}=scratch`,
+		);
+		expect(refused.code).toBe(3);
+		expect(refused.output).toContain("needs the GitHub CLI (gh)");
+		expect(routes()).not.toContain("create-project");
+
+		delete env.FAKE_GH_MISSING;
+		env.FAKE_GH_SIGNED_OUT = "1";
+		const signedOut = await run(
+			"--scope",
+			"machine",
+			"--yes-untracked",
+			"--no-secrets",
+			"--create-repo",
+			`${scratch}=scratch`,
+		);
+		expect(signedOut.code).toBe(3);
+		expect(signedOut.output).toContain("Run `gh auth login`");
+		expect(ghCalls()).toEqual([]);
+	});
+
+	it("waits for the user to add a new repository to a selected-repositories install, creating it once", async () => {
+		server.hidden.add("acme/scratch");
+		const args = [
+			"--scope",
+			"machine",
+			"--yes-untracked",
+			"--no-secrets",
+			"--create-repo",
+			`${scratch}=scratch`,
+		];
+		const waiting = await run(...args);
+		expect(waiting.code).toBe(3);
+		expect(waiting.output).toContain(
+			"The ytimesy GitHub app cannot see acme/scratch yet. Add it to the app's repositories at https://github.com/apps/ytimesy/installations/new",
+		);
+		expect(ghCalls()).toHaveLength(1);
+		server.hidden.delete("acme/scratch");
+		const done = await run(...args);
+		expect(done.code, done.output).toBe(0);
+		expect(done.output).toContain(
+			"Created private repository acme/scratch for",
+		);
+		// The repository was not created a second time.
+		expect(ghCalls()).toHaveLength(1);
+	});
+
+	it("previews a plain folder's first commit with the snapshot's own rules", async () => {
+		write(scratch, "src/main.js", "console.log(1);\n");
+		write(scratch, "node_modules/dep/index.js", "dep\n");
+		write(scratch, ".env", "TOKEN=x\n");
+		const output: string[] = [];
+		const code = await main(["continue", "--code", CODE, "--api", server.url], {
+			...io(output),
+			cwd: scratch,
+			env: { ...env, CLAUDE_CODE_SESSION_ID: "scratch-session" },
+		});
+		const text = output.join("\n");
+		expect(code, text).toBe(0);
+		expect(text).toContain(
+			"the folder becomes the repository's first commit: 2 files",
+		);
+		expect(text).toContain("    index.html");
+		expect(text).toContain("    src/main.js");
+		expect(text).toContain("2 files skipped:");
+		expect(text).toContain(".env (secret-like name)");
+		expect(text).toContain("node_modules/ (always left out)");
+		expect(fs.existsSync(path.join(scratch, ".git"))).toBe(false);
 	});
 
 	it("cancels after the plan; a re-run then refuses", async () => {

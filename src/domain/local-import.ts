@@ -175,10 +175,15 @@ export const planRequest = z
 export type PlanRequest = z.infer<typeof planRequest>;
 export type PlanGroup = PlanRequest["groups"][number];
 
+/**
+ * Makes a project of a GitHub repository the ytimesy app can reach: one the
+ * plan found without a project, or one the CLI just created with the user's
+ * own GitHub login (`gh`). ytimesy never creates repositories itself.
+ */
 export const createProjectRequest = z
 	.object({
 		folder: localPath,
-		name: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
+		repository: repositoryFullName,
 	})
 	.strict();
 
@@ -323,19 +328,17 @@ export type PlanEntry = {
 	readonly sessions: number;
 } & (
 	| {
-			/** The repository is a connected project: import into it. */
+			/**
+			 * Import into the project that holds the repository. `projectId` is
+			 * null when the app reaches the repository but no project holds it
+			 * yet: create-project makes one (named `projectName`) first.
+			 */
 			readonly action: "import";
-			readonly projectId: string;
+			readonly projectId: string | null;
 			readonly projectName: string;
+			readonly newProject: boolean;
 			readonly repository: string;
 			readonly visibility: "public" | "private" | "unknown";
-	  }
-	| {
-			/** ytimesy can reach the repository, but no project holds it yet. */
-			readonly action: "connect-repository";
-			readonly repository: string;
-			readonly visibility: "public" | "private" | "unknown";
-			readonly connectUrl: string;
 	  }
 	| {
 			/** The GitHub app has no access to this repository. */
@@ -344,10 +347,12 @@ export type PlanEntry = {
 			readonly connectUrl: string;
 	  }
 	| {
-			/** No GitHub repository: create a private one, attach to a project, or skip. */
+			/**
+			 * No GitHub repository: create a private one (the CLI does, with the
+			 * user's own GitHub login), attach to a project, or skip.
+			 */
 			readonly action: "no-repository";
 			readonly reason: "no-git" | "no-remote" | "other-host";
-			readonly canCreateRepository: boolean;
 			readonly suggestedName: string;
 			readonly attachTo: readonly { id: string; name: string }[];
 	  }
@@ -365,16 +370,15 @@ export function suggestedRepositoryName(folder: string) {
 
 /**
  * What the server answers for each folder of local sessions: import into the
- * project that holds its repository, connect the repository first, grant the
- * app access, or (no GitHub repository) create one, attach or skip.
+ * project that holds its repository (or a new project, when the app reaches
+ * the repository but no project holds it), grant the app access, or (no
+ * GitHub repository) create one, attach or skip.
  */
 export function planLocalImport(input: {
 	readonly groups: readonly PlanGroup[];
 	readonly projects: readonly PlanProject[];
 	/** Repositories the GitHub app can reach, with their visibility when known. */
 	readonly reachable: ReadonlyMap<string, boolean | undefined>;
-	readonly canCreateRepository: boolean;
-	readonly connectUrl: string;
 	readonly installationUrl: string;
 }): PlanEntry[] {
 	const reachable = new Map(
@@ -407,16 +411,19 @@ export function planLocalImport(input: {
 					action: "import",
 					projectId: project.id,
 					projectName: project.name,
+					newProject: false,
 					repository,
 					visibility: visibility(repository),
 				};
 			if (reachable.has(repository.toLowerCase()))
 				return {
 					...base,
-					action: "connect-repository",
+					action: "import",
+					projectId: null,
+					projectName: repository.split("/")[1] ?? repository,
+					newProject: true,
 					repository,
 					visibility: visibility(repository),
-					connectUrl: input.connectUrl,
 				};
 			return {
 				...base,
@@ -433,7 +440,6 @@ export function planLocalImport(input: {
 				: group.git.host
 					? "other-host"
 					: "no-remote",
-			canCreateRepository: input.canCreateRepository,
 			suggestedName: suggestedRepositoryName(group.folder),
 			attachTo,
 		};

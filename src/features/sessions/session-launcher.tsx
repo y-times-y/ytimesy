@@ -1380,7 +1380,7 @@ export function SessionLauncher({
 									className="session-inline-action"
 									onClick={() => onProjectPickerOpenChange?.(true)}
 								>
-									Connect GitHub
+									Choose repository
 								</button>
 							</p>
 						) : null}

@@ -6,13 +6,13 @@ import {
 	FIRST_RUN_STAGES,
 	type FirstRunState,
 	type FirstRunStep,
+	firstRunDoneCookie,
 	firstRunStage,
 	firstRunStep,
 } from "#/domain/first-run";
 import type { RepositoryChoice } from "#/domain/projects";
 import { YtimesyBrand } from "../auth/onboarding-shell";
 import { ContinueSessionCard } from "../local-import/continue-session-card";
-import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
 import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
@@ -24,7 +24,6 @@ import "./first-run.css";
 
 const STAGE_LABELS = {
 	github: "GitHub",
-	repositories: "Repositories",
 	model: "Model",
 	sessions: "Sessions",
 } as const;
@@ -38,10 +37,6 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 		title: "Connect GitHub",
 		lede: "ytimesy works in your repositories through its GitHub app.",
 	},
-	repositories: {
-		title: "Choose repositories",
-		lede: "Pick the ones for your first project.",
-	},
 	model: {
 		title: "Choose a model",
 		lede: "Use your Codex subscription or your own API key.",
@@ -52,19 +47,31 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 	},
 };
 
-function enterWorkspace() {
+/**
+ * Leaves the first run for good (this browser): the workspace opens even
+ * without a project, and the composer's project picker adds the first one.
+ */
+function finishFirstRun(userId: string | undefined) {
+	// biome-ignore lint/suspicious/noDocumentCookie: one small cookie the server reads; cookieStore is missing in older Safari.
+	if (userId) document.cookie = firstRunDoneCookie(userId);
 	window.location.assign("/");
 }
 
 /**
  * A new account's first run, before its first project: GitHub (sign in and
- * install the app), then the repositories, then a model and local agent
- * sessions (both skippable). The
- * server says where it stands, so the right step paints first.
+ * install the app), then a model and local agent sessions (both skippable).
+ * No repository is picked here: the composer's project picker adds the first
+ * project, and an import adds the projects it needs. The server says where
+ * it stands, so the right step paints first.
  */
-export function FirstRun({ state }: { state: FirstRunState }) {
-	const [projectAdded, setProjectAdded] = useState(false);
-	const [modelDone, setModelDone] = useState(false);
+export function FirstRun({
+	state,
+	userId,
+}: {
+	state: FirstRunState;
+	userId?: string;
+}) {
+	const [modelDone, setModelDone] = useState(state.modelReady);
 	// Same read as the repository picker: connected once it lists repositories.
 	const repositories = useQuery({
 		queryKey: ["github", "repositories"],
@@ -83,10 +90,10 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 	const step = firstRunStep({
 		githubConnected,
 		repositoryCount: repositories.data?.repositories.length ?? null,
-		projectAdded,
 		modelDone,
 	});
 	const stage = firstRunStage(step);
+	const finish = () => finishFirstRun(userId);
 	return (
 		<main className="first-run">
 			<header className="first-run-top">
@@ -114,29 +121,17 @@ export function FirstRun({ state }: { state: FirstRunState }) {
 					<p>{HEADINGS[step].lede}</p>
 				</div>
 				{step === "sessions" ? (
-					<SessionsStep />
+					<SessionsStep onDone={finish} />
 				) : step === "model" ? (
 					<ModelStep
 						ready={state.modelReady}
 						onDone={() => setModelDone(true)}
 					/>
-				) : step === "github" || step === "install" ? (
-					<GithubStep
-						signedIn={step === "install"}
-						installationUrl={repositories.data?.installationUrl}
-					/>
 				) : (
-					<AddProjectForm
-						variant="page"
-						onAdded={(project) => {
-							// The project's machine builds during the next steps;
-							// the workspace finds it under way instead of starting it.
-							void requestJson("/api/workspaces", {
-								projectId: project.id,
-							}).catch(() => undefined);
-							if (state.modelReady) setModelDone(true);
-							setProjectAdded(true);
-						}}
+					<GithubStep
+						signedIn={githubConnected}
+						checking={githubConnected && repositories.isPending}
+						installationUrl={repositories.data?.installationUrl}
 					/>
 				)}
 			</section>
@@ -150,9 +145,12 @@ export function FirstRun({ state }: { state: FirstRunState }) {
  */
 function GithubStep({
 	signedIn,
+	checking,
 	installationUrl,
 }: {
 	signedIn: boolean;
+	/** Signed in; the app's repositories are still loading. */
+	checking: boolean;
 	installationUrl: string | undefined;
 }) {
 	const [notice] = useGithubConnectionNotice();
@@ -216,7 +214,9 @@ function GithubStep({
 							<ArrowUpRight size={14} />
 						</a>
 					) : (
-						<span className="first-run-task-wait">After sign-in</span>
+						<span className="first-run-task-wait">
+							{checking ? "Checking…" : "After sign-in"}
+						</span>
 					)}
 				</li>
 			</ol>
@@ -238,8 +238,12 @@ function GitHubMark() {
 	);
 }
 
-/** Optional: the same import card as Settings > Import; Skip never waits on it. */
-export function SessionsStep() {
+/** Optional: the same import card as Settings > Import; Continue never waits on it. */
+export function SessionsStep({
+	onDone = () => finishFirstRun(undefined),
+}: {
+	onDone?: () => void;
+}) {
 	return (
 		<>
 			<ContinueSessionCard githubConnected heading={false} />
@@ -247,7 +251,7 @@ export function SessionsStep() {
 				<button
 					type="button"
 					className="first-run-primary"
-					onClick={enterWorkspace}
+					onClick={onDone}
 					title="Skip or finish later: import any time from Settings > Import."
 				>
 					Continue
@@ -259,7 +263,7 @@ export function SessionsStep() {
 
 export function ModelStep({
 	ready: readyAtLoad,
-	onDone = enterWorkspace,
+	onDone = () => window.location.assign("/"),
 }: {
 	ready: boolean;
 	/** After Continue or Later: the next step (default: the workspace). */

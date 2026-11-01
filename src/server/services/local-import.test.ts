@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
 	saveSession: vi.fn(),
 	listProjects: vi.fn(),
 	projectForOwner: vi.fn(),
-	creation: vi.fn(),
 	reachable: vi.fn(),
 	workspace: vi.fn(),
 	enqueue: vi.fn(),
@@ -73,9 +72,10 @@ vi.mock("../adapters/handoff-store", () => ({
 vi.mock("../adapters/projects", () => ({
 	listProjects: mocks.listProjects,
 	projectForOwner: mocks.projectForOwner,
+	projectForRepository: vi.fn(),
+	saveProject: vi.fn(),
 }));
 vi.mock("../adapters/github", () => ({
-	githubRepositoryCreation: mocks.creation,
 	listAuthorizedRepositories: mocks.reachable,
 	repositoryBranchSha: vi.fn(),
 }));
@@ -96,7 +96,7 @@ vi.mock("./project-environment-setup", () => ({
 	saveProjectEnvironment: mocks.saveEnvironment,
 }));
 vi.mock("./project-secrets", () => ({ saveImportedProjectSecrets: vi.fn() }));
-vi.mock("./projects", () => ({ createScratchProject: vi.fn() }));
+vi.mock("./projects", () => ({ connectProject: vi.fn() }));
 // The import must never start a model turn; this module is how chats send one.
 vi.mock("./queued-user-messages", () => ({
 	sendComposerMessage: mocks.sendMessage,
@@ -104,6 +104,7 @@ vi.mock("./queued-user-messages", () => ({
 
 const {
 	cancelLocalImport,
+	createImportProject,
 	createLocalImport,
 	finishImport,
 	importSession,
@@ -162,7 +163,6 @@ beforeEach(() => {
 	mocks.require.mockResolvedValue(undefined);
 	mocks.listProjects.mockResolvedValue([project]);
 	mocks.projectForOwner.mockResolvedValue(project);
-	mocks.creation.mockResolvedValue({ owner: "alice", canCreate: true });
 	mocks.bySource.mockResolvedValue({
 		id: IMPORTED,
 		projectId: PROJECT,
@@ -219,9 +219,9 @@ describe("codes", () => {
 		);
 		expect(started).toMatchObject({
 			projects: [{ id: PROJECT, name: "app", repositories: ["alice/app"] }],
-			canCreateRepository: true,
-			repositoryOwner: "alice",
 		});
+		// ytimesy never claims it can create repositories: the CLI uses gh.
+		expect(started).not.toHaveProperty("canCreateRepository");
 	});
 
 	it("start refuses a used, expired or malformed code", async () => {
@@ -478,6 +478,91 @@ describe("finish", () => {
 			sessionId: "chat-1",
 		});
 		expect(mocks.insertChat).not.toHaveBeenCalled();
+	});
+});
+
+describe("create-project", () => {
+	const repository = {
+		installationId: 5,
+		repositoryId: 77,
+		fullName: "alice/scratch",
+		defaultBranch: "main",
+		private: true,
+	};
+	const project = { id: PROJECT } as never;
+	const caller = () => ({
+		importId: importRow().id,
+		userId: "alice",
+		row: importRow(),
+	});
+	const dependencies = (overrides = {}) => ({
+		reachable: vi.fn().mockResolvedValue([repository]),
+		branchExists: vi.fn().mockResolvedValue(true),
+		projectForRepository: vi.fn().mockResolvedValue(null),
+		connect: vi.fn().mockResolvedValue(project),
+		save: vi.fn().mockResolvedValue(project),
+		...overrides,
+	});
+
+	it("makes a project of a repository the app reaches, preparing it when it has commits", async () => {
+		const deps = dependencies();
+		const created = await createImportProject(
+			caller(),
+			{ folder: "/code/scratch", repository: "Alice/Scratch" },
+			deps,
+		);
+		expect(created).toEqual({
+			projectId: PROJECT,
+			repository: "alice/scratch",
+			defaultBranch: "main",
+			cloneUrl: "https://github.com/alice/scratch.git",
+			sshUrl: "git@github.com:alice/scratch.git",
+		});
+		expect(deps.connect).toHaveBeenCalledWith("alice", repository);
+		expect(deps.save).not.toHaveBeenCalled();
+		expect(mocks.require).toHaveBeenCalledWith("alice", "project-create");
+	});
+
+	it("saves an empty repository (just created with gh) without preparing it yet", async () => {
+		const deps = dependencies({
+			branchExists: vi.fn().mockResolvedValue(false),
+		});
+		await createImportProject(
+			caller(),
+			{ folder: "/code/scratch", repository: "alice/scratch" },
+			deps,
+		);
+		expect(deps.save).toHaveBeenCalledWith("alice", repository);
+		expect(deps.connect).not.toHaveBeenCalled();
+	});
+
+	it("returns the existing project for the same repository", async () => {
+		const deps = dependencies({
+			projectForRepository: vi.fn().mockResolvedValue({ id: "existing" }),
+		});
+		const created = await createImportProject(
+			caller(),
+			{ folder: "/code/scratch", repository: "alice/scratch" },
+			deps,
+		);
+		expect(created.projectId).toBe("existing");
+		expect(deps.connect).not.toHaveBeenCalled();
+		expect(deps.save).not.toHaveBeenCalled();
+	});
+
+	it("links to the app's repositories when it cannot see the repository yet", async () => {
+		const deps = dependencies({ reachable: vi.fn().mockResolvedValue([]) });
+		const refused = await createImportProject(
+			caller(),
+			{ folder: "/code/scratch", repository: "alice/scratch" },
+			deps,
+		).catch((error) => error);
+		expect(refused).toBeInstanceOf(Response);
+		expect(refused.status).toBe(409);
+		expect(await refused.text()).toBe(
+			"The ytimesy GitHub app cannot see alice/scratch yet. Add it to the app's repositories at https://github.com/apps/ytimesy/installations/new, then re-run.",
+		);
+		expect(deps.save).not.toHaveBeenCalled();
 	});
 });
 

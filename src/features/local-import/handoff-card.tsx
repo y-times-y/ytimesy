@@ -43,8 +43,8 @@ function FileList({
 /**
  * The first item of a chat continued from a local agent session: where it
  * came from, then at most three short lines (goal, where it stopped, next)
- * and the turns, date and branch. Files, commands and the transcript's path
- * sit in a closed fold, so the card paints the same on the server and in the
+ * and the turns, date and the chat's branch (the local one is in the
+ * details). Files, commands and the transcript's path sit in a closed fold, so the card paints the same on the server and in the
  * browser. Chats imported before the summary existed keep the one line.
  */
 export function HandoffCard({ item }: { item: HandoffSessionItem }) {
@@ -105,7 +105,8 @@ export function HandoffCard({ item }: { item: HandoffSessionItem }) {
 						{handoffCardMeta({
 							turns: item.turns,
 							at: item.at,
-							branch: summary.localBranch ?? item.branch,
+							// The chat's own branch; the local one shows in the details.
+							branch: item.branch,
 						})}
 					</span>
 					<span className="handoff-card-toggle">
@@ -138,10 +139,15 @@ export function HandoffCard({ item }: { item: HandoffSessionItem }) {
 							/>
 						</>
 					) : null}
-					{item.branch ? (
+					{item.branch || summary.localBranch ? (
 						<div className="handoff-card-group">
 							<span className="handoff-card-group-label">Branch</span>
-							<code>{item.branch}</code>
+							<span className="handoff-card-branch">
+								{item.branch ? <code>{item.branch}</code> : null}
+								{summary.localBranch ? (
+									<small>from {summary.localBranch}</small>
+								) : null}
+							</span>
 						</div>
 					) : null}
 					<div className="handoff-card-group">

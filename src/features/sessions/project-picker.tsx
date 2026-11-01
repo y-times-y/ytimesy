@@ -69,6 +69,8 @@ export function ProjectPicker({
 			requestJson<{
 				repositories: RepositoryChoice[];
 				installationUrl: string;
+				/** False when GitHub would refuse: the app lacks the Administration permission. */
+				canCreateRepository?: boolean;
 			}>("/api/github/repositories"),
 		// A dropped fetch (Safari "Load failed") is not a missing GitHub connection.
 		retry: retryTransientRead,
@@ -127,6 +129,9 @@ export function ProjectPicker({
 		[projects, query, repositories.data?.repositories, selectedProject?.id],
 	);
 	const scratch = scratchRepositoryName(scratchName);
+	// GitHub refuses ytimesy's request to create a repository unless its app
+	// has the Administration permission: then "New repo" points to GitHub.
+	const canCreate = repositories.data?.canCreateRepository !== false;
 
 	function choose(row: (typeof sections.projects)[number]) {
 		if (row.project) {
@@ -261,11 +266,25 @@ export function ProjectPicker({
 										loaded: Boolean(repositories.data),
 										unreachable: isUnreachableRead(repositories.error),
 										errorMessage: repositories.error?.message,
+										hasProjects: projects.length > 0,
 									})}
 								</p>
 							) : null}
 						</div>
-						{creating ? (
+						{creating && !canCreate ? (
+							<p className="project-picker-create-elsewhere" role="status">
+								ytimesy can't create repositories on GitHub.{" "}
+								<a
+									href={NEW_REPOSITORY_URL}
+									target="_blank"
+									rel="noreferrer"
+									onClick={() => setCreating(false)}
+								>
+									Create on GitHub
+									<ExternalLink size={12} aria-hidden="true" />
+								</a>
+							</p>
+						) : creating ? (
 							<form
 								className="project-picker-create"
 								onSubmit={(event) => {
@@ -388,6 +407,9 @@ function PickerRow({
 		</button>
 	);
 }
+
+/** GitHub's own new-repository page, private by default. */
+const NEW_REPOSITORY_URL = "https://github.com/new?visibility=private";
 
 function shownReadError(error: Error | null | undefined) {
 	if (!error) return undefined;
