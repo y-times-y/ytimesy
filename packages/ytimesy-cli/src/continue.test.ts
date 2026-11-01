@@ -257,7 +257,7 @@ describe("ytimesy continue", () => {
 		expect(out).toContain("    notes.md");
 		expect(out).toContain(".env (secret-like name)");
 		expect(out).toContain(
-			"Secrets from .env (uploaded as project secrets, values never shown): API_KEY, PORT",
+			"Secrets from .env (values never shown; uploaded only with --secrets): API_KEY, PORT",
 		);
 		expect(out).toContain("Secrets from .env.local");
 		expect(out).not.toContain(SECRET);
@@ -271,6 +271,8 @@ describe("ytimesy continue", () => {
 		expect(needs.code).toBe(3);
 		expect(needs.output).toContain("Needs the user's decision");
 		expect(needs.output).toContain("--yes-untracked");
+		// .env values are never uploaded without the user's choice.
+		expect(needs.output).toContain("--secrets NAME,NAME or --no-secrets");
 		expect(needs.output).toContain(
 			`${scratch} has no GitHub repository: --create-repo ${scratch}=scratch or --attach ${scratch}=<project id> or --skip ${scratch}`,
 		);
@@ -283,6 +285,8 @@ describe("ytimesy continue", () => {
 			"--yes-untracked",
 			"--create-repo",
 			`${scratch}=scratch`,
+			"--secrets",
+			"API_KEY,PORT,DATABASE_URL",
 			"--json",
 		);
 		expect(done.code, done.output).toBe(0);
@@ -376,6 +380,8 @@ describe("ytimesy continue", () => {
 			"--yes-untracked",
 			"--create-repo",
 			`${scratch}=scratch`,
+			"--secrets",
+			"API_KEY,PORT,DATABASE_URL",
 		);
 		expect(again.code).toBe(0);
 		expect(again.output).toContain(`Done — open ${report.openUrl}`);
@@ -393,7 +399,13 @@ describe("ytimesy continue", () => {
 			remotes: new Map([["acme/app", remotes.app]]),
 			failures: [{ route: "transcript", call: 1, status: 500 }],
 		});
-		const failed = await run("--scope", "session", "--no-untracked");
+		const failed = await run(
+			"--scope",
+			"session",
+			"--no-untracked",
+			"--secrets",
+			"API_KEY,PORT,DATABASE_URL",
+		);
 		expect(failed.code).toBe(1);
 		expect(failed.output).toContain(
 			"Failed: The session being continued was not uploaded (Injected failure).",
@@ -410,7 +422,13 @@ describe("ytimesy continue", () => {
 		// A later commit time would make a new commit; the pushed one is reused.
 		env.GIT_COMMITTER_DATE = "2030-01-01T00:00:00Z";
 		env.GIT_AUTHOR_DATE = "2030-01-01T00:00:00Z";
-		const resumed = await run("--scope", "session", "--no-untracked");
+		const resumed = await run(
+			"--scope",
+			"session",
+			"--no-untracked",
+			"--secrets",
+			"API_KEY,PORT,DATABASE_URL",
+		);
 		expect(resumed.code, resumed.output).toBe(0);
 		expect(resumed.output).toContain("Done — open");
 		expect(resumed.output).toContain("notes.md (untracked; --no-untracked)");

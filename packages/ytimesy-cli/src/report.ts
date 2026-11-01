@@ -248,7 +248,7 @@ export function renderPlan(report: PlanReport) {
 	if (secretFiles.length)
 		for (const [file, names] of secretFiles)
 			lines.push(
-				`Secrets from ${file} (uploaded as project secrets, values never shown): ${names.join(", ")}`,
+				`Secrets from ${file} (values never shown; uploaded only with --secrets): ${names.join(", ")}`,
 			);
 	else lines.push("Secrets: no .env or .env.local in this folder.");
 	if (report.needs.length) {

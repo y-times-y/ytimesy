@@ -37,6 +37,8 @@ Options:
   --yes-untracked               Push the untracked files the plan lists.
   --no-untracked                Push tracked changes only.
   --yes-public                  Allow untracked files in a public repository.
+  --secrets NAME,NAME           Upload only these .env names as project secrets.
+  --no-secrets                  Upload no .env values.
   --json                        Print the result as JSON (progress goes to stderr).
   --api <url>                   ytimesy server (default ${DEFAULT_API}).
   -h, --help                    Show this help.
@@ -71,6 +73,8 @@ export function parseContinueOptions(argv: readonly string[]): ContinueOptions {
 			"yes-untracked": { type: "boolean", default: false },
 			"no-untracked": { type: "boolean", default: false },
 			"yes-public": { type: "boolean", default: false },
+			secrets: { type: "string" },
+			"no-secrets": { type: "boolean", default: false },
 		},
 	});
 	if (positionals.length) usage(`Unexpected argument: ${positionals[0]}`);
@@ -80,6 +84,8 @@ export function parseContinueOptions(argv: readonly string[]): ContinueOptions {
 		usage(`--scope must be one of ${SCOPES.join(", ")}.`);
 	if (values["yes-untracked"] && values["no-untracked"])
 		usage("Pass --yes-untracked or --no-untracked, not both.");
+	if (values.secrets !== undefined && values["no-secrets"])
+		usage("Pass --secrets or --no-secrets, not both.");
 	if (values.api) {
 		try {
 			const url = new URL(values.api);
@@ -101,6 +107,11 @@ export function parseContinueOptions(argv: readonly string[]): ContinueOptions {
 		yesUntracked: values["yes-untracked"],
 		noUntracked: values["no-untracked"],
 		yesPublic: values["yes-public"],
+		noSecrets: values["no-secrets"],
+		secretNames: (values.secrets ?? "")
+			.split(",")
+			.map((name) => name.trim())
+			.filter(Boolean),
 	};
 }
 
