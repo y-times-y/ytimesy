@@ -9,6 +9,7 @@ import {
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { adoptChatPublicationBranch } from "../adapters/agent-sessions";
 import { isDevEvalUser } from "../adapters/dev-eval-users";
+import { isEnvironmentSetupChat } from "../adapters/environment-setup-chats";
 import { authorizedRepository, compareBranchAhead } from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
@@ -39,11 +40,14 @@ const PUBLISHED_REF = "refs/ytimesy/published";
  * Evaluation runs (Terminal-Bench, isolated harness) and throwaway dev eval
  * users (hard set, side-by-side evals) never reach GitHub: eval users' projects
  * are copies of their owner's rows, pointing at the owner's real repository.
+ * Nor does an environment-setup chat: its build and install commands can
+ * regenerate tracked files, and setting up must never open a pull request.
  */
 export async function turnPublicationExcluded(
 	session: Pick<AgentSessionRecord, "userId" | "id">,
 ) {
 	if (await isDevEvalUser(session.userId)) return true;
+	if (await isEnvironmentSetupChat(session.userId, session.id)) return true;
 	return Boolean(await evaluationRunForTask(session.userId, session.id));
 }
 

@@ -1,8 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Sparkles } from "lucide-react";
+import { CircleDashed, Sparkles } from "lucide-react";
 import { useState } from "react";
-import type { EnvironmentRecipe } from "#/domain/project-environment";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "#/components/ui/tooltip";
+import {
+	type EnvironmentRecipe,
+	unverifiedItemDetails,
+} from "#/domain/project-environment";
 import { compactRelativeAge } from "#/domain/sidebar-chats";
 import {
 	getProjectEnvironmentFn,
@@ -154,6 +163,7 @@ function RecipeSummary({ recipe }: { recipe: EnvironmentRecipe }) {
 			? ["Secrets", [recipe.buildSecrets.join(", ")]]
 			: null,
 	].filter(Boolean) as [string, string[]][];
+	const unverified = recipe.unverified ?? [];
 	return (
 		<dl className="environment-recipe">
 			{rows.map(([label, values]) => (
@@ -166,6 +176,29 @@ function RecipeSummary({ recipe }: { recipe: EnvironmentRecipe }) {
 					</dd>
 				</div>
 			))}
+			{unverified.length ? (
+				<div>
+					<dt>Unverified</dt>
+					<dd>
+						<TooltipProvider>
+							{unverified.map((item) => (
+								<Tooltip key={item.what}>
+									<TooltipTrigger
+										type="button"
+										className="environment-unverified"
+									>
+										<CircleDashed aria-hidden="true" size={12} />
+										<span>{item.what}</span>
+									</TooltipTrigger>
+									<TooltipContent side="bottom" align="start" sideOffset={6}>
+										{unverifiedItemDetails(item)}
+									</TooltipContent>
+								</Tooltip>
+							))}
+						</TooltipProvider>
+					</dd>
+				</div>
+			) : null}
 		</dl>
 	);
 }
