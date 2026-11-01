@@ -68,6 +68,10 @@ export type ContinueOptions = {
 	readonly yesUntracked: boolean;
 	readonly noUntracked: boolean;
 	readonly yesPublic: boolean;
+	/** --no-secrets: upload none of the .env values. */
+	readonly noSecrets: boolean;
+	/** --secrets A,B: upload only these .env names (the user's choice). */
+	readonly secretNames: readonly string[];
 };
 
 /** A failure with what the agent should do next; exit code 3 means "ask the user". */
@@ -427,6 +431,38 @@ function untrackedNeeds(branch: BranchReport | null, options: ContinueOptions) {
 	return needs;
 }
 
+/**
+ * .env values are never uploaded by default: they can hold the keys to the
+ * user's own infrastructure, and the cloud machine has internet access. The
+ * agent shows the names and the user picks (--secrets A,B) or --no-secrets.
+ */
+function secretNeeds(
+	envVariables: readonly { name: string }[],
+	options: ContinueOptions,
+) {
+	if (!envVariables.length || options.noSecrets) return [];
+	const names = new Set(envVariables.map((variable) => variable.name));
+	const unknown = options.secretNames.filter((name) => !names.has(name));
+	if (unknown.length)
+		return [
+			`--secrets names not found in .env or .env.local: ${unknown.join(", ")}`,
+		];
+	if (options.secretNames.length) return [];
+	return [
+		`${names.size} variable(s) in .env files (names in the plan): ask the user which the cloud agent needs, then pass --secrets NAME,NAME or --no-secrets`,
+	];
+}
+
+/** The .env variables the user chose to upload. */
+export function chosenSecrets<T extends { name: string }>(
+	envVariables: readonly T[],
+	options: Pick<ContinueOptions, "noSecrets" | "secretNames">,
+): T[] {
+	if (options.noSecrets) return [];
+	const chosen = new Set(options.secretNames);
+	return envVariables.filter((variable) => chosen.has(variable.name));
+}
+
 // ---- the command line for the next step -------------------------------------
 
 function nextCommand(
@@ -448,6 +484,10 @@ function nextCommand(
 		...(options.yesUntracked ? ["--yes-untracked"] : []),
 		...(options.noUntracked ? ["--no-untracked"] : []),
 		...(options.yesPublic ? ["--yes-public"] : []),
+		...(options.noSecrets ? ["--no-secrets"] : []),
+		...(options.secretNames.length
+			? ["--secrets", shellWord(options.secretNames.join(","))]
+			: []),
 		...(options.api && options.api !== DEFAULT_API
 			? ["--api", shellWord(options.api)]
 			: []),
@@ -617,6 +657,7 @@ export async function runContinue(
 			item.target.kind === "undecided" ? [item.target.need] : [],
 		),
 		...untrackedNeeds(branch, options),
+		...secretNeeds(envVariables, options),
 	];
 
 	if (options.planOnly || !options.scope) {
@@ -1045,7 +1086,7 @@ async function execute(input: {
 		);
 
 	// 4. Secrets from .env and .env.local.
-	const variables = input.envVariables.filter(
+	const variables = chosenSecrets(input.envVariables, input.options).filter(
 		(variable) => variable.name.length <= 128 && variable.value.length <= 8192,
 	);
 	const secretList = [...new Set(variables.map((variable) => variable.name))];

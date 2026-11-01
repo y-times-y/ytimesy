@@ -119,7 +119,7 @@ Branch ytimesy/feature-login-3f9a on acme/app, from feature-login (your checkout
   1 file skipped:
     .env (secret-like name)
 
-Secrets from .env (uploaded as project secrets, values never shown): DATABASE_URL, API_KEY
+Secrets from .env (values never shown; uploaded only with --secrets): DATABASE_URL, API_KEY
 
 Needs the user's decision:
   - ~/scratch has no GitHub repository: --create-repo ~/scratch=scratch or --attach ~/scratch=<project id> or --skip ~/scratch

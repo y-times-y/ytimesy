@@ -19,7 +19,7 @@ it("states what the agent must and must not do", () => {
 		"this session, all sessions for this project, or everything on this machine",
 		"Show me the plan the CLI prints",
 		"Never open, print or read .env files yourself",
-		"The CLI reads .env and .env.local",
+		"ask me which ones the cloud agent needs",
 		"before pushing anything from a repository other than this one",
 		"before creating a new repository",
 		"That first run only plans",
