@@ -1,0 +1,19 @@
+{
+	"name": "ytimesy",
+	"version": "0.1.0",
+	"description": "Move your local coding-agent sessions (Claude Code, Codex, Cursor, and more) to ytimesy.",
+	"type": "module",
+	"bin": {
+		"ytimesy": "dist/ytimesy.mjs"
+	},
+	"files": ["dist/ytimesy.mjs", "README.md"],
+	"engines": {
+		"node": ">=22"
+	},
+	"license": "UNLICENSED",
+	"homepage": "https://ytimesy.com",
+	"scripts": {
+		"build": "node build.mjs",
+		"prepack": "node build.mjs"
+	}
+}
