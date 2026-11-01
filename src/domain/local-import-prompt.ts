@@ -16,11 +16,11 @@ export function localImportPrompt(code: string) {
 
 ${localImportCommand(code)}
 
-The code works once and expires in ${minutes} minutes. Follow the CLI's output, and:
-- Ask me what to import: this session, all sessions for this project, or everything on this machine. Show me the plan the CLI prints before going on.
+The code works once and expires in ${minutes} minutes. That first run only plans; follow the CLI's output, and:
+- Ask me what to import: this session, all sessions for this project, or everything on this machine. Show me the plan the CLI prints before going on, then run the command it prints with my choices.
 - Never open, print or read .env files yourself. The CLI reads .env and .env.local and uploads them directly.
 - Ask me before pushing anything from a repository other than this one, and before creating a new repository.
-- Ask me before pushing untracked files the CLI lists as risky. In a public repository, ask before pushing any untracked file.
+- Ask me before pushing the untracked files the CLI lists (--yes-untracked). In a public repository, ask before pushing any untracked file (--yes-public).
 - When it finishes, list the files pushed and anything skipped.
 - Then tell me "Done — open <link>" with the link the CLI prints.`;
 }

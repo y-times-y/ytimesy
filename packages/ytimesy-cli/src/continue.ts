@@ -1,0 +1,1192 @@
+import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { LOCAL_AGENT_NAMES } from "../../../src/domain/local-import-view.ts";
+import type { AgentTool } from "../../../src/local-sessions/index.ts";
+import { canonicalPath } from "../../../src/local-sessions/io.ts";
+import { ApiError, ImportApi, type PlanEntry } from "./api.ts";
+import { type EnvVariable, readEnvFiles, redactionValues } from "./env-file.ts";
+import {
+	changedTrackedFiles,
+	currentBranch,
+	type Env,
+	headCommit,
+	pushCommit,
+	sameCommitContent,
+	snapshotFolder,
+	snapshotRepository,
+	untrackedPlan,
+} from "./repo-snapshot.ts";
+import {
+	type BranchReport,
+	type DoneReport,
+	type GroupReport,
+	type PlanReport,
+	renderDone,
+	renderNeeds,
+	renderPlan,
+} from "./report.ts";
+import {
+	buildHandoff,
+	buildTranscriptArchive,
+	type Candidate,
+	type Discovery,
+	discover,
+	type Group,
+	groupSessions,
+	localAgent,
+	planGroupRequest,
+	SCOPES,
+	type Scope,
+	scopeSessions,
+	sessionKey,
+} from "./sessions.ts";
+import { type ImportState, StateStore, stateDirectories } from "./state.ts";
+
+export const DEFAULT_API = "https://ytimesy.com";
+
+export type Io = {
+	readonly env: Env;
+	readonly cwd: string;
+	readonly home: string;
+	readonly stdout: (text: string) => void;
+	readonly stderr: (text: string) => void;
+	/** Ancestor agent processes (tests pin this; default walks `ps`). */
+	readonly ancestors?: () => AgentTool[];
+	readonly version: string;
+};
+
+export type ContinueOptions = {
+	readonly code: string;
+	readonly scope?: Scope;
+	readonly planOnly: boolean;
+	readonly json: boolean;
+	readonly api?: string;
+	readonly createRepo: readonly string[];
+	readonly attach: readonly string[];
+	readonly skip: readonly string[];
+	readonly yesUntracked: boolean;
+	readonly noUntracked: boolean;
+	readonly yesPublic: boolean;
+};
+
+/** A failure with what the agent should do next; exit code 3 means "ask the user". */
+export class CliError extends Error {
+	constructor(
+		message: string,
+		readonly next: string,
+		readonly exitCode = 1,
+	) {
+		super(message);
+	}
+}
+
+export class NeedsDecision extends Error {
+	constructor(
+		readonly needs: readonly string[],
+		readonly nextCommand: string,
+	) {
+		super(needs.join("; "));
+	}
+}
+
+const TOOL_NAMES: Record<AgentTool, string> = {
+	...LOCAL_AGENT_NAMES,
+	"cursor-agent": "Cursor CLI",
+};
+
+const PICKED_BECAUSE = {
+	"caller-session": "the session running this command",
+	"caller-latest": "the calling agent's newest session here",
+	latest: "the newest session in this folder",
+} as const;
+
+function displayPath(folder: string, home: string) {
+	return folder === home
+		? "~"
+		: folder.startsWith(`${home}${path.sep}`)
+			? `~${folder.slice(home.length)}`
+			: folder;
+}
+
+function shellWord(word: string) {
+	return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(word)
+		? word
+		: `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+// ---- decisions ---------------------------------------------------------------
+
+type Decision =
+	| { kind: "create-repo"; name: string }
+	| { kind: "attach"; project: string }
+	| { kind: "skip" };
+
+/** The group an argument names: a path (absolute, ~, relative) or a unique folder name. */
+function matchFolder(
+	argument: string,
+	groups: readonly Group[],
+	io: Io,
+): Group | null {
+	const expanded = argument.startsWith("~")
+		? path.join(io.home, argument.slice(1))
+		: argument;
+	const absolute = canonicalPath(path.resolve(io.cwd, expanded));
+	const exact = groups.find((group) => group.folder === absolute);
+	if (exact) return exact;
+	const byName = groups.filter(
+		(group) => path.basename(group.folder) === argument,
+	);
+	return byName.length === 1 ? (byName[0] as Group) : null;
+}
+
+function splitAssignment(value: string) {
+	const at = value.lastIndexOf("=");
+	return at <= 0
+		? { folder: value, value: "" }
+		: { folder: value.slice(0, at), value: value.slice(at + 1) };
+}
+
+function parseDecisions(
+	options: ContinueOptions,
+	groups: readonly Group[],
+	io: Io,
+): Map<string, Decision> {
+	const decisions = new Map<string, Decision>();
+	const unknown: string[] = [];
+	const add = (raw: string, make: (value: string) => Decision) => {
+		const { folder, value } = splitAssignment(raw);
+		const group = matchFolder(folder, groups, io);
+		if (!group) unknown.push(folder);
+		else decisions.set(group.folder, make(value));
+	};
+	for (const raw of options.createRepo)
+		add(raw, (name) => ({ kind: "create-repo", name }));
+	for (const raw of options.attach)
+		add(raw, (project) => ({ kind: "attach", project }));
+	for (const raw of options.skip) add(`${raw}=`, () => ({ kind: "skip" }));
+	if (unknown.length)
+		throw new CliError(
+			`No folder in this scope matches ${unknown.map((folder) => `"${folder}"`).join(", ")}.`,
+			"Use a folder exactly as the plan prints it.",
+			2,
+		);
+	return decisions;
+}
+
+type Resolved = {
+	readonly group: Group;
+	readonly entry: PlanEntry;
+	readonly report: GroupReport;
+	/** Where its sessions go, once decided. */
+	readonly target:
+		| { kind: "project"; projectId: string; projectName: string }
+		| { kind: "create"; name: string }
+		| { kind: "skip"; reason: string }
+		| { kind: "undecided"; need: string };
+};
+
+function resolveGroups(
+	groups: readonly Group[],
+	entries: readonly PlanEntry[],
+	decisions: ReadonlyMap<string, Decision>,
+	state: ImportState,
+	io: Io,
+): Resolved[] {
+	return groups.map((group, index) => {
+		const entry = entries[index] as PlanEntry;
+		const display = displayPath(group.folder, io.home);
+		const decision = decisions.get(group.folder);
+		const base = {
+			folder: group.folder,
+			display,
+			continued: group.continued,
+			sessions: group.candidates.length,
+			bytes: group.bytes,
+			tools: [...new Set(group.candidates.map((candidate) => candidate.tool))],
+		};
+		let target: Resolved["target"];
+		let reportDecision: GroupReport["decision"] = null;
+		let extra: Partial<GroupReport> = {};
+		switch (entry.action) {
+			case "import":
+				extra = {
+					repository: entry.repository,
+					visibility: entry.visibility,
+					projectId: entry.projectId,
+					projectName: entry.projectName,
+				};
+				if (decision?.kind === "skip" && !group.continued) {
+					target = { kind: "skip", reason: "skipped" };
+					reportDecision = { kind: "skip" };
+				} else {
+					target = {
+						kind: "project",
+						projectId: entry.projectId,
+						projectName: entry.projectName,
+					};
+					reportDecision = { kind: "import", projectName: entry.projectName };
+				}
+				break;
+			case "connect-repository":
+			case "grant-access": {
+				extra = {
+					repository: entry.repository,
+					connectUrl: entry.connectUrl,
+					...(entry.action === "connect-repository"
+						? { visibility: entry.visibility }
+						: {}),
+				};
+				const what =
+					entry.action === "connect-repository"
+						? `${display}: add ${entry.repository} as a project in ytimesy (${entry.connectUrl}) and re-run, or pass --skip ${shellWord(display)}`
+						: `${display}: give the ytimesy GitHub app access to ${entry.repository} (${entry.connectUrl}) and re-run, or pass --skip ${shellWord(display)}`;
+				if (decision?.kind === "skip" && !group.continued) {
+					target = { kind: "skip", reason: "skipped" };
+					reportDecision = { kind: "skip" };
+				} else
+					target = {
+						kind: "undecided",
+						need: group.continued
+							? what.replace(/, or pass --skip .*$/, "")
+							: what,
+					};
+				break;
+			}
+			case "no-repository": {
+				extra = {
+					reason: entry.reason,
+					canCreateRepository: entry.canCreateRepository,
+					suggestedName: entry.suggestedName,
+					attachTo: entry.attachTo,
+				};
+				const created = state.created[group.folder];
+				if (created) {
+					target = {
+						kind: "project",
+						projectId: created.projectId,
+						projectName: created.repository,
+					};
+					reportDecision = {
+						kind: "create-repo",
+						name: created.repository.split("/").pop() ?? "",
+					};
+				} else if (decision?.kind === "create-repo") {
+					const name = decision.name || entry.suggestedName;
+					if (!entry.canCreateRepository)
+						throw new CliError(
+							"ytimesy cannot create repositories on your GitHub account.",
+							"Reconnect GitHub in ytimesy with repository creation allowed, or attach the folder to a project.",
+						);
+					if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name))
+						throw new CliError(
+							`"${name}" is not a valid repository name.`,
+							"Use letters, digits, '.', '_' and '-' only.",
+							2,
+						);
+					target = { kind: "create", name };
+					reportDecision = { kind: "create-repo", name };
+				} else if (decision?.kind === "attach") {
+					const project = entry.attachTo.find(
+						(candidate) =>
+							candidate.id === decision.project ||
+							candidate.name === decision.project,
+					);
+					if (!project)
+						throw new CliError(
+							`No project "${decision.project}" to attach ${display} to.`,
+							`Use one of: ${entry.attachTo.map((candidate) => `${candidate.name} (${candidate.id})`).join(", ") || "(no projects)"}.`,
+							2,
+						);
+					if (group.continued)
+						throw new CliError(
+							"The session being continued needs its own repository: its work is pushed there.",
+							`Use --create-repo ${shellWord(display)}=${entry.suggestedName} instead.`,
+							2,
+						);
+					target = {
+						kind: "project",
+						projectId: project.id,
+						projectName: project.name,
+					};
+					reportDecision = {
+						kind: "attach",
+						projectId: project.id,
+						projectName: project.name,
+					};
+				} else if (decision?.kind === "skip" && !group.continued) {
+					target = { kind: "skip", reason: "skipped" };
+					reportDecision = { kind: "skip" };
+				} else {
+					const options = [
+						entry.canCreateRepository
+							? `--create-repo ${shellWord(display)}=${entry.suggestedName}`
+							: null,
+						!group.continued && entry.attachTo.length
+							? `--attach ${shellWord(display)}=<project id>`
+							: null,
+						group.continued ? null : `--skip ${shellWord(display)}`,
+					].filter(Boolean);
+					target = {
+						kind: "undecided",
+						need: `${display} has no GitHub repository: ${options.join(" or ") || "connect GitHub in ytimesy with repository creation allowed"}`,
+					};
+				}
+				break;
+			}
+		}
+		return {
+			group,
+			entry,
+			target,
+			report: {
+				...base,
+				action: entry.action,
+				...extra,
+				decision: reportDecision,
+			},
+		};
+	});
+}
+
+// ---- the branch --------------------------------------------------------------
+
+function branchSlug(name: string | null) {
+	const slug = (name ?? "handoff")
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/\.{2,}/g, ".")
+		.replace(/^[-.]+|[-.]+$/g, "")
+		.replace(/\.lock$/, "")
+		.slice(0, 40)
+		.replace(/[-.]+$/, "");
+	return slug || "handoff";
+}
+
+function newBranchName(base: string | null) {
+	const suffix = randomBytes(3).toString("hex").slice(0, 4);
+	return `ytimesy/${branchSlug(base)}-${suffix}`;
+}
+
+function branchPreview(
+	resolved: Resolved,
+	branch: string,
+	io: Io,
+): BranchReport {
+	const group = resolved.group;
+	if (!group.git)
+		return {
+			repository: null,
+			branch,
+			from: null,
+			visibility: "new",
+			trackedChanged: [],
+			untrackedToPush: [],
+			skipped: [],
+			wholeFolder: true,
+		};
+	const { included, skipped } = untrackedPlan(group.folder, io.env);
+	const entry = resolved.entry;
+	return {
+		repository: entry.action === "no-repository" ? null : entry.repository,
+		branch,
+		from:
+			currentBranch(group.folder, io.env) ??
+			headCommit(group.folder, io.env)?.slice(0, 12) ??
+			null,
+		visibility:
+			entry.action === "import" || entry.action === "connect-repository"
+				? entry.visibility
+				: entry.action === "no-repository"
+					? "new"
+					: "unknown",
+		trackedChanged: changedTrackedFiles(group.folder, io.env),
+		untrackedToPush: included.map((file) => file.path),
+		skipped: skipped.map((file) => ({ path: file.path, reason: file.reason })),
+		wholeFolder: false,
+	};
+}
+
+/** Untracked files need --yes-untracked (or --no-untracked); public repositories also --yes-public. */
+function untrackedNeeds(branch: BranchReport | null, options: ContinueOptions) {
+	if (!branch || branch.wholeFolder || !branch.untrackedToPush.length)
+		return [];
+	if (options.noUntracked) return [];
+	const needs: string[] = [];
+	if (!options.yesUntracked)
+		needs.push(
+			`${branch.untrackedToPush.length} untracked file(s) would be pushed (listed in the plan): pass --yes-untracked to push them or --no-untracked to leave them out`,
+		);
+	if (
+		(branch.visibility === "public" || branch.visibility === "unknown") &&
+		!options.yesPublic
+	)
+		needs.push(
+			`${branch.repository ?? "the repository"} is ${branch.visibility === "public" ? "public" : "of unknown visibility"}: pushing untracked files there also needs --yes-public (or --no-untracked)`,
+		);
+	return needs;
+}
+
+// ---- the command line for the next step -------------------------------------
+
+function nextCommand(
+	options: ContinueOptions,
+	scope: Scope,
+	extra: string[] = [],
+) {
+	const words = [
+		"npx -y ytimesy continue --code",
+		shellWord(options.code),
+		"--scope",
+		scope,
+		...options.createRepo.flatMap((value) => [
+			"--create-repo",
+			shellWord(value),
+		]),
+		...options.attach.flatMap((value) => ["--attach", shellWord(value)]),
+		...options.skip.flatMap((value) => ["--skip", shellWord(value)]),
+		...(options.yesUntracked ? ["--yes-untracked"] : []),
+		...(options.noUntracked ? ["--no-untracked"] : []),
+		...(options.yesPublic ? ["--yes-public"] : []),
+		...(options.api && options.api !== DEFAULT_API
+			? ["--api", shellWord(options.api)]
+			: []),
+		...extra,
+	];
+	return words.join(" ");
+}
+
+// ---- the run -------------------------------------------------------------------
+
+function totals(candidates: readonly Candidate[]) {
+	return {
+		sessions: candidates.length,
+		bytes: candidates.reduce((sum, candidate) => sum + candidate.bytes, 0),
+		folders: new Set(candidates.map((candidate) => candidate.folder)).size,
+	};
+}
+
+function apiFailure(error: unknown, what: string): never {
+	if (error instanceof ApiError) {
+		if (error.status === 401 || error.status === 410)
+			throw new CliError(
+				`${what}: ${error.message}`,
+				"Copy a new prompt in ytimesy and run the new command.",
+			);
+		if (error.status === 429)
+			throw new CliError(
+				`${what}: ${error.message}`,
+				"Wait (the limit resets within the hour), then re-run the same command; finished steps are skipped.",
+			);
+		if (error.status === 0)
+			throw new CliError(
+				`${what}: ${error.message}`,
+				process.env.CODEX_SANDBOX_NETWORK_DISABLED === "1"
+					? "The agent's sandbox blocks the network: run this command with network access (outside the sandbox), then re-run the same command."
+					: "Check the network connection, then re-run the same command; finished steps are skipped.",
+			);
+		throw new CliError(
+			`${what}: ${error.message}`,
+			"Re-run the same command; finished steps are skipped. If it fails again, copy a new prompt in ytimesy.",
+		);
+	}
+	throw error;
+}
+
+async function connect(
+	options: ContinueOptions,
+	store: StateStore,
+	discovery: Discovery,
+	io: Io,
+): Promise<{ api: ImportApi; state: ImportState }> {
+	const saved = store.load();
+	const userAgent = `ytimesy-cli/${io.version}`;
+	if (saved) {
+		if (Date.parse(saved.expiresAt) <= Date.now() && !saved.finished)
+			throw new CliError(
+				"This import expired (its token lasts 2 hours).",
+				"Copy a new prompt in ytimesy and run the new command.",
+			);
+		return {
+			api: new ImportApi(saved.api, saved.token, userAgent),
+			state: saved,
+		};
+	}
+	if (!store.canSave())
+		throw new CliError(
+			`Cannot write the import's state to ${path.dirname(store.file)}; the code was not used.`,
+			"Set YTIMESY_STATE_DIR to a writable folder (outside the repository), then re-run the same command.",
+		);
+	const base = options.api ?? io.env.YTIMESY_API ?? DEFAULT_API;
+	const api = new ImportApi(base, null, userAgent);
+	const caller = discovery.caller ?? discovery.continued?.candidate;
+	const started = await api
+		.start({
+			code: options.code,
+			...(caller ? { agent: localAgent(caller.tool) } : {}),
+			cliVersion: io.version.slice(0, 40),
+		})
+		.catch((error) => apiFailure(error, "Could not start the import"));
+	api.setToken(started.token);
+	const state: ImportState = {
+		version: 1,
+		api: base,
+		token: started.token,
+		expiresAt: started.expiresAt,
+		appUrl: started.appUrl,
+		startedAt: Date.now(),
+		projects: [...started.projects],
+		canCreateRepository: started.canCreateRepository,
+		repositoryOwner: started.repositoryOwner,
+		created: {},
+		uploaded: {},
+	};
+	store.save(state);
+	return { api, state };
+}
+
+/** Text with every secret value replaced, for anything printed. */
+function hideSecrets(text: string, values: readonly string[]) {
+	return values.reduce(
+		(result, value) => result.split(value).join("[REDACTED]"),
+		text,
+	);
+}
+
+function secretNames(variables: readonly EnvVariable[]) {
+	const names: Record<string, string[]> = {};
+	for (const variable of variables) {
+		const list = names[variable.source] ?? [];
+		if (!list.includes(variable.name)) list.push(variable.name);
+		names[variable.source] = list;
+	}
+	return names;
+}
+
+function progress(io: Io, options: ContinueOptions, text: string) {
+	if (options.json) io.stderr(text);
+	else io.stdout(text);
+}
+
+export async function runContinue(
+	options: ContinueOptions,
+	io: Io,
+): Promise<number> {
+	const store = new StateStore(stateDirectories(io.env), options.code);
+	const finished = store.load()?.finished?.report as DoneReport | undefined;
+	if (finished) {
+		print(io, options, finished, renderDone(finished));
+		return 0;
+	}
+
+	const discovery = discover({
+		cwd: io.cwd,
+		home: io.home,
+		env: io.env,
+		...(io.ancestors ? { ancestors: io.ancestors } : {}),
+	});
+	const continued = discovery.continued;
+	if (!continued)
+		throw new CliError(
+			`No coding-agent session was found for ${displayPath(discovery.folder, io.home)}.`,
+			"Run this command from the folder the session works in (its repository).",
+		);
+	const { api, state } = await connect(options, store, discovery, io);
+	const scope = options.scope ?? "session";
+	const candidates = scopeSessions(discovery, scope);
+	const { groups, droppedGroups } = groupSessions(candidates, discovery.folder);
+	const planned = await api
+		.plan(groups.map(planGroupRequest))
+		.catch((error) => apiFailure(error, "Could not plan the import"));
+	if (planned.groups.length !== groups.length)
+		throw new CliError(
+			"The server's plan does not match the folders sent.",
+			"Re-run the same command.",
+		);
+	const decisions = parseDecisions(options, groups, io);
+	const resolved = resolveGroups(groups, planned.groups, decisions, state, io);
+	const main = resolved.find((item) => item.group.continued) as Resolved;
+	state.branchName ??= newBranchName(
+		main.group.git ? currentBranch(main.group.folder, io.env) : null,
+	);
+	store.save(state);
+	const branch = branchPreview(main, state.branchName, io);
+	const envVariables = readEnvFiles(main.group.folder);
+	const needs = [
+		...resolved.flatMap((item) =>
+			item.target.kind === "undecided" ? [item.target.need] : [],
+		),
+		...untrackedNeeds(branch, options),
+	];
+
+	if (options.planOnly || !options.scope) {
+		const continuedCandidate = continued.candidate;
+		const hide = redactionValues([
+			...envVariables,
+			...resolved.flatMap((item) =>
+				item.group.continued ? [] : readEnvFiles(item.group.folder),
+			),
+		]);
+		const title = continuedCandidate.title
+			? hideSecrets(continuedCandidate.title, hide)
+			: null;
+		const report: PlanReport = {
+			step: "plan",
+			agent: discovery.caller
+				? {
+						tool: discovery.caller.tool,
+						name: TOOL_NAMES[discovery.caller.tool],
+					}
+				: null,
+			session: {
+				tool: TOOL_NAMES[continuedCandidate.tool],
+				id: continuedCandidate.id,
+				title,
+				messages: continuedCandidate.messages,
+				bytes: continuedCandidate.bytes,
+				folder: displayPath(main.group.folder, io.home),
+				pickedBecause: PICKED_BECAUSE[continued.reason],
+			},
+			scope,
+			scopes: Object.fromEntries(
+				SCOPES.map((name) => [
+					name,
+					totals(scopeSessions(discovery, name, false)),
+				]),
+			),
+			groups: resolved.map((item) => item.report),
+			droppedGroups,
+			branch,
+			secrets: secretNames(envVariables),
+			needs,
+			next: nextCommand(
+				options,
+				scope,
+				branch.untrackedToPush.length &&
+					!options.yesUntracked &&
+					!options.noUntracked &&
+					!branch.wholeFolder
+					? ["--yes-untracked"]
+					: [],
+			),
+		};
+		print(io, options, report, renderPlan(report));
+		return 0;
+	}
+
+	if (needs.length) {
+		const report = {
+			step: "needs-decision" as const,
+			needs,
+			next: nextCommand(options, scope),
+		};
+		print(io, options, report, renderNeeds(report));
+		return 3;
+	}
+
+	return execute({
+		options,
+		io,
+		api,
+		state,
+		store,
+		resolved,
+		main,
+		branchName: state.branchName,
+		envVariables,
+		continued: continued.candidate,
+	});
+}
+
+function print(io: Io, options: ContinueOptions, data: unknown, text: string) {
+	io.stdout(options.json ? JSON.stringify(data, null, 2) : text);
+}
+
+/** Remote URLs to try for a new repository: the scheme the user's origin uses first. */
+function pushUrls(created: ImportState["created"][string], preferSsh: boolean) {
+	return preferSsh
+		? [created.sshUrl, created.cloneUrl]
+		: [created.cloneUrl, created.sshUrl];
+}
+
+function pushToNewRepository(input: {
+	created: ImportState["created"][string];
+	cwd: string;
+	env: Env;
+	sha: string;
+	branch: string;
+	preferSsh: boolean;
+	lease?: string;
+}) {
+	let lastError: unknown;
+	const urls = input.created.pushedTo
+		? [input.created.pushedTo]
+		: pushUrls(input.created, input.preferSsh);
+	for (const url of urls) {
+		try {
+			pushCommit({
+				cwd: input.cwd,
+				env: input.env,
+				remote: url,
+				sha: input.sha,
+				branch: input.branch,
+				...(input.lease ? { lease: input.lease } : {}),
+			});
+			return url;
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError;
+}
+
+async function execute(input: {
+	options: ContinueOptions;
+	io: Io;
+	api: ImportApi;
+	state: ImportState;
+	store: StateStore;
+	resolved: Resolved[];
+	main: Resolved;
+	branchName: string;
+	envVariables: EnvVariable[];
+	continued: Candidate;
+}): Promise<number> {
+	const { options, io, api, state, store, resolved, main } = input;
+	const say = (text: string) => progress(io, options, text);
+	const env = io.env;
+
+	// Every folder's .env values are redacted from what is uploaded.
+	const redactValues = redactionValues([
+		...input.envVariables,
+		...resolved.flatMap((item) =>
+			item.group.continued ? [] : readEnvFiles(item.group.folder),
+		),
+	]);
+
+	// 1. New repositories and their projects.
+	const createdRepositories: DoneReport["createdRepositories"][number][] = [];
+	for (const item of resolved) {
+		if (item.target.kind !== "create") continue;
+		say(
+			`Creating private repository ${item.target.name} for ${item.report.display}…`,
+		);
+		const created = await api
+			.createProject({ folder: item.group.folder, name: item.target.name })
+			.catch((error) =>
+				apiFailure(
+					error,
+					`Could not create ${item.target.kind === "create" ? item.target.name : ""}`,
+				),
+			);
+		state.created[item.group.folder] = { ...created };
+		store.save(state);
+		(item as { target: Resolved["target"] }).target = {
+			kind: "project",
+			projectId: created.projectId,
+			projectName: created.repository,
+		};
+		createdRepositories.push({
+			folder: item.report.display,
+			repository: created.repository,
+		});
+	}
+	for (const item of resolved) {
+		const created = state.created[item.group.folder];
+		if (
+			created &&
+			!createdRepositories.some(
+				(entry) => entry.repository === created.repository,
+			)
+		)
+			createdRepositories.push({
+				folder: item.report.display,
+				repository: created.repository,
+			});
+	}
+
+	const preferSsh = /^(?:ssh:\/\/|git@)/.test(main.group.git?.remoteUrl ?? "");
+	const pushed: string[] = [];
+	const skipped: { path: string; reason: string }[] = [];
+	let branchSha: string;
+	let repository: string | null = null;
+
+	// 2. Push the folders of new repositories (the continued one gets its branch too).
+	for (const item of resolved) {
+		const created = state.created[item.group.folder];
+		if (!created || item.target.kind !== "project") continue;
+		if (item.group.continued) continue;
+		if (created.pushedSha) continue;
+		try {
+			const sha = item.group.git ? headCommit(item.group.folder, env) : null;
+			if (item.group.git && !sha) {
+				say(
+					`${item.report.display} has no commits; ${created.repository} stays empty.`,
+				);
+				continue;
+			}
+			if (sha) {
+				say(
+					`Pushing ${item.report.display} (committed work) to ${created.repository}…`,
+				);
+				created.pushedTo = pushToNewRepository({
+					created,
+					cwd: item.group.folder,
+					env,
+					sha,
+					branch: created.defaultBranch,
+					preferSsh,
+				});
+				created.pushedSha = sha;
+			} else {
+				say(`Pushing ${item.report.display} to ${created.repository}…`);
+				const snapshot = snapshotFolder({
+					folder: item.group.folder,
+					env,
+					message: "Initial import from ytimesy",
+				});
+				try {
+					created.pushedTo = pushToNewRepository({
+						created,
+						cwd: item.group.folder,
+						env: snapshot.env,
+						sha: snapshot.sha,
+						branch: created.defaultBranch,
+						preferSsh,
+					});
+					created.pushedSha = snapshot.sha;
+				} finally {
+					fs.rmSync(snapshot.gitDir, { recursive: true, force: true });
+				}
+			}
+			store.save(state);
+		} catch (error) {
+			throw new CliError(
+				`Could not push ${item.report.display} to ${created.repository}: ${(error as Error).message}`,
+				`Check that you can push to github.com/${created.repository} from this terminal, then re-run the same command; finished steps are skipped.`,
+			);
+		}
+	}
+
+	// 3. The continued work, on its ytimesy/ branch.
+	const branch = input.branchName;
+	const message = `Work in progress from a local ${TOOL_NAMES[main.group.candidates[0]?.tool ?? "claude"] ?? "agent"} session, continued in ytimesy`;
+	try {
+		const created = state.created[main.group.folder];
+		if (created) {
+			repository = created.repository;
+			if (main.group.git) {
+				const snapshot = snapshotRepository({
+					root: main.group.folder,
+					env,
+					message,
+					includeUntracked: !options.noUntracked,
+				});
+				pushed.push(...snapshot.trackedChanged, ...snapshot.untrackedPushed);
+				skipped.push(
+					...snapshot.skipped.map((file) => ({
+						path: file.path,
+						reason: file.reason,
+					})),
+				);
+				if (options.noUntracked)
+					skipped.push(
+						...untrackedPlan(main.group.folder, env).included.map((file) => ({
+							path: file.path,
+							reason: "untracked; --no-untracked",
+						})),
+					);
+				const head = headCommit(main.group.folder, env);
+				if (!created.pushedSha) {
+					say(`Pushing ${main.report.display} to ${created.repository}…`);
+					created.pushedTo = pushToNewRepository({
+						created,
+						cwd: main.group.folder,
+						env,
+						sha: head ?? snapshot.sha,
+						branch: created.defaultBranch,
+						preferSsh,
+					});
+					created.pushedSha = head ?? snapshot.sha;
+					store.save(state);
+				}
+				branchSha =
+					state.pushed &&
+					sameCommitContent(
+						main.group.folder,
+						env,
+						state.pushed.sha,
+						snapshot.sha,
+					)
+						? state.pushed.sha
+						: snapshot.sha;
+				if (state.pushed?.sha !== branchSha) {
+					say(`Pushing ${branch} to ${created.repository}…`);
+					pushToNewRepository({
+						created,
+						cwd: main.group.folder,
+						env,
+						sha: branchSha,
+						branch,
+						preferSsh,
+						...(state.pushed ? { lease: state.pushed.sha } : {}),
+					});
+				}
+			} else {
+				const snapshot = snapshotFolder({
+					folder: main.group.folder,
+					env,
+					message,
+				});
+				try {
+					pushed.push(...snapshot.pushed);
+					skipped.push(
+						...snapshot.skipped.map((file) => ({
+							path: file.path,
+							reason: file.reason,
+						})),
+					);
+					branchSha = created.pushedSha ?? snapshot.sha;
+					if (!created.pushedSha) {
+						say(`Pushing ${main.report.display} to ${created.repository}…`);
+						created.pushedTo = pushToNewRepository({
+							created,
+							cwd: main.group.folder,
+							env: snapshot.env,
+							sha: snapshot.sha,
+							branch: created.defaultBranch,
+							preferSsh,
+						});
+						created.pushedSha = snapshot.sha;
+						store.save(state);
+					}
+					if (state.pushed?.sha !== branchSha) {
+						say(`Pushing ${branch} to ${created.repository}…`);
+						pushToNewRepository({
+							created,
+							cwd: main.group.folder,
+							env: snapshot.env,
+							sha: branchSha,
+							branch,
+							preferSsh,
+						});
+					}
+				} finally {
+					fs.rmSync(snapshot.gitDir, { recursive: true, force: true });
+				}
+			}
+		} else {
+			if (main.entry.action !== "import")
+				throw new CliError(
+					"The continued folder has no project.",
+					"Re-run the plan.",
+				);
+			repository = main.entry.repository;
+			const snapshot = snapshotRepository({
+				root: main.group.folder,
+				env,
+				message,
+				includeUntracked: !options.noUntracked,
+			});
+			pushed.push(...snapshot.trackedChanged, ...snapshot.untrackedPushed);
+			skipped.push(
+				...snapshot.skipped.map((file) => ({
+					path: file.path,
+					reason: file.reason,
+				})),
+			);
+			if (options.noUntracked)
+				skipped.push(
+					...untrackedPlan(main.group.folder, env).included.map((file) => ({
+						path: file.path,
+						reason: "untracked; --no-untracked",
+					})),
+				);
+			branchSha =
+				state.pushed &&
+				sameCommitContent(
+					main.group.folder,
+					env,
+					state.pushed.sha,
+					snapshot.sha,
+				)
+					? state.pushed.sha
+					: snapshot.sha;
+			if (state.pushed?.sha !== branchSha) {
+				say(
+					`Pushing ${branch} to ${repository} (your checkout is not touched)…`,
+				);
+				pushCommit({
+					cwd: main.group.folder,
+					env,
+					remote: "origin",
+					sha: branchSha,
+					branch,
+					...(state.pushed ? { lease: state.pushed.sha } : {}),
+				});
+			}
+		}
+		state.pushed = { repository: repository ?? "", branch, sha: branchSha };
+		store.save(state);
+	} catch (error) {
+		if (error instanceof CliError) throw error;
+		throw new CliError(
+			`Could not push ${branch}: ${(error as Error).message}`,
+			`Check that \`git push\` works from ${main.report.display} in this terminal (your Git credentials are used), then re-run the same command; finished steps are skipped.`,
+		);
+	}
+
+	const mainProject =
+		main.target.kind === "project" ? main.target.projectId : null;
+	if (!mainProject)
+		throw new CliError(
+			"The continued folder has no project.",
+			"Re-run the plan.",
+		);
+
+	// 4. Secrets from .env and .env.local.
+	const variables = input.envVariables.filter(
+		(variable) => variable.name.length <= 128 && variable.value.length <= 8192,
+	);
+	const secretList = [...new Set(variables.map((variable) => variable.name))];
+	if (
+		variables.length &&
+		!(
+			state.secrets?.projectId === mainProject &&
+			state.secrets.names.join() === secretList.join()
+		)
+	) {
+		say(
+			`Saving ${secretList.length} secret name(s) from .env files to the project…`,
+		);
+		await api
+			.secrets({ projectId: mainProject, variables: variables.slice(0, 200) })
+			.catch((error) => apiFailure(error, "Could not save the .env secrets"));
+		state.secrets = { projectId: mainProject, names: secretList };
+		store.save(state);
+	}
+
+	// 5. Sessions: handoff, then the full transcript.
+	const uploads = resolved.flatMap((item) =>
+		item.target.kind === "project"
+			? item.group.candidates.map((candidate) => ({
+					candidate,
+					projectId: (item.target as { projectId: string }).projectId,
+				}))
+			: [],
+	);
+	const failed: { session: string; error: string }[] = [];
+	const failedByKey = new Map<string, string>();
+	const transcriptsMissing: { session: string; reason: string }[] = [];
+	let uploaded = 0;
+	let alreadyUploaded = 0;
+	for (const [index, { candidate, projectId }] of uploads.entries()) {
+		const key = `${projectId}:${sessionKey(candidate)}`;
+		const label = `${TOOL_NAMES[candidate.tool]} ${candidate.title ? `"${hideSecrets(candidate.title, redactValues).slice(0, 60)}"` : candidate.id}`;
+		const previous = state.uploaded[key];
+		if (previous?.transcript && previous.updatedAt === candidate.updatedAt) {
+			alreadyUploaded++;
+			continue;
+		}
+		say(`Session ${index + 1}/${uploads.length}: ${label}`);
+		try {
+			const handoff = buildHandoff(candidate, {
+				home: io.home,
+				redactValues,
+				importStartedAt: state.startedAt,
+			});
+			const saved = await api.session({
+				projectId,
+				handoff,
+				total: uploads.length,
+			});
+			state.uploaded[key] = {
+				importedSessionId: saved.importedSessionId,
+				transcript: false,
+				updatedAt: candidate.updatedAt,
+			};
+			store.save(state);
+			const archive = buildTranscriptArchive(candidate, {
+				home: io.home,
+				redactValues,
+			});
+			if (archive) {
+				await api.transcript(saved.transcriptUpload, archive.archive);
+				if (archive.imagesDropped)
+					transcriptsMissing.push({
+						session: label,
+						reason: "images left out (over 25 MB)",
+					});
+			} else
+				transcriptsMissing.push({
+					session: label,
+					reason: "over 25 MB compressed",
+				});
+			state.uploaded[key] = {
+				importedSessionId: saved.importedSessionId,
+				transcript: true,
+				updatedAt: candidate.updatedAt,
+			};
+			store.save(state);
+			uploaded++;
+		} catch (error) {
+			if (error instanceof ApiError && [401, 410, 429].includes(error.status))
+				apiFailure(error, "Upload stopped");
+			failed.push({ session: label, error: (error as Error).message });
+			failedByKey.set(key, (error as Error).message);
+		}
+	}
+	// 6. Finish: the chat on the pushed branch.
+	const continuedSession = input.continued;
+	if (
+		!state.uploaded[`${mainProject}:${sessionKey(continuedSession)}`]
+			?.transcript
+	) {
+		const reason = failedByKey.get(
+			`${mainProject}:${sessionKey(continuedSession)}`,
+		);
+		throw new CliError(
+			`The session being continued was not uploaded${reason ? ` (${reason})` : ""}.`,
+			"Re-run the same command; finished steps are skipped.",
+		);
+	}
+	say("Opening the chat in ytimesy…");
+	const done = await api
+		.finish({
+			projectId: mainProject,
+			continue: {
+				tool: localAgent(continuedSession.tool),
+				sessionId: continuedSession.id,
+			},
+			branch,
+			...(repository ? { repository } : {}),
+			pushedFiles: pushed.length,
+			skippedFiles: skipped.length,
+		})
+		.catch((error) => apiFailure(error, "Could not open the chat"));
+	const report: DoneReport = {
+		step: "done",
+		openUrl: done.openUrl,
+		repository,
+		branch,
+		pushed,
+		skipped,
+		sessions: { uploaded, alreadyUploaded, failed, transcriptsMissing },
+		secrets: state.secrets?.names ?? [],
+		createdRepositories,
+		skippedFolders: resolved.flatMap((item) =>
+			item.target.kind === "skip"
+				? [{ folder: item.report.display, reason: "skipped" }]
+				: [],
+		),
+	};
+	state.finished = {
+		openUrl: done.openUrl,
+		projectId: done.projectId,
+		sessionId: done.sessionId,
+		report,
+	};
+	store.save(state);
+	print(io, options, report, renderDone(report));
+	return 0;
+}

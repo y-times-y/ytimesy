@@ -22,8 +22,10 @@ it("states what the agent must and must not do", () => {
 		"The CLI reads .env and .env.local",
 		"before pushing anything from a repository other than this one",
 		"before creating a new repository",
-		"untracked files the CLI lists as risky",
-		"In a public repository, ask before pushing any untracked file",
+		"That first run only plans",
+		"then run the command it prints",
+		"untracked files the CLI lists (--yes-untracked)",
+		"In a public repository, ask before pushing any untracked file (--yes-public)",
 		"list the files pushed and anything skipped",
 		'"Done — open <link>"',
 	])
