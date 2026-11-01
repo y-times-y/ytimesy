@@ -3,7 +3,7 @@ import { database } from "./database";
 
 /**
  * Rows of "Continue your agent session" (migration
- * 20261101120000_local_session_import.sql). Codes and tokens arrive here
+ * 20261101120100_local_session_import.sql). Codes and tokens arrive here
  * already hashed; every read is scoped by the import's user.
  */
 
