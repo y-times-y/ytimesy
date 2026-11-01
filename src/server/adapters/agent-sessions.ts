@@ -6,6 +6,7 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import { ENVIRONMENT_SETUP_TITLE } from "#/domain/environment-setup";
 import { jsonbText } from "#/domain/jsonb";
 import { sessionTitleFromText } from "#/domain/session-item";
 import type { ChatWaitingOn } from "#/domain/sidebar-chats";
@@ -118,10 +119,11 @@ export async function releaseChatClaim(
 	text: string,
 ) {
 	await database().query(
-		`update agent_session s set title='New session' where s.user_id=$1 and s.id=$2 and s.title=$3
+		`update agent_session s set title='New session', environment_setup=false
+		 where s.user_id=$1 and s.id=$2 and (s.title=$3 or (s.environment_setup and s.title=$4))
 		 and s.turn_status <> 'running' and coalesce(jsonb_array_length(s.items),0)=0
 		 and not exists (select 1 from api_turn t where t.session_id=s.id)`,
-		[userId, sessionId, sessionTitleFromText(text)],
+		[userId, sessionId, sessionTitleFromText(text), ENVIRONMENT_SETUP_TITLE],
 	);
 }
 

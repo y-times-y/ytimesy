@@ -50,3 +50,51 @@ it("refuses an invalid setup without saving it", async () => {
 	expect(save).not.toHaveBeenCalled();
 	expect(result).toMatchObject({ saved: false });
 });
+
+it("saves a partly verified setup with what it could not verify", async () => {
+	save.mockResolvedValue({ repository: "you/web", rebuilding: true });
+	const result = await run({
+		install: "pnpm install --frozen-lockfile",
+		checks: ["pnpm build", "pnpm typecheck"],
+		unverified: [
+			{
+				what: "Dev server",
+				reason: "Needs the realtime secret to start.",
+				secrets: ["REALTIME_SECRET"],
+			},
+		],
+		summary: "Installs, builds and typechecks with pnpm.",
+	});
+	expect(result).toMatchObject({ saved: true });
+	expect(save).toHaveBeenCalledWith(
+		expect.objectContaining({
+			recipe: expect.objectContaining({
+				checks: ["pnpm build", "pnpm typecheck"],
+				unverified: [
+					{
+						what: "Dev server",
+						reason: "Needs the realtime secret to start.",
+						secrets: ["REALTIME_SECRET"],
+					},
+				],
+			}),
+		}),
+	);
+});
+
+it("tells the agent not to hold the save back for optional runtime pieces", () => {
+	const saveTool = environmentSetupTools({ userId: "u1", projectId: "p1" })[
+		SAVE_PROJECT_ENVIRONMENT_TOOL
+	] as {
+		description: string;
+		inputSchema: { safeParse: (v: unknown) => { success: boolean } };
+	};
+	expect(saveTool.description).toMatch(/Do not hold the save back/);
+	expect(saveTool.description).toMatch(/unverified/);
+	expect(
+		saveTool.inputSchema.safeParse({
+			summary: "x",
+			unverified: [{ what: "Dev server", reason: "Needs a secret." }],
+		}).success,
+	).toBe(true);
+});

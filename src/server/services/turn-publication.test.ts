@@ -18,6 +18,10 @@ const deps = vi.hoisted(() => ({
 	evalUser: vi.fn(),
 	evaluation: vi.fn(),
 	branchName: vi.fn(),
+	setupChat: vi.fn(),
+}));
+vi.mock("../adapters/environment-setup-chats", () => ({
+	isEnvironmentSetupChat: deps.setupChat,
 }));
 vi.mock("../adapters/dev-eval-users", () => ({ isDevEvalUser: deps.evalUser }));
 vi.mock("../adapters/harness-evaluation", () => ({
@@ -81,6 +85,7 @@ beforeEach(() => {
 	deps.token.mockResolvedValue("owner-token");
 	deps.evalUser.mockResolvedValue(false);
 	deps.evaluation.mockResolvedValue(null);
+	deps.setupChat.mockResolvedValue(false);
 	deps.evidence.mockResolvedValue(undefined);
 	deps.authorize.mockResolvedValue({ defaultBranch: "main" });
 	deps.ahead.mockResolvedValue(1);
@@ -338,6 +343,7 @@ it.each([
 		"an evaluation run",
 		() => deps.evaluation.mockResolvedValue({ id: "evaluation" }),
 	],
+	["an environment-setup chat", () => deps.setupChat.mockResolvedValue(true)],
 ])("never pushes for %s", async (_label, arrange) => {
 	arrange();
 	for (const each of [chat, session]) {

@@ -10,14 +10,30 @@ const environmentService = z
 	})
 	.strict();
 
+const secretName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
+
+/**
+ * Something the setup could not verify (e.g. the dev server without its
+ * realtime secret): shown in Settings, never run by the build.
+ */
+export const unverifiedEnvironmentItem = z
+	.object({
+		what: z.string().trim().min(1).max(120),
+		reason: z.string().trim().min(1).max(300),
+		secrets: z.array(secretName).max(10).optional(),
+	})
+	.strict();
+export type UnverifiedEnvironmentItem = z.infer<
+	typeof unverifiedEnvironmentItem
+>;
+
 export const environmentRecipe = z
 	.object({
 		version: z.literal(1).default(1),
 		install: command.optional(),
-		buildSecrets: z
-			.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/))
-			.max(100)
-			.default([]),
+		buildSecrets: z.array(secretName).max(100).default([]),
+		/** Left out (not defaulted) so setups saved before it keep their build hash. */
+		unverified: z.array(unverifiedEnvironmentItem).max(20).optional(),
 		verify: z.array(command).max(20).default([]),
 		checks: z.array(command).max(20).default([]),
 		parallelChecks: z.array(z.array(command).min(2).max(4)).max(10).default([]),
@@ -67,4 +83,11 @@ export const ENVIRONMENT_RECIPE_PATH = ".ytimesy/environment.json";
 
 export function parseEnvironmentRecipe(contents: string): EnvironmentRecipe {
 	return environmentRecipe.parse(JSON.parse(contents));
+}
+
+/** An unverified item's tooltip: why, and the secrets it is missing. */
+export function unverifiedItemDetails(item: UnverifiedEnvironmentItem) {
+	return item.secrets?.length
+		? `${item.reason} Needs ${item.secrets.join(", ")}.`
+		: item.reason;
 }

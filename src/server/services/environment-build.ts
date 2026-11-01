@@ -115,14 +115,17 @@ export async function resolveEnvironmentBuildInput(
 			branch,
 		);
 		if (!commit) throw new Error("Cannot resolve the repository revision.");
-		const savedRecipe = savedRecipes.get(repo.repositoryId)?.recipe;
+		// Unverified notes only explain the setup; they never change the image.
+		const saved = withoutUnverified(
+			savedRecipes.get(repo.repositoryId)?.recipe,
+		);
 		repositories.push({
 			...repo,
 			fullName: authorized.fullName,
 			branch,
 			commit,
 			// Part of the input hash: a new saved setup rebuilds the image.
-			...(savedRecipe ? { savedRecipe } : {}),
+			...(saved ? { savedRecipe: saved } : {}),
 		});
 	}
 	const baseSnapshotId =
@@ -176,6 +179,12 @@ export async function resolveEnvironmentBuildInput(
 		baseSnapshotId,
 		repositories,
 	};
+}
+
+function withoutUnverified(recipe: EnvironmentRecipe | undefined) {
+	if (!recipe) return undefined;
+	const { unverified: _notes, ...built } = recipe;
+	return built;
 }
 
 export function environmentInputHash(
