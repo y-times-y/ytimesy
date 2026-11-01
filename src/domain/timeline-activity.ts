@@ -184,6 +184,14 @@ export function groupTimelineRows(
 			timing = turnStartTiming(item);
 			continue;
 		}
+		// A continued chat's handoff card stands alone, before any turn.
+		if (item.kind === "handoff") {
+			flush(true);
+			turn = [];
+			timing = undefined;
+			rows.push({ kind: "item", item });
+			continue;
+		}
 		const internal =
 			item.kind === "agentMessage" && isInternalChildTaskMessage(item.text);
 		if (item.kind === "userMessage") {

@@ -41,7 +41,7 @@ export const Route = createFileRoute("/api/github/repositories")({
 						Effect.either(createScratchProject(user.id, name)),
 					);
 					if (result._tag === "Left") throw result.left.error;
-					return result.right;
+					return result.right.project;
 				}),
 		},
 	},

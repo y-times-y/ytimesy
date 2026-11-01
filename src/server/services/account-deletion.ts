@@ -8,6 +8,7 @@ import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
+import { removeHandoffObjects } from "../adapters/handoff-store";
 import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { cancelServerTurn } from "./cancel-server-turn";
@@ -92,6 +93,13 @@ export async function deleteAccount(
 	await removeUserPullRequestEvidence(userId).catch(() => {
 		throw new Response(
 			"Your account was not deleted because its pull request evidence could not be removed. Try again.",
+			{ status: 503 },
+		);
+	});
+	// Imported local sessions (handoffs and transcripts) in private storage.
+	await removeHandoffObjects(userId).catch(() => {
+		throw new Response(
+			"Your account was not deleted because its imported sessions could not be removed. Try again.",
 			{ status: 503 },
 		);
 	});

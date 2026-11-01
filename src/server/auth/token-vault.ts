@@ -3,8 +3,10 @@ import { z } from "zod";
 import {
 	isVersionedSeal,
 	openVersioned,
+	openVersionedBytes,
 	type SealBinding,
 	sealVersioned,
+	sealVersionedBytes,
 	vaultKeys,
 } from "#/domain/sealed-token";
 import { vaultConfig } from "../config";
@@ -28,6 +30,13 @@ export const unseal = async (data: string, binding?: SealBinding) =>
 	isVersionedSeal(data)
 		? openVersioned(keys(), data, binding)
 		: symmetricDecrypt({ key: vaultConfig().BETTER_AUTH_SECRET, data });
+
+/** Seals a binary payload (a large file) under the same keys, bound like seal. */
+export const sealBytes = (data: Uint8Array, binding?: SealBinding) =>
+	sealVersionedBytes(keys(), data, binding);
+
+export const unsealBytes = (data: Uint8Array, binding?: SealBinding) =>
+	openVersionedBytes(keys(), data, binding);
 
 export const githubCredentials = z.object({
 	accessToken: z.string().min(1),

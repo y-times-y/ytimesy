@@ -170,6 +170,7 @@ import {
 } from "../app/keyboard-shortcuts";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
+import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
@@ -328,8 +329,11 @@ export function WorkspaceHome({
 	savedInspector = CLOSED_INSPECTOR,
 	savedPullRequests = NO_SAVED_SIDEBAR_PRS,
 	savedDefaultBranches = NO_SAVED_DEFAULT_BRANCHES,
+	githubConnected = false,
 }: {
 	initialSession: PublicCodexSession;
+	/** Whether GitHub is connected: the new chat's import card needs it. */
+	githubConnected?: boolean;
 	/** The chat the page opens (a linked chat, else the latest), read with
 	 * the page: it renders open. */
 	initialChatView?: OpenChatView;
@@ -3249,6 +3253,9 @@ export function WorkspaceHome({
 										projectPickerOpen={projectPickerOpen}
 										onProjectPickerOpenChange={setProjectPickerOpen}
 									/>
+									{followUpLayout ? null : (
+										<ContinueSessionCard githubConnected={githubConnected} />
+									)}
 									{projects.error && !projects.data && (
 										<p role="alert">
 											Unable to load projects.{" "}

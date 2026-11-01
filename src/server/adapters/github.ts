@@ -87,6 +87,7 @@ export async function listAuthorizedRepositories(
 				repositoryId: repo.id,
 				fullName: repo.full_name,
 				defaultBranch: repo.default_branch,
+				private: repo.private,
 			});
 		}
 	}
@@ -95,6 +96,8 @@ export async function listAuthorizedRepositories(
 export async function createAuthorizedRepository(
 	token: string,
 	name: string,
+	/** False for an empty repository the caller pushes its own history into. */
+	options: { readonly autoInit?: boolean } = {},
 ): Promise<RepositoryChoice> {
 	const github = githubClient(token);
 	let created: Awaited<
@@ -104,7 +107,7 @@ export async function createAuthorizedRepository(
 		created = await github.repos.createForAuthenticatedUser({
 			name,
 			private: true,
-			auto_init: true,
+			auto_init: options.autoInit ?? true,
 		});
 	} catch (error) {
 		const status =
@@ -161,6 +164,31 @@ export async function createAuthorizedRepository(
 		fullName: created.data.full_name,
 		defaultBranch: created.data.default_branch || "main",
 	};
+}
+
+/**
+ * Whether createAuthorizedRepository can succeed for this user: the ytimesy
+ * app is installed on their own account with write access to contents.
+ */
+export async function githubRepositoryCreation(token: string) {
+	const github = githubClient(token);
+	const [user, installations] = await Promise.all([
+		github.users.getAuthenticated(),
+		github.paginate(github.apps.listInstallationsForAuthenticatedUser, {
+			per_page: 100,
+		}),
+	]);
+	const owner = user.data.login;
+	const installed = installations.some(
+		(row) =>
+			!row.suspended_at &&
+			row.app_slug === serverConfig().GITHUB_APP_SLUG &&
+			row.permissions.contents === "write" &&
+			row.account !== null &&
+			"login" in row.account &&
+			row.account.login.toLowerCase() === owner.toLowerCase(),
+	);
+	return { owner, canCreate: installed };
 }
 
 export async function authorizedRepository(

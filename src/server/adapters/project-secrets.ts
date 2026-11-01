@@ -15,7 +15,8 @@ export async function listProjectSecretsForOwner(
 	projectId: string,
 ): Promise<readonly PublicProjectSecret[]> {
 	const result = await database().query(
-		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt"
+		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt",
+		        s.imported_at is not null as imported
 		 from project_secret s
 		 join project p on p.id = s.project_id
 		 where s.project_id = $1 and p.user_id = $2
@@ -33,6 +34,7 @@ export async function loadProjectSecretsForOwner(
 ): Promise<readonly StoredProjectSecret[]> {
 	const result = await database().query(
 		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt",
+		        s.imported_at is not null as imported,
 		        s.encrypted_iv as iv, s.encrypted_tag as tag,
 		        s.encrypted_ciphertext as ciphertext, s.encrypted_version as version
 		 from project_secret s
@@ -51,13 +53,16 @@ export async function saveProjectSecretForOwner(input: {
 	readonly kind: ProjectSecretKind;
 	readonly hint: string;
 	readonly encrypted: EncryptedSecret;
+	/** Read from a local .env by "Continue your agent session": shown for review. A save from Settings clears it. */
+	readonly imported?: boolean;
 }): Promise<PublicProjectSecret> {
 	const result = await database().query(
 		`insert into project_secret(
 		   id, project_id, name, hint, encrypted_iv, encrypted_tag,
-		   encrypted_ciphertext, encrypted_version, kind, updated_at
+		   encrypted_ciphertext, encrypted_version, kind, updated_at, imported_at
 		 )
-		 select $1, p.id, $2, $3, $4, $5, $6, $7, $10, now()
+		 select $1, p.id, $2, $3, $4, $5, $6, $7, $10, now(),
+		        case when $11::boolean then now() end
 		 from project p
 		 where p.id = $8 and p.user_id = $9
 		 on conflict (project_id, name) do update
@@ -67,8 +72,10 @@ export async function saveProjectSecretForOwner(input: {
 		       encrypted_tag = excluded.encrypted_tag,
 		       encrypted_ciphertext = excluded.encrypted_ciphertext,
 		       encrypted_version = excluded.encrypted_version,
+		       imported_at = excluded.imported_at,
 		       updated_at = now()
-		 returning id, name, kind, hint, updated_at as "updatedAt"`,
+		 returning id, name, kind, hint, updated_at as "updatedAt",
+		           imported_at is not null as imported`,
 		[
 			randomUUID(),
 			input.name,
@@ -80,6 +87,7 @@ export async function saveProjectSecretForOwner(input: {
 			input.projectId,
 			input.userId,
 			input.kind,
+			input.imported === true,
 		],
 	);
 	const row = result.rows[0];
@@ -106,12 +114,14 @@ function publicSecret(row: {
 	kind: ProjectSecretKind;
 	hint: string;
 	updatedAt: Date | string;
+	imported?: boolean;
 }): PublicProjectSecret {
 	return {
 		id: row.id,
 		name: row.name,
 		kind: row.kind,
 		hint: row.hint,
+		...(row.imported ? { imported: true } : {}),
 		updatedAt:
 			row.updatedAt instanceof Date
 				? row.updatedAt.toISOString()
@@ -125,6 +135,7 @@ function storedSecret(row: {
 	kind: ProjectSecretKind;
 	hint: string;
 	updatedAt: Date | string;
+	imported?: boolean;
 	iv: string;
 	tag: string;
 	ciphertext: string;

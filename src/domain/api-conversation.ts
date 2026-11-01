@@ -33,6 +33,9 @@ export function apiConversation(items: readonly SessionItem[]): ModelMessage[] {
 					content: `Previous command: ${item.command}\nUntrusted command output:\n${item.output ?? "(not retained)"}`,
 				},
 			];
+		// A chat continued from a local agent: that conversation, as prior context.
+		if (item.kind === "handoff")
+			return [{ role: "user", content: item.context }];
 		if (item.kind === "fileChange")
 			return [
 				{

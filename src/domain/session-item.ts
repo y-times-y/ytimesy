@@ -4,6 +4,7 @@ import type { ApiTokenUsage } from "./api-token-usage";
 import type { BackgroundCommandRecord } from "./background-command";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
+import type { LocalAgent } from "./local-import-view";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
@@ -197,6 +198,24 @@ export type NoticeSessionItem = {
 	readonly timing?: UserMessageItem["timing"];
 };
 
+/**
+ * The start of a chat continued from a local agent session ("Continue your
+ * agent session"). The timeline shows one compact card; the model reads
+ * `context` as prior conversation (api-conversation.ts).
+ */
+export type HandoffSessionItem = {
+	readonly kind: "handoff";
+	readonly id: SessionItemId;
+	readonly tool: LocalAgent;
+	readonly title: string;
+	/** Turns in the local session. */
+	readonly turns: number;
+	/** The local session's last activity (ISO). */
+	readonly at: string;
+	/** The handoff as the model reads it (handoffContextText); never rendered. */
+	readonly context: string;
+};
+
 export type UnknownSessionItem = {
 	readonly kind: "unknown";
 	readonly id: SessionItemId;
@@ -220,6 +239,7 @@ export type SessionItem =
 	| ErrorSessionItem
 	| ModelSwitchItem
 	| NoticeSessionItem
+	| HandoffSessionItem
 	| UnknownSessionItem;
 
 export function isTurnRunning(status: SessionTurnStatus): boolean {
