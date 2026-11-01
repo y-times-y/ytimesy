@@ -15,8 +15,6 @@ export type StartResponse = {
 	readonly expiresAt: string;
 	readonly appUrl: string;
 	readonly projects: readonly PlanProject[];
-	readonly canCreateRepository: boolean;
-	readonly repositoryOwner: string | null;
 };
 
 export type PlanGroupRequest = {
@@ -38,16 +36,12 @@ export type PlanEntry = {
 } & (
 	| {
 			readonly action: "import";
-			readonly projectId: string;
+			/** Null: no project holds the repository yet; create-project makes one. */
+			readonly projectId: string | null;
 			readonly projectName: string;
+			readonly newProject: boolean;
 			readonly repository: string;
 			readonly visibility: "public" | "private" | "unknown";
-	  }
-	| {
-			readonly action: "connect-repository";
-			readonly repository: string;
-			readonly visibility: "public" | "private" | "unknown";
-			readonly connectUrl: string;
 	  }
 	| {
 			readonly action: "grant-access";
@@ -57,7 +51,6 @@ export type PlanEntry = {
 	| {
 			readonly action: "no-repository";
 			readonly reason: "no-git" | "no-remote" | "other-host";
-			readonly canCreateRepository: boolean;
 			readonly suggestedName: string;
 			readonly attachTo: readonly { id: string; name: string }[];
 	  }
@@ -165,7 +158,8 @@ export class ImportApi {
 		});
 	}
 
-	createProject(body: { folder: string; name: string }) {
+	/** A project for a repository the ytimesy app reaches (409: it cannot see it yet). */
+	createProject(body: { folder: string; repository: string }) {
 		return this.json<CreateProjectResponse>(
 			"/api/local-import/create-project",
 			body,

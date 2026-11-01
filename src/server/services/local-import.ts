@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import type { z } from "zod";
-import { scratchRepositoryName } from "#/domain/add-project";
+import { addedProjectBranch } from "#/domain/add-project";
 import { DEFAULT_COMPOSER_HARNESS_ID } from "#/domain/agent-provider";
 import { handoffSummary } from "#/domain/handoff-summary";
 import { SessionItemId } from "#/domain/ids";
@@ -43,6 +43,7 @@ import { localImportPrompt } from "#/domain/local-import-prompt";
 import {
 	type Project,
 	projectDisplayName,
+	type RepositoryChoice,
 	repositoriesForProject,
 } from "#/domain/projects";
 import type { HandoffSessionItem } from "#/domain/session-item";
@@ -54,7 +55,6 @@ import {
 } from "../adapters/agent-sessions";
 import { latestEnvironmentRecipes } from "../adapters/environment-recipes";
 import {
-	githubRepositoryCreation,
 	listAuthorizedRepositories,
 	repositoryBranchSha,
 } from "../adapters/github";
@@ -77,7 +77,12 @@ import {
 	saveImportedTranscriptSize,
 	saveLocalImportProgress,
 } from "../adapters/local-imports";
-import { listProjects, projectForOwner } from "../adapters/projects";
+import {
+	listProjects,
+	projectForOwner,
+	projectForRepository,
+	saveProject,
+} from "../adapters/projects";
 import {
 	consumeUserAction,
 	requireUserAction,
@@ -90,7 +95,7 @@ import {
 import { serverConfig } from "../config";
 import { saveProjectEnvironment } from "./project-environment-setup";
 import { saveImportedProjectSecrets } from "./project-secrets";
-import { createScratchProject } from "./projects";
+import { connectProject } from "./projects";
 import { enqueueProjectWorkspace } from "./workspaces";
 
 /**
@@ -135,6 +140,9 @@ export function localImportView(
 	return {
 		id: row.id,
 		status: localImportViewStatus(row, now),
+		agent: (LOCAL_AGENTS as readonly string[]).includes(row.agent ?? "")
+			? (row.agent as LocalAgent)
+			: null,
 		sessionsPlanned: row.sessionsPlanned,
 		sessionsImported: row.sessionsImported,
 		projectId: row.projectId,
@@ -236,15 +244,15 @@ function planProjects(projects: readonly Project[]): PlanProject[] {
 	}));
 }
 
-async function repositoryCreation(userId: string) {
-	try {
-		return await githubRepositoryCreation(await githubAccessToken(userId));
-	} catch {
-		return { owner: null, canCreate: false };
-	}
+function installationUrl() {
+	return `https://github.com/apps/${serverConfig().GITHUB_APP_SLUG}/installations/new`;
 }
 
-/** Spends the code and returns the token, the user's projects and whether a repository can be created. */
+/**
+ * Spends the code and returns the token and the user's projects. ytimesy
+ * never creates repositories (its GitHub app lacks the Administration
+ * permission): the CLI does, with the user's own GitHub login.
+ */
 export async function startLocalImport(input: z.infer<typeof startRequest>) {
 	const code = normalizeImportCode(input.code);
 	if (!code)
@@ -263,28 +271,21 @@ export async function startLocalImport(input: z.infer<typeof startRequest>) {
 			importCodeRefusal(await localImportByCodeHash(codeHash), new Date()),
 			410,
 		);
-	const [projects, creation] = await Promise.all([
-		listProjects(row.userId),
-		repositoryCreation(row.userId),
-	]);
+	const projects = await listProjects(row.userId);
 	return {
 		token,
 		expiresAt: tokenExpiresAt.toISOString(),
 		appUrl: serverConfig().APP_URL,
 		projects: planProjects(projects),
-		canCreateRepository: creation.canCreate,
-		repositoryOwner: creation.owner,
 	};
 }
 
 /** For each folder of local sessions: where it goes, or what the user must decide. */
 export async function planImport(caller: ImportCaller, request: PlanRequest) {
-	const config = serverConfig();
 	const githubToken = await githubAccessToken(caller.userId);
-	const [projects, reachable, creation] = await Promise.all([
+	const [projects, reachable] = await Promise.all([
 		listProjects(caller.userId),
 		listAuthorizedRepositories(githubToken),
-		repositoryCreation(caller.userId),
 	]);
 	return {
 		groups: planLocalImport({
@@ -296,34 +297,100 @@ export async function planImport(caller: ImportCaller, request: PlanRequest) {
 					repository.private,
 				]),
 			),
-			canCreateRepository: creation.canCreate,
-			connectUrl: `${config.APP_URL}/?addProject=1`,
-			installationUrl: `https://github.com/apps/${config.GITHUB_APP_SLUG}/installations/new`,
+			installationUrl: installationUrl(),
 		}),
 	};
 }
 
+export type ImportProjectDependencies = {
+	readonly reachable: (userId: string) => Promise<readonly RepositoryChoice[]>;
+	readonly branchExists: (
+		userId: string,
+		fullName: string,
+		branch: string,
+	) => Promise<boolean>;
+	readonly projectForRepository: (
+		userId: string,
+		repositoryId: number,
+	) => Promise<Project | null>;
+	/** A project for a repository with commits; its environment is prepared. */
+	readonly connect: (
+		userId: string,
+		repository: RepositoryChoice,
+	) => Promise<Project>;
+	/** A project for an empty repository; finish prepares it once the push landed. */
+	readonly save: (
+		userId: string,
+		repository: RepositoryChoice,
+	) => Promise<Project>;
+};
+
+const defaultImportProjectDependencies: ImportProjectDependencies = {
+	reachable: async (userId) =>
+		listAuthorizedRepositories(await githubAccessToken(userId)),
+	branchExists: async (userId, fullName, branch) =>
+		Boolean(
+			await repositoryBranchSha(
+				await githubAccessToken(userId),
+				fullName,
+				branch,
+			),
+		),
+	projectForRepository,
+	connect: async (userId, repository) => {
+		const result = await Effect.runPromise(
+			Effect.either(
+				connectProject(userId, {
+					installationId: repository.installationId,
+					repositoryId: repository.repositoryId,
+					branch: addedProjectBranch(repository),
+				}),
+			),
+		);
+		if (result._tag === "Left") throw result.left.error;
+		return result.right;
+	},
+	save: (userId, repository) =>
+		saveProject(userId, repository, addedProjectBranch(repository)),
+};
+
 /**
- * A folder that is not a GitHub repository becomes a new, empty private
- * repository and its project (the existing new-repository flow). The CLI
- * pushes with the user's own Git credentials; no ytimesy token leaves here.
+ * Makes a project of a GitHub repository the ytimesy app reaches: one the
+ * plan found without a project, or one the CLI just created with the user's
+ * own `gh` login. The same repository twice returns its project. A
+ * repository the app cannot see yet (an install on selected repositories)
+ * is refused with the link to add it there; nothing is created here.
  */
 export async function createImportProject(
 	caller: ImportCaller,
 	request: z.infer<typeof createProjectRequest>,
+	dependencies: ImportProjectDependencies = defaultImportProjectDependencies,
 ) {
 	await requireUserAction(caller.userId, "project-create");
-	const name = scratchRepositoryName(request.name);
-	if (!name) refuse("Repository name is invalid.", 400);
-	const result = await Effect.runPromise(
-		Effect.either(
-			createScratchProject(caller.userId, name as string, undefined, {
-				empty: true,
-			}),
-		),
+	const wanted = request.repository.toLowerCase();
+	const repository = (await dependencies.reachable(caller.userId)).find(
+		(candidate) => candidate.fullName.toLowerCase() === wanted,
 	);
-	if (result._tag === "Left") throw result.left.error;
-	const { project, repository } = result.right;
+	if (!repository)
+		return refuse(
+			`The ytimesy GitHub app cannot see ${request.repository} yet. Add it to the app's repositories at ${installationUrl()}, then re-run.`,
+			409,
+		);
+	const existing = await dependencies.projectForRepository(
+		caller.userId,
+		repository.repositoryId,
+	);
+	// A new repository has no commits yet: the CLI pushes its first, and
+	// finish prepares the environment then.
+	const project =
+		existing ??
+		((await dependencies.branchExists(
+			caller.userId,
+			repository.fullName,
+			repository.defaultBranch,
+		))
+			? await dependencies.connect(caller.userId, repository)
+			: await dependencies.save(caller.userId, repository));
 	return {
 		projectId: project.id,
 		repository: repository.fullName,

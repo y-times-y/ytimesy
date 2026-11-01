@@ -27,9 +27,6 @@ vi.mock("../local-import/local-import.fn", () => ({
 	localImportStatusFn: vi.fn(),
 	cancelLocalImportFn: vi.fn(),
 }));
-vi.mock("../projects/add-project-form", () => ({
-	AddProjectForm: () => <div data-testid="add-project" />,
-}));
 
 import { FirstRun } from "./first-run";
 
@@ -41,15 +38,26 @@ function render(state: { githubConnected: boolean; modelReady: boolean }) {
 	);
 }
 
-it("opens at GitHub, or at the repositories once GitHub is connected", () => {
+it("opens at GitHub, and asks for no repository once GitHub is connected", () => {
 	const fresh = render({ githubConnected: false, modelReady: false });
 	expect(fresh).toContain("Connect GitHub");
 	expect(fresh).toContain('aria-current="step">GitHub');
 	expect(fresh).toContain("Install the ytimesy app");
 	expect(fresh).toContain("After sign-in");
+	expect(fresh).not.toContain("Repositories");
+	// Signed in, the app's repositories still loading: the GitHub step waits.
 	const connected = render({ githubConnected: true, modelReady: false });
-	expect(connected).toContain("Choose repositories");
-	expect(connected).toContain('data-state="done"');
+	expect(connected).toContain("Checking…");
+	expect(connected).not.toContain("Choose repositories");
+	expect(connected).not.toContain("add-project");
+});
+
+it("shows three stages: GitHub, Model, Sessions", () => {
+	const html = render({ githubConnected: false, modelReady: false });
+	const stages = [
+		...html.matchAll(/<li[^>]*>(GitHub|Model|Sessions|Repositories)<\/li>/g),
+	].map((match) => match[1]);
+	expect(stages).toEqual(["GitHub", "Model", "Sessions"]);
 });
 
 import { ModelStep } from "./first-run";

@@ -45,7 +45,12 @@ describe("HandoffCard", () => {
 		expect(html).toContain("The login page loops after OAuth.");
 		expect(html).toContain("<dt>Stopped</dt>");
 		expect(html).toContain("<dt>Next</dt>");
-		expect(html).toContain("221 turns · Nov 1 · fix-login");
+		// The chat's own branch up front; the local one only in the details.
+		expect(html).toContain("221 turns · Nov 1 · ytimesy/fix-login-ab12</span>");
+		expect(html).toContain("<small>from fix-login</small>");
+		expect(html.indexOf("fix-login<")).toBeGreaterThan(
+			html.indexOf("<details"),
+		);
 		// Details are folded: a closed <details>, so first paint is the same everywhere.
 		expect(html).toMatch(/<details class="handoff-card-details">/);
 		expect(html).not.toContain("<details open");

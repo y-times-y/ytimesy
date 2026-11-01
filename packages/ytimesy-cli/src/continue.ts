@@ -8,14 +8,22 @@ import { sqliteWarning } from "../../../src/local-sessions/machine.ts";
 import { ApiError, ImportApi, type PlanEntry } from "./api.ts";
 import { type EnvVariable, readEnvFiles, redactionValues } from "./env-file.ts";
 import {
+	createPrivateRepository,
+	type GithubCliStatus,
+	githubCliNextStep,
+	githubCliStatus,
+} from "./github-cli.ts";
+import {
 	changedTrackedFiles,
 	currentBranch,
 	type Env,
+	folderPlan,
 	headCommit,
 	pushCommit,
 	sameCommitContent,
 	snapshotFolder,
 	snapshotRepository,
+	tooManyFiles,
 	untrackedPlan,
 } from "./repo-snapshot.ts";
 import {
@@ -190,6 +198,9 @@ type Resolved = {
 	/** Where its sessions go, once decided. */
 	readonly target:
 		| { kind: "project"; projectId: string; projectName: string }
+		/** The app reaches the repository; create-project makes its project. */
+		| { kind: "register"; repository: string; projectName: string }
+		/** A new private repository (made with `gh`), then its project. */
 		| { kind: "create"; name: string }
 		| { kind: "skip"; reason: string }
 		| { kind: "undecided"; need: string };
@@ -201,6 +212,8 @@ function resolveGroups(
 	decisions: ReadonlyMap<string, Decision>,
 	state: ImportState,
 	io: Io,
+	/** Whether `gh` can create repositories here (asked only when needed). */
+	githubCli: () => GithubCliStatus,
 ): Resolved[] {
 	return groups.map((group, index) => {
 		const entry = entries[index] as PlanEntry;
@@ -218,38 +231,46 @@ function resolveGroups(
 		let reportDecision: GroupReport["decision"] = null;
 		let extra: Partial<GroupReport> = {};
 		switch (entry.action) {
-			case "import":
+			case "import": {
+				// A project an earlier run made for this repository.
+				const registered = state.registered?.[group.folder];
+				const projectId = entry.projectId ?? registered?.projectId ?? null;
 				extra = {
 					repository: entry.repository,
 					visibility: entry.visibility,
-					projectId: entry.projectId,
+					...(projectId ? { projectId } : {}),
 					projectName: entry.projectName,
+					newProject: entry.newProject,
 				};
 				if (decision?.kind === "skip" && !group.continued) {
 					target = { kind: "skip", reason: "skipped" };
 					reportDecision = { kind: "skip" };
 				} else {
-					target = {
-						kind: "project",
-						projectId: entry.projectId,
+					target = projectId
+						? {
+								kind: "project",
+								projectId,
+								projectName: entry.projectName,
+							}
+						: {
+								kind: "register",
+								repository: entry.repository,
+								projectName: entry.projectName,
+							};
+					reportDecision = {
+						kind: "import",
 						projectName: entry.projectName,
+						newProject: entry.newProject,
 					};
-					reportDecision = { kind: "import", projectName: entry.projectName };
 				}
 				break;
-			case "connect-repository":
+			}
 			case "grant-access": {
 				extra = {
 					repository: entry.repository,
 					connectUrl: entry.connectUrl,
-					...(entry.action === "connect-repository"
-						? { visibility: entry.visibility }
-						: {}),
 				};
-				const what =
-					entry.action === "connect-repository"
-						? `${display}: add ${entry.repository} as a project in ytimesy (${entry.connectUrl}) and re-run, or pass --skip ${shellWord(display)}`
-						: `${display}: give the ytimesy GitHub app access to ${entry.repository} (${entry.connectUrl}) and re-run, or pass --skip ${shellWord(display)}`;
+				const what = `${display}: give the ytimesy GitHub app access to ${entry.repository} (${entry.connectUrl}) and re-run, or pass --skip ${shellWord(display)}`;
 				if (decision?.kind === "skip" && !group.continued) {
 					target = { kind: "skip", reason: "skipped" };
 					reportDecision = { kind: "skip" };
@@ -263,13 +284,20 @@ function resolveGroups(
 				break;
 			}
 			case "no-repository": {
+				const created = state.created[group.folder];
+				const pending = state.githubCreated?.[group.folder];
+				// gh is asked only when a repository may be created here.
+				const canCreate =
+					Boolean(created || pending) ||
+					(decision?.kind === "create-repo" || !decision
+						? githubCli().ready
+						: false);
 				extra = {
 					reason: entry.reason,
-					canCreateRepository: entry.canCreateRepository,
+					canCreateRepository: canCreate,
 					suggestedName: entry.suggestedName,
 					attachTo: entry.attachTo,
 				};
-				const created = state.created[group.folder];
 				if (created) {
 					target = {
 						kind: "project",
@@ -281,11 +309,18 @@ function resolveGroups(
 						name: created.repository.split("/").pop() ?? "",
 					};
 				} else if (decision?.kind === "create-repo") {
-					const name = decision.name || entry.suggestedName;
-					if (!entry.canCreateRepository)
+					const name =
+						pending?.repository.split("/").pop() ||
+						decision.name ||
+						entry.suggestedName;
+					const status = githubCli();
+					if (!pending && !status.ready)
 						throw new CliError(
-							"ytimesy cannot create repositories on your GitHub account.",
-							"Reconnect GitHub in ytimesy with repository creation allowed, or attach the folder to a project.",
+							status.reason === "missing"
+								? "Creating a repository needs the GitHub CLI (gh), signed in to your GitHub account; it is not installed."
+								: "Creating a repository needs the GitHub CLI (gh) signed in to your GitHub account; it is not signed in.",
+							githubCliNextStep(status),
+							3,
 						);
 					if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name))
 						throw new CliError(
@@ -328,7 +363,7 @@ function resolveGroups(
 					reportDecision = { kind: "skip" };
 				} else {
 					const options = [
-						entry.canCreateRepository
+						canCreate
 							? `--create-repo ${shellWord(display)}=${entry.suggestedName}`
 							: null,
 						!group.continued && entry.attachTo.length
@@ -336,9 +371,12 @@ function resolveGroups(
 							: null,
 						group.continued ? null : `--skip ${shellWord(display)}`,
 					].filter(Boolean);
+					const create = canCreate
+						? ""
+						: ` (to create a private repository for it: ${githubCliNextStep(githubCli())})`;
 					target = {
 						kind: "undecided",
-						need: `${display} has no GitHub repository: ${options.join(" or ") || "connect GitHub in ytimesy with repository creation allowed"}`,
+						need: `${display} has no GitHub repository: ${options.join(" or ") || "create one"}${create}`,
 					};
 				}
 				break;
@@ -383,17 +421,21 @@ function branchPreview(
 	io: Io,
 ): BranchReport {
 	const group = resolved.group;
-	if (!group.git)
+	if (!group.git) {
+		// The same rules as the push itself (snapshotFolder), nothing committed.
+		const plan = folderPlan(group.folder, io.env);
 		return {
 			repository: null,
 			branch,
 			from: null,
 			visibility: "new",
 			trackedChanged: [],
-			untrackedToPush: [],
-			skipped: [],
+			untrackedToPush: plan.included.map((file) => file.path),
+			skipped: plan.skipped,
 			wholeFolder: true,
+			...(plan.tooMany ? { tooManyFiles: plan.listed } : {}),
 		};
+	}
 	const { included, skipped } = untrackedPlan(group.folder, io.env);
 	const entry = resolved.entry;
 	return {
@@ -404,7 +446,7 @@ function branchPreview(
 			headCommit(group.folder, io.env)?.slice(0, 12) ??
 			null,
 		visibility:
-			entry.action === "import" || entry.action === "connect-repository"
+			entry.action === "import"
 				? entry.visibility
 				: entry.action === "no-repository"
 					? "new"
@@ -511,6 +553,21 @@ function totals(candidates: readonly Candidate[]) {
 	};
 }
 
+/**
+ * create-project's 409: the ytimesy app cannot see the repository yet (its
+ * install covers selected repositories). The user adds it, then re-runs;
+ * nothing is created twice.
+ */
+function projectFailure(error: unknown, what: string): never {
+	if (error instanceof ApiError && error.status === 409)
+		throw new CliError(
+			`${what}: ${error.message}`,
+			"Ask the user to add the repository to the ytimesy GitHub app (the link above), then re-run the same command; finished steps are skipped.",
+			3,
+		);
+	return apiFailure(error, what);
+}
+
 function apiFailure(error: unknown, what: string): never {
 	if (error instanceof ApiError) {
 		if (error.status === 401 || error.status === 410)
@@ -581,8 +638,6 @@ async function connect(
 		appUrl: started.appUrl,
 		startedAt: Date.now(),
 		projects: [...started.projects],
-		canCreateRepository: started.canCreateRepository,
-		repositoryOwner: started.repositoryOwner,
 		created: {},
 		uploaded: {},
 	};
@@ -703,7 +758,18 @@ export async function runContinue(
 			"Re-run the same command.",
 		);
 	const decisions = parseDecisions(options, groups, io);
-	const resolved = resolveGroups(groups, planned.groups, decisions, state, io);
+	let githubCli: GithubCliStatus | undefined;
+	const resolved = resolveGroups(
+		groups,
+		planned.groups,
+		decisions,
+		state,
+		io,
+		() => {
+			githubCli ??= githubCliStatus(io.env);
+			return githubCli;
+		},
+	);
 	const main = resolved.find((item) => item.group.continued) as Resolved;
 	state.branchName ??= newBranchName(
 		main.group.git ? currentBranch(main.group.folder, io.env) : null,
@@ -715,6 +781,9 @@ export async function runContinue(
 		...resolved.flatMap((item) =>
 			item.target.kind === "undecided" ? [item.target.need] : [],
 		),
+		...(branch.tooManyFiles
+			? [tooManyFiles(main.report.display, branch.tooManyFiles)]
+			: []),
 		...untrackedNeeds(branch, options),
 		...secretNeeds(envVariables, options),
 	];
@@ -882,28 +951,82 @@ async function execute(input: {
 		),
 	]);
 
-	// 1. New repositories and their projects.
+	// 1. Projects: for repositories the app reaches without one, and for new
+	// repositories, which `gh` creates with the user's own GitHub login.
 	const createdRepositories: DoneReport["createdRepositories"][number][] = [];
+	const setTarget = (item: Resolved, target: Resolved["target"]) => {
+		(item as { target: Resolved["target"] }).target = target;
+	};
+	for (const item of resolved) {
+		if (item.target.kind !== "register") continue;
+		const repository = item.target.repository;
+		say(`Adding ${repository} to ytimesy as a project…`);
+		const registered = await api
+			.createProject({ folder: item.group.folder, repository })
+			.catch((error) =>
+				projectFailure(error, `Could not add ${repository} as a project`),
+			);
+		state.registered = {
+			...state.registered,
+			[item.group.folder]: {
+				projectId: registered.projectId,
+				repository: registered.repository,
+			},
+		};
+		store.save(state);
+		setTarget(item, {
+			kind: "project",
+			projectId: registered.projectId,
+			projectName: item.target.projectName,
+		});
+	}
 	for (const item of resolved) {
 		if (item.target.kind !== "create") continue;
-		say(
-			`Creating private repository ${item.target.name} for ${item.report.display}…`,
-		);
+		const folder = item.group.folder;
+		let repository = state.githubCreated?.[folder];
+		if (!repository) {
+			say(
+				`Creating private repository ${item.target.name} for ${item.report.display} with your GitHub login (gh)…`,
+			);
+			let made: ReturnType<typeof createPrivateRepository>;
+			try {
+				made = createPrivateRepository(item.target.name, env);
+			} catch (error) {
+				throw new CliError(
+					(error as Error).message,
+					"Pick another name with --create-repo <folder>=<name>, or create the repository at https://github.com/new and make it this folder's origin remote.",
+				);
+			}
+			repository = {
+				repository: made.fullName,
+				defaultBranch: made.defaultBranch,
+				cloneUrl: made.cloneUrl,
+				sshUrl: made.sshUrl,
+			};
+			state.githubCreated = { ...state.githubCreated, [folder]: repository };
+			store.save(state);
+		}
 		const created = await api
-			.createProject({ folder: item.group.folder, name: item.target.name })
+			.createProject({ folder, repository: repository.repository })
 			.catch((error) =>
-				apiFailure(
+				projectFailure(
 					error,
-					`Could not create ${item.target.kind === "create" ? item.target.name : ""}`,
+					`Created ${repository.repository}, but ytimesy could not add it as a project`,
 				),
 			);
-		state.created[item.group.folder] = { ...created };
+		state.created[folder] = {
+			projectId: created.projectId,
+			repository: created.repository,
+			defaultBranch: repository.defaultBranch,
+			cloneUrl: repository.cloneUrl,
+			sshUrl: repository.sshUrl,
+		};
 		store.save(state);
-		(item as { target: Resolved["target"] }).target = {
+		setTarget(item, {
 			kind: "project",
 			projectId: created.projectId,
 			projectName: created.repository,
-		};
+		});
 		createdRepositories.push({
 			folder: item.report.display,
 			repository: created.repository,

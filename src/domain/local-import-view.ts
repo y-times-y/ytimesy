@@ -71,6 +71,8 @@ export function handoffCardMeta(input: {
 export type LocalImportView = {
 	readonly id: string;
 	readonly status: ImportStatus | "expired";
+	/** The local agent that started it (from the CLI's start call), when known. */
+	readonly agent?: LocalAgent | null;
 	readonly sessionsPlanned: number;
 	readonly sessionsImported: number;
 	readonly projectId: string | null;

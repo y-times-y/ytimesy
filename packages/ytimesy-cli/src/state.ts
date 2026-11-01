@@ -20,11 +20,24 @@ export type ImportState = {
 	/** When the first run started (ms); later turns are about the import itself. */
 	startedAt: number;
 	projects: PlanProject[];
-	canCreateRepository: boolean;
-	repositoryOwner: string | null;
 	/** The handoff branch for the continued repository, fixed on the first run. */
 	branchName?: string;
-	/** Folder → the project and repository create-project made for it. */
+	/**
+	 * Folder → the repository `gh` created for it, before ytimesy made it a
+	 * project (the app may not see it yet); a re-run does not create it again.
+	 */
+	githubCreated?: Record<
+		string,
+		{
+			repository: string;
+			defaultBranch: string;
+			cloneUrl: string;
+			sshUrl: string;
+		}
+	>;
+	/** Folder → the project made for its existing repository (the plan's new project). */
+	registered?: Record<string, { projectId: string; repository: string }>;
+	/** Folder → the new repository and its project (create-project after `gh`). */
 	created: Record<
 		string,
 		{

@@ -47,9 +47,14 @@ export function githubRepositoryListMessage(input: {
 	readonly loaded: boolean;
 	readonly unreachable: boolean;
 	readonly errorMessage?: string;
+	/** False for an account without projects: the app reaches no repository yet. */
+	readonly hasProjects?: boolean;
 }): string {
 	if (input.query.trim()) return "No repositories match.";
-	if (input.loaded) return "Every repository is already a project.";
+	if (input.loaded)
+		return input.hasProjects === false
+			? "The ytimesy app reaches no repositories yet. Add some from GitHub."
+			: "Every repository is already a project.";
 	if (input.unreachable) return GITHUB_LIST_UNREACHABLE;
 	return input.errorMessage || "Connect GitHub to see repositories.";
 }

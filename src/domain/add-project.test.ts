@@ -143,6 +143,18 @@ describe("add project", () => {
 	});
 });
 
+describe("githubRepositoryListMessage", () => {
+	it("tells an account without projects to add repositories, not that all are added", () => {
+		const loaded = { query: "", loaded: true, unreachable: false };
+		expect(githubRepositoryListMessage(loaded)).toBe(
+			"Every repository is already a project.",
+		);
+		expect(githubRepositoryListMessage({ ...loaded, hasProjects: false })).toBe(
+			"The ytimesy app reaches no repositories yet. Add some from GitHub.",
+		);
+	});
+});
+
 describe("singleRepositoryProject", () => {
 	it("recognizes a repository already added as a named project, but not a group", () => {
 		const repository = {

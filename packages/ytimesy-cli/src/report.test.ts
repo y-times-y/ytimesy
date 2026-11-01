@@ -89,6 +89,39 @@ const plan: PlanReport = {
 };
 
 describe("renderPlan", () => {
+	it("names a new project for a reachable repository and lists a plain folder's first commit", () => {
+		const text = renderPlan({
+			...plan,
+			groups: [
+				{
+					...(plan.groups[0] as (typeof plan.groups)[number]),
+					projectId: undefined,
+					newProject: true,
+					decision: { kind: "import", projectName: "app", newProject: true },
+				},
+			],
+			branch: {
+				...branch,
+				repository: null,
+				from: null,
+				visibility: "new",
+				trackedChanged: [],
+				untrackedToPush: ["index.html", "src/main.js"],
+				skipped: [{ path: "node_modules/", reason: "always left out" }],
+				wholeFolder: true,
+			},
+		});
+		expect(text).toContain('-> import (new project "app")');
+		expect(text).toContain(
+			"  the folder becomes the repository's first commit: 2 files\n    index.html\n    src/main.js\n  1 file skipped:\n    node_modules/ (always left out)",
+		);
+		const tooMany = renderPlan({
+			...plan,
+			branch: { ...branch, wholeFolder: true, tooManyFiles: 25_000 },
+		});
+		expect(tooMany).toContain("the folder has 25000 files");
+	});
+
 	it("prints scopes, folders with their actions, the branch, secrets and the next command", () => {
 		expect(renderPlan(plan)).toBe(
 			`ytimesy import plan (called from Claude Code)

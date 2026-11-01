@@ -11,7 +11,10 @@ import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
 import { isEnvironmentSetupPrompt } from "#/domain/environment-setup";
-import type { FirstRunState } from "#/domain/first-run";
+import {
+	type FirstRunState,
+	firstRunDoneFromCookies,
+} from "#/domain/first-run";
 import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { openChatFromCookies } from "#/domain/open-chat-cookie";
@@ -384,9 +387,14 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		// A new account (no project yet) opens the first-run steps at the right one.
+		// A new account (no project yet) opens the first-run steps at the right
+		// one, until it leaves them: then the composer's picker adds a project.
+		const setupDone = firstRunDoneFromCookies(
+			getRequest().headers.get("cookie"),
+			user.id,
+		);
 		const firstRun = listed.then((projects) =>
-			projects && projects.length === 0
+			projects && projects.length === 0 && !setupDone
 				? firstRunState(user.id).catch(() => undefined)
 				: undefined,
 		);

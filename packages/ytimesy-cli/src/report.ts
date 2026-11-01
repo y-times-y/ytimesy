@@ -17,23 +17,26 @@ export type GroupReport = {
 	readonly sessions: number;
 	readonly bytes: number;
 	readonly tools: readonly string[];
-	readonly action:
-		| "import"
-		| "connect-repository"
-		| "grant-access"
-		| "no-repository";
+	readonly action: "import" | "grant-access" | "no-repository";
 	readonly repository?: string;
 	readonly visibility?: "public" | "private" | "unknown";
 	readonly projectId?: string;
 	readonly projectName?: string;
+	/** Import: no project holds the repository yet; this run makes one. */
+	readonly newProject?: boolean;
 	readonly connectUrl?: string;
 	readonly reason?: "no-git" | "no-remote" | "other-host";
+	/** Whether this machine's GitHub CLI (gh) can create the repository. */
 	readonly canCreateRepository?: boolean;
 	readonly suggestedName?: string;
 	readonly attachTo?: readonly { id: string; name: string }[];
 	/** What this run does with the folder, or null when the user must decide. */
 	readonly decision:
-		| { readonly kind: "import"; readonly projectName: string }
+		| {
+				readonly kind: "import";
+				readonly projectName: string;
+				readonly newProject?: boolean;
+		  }
 		| { readonly kind: "create-repo"; readonly name: string }
 		| {
 				readonly kind: "attach";
@@ -54,6 +57,8 @@ export type BranchReport = {
 	readonly skipped: readonly { path: string; reason: string }[];
 	/** Not a Git repository: the folder becomes the first commit. */
 	readonly wholeFolder: boolean;
+	/** The folder has this many files, over the limit: nothing would be pushed. */
+	readonly tooManyFiles?: number;
 };
 
 export type PlanReport = {
@@ -132,18 +137,17 @@ function groupAction(group: GroupReport) {
 	const decision = group.decision;
 	switch (group.action) {
 		case "import":
-			return `import into project "${group.projectName}"`;
-		case "connect-repository":
-			return decision?.kind === "skip"
-				? "skip"
-				: `connect ${group.repository} in ytimesy first: ${group.connectUrl}`;
+			if (decision?.kind === "skip") return "skip";
+			return group.newProject && !group.projectId
+				? `import (new project "${group.projectName}")`
+				: `import into project "${group.projectName}"`;
 		case "grant-access":
 			return decision?.kind === "skip"
 				? "skip"
 				: `give the ytimesy GitHub app access to ${group.repository} first: ${group.connectUrl}`;
 		case "no-repository": {
 			if (decision?.kind === "create-repo")
-				return `create private repository "${decision.name}" and import`;
+				return `create private repository "${decision.name}" (with your gh login) and import`;
 			if (decision?.kind === "attach")
 				return `import into project "${decision.projectName}"`;
 			if (decision?.kind === "skip") return "skip";
@@ -217,11 +221,16 @@ export function renderPlan(report: PlanReport) {
 			"",
 			`Branch ${branch.branch}${branch.repository ? ` on ${branch.repository}` : ""}${branch.from ? `, from ${branch.from}` : ""} (your checkout is not touched):`,
 		);
-		if (branch.wholeFolder)
+		if (branch.wholeFolder && branch.tooManyFiles)
+			lines.push(
+				`  the folder has ${branch.tooManyFiles} files, more than can be pushed: add a .gitignore for build output and dependencies`,
+			);
+		else if (branch.wholeFolder) {
 			lines.push(
 				`  the folder becomes the repository's first commit: ${plural(branch.untrackedToPush.length, "file")}`,
 			);
-		else {
+			lines.push(...listLines(branch.untrackedToPush));
+		} else {
 			lines.push(
 				`  ${plural(branch.trackedChanged.length, "uncommitted tracked change")}`,
 			);

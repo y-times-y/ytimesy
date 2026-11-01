@@ -726,6 +726,21 @@
 .project-picker-create button:disabled {
 	opacity: 0.45;
 }
+/* "New repo" when GitHub would refuse it: a link to GitHub's own page. */
+.project-picker-create-elsewhere {
+	flex-shrink: 0;
+	margin: 0;
+	padding: 8px var(--list-row-pad-x);
+	border-top: 1px solid var(--menu-divider);
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+}
+.project-picker-create-elsewhere a {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--list-text-strong);
+}
 .project-setup-notice {
 	margin-top: 18px;
 	padding: 12px 14px;

@@ -2,7 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Effect } from "effect";
 import { z } from "zod";
 import { scratchRepositoryName } from "../../../domain/add-project";
-import { listAuthorizedRepositories } from "../../../server/adapters/github";
+import {
+	githubRepositoryCreation,
+	listAuthorizedRepositories,
+} from "../../../server/adapters/github";
 import { requireUserAction } from "../../../server/adapters/user-action-rate";
 import { requireUser } from "../../../server/auth/auth";
 import { githubAccessToken } from "../../../server/auth/github-connection";
@@ -20,11 +23,18 @@ export const Route = createFileRoute("/api/github/repositories")({
 			GET: ({ request }) =>
 				endpoint(async () => {
 					const user = await requireUser(request.headers);
+					const token = await githubAccessToken(user.id);
+					const [repositories, creation] = await Promise.all([
+						listAuthorizedRepositories(token),
+						// The picker's "New repo" is honest about GitHub refusing it.
+						githubRepositoryCreation(token).catch(() => ({
+							canCreate: false,
+						})),
+					]);
 					return {
-						repositories: await listAuthorizedRepositories(
-							await githubAccessToken(user.id),
-						),
+						repositories,
 						installationUrl: `https://github.com/apps/${serverConfig().GITHUB_APP_SLUG}/installations/new`,
+						canCreateRepository: creation.canCreate,
 					};
 				}),
 			POST: ({ request }) =>

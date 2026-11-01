@@ -7,7 +7,7 @@ import {
 } from "#/server/services/local-import";
 import { readImportJson } from "#/server/services/local-import-http";
 
-/** A new private repository and project for a folder that has none; the CLI pushes to it. */
+/** A project for a repository the ytimesy app reaches (the plan's new project, or one the CLI created with gh). */
 export const Route = createFileRoute("/api/local-import/create-project")({
 	server: {
 		handlers: {

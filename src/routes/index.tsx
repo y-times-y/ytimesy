@@ -95,7 +95,7 @@ function HomePage() {
 	if (firstRun)
 		return (
 			<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
-				<FirstRun state={firstRun} />
+				<FirstRun state={firstRun} userId={userId} />
 			</IdentityGate>
 		);
 	return (

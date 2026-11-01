@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type Env,
+	folderPlan,
 	pushCommit,
 	snapshotFolder,
 	snapshotRepository,
@@ -255,6 +256,45 @@ describe("snapshotFolder", () => {
 				.split("\n")
 				.sort(),
 		).toEqual([".gitignore", "index.html"]);
+	});
+});
+
+describe("folderPlan", () => {
+	it("previews exactly what snapshotFolder pushes, and what it leaves out and why", () => {
+		const folder = path.join(base, "plain-preview");
+		write(folder, "index.html", "<h1>hi</h1>\n");
+		write(folder, "src/app.js", "console.log(1);\n");
+		write(folder, "node_modules/x/index.js", "dep\n");
+		write(folder, "build/out.txt", "ignored by .gitignore\n");
+		write(folder, ".gitignore", "build/\n");
+		write(folder, ".env", "A=1\n");
+		write(folder, "notes.txt", `token ghp_${"a".repeat(36)}\n`);
+		const before = fingerprint(folder);
+		const plan = folderPlan(folder, env);
+		expect(plan.tooMany).toBe(false);
+		expect(plan.included.map((file) => file.path).sort()).toEqual([
+			".gitignore",
+			"index.html",
+			"src/app.js",
+		]);
+		expect(
+			[...plan.skipped].sort((a, b) => a.path.localeCompare(b.path)),
+		).toEqual([
+			{ path: ".env", reason: "secret-like name" },
+			{ path: "build/", reason: "ignored by .gitignore" },
+			{ path: "node_modules/", reason: "always left out" },
+			{ path: "notes.txt", reason: "contains a GitHub token (ghp_…)" },
+		]);
+		// The preview writes nothing into the folder.
+		expect(fingerprint(folder)).toEqual(before);
+		const snapshot = snapshotFolder({ folder, env, message: "Initial import" });
+		try {
+			expect([...snapshot.pushed].sort()).toEqual(
+				plan.included.map((file) => file.path).sort(),
+			);
+		} finally {
+			fs.rmSync(snapshot.gitDir, { recursive: true, force: true });
+		}
 	});
 });
 
