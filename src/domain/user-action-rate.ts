@@ -1,4 +1,9 @@
-export type UserAction = "chat-send" | "project-create" | "vm-create";
+export type UserAction =
+	| "chat-send"
+	| "project-create"
+	| "vm-create"
+	| "local-import-code"
+	| "local-import-call";
 
 /**
  * Per-user abuse limits, fixed windows. Generous for real use: a person
@@ -19,6 +24,19 @@ export const USER_ACTION_LIMITS: Readonly<
 		windowSeconds: 3600,
 		message:
 			"You have added too many projects in the last hour. Try again later.",
+	},
+	// "Continue your agent session": Copy prompt makes a code; the CLI then
+	// calls once per session (twice with its transcript) plus a few more.
+	"local-import-code": {
+		limit: 20,
+		windowSeconds: 3600,
+		message: "Too many import codes in the last hour. Try again later.",
+	},
+	"local-import-call": {
+		limit: 1500,
+		windowSeconds: 3600,
+		message:
+			"This import made too many requests in the last hour. Wait, then run the command again.",
 	},
 	"vm-create": {
 		limit: 60,

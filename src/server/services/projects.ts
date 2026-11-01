@@ -28,6 +28,7 @@ import {
 	createAuthorizedRepository,
 	repositoryBranchSha,
 } from "../adapters/github";
+import { removeHandoffObjects } from "../adapters/handoff-store";
 import {
 	deleteProjectForOwner,
 	listProjects,
@@ -248,11 +249,17 @@ export function createScratchProject(
 	userId: string,
 	name: string,
 	enqueue = enqueueProjectWorkspace,
+	/**
+	 * An empty repository (no initial commit) that the caller pushes its own
+	 * history into (a local folder imported by `ytimesy continue`). Its
+	 * environment is prepared only once that push landed, by the caller.
+	 */
+	options: { readonly empty?: boolean } = {},
 ) {
 	return Effect.gen(function* () {
 		const token = yield* Effect.tryPromise(() => githubAccessToken(userId));
 		const repository = yield* Effect.tryPromise(() =>
-			createAuthorizedRepository(token, name),
+			createAuthorizedRepository(token, name, { autoInit: !options.empty }),
 		);
 		const project = yield* Effect.tryPromise(() =>
 			saveProject(userId, repository, addedProjectBranch(repository)),
@@ -263,8 +270,8 @@ export function createScratchProject(
 			{ repositories: 1 },
 			{ key: project.id, timestamp: new Date() },
 		);
-		yield* enqueue(userId, project.id);
-		return project;
+		if (!options.empty) yield* enqueue(userId, project.id);
+		return { project, repository };
 	});
 }
 
@@ -318,6 +325,13 @@ export async function removeProjectMachine(
 	});
 	// Pull request evidence media in private storage; its rows cascade with the project.
 	await removeProjectPullRequestEvidence(input.userId, input.projectId);
+	// Its imported local sessions; their rows cascade with the project.
+	await removeHandoffObjects(input.userId, input.projectId).catch(() => {
+		throw new Response(
+			"The project was not removed because its imported sessions could not be deleted. Try again.",
+			{ status: 503 },
+		);
+	});
 	await deleteProjectForOwner(input.userId, input.projectId);
 	const refs = projectMachineRefsToDestroy({
 		sessionProviderRefs: targets.vmIds,

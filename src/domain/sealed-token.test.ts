@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
 	isVersionedSeal,
 	openVersioned,
+	openVersionedBytes,
 	sealVersioned,
+	sealVersionedBytes,
 	vaultKeys,
 } from "./sealed-token";
 
@@ -49,5 +51,30 @@ describe("sealed tokens", () => {
 		expect(await symmetricDecrypt({ key: secret, data: legacy })).toBe(
 			"legacy",
 		);
+	});
+});
+
+describe("binary sealing", () => {
+	const bytes = new Uint8Array([0, 1, 2, 250, 255]);
+
+	it("round-trips bytes bound to their purpose and user", () => {
+		const binding = { purpose: "local-import:x:transcript.tgz", userId: "u" };
+		const sealed = sealVersionedBytes(keys, bytes, binding);
+		expect(Buffer.from(sealed).includes(Buffer.from(bytes))).toBe(false);
+		expect([...openVersionedBytes(keys, sealed, binding)]).toEqual([...bytes]);
+		expect(() =>
+			openVersionedBytes(keys, sealed, { ...binding, userId: "v" }),
+		).toThrow();
+		expect(() =>
+			openVersionedBytes(keys, sealed, { ...binding, purpose: "other" }),
+		).toThrow();
+	});
+
+	it("never opens a tampered or malformed value", () => {
+		const sealed = sealVersionedBytes(keys, bytes);
+		const tampered = new Uint8Array(sealed);
+		tampered[tampered.length - 1] ^= 1;
+		expect(() => openVersionedBytes(keys, tampered)).toThrow();
+		expect(() => openVersionedBytes(keys, new Uint8Array([1, 2, 3]))).toThrow();
 	});
 });

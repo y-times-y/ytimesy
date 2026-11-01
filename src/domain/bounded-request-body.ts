@@ -3,7 +3,17 @@ export async function readBoundedRequestBody(
 	request: Pick<Request, "body">,
 	maximumBytes: number,
 ) {
-	if (!request.body) return "";
+	return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+		await readBoundedRequestBytes(request, maximumBytes),
+	);
+}
+
+/** The body's bytes, refused (RangeError) once more than `maximumBytes` arrive. */
+export async function readBoundedRequestBytes(
+	request: Pick<Request, "body">,
+	maximumBytes: number,
+): Promise<Uint8Array> {
+	if (!request.body) return new Uint8Array();
 	const reader = request.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let bytes = 0;
@@ -25,7 +35,5 @@ export async function readBoundedRequestBody(
 		body.set(chunk, offset);
 		offset += chunk.byteLength;
 	}
-	return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
-		body,
-	);
+	return body;
 }

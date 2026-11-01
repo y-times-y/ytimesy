@@ -3193,6 +3193,10 @@ a.session-title-meta:focus-visible {
 .settings-secret-list code {
 	font-size: 12px;
 }
+.settings-secret-imported {
+	margin-left: 8px;
+	vertical-align: middle;
+}
 .settings-secret-hint {
 	margin-left: 8px;
 	color: #6f6f6f;

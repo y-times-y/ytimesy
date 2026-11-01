@@ -37,6 +37,7 @@ import {
 } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
+import { HANDOFF_HISTORY_INSTRUCTIONS } from "#/domain/local-import";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
@@ -128,6 +129,10 @@ import {
 	recordEvaluationUsage,
 	reserveEvaluationRequest,
 } from "../adapters/harness-evaluation";
+import {
+	type ImportedSessionRow,
+	projectImportedSessions,
+} from "../adapters/local-imports";
 import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
@@ -194,6 +199,7 @@ import {
 	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
+import { materializeHandoffHistory } from "../services/handoff-history";
 import {
 	harnessLifecycleHooks,
 	LIFECYCLE_CONFIG_PATH,
@@ -672,6 +678,19 @@ async function runApiTurnAttempt(
 				)
 			: Promise.resolve(null);
 		loadingSecrets.catch(() => {});
+		// The project's imported local sessions ("Continue your agent
+		// session") go on a root chat's machine, for the agent to grep.
+		const loadingHandoffs: Promise<readonly ImportedSessionRow[]> =
+			owner.projectId && !owner.parentSessionId && !evaluation
+				? turnMemo(`${turn.id}:handoff-history`, () =>
+						projectImportedSessions(owner.userId, owner.projectId as string),
+					).catch((error) => {
+						console.warn("Imported sessions could not be listed.", {
+							message: (error as Error).message,
+						});
+						return [];
+					})
+				: Promise.resolve([]);
 		const variant = await loadingVariant;
 		if (owner.agentRole && !sideConversation) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
@@ -778,6 +797,7 @@ async function runApiTurnAttempt(
 		// system prompt byte-stable for provider prompt caching. A restarted or
 		// evicted isolate (including a resumed step) simply loads it again.
 		const projectSecrets = await loadingSecrets;
+		const handoffSessions = await loadingHandoffs;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		// Values every tool result is redacted of. The memory clone's token
@@ -785,6 +805,7 @@ async function runApiTurnAttempt(
 		const redact: string[] = [...(projectSecrets?.redact ?? [])];
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
+		let handoffWritten: Promise<void> | undefined;
 		// Durable steps start at 1; a resumed first step reuses the deduped notice.
 		const firstStep = step ? step.index === 1 : !continued;
 		// A durable turn's first request need not wait for the workspace: a
@@ -882,6 +903,17 @@ async function runApiTurnAttempt(
 				// A missing file surfaces when the agent opens it; other tools keep working.
 				console.warn("Attached files could not be restored.", error);
 			});
+			// ~/.ytimesy/handoff is outside the repository too.
+			if (handoffSessions.length)
+				handoffWritten ??= materializeHandoffHistory(
+					ready.machines,
+					ready.vm,
+					owner.userId,
+					handoffSessions,
+				).catch((error) => {
+					// The chat works without them; its handoff is in the context.
+					console.warn("Imported sessions could not be restored.", error);
+				});
 			// ~/memory is outside the repository, so it overlaps the code point.
 			memoryCloning ??= cloneMemory(ready);
 			memoryCloning.catch(() => {});
@@ -916,6 +948,7 @@ async function runApiTurnAttempt(
 			}
 			await codePoint;
 			await attachmentsWritten;
+			await handoffWritten;
 			await secretsReady;
 			checkoutReady = true;
 			timing?.mark("checkoutReady");
@@ -1714,6 +1747,7 @@ async function runApiTurnAttempt(
 							: undefined,
 				},
 				memory,
+				handoffSessions.length > 0,
 			),
 			tools: earlyPromptCheck
 				? withPromptCheckGate(tools, earlyPromptCheck)
@@ -2781,8 +2815,10 @@ function withCodeMode(
 function turnInstructions(
 	agent: Parameters<typeof agentTurnInstructions>[0],
 	memory: { instructions: string } | null,
+	/** The project has imported local sessions on this machine. */
+	handoffHistory = false,
 ) {
-	return `${agentTurnInstructions(agent)}${memory ? `\n${memory.instructions}` : ""}`;
+	return `${agentTurnInstructions(agent)}${memory ? `\n${memory.instructions}` : ""}${handoffHistory ? `\n${HANDOFF_HISTORY_INSTRUCTIONS}` : ""}`;
 }
 
 function modelSwitchItem(

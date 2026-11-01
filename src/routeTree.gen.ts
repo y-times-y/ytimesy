@@ -31,6 +31,13 @@ import { Route as ApiGithubRepairEventsRouteImport } from './routes/api/github/r
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
+import { Route as ApiLocalImportCreateProjectRouteImport } from './routes/api/local-import/create-project'
+import { Route as ApiLocalImportFinishRouteImport } from './routes/api/local-import/finish'
+import { Route as ApiLocalImportPlanRouteImport } from './routes/api/local-import/plan'
+import { Route as ApiLocalImportSecretsRouteImport } from './routes/api/local-import/secrets'
+import { Route as ApiLocalImportSessionsRouteImport } from './routes/api/local-import/sessions'
+import { Route as ApiLocalImportStartRouteImport } from './routes/api/local-import/start'
+import { Route as ApiLocalImportTranscriptRouteImport } from './routes/api/local-import/transcript'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
 import { Route as ApiVmEdgeAuthorizeRouteImport } from './routes/api/vm-edge/authorize'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
@@ -150,6 +157,43 @@ const ApiInternalCodexTransportRoute =
     path: '/api/internal/codex-transport',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiLocalImportCreateProjectRoute =
+  ApiLocalImportCreateProjectRouteImport.update({
+    id: '/api/local-import/create-project',
+    path: '/api/local-import/create-project',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiLocalImportFinishRoute = ApiLocalImportFinishRouteImport.update({
+  id: '/api/local-import/finish',
+  path: '/api/local-import/finish',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLocalImportPlanRoute = ApiLocalImportPlanRouteImport.update({
+  id: '/api/local-import/plan',
+  path: '/api/local-import/plan',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLocalImportSecretsRoute = ApiLocalImportSecretsRouteImport.update({
+  id: '/api/local-import/secrets',
+  path: '/api/local-import/secrets',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLocalImportSessionsRoute = ApiLocalImportSessionsRouteImport.update({
+  id: '/api/local-import/sessions',
+  path: '/api/local-import/sessions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLocalImportStartRoute = ApiLocalImportStartRouteImport.update({
+  id: '/api/local-import/start',
+  path: '/api/local-import/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLocalImportTranscriptRoute =
+  ApiLocalImportTranscriptRouteImport.update({
+    id: '/api/local-import/transcript',
+    path: '/api/local-import/transcript',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
   id: '/publish',
   path: '/publish',
@@ -212,6 +256,13 @@ export interface FileRoutesByFullPath {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
+  '/api/local-import/finish': typeof ApiLocalImportFinishRoute
+  '/api/local-import/plan': typeof ApiLocalImportPlanRoute
+  '/api/local-import/secrets': typeof ApiLocalImportSecretsRoute
+  '/api/local-import/sessions': typeof ApiLocalImportSessionsRoute
+  '/api/local-import/start': typeof ApiLocalImportStartRoute
+  '/api/local-import/transcript': typeof ApiLocalImportTranscriptRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
@@ -243,6 +294,13 @@ export interface FileRoutesByTo {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
+  '/api/local-import/finish': typeof ApiLocalImportFinishRoute
+  '/api/local-import/plan': typeof ApiLocalImportPlanRoute
+  '/api/local-import/secrets': typeof ApiLocalImportSecretsRoute
+  '/api/local-import/sessions': typeof ApiLocalImportSessionsRoute
+  '/api/local-import/start': typeof ApiLocalImportStartRoute
+  '/api/local-import/transcript': typeof ApiLocalImportTranscriptRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
@@ -275,6 +333,13 @@ export interface FileRoutesById {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
+  '/api/local-import/create-project': typeof ApiLocalImportCreateProjectRoute
+  '/api/local-import/finish': typeof ApiLocalImportFinishRoute
+  '/api/local-import/plan': typeof ApiLocalImportPlanRoute
+  '/api/local-import/secrets': typeof ApiLocalImportSecretsRoute
+  '/api/local-import/sessions': typeof ApiLocalImportSessionsRoute
+  '/api/local-import/start': typeof ApiLocalImportStartRoute
+  '/api/local-import/transcript': typeof ApiLocalImportTranscriptRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
@@ -308,6 +373,13 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/local-import/create-project'
+    | '/api/local-import/finish'
+    | '/api/local-import/plan'
+    | '/api/local-import/secrets'
+    | '/api/local-import/sessions'
+    | '/api/local-import/start'
+    | '/api/local-import/transcript'
     | '/api/projects/publish'
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
@@ -339,6 +411,13 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/local-import/create-project'
+    | '/api/local-import/finish'
+    | '/api/local-import/plan'
+    | '/api/local-import/secrets'
+    | '/api/local-import/sessions'
+    | '/api/local-import/start'
+    | '/api/local-import/transcript'
     | '/api/projects/publish'
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
@@ -370,6 +449,13 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
+    | '/api/local-import/create-project'
+    | '/api/local-import/finish'
+    | '/api/local-import/plan'
+    | '/api/local-import/secrets'
+    | '/api/local-import/sessions'
+    | '/api/local-import/start'
+    | '/api/local-import/transcript'
     | '/api/projects/publish'
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
@@ -402,6 +488,13 @@ export interface RootRouteChildren {
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
   ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
+  ApiLocalImportCreateProjectRoute: typeof ApiLocalImportCreateProjectRoute
+  ApiLocalImportFinishRoute: typeof ApiLocalImportFinishRoute
+  ApiLocalImportPlanRoute: typeof ApiLocalImportPlanRoute
+  ApiLocalImportSecretsRoute: typeof ApiLocalImportSecretsRoute
+  ApiLocalImportSessionsRoute: typeof ApiLocalImportSessionsRoute
+  ApiLocalImportStartRoute: typeof ApiLocalImportStartRoute
+  ApiLocalImportTranscriptRoute: typeof ApiLocalImportTranscriptRoute
   ApiVmEdgeAuthorizeRoute: typeof ApiVmEdgeAuthorizeRoute
   ApiMcpOauthCallbackRoute: typeof ApiMcpOauthCallbackRoute
   ProjectsProjectIdEvidenceEvidenceIdRoute: typeof ProjectsProjectIdEvidenceEvidenceIdRoute
@@ -564,6 +657,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInternalCodexTransportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/local-import/create-project': {
+      id: '/api/local-import/create-project'
+      path: '/api/local-import/create-project'
+      fullPath: '/api/local-import/create-project'
+      preLoaderRoute: typeof ApiLocalImportCreateProjectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/finish': {
+      id: '/api/local-import/finish'
+      path: '/api/local-import/finish'
+      fullPath: '/api/local-import/finish'
+      preLoaderRoute: typeof ApiLocalImportFinishRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/plan': {
+      id: '/api/local-import/plan'
+      path: '/api/local-import/plan'
+      fullPath: '/api/local-import/plan'
+      preLoaderRoute: typeof ApiLocalImportPlanRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/secrets': {
+      id: '/api/local-import/secrets'
+      path: '/api/local-import/secrets'
+      fullPath: '/api/local-import/secrets'
+      preLoaderRoute: typeof ApiLocalImportSecretsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/sessions': {
+      id: '/api/local-import/sessions'
+      path: '/api/local-import/sessions'
+      fullPath: '/api/local-import/sessions'
+      preLoaderRoute: typeof ApiLocalImportSessionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/start': {
+      id: '/api/local-import/start'
+      path: '/api/local-import/start'
+      fullPath: '/api/local-import/start'
+      preLoaderRoute: typeof ApiLocalImportStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/local-import/transcript': {
+      id: '/api/local-import/transcript'
+      path: '/api/local-import/transcript'
+      fullPath: '/api/local-import/transcript'
+      preLoaderRoute: typeof ApiLocalImportTranscriptRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/projects/publish': {
       id: '/api/projects/publish'
       path: '/publish'
@@ -666,6 +808,13 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
   ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
+  ApiLocalImportCreateProjectRoute: ApiLocalImportCreateProjectRoute,
+  ApiLocalImportFinishRoute: ApiLocalImportFinishRoute,
+  ApiLocalImportPlanRoute: ApiLocalImportPlanRoute,
+  ApiLocalImportSecretsRoute: ApiLocalImportSecretsRoute,
+  ApiLocalImportSessionsRoute: ApiLocalImportSessionsRoute,
+  ApiLocalImportStartRoute: ApiLocalImportStartRoute,
+  ApiLocalImportTranscriptRoute: ApiLocalImportTranscriptRoute,
   ApiVmEdgeAuthorizeRoute: ApiVmEdgeAuthorizeRoute,
   ApiMcpOauthCallbackRoute: ApiMcpOauthCallbackRoute,
   ProjectsProjectIdEvidenceEvidenceIdRoute:
@@ -675,3 +824,12 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}

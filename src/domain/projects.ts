@@ -33,6 +33,8 @@ export interface RepositoryChoice {
 	repositoryId: number;
 	fullName: string;
 	defaultBranch: string;
+	/** From GitHub's listing, when known. */
+	private?: boolean;
 }
 export interface Project {
 	id: string;

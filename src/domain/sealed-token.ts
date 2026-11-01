@@ -95,6 +95,75 @@ export function openVersioned(
 	]).toString("utf8");
 }
 
+const BYTES_MAGIC = Buffer.from("YTB2", "ascii");
+
+/**
+ * The same AES-256-GCM sealing for binary payloads (large files), without
+ * base64: `YTB2 | kid length | kid | iv(12) | tag(16) | ciphertext`. The
+ * associated data marks the binary format, so a sealed string never opens here.
+ */
+export function sealVersionedBytes(
+	keys: VaultKeys,
+	plaintext: Uint8Array,
+	binding?: SealBinding,
+): Uint8Array {
+	const secret = keys.secrets[keys.current];
+	if (!secret) throw new Error("Token vault key is not configured.");
+	if (!/^[a-z0-9]+$/.test(keys.current)) throw new Error("Invalid key id.");
+	const kid = Buffer.from(keys.current, "ascii");
+	const iv = randomBytes(12);
+	const cipher = createCipheriv(
+		"aes-256-gcm",
+		deriveKey(secret, keys.current),
+		iv,
+	);
+	cipher.setAAD(
+		Buffer.concat([
+			Buffer.from("bytes\n"),
+			associatedData(keys.current, binding),
+		]),
+	);
+	const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+	return Buffer.concat([
+		BYTES_MAGIC,
+		Buffer.from([kid.byteLength]),
+		kid,
+		iv,
+		cipher.getAuthTag(),
+		ciphertext,
+	]);
+}
+
+export function openVersionedBytes(
+	keys: VaultKeys,
+	sealed: Uint8Array,
+	binding?: SealBinding,
+): Uint8Array {
+	const data = Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength);
+	if (data.byteLength < 5 || !data.subarray(0, 4).equals(BYTES_MAGIC))
+		throw new Error("Malformed sealed value.");
+	const kidLength = data[4] as number;
+	const ivStart = 5 + kidLength;
+	if (data.byteLength < ivStart + 28)
+		throw new Error("Malformed sealed value.");
+	const kid = data.subarray(5, ivStart).toString("ascii");
+	const secret = keys.secrets[kid];
+	if (!secret) throw new Error(`Token vault key "${kid}" is not configured.`);
+	const decipher = createDecipheriv(
+		"aes-256-gcm",
+		deriveKey(secret, kid),
+		data.subarray(ivStart, ivStart + 12),
+	);
+	decipher.setAAD(
+		Buffer.concat([Buffer.from("bytes\n"), associatedData(kid, binding)]),
+	);
+	decipher.setAuthTag(data.subarray(ivStart + 12, ivStart + 28));
+	return Buffer.concat([
+		decipher.update(data.subarray(ivStart + 28)),
+		decipher.final(),
+	]);
+}
+
 /**
  * Key ring from env: TOKEN_VAULT_KEY (kid "k1") when set, otherwise
  * BETTER_AUTH_SECRET (kid "k0"). k0 stays readable after TOKEN_VAULT_KEY is

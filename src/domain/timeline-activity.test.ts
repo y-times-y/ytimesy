@@ -404,3 +404,29 @@ it("keeps a model switch in view above the answer of a finished turn", () => {
 		rows.map((row) => (row.kind === "item" ? row.item.kind : row.kind)),
 	).toEqual(["userMessage", "work", "modelSwitch", "agentMessage"]);
 });
+
+it("shows a continued chat's handoff as its own card before the first turn", () => {
+	const handoff = {
+		kind: "handoff" as const,
+		id: SessionItemId("handoff-1"),
+		tool: "claude" as const,
+		title: "Fix login",
+		turns: 42,
+		at: "2026-10-31T00:00:00Z",
+		context: "…",
+	};
+	const rows = groupTimelineRows(
+		[
+			handoff,
+			{ kind: "userMessage", id: SessionItemId("u1"), text: "Go on." },
+			{ kind: "agentMessage", id: SessionItemId("a1"), text: "Done." },
+		],
+		"completed",
+	);
+	expect(
+		rows.map((row) => (row.kind === "item" ? row.item.kind : row.kind)),
+	).toEqual(["handoff", "userMessage", "agentMessage"]);
+	expect(groupTimelineRows([handoff], "idle")).toEqual([
+		{ kind: "item", item: handoff },
+	]);
+});

@@ -63,6 +63,66 @@ export async function saveVisibleProjectSecret(input: {
 	});
 }
 
+/**
+ * Saves variables a local .env held ("Continue your agent session"), marked
+ * imported for review in Settings. A name the user already set in ytimesy is
+ * kept as it is; invalid names and values are skipped with the reason.
+ */
+export async function saveImportedProjectSecrets(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly variables: readonly {
+		readonly name: string;
+		readonly value: string;
+	}[];
+}) {
+	if (!(await projectForOwner(input.userId, input.projectId))) {
+		throw new Error("Project is not available.");
+	}
+	const existing = await listProjectSecretsForOwner(
+		input.userId,
+		input.projectId,
+	);
+	const kept = new Set(
+		existing.filter((secret) => !secret.imported).map((secret) => secret.name),
+	);
+	const saved: string[] = [];
+	const skipped: { name: string; reason: string }[] = [];
+	const masterKey = input.variables.length ? await loadSecretMasterKey() : null;
+	for (const variable of input.variables) {
+		let name: string;
+		let value: string;
+		try {
+			name = parseProjectSecretName(variable.name);
+			// Runtime secrets are redacted from what the agent sees; values too
+			// short to redact safely become plain environment variables.
+			const kind =
+				variable.value.trim().length >= 6 ? "runtime" : "environment";
+			value = parseProjectSecretValue(variable.value, kind);
+			if (kept.has(name)) {
+				skipped.push({ name, reason: "Already set in ytimesy." });
+				continue;
+			}
+			await saveProjectSecretForOwner({
+				userId: input.userId,
+				projectId: input.projectId,
+				name,
+				kind,
+				hint: secretHint(value),
+				encrypted: encryptSecret(masterKey as Uint8Array, value),
+				imported: true,
+			});
+			saved.push(name);
+		} catch (error) {
+			skipped.push({
+				name: variable.name.slice(0, 128),
+				reason: error instanceof Error ? error.message : "Not saved.",
+			});
+		}
+	}
+	return { saved, skipped };
+}
+
 export async function removeVisibleProjectSecret(input: {
 	readonly userId: string;
 	readonly projectId: string;

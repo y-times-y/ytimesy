@@ -75,6 +75,7 @@ function HomePage() {
 		savedPullRequests,
 		savedDefaultBranches,
 		firstRun,
+		githubConnected,
 	} = Route.useLoaderData();
 	const home = (openChat?: OpenChatView) => (
 		<WorkspaceHome
@@ -89,6 +90,7 @@ function HomePage() {
 			savedInspector={inspector}
 			savedPullRequests={savedPullRequests}
 			savedDefaultBranches={savedDefaultBranches}
+			githubConnected={githubConnected ?? false}
 		/>
 	);
 	// A new account (no project yet) sets up before it sees the workspace.

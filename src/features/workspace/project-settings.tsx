@@ -778,6 +778,14 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 								<code className="settings-row-title">{secret.name}</code>
 								<span className="settings-row-meta">
 									{SECRET_KIND_LABELS[secret.kind]} · {secret.hint}
+									{secret.imported ? (
+										<span
+											className="settings-badge settings-secret-imported"
+											title="Read from your local .env when you continued an agent session. Check it, then save it again here or remove it."
+										>
+											Imported
+										</span>
+									) : null}
 								</span>
 							</div>
 							<button

@@ -69,6 +69,8 @@ export type PublicProjectSecret = {
 	readonly kind: ProjectSecretKind;
 	readonly hint: string;
 	readonly updatedAt: string;
+	/** Imported from a local .env and not yet reviewed (saved again or removed). */
+	readonly imported?: true;
 };
 
 export function parseProjectSecretKind(value: unknown): ProjectSecretKind {

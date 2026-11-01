@@ -133,3 +133,29 @@ it("sends a runtime replacement text after structured history and in the rebuilt
 		}),
 	).toEqual([{ role: "user", content: "peer notice" }]);
 });
+
+it("sends a continued chat's handoff as prior context before the first request", () => {
+	const messages = nextTurnMessages({
+		previous: null,
+		items: [
+			{
+				kind: "handoff",
+				id: SessionItemId("handoff-1"),
+				tool: "codex",
+				title: "Port the parser",
+				turns: 12,
+				at: "2026-10-31T00:00:00Z",
+				context: "# Continued from Codex\nEarlier: the parser was half ported.",
+			},
+			{ kind: "userMessage", id: SessionItemId("m1"), text: "Finish it." },
+		],
+		text: "Finish it.",
+	});
+	expect(messages).toEqual([
+		{
+			role: "user",
+			content: "# Continued from Codex\nEarlier: the parser was half ported.",
+		},
+		{ role: "user", content: "Finish it." },
+	]);
+});
