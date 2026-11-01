@@ -17,7 +17,7 @@ export function environmentSetupTools(context: {
 }): ToolSet {
 	return {
 		[SAVE_PROJECT_ENVIRONMENT_TOOL]: tool({
-			description: `Save this project's environment setup after you have verified it on this machine: the command that installs dependencies on a fresh clone, any long-running services the app needs (with the port each listens on) and the commands that check the code. It is saved in the project's settings and the project's machine image is rebuilt from it in the background, so every new chat starts with dependencies installed. Use it when the user asks you to set up the environment, or after you had to fix a broken setup. Run every command yourself first; save only what worked. Secrets are not part of it: ask for missing ones with request_project_secret and name the ones install needs in buildSecrets.`,
+			description: `Save this project's environment setup once you have verified the parts that matter on this machine: the command that installs dependencies on a fresh clone, any long-running services the app needs (with the port each listens on) and the commands that check the code (build, typecheck, lint, tests). It is saved in the project's settings and the project's machine image is rebuilt from it in the background, so every new chat starts with dependencies installed. Use it when the user asks you to set up the environment, or after you had to fix a broken setup. Run every command yourself first and save only what passed. Do not hold the save back for optional runtime pieces (a dev server, a service, a check) that need a secret or an outside service: leave them out and list each under unverified with the reason and any missing secret names. Secrets are not part of it: ask with request_project_secret only for ones install or build itself needs, and name those in buildSecrets.`,
 			inputSchema: z.object({
 				repository: z
 					.string()
@@ -51,6 +51,29 @@ export function environmentSetupTools(context: {
 					.array(z.string())
 					.optional()
 					.describe("Project secrets the install command needs (names only)."),
+				unverified: z
+					.array(
+						z.object({
+							what: z
+								.string()
+								.max(120)
+								.describe("What was not verified, e.g. 'Dev server'."),
+							reason: z
+								.string()
+								.max(300)
+								.describe(
+									"Why, in one short sentence, e.g. 'Needs the realtime secret to start.'",
+								),
+							secrets: z
+								.array(z.string())
+								.optional()
+								.describe("Missing secret names it needs, if any."),
+						}),
+					)
+					.optional()
+					.describe(
+						"What you could not verify and why; it is shown to the user and never blocks the save.",
+					),
 				summary: z
 					.string()
 					.max(300)

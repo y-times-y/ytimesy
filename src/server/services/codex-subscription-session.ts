@@ -211,6 +211,8 @@ export async function sendSubscriptionTask(
 		continueOn?: string;
 		/** The branch a new chat starts from (its first send only). */
 		baseBranch?: string;
+		/** Sent from "Set up environment" (its first send only). */
+		environmentSetup?: boolean;
 	},
 	preparedTask = false,
 	/** The chat as the caller just read or wrote it (by id, for this user). */
@@ -259,6 +261,7 @@ export async function sendSubscriptionTask(
 						text: input.text,
 						session: opened,
 						baseBranch: input.baseBranch,
+						environmentSetup: input.environmentSetup,
 					}),
 				),
 		);

@@ -1,3 +1,4 @@
+import { ENVIRONMENT_SETUP_TITLE } from "#/domain/environment-setup";
 import type { Project } from "#/domain/projects";
 import {
 	defaultChatBaseBranch,
@@ -5,13 +6,17 @@ import {
 	isValidBranchName,
 	sessionBranchName,
 } from "#/domain/session-branch";
-import { sessionItemsFromUnknown } from "#/domain/session-item";
+import {
+	sessionItemsFromUnknown,
+	sessionTitleFromText,
+} from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	projectBranchHeldByOtherSession,
 	saveSessionWorkingBranch,
 } from "#/server/adapters/agent-sessions";
+import { markEnvironmentSetupChat } from "#/server/adapters/environment-setup-chats";
 import {
 	authorizedRepository,
 	repositoryBranchSha,
@@ -29,6 +34,8 @@ export async function commitChatBranchForSubmission(input: {
 	session?: AgentSessionRecord | null;
 	/** The branch a new chat starts from; ignored once the chat has a conversation. */
 	baseBranch?: string;
+	/** Sent from "Set up environment": the new chat is a setup chat (never publishes). */
+	environmentSetup?: boolean;
 }) {
 	const session =
 		input.session !== undefined && input.session?.id === input.sessionId
@@ -39,6 +46,12 @@ export async function commitChatBranchForSubmission(input: {
 	if (session.parentSessionId) return session;
 	if (session.turnStatus === "running")
 		throw new Error("Finish the active turn before submitting another task.");
+	if (input.environmentSetup)
+		await markEnvironmentSetupChat(
+			input.userId,
+			session.id,
+			sessionTitleFromText(input.text),
+		);
 	if (
 		session.workingBranch &&
 		(!session.selectedBranch ||
@@ -78,7 +91,7 @@ export async function commitChatBranchForSubmission(input: {
 				userId: input.userId,
 				projectId: input.projectId,
 				sessionId: session.id,
-				title: input.text,
+				title: input.environmentSetup ? ENVIRONMENT_SETUP_TITLE : input.text,
 				token,
 				fullName: repository.fullName,
 			});
