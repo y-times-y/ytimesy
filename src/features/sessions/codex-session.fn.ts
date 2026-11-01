@@ -32,6 +32,10 @@ import {
 	chatToOpenMetadata,
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
+import {
+	firstRunFinished,
+	markFirstRunFinished,
+} from "#/server/adapters/first-run";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listModelConnections } from "#/server/adapters/model-connections";
 import { listProjects } from "#/server/adapters/projects";
@@ -393,8 +397,13 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			getRequest().headers.get("cookie"),
 			user.id,
 		);
-		const firstRun = listed.then((projects) =>
-			projects && projects.length === 0 && !setupDone
+		// The cookie answers at once on this browser; the account's record
+		// covers every other browser.
+		const firstRun = listed.then(async (projects) =>
+			projects &&
+			projects.length === 0 &&
+			!setupDone &&
+			!(await firstRunFinished(user.id).catch(() => false))
 				? firstRunState(user.id).catch(() => undefined)
 				: undefined,
 		);
@@ -705,3 +714,12 @@ export const releaseQueuedSessionMessage = createServerFn({ method: "POST" })
 			releaseQueuedComposerMessage(machines, scope, data.messageId, data.text),
 		);
 	});
+
+/** Leaving the first run: recorded on the account, so every browser skips it. */
+export const finishFirstRunFn = createServerFn({ method: "POST" }).handler(
+	async () => {
+		const user = await requireUser(getRequest().headers);
+		await markFirstRunFinished(user.id);
+		return { ok: true };
+	},
+);

@@ -17,6 +17,7 @@ import { requestJson } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
 import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
 import { CodexMark } from "../sessions/codex-mark";
+import { finishFirstRunFn } from "../sessions/codex-session.fn";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
@@ -48,12 +49,14 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 };
 
 /**
- * Leaves the first run for good (this browser): the workspace opens even
+ * Leaves the first run for good (this account): the workspace opens even
  * without a project, and the composer's project picker adds the first one.
  */
-function finishFirstRun(userId: string | undefined) {
+async function finishFirstRun(userId: string | undefined) {
 	// biome-ignore lint/suspicious/noDocumentCookie: one small cookie the server reads; cookieStore is missing in older Safari.
 	if (userId) document.cookie = firstRunDoneCookie(userId);
+	// The account's record covers other browsers; the cookie alone still works if it fails.
+	await finishFirstRunFn().catch(() => undefined);
 	window.location.assign("/");
 }
 
