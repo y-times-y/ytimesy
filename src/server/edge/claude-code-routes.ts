@@ -13,6 +13,7 @@ import { modelConversationName } from "../../domain/model-conversation-routing";
 import {
 	authorizeClaudeCodeProxy,
 	recordClaudeCodeUpstream,
+	recordClaudePlanUsage,
 } from "../adapters/claude-subscription";
 import { withDatabaseScope } from "../adapters/database-scope";
 import {
@@ -24,6 +25,33 @@ import type { EdgeExecutorEnvironment } from "./environment";
 
 export const CLAUDE_CODE_MCP_PATH = `${CLAUDE_CODE_PROXY_PREFIX}/mcp`;
 const MAX_MCP_BODY = 1024 * 1024;
+
+/**
+ * The last plan usage write per user in this isolate, so most of a turn's
+ * requests open no database connection (the database throttles too).
+ */
+const planUsageWrites = new Map<
+	string,
+	{ at: number; status: string | null }
+>();
+const PLAN_USAGE_WRITE_EVERY_MS = 15_000;
+
+export function shouldWritePlanUsage(
+	userId: string,
+	status: string | null,
+	now: number,
+) {
+	const last = planUsageWrites.get(userId);
+	if (
+		last &&
+		last.status === status &&
+		now - last.at < PLAN_USAGE_WRITE_EVERY_MS
+	)
+		return false;
+	if (planUsageWrites.size > 1000) planUsageWrites.clear();
+	planUsageWrites.set(userId, { at: now, status });
+	return true;
+}
 
 const claudeCodeSecrets = z.object({ GIT_PROXY_SECRET: z.string().min(32) });
 
@@ -42,6 +70,8 @@ export function isClaudeCodeEdgePath(path: string) {
 export async function routeClaudeCodeEdge(
 	request: Request,
 	env: EdgeExecutorEnvironment,
+	/** Keeps the plan usage write alive after the response is returned. */
+	waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<Response> {
 	if (!claudeSubscriptionEnabled()) return new Response(null, { status: 404 });
 	const secrets = claudeCodeSecrets.safeParse(env);
@@ -84,6 +114,21 @@ export async function routeClaudeCodeEdge(
 				() => recordClaudeCodeUpstream(grant.userId, outcome),
 				null,
 			),
+		onUsage: waitUntil
+			? (grant, usage) => {
+					if (!shouldWritePlanUsage(grant.userId, usage.status, usage.readAt))
+						return;
+					waitUntil(
+						withDatabaseScope(
+							connection,
+							() => recordClaudePlanUsage(grant.userId, usage),
+							null,
+						).catch(() => {
+							console.warn("Claude plan usage was not recorded.");
+						}),
+					);
+				}
+			: undefined,
 	});
 }
 
