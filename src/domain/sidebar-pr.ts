@@ -26,6 +26,15 @@ export type ListedPullRequest = {
 	readonly mergeableState: string | null;
 	/** The head's check results; listed only for open and draft pull requests. */
 	readonly checks?: PullRequestChecksSummary | null;
+	/** Shown by the pull request panel before its details are read. */
+	readonly title?: string;
+	readonly base?: string;
+	/** GitHub login. */
+	readonly author?: string;
+	readonly authorAvatarUrl?: string | null;
+	readonly additions?: number;
+	readonly deletions?: number;
+	readonly changedFiles?: number;
 };
 
 type SidebarChatPrMark = {

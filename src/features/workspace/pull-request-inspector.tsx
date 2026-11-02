@@ -40,6 +40,13 @@ import {
 	useHighlightedLines,
 } from "../sessions/highlighted-code";
 import { DiffInspector } from "./diff-inspector";
+import {
+	type PullRequestSource,
+	type PullRequestSummary,
+	pickedPullRequestSummary,
+	pullRequestDetailKey,
+	pullRequestDetailQuery,
+} from "./pull-request-detail-query";
 import "./pull-request-inspector.css";
 
 export type PullRequestRepository = {
@@ -47,10 +54,6 @@ export type PullRequestRepository = {
 	readonly repositoryId: number;
 	/** The chat's own pull request, opened first when there is one. */
 	readonly number?: number;
-};
-
-type PullRequestSource = PullRequestRepository & {
-	readonly number: number;
 };
 
 type Tab = "conversation" | "files" | "checks";
@@ -522,6 +525,7 @@ type ReviewChat = {
 /** Review any open pull request of the project's repository without leaving ytimesy. */
 export function PullRequestInspector({
 	repository,
+	summary,
 	projectId,
 	harnessId,
 	modelId,
@@ -529,6 +533,8 @@ export function PullRequestInspector({
 	onReviewStarted,
 }: {
 	repository: PullRequestRepository;
+	/** What the Overview already knows about the chat's pull request (repository.number). */
+	summary?: PullRequestSummary;
 } & ReviewChat) {
 	const list = useQuery({
 		queryKey: ["pull-requests", "open", repository.repositoryId],
@@ -596,10 +602,20 @@ export function PullRequestInspector({
 			</DropdownMenu.Portal>
 		</DropdownMenu.Root>
 	) : null;
+	const listed = open.find((pr) => pr.number === number);
+	const known: PullRequestSummary = {
+		...(listed ? pickedPullRequestSummary(listed) : { number }),
+		...(summary?.number === number ? summary : {}),
+	};
 	return (
 		<PullRequestReview
 			key={number}
-			source={{ ...repository, number }}
+			source={{
+				installationId: repository.installationId,
+				repositoryId: repository.repositoryId,
+				number,
+			}}
+			summary={known}
 			picker={picker}
 			projectId={projectId}
 			harnessId={harnessId}
@@ -612,6 +628,7 @@ export function PullRequestInspector({
 
 function PullRequestReview({
 	source,
+	summary,
 	picker,
 	projectId,
 	harnessId,
@@ -620,19 +637,15 @@ function PullRequestReview({
 	onReviewStarted,
 }: {
 	source: PullRequestSource;
+	summary: PullRequestSummary;
 	picker: ReactNode;
 } & ReviewChat) {
 	const cache = useQueryClient();
-	const key = ["pull-request", source.repositoryId, source.number] as const;
-	const query = new URLSearchParams({
-		installationId: String(source.installationId),
-		repositoryId: String(source.repositoryId),
-		number: String(source.number),
-	});
+	const key = pullRequestDetailKey(source);
+	// Shown at once from the cache (a prefetch or an earlier open) and read
+	// again in the background when older than its fresh window.
 	const detail = useQuery({
-		queryKey: key,
-		queryFn: () =>
-			requestJson<PullRequestDetail>(`/api/github/pull-request?${query}`),
+		...pullRequestDetailQuery(source),
 		refetchInterval: 30_000,
 	});
 	const [tab, setTab] = useState<Tab>("conversation");
@@ -651,22 +664,18 @@ function PullRequestReview({
 			setConfirmMerge(false);
 		},
 	});
-	if (detail.isPending)
-		return <p className="pr-empty">Loading pull request…</p>;
-	if (detail.error || !detail.data)
-		return (
-			<p className="pr-empty" role="alert">
-				{detail.error?.message ?? "Pull request is unavailable."}
-			</p>
-		);
 	const pr = detail.data;
+	// Until the details arrive the panel shows what the list knew; the rest
+	// holds its place with skeletons.
+	const view: PullRequestSummary = pr ?? summary;
+	const checks = pr?.checks ?? [];
 	const people = new Map(
-		pr.participants.map((person) => [person.login, person]),
+		(pr?.participants ?? []).map((person) => [person.login, person]),
 	);
-	const failed = pr.checks.filter((check) => check.state === "failed").length;
-	const pending = pr.checks.filter((check) => check.state === "pending").length;
+	const failed = checks.filter((check) => check.state === "failed").length;
+	const pending = checks.filter((check) => check.state === "pending").length;
 	const canMerge =
-		pr.state === "open" &&
+		pr?.state === "open" &&
 		pr.mergeable === true &&
 		failed === 0 &&
 		pending === 0;
@@ -675,170 +684,203 @@ function PullRequestReview({
 		: pending
 			? "pending"
 			: "passed";
-	const checksSummary = !pr.checks.length
+	const checksSummary = !checks.length
 		? "No checks"
 		: failed
-			? `${failed} of ${pr.checks.length} checks failing`
+			? `${failed} of ${checks.length} checks failing`
 			: pending
-				? `${pending} of ${pr.checks.length} checks running`
-				: pr.checks.length === 1
+				? `${pending} of ${checks.length} checks running`
+				: checks.length === 1
 					? "1 check passed"
-					: `All ${pr.checks.length} checks passed`;
-	const mergeBox =
-		pr.state === "open" || pr.state === "draft" ? (
-			<section className="pr-merge" aria-label="Merge">
-				<div className="pr-merge-row">
-					{pr.checks.length ? (
-						<CheckIcon state={checksState} />
-					) : (
-						<CircleDashed size={14} data-tone="none" />
-					)}
-					<span>{checksSummary}</span>
-					{pr.checks.length ? (
+					: `All ${checks.length} checks passed`;
+	const mergeBox = !pr ? null : pr.state === "open" || pr.state === "draft" ? (
+		<section className="pr-merge" aria-label="Merge">
+			<div className="pr-merge-row">
+				{pr.checks.length ? (
+					<CheckIcon state={checksState} />
+				) : (
+					<CircleDashed size={14} data-tone="none" />
+				)}
+				<span>{checksSummary}</span>
+				{pr.checks.length ? (
+					<button
+						type="button"
+						className="pr-link"
+						onClick={() => setTab("checks")}
+					>
+						Details
+					</button>
+				) : null}
+			</div>
+			<div className="pr-merge-row">
+				{pr.mergeable === false ? (
+					<TriangleAlert size={14} data-tone="bad" />
+				) : pr.mergeable ? (
+					<CircleCheck size={14} data-tone="ok" />
+				) : (
+					<CircleDashed size={14} data-tone="wait" />
+				)}
+				<span>
+					{pr.mergeable === false
+						? `Conflicts with ${pr.base} must be resolved`
+						: pr.mergeable
+							? `No conflicts with ${pr.base}`
+							: "Checking for conflicts…"}
+				</span>
+			</div>
+			<div className="pr-merge-actions">
+				{pr.state === "draft" ? (
+					<button
+						type="button"
+						className="pr-button"
+						data-variant="primary"
+						disabled={act.isPending}
+						onClick={() => act.mutate({ action: "ready" })}
+					>
+						{act.isPending ? "Marking ready…" : "Ready for review"}
+					</button>
+				) : confirmMerge ? (
+					<>
 						<button
 							type="button"
-							className="pr-link"
-							onClick={() => setTab("checks")}
+							className="pr-button"
+							onClick={() => setConfirmMerge(false)}
 						>
-							Details
+							Cancel
 						</button>
-					) : null}
-				</div>
-				<div className="pr-merge-row">
-					{pr.mergeable === false ? (
-						<TriangleAlert size={14} data-tone="bad" />
-					) : pr.mergeable ? (
-						<CircleCheck size={14} data-tone="ok" />
-					) : (
-						<CircleDashed size={14} data-tone="wait" />
-					)}
-					<span>
-						{pr.mergeable === false
-							? `Conflicts with ${pr.base} must be resolved`
-							: pr.mergeable
-								? `No conflicts with ${pr.base}`
-								: "Checking for conflicts…"}
-					</span>
-				</div>
-				<div className="pr-merge-actions">
-					{pr.state === "draft" ? (
 						<button
 							type="button"
 							className="pr-button"
 							data-variant="primary"
 							disabled={act.isPending}
-							onClick={() => act.mutate({ action: "ready" })}
+							onClick={() =>
+								act.mutate({ action: "merge", headSha: pr.headSha })
+							}
 						>
-							{act.isPending ? "Marking ready…" : "Ready for review"}
+							{act.isPending ? "Merging…" : `Squash into ${pr.base}`}
 						</button>
-					) : confirmMerge ? (
-						<>
-							<button
-								type="button"
-								className="pr-button"
-								onClick={() => setConfirmMerge(false)}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								className="pr-button"
-								data-variant="primary"
-								disabled={act.isPending}
-								onClick={() =>
-									act.mutate({ action: "merge", headSha: pr.headSha })
-								}
-							>
-								{act.isPending ? "Merging…" : `Squash into ${pr.base}`}
-							</button>
-						</>
-					) : (
-						<button
-							type="button"
-							className="pr-button"
-							data-variant="primary"
-							disabled={!canMerge}
-							onClick={() => setConfirmMerge(true)}
-						>
-							<GitMerge size={14} />
-							Squash and merge
-						</button>
-					)}
-				</div>
-				{act.error ? (
-					<p className="pr-merge-error" role="alert">
-						{act.error.message}
-					</p>
-				) : null}
-			</section>
-		) : (
-			<section className="pr-merge" aria-label="Merge">
-				<div className="pr-merge-row">
-					<StateIcon state={pr.state} />
-					<span>
-						{pr.state === "merged"
-							? `Merged into ${pr.base}`
-							: "This pull request was closed"}
-					</span>
-				</div>
-			</section>
-		);
+					</>
+				) : (
+					<button
+						type="button"
+						className="pr-button"
+						data-variant="primary"
+						disabled={!canMerge}
+						onClick={() => setConfirmMerge(true)}
+					>
+						<GitMerge size={14} />
+						Squash and merge
+					</button>
+				)}
+			</div>
+			{act.error ? (
+				<p className="pr-merge-error" role="alert">
+					{act.error.message}
+				</p>
+			) : null}
+		</section>
+	) : (
+		<section className="pr-merge" aria-label="Merge">
+			<div className="pr-merge-row">
+				<StateIcon state={pr.state} />
+				<span>
+					{pr.state === "merged"
+						? `Merged into ${pr.base}`
+						: "This pull request was closed"}
+				</span>
+			</div>
+		</section>
+	);
 	const tabs: { id: Tab; label: string; count?: number }[] = [
 		{
 			id: "conversation",
 			label: "Conversation",
-			count: pr.conversation.length,
+			count: pr?.conversation.length,
 		},
-		{ id: "files", label: "Files", count: pr.changedFiles },
-		{ id: "checks", label: "Checks", count: pr.checks.length || undefined },
+		{ id: "files", label: "Files", count: view.changedFiles },
+		{ id: "checks", label: "Checks", count: checks.length || undefined },
 	];
+	const state = view.state;
+	const participants = pr?.participants ?? [];
 	return (
-		<section className="pr" aria-label="Pull request review">
+		<section
+			className="pr"
+			aria-label="Pull request review"
+			aria-busy={!pr || undefined}
+		>
 			<header className="pr-head">
 				<div className="pr-head-bar">
-					<span className="pr-state" data-state={pr.state}>
-						<StateIcon state={pr.state} />
-						{stateLabel[pr.state]}
-					</span>
-					<span className="pr-muted">#{pr.number}</span>
+					{state ? (
+						<span className="pr-state" data-state={state}>
+							<StateIcon state={state} />
+							{stateLabel[state]}
+						</span>
+					) : (
+						<Skeleton className="pr-skeleton-state" />
+					)}
+					<span className="pr-muted">#{view.number}</span>
 					<span className="pr-head-spacer" />
-					<ReviewWithYtimesy
-						pull={{ number: pr.number, title: pr.title, url: pr.url }}
-						projectId={projectId}
-						harnessId={harnessId}
-						modelId={modelId}
-						currentSessionId={currentSessionId}
-						onReviewStarted={onReviewStarted}
-					/>
+					{view.title !== undefined && view.url ? (
+						<ReviewWithYtimesy
+							pull={{ number: view.number, title: view.title, url: view.url }}
+							projectId={projectId}
+							harnessId={harnessId}
+							modelId={modelId}
+							currentSessionId={currentSessionId}
+							onReviewStarted={onReviewStarted}
+						/>
+					) : null}
 					{picker}
-					<a
-						className="pr-ghost"
-						href={pr.url}
-						target="_blank"
-						rel="noreferrer"
-						aria-label="Open on GitHub"
-						title="Open on GitHub"
-					>
-						<ExternalLink size={14} />
-					</a>
+					{view.url ? (
+						<a
+							className="pr-ghost"
+							href={view.url}
+							target="_blank"
+							rel="noreferrer"
+							aria-label="Open on GitHub"
+							title="Open on GitHub"
+						>
+							<ExternalLink size={14} />
+						</a>
+					) : null}
 				</div>
-				<h2 className="pr-title">{pr.title}</h2>
+				{view.title !== undefined ? (
+					<h2 className="pr-title">{view.title}</h2>
+				) : (
+					<Skeleton className="pr-skeleton-title" />
+				)}
 				<div className="pr-byline">
-					{pr.participants.length ? (
+					{participants.length ? (
 						<span
 							className="pr-avatars"
-							title={pr.participants.map(displayName).join(", ")}
+							title={participants.map(displayName).join(", ")}
 						>
-							{pr.participants.slice(0, 5).map((person) => (
+							{participants.slice(0, 5).map((person) => (
 								<Avatar key={person.login} person={person} size={18} />
 							))}
 						</span>
+					) : !pr && view.author ? (
+						// The author comes first among the participants: hold that place.
+						<span className="pr-avatars">
+							<Avatar
+								person={{
+									login: view.author,
+									avatarUrl: view.authorAvatarUrl ?? null,
+									bot: false,
+								}}
+								size={18}
+							/>
+						</span>
 					) : null}
-					<span>
-						<strong>{pr.author}</strong> wants to merge into{" "}
-						<code className="pr-branch">{pr.base}</code> from{" "}
-						<code className="pr-branch">{pr.head}</code>
-					</span>
+					{view.author && view.base && view.head ? (
+						<span>
+							<strong>{view.author}</strong> wants to merge into{" "}
+							<code className="pr-branch">{view.base}</code> from{" "}
+							<code className="pr-branch">{view.head}</code>
+						</span>
+					) : (
+						<Skeleton className="pr-skeleton-byline" />
+					)}
 				</div>
 			</header>
 			<div className="pr-tabs" role="tablist">
@@ -850,20 +892,30 @@ function PullRequestReview({
 						aria-selected={tab === item.id}
 						onClick={() => setTab(item.id)}
 					>
-						{item.id === "checks" && pr.checks.length ? (
+						{item.id === "checks" && checks.length ? (
 							<CheckIcon state={checksState} />
 						) : null}
 						{item.label}
 						{item.count !== undefined ? <span>{item.count}</span> : null}
 					</button>
 				))}
-				<span className="pr-tabs-stat">
-					<span data-tone="ok">+{pr.additions}</span>
-					<span data-tone="bad">−{pr.deletions}</span>
-				</span>
+				{view.additions !== undefined && view.deletions !== undefined ? (
+					<span className="pr-tabs-stat">
+						<span data-tone="ok">+{view.additions}</span>
+						<span data-tone="bad">−{view.deletions}</span>
+					</span>
+				) : null}
 			</div>
 			<div className="pr-pane" role="tabpanel" data-tab={tab}>
-				{tab === "conversation" ? (
+				{!pr ? (
+					detail.error ? (
+						<p className="pr-empty" role="alert">
+							{detail.error.message}
+						</p>
+					) : (
+						<PaneSkeleton />
+					)
+				) : tab === "conversation" ? (
 					<Conversation pr={pr} people={people} mergeBox={mergeBox} />
 				) : tab === "files" ? (
 					pr.files.length ? (
@@ -876,5 +928,26 @@ function PullRequestReview({
 				)}
 			</div>
 		</section>
+	);
+}
+
+function Skeleton({ className }: { className: string }) {
+	return <span className={`pr-skeleton ${className}`} aria-hidden />;
+}
+
+/** The pane's place while the details load: a description and the merge box. */
+function PaneSkeleton() {
+	return (
+		<div className="pr-thread" aria-hidden>
+			<div className="pr-skeleton-comment">
+				<Skeleton className="pr-skeleton-avatar" />
+				<div className="pr-skeleton-lines">
+					<Skeleton className="pr-skeleton-line" />
+					<Skeleton className="pr-skeleton-line" />
+					<Skeleton className="pr-skeleton-line pr-skeleton-short" />
+				</div>
+			</div>
+			<Skeleton className="pr-skeleton-merge" />
+		</div>
 	);
 }

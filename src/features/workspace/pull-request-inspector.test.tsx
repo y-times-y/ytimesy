@@ -201,6 +201,55 @@ describe("pull request picker", () => {
 	});
 });
 
+describe("pull request panel before its details arrive", () => {
+	const render = (
+		summary?: Parameters<typeof PullRequestInspector>[0]["summary"],
+	) =>
+		renderToStaticMarkup(
+			<QueryClientProvider client={new QueryClient()}>
+				<PullRequestInspector
+					repository={{ installationId: 1, repositoryId: 9, number: 7 }}
+					summary={summary}
+				/>
+			</QueryClientProvider>,
+		);
+
+	it("paints what the Overview knows at once and holds the rest with skeletons", () => {
+		const html = render({
+			number: 7,
+			title: "Draft pull request",
+			url: "https://github.com/acme/app/pull/7",
+			state: "draft",
+			head: "ytimesy/fix",
+			base: "main",
+			author: "ada",
+			additions: 12,
+			deletions: 3,
+			changedFiles: 2,
+		});
+		expect(html).not.toContain("Loading pull request");
+		expect(html).toContain("Draft pull request");
+		expect(html).toContain("#7");
+		expect(html).toContain(">Draft<");
+		expect(html).toContain("ytimesy/fix");
+		expect(html).toContain("+12");
+		expect(html).toContain("−3");
+		expect(html).toContain("Conversation");
+		expect(html).toContain('aria-busy="true"');
+		expect(html).toContain("pr-skeleton-merge");
+		expect(html).not.toContain("pr-skeleton-title");
+		expect(html).not.toContain("Squash and merge");
+	});
+
+	it("holds the title's and state's places when only the number is known", () => {
+		const html = render();
+		expect(html).toContain("#7");
+		expect(html).toContain("pr-skeleton-title");
+		expect(html).toContain("pr-skeleton-state");
+		expect(html).toContain("pr-skeleton-byline");
+	});
+});
+
 describe("review action", () => {
 	it("starts a new session instead of posting into the current one", async () => {
 		const request = pullRequestReviewStart({

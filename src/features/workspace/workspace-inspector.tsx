@@ -8,6 +8,7 @@ import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
 import { MemoryInspector } from "./memory-inspector";
+import type { PullRequestSummary } from "./pull-request-detail-query";
 import {
 	PullRequestInspector,
 	type PullRequestRepository,
@@ -89,6 +90,7 @@ export function WorkspaceInspector({
 	onReviewStarted,
 	overview,
 	pullRequest,
+	pullRequestSummary,
 	onOpenChat,
 	memoryFocus,
 	onViewIntent,
@@ -117,6 +119,8 @@ export function WorkspaceInspector({
 	onReviewStarted?: (sessionId: string) => void;
 	overview: ReactNode;
 	pullRequest?: PullRequestRepository;
+	/** What the Overview knows about pullRequest.number, painted before its details load. */
+	pullRequestSummary?: PullRequestSummary;
 	/** Opens a chat linked from memory; false when it is not in this project's list. */
 	onOpenChat?: (chatId: string) => boolean;
 }) {
@@ -254,6 +258,7 @@ export function WorkspaceInspector({
 				<PullRequestInspector
 					key={`${pullRequest.repositoryId}:${pullRequest.number ?? ""}`}
 					repository={pullRequest}
+					summary={pullRequestSummary}
 					projectId={projectId}
 					harnessId={harnessId}
 					modelId={modelId}
