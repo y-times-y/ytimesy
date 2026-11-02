@@ -194,7 +194,8 @@ button:enabled:active {
 .wordmark {
 	display: inline-flex;
 	align-items: center;
-	gap: calc(var(--wm) * 0.2);
+	/* Tight: the marks' own side padding is the gap. */
+	gap: 0;
 	line-height: 1;
 }
 .wordmark-y {
