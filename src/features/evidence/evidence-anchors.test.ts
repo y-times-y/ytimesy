@@ -43,4 +43,19 @@ describe("evidence cards in the chat", () => {
 		expect(anchored.size).toBe(0);
 		expect(trailing).toHaveLength(1);
 	});
+
+	it("put an agent capture right after the tool call that made it, even in the latest turn", () => {
+		const items = [user("u1", 1_000), agent("call"), agent("a2")];
+		const record = {
+			...capture("shot", 2_000),
+			itemId: "call",
+		} as EvidenceRecord;
+		const { anchored, trailing } = evidenceAnchors(items, [record]);
+		expect(anchored.get("call")?.map((each) => each.id)).toEqual(["shot"]);
+		expect(trailing).toEqual([]);
+		// Its call not loaded: the turn rule applies.
+		expect(evidenceAnchors([user("u1", 1_000)], [record]).trailing).toEqual([
+			record,
+		]);
+	});
 });

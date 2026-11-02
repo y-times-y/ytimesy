@@ -835,3 +835,45 @@ describe("lean writes go through the runtime's checked edit", () => {
 		expect(calls.at(-1)?.args).toMatchObject({ id, start: 4 });
 	});
 });
+
+describe("agent captures", () => {
+	it("collects ytimesy-browser captures after the command and tells the agent", async () => {
+		const id = randomUUID();
+		const runner = commandRunner({
+			execute_command: [
+				{
+					id,
+					status: 0,
+					stdout: "/home/u/shot.png\n",
+					start: 0,
+					nextStart: null,
+				},
+				{ id, status: 0, stdout: "ok\n", start: 0, nextStart: null },
+			],
+		});
+		const calls: string[] = [];
+		const { tools } = leanShapeTools("core", runner.tools, {
+			workspace: async () => ({ machines, vm: WorkspaceId("vm"), cwd: repo }),
+			sessionId,
+			turnId: "turn",
+			signal: new AbortController().signal,
+			once: (_id, _fingerprint, run) => run(),
+			installHelpers: async () => {},
+			collectCaptures: async (_workspace, toolCallId) => {
+				calls.push(toolCallId);
+				return "Shown in the chat: shot.png.";
+			},
+		});
+		const shot = (await run(tools, "bash", {
+			command: "ytimesy-browser screenshot",
+		})) as LeanCommandResult;
+		expect(shot.note).toBe("Shown in the chat: shot.png.");
+		expect(calls).toEqual(["call-1"]);
+		// Other commands do not look for captures.
+		const other = (await run(tools, "bash", {
+			command: "make",
+		})) as LeanCommandResult;
+		expect(other.note).toBeUndefined();
+		expect(calls).toHaveLength(1);
+	});
+});

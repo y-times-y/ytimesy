@@ -95,10 +95,29 @@ async function sh(
 	return runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout);
 }
 
+/** Runs one shell command in the workspace. */
+export type WorkspaceShell = (
+	command: string,
+	timeoutMs: number,
+) => Promise<{ exitCode: number; stdout: string; stderr?: string }>;
+
 /** Copies a workspace file out in 1 MiB pieces and checks its size and SHA-256 against the manifest. */
 export async function readEvidenceBytes(
 	runtime: TurnGitRuntime,
 	providerRef: string,
+	path: string,
+	expected: { bytes: number; sha256: string; name: string },
+) {
+	return readWorkspaceBytes(
+		(command, timeout) => sh(runtime, providerRef, command, timeout),
+		path,
+		expected,
+	);
+}
+
+/** readEvidenceBytes over any workspace shell. */
+export async function readWorkspaceBytes(
+	shell: WorkspaceShell,
 	path: string,
 	expected: { bytes: number; sha256: string; name: string },
 ) {
@@ -107,9 +126,7 @@ export async function readEvidenceBytes(
 	const chunk = 1024 * 1024;
 	const parts: Buffer[] = [];
 	for (let index = 0; index * chunk < expected.bytes; index++) {
-		const piece = await sh(
-			runtime,
-			providerRef,
+		const piece = await shell(
 			`dd if=${quote(path)} bs=${chunk} skip=${index} count=1 status=none | base64 -w0`,
 			30_000,
 		);

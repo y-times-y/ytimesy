@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	agentCapturesSummary,
+	CAPTURES_START,
 	EVIDENCE_END,
 	type EvidenceManifest,
 	evidenceManifest,
@@ -9,10 +11,13 @@ import {
 	evidencePlanFor,
 	evidenceRequestFromText,
 	evidenceSectionState,
+	renderAgentCapturesSection,
 	renderEvidenceSection,
 	visiblePath,
+	withAgentCapturesSection,
 	withEvidenceSection,
 } from "./pr-evidence";
+import { withPullRequestFooter } from "./pull-request-footer";
 
 const sha = "c3c0528b5e6e62912fb34a066cf13a9fb81eb770";
 
@@ -291,5 +296,66 @@ describe("Evidence section", () => {
 			pageUrl,
 		});
 		expect(section).toContain("\\]\\(javascript:alert\\(1\\)\\) \\<img\\>");
+	});
+});
+
+describe("agent captures in the Evidence section", () => {
+	const capturesUrl =
+		"https://app.example/projects/p/evidence/33333333-3333-4333-8333-333333333333";
+	const captures = renderAgentCapturesSection({
+		summary: "1 screenshot, 1 recording (5 s)",
+		pageUrl: capturesUrl,
+	}) as string;
+
+	it("counts screenshots and recordings with their lengths", () => {
+		expect(
+			agentCapturesSummary([
+				{ files: [{ name: "screenshot-a.png" }], videoSeconds: null },
+				{ files: [{ name: "recording-a.mp4" }], videoSeconds: 4.6 },
+				{ files: [{ name: "recording-b.webm" }], videoSeconds: 12 },
+			]),
+		).toBe("1 screenshot, 2 recordings (5 s, 12 s)");
+		expect(agentCapturesSummary([])).toBe("");
+		expect(
+			renderAgentCapturesSection({ summary: "", pageUrl: null }),
+		).toBeNull();
+	});
+
+	it("is an Evidence section with a count and the evidence page link, no media", () => {
+		const body = withAgentCapturesSection(
+			withPullRequestFooter("## Summary\n\nAdds a README line.", {}),
+			captures,
+		);
+		expect(body).toContain(
+			"## Evidence\n\nCaptured by the agent on its desktop: 1 screenshot, 1 recording (5 s).",
+		);
+		expect(body).toContain(
+			`[View the evidence](${capturesUrl}) in ytimesy (sign-in required).`,
+		);
+		expect(body).not.toContain("![");
+		// Before the footer, and replaced rather than repeated.
+		expect(body.indexOf(CAPTURES_START)).toBeLessThan(
+			body.indexOf("Generated with ytimesy"),
+		);
+		const again = withAgentCapturesSection(body, captures);
+		expect(again).toBe(body);
+		expect(withAgentCapturesSection(body, null)).not.toContain(CAPTURES_START);
+	});
+
+	it("joins a harness Evidence section under one heading", () => {
+		const harness = renderEvidenceSection({
+			manifest: manifest(),
+			planKey: "web-abc",
+			headSha: sha,
+			pageUrl,
+		});
+		const withCaptures = withAgentCapturesSection("Intro", captures);
+		const body = withEvidenceSection(withCaptures, harness);
+		expect(body.match(/## Evidence/g)).toHaveLength(1);
+		expect(body.indexOf(EVIDENCE_END)).toBeLessThan(
+			body.indexOf("Captured by the agent"),
+		);
+		expect(body).toContain(`[View the evidence](${capturesUrl})`);
+		expect(withAgentCapturesSection(body, captures)).toBe(body);
 	});
 });

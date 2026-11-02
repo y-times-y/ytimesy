@@ -178,3 +178,35 @@
 	margin: 40px auto;
 	color: #aaa;
 }
+
+/* The agent's own screenshot or recording, inline in the chat. */
+.agent-capture {
+	display: grid;
+	gap: 6px;
+	justify-items: start;
+	margin: 8px 0;
+	max-width: 42em;
+}
+.agent-capture a:has(img) {
+	display: block;
+	cursor: zoom-in;
+}
+.agent-capture img,
+.agent-capture video {
+	display: block;
+	max-width: 100%;
+	max-height: 360px;
+	border: 1px solid #ffffff1c;
+	border-radius: 10px;
+	background: #000;
+}
+.agent-capture figcaption {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: #999;
+	font-size: 12px;
+}
+.agent-capture figcaption .evidence-open {
+	margin-left: 8px;
+}

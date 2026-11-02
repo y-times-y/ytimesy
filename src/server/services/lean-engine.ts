@@ -45,7 +45,19 @@ export type LeanSurfaceContext = {
 	memo?: <T>(key: string, load: () => Promise<T>) => Promise<T>;
 	/** Installs the workspace commands; defaults to ensureLeanHelpers. */
 	installHelpers?: (workspace: AgentToolWorkspace) => Promise<void>;
+	/**
+	 * Stores the screenshots and recordings the agent made with ytimesy-browser
+	 * (agent-captures.ts) after a command that may have made one, and returns a
+	 * note for the command's result ("" when there were none). Root chats only.
+	 */
+	collectCaptures?: (
+		workspace: AgentToolWorkspace,
+		toolCallId: string,
+	) => Promise<string>;
 };
+
+/** Commands after which ytimesy-browser captures may be waiting: the browser command itself, or a wait on a background one. */
+const CAPTURING_COMMAND = /\bytimesy-(?:browser|job)\b/;
 
 type ExecuteOptions = Parameters<NonNullable<Tool["execute"]>>[1];
 type CommandPage = {
@@ -247,6 +259,24 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 		};
 	}
 
+	/** Adds the captures note to a finished command's result; a failure only costs the note. */
+	async function withCaptures(
+		workspace: AgentToolWorkspace,
+		result: LeanCommandResult,
+		options: ExecuteOptions,
+	): Promise<LeanCommandResult> {
+		if (!context.collectCaptures || result.status === "running") return result;
+		const note = await context
+			.collectCaptures(workspace, options.toolCallId)
+			.catch((error: unknown) => {
+				console.warn("Agent captures were not collected.", error);
+				return "";
+			});
+		return note
+			? { ...result, note: result.note ? `${result.note}\n${note}` : note }
+			: result;
+	}
+
 	return {
 		ready,
 		outputPath,
@@ -332,7 +362,17 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 					)),
 					id: page.id,
 				};
-			return settle(workspace, input.command, page, 0, started, input.maxBytes);
+			const result = await settle(
+				workspace,
+				input.command,
+				page,
+				0,
+				started,
+				input.maxBytes,
+			);
+			return CAPTURING_COMMAND.test(input.command)
+				? withCaptures(workspace, result, options)
+				: result;
 		},
 		/** Writes to a running command and/or waits; returns output since the last read. Ctrl-C stops it. */
 		async write(
@@ -384,13 +424,17 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 				},
 				options,
 			);
-			return settle(
+			return withCaptures(
 				workspace,
-				"",
-				{ ...page, id: input.id },
-				from,
-				started,
-				input.maxBytes,
+				await settle(
+					workspace,
+					"",
+					{ ...page, id: input.id },
+					from,
+					started,
+					input.maxBytes,
+				),
+				options,
 			);
 		},
 		async readFile(
