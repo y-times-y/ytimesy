@@ -51,3 +51,24 @@ describe("analytics privacy boundary", () => {
 		expect(analyticsSurface("/private/repository")).toBe("other");
 	});
 });
+
+it("lets app_viewed carry the first-touch ref and source, nothing else from the cookie", () => {
+	expect(
+		filteredAnalyticsProperties("app_viewed", {
+			surface: "other",
+			initial_ref: "x",
+			initial_utm_source: "twitter",
+			initial_landing_path: "/blog",
+		}),
+	).toEqual({
+		surface: "other",
+		initial_ref: "x",
+		initial_utm_source: "twitter",
+	});
+	expect(
+		filteredAnalyticsProperties("app_viewed", {
+			surface: "other",
+			initial_ref: "Bad Ref",
+		}),
+	).toBeNull();
+});

@@ -5,6 +5,32 @@ import { interactionTimingEvent, webVitalEvent } from "./web-vitals";
 const surface = z.enum(["workspace", "onboarding", "auth", "other"]);
 const runtime = z.enum(["codex", "api"]);
 const role = z.enum(["lead", "builder", "reader"]);
+/** First-touch referral values, already bounded by referral-attribution.ts. */
+const initialRef = z
+	.string()
+	.regex(/^[a-z0-9_-]{1,32}$/)
+	.optional();
+const initialValue = z
+	.string()
+	.regex(/^[a-z0-9._-]{1,64}$/)
+	.optional();
+/** Where the account first came from (user_attribution), when known. */
+const initialAttribution = z.object({
+	initial_ref: initialRef,
+	initial_utm_source: initialValue,
+	initial_utm_medium: initialValue,
+	initial_utm_campaign: initialValue,
+	initial_utm_content: initialValue,
+	initial_utm_term: initialValue,
+	initial_referrer_host: z
+		.string()
+		.regex(/^[a-z0-9.-]{1,100}$/)
+		.optional(),
+	initial_landing_path: z
+		.string()
+		.regex(/^\/[A-Za-z0-9/._~-]{0,119}$/)
+		.optional(),
+});
 export const serverAnalyticsEvents = {
 	harness_model_completed: harnessModelMetric.extend({
 		runtime,
@@ -16,7 +42,8 @@ export const serverAnalyticsEvents = {
 		role,
 		model_key: z.string().regex(/^[a-f0-9]{64}$/),
 	}),
-	account_created: z.object({}),
+	/** The sign-up event (email, GitHub or Google), with its first touch. */
+	account_created: initialAttribution,
 	agent_created: z.object({ runtime, role }),
 	turn_started: z.object({ runtime, role }),
 	turn_finished: z.object({
@@ -71,7 +98,11 @@ export type ServerAnalyticsProperties<E extends ServerAnalyticsEvent> = z.input<
 	(typeof serverAnalyticsEvents)[E]
 >;
 export const analyticsEvents = {
-	app_viewed: z.object({ surface }),
+	app_viewed: z.object({
+		surface,
+		initial_ref: initialRef,
+		initial_utm_source: initialValue,
+	}),
 	prompt_submitted: z.object({
 		runtime: z.enum(["codex", "api"]),
 		attempts: z.number().int().min(1).max(5),

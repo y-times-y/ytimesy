@@ -1,5 +1,11 @@
 import { betterAuth } from "better-auth";
 import { captcha } from "better-auth/plugins";
+import {
+	type FirstTouch,
+	initialAttributionProperties,
+	isBotUserAgent,
+	readFirstTouchCookie,
+} from "#/domain/referral-attribution";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
 import {
@@ -11,6 +17,7 @@ import {
 	recordLegalAcceptance,
 	recordLegalAcceptanceAtSignIn,
 } from "../adapters/legal-acceptance";
+import { recordUserAttribution } from "../adapters/user-attribution";
 import { serverConfig } from "../config";
 import {
 	loadLocalQaUser,
@@ -47,19 +54,49 @@ export const oauthAccountPolicy = {
  * failed write is logged, not thrown: the user then sees the "We updated our
  * Terms" notice on their next visit instead of a broken sign-up.
  */
-export async function accountCreated(user: { id: string; createdAt: Date }) {
+export async function accountCreated(
+	user: { id: string; createdAt: Date },
+	context?: SignUpRequestContext | null,
+) {
 	await recordLegalAcceptance(user.id, "signup").catch((error: unknown) => {
 		console.error("Could not record Terms acceptance at sign-up.", {
 			userId: user.id,
 			error: error instanceof Error ? error.message : String(error),
 		});
 	});
-	void captureServerAnalytics(
-		user.id,
-		"account_created",
-		{},
-		{ key: user.id, timestamp: user.createdAt },
-	);
+	const touch = signUpFirstTouch(context);
+	if (touch)
+		await recordUserAttribution(user.id, touch).catch((error: unknown) => {
+			console.error("Could not record sign-up attribution.", {
+				userId: user.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	const initial = initialAttributionProperties(touch);
+	void captureServerAnalytics(user.id, "account_created", initial, {
+		key: user.id,
+		timestamp: user.createdAt,
+		setOnce: initial,
+	});
+}
+
+/** The parts of Better Auth's endpoint context a sign-up hook reads. */
+type SignUpRequestContext = {
+	readonly headers?: Headers;
+	readonly request?: Request;
+};
+
+/**
+ * The visitor's first touch (the yt_first_touch cookie the browser set) on
+ * the request that created the account: the email sign-up POST or the GitHub
+ * or Google callback. Null for bots or when the cookie is absent.
+ */
+export function signUpFirstTouch(
+	context: SignUpRequestContext | null | undefined,
+): FirstTouch | null {
+	const headers = context?.headers ?? context?.request?.headers;
+	if (!headers || isBotUserAgent(headers.get("user-agent"))) return null;
+	return readFirstTouchCookie(headers.get("cookie"));
 }
 
 /**
