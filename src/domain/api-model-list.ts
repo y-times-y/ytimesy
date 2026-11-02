@@ -18,6 +18,11 @@ export type ApiModelSpeed = {
 	readonly providers: readonly string[];
 	/** Price relative to the standard endpoint. */
 	readonly priceMultiple: number;
+	/**
+	 * The maker's own request field for this speed (`service_tier`), when its
+	 * direct API offers it; a direct key or plan sends it on each request.
+	 */
+	readonly serviceTier?: string;
 };
 
 export type ListedApiModel = {
@@ -50,10 +55,12 @@ const GOOGLE_PRIORITY: ApiModelSpeed = {
 	providers: ["google-ai-studio/priority", "google-vertex/global/priority"],
 	priceMultiple: 1.8,
 };
+/** xAI priority processing: 2x the standard price, per xAI's docs. */
 const XAI_PRIORITY: ApiModelSpeed = {
 	id: "fast",
 	providers: ["xai/priority"],
 	priceMultiple: 2,
+	serviceTier: "priority",
 };
 
 export const API_MODEL_LIST: readonly ListedApiModel[] = [
@@ -209,6 +216,15 @@ export function apiModelSpeeds(openRouterId: string): readonly ApiModelSpeed[] {
 		API_MODEL_LIST.find((model) => model.openRouterId === openRouterId)
 			?.speeds ?? []
 	);
+}
+
+/** The faster speeds a listed model offers on its maker's own API (a request field). */
+export function directApiModelSpeeds(
+	directId: string,
+): readonly ApiModelSpeed[] {
+	return (
+		API_MODEL_LIST.find((model) => model.directId === directId)?.speeds ?? []
+	).filter((speed) => speed.serviceTier !== undefined);
 }
 
 /**
