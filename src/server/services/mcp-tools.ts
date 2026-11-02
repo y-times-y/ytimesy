@@ -5,6 +5,7 @@ import {
 } from "@ai-sdk/mcp";
 import { asSchema, type JSONSchema7, type ToolSet } from "ai";
 import { mcpToolName } from "#/domain/mcp-tool-call";
+import { redactSecrets } from "#/domain/redact-secrets";
 import { redirectRefusingFetch } from "../adapters/workers-fetch";
 
 type ConnectableMcpServer = {
@@ -170,8 +171,19 @@ export async function connectMcpTools(
 						: {}),
 				} as ToolSet[string];
 			}
-		} catch {
+		} catch (error) {
 			unavailable.push(server.name);
+			// Why it did not connect (status, redirect, auth), never a header value.
+			console.warn("MCP server unavailable.", {
+				server: server.name,
+				host: safeHost(server.url),
+				reason: redactSecrets(
+					error instanceof Error
+						? `${error.name}: ${error.message}`
+						: String(error),
+					300,
+				),
+			});
 		}
 	}
 	return {
@@ -199,4 +211,12 @@ function withinConnectTimeout<T>(work: Promise<T>, signal?: AbortSignal) {
 			.then(resolve, reject)
 			.finally(() => deadline.removeEventListener("abort", stop));
 	});
+}
+
+function safeHost(url: string) {
+	try {
+		return new URL(url).host;
+	} catch {
+		return "invalid-url";
+	}
 }
