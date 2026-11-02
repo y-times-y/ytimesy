@@ -1,6 +1,7 @@
 import { ClaudeMark } from "./claude-mark";
 import { CodexMark } from "./codex-mark";
 import { XaiMark } from "./xai-mark";
+import "./subscription-mark.css";
 
 export type SubscriptionBrand = "codex" | "claude" | "grok";
 

@@ -192,6 +192,7 @@ import {
 	environmentProgressQuery,
 	HeldForSetupMessage,
 } from "../projects/environment-build-progress";
+import { FirstProjectHeading } from "../projects/first-project-heading";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
 	HeldForSetupContext,
@@ -1251,6 +1252,8 @@ export function WorkspaceHome({
 		turnStatus: session.turnStatus,
 		listedTitle,
 	});
+	// Read from the server's list, so the first paint already shows it.
+	const noProjects = projects.data?.length === 0;
 
 	function sessionScope() {
 		return {
@@ -3336,6 +3339,9 @@ export function WorkspaceHome({
 									className="welcome-content"
 									data-layout={followUpLayout ? "chat" : "empty"}
 								>
+									{followUpLayout || !noProjects ? null : (
+										<FirstProjectHeading />
+									)}
 									<SessionLauncher
 										onOpenSettings={(section) => {
 											setSettingsSection(section);
@@ -3634,17 +3640,6 @@ export function WorkspaceHome({
 											</button>
 										</p>
 									)}
-									{!projects.isPending &&
-										!projects.error &&
-										!projects.data?.length && (
-											<button
-												type="button"
-												className="setup-back"
-												onClick={openAddProject}
-											>
-												Add your first project
-											</button>
-										)}
 								</div>
 							</section>
 							<div className="inspector-frame">

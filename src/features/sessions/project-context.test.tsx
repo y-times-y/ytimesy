@@ -141,3 +141,29 @@ it("offers the base picker beside the project in a new chat", () => {
 	expect(html).toContain('aria-label="Project"');
 	expect(html).toContain('aria-label="Start from develop"');
 });
+
+it("draws the repository picker as the one call to action before the first project", () => {
+	const html = render(
+		<ProjectContext
+			projects={[]}
+			onSelectProject={() => {}}
+			onBaseBranchChange={() => {}}
+		/>,
+	);
+	expect(html).toMatch(/class="session-context" data-empty="true"/);
+	expect(html).toMatch(
+		/aria-label="Project" data-empty="true" title="Add repository"/,
+	);
+	expect(html).toContain(">Add repository<");
+	expect(html).not.toContain("Select project");
+	// With a project, the picker is the usual quiet label.
+	const withProject = render(
+		<ProjectContext
+			projects={[project]}
+			selectedProject={project}
+			onSelectProject={() => {}}
+		/>,
+	);
+	expect(withProject).not.toContain("data-empty");
+	expect(withProject).not.toContain("Add repository");
+});

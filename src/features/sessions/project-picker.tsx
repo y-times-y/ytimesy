@@ -128,6 +128,11 @@ export function ProjectPicker({
 			}),
 		[projects, query, repositories.data?.repositories, selectedProject?.id],
 	);
+	const firstProject = !selectedProject && projects.length === 0;
+	const triggerLabel =
+		selectedProject?.name ||
+		selectedProject?.fullName ||
+		(firstProject ? FIRST_PROJECT_LABEL : "Select project");
 	const scratch = scratchRepositoryName(scratchName);
 	// GitHub refuses ytimesy's request to create a repository unless its app
 	// has the Administration permission: then "New repo" points to GitHub.
@@ -160,16 +165,12 @@ export function ProjectPicker({
 			<PopoverTrigger
 				className="context-select project-select"
 				aria-label="Project"
-				title={
-					selectedProject?.name || selectedProject?.fullName || "Select project"
-				}
+				// No project yet: the workspace's one call to action, drawn as a pill.
+				data-empty={firstProject || undefined}
+				title={triggerLabel}
 			>
 				<GitBranch size={14} />
-				<span>
-					{selectedProject?.name ||
-						selectedProject?.fullName ||
-						"Select project"}
-				</span>
+				<span>{triggerLabel}</span>
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
 			<PopoverContent
@@ -407,6 +408,9 @@ function PickerRow({
 		</button>
 	);
 }
+
+/** The trigger's label before the account has any project. */
+export const FIRST_PROJECT_LABEL = "Add repository";
 
 /** GitHub's own new-repository page, private by default. */
 const NEW_REPOSITORY_URL = "https://github.com/new?visibility=private";

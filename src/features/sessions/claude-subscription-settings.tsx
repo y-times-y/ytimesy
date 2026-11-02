@@ -49,14 +49,21 @@ export function claudeSubscriptionMeta(
 	}
 }
 
-/** Settings > Agents: connect a Claude subscription with a setup token. */
-export function ClaudeSubscriptionSettings() {
+/**
+ * The account's Claude subscription: its state, and saving or removing the
+ * setup token. Settings > Agents and the first run's Claude card share it,
+ * so either one updates the model picker the same way.
+ */
+export function useClaudeSubscription({
+	onSaved,
+}: {
+	/** After a token is saved (accepted or refused). */
+	onSaved?: (view: ClaudeSubscriptionView) => void;
+} = {}) {
 	const queryClient = useQueryClient();
 	const read = useServerFn(getClaudeSubscription);
 	const save = useServerFn(saveClaudeSubscriptionFn);
 	const disconnect = useServerFn(disconnectClaudeSubscriptionFn);
-	const [token, setToken] = useState("");
-	const [confirming, setConfirming] = useState(false);
 	const view = useQuery({
 		queryKey: CLAUDE_SUBSCRIPTION_KEY,
 		queryFn: () => read(),
@@ -70,23 +77,40 @@ export function ClaudeSubscriptionSettings() {
 		});
 	};
 	const saving = useMutation({
-		mutationFn: (value: string) => save({ data: { token: value } }),
+		mutationFn: (token: string) => save({ data: { token } }),
 		onSuccess: (data) => {
-			setToken("");
 			refresh(data);
+			onSaved?.(data);
 		},
 	});
 	const removing = useMutation({
 		mutationFn: () => disconnect({ data: {} }),
-		onSuccess: (data) => {
-			setConfirming(false);
-			refresh(data);
-		},
+		onSuccess: refresh,
+	});
+	return { view, saving, removing };
+}
+
+/** Connected or limited: the token works, the plan may only be spent for now. */
+export function claudeSubscriptionUsable(
+	view: ClaudeSubscriptionView | undefined,
+) {
+	return (
+		view?.enabled === true &&
+		(view.status === "connected" || view.status === "limited")
+	);
+}
+
+/** Settings > Agents: connect a Claude subscription with a setup token. */
+export function ClaudeSubscriptionSettings() {
+	const [token, setToken] = useState("");
+	const [confirming, setConfirming] = useState(false);
+	const { view, saving, removing } = useClaudeSubscription({
+		onSaved: () => setToken(""),
 	});
 	const data = view.data;
 	if (!data?.enabled) return null;
 	const meta = claudeSubscriptionMeta(data);
-	const connected = data.status === "connected" || data.status === "limited";
+	const connected = claudeSubscriptionUsable(data);
 	const onSubmit = (event: FormEvent) => {
 		event.preventDefault();
 		if (token.trim()) saving.mutate(token.trim());
@@ -122,7 +146,11 @@ export function ClaudeSubscriptionSettings() {
 										type="button"
 										className="settings-danger"
 										disabled={removing.isPending}
-										onClick={() => removing.mutate()}
+										onClick={() =>
+											removing.mutate(undefined, {
+												onSuccess: () => setConfirming(false),
+											})
+										}
 									>
 										{removing.isPending ? "Disconnecting…" : "Disconnect"}
 									</button>
