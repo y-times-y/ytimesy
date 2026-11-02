@@ -1057,7 +1057,7 @@ function XaiSubscriptionRow({
 	const status = subscription.status;
 	const meta =
 		status === "disconnected"
-			? "Use your SuperGrok plan for Grok models."
+			? "Use your SuperGrok or X subscription for Grok models."
 			: status === "ready"
 				? `${subscription.modelCount} Grok models`
 				: xaiSubscriptionMessage(status);
@@ -1068,10 +1068,10 @@ function XaiSubscriptionRow({
 					<XaiMark size={18} />
 				</span>
 				<div className="settings-row-text">
-					<span className="settings-row-title">SuperGrok subscription</span>
+					<span className="settings-row-title">Grok subscription</span>
 					<span
 						className="settings-row-meta"
-						title="Grok runs on your SuperGrok or X Premium plan, with no API bill. Usage counts against your plan's limits."
+						title="Grok runs on your SuperGrok or X subscription (X Premium and the X Subscription plans), with no API bill. Usage counts against your plan's limits."
 					>
 						{meta}
 					</span>

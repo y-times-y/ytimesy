@@ -66,7 +66,7 @@ const deviceError = z.object({
 });
 
 function disabled(): never {
-	throw new Error("SuperGrok sign-in is not available.");
+	throw new Error("Grok sign-in is not available.");
 }
 
 function pendingView(login: PendingLogin): XaiDeviceLogin {

@@ -83,20 +83,20 @@ it("offers the Codex subscription or an API key, and Later until one is set", ()
 	expect(ready).not.toContain("Later");
 });
 
-it("offers SuperGrok only while its feature switch is on", () => {
+it("offers the Grok subscription only while its feature switch is on", () => {
 	const off = renderToStaticMarkup(
 		<QueryClientProvider client={new QueryClient()}>
 			<ModelStep ready={false} />
 		</QueryClientProvider>,
 	);
-	expect(off).not.toContain("SuperGrok");
+	expect(off).not.toContain("Grok subscription");
 	expect(off).not.toContain("Sign in with xAI");
 	const on = renderToStaticMarkup(
 		<QueryClientProvider client={new QueryClient()}>
 			<ModelStep ready={false} xaiSubscription />
 		</QueryClientProvider>,
 	);
-	expect(on).toContain("Your SuperGrok subscription");
+	expect(on).toContain("Your Grok subscription");
 	expect(on).toContain("Sign in with xAI");
 	expect(on).toContain('data-count="3"');
 });

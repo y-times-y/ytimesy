@@ -53,7 +53,7 @@ export function XaiSubscriptionSignIn({
 						href={login.verificationUrl}
 						target="_blank"
 						rel="noreferrer"
-						title="Approve the code with the xAI account that has SuperGrok or X Premium. This page updates on its own."
+						title="Approve the code with the xAI account that has SuperGrok or an X subscription. This page updates on its own."
 					>
 						Approve at xAI
 						<ArrowUpRight size={13} />
@@ -64,7 +64,7 @@ export function XaiSubscriptionSignIn({
 					type="button"
 					className="chatgpt-sign-in-button"
 					disabled={signIn.isPending}
-					title="Uses your SuperGrok or X Premium plan for Grok models. Usage counts against your plan, not an API bill."
+					title="Uses your SuperGrok or X subscription for Grok models. Usage counts against your plan, not an API bill."
 					onClick={() => signIn.mutate()}
 				>
 					{signIn.isPending ? "Starting…" : label}

@@ -15,7 +15,7 @@ export function xaiSubscriptionEnabled(
 }
 
 /** How the chat and the picker name the subscription's connection. */
-export const XAI_SUBSCRIPTION_LABEL = "SuperGrok";
+export const XAI_SUBSCRIPTION_LABEL = "Grok plan";
 
 /** The xAI API the subscription's token calls; already an official edge endpoint. */
 export const XAI_API_BASE_URL = DIRECT_MODEL_ENDPOINTS["x-ai"] as string;
@@ -36,8 +36,8 @@ export function xaiSubscriptionMessage(
 	status: Exclude<XaiSubscriptionStatus, "ready">,
 ): string {
 	return status === "reconnect"
-		? "Your SuperGrok sign-in expired. Reconnect it in Settings > Agents."
-		: "Your xAI plan can't use Grok here. Check your SuperGrok plan, then reconnect.";
+		? "Your Grok sign-in expired. Reconnect it in Settings > Agents."
+		: "Your xAI plan can't use Grok here. Check your SuperGrok or X subscription, then reconnect.";
 }
 
 /**

@@ -225,7 +225,7 @@ it("seals approved tokens into a SuperGrok connection with xAI's listed Grok mod
 	);
 	expect(connection).toMatchObject({
 		provider: "compatible",
-		label: "SuperGrok",
+		label: "Grok plan",
 		baseUrl: "https://api.x.ai/v1",
 		subscription: { provider: "xai", status: "ready" },
 	});

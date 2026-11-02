@@ -333,9 +333,9 @@ export class XaiSubscriptionUnavailable extends Error {
 	constructor(readonly reason: "reconnect" | "not-eligible" | "unavailable") {
 		super(
 			reason === "reconnect"
-				? "Your SuperGrok sign-in expired. Reconnect it in Settings > Agents, then retry."
+				? "Your Grok sign-in expired. Reconnect it in Settings > Agents, then retry."
 				: reason === "not-eligible"
-					? "Your xAI plan can't use Grok here. Check your SuperGrok plan, or pick another model."
+					? "Your xAI plan can't use Grok here. Check your SuperGrok or X subscription, or pick another model."
 					: "xAI sign-in is unavailable right now. Retry in a few minutes.",
 		);
 		this.name = "XaiSubscriptionUnavailable";
