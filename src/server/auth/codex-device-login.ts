@@ -84,10 +84,19 @@ function pendingView(login: PendingLogin): CodexDeviceLogin {
 
 async function openPending(sealed: string | null, userId: string) {
 	if (!sealed) return null;
-	const parsed = pendingLogin.safeParse(
-		JSON.parse(await unseal(sealed, { purpose: "codex-device-login", userId })),
-	);
-	return parsed.success ? parsed.data : null;
+	// A pending login that no longer opens (sealed by an older build without its
+	// binding) is no login: a fresh sign-in replaces it instead of failing forever.
+	const opened = await unseal(sealed, {
+		purpose: "codex-device-login",
+		userId,
+	}).catch(() => null);
+	if (opened === null) return null;
+	try {
+		const parsed = pendingLogin.safeParse(JSON.parse(opened));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
 }
 
 /** The pending login, from the database only (no OpenAI request). */
