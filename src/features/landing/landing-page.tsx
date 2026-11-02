@@ -16,8 +16,10 @@ import { HELPER_COLORS } from "#/domain/helper-names";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { ScoreCostChart } from "#/features/blog/score-cost-chart";
 import { AgentIcon } from "#/features/sessions/agent-icon";
+import { ClaudeMark } from "#/features/sessions/claude-mark";
 import { CodexMark } from "#/features/sessions/codex-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
+import { XaiMark } from "#/features/sessions/xai-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
 	BENCHMARK,
@@ -222,7 +224,28 @@ function Models() {
 					<span className="model-logos">
 						<CodexMark size={30} />
 					</span>
-					<h3>Your Codex subscription</h3>
+					<div>
+						<h3>Your Codex subscription</h3>
+						<p>Your ChatGPT plan, through Codex.</p>
+					</div>
+				</li>
+				<li className="model-card">
+					<span className="model-logos">
+						<ClaudeMark size={30} />
+					</span>
+					<div>
+						<h3>Your Claude subscription</h3>
+						<p>Runs Claude Code itself, on your Pro or Max plan.</p>
+					</div>
+				</li>
+				<li className="model-card">
+					<span className="model-logos">
+						<XaiMark size={26} />
+					</span>
+					<div>
+						<h3>Your Grok subscription</h3>
+						<p>SuperGrok or X Premium.</p>
+					</div>
 				</li>
 				<li className="model-card">
 					<span className="model-logos">
@@ -230,7 +253,10 @@ function Models() {
 							<ModelProviderLogo key={provider} provider={provider} size={26} />
 						))}
 					</span>
-					<h3>Your API keys</h3>
+					<div>
+						<h3>Your API keys</h3>
+						<p>OpenAI, Anthropic, Google or OpenRouter.</p>
+					</div>
 				</li>
 			</ul>
 		</section>

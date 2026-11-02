@@ -790,6 +790,12 @@
 	font-weight: 550;
 	letter-spacing: -0.01em;
 }
+.model-card p {
+	margin: 6px 0 0;
+	color: #8f8f8f;
+	font-size: 14px;
+	line-height: 1.45;
+}
 .model-logos {
 	display: flex;
 	align-items: center;
