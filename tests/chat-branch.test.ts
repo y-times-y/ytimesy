@@ -10,6 +10,8 @@ const adapters = vi.hoisted(() => ({
 	repository: vi.fn(),
 	held: vi.fn(),
 	remote: vi.fn(),
+	token: vi.fn(),
+	githubConnected: vi.fn(),
 }));
 vi.mock("../src/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
@@ -26,7 +28,8 @@ vi.mock("../src/server/adapters/github", () => ({
 	githubClient: () => ({ repos: { getBranch: adapters.branch } }),
 }));
 vi.mock("../src/server/auth/github-connection", () => ({
-	githubAccessToken: async () => "test-only",
+	githubAccessToken: adapters.token,
+	githubConnectionExists: adapters.githubConnected,
 }));
 const input = {
 	userId: "alice",
@@ -56,6 +59,18 @@ beforeEach(() => {
 	});
 	adapters.held.mockResolvedValue(false);
 	adapters.remote.mockResolvedValue(null);
+	adapters.token.mockResolvedValue("test-only");
+	adapters.githubConnected.mockResolvedValue(true);
+});
+it("a new chat without GitHub says how to send, not how to pick repositories", async () => {
+	adapters.token.mockRejectedValue(
+		new Response("Connect GitHub to choose repositories.", { status: 409 }),
+	);
+	adapters.githubConnected.mockResolvedValue(false);
+	await expect(commitChatBranchForSubmission(input)).rejects.toThrow(
+		"Connect GitHub to send.",
+	);
+	expect(adapters.working).not.toHaveBeenCalled();
 });
 it("generates a task-specific branch only on first submission", async () => {
 	await commitChatBranchForSubmission(input);

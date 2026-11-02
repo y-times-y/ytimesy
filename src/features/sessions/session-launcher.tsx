@@ -73,6 +73,11 @@ import {
 	secretProvidedText,
 } from "#/domain/secret-request";
 import {
+	blockedSendAttempt,
+	type ComposerSendBlock,
+	composerSendBlock,
+} from "#/domain/send-blocked";
+import {
 	continuedChatAwaitsMessage,
 	isQueuedUserMessage,
 	lastUserMessageText,
@@ -90,6 +95,7 @@ import {
 	type SlashCommand,
 	slashMenuCommands,
 } from "#/domain/slash-command";
+import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
 import { startInteraction } from "#/features/analytics/web-vitals";
 import {
@@ -146,6 +152,7 @@ import { getAgentModelCatalog } from "./model-catalog.fn";
 import { readPastedTextFn } from "./pasted-text.fn";
 import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
+import { SendBlockNotice } from "./send-block-notice";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
 import { SideChatFrame, useSideChat } from "./side-chat-panel";
@@ -201,7 +208,10 @@ export function SessionLauncher({
 	loadedCatalog,
 	variant = "main",
 	setupHold,
+	onOpenSettings,
 }: {
+	/** Opens Settings at a section: the fix a blocked send points to. */
+	onOpenSettings?: (section: SettingsSection) => void;
 	/**
 	 * A sent message waiting for the project's setup: drawn after the
 	 * transcript, with the message itself unless the transcript has it.
@@ -665,6 +675,10 @@ export function SessionLauncher({
 	>([]);
 	const [helperError, setHelperError] = useState<string | null>(null);
 	const [noProject, setNoProject] = useState<string | null>(null);
+	/** The block a send attempt ran into; shown while that block still holds. */
+	const [triedBlock, setTriedBlock] = useState<
+		ComposerSendBlock["kind"] | null
+	>(null);
 	useEffect(() => {
 		setHelperOutbox((current) => {
 			const next = current.filter((sent) => {
@@ -794,7 +808,28 @@ export function SessionLauncher({
 			turnStatus,
 			listedTitle,
 		});
+	// The runtime's live model list; null while it is unknown.
+	const availableModelIds =
+		catalog.data && !catalog.isError
+			? catalog.data.map((model) => model.id)
+			: connectedProviderId(session.connection) === harnessId
+				? session.models.map((model) => model.id)
+				: null;
+	const sendBlock = composerSendBlock({
+		harnessId,
+		blockers: session.sendBlockers,
+		modelId,
+		availableModelIds,
+	});
+	const shownSendBlock =
+		sendBlock && sendBlock.kind === triedBlock ? sendBlock : null;
+	function openSendBlockFix(block: ComposerSendBlock) {
+		if (block.action === "model_picker")
+			document.getElementById(MODEL_PICKER_ID)?.click();
+		else onOpenSettings?.(block.action);
+	}
 	function composerCanSend(text: string, slashCommand: boolean) {
+		if (sendBlock) return false;
 		return composerSendIsEnabled({
 			harnessId,
 			connection: session.connection,
@@ -960,6 +995,12 @@ export function SessionLauncher({
 		setNoProject(projectNotice);
 		// The text stays in the box; nothing is sent until there is a project.
 		if (projectNotice) return;
+		// Nor while something stops it: say what, with its fix.
+		const blocked = blockedSendAttempt(text, sendBlock);
+		if (blocked) {
+			setTriedBlock(blocked.kind);
+			return;
+		}
 		if (!composerCanSend(text, false) || attachmentError) return;
 		const files = attachments;
 		captureAnalytics("prompt_submitted", {
@@ -1422,6 +1463,16 @@ export function SessionLauncher({
 								{attachmentError}
 							</p>
 						)}
+						{shownSendBlock && !(noProject && !selectedProject) ? (
+							<SendBlockNotice
+								block={shownSendBlock}
+								onFix={
+									shownSendBlock.action === "model_picker" || onOpenSettings
+										? openSendBlockFix
+										: undefined
+								}
+							/>
+						) : null}
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
@@ -1524,26 +1575,28 @@ export function SessionLauncher({
 											: !composerCanSend(sendableDraft(draft.trim()), false))
 									}
 									title={
-										turnStatus === "running"
-											? "Queue in this chat"
-											: canResumeFollowUp
-												? "Resume and send"
-												: harnessReady
-													? session.canSend
-														? "Send task"
-														: "Wait for this harness to finish starting"
-													: composerCanStartSignIn({
-																harnessId,
-																connection: session.connection,
-																snapshotAvailable: session.snapshotAvailable,
-																busy,
-																draft,
-																slashDraft: Boolean(draftCommand),
-															})
-														? "Send"
-														: harnessRequiresAccountLogin(harnessId)
-															? `Sign in to ${agentProviderById(harnessId).name} to start a session`
-															: `Connect ${agentProviderById(harnessId).name} to start a session`
+										sendBlock
+											? sendBlock.message
+											: turnStatus === "running"
+												? "Queue in this chat"
+												: canResumeFollowUp
+													? "Resume and send"
+													: harnessReady
+														? session.canSend
+															? "Send task"
+															: "Wait for this harness to finish starting"
+														: composerCanStartSignIn({
+																	harnessId,
+																	connection: session.connection,
+																	snapshotAvailable: session.snapshotAvailable,
+																	busy,
+																	draft,
+																	slashDraft: Boolean(draftCommand),
+																})
+															? "Send"
+															: harnessRequiresAccountLogin(harnessId)
+																? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+																: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>

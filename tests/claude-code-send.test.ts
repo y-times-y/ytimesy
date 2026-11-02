@@ -30,6 +30,9 @@ vi.mock("#/server/adapters/api-turns", () => ({
 }));
 vi.mock("#/server/adapters/claude-subscription", () => ({
 	hasClaudeSubscription: fake.connected,
+	claudeSubscriptionStatus: async () => ({
+		status: (await fake.connected()) ? "connected" : "disconnected",
+	}),
 }));
 vi.mock("#/server/adapters/model-connections", () => ({
 	listModelConnections: vi.fn(async () => []),

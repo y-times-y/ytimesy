@@ -17,6 +17,7 @@ import type {
 	MessageAttachment,
 } from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
+import type { SendBlocker } from "#/domain/send-blocked";
 import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
@@ -39,7 +40,10 @@ import {
 	inheritedApiTurnSettings,
 	previousTurnMessages,
 } from "../adapters/api-turns";
-import { hasClaudeSubscription } from "../adapters/claude-subscription";
+import {
+	claudeSubscriptionStatus,
+	hasClaudeSubscription,
+} from "../adapters/claude-subscription";
 import {
 	listModelConnections,
 	loadModelConnection,
@@ -54,17 +58,29 @@ import {
 import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
 import { pinnedTurnFailover } from "./model-failover";
+import { githubSendBlocked } from "./send-blockers";
 import { commitChatBranchForSubmission } from "./session-branch";
 
 export async function apiModelCatalog(userId: string) {
+	return (await apiModelAccess(userId)).models;
+}
+
+/** The listed models, and whether Anthropic refused the saved Claude token. */
+async function apiModelAccess(userId: string) {
 	const [routes, claude] = await Promise.all([
 		listModelConnections(userId).then(availableApiModelRoutes),
 		claudeSubscriptionEnabled()
-			? hasClaudeSubscription(userId).catch(() => false)
-			: false,
+			? claudeSubscriptionStatus(userId)
+					.then((status) => status.status)
+					.catch(() => "disconnected" as const)
+			: ("disconnected" as const),
 	]);
 	// Claude Code (the user's Claude subscription) lists beside API keys.
-	return claude ? [...claudeCodeListedModels(), ...routes] : routes;
+	const listed = claude === "connected" || claude === "limited";
+	return {
+		models: listed ? [...claudeCodeListedModels(), ...routes] : routes,
+		claudeRefused: claude === "refused",
+	};
 }
 
 export async function readApiWorkspaceSession(
@@ -81,7 +97,19 @@ export async function readApiWorkspaceSession(
 		: null;
 	if (session && session.projectId !== scope.projectId)
 		throw new Error("Session is not in this project.");
-	return apiWorkspaceView(session, await apiModelCatalog(scope.userId));
+	const [access, githubMissing] = await Promise.all([
+		apiModelAccess(scope.userId),
+		githubSendBlocked(scope.userId, session),
+	]);
+	const sendBlockers: SendBlocker[] = [
+		...(access.models.length ? [] : (["no_model"] as const)),
+		...(access.claudeRefused ? (["claude_token"] as const) : []),
+		...(githubMissing ? (["github"] as const) : []),
+	];
+	return {
+		...apiWorkspaceView(session, access.models),
+		...(sendBlockers.length ? { sendBlockers } : {}),
+	};
 }
 
 function apiWorkspaceView(

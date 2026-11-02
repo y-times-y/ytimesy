@@ -70,6 +70,7 @@ import {
 	selectedProjectIdAfterDelete,
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
+import { composerSendBlock } from "#/domain/send-blocked";
 import {
 	chatHeaderTitle,
 	composerSubmitTarget,
@@ -2719,7 +2720,15 @@ export function WorkspaceHome({
 			return;
 		}
 		if (step === "abandon") {
-			abandonSend(pending, null);
+			// The composer names the block once it reads this view; a send that
+			// raced ahead of it still says why it did not go.
+			const block = composerSendBlock({
+				harnessId: pending.scope.harnessId,
+				blockers: next.sendBlockers,
+				modelId: pending.modelId,
+				availableModelIds: next.models.map((model) => model.id),
+			});
+			abandonSend(pending, block?.message ?? null);
 			return;
 		}
 		await deliverSend(pending, next);
@@ -3187,6 +3196,10 @@ export function WorkspaceHome({
 									data-layout={followUpLayout ? "chat" : "empty"}
 								>
 									<SessionLauncher
+										onOpenSettings={(section) => {
+											setSettingsSection(section);
+											setSettingsOpen(true);
+										}}
 										setupHold={
 											heldView && selectedProject
 												? {

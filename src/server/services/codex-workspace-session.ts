@@ -1,6 +1,7 @@
 import type { AgentConnection } from "#/domain/agent-connection";
 import type { CodexUsage } from "#/domain/codex-usage";
 import type { ListedModel } from "#/domain/listed-model";
+import type { SendBlocker } from "#/domain/send-blocked";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 
 export type PublicCodexSession = {
@@ -14,6 +15,8 @@ export type PublicCodexSession = {
 	readonly listedModelId: string;
 	readonly blockedListedModelIds: readonly string[];
 	readonly canSend: boolean;
+	/** What the server knows stops a send (send-blocked.ts); absent when nothing does. */
+	readonly sendBlockers?: readonly SendBlocker[];
 	readonly turnStatus: SessionTurnStatus;
 	/** The browser gets the chat's last turns (transcript-page.ts). */
 	readonly items: readonly SessionItem[];
