@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initialSetupMessageId } from "./environment-setup";
-import { startsProjectSetup } from "./project-setup-start";
+import { projectSetupStep, startsProjectSetup } from "./project-setup-start";
 
 const building = { projectId: "p1", status: "cloning", build: null };
 
@@ -61,5 +61,71 @@ describe("initialSetupMessageId", () => {
 			id,
 		);
 		expect(initialSetupMessageId("another-project")).not.toBe(id);
+	});
+});
+
+describe("projectSetupStep", () => {
+	const base = {
+		projectId: "p1",
+		workspace: building,
+		chats: [] as unknown[],
+		startedInThisTab: new Set<string>(),
+		awaitingInThisTab: new Set<string>(),
+		taskHeld: false,
+	};
+	const ready = { ...building, status: "ready" };
+
+	it("waits while the first build runs, then starts once it is ready", () => {
+		expect(projectSetupStep(base)).toBe("await");
+		expect(
+			projectSetupStep({ ...base, awaitingInThisTab: new Set(["p1"]) }),
+		).toBeNull();
+		expect(
+			projectSetupStep({
+				...base,
+				workspace: ready,
+				awaitingInThisTab: new Set(["p1"]),
+			}),
+		).toBe("start");
+	});
+
+	it("never starts a chat before the environment exists", () => {
+		for (const status of ["queued", "provisioning", "cloning", "installing"])
+			expect(
+				projectSetupStep({
+					...base,
+					workspace: { ...building, status },
+					awaitingInThisTab: new Set(["p1"]),
+				}),
+			).not.toBe("start");
+	});
+
+	it("leaves an existing ready project alone, and lets a task sent during the build go first", () => {
+		// Ready, but this tab never saw its first build: an old project.
+		expect(projectSetupStep({ ...base, workspace: ready })).toBeNull();
+		expect(
+			projectSetupStep({
+				...base,
+				workspace: ready,
+				awaitingInThisTab: new Set(["p1"]),
+				taskHeld: true,
+			}),
+		).toBeNull();
+		expect(
+			projectSetupStep({
+				...base,
+				workspace: ready,
+				awaitingInThisTab: new Set(["p1"]),
+				chats: [{ id: "c1" }],
+			}),
+		).toBeNull();
+		expect(
+			projectSetupStep({
+				...base,
+				workspace: ready,
+				awaitingInThisTab: new Set(["p1"]),
+				startedInThisTab: new Set(["p1"]),
+			}),
+		).toBeNull();
 	});
 });
