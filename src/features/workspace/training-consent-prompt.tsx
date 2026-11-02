@@ -144,7 +144,7 @@ export function TrainingConsentCard(props: {
 		<section
 			role="dialog"
 			aria-labelledby="training-prompt-title"
-			className="fixed inset-x-4 top-14 z-[250] mx-auto flex max-w-md flex-col sm:inset-x-auto sm:top-auto sm:right-4 sm:bottom-4 sm:mx-0 sm:max-w-sm gap-3 rounded-lg border bg-background p-4 text-sm shadow-lg"
+			className="fixed inset-x-4 top-14 z-[250] mx-auto flex max-w-md flex-col gap-3 rounded-lg border bg-background p-4 text-sm shadow-lg"
 		>
 			<div className="flex items-center justify-between gap-2">
 				<h2 id="training-prompt-title" className="font-semibold">
