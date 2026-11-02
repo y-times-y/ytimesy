@@ -711,15 +711,18 @@
 	align-items: center;
 	gap: 18px;
 }
+/* The post link: a bold, underlined hyperlink people notice. */
 .bench-foot a.bench-read {
-	padding: 7px 14px;
-	border: 1px solid #ffffff24;
-	border-radius: 999px;
 	color: #fff;
-	font-weight: 500;
+	font-size: 15px;
+	font-weight: 700;
+	text-decoration: underline;
+	text-decoration-thickness: 1.5px;
+	text-underline-offset: 4px;
+	text-decoration-color: #ffffff80;
 }
 .bench-foot a.bench-read:hover {
-	background: #ffffff10;
+	text-decoration-color: #fff;
 }
 .landing .bench-note {
 	margin-top: 16px;
