@@ -36,7 +36,11 @@ export type FailoverReason =
 	/** A subscription sign-in (SuperGrok) was rejected; only the user can renew it. */
 	| "plan-access"
 	/** A subscription token the provider refused (Claude Code's setup-token). */
-	| "signed-out";
+	| "signed-out"
+	/** A fallback's provider account has no credit left (HTTP 402). */
+	| "out-of-credit"
+	/** A fallback's API key was refused (HTTP 401 or 403). */
+	| "key-refused";
 
 const REASON_TEXT: Record<FailoverReason, string> = {
 	outage: "outage",
@@ -46,6 +50,8 @@ const REASON_TEXT: Record<FailoverReason, string> = {
 	timeout: "timed out",
 	"plan-access": "sign-in needs renewing",
 	"signed-out": "token refused",
+	"out-of-credit": "out of credit",
+	"key-refused": "key refused",
 };
 
 /** Why a route stopped, for the person reading the chat. */
@@ -60,12 +66,16 @@ function failingSentence(from: RouteLabel, reason: FailoverReason) {
 		return from.connection === CLAUDE_CODE_LABEL
 			? "Anthropic refused your Claude token"
 			: `${from.connection} refused its sign-in`;
+	if (reason === "key-refused" && from.connection === SUBSCRIPTION_LABEL)
+		return "Codex needs reconnecting in Settings";
 	return {
 		outage: `${from.connection} is down right now`,
 		overloaded: `${from.connection} is overloaded right now`,
 		"rate-limited": `${from.connection} is limiting requests right now`,
 		timeout: `${from.connection} stopped responding`,
 		"plan-access": `${from.connection} needs reconnecting in Settings`,
+		"out-of-credit": `${from.connection} is out of credit`,
+		"key-refused": `${from.connection} refused its key`,
 	}[reason];
 }
 
@@ -323,15 +333,21 @@ function candidateRoute(
 }
 
 /**
- * Where a turn may continue, best first: the user's model through their other
- * connections, then the closest same-tier model on any connection. Routes
- * already tried this turn are never offered again, so a turn cannot loop.
+ * Where a turn may continue, best first. By default the user's prepaid
+ * subscriptions come before anything billed to a key: on each side, the
+ * user's model through another connection first, then the closest same-tier
+ * model. A connection order the user saved ranks connections instead, one at
+ * a time, each offering the same model before the closest ones. Routes
+ * already tried this turn, and connections found unusable, are never offered
+ * again, so a turn cannot loop.
  */
 export function failoverCandidates(input: {
 	readonly original: ModelRoute;
 	readonly connections: readonly FailoverConnection[];
 	readonly order?: readonly string[];
 	readonly tried: readonly string[];
+	/** Connections that cannot serve this turn at all (refused, out of credit). */
+	readonly excludedConnections?: readonly string[];
 	readonly sameModelOnly?: boolean;
 	/** Custom endpoints are unreachable from the Cloudflare executor. */
 	readonly allowCustom?: boolean;
@@ -345,17 +361,33 @@ export function failoverCandidates(input: {
 	const canonical = originalConnection
 		? canonicalModelId(originalConnection, input.original.modelId)
 		: null;
+	const excluded = new Set(input.excludedConnections ?? []);
 	const connections = orderedFailoverConnections(
 		input.connections.filter(
-			(row) => row.kind !== "custom" || input.allowCustom !== false,
+			(row) =>
+				(row.kind !== "custom" || input.allowCustom !== false) &&
+				!excluded.has(row.key),
 		),
 		input.order,
 	);
+	const ranked = (input.order ?? []).some((key) =>
+		input.connections.some((row) => row.key === key),
+	);
+	const band = (connection: FailoverConnection) =>
+		ranked
+			? connections.indexOf(connection)
+			: prepaidKind(connection.kind)
+				? 0
+				: 1;
 	const reasoning = chosenReasoning(input.original);
 	const tried = new Set(input.tried);
 	const candidates: FailoverCandidate[] = [];
-	const offer = (wanted: string | null, sameModel: boolean) => {
-		for (const connection of connections)
+	const offer = (
+		within: readonly FailoverConnection[],
+		wanted: string | null,
+		sameModel: boolean,
+	) => {
+		for (const connection of within)
 			for (const model of connection.models) {
 				const matches = wanted
 					? canonicalModelId(connection, model.id) === wanted
@@ -376,14 +408,38 @@ export function failoverCandidates(input: {
 				});
 			}
 	};
-	offer(canonical, true);
-	if (!input.sameModelOnly && canonical)
-		for (const closest of closestModels(canonical)) offer(closest, false);
+	const closest =
+		canonical && !input.sameModelOnly ? closestModels(canonical) : [];
+	for (const current of [...new Set(connections.map(band))]) {
+		const within = connections.filter((row) => band(row) === current);
+		offer(within, canonical, true);
+		for (const model of closest) offer(within, model, false);
+	}
 	return candidates;
 }
 
 /** At most this many switches per turn; then the turn fails, listing what was tried. */
 export const MAX_TURN_FAILOVERS = 3;
+
+/**
+ * A fallback that cannot serve at all (out of credit, its key refused) moves
+ * the turn on at most this many times; then the turn fails, saying why.
+ */
+export const MAX_FALLBACK_HOPS = 2;
+
+/** A fallback's own account problem: it moves a turn only once the turn already failed over. */
+export function fallbackAccountFailure(reason: FailoverReason) {
+	return reason === "out-of-credit" || reason === "key-refused";
+}
+
+/** Failures that rule out every model on the connection, not just this one. */
+export function connectionWideFailure(reason: FailoverReason) {
+	return (
+		fallbackAccountFailure(reason) ||
+		reason === "signed-out" ||
+		reason === "plan-access"
+	);
+}
 
 export type FailoverPolicy = "any-model" | "same-model" | "off";
 
@@ -416,8 +472,18 @@ export function decideFailover(input: {
 	readonly canAsk: boolean;
 	/** The serving route is prepaid; default: it is the ChatGPT plan. */
 	readonly servingPrepaid?: boolean;
+	/** Why the serving route failed; a fallback's account problem has its own bound. */
+	readonly reason?: FailoverReason;
+	/** Fallbacks this turn already left for their own account problem. */
+	readonly fallbackHops?: number;
 }): FailoverDecision {
 	if (input.policy === "off" || input.switches >= MAX_TURN_FAILOVERS)
+		return { kind: "stop" };
+	if (
+		input.reason &&
+		fallbackAccountFailure(input.reason) &&
+		(input.fallbackHops ?? 0) >= MAX_FALLBACK_HOPS
+	)
 		return { kind: "stop" };
 	const candidate = input.candidates.find(
 		(row) => input.policy === "any-model" || row.sameModel,
@@ -445,6 +511,10 @@ export type TurnFailover = {
 	readonly tried: readonly string[];
 	readonly triedLabels: readonly string[];
 	readonly switches: number;
+	/** Connection keys ruled out for the rest of the turn (refused, out of credit). */
+	readonly excluded?: readonly string[];
+	/** Switches made because a fallback itself could not serve (MAX_FALLBACK_HOPS). */
+	readonly fallbackHops?: number;
 };
 
 const routeSchema = z.object({
@@ -459,6 +529,8 @@ const turnFailoverSchema = z.object({
 	tried: z.array(z.string()).max(32),
 	triedLabels: z.array(z.string()).max(32),
 	switches: z.number().int().min(0),
+	excluded: z.array(z.string().max(64)).max(32).optional(),
+	fallbackHops: z.number().int().min(0).optional(),
 });
 
 /** A stored failover column, or null when absent or unreadable (the turn then uses its own route). */
@@ -539,11 +611,15 @@ export function servingRoute(turn: TurnRouteFields): ModelRoute {
 	return turnFailover(turn.failover)?.route ?? chosenRoute(turn);
 }
 
-/** The state after moving to `candidate`; the route that just failed stays tried. */
+/**
+ * The state after moving to `candidate`; the route that just failed stays
+ * tried, and its whole connection too when `reason` rules it out.
+ */
 export function nextTurnFailover(
 	previous: TurnFailover | null,
 	failing: { route: ModelRoute; label: RouteLabel },
 	candidate: FailoverCandidate,
+	reason?: FailoverReason,
 ): TurnFailover {
 	const label = {
 		model: candidate.modelLabel,
@@ -559,13 +635,38 @@ export function nextTurnFailover(
 		tried.push(key);
 		triedLabels.push(text);
 	}
+	const excluded = [...(previous?.excluded ?? [])];
+	const failingConnection = routeConnectionKey(failing.route);
+	if (
+		reason &&
+		connectionWideFailure(reason) &&
+		!excluded.includes(failingConnection)
+	)
+		excluded.push(failingConnection);
+	const fallbackHops =
+		(previous?.fallbackHops ?? 0) +
+		(reason && fallbackAccountFailure(reason) ? 1 : 0);
 	return {
 		route: candidate.route,
 		label,
 		tried,
 		triedLabels,
 		switches: (previous?.switches ?? 0) + 1,
+		...(excluded.length ? { excluded } : {}),
+		...(fallbackHops ? { fallbackHops } : {}),
 	};
+}
+
+/** The connections a turn may no longer move to: those it ruled out, and the one failing now when `reason` rules it out. */
+export function excludedFailoverConnections(
+	previous: TurnFailover | null,
+	failing: ModelRoute,
+	reason: FailoverReason | undefined,
+): string[] {
+	const excluded = [...(previous?.excluded ?? [])];
+	if (reason && connectionWideFailure(reason))
+		excluded.push(routeConnectionKey(failing));
+	return [...new Set(excluded)];
 }
 
 export function routeLabelText(label: RouteLabel) {
@@ -608,14 +709,20 @@ export function failoverChainFailure(
 	lastFailure: string,
 	now = Date.now(),
 ) {
-	const first = items.find(
+	const switches = items.filter(
 		(item): item is ModelSwitchItem =>
 			item.kind === "modelSwitch" &&
 			item.state === "switched" &&
 			item.id.startsWith(`${turnId}:switch-`) &&
 			item.reason !== "sidekick-escalation",
 	);
+	const first = switches[0];
 	if (!first || first.reason === "sidekick-escalation") return null;
+	const fallbacks = [...new Set(switches.map((item) => item.to.connection))];
+	const tried =
+		fallbacks.length > 1
+			? `${fallbacks.slice(0, -1).join(", ")} and ${fallbacks.at(-1)}`
+			: first.to.connection;
 	const minutes = first.resetsAt
 		? Math.max(1, Math.ceil((first.resetsAt - now) / 60_000))
 		: null;
@@ -623,7 +730,7 @@ export function failoverChainFailure(
 		minutes === null
 			? ""
 			: ` (resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`})`;
-	return `${failingSentence(first.from, first.reason)}${resets}. Switching to ${first.to.connection} didn't work either: ${lastFailure}`;
+	return `${failingSentence(first.from, first.reason)}${resets}. Switching to ${tried} didn't work either: ${lastFailure}`;
 }
 
 /** The runtime note the next model reads after a switch; its earlier reasoning is gone. */

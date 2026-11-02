@@ -55,10 +55,11 @@ export function failoverSettingsSave(
 }
 
 /**
- * When a model's connection is down, a turn continues on the next one: the
- * same model on another connection first, then the closest comparable model.
- * The user ranks their connections and decides whether a paid key needs
- * their go-ahead.
+ * When a model's connection is down, a turn continues on the next one:
+ * subscriptions before paid keys, the same model first, then the closest
+ * comparable model. Reordering ranks connections one by one instead. A
+ * fallback that cannot serve (out of credit, key refused) is skipped. The
+ * user decides whether a paid key needs their go-ahead.
  */
 export function ModelFailoverSettings() {
 	const queryClient = useQueryClient();
@@ -85,7 +86,7 @@ export function ModelFailoverSettings() {
 			<header className="settings-section-head">
 				<div>
 					<h3>Automatic failover</h3>
-					<p title="If a provider has an outage, is overloaded, rate limited or out of plan usage, the turn continues on your next connection: the same model first, then the closest comparable one. Your next message tries your chosen model again.">
+					<p title="If a provider fails, the turn continues on your other connections in the order below, subscriptions first: the same model, then the closest comparable one. A fallback out of credit is skipped. Your next message uses your chosen model again.">
 						Keep a turn going when its provider fails.
 					</p>
 				</div>

@@ -14,8 +14,10 @@ import {
 	canonicalModelId,
 	chosenRoute,
 	decideFailover,
+	excludedFailoverConnections,
 	type FailoverConnection,
 	type FailoverDecision,
+	type FailoverReason,
 	failoverCandidates,
 	failoverConnectionKind,
 	type ModelRoute,
@@ -171,6 +173,7 @@ export type FailoverPlan = {
 /** What a turn whose serving route just failed for `reason` should do next. */
 export async function planModelFailover(input: {
 	readonly turn: ApiTurn;
+	readonly reason: FailoverReason;
 	readonly evaluation: boolean;
 	readonly child: boolean;
 	/** Custom endpoints are unreachable from the Cloudflare executor. */
@@ -197,6 +200,11 @@ export async function planModelFailover(input: {
 		connections,
 		order: preferences.connectionOrder,
 		tried: [...(previous?.tried ?? []), routeKey(original), routeKey(serving)],
+		excludedConnections: excludedFailoverConnections(
+			previous,
+			serving,
+			input.reason,
+		),
 		sameModelOnly: policy === "same-model",
 		allowCustom: input.allowCustom,
 	});
@@ -214,6 +222,8 @@ export async function planModelFailover(input: {
 					connections.find((row) => row.key === serving.connectionId)?.kind ??
 						"key",
 				),
+			reason: input.reason,
+			fallbackHops: previous?.fallbackHops ?? 0,
 		}),
 		failing,
 		previous,

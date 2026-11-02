@@ -1,9 +1,12 @@
+import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
 import {
 	apiModelFailureMessage,
+	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
+	SafeApiModelFailure,
 } from "./api-turn-failure";
 import {
 	CLAUDE_CODE_KEY,
@@ -14,14 +17,19 @@ import {
 } from "./claude-code-route";
 import { composerSendIsEnabled } from "./harness-access";
 import {
+	decideFailover,
 	type FailoverConnection,
 	failoverCandidates,
 	failoverNotice,
+	MAX_FALLBACK_HOPS,
+	nextTurnFailover,
 	routeConnectionKey,
 	routeKey,
+	turnFailover,
 } from "./model-failover";
 import {
 	failoverReason,
+	fallbackAccountReason,
 	subscriptionLimitResetsAt,
 } from "./model-failover-reason";
 
@@ -163,5 +171,156 @@ describe("Claude Code in the composer", () => {
 		expect(
 			composerSendIsEnabled({ ...base, modelId: "claude-code/other" }),
 		).toBe(false);
+	});
+});
+
+describe("the 2026-11-02 live failover", () => {
+	// Claude Code's token refused; connected: the ChatGPT plan (Codex),
+	// SuperGrok, and an OpenRouter key with almost no credit.
+	const OPENROUTER = "11111111-1111-4111-8111-111111111111";
+	const SUPERGROK = "00000000-0000-4000-8000-0000000000a1";
+	const live: FailoverConnection[] = [
+		{
+			key: OPENROUTER,
+			label: "OpenRouter",
+			kind: "gateway",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			revision: "or-rev",
+			models: [
+				{ id: "anthropic/claude-opus-5.5", label: "Claude Opus 5.5" },
+				{ id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol" },
+			],
+		},
+		{
+			key: SUPERGROK,
+			label: "SuperGrok",
+			kind: "plan",
+			provider: "compatible",
+			baseUrl: "https://api.x.ai/v1",
+			revision: "sg-rev",
+			models: [{ id: "grok-4.7", label: "Grok 4.7" }],
+		},
+		{
+			key: "codex",
+			label: "Codex",
+			kind: "subscription",
+			revision: "",
+			models: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }],
+		},
+		connections[0] as FailoverConnection,
+	];
+	const outOfCredit = new SafeApiModelFailure(
+		new APICallError({
+			message: "Payment Required",
+			url: "https://openrouter.ai/api/v1/chat/completions",
+			requestBodyValues: {},
+			statusCode: 402,
+			responseBody:
+				'{"error":{"message":"This request requires more credits. You requested up to 64000 tokens, but can only afford 1253.","code":402}}',
+		}),
+	);
+
+	it("continues on the user's other subscriptions before a paid key, even for the same model", () => {
+		const candidates = failoverCandidates({
+			original: claudeRoute,
+			connections: live,
+			tried: [routeKey(claudeRoute)],
+			excludedConnections: [CLAUDE_CODE_KEY],
+		});
+		expect(
+			candidates.map((row) => [row.connectionLabel, row.modelLabel, row.paid]),
+		).toEqual([
+			["Codex", "GPT-6.1 Sol", false],
+			["SuperGrok", "Grok 4.7", false],
+			["OpenRouter", "Claude Opus 5.5", true],
+			["OpenRouter", "GPT-6.1 Sol", true],
+		]);
+	});
+
+	it("follows a saved connection order one connection at a time", () => {
+		const candidates = failoverCandidates({
+			original: claudeRoute,
+			connections: live,
+			order: [OPENROUTER, "codex"],
+			tried: [routeKey(claudeRoute)],
+		});
+		expect(
+			candidates.map((row) => `${row.modelLabel} via ${row.connectionLabel}`),
+		).toEqual([
+			"Claude Opus 5.5 via OpenRouter",
+			"GPT-6.1 Sol via OpenRouter",
+			"GPT-6.1 Sol via Codex",
+			"Grok 4.7 via SuperGrok",
+		]);
+	});
+
+	it("moves past a fallback that is out of credit, never back onto its connection", () => {
+		// The chosen route itself never moves for its own account problem.
+		expect(failoverReason(outOfCredit)).toBeNull();
+		expect(fallbackAccountReason(outOfCredit)).toBe("out-of-credit");
+		const toOpenRouter = failoverCandidates({
+			original: claudeRoute,
+			connections: live,
+			order: [OPENROUTER, "codex"],
+			tried: [routeKey(claudeRoute)],
+		})[0];
+		if (!toOpenRouter) throw new Error("No candidate.");
+		const first = nextTurnFailover(
+			null,
+			{
+				route: claudeRoute,
+				label: { model: "Claude Opus 5.5", connection: "Claude Code" },
+			},
+			toOpenRouter,
+			"signed-out",
+		);
+		expect(first.excluded).toEqual([CLAUDE_CODE_KEY]);
+		expect(first.fallbackHops).toBeUndefined();
+		const stored = turnFailover(JSON.parse(JSON.stringify(first)));
+		const [next] = failoverCandidates({
+			original: claudeRoute,
+			connections: live,
+			order: [OPENROUTER, "codex"],
+			tried: stored?.tried ?? [],
+			excludedConnections: [...(stored?.excluded ?? []), OPENROUTER],
+		});
+		expect(next).toMatchObject({ connectionLabel: "Codex", paid: false });
+		if (!next || !stored) throw new Error("No candidate.");
+		const second = nextTurnFailover(
+			stored,
+			{ route: stored.route, label: stored.label },
+			next,
+			"out-of-credit",
+		);
+		expect(second).toMatchObject({
+			switches: 2,
+			fallbackHops: 1,
+			excluded: [CLAUDE_CODE_KEY, OPENROUTER],
+		});
+		expect(failoverNotice(stored.label, second.label, "out-of-credit")).toBe(
+			"OpenRouter is out of credit, so this chat continued on GPT-6.1 Sol via Codex.",
+		);
+		expect(
+			decideFailover({
+				policy: "any-model",
+				switches: 1,
+				serving: stored.route,
+				candidates: [next],
+				askBeforePaid: false,
+				canAsk: true,
+				reason: "out-of-credit",
+				fallbackHops: MAX_FALLBACK_HOPS,
+			}).kind,
+		).toBe("stop");
+	});
+
+	it("moves on from Claude Code's own API errors when Anthropic is down", () => {
+		for (const reason of ["outage", "overloaded", "rate-limited"] as const) {
+			expect(failoverReason(new ClaudeCodeApiUnavailable(reason))).toBe(reason);
+			expect(
+				apiModelFailureMessage(new ClaudeCodeApiUnavailable(reason)),
+			).toMatch(/^Anthropic /);
+		}
 	});
 });

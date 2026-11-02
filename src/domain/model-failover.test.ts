@@ -41,6 +41,7 @@ import {
 import {
 	failoverReason,
 	failureSummary,
+	fallbackAccountReason,
 	retriesSameRoute,
 } from "./model-failover-reason";
 import {
@@ -688,6 +689,75 @@ describe("same-route retries", () => {
 			model_id: codex.modelId,
 		};
 	}
+});
+
+describe("fallbackAccountReason", () => {
+	it("names a fallback's spent credit or refused key, never content or provider trouble", () => {
+		expect(fallbackAccountReason(apiError(402))).toBe("out-of-credit");
+		expect(
+			fallbackAccountReason(
+				new SafeApiModelFailure(
+					apiError(400, { error: { code: "insufficient_credits" } }),
+				),
+			),
+		).toBe("out-of-credit");
+		expect(
+			fallbackAccountReason(
+				new Error(
+					"You requested up to 64000 tokens, but can only afford 1253.",
+				),
+			),
+		).toBe("out-of-credit");
+		expect(fallbackAccountReason(apiError(401))).toBe("key-refused");
+		expect(
+			fallbackAccountReason(
+				apiError(400, { error: { code: "invalid_api_key" } }),
+			),
+		).toBe("key-refused");
+		expect(
+			fallbackAccountReason(
+				apiError(
+					403,
+					undefined,
+					false,
+					'{"error":{"message":"Input flagged by moderation"}}',
+				),
+			),
+		).toBeNull();
+		expect(fallbackAccountReason(apiError(503))).toBeNull();
+		expect(
+			fallbackAccountReason(
+				apiError(400, { error: { code: "context_length_exceeded" } }),
+			),
+		).toBeNull();
+		expect(fallbackAccountReason(new ApiTurnCancelled())).toBeNull();
+		// The ChatGPT plan as a fallback, its sign-in needing renewal.
+		expect(fallbackAccountReason(new CodexReconnectRequired())).toBe(
+			"key-refused",
+		);
+		expect(failoverReason(new CodexReconnectRequired())).toBeNull();
+		expect(
+			failoverNotice(
+				{ model: "GPT-6.1-Sol", connection: "Codex" },
+				{ model: "Grok 4.7", connection: "SuperGrok" },
+				"key-refused",
+			),
+		).toBe(
+			"Codex needs reconnecting in Settings, so this chat continued on Grok 4.7 via SuperGrok.",
+		);
+		expect(
+			failoverNotice(
+				{ model: "GPT-6.1 Sol", connection: "OpenRouter" },
+				{ model: "GPT-6.1-Sol", connection: "Codex" },
+				"key-refused",
+			),
+		).toBe(
+			"OpenRouter refused its key, so this chat continued on GPT-6.1-Sol via Codex.",
+		);
+		// On the route the user chose, these still stop the turn.
+		expect(failoverReason(apiError(402))).toBeNull();
+		expect(failoverReason(apiError(401))).toBeNull();
+	});
 });
 
 describe("failureSummary", () => {
