@@ -2,9 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { IdentityGate } from "#/features/auth/identity-gate";
-import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { getEvidencePage } from "#/features/evidence/evidence.fn";
-import { EvidenceDetail } from "#/features/evidence/evidence-view";
+import {
+	EvidenceDetail,
+	EvidenceSummary,
+} from "#/features/evidence/evidence-view";
+import { LandingHeader, SiteFooter } from "#/features/landing/landing-page";
 
 /** Pull request evidence, linked from the PR description; signed-in project owner only. */
 export const Route = createFileRoute(
@@ -47,21 +50,31 @@ function EvidenceContent() {
 			query.state.data?.evidence?.status === "capturing" ? 10_000 : false,
 	});
 	const evidence = page.data?.evidence;
+	const context = page.data?.context;
 	return (
-		<main className="evidence-shell">
-			<nav className="evidence-nav">
-				<YtimesyBrand />
-			</nav>
-			{evidence ? (
-				<EvidenceDetail evidence={evidence} captures={page.data?.captures} />
-			) : page.isPending ? (
-				<p className="evidence-missing">Loading evidence</p>
-			) : (
-				<p className="evidence-missing">
-					This evidence is not available. It may have expired, or it belongs to
-					a project you do not have access to.
-				</p>
-			)}
-		</main>
+		<div className="landing">
+			<LandingHeader signedIn />
+			<main className="evidence-main">
+				{evidence ? (
+					<>
+						{context ? (
+							<EvidenceSummary context={context} now={page.data?.now} />
+						) : null}
+						<EvidenceDetail
+							evidence={evidence}
+							captures={page.data?.captures}
+						/>
+					</>
+				) : page.isPending ? (
+					<p className="evidence-missing">Loading evidence</p>
+				) : (
+					<p className="evidence-missing">
+						This evidence is not available. It may have expired, or it belongs
+						to a project you do not have access to.
+					</p>
+				)}
+			</main>
+			<SiteFooter />
+		</div>
 	);
 }

@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { EvidenceRecord } from "#/domain/pr-evidence";
-import { EvidenceCard, EvidenceDetail } from "./evidence-view";
+import {
+	type EvidenceRecord,
+	evidenceAge,
+	evidenceContext,
+} from "#/domain/pr-evidence";
+import { EvidenceCard, EvidenceDetail, EvidenceSummary } from "./evidence-view";
 
 const PROJECT = "22222222-2222-4222-8222-222222222222";
 
@@ -70,5 +74,104 @@ describe("agent captures in the chat", () => {
 		expect(html.indexOf(media(shot))).toBeLessThan(
 			html.indexOf(media(recording)),
 		);
+	});
+});
+
+describe("the evidence page header", () => {
+	const SESSION = "11111111-1111-4111-8111-111111111111";
+	const NOW = "2026-11-02T14:00:00.000Z";
+
+	it("names the pull request, repository, branch and chat, with links to both", () => {
+		const context = evidenceContext(recording, {
+			chatTitle: "Add the import flow",
+			chatBranch: "ytimesy/old",
+			link: {
+				fullName: "hetpatel-11/demo",
+				pullNumber: 7,
+				headRef: "ytimesy/import-flow",
+			},
+		});
+		expect(context.pullRequest?.url).toBe(
+			"https://github.com/hetpatel-11/demo/pull/7",
+		);
+		expect(context.chatPath).toBe(`/?project=${PROJECT}&chat=${SESSION}`);
+		const html = renderToStaticMarkup(
+			<EvidenceSummary context={context} now={NOW} />,
+		);
+		expect(html).toContain("#7 · </span>Add the import flow");
+		expect(html).toContain("hetpatel-11/demo");
+		expect(html).toContain(">ytimesy/import-flow</code>");
+		expect(html).toContain("2 h ago");
+		expect(html).toContain('dateTime="2026-11-02T12:00:00.000Z"');
+		expect(html).toContain(
+			'href="https://github.com/hetpatel-11/demo/pull/7" target="_blank"',
+		);
+		expect(html).toContain("Open the pull request on GitHub");
+		expect(html).toContain(`href="/?project=${PROJECT}&amp;chat=${SESSION}"`);
+		expect(html).toContain("Back to the chat");
+		expect(html).not.toContain("No pull request yet");
+	});
+
+	it("shows the chat and its branch when no pull request exists yet", () => {
+		const context = evidenceContext(shot, {
+			chatTitle: "Fix the header",
+			chatBranch: "ytimesy/fix-header",
+			link: null,
+		});
+		const html = renderToStaticMarkup(
+			<EvidenceSummary context={context} now={NOW} />,
+		);
+		expect(html).toContain("No pull request yet");
+		expect(html).toContain("Fix the header");
+		expect(html).toContain(">ytimesy/fix-header</code>");
+		expect(html).not.toContain("github.com");
+		expect(html).not.toContain("#");
+		expect(html).toContain("Back to the chat");
+	});
+
+	it("uses a harness capture's own pull request and short commit", () => {
+		const harness = {
+			...shot,
+			source: "harness",
+			fullName: "acme/web",
+			pullNumber: 12,
+			commitSha: "abcdef1234567890abcdef1234567890abcdef12",
+		} satisfies EvidenceRecord;
+		const context = evidenceContext(harness, {
+			chatTitle: null,
+			chatBranch: null,
+			link: null,
+		});
+		expect(context.chatPath).toBeNull();
+		const html = renderToStaticMarkup(
+			<EvidenceSummary context={context} now={NOW} />,
+		);
+		expect(html).toContain("Pull request #12");
+		expect(html).toContain(">abcdef1</code>");
+		expect(html).toContain('href="https://github.com/acme/web/pull/12"');
+		expect(html).not.toContain("Back to the chat");
+	});
+
+	it("leaves out an unusable repository name and a placeholder chat title", () => {
+		const context = evidenceContext(shot, {
+			chatTitle: "New session",
+			chatBranch: null,
+			link: { fullName: "bad name", pullNumber: 3, headRef: null },
+		});
+		expect(context.pullRequest).toBeNull();
+		expect(context.chatTitle).toBeNull();
+		expect(context.chatPath).not.toBeNull();
+	});
+});
+
+describe("evidenceAge", () => {
+	const at = "2026-11-02T12:00:00.000Z";
+	const later = (ms: number) => Date.parse(at) + ms;
+	it("reads like a person would say it", () => {
+		expect(evidenceAge(at, later(10_000))).toBe("just now");
+		expect(evidenceAge(at, later(5 * 60_000))).toBe("5 min ago");
+		expect(evidenceAge(at, later(3 * 3_600_000))).toBe("3 h ago");
+		expect(evidenceAge(at, later(26 * 3_600_000))).toBe("1 day ago");
+		expect(evidenceAge("nope", later(0))).toBe("");
 	});
 });

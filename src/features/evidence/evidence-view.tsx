@@ -1,10 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { Camera, ExternalLink, Video } from "lucide-react";
+import {
+	ArrowLeft,
+	ArrowUpRight,
+	Camera,
+	ExternalLink,
+	Video,
+} from "lucide-react";
 import {
 	agentCapturesSummary,
 	EVIDENCE_RETENTION_DAYS,
+	type EvidenceContext,
 	type EvidenceRecord,
 	type EvidenceStatus,
+	evidenceAge,
 	evidenceMediaPath,
 	evidenceMediaSummary,
 	evidencePagePath,
@@ -329,6 +337,87 @@ function CliOutput({
 			{output.data ??
 				(output.isError ? "The output is unavailable." : "Loading output")}
 		</pre>
+	);
+}
+
+/**
+ * The evidence page's header: which pull request and chat the capture
+ * belongs to, and links back to both. Fields the record lacks are left out.
+ * `now` is the server's clock, so the first paint matches hydration.
+ */
+export function EvidenceSummary({
+	context,
+	now,
+}: {
+	context: EvidenceContext;
+	now?: string;
+}) {
+	const hydrated = useHydrated();
+	const pr = context.pullRequest;
+	const nowMs = hydrated || !now ? Date.now() : Date.parse(now);
+	const age = evidenceAge(context.capturedAt, nowMs);
+	const title =
+		context.chatTitle ?? (pr ? `Pull request #${pr.number}` : "Evidence");
+	return (
+		<header className="evidence-summary">
+			<p className="evidence-summary-kicker">
+				{pr ? "Pull request evidence" : "No pull request yet"}
+			</p>
+			<h1>
+				{pr && context.chatTitle ? (
+					<span className="evidence-summary-number">#{pr.number} · </span>
+				) : null}
+				{title}
+			</h1>
+			<ul className="evidence-summary-facts">
+				{pr ? <li>{pr.fullName}</li> : null}
+				{context.branch ? (
+					<li>
+						<code className="evidence-summary-code">{context.branch}</code>
+					</li>
+				) : null}
+				{context.commit ? (
+					<li>
+						<code className="evidence-summary-code">{context.commit}</code>
+					</li>
+				) : null}
+				{age ? (
+					<li>
+						Captured{" "}
+						<time
+							dateTime={context.capturedAt}
+							title={when(context.capturedAt, hydrated)}
+						>
+							{age}
+						</time>
+					</li>
+				) : null}
+			</ul>
+			{pr || context.chatPath ? (
+				<nav
+					className="evidence-summary-links"
+					aria-label="Pull request and chat"
+				>
+					{pr ? (
+						<a
+							className="evidence-summary-primary"
+							href={pr.url}
+							target="_blank"
+							rel="noreferrer"
+						>
+							Open the pull request on GitHub
+							<ArrowUpRight size={15} aria-hidden="true" />
+						</a>
+					) : null}
+					{context.chatPath ? (
+						<a className="evidence-summary-secondary" href={context.chatPath}>
+							<ArrowLeft size={15} aria-hidden="true" />
+							Back to the chat
+						</a>
+					) : null}
+				</nav>
+			) : null}
+		</header>
 	);
 }
 
