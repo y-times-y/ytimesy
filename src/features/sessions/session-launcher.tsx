@@ -361,6 +361,7 @@ export function SessionLauncher({
 					rememberedModels: listedCatalog,
 					sessionConnected:
 						connectedProviderId(session.connection) === harnessId,
+					harnessId,
 				}),
 			),
 		[

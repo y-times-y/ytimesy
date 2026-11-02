@@ -188,3 +188,32 @@ describe("preferredSessionModelId", () => {
 		expect(models.some((model) => model.id === preferred)).toBe(true);
 	});
 });
+
+describe("composerListedModels across harnesses", () => {
+	it("never lists one harness's models under another while its own list is empty", () => {
+		const grok = [
+			{
+				id: "api/11111111-1111-4111-8111-111111111111/grok-4.7",
+				label: "Grok 4.7 · Grok plan",
+			},
+		];
+		expect(
+			composerListedModels({
+				sessionModels: grok,
+				catalogModels: [],
+				rememberedModels: grok,
+				sessionConnected: false,
+				harnessId: "codex",
+			}),
+		).toEqual([]);
+		expect(
+			composerListedModels({
+				sessionModels: grok,
+				catalogModels: [],
+				rememberedModels: [],
+				sessionConnected: false,
+				harnessId: "api",
+			}),
+		).toEqual(grok);
+	});
+});
