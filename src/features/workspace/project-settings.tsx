@@ -40,6 +40,10 @@ import {
 	type SettingsSection,
 	settingsNavItems,
 } from "#/domain/workspace-settings";
+import {
+	type XaiSubscriptionView,
+	xaiSubscriptionMessage,
+} from "#/domain/xai-subscription";
 import { authClient } from "../auth/client";
 import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { PastImports } from "../local-import/past-imports";
@@ -55,6 +59,9 @@ import { getModelConnections } from "../sessions/model-connections.fn";
 import { getModelFailoverSettings } from "../sessions/model-failover.fn";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
+import { XaiMark } from "../sessions/xai-mark";
+import { disconnectXaiSubscriptionFn } from "../sessions/xai-subscription.fn";
+import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import { ArchivedSettings } from "./archived-settings";
 import { EnvironmentSettings } from "./environment-settings";
 import { GithubMark } from "./github-mark";
@@ -83,6 +90,8 @@ type AccountView = {
 	};
 	readonly githubConnected: boolean;
 	readonly agentAccount: UserAgentAccount;
+	/** Absent while the SuperGrok feature switch is off. */
+	readonly xaiSubscription?: XaiSubscriptionView;
 };
 
 const sectionIcon = {
@@ -320,6 +329,7 @@ export function ProjectSettings({
 										account={
 											account.data?.agentAccount ?? { status: "disconnected" }
 										}
+										xaiSubscription={account.data?.xaiSubscription}
 									/>
 								) : null}
 							</div>
@@ -909,14 +919,23 @@ function UsageSection({ planConnected }: { planConnected: boolean }) {
 	);
 }
 
-function AgentsSection({ account }: { account: UserAgentAccount }) {
+function AgentsSection({
+	account,
+	xaiSubscription,
+}: {
+	account: UserAgentAccount;
+	xaiSubscription?: XaiSubscriptionView;
+}) {
 	const queryClient = useQueryClient();
 	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 	const refreshAccount = () =>
 		Promise.all(
-			[["account"], ["codex-subscription-usage"], ["agent-model-catalog"]].map(
-				(queryKey) => queryClient.invalidateQueries({ queryKey }),
-			),
+			[
+				["account"],
+				["codex-subscription-usage"],
+				["agent-model-catalog"],
+				["model-connections"],
+			].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
 		);
 	const signOut = useMutation({
 		mutationFn: () =>
@@ -939,7 +958,11 @@ function AgentsSection({ account }: { account: UserAgentAccount }) {
 			<section className="settings-section">
 				<SettingsHeader
 					title="Models"
-					description="Your Codex subscription or your API keys."
+					description={
+						xaiSubscription
+							? "Your subscriptions or your API keys."
+							: "Your Codex subscription or your API keys."
+					}
 				/>
 				<ul className="settings-group">
 					<li className="settings-row">
@@ -999,11 +1022,104 @@ function AgentsSection({ account }: { account: UserAgentAccount }) {
 							)}
 						</div>
 					</li>
+					{xaiSubscription ? (
+						<XaiSubscriptionRow
+							subscription={xaiSubscription}
+							onChange={() => void refreshAccount()}
+						/>
+					) : null}
 				</ul>
 				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 			</section>
 			<ModelConnections />
 			<ModelFailoverSettings />
 		</>
+	);
+}
+
+/** Settings > Agents: the SuperGrok subscription, beside the Codex one. */
+function XaiSubscriptionRow({
+	subscription,
+	onChange,
+}: {
+	subscription: XaiSubscriptionView;
+	onChange: () => void;
+}) {
+	const disconnect = useServerFn(disconnectXaiSubscriptionFn);
+	const [confirming, setConfirming] = useState(false);
+	const signOut = useMutation({
+		mutationFn: () => disconnect({ data: {} }),
+		onSuccess: () => {
+			setConfirming(false);
+			onChange();
+		},
+	});
+	const status = subscription.status;
+	const meta =
+		status === "disconnected"
+			? "Use your SuperGrok or X subscription for Grok models."
+			: status === "ready"
+				? `${subscription.modelCount} Grok models`
+				: xaiSubscriptionMessage(status);
+	return (
+		<li className="settings-row">
+			<div className="settings-row-main">
+				<span className="settings-row-icon">
+					<XaiMark size={18} />
+				</span>
+				<div className="settings-row-text">
+					<span className="settings-row-title">Grok subscription</span>
+					<span
+						className="settings-row-meta"
+						title="Grok runs on your SuperGrok or X subscription (X Premium and the X Subscription plans), with no API bill. Usage counts against your plan's limits."
+					>
+						{meta}
+					</span>
+				</div>
+			</div>
+			<div className="settings-row-actions">
+				{status === "ready" ? (
+					confirming ? (
+						<>
+							<button
+								type="button"
+								className="settings-secondary"
+								disabled={signOut.isPending}
+								onClick={() => setConfirming(false)}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className="settings-danger"
+								disabled={signOut.isPending}
+								onClick={() => signOut.mutate()}
+							>
+								{signOut.isPending ? "Signing out…" : "Sign out"}
+							</button>
+						</>
+					) : (
+						<>
+							<span className="settings-badge" data-tone="ok">
+								Connected
+							</span>
+							<button
+								type="button"
+								className="settings-secondary"
+								onClick={() => setConfirming(true)}
+							>
+								Sign out
+							</button>
+						</>
+					)
+				) : (
+					<XaiSubscriptionSignIn
+						label={status === "disconnected" ? "Sign in with xAI" : "Reconnect"}
+						onConnected={onChange}
+					/>
+				)}
+			</div>
+			{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
+		</li>
 	);
 }

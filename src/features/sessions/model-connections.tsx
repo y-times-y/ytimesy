@@ -16,11 +16,16 @@ import {
 } from "#/components/ui/select";
 import {
 	availableConnectionModels,
-	MODEL_PROVIDERS,
-	type ModelProvider,
 	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
+import {
+	CUSTOM_CHOICE,
+	connectionKeyChoice,
+	keyChoiceConnection,
+	keyChoiceLabel,
+	keyProviderChoices,
+} from "#/domain/provider-access";
 import {
 	cacheWrite,
 	optimisticMutation,
@@ -58,11 +63,6 @@ export function modelConnectionRemove(
 }
 
 /** `startAdding` opens the add form at once (first run's "Add a key"). */
-/** The logo ModelProviderLogo draws for a connection's provider. */
-function providerLogo(provider: ModelProvider) {
-	return provider === "compatible" ? "custom" : provider;
-}
-
 export function ModelConnections({
 	startAdding = false,
 }: {
@@ -83,7 +83,8 @@ export function ModelConnections({
 		queryFn: () => getCodingModels(),
 		staleTime: 15 * 60_000,
 	});
-	const [provider, setProvider] = useState<ModelProvider>("openai");
+	const choices = keyProviderChoices();
+	const [choice, setChoice] = useState(choices[0]?.id ?? CUSTOM_CHOICE);
 	const [label, setLabel] = useState("");
 	const [apiKey, setApiKey] = useState("");
 	const [baseUrl, setBaseUrl] = useState("");
@@ -97,10 +98,7 @@ export function ModelConnections({
 			saveConnection({
 				data: {
 					id: replacing,
-					provider,
-					label: label.trim() || MODEL_PROVIDERS[provider].label,
-					apiKey,
-					...(provider === "compatible" ? { baseUrl } : {}),
+					...keyChoiceConnection(choice, { label, apiKey, baseUrl }),
 				},
 			}),
 		onSuccess: (rows) => {
@@ -121,6 +119,8 @@ export function ModelConnections({
 		onSuccess: update,
 	});
 	const busy = save.isPending || verify.isPending;
+	// A SuperGrok subscription has its own card above; this list is API keys.
+	const keys = connections.data?.filter((row) => !row.subscription);
 	const [adding, setAdding] = useState(startAdding);
 	const formOpen = adding || Boolean(replacing);
 	function closeForm() {
@@ -155,9 +155,10 @@ export function ModelConnections({
 			{connections.isError ? (
 				<p role="alert">Could not load your API keys. Please retry.</p>
 			) : null}
-			{connections.data?.length ? (
+			{keys?.length ? (
 				<ul className="settings-group">
-					{connections.data.map((connection) => {
+					{keys.map((connection) => {
+						const connectionChoice = connectionKeyChoice(connection);
 						const visibleIds = new Set(
 							availableConnectionModels(
 								[connection],
@@ -177,7 +178,7 @@ export function ModelConnections({
 									<div className="settings-row-main">
 										<span className="settings-row-icon">
 											<ModelProviderLogo
-												provider={providerLogo(connection.provider)}
+												provider={connectionChoice}
 												size={16}
 											/>
 										</span>
@@ -186,7 +187,7 @@ export function ModelConnections({
 												{connection.label}
 											</span>
 											<span className="settings-row-meta">
-												{MODEL_PROVIDERS[connection.provider].label} ·{" "}
+												{keyChoiceLabel(connectionChoice)} ·{" "}
 												{visibleModels.length} coding models
 											</span>
 										</div>
@@ -199,7 +200,7 @@ export function ModelConnections({
 											onClick={() => {
 												setAdding(false);
 												setReplacing(connection.id);
-												setProvider(connection.provider);
+												setChoice(connectionChoice);
 												setLabel(connection.label);
 												setBaseUrl(connection.baseUrl);
 												setApiKey("");
@@ -269,7 +270,7 @@ export function ModelConnections({
 						);
 					})}
 				</ul>
-			) : connections.data && !formOpen ? (
+			) : keys && !formOpen ? (
 				<div className="settings-group settings-empty">No API keys yet.</div>
 			) : null}
 			{formOpen ? (
@@ -283,25 +284,21 @@ export function ModelConnections({
 					<div className="settings-field settings-field-wide">
 						<span>Provider</span>
 						<fieldset className="provider-choices" aria-label="Provider">
-							{(
-								Object.entries(MODEL_PROVIDERS) as [
-									ModelProvider,
-									(typeof MODEL_PROVIDERS)[ModelProvider],
-								][]
-							).map(([id, row]) => (
+							{choices.map((row) => (
 								<button
-									key={id}
+									key={row.id}
 									type="button"
-									aria-pressed={provider === id}
+									aria-pressed={choice === row.id}
 									className="provider-choice"
+									title={row.hint}
 									disabled={busy || Boolean(replacing)}
 									onClick={() => {
-										setProvider(id);
+										setChoice(row.id);
 										setApiKey("");
 									}}
 								>
-									<ModelProviderLogo provider={providerLogo(id)} size={16} />
-									{id === "compatible" ? "Custom endpoint" : row.label}
+									<ModelProviderLogo provider={row.id} size={16} />
+									{row.label}
 								</button>
 							))}
 						</fieldset>
@@ -311,11 +308,11 @@ export function ModelConnections({
 						<input
 							maxLength={80}
 							value={label}
-							placeholder={MODEL_PROVIDERS[provider].label}
+							placeholder={keyChoiceLabel(choice)}
 							onChange={(event) => setLabel(event.target.value)}
 						/>
 					</label>
-					{provider === "compatible" ? (
+					{choice === CUSTOM_CHOICE ? (
 						<label className="settings-field settings-field-wide">
 							<span>Public HTTPS base URL</span>
 							<input
@@ -325,10 +322,6 @@ export function ModelConnections({
 								placeholder="https://gateway.example.com/v1"
 								onChange={(event) => setBaseUrl(event.target.value)}
 							/>
-							<small className="settings-field-hint">
-								Your gateway or self-hosted models. Every model it lists appears
-								under Custom in the model picker.
-							</small>
 						</label>
 					) : null}
 					<label className="settings-field settings-field-wide">

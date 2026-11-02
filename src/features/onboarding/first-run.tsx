@@ -21,6 +21,8 @@ import { finishFirstRunFn } from "../sessions/codex-session.fn";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
+import { XaiMark } from "../sessions/xai-mark";
+import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import "./first-run.css";
 
 const STAGE_LABELS = {
@@ -128,6 +130,7 @@ export function FirstRun({
 				) : step === "model" ? (
 					<ModelStep
 						ready={state.modelReady}
+						xaiSubscription={state.xaiSubscription}
 						onDone={() => setModelDone(true)}
 					/>
 				) : (
@@ -266,9 +269,12 @@ export function SessionsStep({
 
 export function ModelStep({
 	ready: readyAtLoad,
+	xaiSubscription = false,
 	onDone = () => window.location.assign("/"),
 }: {
 	ready: boolean;
+	/** Offer SuperGrok sign-in (its feature switch is on). */
+	xaiSubscription?: boolean;
 	/** After Continue or Later: the next step (default: the workspace). */
 	onDone?: () => void;
 }) {
@@ -279,11 +285,15 @@ export function ModelStep({
 		queryKey: ["model-connections"],
 		queryFn: () => readConnections(),
 	});
-	const keySaved = (connections.data?.length ?? 0) > 0;
-	const ready = readyAtLoad || chatgptConnected || keySaved;
+	const [grokConnected, setGrokConnected] = useState(false);
+	const keySaved = (connections.data ?? []).some((row) => !row.subscription);
+	const ready = readyAtLoad || chatgptConnected || grokConnected || keySaved;
 	return (
 		<>
-			<div className="first-run-models">
+			<div
+				className="first-run-models"
+				data-count={xaiSubscription ? 3 : undefined}
+			>
 				<div
 					className="first-run-model"
 					data-done={chatgptConnected || undefined}
@@ -294,6 +304,18 @@ export function ModelStep({
 					<strong>Your Codex subscription</strong>
 					<ChatgptSignIn onConnected={() => setChatgptConnected(true)} />
 				</div>
+				{xaiSubscription ? (
+					<div
+						className="first-run-model"
+						data-done={grokConnected || undefined}
+					>
+						<span className="first-run-logos">
+							<XaiMark size={26} />
+						</span>
+						<strong>Your Grok subscription</strong>
+						<XaiSubscriptionSignIn onConnected={() => setGrokConnected(true)} />
+					</div>
+				) : null}
 				<div className="first-run-model" data-done={keySaved || undefined}>
 					<span className="first-run-logos">
 						{["openai", "anthropic", "google", "openrouter"].map((provider) => (

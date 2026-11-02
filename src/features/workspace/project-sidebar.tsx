@@ -24,6 +24,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { titleWithShortcut } from "#/domain/keyboard-shortcuts";
 import { type Project, projectDisplayName } from "#/domain/projects";
@@ -530,15 +531,8 @@ export function ProjectSidebar({
 					}}
 				>
 					<div className="sidebar-brand-row">
-						<a href="/" className="brand" aria-label="ytimesy home">
-							<img
-								className="brand-mark"
-								src="/brand/mark.svg"
-								width={28}
-								height={28}
-								alt=""
-							/>
-							<span className="brand-name">ytimesy</span>
+						<a href="/" className="brand" aria-label="Y times Y home">
+							<Wordmark />
 						</a>
 						<button
 							ref={sidebarToggle}

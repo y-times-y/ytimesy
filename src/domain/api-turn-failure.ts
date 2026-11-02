@@ -41,6 +41,7 @@ const FAILURE_NAMES = new Set([
 	"WorkspaceProvisionError",
 	"WorkspaceCommandError",
 	"MachineUsageLimitReached",
+	"XaiSubscriptionUnavailable",
 ]);
 const FAILURE_CODES = new Set([
 	"ECONNRESET",
@@ -319,6 +320,25 @@ export class CodexReconnectRequired extends Error {
 			"Codex login refresh failed; reconnect Codex in Settings → Agents, then retry. This request was not sent.",
 		);
 		this.name = "CodexReconnectRequired";
+	}
+}
+
+/**
+ * The SuperGrok subscription could not serve a request: its sign-in was
+ * rejected ("reconnect"), xAI refused the plan ("not-eligible"), or xAI's
+ * sign-in service was briefly unreachable ("unavailable"). The first two wait
+ * for the user; every reason lets the turn continue on another connection.
+ */
+export class XaiSubscriptionUnavailable extends Error {
+	constructor(readonly reason: "reconnect" | "not-eligible" | "unavailable") {
+		super(
+			reason === "reconnect"
+				? "Your Grok sign-in expired. Reconnect it in Settings > Agents, then retry."
+				: reason === "not-eligible"
+					? "Your xAI plan can't use Grok here. Check your SuperGrok or X subscription, or pick another model."
+					: "xAI sign-in is unavailable right now. Retry in a few minutes.",
+		);
+		this.name = "XaiSubscriptionUnavailable";
 	}
 }
 
@@ -614,7 +634,8 @@ export function apiModelFailureMessage(error: unknown): string {
 		error instanceof SafeApiModelFailure ||
 		error instanceof SubscriptionUsageLimitReached ||
 		error instanceof UnsupportedEdgeModelEndpoint ||
-		error instanceof ApiModelPreparationFailure
+		error instanceof ApiModelPreparationFailure ||
+		error instanceof XaiSubscriptionUnavailable
 	)
 		return error.message;
 	if (

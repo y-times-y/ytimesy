@@ -9,6 +9,7 @@ import {
 	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { HELPER_COLORS } from "#/domain/helper-names";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
@@ -401,7 +402,9 @@ function Features() {
 export function SiteFooter() {
 	return (
 		<footer className="landing-footer">
-			<span>ytimesy</span>
+			<span role="img" aria-label="Y times Y">
+				<Wordmark size={18} />
+			</span>
 			<nav aria-label="Legal and support">
 				<Link to="/terms">Terms</Link>
 				<Link to="/privacy">Privacy</Link>

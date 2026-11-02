@@ -7,6 +7,7 @@ import { createFreestyleWorkspaceMachines } from "../../server/adapters/freestyl
 import { loadAgentAccount } from "../../server/auth/agent-account";
 import { requireUser } from "../../server/auth/auth";
 import { githubConnectionExists } from "../../server/auth/github-connection";
+import { loadXaiSubscription } from "../../server/auth/xai-subscription";
 import { endpoint, requireSameOrigin } from "../../server/http";
 import { deleteAccount } from "../../server/services/account-deletion";
 
@@ -37,6 +38,8 @@ export const Route = createFileRoute("/api/account")({
 						},
 						githubConnected: await githubConnectionExists(user.id),
 						agentAccount: await loadAgentAccount(user.id),
+						// Absent while the SuperGrok feature switch is off.
+						xaiSubscription: await loadXaiSubscription(user.id),
 					};
 				}),
 			/** Permanently deletes the signed-in account; the body repeats the typed confirmation. */
