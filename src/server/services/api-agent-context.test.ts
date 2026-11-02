@@ -28,7 +28,9 @@ it("uses measured reasoning usage without tokenizing its opaque encoding again",
 	];
 	const measurement = contextMeasurement([], history, 1000, 2000);
 	expect(contextTokenPressure(history, measurement)).toBe(3000);
-	expect(contextTokenPressure(history)).toBeGreaterThan(60000);
+	// Ciphertext counts by the tokens it stands for (about 8 bytes each), not as text.
+	expect(contextTokenPressure(history)).toBeGreaterThan(22_500);
+	expect(contextTokenPressure(history)).toBeLessThan(23_000);
 	expect(
 		contextTokenPressure(
 			[...history, { role: "user", content: "New requirement" }],

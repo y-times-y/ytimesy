@@ -541,6 +541,9 @@ export async function codexSubscriptionModel(
 		// Initial reads use a stable preflight prefix; complete current bodies and
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,
+		// The backend refuses unstreamed requests; the harness's own summary
+		// (its fallback when it declines a native compaction) streams.
+		streamOnly: true,
 		requestSettings,
 		compact: nativeModelCompactor(model, "openai", requestSettings),
 	};
