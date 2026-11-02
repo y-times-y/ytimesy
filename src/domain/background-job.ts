@@ -59,6 +59,14 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		})
 		.strict(),
 	z.object({ ...identity, kind: z.literal("pr-repair") }).strict(),
+	// Messages held for setup, once the workspace's environment is ready.
+	z
+		.object({
+			...identity,
+			kind: z.literal("held-sends"),
+			workspaceId: reference,
+		})
+		.strict(),
 	// A background command's exit callback (background-exit-wake.ts): one per command.
 	z
 		.object({

@@ -5,6 +5,7 @@ import {
 	type EnvironmentWorkflowRequest,
 	environmentWorkflowRequest,
 } from "../../domain/environment-workflow";
+import { backgroundJobId } from "../adapters/background-job-dispatch";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { databaseBuildSteps } from "../adapters/environment-build-steps";
@@ -31,6 +32,7 @@ import {
 	resolveEnvironmentBuildInput,
 	verifyEnvironmentRepositories,
 } from "../services/environment-build";
+import { startBackgroundJob } from "./background-jobs";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 
@@ -106,7 +108,17 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		const request = environmentWorkflowRequest.parse(JSON.parse(row.payload));
 		try {
-			await this.build(request, Date.now() + ALARM_BUDGET_MS);
+			const built = await this.build(request, Date.now() + ALARM_BUDGET_MS);
+			// Messages held while the project was set up go now, tab open or not
+			// (the minute's supervise sweep catches a dispatch lost here).
+			if (built.outcome === "ready")
+				await startBackgroundJob(this.env, {
+					id: backgroundJobId(`held-sends:${request.requestId}`),
+					kind: "held-sends",
+					workspaceId: request.workspaceId,
+				}).catch(() => {
+					console.warn("Held sends were not dispatched; the sweep sends them.");
+				});
 		} catch (error) {
 			if (error instanceof ResumeLater) {
 				await this.ctx.storage.setAlarm(Date.now() + RESUME_DELAY_MS);

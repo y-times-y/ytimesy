@@ -17,6 +17,7 @@ import type {
 } from "#/domain/subagent";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
+import { heldForSetupSql } from "./queued-user-messages";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -63,6 +64,9 @@ export async function reusableEmptyChat(
 				and s.provider_ref is null
 				and coalesce(jsonb_array_length(s.items),0)=0
 				and not exists (select 1 from api_turn t where t.session_id=s.id)
+				-- A chat holding a message (one waiting for setup) is in use.
+				and not exists (select 1 from agent_peer_inbox q where q.recipient_id=s.id
+					and not q.accepted and q.queued_send is not null)
 			order by s.updated_at desc limit 1
 		 )
 		 returning ${SESSION_COLUMNS}`,
@@ -122,7 +126,9 @@ export async function releaseChatClaim(
 		`update agent_session s set title='New session', environment_setup=false
 		 where s.user_id=$1 and s.id=$2 and (s.title=$3 or (s.environment_setup and s.title=$4))
 		 and s.turn_status <> 'running' and coalesce(jsonb_array_length(s.items),0)=0
-		 and not exists (select 1 from api_turn t where t.session_id=s.id)`,
+		 and not exists (select 1 from api_turn t where t.session_id=s.id)
+		 and not exists (select 1 from agent_peer_inbox q where q.recipient_id=s.id
+		  and not q.accepted and q.queued_send is not null)`,
 		[userId, sessionId, sessionTitleFromText(text), ENVIRONMENT_SETUP_TITLE],
 	);
 }
@@ -265,7 +271,12 @@ export async function listSidebarAgentSessions(
 		  case when s.title='New session' and s.turn_status <> 'running' then
 		    coalesce(jsonb_array_length(s.items),0)=0
 		    and not exists (select 1 from api_turn t where t.session_id=s.id)
+		    -- A message waiting in it (held for setup) makes it a used chat.
+		    and not exists (select 1 from agent_peer_inbox q where q.recipient_id=s.id
+		     and not q.accepted and q.queued_send is not null)
 		  else false end as unused,
+		  exists (select 1 from agent_peer_inbox q where q.recipient_id=s.id
+		   and not q.accepted and q.queued_send is not null and ${heldForSetupSql}) as waits_for_setup,
 		  (select min(t.created_at) from api_turn t
 		   where t.state in ('queued','running')
 		    and t.session_id in (select s.id union all
@@ -280,15 +291,18 @@ export async function listSidebarAgentSessions(
 		({
 			waiting_on,
 			unused,
+			waits_for_setup,
 			...row
 		}: AgentSessionRow & {
 			working_since: Date | string | null;
 			waiting_on: ChatWaitingOn | null;
 			unused: boolean | null;
+			waits_for_setup?: boolean | null;
 		}) => ({
 			...withoutItems(toSession(row)),
 			waitingOn: waiting_on,
 			...(unused ? { unused: true as const } : {}),
+			...(waits_for_setup ? { waitsForSetup: true as const } : {}),
 			workingSince:
 				row.working_since instanceof Date
 					? row.working_since.toISOString()

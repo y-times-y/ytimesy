@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
+import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import type { UserMessageItem } from "#/domain/session-item";
 import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
+	sessionTitleFromText,
 	withQueuedUserMessages,
 } from "#/domain/session-item";
 import {
@@ -17,17 +19,29 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	agentSessionPageForOwner,
+	claimChatForSend,
+	insertAgentSession,
+	reusableEmptyChat,
 } from "../adapters/agent-sessions";
 import {
+	backgroundJobId,
+	dispatchBackgroundJob,
+} from "../adapters/background-job-dispatch";
+import {
+	chatHoldingMessage,
+	chatsWithReleasableHeldSends,
+	holdUserMessageForSetup,
 	type QueuedUserSend,
 	queuedUserMessageItems,
 	queueUserMessageWhileRunning,
+	releaseHeldUserMessages,
 	releaseQueuedUserMessage,
 	removeQueuedUserMessage,
 	restoreQueuedUserMessage,
 	takeNextQueuedUserMessage,
 	updateQueuedUserMessage,
 } from "../adapters/queued-user-messages";
+import { workspaceForProject } from "../adapters/workspaces";
 import { mentionNoteFor } from "./agent-mentions";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import {
@@ -67,9 +81,19 @@ export function sendComposerMessage(
 	input: ComposerSend,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.flatMap(
-		Effect.promise(() =>
-			timed("send:queueCheck", () => queueBehindRunningTurn(scope, input)),
-		),
+		Effect.promise(async () => {
+			const queued = await timed("send:queueCheck", () =>
+				queueBehindRunningTurn(scope, input),
+			);
+			if ("view" in queued) return queued;
+			const held = await holdUntilEnvironmentReady(
+				machines,
+				scope,
+				input,
+				queued,
+			);
+			return held ? { view: held } : queued;
+		}),
 		(queued) =>
 			"view" in queued
 				? Effect.succeed(queued.view)
@@ -149,6 +173,171 @@ async function queueBehindRunningTurn(
 	return { view: await publicSessionView(scope) };
 }
 
+/**
+ * A send while the project's environment is not ready (being set up, or its
+ * setup failed) waits in its chat, stored like a queued message: a new chat
+ * is opened for it so it lists in the sidebar, every device shows it, and it
+ * goes by itself once the environment is ready (deliverHeldSends), even with
+ * no tab open. Null when the environment is ready (or missing: the send
+ * reports that as before) or the send is the runtime's own.
+ */
+async function holdUntilEnvironmentReady(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	input: ComposerSend,
+	known: { readonly session?: AgentSessionRecord | null },
+): Promise<PublicCodexSession | null> {
+	if (
+		!scope.projectId ||
+		input.runtimeText !== undefined ||
+		input.approvesPlan ||
+		input.continueOn
+	)
+		return null;
+	const projectId = scope.projectId;
+	const workspace = await workspaceForProject(scope.userId, projectId);
+	if (!workspace || workspaceEnvironmentIsReady(workspace)) return null;
+	const messageId = input.idempotencyKey ?? randomUUID();
+	const session = await chatForHeldSend(
+		scope,
+		projectId,
+		workspace.id,
+		messageId,
+		input.text,
+		known.session,
+	);
+	// An opened, untitled chat is named after the message, as a send names it.
+	await claimChatForSend(scope.userId, session.id, input.text);
+	const sessionScope = { ...scope, sessionId: session.id, createNew: false };
+	const waiting = await queuedUserMessageItems(session.id);
+	if (
+		!waiting.some((item) => item.id === messageId) &&
+		!sendWasQueued(sessionItemsFromUnknown(session.items), messageId)
+	) {
+		const attachments = input.storedAttachments
+			? [...input.storedAttachments]
+			: await storeMessageAttachments(
+					scope.userId,
+					session.id,
+					input.attachments,
+				);
+		const [item] = sessionItemsQueuedWithUser(
+			[],
+			input.text,
+			messageId,
+			false,
+			attachments,
+		);
+		if (item?.kind !== "userMessage") return null;
+		await holdUserMessageForSetup(scope.userId, session.id, {
+			item,
+			message: await queuedModelText(scope.userId, session.id, item),
+			harnessId: scope.harnessId,
+			modelId: input.modelId,
+			...(input.variant ? { variant: input.variant } : {}),
+			...(input.speed ? { speed: input.speed } : {}),
+			...(input.fast !== undefined ? { fast: input.fast } : {}),
+			...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+			...(input.environmentSetup ? { environmentSetup: true } : {}),
+		});
+		// The build may have finished while this was stored: its release ran
+		// before the message was there, so it goes now.
+		const now = await workspaceForProject(scope.userId, projectId);
+		if (workspaceEnvironmentIsReady(now))
+			await deliverHeldSendsInChat(machines, scope.userId, session.id);
+	}
+	return publicSessionView(sessionScope);
+}
+
+/**
+ * The chat a held send waits in: the open one, the one a replay of it
+ * already landed in, or a new chat named after it (an unused one first).
+ */
+async function chatForHeldSend(
+	scope: HarnessSessionScope,
+	projectId: string,
+	workspaceId: string,
+	messageId: string,
+	text: string,
+	known?: AgentSessionRecord | null,
+): Promise<AgentSessionRecord> {
+	if (scope.sessionId && !scope.createNew) {
+		const session =
+			known?.id === scope.sessionId
+				? known
+				: await agentSessionForOwner(scope.userId, scope.sessionId);
+		if (!session || session.projectId !== projectId)
+			throw new Error("Agent session is not available.");
+		return session;
+	}
+	const landed = await chatHoldingMessage(scope.userId, projectId, messageId);
+	const replayed = landed && (await agentSessionForOwner(scope.userId, landed));
+	if (replayed) return replayed;
+	const title = sessionTitleFromText(text);
+	return (
+		(await reusableEmptyChat(
+			scope.userId,
+			projectId,
+			scope.harnessId,
+			title,
+		)) ??
+		(await insertAgentSession({
+			userId: scope.userId,
+			projectId,
+			workspaceId,
+			harness: scope.harnessId,
+			title,
+		}))
+	);
+}
+
+/**
+ * The environment is ready: each chat's held messages are released and the
+ * first starts its turn, once (the take is atomic; a replay finds nothing).
+ * The build's finish dispatches this for its workspace; the periodic sweep
+ * catches any it missed.
+ */
+export async function deliverHeldSends(
+	machines: WorkspaceMachines,
+	workspaceId?: string,
+) {
+	const chats = await chatsWithReleasableHeldSends(workspaceId);
+	let started = 0;
+	for (const chat of chats)
+		if (await deliverHeldSendsInChat(machines, chat.userId, chat.sessionId))
+			started += 1;
+	return started;
+}
+
+/**
+ * The periodic sweep: a release the build's finish did not dispatch (lost,
+ * or a path that readies the environment without a build) goes as a job per
+ * workspace, on the job runner's model routes.
+ */
+export async function dispatchReleasableHeldSends(nowMs = Date.now()) {
+	const chats = await chatsWithReleasableHeldSends();
+	const minute = Math.floor(nowMs / 60_000);
+	for (const workspaceId of new Set(chats.map((chat) => chat.workspaceId)))
+		await dispatchBackgroundJob({
+			id: backgroundJobId(`held-sends:sweep:${workspaceId}:${minute}`),
+			kind: "held-sends",
+			workspaceId,
+		});
+}
+
+async function deliverHeldSendsInChat(
+	machines: WorkspaceMachines,
+	userId: string,
+	sessionId: string,
+) {
+	// Released first: if the start below fails, the message stays in the
+	// chat as an ordinary waiting one (Send, Edit, Remove), never dropped.
+	if (!(await releaseHeldUserMessages(sessionId))) return false;
+	const next = await takeNextQueuedUserMessage(userId, sessionId);
+	if (!next) return false;
+	return deliverQueuedSend(machines, userId, sessionId, next);
+}
+
 /** What the model reads for a queued message: its text, files and mention note. */
 async function queuedModelText(
 	userId: string,
@@ -212,6 +401,8 @@ async function deliverQueuedSend(
 					...(next.fast !== undefined ? { fast: next.fast } : {}),
 					idempotencyKey: next.item.id,
 					storedAttachments: next.item.attachments ?? [],
+					...(next.baseBranch ? { baseBranch: next.baseBranch } : {}),
+					...(next.environmentSetup ? { environmentSetup: true } : {}),
 					released: true,
 				},
 			),
@@ -264,9 +455,11 @@ export function updateQueuedComposerMessage(
 	scope: HarnessSessionScope,
 	messageId: string,
 	text: string,
+	/** "Set up with the agent" on a held message: it goes as a setup chat's request. */
+	environmentSetup = false,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.promise(async () => {
-		await rewriteQueuedText(scope, messageId, text);
+		await rewriteQueuedText(scope, messageId, text, environmentSetup);
 		return publicSessionView(scope);
 	});
 }
@@ -308,6 +501,7 @@ async function rewriteQueuedText(
 	scope: HarnessSessionScope,
 	messageId: string,
 	text: string,
+	environmentSetup = false,
 ) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
 	const trimmed = text.trim();
@@ -315,7 +509,12 @@ async function rewriteQueuedText(
 	const waiting = await queuedUserMessageItems(scope.sessionId);
 	const current = waiting.find((item) => item.id === messageId);
 	if (!current) throw new Error("That message was already delivered.");
-	const { queued: _queued, released: _released, ...item } = current;
+	const {
+		queued: _queued,
+		released: _released,
+		heldForSetup: _held,
+		...item
+	} = current;
 	const message = await queuedModelText(scope.userId, scope.sessionId, {
 		...item,
 		text: trimmed,
@@ -327,6 +526,7 @@ async function rewriteQueuedText(
 			messageId,
 			trimmed,
 			message,
+			environmentSetup,
 		))
 	)
 		throw new Error("That message was already delivered.");

@@ -45,6 +45,11 @@ export type UserMessageItem = {
 	readonly queued?: true;
 	/** Send was pressed; the next model step takes it. Only set on a waiting message. */
 	readonly released?: true;
+	/**
+	 * Waits for the project's environment (being set up, or failed): it goes
+	 * by itself once the environment is ready. Only set on a waiting message.
+	 */
+	readonly heldForSetup?: true;
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -569,6 +574,16 @@ export function withQueuedUserMessages(
 			.filter((item) => !present.has(item.id))
 			.map((item) => ({ ...item, queued: true as const })),
 	];
+}
+
+/** The chat's message waiting for the project's environment, if any. */
+export function heldForSetupMessage(
+	items: readonly SessionItem[],
+): UserMessageItem | null {
+	for (const item of items)
+		if (item.kind === "userMessage" && item.queued && item.heldForSetup)
+			return item;
+	return null;
 }
 
 /** The browser's copy of a send made during a run, shown waiting until delivered. */
