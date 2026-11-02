@@ -518,7 +518,7 @@ function nextCommand(
 	extra: string[] = [],
 ) {
 	const words = [
-		"npx -y ytimesy continue --code",
+		"npx -y ytimesy@latest continue --code",
 		shellWord(options.code),
 		"--scope",
 		scope,

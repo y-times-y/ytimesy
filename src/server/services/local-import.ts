@@ -128,7 +128,7 @@ export async function createLocalImport(userId: string) {
 	});
 	return {
 		importId: id,
-		prompt: localImportPrompt(code),
+		prompt: localImportPrompt(code, serverConfig().APP_URL),
 		expiresAt: expiresAt.toISOString(),
 	};
 }
