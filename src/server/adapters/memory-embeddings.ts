@@ -19,10 +19,11 @@ const QUERY_INPUT = (text: string) => ({
 	documents: [memoryEmbeddingQuery(text)],
 });
 
+type RerankInput = { query: string; contexts: { text: string }[] };
 type AiBinding = {
 	run(
 		model: string,
-		input: { queries?: string[]; documents?: string[] },
+		input: { queries?: string[]; documents?: string[] } | RerankInput,
 	): Promise<{ data?: number[][] } | unknown>;
 };
 export type Embed = {
@@ -73,22 +74,21 @@ function embedder(run: Run): Embed {
 	};
 }
 
-/** The Workers AI binding, or its REST API when an account token is configured (scripts). */
-export function memoryEmbedder(): Embed | null {
+/**
+ * A model call on the Workers AI binding, or its REST API when an account
+ * token is configured (scripts); null when neither is.
+ */
+function aiRunner() {
 	const ai = binding;
 	if (ai)
-		return embedder(async (input) => {
-			const result = (await ai.run(MEMORY_EMBEDDING_MODEL, input)) as {
-				data?: number[][];
-			};
-			return result.data ?? [];
-		});
+		return (model: string, input: Parameters<AiBinding["run"]>[1]) =>
+			ai.run(model, input);
 	const account = process.env.CLOUDFLARE_ACCOUNT_ID;
 	const token = process.env.CLOUDFLARE_API_TOKEN;
 	if (!account || !token) return null;
-	return embedder(async (input) => {
+	return async (model: string, input: Parameters<AiBinding["run"]>[1]) => {
 		const response = await fetch(
-			`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${MEMORY_EMBEDDING_MODEL}`,
+			`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${model}`,
 			{
 				method: "POST",
 				headers: {
@@ -98,11 +98,68 @@ export function memoryEmbedder(): Embed | null {
 				body: JSON.stringify(input),
 			},
 		);
-		const body = (await response.json()) as { result?: { data?: number[][] } };
+		const body = (await response.json()) as { result?: unknown };
 		if (!response.ok)
-			throw new Error(`Embedding request failed (${response.status}).`);
-		return body.result?.data ?? [];
+			throw new Error(`Workers AI request failed (${response.status}).`);
+		return body.result;
+	};
+}
+
+/** The Workers AI binding, or its REST API when an account token is configured (scripts). */
+export function memoryEmbedder(): Embed | null {
+	const run = aiRunner();
+	if (!run) return null;
+	return embedder(async (input) => {
+		const result = (await run(MEMORY_EMBEDDING_MODEL, input)) as
+			| { data?: number[][] }
+			| undefined;
+		return result?.data ?? [];
 	});
+}
+
+/**
+ * A cross-encoder reading the request and each line together, after the
+ * hybrid ranking picked the candidates: the read hook keeps a line only when
+ * this scores it as relevant (memory-repo.ts, MEMORY_RERANK_MIN_SCORE).
+ */
+const MEMORY_RERANK_MODEL = "@cf/baai/bge-reranker-base";
+
+/** Relevance of each text to the query, 0-1, in `texts` order. */
+export type Rerank = (
+	query: string,
+	texts: readonly string[],
+) => Promise<number[]>;
+
+/**
+ * The Workers AI reranker (binding, else REST), or null. Its answer lists
+ * `{ id, score }` by context index, best first; scores are already 0-1
+ * (a raw logit is passed through a sigmoid).
+ */
+export function memoryReranker(): Rerank | null {
+	const run = aiRunner();
+	if (!run) return null;
+	return async (query, texts) => {
+		if (!texts.length) return [];
+		const result = (await run(MEMORY_RERANK_MODEL, {
+			query,
+			contexts: texts.map((text) => ({ text })),
+		})) as { response?: { id?: number; score?: number }[] } | undefined;
+		const scores = new Array<number>(texts.length).fill(Number.NaN);
+		for (const item of result?.response ?? [])
+			if (
+				typeof item.id === "number" &&
+				typeof item.score === "number" &&
+				item.id >= 0 &&
+				item.id < texts.length
+			)
+				scores[item.id] =
+					item.score >= 0 && item.score <= 1
+						? item.score
+						: 1 / (1 + Math.exp(-item.score));
+		if (scores.some(Number.isNaN))
+			throw new Error("Reranker returned no score for some lines.");
+		return scores;
+	};
 }
 
 function lineHash(text: string) {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { lineInScope, type MemoryProject } from "./memory-layout";
+import { lineInScope } from "./memory-layout";
+import {
+	PRECISION_FILES,
+	PRECISION_NEGATIVES,
+	PRECISION_PROBES,
+	PRECISION_PROJECT,
+} from "./memory-precision-fixture";
+import recorded from "./memory-precision-scores.json";
 import {
 	HYBRID_WEIGHTS,
 	hybridScores,
@@ -10,8 +17,10 @@ import {
 import {
 	cosineSimilarity,
 	MEMORY_MATCH_POLICY,
+	MEMORY_RERANK_POLICY,
 	type MemoryLine,
 	memoryLines,
+	memoryRerankPool,
 	selectMemoryMatches,
 } from "./memory-repo";
 
@@ -32,65 +41,27 @@ import {
  * `memory-long-history-eval.ts --recall-check` on dev.
  */
 
-const WEB: MemoryProject = { fullName: "acme/web", repositoryIds: [1] };
-const files = {
-	"personal/style.md": [
-		"- Prefers short replies without preamble",
-		"- Writes commit messages in the imperative mood",
-		"- Works on a Mac with zsh",
-	].join("\n"),
-	"projects/acme-web--1/tooling.md": [
-		"- Install packages with pnpm, never npm",
-		"- Run vitest for unit tests",
-		"- Node is pinned to 22",
-	].join("\n"),
-	"projects/acme-web--1/api.md": [
-		"- API errors return problem+json",
-		"- Routes live under /api/v2",
-		"- Timestamps are stored in UTC",
-	].join("\n"),
-	"projects/acme-web--1/deploy.md": [
-		"- Deploy with wrangler to Cloudflare Workers",
-		"- Never deploy on Fridays",
-	].join("\n"),
-	"projects/acme-api--2/tooling.md": [
-		"- Install packages with yarn",
-		"- Run pytest for unit tests",
-		"- Python is pinned to 3.12",
-	].join("\n"),
-	"projects/acme-api--2/deploy.md": "- Deploy with fly to Fly.io",
-	"projects/acme-api--2/api.md": [
-		"- API errors return a JSON error envelope",
-		"- Store timestamps as unix seconds",
-	].join("\n"),
-};
-
-/** A web-project chat's requests and the lines that are right for each. */
-const probes: { query: string; right: string[] }[] = [
-	{
-		query: "install the date-fns package",
-		right: ["Install packages with pnpm, never npm"],
-	},
-	{
-		query: "add a unit test for the price parser",
-		right: ["Run vitest for unit tests"],
-	},
-	{
-		query: "deploy the latest build",
-		right: [
-			"Deploy with wrangler to Cloudflare Workers",
-			"Never deploy on Fridays",
-		],
-	},
-	{
-		query: "return an error from the orders route when items are missing",
-		right: ["API errors return problem+json", "Routes live under /api/v2"],
-	},
-	{
-		query: "store the created timestamp on each order",
-		right: ["Timestamps are stored in UTC"],
-	},
-];
+const WEB = PRECISION_PROJECT;
+/** The 2026-11-01 scoped selection this proxy measured (floor 0.37). */
+const SCOPED_POLICY = MEMORY_RERANK_POLICY;
+/**
+ * The synthetic proxy keeps its 2026-11-01 memory and probes: the lines and
+ * probes added for the reranker are checked with real scores below.
+ */
+const ADDED = new Set([
+	"personal/customer-reporting.md",
+	"personal/startup-lessons.md",
+]);
+const files = Object.fromEntries(
+	Object.entries(PRECISION_FILES).filter(([path]) => !ADDED.has(path)),
+);
+const probes = PRECISION_PROBES.filter(
+	(probe) =>
+		probe.query !== "run the tests" &&
+		probe.right.every((text) =>
+			Object.values(files).some((content) => content.includes(text)),
+		),
+);
 
 const BACKGROUND = 1.2;
 /** Stems with a final e dropped, so route/routes and store/stored meet, as they would in an embedding. */
@@ -147,10 +118,11 @@ function run(policy: "before" | "after" | "no-gap") {
 							minScore: 0.36,
 							gap: Number.POSITIVE_INFINITY,
 							alwaysProjectOnly: false,
+							rerankMinScore: 0,
 						}
 					: policy === "no-gap"
-						? { ...MEMORY_MATCH_POLICY, gap: Number.POSITIVE_INFINITY }
-						: MEMORY_MATCH_POLICY,
+						? { ...SCOPED_POLICY, gap: Number.POSITIVE_INFINITY }
+						: SCOPED_POLICY,
 		}).map((entry) => entry.text);
 		if (process.env.PRECISION_DEBUG)
 			console.log(
@@ -187,5 +159,110 @@ describe("read hook precision on the offline fixture", () => {
 		const noGap = run("no-gap");
 		expect(noGap.recall).toBe(1);
 		expect(after.precision).toBeGreaterThan(noGap.precision);
+	});
+});
+
+/**
+ * The same fixture replayed with real scores (Qwen3 hybrid and the
+ * bge-reranker-base reranker), recorded by scripts/memory-rerank-calibrate.ts
+ * --write on 2026-11-02: the calibration of MEMORY_RERANK_MIN_SCORE and
+ * MEMORY_MATCH_MIN_SCORE, checked offline.
+ */
+describe("read hook precision with recorded real scores", () => {
+	const scores = recorded as Record<
+		string,
+		Record<string, { hybrid: number; rerank: number }>
+	>;
+	const inScope = memoryLines(PRECISION_FILES).filter((entry) =>
+		lineInScope(entry, WEB),
+	);
+	/** The memory the two dev misfires came from: those personal lines and the project's. */
+	const withoutStyle = inScope.filter(
+		(entry) => entry.path !== "personal/style.md",
+	);
+	/** What the read hook selects: "default" (the hybrid at its floor), "rerank" (MEMORY_RERANK_ON), "before" (floor 0.37). */
+	function recall(
+		query: string,
+		mode: "default" | "rerank" | "before",
+		lines = inScope,
+	) {
+		const recordedFor = scores[query];
+		if (!recordedFor) throw new Error(`No recorded scores for "${query}".`);
+		const score = (entry: MemoryLine, kind: "hybrid" | "rerank") => {
+			const value = recordedFor[entry.text]?.[kind];
+			if (value === undefined)
+				throw new Error(`No recorded score for "${entry.text}".`);
+			return value;
+		};
+		const match = {
+			lines,
+			scores: new Map(lines.map((entry) => [entry, score(entry, "hybrid")])),
+			alreadyShown: () => false,
+			today: "2026-11-02",
+			query,
+		};
+		if (mode === "before")
+			return selectMemoryMatches({ ...match, policy: MEMORY_RERANK_POLICY });
+		if (mode === "default")
+			return selectMemoryMatches({ ...match, policy: MEMORY_MATCH_POLICY });
+		const pool = memoryRerankPool({ ...match, policy: MEMORY_RERANK_POLICY });
+		return selectMemoryMatches({
+			...match,
+			policy: MEMORY_RERANK_POLICY,
+			rerank: new Map(pool.map((entry) => [entry, score(entry, "rerank")])),
+		});
+	}
+	const texts = (lines: readonly MemoryLine[]) =>
+		lines.map((entry) => entry.text);
+
+	it("reproduces the dev misfires without the reranker", () => {
+		expect(
+			texts(recall("Reply with just the word OK.", "before", withoutStyle)),
+		).toContain(PRECISION_FILES["personal/customer-reporting.md"].slice(2));
+		expect(
+			texts(recall(PRECISION_NEGATIVES[1], "before", withoutStyle)),
+		).toContain(PRECISION_FILES["personal/startup-lessons.md"].slice(2));
+	});
+
+	it.each(["default", "rerank"] as const)(
+		"keeps every right line (%s)",
+		(mode) => {
+			for (const probe of PRECISION_PROBES)
+				expect(texts(recall(probe.query, mode))).toEqual(
+					expect.arrayContaining(probe.right),
+				);
+		},
+	);
+
+	it.each(["default", "rerank"] as const)(
+		"recalls nothing for messages nothing is relevant to (%s)",
+		(mode) => {
+			for (const query of PRECISION_NEGATIVES)
+				expect([query, texts(recall(query, mode, withoutStyle))]).toEqual([
+					query,
+					[],
+				]);
+		},
+	);
+
+	it("lets through only a reply-style preference for messages about replies", () => {
+		// The reranker ties "Prefers short replies" to "Reply with just the
+		// word OK." (0.37): the one line no cutoff that keeps every right line drops.
+		const kept = new Set(
+			PRECISION_NEGATIVES.flatMap((query) => texts(recall(query, "rerank"))),
+		);
+		expect([...kept]).toEqual(["Prefers short replies without preamble"]);
+	});
+
+	it("drops most wrong lines on the requests", () => {
+		const wrong = (mode: "default" | "rerank" | "before") =>
+			PRECISION_PROBES.flatMap((probe) =>
+				texts(recall(probe.query, mode)).filter(
+					(text) => !probe.right.includes(text),
+				),
+			).length;
+		expect(wrong("default")).toBeLessThanOrEqual(3);
+		expect(wrong("rerank")).toBeLessThanOrEqual(2);
+		expect(wrong("before")).toBeGreaterThan(wrong("default"));
 	});
 });
