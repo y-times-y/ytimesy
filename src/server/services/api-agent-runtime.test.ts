@@ -356,7 +356,7 @@ it("still rejects a native checkpoint exceeding the hard input limit without rep
 						providerOptions: {
 							openai: {
 								itemId: "oversized",
-								encryptedContent: "e".repeat(180_000),
+								encryptedContent: "e".repeat(400_000),
 							},
 						},
 					},
