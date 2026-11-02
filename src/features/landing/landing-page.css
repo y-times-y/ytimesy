@@ -694,6 +694,60 @@
 .bench-foot a:hover {
 	color: #fff;
 }
+.bench-links {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 18px;
+}
+.bench-foot a.bench-read {
+	padding: 7px 14px;
+	border: 1px solid #ffffff24;
+	border-radius: 999px;
+	color: #fff;
+	font-weight: 500;
+}
+.bench-foot a.bench-read:hover {
+	background: #ffffff10;
+}
+.landing .bench-note {
+	margin-top: 20px;
+	padding: 0 20px;
+	color: #8a8a8a;
+	font-size: 14px;
+	line-height: 1.5;
+}
+/* The launch post's score-vs-cost chart (features/blog/score-cost-chart), on dark. */
+.bench-chart {
+	--scc-ink: #ededed;
+	--scc-ink-2: #a3a3a3;
+	--scc-ink-3: #6b6b6b;
+	--scc-line: #ffffff17;
+	--scc-accent: #ff6e50;
+	--scc-node: #161616;
+	--scc-halo: #0b0b0b;
+	--mark-0: #e6e6e4;
+	--mark-1: #8f8f8c;
+	--mark-2: #bdbdba;
+	--mark-3: #a6a6a3;
+	--mark-4: #ffffff;
+	max-width: 820px;
+	margin: 40px auto 0;
+	padding: 0 20px;
+}
+.bench-chart-head {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px 16px;
+	margin-bottom: 8px;
+	color: #d4d4d4;
+	font-size: 16px;
+}
+.bench-chart-head .landing-dim {
+	font-size: 14px;
+}
 
 /* Models */
 .landing-models {
@@ -1157,6 +1211,13 @@
 	}
 	.bench-table td {
 		font-size: 17px;
+	}
+	.landing .bench-note,
+	.bench-chart {
+		padding: 0 10px;
+	}
+	.bench-chart {
+		margin-top: 28px;
 	}
 	.bench-table tbody th {
 		font-size: 13px;
