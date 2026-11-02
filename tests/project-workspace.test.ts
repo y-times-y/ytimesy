@@ -3,9 +3,11 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
+	heldSendReleases,
 	publicFailureMessage,
 	redactInfrastructure,
 	redactSecrets,
+	sendWaitsForSetup,
 	workspacePrepareShowsStatus,
 	workspacePrepareStalled,
 } from "../src/domain/project-workspace";
@@ -114,4 +116,22 @@ it("flags a prepare request that stayed queued past the stall timeout", () => {
 	expect(workspacePrepareStalled({ ...queued, updatedAt: "" }, at(60))).toBe(
 		false,
 	);
+});
+
+it("holds a message while the environment is not ready, failed included, and releases it only when ready", () => {
+	for (const status of [
+		"missing",
+		"queued",
+		"provisioning",
+		"cloning",
+		"installing",
+		"failed",
+	] as const)
+		expect(sendWaitsForSetup(status), status).toBe(true);
+	expect(sendWaitsForSetup("ready")).toBe(false);
+	// Still loading: nothing to wait for yet.
+	expect(sendWaitsForSetup(undefined)).toBe(false);
+	expect(heldSendReleases("ready")).toBe(true);
+	for (const status of ["failed", "installing", undefined] as const)
+		expect(heldSendReleases(status), String(status)).toBe(false);
 });

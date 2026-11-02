@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { ArrowUp, Square } from "lucide-react";
 import {
 	type KeyboardEvent,
+	type ReactNode,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -198,7 +199,16 @@ export function SessionLauncher({
 	olderItems,
 	loadedCatalog,
 	variant = "main",
+	setupHold,
 }: {
+	/**
+	 * A sent message waiting for the project's setup: drawn after the
+	 * transcript, with the message itself unless the transcript has it.
+	 */
+	setupHold?: {
+		readonly messageId: string;
+		readonly render: (showMessage: boolean) => ReactNode;
+	};
 	/**
 	 * "side": the composer beside Main in a side chat. Same transcript,
 	 * composer and controls, without the project picker, helpers or /side.
@@ -765,6 +775,7 @@ export function SessionLauncher({
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout =
 		side ||
+		Boolean(setupHold) ||
 		sessionUsesFollowUpLayout({
 			items,
 			turnStatus,
@@ -1216,6 +1227,13 @@ export function SessionLauncher({
 						disabled: busy || turnStatus === "running",
 						onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, key),
 					}}
+					trailing={
+						setupHold
+							? setupHold.render(
+									!items.some((item) => item.id === setupHold.messageId),
+								)
+							: undefined
+					}
 					onRemoveQueued={onRemoveQueued}
 					onEditQueued={onEditQueued}
 					onSendQueued={onSendQueued}

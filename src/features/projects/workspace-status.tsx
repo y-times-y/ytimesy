@@ -1,6 +1,8 @@
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import type { EnvironmentBuildView } from "#/domain/environment-build-progress";
+import type { RepositorySetup } from "#/domain/environment-detection";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import {
 	workspacePrepareShowsStatus,
@@ -12,6 +14,11 @@ import {
 	retryTransientRead,
 	transientReadRetryDelay,
 } from "./api";
+import {
+	EnvironmentBuildFailureDetail,
+	EnvironmentBuildSteps,
+	useEnvironmentProgress,
+} from "./environment-build-progress";
 import { GithubSetupLink } from "./github-setup-link";
 
 /** Projects with a message waiting for their environment (workspace-home.tsx). */
@@ -38,6 +45,30 @@ export interface WorkspaceView {
 		| "failed";
 	errorMessage: string | null;
 	updatedAt: string;
+	/** The newest build; a rebuild runs while the workspace stays ready. */
+	build?: EnvironmentBuildView | null;
+	/** What each repository's active setup is (detected, saved, nothing). */
+	setup?: readonly RepositorySetup[] | null;
+}
+
+export type WorkspaceRetryMode = "retry" | "rebuild" | "plain";
+
+/** Retry, rebuild or "Send anyway" (clone only) for a project's environment. */
+export function retryWorkspace(input: {
+	workspaceId: string;
+	mode?: WorkspaceRetryMode;
+	repairModel?: EnvironmentModelRequest;
+}) {
+	return requestJson<WorkspaceView>("/api/workspaces/retry", input);
+}
+
+/** Whether the status should be read again soon: setup or a rebuild is running. */
+export function workspaceStatusIsLive(view: WorkspaceView | null | undefined) {
+	if (!view) return false;
+	return (
+		(view.status !== "ready" && view.status !== "failed") ||
+		view.build?.status === "running"
+	);
 }
 
 /** A project's environment status; read ahead of a project switch too. */
@@ -65,15 +96,8 @@ export function WorkspaceStatus({
 		...workspaceStatusQuery(projectId),
 		retry: retryTransientRead,
 		retryDelay: transientReadRetryDelay,
-		refetchInterval: (query) => {
-			const status = query.state.data?.status;
-			return status &&
-				status !== "ready" &&
-				status !== "failed" &&
-				status !== undefined
-				? 3000
-				: false;
-		},
+		refetchInterval: (query) =>
+			workspaceStatusIsLive(query.state.data) ? 3000 : false,
 	});
 	const prepare = useMutation({
 		mutationFn: () =>
@@ -81,13 +105,18 @@ export function WorkspaceStatus({
 		onSuccess: () => void workspace.refetch(),
 	});
 	const retry = useMutation({
-		mutationFn: (input: {
-			workspaceId: string;
-			repairModel?: EnvironmentModelRequest;
-		}) => requestJson<WorkspaceView>("/api/workspaces/retry", input),
+		mutationFn: retryWorkspace,
 		onSuccess: () => void workspace.refetch(),
 	});
 	const current = workspace.data;
+	const [detailsOpen, setDetailsOpen] = useState(false);
+	const building =
+		Boolean(current) &&
+		current?.status !== "failed" &&
+		(current?.status !== "ready" || current.build?.status === "running");
+	const progress = useEnvironmentProgress(projectId, {
+		enabled: detailsOpen && building,
+	});
 	const queuedMissing = useRef<string | null>(null);
 	useEffect(() => {
 		if (
@@ -122,32 +151,57 @@ export function WorkspaceStatus({
 			</p>
 		);
 	if (!current) return null;
+	// A held message shows the setup in the chat itself.
+	if (held.has(projectId)) return null;
 	// Polling while queued re-renders this, so the stall check advances with time.
 	const stalled = workspacePrepareStalled(current, Date.now());
-	if (!stalled && current.status !== "ready" && current.status !== "failed")
+	const rebuilding =
+		current.status === "ready" && current.build?.status === "running";
+	if (!stalled && (rebuilding || current.status !== "ready") && building)
 		return (
-			<p className="workspace-status workspace-status-progress" role="status">
-				<LoaderCircle size={13} className="workspace-status-spin" />
-				<span>
-					Setting up the project · {SETUP_STEPS[current.status]}
-					{held.has(projectId) ? ". Your message sends when it's ready." : ""}
-				</span>
-			</p>
+			<div className="workspace-status-live">
+				<button
+					type="button"
+					className="workspace-status workspace-status-progress"
+					aria-expanded={detailsOpen}
+					onClick={() => setDetailsOpen((open) => !open)}
+				>
+					<LoaderCircle size={13} className="workspace-status-spin" />
+					<span>
+						{rebuilding
+							? "Rebuilding environment…"
+							: `Setting up the project · ${SETUP_STEPS[current.status as keyof typeof SETUP_STEPS] ?? "Starting"}`}
+					</span>
+				</button>
+				{detailsOpen ? (
+					<div className="workspace-status-details">
+						<EnvironmentBuildSteps steps={progress.data?.steps ?? []} />
+					</div>
+				) : null}
+			</div>
 		);
 	if (!stalled && !workspacePrepareShowsStatus(current.status)) return null;
+	const failure = current.build?.status === "failed" ? current.build : null;
 	return (
-		<p className="workspace-status" role="alert">
-			<span>
-				{stalled
-					? "Environment setup has not started yet."
-					: (current.errorMessage ?? "Workspace preparation failed.")}
+		<div className="workspace-status" role="alert">
+			<div className="workspace-status-message">
+				{stalled ? (
+					"Environment setup has not started yet."
+				) : failure?.failure ? (
+					<EnvironmentBuildFailureDetail
+						failure={failure.failure}
+						message={failure.errorMessage}
+					/>
+				) : (
+					(current.errorMessage ?? "Workspace preparation failed.")
+				)}
 				{current.errorMessage ? (
 					<>
 						{" "}
 						<GithubSetupLink message={current.errorMessage} />
 					</>
 				) : null}
-			</span>
+			</div>
 			<button
 				type="button"
 				disabled={retry.isPending}
@@ -155,6 +209,18 @@ export function WorkspaceStatus({
 			>
 				{retry.isPending ? "Retrying…" : "Retry"}
 			</button>
+			{stalled ? null : (
+				<button
+					type="button"
+					disabled={retry.isPending}
+					title="Chats start with the repository cloned; the agent installs what it needs"
+					onClick={() =>
+						retry.mutate({ workspaceId: current.id, mode: "plain" })
+					}
+				>
+					Skip setup
+				</button>
+			)}
 			{repairModel && (
 				<button
 					type="button"
@@ -176,6 +242,6 @@ export function WorkspaceStatus({
 				</button>
 			)}
 			{retry.error && <span>{retry.error.message}</span>}
-		</p>
+		</div>
 	);
 }

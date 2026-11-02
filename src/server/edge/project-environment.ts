@@ -7,6 +7,7 @@ import {
 } from "../../domain/environment-workflow";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { databaseBuildSteps } from "../adapters/environment-build-steps";
 import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { environmentFreestyleFetch } from "../adapters/freestyle/environment-fetch";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
@@ -232,12 +233,15 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 		const buildId = await recorded("claim-build", "once", () =>
 			claimEnvironmentBuild(input, runtime),
 		);
-		const cleanup = () =>
+		// The failure, when there is one, is what the person sees (its command,
+		// exit code and output tail); a replayed cleanup after a restart has none.
+		const cleanup = (cause?: unknown) =>
 			recorded("finish-and-pause", "cleanup", () =>
-				finishEnvironmentBuild(input, buildId, runtime).then(() => ({
+				finishEnvironmentBuild(input, buildId, runtime, cause).then(() => ({
 					cleaned: true,
 				})),
 			);
+		const steps = databaseBuildSteps(buildId);
 		let snapshotId: string;
 		try {
 			// Provisioning is idempotent: the VM is found again by its build slug.
@@ -254,13 +258,14 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 							{ ...input, repositories: [repository] },
 							vm,
 							runtime,
+							steps,
 						),
 				);
 				repositories.push(...prepared);
 			}
 			assertDistinctEnvironmentServicePorts(repositories);
 			const verified = await recorded("verify", "replay", () =>
-				verifyEnvironmentRepositories(input, vm, repositories, runtime),
+				verifyEnvironmentRepositories(input, vm, repositories, runtime, steps),
 			);
 			snapshotId = await recorded("activate-snapshot", "once", () =>
 				activateEnvironmentBuild(input, buildId, vm, verified, runtime),
@@ -268,7 +273,7 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 		} catch (error) {
 			// Still running on the VM: keep the build VM as it is and continue later.
 			if (error instanceof ResumeLater) throw error;
-			await cleanup();
+			await cleanup(error);
 			throw error;
 		}
 		await cleanup();

@@ -22,6 +22,7 @@ it("uses a non-login readiness shell so Ubuntu logout hooks cannot override succ
 				],
 			}),
 		exec,
+		writeTextFile: vi.fn(async () => {}),
 	} as unknown as WorkspaceMachines;
 	await startEnvironmentServices(machines, WorkspaceId("vm-test"));
 	expect(exec).toHaveBeenCalledOnce();

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { CircleDashed, Sparkles } from "lucide-react";
+import { CircleDashed, LoaderCircle, Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
 	Tooltip,
@@ -9,14 +9,29 @@ import {
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
 import {
+	detectedSetupLine,
+	type RepositorySetup,
+} from "#/domain/environment-detection";
+import {
 	type EnvironmentRecipe,
 	unverifiedItemDetails,
 } from "#/domain/project-environment";
 import { compactRelativeAge } from "#/domain/sidebar-chats";
 import {
 	getProjectEnvironmentFn,
+	restoreProjectEnvironmentFn,
 	saveProjectEnvironmentFn,
 } from "../projects/environment.fn";
+import {
+	EnvironmentBuildFailureDetail,
+	EnvironmentBuildSteps,
+	useEnvironmentProgress,
+} from "../projects/environment-build-progress";
+import {
+	retryWorkspace,
+	workspaceStatusIsLive,
+	workspaceStatusQuery,
+} from "../projects/workspace-status";
 
 export const environmentQueryKey = (projectId: string) =>
 	["project-environment", projectId] as const;
@@ -46,6 +61,12 @@ export function EnvironmentSettings({
 	});
 	const [editing, setEditing] = useState<string | null>(null);
 	const [showHistory, setShowHistory] = useState(false);
+	// The setup each repository uses now has nothing to restore.
+	const latestIds = new Set(
+		environment.data?.repositories.flatMap((repo) =>
+			repo.saved ? [repo.saved.id] : [],
+		) ?? [],
+	);
 	return (
 		<section className="settings-section">
 			<header className="settings-section-head">
@@ -64,6 +85,7 @@ export function EnvironmentSettings({
 					</button>
 				) : null}
 			</header>
+			<LastBuild projectId={projectId} />
 			{environment.isPending ? (
 				<p className="settings-copy">Loading…</p>
 			) : environment.error ? (
@@ -77,7 +99,7 @@ export function EnvironmentSettings({
 								<span className="settings-row-meta">
 									{repo.saved
 										? `${SOURCE[repo.saved.source]} · ${savedAgo(repo.saved.savedAt)}`
-										: "Not set up yet: dependencies install from the lockfile."}
+										: detectedSetupLine(repo.setup)}
 								</span>
 							</div>
 							<div className="settings-row-actions">
@@ -97,6 +119,7 @@ export function EnvironmentSettings({
 								projectId={projectId}
 								repository={repo.fullName}
 								recipe={repo.saved?.recipe}
+								setup={repo.setup}
 								onDone={() => setEditing(null)}
 							/>
 						) : repo.saved ? (
@@ -129,6 +152,11 @@ export function EnvironmentSettings({
 											{new Date(row.savedAt).toLocaleString()}
 										</span>
 									</div>
+									{latestIds.has(row.id) ? null : (
+										<div className="settings-row-actions">
+											<RestoreButton projectId={projectId} recipeId={row.id} />
+										</div>
+									)}
 								</li>
 							))}
 						</ul>
@@ -203,32 +231,54 @@ function RecipeSummary({ recipe }: { recipe: EnvironmentRecipe }) {
 	);
 }
 
+/**
+ * What the Edit box starts with: the saved setup, or a valid one from what
+ * the active build detected (its install, when there was one).
+ */
+export function editorStartingRecipe(
+	recipe: EnvironmentRecipe | undefined,
+	setup: RepositorySetup | null | undefined,
+) {
+	if (recipe) return recipe;
+	const install =
+		setup?.source === "detected" && setup.install ? setup.install : undefined;
+	return {
+		...(install ? { install } : {}),
+		checks: [],
+		services: [],
+		buildSecrets: [],
+	} satisfies Partial<EnvironmentRecipe>;
+}
+
 function RecipeEditor({
 	projectId,
 	repository,
 	recipe,
+	setup,
 	onDone,
 }: {
 	projectId: string;
 	repository: string;
 	recipe?: EnvironmentRecipe;
+	setup?: RepositorySetup | null;
 	onDone: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const saveFn = useServerFn(saveProjectEnvironmentFn);
 	const [text, setText] = useState(() =>
-		JSON.stringify(
-			recipe ?? { install: "", services: [], checks: [], buildSecrets: [] },
-			null,
-			2,
-		),
+		JSON.stringify(editorStartingRecipe(recipe, setup), null, 2),
 	);
 	const save = useMutation({
 		mutationFn: () => saveFn({ data: { projectId, repository, recipe: text } }),
 		onSuccess: async () => {
-			await queryClient.invalidateQueries({
-				queryKey: environmentQueryKey(projectId),
-			});
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: environmentQueryKey(projectId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: workspaceStatusQuery(projectId).queryKey,
+				}),
+			]);
 			onDone();
 		},
 	});
@@ -252,6 +302,136 @@ function RecipeEditor({
 					{save.isPending ? "Saving…" : "Save and rebuild"}
 				</button>
 			</div>
+		</div>
+	);
+}
+
+/** Saves an older setup again as the newest one; the project rebuilds from it. */
+function RestoreButton({
+	projectId,
+	recipeId,
+}: {
+	projectId: string;
+	recipeId: string;
+}) {
+	const queryClient = useQueryClient();
+	const restoreFn = useServerFn(restoreProjectEnvironmentFn);
+	const restore = useMutation({
+		mutationFn: () => restoreFn({ data: { projectId, recipeId } }),
+		onSuccess: () =>
+			Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: environmentQueryKey(projectId),
+				}),
+				queryClient.invalidateQueries({
+					queryKey: workspaceStatusQuery(projectId).queryKey,
+				}),
+			]),
+	});
+	return (
+		<button
+			type="button"
+			className="settings-secondary"
+			disabled={restore.isPending}
+			title={restore.error?.message}
+			onClick={() => restore.mutate()}
+		>
+			{restore.isPending ? "Restoring…" : "Restore"}
+		</button>
+	);
+}
+
+/**
+ * The environment's last build: when it finished, a rebuild running (with
+ * its live steps on request), or why the last one failed, with Retry.
+ */
+function LastBuild({ projectId }: { projectId: string }) {
+	const queryClient = useQueryClient();
+	const workspace = useQuery({
+		...workspaceStatusQuery(projectId),
+		refetchInterval: (query) =>
+			workspaceStatusIsLive(query.state.data) ? 3000 : false,
+	});
+	const [showSteps, setShowSteps] = useState(false);
+	const build = workspace.data?.build ?? null;
+	const progress = useEnvironmentProgress(projectId, {
+		enabled: showSteps && build?.status === "running",
+	});
+	const retry = useMutation({
+		mutationFn: () => {
+			const current = workspace.data;
+			if (!current) throw new Error("The project is still loading.");
+			return retryWorkspace({
+				workspaceId: current.id,
+				mode: current.status === "ready" ? "rebuild" : "retry",
+			});
+		},
+		onSuccess: () =>
+			queryClient.invalidateQueries({
+				queryKey: workspaceStatusQuery(projectId).queryKey,
+			}),
+	});
+	if (!workspace.data || !build) return null;
+	const age = (at: string | null) => (at ? savedAgo(at) : "");
+	return (
+		<div className="settings-group">
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<span className="settings-row-title">
+						{build.status === "running" ? (
+							<>
+								<LoaderCircle size={12} className="workspace-status-spin" />{" "}
+								{build.rebuild ? "Rebuilding…" : "Setting up…"}
+							</>
+						) : build.status === "ready" ? (
+							"Environment ready"
+						) : build.rebuild ? (
+							"Last rebuild failed · still using the previous setup"
+						) : (
+							"Setup failed"
+						)}
+					</span>
+					<span className="settings-row-meta">
+						{build.status === "running"
+							? `Started ${age(build.startedAt)}`
+							: `${build.status === "ready" ? "Built" : "Failed"} ${age(build.completedAt)}`}
+					</span>
+				</div>
+				<div className="settings-row-actions">
+					{build.status === "running" ? (
+						<button
+							type="button"
+							className="settings-secondary"
+							onClick={() => setShowSteps((open) => !open)}
+						>
+							{showSteps ? "Hide" : "Details"}
+						</button>
+					) : build.status === "failed" ? (
+						<button
+							type="button"
+							className="settings-secondary"
+							disabled={retry.isPending}
+							onClick={() => retry.mutate()}
+						>
+							{retry.isPending ? "Retrying…" : "Retry"}
+						</button>
+					) : null}
+				</div>
+			</div>
+			{build.status === "running" && showSteps ? (
+				<div className="settings-group-body">
+					<EnvironmentBuildSteps steps={progress.data?.steps ?? []} />
+				</div>
+			) : null}
+			{build.status === "failed" ? (
+				<div className="settings-group-body">
+					<EnvironmentBuildFailureDetail
+						failure={build.failure}
+						message={build.errorMessage}
+					/>
+				</div>
+			) : null}
+			{retry.error ? <p role="alert">{retry.error.message}</p> : null}
 		</div>
 	);
 }

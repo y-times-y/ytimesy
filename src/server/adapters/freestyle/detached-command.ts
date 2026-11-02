@@ -2,11 +2,17 @@ import {
 	posixShellCommand,
 	posixShellQuoted as quote,
 } from "#/domain/posix-command";
+import { commandOutputListener } from "../command-output";
 import { ResumeLater } from "../resumable-commands";
 import type { RuntimeCommandResult } from "../workspace-runtime";
 
 const OUTPUT_LIMIT = 1024 * 1024;
 const POLL_MS = 5_000;
+/** While someone watches the output (a live setup view), it is read this often. */
+const WATCHED_POLL_MS = 2_000;
+/** Bytes of output a watched poll reads back. */
+const WATCHED_TAIL_BYTES = 4_096;
+const TAIL_MARKER = "\n--ytimesy-output--\n";
 /** Directory removed before a build VM is snapshotted (see activateEnvironmentBuild). */
 export const DETACHED_COMMAND_ROOT = "/tmp/ytimesy-detached";
 
@@ -48,11 +54,27 @@ export async function runDetachedCommand(
 	const startedAt = Number(started.stdout.trim()) * 1000;
 	if (started.exitCode !== 0 || !Number.isFinite(startedAt) || !startedAt)
 		throw new Error("Detached command could not be started.");
+	const listener = commandOutputListener();
+	let reported = "";
 	for (;;) {
+		// A watched command's status read also returns its output's tail.
 		const status = await exec(
-			`cat ${quote(`${directory}/status`)} 2>/dev/null || true`,
+			listener
+				? `cat ${quote(`${directory}/status`)} 2>/dev/null || true; printf %s ${quote(TAIL_MARKER)}; tail -c ${WATCHED_TAIL_BYTES} ${quote(`${directory}/out`)} 2>/dev/null || true`
+				: `cat ${quote(`${directory}/status`)} 2>/dev/null || true`,
 		);
-		const code = status.stdout.trim();
+		const marker = status.stdout.indexOf(TAIL_MARKER);
+		const code = (
+			marker >= 0 ? status.stdout.slice(0, marker) : status.stdout
+		).trim();
+		if (listener && marker >= 0) {
+			const tail = status.stdout.slice(marker + TAIL_MARKER.length);
+			if (tail !== reported) {
+				reported = tail;
+				// The live view is best effort: it never fails the command.
+				await Promise.resolve(listener(tail)).catch(() => undefined);
+			}
+		}
 		const timedOut = Date.now() > startedAt + timeoutMs + 60_000;
 		if (code || timedOut) {
 			const output = await exec(
@@ -64,7 +86,8 @@ export async function runDetachedCommand(
 				stderr: "",
 			};
 		}
-		if (Date.now() + POLL_MS > deadline) throw new ResumeLater();
-		await sleep(POLL_MS);
+		const poll = listener ? WATCHED_POLL_MS : POLL_MS;
+		if (Date.now() + poll > deadline) throw new ResumeLater();
+		await sleep(poll);
 	}
 }

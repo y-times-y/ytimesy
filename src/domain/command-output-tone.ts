@@ -127,7 +127,7 @@ const ANSI_COLOUR = new RegExp(
 );
 const ANSI_SGR = new RegExp(`${ESC}\\[([\\d;]*)m`, "g");
 
-const stripAnsi = (text: string) => text.replace(ANSI_ESCAPE, "");
+export const stripAnsi = (text: string) => text.replace(ANSI_ESCAPE, "");
 
 /** What a terminal shows of a line redrawn with \r: the last redraw. */
 function lastRedraw(line: string) {

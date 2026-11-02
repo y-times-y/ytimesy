@@ -11,3 +11,12 @@ const normalized = (text: string) => text.replace(/\s+/g, " ").trim();
 export function isEnvironmentSetupPrompt(text: string): boolean {
 	return normalized(text) === normalized(ENVIRONMENT_SETUP_PROMPT);
 }
+
+/**
+ * "Set up with the agent" on a message held by a failed setup: the setup
+ * chat's request, keeping the message the person sent (not dropped) for a
+ * later chat, since a setup chat never commits.
+ */
+export function setupRequestKeeping(message: string) {
+	return `${ENVIRONMENT_SETUP_PROMPT}\n\nThe setup failed before this message could be sent. Keep it for after setup, in a new chat (not here):\n${message.trim()}`;
+}

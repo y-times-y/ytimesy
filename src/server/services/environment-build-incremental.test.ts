@@ -1,14 +1,19 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { environmentRecipe } from "#/domain/project-environment";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import {
 	type EnvironmentBuildInput,
+	environmentInputHash,
+	incrementalBase,
 	prepareEnvironmentRepositories,
 } from "./environment-build";
 
 const broker = vi.hoisted(() => ({
 	receive: vi.fn(async (): Promise<string> => "updated"),
 }));
-const install = vi.hoisted(() => vi.fn(async () => {}));
+const install = vi.hoisted(() =>
+	vi.fn(async (_input: { command: string }) => {}),
+);
 const checkout = vi.hoisted(() => vi.fn(async () => "/home/ubuntu/web"));
 
 vi.mock("../adapters/database", () => ({
@@ -22,7 +27,8 @@ vi.mock("../adapters/workspaces", () => ({
 vi.mock("../adapters/github/git-broker", () => ({
 	receiveBrokeredRepository: broker.receive,
 }));
-vi.mock("./environment-repair", () => ({
+vi.mock("./environment-repair", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./environment-repair")>()),
 	installWithEnvironmentRepair: install,
 }));
 vi.mock("./prepare-project-checkout", () => ({
@@ -138,4 +144,58 @@ it("does a normal full preparation without a template", async () => {
 	);
 	expect(broker.receive).not.toHaveBeenCalled();
 	expect(install).toHaveBeenCalledOnce();
+});
+
+it("reinstalls when the saved setup changed though no commit moved", async () => {
+	const vm = runtime([]);
+	const savedRecipe = environmentRecipe.parse({ install: "pnpm install" });
+	await prepareEnvironmentRepositories(
+		{
+			...input,
+			repositories: [{ ...input.repositories[0], savedRecipe }],
+			incremental: {
+				snapshotId: "template",
+				commits: { "1": from },
+				recipes: { "1": "" },
+			},
+		},
+		"vm",
+		vm.runtime,
+	);
+	// The checkout was reused (no reclone); only the setup changed.
+	expect(vm.commands.some((command) => command.startsWith("rm -rf"))).toBe(
+		false,
+	);
+	expect(install).toHaveBeenCalledOnce();
+	expect(install.mock.calls[0]?.[0]).toMatchObject({
+		command: expect.stringContaining("pnpm install"),
+	});
+});
+
+it("reuses dependencies when the saved setup is the template's", async () => {
+	const vm = runtime(["src/app.ts"]);
+	const savedRecipe = environmentRecipe.parse({ install: "pnpm install" });
+	const sources = [{ ...input.repositories[0], commit: from, savedRecipe }];
+	const current = [{ ...input.repositories[0], savedRecipe }];
+	const incremental = incrementalBase(
+		{
+			input_hash: environmentInputHash(sources, "tools", input.secretRevision),
+			sources,
+		},
+		current,
+		"tools",
+		input.secretRevision,
+		"template",
+	);
+	expect(incremental?.recipes?.["1"]).toContain("pnpm install");
+	await prepareEnvironmentRepositories(
+		{
+			...input,
+			repositories: [{ ...input.repositories[0], savedRecipe }],
+			incremental,
+		},
+		"vm",
+		vm.runtime,
+	);
+	expect(install).not.toHaveBeenCalled();
 });

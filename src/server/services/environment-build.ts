@@ -4,6 +4,18 @@ import {
 	ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
 } from "#/domain/environment-build-limits";
 import {
+	buildOutputTail,
+	EnvironmentCommandFailure,
+	environmentFailureSummary,
+} from "#/domain/environment-build-progress";
+import {
+	type DetectedEnvironment,
+	detectEnvironment,
+	type EnvironmentSetupSource,
+	environmentSetupNotice,
+	type RepositorySetup,
+} from "#/domain/environment-detection";
+import {
 	type EnvironmentModel,
 	environmentModel,
 } from "#/domain/environment-model";
@@ -22,7 +34,14 @@ import {
 import { sessionCloneBranch } from "#/domain/session-branch";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { captureServerAnalytics } from "../adapters/analytics";
+import { withCommandOutput } from "../adapters/command-output";
 import { database } from "../adapters/database";
+import {
+	databaseBuildSteps,
+	type EnvironmentBuildSteps,
+	failRunningBuildSteps,
+	noBuildSteps,
+} from "../adapters/environment-build-steps";
 import { latestEnvironmentRecipes } from "../adapters/environment-recipes";
 import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
@@ -30,7 +49,8 @@ import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
 import { receiveBrokeredRepository } from "../adapters/github/git-broker";
 import { loadProjectSecretsForOwner } from "../adapters/project-secrets";
 import { projectForOwner } from "../adapters/projects";
-import { guestNodePath, installArgv } from "../adapters/repository-setup";
+import { guestNodePath } from "../adapters/repository-setup";
+import { ResumeLater } from "../adapters/resumable-commands";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import {
 	recordWorkspaceEvent,
@@ -40,7 +60,15 @@ import {
 import { githubAccessToken } from "../auth/github-connection";
 import { readToolsSnapshotId } from "../records/tools-snapshot-store";
 import { diagnoseEnvironmentFailure } from "./environment-diagnosis";
-import { installWithEnvironmentRepair } from "./environment-repair";
+import {
+	EnvironmentInstallFailed,
+	installWithEnvironmentRepair,
+} from "./environment-repair";
+import {
+	type EnvironmentServiceResult,
+	startRecipeServices,
+	stopRecipeServices,
+} from "./environment-services";
 import { prepareProjectCheckout } from "./prepare-project-checkout";
 import { loadProjectSecretEnvironment } from "./project-secrets";
 import { removeCodexCredentialsFromProjectTemplate } from "./project-template-credentials";
@@ -54,7 +82,11 @@ export type PreparedRepository = ProjectRepository & {
 	commit: string;
 	directory: string;
 	recipe: EnvironmentRecipe;
+	/** Where the recipe came from; left out by builds recorded before it existed. */
+	setup?: RepositorySetup;
 	checkResults?: { command: string; exitCode: number }[];
+	/** Saved services started once during the build, then stopped. */
+	serviceResults?: EnvironmentServiceResult[];
 };
 
 export type EnvironmentBuildInput = {
@@ -70,6 +102,8 @@ export type EnvironmentBuildInput = {
 		/** The setup saved in Settings > Project > Environment; it wins over the repo's file. */
 		savedRecipe?: EnvironmentRecipe;
 	})[];
+	/** "Send anyway": clone only, no install or checks. */
+	plain?: boolean;
 	/**
 	 * Rebuild on top of the active template instead of from the base image: only
 	 * the repositories' commits changed since it was built. Maps repositoryId to
@@ -78,6 +112,13 @@ export type EnvironmentBuildInput = {
 	incremental?: {
 		readonly snapshotId: string;
 		readonly commits: Readonly<Record<string, string>>;
+		/**
+		 * The template's saved setup per repositoryId (canonical JSON, "" for
+		 * none): a different one now reinstalls even without new commits.
+		 */
+		readonly recipes?: Readonly<Record<string, string>>;
+		/** Repositories whose detected install failed in the template: tried again. */
+		readonly retryInstall?: readonly string[];
 	} | null;
 };
 
@@ -136,16 +177,22 @@ export async function resolveEnvironmentBuildInput(
 		workspace.userId,
 		project.id,
 	);
+	const plain = await plainSetupRequested(workspaceId);
 	const inputHash = environmentInputHash(
 		repositories,
 		baseSnapshotId,
 		secretRevision,
+		plain,
 	);
 	const previous = await database().query<{
 		input_hash: string;
-		sources: (ProjectRepository & { commit: string })[];
+		sources: (ProjectRepository & {
+			commit: string;
+			savedRecipe?: EnvironmentRecipe;
+		})[];
+		setup?: RepositorySetup[] | null;
 	}>(
-		"select input_hash, sources from environment_build where workspace_id=$1 and status='ready' order by completed_at desc limit 1",
+		"select input_hash, sources, setup from environment_build where workspace_id=$1 and status='ready' order by completed_at desc limit 1",
 		[workspaceId],
 	);
 	const prior = previous.rows[0];
@@ -158,6 +205,10 @@ export async function resolveEnvironmentBuildInput(
 				(await runtime.snapshotExists?.(workspace.templateSnapshotId)),
 		);
 	if (templateUsable && prior?.input_hash === inputHash) return null;
+	// The same inputs already failed to rebuild: the hourly refresh does not
+	// retry them every hour (Retry in Settings forces one).
+	if (templateUsable && (await lastBuildFailedFor(workspaceId, inputHash)))
+		return null;
 	const incremental =
 		templateUsable && prior && workspace.templateSnapshotId
 			? incrementalBase(
@@ -170,6 +221,7 @@ export async function resolveEnvironmentBuildInput(
 			: null;
 	return {
 		incremental,
+		...(plain ? { plain: true } : {}),
 		repairModel: repairModel ? environmentModel.parse(repairModel) : null,
 		workspaceId,
 		userId: workspace.userId,
@@ -179,6 +231,26 @@ export async function resolveEnvironmentBuildInput(
 		baseSnapshotId,
 		repositories,
 	};
+}
+
+async function plainSetupRequested(workspaceId: string) {
+	const result = await database().query<{ plain_setup_requested?: boolean }>(
+		"select plain_setup_requested from workspace where id=$1",
+		[workspaceId],
+	);
+	return result.rows[0]?.plain_setup_requested === true;
+}
+
+async function lastBuildFailedFor(workspaceId: string, inputHash: string) {
+	const result = await database().query<{
+		status?: string;
+		input_hash?: string;
+	}>(
+		"select status, input_hash from environment_build where workspace_id=$1 order by created_at desc limit 1",
+		[workspaceId],
+	);
+	const last = result.rows[0];
+	return last?.status === "failed" && last.input_hash === inputHash;
 }
 
 function withoutUnverified(recipe: EnvironmentRecipe | undefined) {
@@ -191,6 +263,7 @@ export function environmentInputHash(
 	repositories: readonly (ProjectRepository & { commit: string })[],
 	baseSnapshotId: string | null,
 	secretRevision: string,
+	plain = false,
 ) {
 	return createHash("sha256")
 		.update(
@@ -199,6 +272,8 @@ export function environmentInputHash(
 				repositories,
 				baseSnapshotId,
 				secretRevision,
+				// Only when set, so earlier builds keep their hash.
+				plain: plain || undefined,
 			}),
 		)
 		.digest("hex");
@@ -228,7 +303,11 @@ function canonicalJson(value: unknown): string {
 export function incrementalBase(
 	prior: {
 		readonly input_hash: string;
-		readonly sources: readonly (ProjectRepository & { commit: string })[];
+		readonly sources: readonly (ProjectRepository & {
+			commit: string;
+			savedRecipe?: EnvironmentRecipe;
+		})[];
+		readonly setup?: readonly RepositorySetup[] | null;
 	},
 	repositories: readonly (ProjectRepository & { commit: string })[],
 	baseSnapshotId: string | null,
@@ -256,7 +335,21 @@ export function incrementalBase(
 				before.get(key(repo))?.commit ?? "",
 			]),
 		),
+		recipes: Object.fromEntries(
+			repositories.map((repo) => [
+				String(repo.repositoryId),
+				recipeIdentity(before.get(key(repo))?.savedRecipe),
+			]),
+		),
+		retryInstall: (prior.setup ?? [])
+			.filter((setup) => setup.installFailure)
+			.map((setup) => String(setup.repositoryId)),
 	};
+}
+
+/** A saved setup's identity for "did it change since the template". */
+function recipeIdentity(recipe: EnvironmentRecipe | undefined) {
+	return recipe ? canonicalJson(recipe) : "";
 }
 
 async function projectSecretRevision(userId: string, projectId: string) {
@@ -325,11 +418,19 @@ export async function provisionEnvironmentBuild(
 		recordWorkspaceEvent(input.userId, input.workspaceId, message);
 	if (!hasActive) await saveWorkspaceStatus(input.workspaceId, "provisioning");
 	await event("Preparing project environment.");
+	const steps = databaseBuildSteps(id);
+	await steps.start("machine", "Starting machine");
 	const from = input.incremental?.snapshotId ?? input.baseSnapshotId;
-	const providerRef = await runtime.provision(`ytimesy-build-${id}`, {
-		...(from ? { snapshotId: from } : {}),
-		maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
-	});
+	const providerRef = await runtime
+		.provision(`ytimesy-build-${id}`, {
+			...(from ? { snapshotId: from } : {}),
+			maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
+		})
+		.catch(async (cause: unknown) => {
+			await steps.finish("machine", "failed");
+			throw cause;
+		});
+	await steps.finish("machine", "done");
 	await database().query(
 		"update environment_build set provider_ref=$2 where id=$1",
 		[id, providerRef],
@@ -341,6 +442,7 @@ export async function prepareEnvironmentRepositories(
 	input: EnvironmentBuildInput,
 	vm: string,
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
+	steps: EnvironmentBuildSteps = noBuildSteps,
 ): Promise<PreparedRepository[]> {
 	const event = (message: string) =>
 		recordWorkspaceEvent(input.userId, input.workspaceId, message);
@@ -355,137 +457,274 @@ export async function prepareEnvironmentRepositories(
 		15_000,
 	);
 	const home = homeResult.stdout.trim() || "/home/ubuntu";
-	const prepared = [];
+	const prepared: PreparedRepository[] = [];
 	for (const repo of input.repositories) {
+		const id = String(repo.repositoryId);
 		await updateInitialBuildStatus(input.workspaceId, "cloning");
 		await event(`Preparing ${repo.fullName}.`);
+		const cloneStep = `clone:${id}`;
+		await steps.start(cloneStep, `Cloning ${repo.fullName}`);
 		const [owner, name] = repo.fullName.split("/");
-		const previousCommit =
-			input.incremental?.commits[String(repo.repositoryId)] ?? null;
-		const reused = previousCommit
-			? await fastForwardTemplateCheckout(host, {
-					userId: input.userId,
-					projectId: input.projectId,
-					owner,
-					name,
-					branch: repo.branch,
-					installationId: repo.installationId,
-					directory: projectCheckoutPath(home, name),
-					from: previousCommit,
-					to: repo.commit,
-				})
-			: null;
-		if (previousCommit && !reused)
-			await event(
-				`${repo.fullName} could not be fast-forwarded; preparing it from a fresh clone.`,
-			);
-		const directory = await prepareProjectCheckout({
-			userId: input.userId,
-			projectId: input.projectId,
-			host,
-			owner,
-			name,
-			branch: repo.branch,
-			workingBranch: repo.branch,
-			installationId: repo.installationId,
-			home,
-			install: false,
-			commit: repo.commit,
-		});
-		// As Cursor does: the setup saved in ytimesy wins; without one, the
-		// repository's own .ytimesy/environment.json is used as it is.
-		let fileText = "";
-		if (!repo.savedRecipe) {
-			const recipeResult = await host.exec(
-				`if [ -f ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)} ]; then cat ${quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`)}; fi`,
-				15_000,
-			);
-			if (recipeResult.exitCode !== 0)
-				throw new Error("Could not read environment configuration.");
-			fileText = recipeResult.stdout.trim();
+		const previousCommit = input.incremental?.commits[id] ?? null;
+		let reused: { changedFiles: string[] | null } | null = null;
+		let directory: string;
+		try {
+			reused = previousCommit
+				? await fastForwardTemplateCheckout(host, {
+						userId: input.userId,
+						projectId: input.projectId,
+						owner,
+						name,
+						branch: repo.branch,
+						installationId: repo.installationId,
+						directory: projectCheckoutPath(home, name),
+						from: previousCommit,
+						to: repo.commit,
+					})
+				: null;
+			if (previousCommit && !reused)
+				await event(
+					`${repo.fullName} could not be fast-forwarded; preparing it from a fresh clone.`,
+				);
+			directory = await prepareProjectCheckout({
+				userId: input.userId,
+				projectId: input.projectId,
+				host,
+				owner,
+				name,
+				branch: repo.branch,
+				workingBranch: repo.branch,
+				installationId: repo.installationId,
+				home,
+				install: false,
+				commit: repo.commit,
+			});
+		} catch (cause) {
+			if (!(cause instanceof ResumeLater))
+				await steps.finish(cloneStep, "failed");
+			throw cause;
 		}
-		let recipe =
-			repo.savedRecipe ??
-			(fileText
-				? parseEnvironmentRecipe(fileText)
-				: environmentRecipe.parse({}));
-		if (repo.savedRecipe)
-			await event(`${repo.fullName}: using the saved environment setup.`);
+		await steps.finish(
+			cloneStep,
+			"done",
+			reused ? { note: "Updated the existing checkout" } : {},
+		);
 		const listing = await host.exec(`ls -1 ${quote(directory)}`, 15_000);
-		const files = listing.stdout.split("\n");
-		if (!repo.savedRecipe && !fileText && files.includes("package.json")) {
-			const manifest = await host.exec(
-				`cat ${quote(`${directory}/package.json`)}`,
-				15_000,
-			);
-			const scripts = JSON.parse(manifest.stdout).scripts || {};
-			const manager = files.includes("pnpm-lock.yaml")
-				? "corepack pnpm"
-				: files.includes("yarn.lock")
-					? "corepack yarn"
-					: "npm";
-			const checks = ["typecheck", "build", "test"]
-				.filter((name) => typeof scripts[name] === "string")
-				.map((name) => `${manager} run ${name}`);
-			recipe = environmentRecipe.parse({ checks });
+		const files = listing.stdout.split("\n").map((line) => line.trim());
+		const chosen = await chooseRepositorySetup(input, repo, directory, files, {
+			exec: host.exec,
+			event,
+		});
+		const { recipe, source, detected } = chosen;
+		const setup: RepositorySetup = {
+			repositoryId: repo.repositoryId,
+			fullName: repo.fullName,
+			source,
+			...(detected ? { detected: detected.label } : {}),
+			...(chosen.install ? { install: chosen.install } : {}),
+		};
+		const installStep = `install:${id}`;
+		if (!chosen.install) {
+			await steps.start(installStep, "Installing dependencies");
+			await steps.finish(installStep, "skipped", {
+				note:
+					source === "plain"
+						? "Setup skipped"
+						: source === "none"
+							? "Nothing to install was detected"
+							: "No install command",
+			});
+			prepared.push({ ...repo, directory, recipe, setup });
+			continue;
 		}
-		if (!recipe.install && !files.includes("package.json"))
-			throw new Error(
-				`Add ${ENVIRONMENT_RECIPE_PATH} with install and verification commands for ${repo.fullName}.`,
-			);
+		const recipeChanged =
+			(input.incremental?.recipes?.[id] ?? "") !==
+			recipeIdentity(repo.savedRecipe);
+		const retryInstall = input.incremental?.retryInstall?.includes(id);
 		if (
 			reused &&
-			!dependencyInputsChanged(reused.changedFiles, recipe.install ?? "")
+			!recipeChanged &&
+			!retryInstall &&
+			!dependencyInputsChanged(reused.changedFiles, chosen.install)
 		) {
 			await event(
 				`${repo.fullName}: dependencies unchanged since the last environment; reusing them.`,
 			);
-			prepared.push({ ...repo, directory, recipe });
+			await steps.start(installStep, "Installing dependencies", chosen.install);
+			await steps.finish(installStep, "skipped", {
+				note: "Dependencies unchanged",
+			});
+			prepared.push({ ...repo, directory, recipe, setup });
 			continue;
 		}
 		await event(`Installing ${repo.fullName}.`);
 		await updateInitialBuildStatus(input.workspaceId, "installing");
-		const install = recipe.install
-			? `cd ${quote(directory)} && ${guestNodePath()} && ${recipe.install}`
-			: installArgv(directory, files)[2];
 		await assertBuildSecretsCurrent(input);
 		const secrets = await loadProjectSecretEnvironment(
 			input.userId,
 			input.projectId,
 			recipe.buildSecrets,
 		);
+		const secretValues = Object.values(secrets);
+		await steps.start(installStep, "Installing dependencies", chosen.install);
 		try {
-			await installWithEnvironmentRepair({
-				runtime,
-				vm,
-				command: install,
-				env: { ...secrets, CI: "true" },
-				timeoutMs: recipe.timeoutSeconds * 1000,
-				diagnose: (failure) =>
-					diagnoseEnvironmentFailure({
-						userId: input.userId,
-						workspaceId: input.workspaceId,
-						model: input.repairModel ?? null,
+			await withCommandOutput(
+				(tail) =>
+					steps.output(installStep, buildOutputTail(tail, secretValues)),
+				() =>
+					installWithEnvironmentRepair({
+						runtime,
 						vm,
-						directory,
-						failure,
-						secrets,
+						command: `cd ${quote(directory)} && ${guestNodePath()} && ${chosen.install}`,
+						env: { ...secrets, CI: "true" },
+						timeoutMs: recipe.timeoutSeconds * 1000,
+						diagnose: (failure) =>
+							diagnoseEnvironmentFailure({
+								userId: input.userId,
+								workspaceId: input.workspaceId,
+								model: input.repairModel ?? null,
+								vm,
+								directory,
+								failure,
+								secrets,
+							}),
+						onRepair: (attempt) =>
+							event(
+								`Diagnosing dependency setup for ${repo.fullName} (repair ${attempt}/2).`,
+							),
 					}),
-				onRepair: (attempt) =>
-					event(
-						`Diagnosing dependency setup for ${repo.fullName} (repair ${attempt}/2).`,
-					),
-			});
+			);
+			await steps.finish(installStep, "done");
 		} catch (cause) {
+			if (cause instanceof ResumeLater) throw cause;
+			const result =
+				cause instanceof EnvironmentInstallFailed ? cause.result : null;
+			const failure = {
+				step: "Installing dependencies",
+				command: chosen.install,
+				exitCode: result?.exitCode ?? 1,
+				output: result
+					? buildOutputTail(`${result.stdout}\n${result.stderr}`, secretValues)
+					: "",
+			};
+			await steps.finish(installStep, "failed", {
+				exitCode: failure.exitCode,
+				output: failure.output,
+			});
+			// A detected install is only a default: the project still gets a
+			// machine with its checkout, and the agent is told it failed.
+			if (source === "detected" && result) {
+				await event(
+					`${repo.fullName}: the detected install failed (exit ${failure.exitCode}); continuing without it.`,
+				);
+				prepared.push({
+					...repo,
+					directory,
+					recipe,
+					setup: { ...setup, installFailure: failure },
+				});
+				continue;
+			}
 			await event(
 				`Dependency setup for ${repo.fullName} could not be completed automatically. Select a model and authorize repair, or check project secrets and the install command; no provider fallback was used.`,
 			);
-			throw cause;
+			throw result ? new EnvironmentCommandFailure(failure) : cause;
 		}
-		prepared.push({ ...repo, directory, recipe });
+		prepared.push({ ...repo, directory, recipe, setup });
 	}
 	assertDistinctEnvironmentServicePorts(prepared);
 	return prepared;
+}
+
+/**
+ * As Cursor does: the setup saved in ytimesy wins; without one, the
+ * repository's own .ytimesy/environment.json is used as it is; without that,
+ * a lockfile or manifest implies a default install. Nothing recognized is
+ * not an error: the machine has the checkout and the agent installs.
+ */
+async function chooseRepositorySetup(
+	input: Pick<EnvironmentBuildInput, "plain">,
+	repo: EnvironmentBuildInput["repositories"][number],
+	directory: string,
+	files: readonly string[],
+	host: {
+		exec: (
+			command: string,
+			timeoutMs: number,
+		) => Promise<{ exitCode: number; stdout: string }>;
+		event: (message: string) => Promise<void>;
+	},
+): Promise<{
+	recipe: EnvironmentRecipe;
+	source: EnvironmentSetupSource;
+	detected: DetectedEnvironment | null;
+	install: string | undefined;
+}> {
+	if (input.plain)
+		return {
+			recipe: environmentRecipe.parse({}),
+			source: "plain",
+			detected: null,
+			install: undefined,
+		};
+	// A saved or file setup without its own install keeps the lockfile install
+	// for Node, as before.
+	const nodeInstall = () =>
+		files.includes("package.json")
+			? detectEnvironment(files).install
+			: undefined;
+	if (repo.savedRecipe) {
+		await host.event(`${repo.fullName}: using the saved environment setup.`);
+		return {
+			recipe: repo.savedRecipe,
+			source: "saved",
+			detected: null,
+			install: repo.savedRecipe.install ?? nodeInstall(),
+		};
+	}
+	const path = quote(`${directory}/${ENVIRONMENT_RECIPE_PATH}`);
+	const recipeResult = await host.exec(
+		`if [ -f ${path} ]; then cat ${path}; fi`,
+		15_000,
+	);
+	if (recipeResult.exitCode !== 0)
+		throw new Error("Could not read environment configuration.");
+	const fileText = recipeResult.stdout.trim();
+	if (fileText) {
+		try {
+			const recipe = parseEnvironmentRecipe(fileText);
+			return {
+				recipe,
+				source: "file",
+				detected: null,
+				install: recipe.install ?? nodeInstall(),
+			};
+		} catch {
+			await host.event(
+				`${repo.fullName}: ${ENVIRONMENT_RECIPE_PATH} is not a valid setup; using the detected defaults.`,
+			);
+		}
+	}
+	let scripts: Record<string, unknown> = {};
+	if (files.includes("package.json")) {
+		const manifest = await host.exec(
+			`cat ${quote(`${directory}/package.json`)}`,
+			15_000,
+		);
+		try {
+			scripts = JSON.parse(manifest.stdout).scripts || {};
+		} catch {}
+	}
+	const detected = detectEnvironment(files, scripts);
+	return {
+		recipe: environmentRecipe.parse({
+			...(detected.install ? { install: detected.install } : {}),
+			checks: [...detected.checks],
+		}),
+		source: detected.label ? "detected" : "none",
+		detected,
+		install: detected.install,
+	};
 }
 
 export function assertDistinctEnvironmentServicePorts(
@@ -515,49 +754,81 @@ export async function verifyEnvironmentRepositories(
 	vm: string,
 	repositories: PreparedRepository[],
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
+	steps: EnvironmentBuildSteps = noBuildSteps,
 ) {
 	const verified: PreparedRepository[] = [];
+	const step = "checks";
+	const label = "Running checks";
+	let started = false;
+	let failedChecks = 0;
 	for (const repo of repositories) {
+		// A repository whose detected install failed has nothing to check yet.
+		if (input.plain || repo.setup?.installFailure) {
+			verified.push(repo);
+			continue;
+		}
+		const commands = [...repo.recipe.verify, ...repo.recipe.checks];
+		if (!commands.length && !repo.recipe.services.length) {
+			verified.push(repo);
+			continue;
+		}
 		await assertBuildSecretsCurrent(input);
 		const secrets = await loadProjectSecretEnvironment(
 			input.userId,
 			input.projectId,
 			repo.recipe.buildSecrets,
 		);
+		const secretValues = Object.values(secrets);
 		await recordWorkspaceEvent(
 			input.userId,
 			input.workspaceId,
 			`Verifying ${repo.fullName}.`,
 		);
-		for (const command of repo.recipe.verify) {
-			const checked = await runtime.exec(
-				vm,
-				[
-					"bash",
-					"-lc",
-					`cd ${quote(repo.directory)} && ${guestNodePath()} && ${command}`,
-				],
-				{ ...secrets, CI: "true" },
-				repo.recipe.timeoutSeconds * 1000,
+		const run = async (command: string, timeoutMs: number) => {
+			await steps.start(step, label, command);
+			started = true;
+			return withCommandOutput(
+				(tail) => steps.output(step, buildOutputTail(tail, secretValues)),
+				() =>
+					runtime.exec(
+						vm,
+						[
+							"bash",
+							"-lc",
+							`cd ${quote(repo.directory)} && ${guestNodePath()} && ${command}`,
+						],
+						{ ...secrets, CI: "true" },
+						timeoutMs,
+					),
 			);
-			if (checked.exitCode !== 0)
-				throw new Error(
-					`Environment verification failed for ${repo.fullName}.`,
-				);
+		};
+		for (const command of repo.recipe.verify) {
+			const checked = await run(command, repo.recipe.timeoutSeconds * 1000);
+			if (checked.exitCode !== 0) {
+				const failure = {
+					step: label,
+					command,
+					exitCode: checked.exitCode,
+					output: buildOutputTail(
+						`${checked.stdout}\n${checked.stderr}`,
+						secretValues,
+					),
+				};
+				await steps.finish(step, "failed", {
+					exitCode: failure.exitCode,
+					output: failure.output,
+				});
+				throw new EnvironmentCommandFailure(failure);
+			}
 		}
 		const checkResults = [];
 		for (const command of repo.recipe.checks) {
-			const checked = await runtime.exec(
-				vm,
-				[
-					"bash",
-					"-lc",
-					`cd ${quote(repo.directory)} && ${guestNodePath()} && ${command}`,
-				],
-				{ ...secrets, CI: "true" },
+			const checked = await run(
+				command,
 				Math.min(repo.recipe.timeoutSeconds, 120) * 1000,
 			);
 			checkResults.push({ command, exitCode: checked.exitCode });
+			if (checked.exitCode !== 0) failedChecks += 1;
 			if (checked.exitCode !== 0)
 				await recordWorkspaceEvent(
 					input.userId,
@@ -565,7 +836,53 @@ export async function verifyEnvironmentRepositories(
 					`${repo.fullName}: a baseline code check failed (exit ${checked.exitCode}). This does not block preparation; the task agent will receive this result.`,
 				);
 		}
-		verified.push({ ...repo, checkResults });
+		let serviceResults: EnvironmentServiceResult[] | undefined;
+		if (repo.recipe.services.length) {
+			await steps.start(step, label, `Starting ${repo.fullName} services`);
+			started = true;
+			// Services are checked once and stopped: chats start their own.
+			const exec = async (command: string, timeoutMs: number) => {
+				const result = await runtime.exec(
+					vm,
+					["bash", "-c", command],
+					{ ...secrets, CI: "true" },
+					timeoutMs,
+				);
+				return {
+					...result,
+					stdout: buildOutputTail(result.stdout, secretValues, 20),
+				};
+			};
+			serviceResults = await startRecipeServices(exec, [repo]);
+			await stopRecipeServices(exec, [repo]).catch(() => undefined);
+			for (const service of serviceResults.filter((item) => !item.ready))
+				await recordWorkspaceEvent(
+					input.userId,
+					input.workspaceId,
+					`${repo.fullName}: service ${service.name} did not become ready on port ${service.port}. This does not block preparation.`,
+				);
+		}
+		verified.push({
+			...repo,
+			checkResults,
+			...(serviceResults ? { serviceResults } : {}),
+		});
+	}
+	if (started)
+		await steps.finish(
+			step,
+			"done",
+			failedChecks
+				? {
+						note: `${failedChecks} baseline ${failedChecks === 1 ? "check" : "checks"} failed; the agent is told`,
+					}
+				: {},
+		);
+	else {
+		await steps.start(step, label);
+		await steps.finish(step, "skipped", {
+			note: input.plain ? "Setup skipped" : "No checks saved",
+		});
 	}
 	return verified;
 }
@@ -579,6 +896,8 @@ export async function activateEnvironmentBuild(
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
 ) {
 	await assertBuildSecretsCurrent(input);
+	const steps = databaseBuildSteps(id);
+	await steps.start("ready", "Saving the environment");
 	// Chats start by switching the checkout to their own branch, which refuses
 	// over uncommitted changes. Setup often rewrites tracked files (generated
 	// code, lockfile drift); the template must start clean.
@@ -603,10 +922,17 @@ export async function activateEnvironmentBuild(
 				`${repo.fullName}: setup changed ${files.length} tracked ${files.length === 1 ? "file" : "files"} (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}); restored so chats start from a clean checkout.`,
 			).catch(() => undefined);
 	}
+	const setup = environmentSetupOf(input, prepared);
+	const notice = environmentSetupNotice(setup);
 	await runtime.writeTextFile(
 		vm,
 		"/tmp/ytimesy-environment.json",
-		JSON.stringify({ version: 1, repositories: prepared }),
+		// The notice comes first: the agent's first read of the report sees it.
+		JSON.stringify({
+			version: 1,
+			...(notice ? { notice } : {}),
+			repositories: prepared,
+		}),
 	);
 	await runtime.writeTextFile(
 		vm,
@@ -641,12 +967,23 @@ export async function activateEnvironmentBuild(
 	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`);
 	const result = await database().query(
 		`with activated as (
-      update workspace set provider_ref=$2,template_snapshot_id=$3,status='ready',error_message=null,updated_at=now() where id=$1 and exists (select 1 from environment_build where id=$4 and workspace_id=$1 and status='running' and created_at > now() - ($5 * interval '1 second')) returning id
-    ) update environment_build set status='ready',snapshot_id=$3,completed_at=now() where id=$4 and workspace_id in (select id from activated) returning id`,
-		[input.workspaceId, vm, snapshotId, id, ENVIRONMENT_BUILD_RECOVERY_SECONDS],
+      update workspace set provider_ref=$2,template_snapshot_id=$3,status='ready',error_message=null,
+        plain_setup_requested=(plain_setup_requested and not $7::boolean),updated_at=now()
+      where id=$1 and exists (select 1 from environment_build where id=$4 and workspace_id=$1 and status='running' and created_at > now() - ($5 * interval '1 second')) returning id
+    ) update environment_build set status='ready',snapshot_id=$3,completed_at=now(),setup=$6::jsonb where id=$4 and workspace_id in (select id from activated) returning id`,
+		[
+			input.workspaceId,
+			vm,
+			snapshotId,
+			id,
+			ENVIRONMENT_BUILD_RECOVERY_SECONDS,
+			JSON.stringify(setup),
+			Boolean(input.plain),
+		],
 	);
 	if (!result.rows.length)
 		throw new Error("Environment build is no longer active.");
+	await steps.finish("ready", "done");
 	void captureServerAnalytics(
 		input.userId,
 		"environment_finished",
@@ -667,10 +1004,31 @@ export async function activateEnvironmentBuild(
 	return snapshotId;
 }
 
+/** Each repository's setup as recorded; builds recorded before it say "file". */
+function environmentSetupOf(
+	input: Pick<EnvironmentBuildInput, "plain">,
+	prepared: readonly PreparedRepository[],
+): RepositorySetup[] {
+	return prepared.map(
+		(repo) =>
+			repo.setup ?? {
+				repositoryId: repo.repositoryId,
+				fullName: repo.fullName,
+				source: input.plain ? "plain" : "file",
+			},
+	);
+}
+
+/**
+ * Ends a build that did not activate. A failed setup command is recorded as
+ * it happened (command, exit code, output tail); anything else gets the
+ * generic message, since provider and SQL errors are not for the person.
+ */
 export async function finishEnvironmentBuild(
 	input: Pick<EnvironmentBuildInput, "workspaceId" | "userId">,
 	id: string,
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
+	cause?: unknown,
 ) {
 	const result = await database().query(
 		"select provider_ref,status from environment_build where id=$1 and workspace_id=$2",
@@ -685,12 +1043,16 @@ export async function finishEnvironmentBuild(
 	// must not turn a running build into a terminal row that recovery would skip.
 	if (providerRef) await runtime.pause?.(providerRef);
 	if (build?.status === "running") {
-		const message =
-			"Environment build did not complete. Check the repository setup commands and retry.";
+		const failure =
+			cause instanceof EnvironmentCommandFailure ? cause.failure : null;
+		const message = failure
+			? environmentFailureSummary(failure)
+			: "Environment build did not complete. Check the repository setup commands and retry.";
 		const failed = await database().query(
-			"update environment_build set status='failed',error_message=$2,completed_at=now() where id=$1 and status='running' returning id",
-			[id, message],
+			"update environment_build set status='failed',error_message=$2,failure=$3::jsonb,completed_at=now() where id=$1 and status='running' returning id",
+			[id, message, failure ? JSON.stringify(failure) : null],
 		);
+		await failRunningBuildSteps(id);
 		if (failed.rows.length)
 			void captureServerAnalytics(
 				input.userId,

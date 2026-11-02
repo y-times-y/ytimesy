@@ -61,8 +61,16 @@ beforeAll(async () => {
 		"20261013101000_environment_build_release.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
-	await db.exec(`alter table workspace add column template_snapshot_id text, add column template_source_ref text, add column template_source_sha text;
-		insert into auth_user(id,name,email,"emailVerified") values ('alice','Alice','alice@test.invalid',true);
+	await db.exec(
+		`alter table workspace add column template_snapshot_id text, add column template_source_ref text, add column template_source_sha text;`,
+	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20261101150000_environment_build_progress.sql",
+			"utf8",
+		),
+	);
+	await db.exec(`insert into auth_user(id,name,email,"emailVerified") values ('alice','Alice','alice@test.invalid',true);
 		insert into project(id,user_id,repository_id,installation_id,full_name,branch) values('11111111-1111-4111-8111-111111111111','alice',1,1,'org/web','main');
 		create table agent_session(id uuid primary key, provider_ref text);
 		insert into workspace(id,user_id,project_id,status,template_snapshot_id,provider_ref) values('${input.workspaceId}','alice','11111111-1111-4111-8111-111111111111','ready','previous-snapshot','previous-machine');`);
@@ -115,7 +123,7 @@ it("preserves the last working snapshot when verification fails and pauses only 
 	const vm = await provisionEnvironmentBuild(input, id, runtime);
 	await expect(
 		verifyEnvironmentRepositories(input, vm, repositories, runtime),
-	).rejects.toThrow("verification failed");
+	).rejects.toThrow("npm test failed (exit 1)");
 	await finishEnvironmentBuild(input, id, runtime);
 	const workspace = await db.query<{
 		template_snapshot_id: string;
@@ -360,7 +368,12 @@ it("fast-forwards the template only when nothing but commits moved", () => {
 			input.secretRevision,
 			"template",
 		),
-	).toEqual({ snapshotId: "template", commits: { "1": "b".repeat(40) } });
+	).toEqual({
+		snapshotId: "template",
+		commits: { "1": "b".repeat(40) },
+		recipes: { "1": "" },
+		retryInstall: [],
+	});
 	// A new base image, new secrets or another branch need a full build.
 	for (const [base, secrets, repos] of [
 		["new-tools", input.secretRevision, input.repositories],

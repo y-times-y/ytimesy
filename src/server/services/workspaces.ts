@@ -5,6 +5,11 @@ import {
 	canStartPrepare,
 	type ProjectWorkspace,
 } from "../../domain/project-workspace";
+import { database } from "../adapters/database";
+import {
+	activeEnvironmentSetup,
+	latestEnvironmentBuild,
+} from "../adapters/environment-build-steps";
 import { projectForOwner } from "../adapters/projects";
 import {
 	insertQueuedWorkspace,
@@ -25,6 +30,82 @@ export function workspaceView(workspace: ProjectWorkspace) {
 		errorMessage: workspace.errorMessage,
 		updatedAt: workspace.updatedAt,
 	};
+}
+
+/**
+ * The status the project's chat and Settings show: the workspace, its newest
+ * build (a rebuild runs while the workspace stays ready) and what each
+ * repository's active setup is.
+ */
+export async function workspaceStatusView(workspace: ProjectWorkspace) {
+	const [build, setup] = await Promise.all([
+		latestEnvironmentBuild(workspace.id),
+		activeEnvironmentSetup(workspace.id),
+	]);
+	return { ...workspaceView(workspace), build, setup };
+}
+
+/**
+ * "Send anyway" after a failed first build: the next build clones only, so
+ * chats run on the plain checkout and the agent installs what it needs.
+ */
+export function prepareWithoutSetup(
+	userId: string,
+	workspaceId: string,
+	queue: WorkspaceJobQueue = postgresJobQueue,
+) {
+	return Effect.gen(function* () {
+		const workspace = yield* Effect.tryPromise(async () => {
+			const owned = await workspaceForOwner(userId, workspaceId);
+			if (!owned)
+				throw new Response("Workspace is not available.", { status: 404 });
+			return owned;
+		});
+		yield* Effect.tryPromise(() =>
+			database().query(
+				"update workspace set plain_setup_requested=true where id=$1 and user_id=$2",
+				[workspace.id, userId],
+			),
+		);
+		if (!canStartPrepare(workspace.status)) return workspace;
+		return yield* enqueueProjectWorkspace(userId, workspace.projectId, queue);
+	});
+}
+
+/**
+ * Builds a ready project's environment again (Retry after a failed rebuild);
+ * chats keep the current environment until the new one is ready.
+ */
+export function rebuildProjectWorkspace(
+	userId: string,
+	workspaceId: string,
+	queue: WorkspaceJobQueue = postgresJobQueue,
+	repairRequest?: EnvironmentModelRequest,
+) {
+	return Effect.gen(function* () {
+		const workspace = yield* Effect.tryPromise(async () => {
+			const owned = await workspaceForOwner(userId, workspaceId);
+			if (!owned)
+				throw new Response("Workspace is not available.", { status: 404 });
+			return owned;
+		});
+		if (workspace.status !== "ready")
+			return yield* retryProjectWorkspace(
+				userId,
+				workspaceId,
+				queue,
+				repairRequest,
+			);
+		const repairModel = yield* Effect.tryPromise(() =>
+			resolveEnvironmentModel(userId, repairRequest),
+		);
+		const jobId = yield* Effect.tryPromise(() =>
+			queue.enqueuePrepare(workspace.id, repairModel),
+		);
+		if (jobId)
+			yield* Effect.tryPromise(() => saveLastJobId(workspace.id, jobId));
+		return workspace;
+	});
 }
 
 /**
