@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { redactSecrets } from "#/domain/redact-secrets";
 import {
 	type EnvironmentWorkflowRequest,
 	environmentWorkflowRequest,
@@ -235,7 +236,15 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 						runtime,
 						request.repairModel,
 					);
-				} catch {
+				} catch (error) {
+					// Which check refused (token, installation, branch): redacted, bounded.
+					console.warn("Environment source authorization failed.", {
+						requestId: request.requestId,
+						reason: redactSecrets(
+							error instanceof Error ? error.message : String(error),
+							300,
+						),
+					});
 					await failEnvironmentPreflight(request.workspaceId);
 					throw new Error("Environment source authorization failed.");
 				}
