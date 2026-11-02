@@ -221,7 +221,19 @@ function Benchmark() {
 	);
 }
 
-const API_PROVIDERS = ["openai", "anthropic", "google", "openrouter"];
+/** Every model maker the model picker lists (src/domain/api-model-list.ts), then OpenRouter. */
+const API_PROVIDERS = [
+	"openai",
+	"anthropic",
+	"google",
+	"x-ai",
+	"deepseek",
+	"qwen",
+	"moonshotai",
+	"meta",
+	"z-ai",
+	"openrouter",
+];
 
 function Models() {
 	return (
@@ -260,14 +272,16 @@ function Models() {
 					</div>
 				</li>
 				<li className="model-card">
-					<span className="model-logos">
+					<span className="model-logos model-logos-many">
 						{API_PROVIDERS.map((provider) => (
 							<ModelProviderLogo key={provider} provider={provider} size={26} />
 						))}
 					</span>
 					<div>
 						<h3>Your API keys</h3>
-						<p>OpenAI, Anthropic, Google or OpenRouter.</p>
+						<p>
+							A key from any of these, or one OpenRouter key for all of them.
+						</p>
 					</div>
 				</li>
 			</ul>
