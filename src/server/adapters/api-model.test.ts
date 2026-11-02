@@ -1,5 +1,11 @@
 import { generateText } from "ai";
 import { expect, it, vi } from "vitest";
+import { modelConnectionInput } from "#/domain/model-connection";
+import {
+	keyChoiceConnection,
+	keyProviderChoices,
+} from "#/domain/provider-access";
+import { edgeModelEndpointTransport } from "../edge/model-endpoint";
 import { connectedLanguageModel } from "./api-model";
 
 it("roundtrips encrypted OpenRouter details through a serialized checkpoint and the real SDK converter", async () => {
@@ -138,4 +144,33 @@ it("rejects a gateway format the installed SDK would silently drop", async () =>
 	await expect(
 		generateText({ model, prompt: "Task", maxRetries: 0 }),
 	).rejects.toThrow("Unsupported OpenRouter reasoning protocol");
+});
+
+it("resolves every Settings key choice to a client on an allowed endpoint", () => {
+	const expected: Record<string, string> = {
+		openai: "openai.responses",
+		anthropic: "anthropic.messages",
+		google: "google.generative-ai",
+		"x-ai": "openai.responses",
+		openrouter: "openrouter",
+	};
+	for (const choice of keyProviderChoices()) {
+		if (choice.id === "custom") continue;
+		const input = modelConnectionInput.parse(
+			keyChoiceConnection(choice.id, {
+				label: "",
+				apiKey: "test-only-key",
+				baseUrl: "",
+			}),
+		);
+		// The edge transport refuses any endpoint that is not a fixed provider's.
+		expect(() => edgeModelEndpointTransport(input.baseUrl)).not.toThrow();
+		const model = connectedLanguageModel(
+			{ ...input, modelId: "model" },
+			async () => new Response("{}"),
+		);
+		expect(typeof model === "string" ? model : model.provider).toBe(
+			expected[choice.id],
+		);
+	}
 });
