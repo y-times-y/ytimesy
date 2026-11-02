@@ -17,12 +17,12 @@ import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { requestJson } from "../projects/api";
 import { useGithubConnectionNotice } from "../projects/github-connection-notice";
 import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
-import { CodexMark } from "../sessions/codex-mark";
+import { ClaudeSetupTokenSignIn } from "../sessions/claude-setup-token-sign-in";
 import { finishFirstRunFn } from "../sessions/codex-session.fn";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
-import { XaiMark } from "../sessions/xai-mark";
+import { SubscriptionMark } from "../sessions/subscription-mark";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import {
 	TrainingChoice,
@@ -48,7 +48,7 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 	},
 	model: {
 		title: "Choose a model",
-		lede: "Use your Codex subscription or your own API key.",
+		lede: "Use a plan you already pay for, or your own API key.",
 	},
 	sessions: {
 		title: "Bring your agent sessions",
@@ -146,6 +146,7 @@ export function FirstRun({
 					<ModelStep
 						ready={state.modelReady}
 						xaiSubscription={state.xaiSubscription}
+						claudeSubscription={state.claudeSubscription}
 						onDone={() => setModelDone(true)}
 					/>
 				) : (
@@ -322,11 +323,14 @@ export function PrivacyStep({
 export function ModelStep({
 	ready: readyAtLoad,
 	xaiSubscription = false,
+	claudeSubscription = false,
 	onDone = () => window.location.assign("/"),
 }: {
 	ready: boolean;
 	/** Offer SuperGrok sign-in (its feature switch is on). */
 	xaiSubscription?: boolean;
+	/** Offer the Claude plan's setup token (its feature switch is on). */
+	claudeSubscription?: boolean;
 	/** After Continue or Later: the next step (default: the workspace). */
 	onDone?: () => void;
 }) {
@@ -338,31 +342,53 @@ export function ModelStep({
 		queryFn: () => readConnections(),
 	});
 	const [grokConnected, setGrokConnected] = useState(false);
+	const [claudeConnected, setClaudeConnected] = useState(false);
 	const keySaved = (connections.data ?? []).some((row) => !row.subscription);
-	const ready = readyAtLoad || chatgptConnected || grokConnected || keySaved;
+	const ready =
+		readyAtLoad ||
+		chatgptConnected ||
+		claudeConnected ||
+		grokConnected ||
+		keySaved;
+	// Codex and the API key always; Claude and Grok while their switches are on.
+	const cards = 2 + Number(claudeSubscription) + Number(xaiSubscription);
 	return (
 		<>
 			<div
 				className="first-run-models"
-				data-count={xaiSubscription ? 3 : undefined}
+				data-count={cards > 2 ? cards : undefined}
 			>
 				<div
 					className="first-run-model"
 					data-done={chatgptConnected || undefined}
 				>
 					<span className="first-run-logos">
-						<CodexMark size={26} />
+						<SubscriptionMark brand="codex" size={26} />
 					</span>
 					<strong>Your Codex subscription</strong>
 					<ChatgptSignIn onConnected={() => setChatgptConnected(true)} />
 				</div>
+				{claudeSubscription ? (
+					<div
+						className="first-run-model"
+						data-done={claudeConnected || undefined}
+					>
+						<span className="first-run-logos">
+							<SubscriptionMark brand="claude" size={26} />
+						</span>
+						<strong>Your Claude subscription</strong>
+						<ClaudeSetupTokenSignIn
+							onConnected={() => setClaudeConnected(true)}
+						/>
+					</div>
+				) : null}
 				{xaiSubscription ? (
 					<div
 						className="first-run-model"
 						data-done={grokConnected || undefined}
 					>
 						<span className="first-run-logos">
-							<XaiMark size={26} />
+							<SubscriptionMark brand="grok" size={26} />
 						</span>
 						<strong>Your Grok subscription</strong>
 						<XaiSubscriptionSignIn onConnected={() => setGrokConnected(true)} />

@@ -21,6 +21,11 @@ vi.mock("../sessions/chatgpt-sign-in", () => ({
 vi.mock("../sessions/xai-subscription-sign-in", () => ({
 	XaiSubscriptionSignIn: () => <button type="button">Sign in with xAI</button>,
 }));
+vi.mock("../sessions/claude-subscription.fn", () => ({
+	getClaudeSubscription: vi.fn(),
+	saveClaudeSubscriptionFn: vi.fn(),
+	disconnectClaudeSubscriptionFn: vi.fn(),
+}));
 vi.mock("../sessions/codex-session.fn", () => ({
 	pollCodexLogin: vi.fn(),
 	startChatgptSignIn: vi.fn(),
@@ -110,6 +115,56 @@ it("offers the Grok subscription only while its feature switch is on", () => {
 	expect(on).toContain("Your Grok subscription");
 	expect(on).toContain("Sign in with xAI");
 	expect(on).toContain('data-count="3"');
+});
+
+it("offers the Claude plan, with its setup token, only while its feature switch is on", () => {
+	const off = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ModelStep ready={false} />
+		</QueryClientProvider>,
+	);
+	expect(off).not.toContain("Claude subscription");
+	expect(off).not.toContain("setup-token");
+	const on = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ModelStep ready={false} claudeSubscription />
+		</QueryClientProvider>,
+	);
+	expect(on).toContain("Your Claude subscription");
+	expect(on).toContain("Paste setup token");
+	expect(on).toContain("<code>claude setup-token</code>");
+	expect(on).toContain('data-count="3"');
+	// Each plan wears its subscription mark, as in the model picker.
+	expect(on).toContain('data-brand="codex"');
+	expect(on).toContain('data-brand="claude"');
+	// Both plans on: four cards, two by two.
+	const both = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ModelStep ready={false} claudeSubscription xaiSubscription />
+		</QueryClientProvider>,
+	);
+	expect(both).toContain('data-count="4"');
+	const order = ["Codex", "Claude", "Grok", "API key"].map((name) =>
+		both.indexOf(`Your ${name}`),
+	);
+	expect(order).toEqual([...order].sort((a, b) => a - b));
+});
+
+it("shows the Claude plan as connected once its token works", () => {
+	const client = new QueryClient();
+	client.setQueryData(["claude-subscription"], {
+		enabled: true,
+		status: "connected",
+		limitedUntil: null,
+		models: [],
+	});
+	const html = renderToStaticMarkup(
+		<QueryClientProvider client={client}>
+			<ModelStep ready claudeSubscription />
+		</QueryClientProvider>,
+	);
+	expect(html).toContain("Connected");
+	expect(html).not.toContain("Paste setup token");
 });
 
 import { SessionsStep } from "./first-run";

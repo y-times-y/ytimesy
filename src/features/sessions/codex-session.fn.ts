@@ -9,6 +9,7 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { claudeSubscriptionEnabled } from "#/domain/claude-code-route";
 import { savedDefaultBranchesFromCookies } from "#/domain/default-branch-cookie";
 import { isEnvironmentSetupPrompt } from "#/domain/environment-setup";
 import {
@@ -33,6 +34,7 @@ import {
 	chatToOpenMetadata,
 	listSidebarAgentSessions,
 } from "#/server/adapters/agent-sessions";
+import { claudeSubscriptionStatus } from "#/server/adapters/claude-subscription";
 import {
 	firstRunFinished,
 	markFirstRunFinished,
@@ -480,15 +482,24 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 
 /** Where a new account stands: GitHub connected, and a model to run chats on. */
 async function firstRunState(userId: string): Promise<FirstRunState> {
-	const [githubConnected, account, connections] = await Promise.all([
+	const claudeSubscription = claudeSubscriptionEnabled();
+	const [githubConnected, account, connections, claude] = await Promise.all([
 		githubConnectionExists(userId),
 		loadAgentAccount(userId),
 		listModelConnections(userId),
+		claudeSubscription
+			? claudeSubscriptionStatus(userId).catch(() => null)
+			: null,
 	]);
 	return {
 		githubConnected,
-		modelReady: account.status === "connected" || connections.length > 0,
+		modelReady:
+			account.status === "connected" ||
+			connections.length > 0 ||
+			claude?.status === "connected" ||
+			claude?.status === "limited",
 		...(xaiSubscriptionEnabled() ? { xaiSubscription: true } : {}),
+		...(claudeSubscription ? { claudeSubscription: true } : {}),
 	};
 }
 
