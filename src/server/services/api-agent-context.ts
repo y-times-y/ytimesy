@@ -9,10 +9,42 @@ type ContextBudget = {
 // screenshot is about 1,600 tokens, while its encoding can exceed 400 KB.
 const IMAGE_TOKENS = 2_000;
 
+/**
+ * Opaque provider state (OpenAI's encrypted reasoning and compaction items,
+ * Anthropic's signatures and redacted thinking, Gemini's thought signatures)
+ * is ciphertext: the provider bills the tokens it stands for, not its bytes.
+ * Measured 2026-11-02 on gpt-6.1-sol (Codex subscription): 93,472 bytes of
+ * reasoningEncryptedContent stood for 7,654 reasoning tokens, 12.2 bytes per
+ * token. Counted at bytes/3 like text, it read as 4x its size: 8-hour Astra
+ * runs measured at 404K-611K tokens were estimated above their 1.05M window,
+ * and their follow-up runs stopped on compaction. 8 bytes per token keeps a
+ * 1.5x margin.
+ */
+const OPAQUE_BYTES_PER_TOKEN = 8;
+const OPAQUE_KEYS = new Set([
+	"reasoningEncryptedContent",
+	"encryptedContent",
+	"encrypted_content",
+	"signature",
+	"redactedData",
+	"thoughtSignature",
+]);
+const OPAQUE_ENCODING = /^[A-Za-z0-9+/=_.-]*$/;
+
 /** Conservative estimate, not provider-measured usage or a universal tokenizer. */
 export const estimateContextTokens = (value: unknown) => {
 	let images = 0;
-	const text = JSON.stringify(value, (_key, item: unknown) => {
+	let opaqueBytes = 0;
+	const text = JSON.stringify(value, (key, item: unknown) => {
+		// Only base64 ciphertext: a tool argument that happens to share a name is text.
+		if (
+			typeof item === "string" &&
+			OPAQUE_KEYS.has(key) &&
+			OPAQUE_ENCODING.test(item)
+		) {
+			opaqueBytes += item.length;
+			return undefined;
+		}
 		if (
 			item &&
 			typeof item === "object" &&
@@ -26,7 +58,9 @@ export const estimateContextTokens = (value: unknown) => {
 		return item;
 	});
 	return (
-		Math.ceil(Buffer.byteLength(text ?? "", "utf8") / 3) + images * IMAGE_TOKENS
+		Math.ceil(Buffer.byteLength(text ?? "", "utf8") / 3) +
+		Math.ceil(opaqueBytes / OPAQUE_BYTES_PER_TOKEN) +
+		images * IMAGE_TOKENS
 	);
 };
 
@@ -60,6 +94,58 @@ export function contextMeasurement(
 			...response.filter((message) => message.role !== "tool"),
 		]),
 	};
+}
+
+type RememberedMeasurement = ContextMeasurement & {
+	first: ModelMessage;
+	length: number;
+	contextWindow: number | undefined;
+};
+const measuredHistories = new WeakMap<ModelMessage, RememberedMeasurement>();
+
+/**
+ * Keeps a step's provider measurement with the history it measured, so a
+ * later run continuing that same history (a follow-up after background
+ * jobs, a helper's next round, a resumed or retried run) starts from the
+ * provider's count instead of a fresh byte estimate.
+ */
+export function rememberContextMeasurement(
+	history: readonly ModelMessage[],
+	measurement: ContextMeasurement,
+	contextWindow: number | undefined,
+) {
+	const last = history.at(-1);
+	if (!last || !history[0]) return;
+	measuredHistories.set(last, {
+		...measurement,
+		first: history[0],
+		length: history.length,
+		contextWindow,
+	});
+}
+
+/** The latest remembered measurement of a prefix of this exact history, for the same window. */
+export function recalledContextMeasurement(
+	history: readonly ModelMessage[],
+	contextWindow: number | undefined,
+): ContextMeasurement | undefined {
+	for (let index = history.length - 1; index >= 0; index--) {
+		const remembered = measuredHistories.get(history[index]);
+		if (!remembered) continue;
+		// A compacted or rewritten history reuses recent message objects under a
+		// new prefix; the measurement covered the old prefix and is not reused.
+		if (
+			remembered.length !== index + 1 ||
+			remembered.first !== history[0] ||
+			remembered.contextWindow !== contextWindow
+		)
+			return undefined;
+		return {
+			tokens: remembered.tokens,
+			estimatedHistory: remembered.estimatedHistory,
+		};
+	}
+	return undefined;
 }
 
 /** Used only when neither the connection nor any catalog reports the model's window. */
@@ -215,17 +301,201 @@ function historySplit(
 				latestToolCycle = index;
 		}
 	if (latestToolCycle >= 0) latestAssistant = latestToolCycle;
+	// No completed step to retire: everything before the active turn goes, and
+	// the turn stays whole. An oversized remainder is the caller's to fit
+	// (compactApiHistory shortens its tool outputs, which are archived).
 	if (latestAssistant <= currentUser + 1)
-		throw new Error(
-			"Recent task activity exceeds the model context safety limit; no reasoning was discarded.",
-		);
-	const recent = [messages[currentUser], ...messages.slice(latestAssistant)];
-	if (estimateContextTokens(recent) >= threshold)
-		throw new Error(
-			"Recent task activity exceeds the model context safety limit; no reasoning was discarded.",
-		);
-	const older = messages.slice(0, latestAssistant);
-	return { older, recent };
+		return {
+			older: messages.slice(0, currentUser),
+			recent: messages.slice(currentUser),
+		};
+	return {
+		older: messages.slice(0, latestAssistant),
+		recent: [messages[currentUser], ...messages.slice(latestAssistant)],
+	};
+}
+
+const RECENT_TOO_LARGE =
+	"Recent task activity exceeds the model context safety limit. Start a focused follow-up task.";
+
+/** Head and tail of a long text, with a note where the middle was. */
+function clipText(text: string, maxCharacters: number, note: string) {
+	if (text.length <= maxCharacters) return text;
+	const keep = Math.max(200, maxCharacters - note.length - 8);
+	const tail = text.slice(-Math.floor(keep / 4));
+	const head = text.slice(0, keep - tail.length);
+	return `${head}\n[${text.length - head.length - tail.length} characters ${note}]\n${tail}`;
+}
+
+const CLIPPED_OUTPUT_NOTE =
+	"of this tool output omitted by the runtime to fit the context window; the full output is in the context archive";
+
+/**
+ * The active turn's tool outputs shortened, largest first, until the turn
+ * fits `targetTokens`. Only tool results change: the user's messages, the
+ * model's own messages and its reasoning stay exactly as sent.
+ */
+function clipToolOutputs(
+	messages: ModelMessage[],
+	targetTokens: number,
+): ModelMessage[] {
+	let current = messages;
+	for (
+		let cap = 64_000;
+		cap >= 1_000 && estimateContextTokens(current) >= targetTokens;
+		cap = Math.floor(cap / 2)
+	)
+		current = messages.map((message) => {
+			if (message.role !== "tool") return message;
+			let changed = false;
+			const content = message.content.map((part) => {
+				if (part.type !== "tool-result") return part;
+				const output = part.output;
+				const text =
+					output.type === "text" || output.type === "error-text"
+						? output.value
+						: output.type === "json" || output.type === "error-json"
+							? JSON.stringify(output.value)
+							: output.type === "content"
+								? JSON.stringify(output.value)
+								: null;
+				if (text === null || text.length <= cap) return part;
+				changed = true;
+				return {
+					...part,
+					output: {
+						type: output.type.startsWith("error")
+							? ("error-text" as const)
+							: ("text" as const),
+						value: clipText(text, cap, CLIPPED_OUTPUT_NOTE),
+					},
+				};
+			});
+			return changed ? { ...message, content } : message;
+		});
+	return current;
+}
+
+const CLIPPED_FOR_SUMMARY_NOTE =
+	"of this earlier message omitted from the summary input by the runtime; the original is in the context archive";
+
+/** A readable message too large for one summary request, as clipped text. */
+function clippedForSummary(
+	message: ModelMessage,
+	maxTokens: number,
+): ModelMessage {
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: JSON.stringify(message.content);
+	return {
+		role: message.role === "user" ? "user" : "assistant",
+		content: `[Earlier ${message.role} message, shortened for the summary]\n${clipText(text, maxTokens * 3, CLIPPED_FOR_SUMMARY_NOTE)}`,
+	};
+}
+
+/**
+ * Readable history in pieces that each fit one summary request. A single
+ * message larger than a piece is clipped (only with an archive holding the
+ * original); without one it cannot be summarized safely.
+ */
+function summaryChunks(
+	readable: ModelMessage[],
+	chunkTokens: number,
+	archived: boolean,
+): { chunks: ModelMessage[][]; clipped: boolean } {
+	const chunks: ModelMessage[][] = [];
+	let clipped = false;
+	let chunk: ModelMessage[] = [];
+	let used = 0;
+	for (const original of readable) {
+		let message = original;
+		let size = estimateContextTokens(message);
+		if (size > chunkTokens) {
+			if (!archived)
+				throw new Error(
+					"Earlier history exceeds this model's context window; no history was discarded.",
+				);
+			message = clippedForSummary(message, chunkTokens);
+			size = estimateContextTokens(message);
+			clipped = true;
+		}
+		if (chunk.length && used + size > chunkTokens) {
+			chunks.push(chunk);
+			chunk = [];
+			used = 0;
+		}
+		chunk.push(message);
+		used += size;
+	}
+	if (chunk.length) chunks.push(chunk);
+	return { chunks, clipped };
+}
+
+const ROLLING_SUMMARY_HEADING =
+	"Continuation record written by the runtime for the part of this conversation before the messages that follow. Carry every fact in it forward into your record, updated by the messages that follow:";
+
+function capSummary(summary: string) {
+	return summary.length > MAX_SUMMARY_CHARACTERS
+		? `${summary.slice(0, MAX_SUMMARY_CHARACTERS - 200)}\n[The rest of this summary was cut by the runtime at ${MAX_SUMMARY_CHARACTERS} characters.]`
+		: summary;
+}
+
+/**
+ * One summary of `readable`. When it does not fit one request, a rolling
+ * summary: each piece is summarized together with the summary so far, so
+ * no history is left out and no request exceeds the window. Every call is
+ * the caller's `summarize`, so each is reserved and its usage recorded.
+ */
+async function rollingSummary(
+	readable: ModelMessage[],
+	summarize: (older: ModelMessage[]) => Promise<string>,
+	budget: ContextBudget,
+	archived: boolean,
+): Promise<{ summary: string; clipped: boolean }> {
+	// Room for the summary so far, the instructions and the reply.
+	const chunkTokens = Math.max(
+		1_024,
+		Math.floor(budget.inputLimitTokens * 0.85) -
+			Math.ceil(MAX_SUMMARY_CHARACTERS / 3),
+	);
+	// One request whenever it fits, as before pieces existed.
+	if (estimateContextTokens(readable) <= budget.inputLimitTokens)
+		return {
+			summary: capSummary((await summarize(readable)).trim()),
+			clipped: false,
+		};
+	const split = summaryChunks(readable, chunkTokens, archived);
+	const { chunks } = split;
+	// Text that reaches no summary is only in the archive.
+	let clipped = split.clipped;
+	let summary = "";
+	for (const [index, chunk] of chunks.entries()) {
+		const next = (
+			await summarize(
+				summary
+					? [
+							{
+								role: "assistant",
+								content: `${ROLLING_SUMMARY_HEADING}\n${summary}`,
+							},
+							...chunk,
+						]
+					: chunk,
+			)
+		).trim();
+		if (next) summary = capSummary(next);
+		else if (archived) {
+			clipped = true;
+			summary = capSummary(
+				`${summary}\n- Part ${index + 1} of ${chunks.length} of the earlier history could not be summarized; it is in the context archive.`.trim(),
+			);
+		} else
+			throw new Error(
+				"Context summary was empty; the conversation was not truncated.",
+			);
+	}
+	return { summary, clipped };
 }
 
 function assertCompletedToolSequences(messages: ModelMessage[]) {
@@ -448,6 +718,9 @@ export type ArchivedHistory = string | { file: string };
 
 const MAX_SUMMARY_CHARACTERS = 16_000;
 
+const CLIPPED_ONLY_NOTICE =
+	"No earlier history was replaced. Tool outputs in the current turn that did not fit the context window were shortened; their full text is in the context archive.";
+
 export const EMPTY_SUMMARY_NOTICE =
 	"No summary could be written for the earlier part of this conversation. Its messages are archived (below); the user's requests are listed above. Before relying on earlier work, check the current state of the workspace and search the archive for earlier findings.";
 
@@ -462,24 +735,40 @@ export async function compactApiHistory(
 ): Promise<{ messages: ModelMessage[]; compacted: boolean }> {
 	if (estimateContextTokens(messages) < budget.compactAtTokens)
 		return { messages, compacted: false };
-	const { older, recent } = historySplit(
+	const { older, recent: active } = historySplit(
 		messages,
 		budget.compactAtTokens,
 		policy,
 	);
 	assertCompletedToolSequences(older);
-	if (estimateContextTokens(older) > budget.inputLimitTokens)
-		throw new Error(
-			"Earlier history exceeds this model's context window; no history was discarded.",
-		);
-	if (estimateContextTokens(recent) >= budget.compactAtTokens)
-		throw new Error(
-			"Recent task activity exceeds the model context safety limit. Start a focused follow-up task.",
-		);
-	let summary = (await summarize(readableHistory(older))).trim();
-	// An oversized summary keeps its head; the archive holds the rest.
-	if (summary.length > MAX_SUMMARY_CHARACTERS)
-		summary = `${summary.slice(0, MAX_SUMMARY_CHARACTERS - 200)}\n[The rest of this summary was cut by the runtime at ${MAX_SUMMARY_CHARACTERS} characters.]`;
+	// The kept turn must fit under the threshold, or every later step would
+	// compact again. Its tool outputs can be shortened, with the originals in
+	// the archive; the user's messages and the model's own (signed or bound
+	// reasoning included) are never edited.
+	let recent = active;
+	let clipped = false;
+	if (estimateContextTokens(recent) >= budget.compactAtTokens) {
+		if (archive && policy !== "bound-prefix")
+			recent = clipToolOutputs(
+				recent,
+				Math.floor(budget.compactAtTokens * 0.5),
+			);
+		if (estimateContextTokens(recent) >= budget.compactAtTokens)
+			throw new Error(RECENT_TOO_LARGE);
+		clipped = true;
+	}
+	// Sized as the summarizer receives it (opaque provider state is archived,
+	// not sent); larger than one request, it is summarized in pieces.
+	const rolled = older.length
+		? await rollingSummary(
+				readableHistory(older),
+				summarize,
+				budget,
+				Boolean(archive),
+			)
+		: { summary: CLIPPED_ONLY_NOTICE, clipped: false };
+	let summary = rolled.summary;
+	clipped ||= rolled.clipped;
 	// No summary text (a model can spend its whole output cap reasoning):
 	// without an archive the earlier history would be lost, so nothing is
 	// truncated; with one, the history is replaced by a notice pointing there.
@@ -512,6 +801,11 @@ export async function compactApiHistory(
 		if (reference === null && summary === EMPTY_SUMMARY_NOTICE)
 			throw new Error(
 				"Context summary was empty and the archive failed; the conversation was not truncated.",
+			);
+		// Clipped text exists only in the archive: without it, nothing is replaced.
+		if (reference === null && clipped)
+			throw new Error(
+				"The context archive failed; oversized history was not shortened.",
 			);
 		const first = compacted.find((message) => message.role === "assistant");
 		if (reference !== null && first && typeof first.content === "string")

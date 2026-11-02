@@ -482,6 +482,9 @@ export async function codexSubscriptionModel(
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,
 		autoCompactTokenLimit: selected.auto_compact_token_limit ?? undefined,
+		// The backend refuses unstreamed requests; the harness's own summary
+		// (its fallback when it declines a native compaction) streams.
+		streamOnly: true,
 		requestSettings,
 		compact: nativeModelCompactor(model, "openai", requestSettings),
 	};
