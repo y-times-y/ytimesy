@@ -1,6 +1,7 @@
+import { applyApiProgress } from "./api-progress";
 import { isWakeTurnStart, turnStartTiming } from "./child-task-activity";
 import { SessionItemId } from "./ids";
-import type { SessionItem } from "./session-item";
+import type { SessionItem, SessionTurnStatus } from "./session-item";
 
 /** The quiet line that closes a turn the user stopped. */
 export const STOPPED_NOTICE = "Stopped";
@@ -64,4 +65,44 @@ export function withStoppedNotice(
 		...items,
 		{ kind: "notice", id, message: STOPPED_NOTICE, stopped: true },
 	];
+}
+
+/**
+ * The open chat the moment the user presses Stop, before the server answers:
+ * idle, its partial answer kept (no longer streaming) and closed with the
+ * "Stopped" notice, as the server will settle it. The server's own view
+ * replaces these items when it arrives.
+ */
+export function sessionStoppedByUser<
+	View extends {
+		readonly items: readonly SessionItem[];
+		readonly turnStatus: SessionTurnStatus;
+	},
+>(view: View, now: number): View {
+	if (view.turnStatus !== "running") return view;
+	let lastUser: SessionItem | undefined;
+	for (const item of view.items)
+		if (item.kind === "userMessage" && !item.queued) lastUser = item;
+	const finished = applyApiProgress(view.items, "", {
+		type: "finish",
+		inputTokens: null,
+		outputTokens: null,
+		reason: "stopped",
+	});
+	// Messages still waiting stay after the stopped turn, as the server lists them.
+	const queued = finished.filter(
+		(item) => item.kind === "userMessage" && item.queued,
+	);
+	const turn = finished.filter((item) => !queued.includes(item));
+	return {
+		...view,
+		turnStatus: "idle",
+		items: [
+			...settledTurnItems(
+				withStoppedNotice(turn, `stop:${lastUser?.id ?? "turn"}`),
+				now,
+			),
+			...queued,
+		],
+	};
 }

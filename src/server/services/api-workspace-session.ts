@@ -506,16 +506,19 @@ async function sendClaudeCodeTask(
 	);
 }
 
+/**
+ * Stops the chat's turn before anything else: reading the chat (and its model
+ * catalog) waits on the network, and the stop must not. The cancel is fenced
+ * by the owner, so it needs no earlier read; the caller reads the view after.
+ */
 export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
-	await readApiWorkspaceSession(scope);
-	await cancelServerTurn(scope.userId, scope.sessionId);
+	const { userId, sessionId } = scope;
+	await cancelServerTurn(userId, sessionId);
 	// Stop on a parent stops its whole subagent tree; cancelled children send no reports.
-	const { userId } = scope;
 	await Promise.all(
-		(await descendantAgentSessions(userId, scope.sessionId))
+		(await descendantAgentSessions(userId, sessionId))
 			.filter((child) => child.agentRole && child.turnStatus === "running")
 			.map((child) => cancelServerTurn(userId, child.id).catch(() => {})),
 	);
-	return readApiWorkspaceSession(scope);
 }

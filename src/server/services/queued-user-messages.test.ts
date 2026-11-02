@@ -300,13 +300,31 @@ it("puts a message back when its turn cannot start", async () => {
 });
 
 it("keeps queued messages through Stop and starts them once nothing runs", async () => {
-	mocks.stop.mockReturnValue(Effect.succeed(view("running")));
+	mocks.stop.mockReturnValue(Effect.succeed(undefined));
+	mocks.read.mockReturnValue(Effect.succeed(view("running")));
 	await Effect.runPromise(stopTurnKeepingQueue(machines, scope));
 	expect(mocks.take).not.toHaveBeenCalled();
-	mocks.stop.mockReturnValue(Effect.succeed(view("idle")));
+	mocks.read.mockReturnValue(Effect.succeed(view("idle")));
 	mocks.take.mockResolvedValue(null);
 	await Effect.runPromise(stopTurnKeepingQueue(machines, scope));
 	expect(mocks.take).toHaveBeenCalledWith("owner", "chat");
+});
+
+it("stops before reading the chat, and reads its view once", async () => {
+	const order: string[] = [];
+	mocks.stop.mockImplementation(() =>
+		Effect.sync(() => {
+			order.push("stop");
+		}),
+	);
+	mocks.read.mockImplementation(() =>
+		Effect.sync(() => {
+			order.push("read");
+			return view("running");
+		}),
+	);
+	await Effect.runPromise(stopTurnKeepingQueue(machines, scope));
+	expect(order).toEqual(["stop", "read"]);
 });
 
 it("removes a waiting message, and says so when it was already delivered", async () => {

@@ -223,6 +223,7 @@ import {
 	lifecycleHookConfig,
 } from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
+import { registerLiveTurn } from "../services/live-turn-abort";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
 import { connectMcpTools } from "../services/mcp-tools";
@@ -628,6 +629,11 @@ async function runApiTurnAttempt(
 		loadingRecordsRequests,
 	])
 		loading.catch(() => {});
+	// Stop reaches this turn directly when it runs in this process: the model
+	// stream and its commands stop now, not at the next heartbeat.
+	const forgetLiveTurn = registerLiveTurn(turn.id, (reason) =>
+		abort.abort(reason),
+	);
 	try {
 		failureStage = "coordination";
 		if (
@@ -2800,6 +2806,7 @@ async function runApiTurnAttempt(
 		// any earlier step's; a later step clones with a new one.
 		// Tools wait for the clone; a step that called none may end while it
 		// runs, so it is awaited before its token is released.
+		forgetLiveTurn();
 		await memoryCloning?.catch(() => {});
 		const cloned = memoryCloned;
 		const vm = execution;

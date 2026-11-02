@@ -62,6 +62,7 @@ import {
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
+import { abortLiveTurn } from "../services/live-turn-abort";
 import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
 import {
@@ -624,6 +625,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 						);
 						if (control.success && (await this.cancelWaiting(control.data)))
 							return new Response(null, { status: 204 });
+						const response = await this.room.fetch(authenticated);
+						// The room holds the stop; the turn running here stops now.
+						if (control.success && response.status === 204)
+							abortLiveTurn(control.data.turnId);
+						return response;
 					}
 					return this.room.fetch(authenticated);
 				},
