@@ -708,11 +708,14 @@ export function WorkspaceHome({
 	const [composerPrefill, setComposerPrefill] = useState<{
 		readonly text: string;
 		readonly at: number;
+		readonly send?: boolean;
 	}>();
 	// The message box takes it in its own effect (children's run first); it
-	// must not come back when another chat's box mounts later.
+	// must not come back when another chat's box mounts later. One to send
+	// by itself stays until the box sends it (the box can remount while its
+	// chat is created), and only for the chat it was made for.
 	useEffect(() => {
-		if (composerPrefill) setComposerPrefill(undefined);
+		if (composerPrefill && !composerPrefill.send) setComposerPrefill(undefined);
 	}, [composerPrefill]);
 	/**
 	 * The chat view "Set up environment" opened (its session epoch): its sends
@@ -2188,12 +2191,19 @@ export function WorkspaceHome({
 		if (compact) setProjectsOpen(false);
 	}
 
-	/** A new chat in that project, its message box holding the setup request. */
+	/**
+	 * A new chat in that project that sends the setup request by itself, so
+	 * the agent starts setting the environment up at once.
+	 */
 	function startEnvironmentSetup(projectId: string) {
 		setSettingsOpen(false);
 		startNewChat(projectId);
 		environmentSetupEpochRef.current = sessionEpoch.current;
-		setComposerPrefill({ text: ENVIRONMENT_SETUP_PROMPT, at: Date.now() });
+		setComposerPrefill({
+			text: ENVIRONMENT_SETUP_PROMPT,
+			at: Date.now(),
+			send: true,
+		});
 	}
 
 	function startNewChat(projectId?: string) {
@@ -3300,7 +3310,13 @@ export function WorkspaceHome({
 													}
 												: undefined
 										}
-										prefill={composerPrefill}
+										prefill={
+											composerPrefill?.send &&
+											environmentSetupEpochRef.current !== sessionEpoch.current
+												? undefined
+												: composerPrefill
+										}
+										onPrefillSent={() => setComposerPrefill(undefined)}
 										onSetUpEnvironment={() =>
 											selectedProject &&
 											startEnvironmentSetup(selectedProject.id)

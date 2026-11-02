@@ -16,12 +16,16 @@ signing in, you acknowledge this policy.
   chose**, under your own key or subscription and your own agreement with that
   provider.
 - **Training data.** The "Help improve ytimesy" setting is shown during
-  onboarding with its switch **on**. When it is on, your prompts and
+  onboarding with its switch **on** (**off** in the EU, EEA, UK and
+  Switzerland). When it is on, your prompts and
   messages, your code and repository context, and results can be used to
   improve ytimesy. **We never use AI models' replies or model-generated code
   as training data.** Turn it off at any time in Settings → Privacy. Today no
   training export exists; see [Training Data](./training-opt-in.md).
 - Memory is **on by default**; you can turn it off or clear it.
+- We record **masked session replays** of how the web app is used, to fix bugs
+  and improve the product. Inputs, chat content, code and secrets are masked.
+  No replays are recorded in the EU, EEA, UK or Switzerland.
 - We do not sell your personal information or use it for advertising.
 - You can delete chats, projects, your memory, and your whole account yourself.
 - ytimesy is for people 18 and older.
@@ -89,15 +93,21 @@ as "account created", "turn started/finished", "pull request created" and
 agent performance measurements (timings, token counts, tool outcomes). Events
 are linked to your account id and do not contain prompts, code or repository
 names. IP-based location lookup is turned off. If your browser sends "Do Not
-Track", the web app sends no analytics or recordings; server events are still
-recorded.
+Track", the web app sends no analytics or session replays; server events are
+still recorded.
 
-**Session recording.** **Only if you accept** the recording prompt, PostHog
-also records how you use the web app in that browser. All text is masked, and
-code, terminals, chat content, inputs, images, previews and the desktop view
-are blocked before anything leaves your browser; sign-in pages, network
-traffic and console logs are not recorded. You can turn it off at any time in
-Settings → Privacy; the choice is kept in that browser.
+**Session replays.** While you are signed in, PostHog records masked
+session replays of how you use the web app (clicks, scrolling, which screens
+you open), linked to your account id, so we can fix bugs and improve the
+product. Replays are masked in
+your browser before anything is sent: all text is masked, every input is
+masked, and code, diffs, terminals, file contents, chat content, secrets,
+images, previews and the desktop view are blocked. Sign-in pages, network
+traffic and console logs are not recorded. Replays are kept for 30 days and
+deleted with your account. **We do not record session replays for people in
+the EU, EEA, UK or Switzerland**, based on the country our hosting provider
+reports for your connection. To object to replays elsewhere, email us (section
+11).
 
 **Logs and bot checks.** Our hosting provider keeps operational logs
 (requests, errors, timings) that can include IP addresses and identifiers, for
@@ -110,7 +120,7 @@ our addresses is forwarded to a mailbox hosted by Google.
 
 **Cookies and browser storage.** We use a sign-in cookie and a few cookies
 that remember interface state (such as open panels). The browser also stores
-unsent message drafts, your recording choice and the analytics identifier. We
+unsent message drafts and the analytics identifier. We
 use no advertising cookies.
 
 ## 2. Children
@@ -140,15 +150,14 @@ We look at your code, chats or workspaces only (a) when you ask us to (for
 example in a support request), or (b) to investigate abuse, a security
 incident or a legal request.
 
-For EU/UK users, our legal bases are: performance of our contract with you
-(running the service), legitimate interests (security, abuse prevention,
-product analytics), consent (training use and session recording), and legal
-obligation.
+For people in the EU, EEA, UK and Switzerland, see section 11 for our legal
+bases.
 
 ## 4. Training data
 
 - **The setting.** "Help improve ytimesy" is shown during onboarding with its
-  switch **on**, and your choice is saved when you continue. Until you make a
+  switch **on** (**off** in the EU, EEA, UK and Switzerland), and your choice
+  is saved when you continue. Until you make a
   choice there or in Settings, it is off. You can change it at any time in
   Settings → Privacy, and you can exclude a single project in its settings.
 - **What can be used when it is on**, from chats that run while it is on and
@@ -234,7 +243,7 @@ service to us.
 | Cloudflare, Inc. | Web app and API hosting (Workers, Durable Objects), private object storage (R2: encrypted chat checkpoints, encrypted attachments, encrypted imported sessions, pull request evidence), memory repositories, memory embeddings (Workers AI), sending email, receiving email, bot checks (Turnstile), network egress, logs | All categories above | Global network; storage location chosen by Cloudflare |
 | Supabase, Inc. | Main database (Postgres): account, projects, chats, usage, encrypted credentials | Account, content, credentials (encrypted), usage | United States (AWS us-east-2, Ohio) |
 | Freestyle | Workspace virtual machines, previews and machine snapshots | Repository copies, workspace files, command output, project secrets on the machine | Chosen by Freestyle |
-| PostHog, Inc. | Product analytics, error reports and masked session recording | Account id, product events, error reports, masked recordings | United States |
+| PostHog, Inc. | Product analytics, error reports and masked session replays | Account id, product events, error reports, masked replays | United States |
 | Google LLC | Sign-in with Google (if you use it); mailbox for email sent to our addresses | Account; email you send us | United States |
 | GitHub, Inc. | Sign-in and repository access | Account, repository content | United States |
 
@@ -271,7 +280,8 @@ whoever can see the repository on GitHub.
 | Sign-in, verification and device-login codes | Until used or expired |
 | Training setting changes | The current setting until you delete your account; the change history is kept after deletion as proof of consent and withdrawal |
 | Cloud usage ledger (amounts and times, linked to your account id) | Kept after account deletion as our spend record |
-| Analytics events and recordings | PostHog's retention for our project, or until your account is deleted |
+| Session replays | 30 days, or until your account is deleted |
+| Analytics events | PostHog's retention for our project, or until your account is deleted |
 | Hosting logs | The hosting provider's log retention period |
 | Database backups | Rolled off on our database provider's backup schedule |
 
@@ -290,7 +300,7 @@ whoever can see the repository on GitHub.
   checkpoints, imported sessions, pull request evidence, workspaces and
   snapshots, memory, credentials and training setting, signs you out
   everywhere, and asks PostHog to delete your analytics person, events and
-  recordings. We keep only the training-setting change history and the cloud
+  session replays. We keep only the training-setting change history and the cloud
   usage ledger described in section 9.
 - Deleting your ytimesy account **does not** uninstall the GitHub App, revoke
   your sign-ins at model providers, or delete data your model provider holds.
@@ -302,13 +312,31 @@ whoever can see the repository on GitHub.
 Depending on where you live (including the EU, UK and California) you may
 have the right to access, correct, delete, or receive a copy of your data, to
 object to or restrict some processing, and to withdraw consent. You can
-delete data, turn off training use, memory and session recording yourself in
-the app. ytimesy has no self-serve data export yet; for a copy of your data
+delete data and turn off training use and memory yourself in the app. ytimesy has no self-serve data export yet; for a copy of your data
 or anything else, email support@ytimesy.com. We may need to verify your
 identity. We will respond within the time the law requires and will not treat
 you differently for exercising a right. If we deny a request, you can appeal by
-replying to our answer. EU/UK users can complain to their data protection
-authority.
+replying to our answer.
+
+**EU, EEA, UK and Switzerland.** Where the GDPR, the UK GDPR or the Swiss data
+protection law applies, our legal bases are:
+
+- **contract**: running the service and your account;
+- **legitimate interests**: security, abuse prevention, fixing bugs and
+  improving the product, including product analytics (and, outside these
+  regions, masked session replays);
+- **consent**, only where we ask for it, such as the "Help improve ytimesy"
+  setting;
+- **legal obligations**.
+
+For people in these regions we do not record session replays, and the
+"Help improve ytimesy" switch starts off. You have the right to access,
+correct, delete and receive a copy of your data, to restrict processing, to
+object to processing (including product analytics), and to withdraw consent at
+any time. To exercise a right, email support@ytimesy.com with "Privacy
+Request" in the subject. You can also complain to your local data protection
+authority. Transfers out of these regions rely on the Standard Contractual
+Clauses and the UK International Data Transfer Addendum (section 13).
 
 We do not sell or "share" personal information for cross-context behavioural
 advertising as those terms are defined in California law.
@@ -325,9 +353,11 @@ requires. Report vulnerabilities to support@ytimesy.com.
 
 ## 13. International transfers
 
-Our providers process data in the United States and elsewhere. Where the law
-requires a transfer mechanism, we rely on the safeguards our providers offer,
-such as Standard Contractual Clauses.
+Our providers process data in the United States and elsewhere. For transfers
+of personal data out of the EU, EEA, UK or Switzerland, we rely on the
+European Commission's Standard Contractual Clauses and, for the UK, the
+International Data Transfer Addendum, as offered in our providers' data
+processing terms.
 
 ## 14. Changes
 

@@ -434,10 +434,31 @@
 	padding: var(--menu-pad);
 	overscroll-behavior: contain;
 }
-.model-provider-rail .model-provider-subscription,
-.model-provider-rail .model-provider-subscription:hover,
-.model-provider-rail .model-provider-subscription[aria-pressed="true"] {
+/* Subscriptions (subscription-mark.tsx): each brand's glyph on its own
+   colored badge, apart from the plain API-key logos. */
+.subscription-mark {
+	display: grid;
+	flex-shrink: 0;
+	place-items: center;
+	border-radius: 6px;
+}
+.subscription-mark[data-brand="codex"] {
 	color: #78b7ff;
+}
+.subscription-mark[data-brand="claude"] {
+	background: #d97757;
+}
+.subscription-mark[data-brand="grok"] {
+	background: #f2f2f2;
+	color: #0a0a0a;
+}
+.model-provider-rail
+	.model-provider-subscription:not([aria-pressed="true"])
+	.subscription-mark:not([data-brand="codex"]) {
+	opacity: 0.88;
+}
+.model-provider-rail .model-provider-subscription:hover .subscription-mark {
+	opacity: 1;
 }
 .model-picker-catalog h3 {
 	margin: 0;

@@ -102,7 +102,8 @@ requests, messages, screenshots and recordings.
 ## 6. Training data
 
 - ytimesy has a **"Help improve ytimesy"** setting. It is shown to you during
-  onboarding with its switch **on**; your choice is saved when you continue.
+  onboarding with its switch **on** (**off** in the EU, EEA, UK and
+  Switzerland); your choice is saved when you continue.
   You can change it at any time in Settings → Privacy.
 - **When it is on**, chats that run while it is on can be used to improve
   ytimesy's agents and to train or evaluate models, using only: your prompts

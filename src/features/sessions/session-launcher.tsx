@@ -190,6 +190,7 @@ export function SessionLauncher({
 	onRecovered,
 	initialDraft = "",
 	prefill,
+	onPrefillSent,
 	onSetUpEnvironment,
 	childTasks = [],
 	projects,
@@ -275,7 +276,14 @@ export function SessionLauncher({
 	) => Promise<void>;
 	initialDraft?: string;
 	/** Text put in the message box (focused) whenever `at` changes. */
-	prefill?: { readonly text: string; readonly at: number };
+	/** Text put in the message box; `send` also sends it once the chat can take it. */
+	prefill?: {
+		readonly text: string;
+		readonly at: number;
+		readonly send?: boolean;
+	};
+	/** A `send` prefill went (or showed why it cannot); the page drops it. */
+	onPrefillSent?: () => void;
 	onSetUpEnvironment?: () => void;
 	childTasks?: readonly AgentTaskActivity[];
 	projects: Project[];
@@ -549,11 +557,14 @@ export function SessionLauncher({
 			setDraft((current) => current || typedBeforeHydration);
 	}, [typedBeforeHydration]);
 	const prefillAt = prefill?.at;
+	/** A prefill to send by itself as soon as the new chat can take it. */
+	const autoSend = useRef<string | null>(null);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new request (its time), not each render.
 	useEffect(() => {
 		if (!prefill) return;
 		setDraft(prefill.text);
-		requestAnimationFrame(() => textareaRef.current?.focus());
+		if (prefill.send) autoSend.current = prefill.text;
+		else requestAnimationFrame(() => textareaRef.current?.focus());
 	}, [prefillAt]);
 	// Saved as it is typed, under the chat it was typed in; cleared at once
 	// when it empties (a send). Moving to another chat or unmounting saves
@@ -989,6 +1000,40 @@ export function SessionLauncher({
 			),
 		);
 	}, [session.items]);
+
+	// "Set up in new chat": the setup request goes as soon as the new chat
+	// can take it. A send block (no model connected, say) shows its fix after
+	// a moment instead of the request waiting silently.
+	const autoSendReady =
+		autoSend.current !== null &&
+		autoSend.current === draft &&
+		// The new chat exists: a send before that is refused as "still opening".
+		Boolean(session.agentSessionId) &&
+		composerCanSend(draft, false);
+	const autoSendWaiting =
+		autoSend.current !== null &&
+		Boolean(session.agentSessionId) &&
+		Boolean(sendBlock);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fires on readiness, sending the text it holds.
+	useEffect(() => {
+		const text = autoSend.current;
+		if (text === null || !autoSendReady) return;
+		autoSend.current = null;
+		onPrefillSent?.();
+		sendText(text);
+	}, [autoSendReady]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a block that outlasts loading is shown once.
+	useEffect(() => {
+		if (!autoSendWaiting) return;
+		const timer = setTimeout(() => {
+			const text = autoSend.current;
+			if (text === null) return;
+			autoSend.current = null;
+			onPrefillSent?.();
+			sendText(text);
+		}, 4000);
+		return () => clearTimeout(timer);
+	}, [autoSendWaiting]);
 
 	function sendText(typed: string, continueOn?: string) {
 		const text = sendableDraft(typed);

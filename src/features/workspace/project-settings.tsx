@@ -8,6 +8,7 @@ import {
 	Folder,
 	Gauge,
 	Import,
+	Mail,
 	Plug,
 	Shield,
 	User,
@@ -27,6 +28,11 @@ import type {
 	PublicProjectSecret,
 } from "#/domain/project-secret";
 import { type Project, projectDisplayName } from "#/domain/projects";
+import {
+	memberSince,
+	SIGN_IN_METHOD_LABELS,
+	type SignInMethod,
+} from "#/domain/sign-in-methods";
 import type { UserAgentAccount } from "#/domain/user-agent-account";
 import {
 	accountDisplayName,
@@ -50,8 +56,6 @@ import { CodexMark } from "../sessions/codex-mark";
 import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
-import { getModelConnections } from "../sessions/model-connections.fn";
-import { getModelFailoverSettings } from "../sessions/model-failover.fn";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
 import { XaiMark } from "../sessions/xai-mark";
@@ -61,16 +65,15 @@ import { ArchivedSettings } from "./archived-settings";
 import { EnvironmentSettings } from "./environment-settings";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
-import { readMachineSizeFn } from "./machine-size.fn";
 import { MachineSizeSettings } from "./machine-size-settings";
 import { MemorySettings } from "./memory-settings";
-import { readNetworkAccessFn } from "./network-access.fn";
 import { NetworkAccessSettings } from "./network-access-settings";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
+import { prefetchSettings } from "./settings-prefetch";
 import { codexSubscriptionUsageFn } from "./subscription-usage.fn";
 import {
 	ProjectTrainingSettings,
@@ -82,7 +85,10 @@ type AccountView = {
 		readonly name?: string | null;
 		readonly email?: string | null;
 		readonly image?: string | null;
+		readonly createdAt?: string | null;
 	};
+	/** How this account signs in (absent from an older server). */
+	readonly signInMethods?: readonly SignInMethod[];
 	readonly githubConnected: boolean;
 	readonly agentAccount: UserAgentAccount;
 	/** Absent while the SuperGrok feature switch is off. */
@@ -132,6 +138,11 @@ export function ProjectSettings({
 		if (open && initialSection) setSection(initialSection);
 	}, [open, initialSection]);
 	const [settingsProjectId, setSettingsProjectId] = useState<string>();
+	// Each opening starts on the project in view; a project picked in an
+	// earlier opening does not stick.
+	useEffect(() => {
+		if (open) setSettingsProjectId(undefined);
+	}, [open]);
 	const readSubscriptionUsage = useServerFn(codexSubscriptionUsageFn);
 	// Shared with the model picker's plan line (plan-usage.tsx).
 	useQuery({
@@ -147,33 +158,27 @@ export function ProjectSettings({
 		queryKey: ["account"],
 		queryFn: () => requestJson<AccountView>("/api/account"),
 		enabled: open,
+		staleTime: 60_000,
 	});
-	// The sections' own reads start with the panel: a section picked later
-	// shows at its full height instead of growing as its data lands.
+	// The sections' saved values are read ahead: once while the app is idle
+	// and again when the panel opens (or another project is picked), so a
+	// section shows its switches as saved the moment it is picked.
 	const queryClient = useQueryClient();
 	const prefetchProjectId =
 		settingsProjectId ?? selectedProject?.id ?? projectId;
 	useEffect(() => {
-		if (!open) return;
-		void queryClient.prefetchQuery({
-			queryKey: ["model-connections"],
-			queryFn: () => getModelConnections(),
-		});
-		void queryClient.prefetchQuery({
-			queryKey: ["model-failover-settings"],
-			queryFn: () => getModelFailoverSettings(),
-		});
-		if (!prefetchProjectId) return;
-		const data = { projectId: prefetchProjectId };
-		void queryClient.prefetchQuery({
-			queryKey: ["project-machine-size", prefetchProjectId],
-			queryFn: () => readMachineSizeFn({ data }),
-		});
-		void queryClient.prefetchQuery({
-			queryKey: ["project-network-access", prefetchProjectId],
-			queryFn: () => readNetworkAccessFn({ data }),
-		});
+		if (open) prefetchSettings(queryClient, prefetchProjectId);
 	}, [open, prefetchProjectId, queryClient]);
+	const idleProjectId = selectedProject?.id ?? projectId;
+	useEffect(() => {
+		const read = () => prefetchSettings(queryClient, idleProjectId);
+		if (typeof window.requestIdleCallback === "function") {
+			const handle = window.requestIdleCallback(read, { timeout: 4000 });
+			return () => window.cancelIdleCallback(handle);
+		}
+		const timer = setTimeout(read, 1500);
+		return () => clearTimeout(timer);
+	}, [idleProjectId, queryClient]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -234,14 +239,13 @@ export function ProjectSettings({
 						<ScrollArea.Viewport className="settings-scroll-viewport">
 							<div className="settings-body">
 								{section === "account" ? (
-									<>
-										<AccountSection
-											loading={account.isPending}
-											error={account.error?.message}
-											user={user}
-											onSignOut={onSignOut}
-										/>
-									</>
+									<AccountSection
+										loading={account.isPending}
+										error={account.error?.message}
+										user={user}
+										signInMethods={account.data?.signInMethods}
+										onSignOut={onSignOut}
+									/>
 								) : null}
 								{section === "privacy" ? <TrainingConsentSettings /> : null}
 								{section === "memory" ? <MemorySettings /> : null}
@@ -277,45 +281,22 @@ export function ProjectSettings({
 									</section>
 								) : null}
 								{section === "project" ? (
-									<>
-										{settingsProject ? (
-											<ProjectHeader
-												project={settingsProject}
-												projects={projects}
-												onSelect={setSettingsProjectId}
+									settingsProject ? (
+										<ProjectPage
+											key={settingsProject.id}
+											project={settingsProject}
+											projects={projects}
+											onSelect={setSettingsProjectId}
+											onSetUpEnvironment={onSetUpEnvironment}
+										/>
+									) : (
+										<section className="settings-section">
+											<SettingsHeader
+												title="Project"
+												description="Add a repository first."
 											/>
-										) : null}
-										{settingsProject ? (
-											<EnvironmentSettings
-												key={`environment-${settingsProject.id}`}
-												projectId={settingsProject.id}
-												onSetUpWithAgent={
-													onSetUpEnvironment
-														? () => onSetUpEnvironment(settingsProject.id)
-														: undefined
-												}
-											/>
-										) : null}
-										{settingsProject ? (
-											<MachineSizeSettings
-												key={settingsProject.id}
-												projectId={settingsProject.id}
-											/>
-										) : null}
-										{settingsProject ? (
-											<NetworkAccessSettings
-												key={`network-${settingsProject.id}`}
-												projectId={settingsProject.id}
-											/>
-										) : null}
-										<ProjectSecretsSection project={settingsProject} />
-										{settingsProject ? (
-											<ProjectTrainingSettings
-												key={`training-${settingsProject.id}`}
-												projectId={settingsProject.id}
-											/>
-										) : null}
-									</>
+										</section>
+									)
 								) : null}
 								{section === "plugins" ? <Plugins /> : null}
 								{section === "mcp" ? <McpServers /> : null}
@@ -343,35 +324,74 @@ export function ProjectSettings({
 	);
 }
 
-function ProjectHeader({
+/**
+ * Settings > Project: one repository's settings, picked at the top. Every
+ * part is a titled section over a card group, like the other pages.
+ */
+function ProjectPage({
 	project,
 	projects,
 	onSelect,
+	onSetUpEnvironment,
 }: {
 	project: Project;
 	projects: readonly Project[];
 	onSelect: (projectId: string) => void;
+	onSetUpEnvironment?: (projectId: string) => void;
 }) {
 	return (
-		<SettingsHeader
-			title={projectDisplayName(project)}
-			description={`${project.fullName} · ${project.branch}`}
-			action={
-				projects.length > 1 ? (
-					<MenuSelect
-						value={project.id}
-						onValueChange={onSelect}
-						options={projects.map((row) => ({
-							value: row.id,
-							label: projectDisplayName(row),
-						}))}
-						className="settings-project-select"
-						align="end"
-						aria-label="Project"
-					/>
-				) : undefined
-			}
-		/>
+		<>
+			<section className="settings-section" aria-label="Project">
+				<SettingsHeader
+					title="Project"
+					description="Settings per repository."
+				/>
+				<div className="settings-group">
+					<div className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-icon">
+								<GithubMark size={16} />
+							</span>
+							<div className="settings-row-text">
+								<span className="settings-row-title">
+									{projectDisplayName(project)}
+								</span>
+								<span className="settings-row-meta">
+									{project.fullName} · {project.branch}
+								</span>
+							</div>
+						</div>
+						{projects.length > 1 ? (
+							<div className="settings-row-actions">
+								<MenuSelect
+									value={project.id}
+									onValueChange={onSelect}
+									valueLabel="Switch project"
+									options={projects.map((row) => ({
+										value: row.id,
+										label: projectDisplayName(row),
+										title: row.fullName,
+									}))}
+									className="settings-project-select"
+									align="end"
+									aria-label="Project"
+								/>
+							</div>
+						) : null}
+					</div>
+				</div>
+			</section>
+			<EnvironmentSettings
+				projectId={project.id}
+				onSetUpWithAgent={
+					onSetUpEnvironment ? () => onSetUpEnvironment(project.id) : undefined
+				}
+			/>
+			<MachineSizeSettings projectId={project.id} />
+			<NetworkAccessSettings projectId={project.id} />
+			<ProjectSecretsSection project={project} />
+			<ProjectTrainingSettings projectId={project.id} />
+		</>
 	);
 }
 
@@ -403,50 +423,132 @@ function AccountSection({
 	loading,
 	error,
 	user,
+	signInMethods,
 	onSignOut,
 }: {
 	loading: boolean;
 	error?: string;
 	user?: AccountView["user"];
+	signInMethods?: readonly SignInMethod[];
 	onSignOut: () => void;
 }) {
 	if (loading) return <p className="settings-copy">Loading account…</p>;
 	if (error) return <p role="alert">{error}</p>;
+	const since = user?.createdAt ? memberSince(user.createdAt) : null;
 	return (
-		<section className="settings-section">
-			<SettingsHeader title="Account" description="Your ytimesy sign-in." />
-			<div className="settings-group">
-				<div className="settings-row">
-					<div className="settings-row-main settings-identity">
-						{user?.image ? (
-							<img src={user.image} width={40} height={40} alt="" />
-						) : (
-							<span className="settings-initials" aria-hidden="true">
-								{accountInitials(user ?? {})}
-							</span>
-						)}
-						<div className="settings-row-text">
-							<span className="settings-row-title">
-								{accountDisplayName(user ?? {})}
-							</span>
-							{user?.email ? (
-								<span className="settings-row-meta">{user.email}</span>
-							) : null}
+		<div className="settings-account">
+			<section className="settings-section">
+				<SettingsHeader title="Account" description="Your ytimesy sign-in." />
+				<div className="settings-group">
+					<div className="settings-row">
+						<div className="settings-row-main settings-identity">
+							{user?.image ? (
+								<img src={user.image} width={40} height={40} alt="" />
+							) : (
+								<span className="settings-initials" aria-hidden="true">
+									{accountInitials(user ?? {})}
+								</span>
+							)}
+							<div className="settings-row-text">
+								<span className="settings-row-title">
+									{accountDisplayName(user ?? {})}
+								</span>
+								{user?.email ? (
+									<span className="settings-row-meta">{user.email}</span>
+								) : null}
+							</div>
 						</div>
 					</div>
-					<div className="settings-row-actions">
-						<button
-							type="button"
-							className="settings-secondary"
-							onClick={onSignOut}
-						>
-							Sign out
-						</button>
+					{since ? (
+						<div className="settings-row">
+							<span className="settings-row-title">Member since</span>
+							<span className="settings-row-value">{since}</span>
+						</div>
+					) : null}
+				</div>
+			</section>
+			{signInMethods?.length ? (
+				<section className="settings-section" aria-label="Sign-in methods">
+					<SettingsHeader
+						title="Sign-in methods"
+						description="Ways you can sign in."
+					/>
+					<ul className="settings-group">
+						{signInMethods.map((method) => (
+							<li key={method} className="settings-row">
+								<div className="settings-row-main">
+									<span className="settings-row-icon">
+										{method === "github" ? (
+											<GithubMark size={16} />
+										) : method === "google" ? (
+											<GoogleMark size={15} />
+										) : (
+											<Mail size={16} strokeWidth={1.5} />
+										)}
+									</span>
+									<div className="settings-row-text">
+										<span className="settings-row-title">
+											{SIGN_IN_METHOD_LABELS[method]}
+										</span>
+										{method === "email" && user?.email ? (
+											<span className="settings-row-meta">{user.email}</span>
+										) : null}
+									</div>
+								</div>
+								<span className="settings-badge" data-tone="ok">
+									Linked
+								</span>
+							</li>
+						))}
+					</ul>
+				</section>
+			) : null}
+			<section className="settings-section" aria-label="Session">
+				<SettingsHeader title="Session" />
+				<div className="settings-group">
+					<div className="settings-row">
+						<div className="settings-row-text">
+							<span className="settings-row-title">Sign out</span>
+							<span className="settings-row-meta">On this browser only.</span>
+						</div>
+						<div className="settings-row-actions">
+							<button
+								type="button"
+								className="settings-secondary"
+								onClick={onSignOut}
+							>
+								Sign out
+							</button>
+						</div>
 					</div>
 				</div>
-			</div>
+			</section>
 			<DeleteAccount email={user?.email} />
-		</section>
+		</div>
+	);
+}
+
+/** Google's "G" in its own colors (sign-in method row). */
+function GoogleMark({ size = 16 }: { size?: number }) {
+	return (
+		<svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+			<path
+				fill="#4285F4"
+				d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82Z"
+			/>
+			<path
+				fill="#34A853"
+				d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24Z"
+			/>
+			<path
+				fill="#FBBC05"
+				d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29A11.97 11.97 0 0 0 0 12c0 1.94.46 3.77 1.29 5.38l3.98-3.09Z"
+			/>
+			<path
+				fill="#EA4335"
+				d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75Z"
+			/>
+		</svg>
 	);
 }
 
@@ -710,6 +812,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	const [name, setName] = useState("");
 	const [value, setValue] = useState("");
 	const [kind, setKind] = useState<ProjectSecretKind>("runtime");
+	const [adding, setAdding] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 
@@ -740,6 +843,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 			);
 			setName("");
 			setValue("");
+			setAdding(false);
 		} catch (cause) {
 			setError(
 				cause instanceof Error ? cause.message : "Could not save secret.",
@@ -772,21 +876,23 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		}
 	}
 
-	if (!project) {
-		return (
-			<SettingsHeader
-				title="Project"
-				description="Add a repository first; project settings appear here."
-			/>
-		);
-	}
+	if (!project) return null;
 
 	return (
-		<section className="settings-section settings-section-gap">
+		<section className="settings-section">
 			<SettingsHeader
 				title="Secrets"
 				description="Encrypted and never shown again."
 				details="Environment variables and runtime secrets are loaded as environment variables for the agent and services. Runtime secret values (and common encodings of them) are redacted from what the model and this chat see on a best-effort basis, and commits containing them are refused. Build secrets are only passed to environment setup."
+				action={
+					<button
+						type="button"
+						className="settings-secondary"
+						onClick={() => setAdding((open) => !open)}
+					>
+						{adding ? "Cancel" : "Add secret"}
+					</button>
+				}
 			/>
 			<ul className="settings-group">
 				{secrets.length === 0 ? (
@@ -820,61 +926,63 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 					))
 				)}
 			</ul>
-			<form
-				className="settings-group settings-form-grid"
-				onSubmit={(event) => void onSave(event)}
-			>
-				<label className="settings-field">
-					<span>Name</span>
-					<input
-						autoComplete="off"
-						spellCheck={false}
-						placeholder="DATABASE_URL"
-						value={name}
-						onChange={(event) => setName(event.target.value.toUpperCase())}
-					/>
-				</label>
-				<div className="settings-field">
-					<span>Type</span>
-					<MenuSelect
-						value={kind}
-						disabled={busy}
-						onValueChange={(next) => setKind(next as ProjectSecretKind)}
-						valueLabel={SECRET_KIND_LABELS[kind]}
-						options={(
-							Object.entries(SECRET_KIND_LABELS) as [
-								ProjectSecretKind,
-								string,
-							][]
-						).map(([id, label]) => ({
-							value: id,
-							label,
-							title: SECRET_KIND_HINTS[id],
-						}))}
-						aria-label="Secret type"
-					/>
-				</div>
-				<label className="settings-field">
-					<span>Value</span>
-					<input
-						type="password"
-						autoComplete="off"
-						spellCheck={false}
-						placeholder="Value"
-						value={value}
-						onChange={(event) => setValue(event.target.value)}
-					/>
-				</label>
-				<div className="settings-form-actions">
-					<button
-						type="submit"
-						className="settings-primary"
-						disabled={busy || !name.trim() || !value.trim()}
-					>
-						{busy ? "Saving…" : "Add secret"}
-					</button>
-				</div>
-			</form>
+			{adding ? (
+				<form
+					className="settings-group settings-form-grid"
+					onSubmit={(event) => void onSave(event)}
+				>
+					<label className="settings-field">
+						<span>Name</span>
+						<input
+							autoComplete="off"
+							spellCheck={false}
+							placeholder="DATABASE_URL"
+							value={name}
+							onChange={(event) => setName(event.target.value.toUpperCase())}
+						/>
+					</label>
+					<div className="settings-field">
+						<span>Type</span>
+						<MenuSelect
+							value={kind}
+							disabled={busy}
+							onValueChange={(next) => setKind(next as ProjectSecretKind)}
+							valueLabel={SECRET_KIND_LABELS[kind]}
+							options={(
+								Object.entries(SECRET_KIND_LABELS) as [
+									ProjectSecretKind,
+									string,
+								][]
+							).map(([id, label]) => ({
+								value: id,
+								label,
+								title: SECRET_KIND_HINTS[id],
+							}))}
+							aria-label="Secret type"
+						/>
+					</div>
+					<label className="settings-field">
+						<span>Value</span>
+						<input
+							type="password"
+							autoComplete="off"
+							spellCheck={false}
+							placeholder="Value"
+							value={value}
+							onChange={(event) => setValue(event.target.value)}
+						/>
+					</label>
+					<div className="settings-form-actions">
+						<button
+							type="submit"
+							className="settings-primary"
+							disabled={busy || !name.trim() || !value.trim()}
+						>
+							{busy ? "Saving…" : "Save secret"}
+						</button>
+					</div>
+				</form>
+			) : null}
 			{error ? <p role="alert">{error}</p> : null}
 		</section>
 	);

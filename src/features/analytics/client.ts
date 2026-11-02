@@ -5,11 +5,6 @@ import {
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
 import { redactDeep, replaySafeUrl } from "#/domain/redact-secrets";
-import {
-	onReplayConsentChange,
-	type ReplayConsent,
-	readReplayConsent,
-} from "./replay-consent";
 import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
 
 /** Where analytics events go; the page preconnects to it (src/routes/__root.tsx). */
@@ -37,7 +32,8 @@ function analyticsClient(): Promise<PostHog | null> {
 					capture_unhandled_rejections: true,
 					capture_console_errors: false,
 				},
-				// Replay starts only after the visitor accepts it (replay-consent.ts).
+				// Replay starts only for a signed-in user outside the EU/UK
+				// (setAnalyticsUser), masked by replayPrivacy.
 				disable_session_recording: true,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
@@ -84,22 +80,36 @@ function analyticsClient(): Promise<PostHog | null> {
 					return event;
 				},
 			});
-			applyReplayConsent(posthog, readReplayConsent());
-			onReplayConsentChange((choice) => applyReplayConsent(posthog, choice));
 			return posthog;
 		})
 		.catch(() => null);
 	return client;
 }
 
-function applyReplayConsent(posthog: PostHog, choice: ReplayConsent | null) {
-	if (choice === "accepted") posthog.startSessionRecording();
-	else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
+/** Do Not Track turns off everything the browser would send, replay included. */
+function doNotTrack() {
+	return typeof navigator !== "undefined" && navigator.doNotTrack === "1";
 }
 
-/** Starts the client so a consent choice made before any event applies now. */
-export function loadAnalytics() {
-	void analyticsClient().catch(() => undefined);
+/** Set by the old recording prompt (removed); a "Decline" given there still holds. */
+export const DECLINED_REPLAY_KEY = "ytimesy.replay-consent";
+function replayDeclined() {
+	try {
+		return globalThis.localStorage?.getItem(DECLINED_REPLAY_KEY) === "declined";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Masked session replay runs for signed-in users, except in the EU/UK
+ * (privacy-region.ts), under Do Not Track, or after an earlier decline;
+ * signing out stops it.
+ */
+function applyReplay(posthog: PostHog, record: boolean) {
+	if (record && !doNotTrack() && !replayDeclined()) {
+		if (!posthog.sessionRecordingStarted()) posthog.startSessionRecording();
+	} else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
 }
 
 /** Error tracking keeps the exception itself and the page path, nothing else. */
@@ -123,12 +133,16 @@ export function captureAnalytics<E extends AnalyticsEvent>(
 		.then((posthog) => posthog?.capture(event, properties))
 		.catch(() => undefined);
 }
-export function setAnalyticsUser(userId: string | null) {
+export function setAnalyticsUser(
+	userId: string | null,
+	options: { readonly replay: boolean },
+) {
 	void analyticsClient()
 		.then((posthog) => {
 			if (!posthog) return;
 			if (userId) posthog.identify(userId);
 			else posthog.reset();
+			applyReplay(posthog, Boolean(userId) && options.replay);
 		})
 		.catch(() => undefined);
 }
