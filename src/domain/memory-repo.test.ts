@@ -14,6 +14,7 @@ import {
 	isNearDuplicate,
 	isNewFileRequest,
 	likelySupersededPairs,
+	looksProjectSpecific,
 	memoryEntryPart,
 	memoryInstructions,
 	memoryLineShown,
@@ -22,6 +23,7 @@ import {
 	memoryMatchesPart,
 	memoryPath,
 	memoryQueryText,
+	memoryRerankPool,
 	memoryRulesPart,
 	PROJECT_RULES_CHARS,
 	PROJECT_RULES_LIMIT,
@@ -30,6 +32,7 @@ import {
 	projectRules,
 	projectRulesShown,
 	renderDreamInbox,
+	SAVE_HOOK_INSTRUCTIONS,
 	saveHookPrompt,
 	selectMemoryMatches,
 	supersedesLine,
@@ -397,6 +400,52 @@ describe("rules a request must follow without naming them", () => {
 		expect(dreamReviewSection(files)).toContain(`${style}:1 -> ${style}:2`);
 	});
 
+	it("keeps only the lines the reranker finds relevant, best reranked first, and the rules whatever it says", () => {
+		const scores = new Map([
+			[byText("Routes live"), 0.6],
+			[byText("Max line length"), 0.55],
+			[byText("Renamed scripts/"), 0.46],
+		]);
+		const match = {
+			lines,
+			scores,
+			alreadyShown: () => false,
+			today: "2026-10-18",
+		};
+		// The pool: the hybrid's picks and the convention line.
+		const pool = memoryRerankPool(match);
+		expect(pool.map((entry) => entry.text.slice(0, 20))).toEqual([
+			"Routes live under /a",
+			"Max line length is 1",
+			"Renamed scripts/ to ",
+		]);
+		const rerank = (relevant: Record<string, number>) =>
+			selectMemoryMatches({
+				...match,
+				query: "Fix the bug",
+				rerank: new Map(
+					pool.map((entry) => [
+						entry,
+						relevant[entry.text.slice(0, 20)] ?? 1e-5,
+					]),
+				),
+			}).map((entry) => entry.text.slice(0, 20));
+		expect(
+			rerank({ "Routes live under /a": 0.01, "Max line length is 1": 0.4 }),
+		).toEqual([
+			"Max line length is 1",
+			"Routes live under /a",
+			"Run the linter befor",
+		]);
+		// The convention line passes the reranker too.
+		expect(rerank({ "Renamed scripts/ to ": 0.2 })).toEqual([
+			"Renamed scripts/ to ",
+			"Run the linter befor",
+		]);
+		// Nothing relevant: nothing matched, however the hybrid scored it.
+		expect(rerank({})).toEqual(["Run the linter befor"]);
+	});
+
 	it("never retires an exception that names the rule it narrows", () => {
 		const tooling = memoryLines({
 			"tooling.md": [
@@ -434,6 +483,20 @@ describe("project rules", () => {
 		expect(rules.map((entry) => entry.text)).not.toContain(
 			"Always run pnpm check before saying done",
 		);
+	});
+
+	it("leaves out personal/ lines: a misfiled one would ride on every project's chats", () => {
+		const scoped = memoryLines({
+			"personal/reporting.md":
+				"- Customer summaries count rows, not quantities [scope: always; added: 2026-10-20]",
+			"projects/acme--1/http.md":
+				"- Every HTTP call goes through lib/http.ts [scope: always; added: 2026-10-01]",
+		});
+		expect(
+			projectRules({ lines: scoped, today: "2026-10-21" }).map(
+				(entry) => entry.path,
+			),
+		).toEqual(["projects/acme--1/http.md"]);
 	});
 
 	it("keeps the section to a few short lines", () => {
@@ -602,6 +665,39 @@ describe("where saves go and when they run", () => {
 			"this chat has no project: ignore ~/memory/projects/",
 		);
 		expect(none).toContain("`grep -rn <term> ~/memory/personal`");
+	});
+
+	it("files what a project chat learns about its code or data under the project", () => {
+		const project = memoryInstructions("full", {
+			url: "https://app/?chat=1",
+			project: "acme/web",
+			folder: "projects/acme-web--7",
+		});
+		expect(project).toContain(
+			"projects/acme-web--7/<topic>.md for anything learned here about this project's code, data or domain",
+		);
+		expect(project).toContain(
+			"personal/<topic>.md only for something about the user themself",
+		);
+		expect(SAVE_HOOK_INSTRUCTIONS).toContain(
+			"data, reports, customers or domain belongs to the project even when it sounds general",
+		);
+		// The two lines dev filed under personal/ (2026-11-02), and lines that belong there.
+		for (const text of [
+			"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.",
+			"Config lives in settings/app.yaml",
+			"Never deploy on Fridays",
+			"The orders table keys on customer_id",
+		])
+			expect([text, looksProjectSpecific(text)]).toEqual([text, true]);
+		for (const text of [
+			"Prefers short replies without preamble",
+			"Writes commit messages in the imperative mood",
+			"Works on a Mac with zsh",
+			"Prefers small functions in every repo",
+			"From the Notion page on startup strategy: talk to users every week",
+		])
+			expect([text, looksProjectSpecific(text)]).toEqual([text, false]);
 	});
 
 	it("tells the save hook the chat's folder, or personal entries only", () => {
