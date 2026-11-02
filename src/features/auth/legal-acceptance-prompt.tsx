@@ -76,7 +76,7 @@ export function LegalUpdateCard(props: { readonly onDismiss: () => void }) {
 	return (
 		<section
 			aria-label="Terms update"
-			className="fixed inset-x-4 bottom-4 z-[250] mx-auto flex max-w-md items-center gap-3 rounded-lg border bg-background py-2 pr-2 pl-4 text-sm shadow-lg"
+			className="fixed inset-x-4 top-14 z-[250] mx-auto flex max-w-md items-center gap-3 rounded-lg border bg-background py-2 pr-2 pl-4 text-sm shadow-lg"
 		>
 			<p className="flex-1 text-muted-foreground">
 				We updated our{" "}
