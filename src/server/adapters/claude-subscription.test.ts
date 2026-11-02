@@ -6,6 +6,7 @@ import { claudeCodeTurnRevision } from "#/domain/claude-code-route";
 import {
 	authorizeClaudeCodeProxy,
 	checkClaudeSetupToken,
+	claudePlanUsageForPicker,
 	claudeSubscriptionStatus,
 	disconnectClaudeSubscription,
 	normalizedSetupToken,
@@ -33,7 +34,8 @@ beforeEach(async () => {
 	   connection_revision text,failover jsonb);
 	 create table claude_subscription(user_id text primary key,sealed_token text not null,
 	   status text not null,message text,limited_until timestamptz,
-	   connected_at timestamptz not null default now(),updated_at timestamptz not null default now());
+	   connected_at timestamptz not null default now(),updated_at timestamptz not null default now(),
+	   plan_usage jsonb,plan_usage_at timestamptz);
 	 create table claude_code_turn_request(turn_id uuid primary key,user_id text not null,
 	   requests integer not null default 0,updated_at timestamptz not null default now());
 	 create table claude_code_session(session_id uuid primary key,user_id text not null,
@@ -303,5 +305,147 @@ describe("checks the token with Anthropic before saving", () => {
 		});
 		expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
 		expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+	});
+});
+
+describe("reads the Claude plan's usage for the picker", () => {
+	const reset = Math.floor(Date.now() / 1000) + 3600;
+	const usageHeaders = (fiveHour: string, status = "allowed") => ({
+		"anthropic-ratelimit-unified-status": status,
+		"anthropic-ratelimit-unified-reset": String(reset),
+		"anthropic-ratelimit-unified-5h-utilization": fiveHour,
+		"anthropic-ratelimit-unified-5h-reset": String(reset),
+		"anthropic-ratelimit-unified-7d-utilization": "0.2",
+		"anthropic-ratelimit-unified-7d-reset": String(reset + 86_400),
+	});
+	const answering = (status: number, headers: Record<string, string> = {}) =>
+		vi.fn<typeof fetch>(async () => new Response("{}", { status, headers }));
+	const percents = (
+		usage: Awaited<ReturnType<typeof claudePlanUsageForPicker>>,
+	) => usage?.windows.map((window) => window.usedPercent);
+
+	beforeEach(async () => {
+		await saveClaudeSubscriptionToken("u1", token, { fetch: answering(200) });
+	});
+
+	it("sends one 1-token Haiku request as Claude Code and saves the reading", async () => {
+		const fetch = answering(200, usageHeaders("0.4"));
+		const usage = await claudePlanUsageForPicker("u1", { fetch });
+		expect(percents(usage)).toEqual([40, 20]);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		const [url, init] = fetch.mock.calls[0] ?? [];
+		expect(url).toBe("https://api.anthropic.com/v1/messages");
+		const headers = new Headers(init?.headers);
+		expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+		expect(headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
+		const body = JSON.parse(String(init?.body));
+		expect(body).toMatchObject({ model: "claude-haiku-5-5", max_tokens: 1 });
+		expect(body.system[0].text).toBe(
+			"You are Claude Code, Anthropic's official CLI for Claude.",
+		);
+		const stored = (
+			await db.query<{ plan_usage: { windows: unknown[] } }>(
+				"select plan_usage from claude_subscription",
+			)
+		).rows[0];
+		expect(stored?.plan_usage.windows).toHaveLength(2);
+	});
+
+	it("sends at most one request per five minutes, however often the picker opens", async () => {
+		const fetch = answering(200, usageHeaders("0.4"));
+		await claudePlanUsageForPicker("u1", { fetch });
+		const again = await claudePlanUsageForPicker("u1", {
+			fetch: answering(200, usageHeaders("0.9")),
+		});
+		expect(percents(again)).toEqual([40, 20]);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		// Past five minutes it reads again.
+		await db.query(
+			"update claude_subscription set plan_usage_at=now()-interval '6 minutes'",
+		);
+		const later = answering(200, usageHeaders("0.9"));
+		expect(
+			percents(await claudePlanUsageForPicker("u1", { fetch: later })),
+		).toEqual([90, 20]);
+		expect(later).toHaveBeenCalledTimes(1);
+	});
+
+	it("shares one request between opens that arrive together", async () => {
+		let answer: (response: Response) => void = () => {};
+		const pending = vi.fn<typeof fetch>(
+			() => new Promise((resolve) => (answer = resolve)),
+		);
+		const first = claudePlanUsageForPicker("u1", { fetch: pending });
+		const second = claudePlanUsageForPicker("u1", { fetch: pending });
+		expect(second).toBe(first);
+		await vi.waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+		answer(new Response("{}", { status: 200, headers: usageHeaders("0.5") }));
+		expect(percents(await first)).toEqual([50, 20]);
+		expect(percents(await second)).toEqual([50, 20]);
+		expect(pending).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the last reading on failure and does not retry within five minutes", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await claudePlanUsageForPicker("u1", {
+			fetch: answering(200, usageHeaders("0.3")),
+		});
+		await db.query(
+			"update claude_subscription set plan_usage_at=now()-interval '6 minutes'",
+		);
+		const failing = vi.fn<typeof fetch>(async () => {
+			throw new TypeError("network");
+		});
+		expect(
+			percents(await claudePlanUsageForPicker("u1", { fetch: failing })),
+		).toEqual([30, 20]);
+		const next = answering(200, usageHeaders("0.9"));
+		expect(
+			percents(await claudePlanUsageForPicker("u1", { fetch: next })),
+		).toEqual([30, 20]);
+		expect(next).not.toHaveBeenCalled();
+		expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+	});
+
+	it("gives up after a short timeout", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const hanging = vi.fn<typeof fetch>(
+			(_url, init) =>
+				new Promise((_resolve, reject) =>
+					init?.signal?.addEventListener("abort", () =>
+						reject(init.signal?.reason),
+					),
+				),
+		);
+		expect(
+			await claudePlanUsageForPicker("u1", { fetch: hanging, timeoutMs: 10 }),
+		).toBeNull();
+	});
+
+	it("marks a refused token as refused and returns nothing", async () => {
+		for (const status of [401, 403]) {
+			await db.query(
+				"update claude_subscription set status='connected',plan_usage_at=null",
+			);
+			expect(
+				await claudePlanUsageForPicker("u1", { fetch: answering(status) }),
+			).toBeNull();
+			expect((await claudeSubscriptionStatus("u1")).status).toBe("refused");
+		}
+	});
+
+	it("records a spent plan from a rejected reading", async () => {
+		const usage = await claudePlanUsageForPicker("u1", {
+			fetch: answering(429, usageHeaders("1", "rejected")),
+		});
+		expect(usage?.status).toBe("rejected");
+		expect((await claudeSubscriptionStatus("u1")).status).toBe("limited");
+	});
+
+	it("sends nothing while Claude is not connected", async () => {
+		await disconnectClaudeSubscription("u1");
+		const fetch = answering(200, usageHeaders("0.4"));
+		expect(await claudePlanUsageForPicker("u1", { fetch })).toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
 	});
 });

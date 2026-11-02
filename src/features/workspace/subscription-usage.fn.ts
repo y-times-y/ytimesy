@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { claudeSubscriptionEnabled } from "#/domain/claude-code-route";
-import { readClaudePlanUsage } from "#/server/adapters/claude-subscription";
+import { claudePlanUsageForPicker } from "#/server/adapters/claude-subscription";
 import { readCodexSubscriptionUsage } from "#/server/adapters/codex-subscription";
 import { requireUser } from "#/server/auth/auth";
 
@@ -19,7 +19,8 @@ export const codexSubscriptionUsageFn = createServerFn({
 
 /**
  * The Claude plan's latest reading, taken from Anthropic's response headers
- * as Claude Code turns run; null while Claude is off, disconnected or unused.
+ * as Claude Code turns run, or read afresh when it is missing or over five
+ * minutes old; null while Claude is off, disconnected or unreadable.
  */
 export const claudePlanUsageFn = createServerFn({
 	method: "GET",
@@ -27,7 +28,7 @@ export const claudePlanUsageFn = createServerFn({
 	const user = await requireUser(getRequest().headers);
 	if (!claudeSubscriptionEnabled()) return null;
 	try {
-		return await readClaudePlanUsage(user.id);
+		return await claudePlanUsageForPicker(user.id);
 	} catch {
 		return null;
 	}

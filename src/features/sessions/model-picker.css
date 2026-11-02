@@ -655,3 +655,12 @@
 .model-picker-usage-bar[data-tone="low"] > span {
 	background: #f87171;
 }
+/* A plan's line under its section's caption; a fixed height so it never jumps in. */
+.model-picker-usage.model-picker-usage-section {
+	box-sizing: border-box;
+	align-items: center;
+	height: 20px;
+	margin: 0 0 6px;
+	padding: 0 var(--list-row-pad-x);
+	border-top: 0;
+}
