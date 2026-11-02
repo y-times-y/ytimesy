@@ -105,6 +105,8 @@ for (const name of [
 	"YTIMESY_PR_REPAIR_ENABLED",
 	// SuperGrok subscription sign-in and turns (off unless "1").
 	"YTIMESY_XAI_SUBSCRIPTION_ENABLED",
+	// Claude Code on the user's Claude subscription (off unless "1").
+	"YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED",
 	// Cloudflare Email Service sender for verification and password-reset mail.
 	"AUTH_EMAIL_FROM",
 	"CLOUDFLARE_EMAIL_ACCOUNT_ID",
