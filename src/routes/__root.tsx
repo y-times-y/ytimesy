@@ -40,6 +40,20 @@ export const Route = createRootRoute({
 			},
 		],
 		links: [
+			// The Y mark in the tab: dark artwork on light tab bars, light on dark.
+			{
+				rel: "icon",
+				type: "image/svg+xml",
+				href: "/brand/mark-dark.svg",
+				media: "(prefers-color-scheme: light)",
+			},
+			{
+				rel: "icon",
+				type: "image/svg+xml",
+				href: "/brand/mark-light.svg",
+				media: "(prefers-color-scheme: dark)",
+			},
+			{ rel: "apple-touch-icon", href: "/brand/github-avatar.png" },
 			// The text's font downloads with the stylesheet instead of after it.
 			{
 				rel: "preload",

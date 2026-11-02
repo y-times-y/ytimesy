@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ReactNode, Suspense, use } from "react";
 import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
+import { SITE_PREVIEW_META } from "../features/blog/posts";
 import { LandingPage } from "../features/landing/landing-page";
 import { FirstRun } from "../features/onboarding/first-run";
 import {
@@ -47,6 +48,7 @@ export const Route = createFileRoute("/")({
 	// paint the chat full width, its transcript at the top, then move both.
 	// Browsers without render-blocking expect links ignore it.
 	head: ({ loaderData }) => ({
+		meta: SITE_PREVIEW_META,
 		links: loaderData?.signedIn
 			? [
 					{

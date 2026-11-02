@@ -28,3 +28,40 @@ export const HARNESS_POST: BlogPost = {
 
 /** Newest first. */
 export const BLOG_POSTS: readonly BlogPost[] = [HARNESS_POST];
+
+/** Link-preview tags (Open Graph and X) with the harness post's banner as the card. */
+export function sitePreviewMeta({
+	title,
+	description,
+	url,
+}: {
+	title: string;
+	description: string;
+	url: string;
+}) {
+	const image = `${SITE_ORIGIN}${HARNESS_POST.banner}`;
+	return [
+		{ name: "description", content: description },
+		{ property: "og:type", content: "website" },
+		{ property: "og:site_name", content: "ytimesy" },
+		{ property: "og:title", content: title },
+		{ property: "og:description", content: description },
+		{ property: "og:url", content: url },
+		{ property: "og:image", content: image },
+		{ property: "og:image:width", content: "2400" },
+		{ property: "og:image:height", content: "1260" },
+		{ property: "og:image:alt", content: HARNESS_POST.bannerAlt },
+		{ name: "twitter:card", content: "summary_large_image" },
+		{ name: "twitter:title", content: title },
+		{ name: "twitter:description", content: description },
+		{ name: "twitter:image", content: image },
+	];
+}
+
+/** The front page's preview: what a shared ytimesy.com link shows. */
+export const SITE_PREVIEW_META = sitePreviewMeta({
+	title: "ytimesy: AI software engineer in the cloud",
+	description:
+		"Give it a task and it builds in its own cloud machine, then opens a pull request. Use your ChatGPT, Claude or Grok plan, or your API keys.",
+	url: `${SITE_ORIGIN}/`,
+});
