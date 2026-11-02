@@ -10,9 +10,12 @@ import {
 	dreamReviewSection,
 	droppedDetails,
 	EMPTY_MEMORY,
+	hasDurableCue,
+	isNearDuplicate,
 	isNewFileRequest,
 	likelySupersededPairs,
 	memoryEntryPart,
+	memoryInstructions,
 	memoryLineShown,
 	memoryLines,
 	memoryLinks,
@@ -20,12 +23,14 @@ import {
 	memoryPath,
 	memoryQueryText,
 	memoryRulesPart,
+	PROJECT_RULES_CHARS,
+	PROJECT_RULES_LIMIT,
 	parseMemoryLine,
 	parseSaveHookAnswer,
 	projectRules,
 	projectRulesShown,
-	projectRuleTier,
 	renderDreamInbox,
+	saveHookPrompt,
 	selectMemoryMatches,
 	supersedesLine,
 	withMemoryParts,
@@ -137,49 +142,62 @@ describe("memory on the request", () => {
 		);
 	});
 
-	it("selects at most eight lines above the cutoff, never twice", () => {
+	it("selects lines above the floor and near the best one, at most the limit, never twice", () => {
 		const files = {
 			"MEMORY.md": "- Prefers short answers",
 			"tooling.md": Array.from(
 				{ length: 12 },
 				(_, index) => `- Rule ${index}`,
 			).join("\n"),
-			"other.md": "- Uses Go modules [project: acme/api]",
 		};
 		const lines = memoryLines(files);
+		const rule = (text: string) => Number(/Rule (\d+)/.exec(text)?.[1] ?? 99);
 		const scores = new Map(
-			lines.map((entry, index) => [entry, 0.9 - index * 0.04]),
+			lines.map((entry) => [entry, 0.9 - 0.045 * rule(entry.text)]),
 		);
-		const picked = selectMemoryMatches({
-			lines,
-			scores,
-			alreadyShown: (raw) => raw === "- Rule 0",
-			today: "2026-10-15",
-			project: "acme/web",
-		});
-		expect(picked.map((entry) => entry.text)).toEqual([
+		const select = (limit?: number) =>
+			selectMemoryMatches({
+				lines,
+				scores,
+				alreadyShown: (raw) => raw === "- Rule 0",
+				today: "2026-10-15",
+				limit,
+			}).map((entry) => entry.text);
+		// Best shown line 0.855: lines down to 0.655 stay, the 0.63 tail does not.
+		expect(select()).toEqual([
 			"Rule 1",
 			"Rule 2",
 			"Rule 3",
 			"Rule 4",
 			"Rule 5",
-			"Rule 6",
-			"Rule 7",
-			"Rule 8",
 		]);
-		expect(memoryMatchesPart(picked.slice(0, 1))).toContain(
-			"tooling.md:2: - Rule 1",
-		);
-		const below = new Map(lines.map((entry) => [entry, 0.3]));
+		expect(select(4)).toEqual(["Rule 1", "Rule 2", "Rule 3", "Rule 4"]);
+		expect(
+			memoryMatchesPart(
+				memoryLines(files).filter((entry) => entry.text === "Rule 1"),
+			),
+		).toContain("tooling.md:2: - Rule 1");
+		const below = new Map(lines.map((entry) => [entry, 0.36]));
 		expect(
 			selectMemoryMatches({
 				lines,
 				scores: below,
 				alreadyShown: () => false,
 				today: "2026-10-15",
-				project: null,
 			}),
 		).toEqual([]);
+		// Only weak hits: no strong line to be near, so all of them above the floor stay.
+		const weak = new Map(
+			lines.map((entry) => [entry, rule(entry.text) < 3 ? 0.4 : 0.3]),
+		);
+		expect(
+			selectMemoryMatches({
+				lines,
+				scores: weak,
+				alreadyShown: () => false,
+				today: "2026-10-15",
+			}).map((entry) => entry.text),
+		).toEqual(["Rule 0", "Rule 1", "Rule 2"]);
 	});
 });
 
@@ -201,10 +219,16 @@ describe("dream inbox and save hook", () => {
 	it("parses bounded entries and drops anything unsafe", () => {
 		expect(
 			parseSaveHookAnswer(
-				'Sure: {"entries":[{"file":"tooling","text":"Uses pnpm, never npm","project":""},{"file":"../x.md","text":"bad"}]}',
+				'Sure: {"entries":[{"file":"tooling","text":"Uses pnpm, never npm","personal":""},{"file":"..","text":"bad"},{"file":"projects/acme--1/style.md","text":"Prefers tabs","personal":"how they write code everywhere"}]}',
 			),
 		).toEqual([
-			{ file: "tooling.md", text: "Uses pnpm, never npm", project: "" },
+			{ file: "tooling.md", text: "Uses pnpm, never npm" },
+			// A topic name only: any folder the model wrote is dropped.
+			{
+				file: "style.md",
+				text: "Prefers tabs",
+				personal: "how they write code everywhere",
+			},
 		]);
 		expect(parseSaveHookAnswer("no json")).toEqual([]);
 	});
@@ -212,23 +236,22 @@ describe("dream inbox and save hook", () => {
 	it("reads which shown line an entry replaces, and keeps brackets that are not metadata", () => {
 		expect(
 			parseSaveHookAnswer(
-				'{"entries":[{"file":"tooling.md","text":"Use pnpm","project":"","replaces":"tooling.md:3"},{"file":"log.md","text":"Prefix logs with [orders]","replaces":"nonsense"},{"file":"x.md","text":"Ends in [key: value]"}]}',
+				'{"entries":[{"file":"tooling.md","text":"Use pnpm","replaces":"projects/acme--1/tooling.md:3"},{"file":"log.md","text":"Prefix logs with [orders]","replaces":"nonsense"},{"file":"x.md","text":"Ends in [key: value]"}]}',
 			),
 		).toEqual([
 			{
 				file: "tooling.md",
 				text: "Use pnpm",
-				project: "",
-				replaces: { path: "tooling.md", line: 3 },
+				replaces: { path: "projects/acme--1/tooling.md", line: 3 },
 			},
-			{ file: "log.md", text: "Prefix logs with [orders]", project: "" },
-			{ file: "x.md", text: "Ends in key: value", project: "" },
+			{ file: "log.md", text: "Prefix logs with [orders]" },
+			{ file: "x.md", text: "Ends in key: value" },
 		]);
 		expect(
 			parseSaveHookAnswer(
 				'{"entries":[{"file":"y.md","text":"See [[other]]"}]}',
 			),
-		).toEqual([{ file: "y.md", text: "See other", project: "" }]);
+		).toEqual([{ file: "y.md", text: "See other" }]);
 	});
 });
 
@@ -253,26 +276,30 @@ describe("superseded entries", () => {
 				scores: new Map(lines.map((entry) => [entry, 0.9])),
 				alreadyShown: () => false,
 				today: "2026-10-15",
-				project: null,
 			}).map((entry) => entry.text),
 		).toEqual(["Use pnpm"]);
 	});
 });
 
 describe("rules a request must follow without naming them", () => {
+	const style = "projects/acme--1/style.md";
+	const tooling = "projects/acme--1/tooling.md";
 	const files = {
-		"style.md": [
+		"personal/editor.md":
+			"- New Python files use tabs, everywhere [added: 2026-10-19]",
+		[style]: [
 			'- New source files start with the line "# Copyright (c) Acme Corp" [added: 2026-01-12]',
 			'- License headers: replaced the copyright line with "# SPDX-License-Identifier: Apache-2.0" as the first line of new source files [added: 2026-05-30]',
 			"- New JSON files use 4-space indentation [added: 2026-10-18]",
 			"- Max line length is 100 [added: 2026-01-30]",
 		].join("\n"),
-		"tooling.md": [
+		[tooling]: [
 			"- CLI scripts live in scripts/ and use argparse [added: 2026-02-06]",
 			"- Renamed scripts/ to tools/: new CLI scripts go in tools/ [added: 2026-10-18]",
 			"- Run the linter before committing [scope: always; added: 2026-03-01]",
 		].join("\n"),
-		"api.md": "- Routes live under /api/v2 [added: 2026-03-06]",
+		"projects/acme--1/api.md":
+			"- Routes live under /api/v2 [added: 2026-03-06]",
 	};
 	const lines = memoryLines(files);
 	const byText = (part: string) =>
@@ -283,7 +310,6 @@ describe("rules a request must follow without naming them", () => {
 			scores,
 			alreadyShown: () => false,
 			today: "2026-10-18",
-			project: null,
 			query,
 		}).map((entry) => entry.text.slice(0, 20));
 
@@ -305,8 +331,9 @@ describe("rules a request must follow without naming them", () => {
 		expect(alwaysApplies(byText("Run the linter"), "Fix the bug")).toBe(true);
 	});
 
-	it("adds them without a similarity match, newest version only", () => {
-		// Nothing scores: only the always-applicable rules ride along.
+	it("adds them without a similarity match, newest version only, for the project's lines alone", () => {
+		// Nothing scores: only the always-applicable project rules ride along;
+		// personal/'s new-file rule is recalled only by a match.
 		expect(select("Add util/slug.py with slugify(text)", new Map())).toEqual([
 			"License headers: rep",
 			"Run the linter befor",
@@ -328,7 +355,7 @@ describe("rules a request must follow without naming them", () => {
 			"Renamed scripts/ to ",
 			"Run the linter befor",
 		]);
-		// Past the top eight, a convention line still gets one extra slot.
+		// Within the limit, a convention line keeps the last slot.
 		const crowded = memoryLines({
 			"misc.md": Array.from(
 				{ length: 8 },
@@ -349,11 +376,11 @@ describe("rules a request must follow without naming them", () => {
 				scores: crowdedScores(convention),
 				alreadyShown: () => false,
 				today: "2026-10-18",
-				project: null,
 			}).map((entry) => entry.text);
-		expect(pick(0.5)).toHaveLength(9);
-		expect(pick(0.5)).toContain("New CLI scripts go in tools/");
-		expect(pick(0.4)).toHaveLength(8);
+		expect(pick(0.5)).toHaveLength(6);
+		expect(pick(0.5).at(-1)).toBe("New CLI scripts go in tools/");
+		expect(pick(0.4)).toHaveLength(6);
+		expect(pick(0.4)).not.toContain("New CLI scripts go in tools/");
 		expect(
 			supersedesLine(byText("Renamed scripts/"), byText("CLI scripts live")),
 		).toBe(true);
@@ -364,10 +391,10 @@ describe("rules a request must follow without naming them", () => {
 			supersedesLine(byText("New source files"), byText("License headers")),
 		).toBe(false);
 		expect(likelySupersededPairs(files)).toEqual([
-			"style.md:1 -> style.md:2",
-			"tooling.md:1 -> tooling.md:2",
+			`${style}:1 -> ${style}:2`,
+			`${tooling}:1 -> ${tooling}:2`,
 		]);
-		expect(dreamReviewSection(files)).toContain("style.md:1 -> style.md:2");
+		expect(dreamReviewSection(files)).toContain(`${style}:1 -> ${style}:2`);
 	});
 
 	it("never retires an exception that names the rule it narrows", () => {
@@ -389,40 +416,44 @@ describe("project rules", () => {
 			"- Errors are JSON with a code field [scope: always; added: 2026-10-01]",
 			"- The orders API returns 50 rows per page",
 			"- Always run pnpm check before saying done [added: 2026-10-02]",
-			"- New entity IDs use ULIDs [added: 2026-10-03]",
+			"- New entity IDs use ULIDs [scope: always; added: 2026-10-03]",
 			"- Switched new entity IDs from ULIDs to UUIDv7 [added: 2026-10-09]",
-			"- Old webhook flags must stay [expires: 2026-01-01]",
-			"- Every log line uses lib/log.ts [project: other/app; scope: always]",
+			"- Old webhook flags must stay [scope: always; expires: 2026-01-01]",
+			"- Inferred: every file ends in a newline [scope: always; kind: inferred; added: 2026-10-10]",
 		].join("\n"),
 	});
 
-	it("takes standing rules by firmness, swapped for their later change, without facts", () => {
-		const rules = projectRules({
-			lines,
-			today: "2026-10-15",
-			project: "acme/web",
-		});
+	it("takes only scope: always rules, the user's first, swapped for their later change", () => {
+		const rules = projectRules({ lines, today: "2026-10-15" });
 		expect(rules.map((entry) => entry.text)).toEqual([
-			"Errors are JSON with a code field",
 			"Switched new entity IDs from ULIDs to UUIDv7",
-			"Always run pnpm check before saying done",
+			"Errors are JSON with a code field",
+			"Inferred: every file ends in a newline",
 		]);
+		// A standing do or don't without the key is recalled by match, not always on.
+		expect(rules.map((entry) => entry.text)).not.toContain(
+			"Always run pnpm check before saying done",
+		);
+	});
+
+	it("keeps the section to a few short lines", () => {
+		const many = memoryLines({
+			"rules.md": Array.from(
+				{ length: 9 },
+				(_, index) =>
+					`- Rule ${index} ${"x".repeat(150)} [scope: always; added: 2026-10-0${index + 1}]`,
+			).join("\n"),
+		});
+		const rules = projectRules({ lines: many, today: "2026-10-15" });
+		expect(rules.length).toBeLessThanOrEqual(PROJECT_RULES_LIMIT);
 		expect(
-			projectRules({ lines, today: "2026-10-15", project: "other/app" }).map(
-				(entry) => entry.text,
-			),
-		).toContain("Every log line uses lib/log.ts");
-		expect(
-			projectRuleTier({ text: "The orders API returns 50 rows", meta: {} }),
-		).toBeNull();
+			rules.reduce((total, entry) => total + entry.text.length, 0),
+		).toBeLessThanOrEqual(PROJECT_RULES_CHARS);
+		expect(rules[0].text.startsWith("Rule 8")).toBe(true);
 	});
 
 	it("is recognised as shown, so the read hook does not repeat a rule", () => {
-		const rules = projectRules({
-			lines,
-			today: "2026-10-15",
-			project: null,
-		});
+		const rules = projectRules({ lines, today: "2026-10-15" });
 		const part = memoryRulesPart(rules);
 		expect(projectRulesShown(part)).toBe(true);
 		expect(projectRulesShown(memoryEntryPart("- x"))).toBe(false);
@@ -477,23 +508,26 @@ describe("a replacement that loses details", () => {
 			{
 				file: "style.md",
 				text: "Every new file starts with an SPDX line",
-				project: "",
 				scope: "always",
 			},
-			{ file: "x.md", text: "Other", project: "" },
+			{ file: "x.md", text: "Other" },
 		]);
 	});
 });
 
 describe("embedding text", () => {
-	it("embeds one line as its file and text, and queries with Qwen3's instruction", async () => {
+	it("embeds one line as its topic and text, whatever its folder, and queries with Qwen3's instruction", async () => {
 		const { memoryLineEmbeddingText, memoryEmbeddingQuery } = await import(
 			"./memory-repo"
 		);
-		const [entry] = memoryLines({
-			"projects/web.md": "- Uses pnpm [source: x; added: 2026-10-15]",
+		const [legacy, moved] = memoryLines({
+			"web.md": "- Uses pnpm [source: x; added: 2026-10-15]",
+			"projects/acme-web--12/web.md":
+				"- Uses pnpm [source: x; added: 2026-10-15]",
 		});
-		expect(memoryLineEmbeddingText(entry)).toBe("projects/web: Uses pnpm");
+		expect(memoryLineEmbeddingText(legacy)).toBe("web: Uses pnpm");
+		// A line the layout moved keeps its vector.
+		expect(memoryLineEmbeddingText(moved)).toBe("web: Uses pnpm");
 		expect(memoryEmbeddingQuery("install a date library")).toBe(
 			"Instruct: Given a user's request to a coding agent, retrieve relevant memories\nQuery: install a date library",
 		);
@@ -538,8 +572,87 @@ describe("keys written outside the metadata brackets", () => {
 		const rules = projectRules({
 			lines: memoryLines({ "rules.md": `# Rules\n\n${outside}\n` }),
 			today: "2026-10-20",
-			project: null,
 		});
 		expect(rules.map((rule) => rule.text)).toEqual(["Use pnpm, never npm."]);
+	});
+});
+
+describe("where saves go and when they run", () => {
+	it("tells the agent the layout and to search only this chat's folders", () => {
+		const project = memoryInstructions("full", {
+			url: "https://app/?chat=1",
+			project: "acme/web",
+			folder: "projects/acme-web--7",
+		});
+		expect(project).toContain(
+			"~/memory/personal/<topic>.md holds notes about the user for every project",
+		);
+		expect(project).toContain(
+			"~/memory/projects/acme-web--7/<topic>.md holds this project's",
+		);
+		expect(project).toContain(
+			"`grep -rn <term> ~/memory/personal ~/memory/projects/acme-web--7`",
+		);
+		expect(project).not.toContain("`project: <name>`");
+		const none = memoryInstructions("full", {
+			url: "https://app/?chat=1",
+			project: null,
+		});
+		expect(none).toContain(
+			"this chat has no project: ignore ~/memory/projects/",
+		);
+		expect(none).toContain("`grep -rn <term> ~/memory/personal`");
+	});
+
+	it("tells the save hook the chat's folder, or personal entries only", () => {
+		const base = { message: "m", memory: "", files: [] };
+		expect(
+			saveHookPrompt({
+				...base,
+				project: "acme/web",
+				folder: "projects/acme-web--7",
+			}),
+		).toContain(
+			'Project of this chat: acme/web (entries go to projects/acme-web--7/ unless "personal" is set)',
+		);
+		expect(saveHookPrompt({ ...base, project: null })).toContain(
+			"Project of this chat: (none): save only personal entries, each with its reason",
+		);
+	});
+
+	it("skips the save hook's model call for messages without a durable cue", () => {
+		for (const text of [
+			"From now on always use pnpm",
+			"I prefer short replies",
+			"No, don't add comments there",
+			"We use Fly for deploys",
+			"Remember the staging URL",
+			"Our API is versioned by header",
+			"Switched to Postgres 17 last week",
+		])
+			expect(hasDurableCue(text)).toBe(true);
+		for (const text of [
+			"run the tests again",
+			"yes, do it",
+			"fix the failing build in ci",
+			"why does this fail?",
+			"/compact now please",
+			"ok thanks",
+		])
+			expect(hasDurableCue(text)).toBe(false);
+	});
+
+	it("calls an entry a copy only when it embeds close and keeps the same words", () => {
+		expect(
+			isNearDuplicate(
+				0.95,
+				"Uses pnpm for every install",
+				"Uses pnpm for installs",
+			),
+		).toBe(true);
+		expect(
+			isNearDuplicate(0.95, "Use npm for installs", "Use pnpm for installs"),
+		).toBe(false);
+		expect(isNearDuplicate(0.85, "Prefers tabs", "Prefers tabs")).toBe(false);
 	});
 });

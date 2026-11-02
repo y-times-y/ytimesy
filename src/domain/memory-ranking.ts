@@ -43,9 +43,9 @@ export function memoryTokens(text: string): string[] {
 	return out;
 }
 
-/** What a line is indexed by: its topic file (without .md) and its text. */
+/** What a line is indexed by: its topic name (no folder, no .md) and its text. */
 export function memoryLineSearchText(entry: Pick<MemoryLine, "path" | "text">) {
-	return `${entry.path.replace(/\.md$/, "")} ${entry.text}`;
+	return `${(entry.path.split("/").pop() ?? entry.path).replace(/\.md$/, "")} ${entry.text}`;
 }
 
 const BM25_K1 = 1.2;
@@ -94,6 +94,11 @@ export type HybridWeights = {
 	half: number;
 	/** Share of the best line score in its file added to every line of that file. */
 	file: number;
+	/**
+	 * The file boost applies only when its file's best line scores at least
+	 * this: a weak best hit is not evidence its neighbours matter.
+	 */
+	strong: number;
 };
 
 /**
@@ -108,12 +113,13 @@ export const HYBRID_WEIGHTS: HybridWeights = {
 	lexical: 0.24,
 	half: 4,
 	file: 0.25,
+	strong: 0.5,
 };
 
 /**
  * cosine + lexical, then each line gains `file` x how far the best other
- * line of its topic file scores above it (the neighbours of a strong hit:
- * a decision's later change usually sits in the same file).
+ * line of its topic file scores above it, when that line is a strong hit
+ * (`strong`): a decision's later change usually sits in the same file.
  */
 export function hybridScores<T extends Pick<MemoryLine, "path" | "text">>(
 	lines: readonly T[],
@@ -143,6 +149,7 @@ export function hybridScores<T extends Pick<MemoryLine, "path" | "text">>(
 		[...base].map(([entry, score]) => {
 			const [first, second] = best.get(entry.path) ?? [0, 0];
 			const neighbour = score >= first ? second : first;
+			if (neighbour < weights.strong) return [entry, score];
 			return [entry, score + weights.file * Math.max(0, neighbour - score)];
 		}),
 	);

@@ -1,3 +1,14 @@
+import {
+	isMemoryProjectKey,
+	memoryPathScope,
+	memoryProjectKeys,
+	PERSONAL_FOLDER,
+	projectFolderPath,
+	projectKeyId,
+	projectKeySlug,
+	projectSlug,
+	topicFileName,
+} from "./memory-layout";
 import { memoryTokens } from "./memory-ranking";
 import {
 	ALWAYS_SCOPE,
@@ -14,10 +25,11 @@ import {
 
 /**
  * Edits the user makes by hand in the Memory view: add a line, change its
- * text, move it between Personal (no `project:`) and a project, pin it as an
- * always-on rule (`scope: always`), or delete it. Each edit is a pure change
- * to one or two files; the server commits it as one memory commit. Lines
- * stay in the Agent Memory Repo format: `- <text> [key: value; …]`.
+ * text, move it between personal/ and a project's folder (projects/<key>/),
+ * pin it as an always-on rule (`scope: always`), or delete it. Each edit is
+ * a pure change to a few files; the server commits it as one memory commit.
+ * Lines stay in the Agent Memory Repo format: `- <text> [key: value; …]`.
+ * A "project" here is a project folder key (memory-layout.ts).
  */
 
 /** Where a manually added line says it came from. */
@@ -55,12 +67,46 @@ export function memoryEntryText(input: string): string | null {
 		: null;
 }
 
-/** A project name as `project:` metadata holds it; null when it cannot. */
+/**
+ * A project folder key as the view sends it; an owner/name (older clients)
+ * becomes its slug. Null when it cannot name a folder.
+ */
 export function memoryProjectValue(input: string): string | null {
 	const value = input.trim();
 	if (!value || value.length > MEMORY_PROJECT_MAX || /[;[\]\n\r]/.test(value))
 		return null;
-	return value;
+	return isMemoryProjectKey(value) ? value : projectSlug(value);
+}
+
+/**
+ * The folder key a project value resolves to in these files: the existing
+ * folder with its repository id (a renamed repo keeps its folder), else the
+ * one with its slug, else the value itself (a new folder).
+ */
+export function resolveProjectKey(files: MemoryFiles, key: string) {
+	const keys = memoryProjectKeys(files);
+	if (keys.includes(key)) return key;
+	const id = projectKeyId(key);
+	return (
+		(id !== null
+			? keys.find((other) => projectKeyId(other) === id)
+			: keys.find((other) => projectKeySlug(other) === key)) ?? key
+	);
+}
+
+/** `personal`, or `projects/<key>` for a project. */
+function folderFor(files: MemoryFiles, project: string | null) {
+	return project
+		? projectFolderPath(resolveProjectKey(files, project))
+		: PERSONAL_FOLDER;
+}
+
+/** The project a line applies to: its folder's key, or a legacy `project:` value. */
+function lineProjectOf(entry: MemoryLine) {
+	const scope = memoryPathScope(entry.path);
+	if (scope.kind === "project") return scope.key;
+	if (scope.kind === "personal") return null;
+	return entry.meta.project?.trim() || null;
 }
 
 /** A topic file new lines may go to: a Markdown path in the repo, not the index. */
@@ -68,6 +114,11 @@ export function memoryTopicPath(input: string): string | null {
 	const path = memoryPath(input);
 	if (!path || path === MEMORY_ENTRY) return null;
 	return path.endsWith(".md") ? path : null;
+}
+
+/** A topic in `folder`: a chosen file's name (whatever folder it was in) under that folder. */
+function topicIn(folder: string, topic: string) {
+	return `${folder}/${topicFileName(topic)}`;
 }
 
 /**
@@ -106,7 +157,7 @@ function replaceLine(
 }
 
 function scopeLabel(project: string | null) {
-	return project ? `project ${project}` : "Personal";
+	return project ? `project ${projectKeySlug(project)}` : "Personal";
 }
 
 function clipped(text: string) {
@@ -129,12 +180,19 @@ export type MemoryEditResult =
  * larger topic. Deterministic and model-free. DEFAULT_TOPIC when nothing
  * shares a word.
  */
-export function suggestMemoryTopic(files: MemoryFiles, text: string): string {
+export function suggestMemoryTopic(
+	files: MemoryFiles,
+	text: string,
+	/** Only topics in this folder (`personal`, `projects/<key>`); the answer is still a path. */
+	folder?: string,
+): string {
+	const fallback = folder ? `${folder}/${DEFAULT_TOPIC}` : DEFAULT_TOPIC;
 	const words = new Set(memoryTokens(text));
-	if (!words.size) return DEFAULT_TOPIC;
+	if (!words.size) return fallback;
 	let best: { path: string; score: number; size: number } | null = null;
 	for (const [path, content] of Object.entries(files)) {
 		if (!path.endsWith(".md") || path === MEMORY_ENTRY) continue;
+		if (folder && !path.startsWith(`${folder}/`)) continue;
 		const title = /^#\s+(.+)$/m.exec(content)?.[1] ?? path.replace(/\.md$/, "");
 		const titleWords = new Set(
 			memoryTokens(
@@ -158,7 +216,7 @@ export function suggestMemoryTopic(files: MemoryFiles, text: string): string {
 		)
 			best = { path, score, size: lines.length };
 	}
-	return best ? best.path : DEFAULT_TOPIC;
+	return best ? best.path : fallback;
 }
 
 /** A new line in plain words, stated by the user, dated today. */
@@ -178,11 +236,15 @@ export function addMemoryLine(
 		input.project === null ? null : memoryProjectValue(input.project);
 	if (input.project !== null && !project)
 		return { ok: false, error: "That project name cannot be stored." };
-	const topic = memoryTopicPath(input.topic || suggestMemoryTopic(files, text));
+	const folder = folderFor(files, project);
+	const chosen = input.topic
+		? memoryTopicPath(input.topic)
+		: suggestMemoryTopic(files, text, folder);
+	if (!chosen) return { ok: false, error: "That topic cannot be used." };
+	const topic = memoryTopicPath(topicIn(folder, chosen));
 	if (!topic) return { ok: false, error: "That topic cannot be used." };
 	const bullet = memoryBullet(text, {
 		...(input.always ? { [SCOPE_KEY]: ALWAYS_SCOPE } : {}),
-		...(project ? { project } : {}),
 		source: MANUAL_SOURCE,
 		added: input.today,
 	});
@@ -206,9 +268,11 @@ function invalidText(input: string) {
 }
 
 /**
- * Changes one line in place: its text, its scope (`project:`, null for
- * Personal), and whether it is an always-on rule. Other metadata is kept.
- * Only the given fields change; nothing to change is an error.
+ * Changes one line: its text and whether it is an always-on rule in place,
+ * and its scope (a project folder key, null for Personal) by moving it to
+ * the same topic in that folder. Other metadata is kept (a legacy
+ * `project:` key goes, since the folder says it now). Only the given fields
+ * change; nothing to change is an error.
  */
 export function updateMemoryLine(
 	files: MemoryFiles,
@@ -233,16 +297,25 @@ export function updateMemoryLine(
 			notes.push("Edit memory");
 		}
 	}
+	let target: string | null = null;
 	if (update.project !== undefined) {
 		const project =
 			update.project === null ? null : memoryProjectValue(update.project);
 		if (update.project !== null && !project)
 			return { ok: false, error: "That project name cannot be stored." };
-		const current = meta.project?.trim() || null;
-		if ((current ?? "").toLowerCase() !== (project ?? "").toLowerCase()) {
-			if (project) meta.project = project;
-			else delete meta.project;
-			notes.push(`Move memory to ${scopeLabel(project)}`);
+		const current = lineProjectOf(entry);
+		const wanted = project ? resolveProjectKey(files, project) : null;
+		const same =
+			current === null
+				? wanted === null
+				: wanted !== null &&
+					(current.toLowerCase() === wanted.toLowerCase() ||
+						(memoryPathScope(entry.path).kind === "legacy" &&
+							projectSlug(current) === projectKeySlug(wanted)));
+		if (!same) {
+			delete meta.project;
+			target = topicIn(folderFor(files, wanted), entry.path);
+			notes.push(`Move memory to ${scopeLabel(wanted)}`);
 		}
 	}
 	if (update.always !== undefined) {
@@ -256,10 +329,17 @@ export function updateMemoryLine(
 		}
 	}
 	if (!notes.length) return { ok: false, error: "Nothing changed." };
+	const bullet = memoryBullet(text, meta);
+	const message = `${notes.join("; ")}: ${clipped(text)}`;
+	if (!target || target === entry.path)
+		return { ok: true, changes: [replaceLine(files, entry, bullet)], message };
+	// A move: out of its file, onto the end of the same topic in the target folder.
+	const removed = replaceLine(files, entry, null);
+	const after = { ...files, [removed.path]: removed.content ?? "" };
 	return {
 		ok: true,
-		changes: [replaceLine(files, entry, memoryBullet(text, meta))],
-		message: `${notes.join("; ")}: ${clipped(text)}`,
+		changes: [removed, ...appendMemoryEntry(after, target, bullet)],
+		message,
 	};
 }
 

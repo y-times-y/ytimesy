@@ -1,9 +1,12 @@
 import { BookMarked, BookmarkPlus, ChevronRight } from "lucide-react";
 import { createContext, type ReactNode, useContext, useState } from "react";
-import type {
-	MemoryRecall,
-	RecalledMemoryLine,
-	SavedMemoryLine,
+import {
+	type MemoryRecall,
+	memoryRecallBreakdown,
+	memoryRecallCounts,
+	type RecalledChatMessage,
+	type RecalledMemoryLine,
+	type SavedMemoryLine,
 } from "#/domain/memory-marker";
 import { MEMORY_ENTRY } from "#/domain/memory-repo";
 import type { MemorySaveItem } from "#/domain/session-item";
@@ -116,13 +119,16 @@ function MemorySummary({
 	icon: Icon,
 	label,
 	note,
+	title,
 }: {
 	icon: typeof BookMarked;
 	label: string;
 	note?: string;
+	/** The tooltip: details behind the short label. */
+	title?: string;
 }) {
 	return (
-		<summary className="memory-marker-summary">
+		<summary className="memory-marker-summary" title={title}>
 			<Icon
 				className="memory-marker-icon"
 				size={14}
@@ -152,34 +158,52 @@ function RecalledRow({ line }: { line: RecalledMemoryLine }) {
 	);
 }
 
+function RecentRow({ message }: { message: RecalledChatMessage }) {
+	const { onOpenChat } = useContext(MemoryMarkerContext);
+	return (
+		<li className="memory-marker-entry">
+			<MemoryLineText text={message.text} />
+			<span className="memory-marker-meta">
+				{"From chat "}
+				<a
+					className="memory-marker-link"
+					href={`/?chat=${message.chatId}`}
+					onClick={(event) => {
+						if (onOpenChat?.(message.chatId)) event.preventDefault();
+					}}
+				>
+					{message.title || "another chat"}
+				</a>
+			</span>
+		</li>
+	);
+}
+
 /**
- * Under a request: the memory used for it, collapsed to a count. Open, it
- * lists the standing project rules and the lines matched for this request
- * as separate groups, one line per row with its file and source muted.
+ * Under a request: the memory used for it, collapsed to one count of
+ * everything it put in context (the index, rules, matched lines, other
+ * chats' messages), the breakdown in its tooltip. Open, it lists each group.
  */
 export function MemoryRecallNote({ recall }: { recall: MemoryRecall }) {
-	if (!recall.index && !recall.lines.length) return null;
+	const counts = memoryRecallCounts(recall);
+	if (!counts.total) return null;
 	const rules = recall.lines.filter((line) => line.rule);
 	const matched = recall.lines.filter((line) => !line.rule);
+	const recent = recall.recent ?? [];
+	const groups = [rules.length, matched.length, recent.length].filter(
+		Boolean,
+	).length;
 	return (
 		<details className="memory-marker" data-kind="recall">
 			<MemorySummary
 				icon={BookMarked}
-				label={
-					recall.lines.length
-						? `Used ${count(recall.lines.length)}`
-						: "Used the memory index"
-				}
-				note={
-					rules.length
-						? `${rules.length} project ${rules.length === 1 ? "rule" : "rules"}`
-						: undefined
-				}
+				label={`Used ${count(counts.total)}`}
+				title={memoryRecallBreakdown(recall)}
 			/>
 			<div className="memory-marker-body">
 				{rules.length ? (
 					<section className="memory-marker-group" aria-label="Project rules">
-						<div className="memory-marker-group-title">Project rules</div>
+						<div className="memory-marker-group-title">Rules</div>
 						<ul className="memory-marker-lines">
 							{rules.map((line) => (
 								<RecalledRow key={`${line.path}:${line.text}`} line={line} />
@@ -190,12 +214,10 @@ export function MemoryRecallNote({ recall }: { recall: MemoryRecall }) {
 				{matched.length ? (
 					<section
 						className="memory-marker-group"
-						aria-label={rules.length ? "Matched this request" : undefined}
+						aria-label={groups > 1 ? "Matched this request" : undefined}
 					>
-						{rules.length ? (
-							<div className="memory-marker-group-title">
-								Matched this request
-							</div>
+						{groups > 1 ? (
+							<div className="memory-marker-group-title">Matched</div>
 						) : null}
 						<ul className="memory-marker-lines">
 							{matched.map((line) => (
@@ -204,11 +226,29 @@ export function MemoryRecallNote({ recall }: { recall: MemoryRecall }) {
 						</ul>
 					</section>
 				) : null}
+				{recent.length ? (
+					<section
+						className="memory-marker-group"
+						aria-label="From other chats"
+					>
+						<div className="memory-marker-group-title">Other chats</div>
+						<ul className="memory-marker-lines">
+							{recent.map((message) => (
+								<RecentRow
+									key={`${message.chatId}:${message.text}`}
+									message={message}
+								/>
+							))}
+						</ul>
+					</section>
+				) : null}
 				{recall.index ? (
 					<div className="memory-marker-meta memory-marker-index">
-						{"Memory index "}
+						{"Index "}
 						<FileLink path={MEMORY_ENTRY} />
-						{" attached at the start of this chat"}
+						{recall.indexLines
+							? ` · ${recall.indexLines} ${recall.indexLines === 1 ? "line" : "lines"}`
+							: null}
 					</div>
 				) : null}
 			</div>

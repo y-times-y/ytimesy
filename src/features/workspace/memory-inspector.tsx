@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
 	ChevronDown,
+	ChevronRight,
+	Folder,
 	FolderInput,
 	Pencil,
 	Pin,
@@ -13,7 +15,16 @@ import {
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { MEMORY_EDIT_TEXT_MAX, type MemoryLineRef } from "#/domain/memory-edit";
 import {
+	isMemoryProjectKey,
+	keyMatchesProject,
+	memoryProjectKey,
+	memoryProjectOf,
+	projectKeySlug,
+	projectNameMatches,
+} from "#/domain/memory-layout";
+import {
 	type MemoryRow,
+	memoryFolders,
 	memoryRows,
 	memoryScopes,
 	PERSONAL_SCOPE,
@@ -77,10 +88,20 @@ export const memoryLineRef = (row: MemoryRow): MemoryLineRef => ({
 	text: row.text,
 });
 
-/** Scope names: Personal, then each project by its display name. */
+/** A project the Memory view can name and move lines to. */
+export type MemoryViewProject = Pick<
+	Project,
+	"fullName" | "name" | "repositoryId" | "repositories"
+>;
+
+/**
+ * Scope names: Personal, then each project by its display name. A scope's
+ * value is its project folder key (projects/<key>/); the user's projects
+ * without a folder yet get the key their first line will create.
+ */
 export function useMemoryScopeNames(
 	rows: readonly MemoryRow[],
-	knownProjects?: readonly Pick<Project, "fullName" | "name">[],
+	knownProjects?: readonly MemoryViewProject[],
 ) {
 	const queryClient = useQueryClient();
 	const projectList =
@@ -88,16 +109,29 @@ export function useMemoryScopeNames(
 	const scopes = useMemo(() => memoryScopes(rows), [rows]);
 	const names = useMemo(() => {
 		const map = new Map<string, { value: string; label: string }>();
-		for (const project of projectList ?? [])
-			map.set(project.fullName.toLowerCase(), {
-				value: project.fullName,
-				label: projectDisplayName(project),
-			});
-		for (const entry of scopes)
-			if (entry.project && !map.has(entry.project.toLowerCase()))
-				map.set(entry.project.toLowerCase(), {
-					value: entry.project,
-					label: projectFolderName(entry.project),
+		const present = scopes.flatMap((entry) =>
+			entry.project ? [entry.project] : [],
+		);
+		for (const project of projectList ?? []) {
+			const ref = memoryProjectOf(project);
+			const value =
+				present.find(
+					(key) => isMemoryProjectKey(key) && keyMatchesProject(key, ref),
+				) ?? memoryProjectKey(ref);
+			const name = { value, label: projectDisplayName(project) };
+			map.set(value.toLowerCase(), name);
+			// Lines still tagged by name (before the layout moved them).
+			for (const key of present)
+				if (!isMemoryProjectKey(key) && projectNameMatches(key, ref))
+					map.set(key.toLowerCase(), name);
+		}
+		for (const key of present)
+			if (!map.has(key.toLowerCase()))
+				map.set(key.toLowerCase(), {
+					value: key,
+					label: isMemoryProjectKey(key)
+						? projectKeySlug(key)
+						: projectFolderName(key),
 				});
 		return map;
 	}, [projectList, scopes]);
@@ -109,28 +143,35 @@ export function useMemoryScopeNames(
 	/** Where a line can live: Personal, then every known project. */
 	const choices: MemoryMenuChoice[] = [
 		{ value: null, label: "Personal" },
-		...[...names.values()]
+		...[
+			...new Map(
+				[...names.values()].map((name) => [name.value, name] as const),
+			).values(),
+		]
 			.sort((a, b) => a.label.localeCompare(b.label))
 			.map((name) => ({ value: name.value, label: name.label })),
 	];
 	const projectLabel = (project: string | null) =>
 		project
-			? (names.get(project.toLowerCase())?.label ?? projectFolderName(project))
+			? (names.get(project.toLowerCase())?.label ?? projectKeySlug(project))
 			: "Personal";
 	return { scopes, scopeTitle, choices, projectLabel };
 }
 
 /**
- * The user's memory as a list: a one-line composer, Personal and each
- * project as scopes, lines by topic with inline edit, move, pin and delete
- * (each one memory commit), and a short Dreaming card. The same view fills
- * the right panel and the Memory page's List view, beside its graph.
+ * The user's memory: a one-line composer, lines with inline edit, move,
+ * pin and delete (each one memory commit), and a short Dreaming card.
+ * Arranged as a list (Personal and each project as scope chips, lines by
+ * topic or newest) in the right panel and the Memory page's List view, or
+ * as the repo's folder tree (Personal, each project, their topic files) in
+ * the Memory page's Tree view.
  */
 export function MemoryInspector({
 	active,
 	focus,
 	onOpenChat,
 	layout = "panel",
+	arrangement = "list",
 	projects: knownProjects,
 }: {
 	active: boolean;
@@ -139,7 +180,9 @@ export function MemoryInspector({
 	onOpenChat: (chatId: string) => boolean;
 	/** "page": the full-page Memory view from the left sidebar. */
 	layout?: "panel" | "page";
-	projects?: readonly Pick<Project, "fullName" | "name">[];
+	/** "tree": folders, then topic files, then lines, as the repo holds them. */
+	arrangement?: "list" | "tree";
+	projects?: readonly MemoryViewProject[];
 }) {
 	const readMemory = useServerFn(readMemoryFn);
 	const readDreams = useServerFn(readMemoryDreamsFn);
@@ -295,8 +338,10 @@ export function MemoryInspector({
 		: order === "newest"
 			? recentMemoryRows(inScope, 500)
 			: inScope;
+	const tree = arrangement === "tree" && !searching;
 	const groups =
-		searching || order === "newest" ? null : rowsByTopic(shown, repo);
+		searching || order === "newest" || tree ? null : rowsByTopic(shown, repo);
+	const folders = tree ? memoryFolders(rows, repo) : null;
 	const defaultProject = scope?.startsWith("project:")
 		? (scopes.find((entry) => entry.id === scope)?.project ?? null)
 		: null;
@@ -305,7 +350,7 @@ export function MemoryInspector({
 			key={rowKey(row)}
 			row={row}
 			fresh={fresh}
-			showScope={scope === null || searching}
+			showScope={(scope === null && !tree) || searching}
 			showTopic={showTopic}
 			scopeLabel={scopeTitle(rowScope(row))}
 			topicTitle={titles[row.path] ?? row.path}
@@ -400,7 +445,11 @@ export function MemoryInspector({
 				) : (
 					<div className="memory-list" ref={listRef}>
 						<div className="memory-list-head">
-							{searching ? (
+							{tree ? (
+								<h3 className="memory-matches">
+									{live.length} {live.length === 1 ? "memory" : "memories"}
+								</h3>
+							) : searching ? (
 								<h3 className="memory-matches">
 									{shown.length} {shown.length === 1 ? "match" : "matches"}
 								</h3>
@@ -459,22 +508,24 @@ export function MemoryInspector({
 										</button>
 									) : null}
 								</label>
-								<fieldset className="memory-order" aria-label="Order lines">
-									<button
-										type="button"
-										aria-pressed={order === "topic"}
-										onClick={() => setOrder("topic")}
-									>
-										Topics
-									</button>
-									<button
-										type="button"
-										aria-pressed={order === "newest"}
-										onClick={() => setOrder("newest")}
-									>
-										Newest
-									</button>
-								</fieldset>
+								{tree ? null : (
+									<fieldset className="memory-order" aria-label="Order lines">
+										<button
+											type="button"
+											aria-pressed={order === "topic"}
+											onClick={() => setOrder("topic")}
+										>
+											Topics
+										</button>
+										<button
+											type="button"
+											aria-pressed={order === "newest"}
+											onClick={() => setOrder("newest")}
+										>
+											Newest
+										</button>
+									</fieldset>
+								)}
 							</div>
 						</div>
 						{added ? (
@@ -482,7 +533,57 @@ export function MemoryInspector({
 								{rowItem(added, true, true)}
 							</ul>
 						) : null}
-						{groups ? (
+						{folders ? (
+							<div className="memory-tree">
+								{folders.map((folder) => (
+									<details key={folder.id} className="memory-folder" open>
+										<summary
+											title={
+												folder.project
+													? `Used only in ${scopeTitle(folder.id)}`
+													: "Used in every project"
+											}
+										>
+											<ChevronRight
+												className="memory-folder-chevron"
+												size={14}
+												strokeWidth={1.5}
+												aria-hidden="true"
+											/>
+											<Folder size={14} strokeWidth={1.5} aria-hidden="true" />
+											{scopeTitle(folder.id)}
+											<span className="memory-muted">{folder.count}</span>
+										</summary>
+										<div className="memory-folder-body">
+											{folder.topics.length ? (
+												folder.topics.map((group) => (
+													<TopicGroup
+														key={group.path}
+														path={group.path}
+														title={group.title}
+														count={
+															group.rows.filter((row) => !row.replaced).length
+														}
+														content={repo[group.path] ?? ""}
+														focused={focusTopic === group.path}
+													>
+														<ul className="memory-rows">
+															{group.rows
+																.filter((row) => row !== added)
+																.map((row) => rowItem(row, false))}
+														</ul>
+													</TopicGroup>
+												))
+											) : (
+												<p className="memory-muted memory-folder-empty">
+													Nothing here yet.
+												</p>
+											)}
+										</div>
+									</details>
+								))}
+							</div>
+						) : groups ? (
 							groups.map((group) => (
 								<TopicGroup
 									key={group.path}

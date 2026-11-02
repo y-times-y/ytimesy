@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	memoryChangeSummary,
+	memoryFolders,
 	memoryRows,
 	memoryScopes,
 	PERSONAL_SCOPE,
@@ -155,5 +156,44 @@ describe("what a dream changed", () => {
 			resolved: [],
 			removed: [],
 		});
+	});
+});
+
+describe("the folder tree", () => {
+	const laidOut = {
+		"MEMORY.md": "# Memory\n\n## Index\n- [[personal/style]]\n",
+		"personal/style.md": "# Style\n\n- Prefers tabs [added: 2026-10-02]\n",
+		"projects/acme-web--7/api.md":
+			"# API\n\n- Errors are problem+json [scope: always; added: 2026-10-16]\n- Old note [superseded-by: x]\n",
+		"projects/acme-web--7/deploy.md": "# Deploy\n\n- Ship on Tuesdays\n",
+	};
+	const rows = memoryRows(laidOut, "2026-10-20");
+
+	it("reads a line's project from its folder", () => {
+		expect(
+			rows.find((row) => row.text === "Errors are problem+json")?.project,
+		).toBe("acme-web--7");
+		expect(rows.find((row) => row.text === "Prefers tabs")?.project).toBe(
+			undefined,
+		);
+	});
+
+	it("is Personal, then each project folder, each with its topic files", () => {
+		const folders = memoryFolders(rows, laidOut);
+		expect(
+			folders.map((folder) => [
+				folder.id,
+				folder.count,
+				folder.rules,
+				folder.topics.map((topic) => topic.title),
+			]),
+		).toEqual([
+			[PERSONAL_SCOPE, 1, 0, ["Style"]],
+			["project:acme-web--7", 2, 1, ["API", "Deploy"]],
+		]);
+		expect(folders[1].topics[0].rows.map((row) => row.text)).toEqual([
+			"Errors are problem+json",
+			"Old note",
+		]);
 	});
 });

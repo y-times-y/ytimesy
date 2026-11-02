@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { jsonbText } from "#/domain/jsonb";
+import { type MemoryProject, memoryRecallKey } from "#/domain/memory-layout";
 import { type SavedMemoryLine, withSavedMemory } from "#/domain/memory-marker";
 import { MEMORY_MODES, type MemoryMode } from "#/domain/memory-repo";
 import { chosenRoute, type ModelRoute } from "#/domain/model-failover";
@@ -95,8 +96,10 @@ export async function memoryDreamCandidates(idleSeconds: number, limit = 50) {
 export type MemoryChat = {
 	id: string;
 	title: string;
-	/** The project's repository (owner/name); `project:` metadata uses it. */
+	/** The project's repository (owner/name). */
 	project: string | null;
+	/** The project with its repository ids: which projects/<key>/ folder is its. */
+	projectRef?: MemoryProject | null;
 	updatedAt: Date;
 	items: SessionItem[];
 };
@@ -108,31 +111,46 @@ export async function memoryChatsSince(
 	limit = 10,
 ): Promise<MemoryChat[]> {
 	const rows = (
-		await database().query<{
-			id: string;
-			title: string;
-			project: string | null;
-			items: unknown;
-			updated_at: Date;
-		}>(
-			`select s.id,s.title,p.full_name as project,s.items,max(t.updated_at) as updated_at
+		await database().query<ChatRow>(
+			`select s.id,s.title,p.full_name as project,p.name as project_name,(select coalesce(array_agg(r.repository_id::float8 order by r.position),array[p.repository_id::float8]) from project_repository r where r.project_id=p.id) as project_repository_ids,s.items,max(t.updated_at) as updated_at
 			 from agent_session s join api_turn t on t.session_id=s.id and t.user_id=s.user_id
 			 left join project p on p.id=s.project_id
 			 where s.user_id=$1 and s.parent_session_id is null
 			   and t.state in ('completed','failed','cancelled')
 			   and ($2::timestamptz is null or t.updated_at > $2)
 			   and not exists(select 1 from harness_evaluation_run e where e.root_session_id=s.id)
-			 group by s.id,p.full_name order by max(t.updated_at) desc limit $3`,
+			 group by s.id,p.id order by max(t.updated_at) desc limit $3`,
 			[userId, since, limit],
 		)
 	).rows;
-	return rows.map((row) => ({
+	return rows.map(chatFromRow);
+}
+
+type ChatRow = {
+	id: string;
+	title: string;
+	project: string | null;
+	project_name: string | null;
+	project_repository_ids: (number | string)[] | null;
+	items: unknown;
+	updated_at: Date;
+};
+
+function chatFromRow(row: ChatRow): MemoryChat {
+	return {
 		id: row.id,
 		title: row.title,
 		project: row.project,
+		projectRef: row.project
+			? {
+					fullName: row.project,
+					name: row.project_name,
+					repositoryIds: (row.project_repository_ids ?? []).map(Number),
+				}
+			: null,
 		updatedAt: row.updated_at,
 		items: sessionItemsFromUnknown(row.items),
-	}));
+	};
 }
 
 /** One of the user's own chats, for read_source; never another user's. */
@@ -141,26 +159,12 @@ export async function memoryChat(
 	sessionId: string,
 ): Promise<MemoryChat | null> {
 	const row = (
-		await database().query<{
-			id: string;
-			title: string;
-			project: string | null;
-			items: unknown;
-			updated_at: Date;
-		}>(
-			"select s.id,s.title,p.full_name as project,s.items,s.updated_at from agent_session s left join project p on p.id=s.project_id where s.id=$1 and s.user_id=$2",
+		await database().query<ChatRow>(
+			`select s.id,s.title,p.full_name as project,p.name as project_name,(select coalesce(array_agg(r.repository_id::float8 order by r.position),array[p.repository_id::float8]) from project_repository r where r.project_id=p.id) as project_repository_ids,s.items,s.updated_at from agent_session s left join project p on p.id=s.project_id where s.id=$1 and s.user_id=$2`,
 			[sessionId, userId],
 		)
 	).rows[0];
-	return row
-		? {
-				id: row.id,
-				title: row.title,
-				project: row.project,
-				updatedAt: row.updated_at,
-				items: sessionItemsFromUnknown(row.items),
-			}
-		: null;
+	return row ? chatFromRow(row) : null;
 }
 
 /** The model route of the user's latest finished root-chat turn: their own model and credentials. */
@@ -247,16 +251,87 @@ export async function saveMemoryEmbeddings(
 	);
 }
 
-/** owner/name of a project, for `project:` metadata. */
-export async function memoryProjectName(userId: string, projectId: string) {
+type ProjectRow = {
+	full_name: string;
+	name: string | null;
+	repository_ids: (number | string)[] | null;
+};
+const PROJECT_SELECT = `select p.full_name,p.name,(select coalesce(array_agg(r.repository_id::float8 order by r.position),array[p.repository_id::float8]) from project_repository r where r.project_id=p.id) as repository_ids from project p`;
+const projectFromRow = (row: ProjectRow): MemoryProject => ({
+	fullName: row.full_name,
+	name: row.name,
+	repositoryIds: (row.repository_ids ?? []).map(Number),
+});
+
+/** A chat's project as memory scopes it: owner/name and its repository ids. */
+export async function memoryProject(
+	userId: string,
+	projectId: string,
+): Promise<MemoryProject | null> {
+	const row = (
+		await database().query<ProjectRow>(
+			`${PROJECT_SELECT} where p.id=$1 and p.user_id=$2`,
+			[projectId, userId],
+		)
+	).rows[0];
+	return row ? projectFromRow(row) : null;
+}
+
+/** Every project of the user (archived too): legacy `project:` names map to their folders. */
+export async function memoryProjects(userId: string): Promise<MemoryProject[]> {
 	return (
-		(
-			await database().query<{ full_name: string }>(
-				"select full_name from project where id=$1 and user_id=$2",
-				[projectId, userId],
-			)
-		).rows[0]?.full_name ?? null
+		await database().query<ProjectRow>(
+			`${PROJECT_SELECT} where p.user_id=$1 order by p.created_at`,
+			[userId],
+		)
+	).rows.map(projectFromRow);
+}
+
+const recallHash = (text: string) =>
+	createHash("sha256").update(memoryRecallKey(text)).digest("hex");
+
+/** Notes that memory lines were attached to a request (by text), for dreams to retire unused ones. */
+export async function recordMemoryRecalls(
+	userId: string,
+	texts: readonly string[],
+) {
+	const hashes = [...new Set(texts.map(recallHash))];
+	if (!hashes.length) return;
+	await database().query(
+		`insert into memory_line_recall(user_id,line_hash)
+		 select $1,h from unnest($2::text[]) as h
+		 on conflict(user_id,line_hash) do update set recalled_at=now(),recall_count=memory_line_recall.recall_count+1`,
+		[userId, hashes],
 	);
+}
+
+/**
+ * When each of these lines was last recalled (YYYY-MM-DD, by
+ * memoryRecallKey), and since when the user's recalls are tracked at all.
+ */
+export async function memoryRecalls(
+	userId: string,
+	texts: readonly string[],
+): Promise<{ recalled: Map<string, string>; since: string | null }> {
+	const byHash = new Map(texts.map((text) => [recallHash(text), text]));
+	const [rows, first] = await Promise.all([
+		byHash.size
+			? database().query<{ line_hash: string; day: string }>(
+					"select line_hash,to_char(recalled_at at time zone 'UTC','YYYY-MM-DD') as day from memory_line_recall where user_id=$1 and line_hash=any($2::text[])",
+					[userId, [...byHash.keys()]],
+				)
+			: Promise.resolve({ rows: [] as { line_hash: string; day: string }[] }),
+		database().query<{ day: string | null }>(
+			"select to_char(min(first_recalled_at) at time zone 'UTC','YYYY-MM-DD') as day from memory_line_recall where user_id=$1",
+			[userId],
+		),
+	]);
+	const recalled = new Map<string, string>();
+	for (const row of rows.rows) {
+		const text = byHash.get(row.line_hash);
+		if (text !== undefined) recalled.set(memoryRecallKey(text), row.day);
+	}
+	return { recalled, since: first.rows[0]?.day ?? null };
 }
 
 /** Titles of the user's own chats, for "from chat <title>" under recalled memory. */
@@ -364,6 +439,8 @@ export async function recentUnsavedMessages(
 	userId: string,
 	exceptSessionId: string,
 	windowSeconds: number,
+	/** Only chats of this project (null: only chats without one). */
+	projectId: string | null,
 	limit = 3,
 ): Promise<RecentChatMessage[]> {
 	const rows = (
@@ -379,6 +456,7 @@ export async function recentUnsavedMessages(
 			   group by session_id)
 			 select s.id::text as id,s.title,m.e->>'text' as text,r.at
 			 from recent r join agent_session s on s.id=r.session_id and s.user_id=$1 and s.parent_session_id is null
+			   and s.project_id is not distinct from $5::uuid
 			 join lateral (select x.e,x.i from jsonb_array_elements(s.items) with ordinality as x(e,i)
 			   where x.e->>'kind'='userMessage' order by x.i desc limit 1) m on true
 			 where not exists(select 1 from jsonb_array_elements(s.items) with ordinality as y(e,j)
@@ -387,7 +465,7 @@ export async function recentUnsavedMessages(
 			     where u.user_id=s.user_id and u.session_id=s.id and u.kind='save'
 			       and u.created_at >= r.at and u.outcome like '%:nothing-new')
 			 order by r.at desc limit $4`,
-			[userId, exceptSessionId, windowSeconds, limit],
+			[userId, exceptSessionId, windowSeconds, limit, projectId],
 		)
 	).rows;
 	return rows.flatMap((row) =>

@@ -6,9 +6,10 @@ import type {
 } from "../adapters/memory-repos";
 import { commitMemoryEdit, lastDreamChange } from "./memory-edit";
 
+const TOOLING = "projects/acme-web--7/tooling.md";
 const first: MemorySnapshot = {
 	head: "h1",
-	files: { "tooling.md": "# Tooling\n- Uses pnpm [added: 2026-10-01]\n" },
+	files: { [TOOLING]: "# Tooling\n- Uses pnpm [added: 2026-10-01]\n" },
 };
 
 function repo(
@@ -40,27 +41,27 @@ describe("manual memory edits", () => {
 				{
 					op: "add",
 					text: "Use httpx",
-					project: "acme/web",
+					project: "acme-web--7",
 					always: false,
-					topic: "tooling.md",
+					topic: TOOLING,
 				},
 				"2026-10-21",
 			),
 		).toEqual({
 			ok: true,
-			added: { path: "tooling.md", line: 3, text: "Use httpx" },
+			added: { path: TOOLING, line: 3, text: "Use httpx" },
 		});
 		expect(memory.commit).toHaveBeenCalledTimes(1);
 		expect(memory.commit).toHaveBeenCalledWith(
 			first,
 			[
 				{
-					path: "tooling.md",
+					path: TOOLING,
 					content:
-						"# Tooling\n- Uses pnpm [added: 2026-10-01]\n- Use httpx [project: acme/web; source: manual; added: 2026-10-21]\n",
+						"# Tooling\n- Uses pnpm [added: 2026-10-01]\n- Use httpx [source: manual; added: 2026-10-21]\n",
 				},
 			],
-			"Add memory (project acme/web): Use httpx",
+			"Add memory (project acme-web): Use httpx",
 		);
 	});
 
@@ -68,7 +69,7 @@ describe("manual memory edits", () => {
 		const moved: MemorySnapshot = {
 			head: "h2",
 			files: {
-				"tooling.md":
+				[TOOLING]:
 					"# Tooling\n- Runs vitest\n- Uses pnpm [added: 2026-10-01]\n",
 			},
 		};
@@ -76,17 +77,17 @@ describe("manual memory edits", () => {
 			[first],
 			[{ ok: false, reason: "conflict", current: moved }],
 		);
-		const ref = { path: "tooling.md", line: 2, text: "Uses pnpm" };
+		const ref = { path: TOOLING, line: 2, text: "Uses pnpm" };
 		expect(
 			await commitMemoryEdit(memory, { op: "delete", ref }, "2026-10-21"),
 		).toEqual({ ok: true });
 		expect(memory.commit).toHaveBeenLastCalledWith(
 			moved,
-			[{ path: "tooling.md", content: "# Tooling\n- Runs vitest\n" }],
+			[{ path: TOOLING, content: "# Tooling\n- Runs vitest\n" }],
 			"Delete memory: Uses pnpm",
 		);
 		const gone = repo(
-			[{ head: "h3", files: { "tooling.md": "# Tooling\n" } }],
+			[{ head: "h3", files: { [TOOLING]: "# Tooling\n" } }],
 			[],
 		);
 		expect(

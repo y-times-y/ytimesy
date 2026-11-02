@@ -1,3 +1,4 @@
+import { memoryPathScope } from "./memory-layout";
 import {
 	ALWAYS_SCOPE,
 	chatIdFromSource,
@@ -25,6 +26,10 @@ export type MemoryRow = {
 	/** Replaced by a later statement (`superseded-by:`) or expired: kept in the file, no longer used. */
 	readonly replaced: boolean;
 	readonly kind: "stated" | "inferred";
+	/**
+	 * The project the line applies to: its projects/<key>/ folder's key, or a
+	 * legacy file's `project:` value; absent for Personal.
+	 */
 	readonly project?: string;
 	readonly expires?: string;
 	/** `added:` date (YYYY-MM-DD). */
@@ -37,11 +42,24 @@ export type MemoryRow = {
 	readonly supersededBy?: string;
 };
 
+/** The project a line applies to, by its folder (or a legacy file's `project:` key). */
+export function lineProject(entry: {
+	path: string;
+	meta: Record<string, string>;
+}): string | undefined {
+	const scope = memoryPathScope(entry.path);
+	if (scope.kind === "project") return scope.key;
+	if (scope.kind === "legacy" || scope.kind === "index")
+		return entry.meta.project?.trim() || undefined;
+	return undefined;
+}
+
 export function memoryRows(files: MemoryFiles, today: string): MemoryRow[] {
 	return memoryLines(files).map((entry) => {
 		const chatId = entry.meta.source
 			? chatIdFromSource(entry.meta.source)
 			: null;
+		const project = lineProject(entry);
 		return {
 			path: entry.path,
 			line: entry.line,
@@ -49,7 +67,7 @@ export function memoryRows(files: MemoryFiles, today: string): MemoryRow[] {
 			rule: entry.meta[SCOPE_KEY]?.toLowerCase() === ALWAYS_SCOPE,
 			replaced: isRetired(entry.meta, today),
 			kind: entry.meta.kind === "inferred" ? "inferred" : "stated",
-			...(entry.meta.project ? { project: entry.meta.project } : {}),
+			...(project ? { project } : {}),
 			...(entry.meta.expires ? { expires: entry.meta.expires } : {}),
 			...(/^\d{4}-\d{2}-\d{2}$/.test(entry.meta.added ?? "")
 				? { added: entry.meta.added }
@@ -115,14 +133,14 @@ export function searchMemoryRows(
 
 // ---- scopes -----------------------------------------------------------------
 
-/** The scope of lines without `project:`: they apply in every project. */
+/** The scope of personal/ lines (and untagged legacy ones): they apply in every project. */
 export const PERSONAL_SCOPE = "personal";
 
 /** A scope in the Memory view: Personal, or one project's lines. */
 export type MemoryScope = {
-	/** PERSONAL_SCOPE, or `project:<name lowercased>`. */
+	/** PERSONAL_SCOPE, or `project:<folder key, lowercased>`. */
 	readonly id: string;
-	/** The `project:` value as first written; null for Personal. */
+	/** The project's folder key (or legacy `project:` value); null for Personal. */
 	readonly project: string | null;
 	/** Lines in use. */
 	readonly count: number;
@@ -320,4 +338,26 @@ export function memoryChangeSummary(
 		resolved,
 		removed,
 	};
+}
+
+// ---- the folder tree ------------------------------------------------------------
+
+export type MemoryFolder = MemoryScope & {
+	/** The folder's topic files with their lines, as rowsByTopic orders them. */
+	readonly topics: { path: string; title: string; rows: MemoryRow[] }[];
+};
+
+/**
+ * The repo as the Memory page's tree: Personal, then each project folder,
+ * each with its topic files and their lines (rules first in a topic). The
+ * same order and counts as memoryScopes; Personal is always there.
+ */
+export function memoryFolders(
+	rows: readonly MemoryRow[],
+	files: MemoryFiles,
+): MemoryFolder[] {
+	return memoryScopes(rows).map((scope) => ({
+		...scope,
+		topics: rowsByTopic(scopeRows(rows, scope.id), files),
+	}));
 }
