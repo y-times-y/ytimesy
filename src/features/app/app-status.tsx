@@ -1,5 +1,6 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { Wordmark } from "#/components/brand/wordmark";
 import { OnboardingShell } from "../auth/onboarding-shell";
 
 function AppStatus({
@@ -14,9 +15,8 @@ function AppStatus({
 	return (
 		<OnboardingShell>
 			<section className="onboarding-card">
-				<a href="/" className="brand" aria-label="ytimesy home">
-					<img src="/brand/mark.svg" width={28} height={28} alt="" />
-					<span className="brand-name">ytimesy</span>
+				<a href="/" className="brand" aria-label="Y times Y home">
+					<Wordmark />
 				</a>
 				<h1>{title}</h1>
 				<p>{detail}</p>

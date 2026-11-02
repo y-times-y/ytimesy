@@ -80,14 +80,14 @@ describe("left sidebar", () => {
 		expect(html).toContain("left-sidebar-toggle");
 		// The open sidebar's toggle sits in its header, after the logo.
 		const header = html.slice(html.indexOf('class="sidebar-brand-row"'));
-		expect(header.indexOf("brand-mark")).toBeLessThan(
+		expect(header.indexOf("wordmark")).toBeLessThan(
 			header.indexOf("sidebar-brand-toggle"),
 		);
 		expect(header.indexOf("sidebar-brand-toggle")).toBeLessThan(
 			header.indexOf('class="sidebar-toolbar"'),
 		);
 		expect(html).not.toContain("sidebar-rail");
-		expect(html.match(/class="brand-mark"/g)).toHaveLength(1);
+		expect(html.match(/class="wordmark"/g)).toHaveLength(1);
 	});
 
 	it("groups by project by default, the most recently active project first", () => {
