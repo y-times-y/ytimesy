@@ -164,6 +164,15 @@ for (const name of [
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
+// Launch features: PR repair (comment @<slug> on a PR), Grok on a SuperGrok or
+// X subscription, Claude Code on the user's Claude subscription. On unless the
+// deployment's environment sets one to "0".
+for (const name of [
+	"YTIMESY_PR_REPAIR_ENABLED",
+	"YTIMESY_XAI_SUBSCRIPTION_ENABLED",
+	"YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED",
+] as const)
+	secrets[name] = process.env[name] === "0" ? "0" : "1";
 const relayProblem = codexRelaySettingsProblem(secrets);
 if (relayProblem) throw new Error(relayProblem);
 const key = Buffer.from(
