@@ -224,3 +224,12 @@ it("does not expose issuer errors when a login is refused", async () => {
 	});
 	expect(row?.status).toBe("disconnected");
 });
+
+it("starts a fresh sign-in when the pending one no longer opens", async () => {
+	issuer({ "/api/accounts/deviceauth/usercode": userCode });
+	await startCodexDeviceLogin("user");
+	// What an older build left: the same login sealed without its binding.
+	if (row) row.encrypted_device_login = "sealed:none/none:{}";
+	const restarted = await startCodexDeviceLogin("user");
+	expect(restarted.status).toBe("pending");
+});

@@ -1,17 +1,6 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
-import { Sparkles } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { offersEnvironmentSetup } from "#/domain/environment-detection";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
-import { RERUN_SETUP_LABEL } from "#/domain/environment-setup";
 import type { Project } from "../../domain/projects";
-import { getProjectEnvironmentFn } from "../projects/environment.fn";
-import {
-	WorkspaceStatus,
-	workspaceStatusQuery,
-} from "../projects/workspace-status";
-import { environmentQueryKey } from "../workspace/environment-settings";
+import { WorkspaceStatus } from "../projects/workspace-status";
 import { BaseBranchPicker } from "./base-branch-picker";
 import { ProjectPicker } from "./project-picker";
 
@@ -20,7 +9,6 @@ export function ProjectContext({
 	selectedProject,
 	onSelectProject,
 	projectLocked = false,
-	onSetUpEnvironment,
 	projectPickerOpen,
 	onProjectPickerOpenChange,
 	repairModel,
@@ -67,12 +55,7 @@ export function ProjectContext({
 				currentBranch={currentBranch}
 				locked={projectLocked || !onBaseBranchChange}
 			/>
-			{selectedProject && onSetUpEnvironment && !projectLocked ? (
-				<SetUpEnvironmentChip
-					projectId={selectedProject.id}
-					onSetUp={onSetUpEnvironment}
-				/>
-			) : null}
+			{/* Rerun setup lives in Settings > Environment, not in every chat. */}
 			{selectedProject && (
 				<WorkspaceStatus
 					projectId={selectedProject.id}
@@ -81,51 +64,5 @@ export function ProjectContext({
 				/>
 			)}
 		</div>
-	);
-}
-
-/**
- * "Rerun setup", until one of the project's repositories has a setup of its
- * own (saved, or its .ytimesy/environment.json). Read again whenever a build
- * finishes, so a setup just saved hides it. Hidden while the project's first
- * setup runs: that has its own chat.
- */
-function SetUpEnvironmentChip({
-	projectId,
-	onSetUp,
-}: {
-	projectId: string;
-	onSetUp: () => void;
-}) {
-	const read = useServerFn(getProjectEnvironmentFn);
-	const queryClient = useQueryClient();
-	const environment = useQuery({
-		queryKey: environmentQueryKey(projectId),
-		queryFn: () => read({ data: { projectId } }),
-		staleTime: 60_000,
-	});
-	// Shares WorkspaceStatus's read; no request of its own.
-	const workspace = useQuery({
-		...workspaceStatusQuery(projectId),
-		enabled: false,
-	});
-	const build = workspace.data?.build;
-	const buildKey = build ? `${build.id}:${build.status}` : null;
-	const seenBuild = useRef(buildKey);
-	useEffect(() => {
-		if (buildKey === seenBuild.current) return;
-		seenBuild.current = buildKey;
-		void queryClient.invalidateQueries({
-			queryKey: environmentQueryKey(projectId),
-		});
-	}, [buildKey, projectId, queryClient]);
-	if (!environment.data) return null;
-	if (workspace.data?.status !== "ready") return null;
-	if (!offersEnvironmentSetup(environment.data.repositories)) return null;
-	return (
-		<button type="button" className="environment-chip" onClick={onSetUp}>
-			<Sparkles size={13} />
-			{RERUN_SETUP_LABEL}
-		</button>
 	);
 }
