@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Check, ChevronDown, Search, Star, Zap } from "lucide-react";
+import { contextWindowLabel } from "#/domain/context-window-option";
 import "./model-picker.css";
 import { type ReactNode, useState } from "react";
 import {
@@ -96,6 +97,8 @@ export function HarnessPicker({
 	onReasoningIdChange,
 	speed = "",
 	onSpeedChange,
+	largeContext = false,
+	onLargeContextChange,
 }: {
 	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
@@ -111,6 +114,8 @@ export function HarnessPicker({
 	onReasoningIdChange?: (id: string) => void;
 	speed?: ComposerSpeed;
 	onSpeedChange?: (speed: ComposerSpeed) => void;
+	largeContext?: boolean;
+	onLargeContextChange?: (large: boolean) => void;
 }) {
 	const options = offeredAgentProviders();
 	const selected =
@@ -187,7 +192,7 @@ export function HarnessPicker({
 				aria-label="Model"
 				onPointerEnter={prefetchPlanUsage}
 				onFocus={prefetchPlanUsage}
-				title={`${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}`}
+				title={`${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}${largeContext && model?.contextWindow ? ` · ${contextWindowLabel(model.contextWindow.large)} context` : ""}`}
 			>
 				{harnessId === "api" ? (
 					<ModelProviderLogo
@@ -234,6 +239,8 @@ export function HarnessPicker({
 						onReasoningIdChange={onReasoningIdChange}
 						speed={speed}
 						onSpeedChange={onSpeedChange}
+						largeContext={largeContext}
+						onLargeContextChange={onLargeContextChange}
 					/>
 				) : null}
 				<div className="model-picker-body">

@@ -65,7 +65,7 @@ it.each([
 });
 
 describe("sessionModelsFromListed", () => {
-	it("keeps agent-listed names and does not invent reasoning or Fast", () => {
+	it("keeps agent-listed names and does not invent reasoning, Fast or a larger window", () => {
 		expect(
 			sessionModelsFromListed([
 				{ id: "gpt-5.3-codex-spark", label: "GPT-5.3-Codex-Spark" },
@@ -77,6 +77,7 @@ describe("sessionModelsFromListed", () => {
 				notice: null,
 				reasoning: null,
 				speeds: [],
+				contextWindow: null,
 			},
 		]);
 	});

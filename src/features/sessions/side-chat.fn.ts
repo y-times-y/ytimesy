@@ -53,6 +53,7 @@ export const sendSideChatFn = createServerFn({ method: "POST" })
 				userMessageId: z.uuid(),
 				variant: z.string().trim().max(64).optional(),
 				speed: z.enum(["standard", "fast", "ultrafast"]).optional(),
+				largeContext: z.boolean().optional(),
 			})
 			.parse(data);
 		return {
@@ -79,6 +80,9 @@ export const sendSideChatFn = createServerFn({ method: "POST" })
 				idempotencyKey: data.userMessageId,
 				...(data.variant ? { variant: data.variant } : {}),
 				...("speed" in data && data.speed ? { speed: data.speed } : {}),
+				...(data.largeContext !== undefined
+					? { largeContext: data.largeContext }
+					: {}),
 			}),
 		);
 	});

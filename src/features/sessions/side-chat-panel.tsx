@@ -83,6 +83,7 @@ export function useSideChat({
 		options?: {
 			readonly reasoningId?: string;
 			readonly speed?: string;
+			readonly largeContext?: boolean;
 			readonly userMessageId?: string;
 		},
 	): Promise<SideSend> {
@@ -100,6 +101,9 @@ export function useSideChat({
 					...(options?.reasoningId ? { variant: options.reasoningId } : {}),
 					...(options?.speed === "fast" || options?.speed === "ultrafast"
 						? { speed: options.speed }
+						: {}),
+					...(options?.largeContext !== undefined
+						? { largeContext: options.largeContext }
 						: {}),
 				},
 			});

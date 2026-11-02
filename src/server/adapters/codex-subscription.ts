@@ -10,6 +10,10 @@ import {
 } from "#/domain/api-turn-failure";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import type { CodexUsage } from "#/domain/codex-usage";
+import {
+	type ListedContextWindow,
+	listedContextWindow,
+} from "#/domain/context-window-option";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
 import {
 	type ListedModel,
@@ -191,6 +195,11 @@ const catalogSchema = z.object({
 			default_reasoning_level: z.string().optional(),
 			priority: z.number().optional(),
 			context_window: z.number().positive().optional(),
+			// "Maximum context window allowed for config overrides" (Codex's
+			// openai_models.rs): Codex's `model_context_window` may raise the
+			// window up to it. Only local compaction limits change; nothing about
+			// the window is sent with a request.
+			max_context_window: z.number().positive().nullish(),
 			auto_compact_token_limit: z.number().positive().nullish(),
 			// Fast mode, as Codex reads it: a "priority" service tier, or the
 			// older "fast" speed tier.
@@ -207,6 +216,44 @@ function supportsFast(row: CatalogRow) {
 		row.service_tiers?.some((tier) => tier.id === FAST_SERVICE_TIER) === true ||
 		row.additional_speed_tiers?.includes("fast") === true
 	);
+}
+
+/**
+ * The larger window a plan model allows, as Codex applies
+ * `model_context_window`: offered only when `max_context_window` exceeds the
+ * standard `context_window`.
+ */
+export function codexContextWindowOption(
+	row: Pick<CatalogRow, "context_window" | "max_context_window">,
+): ListedContextWindow | undefined {
+	return listedContextWindow({
+		standard: row.context_window,
+		large: row.max_context_window,
+		costNote: CODEX_LARGE_CONTEXT_NOTE,
+	});
+}
+/** Longer prompts use more of the plan's limits (developers.openai.com/codex/pricing). */
+const CODEX_LARGE_CONTEXT_NOTE = "Longer chats use your plan's limits faster";
+
+/**
+ * The window and compaction limit a turn runs with. The larger window drops
+ * the catalog's auto-compact limit, which was set for the standard window;
+ * the budget then derives from the larger window, as Codex derives 90% of
+ * an overridden window.
+ */
+export function codexTurnContext(
+	row: Pick<
+		CatalogRow,
+		"context_window" | "max_context_window" | "auto_compact_token_limit"
+	>,
+	largeContext: boolean,
+): { contextWindow?: number; autoCompactTokenLimit?: number } {
+	const option = largeContext ? codexContextWindowOption(row) : undefined;
+	if (option) return { contextWindow: option.large };
+	return {
+		contextWindow: row.context_window,
+		autoCompactTokenLimit: row.auto_compact_token_limit ?? undefined,
+	};
 }
 type Catalog = z.infer<typeof catalogSchema>;
 /** Fresh for a minute; past that, served while a refresh runs (plans rarely change). */
@@ -356,6 +403,9 @@ export async function codexSubscriptionCatalog(
 				defaultReasoningEffort: row.default_reasoning_level,
 			}),
 			...(supportsFast(row) ? { speeds: [{ id: "fast" as const }] } : {}),
+			...(codexContextWindowOption(row)
+				? { contextWindow: codexContextWindowOption(row) }
+				: {}),
 		}));
 }
 
@@ -365,6 +415,7 @@ export async function codexSubscriptionModel(
 	reasoning?: string,
 	fast = false,
 	cacheScopeId: string = randomUUID(),
+	largeContext = false,
 ) {
 	// The catalog and the account's token are independent reads; a catalog
 	// failure is still reported first.
@@ -384,6 +435,10 @@ export async function codexSubscriptionModel(
 	if (fast && !supportsFast(selected))
 		throw new Error(
 			"Fast mode is not available for this model on your ChatGPT plan.",
+		);
+	if (largeContext && !codexContextWindowOption(selected))
+		throw new Error(
+			"A larger context window is not available for this model on your ChatGPT plan.",
 		);
 	const effort = reasoning ?? selected.default_reasoning_level ?? "low";
 	if (
@@ -477,11 +532,10 @@ export async function codexSubscriptionModel(
 	});
 	return {
 		model,
-		contextWindow: selected.context_window,
+		...codexTurnContext(selected, largeContext),
 		// Initial reads use a stable preflight prefix; complete current bodies and
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,
-		autoCompactTokenLimit: selected.auto_compact_token_limit ?? undefined,
 		requestSettings,
 		compact: nativeModelCompactor(model, "openai", requestSettings),
 	};

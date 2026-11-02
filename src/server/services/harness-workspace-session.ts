@@ -124,6 +124,8 @@ export function sendHarnessWorkspaceTask(
 		readonly fast?: boolean;
 		/** API-key models only; Codex uses `fast`. */
 		readonly speed?: "standard" | "fast" | "ultrafast";
+		/** The route's larger context window (context-window-option.ts). */
+		readonly largeContext?: boolean;
 		readonly runtimeText?: string;
 		/** A runtime-switch envelope, used only when no structured history carries over. */
 		readonly runtimeHandoff?: string;

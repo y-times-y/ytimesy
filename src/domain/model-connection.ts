@@ -1,6 +1,15 @@
 import { z } from "zod";
-import { API_MODEL_LIST, apiModelSpeeds } from "./api-model-list";
+import {
+	API_MODEL_LIST,
+	apiLongContextTier,
+	apiModelSpeeds,
+} from "./api-model-list";
 import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
+import {
+	type ListedContextWindow,
+	listedContextWindow,
+} from "./context-window-option";
+import { knownModelLimits } from "./model-context-windows";
 import type { XaiSubscriptionStatus } from "./xai-subscription";
 
 export const modelProvider = z.enum([
@@ -131,6 +140,58 @@ export function apiModelReasoning(
 	return { levels: [first, ...rest], defaultLevelId: "medium" };
 }
 
+/**
+ * The larger window an API route offers: a maker that prices a request
+ * higher past a prompt size (OpenAI past 272K, xAI past 200K, Haiku 5.5 past
+ * 100K) runs within that size by default, and the full window is the option.
+ * Only on the maker's own API or OpenRouter (which bills the maker's tiers),
+ * never on a plan sign-in (the Grok plan documents no such tier) or a
+ * custom endpoint.
+ */
+export function apiContextWindowOption(
+	connection: {
+		readonly provider: ModelProvider;
+		readonly baseUrl: string;
+		readonly subscription?: unknown;
+	},
+	modelId: string,
+): ListedContextWindow | undefined {
+	if (connection.subscription) return undefined;
+	const tier = apiLongContextTier(modelId);
+	if (!tier) return undefined;
+	const official =
+		connection.provider === "openrouter" ||
+		officialProviderEndpoint(connection) ||
+		(connection.provider === "compatible" &&
+			sameOrigin(connection.baseUrl, DIRECT_MODEL_ENDPOINTS["x-ai"]));
+	if (!official || !officialRouteProvider(connection.provider, modelId))
+		return undefined;
+	return listedContextWindow({
+		standard: tier.threshold,
+		large: knownModelLimits(modelId)?.contextWindow,
+		costNote: tier.costNote,
+	});
+}
+
+/** An OpenRouter id names its maker; a direct id must match the connection's maker. */
+function officialRouteProvider(provider: ModelProvider, modelId: string) {
+	if (provider === "openrouter") return modelId.includes("/");
+	const entry = API_MODEL_LIST.find((model) => model.directId === modelId);
+	if (!entry) return false;
+	return provider === "compatible"
+		? entry.author === "x-ai"
+		: entry.author === provider;
+}
+
+function sameOrigin(a: string, b: string | undefined) {
+	if (!b) return false;
+	try {
+		return new URL(a).origin === new URL(b).origin;
+	} catch {
+		return false;
+	}
+}
+
 export function modelRouteId(connectionId: string, modelId: string): string {
 	return `api/${connectionId}/${encodeURIComponent(modelId)}`;
 }
@@ -150,11 +211,13 @@ export function availableConnectionModels(
 							priceMultiple,
 						}))
 					: [];
+			const contextWindow = apiContextWindowOption(connection, model.id);
 			return {
 				id: modelRouteId(connection.id, model.id),
 				label: `${model.label} · ${connection.label}`,
 				...(reasoning ? { reasoning } : {}),
 				...(speeds.length ? { speeds } : {}),
+				...(contextWindow ? { contextWindow } : {}),
 			};
 		}),
 	);

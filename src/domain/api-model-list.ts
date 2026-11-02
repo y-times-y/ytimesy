@@ -33,6 +33,29 @@ export type ListedApiModel = {
 	readonly hosts?: readonly string[];
 	/** Require OpenRouter's zero-data-retention endpoints. */
 	readonly zeroRetention?: boolean;
+	/**
+	 * The maker prices a whole request higher once its prompt reaches this
+	 * many tokens. Its window up to here is the route's standard window; the
+	 * full window is the larger option (context-window-option.ts).
+	 */
+	readonly longContext?: ApiLongContextTier;
+};
+
+export type ApiLongContextTier = {
+	readonly threshold: number;
+	/** How the larger window costs more, from the maker's pricing page. */
+	readonly costNote: string;
+};
+
+/** developers.openai.com/api/docs/pricing: "more than 272K input tokens are priced at 2x input and cache rates and 1.5x output for the full request". */
+const OPENAI_LONG_CONTEXT: ApiLongContextTier = {
+	threshold: 272_000,
+	costNote: "Past 272K: 2× input, 1.5× output price",
+};
+/** docs.x.ai/docs/models: prompts reaching 200K are billed at the higher rate ($4/$12 vs $2/$6) for all tokens. */
+const XAI_LONG_CONTEXT: ApiLongContextTier = {
+	threshold: 200_000,
+	costNote: "Past 200K: 2× price",
 };
 
 const OPENAI_FAST: ApiModelSpeed = {
@@ -63,6 +86,7 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "openai/gpt-6.1-sol",
 		directId: "gpt-6.1-sol",
 		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
+		longContext: OPENAI_LONG_CONTEXT,
 	},
 	{
 		author: "openai",
@@ -70,6 +94,7 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "openai/gpt-6-luna",
 		directId: "gpt-6-luna",
 		speeds: [OPENAI_FAST],
+		longContext: OPENAI_LONG_CONTEXT,
 	},
 	{
 		author: "openai",
@@ -77,6 +102,7 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "openai/gpt-6-astra",
 		directId: "gpt-6-astra",
 		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
+		longContext: OPENAI_LONG_CONTEXT,
 	},
 	{
 		author: "anthropic",
@@ -96,6 +122,9 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "Claude Haiku 5.5",
 		openRouterId: "anthropic/claude-haiku-5.5",
 		directId: "claude-haiku-5-5",
+		// platform.claude.com/docs/en/about-claude/pricing: prompts over 100K
+		// cost $0.50/$2.50 instead of $0.10/$0.50 per MTok.
+		longContext: { threshold: 100_000, costNote: "Past 100K: 5× price" },
 	},
 	{
 		author: "anthropic",
@@ -130,6 +159,7 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "x-ai/grok-4.7",
 		directId: "grok-4.7",
 		speeds: [XAI_PRIORITY],
+		longContext: XAI_LONG_CONTEXT,
 	},
 	{
 		author: "x-ai",
@@ -137,6 +167,7 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "x-ai/grok-4.6",
 		directId: "grok-4.6",
 		speeds: [XAI_PRIORITY],
+		longContext: XAI_LONG_CONTEXT,
 	},
 	// The makers below are offered through OpenRouter; their direct-key ids are
 	// not listed yet, so a direct key for them unlocks nothing until they are.
@@ -196,7 +227,6 @@ const OFFICIAL_OPENROUTER_PROVIDERS: Readonly<
 	qwen: ["alibaba"],
 };
 
-/** The faster speeds a listed OpenRouter model offers, empty when none. */
 /** The OpenRouter catalog id of a listed model, by either of its ids. */
 export function listedOpenRouterId(modelId: string): string | undefined {
 	return API_MODEL_LIST.find(
@@ -204,6 +234,7 @@ export function listedOpenRouterId(modelId: string): string | undefined {
 	)?.openRouterId;
 }
 
+/** The faster speeds a listed OpenRouter model offers, empty when none. */
 export function apiModelSpeeds(openRouterId: string): readonly ApiModelSpeed[] {
 	return (
 		API_MODEL_LIST.find((model) => model.openRouterId === openRouterId)
@@ -229,4 +260,13 @@ export function openRouterRouting(
 		? entry.speeds?.find((tier) => tier.id === speed)?.providers
 		: (entry.hosts ?? OFFICIAL_OPENROUTER_PROVIDERS[entry.author]);
 	return only ? { only, zdr: entry.zeroRetention === true } : null;
+}
+
+/** A listed model's long-context price tier, by either of its ids. */
+export function apiLongContextTier(
+	modelId: string,
+): ApiLongContextTier | undefined {
+	return API_MODEL_LIST.find(
+		(model) => model.openRouterId === modelId || model.directId === modelId,
+	)?.longContext;
 }

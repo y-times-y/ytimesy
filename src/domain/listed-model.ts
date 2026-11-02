@@ -3,6 +3,7 @@ import {
 	claudeCodeModelLabel,
 	parseClaudeCodeRouteId,
 } from "./claude-code-route";
+import type { ListedContextWindow } from "./context-window-option";
 import { parseModelRouteId } from "./model-connection";
 
 export type ListedReasoning = {
@@ -27,6 +28,8 @@ export type ListedModel = {
 	readonly speeds?: readonly ListedSpeed[];
 	readonly fastModeId?: string;
 	readonly reasoning?: ListedReasoning;
+	/** A larger context window the route offers; absent when it has none. */
+	readonly contextWindow?: ListedContextWindow;
 };
 
 export function listedModelSupportsFastMode(row: {
