@@ -1,5 +1,9 @@
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	ENVIRONMENT_SETUP_PROMPT,
+	initialSetupMessageId,
+} from "#/domain/environment-setup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
@@ -30,6 +34,12 @@ const mocks = vi.hoisted(() => ({
 	reusable: vi.fn(async () => null as unknown),
 	insert: vi.fn(),
 	dispatch: vi.fn(async (_job: unknown) => true),
+	markSetup: vi.fn(async (..._args: unknown[]) => true),
+	otherSetup: vi.fn(async (..._args: unknown[]) => null as string | null),
+}));
+vi.mock("../adapters/environment-setup-chats", () => ({
+	markEnvironmentSetupChat: mocks.markSetup,
+	otherProjectSetupChat: mocks.otherSetup,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
@@ -124,6 +134,8 @@ beforeEach(() => {
 	mocks.claim.mockResolvedValue(true);
 	mocks.reusable.mockResolvedValue(null);
 	mocks.dispatch.mockResolvedValue(true);
+	mocks.markSetup.mockResolvedValue(true);
+	mocks.otherSetup.mockResolvedValue(null);
 });
 
 it("queues a send behind the running turn instead of rejecting it", async () => {
@@ -445,6 +457,111 @@ describe("messages held while the project's environment is set up", () => {
 		expect(result.agentSessionId).toBe("held-chat");
 		// Not ready on the second look either: nothing goes yet.
 		expect(mocks.releaseHeld).not.toHaveBeenCalled();
+	});
+
+	it("marks the chat holding a setup request as the project's setup chat at once", async () => {
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.insert.mockResolvedValue(heldChat);
+		mocks.read.mockReturnValue(
+			Effect.succeed({ ...view("idle"), agentSessionId: "held-chat" }),
+		);
+		await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: ENVIRONMENT_SETUP_PROMPT,
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+				environmentSetup: true,
+			}),
+		);
+		expect(mocks.insert).toHaveBeenCalledWith(
+			expect.objectContaining({ title: "Set up project" }),
+		);
+		expect(mocks.markSetup).toHaveBeenCalledWith(
+			"owner",
+			"held-chat",
+			"Set up project",
+		);
+		expect(mocks.hold).toHaveBeenCalledOnce();
+	});
+
+	it("starts a new project's setup once: a second start gets the chat that has it", async () => {
+		const initial = initialSetupMessageId("project");
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.read.mockReturnValue(
+			Effect.succeed({ ...view("idle"), agentSessionId: "setup-chat" }),
+		);
+		// Still held (another tab started it a moment ago)...
+		mocks.holding.mockResolvedValue("setup-chat");
+		const second = await Effect.runPromise(
+			sendComposerMessage(
+				machines,
+				{ ...scope, sessionId: "fresh-chat" },
+				{
+					text: ENVIRONMENT_SETUP_PROMPT,
+					modelId: "connection|model",
+					idempotencyKey: initial,
+					environmentSetup: true,
+				},
+			),
+		);
+		expect(second.agentSessionId).toBe("setup-chat");
+		// ...or already sent, its chat marked as the project's setup chat.
+		mocks.holding.mockResolvedValue(null);
+		mocks.otherSetup.mockResolvedValue("setup-chat");
+		await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: ENVIRONMENT_SETUP_PROMPT,
+				modelId: "connection|model",
+				idempotencyKey: initial,
+				environmentSetup: true,
+			}),
+		);
+		expect(mocks.otherSetup).toHaveBeenCalledWith("owner", "project", null);
+		expect(mocks.hold).not.toHaveBeenCalled();
+		expect(mocks.send).not.toHaveBeenCalled();
+		expect(mocks.insert).not.toHaveBeenCalled();
+	});
+
+	it("delivers the new project's held setup request in its own chat", async () => {
+		const initial = initialSetupMessageId("project");
+		mocks.otherSetup.mockResolvedValue("older-setup-chat");
+		mocks.releasable.mockResolvedValue([
+			{ userId: "owner", sessionId: "held-chat", workspaceId: "workspace" },
+		]);
+		mocks.session.mockResolvedValue(heldChat);
+		mocks.take.mockResolvedValueOnce({
+			item: {
+				kind: "userMessage",
+				id: initial,
+				text: ENVIRONMENT_SETUP_PROMPT,
+			},
+			message: ENVIRONMENT_SETUP_PROMPT,
+			harnessId: "api",
+			modelId: "connection|model",
+			environmentSetup: true,
+			released: true,
+		});
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		expect(await deliverHeldSends(machines, "workspace")).toBe(1);
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(mocks.send.mock.calls[0]?.[1]).toMatchObject({
+			sessionId: "held-chat",
+		});
+	});
+
+	it("lets Rerun setup start another setup chat", async () => {
+		mocks.otherSetup.mockResolvedValue("setup-chat");
+		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: ENVIRONMENT_SETUP_PROMPT,
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+				environmentSetup: true,
+			}),
+		);
+		expect(mocks.otherSetup).not.toHaveBeenCalled();
+		expect(mocks.send).toHaveBeenCalledOnce();
 	});
 
 	it("holds a replayed send once, in the chat it already landed in", async () => {

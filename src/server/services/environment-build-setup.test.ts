@@ -115,9 +115,28 @@ it("gives a repository nothing recognizes a plain checkout instead of failing", 
 	expect(events).toEqual([
 		"start clone:7 Cloning org/app",
 		"done clone:7",
+		"start detect:7 Detecting the stack",
+		"done detect:7 Nothing to install detected",
 		"start install:7 Installing dependencies",
 		"skipped install:7 Nothing to install was detected",
 	]);
+});
+
+it("streams what it detected as its own step before installing", async () => {
+	const { events, steps } = recorder();
+	await prepareEnvironmentRepositories(
+		input,
+		"vm",
+		vm(["pyproject.toml", "uv.lock"]),
+		steps,
+	);
+	expect(events.slice(2, 4)).toEqual([
+		"start detect:7 Detecting the stack",
+		"done detect:7 Python (uv)",
+	]);
+	expect(events[4]).toMatch(
+		/^start install:7 Installing dependencies \(.*uv sync --frozen\)$/,
+	);
 });
 
 it("installs a Python repository from its lockfile", async () => {

@@ -573,7 +573,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			userMessageId?: string;
 			/** The branch a new chat starts from; the server checks it on GitHub. */
 			baseBranch?: string;
-			/** Sent from "Set up environment": the chat becomes a setup chat. */
+			/** A project setup request: the chat becomes a setup chat. */
 			environmentSetup?: boolean;
 		}) => {
 			const attachments =
@@ -690,7 +690,7 @@ export const updateQueuedSessionMessage = createServerFn({ method: "POST" })
 			data: Parameters<typeof optionalSessionInput>[0] & {
 				messageId: string;
 				text: string;
-				/** "Set up with the agent" on a message held for setup. */
+				/** "Fix with the agent" on a message held for setup. */
 				environmentSetup?: boolean;
 			},
 		) => ({

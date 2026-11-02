@@ -33,6 +33,7 @@ import {
 } from "#/domain/default-branch-cookie";
 import {
 	ENVIRONMENT_SETUP_PROMPT,
+	initialSetupMessageId,
 	setupRequestKeeping,
 } from "#/domain/environment-setup";
 import {
@@ -57,6 +58,7 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { openChatCookie } from "#/domain/open-chat-cookie";
+import { startsProjectSetup } from "#/domain/project-setup-start";
 import {
 	heldSendReleases,
 	publicFailureMessage,
@@ -305,7 +307,7 @@ type PendingSend = {
 	readonly attachments?: readonly IncomingAttachment[];
 	/** The branch a new chat starts from, when the person picked one. */
 	readonly baseBranch?: string;
-	/** Sent from the chat "Set up environment" opened: it becomes a setup chat. */
+	/** Sent in the chat project setup opened: it becomes a setup chat. */
 	readonly environmentSetup?: boolean;
 	/**
 	 * Sent while the project's environment is not ready: the server holds it
@@ -727,6 +729,7 @@ export function WorkspaceHome({
 		readonly text: string;
 		readonly at: number;
 		readonly send?: boolean;
+		readonly messageId?: string;
 	}>();
 	// The message box takes it in its own effect (children's run first); it
 	// must not come back when another chat's box mounts later. One to send
@@ -736,8 +739,8 @@ export function WorkspaceHome({
 		if (composerPrefill && !composerPrefill.send) setComposerPrefill(undefined);
 	}, [composerPrefill]);
 	/**
-	 * The chat view "Set up environment" opened (its session epoch): its sends
-	 * are flagged as a setup chat. Opening another chat moves the epoch on.
+	 * The chat view project setup opened (its session epoch): its sends are
+	 * flagged as a setup chat. Opening another chat moves the epoch on.
 	 */
 	const environmentSetupEpochRef = useRef<number | null>(null);
 	// A message sent while the project's environment is still being set up
@@ -1894,6 +1897,24 @@ export function WorkspaceHome({
 		enabled: Boolean(selectedProject?.id),
 	});
 	const projectSetupStatus = projectSetup.data?.status;
+	// A project just added starts its setup by itself, in its own chat.
+	const setupStartedInTab = useRef(new Set<string>());
+	// biome-ignore lint/correctness/useExhaustiveDependencies: decided when the project, its status or its chats change.
+	useEffect(() => {
+		const projectId = selectedProject?.id;
+		if (
+			!projectId ||
+			!startsProjectSetup({
+				projectId,
+				workspace: projectSetup.data,
+				chats: chats.data,
+				startedInThisTab: setupStartedInTab.current,
+			})
+		)
+			return;
+		setupStartedInTab.current.add(projectId);
+		startProjectSetup(projectId, { initial: true });
+	}, [selectedProject?.id, projectSetup.data, chats.data]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: runs as the setup status changes; the held send carries its own scope.
 	useEffect(() => {
 		const held = heldForSetupRef.current;
@@ -2073,7 +2094,7 @@ export function WorkspaceHome({
 		);
 		return () => window.clearTimeout(timer);
 	}, [activeSessionId, awaitedHeld, heldArrived, queryClient]);
-	/** "Set up with the agent": the held message becomes a setup chat's request. */
+	/** "Fix with the agent": the held message becomes a setup chat's request. */
 	function setUpHeldWithAgent() {
 		if (storedHeld) {
 			const text = setupRequestKeeping(storedHeld.text);
@@ -2229,10 +2250,16 @@ export function WorkspaceHome({
 	}
 
 	/**
-	 * A new chat in that project that sends the setup request by itself, so
-	 * the agent starts setting the environment up at once.
+	 * Project setup: a new chat in that project that sends the setup request
+	 * by itself, so nobody types anything. While the environment is built the
+	 * request waits in the chat with the build streaming under it; once it is
+	 * ready the setup agent works there. A new project's first setup carries
+	 * the project's own message id, so it starts once (Rerun setup does not).
 	 */
-	function startEnvironmentSetup(projectId: string) {
+	function startProjectSetup(
+		projectId: string,
+		options: { readonly initial?: boolean } = {},
+	) {
 		setSettingsOpen(false);
 		startNewChat(projectId);
 		environmentSetupEpochRef.current = sessionEpoch.current;
@@ -2240,6 +2267,9 @@ export function WorkspaceHome({
 			text: ENVIRONMENT_SETUP_PROMPT,
 			at: Date.now(),
 			send: true,
+			...(options.initial
+				? { messageId: initialSetupMessageId(projectId) }
+				: {}),
 		});
 	}
 
@@ -3218,7 +3248,7 @@ export function WorkspaceHome({
 						account={account}
 					/>
 					<ProjectSettings
-						onSetUpEnvironment={startEnvironmentSetup}
+						onSetUpEnvironment={startProjectSetup}
 						codexUsage={session.usage}
 						open={settingsOpen}
 						projectId={selectedProject?.id}
@@ -3389,8 +3419,7 @@ export function WorkspaceHome({
 										}
 										onPrefillSent={() => setComposerPrefill(undefined)}
 										onSetUpEnvironment={() =>
-											selectedProject &&
-											startEnvironmentSetup(selectedProject.id)
+											selectedProject && startProjectSetup(selectedProject.id)
 										}
 										initialDraft={
 											recoveryDraft?.id === session.agentSessionId
@@ -3492,7 +3521,7 @@ export function WorkspaceHome({
 												: (target.sessionId ?? activeSessionId);
 											const messageId =
 												options?.userMessageId ?? crypto.randomUUID();
-											// Every send in the chat "Set up environment" opened says so
+											// Every send in the chat project setup opened says so
 											// (a failed first send is retried flagged too).
 											const environmentSetup =
 												environmentSetupEpochRef.current === epoch;

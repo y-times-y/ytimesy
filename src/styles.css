@@ -4589,6 +4589,33 @@ button.workspace-status-progress:hover {
 .environment-build[data-state="failed"] .environment-build-title svg {
 	color: #ff6764;
 }
+/* Project setup in its chat: its request as one line, the finished build
+   folded to "Environment ready · 43s" (environment-build-progress.tsx). */
+.setup-request-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 8px 0 0;
+	color: rgba(255, 255, 255, 0.62);
+	font-size: 13px;
+}
+details.environment-build > summary {
+	margin: 0;
+	list-style: none;
+	cursor: pointer;
+}
+details.environment-build > summary::-webkit-details-marker {
+	display: none;
+}
+details.environment-build[open] > summary {
+	margin-bottom: 6px;
+}
+details.environment-build > summary > svg:first-child {
+	color: #40c977;
+}
+details.environment-build[open] > summary .session-activity-chevron {
+	transform: rotate(90deg);
+}
 .environment-build-steps {
 	display: grid;
 	gap: 2px;
@@ -5059,7 +5086,7 @@ button.workspace-status-progress:hover {
 	margin-top: 10px;
 }
 
-/* "Set up environment" beside the repository and branch (project-context.tsx). */
+/* "Rerun setup" beside the repository and branch (project-context.tsx). */
 .environment-chip {
 	display: inline-flex;
 	align-items: center;

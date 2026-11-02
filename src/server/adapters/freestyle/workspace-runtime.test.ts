@@ -58,3 +58,53 @@ describe("FreestyleWorkspaceRuntime.pause", () => {
 		]);
 	});
 });
+
+describe("FreestyleWorkspaceRuntime admission reuse", () => {
+	const fetch = (async () =>
+		Response.json({
+			statusCode: 0,
+			stdout: "",
+			stderr: "",
+		})) as unknown as typeof globalThis.fetch;
+	async function recoveries(
+		options: { admissionReuseMs?: number },
+		timeouts: number[],
+	) {
+		const previous = process.env.YTIMESY_INFRASTRUCTURE_ADMISSION;
+		process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+		try {
+			const runtime = new FreestyleWorkspaceRuntime("fs_test", {
+				fetch,
+				...options,
+			});
+			const recovered: number[] = [];
+			runtime.recover = async (ref: string, seconds = 60) => {
+				recovered.push(seconds);
+				return ref;
+			};
+			for (const timeout of timeouts)
+				await runtime.exec("vm-1", ["true"], {}, timeout);
+			return recovered;
+		} finally {
+			if (previous === undefined)
+				delete process.env.YTIMESY_INFRASTRUCTURE_ADMISSION;
+			else process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = previous;
+		}
+	}
+
+	it("admits every command by default", async () => {
+		expect(await recoveries({}, [15_000, 15_000, 15_000])).toEqual([
+			15, 15, 15,
+		]);
+	});
+
+	it("lets a build's short commands reuse a recent admission, not a long one", async () => {
+		expect(
+			await recoveries({ admissionReuseMs: 30_000 }, [15_000, 15_000, 25_000]),
+		).toEqual([15]);
+		// A command needing more than the admission is sure to cover is admitted again.
+		expect(
+			await recoveries({ admissionReuseMs: 30_000 }, [15_000, 200_000]),
+		).toEqual([15, 200]);
+	});
+});
