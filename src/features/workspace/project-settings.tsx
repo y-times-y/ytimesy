@@ -16,13 +16,7 @@ import {
 import { ScrollArea } from "radix-ui";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
+import { MenuSelect } from "#/components/ui/menu-select";
 import {
 	accountDeletionConfirmed,
 	accountDeletionPhrase,
@@ -364,21 +358,17 @@ function ProjectHeader({
 			description={`${project.fullName} · ${project.branch}`}
 			action={
 				projects.length > 1 ? (
-					<Select value={project.id} onValueChange={onSelect}>
-						<SelectTrigger
-							className="settings-project-select"
-							aria-label="Project"
-						>
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{projects.map((row) => (
-								<SelectItem key={row.id} value={row.id}>
-									{projectDisplayName(row)}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+					<MenuSelect
+						value={project.id}
+						onValueChange={onSelect}
+						options={projects.map((row) => ({
+							value: row.id,
+							label: projectDisplayName(row),
+						}))}
+						className="settings-project-select"
+						align="end"
+						aria-label="Project"
+					/>
 				) : undefined
 			}
 		/>
@@ -846,32 +836,23 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 				</label>
 				<div className="settings-field">
 					<span>Type</span>
-					<Select
+					<MenuSelect
 						value={kind}
 						disabled={busy}
 						onValueChange={(next) => setKind(next as ProjectSecretKind)}
-					>
-						<SelectTrigger aria-label="Secret type">
-							<SelectValue>{SECRET_KIND_LABELS[kind]}</SelectValue>
-						</SelectTrigger>
-						<SelectContent>
-							{(
-								Object.entries(SECRET_KIND_LABELS) as [
-									ProjectSecretKind,
-									string,
-								][]
-							).map(([id, label]) => (
-								<SelectItem
-									key={id}
-									value={id}
-									textValue={label}
-									title={SECRET_KIND_HINTS[id]}
-								>
-									{label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+						valueLabel={SECRET_KIND_LABELS[kind]}
+						options={(
+							Object.entries(SECRET_KIND_LABELS) as [
+								ProjectSecretKind,
+								string,
+							][]
+						).map(([id, label]) => ({
+							value: id,
+							label,
+							title: SECRET_KIND_HINTS[id],
+						}))}
+						aria-label="Secret type"
+					/>
 				</div>
 				<label className="settings-field">
 					<span>Value</span>

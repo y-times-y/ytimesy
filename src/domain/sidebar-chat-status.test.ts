@@ -206,3 +206,22 @@ describe("unread replies", () => {
 		expect(sidebarChatUnread({ ...base, seenSinceMs: null })).toBe(false);
 	});
 });
+
+it("marks a chat holding a message for setup, below asking and working", async () => {
+	const { sidebarChatStatus, sidebarChatStatusLabel } = await import(
+		"./sidebar-chat-status"
+	);
+	const setup = sidebarChatStatus({ running: false, waitsForSetup: true });
+	expect(setup).toEqual({ kind: "setup" });
+	expect(sidebarChatStatusLabel(setup)).toBe("Waiting for setup");
+	expect(sidebarChatStatus({ running: true, waitsForSetup: true }).kind).toBe(
+		"working",
+	);
+	expect(
+		sidebarChatStatus({
+			running: false,
+			waitsForSetup: true,
+			waitingOn: "question",
+		}).kind,
+	).toBe("asking");
+});

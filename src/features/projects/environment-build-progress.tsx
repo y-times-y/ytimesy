@@ -147,6 +147,8 @@ export function HeldForSetupMessage({
 	showMessage,
 	failed,
 	actions,
+	onEdit,
+	onRemove,
 }: {
 	projectId: string;
 	text: string;
@@ -155,7 +157,14 @@ export function HeldForSetupMessage({
 	/** The project's setup failed (its status), even before the build row shows it. */
 	failed: boolean;
 	actions: HeldSetupActions;
+	/** The message is stored in the chat: it can be rewritten before it goes. */
+	onEdit?: (text: string) => void;
+	/** ...or taken back. */
+	onRemove?: () => void;
 }) {
+	const [draft, setDraft] = useState<string | null>(null);
+	const editing = draft !== null;
+	const edited = (draft ?? "").trim();
 	const progress = useEnvironmentProgress(projectId, {
 		enabled: true,
 		waiting: !failed,
@@ -170,12 +179,68 @@ export function HeldForSetupMessage({
 	return (
 		<>
 			<div className="session-message" data-role="user" data-queued="true">
-				{showMessage ? <p>{text}</p> : null}
+				{showMessage ? (
+					editing ? (
+						<textarea
+							className="session-queued-edit"
+							aria-label="Edit held message"
+							rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+							value={draft}
+							onChange={(event) => setDraft(event.currentTarget.value)}
+						/>
+					) : (
+						<p>{text}</p>
+					)
+				) : null}
 				<p className="session-queued-note" role="status">
 					<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 					<span>
 						{showFailure ? "Not sent: setup failed" : "Waiting for setup"}
 					</span>
+					{showMessage && onEdit ? (
+						editing ? (
+							<>
+								<button
+									type="button"
+									className="session-queued-action"
+									disabled={!edited}
+									onClick={() => {
+										if (!edited) return;
+										onEdit(edited);
+										setDraft(null);
+									}}
+								>
+									Save
+								</button>
+								<button
+									type="button"
+									className="session-queued-action"
+									onClick={() => setDraft(null)}
+								>
+									Cancel
+								</button>
+							</>
+						) : (
+							<button
+								type="button"
+								className="session-queued-action"
+								aria-label="Edit held message"
+								onClick={() => setDraft(text)}
+							>
+								Edit
+							</button>
+						)
+					) : null}
+					{showMessage && onRemove ? (
+						<button
+							type="button"
+							aria-label="Remove held message"
+							title="Remove this message before it is sent"
+							onClick={onRemove}
+						>
+							<X size={14} strokeWidth={1.5} aria-hidden="true" />
+						</button>
+					) : null}
 				</p>
 			</div>
 			<section

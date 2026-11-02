@@ -900,7 +900,11 @@ const QueuedMessage = memo(function QueuedMessage({
 			<p className="session-queued-note" role="status">
 				<Clock3 size={14} strokeWidth={1.5} aria-hidden="true" />
 				<span>
-					{item.released ? "Sends after this step" : "Queued in this chat"}
+					{item.heldForSetup
+						? "Waiting for setup"
+						: item.released
+							? "Sends after this step"
+							: "Queued in this chat"}
 				</span>
 				{onEdit ? (
 					editing ? (
@@ -935,7 +939,7 @@ const QueuedMessage = memo(function QueuedMessage({
 						</button>
 					)
 				) : null}
-				{onSend ? (
+				{onSend && !item.heldForSetup ? (
 					<button
 						type="button"
 						className="session-queued-action"

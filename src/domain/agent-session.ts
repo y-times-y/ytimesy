@@ -84,6 +84,8 @@ export function chatsFromAgentSessions(
 		readonly workingSince?: string | null;
 		/** Opened but never used: the sidebar lists it only while it is open. */
 		readonly unused?: boolean;
+		/** Holds a message until the project's environment is ready. */
+		readonly waitsForSetup?: boolean;
 	}[],
 ) {
 	return sessions
@@ -98,6 +100,7 @@ export function chatsFromAgentSessions(
 			workspaceId: session.workspaceId ?? null,
 			...(session.workingSince ? { workingSince: session.workingSince } : {}),
 			...(session.unused ? { unused: true as const } : {}),
+			...(session.waitsForSetup ? { waitsForSetup: true as const } : {}),
 			...(session.waitingOn !== undefined
 				? { waitingOn: session.waitingOn }
 				: session.items === undefined

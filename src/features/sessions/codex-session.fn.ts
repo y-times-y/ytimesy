@@ -667,11 +667,14 @@ export const updateQueuedSessionMessage = createServerFn({ method: "POST" })
 			data: Parameters<typeof optionalSessionInput>[0] & {
 				messageId: string;
 				text: string;
+				/** "Set up with the agent" on a message held for setup. */
+				environmentSetup?: boolean;
 			},
 		) => ({
 			...optionalSessionInput(data),
 			messageId: z.string().uuid().parse(data.messageId),
 			text: messageText.parse(data.text),
+			environmentSetup: data.environmentSetup === true,
 		}),
 	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
@@ -682,7 +685,12 @@ export const updateQueuedSessionMessage = createServerFn({ method: "POST" })
 			data.createNew,
 		);
 		return Effect.runPromise(
-			updateQueuedComposerMessage(scope, data.messageId, data.text),
+			updateQueuedComposerMessage(
+				scope,
+				data.messageId,
+				data.text,
+				data.environmentSetup,
+			),
 		);
 	});
 

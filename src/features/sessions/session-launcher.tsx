@@ -74,6 +74,7 @@ import {
 } from "#/domain/secret-request";
 import {
 	continuedChatAwaitsMessage,
+	isQueuedUserMessage,
 	lastUserMessageText,
 	type SessionItem,
 	type SessionTurnStatus,
@@ -611,6 +612,18 @@ export function SessionLauncher({
 		[session.items, optimisticItems],
 	);
 	useMarkPlanLimitFromSwitches(items);
+	// The message held for setup shows in the setup block (with its own
+	// Edit and Remove), not again as a queued message.
+	const heldMessageId = setupHold?.messageId;
+	const timelineItems = useMemo(
+		() =>
+			heldMessageId
+				? items.filter(
+						(item) => !(item.id === heldMessageId && isQueuedUserMessage(item)),
+					)
+				: items,
+		[items, heldMessageId],
+	);
 	const turnStatus = session.turnStatus;
 	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
 	const agents = agentPanelRows({
@@ -1196,7 +1209,7 @@ export function SessionLauncher({
 					helperLines={helperLines}
 					evidence={chatEvidence.data?.evidence}
 					memoryActions={memoryActions}
-					items={items}
+					items={timelineItems}
 					turnStatus={turnStatus}
 					fill={followUpLayout}
 					onOpenFile={onOpenFile}
@@ -1230,7 +1243,9 @@ export function SessionLauncher({
 					trailing={
 						setupHold
 							? setupHold.render(
-									!items.some((item) => item.id === setupHold.messageId),
+									!timelineItems.some(
+										(item) => item.id === setupHold.messageId,
+									),
 								)
 							: undefined
 					}
