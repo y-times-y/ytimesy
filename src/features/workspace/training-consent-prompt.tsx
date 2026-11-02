@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Switch } from "#/components/ui/switch";
 import { TRAINING_POLICY_VERSION } from "#/content/legal/versions";
+import { useTrainingChoiceDefault } from "../app/privacy-region";
 import { authClient } from "../auth/client";
 import { useLegalPromptPending } from "../auth/legal-acceptance-prompt";
 import {
@@ -12,13 +13,15 @@ import {
 	readTrainingPromptFn,
 	saveTrainingConsentFn,
 } from "./training-consent.fn";
+import { TrainingLearnMore } from "./training-consent-settings";
 
 /** Same key as Settings, Privacy (training-consent-settings.tsx). */
 const CONSENT_KEY = ["training-consent"];
 const PROMPT_KEY = (userId: string | undefined) => ["training-prompt", userId];
 
 /**
- * The "Help improve ytimesy" choice: on until the user turns it off here.
+ * The "Help improve ytimesy" choice: starts on (off in the EU/UK, see
+ * useTrainingChoiceDefault) until the user changes it here.
  * Showing it records nothing; only Continue does (useTrainingChoiceSave).
  */
 export function TrainingChoice(props: {
@@ -36,15 +39,7 @@ export function TrainingChoice(props: {
 					Help improve ytimesy
 				</label>
 				<span className="text-muted-foreground">
-					Uses your prompts, code and results, never AI replies.{" "}
-					<a
-						href="/training"
-						target="_blank"
-						rel="noopener noreferrer"
-						className="underline underline-offset-4"
-					>
-						Learn more<span className="sr-only"> about training data</span>
-					</a>
+					<TrainingLearnMore />
 				</span>
 				<span className="text-xs text-muted-foreground">
 					You can change this anytime in Settings → Privacy.
@@ -139,7 +134,7 @@ export function TrainingConsentCard(props: {
 	readonly onContinue: (enabled: boolean) => void;
 	readonly onDismiss: () => void;
 }) {
-	const [enabled, setEnabled] = useState(true);
+	const [enabled, setEnabled] = useState(useTrainingChoiceDefault());
 	return (
 		<section
 			role="dialog"

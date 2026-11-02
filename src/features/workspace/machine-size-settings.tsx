@@ -48,19 +48,17 @@ export function MachineSizeSettings({ projectId }: { projectId: string }) {
 	const save = useMutation(machineSizeSave(queryClient, projectId, saveSize));
 	return (
 		<section
-			className="machine-size-settings"
+			className="settings-section"
 			aria-labelledby="machine-size-heading"
 		>
-			<div className="machine-size-heading">
-				<h3 id="machine-size-heading">Machine size</h3>
-				<span>Per project</span>
-			</div>
-			<p
-				className="settings-copy"
-				title="Existing machines keep their size. Larger sizes use your compute allowance faster. A copy of a larger environment snapshot cannot be reduced below that snapshot’s size."
-			>
-				Resources for new chat machines.
-			</p>
+			<header className="settings-section-head">
+				<div>
+					<h3 id="machine-size-heading">Machine size</h3>
+					<p title="Existing machines keep their size. Larger sizes use your compute allowance faster. A copy of a larger environment snapshot cannot be reduced below that snapshot’s size.">
+						Resources for new chat machines.
+					</p>
+				</div>
+			</header>
 			{/* While the choice loads, the same list shows disabled: nothing moves when it lands. */}
 			{preference.data || preference.isPending ? (
 				<RadioGroup.Root

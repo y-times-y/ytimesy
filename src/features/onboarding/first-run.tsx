@@ -11,6 +11,7 @@ import {
 	firstRunStep,
 } from "#/domain/first-run";
 import type { RepositoryChoice } from "#/domain/projects";
+import { useTrainingChoiceDefault } from "../app/privacy-region";
 import { YtimesyBrand } from "../auth/onboarding-shell";
 import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { requestJson } from "../projects/api";
@@ -282,7 +283,7 @@ export function SessionsStep({
 }
 
 /**
- * "Help improve ytimesy", on until the user turns it off. Continue records
+ * "Help improve ytimesy", on (off in the EU/UK) until the user changes it. Continue records
  * the choice (on or off, with the policy version shown) and leaves the first
  * run; leaving any other way records nothing, and the workspace shows the
  * same card once.
@@ -294,7 +295,7 @@ export function PrivacyStep({
 	userId?: string;
 	onDone?: () => void;
 }) {
-	const [enabled, setEnabled] = useState(true);
+	const [enabled, setEnabled] = useState(useTrainingChoiceDefault());
 	const save = useTrainingChoiceSave(userId);
 	return (
 		<>

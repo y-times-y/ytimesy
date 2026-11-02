@@ -5,15 +5,15 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Switch } from "#/components/ui/switch";
 import {
 	cacheWrite,
 	optimisticMutation,
 	saveErrorMessage,
 } from "#/lib/optimistic-mutation";
 import { readMemoryModeFn, saveMemoryModeFn } from "./memory.fn";
+import { SettingsSwitch } from "./settings-switch";
 
-const MODE_KEY = ["memory-mode"];
+export const MODE_KEY = ["memory-mode"];
 
 type MemoryMode = Awaited<ReturnType<typeof readMemoryModeFn>>;
 
@@ -48,9 +48,8 @@ export function MemorySettings() {
 	const change = useMutation(memoryModeChange(queryClient, save));
 	return (
 		<MemorySettingsView
-			on={mode.data ? mode.data.mode !== "off" : true}
+			on={mode.data ? mode.data.mode !== "off" : undefined}
 			available={mode.data?.available ?? true}
-			loading={mode.isPending}
 			error={saveErrorMessage(change.error) ?? mode.error?.message}
 			onChange={(on) => change.mutate(on)}
 		/>
@@ -58,9 +57,9 @@ export function MemorySettings() {
 }
 
 export function MemorySettingsView(props: {
-	readonly on: boolean;
+	/** Undefined until the saved mode is known: the switch shows as loading. */
+	readonly on: boolean | undefined;
 	readonly available: boolean;
-	readonly loading?: boolean;
 	readonly error?: string;
 	readonly onChange: (on: boolean) => void;
 }) {
@@ -85,10 +84,10 @@ export function MemorySettingsView(props: {
 						</span>
 					</div>
 					<div className="settings-row-actions">
-						<Switch
+						<SettingsSwitch
 							id="memory-use"
-							checked={props.available && props.on}
-							disabled={!props.available || props.loading}
+							checked={props.available ? props.on : false}
+							disabled={!props.available}
 							onCheckedChange={props.onChange}
 						/>
 					</div>

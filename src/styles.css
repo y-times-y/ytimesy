@@ -3903,10 +3903,6 @@ a.session-title-meta:focus-visible {
 .settings-row-text {
 	flex: 1 1 auto;
 }
-.settings-project-select {
-	min-width: 180px;
-}
-
 .settings-primary,
 .settings-secondary,
 .settings-danger {
@@ -5068,15 +5064,89 @@ button.workspace-status-progress:hover {
 	min-height: 100%;
 }
 .settings-body:has(.settings-danger-zone),
-.settings-body > .settings-section:has(.settings-danger-zone) {
+.settings-body > .settings-account {
 	display: flex;
 	flex: 1;
 	flex-direction: column;
 }
+/* Last on the page, after a clear gap; pushed to the bottom when the page is short. */
 .settings-body .settings-danger-zone {
 	margin-top: auto;
 }
-.settings-section:has(.settings-danger-zone)
-	> .settings-group:not(.settings-danger-zone) {
-	margin-bottom: 32px;
+.settings-account > .settings-section:last-of-type {
+	margin-bottom: 36px;
+}
+
+/* A row's plain value on the right (Account: Member since). */
+.settings-row-value {
+	flex-shrink: 0;
+	color: #a3a3a3;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* A Settings switch whose saved value is still loading: the track only,
+   never a wrong position (settings-switch.tsx). */
+.settings-switch-pending {
+	display: inline-block;
+	flex-shrink: 0;
+	width: 28px;
+	height: 16.6px;
+	border-radius: 999px;
+	background: #ffffff14;
+	animation: settings-switch-pending 1.2s ease-in-out infinite alternate;
+}
+@keyframes settings-switch-pending {
+	from {
+		opacity: 0.5;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-switch-pending {
+		animation: none;
+	}
+}
+
+/* Settings > Project: the project switcher sits in the project's row. */
+.settings-project-select {
+	min-width: 0;
+	height: 30px;
+	font-size: 12.5px;
+}
+.environment-setup-button {
+	display: inline-flex;
+	align-items: center;
+	flex: none;
+}
+/* Machine size and Internet access choices line up with the card rows. */
+.settings-section .machine-size-list {
+	margin-top: 0;
+}
+.settings-section .machine-size-option {
+	min-height: 58px;
+	padding: 12px 16px;
+}
+.settings-section .machine-size-resources {
+	padding-right: 0;
+}
+/* "Learn more" under "Help improve ytimesy" (Settings and the first-time card). */
+.training-learn-more {
+	color: #c8c8c8;
+	text-decoration: underline;
+	text-decoration-color: #ffffff40;
+	text-underline-offset: 3px;
+}
+.training-learn-more:hover {
+	color: #f2f2f2;
+	text-decoration-color: #ffffff80;
+}
+/* Settings pickers use the rows' type size (a global button rule set 16px). */
+.settings-body .menu-select-trigger {
+	font-size: 13px;
+}
+.settings-field .menu-select-trigger {
+	height: 34px;
 }

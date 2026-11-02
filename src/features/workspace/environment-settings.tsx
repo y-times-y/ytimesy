@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { CircleDashed, LoaderCircle, Sparkles } from "lucide-react";
+import { CircleDashed, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import {
 	Tooltip,
@@ -35,6 +35,10 @@ import {
 
 export const environmentQueryKey = (projectId: string) =>
 	["project-environment", projectId] as const;
+
+/** The setup button's tooltip: what pressing it does, in one line. */
+export const ENVIRONMENT_SETUP_BUTTON_TITLE =
+	"The agent installs, builds and tests this project in a new chat, then saves the setup here.";
 
 const SOURCE = {
 	agent: "Set up by the agent",
@@ -77,11 +81,11 @@ export function EnvironmentSettings({
 				{onSetUpWithAgent ? (
 					<button
 						type="button"
-						className="settings-primary environment-setup-button"
+						className="settings-secondary environment-setup-button"
+						title={ENVIRONMENT_SETUP_BUTTON_TITLE}
 						onClick={onSetUpWithAgent}
 					>
-						<Sparkles size={13} />
-						Set up with agent
+						Set up in new chat
 					</button>
 				) : null}
 			</header>
