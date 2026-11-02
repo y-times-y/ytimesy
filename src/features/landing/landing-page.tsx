@@ -280,7 +280,8 @@ function Models() {
 					<div>
 						<h3>Your API keys</h3>
 						<p>
-							A key from any of these, or one OpenRouter key for all of them.
+							Your OpenAI, Anthropic, Google or xAI key, or one OpenRouter key
+							for all of them.
 						</p>
 					</div>
 				</li>
