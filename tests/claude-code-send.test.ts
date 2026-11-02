@@ -10,6 +10,15 @@ const fake = vi.hoisted(() => ({
 	owner: vi.fn(),
 	enqueue: vi.fn(async (_input: Record<string, unknown>) => {}),
 	connected: vi.fn(async () => true),
+	refused: vi.fn(async () => false),
+	failover: vi.fn(async () => true),
+}));
+vi.mock("#/server/adapters/model-failover-preferences", () => ({
+	loadModelFailoverPreferences: async () => ({
+		enabled: await fake.failover(),
+		askBeforePaid: false,
+		connectionOrder: [],
+	}),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -31,7 +40,11 @@ vi.mock("#/server/adapters/api-turns", () => ({
 vi.mock("#/server/adapters/claude-subscription", () => ({
 	hasClaudeSubscription: fake.connected,
 	claudeSubscriptionStatus: async () => ({
-		status: (await fake.connected()) ? "connected" : "disconnected",
+		status: (await fake.connected())
+			? "connected"
+			: (await fake.refused())
+				? "refused"
+				: "disconnected",
 	}),
 }));
 vi.mock("#/server/adapters/model-connections", () => ({
@@ -60,6 +73,8 @@ beforeEach(() => {
 	process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED = "1";
 	fake.enqueue.mockClear();
 	fake.connected.mockReset().mockResolvedValue(true);
+	fake.refused.mockReset().mockResolvedValue(false);
+	fake.failover.mockReset().mockResolvedValue(true);
 	fake.owner.mockResolvedValue({
 		id: "s1",
 		projectId: "p1",
@@ -151,4 +166,32 @@ it("refuses a Claude Code send while switched off or not connected", async () =>
 		}),
 	).rejects.toThrow(/not available/);
 	expect(fake.enqueue).not.toHaveBeenCalled();
+});
+
+it("sends on a refused Claude token while failover is on: the turn moves elsewhere", async () => {
+	fake.connected.mockResolvedValue(false);
+	fake.refused.mockResolvedValue(true);
+	expect((await apiModelCatalog("u1")).map((model) => model.id)).toContain(
+		"claude-code/claude-opus-5-5",
+	);
+	const view = await sendApiWorkspaceTask(scope, {
+		text: "Reply with just the word OK.",
+		modelId: "claude-code/claude-opus-5-5",
+	});
+	expect(fake.enqueue.mock.calls[0]?.[0]).toMatchObject({
+		revision: "claude-code:v1:{}",
+		routeId: "claude-code/claude-opus-5-5",
+	});
+	expect(view.listedModelId).toBe("claude-code/claude-opus-5-5");
+	// With failover off, the token must be renewed first.
+	fake.failover.mockResolvedValue(false);
+	expect((await apiModelCatalog("u1")).map((model) => model.id)).toEqual([
+		routeId,
+	]);
+	await expect(
+		sendApiWorkspaceTask(scope, {
+			text: "x",
+			modelId: "claude-code/claude-opus-5-5",
+		}),
+	).rejects.toThrow(/Settings > Agents/);
 });

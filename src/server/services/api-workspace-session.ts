@@ -48,6 +48,7 @@ import {
 	listModelConnections,
 	loadModelConnection,
 } from "../adapters/model-connections";
+import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
 import {
@@ -65,6 +66,20 @@ export async function apiModelCatalog(userId: string) {
 	return (await apiModelAccess(userId)).models;
 }
 
+/** Failover moves a refused-token turn elsewhere, so the user's Claude model stays usable. */
+function refusedClaudeListed(userId: string) {
+	return loadModelFailoverPreferences(userId)
+		.then((preferences) => preferences.enabled)
+		.catch(() => false);
+}
+
+/** A Claude Code send can start: connected, or refused while failover is on. */
+async function claudeCodeSendable(userId: string) {
+	if (await hasClaudeSubscription(userId)) return true;
+	const status = await claudeSubscriptionStatus(userId).catch(() => null);
+	return status?.status === "refused" && (await refusedClaudeListed(userId));
+}
+
 /** The listed models, and whether Anthropic refused the saved Claude token. */
 async function apiModelAccess(userId: string) {
 	const [routes, claude] = await Promise.all([
@@ -75,8 +90,13 @@ async function apiModelAccess(userId: string) {
 					.catch(() => "disconnected" as const)
 			: ("disconnected" as const),
 	]);
-	// Claude Code (the user's Claude subscription) lists beside API keys.
-	const listed = claude === "connected" || claude === "limited";
+	// Claude Code (the user's Claude subscription) lists beside API keys. A
+	// refused token still lists while automatic failover is on: the chat
+	// keeps the user's Claude model, and each turn continues elsewhere.
+	const listed =
+		claude === "connected" ||
+		claude === "limited" ||
+		(claude === "refused" && (await refusedClaudeListed(userId)));
 	return {
 		models: listed ? [...claudeCodeListedModels(), ...routes] : routes,
 		claudeRefused: claude === "refused",
@@ -386,7 +406,7 @@ async function sendClaudeCodeTask(
 		read?.id === sessionId
 			? read
 			: agentSessionForOwner(scope.userId, sessionId),
-		hasClaudeSubscription(scope.userId),
+		claudeCodeSendable(scope.userId),
 	]);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");

@@ -6,6 +6,14 @@ const fake = vi.hoisted(() => ({
 	claude: vi.fn(async () => ({ status: "refused" as string })),
 	routes: vi.fn(async (): Promise<{ id: string; label: string }[]> => []),
 	github: vi.fn(async () => false),
+	failover: vi.fn(async () => false),
+}));
+vi.mock("#/server/adapters/model-failover-preferences", () => ({
+	loadModelFailoverPreferences: async () => ({
+		enabled: await fake.failover(),
+		askBeforePaid: false,
+		connectionOrder: [],
+	}),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
@@ -36,6 +44,7 @@ beforeEach(() => {
 	fake.claude.mockResolvedValue({ status: "refused" });
 	fake.routes.mockResolvedValue([]);
 	fake.github.mockResolvedValue(false);
+	fake.failover.mockResolvedValue(false);
 });
 afterEach(() => {
 	delete process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED;
@@ -75,4 +84,28 @@ it("never asks GitHub for a chat already on its branch", async () => {
 	});
 	expect(view.sendBlockers).toEqual(["claude_token"]);
 	expect(fake.github).not.toHaveBeenCalled();
+});
+
+it("keeps the user's Claude model listed while failover can carry its turns", async () => {
+	fake.failover.mockResolvedValue(true);
+	fake.routes.mockResolvedValue([{ id: routeId, label: "Test" }]);
+	fake.github.mockResolvedValue(true);
+	fake.owner.mockResolvedValue({
+		id: "s1",
+		projectId: "p1",
+		items: [],
+		turnStatus: "idle",
+		harness: "api",
+		listedModelId: "claude-code/claude-opus-5-5",
+	});
+	const view = await readApiWorkspaceSession({
+		userId: "u1",
+		projectId: "p1",
+		sessionId: "s1",
+	});
+	expect(view.models.map((model) => model.id)).toContain(
+		"claude-code/claude-opus-5-5",
+	);
+	expect(view.listedModelId).toBe("claude-code/claude-opus-5-5");
+	expect(view.canSend).toBe(true);
 });

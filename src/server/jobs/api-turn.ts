@@ -65,6 +65,7 @@ import {
 	developmentOutageError,
 	failoverReason,
 	failureSummary,
+	fallbackAccountReason,
 	retriesSameRoute,
 	subscriptionLimitResetsAt,
 } from "#/domain/model-failover-reason";
@@ -179,6 +180,7 @@ import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	claudeCodeBridgeToolSet,
 	runClaudeCodeTurnStep,
+	stopClaudeCodeTurnRun,
 } from "../services/claude-code-turn";
 import {
 	CODE_MODE_TOOL,
@@ -433,6 +435,8 @@ async function runApiTurnAttempt(
 				role: ReturnType<typeof analyticsAgentRole>;
 		  }
 		| undefined;
+	/** A Claude Code turn: stops its CLI when the turn moves to another model. */
+	let stopClaudeCodeRun: (() => Promise<void>) | undefined;
 	let failedAttempt:
 		| {
 				committed: ModelMessage[];
@@ -747,6 +751,18 @@ async function runApiTurnAttempt(
 				throw new Error("Claude Code is not available.");
 			if (!step)
 				throw new Error("Claude Code chats run on the durable executor only.");
+			// An earlier step's CLI may still run on the chat's machine.
+			const claudeCodeOwner = owner;
+			stopClaudeCodeRun = () =>
+				stopClaudeCodeTurnRun({
+					machines: unscopedMachines,
+					vm:
+						execution?.vm ??
+						(claudeCodeOwner.providerRef
+							? WorkspaceId(claudeCodeOwner.providerRef)
+							: null),
+					turnId: turn.id,
+				});
 			// A refused or removed token is a route failure: the turn fails over.
 			const status = await claudeSubscriptionStatus(turn.user_id);
 			if (status.status === "disconnected" || status.status === "refused") {
@@ -2477,14 +2493,17 @@ async function runApiTurnAttempt(
 					: {}),
 			});
 		// A provider-side failure moves the turn to its next best route; the
-		// switch happens here, between model steps, never inside a stream.
+		// switch happens here, between model steps, never inside a stream. A
+		// fallback the turn moved to on its own also moves on when its account
+		// cannot serve (out of credit, key refused).
 		const reason =
 			failureStage === "model" &&
 			failoverScope &&
 			!abort.signal.aborted &&
 			!progressFailed &&
 			!coordinationFailure
-				? failoverReason(error)
+				? (failoverReason(error) ??
+					(turnFailover(turn.failover) ? fallbackAccountReason(error) : null))
 				: null;
 		// A transient failure first runs the step again on the same route, from
 		// the same checkpoint a failover would continue from, after a short
@@ -2527,6 +2546,11 @@ async function runApiTurnAttempt(
 					});
 			}
 		}
+		// The turn leaves Claude Code here (it moves on, waits for an answer or
+		// fails): a CLI still running for it stops, so its trailing output (often
+		// an error once its access ended) is never read and it stops working.
+		// A stopped turn's commands, the CLI among them, are already stopping.
+		if (!abort.signal.aborted) await stopClaudeCodeRun?.();
 		let paused: ModelSwitchItem | undefined;
 		let exhausted = "";
 		if (reason && failoverScope && !abort.signal.aborted) {
@@ -2534,6 +2558,7 @@ async function runApiTurnAttempt(
 			try {
 				const plan = await planModelFailover({
 					turn,
+					reason,
 					evaluation: scope.evaluation,
 					child: scope.child,
 					allowCustom: !step,
@@ -2565,6 +2590,7 @@ async function runApiTurnAttempt(
 						plan.previous,
 						plan.failing,
 						decision.candidate,
+						reason,
 					);
 					// The failed step's cut-off text is not part of the answer.
 					const partial = failedAttempt?.uncommittedIds ?? [];
