@@ -50,18 +50,8 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 		"Terminal-Bench 4.0 · GPT-6 Astra · all 66 tasks · 5 attempts each",
 	])
 		expect(flat).toContain(value);
-	// The best value in each row is marked, whichever column it is in.
-	const best = [
-		...html.matchAll(/<td[^>]*data-best="true"[^>]*>(.*?)<\/td>/g),
-	].map((m) => m[1].replace(/<small>.*?<\/small>/, "").replace(/<[^>]+>/g, ""));
-	expect(best).toEqual([
-		"58.5%",
-		"49 of 66",
-		"$7.12",
-		"$2,351",
-		"3.34M",
-		"45k",
-	]);
+	// No value is emphasized: every number is shown the same way.
+	expect(html).not.toContain("data-best");
 	// The Codex max sentence is gone: the table shows max.
 	expect(flat).not.toContain("Codex with GPT-6 Astra max scores");
 	expect(text).not.toContain("Preliminary");
