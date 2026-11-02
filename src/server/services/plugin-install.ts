@@ -12,6 +12,25 @@ import { addMcpServer } from "../adapters/mcp-servers";
 import { saveInstall } from "../adapters/plugin-installs";
 import { fetchPinnedPlugin } from "../adapters/plugin-source";
 import { requiresOAuth } from "./mcp-oauth";
+import { mcpOAuthAppCredentials } from "./mcp-oauth-client";
+
+/**
+ * Credential settings the user may leave empty for this plugin: those of a
+ * catalog entry whose sign-in app the owner has configured.
+ */
+export function signInReplacesSettings(
+	entry: PluginCatalogEntry,
+	env?: Record<string, string | undefined>,
+): Set<string> {
+	if (!entry.signInApp || !mcpOAuthAppCredentials(entry.signInApp, env))
+		return new Set();
+	return new Set(
+		(entry.settings ?? [])
+			.filter((setting) => setting.sensitive)
+			.map((setting) => setting.key),
+	);
+}
+
 import { connectMcpTools } from "./mcp-tools";
 
 /**
@@ -27,6 +46,7 @@ export async function installCatalogPlugin(input: {
 	catalog?: readonly PluginCatalogEntry[];
 	fetch?: typeof globalThis.fetch;
 	mcpFetch?: typeof globalThis.fetch;
+	env?: Record<string, string | undefined>;
 }) {
 	const entry = (input.catalog ?? PLUGIN_CATALOG).find(
 		(candidate) => candidate.id === input.catalogId,
@@ -34,8 +54,9 @@ export async function installCatalogPlugin(input: {
 	if (!entry) throw new Error("That plugin is not in the reviewed catalog.");
 	const files = await fetchPinnedPlugin(entry, input.fetch);
 	const plugin = parsePlugin(files, entry.id);
+	const optional = signInReplacesSettings(entry, input.env);
 	for (const [key, option] of Object.entries(plugin.userConfig))
-		if (option.required && !input.config[key])
+		if (option.required && !input.config[key] && !optional.has(key))
 			throw new Error(
 				`"${option.title}" is required to install ${plugin.displayName}.`,
 			);
@@ -45,10 +66,17 @@ export async function installCatalogPlugin(input: {
 			resolvePluginValue(server.url, input.config);
 		if (!url.startsWith("https://"))
 			throw new Error(`${server.name} must resolve to an HTTPS URL.`);
+		// A credential left empty because the owner's app signs the user in.
+		const signInOnly = Object.values(server.headers).some((value) =>
+			[...optional].some((key) => value.includes(key) && !input.config[key]),
+		);
 		return {
 			name: `${plugin.name}-${server.name}`.slice(0, 32),
 			url,
-			headers: resolvePluginHeaders(server.headers, input.config),
+			signInOnly,
+			headers: signInOnly
+				? {}
+				: resolvePluginHeaders(server.headers, input.config),
 			// A server whose config takes a credential from the user's settings.
 			usesCredential: Object.values({
 				url: server.url,
@@ -56,11 +84,20 @@ export async function installCatalogPlugin(input: {
 			}).some((value) => value.includes("${")),
 		};
 	});
-	const probe = await connectMcpTools(candidates, { fetch: input.mcpFetch });
+	const probe = await connectMcpTools(
+		candidates.filter((server) => !server.signInOnly),
+		{ fetch: input.mcpFetch },
+	);
 	await probe.close();
 	const unavailable = new Set(probe.unavailable);
+	const signInOnly = new Set(
+		candidates.filter((server) => server.signInOnly).map((s) => s.name),
+	);
 	const wrongCredential = candidates.filter(
-		(server) => unavailable.has(server.name) && server.usesCredential,
+		(server) =>
+			unavailable.has(server.name) &&
+			server.usesCredential &&
+			!server.signInOnly,
 	);
 	if (wrongCredential.length)
 		throw new Error(
@@ -75,8 +112,14 @@ export async function installCatalogPlugin(input: {
 		auth: "headers" | "oauth";
 	}[] = [];
 	const unreachable: string[] = [];
-	for (const { usesCredential: _usesCredential, ...server } of candidates)
-		if (!unavailable.has(server.name))
+	for (const {
+		usesCredential: _usesCredential,
+		signInOnly: _signInOnly,
+		...server
+	} of candidates)
+		if (signInOnly.has(server.name))
+			servers.push({ ...server, headers: {}, auth: "oauth" });
+		else if (!unavailable.has(server.name))
 			servers.push({ ...server, auth: "headers" });
 		else if (await requiresOAuth(server.url, input.mcpFetch))
 			servers.push({ ...server, headers: {}, auth: "oauth" });

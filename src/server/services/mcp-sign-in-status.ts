@@ -11,9 +11,27 @@ import { seal } from "../auth/token-vault";
 import { serverConfig } from "../config";
 import {
 	mcpOAuthRedirectUrl,
+	type OAuthRecord,
 	readOAuthRecord,
 	storedOAuthProvider,
 } from "./mcp-oauth";
+import { mcpOAuthAppCredentials, mcpOAuthAppFor } from "./mcp-oauth-client";
+
+/**
+ * Without tokens: "needs-token" when the last sign-in start found no way to
+ * sign in, unless the owner has since set up the service's app.
+ */
+export function signedOutState(
+	record: OAuthRecord,
+	env?: Record<string, string | undefined>,
+): McpSignInState {
+	const unavailable = record.unavailable;
+	if (!unavailable) return "needs-sign-in";
+	const app = mcpOAuthAppFor(unavailable.authorizationServer);
+	return app && mcpOAuthAppCredentials(app.service, env)
+		? "needs-sign-in"
+		: "needs-token";
+}
 
 const CHECK_TIMEOUT_MS = 8_000;
 
@@ -32,7 +50,7 @@ export async function mcpSignInState(input: {
 	fetchFn?: typeof fetch;
 }): Promise<McpSignInState> {
 	const record = await readOAuthRecord(input.sealedOAuth, input.userId);
-	if (!record.tokens?.access_token) return "needs-sign-in";
+	if (!record.tokens?.access_token) return signedOutState(record);
 	const provider = storedOAuthProvider({
 		record,
 		redirectUrl: mcpOAuthRedirectUrl(input.appUrl),

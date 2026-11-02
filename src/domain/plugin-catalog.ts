@@ -18,6 +18,12 @@ export type PluginCatalogEntry = {
 	 * for providers whose plugin points at a shared keyless endpoint.
 	 */
 	readonly signInUrls?: Readonly<Record<string, string>>;
+	/**
+	 * The owner's OAuth app (MCP_OAUTH_<app>_CLIENT_ID/_SECRET) that can sign
+	 * users in instead of the plugin's credential settings. When configured,
+	 * those settings are optional: left empty, the server installs as sign-in.
+	 */
+	readonly signInApp?: string;
 	readonly settings?: readonly {
 		readonly key: string;
 		readonly title: string;
@@ -39,6 +45,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		repo: "claude-plugins-official",
 		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
 		path: "external_plugins/github",
+		signInApp: "GITHUB",
 		settings: [
 			{
 				key: "GITHUB_PERSONAL_ACCESS_TOKEN",

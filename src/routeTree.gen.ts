@@ -46,6 +46,7 @@ import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/pu
 import { Route as ApiVmEdgeAuthorizeRouteImport } from './routes/api/vm-edge/authorize'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 import { Route as ApiMcpOauthCallbackRouteImport } from './routes/api/mcp/oauth/callback'
+import { Route as ApiMcpOauthClientMetadataRouteImport } from './routes/api/mcp/oauth/client-metadata'
 import { Route as ProjectsProjectIdEvidenceEvidenceIdRouteImport } from './routes/projects/$projectId/evidence/$evidenceId'
 import { Route as ProjectsProjectIdPullsLinkIdFixRouteImport } from './routes/projects/$projectId/pulls/$linkId/fix'
 import { Route as ApiProjectsProjectIdEvidenceEvidenceIdFileRouteImport } from './routes/api/projects/$projectId/evidence/$evidenceId/$file'
@@ -238,6 +239,12 @@ const ApiMcpOauthCallbackRoute = ApiMcpOauthCallbackRouteImport.update({
   path: '/api/mcp/oauth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMcpOauthClientMetadataRoute =
+  ApiMcpOauthClientMetadataRouteImport.update({
+    id: '/api/mcp/oauth/client-metadata',
+    path: '/api/mcp/oauth/client-metadata',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsProjectIdEvidenceEvidenceIdRoute =
   ProjectsProjectIdEvidenceEvidenceIdRouteImport.update({
     id: '/projects/$projectId/evidence/$evidenceId',
@@ -295,6 +302,7 @@ export interface FileRoutesByFullPath {
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
+  '/api/mcp/oauth/client-metadata': typeof ApiMcpOauthClientMetadataRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
   '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
@@ -337,6 +345,7 @@ export interface FileRoutesByTo {
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
+  '/api/mcp/oauth/client-metadata': typeof ApiMcpOauthClientMetadataRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
   '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
@@ -380,6 +389,7 @@ export interface FileRoutesById {
   '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
+  '/api/mcp/oauth/client-metadata': typeof ApiMcpOauthClientMetadataRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
   '/projects/$projectId/pulls/$linkId/fix': typeof ProjectsProjectIdPullsLinkIdFixRoute
   '/api/projects/$projectId/evidence/$evidenceId/$file': typeof ApiProjectsProjectIdEvidenceEvidenceIdFileRoute
@@ -424,6 +434,7 @@ export interface FileRouteTypes {
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
+    | '/api/mcp/oauth/client-metadata'
     | '/projects/$projectId/evidence/$evidenceId'
     | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
@@ -466,6 +477,7 @@ export interface FileRouteTypes {
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
+    | '/api/mcp/oauth/client-metadata'
     | '/projects/$projectId/evidence/$evidenceId'
     | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
@@ -508,6 +520,7 @@ export interface FileRouteTypes {
     | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
+    | '/api/mcp/oauth/client-metadata'
     | '/projects/$projectId/evidence/$evidenceId'
     | '/projects/$projectId/pulls/$linkId/fix'
     | '/api/projects/$projectId/evidence/$evidenceId/$file'
@@ -549,6 +562,7 @@ export interface RootRouteChildren {
   ApiLocalImportTranscriptRoute: typeof ApiLocalImportTranscriptRoute
   ApiVmEdgeAuthorizeRoute: typeof ApiVmEdgeAuthorizeRoute
   ApiMcpOauthCallbackRoute: typeof ApiMcpOauthCallbackRoute
+  ApiMcpOauthClientMetadataRoute: typeof ApiMcpOauthClientMetadataRoute
   ProjectsProjectIdEvidenceEvidenceIdRoute: typeof ProjectsProjectIdEvidenceEvidenceIdRoute
   ProjectsProjectIdPullsLinkIdFixRoute: typeof ProjectsProjectIdPullsLinkIdFixRoute
 }
@@ -814,6 +828,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMcpOauthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mcp/oauth/client-metadata': {
+      id: '/api/mcp/oauth/client-metadata'
+      path: '/api/mcp/oauth/client-metadata'
+      fullPath: '/api/mcp/oauth/client-metadata'
+      preLoaderRoute: typeof ApiMcpOauthClientMetadataRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectId/evidence/$evidenceId': {
       id: '/projects/$projectId/evidence/$evidenceId'
       path: '/projects/$projectId/evidence/$evidenceId'
@@ -901,6 +922,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiLocalImportTranscriptRoute: ApiLocalImportTranscriptRoute,
   ApiVmEdgeAuthorizeRoute: ApiVmEdgeAuthorizeRoute,
   ApiMcpOauthCallbackRoute: ApiMcpOauthCallbackRoute,
+  ApiMcpOauthClientMetadataRoute: ApiMcpOauthClientMetadataRoute,
   ProjectsProjectIdEvidenceEvidenceIdRoute:
     ProjectsProjectIdEvidenceEvidenceIdRoute,
   ProjectsProjectIdPullsLinkIdFixRoute: ProjectsProjectIdPullsLinkIdFixRoute,
