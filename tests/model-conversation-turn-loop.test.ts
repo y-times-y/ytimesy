@@ -372,3 +372,60 @@ it("settles Stop on a waiting turn at once instead of leaving it queued", async 
 		{ t: turn.turnId },
 	]);
 });
+
+it("stops the turn running in this object the moment its Stop arrives", async () => {
+	vi.stubEnv("YTIMESY_REALTIME_SECRET", "r".repeat(32));
+	const { signDeliveryRequest } = await import("../src/domain/delivery-auth");
+	const { registerLiveTurn } = await import(
+		"../src/server/services/live-turn-abort"
+	);
+	const { ApiTurnCancelled } = await import("../src/domain/api-turn-failure");
+	const { object } = conversation();
+	const control = async (action: string) => {
+		const url = `https://chat.internal/turn/${action}`;
+		const body = JSON.stringify({ ...scope, ...turn });
+		return object.fetch(
+			new Request(url, {
+				method: "POST",
+				headers: await signDeliveryRequest("r".repeat(32), "POST", url, body),
+				body,
+			}),
+		);
+	};
+	expect((await control("acquire")).status).toBe(204);
+	const abort = vi.fn();
+	const forget = registerLiveTurn(turn.turnId, abort);
+	try {
+		expect((await control("cancel")).status).toBe(204);
+		expect(abort).toHaveBeenCalledOnce();
+		expect(abort.mock.calls[0][0]).toBeInstanceOf(ApiTurnCancelled);
+	} finally {
+		forget();
+	}
+});
+
+it("leaves a turn it does not hold running when a stale Stop arrives", async () => {
+	vi.stubEnv("YTIMESY_REALTIME_SECRET", "r".repeat(32));
+	const { signDeliveryRequest } = await import("../src/domain/delivery-auth");
+	const { registerLiveTurn } = await import(
+		"../src/server/services/live-turn-abort"
+	);
+	const { object } = conversation();
+	const abort = vi.fn();
+	const forget = registerLiveTurn(turn.turnId, abort);
+	try {
+		const url = "https://chat.internal/turn/cancel";
+		const body = JSON.stringify({ ...scope, ...turn });
+		const response = await object.fetch(
+			new Request(url, {
+				method: "POST",
+				headers: await signDeliveryRequest("r".repeat(32), "POST", url, body),
+				body,
+			}),
+		);
+		expect(response.status).toBe(409);
+		expect(abort).not.toHaveBeenCalled();
+	} finally {
+		forget();
+	}
+});
