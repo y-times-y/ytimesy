@@ -223,8 +223,19 @@ run("pnpm", ["exec", "vite", "build"], undefined, {
 	YTIMESY_TARGET: "cloudflare",
 	CLOUDFLARE_ENV: "production",
 });
-wrangler("wrangler.web.jsonc", ["deploy"]);
-wrangler("wrangler.web.jsonc", ["secret", "bulk"], JSON.stringify(secrets));
+// The web Worker ships the build output: vite's Cloudflare plugin writes
+// dist/server/wrangler.json with the production env already applied, so it
+// takes no --env (deploying wrangler.web.jsonc would bundle raw source).
+const webBuild = (args: string[], input?: string) =>
+	run(
+		"pnpm",
+		["exec", "wrangler", ...args, "--config", "dist/server/wrangler.json"],
+		input,
+	);
+webBuild(["deploy"]);
+webBuild(["secret", "bulk"], JSON.stringify(secrets));
 console.log(
-	"Production deployed with no public app route. Reach it only through Cloudflare Access until launch.",
+	process.env.YTIMESY_GO_LIVE === "1"
+		? `Production deployed and live at ${secrets.APP_URL}.`
+		: "Production deployed with no public app route.",
 );
