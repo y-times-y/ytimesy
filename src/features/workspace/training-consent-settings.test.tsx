@@ -27,7 +27,8 @@ it("shows the drafted training copy with the toggle off by default", () => {
 it("keeps every training commitment in the details", () => {
 	for (const commitment of [
 		"from now on",
-		"prompts, agent actions and the code the agent reads or writes",
+		"your prompts, your code and its results",
+		"We never use replies or code written by AI models.",
 		"train our own models",
 		"We remove account details and secrets first",
 		"never share it with model providers",

@@ -15,7 +15,7 @@ import { requireSameOrigin } from "#/server/http";
 export type LegalAcceptanceStatus = {
 	/** False when the user never accepted, or accepted an older version. */
 	current: boolean;
-	/** True when an older version was accepted (the copy says "updated"). */
+	/** True when an older version was accepted. */
 	updated: boolean;
 };
 
@@ -50,6 +50,6 @@ export const acceptLegalTermsFn = createServerFn({ method: "POST" })
 			throw new Response("The Terms changed; reload to read them.", {
 				status: 409,
 			});
-		await recordLegalAcceptance(user.id, "prompt");
+		await recordLegalAcceptance(user.id, "notice");
 		return { versions: CURRENT_LEGAL_VERSIONS };
 	});
