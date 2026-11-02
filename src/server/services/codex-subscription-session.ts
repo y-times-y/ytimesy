@@ -48,6 +48,7 @@ import {
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
 import { pinnedTurnFailover } from "./model-failover";
+import { githubSendBlocked } from "./send-blockers";
 import { commitChatBranchForSubmission } from "./session-branch";
 import { timed } from "./step-timing";
 
@@ -85,6 +86,8 @@ async function readSubscriptionSessionState(
 	const { managed, account: listedAccount } = state;
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
+	// Read beside the catalog; it settles (never rejects) before the view returns.
+	const githubMissing = githubSendBlocked(scope.userId, session ?? null);
 	let connected = managed;
 	let expired = false;
 	let models: Awaited<ReturnType<typeof codexSubscriptionCatalog>> = [];
@@ -127,6 +130,7 @@ async function readSubscriptionSessionState(
 		turnStatus: session?.turnStatus ?? "idle",
 		canSend: connected && models.length > 0,
 		connection,
+		...((await githubMissing) ? { sendBlockers: ["github"] as const } : {}),
 	};
 	return { view, sealedDeviceLogin: state.sealedDeviceLogin };
 }

@@ -1,5 +1,6 @@
 import { ENVIRONMENT_SETUP_TITLE } from "#/domain/environment-setup";
 import type { Project } from "#/domain/projects";
+import { GITHUB_SEND_BLOCK_MESSAGE } from "#/domain/send-blocked";
 import {
 	defaultChatBaseBranch,
 	isGeneratedSessionBranch,
@@ -22,7 +23,10 @@ import {
 	repositoryBranchSha,
 } from "#/server/adapters/github";
 import { projectForOwner } from "#/server/adapters/projects";
-import { githubAccessToken } from "#/server/auth/github-connection";
+import {
+	githubAccessToken,
+	githubConnectionExists,
+} from "#/server/auth/github-connection";
 
 /** Called at submission, never by the picker or a background chat read. */
 export async function commitChatBranchForSubmission(input: {
@@ -72,7 +76,14 @@ export async function commitChatBranchForSubmission(input: {
 		(item) => item.kind === "userMessage",
 	);
 	if (hasConversation && !session.selectedBranch) return session;
-	const token = await githubAccessToken(input.userId);
+	const token = await githubAccessToken(input.userId).catch(
+		async (cause: unknown) => {
+			// Said as the composer says it (send-blocked.ts), not as the repository picker does.
+			if (!(await githubConnectionExists(input.userId).catch(() => true)))
+				throw new Error(GITHUB_SEND_BLOCK_MESSAGE);
+			throw cause;
+		},
+	);
 	const repository = await authorizedRepository(
 		token,
 		project.installationId,
