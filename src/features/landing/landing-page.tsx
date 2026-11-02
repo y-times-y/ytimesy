@@ -66,7 +66,6 @@ export function LandingPage() {
 			</header>
 			<main>
 				<section className="landing-hero" aria-labelledby="landing-title">
-					<span className="landing-chip">Free beta</span>
 					<h1 id="landing-title">AI Software Engineer in the Cloud</h1>
 					<SignUp
 						className="landing-button landing-button-large"
@@ -80,9 +79,7 @@ export function LandingPage() {
 				<Models />
 				<Features />
 				<section className="landing-close" aria-labelledby="landing-close">
-					<h2 id="landing-close">
-						Build Ambitious Software Without Constraints
-					</h2>
+					<h2 id="landing-close">Build Ambitious Software</h2>
 					<SignUp
 						className="landing-button landing-button-large"
 						label="Start building"
