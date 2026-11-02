@@ -12,15 +12,30 @@ export function composerListedModels({
 	catalogModels,
 	rememberedModels,
 	sessionConnected,
+	harnessId,
 }: {
 	sessionModels: readonly ListedModel[];
 	catalogModels: readonly ListedModel[];
 	rememberedModels: readonly ListedModel[];
 	sessionConnected: boolean;
+	/** The harness being shown: another harness's models never stand in for it. */
+	harnessId?: string;
 }): readonly ListedModel[] {
 	if (sessionConnected && sessionModels.length) return sessionModels;
 	if (catalogModels.length) return catalogModels;
-	return sessionModels.length ? sessionModels : rememberedModels;
+	const own = (models: readonly ListedModel[]) =>
+		harnessId
+			? models.filter((model) => modelHarness(model.id) === harnessId)
+			: models;
+	const session = own(sessionModels);
+	return session.length ? session : own(rememberedModels);
+}
+
+/** Which harness a composer model id belongs to: API and plan routes are "api". */
+export function modelHarness(modelId: string): "api" | "codex" {
+	return modelId.startsWith("api/") || modelId.startsWith("claude-code/")
+		? "api"
+		: "codex";
 }
 
 export interface ReasoningLevel {
