@@ -162,6 +162,8 @@ export type ErrorSessionItem = {
 	readonly kind: "error";
 	readonly id: SessionItemId;
 	readonly message: string;
+	/** Why, for the owner: a machine failure's raw cause, redacted. Not shown in the chat. */
+	readonly cause?: string;
 };
 
 /**

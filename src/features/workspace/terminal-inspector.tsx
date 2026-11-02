@@ -1,5 +1,6 @@
 import { ClientOnly, useHydrated } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { silentReconnectDelayMs } from "#/domain/workspace-desktop";
 import {
 	TERMINAL_SOCKET_OPEN_TIMEOUT_MS,
 	terminalClosedMessage,
@@ -31,6 +32,8 @@ export function TerminalInspector({
 	const [error, setError] = useState<string | null>(null);
 	const [connected, setConnected] = useState(false);
 	const [retryGeneration, setRetryGeneration] = useState(0);
+	// Silent reconnects since the shell last answered (a deploy drops the socket).
+	const reconnects = useRef(0);
 	const prompt = terminalInspectorPrompt({ projectId, sessionId });
 	const shouldAttach = terminalInspectorShouldAttach({
 		tabActive: active,
@@ -54,6 +57,10 @@ export function TerminalInspector({
 		let closed = false;
 		let dispose: (() => void) | undefined;
 		let openTimer: number | undefined;
+		let reconnectTimer: number | undefined;
+		// The shell answered on this socket, and the relay sent no error.
+		let live = false;
+		let relayError = false;
 		void (async () => {
 			const [{ Terminal }, { FitAddon }] = await Promise.all([
 				import("@xterm/xterm"),
@@ -107,6 +114,8 @@ export function TerminalInspector({
 				// The socket opens before the machine answers (it may be waking);
 				// the shell's first output is what connects the terminal.
 				if (!closed && !isTerminalError(event.data)) {
+					live = true;
+					reconnects.current = 0;
 					setConnected(true);
 					finishInteraction("terminal_ready");
 				}
@@ -117,6 +126,7 @@ export function TerminalInspector({
 							message?: string;
 						};
 						if (message.type === "error" && message.message) {
+							relayError = true;
 							setError(message.message);
 							setConnected(false);
 						}
@@ -129,6 +139,24 @@ export function TerminalInspector({
 			});
 			socket.addEventListener("close", (event) => {
 				if (closed) return;
+				// A live shell whose socket dropped without a reason (a deploy,
+				// a network blip) re-attaches quietly: the PTY kept running.
+				const delay = relayError
+					? null
+					: silentReconnectDelayMs({
+							wasConnected: live,
+							reason: event.reason,
+							attempt: reconnects.current,
+						});
+				if (delay !== null) {
+					reconnects.current += 1;
+					setConnected(false);
+					reconnectTimer = window.setTimeout(
+						() => setRetryGeneration((value) => value + 1),
+						delay,
+					);
+					return;
+				}
 				// A clean close carries no error message; without one the panel waited forever.
 				setError(
 					(current) =>
@@ -141,7 +169,8 @@ export function TerminalInspector({
 				setConnected(false);
 			});
 			socket.addEventListener("error", () => {
-				if (closed) return;
+				// A live socket's close follows and decides (reconnect or say why).
+				if (closed || live) return;
 				setError((current) => current ?? "Terminal disconnected.");
 				setConnected(false);
 			});
@@ -178,6 +207,7 @@ export function TerminalInspector({
 		return closeOnPageHide(() => {
 			closed = true;
 			window.clearTimeout(openTimer);
+			window.clearTimeout(reconnectTimer);
 			// Closed before the shell answered: no timing for this open.
 			cancelInteraction("terminal_ready");
 			dispose?.();

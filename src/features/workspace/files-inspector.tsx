@@ -191,6 +191,9 @@ export function FilesInspector({
 	const explorer = useQuery({
 		...explorerQuery(queryClient, projectId, sessionId, openHint),
 		enabled: active && Boolean(projectId && sessionId),
+		// A machine still starting is checked again until the chat has it.
+		refetchInterval: (query) =>
+			query.state.data?.machine === "starting" ? 3_000 : false,
 		placeholderData: snapshot
 			? { root: snapshot.root, paths: snapshot.paths }
 			: undefined,
@@ -295,14 +298,18 @@ export function FilesInspector({
 									{wake.isPending
 										? explorer.data.machine === "none"
 											? "Setting up this chat's computer. The first time takes a minute or two."
-											: "Waking this chat's computer…"
+											: explorer.data.machine === "starting"
+												? "Starting the machine…"
+												: "Waking this chat's computer…"
 										: wake.data && !wake.data.ready
 											? "This project's environment isn't ready yet."
-											: explorer.data.machine === "none"
-												? "This chat doesn't have its own computer yet, so there are no files to show."
-												: explorer.data.paths.length
-													? "Computer asleep. Wake it to save edits."
-													: "This chat's computer is asleep to save minutes."}
+											: explorer.data.machine === "starting"
+												? "Starting the machine…"
+												: explorer.data.machine === "none"
+													? "This chat doesn't have its own computer yet, so there are no files to show."
+													: explorer.data.paths.length
+														? "Computer asleep. Wake it to save edits."
+														: "This chat's computer is asleep to save minutes."}
 									{tree.length && !explorer.data.paths.length && !wake.isPending
 										? " Showing this chat's changes only."
 										: ""}
@@ -315,7 +322,9 @@ export function FilesInspector({
 								>
 									{explorer.data.machine === "none"
 										? "Set up computer"
-										: "Wake computer"}
+										: explorer.data.machine === "starting"
+											? "Retry"
+											: "Wake computer"}
 								</button>
 								{wake.error ? <p role="alert">{wake.error.message}</p> : null}
 							</div>

@@ -109,8 +109,8 @@ export function listWorkspaceExplorer(
 	const list = (reuse: boolean) =>
 		Effect.gen(function* () {
 			const checkout = yield* findCheckout(machines, scope, { reuse });
-			if (checkout === "none")
-				return { ...emptyListing(), machine: "none" as const };
+			if (checkout === "none" || checkout === "starting")
+				return { ...emptyListing(), machine: checkout };
 			if (!checkout) return emptyListing();
 			const { workspaceId, roots, running } = checkout;
 			const readOpened = (path: string | undefined) =>
@@ -251,7 +251,7 @@ export function readWorkspaceExplorerFiles(
 	const read = (reuse: boolean) =>
 		findCheckout(machines, scope, { askRunning: false, reuse }).pipe(
 			Effect.flatMap((checkout) =>
-				checkout && checkout !== "none"
+				checkout && typeof checkout === "object"
 					? Effect.all(
 							wanted.map((want) =>
 								want
@@ -471,7 +471,7 @@ function withRunningCheckout<A>(
 ): Effect.Effect<A | null> {
 	return findCheckout(machines, scope).pipe(
 		Effect.flatMap((checkout) =>
-			checkout && checkout !== "none" && checkout.running
+			checkout && typeof checkout === "object" && checkout.running
 				? run(checkout.workspaceId, checkout.root, checkout.roots)
 				: Effect.succeed(null),
 		),
@@ -518,7 +518,10 @@ async function lookUpChatMachine(
 	scope: ExplorerScope,
 	projectId: string,
 	reuse: boolean,
-): Promise<{ value: ChatMachine | "none" | null; reused: boolean }> {
+): Promise<{
+	value: ChatMachine | "none" | "starting" | null;
+	reused: boolean;
+}> {
 	const key = chatMachineKey(scope);
 	const recent = recentChatMachines.get(key);
 	if (reuse && recent && Date.now() - recent.at < CHAT_MACHINE_REUSE_MS)
@@ -531,7 +534,16 @@ async function lookUpChatMachine(
 		}),
 		projectForOwner(scope.userId, projectId),
 	]);
-	if (!peeked.providerRef) return { value: "none", reused: false };
+	// A chat that has run a turn was given a machine, or is being given one
+	// (or its start failed and is retried): it is starting, not missing.
+	if (!peeked.providerRef)
+		return {
+			value:
+				peeked.session && peeked.session.turnStatus !== "idle"
+					? "starting"
+					: "none",
+			reused: false,
+		};
 	if (!project) return { value: null, reused: false };
 	const value = { workspaceId: WorkspaceId(peeked.providerRef), project };
 	if (recentChatMachines.size >= 1000) recentChatMachines.clear();
@@ -541,7 +553,8 @@ async function lookUpChatMachine(
 
 /**
  * The chat's machine and where its repositories are checked out; "none" when
- * the chat has no machine yet. The chat and project rows are read together
+ * the chat has no machine yet, "starting" when it has run a turn but its
+ * machine is not bound yet. The chat and project rows are read together
  * (or reused from a recent lookup, for Files), then the machine's state and
  * checkout directory together; the directory is remembered per machine,
  * since it never moves. Nothing is started.
@@ -550,7 +563,7 @@ function findCheckout(
 	machines: WorkspaceMachines,
 	scope: ExplorerScope,
 	options: { readonly askRunning?: boolean; readonly reuse?: boolean } = {},
-): Effect.Effect<Checkout | "none" | null, unknown> {
+): Effect.Effect<Checkout | "none" | "starting" | null, unknown> {
 	const projectId = scope.projectId?.trim();
 	if (!projectId) return Effect.succeed(null);
 	return Effect.tryPromise(async () => {
@@ -559,7 +572,7 @@ function findCheckout(
 			projectId,
 			options.reuse === true,
 		);
-		if (!chat.value || chat.value === "none") return chat.value;
+		if (!chat.value || typeof chat.value === "string") return chat.value;
 		const { workspaceId, project } = chat.value;
 		const [running, root] = await Promise.all([
 			options.askRunning === false ? false : machines.isRunning(workspaceId),
