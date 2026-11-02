@@ -4,10 +4,12 @@ import {
 	CLAUDE_CODE_UPSTREAM,
 	type ClaudeCodeProxyAuthorization,
 	type ClaudeCodeUpstreamOutcome,
+	claudeCodeUpstreamOutcome,
 } from "#/domain/claude-code-proxy";
 import { isClaudeCodeSessionId } from "#/domain/claude-code-stream";
 import {
 	type ClaudePlanUsage,
+	claudePlanUsageFromHeaders,
 	claudePlanUsageFromJson,
 } from "#/domain/claude-plan-usage";
 import { seal, unseal } from "../auth/token-vault";
@@ -244,14 +246,110 @@ const PLAN_USAGE_WRITE_EVERY_SECONDS = 15;
 export async function recordClaudePlanUsage(
 	userId: string,
 	usage: ClaudePlanUsage,
+	/** Seconds since the last write before another is taken; 0 always writes. */
+	everySeconds = PLAN_USAGE_WRITE_EVERY_SECONDS,
 ) {
 	await database().query(
 		`update claude_subscription set plan_usage=$2::jsonb,plan_usage_at=now()
 		 where user_id=$1 and (plan_usage_at is null
-		 or plan_usage_at < now() - make_interval(secs => $3)
+		 or plan_usage_at <= now() - make_interval(secs => $3)
 		 or plan_usage->>'status' is distinct from $2::jsonb->>'status')`,
-		[userId, JSON.stringify(usage), PLAN_USAGE_WRITE_EVERY_SECONDS],
+		[userId, JSON.stringify(usage), everySeconds],
 	);
+}
+
+/** How old the reading may get before opening the picker reads it again. */
+export const CLAUDE_PLAN_USAGE_REFRESH_SECONDS = 5 * 60;
+const PLAN_USAGE_READ_TIMEOUT_MS = 4_000;
+/** One read per user at a time in this isolate; the database claim covers the rest. */
+const planUsageReads = new Map<string, Promise<ClaudePlanUsage | null>>();
+
+/**
+ * The reading for the model picker. When it is missing or older than five
+ * minutes, one 1-token Haiku request with the user's token reads the plan's
+ * headers afresh (it uses a tiny bit of the plan). Claiming the read moves
+ * plan_usage_at forward first, so every isolate waits five minutes after an
+ * attempt, failed or not. On failure the last reading (or null) comes back.
+ */
+export function claudePlanUsageForPicker(
+	userId: string,
+	options: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<ClaudePlanUsage | null> {
+	const running = planUsageReads.get(userId);
+	if (running) return running;
+	const read = readFreshClaudePlanUsage(userId, options).finally(() =>
+		planUsageReads.delete(userId),
+	);
+	planUsageReads.set(userId, read);
+	return read;
+}
+
+async function readFreshClaudePlanUsage(
+	userId: string,
+	options: { fetch?: typeof fetch; timeoutMs?: number },
+): Promise<ClaudePlanUsage | null> {
+	const claimed = (
+		await database().query<{ sealed_token: string }>(
+			`update claude_subscription set plan_usage_at=now()
+			 where user_id=$1 and status in ('connected','limited')
+			 and (plan_usage_at is null or plan_usage_at < now() - make_interval(secs => $2))
+			 returning sealed_token`,
+			[userId, CLAUDE_PLAN_USAGE_REFRESH_SECONDS],
+		)
+	).rows[0];
+	if (!claimed) return readClaudePlanUsage(userId);
+	let response: Response;
+	try {
+		const token = await unseal(claimed.sealed_token, binding(userId));
+		response = await (options.fetch ?? fetch)(
+			`${CLAUDE_CODE_UPSTREAM}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"anthropic-version": "2023-06-01",
+					"anthropic-beta": "oauth-2025-04-20",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					model: "claude-haiku-5-5",
+					max_tokens: 1,
+					system: [
+						{
+							type: "text",
+							text: "You are Claude Code, Anthropic's official CLI for Claude.",
+						},
+					],
+					messages: [{ role: "user", content: "hi" }],
+				}),
+				redirect: "manual",
+				signal: AbortSignal.timeout(
+					options.timeoutMs ?? PLAN_USAGE_READ_TIMEOUT_MS,
+				),
+			},
+		);
+	} catch (error) {
+		console.warn("Claude plan usage could not be read from Anthropic.", {
+			reason: error instanceof Error ? error.name : "unknown",
+		});
+		return readClaudePlanUsage(userId);
+	}
+	await response.body?.cancel().catch(() => undefined);
+	const outcome = claudeCodeUpstreamOutcome(response);
+	if (outcome) await recordClaudeCodeUpstream(userId, outcome);
+	const usage =
+		outcome?.kind === "refused"
+			? null
+			: claudePlanUsageFromHeaders(response.headers, Date.now());
+	if (!usage) {
+		if (!outcome)
+			console.warn("Claude plan usage read got no usage headers.", {
+				status: response.status,
+			});
+		return readClaudePlanUsage(userId);
+	}
+	await recordClaudePlanUsage(userId, usage, 0);
+	return usage;
 }
 
 /** The latest reading while Claude is connected, or null when there is none. */

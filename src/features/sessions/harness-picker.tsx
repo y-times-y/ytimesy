@@ -44,9 +44,9 @@ import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
 import {
 	CLAUDE_PLAN_USAGE_HINT,
-	ModelPickerPlanUsage,
-	useClaudePlanUsageBars,
-	usePlanUsageBars,
+	SectionPlanUsage,
+	useClaudePlanUsageLine,
+	usePlanUsageLine,
 	usePrefetchPlanUsage,
 } from "./plan-usage";
 import { SubscriptionMark } from "./subscription-mark";
@@ -120,8 +120,7 @@ export function HarnessPicker({
 	const [open, setOpen] = useState(false);
 	// Read with the composer, so the picker opens at its full height.
 	const usageWindows = useCloudUsageWindows();
-	const planBars = usePlanUsageBars(open);
-	const prefetchPlanUsage = usePrefetchPlanUsage();
+	const planUsage = usePlanUsageLine(open);
 	const [browse, setBrowse] = useState(
 		harnessId === "api" && !isClaudeCodeRoute(modelId),
 	);
@@ -135,10 +134,10 @@ export function HarnessPicker({
 		staleTime: 30_000,
 	});
 	const claudeData = claude.data?.enabled ? claude.data : null;
-	const claudeBars = useClaudePlanUsageBars(
-		open,
-		claudeData?.status === "connected" || claudeData?.status === "limited",
-	);
+	const claudeConnected =
+		claudeData?.status === "connected" || claudeData?.status === "limited";
+	const claudeUsage = useClaudePlanUsageLine(open, claudeConnected);
+	const prefetchPlanUsage = usePrefetchPlanUsage(claudeConnected);
 	const [apiProvider, setApiProvider] = useState("openai");
 	// The Grok subscription's own rail entry: the xAI models, on the plan.
 	const [grokView, setGrokView] = useState(false);
@@ -395,6 +394,13 @@ export function HarnessPicker({
 						) : claudeView && claudeData ? (
 							<ClaudeCodeModels
 								models={claudeData.models}
+								usage={
+									<SectionPlanUsage
+										line={claudeUsage}
+										label="Claude plan"
+										hint={CLAUDE_PLAN_USAGE_HINT}
+									/>
+								}
 								selectedRoute={harnessId === "api" ? modelId : ""}
 								onSelect={(id) => {
 									if (harnessId !== "api") onHarnessIdChange("api");
@@ -432,7 +438,12 @@ export function HarnessPicker({
 										: selected.name}
 								</h3>
 								{harnessId === "codex" ? (
-									<p className="model-browser-caption">ChatGPT subscription</p>
+									<>
+										<p className="model-browser-caption">
+											ChatGPT subscription
+										</p>
+										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
+									</>
 								) : null}
 								<div className="model-picker-list">
 									{connectionContent}
@@ -517,12 +528,6 @@ export function HarnessPicker({
 						)}
 					</section>
 				</div>
-				<ModelPickerPlanUsage bars={planBars} />
-				<ModelPickerPlanUsage
-					bars={claudeBars}
-					label="Claude plan"
-					hint={CLAUDE_PLAN_USAGE_HINT}
-				/>
 				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>
@@ -530,12 +535,15 @@ export function HarnessPicker({
 }
 
 /** Claude Code's models (the user's Claude subscription), apart from API keys. */
-function ClaudeCodeModels({
+export function ClaudeCodeModels({
 	models,
+	usage,
 	selectedRoute,
 	onSelect,
 }: {
 	models: readonly { readonly id: string; readonly label: string }[];
+	/** The Claude plan's usage line, under the caption. */
+	usage?: ReactNode;
 	selectedRoute: string;
 	onSelect: (id: string) => void;
 }) {
@@ -548,6 +556,7 @@ function ClaudeCodeModels({
 			>
 				Claude subscription
 			</p>
+			{usage}
 			<div className="model-picker-list">
 				{models.map((model) => (
 					<div
