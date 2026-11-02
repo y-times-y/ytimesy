@@ -253,6 +253,46 @@ export function usageLimitReset(body: string): Date | null | undefined {
 		: null;
 }
 
+/** The Claude plan's usage window is spent (Claude Code turns); it resets on its own. */
+export class ClaudeSubscriptionLimitReached extends Error {
+	constructor(readonly resetsAt: Date | null) {
+		super(claudeSubscriptionLimitMessage(resetsAt));
+		this.name = "ClaudeSubscriptionLimitReached";
+	}
+}
+
+export function claudeSubscriptionLimitMessage(
+	resetsAt: Date | null,
+	now = new Date(),
+) {
+	const minutes = resetsAt
+		? Math.max(1, Math.ceil((resetsAt.getTime() - now.getTime()) / 60_000))
+		: null;
+	const wait =
+		minutes === null
+			? "It resets when your plan's usage window renews."
+			: `It resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`}.`;
+	return `Your Claude plan's usage is used up. ${wait} To keep going now, pick another model. Your work is saved.`;
+}
+
+/** Anthropic refused the Claude subscription token; only a new setup-token fixes it. */
+export class ClaudeSubscriptionRefused extends Error {
+	constructor() {
+		super(
+			"Anthropic refused your Claude token. Run `claude setup-token` and paste the new token in Settings > Agents. Your work is saved.",
+		);
+		this.name = "ClaudeSubscriptionRefused";
+	}
+}
+
+/** Claude Code itself stopped without an answer (not a subscription problem). */
+export class ClaudeCodeRunFailure extends Error {
+	constructor(detail: string) {
+		super(`Claude Code stopped: ${detail} Your work is saved; retry the turn.`);
+		this.name = "ClaudeCodeRunFailure";
+	}
+}
+
 export class SafeApiModelFailure extends Error {
 	readonly classification: ApiModelFailureClassification;
 
@@ -613,6 +653,9 @@ export function apiModelFailureMessage(error: unknown): string {
 	if (
 		error instanceof SafeApiModelFailure ||
 		error instanceof SubscriptionUsageLimitReached ||
+		error instanceof ClaudeSubscriptionLimitReached ||
+		error instanceof ClaudeSubscriptionRefused ||
+		error instanceof ClaudeCodeRunFailure ||
 		error instanceof UnsupportedEdgeModelEndpoint ||
 		error instanceof ApiModelPreparationFailure
 	)

@@ -47,6 +47,7 @@ import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { clearChatCache } from "../sessions/chat-cache";
 import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
+import { ClaudeSubscriptionSettings } from "../sessions/claude-subscription-settings";
 import { CodexMark } from "../sessions/codex-mark";
 import { CodexSubscriptionUsage } from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
@@ -1002,6 +1003,7 @@ function AgentsSection({ account }: { account: UserAgentAccount }) {
 				</ul>
 				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 			</section>
+			<ClaudeSubscriptionSettings />
 			<ModelConnections />
 			<ModelFailoverSettings />
 		</>

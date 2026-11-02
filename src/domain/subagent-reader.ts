@@ -154,6 +154,19 @@ export function readerCommand(sessionId: string, command: string) {
 }
 
 /**
+ * A read-only Claude Code helper's CLI, run as the reader (the checkout
+ * stays unwritable) but outside the network namespace: the unmodified CLI
+ * must reach ytimesy's edge for every model request. Its commands can
+ * therefore reach the VM's loopback services, unlike a reader on our own
+ * harness. Only Claude Code read-only helpers use it.
+ */
+export function readerNetworkedCommand(sessionId: string, command: string) {
+	const scratch = readerScratchDirectory(sessionId);
+	const encoded = Buffer.from(command, "utf8").toString("base64");
+	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
+}
+
+/**
  * Where the runtime may write a file for a reader: its scratch, its session
  * runtime root, single-use payload files directly in /tmp, and the attempt
  * loop's per-attempt directories (the runtime creates each one for its

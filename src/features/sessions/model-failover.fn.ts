@@ -2,11 +2,17 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import {
+	CLAUDE_CODE_KEY,
+	CLAUDE_CODE_LABEL,
+	claudeSubscriptionEnabled,
+} from "#/domain/claude-code-route";
+import {
 	type FailoverConnectionKind,
 	failoverConnectionKind,
 	orderedFailoverConnections,
 	SUBSCRIPTION_KEY,
 } from "#/domain/model-failover";
+import { hasClaudeSubscription } from "#/server/adapters/claude-subscription";
 import { listModelConnections } from "#/server/adapters/model-connections";
 import {
 	connectionOrderSchema,
@@ -31,9 +37,12 @@ export type ModelFailoverSettings = {
 };
 
 async function readSettings(userId: string): Promise<ModelFailoverSettings> {
-	const [preferences, codex, connections] = await Promise.all([
+	const [preferences, codex, claude, connections] = await Promise.all([
 		loadModelFailoverPreferences(userId),
 		hasManagedCodexAuth(userId).catch(() => false),
+		claudeSubscriptionEnabled()
+			? hasClaudeSubscription(userId).catch(() => false)
+			: false,
 		listModelConnections(userId),
 	]);
 	return settingsView(preferences, [
@@ -42,6 +51,15 @@ async function readSettings(userId: string): Promise<ModelFailoverSettings> {
 					{
 						key: SUBSCRIPTION_KEY,
 						label: SUBSCRIPTION_LABEL,
+						kind: "subscription" as const,
+					},
+				]
+			: []),
+		...(claude
+			? [
+					{
+						key: CLAUDE_CODE_KEY,
+						label: CLAUDE_CODE_LABEL,
 						kind: "subscription" as const,
 					},
 				]

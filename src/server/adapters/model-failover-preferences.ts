@@ -17,7 +17,7 @@ export const DEFAULT_MODEL_FAILOVER_PREFERENCES: ModelFailoverPreferences = {
 };
 
 export const connectionOrderSchema = z
-	.array(z.union([z.literal("codex"), z.uuid()]))
+	.array(z.union([z.literal("codex"), z.literal("claude-code"), z.uuid()]))
 	.max(64)
 	.transform((keys) => [...new Set(keys)]);
 

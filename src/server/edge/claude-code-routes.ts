@@ -1,0 +1,133 @@
+import { z } from "zod";
+import {
+	presentedClaudeCodeGrant,
+	verifyClaudeCodeGrant,
+} from "../../domain/claude-code-grant";
+import { handleMcpMessage } from "../../domain/claude-code-mcp";
+import {
+	CLAUDE_CODE_PROXY_PREFIX,
+	proxyClaudeCode,
+} from "../../domain/claude-code-proxy";
+import { claudeSubscriptionEnabled } from "../../domain/claude-code-route";
+import { modelConversationName } from "../../domain/model-conversation-routing";
+import {
+	authorizeClaudeCodeProxy,
+	recordClaudeCodeUpstream,
+} from "../adapters/claude-subscription";
+import { withDatabaseScope } from "../adapters/database-scope";
+import {
+	claudeCodeBridgeTools,
+	requestClaudeCodeCall,
+} from "../services/claude-code-bridge";
+import { durableObjectLocation } from "./durable-object-location";
+import type { EdgeExecutorEnvironment } from "./environment";
+
+export const CLAUDE_CODE_MCP_PATH = `${CLAUDE_CODE_PROXY_PREFIX}/mcp`;
+const MAX_MCP_BODY = 1024 * 1024;
+
+const claudeCodeSecrets = z.object({ GIT_PROXY_SECRET: z.string().min(32) });
+
+export function isClaudeCodeEdgePath(path: string) {
+	return (
+		path === CLAUDE_CODE_PROXY_PREFIX ||
+		path.startsWith(`${CLAUDE_CODE_PROXY_PREFIX}/`)
+	);
+}
+
+/**
+ * The VM's Claude Code traffic: model requests through the proxy, and
+ * ytimesy's MCP tools, which the chat's Durable Object (the one running the
+ * turn) answers. Off unless YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED=1.
+ */
+export async function routeClaudeCodeEdge(
+	request: Request,
+	env: EdgeExecutorEnvironment,
+): Promise<Response> {
+	if (!claudeSubscriptionEnabled()) return new Response(null, { status: 404 });
+	const secrets = claudeCodeSecrets.safeParse(env);
+	if (!secrets.success) return new Response(null, { status: 503 });
+	const secret = secrets.data.GIT_PROXY_SECRET;
+	const path = new URL(request.url).pathname;
+	if (path === CLAUDE_CODE_MCP_PATH) {
+		const grant = await verifyClaudeCodeGrant(
+			secret,
+			presentedClaudeCodeGrant(request.headers),
+		);
+		if (!grant) return new Response(null, { status: 401 });
+		return env.MODEL_CONVERSATIONS.getByName(
+			modelConversationName(grant),
+			durableObjectLocation(),
+		).fetch(
+			new Request(`https://chat.internal${CLAUDE_CODE_MCP_PATH}`, {
+				method: request.method,
+				headers: {
+					authorization: request.headers.get("authorization") ?? "",
+					"content-type": "application/json",
+				},
+				body: request.method === "POST" ? request.body : null,
+				duplex: "half",
+			} as RequestInit),
+		);
+	}
+	const connection = env.HYPERDRIVE.connectionString;
+	return proxyClaudeCode(request, {
+		secret,
+		authorize: (grant) =>
+			withDatabaseScope(
+				connection,
+				() => authorizeClaudeCodeProxy(grant),
+				null,
+			),
+		onUpstream: (grant, outcome) =>
+			withDatabaseScope(
+				connection,
+				() => recordClaudeCodeUpstream(grant.userId, outcome),
+				null,
+			),
+	});
+}
+
+/**
+ * Inside the chat's Durable Object: one MCP message for the turn the grant
+ * names. Tools run in the turn's step (claude-code-bridge.ts).
+ */
+export async function answerClaudeCodeMcp(
+	request: Request,
+	env: EdgeExecutorEnvironment,
+	expectedName: (name: string) => boolean,
+): Promise<Response> {
+	if (!claudeSubscriptionEnabled()) return new Response(null, { status: 404 });
+	const secrets = claudeCodeSecrets.safeParse(env);
+	if (!secrets.success) return new Response(null, { status: 503 });
+	const grant = await verifyClaudeCodeGrant(
+		secrets.data.GIT_PROXY_SECRET,
+		presentedClaudeCodeGrant(request.headers),
+	);
+	if (!grant || !expectedName(modelConversationName(grant)))
+		return new Response(null, { status: 401 });
+	// No server-sent stream and no session to end: plain JSON per POST.
+	if (request.method !== "POST")
+		return new Response(null, { status: 405, headers: { allow: "POST" } });
+	const text = await request.text();
+	if (text.length > MAX_MCP_BODY) return new Response(null, { status: 413 });
+	let message: unknown;
+	try {
+		message = JSON.parse(text);
+	} catch {
+		return Response.json(
+			{
+				jsonrpc: "2.0",
+				id: null,
+				error: { code: -32700, message: "Parse error." },
+			},
+			{ status: 400 },
+		);
+	}
+	const reply = await handleMcpMessage(message, {
+		tools: async () => (await claudeCodeBridgeTools(grant.turnId)) ?? [],
+		call: (name, args) => requestClaudeCodeCall(grant.turnId, name, args),
+	});
+	return reply.body === undefined
+		? new Response(null, { status: reply.status })
+		: Response.json(reply.body, { status: reply.status });
+}
