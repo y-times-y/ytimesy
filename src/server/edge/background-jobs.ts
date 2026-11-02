@@ -1,6 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
-import { type BackgroundJob, backgroundJob } from "../../domain/background-job";
+import {
+	type BackgroundJob,
+	backgroundJob,
+	interruptedJobDecision,
+} from "../../domain/background-job";
 import { modelConversationName } from "../../domain/model-conversation-routing";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
@@ -125,12 +129,15 @@ type JobRecord = {
 	job: BackgroundJob;
 	state: "queued" | "running" | "done" | "failed";
 	attempts: number;
+	/** Runs a Worker restart cut off; a replayable job runs again until MAX_JOB_INTERRUPTIONS. */
+	interruptions?: number;
 };
 
 /**
  * One instance per on-demand job. Only an explicitly pending peer message is
- * retried; any other failure, or a run interrupted mid-way, fails closed so an
- * uncertain side effect is never replayed.
+ * retried after a failure. A run interrupted mid-way (a deploy) runs again
+ * when its kind is safe to repeat (interruptedJobDecision); any other fails
+ * closed so an uncertain side effect is never replayed.
  */
 export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> {
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
@@ -154,16 +161,29 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 	}
 
 	async alarm() {
-		const record = await this.ctx.storage.get<JobRecord>("job");
+		let record = await this.ctx.storage.get<JobRecord>("job");
 		if (!record) return;
 		if (record.state === "done" || record.state === "failed") {
 			await this.ctx.storage.deleteAll();
 			return;
 		}
 		if (record.state === "running") {
-			// The platform re-fires an alarm whose handler died; its effects are unknown.
-			await this.finish(record, "failed", "interrupted");
-			return;
+			// The platform re-fires an alarm whose handler died (a deploy, a
+			// crash). A job safe to repeat runs again; any other fails closed,
+			// since its effects are unknown.
+			const interruptions = (record.interruptions ?? 0) + 1;
+			if (
+				interruptedJobDecision(record.job.kind, interruptions - 1) === "fail"
+			) {
+				await this.finish(record, "failed", "interrupted");
+				return;
+			}
+			console.warn("Background job interrupted; running it again.", {
+				id: record.job.id,
+				kind: record.job.kind,
+				interruptions,
+			});
+			record = { ...record, interruptions };
 		}
 		await this.ctx.storage.put<JobRecord>("job", {
 			...record,

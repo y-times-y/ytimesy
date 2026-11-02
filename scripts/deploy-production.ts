@@ -1,10 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	codexRelaySettingNames,
 	codexRelaySettingsProblem,
 } from "../src/domain/codex-egress";
+import {
+	IN_FLIGHT_WORK_NOTE,
+	productionDeploySteps,
+} from "./production-deploy-steps";
 import {
 	missingDeployedSettings,
 	productionPreflightProblems,
@@ -205,11 +211,15 @@ if (key.length !== 32) throw new Error("Production encryption key is invalid.");
 const certPath = database.searchParams.get("sslrootcert");
 if (certPath) secrets.DATABASE_SSL_CA = await readFile(certPath, "utf8");
 
-/** Only calls without secret input may show wrangler's own error. */
-function run(command: string, args: string[], input?: string, env?: object) {
+/** Calls that carry secrets (masked) show wrangler's error with every value masked. */
+function run(
+	command: string,
+	args: string[],
+	options: { masked?: boolean; env?: object } = {},
+) {
+	const { masked = false, env } = options;
 	try {
 		const output = execFileSync(command, args, {
-			...(input ? { input } : {}),
 			encoding: "utf8",
 			stdio: ["pipe", "pipe", "pipe"],
 			maxBuffer: 16 * 1024 * 1024,
@@ -219,8 +229,7 @@ function run(command: string, args: string[], input?: string, env?: object) {
 	} catch (error) {
 		const { stdout, stderr } = error as { stdout?: string; stderr?: string };
 		let shown = `${stdout ?? ""}${stderr ?? ""}`;
-		// Calls with secret input show wrangler's error with every value masked.
-		if (input)
+		if (masked)
 			for (const value of Object.values(secrets))
 				if (value.length >= 4) shown = shown.split(value).join("[redacted]");
 		console.error(shown);
@@ -239,8 +248,6 @@ const EDGE_CONFIG = [
 // dist/server/wrangler.json with the production env already applied, so it
 // takes no --env (deploying wrangler.web.jsonc would bundle raw source).
 const WEB_CONFIG = ["--config", "dist/server/wrangler.json"];
-const wrangler = (config: string[], args: string[], input?: string) =>
-	run("pnpm", ["exec", "wrangler", ...args, ...config], input);
 
 /** Secret names on a deployed Worker (names only; empty before its first deploy). */
 function deployedSecretNames(config: string[]): string[] {
@@ -258,9 +265,8 @@ function deployedSecretNames(config: string[]): string[] {
 
 // Build the web first: its plain variables are part of what it runs with, and
 // the preflight below checks both Workers before anything is deployed.
-run("pnpm", ["exec", "vite", "build"], undefined, {
-	YTIMESY_TARGET: "cloudflare",
-	CLOUDFLARE_ENV: "production",
+run("pnpm", ["exec", "vite", "build"], {
+	env: { YTIMESY_TARGET: "cloudflare", CLOUDFLARE_ENV: "production" },
 });
 const { unstable_readConfig } = await import("wrangler");
 const edgeConfig = unstable_readConfig({
@@ -316,12 +322,26 @@ if (problems.length)
 console.log("Production preflight passed for the web and edge Workers.");
 if (preflightOnly) process.exit(0);
 
-// Secrets before code, so new code never boots without a setting it needs.
-// Edge executor first: the web Worker's EXECUTOR service binding targets it.
-wrangler(EDGE_CONFIG, ["secret", "bulk"], JSON.stringify(secrets));
-wrangler(EDGE_CONFIG, ["deploy"]);
-wrangler(WEB_CONFIG, ["secret", "bulk"], JSON.stringify(webSecrets));
-wrangler(WEB_CONFIG, ["deploy"]);
+// Code and secrets go up together as one version per Worker, so new code
+// never boots without a setting it needs and each Worker restarts once.
+// The secrets files live only for the deploy, readable by this user alone.
+const secretsDirectory = await mkdtemp(join(tmpdir(), "ytimesy-deploy-"));
+try {
+	const edgeSecretsFile = join(secretsDirectory, "edge.json");
+	const webSecretsFile = join(secretsDirectory, "web.json");
+	await writeFile(edgeSecretsFile, JSON.stringify(secrets), { mode: 0o600 });
+	await writeFile(webSecretsFile, JSON.stringify(webSecrets), { mode: 0o600 });
+	// Masked like a stdin secret call: wrangler's error never shows a value.
+	for (const args of productionDeploySteps({
+		edgeConfig: EDGE_CONFIG,
+		webConfig: WEB_CONFIG,
+		edgeSecretsFile,
+		webSecretsFile,
+	}))
+		run("pnpm", ["exec", "wrangler", ...args], { masked: true });
+} finally {
+	await rm(secretsDirectory, { recursive: true, force: true });
+}
 
 // What actually landed: every required name on each Worker.
 const missing = [
@@ -345,3 +365,4 @@ console.log(
 		? `Production deployed and live at ${secrets.APP_URL}.`
 		: "Production deployed with no public app route.",
 );
+console.log(IN_FLIGHT_WORK_NOTE);

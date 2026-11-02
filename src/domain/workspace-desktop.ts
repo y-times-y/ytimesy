@@ -1,3 +1,4 @@
+import { machineFailureMessage } from "./api-turn-failure";
 import { CODE_MODE_TOOL } from "./code-mode";
 import { failureMessage, workspaceLooksGone } from "./failure-message";
 import { leanToolNames } from "./harness-model-profile";
@@ -22,6 +23,10 @@ export const START_HARNESS_BEFORE_DESKTOP =
 export function desktopStartFailureReason(cause: unknown): string {
 	const message = failureMessage(cause);
 	if (workspaceLooksGone(message)) return START_HARNESS_BEFORE_DESKTOP;
+	// The chat's machine failed to start: worded as the chat words it, never
+	// the provider's raw text.
+	const machine = machineFailureMessage(cause);
+	if (machine) return machine;
 	return publicFailureMessage(new Error(message));
 }
 
@@ -264,4 +269,22 @@ export function desktopSidebarShouldOpen(input: {
 	readonly dismissedStreakId: string | null;
 }): boolean {
 	return input.streakId !== null && input.streakId !== input.dismissedStreakId;
+}
+
+/** Backoff of the silent reconnects after a live socket drops (about 15 s in all). */
+export const SILENT_RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
+
+/**
+ * When a desktop or terminal socket that was live drops without a reason
+ * from our relay (a deploy swapping the Worker, a network blip), the panel
+ * reconnects on its own after this delay; null once the reconnects are
+ * spent, or when the relay said why it closed (that is shown instead).
+ */
+export function silentReconnectDelayMs(input: {
+	readonly wasConnected: boolean;
+	readonly reason?: string;
+	readonly attempt: number;
+}): number | null {
+	if (!input.wasConnected || input.reason?.trim()) return null;
+	return SILENT_RECONNECT_DELAYS_MS[input.attempt] ?? null;
 }

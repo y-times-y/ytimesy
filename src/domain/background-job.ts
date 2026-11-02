@@ -113,3 +113,37 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		.strict(),
 ]);
 export type BackgroundJob = z.infer<typeof backgroundJob>;
+
+/**
+ * Kinds whose handler is safe to run again from the top after a restart cut
+ * it off mid-way (claims, leases, slug-keyed copies or receipts make a repeat
+ * a no-op or a continuation). held-sends (it takes the queued message before
+ * starting its turn) and background-wake (it marks the exit notified before
+ * waking the agent) are not yet: an interrupted one still fails closed.
+ */
+const REPLAYABLE_AFTER_INTERRUPTION: ReadonlySet<BackgroundJob["kind"]> =
+	new Set([
+		"maintenance",
+		"model-admission",
+		"prepare",
+		"task-event",
+		"peer-message",
+		"checkpoint",
+		"pr-repair",
+		"conversation-fork",
+		"pr-evidence",
+		"memory",
+	]);
+/** A job a deploy keeps interrupting stops being replayed after this many. */
+export const MAX_JOB_INTERRUPTIONS = 3;
+
+/** What the job runner does with a job a Worker restart cut off. */
+export function interruptedJobDecision(
+	kind: BackgroundJob["kind"],
+	interruptions: number,
+): "replay" | "fail" {
+	return REPLAYABLE_AFTER_INTERRUPTION.has(kind) &&
+		interruptions < MAX_JOB_INTERRUPTIONS
+		? "replay"
+		: "fail";
+}

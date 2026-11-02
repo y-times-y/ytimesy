@@ -160,6 +160,18 @@ function machineFailureReason(message: string) {
 		return "another operation was updating it";
 	if (/did not become running|stopped before it became running/i.test(message))
 		return "it did not finish starting";
+	if (/earlier start of this machine was still finishing/i.test(message))
+		return "an earlier start of it was still finishing";
+	if (/limiting requests|rate.?limit|too many requests|\b429\b/i.test(message))
+		return "the machine provider was limiting requests";
+	if (/sizing did not complete|did not finish resizing/i.test(message))
+		return "it did not finish resizing";
+	if (/started but is not answering/i.test(message))
+		return "it started but did not answer yet";
+	if (/not responding/i.test(message))
+		return "the machine provider was not responding";
+	if (/must be configured|refuses VM work without usage caps/i.test(message))
+		return "this deployment is missing a machine setting";
 	if (
 		/internal server error|bad gateway|service unavailable|gateway time-?out|\b5\d\d\b|temporar/i.test(
 			message,
@@ -214,6 +226,25 @@ function usageCapFailure(error: unknown, depth = 0): string | null {
 		(error as { providerError?: unknown }).providerError ??
 		(RetryError.isInstance(error) ? error.lastError : error.cause);
 	return usageCapFailure(inner, depth + 1);
+}
+
+/**
+ * The raw cause of a machine failure, redacted, for the owner (logs and the
+ * turn's stored error item; never its message): the provider detail the
+ * adapter attached, else the machine error's own text. Null when the error
+ * is not a machine failure.
+ */
+export function machineFailureCause(error: unknown): string | null {
+	const found = machineError(error);
+	if (!found) return null;
+	const detail = (found as { detail?: unknown }).detail;
+	const tag = (found as { _tag?: unknown })._tag;
+	return redactSecrets(
+		typeof detail === "string" && detail
+			? detail
+			: `${typeof tag === "string" ? tag : found.name}: ${found.message}`,
+		600,
+	);
 }
 
 export function machineFailureMessage(error: unknown): string | null {

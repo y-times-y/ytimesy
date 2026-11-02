@@ -34,6 +34,13 @@ import {
 } from "./edge-routes";
 import { forkRunningVm } from "./fork-vm";
 import {
+	logMachineFailure,
+	machineFailureDetail,
+	machineFailureKind,
+	requestIdRecordingFetch,
+	resumableMachineStart,
+} from "./machine-failure";
+import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
@@ -84,9 +91,18 @@ class MachineSizeRejected extends Error {
 	}
 }
 
+/** Fixed wording for the failure kinds machineFailureReason (api-turn-failure.ts) names. */
+export const MACHINE_START_STILL_FINISHING =
+	"An earlier start of this machine was still finishing.";
+export const PROVIDER_RATE_LIMITED =
+	"The machine provider is limiting requests right now.";
+
 function providerMessage(cause: unknown): string {
 	if (cause instanceof MachineSizeRejected) return cause.message;
 	if (isTransientProviderFailure(cause)) return PROVIDER_UNAVAILABLE_MESSAGE;
+	const kind = machineFailureKind(cause);
+	if (kind === "conflict") return MACHINE_START_STILL_FINISHING;
+	if (kind === "rate-limited") return PROVIDER_RATE_LIMITED;
 	return publicFailureMessage(
 		cause instanceof FreestyleApiError || cause instanceof Error
 			? cause
@@ -98,7 +114,9 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const transport = fastPollFreestyleFetch(boundedFreestyleFetch());
+	const transport = requestIdRecordingFetch(
+		fastPollFreestyleFetch(boundedFreestyleFetch()),
+	);
 	const freestyle = new Freestyle({
 		apiKey,
 		fetch: options.signal
@@ -267,17 +285,22 @@ export function createFreestyleWorkspaceMachines(
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
 			try {
 				const vm = freestyle.vms.ref(workspaceId);
-				await retryTransientProviderFailure(async () => {
-					const data = await vm.data();
-					if (!admittedAndRunning(data, 60))
-						await resumeProductVm(vm, "Workspace VM", 60, data);
-				});
+				// Resumable: a resume interrupted by a restart is simply run again.
+				await resumableMachineStart(
+					async () => {
+						const data = await vm.data();
+						if (!admittedAndRunning(data, 60))
+							await resumeProductVm(vm, "Workspace VM", 60, data);
+					},
+					{ operation: "ensureRunning", vmId: workspaceId },
+				);
 				return workspaceId;
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
 					providerWorkspaceId: workspaceId,
+					detail: machineFailureDetail(cause),
 				});
 			}
 		},
@@ -418,10 +441,17 @@ export function createFreestyleWorkspaceMachines(
 				return { vm: WorkspaceId(fork.vmId), forkMs: fork.forkMs };
 			} catch (cause) {
 				if (cause instanceof WorkspaceProvisionError) throw cause;
+				logMachineFailure({
+					operation: "forkWorkspace",
+					slug,
+					vmId: source,
+					error: cause,
+				});
 				throw new WorkspaceProvisionError({
 					operation: "snapshot",
 					message: providerMessage(cause),
 					providerWorkspaceId: source,
+					detail: machineFailureDetail(cause),
 				});
 			}
 		},
@@ -433,21 +463,35 @@ export function createFreestyleWorkspaceMachines(
 				memory: requested.memory,
 				storage: requested.storage,
 			};
+			// An earlier attempt made it (one a restart interrupted, a prewarm,
+			// or one still running beside this one): finish and resume it.
+			const adopt = async (existing: string) => {
+				await completeCopiedMachineSize(freestyle.vms.ref(existing));
+				// Its guest may never have answered.
+				await resumeProductVm(
+					freestyle.vms.ref(existing),
+					"Agent session VM",
+					60,
+					undefined,
+					true,
+				);
+				return WorkspaceId(existing);
+			};
 			const provision = async () => {
 				const existing = await findVmBySlug(freestyle, slug);
-				if (existing) {
-					await completeCopiedMachineSize(freestyle.vms.ref(existing));
-					// An earlier attempt made it; its guest may never have answered.
-					await resumeProductVm(
-						freestyle.vms.ref(existing),
-						"Agent session VM",
-						60,
-						undefined,
-						true,
-					);
-					return WorkspaceId(existing);
-				}
-				return WorkspaceId(
+				if (existing) return adopt(existing);
+				const created = await createCopy().catch(async (cause) => {
+					// Another attempt's create of this slug is still landing: the
+					// provider refuses the slug before it lists the VM.
+					if (machineFailureKind(cause) !== "conflict") throw cause;
+					const landed = await waitForSlug(freestyle, slug);
+					if (!landed) throw cause;
+					return adopt(landed);
+				});
+				return created;
+			};
+			const createCopy = async () =>
+				WorkspaceId(
 					await admitVmCreate(
 						freestyle,
 						slug,
@@ -533,28 +577,18 @@ export function createFreestyleWorkspaceMachines(
 						requestedResources,
 					),
 				);
-			};
 			try {
-				// Slug-keyed: a repeat finds and resumes a VM an earlier attempt created.
-				return await retryTransientProviderFailure(provision);
+				// Slug-keyed: a repeat finds and resumes a VM an earlier attempt
+				// created, so passing failures are waited out, not surfaced.
+				return await resumableMachineStart(provision, {
+					operation: "provisionSession",
+					slug,
+				});
 			} catch (cause) {
-				if (cause instanceof FreestyleApiError && cause.status === 409) {
-					const recovered = await findVmBySlug(freestyle, slug);
-					if (recovered) {
-						await completeCopiedMachineSize(freestyle.vms.ref(recovered));
-						await resumeProductVm(
-							freestyle.vms.ref(recovered),
-							"Agent session VM",
-							60,
-							undefined,
-							true,
-						);
-						return WorkspaceId(recovered);
-					}
-				}
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
+					detail: machineFailureDetail(cause),
 				});
 			}
 		},
@@ -729,6 +763,28 @@ async function onReadyGuest<T>(
 		forgetRunningGuest(vm.id);
 		throw cause;
 	}
+}
+
+/** How long a slug the provider refused as taken may take to be listed. */
+const SLUG_LANDING_WAIT_MS = 30_000;
+
+/** Waits for the VM another attempt is creating under this slug to be listed. */
+async function waitForSlug(
+	freestyle: Freestyle,
+	slug: string,
+	waitMs = SLUG_LANDING_WAIT_MS,
+): Promise<string | null> {
+	const deadline = Date.now() + waitMs;
+	for (
+		let pause = 250;
+		Date.now() < deadline;
+		pause = Math.min(pause * 2, 2_000)
+	) {
+		await new Promise((resolve) => setTimeout(resolve, pause));
+		const found = await findVmBySlug(freestyle, slug).catch(() => null);
+		if (found) return found;
+	}
+	return null;
 }
 
 async function findVmBySlug(
