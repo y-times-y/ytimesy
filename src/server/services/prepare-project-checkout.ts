@@ -43,6 +43,14 @@ export async function prepareProjectCheckout(input: {
 	readonly commit?: string;
 }) {
 	const directory = projectCheckoutPath(input.home, input.name);
+	if (input.commit && !/^[a-f0-9]{40}$/i.test(input.commit))
+		throw new Error("Invalid repository revision.");
+	// The App's bot identity is a GitHub read independent of the clone.
+	const botLookup = resolveGithubAppBot({
+		installationId: input.installationId,
+		repositoryName: input.name,
+	});
+	botLookup.catch(() => undefined);
 	const exists = await input.host.exec(
 		`test -d ${posixShellQuoted(`${directory}/.git`)} && echo present`,
 		15_000,
@@ -53,36 +61,36 @@ export async function prepareProjectCheckout(input: {
 			destination: directory,
 			mode: "clone",
 		});
-	await input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`);
 	// Every commit made in this checkout (the agent's own included) credits the App.
-	const bot = await resolveGithubAppBot({
-		installationId: input.installationId,
-		repositoryName: input.name,
-	});
-	if (bot) {
-		const hook = githubBotCommitHookPath(directory);
-		await input.host.writeTextFile(hook, githubBotCommitMsgHook(bot));
+	const [, bot] = await Promise.all([
+		input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`),
+		botLookup.then(async (found) => {
+			if (found)
+				await input.host.writeTextFile(
+					githubBotCommitHookPath(directory),
+					githubBotCommitMsgHook(found),
+				);
+			return found;
+		}),
+	]);
+	const activate = bot ? activateGithubBotCommitHookArgv(directory)[2] : null;
+	const revision = `git -C ${posixShellQuoted(directory)} rev-parse HEAD`;
+	// Without a callback in between, activating the hook and reading the
+	// commit are one guest command.
+	const together = !input.onCloned && activate && input.commit;
+	if (activate)
 		await runCheckoutCommand(
 			input.host,
-			activateGithubBotCommitHookArgv(directory)[2],
-			15_000,
-		);
-	}
-	await input.onCloned?.(directory);
-	if (input.commit) {
-		if (!/^[a-f0-9]{40}$/i.test(input.commit))
-			throw new Error("Invalid repository revision.");
-		await runCheckoutCommand(
-			input.host,
-			`git -C ${posixShellQuoted(directory)} rev-parse HEAD`,
+			together ? `{ ${activate}; } && ${revision}` : activate,
 			15_000,
 		).then((result) => {
-			if (result.stdout.trim() !== input.commit)
-				throw new Error(
-					"Repository moved during preparation. Retry the build.",
-				);
+			if (together) assertCommit(result.stdout, input.commit);
 		});
-	}
+	await input.onCloned?.(directory);
+	if (input.commit && !together)
+		await runCheckoutCommand(input.host, revision, 15_000).then((result) =>
+			assertCommit(result.stdout, input.commit),
+		);
 	if (input.install === false) return directory;
 	const listing = await runCheckoutCommand(
 		input.host,
@@ -97,6 +105,12 @@ export async function prepareProjectCheckout(input: {
 	);
 	await input.onInstalled?.();
 	return directory;
+}
+
+function assertCommit(stdout: string, commit: string | undefined) {
+	// With the hook activated first, the commit is the output's last line.
+	if (stdout.trim().split("\n").at(-1)?.trim() !== commit)
+		throw new Error("Repository moved during preparation. Retry the build.");
 }
 
 async function runCheckoutCommand(

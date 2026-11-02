@@ -116,6 +116,118 @@ export async function checkBranchNames(
  * remains credential-free. A write capability updates only `input.branch`,
  * once, and the proxy refuses deletes and every other ref.
  */
+/** The private Git config that carries a grant: its headers, no redirects. */
+function proxyGitConfig(origin: string, headers: Record<string, string>) {
+	return `[http ${JSON.stringify(`${origin}/`)}]\n\tfollowRedirects = false\n${Object.entries(
+		headers,
+	)
+		.map(
+			([name, value]) =>
+				`\textraHeader = ${JSON.stringify(`${name}: ${value}`)}`,
+		)
+		.join("\n")}\n`;
+}
+
+const proxyGit = (config: string) =>
+	`env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${config} GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https git -c core.hooksPath=/dev/null -c protocol.ext.allow=never -c fetch.fsckObjects=true -c transfer.fsckObjects=true`;
+
+/** Exit codes of the one-command clone, one per step that can fail. */
+const CLONE_EXIT = {
+	branchName: 64,
+	prepare: 65,
+	create: 66,
+	fetch: 67,
+	checkout: 68,
+	dirty: 69,
+	status: 70,
+} as const;
+
+/**
+ * A new checkout, or a clean one fast-forwarded, in one guest command:
+ * branch names, the checkout's state, the private config (its grant arrives
+ * in the environment, never in the command text), fetch, checkout and
+ * cleanup. The same steps as below, about six guest round trips fewer; each
+ * failure keeps its own message, and a dirty checkout is still "dirty".
+ */
+async function receiveProxiedRepositoryInOneCommand(
+	execWithEnv: NonNullable<GitTransferHost["execWithEnv"]>,
+	input: Repository & {
+		destination: string;
+		workingBranch?: string;
+		mode: "clone" | "update";
+		pinnedRevision?: string;
+	},
+) {
+	const config = gitProxyConfiguration();
+	if (!config || !input.userId || !input.projectId)
+		throw new Error("Owner-scoped Git proxy configuration is missing.");
+	const branch = input.workingBranch || input.branch;
+	const headers = await issueGitProxyGrant(config.secret, {
+		userId: input.userId,
+		projectId: input.projectId,
+		owner: input.owner,
+		name: input.name,
+		installationId: Number(input.installationId),
+		access: "read",
+	});
+	const dest = quote(input.destination);
+	const url = `${config.origin}/git/${input.owner}/${input.name}.git`;
+	const script = `set -u
+for name in ${[input.branch, branch].map(quote).join(" ")}; do
+  git check-ref-format --branch "$name" >/dev/null || exit ${CLONE_EXIT.branchName}
+done
+temporary=$(umask 077; mktemp -d /tmp/ytimesy-git-proxy-XXXXXXXX) || exit ${CLONE_EXIT.prepare}
+trap 'rm -rf "$temporary"' EXIT
+(umask 077; printf '%s' "$YTIMESY_GIT_PROXY_CONFIG" > "$temporary/config") || exit ${CLONE_EXIT.prepare}
+unset YTIMESY_GIT_PROXY_CONFIG
+${
+	input.mode === "clone"
+		? `{ test ! -e ${dest} && mkdir -p ${dest} && git -C ${dest} init -q; } || exit ${CLONE_EXIT.create}`
+		: `state=$(git -C ${dest} status --porcelain) || exit ${CLONE_EXIT.status}\n[ -z "$state" ] || exit ${CLONE_EXIT.dirty}`
+}
+${proxyGit('"$temporary/config"')} -C ${dest} fetch --no-tags ${quote(url)} ${quote(`refs/heads/${input.branch}`)} || exit ${CLONE_EXIT.fetch}
+(set -eu
+${fetchedBranchCommand({
+	directory: input.destination,
+	branch: input.branch,
+	workingBranch: branch,
+	mode: input.mode,
+	originUrl: `https://github.com/${input.owner}/${input.name}.git`,
+	pinnedRevision: input.pinnedRevision,
+})}
+) || exit ${CLONE_EXIT.checkout}`;
+	const result = await execWithEnv(
+		script,
+		{ YTIMESY_GIT_PROXY_CONFIG: proxyGitConfig(config.origin, headers) },
+		// The fetch and the checkout had two minutes each.
+		2 * NETWORK_GIT_TIMEOUT_MS,
+	);
+	if (result.exitCode === 0) return "updated";
+	if (result.exitCode === CLONE_EXIT.dirty) return "dirty";
+	const failure =
+		result.exitCode === CLONE_EXIT.status
+			? "Workspace Git could not read the checkout's status."
+			: result.exitCode === CLONE_EXIT.branchName
+				? "Workspace Git rejected the branch name."
+				: result.exitCode === CLONE_EXIT.prepare
+					? "Workspace Git could not prepare its private configuration."
+					: result.exitCode === CLONE_EXIT.create
+						? "Workspace Git could not create the checkout."
+						: result.exitCode === CLONE_EXIT.fetch
+							? TRANSFER_FAILED
+							: result.exitCode === CLONE_EXIT.checkout
+								? input.mode === "update"
+									? "Workspace Git could not fast-forward the checkout to its branch."
+									: "Workspace Git could not check out the fetched branch."
+								: `Workspace Git could not fetch the repository (exit ${result.exitCode}).`;
+	console.warn("Workspace Git command failed", {
+		failure,
+		exitCode: result.exitCode,
+		stderr: stderrTail(result, 400),
+	});
+	throw new Error(failure);
+}
+
 async function withProxyGit<T>(
 	host: GitTransferHost,
 	input: Repository,
@@ -145,16 +257,9 @@ async function withProxyGit<T>(
 	try {
 		await host.writeTextFile(
 			`${temporary}/config`,
-			`[http ${JSON.stringify(`${config.origin}/`)}]\n\tfollowRedirects = false\n${Object.entries(
-				headers,
-			)
-				.map(
-					([name, value]) =>
-						`\textraHeader = ${JSON.stringify(`${name}: ${value}`)}`,
-				)
-				.join("\n")}\n`,
+			proxyGitConfig(config.origin, headers),
 		);
-		const git = `env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${quote(`${temporary}/config`)} GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https git -c core.hooksPath=/dev/null -c protocol.ext.allow=never -c fetch.fsckObjects=true -c transfer.fsckObjects=true`;
+		const git = proxyGit(quote(`${temporary}/config`));
 		return await run(git, url, temporary);
 	} finally {
 		await host
@@ -173,6 +278,11 @@ export async function receiveProxiedRepository(
 		pinnedRevision?: string;
 	},
 ) {
+	if (input.mode !== "switch" && host.execWithEnv)
+		return receiveProxiedRepositoryInOneCommand(host.execWithEnv.bind(host), {
+			...input,
+			mode: input.mode,
+		});
 	const dest = quote(input.destination);
 	const branch = input.workingBranch || input.branch;
 	await checkBranchNames(host, [input.branch, branch]);

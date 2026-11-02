@@ -26,6 +26,16 @@ export interface GitTransferHost {
 	): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 	writeTextFile(path: string, contents: string): Promise<void>;
 	readTextFile?(path: string): Promise<string | null>;
+	/**
+	 * Runs a command with extra environment variables that are not part of
+	 * the command's text (a capability must not land in logs or journals).
+	 * A host that has it clones in one command instead of seven.
+	 */
+	execWithEnv?(
+		command: string,
+		env: Record<string, string>,
+		timeoutMs: number,
+	): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 type Repository = {

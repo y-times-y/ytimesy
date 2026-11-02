@@ -207,6 +207,52 @@ async function plainBody(
 	);
 }
 
+/**
+ * A fetch is two or three requests (refs, then packs) carrying the same read
+ * grant: they share one authorization, which re-checked the owner and GitHub
+ * access, instead of each repeating it (about a second each). Keyed by the
+ * grant's signature, so only that grant's own requests share it, and never
+ * past the grant's expiry (at most a minute). Write grants authorize every
+ * request.
+ */
+const readAuthorizations = new Map<
+	string,
+	{ readonly expiresAt: number; readonly token: Promise<string | null> }
+>();
+const MAX_READ_AUTHORIZATIONS = 256;
+
+function authorizeReadOnce(
+	request: Request,
+	grant: GitProxyGrant,
+	authorize: (grant: GitProxyGrant) => Promise<string | null>,
+) {
+	const signature = request.headers.get("x-ytimesy-delivery-signature") ?? "";
+	const expiresAt = Number(request.headers.get(EXPIRY_HEADER));
+	const now = Date.now();
+	const known = readAuthorizations.get(signature);
+	if (known && known.expiresAt > now) return known.token;
+	for (const [key, entry] of readAuthorizations)
+		if (
+			entry.expiresAt <= now ||
+			readAuthorizations.size >= MAX_READ_AUTHORIZATIONS
+		)
+			readAuthorizations.delete(key);
+	const token = authorize(grant);
+	readAuthorizations.set(signature, { expiresAt, token });
+	// A refusal or failure is not remembered: the next request checks again.
+	token.then(
+		(value) => {
+			if (!value) readAuthorizations.delete(signature);
+		},
+		() => readAuthorizations.delete(signature),
+	);
+	return token;
+}
+
+export function forgetGitReadAuthorizationsForTests() {
+	readAuthorizations.clear();
+}
+
 export async function proxyGithubGit(
 	request: Request,
 	secret: string,
@@ -259,7 +305,9 @@ export async function proxyGithubGit(
 		claims = commands.updates.length === 1;
 	}
 	try {
-		const token = await authorize(grant);
+		const token = await (grant.access === "read"
+			? authorizeReadOnce(request, grant, authorize)
+			: authorize(grant));
 		if (!token) return new Response(null, { status: 403 });
 		if (
 			claims &&
