@@ -234,11 +234,13 @@ export async function advanceCodexDeviceLogin(
 				"update agent_account set encrypted_device_login=$2,updated_at=now() where user_id=$1 and provider='codex'",
 				[
 					userId,
+					// The same binding the login was first sealed with (openPending).
 					await seal(
 						JSON.stringify({
 							...login,
 							nextPollAt: now + login.intervalSeconds * 1000,
 						}),
+						{ purpose: "codex-device-login", userId },
 					),
 				],
 			);
