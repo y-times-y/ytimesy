@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { type BackgroundJob, backgroundJob } from "#/domain/background-job";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { edgeSigningSecret } from "#/domain/edge-signing-secret";
 import { executorFetch } from "./executor-fetch";
 
 type Dispatch = (job: BackgroundJob) => Promise<void>;
@@ -39,14 +40,10 @@ export function backgroundAdmissionEndpoint(): {
 	const endpoint = process.env.YTIMESY_BACKGROUND_WORKFLOW_URL;
 	if (!endpoint) return null;
 	const origin = new URL(endpoint);
-	const root = process.env.BETTER_AUTH_SECRET;
-	const secret =
-		process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ||
-		(root && root.length >= 32
-			? createHmac("sha256", root)
-					.update("ytimesy:background-workflows:development:v1")
-					.digest("hex")
-			: undefined);
+	const secret = edgeSigningSecret(
+		"YTIMESY_BACKGROUND_WORKFLOW_SECRET",
+		"background-workflows",
+	);
 	if (
 		origin.protocol !== "https:" ||
 		origin.pathname !== "/" ||

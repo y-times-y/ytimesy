@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { edgeSigningSecret } from "#/domain/edge-signing-secret";
 import { fetchedBranchCommand } from "#/domain/git-branch-switch";
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
@@ -18,14 +18,7 @@ export function gitProxyConfiguration() {
 	const endpoint = process.env.YTIMESY_GIT_PROXY_URL;
 	if (!endpoint) return null;
 	const url = new URL(endpoint);
-	const root = process.env.BETTER_AUTH_SECRET;
-	const secret =
-		process.env.YTIMESY_GIT_PROXY_SECRET ||
-		(root && root.length >= 32
-			? createHmac("sha256", root)
-					.update("ytimesy:git-proxy:development:v1")
-					.digest("hex")
-			: undefined);
+	const secret = edgeSigningSecret("YTIMESY_GIT_PROXY_SECRET", "git-proxy");
 	if (
 		url.protocol !== "https:" ||
 		url.username ||

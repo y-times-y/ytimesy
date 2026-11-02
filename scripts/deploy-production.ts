@@ -6,18 +6,27 @@ import {
 	codexRelaySettingsProblem,
 } from "../src/domain/codex-egress";
 import {
+	missingDeployedSettings,
+	productionPreflightProblems,
+	requiredSettingNames,
+} from "./production-preflight";
+import {
 	assertProductionRoutes,
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
 } from "./production-settings";
 
 /**
- * Production deploy for the edge executor and the web Worker. Not run yet:
- * production has never been deployed (docs/production-launch.md). It refuses
- * to run until every production-only input exists, so it cannot fall back to
- * development values or make the app public.
+ * Production deploy for the edge executor and the web Worker. It refuses to
+ * run until every production-only input exists, so it cannot fall back to
+ * development values or make the app public, and its preflight
+ * (production-preflight.ts) checks every setting both Workers read before
+ * anything ships.
  *
  *   node --env-file=.secrets/production.env --import tsx scripts/deploy-production.ts --confirm-production
+ *
+ * --preflight-only builds the web and runs the preflight, then stops: it
+ * deploys nothing and skips the migration check (no database access).
  *
  * .secrets/production.env holds production values only (fresh secrets, the
  * production GitHub App, the production database). Never pass the dev .env.
@@ -26,7 +35,8 @@ import {
 const PRODUCTION_DATABASE_REF = "exampleprojectref";
 const DEVELOPMENT_DATABASE_REF = "exampledevprojectref";
 
-if (!process.argv.includes("--confirm-production"))
+const preflightOnly = process.argv.includes("--preflight-only");
+if (!preflightOnly && !process.argv.includes("--confirm-production"))
 	throw new Error("Pass --confirm-production to deploy production.");
 
 const required = [
@@ -112,18 +122,20 @@ for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
 	});
 
 // Every migration must be applied to production before its code ships.
-const migrations = execFileSync(
-	"node",
-	["--import", "tsx", "scripts/db-migrate.ts"],
-	{
-		encoding: "utf8",
-		env: { ...process.env, MIGRATION_DATABASE_URL: secrets.DATABASE_URL },
-	},
-);
-if (/not recorded/.test(migrations))
-	throw new Error(
-		`Apply pending production migrations first:\n${migrations.trim()}`,
+if (!preflightOnly) {
+	const migrations = execFileSync(
+		"node",
+		["--import", "tsx", "scripts/db-migrate.ts"],
+		{
+			encoding: "utf8",
+			env: { ...process.env, MIGRATION_DATABASE_URL: secrets.DATABASE_URL },
+		},
 	);
+	if (/not recorded/.test(migrations))
+		throw new Error(
+			`Apply pending production migrations first:\n${migrations.trim()}`,
+		);
+}
 
 secrets.GITHUB_PRIVATE_KEY = createPrivateKey(
 	secrets.GITHUB_PRIVATE_KEY.replaceAll("\\n", "\n"),
@@ -217,59 +229,117 @@ function run(command: string, args: string[], input?: string, env?: object) {
 		);
 	}
 }
-const wrangler = (config: string, args: string[], input?: string) =>
-	run(
-		"pnpm",
-		["exec", "wrangler", ...args, "--config", config, "--env", "production"],
-		input,
-	);
-
-// Edge executor first: the web Worker's EXECUTOR service binding targets it.
-wrangler("wrangler.edge-executor.jsonc", ["deploy"]);
-wrangler(
+const EDGE_CONFIG = [
+	"--config",
 	"wrangler.edge-executor.jsonc",
-	["secret", "bulk"],
-	JSON.stringify(secrets),
-);
+	"--env",
+	"production",
+];
+// The web Worker ships the build output: vite's Cloudflare plugin writes
+// dist/server/wrangler.json with the production env already applied, so it
+// takes no --env (deploying wrangler.web.jsonc would bundle raw source).
+const WEB_CONFIG = ["--config", "dist/server/wrangler.json"];
+const wrangler = (config: string[], args: string[], input?: string) =>
+	run("pnpm", ["exec", "wrangler", ...args, ...config], input);
+
+/** Secret names on a deployed Worker (names only; empty before its first deploy). */
+function deployedSecretNames(config: string[]): string[] {
+	try {
+		const listed = execFileSync(
+			"pnpm",
+			["exec", "wrangler", "secret", "list", "--format", "json", ...config],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+		);
+		return (JSON.parse(listed) as { name: string }[]).map((row) => row.name);
+	} catch {
+		return [];
+	}
+}
+
+// Build the web first: its plain variables are part of what it runs with, and
+// the preflight below checks both Workers before anything is deployed.
 run("pnpm", ["exec", "vite", "build"], undefined, {
 	YTIMESY_TARGET: "cloudflare",
 	CLOUDFLARE_ENV: "production",
 });
-// The web Worker ships the build output: vite's Cloudflare plugin writes
-// dist/server/wrangler.json with the production env already applied, so it
-// takes no --env (deploying wrangler.web.jsonc would bundle raw source).
-const webBuild = (args: string[], input?: string) =>
-	run(
-		"pnpm",
-		["exec", "wrangler", ...args, "--config", "dist/server/wrangler.json"],
-		input,
+const { unstable_readConfig } = await import("wrangler");
+const edgeConfig = unstable_readConfig({
+	config: "wrangler.edge-executor.jsonc",
+	env: "production",
+});
+const webConfig = unstable_readConfig({ config: "dist/server/wrangler.json" });
+const senders = (config: {
+	send_email: { allowed_sender_addresses?: string[] }[];
+}) =>
+	config.send_email.flatMap(
+		(binding) => binding.allowed_sender_addresses ?? [],
 	);
-webBuild(["deploy"]);
-// A name the build already sets as a plain variable (YTIMESY_ENVIRONMENT)
-// cannot also be a secret: Cloudflare rejects the whole upload.
-const webVars = new Set(
-	Object.keys(
-		(
-			JSON.parse(await readFile("dist/server/wrangler.json", "utf8")) as {
-				vars?: Record<string, unknown>;
-			}
-		).vars ?? {},
-	),
+const webVars: Record<string, string> = Object.fromEntries(
+	Object.entries(webConfig.vars ?? {}).map(([name, value]) => [
+		name,
+		String(value),
+	]),
 );
-// The web hands environment setup and background jobs to the edge over
+// The web hands background jobs (environment setup included) to the edge over
 // signed HTTPS, as the development server wires it (development-server.ts);
-// unset, a new project's setup is never handed off and stays queued.
-const webSecrets: Record<string, string> = {
-	...Object.fromEntries(
-		Object.entries(secrets).filter(([name]) => !webVars.has(name)),
-	),
-	YTIMESY_ENVIRONMENT_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
-	YTIMESY_ENVIRONMENT_WORKFLOW_SECRET: secrets.ENVIRONMENT_WORKFLOW_SECRET,
-	YTIMESY_BACKGROUND_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
-	YTIMESY_BACKGROUND_WORKFLOW_SECRET: secrets.BACKGROUND_WORKFLOW_SECRET,
-	YTIMESY_PR_REPAIR_INGRESS_SECRET: secrets.PR_REPAIR_INGRESS_SECRET,
+// unset, a new project's setup is never handed off and stays queued. A name
+// the build already sets as a plain variable (YTIMESY_ENVIRONMENT) cannot
+// also be a secret: Cloudflare rejects the whole upload.
+const webSecrets: Record<string, string> = Object.fromEntries(
+	Object.entries({
+		...secrets,
+		YTIMESY_ENVIRONMENT_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
+		YTIMESY_ENVIRONMENT_WORKFLOW_SECRET: secrets.ENVIRONMENT_WORKFLOW_SECRET,
+		YTIMESY_BACKGROUND_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
+		YTIMESY_BACKGROUND_WORKFLOW_SECRET: secrets.BACKGROUND_WORKFLOW_SECRET,
+		YTIMESY_PR_REPAIR_INGRESS_SECRET: secrets.PR_REPAIR_INGRESS_SECRET,
+	}).filter(([name]) => !(name in webVars)),
+);
+
+// Preflight: every setting both Workers read, as they will run with it.
+const deployed = {
+	edge: deployedSecretNames(EDGE_CONFIG),
+	web: deployedSecretNames(WEB_CONFIG),
 };
-webBuild(["secret", "bulk"], JSON.stringify(webSecrets));
+const webRuntime = { ...webSecrets, ...webVars };
+const problems = productionPreflightProblems({
+	web: webRuntime,
+	edge: secrets,
+	webVars: Object.keys(webVars),
+	deployed,
+	emailSenders: { web: senders(webConfig), edge: senders(edgeConfig) },
+});
+if (problems.length)
+	throw new Error(
+		`Production preflight failed; nothing was deployed:\n- ${problems.join("\n- ")}`,
+	);
+console.log("Production preflight passed for the web and edge Workers.");
+if (preflightOnly) process.exit(0);
+
+// Secrets before code, so new code never boots without a setting it needs.
+// Edge executor first: the web Worker's EXECUTOR service binding targets it.
+wrangler(EDGE_CONFIG, ["secret", "bulk"], JSON.stringify(secrets));
+wrangler(EDGE_CONFIG, ["deploy"]);
+wrangler(WEB_CONFIG, ["secret", "bulk"], JSON.stringify(webSecrets));
+wrangler(WEB_CONFIG, ["deploy"]);
+
+// What actually landed: every required name on each Worker.
+const missing = [
+	...missingDeployedSettings({
+		required: requiredSettingNames("edge", secrets),
+		secrets: deployedSecretNames(EDGE_CONFIG),
+		vars: [],
+	}).map((name) => `edge: ${name}`),
+	...missingDeployedSettings({
+		required: requiredSettingNames("web", webRuntime),
+		secrets: deployedSecretNames(WEB_CONFIG),
+		vars: Object.keys(webVars),
+	}).map((name) => `web: ${name}`),
+];
+if (missing.length)
+	throw new Error(
+		`Production deployed but a Worker lacks settings:\n- ${missing.join("\n- ")}`,
+	);
 console.log(
 	process.env.YTIMESY_GO_LIVE === "1"
 		? `Production deployed and live at ${secrets.APP_URL}.`
