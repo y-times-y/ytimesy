@@ -51,9 +51,14 @@ import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { clearChatCache } from "../sessions/chat-cache";
 import { ChatgptSignIn, DeviceCodeHint } from "../sessions/chatgpt-sign-in";
+import { getClaudeSubscription } from "../sessions/claude-subscription.fn";
 import { ClaudeSubscriptionSettings } from "../sessions/claude-subscription-settings";
 import { CodexMark } from "../sessions/codex-mark";
-import { CodexSubscriptionUsage } from "../sessions/codex-usage";
+import {
+	ClaudeSubscriptionUsage,
+	CodexSubscriptionUsage,
+	GrokSubscriptionUsage,
+} from "../sessions/codex-usage";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
@@ -254,6 +259,10 @@ export function ProjectSettings({
 									<UsageSection
 										planConnected={
 											account.data?.agentAccount.status === "connected"
+										}
+										grokConnected={
+											(account.data?.xaiSubscription?.status ??
+												"disconnected") !== "disconnected"
 										}
 									/>
 								) : null}
@@ -988,7 +997,22 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	);
 }
 
-function UsageSection({ planConnected }: { planConnected: boolean }) {
+function UsageSection({
+	planConnected,
+	grokConnected,
+}: {
+	planConnected: boolean;
+	grokConnected: boolean;
+}) {
+	const loadClaude = useServerFn(getClaudeSubscription);
+	const claude = useQuery({
+		queryKey: ["claude-subscription"],
+		queryFn: () => loadClaude(),
+		staleTime: 30_000,
+	});
+	const claudeConnected =
+		claude.data?.enabled === true &&
+		(claude.data.status === "connected" || claude.data.status === "limited");
 	return (
 		<>
 			<section className="settings-section">
@@ -996,11 +1020,12 @@ function UsageSection({ planConnected }: { planConnected: boolean }) {
 					title="Usage"
 					description="What you've used and when it resets."
 				/>
-				{planConnected ? (
-					<CodexSubscriptionUsage />
-				) : (
+				{planConnected ? <CodexSubscriptionUsage /> : null}
+				{claudeConnected ? <ClaudeSubscriptionUsage /> : null}
+				{grokConnected ? <GrokSubscriptionUsage /> : null}
+				{planConnected || claudeConnected || grokConnected ? null : (
 					<div className="settings-group settings-empty">
-						Sign in with ChatGPT in Agents to see your plan's usage.
+						Connect a plan in Agents to see its usage.
 					</div>
 				)}
 			</section>
