@@ -45,7 +45,11 @@ export function ProjectContext({
 	currentBranch?: string | null;
 }) {
 	return (
-		<div className="session-context">
+		<div
+			className="session-context"
+			// No project yet: the picker's pill sits alone, centered over the composer.
+			data-empty={(!selectedProject && projects.length === 0) || undefined}
+		>
 			{projectLocked ? null : (
 				<ProjectPicker
 					projects={projects}

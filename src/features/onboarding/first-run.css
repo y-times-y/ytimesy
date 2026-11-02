@@ -142,6 +142,10 @@
 .first-run-models[data-count="3"] {
 	grid-template-columns: repeat(3, 1fr);
 }
+/* Four plans read as two rows of two: four columns are too narrow at 560px. */
+.first-run-models[data-count="4"] {
+	grid-template-columns: 1fr 1fr;
+}
 .first-run-model {
 	display: flex;
 	flex-direction: column;
@@ -172,6 +176,10 @@
 }
 .first-run-logos svg {
 	fill: currentColor;
+}
+/* The Claude badge keeps its white glyph on the orange. */
+.first-run-logos .subscription-mark[data-brand="claude"] {
+	color: #fff;
 }
 .first-run-secondary {
 	height: 34px;
@@ -269,7 +277,8 @@
 }
 @media (max-width: 560px) {
 	.first-run-models,
-	.first-run-models[data-count="3"] {
+	.first-run-models[data-count="3"],
+	.first-run-models[data-count="4"] {
 		grid-template-columns: 1fr;
 	}
 }
