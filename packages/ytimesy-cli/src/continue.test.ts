@@ -295,7 +295,7 @@ describe("ytimesy continue", { timeout: 60_000 }, () => {
 		expect(out).not.toContain(SECRET);
 		expect(out).not.toContain("p4ssw0rd");
 		expect(out).toMatch(
-			/npx -y ytimesy continue --code YTM-ABCD-EFGH-JKLM --scope session --api http:\/\/127\.0\.0\.1:\d+ --yes-untracked/,
+			/npx -y ytimesy@latest continue --code YTM-ABCD-EFGH-JKLM --scope session --api http:\/\/127\.0\.0\.1:\d+ --yes-untracked/,
 		);
 
 		// 2. Machine scope without decisions: nothing happens, the needs are listed.
