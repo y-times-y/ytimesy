@@ -59,10 +59,17 @@ function query(sql: string, params: unknown[] = []) {
 beforeEach(() => {
 	row = undefined;
 	statements.length = 0;
-	vi.mocked(seal).mockImplementation(async (value) => `sealed:${value}`);
-	vi.mocked(unseal).mockImplementation(async (value) =>
-		value.replace(/^sealed:/, ""),
+	// Like the real vault: a blob opens only with the binding it was sealed with.
+	const bound = (binding?: { purpose?: string; userId?: string }) =>
+		`${binding?.purpose ?? "none"}/${binding?.userId ?? "none"}`;
+	vi.mocked(seal).mockImplementation(
+		async (value, binding) => `sealed:${bound(binding)}:${value}`,
 	);
+	vi.mocked(unseal).mockImplementation(async (value, binding) => {
+		const prefix = `sealed:${bound(binding)}:`;
+		if (!value.startsWith(prefix)) throw new Error("Seal binding mismatch.");
+		return value.slice(prefix.length);
+	});
 	vi.mocked(database).mockReturnValue({
 		query: vi.fn(async (sql: string, params?: unknown[]) => query(sql, params)),
 		connect: vi.fn(async () => ({
@@ -173,7 +180,9 @@ it("exchanges an approved code and stores the login where turns read it", async 
 	expect(row?.status).toBe("connected");
 	expect(row?.plan_type).toBe("plus");
 	expect(row?.encrypted_device_login).toBeNull();
-	const stored = JSON.parse(String(row?.encrypted_codex_auth).slice(7));
+	const stored = JSON.parse(
+		String(row?.encrypted_codex_auth).replace("sealed:codex-auth/user:", ""),
+	);
 	expect(stored).toEqual({
 		auth_mode: "chatgpt",
 		tokens: {
