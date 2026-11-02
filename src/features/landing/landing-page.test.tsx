@@ -28,9 +28,26 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	const html = renderToStaticMarkup(<LandingPage />);
 	const text = html.replace(/<[^>]+>/g, " ");
 	expect(text).toContain("AI Software Engineer in the Cloud");
-	expect(text).toContain("Time per task");
-	expect(text).toContain("Terminal-Bench 4");
-	expect(text).toContain("19.3 min");
+	expect(text).toContain("Terminal-Bench 4.0");
+	expect(text).toContain("58.5%");
+	expect(text).toContain("57.9%");
+	expect(text).toContain("49 of 66");
+	expect(text).toContain("46 of 66");
+	expect(text).toContain("$7.47");
+	expect(text).toContain("$7.12");
+	expect(text.replace(/\s+/g, " ")).toContain(
+		"Codex with GPT-6 Astra max scores 58.2% at $9.90 per attempt. ytimesy matches that score at about 25% lower cost.",
+	);
+	// Final numbers, and no speed claim.
+	expect(text).not.toContain("Preliminary");
+	expect(text).not.toMatch(/Time per|min\b/);
+	expect(html).toContain('href="/blog/harness-1-0"');
+	expect(text).toContain("Read how we built it");
+	expect(html).toContain(
+		'href="https://hub.harborframework.com/jobs/6aacc762-8e07-4be2-ab4e-17495141235d"',
+	);
+	// The score-vs-cost chart, wide and narrow.
+	expect(html.match(/class="scc-svg/g)?.length).toBe(2);
 	expect(html).toContain('href="/auth/sign-in"');
 	expect(html).toContain('href="/auth/sign-up"');
 	expect(html).toContain('href="/terms"');

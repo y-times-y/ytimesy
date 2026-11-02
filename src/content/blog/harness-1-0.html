@@ -1,0 +1,161 @@
+<div class="hero">
+	<h1>Introducing ytimesy harness 1.0</h1>
+	<div class="meta"><span></span><time datetime="2026-11-01">11.01.26</time></div>
+	<img class="banner" src="/blog/harness-1-0/banner.jpg" width="1200" height="630" alt="ytimesy: 58.5% on Terminal-Bench 4.0 with GPT-6 Astra at xhigh, against Codex at 58.2% with GPT-6 Astra max and 57.9% with GPT-6 Astra xhigh." />
+</div>
+
+<figure class="tbl">
+	<table class="rt">
+		<thead><tr><th class="model">GPT-6 Astra<small>same model in every column</small></th><th class="us">ytimesy<small>GPT-6 Astra xhigh</small></th><th>Codex<small>GPT-6 Astra max</small></th><th>Codex<small>GPT-6 Astra xhigh</small></th></tr></thead>
+		<tbody>
+			<tr><th scope="row">Score</th><td class="us"><span class="best">58.5%</span><span class="ci">47.9–68.8</span></td><td class=""><span class="">58.2%</span><span class="ci">47.6–68.5</span></td><td class=""><span class="">57.9%</span><span class="ci">47.3–68.2</span></td></tr>
+			<tr><th scope="row">vs ytimesy</th><td class="us">—</td><td>−0.3<span class="ci">−6.1 to +4.8</span></td><td>−0.6<span class="ci">−6.4 to +5.5</span></td></tr>
+			<tr><th scope="row">Tasks solved at least once</th><td class="us"><span class="best">49 of 66</span></td><td class=""><span class="">47 of 66</span></td><td class=""><span class="">46 of 66</span></td></tr>
+			<tr><th scope="row">Cost per attempt</th><td class="us"><span class="">$7.47</span></td><td class=""><span class="">$9.90</span></td><td class=""><span class="best">$7.12</span></td></tr>
+			<tr><th scope="row">Total cost</th><td class="us"><span class="">$2,466</span></td><td class=""><span class="">$3,267</span></td><td class=""><span class="best">$2,351</span></td></tr>
+			<tr><th scope="row">Input tokens per attempt</th><td class="us"><span class="best">3.34M</span></td><td class=""><span class="">4.56M</span></td><td class=""><span class="">3.60M</span></td></tr>
+			<tr><th scope="row">Output tokens per attempt</th><td class="us"><span class="">48k</span></td><td class=""><span class="">73k</span></td><td class=""><span class="best">45k</span></td></tr>
+			<tr><th scope="row">Time per attempt</th><td class="us"><span class="">33.2 min*</span></td><td class=""><span class="">43.4 min</span></td><td class=""><span class="">33.3 min</span></td></tr>
+			<tr><th scope="row">Harbor job</th><td class="us"><a href="https://hub.harborframework.com/jobs/6aacc762-8e07-4be2-ab4e-17495141235d">6aacc762</a></td><td><a href="https://hub.harborframework.com/jobs/0f01715e-2f98-40e3-836f-1ac4fdce39a4">0f01715e</a></td><td><a href="https://hub.harborframework.com/jobs/caf6e433-9fff-4475-b0bc-977f14ac7052">caf6e433</a></td></tr>
+		</tbody>
+	</table>
+	<figcaption>Terminal-Bench 4.0<sup class="ref"><a href="#ref-1">1</a></sup> with GPT-6 Astra, all 66 tasks, five attempts each. Small figures are 95% intervals; “vs ytimesy” is the paired per-task difference in points. Best value in each row underlined. Cost is OpenAI list price; ours is computed from our token counts. Each column links to its public Harbor job.<sup class="ref"><a href="#ref-2">2</a></sup><sup class="ref"><a href="#ref-3">3</a></sup><sup class="ref"><a href="#ref-4">4</a></sup><br><br>* Converted to OpenAI speed, so all three columns are timed on the same API. Each of our model calls is timed at the mean latency OpenAI’s API gave Codex’s 16,279 calls of similar output size, plus our measured tool time; applied to Codex’s own calls, this conversion lands within 7% of their measured model time. Codex times are measured from their trajectories. We ran on Amazon Bedrock, where our attempts took 25.2 minutes. The difference from Codex with GPT-6 Astra at xhigh is within noise, so no value in this row is underlined.</figcaption>
+</figure>
+<!-- score-cost-chart -->
+<h2>The harness</h2>
+<p>One lead agent, its tools, subagents that work on their own copies of the code, commands that keep running in the background, and a check before it finishes.</p>
+
+
+<h2>The lead agent</h2>
+<p>Every task has one lead agent. It reads the task and a short report on the machine it runs on, keeps a plan for long work, does the work itself, brings in subagents when parts of the task can run on their own, reviews and applies what they send back, and decides when the task is done.</p>
+<p>It has eleven tools, the same for every model. Anything more specific, such as the browser or the background-command controls, is a command on the machine, described in one line of the instructions, rather than another tool. Long builds, test suites and experiments run in the background: <code>bash</code> starts them, the lead keeps working, and it is told when each one finishes.</p>
+
+<figure>
+	<div class="frame">
+		<svg viewBox="0 0 760 400" role="img" aria-label="The lead agent and its eleven tools in four groups: files and shell (read, write, edit, bash), code mode (run_code), subagents (agent, agent_wait, agent_send), web and plan (web_search, web_fetch, update_plan). Below: background commands started from bash.">
+			<defs><marker id="a1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker></defs>
+			<!-- lead -->
+			<rect x="280" y="40" width="200" height="48" rx="12" class="n-dark"/>
+			<text x="380" y="69" class="t-inv" text-anchor="middle">Lead agent</text>
+			<!-- connectors -->
+			<path d="M380 88 V 120" class="e"/>
+			<path d="M112 136 V 128 Q 112 120 120 120 H 640 Q 648 120 648 128 V 136" class="e"/>
+			<path d="M291 120 V 136 M469 120 V 136" class="e"/>
+			<!-- tool groups -->
+			<g>
+				<rect x="32" y="136" width="160" height="152" rx="10" class="n"/>
+				<text x="48" y="162" class="t">Files and shell</text>
+				<text x="48" y="190" class="t-m">read</text><text x="48" y="214" class="t-m">write</text><text x="48" y="238" class="t-m">edit</text><text x="48" y="262" class="t-m">bash</text>
+			</g>
+			<g>
+				<rect x="211" y="136" width="160" height="152" rx="10" class="n"/>
+				<text x="227" y="162" class="t">Code mode</text>
+				<text x="227" y="190" class="t-m">run_code</text>
+				<text x="227" y="218" class="t-s">one program calls any</text>
+				<text x="227" y="236" class="t-s">of the other tools,</text>
+				<text x="227" y="254" class="t-s">up to 40 per program</text>
+			</g>
+			<g>
+				<rect x="389" y="136" width="160" height="152" rx="10" class="n"/>
+				<text x="405" y="162" class="t">Subagents</text>
+				<text x="405" y="190" class="t-m">agent</text><text x="405" y="214" class="t-m">agent_wait</text><text x="405" y="238" class="t-m">agent_send</text>
+				<text x="405" y="266" class="t-s">start · collect · stop</text>
+			</g>
+			<g>
+				<rect x="568" y="136" width="160" height="152" rx="10" class="n"/>
+				<text x="584" y="162" class="t">Web and plan</text>
+				<text x="584" y="190" class="t-m">web_search</text><text x="584" y="214" class="t-m">web_fetch</text><text x="584" y="238" class="t-m">update_plan</text>
+			</g>
+			<!-- background commands, started from bash -->
+			<path d="M112 288 V 320" class="e" marker-end="url(#a1)"/>
+			<text x="122" y="309" class="t-x">background</text>
+			<rect x="32" y="320" width="696" height="56" rx="10" class="n-soft"/>
+			<text x="48" y="344" class="t">Background commands</text>
+			<text x="48" y="364" class="t-s">builds, tests, servers keep running · the lead keeps working and is told when each one finishes</text>
+		</svg>
+	</div>
+	<figcaption>The lead and its eleven tools, grouped by what they do. Below them: commands it runs in the background from <code>bash</code>.</figcaption>
+</figure>
+
+<h2>Code mode</h2>
+<p>Most steps need several things at once: a few files, the state of the machine, the output of a test. With <code>run_code</code> the lead writes a short JavaScript program that calls its other tools, runs the independent ones in parallel with <code>Promise.all</code>, and returns only what it needs. A failed call comes back as an error value instead of stopping the program, so one missing file does not sink the rest. One model call does the work of several.</p>
+
+<figure>
+	<div class="frame">
+		<svg viewBox="0 0 760 332" role="img" aria-label="A real program from a ytimesy run: one run_code call that runs one bash command and four file reads in parallel, and returns their output as one result.">
+			<defs><marker id="a2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker></defs>
+			<rect x="32" y="32" width="380" height="268" rx="10" class="n"/>
+			<text x="52" y="60" class="t">One model call</text>
+			<text x="392" y="60" class="t-x" text-anchor="end">run_code</text>
+			<foreignObject x="52" y="76" width="348" height="216"><div xmlns="http://www.w3.org/1999/xhtml" class="code">return await Promise.all([
+  tools.bash({ command:
+    "pwd &amp;&amp; ls -la &amp;&amp; nvidia-smi &amp;&amp;
+     cat ~/.ytimesy/environment.md 2&gt;/dev/null",
+    timeout: 120 }),
+  tools.read({ path: "fp8_rmsnorm_gemm.cu" }),
+  tools.read({ path: "build.sh" }),
+  tools.read({ path:
+    "fp8_rmsnorm_gemm_dispatch.py" }),
+  tools.read({ path: "example.py" }),
+]);</div></foreignObject>
+			<path d="M412 166 H 432" class="e"/>
+			<path d="M432 166 V 78 Q 432 70 440 70 H 451" class="e" marker-end="url(#a2)"/>
+			<path d="M432 166 V 126 Q 432 118 440 118 H 451" class="e" marker-end="url(#a2)"/>
+			<path d="M432 166 H 451" class="e" marker-end="url(#a2)"/>
+			<path d="M432 166 V 206 Q 432 214 440 214 H 451" class="e" marker-end="url(#a2)"/>
+			<path d="M432 166 V 254 Q 432 262 440 262 H 451" class="e" marker-end="url(#a2)"/>
+			<rect x="452" y="54" width="160" height="32" rx="8" class="n"/><text x="466" y="75" class="t-m">bash</text><text x="598" y="75" class="t-x" text-anchor="end">machine state</text>
+			<rect x="452" y="102" width="160" height="32" rx="8" class="n"/><text x="466" y="123" class="t-m">read</text><text x="598" y="123" class="t-x" text-anchor="end">kernel</text>
+			<rect x="452" y="150" width="160" height="32" rx="8" class="n"/><text x="466" y="171" class="t-m">read</text><text x="598" y="171" class="t-x" text-anchor="end">build script</text>
+			<rect x="452" y="198" width="160" height="32" rx="8" class="n"/><text x="466" y="219" class="t-m">read</text><text x="598" y="219" class="t-x" text-anchor="end">dispatcher</text>
+			<rect x="452" y="246" width="160" height="32" rx="8" class="n"/><text x="466" y="267" class="t-m">read</text><text x="598" y="267" class="t-x" text-anchor="end">example</text>
+			<path d="M612 70 H 628 Q 636 70 636 78 V 254 Q 636 262 628 262 H 612 M612 118 H 628 Q 636 118 636 126 M612 214 H 628 Q 636 214 636 206 M612 166 H 636" class="e"/>
+			<path d="M636 166 H 657" class="e" marker-end="url(#a2)"/>
+			<rect x="658" y="146" width="70" height="40" rx="10" class="n-dark"/><text x="693" y="171" class="t-inv" text-anchor="middle">Result</text>
+		</svg>
+	</div>
+	<figcaption>A real program from one of our runs, on a GPU kernel task: one bash command and four file reads in parallel, back as one result. Line breaks added for reading.</figcaption>
+</figure>
+
+<h2>Subagents</h2>
+<p>When parts of a task can be done on their own, the lead starts subagents with <code>agent</code> and keeps working. A subagent sees only the lead's brief and works in the background; one that writes code does it on its own git worktree, and the lead reviews and applies its work. The lead collects their reports with <code>agent_wait</code> and can stop or re-brief them with <code>agent_send</code>.</p>
+
+<h2>The clean-copy check</h2>
+<p>Before finishing, the lead can run <code>ytimesy-check</code>. It copies only what is delivered, the Git-tracked files and declared outputs, into a clean environment and runs the documented command there.</p>
+<p>It catches work that runs on the agent's machine but breaks for the next person: a file never committed, a dependency never declared, or state that exists only in the workspace.</p>
+
+<figure>
+	<div class="frame">
+		<svg viewBox="0 0 760 184" role="img" aria-label="The workspace has many files; only tracked files and the declared outputs are copied to a clean place; they are run with the documented command; the result goes back to the lead.">
+			<defs><marker id="a5" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker></defs>
+			<rect x="32" y="36" width="192" height="112" rx="10" class="n"/>
+			<text x="48" y="64" class="t">Workspace</text>
+			<text x="48" y="90" class="t-m">solve.py</text>
+			<text x="48" y="110" class="t-m" style="opacity:.42">scratch.py  cache/</text>
+			<text x="48" y="130" class="t-m" style="opacity:.42">notes.txt  build/</text>
+			<path d="M224 92 H 272" class="e" marker-end="url(#a5)"/>
+			<text x="248" y="82" class="t-x" text-anchor="middle">--files</text>
+			<rect x="276" y="36" width="192" height="112" rx="10" class="n"/>
+			<text x="292" y="64" class="t">Clean copy</text>
+			<text x="292" y="90" class="t-m">solve.py</text>
+			<text x="292" y="130" class="t-s">tracked files + outputs</text>
+			<path d="M468 92 H 516" class="e" marker-end="url(#a5)"/>
+			<text x="492" y="82" class="t-x" text-anchor="middle">run</text>
+			<rect x="520" y="36" width="208" height="112" rx="10" class="n-dark"/>
+			<text x="536" y="64" class="t-inv">Result to the lead</text>
+			<text x="536" y="90" class="t-inv-s">output and exit code of</text>
+			<text x="536" y="108" class="t-inv-s">the documented command</text>
+		</svg>
+	</div>
+	<figcaption>Only what is delivered gets run. Untracked files stay behind.</figcaption>
+</figure>
+
+<h2>AI Software Engineer in the Cloud</h2>
+<p class="cta"><a class="btn" href="/auth/sign-up">Start building</a></p>
+
+<ol class="refs">
+	<li id="ref-1"><span>1</span><span>Terminal-Bench, <a href="https://www.tbench.ai/">tbench.ai</a>. Version 4.0, 66 tasks; Codex scores from the official leaderboard on Harbor Hub.</span></li>
+	<li id="ref-2"><span>2</span><span>Codex, GPT-6 Astra xhigh, Terminal-Bench 4.0. <a href="https://hub.harborframework.com/jobs/caf6e433-9fff-4475-b0bc-977f14ac7052">Harbor Hub job caf6e433</a>.</span></li>
+	<li id="ref-3"><span>3</span><span>Codex, GPT-6 Astra max, Terminal-Bench 4.0. <a href="https://hub.harborframework.com/jobs/0f01715e-2f98-40e3-836f-1ac4fdce39a4">Harbor Hub job 0f01715e</a>.</span></li>
+	<li id="ref-4"><span>4</span><span>ytimesy, GPT-6 Astra xhigh, Terminal-Bench 4.0. Run October 29 to November 1, 2026. <a href="https://hub.harborframework.com/jobs/6aacc762-8e07-4be2-ab4e-17495141235d">Harbor Hub job 6aacc762</a>.</span></li>
+</ol>

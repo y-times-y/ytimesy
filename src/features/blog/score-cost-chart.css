@@ -1,0 +1,180 @@
+/* Score-vs-cost chart (score-cost-chart.tsx). The page around it sets the
+   colours: --scc-ink, --scc-ink-2, --scc-ink-3, --scc-line, --scc-accent,
+   --scc-node (our point's fill), --scc-halo (the background behind labels)
+   and the logo's --mark-0..4. */
+.scc {
+	position: relative;
+	container-type: inline-size;
+	font-family: var(
+		--scc-font,
+		"Inter Variable",
+		"Inter",
+		system-ui,
+		sans-serif
+	);
+}
+.scc-svg {
+	display: block;
+	width: 100%;
+	height: auto;
+	cursor: crosshair;
+	outline: none;
+	overflow: visible;
+}
+.scc-svg[data-pointer] {
+	cursor: pointer;
+}
+.scc-svg:focus-visible {
+	box-shadow: inset 0 0 0 2px var(--scc-ink-3);
+	border-radius: 14px;
+}
+.scc .scc-narrow {
+	display: none;
+}
+@container (max-width: 560px) {
+	.scc .scc-wide {
+		display: none;
+	}
+	.scc .scc-narrow {
+		display: block;
+	}
+}
+
+.scc-grid {
+	stroke: var(--scc-line);
+	stroke-width: 1;
+}
+.scc-axis {
+	stroke: var(--scc-ink);
+	stroke-width: 1;
+	opacity: 0.55;
+}
+.scc-tick {
+	fill: var(--scc-ink-2);
+	font: 400 15px
+		var(--scc-font, "Inter Variable", "Inter", system-ui, sans-serif);
+	font-variant-numeric: tabular-nums;
+}
+.scc-title {
+	fill: var(--scc-ink);
+	font: 400 15.5px
+		var(--scc-font, "Inter Variable", "Inter", system-ui, sans-serif);
+}
+.scc-name,
+.scc-sub {
+	/* A halo in the background colour: a gridline behind a label stops at its letters. */
+	paint-order: stroke;
+	stroke: var(--scc-halo);
+	stroke-width: 5px;
+	stroke-linejoin: round;
+}
+.scc-name {
+	fill: var(--scc-ink);
+	font: 400 16px
+		var(--scc-font, "Inter Variable", "Inter", system-ui, sans-serif);
+}
+.scc-name-ours {
+	font-weight: 600;
+}
+.scc-effort {
+	fill: var(--scc-ink-2);
+	font-weight: 400;
+}
+.scc-sub {
+	fill: var(--scc-ink-2);
+	font: 400 15px
+		var(--scc-font, "Inter Variable", "Inter", system-ui, sans-serif);
+	font-variant-numeric: tabular-nums;
+}
+.scc-guide {
+	stroke: var(--scc-accent);
+	stroke-width: 1.25;
+	stroke-dasharray: 3 4;
+	opacity: 0.8;
+}
+.scc-tag-bg {
+	fill: var(--scc-accent);
+}
+.scc-tag {
+	fill: #fff;
+	font: 600 12.5px
+		var(--scc-font, "Inter Variable", "Inter", system-ui, sans-serif);
+	font-variant-numeric: tabular-nums;
+}
+.scc-point-ours {
+	fill: var(--scc-node);
+	stroke: var(--scc-accent);
+	stroke-width: 2;
+}
+.scc-point {
+	fill: var(--scc-ink-2);
+	stroke: var(--scc-halo);
+	stroke-width: 2;
+}
+.scc-ring {
+	fill: none;
+	stroke: var(--scc-ink);
+	stroke-width: 1.5;
+	pointer-events: none;
+}
+.scc-narrow .scc-tick {
+	font-size: 12px;
+}
+.scc-narrow .scc-title,
+.scc-narrow .scc-name {
+	font-size: 13px;
+}
+.scc-narrow .scc-sub {
+	font-size: 12px;
+}
+.scc-narrow .scc-tag {
+	font-size: 11.5px;
+}
+.scc-narrow .scc-name,
+.scc-narrow .scc-sub {
+	stroke-width: 4px;
+}
+
+.scc-tip {
+	position: absolute;
+	z-index: 3;
+	pointer-events: none;
+	min-width: 200px;
+	white-space: nowrap;
+	background: var(--scc-node);
+	color: var(--scc-ink-2);
+	border: 1px solid var(--scc-line);
+	border-radius: 10px;
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+	padding: 10px 12px;
+	font-size: 13px;
+	line-height: 1.5;
+	transform: translate(-50%, calc(-100% - 14px));
+}
+.scc-tip[data-below] {
+	transform: translate(-50%, 14px);
+}
+.scc-tip-name {
+	font-weight: 500;
+	color: var(--scc-ink);
+	margin-bottom: 4px;
+}
+.scc-tip-name span {
+	color: var(--scc-ink-2);
+	font-weight: 400;
+}
+.scc-tip-row {
+	display: flex;
+	justify-content: space-between;
+	gap: 18px;
+	font-variant-numeric: tabular-nums;
+}
+.scc-tip-row b {
+	color: var(--scc-ink);
+	font-weight: 400;
+}
+.scc-tip-foot {
+	margin-top: 6px;
+	color: var(--scc-ink-3);
+	font-size: 12px;
+}

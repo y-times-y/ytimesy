@@ -18,6 +18,9 @@ import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
 import { Route as AuthPathRouteImport } from './routes/auth/$path'
+import { Route as BlogIndexRouteImport } from './routes/blog/index'
+import { Route as BlogHarnessRouteImport } from './routes/blog/harness'
+import { Route as BlogHarness10RouteImport } from './routes/blog/harness-1-0'
 import { Route as ApiAgentAccountRouteImport } from './routes/api/agent/account'
 import { Route as ApiAgentProgressRouteImport } from './routes/api/agent/progress'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -90,6 +93,21 @@ const ApiWorkspacesRoute = ApiWorkspacesRouteImport.update({
 const AuthPathRoute = AuthPathRouteImport.update({
   id: '/auth/$path',
   path: '/auth/$path',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogIndexRoute = BlogIndexRouteImport.update({
+  id: '/blog/',
+  path: '/blog/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogHarnessRoute = BlogHarnessRouteImport.update({
+  id: '/blog/harness',
+  path: '/blog/harness',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogHarness10Route = BlogHarness10RouteImport.update({
+  id: '/blog/harness-1-0',
+  path: '/blog/harness-1-0',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAgentAccountRoute = ApiAgentAccountRouteImport.update({
@@ -249,6 +267,9 @@ export interface FileRoutesByFullPath {
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
+  '/blog/harness': typeof BlogHarnessRoute
+  '/blog/harness-1-0': typeof BlogHarness10Route
+  '/blog/': typeof BlogIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -288,6 +309,9 @@ export interface FileRoutesByTo {
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
+  '/blog/harness': typeof BlogHarnessRoute
+  '/blog/harness-1-0': typeof BlogHarness10Route
+  '/blog': typeof BlogIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -328,6 +352,9 @@ export interface FileRoutesById {
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
+  '/blog/harness': typeof BlogHarnessRoute
+  '/blog/harness-1-0': typeof BlogHarness10Route
+  '/blog/': typeof BlogIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -369,6 +396,9 @@ export interface FileRouteTypes {
     | '/api/projects'
     | '/api/workspaces'
     | '/auth/$path'
+    | '/blog/harness'
+    | '/blog/harness-1-0'
+    | '/blog/'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -408,6 +438,9 @@ export interface FileRouteTypes {
     | '/api/projects'
     | '/api/workspaces'
     | '/auth/$path'
+    | '/blog/harness'
+    | '/blog/harness-1-0'
+    | '/blog'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -447,6 +480,9 @@ export interface FileRouteTypes {
     | '/api/projects'
     | '/api/workspaces'
     | '/auth/$path'
+    | '/blog/harness'
+    | '/blog/harness-1-0'
+    | '/blog/'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -487,6 +523,9 @@ export interface RootRouteChildren {
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
   AuthPathRoute: typeof AuthPathRoute
+  BlogHarnessRoute: typeof BlogHarnessRoute
+  BlogHarness10Route: typeof BlogHarness10Route
+  BlogIndexRoute: typeof BlogIndexRoute
   ApiAgentAccountRoute: typeof ApiAgentAccountRoute
   ApiAgentProgressRoute: typeof ApiAgentProgressRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -577,6 +616,27 @@ declare module '@tanstack/react-router' {
       path: '/auth/$path'
       fullPath: '/auth/$path'
       preLoaderRoute: typeof AuthPathRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog/': {
+      id: '/blog/'
+      path: '/blog'
+      fullPath: '/blog/'
+      preLoaderRoute: typeof BlogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog/harness': {
+      id: '/blog/harness'
+      path: '/blog/harness'
+      fullPath: '/blog/harness'
+      preLoaderRoute: typeof BlogHarnessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog/harness-1-0': {
+      id: '/blog/harness-1-0'
+      path: '/blog/harness-1-0'
+      fullPath: '/blog/harness-1-0'
+      preLoaderRoute: typeof BlogHarness10RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/account': {
@@ -815,6 +875,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
   AuthPathRoute: AuthPathRoute,
+  BlogHarnessRoute: BlogHarnessRoute,
+  BlogHarness10Route: BlogHarness10Route,
+  BlogIndexRoute: BlogIndexRoute,
   ApiAgentAccountRoute: ApiAgentAccountRoute,
   ApiAgentProgressRoute: ApiAgentProgressRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,

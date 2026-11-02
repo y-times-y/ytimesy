@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import {
+	ArrowRight,
 	ArrowUpRight,
 	BookmarkPlus,
 	Camera,
@@ -13,11 +14,16 @@ import { Wordmark } from "#/components/brand/wordmark";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import { HELPER_COLORS } from "#/domain/helper-names";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { ScoreCostChart } from "#/features/blog/score-cost-chart";
 import { AgentIcon } from "#/features/sessions/agent-icon";
 import { CodexMark } from "#/features/sessions/codex-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
-import { BENCHMARK } from "./landing-facts";
+import {
+	BENCHMARK,
+	HARNESS_POST_PATH,
+	SAVING_VS_CODEX_MAX,
+} from "./landing-facts";
 import "./landing-page.css";
 
 /** The auth route's optional search parameters, all unset. */
@@ -95,34 +101,34 @@ type Row = {
 };
 
 function Benchmark() {
-	const { ours, codex } = BENCHMARK;
+	const { ours, codex, codexMax, tasks } = BENCHMARK;
 	const rows: Row[] = [
 		{
 			label: "Score",
-			detail: "Tasks solved",
+			detail: "Average over 5 attempts per task",
 			ours: `${ours.score.toFixed(1)}%`,
 			codex: `${codex.score.toFixed(1)}%`,
 			lead: null,
 		},
 		{
-			label: "Time per task",
-			detail: "Agent working time",
-			ours: `${ours.minutes.toFixed(1)} min`,
-			codex: `${codex.minutes.toFixed(1)} min`,
+			label: "Tasks solved at least once",
+			detail: "In any of the 5 attempts",
+			ours: `${ours.solved} of ${tasks}`,
+			codex: `${codex.solved} of ${tasks}`,
 			lead: "ours",
 		},
 		{
-			label: "Cost per task",
+			label: "Cost per attempt",
 			detail: "At OpenAI list prices",
 			ours: `$${ours.cost.toFixed(2)}`,
 			codex: `$${codex.cost.toFixed(2)}`,
-			lead: null,
+			lead: "codex",
 		},
 	];
 	return (
 		<section className="landing-bench" aria-labelledby="landing-bench-title">
 			<h2 id="landing-bench-title">
-				Terminal-Bench 4
+				Terminal-Bench 4.0
 				<br />
 				<span className="landing-dim bench-sub">
 					The ytimesy harness vs Codex, on the same model.
@@ -169,14 +175,32 @@ function Benchmark() {
 						))}
 					</tbody>
 				</table>
+				<p className="bench-note">
+					Codex with GPT-6 Astra max scores {codexMax.score.toFixed(1)}% at $
+					{codexMax.cost.toFixed(2)} per attempt. ytimesy matches that score at
+					about {SAVING_VS_CODEX_MAX}% lower cost.
+				</p>
+				<figure className="bench-chart">
+					<figcaption className="bench-chart-head">
+						<span>Score vs cost</span>
+						<span className="landing-dim">Up and to the right is better</span>
+					</figcaption>
+					<ScoreCostChart />
+				</figure>
 				<div className="bench-foot">
 					<span>{BENCHMARK.setup}</span>
-					{BENCHMARK.runUrl ? (
-						<a href={BENCHMARK.runUrl} target="_blank" rel="noreferrer">
-							See the run
-							<ArrowUpRight size={13} />
+					<span className="bench-links">
+						{BENCHMARK.runUrl ? (
+							<a href={BENCHMARK.runUrl} target="_blank" rel="noreferrer">
+								See the run
+								<ArrowUpRight size={13} />
+							</a>
+						) : null}
+						<a href={HARNESS_POST_PATH} className="bench-read">
+							Read how we built it
+							<ArrowRight size={13} />
 						</a>
-					) : null}
+					</span>
 				</div>
 			</div>
 		</section>
