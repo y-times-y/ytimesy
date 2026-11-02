@@ -22,3 +22,13 @@ it("tells people to turn on device code sign-in in ChatGPT's security settings",
 	expect(html).toContain("<strong>Turn on device code sign-in</strong>");
 	expect(html).toContain('href="https://chatgpt.com/#settings/Security"');
 });
+
+it("leaves the hint to a settings row that shows it below its description", () => {
+	const html = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ChatgptSignIn showHint={false} />
+		</QueryClientProvider>,
+	);
+	expect(html).toContain("Sign in with ChatGPT");
+	expect(html).not.toContain("device code sign-in");
+});

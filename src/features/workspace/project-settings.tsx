@@ -50,7 +50,7 @@ import { PastImports } from "../local-import/past-imports";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { clearChatCache } from "../sessions/chat-cache";
-import { ChatgptSignIn } from "../sessions/chatgpt-sign-in";
+import { ChatgptSignIn, DeviceCodeHint } from "../sessions/chatgpt-sign-in";
 import { ClaudeSubscriptionSettings } from "../sessions/claude-subscription-settings";
 import { CodexMark } from "../sessions/codex-mark";
 import { CodexSubscriptionUsage } from "../sessions/codex-usage";
@@ -974,6 +974,8 @@ function AgentsSection({
 							<div className="settings-row-text">
 								<span className="settings-row-title">Codex subscription</span>
 								<span className="settings-row-meta">{meta}</span>
+								{/* Below the description, so the button column stays narrow. */}
+								{connected ? null : <DeviceCodeHint />}
 							</div>
 						</div>
 						<div className="settings-row-actions">
@@ -1019,6 +1021,7 @@ function AgentsSection({
 											: "Sign in with ChatGPT"
 									}
 									onConnected={() => void refreshAccount()}
+									showHint={false}
 								/>
 							)}
 						</div>

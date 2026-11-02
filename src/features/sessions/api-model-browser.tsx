@@ -40,12 +40,18 @@ export function ApiModelBrowser({
 	onSelect,
 	onBrowseProvider,
 	selectedRoute,
+	coveredIds,
+	hasOtherResults = false,
 }: {
 	author: string | null;
 	search: string;
 	onSelect: (route: string) => void;
 	onBrowseProvider?: (author: string) => void;
 	selectedRoute?: string;
+	/** Models another usable route already lists (the Claude subscription): no locked copy. */
+	coveredIds?: readonly string[];
+	/** Search found models above this list, so an empty list says nothing. */
+	hasOtherResults?: boolean;
 }) {
 	const client = useQueryClient();
 	const identity = authClient.useSession();
@@ -125,6 +131,7 @@ export function ApiModelBrowser({
 		API_MODEL_LIST.filter(
 			(model) =>
 				authors.includes(model.author) &&
+				!coveredIds?.includes(model.openRouterId) &&
 				!(author
 					? activeConnection
 					: providerConnections(model.author, connections.data ?? []).length),
@@ -135,6 +142,8 @@ export function ApiModelBrowser({
 		})),
 		search,
 	);
+	if (!author && hasOtherResults && !locked.length && !visibleConnected.length)
+		return null;
 	return (
 		<>
 			<h3>

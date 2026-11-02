@@ -186,6 +186,22 @@ function repositoryFetchFailed(error: unknown, depth = 0): boolean {
 	return repositoryFetchFailed(inner, depth + 1);
 }
 
+const WORKSPACE_GIT_FAILURE =
+	"Couldn't set up this chat's code on its machine. Retry in a moment. Your work is saved.";
+
+/**
+ * A local Git step on the chat's machine failed (checkout, branch check,
+ * status); the model was never asked. Fetch and push failures are worded above.
+ */
+function workspaceGitFailed(error: unknown, depth = 0): boolean {
+	if (depth > 4 || !(error instanceof Error)) return false;
+	if (/^Workspace Git\b/.test(error.message)) return true;
+	const inner =
+		(error as { providerError?: unknown }).providerError ??
+		(RetryError.isInstance(error) ? error.lastError : error.cause);
+	return workspaceGitFailed(inner, depth + 1);
+}
+
 /**
  * A usage cap refusal anywhere in the error chain, worded for the user. The
  * cap texts are our own fixed wording, so they are matched even untagged.
@@ -202,6 +218,7 @@ function usageCapFailure(error: unknown, depth = 0): string | null {
 
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
+	if (workspaceGitFailed(error)) return WORKSPACE_GIT_FAILURE;
 	const capped = usageCapFailure(error);
 	if (capped) return capped;
 	const found = machineError(error);

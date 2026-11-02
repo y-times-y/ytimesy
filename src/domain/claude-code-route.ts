@@ -78,3 +78,31 @@ export function claudeCodeModelLabel(modelId: string) {
 		CLAUDE_CODE_MODELS.find((model) => model.id === modelId)?.label ?? modelId
 	);
 }
+
+/**
+ * The connected Claude subscription's models that match a model-picker
+ * search, so search finds the usable route, not only the API-key one.
+ */
+export function claudeCodeSearchMatches<T extends { readonly label: string }>(
+	models: readonly T[],
+	search: string,
+): T[] {
+	const term = search.trim().toLowerCase();
+	if (!term) return [];
+	return models.filter((model) =>
+		[model.label, "anthropic", "claude code", "claude subscription"].some(
+			(text) => text.toLowerCase().includes(term),
+		),
+	);
+}
+
+/** The API-list ids (OpenRouter's) of subscription routes, so search shows no locked copy of them. */
+export function claudeCodeCoveredOpenRouterIds(
+	models: readonly { readonly id: string }[],
+): string[] {
+	return models.flatMap((model) => {
+		const id = parseClaudeCodeRouteId(model.id);
+		const equivalent = id ? CLAUDE_CODE_MODEL_EQUIVALENTS[id] : undefined;
+		return equivalent ? [equivalent] : [];
+	});
+}

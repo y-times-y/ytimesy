@@ -372,6 +372,26 @@ it("says the repository could not be fetched when a Git proxy transfer fails", (
 	}
 });
 
+it("words a failed workspace Git step as a workspace problem, the same at every stage", () => {
+	const git = new Error("Workspace Git rejected the branch name.");
+	const wrapped = new SafeApiModelFailure(
+		new Error("fiber failure", { cause: git }),
+	);
+	const messages = [
+		apiModelFailureMessage(git),
+		apiModelFailureMessage(wrapped),
+		apiTurnFailureMessage("model", git),
+		apiTurnFailureMessage("workspace", git),
+		apiTurnFailureMessage(
+			"workspace",
+			new Error("Workspace Git could not check the branch name (exit 124)."),
+		),
+	];
+	expect(new Set(messages).size).toBe(1);
+	expect(messages[0]).toContain("set up this chat's code");
+	expect(messages[0]).not.toMatch(/model request failed|couldn't start/);
+});
+
 function rejected(message: string, data?: unknown, statusCode = 400) {
 	return new APICallError({
 		message,

@@ -4746,7 +4746,8 @@ button.workspace-status-progress:hover {
 	line-height: 1.5;
 }
 /* Beats the cards' own bold (first-run .first-run-model strong). */
-.chatgpt-sign-in .chatgpt-sign-in-hint strong {
+.chatgpt-sign-in .chatgpt-sign-in-hint strong,
+.settings-row-text .chatgpt-sign-in-hint strong {
 	color: #ededed;
 	font-size: inherit;
 	font-weight: 550;
