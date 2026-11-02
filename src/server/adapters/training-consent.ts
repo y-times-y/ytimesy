@@ -74,6 +74,29 @@ export async function setTrainingConsent(
 	}
 }
 
+/**
+ * Whether to show the "Help improve ytimesy" card: the account never set
+ * consent (no row, so it is off) and never closed the card unanswered.
+ */
+export async function trainingPromptDue(userId: string) {
+	const row = (
+		await database().query<{ due: boolean }>(
+			`select not exists(select 1 from training_consent where user_id=$1)
+			 and not exists(select 1 from training_prompt_dismissal where user_id=$1) as due`,
+			[userId],
+		)
+	).rows[0];
+	return row?.due ?? false;
+}
+
+/** Closing the card without continuing: nothing about consent is recorded. */
+export async function dismissTrainingPrompt(userId: string) {
+	await database().query(
+		"insert into training_prompt_dismissal(user_id) values($1) on conflict(user_id) do nothing",
+		[userId],
+	);
+}
+
 /** Null when the project is not the user's. */
 export async function projectTrainingExcluded(
 	userId: string,

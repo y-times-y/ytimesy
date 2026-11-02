@@ -12,7 +12,7 @@ import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { SPECULATION_RULES } from "../features/app/speculation-rules";
 import { AuthProviders } from "../features/auth/auth-providers";
-import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
+import { LegalUpdateNotice } from "../features/auth/legal-acceptance-prompt";
 import { followOtherTabSaves } from "../lib/optimistic-mutation";
 import appCss from "../styles.css?url";
 
@@ -89,7 +89,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<QueryClientProvider client={queryClient}>
 					<AuthProviders>
 						<Analytics />
-						<LegalAcceptancePrompt />
+						<LegalUpdateNotice />
 						<ReplayConsentBanner />
 						{children}
 					</AuthProviders>

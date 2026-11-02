@@ -85,7 +85,7 @@ export function projectTrainingChange(
 
 /** Every commitment the setting makes; shown behind the info tooltip. */
 export const TRAINING_DETAILS =
-	"Let ytimesy use your chats from now on, including prompts, agent actions and the code the agent reads or writes, to improve our agents and train our own models. We remove account details and secrets first, and never share it with model providers. Your API keys, secrets and attachments are never included. Turn this off any time; we stop immediately and delete what we kept within 30 days.";
+	"Let ytimesy use your chats from now on, including your prompts, your code and its results (such as test output and merged pull requests), to improve our agents and train our own models. We never use replies or code written by AI models. We remove account details and secrets first, and never share it with model providers. Your API keys, secrets and attachments are never included. Turn this off any time; we stop immediately and delete what we kept within 30 days.";
 
 /**
  * The details open below the icon and stay in the viewport. The tooltip is
@@ -101,7 +101,10 @@ export const TRAINING_TOOLTIP_PLACEMENT = {
 	className: "z-[210] leading-snug",
 } as const;
 
-/** Settings, Privacy: "Help improve ytimesy", off unless the user turns it on. */
+/**
+ * Settings, Privacy: "Help improve ytimesy". Stored off until the user turns it
+ * on here or continues past the setup card (training-consent-prompt.tsx).
+ */
 export function TrainingConsentSettings() {
 	const read = useServerFn(readTrainingConsentFn);
 	const save = useServerFn(saveTrainingConsentFn);

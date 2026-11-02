@@ -2,17 +2,19 @@ import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	record: vi.fn(async (_userId: string, _source: string) => undefined),
+	recordAtSignIn: vi.fn(async (_userId: string) => undefined),
 	capture: vi.fn(async () => undefined),
 }));
 vi.mock("../adapters/legal-acceptance", () => ({
 	recordLegalAcceptance: mocks.record,
+	recordLegalAcceptanceAtSignIn: mocks.recordAtSignIn,
 }));
 vi.mock("../adapters/analytics", () => ({
 	captureServerAnalytics: mocks.capture,
 }));
 vi.mock("../adapters/database", () => ({ database: () => ({}) }));
 
-import { accountCreated } from "./auth";
+import { accountCreated, signedIn } from "./auth";
 
 it("records Terms and Privacy acceptance for every new account", async () => {
 	const createdAt = new Date();
@@ -32,6 +34,16 @@ it("does not fail sign-up when the acceptance write fails", async () => {
 	await expect(
 		accountCreated({ id: "u2", createdAt: new Date() }),
 	).resolves.toBeUndefined();
+	expect(error).toHaveBeenCalled();
+	error.mockRestore();
+});
+
+it("records acceptance of the current versions at every sign-in", async () => {
+	await signedIn({ userId: "returning" });
+	expect(mocks.recordAtSignIn).toHaveBeenCalledWith("returning");
+	mocks.recordAtSignIn.mockRejectedValueOnce(new Error("database down"));
+	const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+	await expect(signedIn({ userId: "u3" })).resolves.toBeUndefined();
 	expect(error).toHaveBeenCalled();
 	error.mockRestore();
 });

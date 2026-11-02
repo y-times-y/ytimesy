@@ -23,12 +23,17 @@ import { getModelConnections } from "../sessions/model-connections.fn";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
 import { XaiMark } from "../sessions/xai-mark";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
+import {
+	TrainingChoice,
+	useTrainingChoiceSave,
+} from "../workspace/training-consent-prompt";
 import "./first-run.css";
 
 const STAGE_LABELS = {
 	github: "GitHub",
 	model: "Model",
 	sessions: "Sessions",
+	privacy: "Privacy",
 } as const;
 
 const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
@@ -48,6 +53,10 @@ const HEADINGS: Record<FirstRunStep, { title: string; lede: string }> = {
 		title: "Bring your agent sessions",
 		lede: "Optional. Continue a local agent's work here.",
 	},
+	privacy: {
+		title: "Your privacy choice",
+		lede: "Choose how ytimesy may use your chats.",
+	},
 };
 
 /**
@@ -64,7 +73,8 @@ async function finishFirstRun(userId: string | undefined) {
 
 /**
  * A new account's first run, before its first project: GitHub (sign in and
- * install the app), then a model and local agent sessions (both skippable).
+ * install the app), then a model and local agent sessions (both skippable),
+ * then the training-data choice (recorded on Continue).
  * No repository is picked here: the composer's project picker adds the first
  * project, and an import adds the projects it needs. The server says where
  * it stands, so the right step paints first.
@@ -77,6 +87,7 @@ export function FirstRun({
 	userId?: string;
 }) {
 	const [modelDone, setModelDone] = useState(state.modelReady);
+	const [sessionsDone, setSessionsDone] = useState(false);
 	// Same read as the repository picker: connected once it lists repositories.
 	const repositories = useQuery({
 		queryKey: ["github", "repositories"],
@@ -96,6 +107,7 @@ export function FirstRun({
 		githubConnected,
 		repositoryCount: repositories.data?.repositories.length ?? null,
 		modelDone,
+		sessionsDone,
 	});
 	const stage = firstRunStage(step);
 	const finish = () => finishFirstRun(userId);
@@ -125,8 +137,10 @@ export function FirstRun({
 					<h1 id="first-run-title">{HEADINGS[step].title}</h1>
 					<p>{HEADINGS[step].lede}</p>
 				</div>
-				{step === "sessions" ? (
-					<SessionsStep onDone={finish} />
+				{step === "privacy" ? (
+					<PrivacyStep userId={userId} onDone={finish} />
+				) : step === "sessions" ? (
+					<SessionsStep onDone={() => setSessionsDone(true)} />
 				) : step === "model" ? (
 					<ModelStep
 						ready={state.modelReady}
@@ -261,6 +275,43 @@ export function SessionsStep({
 					title="Skip or finish later: import any time from Settings > Import."
 				>
 					Continue
+				</button>
+			</div>
+		</>
+	);
+}
+
+/**
+ * "Help improve ytimesy", on until the user turns it off. Continue records
+ * the choice (on or off, with the policy version shown) and leaves the first
+ * run; leaving any other way records nothing, and the workspace shows the
+ * same card once.
+ */
+export function PrivacyStep({
+	userId,
+	onDone = () => finishFirstRun(undefined),
+}: {
+	userId?: string;
+	onDone?: () => void;
+}) {
+	const [enabled, setEnabled] = useState(true);
+	const save = useTrainingChoiceSave(userId);
+	return (
+		<>
+			<TrainingChoice
+				enabled={enabled}
+				onChange={setEnabled}
+				disabled={save.isPending}
+			/>
+			{save.error ? <p role="alert">{save.error.message}</p> : null}
+			<div className="first-run-actions">
+				<button
+					type="button"
+					className="first-run-primary"
+					disabled={save.isPending}
+					onClick={() => save.mutate(enabled, { onSuccess: onDone })}
+				>
+					{save.isPending ? "Saving…" : "Continue"}
 				</button>
 			</div>
 		</>

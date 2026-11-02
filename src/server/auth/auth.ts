@@ -7,7 +7,10 @@ import {
 	persistAuthEmail,
 } from "../adapters/email";
 import { trackInvocationTask } from "../adapters/invocation-tasks";
-import { recordLegalAcceptance } from "../adapters/legal-acceptance";
+import {
+	recordLegalAcceptance,
+	recordLegalAcceptanceAtSignIn,
+} from "../adapters/legal-acceptance";
 import { serverConfig } from "../config";
 import {
 	loadLocalQaUser,
@@ -39,11 +42,10 @@ export const oauthAccountPolicy = {
 
 /**
  * Runs once an account exists (after Better Auth commits it). Every path that
- * creates an account shows the Terms and Privacy consent first: the sign-up
- * checkbox gates the email form and the GitHub/Google buttons, and sign-in
- * (which can create an account through a provider) states that continuing
- * accepts them. A failed write is logged, not thrown: the user then gets the
- * acceptance prompt on their next visit instead of a broken sign-up.
+ * creates an account goes through the sign-in or sign-up screen, which states
+ * under its buttons that continuing accepts the Terms and Privacy Policy. A
+ * failed write is logged, not thrown: the user then sees the "We updated our
+ * Terms" notice on their next visit instead of a broken sign-up.
  */
 export async function accountCreated(user: { id: string; createdAt: Date }) {
 	await recordLegalAcceptance(user.id, "signup").catch((error: unknown) => {
@@ -57,6 +59,23 @@ export async function accountCreated(user: { id: string; createdAt: Date }) {
 		"account_created",
 		{},
 		{ key: user.id, timestamp: user.createdAt },
+	);
+}
+
+/**
+ * Runs when a session is created: every sign-in happens on the sign-in or
+ * sign-up screen and its notice, so an account that accepted older versions
+ * (or none) is recorded as accepting the current ones. A failed write is
+ * logged, not thrown; the in-app notice then asks again.
+ */
+export async function signedIn(session: { userId: string }) {
+	await recordLegalAcceptanceAtSignIn(session.userId).catch(
+		(error: unknown) => {
+			console.error("Could not record Terms acceptance at sign-in.", {
+				userId: session.userId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		},
 	);
 }
 
@@ -163,6 +182,7 @@ export function authOptions() {
 			},
 			// Sign-out, revocation and password reset delete session rows.
 			session: {
+				create: { after: signedIn },
 				delete: {
 					after: async (session: { token: string }) =>
 						forgetSession(session.token),
