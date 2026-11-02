@@ -5,11 +5,13 @@ import { TRAINING_POLICY_VERSION } from "../src/content/legal/versions";
 import { turnTrainingEligible } from "../src/domain/training-consent";
 import { deleteAccountRecords } from "../src/server/adapters/account-deletion";
 import {
+	dismissTrainingPrompt,
 	projectTrainingExcluded,
 	setProjectTrainingExcluded,
 	setTrainingConsent,
 	trainingConsentFor,
 	trainingEligibleAtTurnStart,
+	trainingPromptDue,
 } from "../src/server/adapters/training-consent";
 
 let db: PGlite;
@@ -166,4 +168,37 @@ it("records withdrawal when the account is deleted, and the proof survives it", 
 		"select enabled,source from training_consent_event where user_id='alice' order by created_at desc limit 1",
 	);
 	expect(events.rows).toEqual([{ enabled: false, source: "account-deletion" }]);
+});
+
+it("shows the training card once to an account that never chose, and Continue records the choice", async () => {
+	expect(await trainingPromptDue("alice")).toBe(true);
+	await setTrainingConsent("alice", true, "onboarding");
+	expect(await trainingPromptDue("alice")).toBe(false);
+	expect(await trainingConsentFor("alice")).toMatchObject({
+		enabled: true,
+		policyVersion: TRAINING_POLICY_VERSION,
+	});
+	expect(
+		(
+			await db.query(
+				"select enabled,source from training_consent_event where user_id='alice' and source='onboarding'",
+			)
+		).rows,
+	).toEqual([{ enabled: true, source: "onboarding" }]);
+});
+
+it("closing the card records no consent, keeps it off and does not show it again", async () => {
+	expect(await trainingPromptDue("alice")).toBe(true);
+	await dismissTrainingPrompt("alice");
+	await dismissTrainingPrompt("alice");
+	expect(await trainingPromptDue("alice")).toBe(false);
+	expect(await trainingConsentFor("alice")).toEqual({
+		enabled: false,
+		policyVersion: null,
+		changedAt: null,
+	});
+	expect(await turnTimeEligibility(session)).toBe(false);
+	// Settings still turns it on afterwards.
+	await setTrainingConsent("alice", true, "settings");
+	expect(await turnTimeEligibility(session)).toBe(true);
 });

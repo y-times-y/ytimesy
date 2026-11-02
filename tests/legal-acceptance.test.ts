@@ -8,6 +8,7 @@ import {
 import {
 	legalAcceptanceFor,
 	recordLegalAcceptance,
+	recordLegalAcceptanceAtSignIn,
 } from "../src/server/adapters/legal-acceptance";
 
 let db: PGlite;
@@ -25,6 +26,7 @@ beforeAll(async () => {
 	for (const file of [
 		"20260913193000_identity_and_projects.sql",
 		"20261019140000_legal_acceptance.sql",
+		"20261102120000_legal_acceptance_sources.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -61,17 +63,43 @@ it("records the accepted versions and time, and replaces them on re-acceptance",
 		"update legal_acceptance set terms_version='old', accepted_at=now()-interval '1 day' where user_id='alice'",
 	);
 	expect(legalAcceptanceCurrent(await legalAcceptanceFor("alice"))).toBe(false);
-	await recordLegalAcceptance("alice", "prompt");
+	await recordLegalAcceptance("alice", "notice");
 	const second = await db.query<{ terms_version: string; source: string }>(
 		"select terms_version,source,accepted_at>now()-interval '1 minute' as fresh from legal_acceptance where user_id='alice'",
 	);
 	expect(second.rows).toEqual([
 		{
 			terms_version: CURRENT_LEGAL_VERSIONS.termsVersion,
-			source: "prompt",
+			source: "notice",
 			fresh: true,
 		},
 	]);
+});
+
+it("records sign-in acceptance only when the current versions are not on record", async () => {
+	const row = async () =>
+		(
+			await db.query<{ terms_version: string; source: string }>(
+				"select terms_version,source from legal_acceptance where user_id='alice'",
+			)
+		).rows[0];
+	await recordLegalAcceptance("alice", "signup");
+	await recordLegalAcceptanceAtSignIn("alice");
+	// Already current: the sign-up row stays as it was.
+	expect(await row()).toMatchObject({ source: "signup" });
+	await db.query(
+		"update legal_acceptance set privacy_version='old' where user_id='alice'",
+	);
+	await recordLegalAcceptanceAtSignIn("alice");
+	expect(await row()).toEqual({
+		terms_version: CURRENT_LEGAL_VERSIONS.termsVersion,
+		source: "signin",
+	});
+	expect(legalAcceptanceCurrent(await legalAcceptanceFor("alice"))).toBe(true);
+	// An account that never accepted (created before acceptance was recorded).
+	await db.query("delete from legal_acceptance where user_id='alice'");
+	await recordLegalAcceptanceAtSignIn("alice");
+	expect(await row()).toMatchObject({ source: "signin" });
 });
 
 it("is deleted with the account", async () => {

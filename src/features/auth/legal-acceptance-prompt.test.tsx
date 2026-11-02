@@ -1,37 +1,20 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import {
-	LegalAcceptanceDialog,
-	legalPromptPending,
-} from "./legal-acceptance-prompt";
+import { LegalUpdateCard, legalPromptPending } from "./legal-acceptance-prompt";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, "");
 
-it("asks a user with no recorded acceptance to accept before continuing", () => {
+it("tells a signed-in user the documents changed, without blocking the app", () => {
 	const html = renderToStaticMarkup(
-		<LegalAcceptanceDialog
-			updated={false}
-			onAccept={() => undefined}
-			onSignOut={() => undefined}
-		/>,
+		<LegalUpdateCard onDismiss={() => undefined} />,
 	);
-	expect(html).toContain('role="dialog"');
+	expect(html).not.toContain('role="dialog"');
+	expect(html).not.toContain("aria-modal");
+	expect(html).not.toContain('role="checkbox"');
 	expect(html).toContain('href="/terms"');
 	expect(html).toContain('href="/privacy"');
-	expect(text(html)).toContain("Review our Terms and Privacy Policy");
-	// Accept stays disabled until the box is ticked.
-	expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Accept and continue/);
-});
-
-it("tells returning users the documents changed", () => {
-	const html = renderToStaticMarkup(
-		<LegalAcceptanceDialog
-			updated
-			onAccept={() => undefined}
-			onSignOut={() => undefined}
-		/>,
-	);
-	expect(text(html)).toContain("We updated our Terms and Privacy Policy");
+	expect(text(html)).toContain("We updated our Terms and Privacy Policy.");
+	expect(html).toContain('aria-label="Dismiss"');
 });
 
 describe("legalPromptPending", () => {
@@ -41,7 +24,7 @@ describe("legalPromptPending", () => {
 		statusPending: false,
 		current: true,
 	};
-	it("holds other prompts while the Terms prompt shows or may show", () => {
+	it("holds other prompts while the Terms notice shows or may show", () => {
 		expect(legalPromptPending({ ...base, current: false })).toBe(true);
 		expect(legalPromptPending({ ...base, statusPending: true })).toBe(true);
 		expect(legalPromptPending({ ...base, sessionPending: true })).toBe(true);
