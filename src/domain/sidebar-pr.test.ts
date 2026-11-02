@@ -30,6 +30,48 @@ describe("sidebarChatPrNeedFromPullRequest", () => {
 			).toBe("pending");
 		},
 	);
+	it("shows no failure for an unstable pull request whose checks did not fail", () => {
+		const unstable = {
+			state: "open",
+			merged: false,
+			mergeable: true,
+			mergeableState: "unstable",
+		} as const;
+		// No CI: only other Apps' queued suites, no check runs or statuses.
+		const none = { passed: 0, failed: 0, pending: 0 };
+		expect(
+			sidebarChatPrNeedFromPullRequest({
+				...unstable,
+				draft: true,
+				checks: none,
+			}),
+		).toBe("draft");
+		expect(
+			sidebarChatPrNeedFromPullRequest({
+				...unstable,
+				draft: false,
+				checks: none,
+			}),
+		).toBe("ready");
+		expect(
+			sidebarChatPrNeedFromPullRequest({
+				...unstable,
+				draft: false,
+				checks: { passed: 1, failed: 0, pending: 1 },
+			}),
+		).toBe("pending");
+		expect(
+			sidebarChatPrNeedFromPullRequest({
+				...unstable,
+				draft: false,
+				checks: { passed: 0, failed: 1, pending: 0 },
+			}),
+		).toBe("checks_failed");
+		// A saved mark without check counts keeps what it said.
+		expect(
+			sidebarChatPrNeedFromPullRequest({ ...unstable, draft: false }),
+		).toBe("checks_failed");
+	});
 	it("does not mark a draft with a clean merge as ready", () => {
 		expect(
 			sidebarChatPrNeedFromPullRequest({

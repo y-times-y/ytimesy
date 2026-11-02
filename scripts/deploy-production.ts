@@ -41,6 +41,9 @@ const required = [
 	"GITHUB_OAUTH_CLIENT_ID",
 	"GITHUB_OAUTH_CLIENT_SECRET",
 	"GITHUB_APP_SLUG",
+	// The production App's bot user id, credited as Co-authored-by on every
+	// agent commit: `gh api users/<GITHUB_APP_SLUG>%5Bbot%5D --jq .id`.
+	"GITHUB_APP_BOT_USER_ID",
 	// Master key for stored project secrets and credentials. Escrow it before
 	// any user data exists; there is no file fallback in production.
 	"YTIMESY_SECRETS_KEY",
@@ -66,6 +69,11 @@ for (const name of required) {
 	if (!value) throw new Error(`Production deployment is missing ${name}.`);
 	secrets[name] = value;
 }
+
+if (!/^\d+$/.test(secrets.GITHUB_APP_BOT_USER_ID))
+	throw new Error(
+		`GITHUB_APP_BOT_USER_ID must be the numeric id of ${secrets.GITHUB_APP_SLUG}[bot].`,
+	);
 
 // Per-user rolling usage windows (micro-USD of VM cost); the deployment's
 // environment tunes them, these are the defaults.

@@ -32,6 +32,8 @@ export async function acceptPrRepairWebhook(
 	request: Request,
 	secret: string,
 	schedule: (delivery: z.infer<typeof prRepairDelivery>) => Promise<void>,
+	/** The App's slug: comments that mention `@<slug>` wake a chat. */
+	appSlug?: string | null,
 ) {
 	if (
 		request.method !== "POST" ||
@@ -56,6 +58,7 @@ export async function acceptPrRepairWebhook(
 		signal = parsePrRepairSignal(
 			request.headers.get("x-github-event") ?? "",
 			JSON.parse(body),
+			appSlug,
 		);
 	} catch {
 		return new Response(null, { status: 400 });

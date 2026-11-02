@@ -4,7 +4,6 @@ import {
 	mentionInstruction,
 	pullRequestWakePrompt,
 	wakeMessageId,
-	withFixSection,
 } from "./pull-request-wake";
 
 const pull = {
@@ -26,11 +25,18 @@ const failing = {
 };
 
 it("takes the instruction after the mention", () => {
-	expect(mentionInstruction("@ytimesy rename `foo` to `bar`\r\nthanks")).toBe(
-		"rename `foo` to `bar`\nthanks",
+	expect(
+		mentionInstruction(
+			"@ytimesy-agent rename `foo` to `bar`\r\nthanks",
+			"ytimesy-agent",
+		),
+	).toBe("rename `foo` to `bar`\nthanks");
+	expect(mentionInstruction("Hey @ytimesy-agent", "ytimesy-agent")).toBe("");
+	// Comments written before the handle changed still work.
+	expect(mentionInstruction("@ytimesy rename it", "ytimesy-agent")).toBe(
+		"rename it",
 	);
-	expect(mentionInstruction("Hey @ytimesy")).toBe("");
-	expect(mentionInstruction("no mention")).toBeNull();
+	expect(mentionInstruction("no mention", "ytimesy-agent")).toBeNull();
 });
 
 it("asks a CI wake to fix the failure on the branch, with logs fenced as untrusted data", () => {
@@ -85,13 +91,6 @@ it("derives one message id per wake", () => {
 	expect(wakeMessageId("link:ci:abd")).not.toBe(id);
 });
 
-it("adds the Fix with ytimesy section once and replaces it later", () => {
-	const once = withFixSection("Automatic draft handoff.", "https://app/fix/1");
-	expect(once).toContain("[Fix with ytimesy](https://app/fix/1)");
-	expect(once).toContain("`@ytimesy <what to change>`");
-	const again = withFixSection(`${once}\n\nmore`, "https://app/fix/2");
-	expect(again.match(/Fix with ytimesy/g)).toHaveLength(1);
-	expect(again).toContain("https://app/fix/2");
-	expect(again.endsWith("more")).toBe(true);
+it("links a chat by its project and id", () => {
 	expect(chatPath("p", "c")).toBe("/?project=p&chat=c");
 });

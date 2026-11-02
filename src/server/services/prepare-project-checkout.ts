@@ -54,7 +54,11 @@ export async function prepareProjectCheckout(input: {
 			mode: "clone",
 		});
 	await input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`);
-	const bot = await resolveGithubAppBot();
+	// Every commit made in this checkout (the agent's own included) credits the App.
+	const bot = await resolveGithubAppBot({
+		installationId: input.installationId,
+		repositoryName: input.name,
+	});
 	if (bot) {
 		const hook = githubBotCommitHookPath(directory);
 		await input.host.writeTextFile(hook, githubBotCommitMsgHook(bot));

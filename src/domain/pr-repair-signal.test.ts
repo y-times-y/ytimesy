@@ -110,6 +110,25 @@ it("wakes on a person's new @ytimesy comment on a pull request, keeping only ide
 	).toMatchObject({ kind: "review_comment", sourceId: 9, prNumber: 12 });
 });
 
+it("wakes on the App's own handle, @<slug>, as a whole mention", () => {
+	const onPull = { issue: { number: 12, pull_request: {} } };
+	expect(
+		parsePrRepairSignal(
+			"issue_comment",
+			{ ...comment("@ytimesy-agent rename the flag"), ...onPull },
+			"ytimesy-agent",
+		),
+	).toMatchObject({ kind: "comment", prNumber: 12 });
+	for (const body of ["@ytimesy-agents hi", "a@ytimesy-agent.dev"])
+		expect(
+			parsePrRepairSignal(
+				"issue_comment",
+				{ ...comment(body), ...onPull },
+				"ytimesy-agent",
+			),
+		).toBeNull();
+});
+
 it("ignores comments on issues, by bots, edits, and ones that do not mention @ytimesy", () => {
 	const onPull = { issue: { number: 12, pull_request: {} } };
 	expect(

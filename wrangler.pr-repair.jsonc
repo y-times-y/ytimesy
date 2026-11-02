@@ -6,7 +6,7 @@
   "compatibility_date": "2026-10-05",
 	"compatibility_flags": ["nodejs_compat", "nodejs_compat_do_not_populate_process_env"],
   "workers_dev": true,
-  "vars": { "REPAIR_EXECUTOR_URL": "" },
+  "vars": { "REPAIR_EXECUTOR_URL": "", "GITHUB_APP_SLUG": "ytimesy-agent" },
   "secrets": { "required": ["GITHUB_PR_REPAIR_WEBHOOK_SECRET", "PR_REPAIR_INGRESS_SECRET"] },
   "workflows": [{ "binding": "PR_REPAIRS", "name": "ytimesy-pr-repairs-development", "class_name": "PrRepairWorkflow" }],
   "observability": { "enabled": true, "traces": { "enabled": true, "head_sampling_rate": 0.01 } }
