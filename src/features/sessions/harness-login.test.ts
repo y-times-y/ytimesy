@@ -92,3 +92,20 @@ it("shows the sign-in card above the composer for an expired or pending login, n
 		),
 	).toBe("");
 });
+
+it("titles a failure that is not a sign-in problem neutrally", () => {
+	const html = render({
+		status: "failed",
+		provider: "codex",
+		message: "Prepare a project environment before starting an agent.",
+	});
+	expect(html).toContain("Couldn&#x27;t start the chat");
+	expect(html).not.toContain("sign-in failed");
+	expect(
+		render({
+			status: "failed",
+			provider: "codex",
+			message: "ChatGPT sign-in was not approved. Sign in again.",
+		}),
+	).toContain("Codex sign-in failed");
+});

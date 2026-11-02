@@ -258,4 +258,15 @@ describe("listedModelDisplayName", () => {
 		);
 		expect(listedModelDisplayName("  ")).toBe("");
 	});
+
+	it("keeps an offered model's label when its route is not listed", () => {
+		expect(listedModelDisplayName("claude-code/claude-opus-5-5")).toBe(
+			"Claude Opus 5.5",
+		);
+		expect(
+			listedModelDisplayName(
+				`api/${"0".repeat(8)}-0000-4000-8000-${"0".repeat(12)}/${encodeURIComponent("anthropic/claude-opus-5.5")}`,
+			),
+		).toBe("Claude Opus 5.5");
+	});
 });

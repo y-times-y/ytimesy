@@ -50,6 +50,7 @@ import {
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
 import { githubConnectionExists } from "#/server/auth/github-connection";
 import { requireSameOrigin } from "#/server/http";
+import { readableServerError } from "#/server/public-error";
 import { agentModelCatalog } from "#/server/services/agent-model-catalog";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -513,15 +514,19 @@ export const pollCodexLogin = createServerFn({ method: "POST" })
 export const connectCodexSession = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(
-			data.projectId,
-			data.harnessId,
-			data.sessionId,
-			data.createNew,
-		);
-		return withQueuedMessages(
-			await Effect.runPromise(connectHarnessWorkspaceSession(scope)),
-		);
+		try {
+			const scope = await requireScope(
+				data.projectId,
+				data.harnessId,
+				data.sessionId,
+				data.createNew,
+			);
+			return withQueuedMessages(
+				await Effect.runPromise(connectHarnessWorkspaceSession(scope)),
+			);
+		} catch (cause) {
+			throw await readableServerError(cause);
+		}
 	});
 
 /** About 100k tokens; a longer paste belongs in an attached file. */
@@ -623,6 +628,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 					sendComposerMessage(machines, scope, data),
 				);
 				return timed("send:queued", () => withQueuedMessages(sent));
+			}).catch(async (cause: unknown) => {
+				// A thrown Response (GitHub not connected) would reach the client as "{}".
+				throw await readableServerError(cause);
 			}),
 	);
 
