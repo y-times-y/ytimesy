@@ -4,9 +4,9 @@
  * older Terms or Privacy version are asked to accept again, and training
  * consent records the training policy version that was shown.
  */
-export const TERMS_VERSION = "2026-10-19";
-export const PRIVACY_VERSION = "2026-10-19";
-export const TRAINING_POLICY_VERSION = "2026-10-19";
+export const TERMS_VERSION = "2026-11-02";
+export const PRIVACY_VERSION = "2026-11-02";
+export const TRAINING_POLICY_VERSION = "2026-11-02";
 
 /**
  * False until counsel has reviewed the drafts and the owner publishes them.
