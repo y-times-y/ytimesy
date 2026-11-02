@@ -34,12 +34,17 @@ export function sitePreviewMeta({
 	title,
 	description,
 	url,
+	image: imagePath = HARNESS_POST.banner,
+	imageAlt = HARNESS_POST.bannerAlt,
 }: {
 	title: string;
 	description: string;
 	url: string;
+	/** A 2400 x 1260 card under public/; the harness post's banner by default. */
+	image?: string;
+	imageAlt?: string;
 }) {
-	const image = `${SITE_ORIGIN}${HARNESS_POST.banner}`;
+	const image = `${SITE_ORIGIN}${imagePath}`;
 	return [
 		{ name: "description", content: description },
 		{ property: "og:type", content: "website" },
@@ -50,7 +55,7 @@ export function sitePreviewMeta({
 		{ property: "og:image", content: image },
 		{ property: "og:image:width", content: "2400" },
 		{ property: "og:image:height", content: "1260" },
-		{ property: "og:image:alt", content: HARNESS_POST.bannerAlt },
+		{ property: "og:image:alt", content: imageAlt },
 		{ name: "twitter:card", content: "summary_large_image" },
 		{ name: "twitter:title", content: title },
 		{ name: "twitter:description", content: description },
@@ -64,4 +69,7 @@ export const SITE_PREVIEW_META = sitePreviewMeta({
 	description:
 		"Give it a task and it builds in its own cloud machine, then opens a pull request. Use your ChatGPT, Claude or Grok plan, or your API keys.",
 	url: `${SITE_ORIGIN}/`,
+	image: "/og/home.jpg",
+	imageAlt:
+		"ytimesy: AI Software Engineer in the Cloud, above the ytimesy app with a chat and its todos.",
 });
