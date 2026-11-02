@@ -193,6 +193,15 @@ export function HarnessPicker({
 				if (value) {
 					setFavorites(readModelFavorites());
 					setSearch("");
+					// Open on the section the chosen model belongs to: Codex,
+					// Claude Code, the Grok plan, or its provider's API keys.
+					const view = pickerViewFor(harnessId, modelId, connections.data);
+					setFavoritesOnly(false);
+					setClaudeView(view.kind === "claude");
+					setGrokView(view.kind === "grok");
+					setBrowse(view.kind === "grok" || view.kind === "api");
+					if (view.kind === "grok") setApiProvider("x-ai");
+					if (view.kind === "api") setApiProvider(view.author);
 				}
 			}}
 		>
@@ -682,4 +691,41 @@ function CodexModelSearch({
 			))}
 		</>
 	);
+}
+
+/**
+ * The picker section a chosen model lives in, so the picker never opens on a
+ * list that mixes routes (an API model under no section looked like Codex's).
+ */
+export function pickerViewFor(
+	harnessId: string,
+	modelId: string,
+	connections:
+		| readonly {
+				readonly id: string;
+				readonly provider: string;
+				readonly baseUrl?: string | null;
+				readonly subscription?: { readonly provider: string } | null;
+		  }[]
+		| undefined,
+):
+	| { kind: "codex" }
+	| { kind: "claude" }
+	| { kind: "grok" }
+	| { kind: "api"; author: string } {
+	if (harnessId !== "api") return { kind: "codex" };
+	if (isClaudeCodeRoute(modelId)) return { kind: "claude" };
+	const route = parseModelRouteId(modelId);
+	const connection = connections?.find(
+		(candidate) => candidate.id === route?.connectionId,
+	);
+	if (connection?.subscription?.provider === "xai") return { kind: "grok" };
+	const id = route?.modelId ?? "";
+	if (id.includes("/")) return { kind: "api", author: id.split("/")[0] };
+	if (connection?.provider === "compatible")
+		return {
+			kind: "api",
+			author: connection.baseUrl?.includes("api.x.ai") ? "x-ai" : "custom",
+		};
+	return { kind: "api", author: connection?.provider ?? "openai" };
 }

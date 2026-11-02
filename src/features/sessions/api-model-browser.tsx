@@ -279,7 +279,10 @@ export function ApiModelBrowser({
 								onSelect(route);
 							}}
 						>
-							<ModelProviderLogo provider={model.author} size={16} />
+							<ModelProviderLogo
+								provider={model.author === "x-ai" ? "grok" : model.author}
+								size={16}
+							/>
 							<span>
 								{author
 									? model.label
@@ -314,7 +317,10 @@ export function ApiModelBrowser({
 							: `Connect ${AUTHOR_LABELS[model.author] ?? model.author}`
 					}
 				>
-					<ModelProviderLogo provider={model.author} size={16} />
+					<ModelProviderLogo
+						provider={model.author === "x-ai" ? "grok" : model.author}
+						size={16}
+					/>
 					<span>
 						{author
 							? model.label
