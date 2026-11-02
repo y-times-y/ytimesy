@@ -12,6 +12,7 @@ import {
 	type ApiTurnFailureStage,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
+	ClaudeSubscriptionRefused,
 	IncompleteAgentTurn,
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
@@ -23,6 +24,10 @@ import {
 	hasCheckerFinalNotice,
 } from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
+import {
+	claudeSubscriptionEnabled,
+	isClaudeCodeRevision,
+} from "#/domain/claude-code-route";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
@@ -113,6 +118,7 @@ import {
 	renewApiTurn,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
+import { claudeSubscriptionStatus } from "../adapters/claude-subscription";
 import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { archiveModelContext } from "../adapters/context-archives";
 import { conversationPointCodeRef } from "../adapters/conversation-recovery";
@@ -170,6 +176,10 @@ import {
 import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
+import {
+	claudeCodeBridgeToolSet,
+	runClaudeCodeTurnStep,
+} from "../services/claude-code-turn";
 import {
 	CODE_MODE_TOOL,
 	codeModeTool,
@@ -588,6 +598,9 @@ async function runApiTurnAttempt(
 	// connection, the eval user's variant) start before the coordination
 	// lease is acquired; nothing uses them unless the turn then owns it.
 	const subscription = subscriptionTurnSettings(route.connectionRevision);
+	// Claude Code on the user's Claude subscription: the CLI runs on the VM.
+	const claudeCode =
+		!route.connectionId && isClaudeCodeRevision(route.connectionRevision);
 	const checkingCodexAuth =
 		subscription && !route.connectionId
 			? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
@@ -729,6 +742,23 @@ async function runApiTurnAttempt(
 			warmCodexSubscriptionCatalog(turn.user_id);
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
 			webSearch = nativeWebSearchTools("openai");
+		} else if (claudeCode) {
+			if (!claudeSubscriptionEnabled())
+				throw new Error("Claude Code is not available.");
+			if (!step)
+				throw new Error("Claude Code chats run on the durable executor only.");
+			// A refused or removed token is a route failure: the turn fails over.
+			const status = await claudeSubscriptionStatus(turn.user_id);
+			if (status.status === "disconnected" || status.status === "refused") {
+				failureStage = "model";
+				failoverScope = {
+					evaluation: Boolean(evaluation),
+					child: Boolean(owner.parentSessionId),
+					runtime: "api",
+					role: analyticsAgentRole(owner),
+				};
+				throw new ClaudeSubscriptionRefused();
+			}
 		} else {
 			if (!route.connectionId) throw new Error("Model connection was removed.");
 			const connection = await loadingConnection;
@@ -2044,9 +2074,68 @@ async function runApiTurnAttempt(
 				if (loopStep.messages) messages = loopStep.messages;
 				if (loopStep.items || loopStep.messages) await saveCheckpoint();
 			}
-			result = await timed("turn:runAgent", async () =>
-				runAgent({ ...agentInput, messages }),
-			);
+			if (claudeCode) {
+				const claudeResult = await timed("turn:claudeCode", () =>
+					runClaudeCodeTurnStep({
+						userId: owner.userId,
+						sessionId: owner.id,
+						turnId: turn.id,
+						modelId: route.modelId,
+						agentRole: owner.agentRole,
+						workspace,
+						machines: unscopedMachines,
+						messages,
+						// Claude Code has its own file, shell and web tools.
+						tools: claudeCodeBridgeToolSet(tools, [
+							...Object.keys(surfaceTools),
+							...Object.keys(webSearch),
+							...Object.keys(webFetch),
+						]),
+						deadline: step?.waitDeadlineAt ?? Date.now() + 10 * 60_000,
+						signal: abort.signal,
+						redact: () => redact,
+						addRedaction: (value) => {
+							if (!redact.includes(value)) redact.push(value);
+						},
+						hasItem: (id) =>
+							items.some((item) => item.id === `${turn.id}:${id}`),
+						toolName: (id) => {
+							const found = items.find(
+								(item) => item.id === `${turn.id}:${id}`,
+							);
+							return found?.kind === "dynamicToolCall" ? found.tool : undefined;
+						},
+						onEvent: async (event) => {
+							if (
+								event.type === "text-delta" ||
+								event.type === "reasoning-delta" ||
+								event.type === "tool-call"
+							)
+								timing?.mark("firstToken");
+							items = applyApiProgress(items, turn.id, event);
+							if (Date.now() - flushedAt >= 250 || event.type === "finish") {
+								progress.offer(items);
+								if (event.type === "finish") await progress.drain();
+								flushedAt = Date.now();
+							} else progress.offerLater(items, flushedAt + 250 - Date.now());
+						},
+						onPlan: (plan) => {
+							items = applyPlanUpdate(items, turn.id, {
+								plan: plan.map(({ step: text, status }) => ({
+									step: text,
+									status,
+								})),
+							});
+							progress.offer(items);
+						},
+					}),
+				);
+				messages = claudeResult.messages;
+				result = claudeResult;
+			} else
+				result = await timed("turn:runAgent", async () =>
+					runAgent({ ...agentInput, messages }),
+				);
 			// The step succeeded: a later failure gets its own retries.
 			if (retried) {
 				retryCleared = withRouteRetries(turn.failover, route, 0);

@@ -5,6 +5,12 @@ import {
 } from "#/domain/api-conversation";
 import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import {
+	claudeCodeListedModels,
+	claudeCodeTurnRevision,
+	claudeSubscriptionEnabled,
+	parseClaudeCodeRouteId,
+} from "#/domain/claude-code-route";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import type {
 	IncomingAttachment,
@@ -33,6 +39,7 @@ import {
 	inheritedApiTurnSettings,
 	previousTurnMessages,
 } from "../adapters/api-turns";
+import { hasClaudeSubscription } from "../adapters/claude-subscription";
 import {
 	listModelConnections,
 	loadModelConnection,
@@ -50,7 +57,14 @@ import { pinnedTurnFailover } from "./model-failover";
 import { commitChatBranchForSubmission } from "./session-branch";
 
 export async function apiModelCatalog(userId: string) {
-	return availableApiModelRoutes(await listModelConnections(userId));
+	const [routes, claude] = await Promise.all([
+		listModelConnections(userId).then(availableApiModelRoutes),
+		claudeSubscriptionEnabled()
+			? hasClaudeSubscription(userId).catch(() => false)
+			: false,
+	]);
+	// Claude Code (the user's Claude subscription) lists beside API keys.
+	return claude ? [...claudeCodeListedModels(), ...routes] : routes;
 }
 
 export async function readApiWorkspaceSession(
@@ -183,6 +197,8 @@ export async function sendApiWorkspaceTask(
 		);
 	}
 	const sessionId = scope.sessionId;
+	if (parseClaudeCodeRouteId(input.modelId))
+		return sendClaudeCodeTask(scope, sessionId, input, preparedTask, read);
 	const selected = parseModelRouteId(input.modelId);
 	const inheritsSettings =
 		input.speed === undefined && input.variant === undefined;
@@ -310,6 +326,111 @@ export async function sendApiWorkspaceTask(
 	// The chat as just committed: its transcript with the sent message and a
 	// running turn on the route it was sent to. Re-reading it would repeat
 	// the chat and catalog reads above.
+	return apiWorkspaceView(
+		{
+			...session,
+			items,
+			turnStatus: "running",
+			harness: "api",
+			listedModelId: input.modelId,
+		},
+		await catalog,
+	);
+}
+
+/**
+ * A send to a Claude Code model: the turn runs the Claude Code CLI on the
+ * chat's VM, billed to the user's Claude subscription (no API connection).
+ */
+async function sendClaudeCodeTask(
+	scope: CodexSessionScope,
+	sessionId: string,
+	input: Parameters<typeof sendApiWorkspaceTask>[1],
+	preparedTask: boolean,
+	read?: AgentSessionRecord,
+): ReturnType<typeof readApiWorkspaceSession> {
+	const modelId = parseClaudeCodeRouteId(input.modelId);
+	if (!modelId || !claudeSubscriptionEnabled())
+		throw new Error("Claude Code is not available.");
+	const catalog = apiModelCatalog(scope.userId);
+	catalog.catch(() => {});
+	const [session, connected] = await Promise.all([
+		read?.id === sessionId
+			? read
+			: agentSessionForOwner(scope.userId, sessionId),
+		hasClaudeSubscription(scope.userId),
+	]);
+	if (!session || session.projectId !== scope.projectId)
+		throw new Error("Session is not available.");
+	if (!connected)
+		throw new Error(
+			"Connect your Claude subscription in Settings > Agents first.",
+		);
+	const current = sessionItemsFromUnknown(session.items);
+	if (sendWasQueued(current, input.idempotencyKey))
+		return readApiWorkspaceSession(scope);
+	const revision = claudeCodeTurnRevision();
+	const failover = input.continueOn
+		? await pinnedTurnFailover(
+				scope.userId,
+				{
+					connectionId: null,
+					connectionRevision: revision,
+					modelId,
+					settings: {},
+				},
+				input.continueOn,
+			)
+		: undefined;
+	if (input.approvesPlan && !pendingPlanId(current))
+		throw new Error("That plan was already answered.");
+	const [attachments, previous] = await Promise.all([
+		input.storedAttachments
+			? [...input.storedAttachments]
+			: storeMessageAttachments(scope.userId, session.id, input.attachments),
+		previousTurnMessages(scope.userId, session.id, modelId, revision),
+	]);
+	const items = sessionItemsQueuedWithUser(
+		current,
+		input.text,
+		input.idempotencyKey,
+		input.approvesPlan,
+		attachments,
+	);
+	let messages = nextTurnMessages({
+		previous,
+		items,
+		text: input.text,
+		runtimeText: input.runtimeText,
+		attachments,
+	});
+	if (!previous)
+		messages = reconstructedContextTransition(
+			messages,
+			failover?.route.modelId ?? modelId,
+		);
+	assertApiContextFits(messages);
+	await enqueueApiTurn({
+		userId: scope.userId,
+		sessionId: session.id,
+		connectionId: null,
+		revision,
+		modelId,
+		routeId: input.modelId,
+		messages,
+		items,
+		preparedTask,
+		idempotencyKey: input.idempotencyKey,
+		settings: {},
+		failover,
+	});
+	const title = () =>
+		titleUntitledAgentSession(
+			scope.userId,
+			session.id,
+			sessionTitleFromItems(items),
+		).catch(() => undefined);
+	if (!startAfterResponse(title)) await title();
 	return apiWorkspaceView(
 		{
 			...session,

@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { Freestyle, type Vm } from "freestyle";
 import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
+import {
+	CLAUDE_CODE_BINARY,
+	claudeCodeInstallScript,
+} from "#/domain/guest-cli-pin";
 import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
 import { BROWSER_USE_INSTALL } from "#/server/adapters/browser-use-cli";
 import { boundedFreestyleFetch } from "#/server/adapters/freestyle/bounded-fetch";
@@ -115,6 +119,12 @@ corepack enable --install-directory /usr/local/bin pnpm yarn`,
 		name: "desktop",
 		script: DESKTOP_IMAGE_SCRIPT,
 	},
+	{
+		// Claude Code chats run the pinned CLI; the first turn then starts at once.
+		name: "claude code",
+		script: `${claudeCodeInstallScript(true)}
+rm -f /tmp/ytimesy-claude-code-install.lock`,
+	},
 ];
 
 // Run per user so pnpm and yarn need no download on the first command, and
@@ -132,7 +142,7 @@ for c in "node --version" "npm --version" "corepack --version" "pnpm --version" 
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
   "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version" \\
   "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version" \\
-  "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version"; do
+  "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version" "${CLAUDE_CODE_BINARY} --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done

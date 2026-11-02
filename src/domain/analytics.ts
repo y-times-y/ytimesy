@@ -35,6 +35,7 @@ export const serverAnalyticsEvents = {
 			"usage-limit",
 			"timeout",
 			"plan-access",
+			"signed-out",
 		]),
 		outcome: z.enum(["switched", "asked", "exhausted"]),
 		same_model: z.boolean(),

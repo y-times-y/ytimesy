@@ -13,6 +13,7 @@ import {
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
 import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
+import { isClaudeCodeRoute } from "#/domain/claude-code-route";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { apiPickerSections } from "#/domain/provider-access";
 import { authClient } from "#/features/auth/client";
@@ -22,6 +23,7 @@ import {
 } from "../workspace/usage-windows";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
+import { getClaudeSubscription } from "./claude-subscription.fn";
 import {
 	type ComposerSpeed,
 	type SessionModel,
@@ -113,7 +115,19 @@ export function HarnessPicker({
 	const usageWindows = useCloudUsageWindows();
 	const planBars = usePlanUsageBars(open);
 	const prefetchPlanUsage = usePrefetchPlanUsage();
-	const [browse, setBrowse] = useState(harnessId === "api");
+	const [browse, setBrowse] = useState(
+		harnessId === "api" && !isClaudeCodeRoute(modelId),
+	);
+	const [claudeView, setClaudeView] = useState(
+		harnessId === "api" && isClaudeCodeRoute(modelId),
+	);
+	const loadClaude = useServerFn(getClaudeSubscription);
+	const claude = useQuery({
+		queryKey: ["claude-subscription"],
+		queryFn: () => loadClaude(),
+		staleTime: 30_000,
+	});
+	const claudeData = claude.data?.enabled ? claude.data : null;
 	const [apiProvider, setApiProvider] = useState("openai");
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -163,7 +177,10 @@ export function HarnessPicker({
 				{harnessId === "api" ? (
 					<ModelProviderLogo
 						provider={
-							parseModelRouteId(modelId)?.modelId.split("/")[0] ?? "openrouter"
+							isClaudeCodeRoute(modelId)
+								? "anthropic"
+								: (parseModelRouteId(modelId)?.modelId.split("/")[0] ??
+									"openrouter")
 						}
 						size={16}
 					/>
@@ -213,6 +230,7 @@ export function HarnessPicker({
 							aria-pressed={favoritesOnly}
 							onClick={() => {
 								setBrowse(false);
+								setClaudeView(false);
 								setFavoritesOnly(!favoritesOnly);
 							}}
 						>
@@ -233,6 +251,7 @@ export function HarnessPicker({
 									onClick={() => {
 										setFavoritesOnly(false);
 										setBrowse(false);
+										setClaudeView(false);
 										setSearch("");
 										if (option.id !== harnessId) onHarnessIdChange(option.id);
 									}}
@@ -240,10 +259,28 @@ export function HarnessPicker({
 									<AgentProviderMark provider={option.id} size={21} />
 								</button>
 							))}
+						{claudeData ? (
+							<button
+								className="model-provider-subscription"
+								type="button"
+								title="Claude Code · Claude subscription"
+								aria-label="Claude Code"
+								aria-pressed={claudeView && !browse && !favoritesOnly}
+								onClick={() => {
+									setFavoritesOnly(false);
+									setBrowse(false);
+									setClaudeView(true);
+									setSearch("");
+								}}
+							>
+								<ModelProviderLogo provider="anthropic" size={21} />
+							</button>
+						) : null}
 						<ApiProviderRail
 							selected={browse ? apiProvider : null}
 							onSelect={(id) => {
 								setBrowse(true);
+								setClaudeView(false);
 								setApiProvider(id);
 								setFavoritesOnly(false);
 								setSearch("");
@@ -257,7 +294,9 @@ export function HarnessPicker({
 								? "Search all models"
 								: browse
 									? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
-									: selected.name
+									: claudeView && claudeData
+										? "Claude Code"
+										: selected.name
 						}
 					>
 						{searching ? (
@@ -287,6 +326,16 @@ export function HarnessPicker({
 									}}
 								/>
 							</>
+						) : claudeView && claudeData ? (
+							<ClaudeCodeModels
+								models={claudeData.models}
+								selectedRoute={harnessId === "api" ? modelId : ""}
+								onSelect={(id) => {
+									if (harnessId !== "api") onHarnessIdChange("api");
+									onModelIdChange(id);
+									setOpen(false);
+								}}
+							/>
 						) : browse ? (
 							<ApiModelBrowser
 								key={apiProvider}
@@ -398,6 +447,57 @@ export function HarnessPicker({
 				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/** Claude Code's models (the user's Claude subscription), apart from API keys. */
+function ClaudeCodeModels({
+	models,
+	selectedRoute,
+	onSelect,
+}: {
+	models: readonly { readonly id: string; readonly label: string }[];
+	selectedRoute: string;
+	onSelect: (id: string) => void;
+}) {
+	return (
+		<>
+			<h3>Claude Code</h3>
+			<p
+				className="model-browser-caption"
+				title="Runs Claude Code on the chat's machine, billed to your Claude plan."
+			>
+				Claude subscription
+			</p>
+			<div className="model-picker-list">
+				{models.map((model) => (
+					<div
+						className="model-picker-row"
+						key={model.id}
+						data-selected={model.id === selectedRoute}
+					>
+						<button
+							type="button"
+							className="model-picker-option"
+							aria-pressed={model.id === selectedRoute}
+							title={`${model.label} in Claude Code`}
+							onClick={() => onSelect(model.id)}
+						>
+							<ModelProviderLogo provider="anthropic" size={16} />
+							<span>{model.label}</span>
+							{model.id === selectedRoute ? (
+								<Check size={14} aria-hidden="true" />
+							) : null}
+						</button>
+					</div>
+				))}
+				{models.length === 0 ? (
+					<p className="model-picker-status" role="status">
+						Connect your Claude plan in Settings › Agents
+					</p>
+				) : null}
+			</div>
+		</>
 	);
 }
 

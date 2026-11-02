@@ -70,6 +70,12 @@ import {
 	startBackgroundJob,
 	startClaimedTurn,
 } from "./background-jobs";
+import {
+	answerClaudeCodeMcp,
+	CLAUDE_CODE_MCP_PATH,
+	isClaudeCodeEdgePath,
+	routeClaudeCodeEdge,
+} from "./claude-code-routes";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -588,6 +594,18 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	async fetch(request: Request) {
 		const path = new URL(request.url).pathname;
+		// The VM's Claude Code asking for ytimesy's tools; the turn's step runs them.
+		if (path === CLAUDE_CODE_MCP_PATH) {
+			if (this.purged) return new Response(null, { status: 410 });
+			return answerClaudeCodeMcp(
+				request,
+				this.env,
+				(name) =>
+					this.ctx.storage.sql
+						.exec<{ name: string }>("select name from conversation_identity")
+						.toArray()[0]?.name === name,
+			);
+		}
 		if (isRealtimeRoute(path)) {
 			const secret = process.env.YTIMESY_REALTIME_SECRET;
 			if (!secret || secret.length < 32)
@@ -1072,6 +1090,8 @@ export default {
 					{ status: 202 },
 				);
 			}
+			if (isClaudeCodeEdgePath(new URL(request.url).pathname))
+				return await routeClaudeCodeEdge(request, env);
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });

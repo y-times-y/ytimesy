@@ -2,6 +2,9 @@ import { APICallError, RetryError } from "ai";
 import {
 	ApiModelPreparationFailure,
 	ApiTurnCancelled,
+	ClaudeCodeRunFailure,
+	ClaudeSubscriptionLimitReached,
+	ClaudeSubscriptionRefused,
 	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	ContextWindowExhausted,
@@ -129,9 +132,13 @@ function statusReason(
 /** When a spent ChatGPT plan allowance resets (epoch ms), if the failure says. */
 export function subscriptionLimitResetsAt(error: unknown): number | undefined {
 	const spent = failureChain(error).find(
-		(current) => current instanceof SubscriptionUsageLimitReached,
+		(current) =>
+			current instanceof SubscriptionUsageLimitReached ||
+			current instanceof ClaudeSubscriptionLimitReached,
 	);
-	return spent instanceof SubscriptionUsageLimitReached && spent.resetsAt
+	return (spent instanceof SubscriptionUsageLimitReached ||
+		spent instanceof ClaudeSubscriptionLimitReached) &&
+		spent.resetsAt
 		? spent.resetsAt.getTime()
 		: undefined;
 }
@@ -146,6 +153,9 @@ export function failoverReason(error: unknown): FailoverReason | null {
 		// A rejected SuperGrok sign-in waits for the user; other routes still work.
 		if (current instanceof XaiSubscriptionUnavailable)
 			return current.reason === "unavailable" ? "outage" : "plan-access";
+		if (current instanceof ClaudeSubscriptionLimitReached) return "usage-limit";
+		if (current instanceof ClaudeSubscriptionRefused) return "signed-out";
+		if (current instanceof ClaudeCodeRunFailure) return null;
 		// Every egress path is blocked: another provider route still works.
 		if (current instanceof CodexEgressUnavailable) return "outage";
 		if (current instanceof SubscriptionMetadataFailure)
