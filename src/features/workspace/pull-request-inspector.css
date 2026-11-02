@@ -708,3 +708,72 @@
 	margin-top: 0;
 	gap: 10px;
 }
+
+/* Places held while a pull request's details load, sized like what replaces them. */
+.pr-skeleton {
+	display: block;
+	border-radius: 6px;
+	background: linear-gradient(
+		90deg,
+		#ffffff08 25%,
+		#ffffff12 50%,
+		#ffffff08 75%
+	);
+	background-size: 200% 100%;
+	animation: pr-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.pr-skeleton-state {
+	width: 64px;
+	height: 22px;
+}
+.pr-skeleton-title {
+	width: 70%;
+	height: 22px;
+}
+.pr-skeleton-byline {
+	flex: 1;
+	max-width: 260px;
+	height: 18px;
+}
+.pr-skeleton-comment {
+	display: flex;
+	gap: 12px;
+	padding: 14px 0;
+}
+.pr-skeleton-lines {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 8px;
+	padding-top: 3px;
+}
+.pr-skeleton-avatar {
+	flex-shrink: 0;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+}
+.pr-skeleton-line {
+	height: 14px;
+}
+.pr-skeleton-short {
+	width: 55%;
+}
+.pr-skeleton-merge {
+	height: 132px;
+	margin-top: 10px;
+	border-radius: 10px;
+}
+@keyframes pr-skeleton-shimmer {
+	from {
+		background-position: 200% 0;
+	}
+	to {
+		background-position: -200% 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.pr-skeleton {
+		animation: none;
+	}
+}

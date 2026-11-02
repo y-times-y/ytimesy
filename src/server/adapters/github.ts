@@ -23,6 +23,7 @@ import {
 } from "../../domain/pull-request-review";
 import { pullRequestChecksSummary } from "../../domain/sidebar-chat-status";
 import { serverConfig } from "../config";
+import { timedFetch } from "../services/step-timing";
 
 const tokenResponse = z.object({
 	access_token: z.string().min(1),
@@ -34,8 +35,13 @@ interface GithubCredentials {
 	refreshToken?: string;
 	expiresAt: number | null;
 }
+/** Every GitHub call shows in step timing (development diagnostics) as github:<method> <path>. */
+const githubFetch = timedFetch("github", (input, init) => fetch(input, init));
 export function githubClient(token: string) {
-	return new Octokit({ auth: token, request: { timeout: 15000 } });
+	return new Octokit({
+		auth: token,
+		request: { timeout: 15000, fetch: githubFetch },
+	});
 }
 export async function exchangeGithubToken(
 	parameters: Record<string, string>,
@@ -64,6 +70,43 @@ export async function exchangeGithubToken(
 			: null,
 	};
 }
+type UserInstallation = {
+	id: number;
+	suspended_at?: string | null;
+	app_slug: string;
+	permissions: { contents?: string };
+};
+type InstallationRepository = {
+	id: number;
+	full_name: string;
+	default_branch: string;
+	private: boolean;
+	archived?: boolean;
+	disabled?: boolean;
+	permissions?: { push?: boolean };
+};
+/** Our app's installation, active and able to write contents. */
+function usableInstallation(installation: UserInstallation) {
+	return (
+		!installation.suspended_at &&
+		installation.permissions.contents === "write" &&
+		installation.app_slug === serverConfig().GITHUB_APP_SLUG
+	);
+}
+/** A repository the user can push to through the installation, else null. */
+function repositoryChoice(
+	installationId: number,
+	repo: InstallationRepository,
+): RepositoryChoice | null {
+	if (repo.archived || repo.disabled || !repo.permissions?.push) return null;
+	return {
+		installationId,
+		repositoryId: repo.id,
+		fullName: repo.full_name,
+		defaultBranch: repo.default_branch,
+		private: repo.private,
+	};
+}
 export async function listAuthorizedRepositories(
 	token: string,
 ): Promise<RepositoryChoice[]> {
@@ -74,25 +117,14 @@ export async function listAuthorizedRepositories(
 	);
 	const choices: RepositoryChoice[] = [];
 	for (const installation of installations) {
-		if (
-			installation.suspended_at ||
-			installation.permissions.contents !== "write" ||
-			installation.app_slug !== serverConfig().GITHUB_APP_SLUG
-		)
-			continue;
+		if (!usableInstallation(installation)) continue;
 		const repositories = await github.paginate(
 			github.apps.listInstallationReposForAuthenticatedUser,
 			{ installation_id: installation.id, per_page: 100 },
 		);
 		for (const repo of repositories) {
-			if (repo.archived || repo.disabled || !repo.permissions?.push) continue;
-			choices.push({
-				installationId: installation.id,
-				repositoryId: repo.id,
-				fullName: repo.full_name,
-				defaultBranch: repo.default_branch,
-				private: repo.private,
-			});
+			const choice = repositoryChoice(installation.id, repo);
+			if (choice) choices.push(choice);
 		}
 	}
 	return choices.sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -199,23 +231,46 @@ export async function githubRepositoryCreation(token: string) {
 	return { owner, canCreate: installed };
 }
 
+/**
+ * The repository when the user can push to it through our app's installation;
+ * a 403 otherwise. Reads the user's installations and that one installation's
+ * repositories at the same time (stopping at the repository's page), not every
+ * installation's repositories in turn.
+ */
 export async function authorizedRepository(
 	token: string,
 	installationId: number,
 	repositoryId: number,
 ) {
-	const repositories = await listAuthorizedRepositories(token);
-	const repository = repositories.find(
-		(repo) =>
-			repo.installationId === installationId &&
-			repo.repositoryId === repositoryId,
+	const github = githubClient(token);
+	const [installations, repository] = await Promise.allSettled([
+		github.paginate(github.apps.listInstallationsForAuthenticatedUser, {
+			per_page: 100,
+		}),
+		github.paginate(
+			github.apps.listInstallationReposForAuthenticatedUser,
+			{ installation_id: installationId, per_page: 100 },
+			(response, done) => {
+				const found = response.data.find((repo) => repo.id === repositoryId);
+				if (found) done();
+				return found ? [found] : [];
+			},
+		),
+	]);
+	if (installations.status === "rejected") throw installations.reason;
+	const installation = installations.value.find(
+		(item) => item.id === installationId,
 	);
-	if (!repository)
-		throw new Response(
-			"Repository access is unavailable. Refresh your GitHub connection.",
-			{ status: 403 },
-		);
-	return repository;
+	if (installation && usableInstallation(installation)) {
+		if (repository.status === "rejected") throw repository.reason;
+		const repo = repository.value.find((item) => item.id === repositoryId);
+		const choice = repo ? repositoryChoice(installationId, repo) : null;
+		if (choice) return choice;
+	}
+	throw new Response(
+		"Repository access is unavailable. Refresh your GitHub connection.",
+		{ status: 403 },
+	);
 }
 /** Pages of 100 a branch listing reads at most; search narrows the rest. */
 const BRANCH_LIST_PAGES = 10;
@@ -561,6 +616,7 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 							),
 						)
 					: null;
+			const author = pullRequestPerson(full.data.user);
 			return {
 				number: full.data.number,
 				url: full.data.html_url,
@@ -571,6 +627,13 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 				mergeable: full.data.mergeable ?? null,
 				mergeableState: full.data.mergeable_state ?? null,
 				checks,
+				title: full.data.title,
+				base: full.data.base.ref,
+				author: author.login,
+				authorAvatarUrl: author.avatarUrl,
+				additions: full.data.additions,
+				deletions: full.data.deletions,
+				changedFiles: full.data.changed_files,
 			};
 		}),
 	);
@@ -615,8 +678,14 @@ export async function pullRequestDetail(
 ): Promise<PullRequestDetail> {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
-	const [pull, files, reviews, comments, inline] = await Promise.all([
-		github.pulls.get({ owner, repo, pull_number: number }),
+	const pullRead = github.pulls.get({ owner, repo, pull_number: number });
+	// Every read starts at once; the head's checks start as soon as the pull
+	// request names its head, without waiting for the file list.
+	const [pull, checks, files, reviews, comments, inline] = await Promise.all([
+		pullRead,
+		pullRead.then((read) =>
+			headChecks(github, owner, repo, read.data.head.sha),
+		),
 		github.paginate(github.pulls.listFiles, {
 			owner,
 			repo,
@@ -675,7 +744,6 @@ export async function pullRequestDetail(
 		})),
 	].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 	const author = pullRequestPerson(pull.data.user);
-	const checks = await headChecks(github, owner, repo, pull.data.head.sha);
 	return {
 		number: pull.data.number,
 		title: pull.data.title,

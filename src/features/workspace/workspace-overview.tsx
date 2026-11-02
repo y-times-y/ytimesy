@@ -85,6 +85,8 @@ export function WorkspaceOverview({
 							key={pr.number}
 							type="button"
 							className="overview-pr"
+							onPointerEnter={() => onIntent?.("pr")}
+							onFocus={() => onIntent?.("pr")}
 							onClick={() => onOpen("pr")}
 						>
 							<GitPullRequest size={16} />

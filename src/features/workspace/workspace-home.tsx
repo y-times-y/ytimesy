@@ -255,6 +255,10 @@ import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
+import {
+	listedPullRequestSummary,
+	prefetchPullRequestDetail,
+} from "./pull-request-detail-query";
 import { chatRemoval, projectRemoval } from "./sidebar-removals";
 import { useCompactLayout } from "./use-compact-layout";
 import {
@@ -2099,6 +2103,10 @@ export function WorkspaceHome({
 	 * without that wait.
 	 */
 	function intendView(view: ToolsView) {
+		if (view === "pr") {
+			prefetchChatPullRequest();
+			return;
+		}
 		const projectId = selectedProject?.id;
 		const sessionId = activeSessionId;
 		if (!projectId || !sessionId) return;
@@ -2873,6 +2881,23 @@ export function WorkspaceHome({
 		repositories: projectRepositories,
 		chatPullRequest: sessionPullRequest,
 	});
+	/** Reads the chat's pull request ahead of its panel, so opening it is instant. */
+	function prefetchChatPullRequest() {
+		const pull = chatPullRequestRepository;
+		if (pull?.number === undefined) return;
+		prefetchPullRequestDetail(queryClient, { ...pull, number: pull.number });
+	}
+	const prefetchChatPullRequestRef = useRef(prefetchChatPullRequest);
+	prefetchChatPullRequestRef.current = prefetchChatPullRequest;
+	// The Overview's pull request card is a click from the panel: read it ahead.
+	const overviewPullRequestKey =
+		inspectorOpen && inspectorView === "overview"
+			? sessionPullRequest &&
+				`${sessionPullRequest.repositoryId}:${sessionPullRequest.number}`
+			: undefined;
+	useEffect(() => {
+		if (overviewPullRequestKey) prefetchChatPullRequestRef.current();
+	}, [overviewPullRequestKey]);
 
 	function openSettings() {
 		setSettingsSection(undefined);
@@ -3613,10 +3638,12 @@ export function WorkspaceHome({
 										openChat(chatId);
 										return true;
 									}}
-									pullRequest={pullRequestPanelRepository({
-										repositories: projectRepositories,
-										chatPullRequest: sessionPullRequest,
-									})}
+									pullRequest={chatPullRequestRepository}
+									pullRequestSummary={
+										sessionPullRequest
+											? listedPullRequestSummary(sessionPullRequest)
+											: undefined
+									}
 									overview={
 										<WorkspaceOverview
 											tasks={agentTasks.data ?? []}

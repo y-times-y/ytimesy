@@ -4,6 +4,7 @@ import {
 	authorizedRepository,
 	listSessionPullRequests,
 } from "../../../server/adapters/github";
+import { repositoryAccess } from "../../../server/adapters/github/repository-access-cache";
 import { requireUser } from "../../../server/auth/auth";
 import { githubAccessToken } from "../../../server/auth/github-connection";
 import { endpoint } from "../../../server/http";
@@ -23,16 +24,20 @@ export const Route = createFileRoute("/api/github/pull-requests")({
 						Object.fromEntries(new URL(request.url).searchParams),
 					);
 					const token = await githubAccessToken(user.id);
-					const repository = await authorizedRepository(
-						token,
-						params.installationId,
-						params.repositoryId,
+					// A minute's reuse of the access check (repository-access-cache.ts).
+					const key = { userId: user.id, ...params };
+					const repository = await repositoryAccess.access(key, () =>
+						authorizedRepository(
+							token,
+							params.installationId,
+							params.repositoryId,
+						),
 					);
 					return {
 						pullRequests: await listSessionPullRequests(
 							token,
 							repository.fullName,
-						),
+						).catch(repositoryAccess.refused(key)),
 					};
 				}),
 		},
