@@ -41,6 +41,16 @@ rm -f "$dir/viewer.auth" "$dir/vnc.password"
 echo ${DESKTOP_PRIVATE_READY}`;
 
 /**
+ * For a project template only (template-snapshot.ts): the drop setup, then
+ * random viewer and VNC credentials that nobody holds, so the desktop it
+ * starts before the snapshot serves no one until a copy drops its own.
+ */
+export const DESKTOP_THROWAWAY_CREDENTIALS = `${DESKTOP_CREDENTIAL_DROP_SETUP}
+(umask 077
+printf 'ytimesy:%s' "$(od -An -tx1 -N20 /dev/urandom | tr -d ' \\n')" > "$dir/viewer.auth"
+od -An -tx1 -N4 /dev/urandom | tr -d ' \\n' > "$dir/vnc.password")`;
+
+/**
  * Waits (up to 5s) for a check to pass. Each desktop piece starts in well
  * under a second, so fixed one-second sleeps made most of the start time.
  */
@@ -148,7 +158,7 @@ Exec=pcmanfm
 Icon=system-file-manager
 Terminal=false
 EOF
-  cat > "\${HOME}/.config/tint2/tint2rc" <<EOF
+  cat > "\${HOME}/.config/tint2/tint2rc.new" <<EOF
 # ytimesy desktop dock
 rounded = 22
 border_width = 0
@@ -171,6 +181,13 @@ launcher_item_app = $DESK_DIR/chrome.desktop
 launcher_item_app = $DESK_DIR/terminal.desktop
 launcher_item_app = $DESK_DIR/files.desktop
 EOF
+  # The dock restarts only for a new configuration (or when it is not running).
+  if cmp -s "\${HOME}/.config/tint2/tint2rc.new" "\${HOME}/.config/tint2/tint2rc"; then
+    rm -f "\${HOME}/.config/tint2/tint2rc.new"
+  else
+    mv -f "\${HOME}/.config/tint2/tint2rc.new" "\${HOME}/.config/tint2/tint2rc"
+    DOCK_CHANGED=1
+  fi
   if ! grep -q 'toolbar.visible' "\${HOME}/.fluxbox/init" 2>/dev/null; then
     printf 'session.screen0.toolbar.visible: false\\n' >> "\${HOME}/.fluxbox/init"
   fi
@@ -273,24 +290,41 @@ fi
 DESK_AUTH_PLUGIN="\${HOME}/.ytimesy/desk-auth"
 mkdir -p "$DESK_AUTH_PLUGIN"
 cat > "$DESK_AUTH_PLUGIN/ytimesy_desk_auth.py" <<'PY'
+import hmac
+
 from websockify.auth_plugins import BasicHTTPAuth
 
 
-class FileBasicHTTPAuth(BasicHTTPAuth):
-    """BasicHTTPAuth with user:password read from the file named by --auth-source."""
+class LiveFileBasicHTTPAuth(BasicHTTPAuth):
+    """BasicHTTPAuth against the user:password in the --auth-source file, read
+    on every connection: a new credential applies without a restart (a copy of
+    a template that already runs the desktop only replaces the file)."""
 
     def __init__(self, src=None):
-        with open(src) as source:
-            super().__init__(source.read().rstrip("\\n"))
+        super().__init__(None)
+        self.path = src
+
+    def validate_creds(self, username, password):
+        try:
+            with open(self.path) as source:
+                expected = source.read().rstrip("\\n")
+        except OSError:
+            return False
+        given = "%s:%s" % (username, password)
+        return bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
 PY
 desk_proxy_listening() { ss -ltn | grep -q ':6080 '; }
 # A proxy from before the Unix-socket viewer forwards to a port nothing serves.
 desk_proxy_current() { pgrep -f "[w]ebsockify.*--unix-target=$VNC_SOCKET" >/dev/null 2>&1; }
+# One that reads its credential file per connection takes a new one in place.
+desk_proxy_rereads() { pgrep -f "[w]ebsockify.*LiveFileBasicHTTPAuth --auth-source $DESK_AUTH_FILE --unix-target=$VNC_SOCKET 0" >/dev/null 2>&1; }
 if [ -s "$DESK_AUTH_FILE" ]; then
   DESK_AUTH_DIGEST="$(sha256sum "$DESK_AUTH_FILE" | cut -d' ' -f1)"
-  if ! desk_proxy_listening || ! desk_proxy_current || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
+  if desk_proxy_listening && desk_proxy_rereads; then
+    printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"
+  else
     if pkill -x websockify >/dev/null 2>&1; then wait_until '! desk_proxy_listening'; fi
-    PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source "$DESK_AUTH_FILE" --unix-target="$VNC_SOCKET" 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
+    PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.LiveFileBasicHTTPAuth --auth-source $DESK_AUTH_FILE --unix-target=$VNC_SOCKET 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
     DESK_PROXY_STARTED=1
   fi
 else
@@ -310,11 +344,11 @@ if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
   if pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
     CHROME_REOPEN=1
     pkill -TERM -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1 || true
-    sleep 2
+    wait_until "! pgrep -x 'chrome|chromium|chromium-browse'"
   fi
   pkill -x x11vnc >/dev/null 2>&1 || true
   pkill -x Xvfb >/dev/null 2>&1 || true
-  sleep 1
+  wait_until '! pgrep -x Xvfb && ! pgrep -x x11vnc'
 fi
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   (umask 077; touch "$XAUTH")
@@ -334,7 +368,7 @@ if ! pgrep -x fluxbox >/dev/null 2>&1; then
 fi
 # Nothing waits on the wallpaper (it took about a second on a cold guest).
 ( feh --bg-fill "$WALLPAPER" || { sleep 1; feh --bg-fill "$WALLPAPER"; } ) >/tmp/ytimesy-wallpaper.log 2>&1 &
-if command -v tint2 >/dev/null 2>&1; then
+if command -v tint2 >/dev/null 2>&1 && { [ "\${DOCK_CHANGED:-0}" = 1 ] || ! pgrep -x tint2 >/dev/null 2>&1; }; then
   pkill -x tint2 >/dev/null 2>&1 || true
   tint2 -c "\${HOME}/.config/tint2/tint2rc" >/tmp/ytimesy-dock.log 2>&1 &
 fi
@@ -346,8 +380,10 @@ fi
 # VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
 # or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
 # for the VNC password the runtime drops (the owner's viewer gets it from the
-# server); the proxy below is its one client. A desktop on TCP, or on an
-# older password, restarts its x11vnc; the display and Chrome stay.
+# server); the proxy below is its one client. x11vnc rereads the password
+# file as each client connects (read:), so a new password needs no restart;
+# one on TCP, or one that does not reread its file, restarts (the display
+# and Chrome stay).
 VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
 VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
 VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
@@ -361,17 +397,18 @@ if [ ! -s "$VNC_PASS_FILE" ]; then
 fi
 VNC_PASS_DIGEST="$(sha256sum "$VNC_PASS_FILE" | cut -d' ' -f1)"
 vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
-if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || [ "$(cat "$VNC_APPLIED" 2>/dev/null)" != "$VNC_PASS_DIGEST" ]; }; then
+vnc_rereads() { pgrep -f "[x]11vnc .*-passwdfile read:$VNC_PASS_FILE " >/dev/null 2>&1; }
+if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads; }; then
   pkill -x x11vnc >/dev/null 2>&1 || true
-  sleep 1
+  wait_until '! pgrep -x x11vnc'
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   install -d -m 0700 "$VNC_DIR"
   rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "read:$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
   wait_until '[ -S "$VNC_SOCKET" ]'
-  printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
 fi
+printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
 if vnc_on_tcp; then
   pkill -x x11vnc >/dev/null 2>&1 || true
   echo "ytimesy: x11vnc listened on TCP; it was stopped and the desktop refused" >&2

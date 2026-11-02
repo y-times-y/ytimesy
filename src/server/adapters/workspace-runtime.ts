@@ -1,3 +1,4 @@
+import type { TemplateSnapshotPreparation } from "./freestyle/template-snapshot";
 export interface RuntimeCommandResult {
 	exitCode: number;
 	stdout: string;
@@ -25,7 +26,12 @@ export interface WorkspaceRuntime {
 		path: string,
 		contents: string,
 	): Promise<void>;
-	snapshot(providerRef: string, slug: string): Promise<string>;
+	snapshot(
+		providerRef: string,
+		slug: string,
+		/** What the template is given first (template-snapshot.ts); best effort. */
+		preparation?: TemplateSnapshotPreparation,
+	): Promise<string>;
 	snapshotExists?(snapshotId: string): Promise<boolean>;
 	pause?(providerRef: string): Promise<void>;
 	/** Succeeds when the machine is already gone. */
