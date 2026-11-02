@@ -37,9 +37,11 @@ import {
 	entryPaths,
 	MEMORY_CHECKER_RULES_HEADER,
 	MEMORY_ENTRY,
-	MEMORY_FALLBACK_POLICY,
 	MEMORY_MATCH_LATER_LIMIT,
 	MEMORY_MATCH_LIMIT,
+	MEMORY_MATCH_POLICY,
+	MEMORY_RERANK_ON,
+	MEMORY_RERANK_POLICY,
 	type MemoryLine,
 	type MemoryMode,
 	memoryAppUrl,
@@ -184,7 +186,7 @@ type MemoryOptions = {
 	appUrl?: string;
 	repo?: MemoryRepo | null;
 	embed?: Embed | null;
-	/** The read hook's reranker; null: the hybrid alone, with the fallback floor. */
+	/** The read hook's reranker (by default only when MEMORY_RERANK_ON); null: the hybrid alone. */
 	rerank?: Rerank | null;
 	today?: () => string;
 	/** The chat's project (its repository ids pick its memory folder); looked up when absent. */
@@ -219,7 +221,11 @@ async function memorySource(owner: TurnMemoryOwner, options: MemoryOptions) {
 	if (!repo) return null;
 	const embed = options.embed === undefined ? memoryEmbedder() : options.embed;
 	const rerank =
-		options.rerank === undefined ? memoryReranker() : options.rerank;
+		options.rerank === undefined
+			? MEMORY_RERANK_ON
+				? memoryReranker()
+				: null
+			: options.rerank;
 	const setupStarted = Date.now();
 	let prefetched: Prefetched | null | undefined;
 	// Independent: the snapshot and the project that scopes it.
@@ -979,7 +985,7 @@ function recalledHook(
  * The reranker's budget within the read hook (over REST from a laptop,
  * 13-17 lines: median 0.44 s, slowest 2.5 s of 23 calls, 2026-11-02; the
  * edge binding is not measured yet); past it, or on an error, the hook keeps
- * the hybrid selection with the stricter fallback floor.
+ * the hybrid selection alone.
  */
 const RERANK_TIMEOUT_MS = 1500;
 
@@ -1018,15 +1024,16 @@ async function rerankScores(
 /**
  * Supermemory-style recall: embed the message, rank this chat's lines by
  * cosine similarity merged with word overlap and its topic file's best hit
- * (memory-ranking.ts), then let the reranker read the message with each of
- * the best and keep only the lines it finds relevant (none, when none is).
- * Never throws: a timeout or an error yields no lines and says which it was;
- * a failed reranker falls back to the hybrid with a stricter floor.
+ * (memory-ranking.ts), keep the best few above the floor (none when none
+ * is). With a reranker (MEMORY_RERANK_ON), it reads the message with each of
+ * the best and keeps only the lines it finds relevant; a failed one leaves
+ * the hybrid alone. Never throws: a timeout or an error yields no lines and
+ * says which it was.
  */
 export async function readHook(input: {
 	snapshot: MemorySnapshot;
 	embed: Embed;
-	/** Null: the hybrid alone, with the fallback floor (MEMORY_FALLBACK_POLICY). */
+	/** Null: the hybrid alone (MEMORY_MATCH_POLICY). */
 	rerank?: Rerank | null;
 	userId: string;
 	query: string;
@@ -1100,6 +1107,7 @@ export async function readHook(input: {
 			scores,
 			alreadyShown: input.alreadyShown,
 			today: input.today,
+			...(input.rerank ? { policy: MEMORY_RERANK_POLICY } : {}),
 		};
 		spans.rankMs = Date.now() - ranking;
 		const pool = input.rerank ? memoryRerankPool(match) : [];
@@ -1120,7 +1128,8 @@ export async function readHook(input: {
 			...match,
 			query,
 			limit: input.limit,
-			...(rerank ? { rerank } : { policy: MEMORY_FALLBACK_POLICY }),
+			// A failed reranker leaves the hybrid alone, at its own floor.
+			...(rerank ? { rerank } : { policy: MEMORY_MATCH_POLICY }),
 		});
 	})();
 	let timer: ReturnType<typeof setTimeout> | undefined;

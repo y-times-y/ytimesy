@@ -1980,8 +1980,9 @@ async function recallCheck() {
 async function hookLatency() {
 	const { CLOUDFLARE_ACCOUNT_ID } = await import("./development-config");
 	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
-	const { memoryEmbedder, memoryReranker, resetWarmLineEmbeddings } =
-		await import("../src/server/adapters/memory-embeddings");
+	const { memoryEmbedder, resetWarmLineEmbeddings } = await import(
+		"../src/server/adapters/memory-embeddings"
+	);
 	const { readHook, recallableLines } = await import(
 		"../src/server/services/turn-memory"
 	);
@@ -2013,7 +2014,6 @@ async function hookLatency() {
 		const result = await readHook({
 			snapshot,
 			embed,
-			rerank: memoryReranker(),
 			userId: "latency",
 			query: `${prompt}${PROMPT_SUFFIX}`,
 			alreadyShown: () => false,

@@ -16,8 +16,8 @@ import {
 } from "./memory-ranking";
 import {
 	cosineSimilarity,
-	MEMORY_FALLBACK_POLICY,
 	MEMORY_MATCH_POLICY,
+	MEMORY_RERANK_POLICY,
 	type MemoryLine,
 	memoryLines,
 	memoryRerankPool,
@@ -42,6 +42,8 @@ import {
  */
 
 const WEB = PRECISION_PROJECT;
+/** The 2026-11-01 scoped selection this proxy measured (floor 0.37). */
+const SCOPED_POLICY = MEMORY_RERANK_POLICY;
 /**
  * The synthetic proxy keeps its 2026-11-01 memory and probes: the lines and
  * probes added for the reranker are checked with real scores below.
@@ -119,8 +121,8 @@ function run(policy: "before" | "after" | "no-gap") {
 							rerankMinScore: 0,
 						}
 					: policy === "no-gap"
-						? { ...MEMORY_MATCH_POLICY, gap: Number.POSITIVE_INFINITY }
-						: MEMORY_MATCH_POLICY,
+						? { ...SCOPED_POLICY, gap: Number.POSITIVE_INFINITY }
+						: SCOPED_POLICY,
 		}).map((entry) => entry.text);
 		if (process.env.PRECISION_DEBUG)
 			console.log(
@@ -164,7 +166,7 @@ describe("read hook precision on the offline fixture", () => {
  * The same fixture replayed with real scores (Qwen3 hybrid and the
  * bge-reranker-base reranker), recorded by scripts/memory-rerank-calibrate.ts
  * --write on 2026-11-02: the calibration of MEMORY_RERANK_MIN_SCORE and
- * MEMORY_RERANK_FALLBACK_MIN_SCORE, checked offline.
+ * MEMORY_MATCH_MIN_SCORE, checked offline.
  */
 describe("read hook precision with recorded real scores", () => {
 	const scores = recorded as Record<
@@ -178,10 +180,10 @@ describe("read hook precision with recorded real scores", () => {
 	const withoutStyle = inScope.filter(
 		(entry) => entry.path !== "personal/style.md",
 	);
-	/** What the read hook selects: "rerank" scores the pool, "fallback" is the hybrid with the stricter floor. */
+	/** What the read hook selects: "default" (the hybrid at its floor), "rerank" (MEMORY_RERANK_ON), "before" (floor 0.37). */
 	function recall(
 		query: string,
-		mode: "rerank" | "fallback" | "before",
+		mode: "default" | "rerank" | "before",
 		lines = inScope,
 	) {
 		const recordedFor = scores[query];
@@ -200,12 +202,13 @@ describe("read hook precision with recorded real scores", () => {
 			query,
 		};
 		if (mode === "before")
+			return selectMemoryMatches({ ...match, policy: MEMORY_RERANK_POLICY });
+		if (mode === "default")
 			return selectMemoryMatches({ ...match, policy: MEMORY_MATCH_POLICY });
-		if (mode === "fallback")
-			return selectMemoryMatches({ ...match, policy: MEMORY_FALLBACK_POLICY });
-		const pool = memoryRerankPool(match);
+		const pool = memoryRerankPool({ ...match, policy: MEMORY_RERANK_POLICY });
 		return selectMemoryMatches({
 			...match,
+			policy: MEMORY_RERANK_POLICY,
 			rerank: new Map(pool.map((entry) => [entry, score(entry, "rerank")])),
 		});
 	}
@@ -221,7 +224,7 @@ describe("read hook precision with recorded real scores", () => {
 		).toContain(PRECISION_FILES["personal/startup-lessons.md"].slice(2));
 	});
 
-	it.each(["rerank", "fallback"] as const)(
+	it.each(["default", "rerank"] as const)(
 		"keeps every right line (%s)",
 		(mode) => {
 			for (const probe of PRECISION_PROBES)
@@ -231,7 +234,7 @@ describe("read hook precision with recorded real scores", () => {
 		},
 	);
 
-	it.each(["rerank", "fallback"] as const)(
+	it.each(["default", "rerank"] as const)(
 		"recalls nothing for messages nothing is relevant to (%s)",
 		(mode) => {
 			for (const query of PRECISION_NEGATIVES)
@@ -252,13 +255,14 @@ describe("read hook precision with recorded real scores", () => {
 	});
 
 	it("drops most wrong lines on the requests", () => {
-		const wrong = (mode: "rerank" | "before") =>
+		const wrong = (mode: "default" | "rerank" | "before") =>
 			PRECISION_PROBES.flatMap((probe) =>
 				texts(recall(probe.query, mode)).filter(
 					(text) => !probe.right.includes(text),
 				),
 			).length;
+		expect(wrong("default")).toBeLessThanOrEqual(3);
 		expect(wrong("rerank")).toBeLessThanOrEqual(2);
-		expect(wrong("before")).toBeGreaterThan(wrong("rerank"));
+		expect(wrong("before")).toBeGreaterThan(wrong("default"));
 	});
 });
