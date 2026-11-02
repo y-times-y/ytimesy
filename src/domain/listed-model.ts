@@ -28,7 +28,7 @@ export type ListedModel = {
 	readonly speeds?: readonly ListedSpeed[];
 	readonly fastModeId?: string;
 	readonly reasoning?: ListedReasoning;
-	/** A larger context window the route offers; absent when it has none. */
+	/** A second context window the route offers; absent when it has none. */
 	readonly contextWindow?: ListedContextWindow;
 };
 

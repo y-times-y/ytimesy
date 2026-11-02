@@ -97,8 +97,8 @@ export function HarnessPicker({
 	onReasoningIdChange,
 	speed = "",
 	onSpeedChange,
-	largeContext = false,
-	onLargeContextChange,
+	alternateContext = false,
+	onAlternateContextChange,
 }: {
 	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
@@ -114,8 +114,8 @@ export function HarnessPicker({
 	onReasoningIdChange?: (id: string) => void;
 	speed?: ComposerSpeed;
 	onSpeedChange?: (speed: ComposerSpeed) => void;
-	largeContext?: boolean;
-	onLargeContextChange?: (large: boolean) => void;
+	alternateContext?: boolean;
+	onAlternateContextChange?: (alternate: boolean) => void;
 }) {
 	const options = offeredAgentProviders();
 	const selected =
@@ -192,7 +192,7 @@ export function HarnessPicker({
 				aria-label="Model"
 				onPointerEnter={prefetchPlanUsage}
 				onFocus={prefetchPlanUsage}
-				title={`${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}${largeContext && model?.contextWindow ? ` · ${contextWindowLabel(model.contextWindow.large)} context` : ""}`}
+				title={`${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}${alternateContext && model?.contextWindow ? ` · ${contextWindowLabel(model.contextWindow.alternate)} context` : ""}`}
 			>
 				{harnessId === "api" ? (
 					<ModelProviderLogo
@@ -239,8 +239,8 @@ export function HarnessPicker({
 						onReasoningIdChange={onReasoningIdChange}
 						speed={speed}
 						onSpeedChange={onSpeedChange}
-						largeContext={largeContext}
-						onLargeContextChange={onLargeContextChange}
+						alternateContext={alternateContext}
+						onAlternateContextChange={onAlternateContextChange}
 					/>
 				) : null}
 				<div className="model-picker-body">

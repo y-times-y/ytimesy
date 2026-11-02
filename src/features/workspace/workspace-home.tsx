@@ -296,7 +296,7 @@ type PendingSend = {
 	readonly modelId: string;
 	readonly variant?: string;
 	readonly speed?: ComposerSpeed;
-	readonly largeContext?: boolean;
+	readonly alternateContext?: boolean;
 	readonly approvesPlan?: boolean;
 	/** Continue on the fallback route the user approved after an outage. */
 	readonly continueOn?: string;
@@ -2728,8 +2728,8 @@ export function WorkspaceHome({
 						...(pending.speed
 							? { speed: pending.speed, fast: pending.speed === "fast" }
 							: {}),
-						...(pending.largeContext !== undefined
-							? { largeContext: pending.largeContext }
+						...(pending.alternateContext !== undefined
+							? { alternateContext: pending.alternateContext }
 							: {}),
 						...(pending.approvesPlan ? { approvesPlan: true } : {}),
 						...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
@@ -3488,8 +3488,8 @@ export function WorkspaceHome({
 														? { variant: options.reasoningId }
 														: {}),
 													...(options?.speed ? { speed: options.speed } : {}),
-													...(options?.largeContext !== undefined
-														? { largeContext: options.largeContext }
+													...(options?.alternateContext !== undefined
+														? { alternateContext: options.alternateContext }
 														: {}),
 													...(options?.approvesPlan
 														? { approvesPlan: true }

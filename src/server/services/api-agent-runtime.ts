@@ -2,7 +2,6 @@ import type { LanguageModel, ModelMessage } from "ai";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
-import { chosenContextWindow } from "#/domain/context-window-option";
 import {
 	apiContextWindowOption,
 	type ModelProvider,
@@ -54,7 +53,7 @@ type ApiModelInput = Pick<
 	| "connectionRevision"
 	| "modelId"
 	| "speed"
-	| "largeContext"
+	| "alternateContext"
 	| "cacheScopeId"
 	| "reasoning"
 	| "maxOutputTokens"
@@ -121,8 +120,7 @@ async function prepareApiModel<T>(
 					apiKey: access.apiKey,
 					modelId: input.modelId,
 					speed: input.speed,
-					// A product turn always states its window choice.
-					largeContext: input.largeContext === true,
+					alternateContext: input.alternateContext === true,
 					...(connection.subscription
 						? { subscription: connection.subscription }
 						: {}),
@@ -151,25 +149,24 @@ async function prepareApiModel<T>(
 }
 
 /**
- * The window an API turn budgets against: a route with a larger option
- * runs at its standard window unless the larger one was chosen, and never
- * above what the provider reports.
+ * The window an API turn budgets against: the reported window, exactly as
+ * before the option existed, unless the route's cheaper tier was chosen;
+ * then the tier, never above what the provider reports.
  */
 export function apiTurnContextWindow(
 	input: {
 		provider: ModelProvider;
 		baseUrl: string;
 		modelId: string;
-		largeContext?: boolean;
+		alternateContext?: boolean;
 		subscription?: unknown;
 	},
 	reported: number | undefined,
 ): number | undefined {
-	if (input.largeContext === undefined) return reported;
+	if (!input.alternateContext) return reported;
 	const option = apiContextWindowOption(input, input.modelId);
 	if (!option) return reported;
-	const chosen = chosenContextWindow(option, input.largeContext) as number;
-	return reported ? Math.min(chosen, reported) : chosen;
+	return reported ? Math.min(option.alternate, reported) : option.alternate;
 }
 
 /**
@@ -188,10 +185,9 @@ export async function apiModelRuntime(
 		speed?: ApiModelSpeedId;
 		/**
 		 * On a route with a long-context price tier (apiContextWindowOption),
-		 * false budgets within the standard tier and true uses the full
-		 * window. Absent (an evaluation's direct call) keeps the full window.
+		 * true budgets within that tier; otherwise the full window, as always.
 		 */
-		largeContext?: boolean;
+		alternateContext?: boolean;
 		/** Set on a plan sign-in (the Grok plan), which has no such tier. */
 		subscription?: unknown;
 		userId: string;

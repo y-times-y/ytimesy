@@ -182,8 +182,8 @@ export async function sendApiWorkspaceTask(
 		variant?: string;
 		/** Absent on internal follow-ups, which keep the previous turn's settings. */
 		speed?: "standard" | ApiModelSpeedId;
-		/** The route's larger context window; absent on internal follow-ups. */
-		largeContext?: boolean;
+		/** The route's alternate context window; absent on internal follow-ups. */
+		alternateContext?: boolean;
 		runtimeText?: string;
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
@@ -256,7 +256,7 @@ export async function sendApiWorkspaceTask(
 	const inheritsSettings =
 		input.speed === undefined &&
 		input.variant === undefined &&
-		input.largeContext === undefined;
+		input.alternateContext === undefined;
 	// The chat, its connection, the settings it inherits and the catalog the
 	// response shows are independent reads; each is checked in order below.
 	const catalog = apiModelCatalog(scope.userId);
@@ -294,14 +294,14 @@ export async function sendApiWorkspaceTask(
 				...(input.speed && input.speed !== "standard"
 					? { speed: input.speed }
 					: {}),
-				...(input.largeContext ? { largeContext: true as const } : {}),
+				...(input.alternateContext ? { alternateContext: true as const } : {}),
 			};
 	if (
-		settings.largeContext &&
+		settings.alternateContext &&
 		!apiContextWindowOption(connection, selected.modelId)
 	)
 		throw new Error(
-			"A larger context window is not available for this model on this connection.",
+			"That context window is not available for this model on this connection.",
 		);
 	if (
 		settings.speed &&

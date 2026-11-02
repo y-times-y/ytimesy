@@ -312,8 +312,8 @@ it("offers the plan's larger window where max_context_window exceeds the standar
 	expect(models.map((model) => model.contextWindow)).toEqual([
 		{
 			standard: 272_000,
-			large: 872_000,
-			costNote: "Longer chats use your plan's limits faster",
+			alternate: 872_000,
+			note: "Longer chats use your plan's limits faster",
 		},
 		undefined,
 		undefined,

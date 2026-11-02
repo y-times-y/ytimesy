@@ -27,10 +27,10 @@ it("records the larger window only when chosen, so standard revisions are unchan
 	);
 	expect(
 		subscriptionTurnSettings(subscriptionTurnRevision("high", false, true)),
-	).toEqual({ reasoning: "high", fast: false, largeContext: true });
+	).toEqual({ reasoning: "high", fast: false, alternateContext: true });
 	expect(() =>
 		subscriptionTurnSettings(
-			'codex-subscription:v1:{"fast":false,"largeContext":"yes"}',
+			'codex-subscription:v1:{"fast":false,"alternateContext":"yes"}',
 		),
 	).toThrow();
 });

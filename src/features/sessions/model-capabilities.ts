@@ -45,7 +45,7 @@ export interface SessionModel {
 	} | null;
 	/** Faster speeds than standard; empty when the model has none. */
 	speeds: readonly ListedSpeed[];
-	/** A larger context window the route offers; null when it has none. */
+	/** A second context window the route offers; null when it has none. */
 	contextWindow: ListedContextWindow | null;
 }
 

@@ -105,10 +105,10 @@ export type ModelAgentInput = {
 	/** A listed API model's faster maker endpoint (OpenRouter keys only). */
 	speed?: ApiModelSpeedId;
 	/**
-	 * The route's larger context window (context-window-option.ts): the
+	 * The route's alternate context window (context-window-option.ts): the
 	 * runtime budgets and compacts against it instead of the standard one.
 	 */
-	largeContext?: boolean;
+	alternateContext?: boolean;
 	messages: ModelMessage[];
 	instructions: string;
 	tools: ToolSet;
