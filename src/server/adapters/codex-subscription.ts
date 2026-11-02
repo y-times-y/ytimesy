@@ -192,9 +192,22 @@ const catalogSchema = z.object({
 			priority: z.number().optional(),
 			context_window: z.number().positive().optional(),
 			auto_compact_token_limit: z.number().positive().nullish(),
+			// Fast mode, as Codex reads it: a "priority" service tier, or the
+			// older "fast" speed tier.
+			service_tiers: z.array(z.object({ id: z.string() })).optional(),
+			additional_speed_tiers: z.array(z.string()).optional(),
 		}),
 	),
 });
+type CatalogRow = z.infer<typeof catalogSchema>["models"][number];
+const FAST_SERVICE_TIER = "priority";
+
+function supportsFast(row: CatalogRow) {
+	return (
+		row.service_tiers?.some((tier) => tier.id === FAST_SERVICE_TIER) === true ||
+		row.additional_speed_tiers?.includes("fast") === true
+	);
+}
 type Catalog = z.infer<typeof catalogSchema>;
 /** Fresh for a minute; past that, served while a refresh runs (plans rarely change). */
 const CATALOG_FRESH_MS = 60_000;
@@ -342,6 +355,7 @@ export async function codexSubscriptionCatalog(
 				),
 				defaultReasoningEffort: row.default_reasoning_level,
 			}),
+			...(supportsFast(row) ? { speeds: [{ id: "fast" as const }] } : {}),
 		}));
 }
 
@@ -367,9 +381,9 @@ export async function codexSubscriptionModel(
 		throw new Error(
 			"The selected model is no longer available on your current Codex plan. Choose another model.",
 		);
-	if (fast)
+	if (fast && !supportsFast(selected))
 		throw new Error(
-			"Fast mode is not available on this subscription transport.",
+			"Fast mode is not available for this model on your ChatGPT plan.",
 		);
 	const effort = reasoning ?? selected.default_reasoning_level ?? "low";
 	if (
@@ -454,6 +468,7 @@ export async function codexSubscriptionModel(
 				promptCacheKey: cacheKey,
 				reasoningEffort: effort,
 				reasoningSummary: "auto",
+				...(fast ? { serviceTier: FAST_SERVICE_TIER } : {}),
 				// Independent tool calls may share a response. Authorization and
 				// write/lease fencing remain enforced by each tool's executor.
 				parallelToolCalls: true,

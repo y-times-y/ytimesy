@@ -225,6 +225,7 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 	const models = await codexSubscriptionCatalog("reasoning-owner");
 	expect(models[0].label).toBe("Modern Model");
 	expect(models[0].supportsFastMode).toBeUndefined();
+	expect(models[0].speeds).toBeUndefined();
 	const runtime = await codexSubscriptionModel(
 		"reasoning-owner",
 		"modern",
@@ -250,6 +251,42 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"Connect Codex",
 	);
 });
+it("offers fast mode where the plan's catalog lists the priority tier, and sends it", async () => {
+	vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				models: [
+					{ slug: "tiered", service_tiers: [{ id: "priority" }] },
+					{ slug: "legacy", additional_speed_tiers: ["fast"] },
+					{ slug: "plain" },
+				],
+			}),
+		),
+	);
+	const models = await codexSubscriptionCatalog("fast-owner");
+	expect(models.map((model) => model.speeds)).toEqual([
+		[{ id: "fast" }],
+		[{ id: "fast" }],
+		undefined,
+	]);
+	const fast = await codexSubscriptionModel(
+		"fast-owner",
+		"tiered",
+		undefined,
+		true,
+	);
+	expect(fast.requestSettings("x").providerOptions.openai.serviceTier).toBe(
+		"priority",
+	);
+	const standard = await codexSubscriptionModel("fast-owner", "tiered");
+	expect(
+		standard.requestSettings("x").providerOptions.openai,
+	).not.toHaveProperty("serviceTier");
+	await expect(
+		codexSubscriptionModel("fast-owner", "plain", undefined, true),
+	).rejects.toThrow("Fast mode");
+});
+
 it.each([
 	{ measuredTokens: 70_000, providerLimit: null, compacted: false },
 	{ measuredTokens: 210_000, providerLimit: null, compacted: true },
