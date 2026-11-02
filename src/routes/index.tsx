@@ -9,6 +9,7 @@ import {
 	type OpenChatView,
 	type StreamedChatView,
 } from "../features/sessions/codex-session.fn";
+import { TrainingConsentPrompt } from "../features/workspace/training-consent-prompt";
 import { WorkspaceHome } from "../features/workspace/workspace-home";
 
 /** A chat link: `/?chat=<id>`, or `/?project=<id>&chat=<id>` (GitHub wake-ups). */
@@ -100,6 +101,8 @@ function HomePage() {
 		);
 	return (
 		<IdentityGate initialSignedIn={signedIn} signedOut={<LandingPage />}>
+			{/* Accounts that never set training consent see its card once. */}
+			<TrainingConsentPrompt />
 			{openChatView instanceof Promise ? (
 				// A slow read of the chat: the page streams with the chat open
 				// but its transcript still empty (title, composer, sidebar in

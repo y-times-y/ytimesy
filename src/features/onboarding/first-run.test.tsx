@@ -6,6 +6,15 @@ vi.mock("@tanstack/react-start", () => ({
 	useServerFn: (fn: unknown) => fn,
 	createServerFn: () => ({}),
 }));
+vi.mock("../auth/legal-acceptance.fn", () => ({
+	getLegalAcceptanceFn: vi.fn(),
+	acceptLegalTermsFn: vi.fn(),
+}));
+vi.mock("../workspace/training-consent.fn", () => ({
+	saveTrainingConsentFn: vi.fn(),
+	readTrainingPromptFn: vi.fn(),
+	dismissTrainingPromptFn: vi.fn(),
+}));
 vi.mock("../sessions/chatgpt-sign-in", () => ({
 	ChatgptSignIn: () => <button type="button">Sign in with ChatGPT</button>,
 }));
@@ -55,12 +64,14 @@ it("opens at GitHub, and asks for no repository once GitHub is connected", () =>
 	expect(connected).not.toContain("add-project");
 });
 
-it("shows three stages: GitHub, Model, Sessions", () => {
+it("shows four stages: GitHub, Model, Sessions, Privacy", () => {
 	const html = render({ githubConnected: false, modelReady: false });
 	const stages = [
-		...html.matchAll(/<li[^>]*>(GitHub|Model|Sessions|Repositories)<\/li>/g),
+		...html.matchAll(
+			/<li[^>]*>(GitHub|Model|Sessions|Privacy|Repositories)<\/li>/g,
+		),
 	].map((match) => match[1]);
-	expect(stages).toEqual(["GitHub", "Model", "Sessions"]);
+	expect(stages).toEqual(["GitHub", "Model", "Sessions", "Privacy"]);
 });
 
 import { ModelStep } from "./first-run";

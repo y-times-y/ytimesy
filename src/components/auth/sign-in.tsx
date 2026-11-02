@@ -362,6 +362,8 @@ export function SignIn({
 							)}
 						</>
 					)}
+
+					<TermsNotice />
 				</div>
 
 				<div className="flex flex-col gap-3 items-center w-full mt-4">
@@ -385,8 +387,6 @@ export function SignIn({
 							</Link>
 						</FieldDescription>
 					)}
-
-					<TermsNotice />
 				</div>
 			</CardContent>
 		</Card>
