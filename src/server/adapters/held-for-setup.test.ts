@@ -91,6 +91,32 @@ it("keeps a held message in its chat, listed in the sidebar as waiting for setup
 	]);
 });
 
+it("lists the held send's model on its chat, the one its turn will use", async () => {
+	const held = await chat("New session");
+	await db.query(
+		"update agent_session set listed_model_id='claude-code/claude-haiku-5-5' where id=$1",
+		[held],
+	);
+	await holdUserMessageForSetup("alice", held, {
+		...send,
+		modelId: "claude-code/claude-opus-5-5",
+	});
+	const { rows } = await db.query<{ listed_model_id: string }>(
+		"select listed_model_id from agent_session where id=$1",
+		[held],
+	);
+	expect(rows[0]?.listed_model_id).toBe("claude-code/claude-opus-5-5");
+	await db.query(
+		"update workspace set status='ready',template_snapshot_id='snap' where id=$1",
+		[workspace],
+	);
+	await releaseHeldUserMessages(held);
+	expect(await takeNextQueuedUserMessage("alice", held)).toMatchObject({
+		harnessId: "api",
+		modelId: "claude-code/claude-opus-5-5",
+	});
+});
+
 it("no turn end, Send or step takes a held message; the ready environment releases it once", async () => {
 	const held = await chat("Add a login page");
 	await holdUserMessageForSetup("alice", held, send);

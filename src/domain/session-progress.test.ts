@@ -5,6 +5,7 @@ import {
 } from "./child-task-activity";
 import { SessionItemId } from "./ids";
 import {
+	HELD_DELIVERY_POLL_MS,
 	LIVE_STREAM_RECONCILE_MS,
 	progressIsFresh,
 	progressMatchesTurn,
@@ -111,6 +112,34 @@ describe("progressRevivesStoppedTurn", () => {
 });
 
 describe("sessionReadInterval", () => {
+	it("reads an idle chat while its held message is being delivered, and only then", () => {
+		expect(
+			sessionReadInterval({
+				polling: false,
+				streamOpen: false,
+				pollMs: 700,
+				awaitingHeldDelivery: true,
+			}),
+		).toBe(HELD_DELIVERY_POLL_MS);
+		expect(
+			sessionReadInterval({
+				polling: false,
+				streamOpen: false,
+				pollMs: 700,
+				awaitingHeldDelivery: false,
+			}),
+		).toBe(false);
+		// Its turn runs: the running chat's own reads take over.
+		expect(
+			sessionReadInterval({
+				polling: true,
+				streamOpen: true,
+				pollMs: 700,
+				awaitingHeldDelivery: true,
+			}),
+		).toBe(LIVE_STREAM_RECONCILE_MS);
+	});
+
 	it("polls a running chat quickly only while no progress stream is open", () => {
 		expect(
 			sessionReadInterval({ polling: true, streamOpen: false, pollMs: 700 }),

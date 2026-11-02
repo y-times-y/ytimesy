@@ -96,16 +96,32 @@ import type { CodexUsage } from "./codex-usage";
 export const LIVE_STREAM_RECONCILE_MS = 10_000;
 
 /**
+ * How often the open chat is read while the message it held for setup is on
+ * its way to a turn: the server sends it once the environment is ready, and
+ * an idle chat has no stream or poll that would show it.
+ */
+export const HELD_DELIVERY_POLL_MS = 1_500;
+/**
+ * How long the open chat looks for that turn. The minute's sweep sends a
+ * held message whose release was lost, so this covers a couple of sweeps.
+ */
+export const HELD_DELIVERY_WATCH_MS = 3 * 60_000;
+
+/**
  * How often the open chat's view is re-read: every `pollMs` while its turn
  * runs without a live progress stream (the stream is how progress arrives
- * otherwise), rarely while one is open, never while idle.
+ * otherwise), rarely while one is open, every HELD_DELIVERY_POLL_MS while a
+ * held message is being delivered, never while idle.
  */
 export function sessionReadInterval(input: {
 	readonly polling: boolean;
 	readonly streamOpen: boolean;
 	readonly pollMs: number;
+	/** The environment is ready and the chat's held message has not shown as sent yet. */
+	readonly awaitingHeldDelivery?: boolean;
 }): number | false {
-	if (!input.polling) return false;
+	if (!input.polling)
+		return input.awaitingHeldDelivery ? HELD_DELIVERY_POLL_MS : false;
 	return input.streamOpen ? LIVE_STREAM_RECONCILE_MS : input.pollMs;
 }
 

@@ -521,6 +521,59 @@ describe("messages held while the project's environment is set up", () => {
 		expect(mocks.send).toHaveBeenCalledOnce();
 	});
 
+	it("holds and delivers on the model and route chosen at send, never the chat's listed one", async () => {
+		const listedHaiku = {
+			...heldChat,
+			listedModelId: "claude-code/claude-haiku-5-5",
+		};
+		// Still being set up at the send and on its second look; ready after.
+		mocks.workspace
+			.mockResolvedValueOnce(failedWorkspace)
+			.mockResolvedValueOnce(failedWorkspace)
+			.mockResolvedValue(readyWorkspace);
+		mocks.session.mockResolvedValue(listedHaiku);
+		mocks.queued.mockResolvedValue([]);
+		mocks.read.mockReturnValue(
+			Effect.succeed({ ...view("idle"), agentSessionId: "held-chat" }),
+		);
+		await Effect.runPromise(
+			sendComposerMessage(
+				machines,
+				{ ...scope, sessionId: "held-chat" },
+				{
+					text: "Reply with just the word HELD.",
+					modelId: "claude-code/claude-opus-5-5",
+					variant: "high",
+					idempotencyKey: messageId,
+				},
+			),
+		);
+		const [, , held] = mocks.hold.mock.calls[0] as [
+			string,
+			string,
+			Record<string, unknown>,
+		];
+		expect(held).toMatchObject({
+			harnessId: "api",
+			modelId: "claude-code/claude-opus-5-5",
+			variant: "high",
+		});
+
+		mocks.releasable.mockResolvedValue([
+			{ userId: "owner", sessionId: "held-chat", workspaceId: "workspace" },
+		]);
+		mocks.take.mockResolvedValueOnce({ ...held, released: true });
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		expect(await deliverHeldSends(machines, "workspace")).toBe(1);
+		const [, sent, task] = mocks.send.mock.calls[0];
+		expect(sent).toMatchObject({ harnessId: "api", sessionId: "held-chat" });
+		expect(task).toMatchObject({
+			modelId: "claude-code/claude-opus-5-5",
+			variant: "high",
+			idempotencyKey: messageId,
+		});
+	});
+
 	it("keeps a held message in the chat when its turn cannot start", async () => {
 		mocks.releasable.mockResolvedValue([
 			{ userId: "owner", sessionId: "held-chat", workspaceId: "workspace" },

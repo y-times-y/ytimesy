@@ -77,9 +77,11 @@ import {
 	fileChangesFromSessionItems,
 	heldForSetupMessage,
 	isTurnRunning,
+	itemsKeepingMessageInFlight,
 	lastAgentMessageText,
 	lastUserMessageText,
 	markedQueuedSend,
+	messageDelivered,
 	type SessionTurnStatus,
 	sendWasQueued,
 	sessionItemsQueuedWithUser,
@@ -90,6 +92,7 @@ import {
 	sessionWithoutFailedSend,
 } from "#/domain/session-item";
 import {
+	HELD_DELIVERY_WATCH_MS,
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
@@ -723,6 +726,18 @@ export function WorkspaceHome({
 	const [heldForSetup, setHeldForSetup] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
+	/**
+	 * The open chat's held message once the environment is ready: the server
+	 * sends it, and the chat is read until its turn shows (an idle chat has
+	 * no stream or poll that would bring it).
+	 */
+	const [awaitedHeld, setAwaitedHeld] = useState<{
+		readonly chatId: string;
+		readonly messageId: string;
+		readonly since: number;
+	} | null>(null);
+	const awaitedHeldRef = useRef(awaitedHeld);
+	awaitedHeldRef.current = awaitedHeld;
 	const [heldMessage, setHeldMessage] = useState<{
 		readonly projectId: string;
 		readonly messageId: string;
@@ -845,6 +860,22 @@ export function WorkspaceHome({
 					};
 				// The server sends the chat's last turns; older ones read stay above.
 				next = withEarlierPages(current, next);
+				const awaited = awaitedHeldRef.current;
+				if (
+					awaited &&
+					awaited.chatId === next.agentSessionId &&
+					current.agentSessionId === next.agentSessionId
+				)
+					next = {
+						...next,
+						items: [
+							...itemsKeepingMessageInFlight(
+								current.items,
+								next.items,
+								awaited.messageId,
+							),
+						],
+					};
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,
@@ -1385,6 +1416,10 @@ export function WorkspaceHome({
 	const pollSession =
 		harnessLoginIsPending(session.connection) ||
 		isTurnRunning(session.turnStatus);
+	const awaitingHeldDelivery =
+		awaitedHeld !== null &&
+		awaitedHeld.chatId === activeSessionId &&
+		!messageDelivered(session.items, awaitedHeld.messageId);
 	const sessionRead = useQuery({
 		...sessionReconciliationQuery(
 			{
@@ -1410,6 +1445,7 @@ export function WorkspaceHome({
 				streamOpen:
 					!!activeSessionId && progressStreamOpen.current === activeSessionId,
 				pollMs: RUNNING_TURN_POLL_MS,
+				awaitingHeldDelivery,
 			}),
 		refetchIntervalInBackground: true,
 	});
@@ -1956,21 +1992,51 @@ export function WorkspaceHome({
 				: heldForSetup,
 		[heldForSetup, storedHeldProjectId],
 	);
-	// The server sends a held message once the environment is ready; the open
-	// chat reads itself again then (its live updates usually bring it first).
-	const releasedHeldRef = useRef<string | null>(null);
+	// The server sends a held message once the environment is ready, a few
+	// seconds after this tab may see it ready: the open chat is read until the
+	// message's turn shows (sessionRead polls while awaitingHeldDelivery).
+	const storedHeldId = storedHeld?.id;
 	useEffect(() => {
-		if (!storedHeld || !heldSendReleases(projectSetupStatus)) return;
-		if (releasedHeldRef.current === storedHeld.id) return;
-		releasedHeldRef.current = storedHeld.id;
-		const timer = window.setTimeout(() => {
+		if (
+			!storedHeldId ||
+			!activeSessionId ||
+			!heldSendReleases(projectSetupStatus)
+		)
+			return;
+		setAwaitedHeld((current) =>
+			current?.messageId === storedHeldId && current.chatId === activeSessionId
+				? current
+				: {
+						chatId: activeSessionId,
+						messageId: storedHeldId,
+						since: Date.now(),
+					},
+		);
+	}, [activeSessionId, projectSetupStatus, storedHeldId]);
+	// Its turn showed (the sidebar's clock goes too), the chat changed, or it
+	// never came: the last read then shows the chat as the server has it.
+	const heldArrived = awaitedHeld
+		? messageDelivered(session.items, awaitedHeld.messageId)
+		: false;
+	useEffect(() => {
+		if (!awaitedHeld) return;
+		const finish = () => {
+			setAwaitedHeld(null);
 			void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-			void queryClient.invalidateQueries({
-				queryKey: ["session-reconciliation"],
-			});
-		}, 1500);
+		};
+		if (heldArrived || awaitedHeld.chatId !== activeSessionId) {
+			finish();
+			return;
+		}
+		const timer = window.setTimeout(
+			() => {
+				finish();
+				refetchOpenSession.current();
+			},
+			Math.max(0, awaitedHeld.since + HELD_DELIVERY_WATCH_MS - Date.now()),
+		);
 		return () => window.clearTimeout(timer);
-	}, [projectSetupStatus, queryClient, storedHeld]);
+	}, [activeSessionId, awaitedHeld, heldArrived, queryClient]);
 	/** "Set up with the agent": the held message becomes a setup chat's request. */
 	function setUpHeldWithAgent() {
 		if (storedHeld) {

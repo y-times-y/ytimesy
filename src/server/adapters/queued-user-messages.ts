@@ -236,6 +236,8 @@ export async function restoreQueuedUserMessage(
  * chat's own waiting row, so the chat lists with it, every device shows it,
  * and it goes once the environment is ready even with no tab open. A replay
  * with the same message id adds nothing. Touching `items` republishes the chat.
+ * The chat lists the held send's model, the one its turn will use, so the
+ * composer shows that model meanwhile (not the catalog's first one).
  */
 export async function holdUserMessageForSetup(
 	userId: string,
@@ -249,11 +251,18 @@ export async function holdUserMessageForSetup(
 		released: false,
 	};
 	const result = await database().query(
-		`with s as (update agent_session set items=items,updated_at=now() where id=$1 and user_id=$2 returning id),
+		`with s as (update agent_session set items=items,updated_at=now(),listed_model_id=coalesce(nullif($6,''),listed_model_id) where id=$1 and user_id=$2 returning id),
 		 held as (insert into agent_peer_inbox(id,recipient_id,message,queued_send)
 		  select $3,s.id,$4,$5::jsonb from s on conflict(id) do nothing returning id)
 		 select (select count(*) from s)::int as found`,
-		[sessionId, userId, inboxId(send.item.id), message, jsonbText(held)],
+		[
+			sessionId,
+			userId,
+			inboxId(send.item.id),
+			message,
+			jsonbText(held),
+			send.modelId,
+		],
 	);
 	if (!result.rows[0]?.found) return false;
 	forgetPeerInboxObservation(sessionId);

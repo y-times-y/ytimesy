@@ -623,3 +623,37 @@ it("finds the chat's message held for setup among its waiting ones", async () =>
 	expect(heldForSetupMessage(items)).toMatchObject({ id: "b", queued: true });
 	expect(heldForSetupMessage(items.slice(0, 1))).toBeNull();
 });
+
+it("keeps a released held message shown until the transcript holds it, never twice", async () => {
+	const { itemsKeepingMessageInFlight, messageDelivered } = await import(
+		"./session-item"
+	);
+	const { SessionItemId: id } = await import("./ids");
+	const held = {
+		kind: "userMessage" as const,
+		id: id("m"),
+		text: "Reply with just the word HELD.",
+		queued: true as const,
+		heldForSetup: true as const,
+	};
+	// Taken from the chat's waiting row, not yet in its turn: kept as it was.
+	expect(itemsKeepingMessageInFlight([held], [], "m")).toEqual([held]);
+	expect(messageDelivered([held], "m")).toBe(false);
+	// Released, still waiting: the read's copy shows.
+	const released = {
+		...held,
+		heldForSetup: undefined,
+		released: true as const,
+	};
+	expect(itemsKeepingMessageInFlight([held], [released], "m")).toEqual([
+		released,
+	]);
+	// In the turn: once, as sent, with the answer after it.
+	const sent = { kind: "userMessage" as const, id: id("m"), text: held.text };
+	const answer = { kind: "agentMessage" as const, id: id("a"), text: "HELD" };
+	const delivered = itemsKeepingMessageInFlight([held], [sent, answer], "m");
+	expect(delivered).toEqual([sent, answer]);
+	expect(messageDelivered(delivered, "m")).toBe(true);
+	// A message taken back here stays gone.
+	expect(itemsKeepingMessageInFlight([], [], "m")).toEqual([]);
+});
