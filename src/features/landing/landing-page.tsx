@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 import {
-	ArrowRight,
 	ArrowUpRight,
 	BookmarkPlus,
 	Camera,
@@ -212,6 +211,9 @@ function Benchmark() {
 					</figcaption>
 					<ScoreCostChart />
 				</figure>
+				<p className="bench-writeup">
+					<a href={HARNESS_POST_PATH}>Introducing ytimesy harness 1.0</a>
+				</p>
 				<div className="bench-foot">
 					<span>{BENCHMARK.setup}</span>
 					<span className="bench-links">
@@ -221,10 +223,6 @@ function Benchmark() {
 								<ArrowUpRight size={13} />
 							</a>
 						) : null}
-						<a href={HARNESS_POST_PATH} className="bench-read">
-							Read how we built it
-							<ArrowRight size={13} />
-						</a>
 					</span>
 				</div>
 			</div>

@@ -56,7 +56,8 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	expect(flat).not.toContain("Codex with GPT-6 Astra max scores");
 	expect(text).not.toContain("Preliminary");
 	expect(html).toContain('href="/blog/harness-1-0"');
-	expect(text).toContain("Read how we built it");
+	expect(html).toContain('class="bench-writeup"');
+	expect(text).toContain("Introducing ytimesy harness 1.0");
 	for (const job of [
 		"6aacc762-8e07-4be2-ab4e-17495141235d",
 		"0f01715e-2f98-40e3-836f-1ac4fdce39a4",
