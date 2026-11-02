@@ -358,6 +358,9 @@ async function deliverHeldReports(
 	}
 }
 
+const MCP_UNAVAILABLE_PREFIX =
+	"MCP servers unavailable this turn (connection or credentials failed):";
+
 export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
@@ -1557,7 +1560,25 @@ async function runApiTurnAttempt(
 			: null;
 		const tools = deferral?.tools ?? orderedTools;
 		if (mcp.unavailable.length) {
-			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
+			const notice = `${MCP_UNAVAILABLE_PREFIX} ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
+			if (!messages.some((message) => message.content === notice))
+				messages = [...messages, { role: "user", content: notice }];
+		}
+		// An earlier turn's "unavailable" notice stays in the history; once the
+		// server connects again (the user signed in), say so, or the model
+		// trusts the old notice and never looks for the tools.
+		const reconnected = [
+			...new Set(mcp.catalog.map((entry) => entry.server)),
+		].filter((server) =>
+			messages.some(
+				(message) =>
+					typeof message.content === "string" &&
+					message.content.startsWith(MCP_UNAVAILABLE_PREFIX) &&
+					message.content.includes(server),
+			),
+		);
+		if (reconnected.length) {
+			const notice = `MCP servers connected this turn: ${reconnected.join(", ")}. The earlier notice that they were unavailable no longer applies; their tools are offered now.`;
 			if (!messages.some((message) => message.content === notice))
 				messages = [...messages, { role: "user", content: notice }];
 		}
