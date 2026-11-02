@@ -586,6 +586,35 @@ export function heldForSetupMessage(
 	return null;
 }
 
+/** The message reached its turn: the transcript holds it as sent, no longer waiting. */
+export function messageDelivered(
+	items: readonly SessionItem[],
+	messageId: string,
+): boolean {
+	return items.some(
+		(item) =>
+			item.kind === "userMessage" && item.id === messageId && !item.queued,
+	);
+}
+
+/**
+ * A read taken while a released held message moves from the chat's waiting
+ * row into its turn's transcript has it nowhere. The message stays shown as
+ * it was until a read holds it again, so it neither blinks out nor shows twice.
+ */
+export function itemsKeepingMessageInFlight(
+	current: readonly SessionItem[],
+	next: readonly SessionItem[],
+	messageId: string,
+): readonly SessionItem[] {
+	if (next.some((item) => item.id === messageId)) return next;
+	const shown = current.find(
+		(item) =>
+			item.kind === "userMessage" && item.id === messageId && item.queued,
+	);
+	return shown ? [...next, shown] : next;
+}
+
 /** The browser's copy of a send made during a run, shown waiting until delivered. */
 export function markedQueuedSend(
 	items: readonly SessionItem[],
