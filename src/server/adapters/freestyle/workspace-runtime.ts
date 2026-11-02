@@ -78,6 +78,18 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async provision(slug: string, options?: WorkspaceProvisionOptions) {
+		const vm = await this.provisionAdmitted(slug, options);
+		// Starting or creating it was an admission: the commands that follow
+		// right away (a build's first ones) may reuse it like any other.
+		if ((this.options.admissionReuseMs ?? 0) > 0)
+			this.admittedAt.set(vm, Date.now());
+		return vm;
+	}
+
+	private async provisionAdmitted(
+		slug: string,
+		options?: WorkspaceProvisionOptions,
+	) {
 		const existing = await this.findBySlug(slug);
 		if (existing) return this.recover(existing);
 		try {

@@ -11,11 +11,15 @@ const POLL_MS = 5_000;
 /** While someone watches the output (a live setup view), it is read this often. */
 const WATCHED_POLL_MS = 2_000;
 /**
- * Most setup commands (a small repository's fetch and checkout) finish in
- * about a second: the first status reads come quickly, then back off to the
- * poll interval. A flat 5 s wait made each of them take 5 s.
+ * Most setup commands (a small repository's fetch and checkout, a restore)
+ * finish in one to four seconds: status reads stay a quarter second apart
+ * for the first second, half a second until four, then back off to the poll
+ * interval. Backing off to 5 s after 1.75 s made a 2 s fetch take 6.75 s.
  */
-const FIRST_POLLS_MS = [250, 500, 1_000] as const;
+const FIRST_POLLS_MS = [
+	250, 250, 250, 250, 500, 500, 500, 500, 500, 500, 1_000, 1_000, 1_000, 1_000,
+	2_000, 2_000,
+] as const;
 
 /** The wait before the status read after `polls` reads found it still running. */
 export function detachedPollDelay(polls: number, watched: boolean) {

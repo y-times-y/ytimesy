@@ -85,6 +85,85 @@ export function signedR2Headers(input: {
 	};
 }
 
+/**
+ * A presigned URL (Signature V4 in the query) for one object: a guest
+ * fetches or stores that object with plain curl and holds no R2 key. It
+ * names one key and one method and expires within `expiresSeconds`.
+ */
+export function presignedR2Url(input: {
+	config: R2Configuration;
+	method: "GET" | "PUT";
+	key: string;
+	expiresSeconds: number;
+	now?: Date;
+}) {
+	const { config } = input;
+	if (
+		!input.key ||
+		input.key.startsWith("/") ||
+		input.key.split("/").some((part) => part === "" || part === "..")
+	)
+		throw new Error("Invalid R2 object key.");
+	return presignedS3Url({
+		method: input.method,
+		url: new URL(
+			`https://${config.accountId}.r2.cloudflarestorage.com/${config.bucket}/${input.key}`,
+		),
+		region: "auto",
+		accessKeyId: config.accessKeyId,
+		secretAccessKey: config.secretAccessKey,
+		expiresSeconds: Math.min(
+			Math.max(1, Math.floor(input.expiresSeconds)),
+			3600,
+		),
+		now: input.now,
+	});
+}
+
+/** Signature V4 query signing (AWS "presigned URL"); exported for its reference vector. */
+export function presignedS3Url(input: {
+	method: string;
+	url: URL;
+	region: string;
+	accessKeyId: string;
+	secretAccessKey: string;
+	expiresSeconds: number;
+	now?: Date;
+}) {
+	const stamp = (input.now ?? new Date())
+		.toISOString()
+		.replace(/[-:]|\.\d{3}/g, "");
+	const day = stamp.slice(0, 8);
+	const scope = `${day}/${input.region}/s3/aws4_request`;
+	const query = [
+		["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
+		["X-Amz-Credential", `${input.accessKeyId}/${scope}`],
+		["X-Amz-Date", stamp],
+		["X-Amz-Expires", String(input.expiresSeconds)],
+		["X-Amz-SignedHeaders", "host"],
+	]
+		.map(([key, value]) => `${encode(key)}=${encode(value)}`)
+		.sort()
+		.join("&");
+	const path = input.url.pathname.split("/").map(encode).join("/");
+	const canonical = [
+		input.method,
+		path,
+		query,
+		`host:${input.url.host}\n`,
+		"host",
+		"UNSIGNED-PAYLOAD",
+	].join("\n");
+	const key = hmac(
+		hmac(hmac(hmac(`AWS4${input.secretAccessKey}`, day), input.region), "s3"),
+		"aws4_request",
+	);
+	const signature = createHmac("sha256", key)
+		.update(["AWS4-HMAC-SHA256", stamp, scope, sha256(canonical)].join("\n"))
+		.digest("hex");
+	return `${input.url.origin}${path}?${query}&X-Amz-Signature=${signature}`;
+}
+
 async function r2Fetch(
 	config: R2Configuration,
 	method: string,
@@ -131,6 +210,14 @@ export async function r2PutObject(
 		headers: { "content-type": contentType },
 	});
 	if (!stored.ok) throw new Error(`R2 upload failed (${stored.status}).`);
+}
+
+/** One object's size in bytes, or null when there is none. */
+export async function r2ObjectSize(config: R2Configuration, key: string) {
+	const head = await r2Fetch(config, "HEAD", key);
+	if (head.status === 404) return null;
+	if (!head.ok) throw new Error(`R2 lookup failed (${head.status}).`);
+	return Number(head.headers.get("content-length") ?? "0");
 }
 
 /** Reads one object; a range header passes through for media seeking. */
