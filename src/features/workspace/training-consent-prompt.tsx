@@ -36,7 +36,7 @@ export function TrainingChoice(props: {
 					Help improve ytimesy
 				</label>
 				<span className="text-muted-foreground">
-					Uses your chats to improve our models.{" "}
+					Uses your prompts, code and results, never AI replies.{" "}
 					<a
 						href="/training"
 						target="_blank"

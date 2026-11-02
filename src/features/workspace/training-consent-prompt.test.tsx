@@ -28,7 +28,7 @@ it("shows the training switch on by default, with the policy link and where to c
 	);
 	expect(html).toMatch(/role="switch"[^>]*aria-checked="true"/);
 	expect(text(html)).toContain("Help improve ytimesy");
-	expect(text(html)).toContain("Uses your chats to improve our models.");
+	expect(text(html)).toContain("Uses your prompts, code and results, never AI replies.");
 	expect(html).toContain('href="/training"');
 	expect(text(html)).toContain(
 		"You can change this anytime in Settings → Privacy.",
