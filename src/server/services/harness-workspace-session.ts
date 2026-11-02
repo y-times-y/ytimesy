@@ -285,7 +285,7 @@ function taskScope(
 
 export function stopHarnessWorkspaceTurn(
 	scope: HarnessSessionScope,
-): Effect.Effect<PublicHarnessSession> {
+): Effect.Effect<void> {
 	return Effect.promise(() =>
 		scope.harnessId === "api"
 			? stopApiWorkspaceTask(scope)

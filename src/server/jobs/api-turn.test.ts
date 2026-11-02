@@ -7,6 +7,7 @@ import type { ApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { loadModelConnection } from "../adapters/model-connections";
 import { FIRST_REQUEST_WORKSPACE_WAIT_MS } from "../services/first-request-gate";
+import { abortLiveTurn } from "../services/live-turn-abort";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -1362,6 +1363,47 @@ it("treats a Stop noticed by the heartbeat as the user's clean stop", async () =
 			"cancelled",
 			expect.not.arrayContaining([expect.objectContaining({ kind: "error" })]),
 		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("stops a turn running here the moment Stop reaches it, before any heartbeat", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValue(true);
+		let started: () => void = () => {};
+		const running = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		let reason: unknown;
+		mocks.stepRuntime.mockImplementation((input: { signal: AbortSignal }) => {
+			started();
+			return hangUntilAborted(input).catch((error: unknown) => {
+				reason = error;
+				throw error;
+			});
+		});
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		});
+		await running;
+		// No timer runs: the heartbeat never gets a chance to notice the stop.
+		expect(abortLiveTurn(childTurn.id)).toBe(true);
+		expect(await outcome).toBe("cancelled");
+		expect(reason).toBeInstanceOf(ApiTurnCancelled);
+		// The stop is known; nothing re-reads it before settling.
+		expect(mocks.cancelRequested).not.toHaveBeenCalled();
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"cancelled",
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "notice", stopped: true }),
+			]),
+		);
+		// The finished turn no longer answers a later Stop.
+		expect(abortLiveTurn(childTurn.id)).toBe(false);
 	} finally {
 		vi.useRealTimers();
 	}

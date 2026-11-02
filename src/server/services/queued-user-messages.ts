@@ -362,8 +362,8 @@ export async function startQueuedUserTurn(
 	sessionId: string,
 ) {
 	const next = await takeNextQueuedUserMessage(userId, sessionId);
-	if (!next) return;
-	await deliverQueuedSend(machines, userId, sessionId, next);
+	if (!next) return false;
+	return deliverQueuedSend(machines, userId, sessionId, next);
 }
 
 /**
@@ -425,13 +425,19 @@ export function stopTurnKeepingQueue(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicCodexSession> {
-	return Effect.flatMap(stopHarnessWorkspaceTurn(scope), (view) =>
+	return Effect.flatMap(stopHarnessWorkspaceTurn(scope), () =>
 		Effect.promise(async () => {
+			// One read after the stop (the browser already shows it stopped).
+			const view = await publicSessionView(scope);
 			// A turn that never started settles at once; a running one starts the
 			// queue itself when its executor finishes stopping it.
-			if (scope.sessionId && view.turnStatus !== "running")
-				await startQueuedUserTurn(machines, scope.userId, scope.sessionId);
-			return publicSessionView(scope);
+			if (
+				scope.sessionId &&
+				view.turnStatus !== "running" &&
+				(await startQueuedUserTurn(machines, scope.userId, scope.sessionId))
+			)
+				return publicSessionView(scope);
+			return view;
 		}),
 	);
 }
