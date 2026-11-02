@@ -7,9 +7,10 @@ import {
 	ANALYTICS_ENABLED,
 	ANALYTICS_HOST,
 } from "../features/analytics/client";
-import { ReplayConsentBanner } from "../features/analytics/replay-consent-banner";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
+import { PrivacyRegionProvider } from "../features/app/privacy-region";
+import { readPrivacyRegionFn } from "../features/app/privacy-region.fn";
 import { SPECULATION_RULES } from "../features/app/speculation-rules";
 import { AuthProviders } from "../features/auth/auth-providers";
 import { LegalUpdateNotice } from "../features/auth/legal-acceptance-prompt";
@@ -19,6 +20,11 @@ import appCss from "../styles.css?url";
 export const Route = createRootRoute({
 	notFoundComponent: AppNotFound,
 	errorComponent: AppError,
+	// The visitor's region, read once with the server's page: the EU/UK
+	// defaults (no replay, training off) are right from the first paint.
+	loader: () => readPrivacyRegionFn(),
+	staleTime: Number.POSITIVE_INFINITY,
+	shouldReload: false,
 	head: () => ({
 		meta: [
 			{
@@ -69,6 +75,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			}),
 	);
 	useEffect(() => followOtherTabSaves(queryClient), [queryClient]);
+	const strictRegion = Route.useLoaderData()?.strict ?? false;
 	return (
 		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
@@ -87,12 +94,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body>
 				<QueryClientProvider client={queryClient}>
-					<AuthProviders>
-						<Analytics />
-						<LegalUpdateNotice />
-						<ReplayConsentBanner />
-						{children}
-					</AuthProviders>
+					<PrivacyRegionProvider strict={strictRegion}>
+						<AuthProviders>
+							<Analytics />
+							<LegalUpdateNotice />
+							{children}
+						</AuthProviders>
+					</PrivacyRegionProvider>
 				</QueryClientProvider>
 
 				<Scripts />

@@ -97,31 +97,35 @@ export function NetworkAccessSettings({ projectId }: { projectId: string }) {
 	}
 	return (
 		<section
-			className="machine-size-settings"
+			className="settings-section"
 			aria-labelledby="network-access-heading"
 		>
-			<div className="machine-size-heading">
-				<h3 id="network-access-heading">Internet access</h3>
-				<span>Per project</span>
-			</div>
-			<p
-				className="settings-copy"
-				title="Changes apply to each chat machine when its next turn starts. Cloud metadata addresses stay blocked in every mode."
-			>
-				What chat machines can reach.
-			</p>
+			<header className="settings-section-head">
+				<div>
+					<h3 id="network-access-heading">Internet access</h3>
+					<p title="Changes apply to each chat machine when its next turn starts. Cloud metadata addresses stay blocked in every mode.">
+						What chat machines can reach.
+					</p>
+				</div>
+			</header>
 			{/* While the setting loads, the same form shows disabled: nothing moves when it lands. */}
 			{current.data || current.isPending ? (
 				<NetworkAccessView
 					mode={mode}
 					text={text}
 					pending={save.isPending || !current.data}
+					changed={
+						Boolean(current.data) &&
+						(mode !== current.data?.mode ||
+							parseDomainList(text).join("\n") !==
+								current.data?.domains.join("\n"))
+					}
 					onMode={setMode}
 					onText={setText}
 					onSubmit={onSubmit}
 				/>
 			) : null}
-			{save.isSuccess ? (
+			{save.isSuccess && !save.isPending ? (
 				<p role="status" className="settings-copy">
 					Saved. Applies at each chat's next turn.
 				</p>
@@ -139,6 +143,7 @@ export function NetworkAccessView({
 	mode,
 	text,
 	pending,
+	changed = true,
 	onMode,
 	onText,
 	onSubmit,
@@ -146,6 +151,8 @@ export function NetworkAccessView({
 	mode: VmNetworkMode;
 	text: string;
 	pending: boolean;
+	/** Save shows only once the form differs from what is saved. */
+	changed?: boolean;
 	onMode: (mode: VmNetworkMode) => void;
 	onText: (text: string) => void;
 	onSubmit: (event: FormEvent) => void;
@@ -216,15 +223,17 @@ export function NetworkAccessView({
 					HTTPS to the listed names only.
 				</p>
 			)}
-			<div className="settings-form-actions">
-				<button
-					type="submit"
-					className="settings-primary"
-					disabled={save.isPending}
-				>
-					{save.isPending ? "Saving…" : "Save"}
-				</button>
-			</div>
+			{changed || save.isPending ? (
+				<div className="settings-form-actions">
+					<button
+						type="submit"
+						className="settings-primary"
+						disabled={save.isPending}
+					>
+						{save.isPending ? "Saving…" : "Save"}
+					</button>
+				</div>
+			) : null}
 		</form>
 	);
 }

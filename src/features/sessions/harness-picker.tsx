@@ -47,6 +47,7 @@ import {
 	usePlanUsageBars,
 	usePrefetchPlanUsage,
 } from "./plan-usage";
+import { SubscriptionMark } from "./subscription-mark";
 
 /** The composer's model button; Cmd+Shift+M clicks it. */
 export const MODEL_PICKER_ID = "session-harness-select";
@@ -133,6 +134,16 @@ export function HarnessPicker({
 	});
 	const claudeData = claude.data?.enabled ? claude.data : null;
 	const [apiProvider, setApiProvider] = useState("openai");
+	// The Grok subscription's own rail entry: the xAI models, on the plan.
+	const [grokView, setGrokView] = useState(false);
+	const loadConnections = useServerFn(getModelConnections);
+	const connections = useQuery({
+		queryKey: ["model-connections"],
+		queryFn: () => loadConnections(),
+	});
+	const grokSubscription = connections.data?.some(
+		(connection) => connection.subscription?.provider === "xai",
+	);
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
@@ -260,7 +271,7 @@ export function HarnessPicker({
 										if (option.id !== harnessId) onHarnessIdChange(option.id);
 									}}
 								>
-									<AgentProviderMark provider={option.id} size={21} />
+									<SubscriptionMark brand="codex" size={21} />
 								</button>
 							))}
 						{claudeData ? (
@@ -274,16 +285,39 @@ export function HarnessPicker({
 									setFavoritesOnly(false);
 									setBrowse(false);
 									setClaudeView(true);
+									setGrokView(false);
 									setSearch("");
 								}}
 							>
-								<ModelProviderLogo provider="anthropic" size={21} />
+								<SubscriptionMark brand="claude" size={21} />
+							</button>
+						) : null}
+						{grokSubscription ? (
+							<button
+								className="model-provider-subscription"
+								type="button"
+								title="Grok · Grok subscription"
+								aria-label="Grok subscription"
+								aria-pressed={
+									browse && grokView && apiProvider === "x-ai" && !favoritesOnly
+								}
+								onClick={() => {
+									setFavoritesOnly(false);
+									setClaudeView(false);
+									setGrokView(true);
+									setApiProvider("x-ai");
+									setBrowse(true);
+									setSearch("");
+								}}
+							>
+								<SubscriptionMark brand="grok" size={21} />
 							</button>
 						) : null}
 						<ApiProviderRail
-							selected={browse ? apiProvider : null}
+							selected={browse && !grokView ? apiProvider : null}
 							onSelect={(id) => {
 								setBrowse(true);
+								setGrokView(false);
 								setClaudeView(false);
 								setApiProvider(id);
 								setFavoritesOnly(false);

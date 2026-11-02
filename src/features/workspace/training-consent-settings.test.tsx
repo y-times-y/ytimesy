@@ -15,13 +15,21 @@ it("shows the drafted training copy with the toggle off by default", () => {
 		<TrainingConsentView enabled={false} onChange={() => undefined} />,
 	);
 	expect(text(html)).toContain("Help improve ytimesy");
-	expect(text(html)).toContain(
-		"Use your chats to improve our agents and models.",
-	);
-	expect(html).toContain('aria-label="Training details"');
-	expect(text(html)).toContain(TRAINING_DETAILS);
+	// The description is only the link; the details are its tooltip.
+	expect(text(html)).not.toContain("Use your chats");
+	expect(text(html)).toContain("Learn more");
 	expect(html).toContain('href="/training"');
 	expect(html).toMatch(/role="switch"[^>]*aria-checked="false"/);
+	expect(html).not.toContain("Session recording");
+});
+
+it("shows a loading switch, never off, until the setting is known", () => {
+	const html = renderToStaticMarkup(
+		<TrainingConsentView enabled={undefined} onChange={() => undefined} />,
+	);
+	expect(html).toContain("settings-switch-pending");
+	expect(html).toContain('aria-busy="true"');
+	expect(html).not.toContain('data-state="unchecked"');
 });
 
 it("keeps every training commitment in the details", () => {
@@ -43,12 +51,12 @@ it("shows the project exclusion with the drafted copy", () => {
 		<ProjectTrainingView excluded={false} onChange={() => undefined} />,
 	);
 	expect(text(html)).toContain("Never use this project for training");
-	expect(text(html)).toContain(
+	expect(html).toContain(
 		"Chats in this project are never used to improve ytimesy",
 	);
 });
 
-it("opens the training details below the icon, above the Settings dialog", () => {
+it("opens the training details below the link, above the Settings dialog", () => {
 	expect(TRAINING_TOOLTIP_PLACEMENT.side).toBe("bottom");
 	expect(TRAINING_TOOLTIP_PLACEMENT.collisionPadding).toBeGreaterThan(0);
 	// The tooltip is portaled to the page: it must stack over the overlay.

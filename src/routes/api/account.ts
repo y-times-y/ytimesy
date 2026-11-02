@@ -7,6 +7,7 @@ import { createFreestyleWorkspaceMachines } from "../../server/adapters/freestyl
 import { loadAgentAccount } from "../../server/auth/agent-account";
 import { requireUser } from "../../server/auth/auth";
 import { githubConnectionExists } from "../../server/auth/github-connection";
+import { loadSignInMethods } from "../../server/auth/sign-in-methods";
 import { loadXaiSubscription } from "../../server/auth/xai-subscription";
 import { endpoint, requireSameOrigin } from "../../server/http";
 import { deleteAccount } from "../../server/services/account-deletion";
@@ -35,7 +36,9 @@ export const Route = createFileRoute("/api/account")({
 							name: user.name,
 							email: user.email,
 							image: user.image,
+							createdAt: user.createdAt,
 						},
+						signInMethods: await loadSignInMethods(user.id).catch(() => []),
 						githubConnected: await githubConnectionExists(user.id),
 						agentAccount: await loadAgentAccount(user.id),
 						// Absent while the SuperGrok feature switch is off.

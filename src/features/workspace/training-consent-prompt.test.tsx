@@ -14,6 +14,7 @@ vi.mock("#/server/adapters/training-consent", () => ({}));
 vi.mock("#/server/auth/auth", () => ({}));
 vi.mock("#/server/http", () => ({}));
 
+import { PrivacyRegionProvider } from "../app/privacy-region";
 import { PrivacyStep } from "../onboarding/first-run";
 import { trainingConsentInput } from "./training-consent.fn";
 import { TrainingChoice, TrainingConsentCard } from "./training-consent-prompt";
@@ -28,7 +29,9 @@ it("shows the training switch on by default, with the policy link and where to c
 	);
 	expect(html).toMatch(/role="switch"[^>]*aria-checked="true"/);
 	expect(text(html)).toContain("Help improve ytimesy");
-	expect(text(html)).toContain("Uses your prompts, code and results, never AI replies.");
+	// Only the link describes it; the details are its tooltip.
+	expect(text(html)).not.toContain("Uses your prompts");
+	expect(text(html)).toContain("Learn more");
 	expect(html).toContain('href="/training"');
 	expect(text(html)).toContain(
 		"You can change this anytime in Settings → Privacy.",
@@ -57,6 +60,23 @@ it("puts the same default-on card in the first run, recorded on Continue", () =>
 	);
 	expect(html).toMatch(/role="switch"[^>]*aria-checked="true"/);
 	expect(html).toMatch(/<button[^>]*class="first-run-primary"[^>]*>Continue/);
+});
+
+it("starts the switch off in the EU/UK, on the card and in the first run", () => {
+	const card = renderToStaticMarkup(
+		<PrivacyRegionProvider strict>
+			<TrainingConsentCard onContinue={vi.fn()} onDismiss={vi.fn()} />
+		</PrivacyRegionProvider>,
+	);
+	expect(card).toMatch(/role="switch"[^>]*aria-checked="false"/);
+	const firstRun = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<PrivacyRegionProvider strict>
+				<PrivacyStep />
+			</PrivacyRegionProvider>
+		</QueryClientProvider>,
+	);
+	expect(firstRun).toMatch(/role="switch"[^>]*aria-checked="false"/);
 });
 
 it("records Settings changes as settings and the card's choice as onboarding", () => {
