@@ -1,20 +1,35 @@
+import type { PlanUsageBar } from "#/domain/plan-usage-bars";
 import { usageResetLabel } from "#/domain/usage-warning";
-import { usePlanUsageBars } from "./plan-usage";
+import {
+	CLAUDE_PLAN_USAGE_HINT,
+	useClaudePlanUsageLine,
+	usePlanUsageBars,
+} from "./plan-usage";
 
 const LOW_PERCENT = 85;
 
-/**
- * Settings' ChatGPT plan usage: the same windows the model picker shows
- * (including a limit a turn just hit), each with its reset time.
- */
-export function CodexSubscriptionUsage() {
-	const bars = usePlanUsageBars(true);
+/** One plan's windows in Settings, each with its reset time. */
+function PlanUsageCard({
+	title,
+	label,
+	bars,
+	pending = false,
+	hint,
+}: {
+	title: string;
+	label: string;
+	bars: readonly PlanUsageBar[];
+	pending?: boolean;
+	hint?: string;
+}) {
 	return (
 		<section
 			className="settings-group settings-group-body codex-subscription-usage"
-			aria-label="ChatGPT plan usage"
+			aria-label={label}
 		>
-			<p className="settings-row-title">ChatGPT plan usage</p>
+			<p className="settings-row-title" title={hint}>
+				{title}
+			</p>
 			{bars.length ? (
 				bars.map((bar) => {
 					const used = Math.min(100, Math.max(0, bar.usedPercent));
@@ -47,8 +62,53 @@ export function CodexSubscriptionUsage() {
 					);
 				})
 			) : (
-				<p className="settings-row-meta">Plan usage unavailable right now.</p>
+				<p className="settings-row-meta">
+					{pending ? "Reading usage…" : "Plan usage unavailable right now."}
+				</p>
 			)}
+		</section>
+	);
+}
+
+/**
+ * Settings' ChatGPT plan usage: the same windows the model picker shows
+ * (including a limit a turn just hit), each with its reset time.
+ */
+export function CodexSubscriptionUsage() {
+	return (
+		<PlanUsageCard
+			title="ChatGPT plan usage"
+			label="ChatGPT plan usage"
+			bars={usePlanUsageBars(true)}
+		/>
+	);
+}
+
+/** Settings' Claude plan usage: the picker's reading, read afresh past five minutes. */
+export function ClaudeSubscriptionUsage() {
+	const line = useClaudePlanUsageLine(true, true);
+	return (
+		<PlanUsageCard
+			title="Claude plan usage"
+			label="Claude plan usage"
+			bars={line.bars}
+			pending={line.pending}
+			hint={CLAUDE_PLAN_USAGE_HINT}
+		/>
+	);
+}
+
+/** xAI shares no plan usage with apps; say so instead of showing numbers. */
+export function GrokSubscriptionUsage() {
+	return (
+		<section
+			className="settings-group settings-group-body codex-subscription-usage"
+			aria-label="Grok plan usage"
+		>
+			<p className="settings-row-title">Grok plan usage</p>
+			<p className="settings-row-meta">
+				xAI doesn't share plan usage with apps. See it in the Grok app.
+			</p>
 		</section>
 	);
 }
