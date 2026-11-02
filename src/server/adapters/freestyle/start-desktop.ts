@@ -384,6 +384,10 @@ fi
 # file as each client connects (read:), so a new password needs no restart;
 # one on TCP, or one that does not reread its file, restarts (the display
 # and Chrome stay).
+# -sb 0: after a minute without changes x11vnc naps 1.5 s between polls, so
+# the first frame of a viewer opened after a quiet spell (every copy of a
+# template) waited for the nap: about 2.0 s from connect, 0.5 s with -sb 0
+# on dev. One started without it restarts while no viewer is connected.
 VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
 VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
 VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
@@ -398,14 +402,16 @@ fi
 VNC_PASS_DIGEST="$(sha256sum "$VNC_PASS_FILE" | cut -d' ' -f1)"
 vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
 vnc_rereads() { pgrep -f "[x]11vnc .*-passwdfile read:$VNC_PASS_FILE " >/dev/null 2>&1; }
-if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads; }; then
+vnc_wakes() { pgrep -f "[x]11vnc .*-passwdfile read:$VNC_PASS_FILE .*-sb 0" >/dev/null 2>&1; }
+vnc_viewed() { ss -xH state connected 2>/dev/null | grep -qF "$VNC_SOCKET "; }
+if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads || { ! vnc_wakes && ! vnc_viewed; }; }; then
   pkill -x x11vnc >/dev/null 2>&1 || true
   wait_until '! pgrep -x x11vnc'
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   install -d -m 0700 "$VNC_DIR"
   rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "read:$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "read:$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 -sb 0 >/tmp/ytimesy-desk.log 2>&1 &
   wait_until '[ -S "$VNC_SOCKET" ]'
 fi
 printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
