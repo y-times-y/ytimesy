@@ -53,6 +53,7 @@
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
       "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-production" }],
       "ai": { "binding": "AI" },
+      "routes": [{ "pattern": "edge.ytimesy.com", "custom_domain": true }],
       "workers_dev": false
     }
   }

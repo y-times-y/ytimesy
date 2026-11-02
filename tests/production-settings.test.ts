@@ -143,16 +143,19 @@ it("lets only the executor route its own Git proxy custom domain in production",
 	).toThrow("workers_dev off");
 });
 
-it("passes the committed production wrangler configs", () => {
+it("passes the committed production wrangler configs at go-live, and only then", () => {
+	const check = (file: string, goLive: boolean) => () =>
+		assertProductionRoutes({
+			file,
+			text: readFileSync(file, "utf8"),
+			gitProxyUrl: "https://edge.ytimesy.com",
+			appUrl: "https://ytimesy.com",
+			goLive,
+		});
 	for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
-		expect(() =>
-			assertProductionRoutes({
-				file,
-				text: readFileSync(file, "utf8"),
-				gitProxyUrl: "https://edge.ytimesy.com",
-				appUrl: "https://ytimesy.com",
-			}),
-		).not.toThrow();
+		expect(check(file, true)).not.toThrow();
+	// The web Worker's only public address is the app host: no deploy without go-live.
+	expect(check("wrangler.web.jsonc", false)).toThrow(/no routes until launch/);
 });
 
 it("refuses a production deploy without the PR repair webhook secret", () => {
@@ -162,4 +165,30 @@ it("refuses a production deploy without the PR repair webhook secret", () => {
 		script.indexOf("] as const;"),
 	);
 	expect(required).toContain('"GITHUB_PR_REPAIR_WEBHOOK_SECRET"');
+});
+
+it("lets the web Worker route only the app host, and only at go-live", () => {
+	const web = (extra: string, goLive?: boolean) => () =>
+		assertProductionRoutes({
+			file: "wrangler.web.jsonc",
+			text: productionConfig(extra),
+			gitProxyUrl: "https://edge.ytimesy.com",
+			appUrl: "https://ytimesy.com",
+			goLive,
+		});
+	const app = `"routes": [{ "pattern": "ytimesy.com", "custom_domain": true }],`;
+	expect(web(app)).toThrow(/no routes until launch/);
+	expect(web(app, true)).not.toThrow();
+	expect(
+		web(
+			`"routes": [{ "pattern": "www.ytimesy.com", "custom_domain": true }],`,
+			true,
+		),
+	).toThrow(/only route the app host ytimesy.com/);
+	expect(
+		web(
+			`"routes": [{ "pattern": "ytimesy.com/*", "zone_name": "ytimesy.com" }],`,
+			true,
+		),
+	).toThrow(/only route the app host/);
 });

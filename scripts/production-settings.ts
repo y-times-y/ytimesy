@@ -96,6 +96,8 @@ export function assertProductionRoutes(input: {
 	readonly text: string;
 	readonly gitProxyUrl: string;
 	readonly appUrl: string;
+	/** YTIMESY_GO_LIVE=1: the owner's go-live for this deploy. */
+	readonly goLive?: boolean;
 }) {
 	const production = input.text.slice(input.text.indexOf('"production"'));
 	const refuse = (reason: string) =>
@@ -106,8 +108,30 @@ export function assertProductionRoutes(input: {
 		throw refuse("must not set a route; only the executor custom domain.");
 	const declared = production.match(/"routes"\s*:/g)?.length ?? 0;
 	if (!declared) return;
-	if (input.file !== "wrangler.edge-executor.jsonc")
-		throw refuse("must have no routes until launch.");
+	if (input.file !== "wrangler.edge-executor.jsonc") {
+		// Go live: the web Worker may serve exactly the app host, and only when
+		// the owner says so for this deploy (YTIMESY_GO_LIVE=1).
+		if (!input.goLive) throw refuse("must have no routes until launch.");
+		const block = production.match(/"routes"\s*:\s*(\[[^\]]*\])/)?.[1];
+		let parsed: unknown = null;
+		try {
+			parsed = block ? JSON.parse(block) : null;
+		} catch {}
+		const appHost = new URL(input.appUrl).host;
+		const only = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : null;
+		if (
+			declared !== 1 ||
+			!only ||
+			typeof only !== "object" ||
+			Object.keys(only).sort().join(",") !== "custom_domain,pattern" ||
+			(only as { custom_domain: unknown }).custom_domain !== true ||
+			(only as { pattern: unknown }).pattern !== appHost
+		)
+			throw refuse(
+				`may only route the app host ${appHost} (APP_URL): [{ "pattern": "${appHost}", "custom_domain": true }].`,
+			);
+		return;
+	}
 	const blocks = [...production.matchAll(/"routes"\s*:\s*(\[[^\]]*\])/g)];
 	let routes: unknown;
 	try {
