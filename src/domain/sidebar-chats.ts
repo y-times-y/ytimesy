@@ -28,6 +28,8 @@ export type SidebarChat = {
 	readonly workingSince?: string | null;
 	/** Opened but nothing sent: "New chat" reuses it; listed only while open. */
 	readonly unused?: boolean;
+	/** A message waits in it for the project's environment (setup running or failed). */
+	readonly waitsForSetup?: boolean;
 };
 
 /**
@@ -39,7 +41,10 @@ export function visibleSidebarChats<Chat extends SidebarChat>(
 	chats: readonly Chat[],
 	openChatId: string | undefined,
 ): Chat[] {
-	return chats.filter((chat) => !chat.unused || chat.id === openChatId);
+	// A chat holding a message for setup is in use, whatever else it says.
+	return chats.filter(
+		(chat) => !chat.unused || chat.waitsForSetup || chat.id === openChatId,
+	);
 }
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
@@ -247,6 +252,31 @@ export function withChatTurnStatus(
 	if (!chatId) return [...chats];
 	return chats.map((chat) =>
 		chat.id === chatId ? { ...chat, turnStatus } : chat,
+	);
+}
+
+/**
+ * A chat whose message the server holds for the project's setup, as it will
+ * list it: in use, waiting for setup, named after the message when untitled.
+ */
+export function withChatHeldForSetup(
+	chats: readonly SidebarChat[],
+	chatId: string | undefined,
+	text: string,
+): SidebarChat[] {
+	if (!chatId) return [...chats];
+	return chats.map((chat) =>
+		chat.id === chatId
+			? {
+					...chat,
+					waitsForSetup: true,
+					...(chat.unused ? { unused: false } : {}),
+					title:
+						chat.title === UNTITLED_SESSION_TITLE
+							? sessionTitleFromText(text)
+							: chat.title,
+				}
+			: chat,
 	);
 }
 
@@ -527,8 +557,10 @@ export type SidebarStatusGroup = "needs-you" | "working" | "done";
 export function sidebarStatusGroup(input: {
 	readonly running: boolean;
 	readonly waitingOn?: ChatWaitingOn | null;
+	/** A message waits for the project's setup: still to do, not done. */
+	readonly waitsForSetup?: boolean;
 }): SidebarStatusGroup {
-	if (input.running) return "working";
+	if (input.running || input.waitsForSetup) return "working";
 	return input.waitingOn ? "needs-you" : "done";
 }
 

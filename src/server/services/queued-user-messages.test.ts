@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
@@ -21,10 +21,29 @@ const mocks = vi.hoisted(() => ({
 	read: vi.fn(),
 	stop: vi.fn(),
 	store: vi.fn(async () => [] as unknown[]),
+	workspace: vi.fn(),
+	hold: vi.fn(async (..._args: unknown[]) => true),
+	releaseHeld: vi.fn(async () => true),
+	holding: vi.fn(async () => null as string | null),
+	releasable: vi.fn(async () => [] as unknown[]),
+	claim: vi.fn(async () => true),
+	reusable: vi.fn(async () => null as unknown),
+	insert: vi.fn(),
+	dispatch: vi.fn(async (_job: unknown) => true),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
 	agentSessionPageForOwner: vi.fn(async () => null),
+	claimChatForSend: mocks.claim,
+	reusableEmptyChat: mocks.reusable,
+	insertAgentSession: mocks.insert,
+}));
+vi.mock("../adapters/workspaces", () => ({
+	workspaceForProject: mocks.workspace,
+}));
+vi.mock("../adapters/background-job-dispatch", () => ({
+	backgroundJobId: (key: string) => `job:${key}`,
+	dispatchBackgroundJob: mocks.dispatch,
 }));
 vi.mock("../adapters/queued-user-messages", () => ({
 	queueUserMessageWhileRunning: mocks.queue,
@@ -34,6 +53,10 @@ vi.mock("../adapters/queued-user-messages", () => ({
 	removeQueuedUserMessage: mocks.remove,
 	updateQueuedUserMessage: mocks.update,
 	releaseQueuedUserMessage: mocks.release,
+	holdUserMessageForSetup: mocks.hold,
+	releaseHeldUserMessages: mocks.releaseHeld,
+	chatHoldingMessage: mocks.holding,
+	chatsWithReleasableHeldSends: mocks.releasable,
 }));
 vi.mock("./harness-workspace-session", () => ({
 	sendHarnessWorkspaceTask: mocks.send,
@@ -45,6 +68,8 @@ vi.mock("./message-attachments", () => ({
 }));
 
 const {
+	deliverHeldSends,
+	dispatchReleasableHeldSends,
 	releaseQueuedComposerMessage,
 	removeQueuedComposerMessage,
 	sendComposerMessage,
@@ -61,6 +86,12 @@ const scope = {
 	harnessId: "api" as const,
 };
 const messageId = "11111111-1111-4111-8111-111111111111";
+const readyWorkspace = {
+	id: "workspace",
+	status: "ready",
+	providerRef: "vm",
+	templateSnapshotId: "snap",
+};
 const view = (turnStatus = "running", items: unknown[] = []) => ({
 	agentSessionId: "chat",
 	items,
@@ -85,6 +116,14 @@ beforeEach(() => {
 		items: [],
 	});
 	mocks.queue.mockResolvedValue("queued");
+	mocks.workspace.mockResolvedValue(readyWorkspace);
+	mocks.hold.mockResolvedValue(true);
+	mocks.releaseHeld.mockResolvedValue(true);
+	mocks.holding.mockResolvedValue(null);
+	mocks.releasable.mockResolvedValue([]);
+	mocks.claim.mockResolvedValue(true);
+	mocks.reusable.mockResolvedValue(null);
+	mocks.dispatch.mockResolvedValue(true);
 });
 
 it("queues a send behind the running turn instead of rejecting it", async () => {
@@ -292,6 +331,7 @@ it("edits a waiting message in place", async () => {
 		messageId,
 		"Also the README",
 		expect.stringContaining("Also the README"),
+		false,
 	);
 });
 
@@ -329,4 +369,202 @@ it("marks Send for the next step while the turn runs, and starts it once the tur
 		}),
 		expect.objectContaining({ id: "chat", turnStatus: "idle" }),
 	);
+});
+
+describe("messages held while the project's environment is set up", () => {
+	const failedWorkspace = {
+		id: "workspace",
+		status: "failed",
+		providerRef: null,
+		templateSnapshotId: null,
+	};
+	const newChatScope = {
+		userId: "owner",
+		projectId: "project",
+		harnessId: "api" as const,
+		createNew: true,
+	};
+	const heldChat = {
+		id: "held-chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	};
+
+	it("stores a new chat's first send in a new, titled chat instead of starting a turn", async () => {
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.insert.mockResolvedValue(heldChat);
+		mocks.read.mockReturnValue(
+			Effect.succeed({ ...view("idle"), agentSessionId: "held-chat" }),
+		);
+		mocks.queued.mockResolvedValue([]);
+		const result = await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+				baseBranch: "develop",
+				environmentSetup: true,
+			}),
+		);
+		expect(mocks.send).not.toHaveBeenCalled();
+		expect(mocks.insert).toHaveBeenCalledWith(
+			expect.objectContaining({
+				projectId: "project",
+				workspaceId: "workspace",
+				title: "Add a login page",
+			}),
+		);
+		const [owner, chat, held] = mocks.hold.mock.calls[0];
+		expect([owner, chat]).toEqual(["owner", "held-chat"]);
+		expect(held).toMatchObject({
+			item: { kind: "userMessage", id: messageId, text: "Add a login page" },
+			modelId: "connection|model",
+			baseBranch: "develop",
+			environmentSetup: true,
+		});
+		expect(result.agentSessionId).toBe("held-chat");
+		// Not ready on the second look either: nothing goes yet.
+		expect(mocks.releaseHeld).not.toHaveBeenCalled();
+	});
+
+	it("holds a replayed send once, in the chat it already landed in", async () => {
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.holding.mockResolvedValue("held-chat");
+		mocks.session.mockResolvedValue(heldChat);
+		mocks.queued.mockResolvedValue([
+			{ kind: "userMessage", id: messageId, text: "Add a login page" },
+		]);
+		await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+			}),
+		);
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.reusable).not.toHaveBeenCalled();
+		expect(mocks.hold).not.toHaveBeenCalled();
+		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	it("sends at once when the environment became ready while the message was stored", async () => {
+		mocks.workspace
+			.mockResolvedValueOnce(failedWorkspace)
+			.mockResolvedValue(readyWorkspace);
+		mocks.insert.mockResolvedValue(heldChat);
+		mocks.session.mockResolvedValue(heldChat);
+		mocks.take.mockResolvedValue({
+			item: { kind: "userMessage", id: messageId, text: "Add a login page" },
+			message: "Add a login page",
+			harnessId: "api",
+			modelId: "connection|model",
+			released: true,
+		});
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+				idempotencyKey: messageId,
+			}),
+		);
+		expect(mocks.releaseHeld).toHaveBeenCalledWith("held-chat");
+		expect(mocks.send).toHaveBeenCalledOnce();
+	});
+
+	it("never holds runtime sends or plan approvals", async () => {
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "Approved",
+				modelId: "connection|model",
+				approvesPlan: true,
+			}),
+		);
+		expect(mocks.hold).not.toHaveBeenCalled();
+		expect(mocks.send).toHaveBeenCalledOnce();
+	});
+
+	it("delivers a held message exactly once when the environment is ready", async () => {
+		mocks.releasable.mockResolvedValue([
+			{ userId: "owner", sessionId: "held-chat", workspaceId: "workspace" },
+		]);
+		mocks.session.mockResolvedValue(heldChat);
+		mocks.take.mockResolvedValueOnce({
+			item: { kind: "userMessage", id: messageId, text: "Add a login page" },
+			message: "Add a login page",
+			harnessId: "api",
+			modelId: "connection|model",
+			baseBranch: "develop",
+			environmentSetup: true,
+			released: true,
+		});
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		expect(await deliverHeldSends(machines, "workspace")).toBe(1);
+		expect(mocks.releasable).toHaveBeenCalledWith("workspace");
+		expect(mocks.send).toHaveBeenCalledOnce();
+		const [, sent, task] = mocks.send.mock.calls[0];
+		expect(sent).toMatchObject({ sessionId: "held-chat", createNew: false });
+		expect(task).toMatchObject({
+			text: "Add a login page",
+			idempotencyKey: messageId,
+			baseBranch: "develop",
+			environmentSetup: true,
+		});
+
+		// The job and the sweep both ran: the second finds nothing held.
+		mocks.releaseHeld.mockResolvedValue(false);
+		expect(await deliverHeldSends(machines, "workspace")).toBe(0);
+		expect(mocks.send).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a held message in the chat when its turn cannot start", async () => {
+		mocks.releasable.mockResolvedValue([
+			{ userId: "owner", sessionId: "held-chat", workspaceId: "workspace" },
+		]);
+		mocks.session.mockResolvedValue(heldChat);
+		const next = {
+			item: { kind: "userMessage", id: messageId, text: "Add a login page" },
+			message: "Add a login page",
+			harnessId: "api",
+			modelId: "connection|model",
+			released: true,
+		};
+		mocks.take.mockResolvedValueOnce(next);
+		mocks.send.mockReturnValue(
+			Effect.succeed({
+				...view("idle"),
+				connection: { status: "failed", message: "No model" },
+			}),
+		);
+		expect(await deliverHeldSends(machines)).toBe(0);
+		expect(mocks.restore).toHaveBeenCalledWith(
+			"held-chat",
+			expect.objectContaining({ item: next.item }),
+		);
+	});
+
+	it("the sweep dispatches one job per workspace with a releasable message", async () => {
+		mocks.releasable.mockResolvedValue([
+			{ userId: "a", sessionId: "1", workspaceId: "w1" },
+			{ userId: "a", sessionId: "2", workspaceId: "w1" },
+			{ userId: "b", sessionId: "3", workspaceId: "w2" },
+		]);
+		await dispatchReleasableHeldSends(120_000);
+		expect(mocks.dispatch.mock.calls.map(([job]) => job)).toEqual([
+			{
+				id: "job:held-sends:sweep:w1:2",
+				kind: "held-sends",
+				workspaceId: "w1",
+			},
+			{
+				id: "job:held-sends:sweep:w2:2",
+				kind: "held-sends",
+				workspaceId: "w2",
+			},
+		]);
+	});
 });

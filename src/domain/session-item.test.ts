@@ -607,3 +607,19 @@ describe("continued chats", () => {
 		expect(continuedChatAwaitsMessage([])).toBe(false);
 	});
 });
+
+it("finds the chat's message held for setup among its waiting ones", async () => {
+	const { heldForSetupMessage, withQueuedUserMessages } = await import(
+		"./session-item"
+	);
+	const { SessionItemId: id } = await import("./ids");
+	const items = withQueuedUserMessages(
+		[],
+		[
+			{ kind: "userMessage", id: id("a"), text: "queued" },
+			{ kind: "userMessage", id: id("b"), text: "held", heldForSetup: true },
+		],
+	);
+	expect(heldForSetupMessage(items)).toMatchObject({ id: "b", queued: true });
+	expect(heldForSetupMessage(items.slice(0, 1))).toBeNull();
+});

@@ -515,3 +515,31 @@ describe("chatsToReadAhead", () => {
 		).toEqual(["a", "b"]);
 	});
 });
+
+describe("chats holding a message for setup", () => {
+	it("are never hidden as unused, open or not", async () => {
+		const { visibleSidebarChats, withChatHeldForSetup, sidebarStatusGroup } =
+			await import("./sidebar-chats");
+		const chats = [
+			{ id: "held", title: "New session", unused: true, waitsForSetup: true },
+			{ id: "empty", title: "New session", unused: true },
+		];
+		expect(
+			visibleSidebarChats(chats, undefined).map((chat) => chat.id),
+		).toEqual(["held"]);
+		const [held] = withChatHeldForSetup(
+			[{ id: "c", title: "New session", unused: true }],
+			"c",
+			"Add a login page",
+		);
+		expect(held).toMatchObject({
+			title: "Add a login page",
+			unused: false,
+			waitsForSetup: true,
+		});
+		expect(held).not.toHaveProperty("turnStatus");
+		expect(sidebarStatusGroup({ running: false, waitsForSetup: true })).toBe(
+			"working",
+		);
+	});
+});

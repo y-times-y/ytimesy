@@ -17,7 +17,12 @@ const started = "2026-11-01T10:00:00.000Z";
 
 function render(
 	progress: EnvironmentBuildProgress,
-	props: { failed: boolean; showMessage?: boolean; setUp?: boolean },
+	props: {
+		failed: boolean;
+		showMessage?: boolean;
+		setUp?: boolean;
+		stored?: boolean;
+	},
 ) {
 	const client = new QueryClient();
 	client.setQueryData(environmentProgressQuery("p").queryKey, progress);
@@ -34,6 +39,7 @@ function render(
 					onSendAnyway: noop,
 					...(props.setUp ? { onSetUpWithAgent: noop } : {}),
 				}}
+				{...(props.stored ? { onEdit: noop, onRemove: noop } : {})}
 			/>
 		</QueryClientProvider>,
 	);
@@ -143,4 +149,20 @@ it("offers Set up with the agent only for a new chat's first message", () => {
 	expect(html).toContain("Setup did not finish.");
 	expect(html).toContain("Send anyway");
 	expect(html).not.toContain("Set up with the agent");
+});
+
+it("shows a stored held message (after a reload) with Edit and Remove beside the live setup", () => {
+	const html = render(running, { failed: false, stored: true });
+	expect(text(html)).toContain("Add a login page");
+	expect(text(html)).toContain("Waiting for setup");
+	expect(html).toContain('aria-label="Edit held message"');
+	expect(html).toContain('aria-label="Remove held message"');
+	expect(text(html)).toContain("Installing dependencies");
+	// The composer's own copy shows the text: no second Edit there.
+	const inline = render(running, {
+		failed: false,
+		stored: true,
+		showMessage: false,
+	});
+	expect(inline).not.toContain("Edit held message");
 });

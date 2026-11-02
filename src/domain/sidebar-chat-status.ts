@@ -34,17 +34,22 @@ export type SidebarChatStatus =
 			readonly waitingOn: Exclude<ChatWaitingOn, "failed">;
 	  }
 	| { readonly kind: "working"; readonly since: string | null }
+	/** A message waits in the chat for the project's environment. */
+	| { readonly kind: "setup" }
 	| { readonly kind: "failed" }
 	| { readonly kind: "pr"; readonly pr: SidebarPullRequest }
 	| { readonly kind: "unread" }
 	| { readonly kind: "idle" };
 
 /**
- * Asking you, then Working, then a failed last turn, then the PR, then an
- * unread reply; otherwise nothing (the row shows its relative time).
+ * Asking you, then Working, then a message waiting for setup, then a failed
+ * last turn, then the PR, then an unread reply; otherwise nothing (the row
+ * shows its relative time).
  */
 export function sidebarChatStatus(input: {
 	readonly running: boolean;
+	/** A message waits in the chat for the project's environment. */
+	readonly waitsForSetup?: boolean;
 	/** When Main or a helper started its active turn, if known. */
 	readonly workingSince?: string | null;
 	readonly waitingOn?: ChatWaitingOn | null;
@@ -55,6 +60,7 @@ export function sidebarChatStatus(input: {
 	if (waitingOn && waitingOn !== "failed") return { kind: "asking", waitingOn };
 	if (input.running)
 		return { kind: "working", since: input.workingSince ?? null };
+	if (input.waitsForSetup) return { kind: "setup" };
 	if (waitingOn === "failed") return { kind: "failed" };
 	if (input.pr) return { kind: "pr", pr: input.pr };
 	if (input.unread) return { kind: "unread" };
@@ -89,6 +95,8 @@ export function sidebarChatStatusLabel(
 				? `Working · ${workingElapsed(since, nowMs)}`
 				: "Working";
 		}
+		case "setup":
+			return "Waiting for setup";
 		case "failed":
 			return "Last turn failed";
 		case "pr":

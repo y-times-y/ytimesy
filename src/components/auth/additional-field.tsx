@@ -34,18 +34,12 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
+import { MenuSelect } from "#/components/ui/menu-select.tsx";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover.tsx";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select.tsx";
 import { Slider } from "#/components/ui/slider.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
@@ -303,30 +297,18 @@ export function AdditionalField({
 			<Field data-invalid={isInvalid}>
 				<FieldLabel htmlFor={name}>{field.label}</FieldLabel>
 
-				<Select
+				<MenuSelect
+					id={name}
 					name={name}
-					value={valueToString(value) || undefined}
+					value={valueToString(value)}
 					onValueChange={(nextValue) => onChange(nextValue)}
-					required={field.required}
 					disabled={isPending || field.readOnly}
-				>
-					<SelectTrigger
-						id={name}
-						className="w-full"
-						onBlur={onBlur}
-						aria-invalid={isInvalid}
-					>
-						<SelectValue placeholder={field.placeholder} />
-					</SelectTrigger>
-
-					<SelectContent>
-						{field.options?.map((option) => (
-							<SelectItem key={option.value} value={option.value}>
-								{option.label}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
+					options={field.options ?? []}
+					placeholder={field.placeholder}
+					className="w-full"
+					onBlur={onBlur}
+					aria-invalid={isInvalid}
+				/>
 
 				<FieldError errors={fieldErrors} />
 			</Field>

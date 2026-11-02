@@ -1,11 +1,5 @@
 import { Brain, Zap } from "lucide-react";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
+import { MenuSelect } from "#/components/ui/menu-select";
 import {
 	type ComposerSpeed,
 	reasoningLevelLabel,
@@ -42,65 +36,43 @@ export function ModelPickerSettings({
 				<div className="model-picker-setting">
 					<Brain size={16} aria-hidden="true" />
 					<span>Reasoning</span>
-					<Select
+					<MenuSelect
 						value={reasoning?.id ?? ""}
 						onValueChange={onReasoningIdChange}
-					>
-						<SelectTrigger
-							className="model-reasoning-select"
-							aria-label="Reasoning level"
-						>
-							<SelectValue>
-								{reasoning ? reasoningLevelLabel(reasoning.id) : null}
-							</SelectValue>
-						</SelectTrigger>
-						<SelectContent position="popper" side="right">
-							{model.reasoning.levels.map((option) => (
-								<SelectItem
-									key={option.id}
-									value={option.id}
-									textValue={reasoningLevelLabel(option.id)}
-								>
-									{reasoningLevelLabel(option.id)}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+						options={model.reasoning.levels.map((option) => ({
+							value: option.id,
+							label: reasoningLevelLabel(option.id),
+						}))}
+						className="model-reasoning-select"
+						side="right"
+						aria-label="Reasoning level"
+					/>
 				</div>
 			) : null}
 			{onSpeedChange && model.speeds.length ? (
 				<div className="model-picker-setting">
 					<Zap size={16} aria-hidden="true" />
 					<span>Speed</span>
-					<Select
+					<MenuSelect
 						value={selectedSpeed?.id ?? "standard"}
 						onValueChange={(id) =>
 							onSpeedChange(id === "standard" ? "" : (id as ComposerSpeed))
 						}
-					>
-						<SelectTrigger
-							className="model-reasoning-select"
-							aria-label="Speed"
-						>
-							<SelectValue>
-								{selectedSpeed ? speedLabel(selectedSpeed, false) : "Standard"}
-							</SelectValue>
-						</SelectTrigger>
-						<SelectContent position="popper" side="right">
-							<SelectItem value="standard" textValue="Standard">
-								Standard
-							</SelectItem>
-							{model.speeds.map((option) => (
-								<SelectItem
-									key={option.id}
-									value={option.id}
-									textValue={SPEED_LABELS[option.id]}
-								>
-									{speedLabel(option)}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+						valueLabel={
+							selectedSpeed ? speedLabel(selectedSpeed, false) : "Standard"
+						}
+						options={[
+							{ value: "standard", label: "Standard" },
+							...model.speeds.map((option) => ({
+								value: option.id,
+								label: speedLabel(option),
+								textValue: SPEED_LABELS[option.id],
+							})),
+						]}
+						className="model-reasoning-select"
+						side="right"
+						aria-label="Speed"
+					/>
 				</div>
 			) : null}
 		</div>

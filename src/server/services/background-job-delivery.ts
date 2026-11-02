@@ -48,6 +48,10 @@ import {
 import { expirePullRequestEvidence } from "./pr-evidence-cleanup";
 import { runPullRequestEvidenceJob } from "./pr-evidence-job";
 import { deliverPrRepairEvents } from "./pr-repair";
+import {
+	deliverHeldSends,
+	dispatchReleasableHeldSends,
+} from "./queued-user-messages";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
 import { teardownSubagentForks } from "./subagent-runtime";
@@ -77,6 +81,8 @@ export async function deliverBackgroundJob(
 						teardownSubagentForks(machines),
 						// New chats' machines copied ahead, when nothing was sent.
 						sweepUnusedChatMachines(machines),
+						// Messages held for setup whose environment is ready (a missed release).
+						dispatchReleasableHeldSends(),
 					]);
 					const failed = sweeps.find((sweep) => sweep.status === "rejected");
 					if (failed) throw failed.reason;
@@ -177,6 +183,10 @@ export async function deliverBackgroundJob(
 			break;
 		case "checkpoint":
 			await captureSessionCheckpoint(machines, job.userId, job.sessionId);
+			break;
+		case "held-sends":
+			// The workspace's environment just became ready.
+			await deliverHeldSends(machines, job.workspaceId);
 			break;
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
