@@ -244,10 +244,28 @@ function turnDescription(
 	session: AgentSessionRecord,
 	items: readonly SessionItem[],
 ) {
-	return (lastUserMessageText(items) || session.title)
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 72);
+	return commitSubject(lastUserMessageText(items), session.title);
+}
+
+/** A reply that says nothing about the change: "Yes, do that.", "ok", "continue". */
+const BARE_REPLY =
+	/^(?:yes|yep|yeah|ok(?:ay)?|sure|go(?: ahead)?|do (?:it|that|this)|please|continue|proceed|sounds good|looks good|lgtm|thanks?|thank you)\b/i;
+
+/**
+ * The commit subject: the last request, unless it is a short reply to the
+ * agent ("Yes, do that."), which names nothing; then the chat's title.
+ */
+export function commitSubject(
+	message: string | null | undefined,
+	title: string | null | undefined,
+) {
+	const request = (message ?? "").replace(/\s+/g, " ").trim();
+	const named = (title ?? "").replace(/\s+/g, " ").trim();
+	const bare =
+		!request ||
+		request.split(" ").length < 4 ||
+		(BARE_REPLY.test(request) && request.split(" ").length < 8);
+	return (bare && named ? named : request || named).slice(0, 72);
 }
 
 /** Each repository's checkout, under the recorded path ($HOME/<repo>) where baselines are pinned. */

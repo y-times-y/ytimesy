@@ -1,9 +1,9 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { MemoryWorkspaceRuntime } from "../adapters/workspace-runtime";
-import { commitCompletedSessionTurn } from "./turn-commit";
+import { commitCompletedSessionTurn, commitSubject } from "./turn-commit";
 
 const lookup = vi.hoisted(() => vi.fn());
 const evaluation = vi.hoisted(() => vi.fn());
@@ -321,4 +321,36 @@ it("leaves the chat's branch alone when the checkout stays on it or HEAD is deta
 		expect(branchStore.save).not.toHaveBeenCalled();
 		expect(publication.publish.mock.calls[0][0]).toEqual(chat);
 	}
+});
+
+describe("commitSubject", () => {
+	it("keeps a request that describes the change", () => {
+		expect(
+			commitSubject("Add a --version flag to hello.py", "Add a docstring"),
+		).toBe("Add a --version flag to hello.py");
+	});
+	it("uses the chat title for a bare reply", () => {
+		for (const reply of [
+			"Yes, do that.",
+			"ok",
+			"continue",
+			"Sounds good, go ahead",
+		])
+			expect(commitSubject(reply, "Add a one-line docstring to main")).toBe(
+				"Add a one-line docstring to main",
+			);
+	});
+	it("keeps a long reply that names the change", () => {
+		expect(
+			commitSubject(
+				"Yes, and also rename the --shout flag to --loud everywhere",
+				"t",
+			),
+		).toBe("Yes, and also rename the --shout flag to --loud everywhere");
+	});
+	it("falls back to whichever is present, capped at 72 characters", () => {
+		expect(commitSubject(null, "Title")).toBe("Title");
+		expect(commitSubject("ok", "")).toBe("ok");
+		expect(commitSubject("x ".repeat(60), null)).toHaveLength(72);
+	});
 });
