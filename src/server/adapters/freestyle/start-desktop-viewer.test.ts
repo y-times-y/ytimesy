@@ -350,6 +350,8 @@ it("serves VNC on its Unix socket only, behind the dropped password", () => {
 	expect(x11vnc).toContain(`-passwdfile read:${dir}/vnc.passwd `);
 	expect(x11vnc).toContain("-rfbport 0 -rfbportv6 -1 -noipv6");
 	expect(x11vnc).not.toContain("-nopw");
+	// No 1.5 s naps after an idle minute: a template copy's first frame waited for one.
+	expect(x11vnc).toMatch(/ -sb 0$/);
 	expect(existsSync(join(dir, "vnc.password"))).toBe(false);
 	expect(readFileSync(join(dir, "vnc.passwd"), "utf8")).toBe("pass1234\n");
 	expect(statSync(join(dir, "vnc.passwd")).mode & 0o777).toBe(0o600);
@@ -369,11 +371,26 @@ it("keeps an x11vnc that rereads its password file and only replaces the file", 
 	writeFileSync(join(dir, "vnc.password"), "chatpass\n");
 	const kept = runVnc(
 		"",
-		`x11vnc -display :0 -passwdfile read:${dir}/vnc.passwd -unixsock x`,
+		`x11vnc -display :0 -passwdfile read:${dir}/vnc.passwd -unixsock x -sb 0`,
 	);
 	expect(kept.status).toBe(0);
 	expect(kept.calls).toEqual([]);
 	expect(readFileSync(join(dir, "vnc.passwd"), "utf8")).toBe("chatpass\n");
+});
+
+it("restarts an x11vnc that naps when idle, but never under a connected viewer", () => {
+	const napping = `x11vnc -display :0 -passwdfile read:${dir}/vnc.passwd -unixsock x`;
+	writeFileSync(join(dir, "vnc.password"), "chatpass\n");
+	const restarted = runVnc("", napping);
+	expect(restarted.calls[0]).toBe("pkill -x x11vnc");
+	writeFileSync(join(dir, "calls"), "");
+	writeFileSync(join(dir, "vnc.password"), "chatpass\n");
+	const viewed = runVnc(
+		`u_str ESTAB 0 0 ${dir}/.ytimesy/vnc/rfb.sock 18834 * 17812\n`,
+		napping,
+	);
+	expect(viewed.status).toBe(0);
+	expect(viewed.calls.filter(Boolean)).toEqual([]);
 });
 
 it("restarts an x11vnc that read its password only at start", () => {
