@@ -98,7 +98,7 @@ Option A with `edge.ytimesy.com`, plus Access on the web app until launch.
      Metadata read-only (the same set as `scripts/setup-github-app.mjs`).
      Checks read lets PR repair re-read the failing check run or suite it was
      woken for; Issues read is what GitHub requires to deliver Issue comment
-     events (`@ytimesy` on a pull request); Actions read lets a CI wake-up
+     events (`@<app slug>`, e.g. `@ytimesy-agent`, on a pull request); Actions read lets a CI wake-up
      include the failed job's log tail (without it the wake carries check
      output and annotations only).
    - Subscribe to events: Check run, Check suite, Pull request review, Issue

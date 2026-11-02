@@ -122,6 +122,16 @@ for (const name of [
 }
 // ytimesy.com is onboarded to Email Sending; the EMAIL binding sends from here.
 secrets.AUTH_EMAIL_FROM ||= "noreply@ytimesy.com";
+// The development App's bot user (ytimesy-agent[bot]), credited as
+// Co-authored-by on every agent commit. Another App: set GITHUB_APP_BOT_USER_ID
+// from `gh api users/<slug>%5Bbot%5D --jq .id`.
+secrets.GITHUB_APP_BOT_USER_ID =
+	process.env.GITHUB_APP_BOT_USER_ID ||
+	(secrets.GITHUB_APP_SLUG === "ytimesy-agent" ? "328807657" : "");
+if (!/^\d+$/.test(secrets.GITHUB_APP_BOT_USER_ID))
+	throw new Error(
+		`Development deployment is missing GITHUB_APP_BOT_USER_ID (gh api users/${secrets.GITHUB_APP_SLUG}%5Bbot%5D --jq .id).`,
+	);
 const relayProblem = codexRelaySettingsProblem(secrets);
 if (relayProblem) throw new Error(relayProblem);
 if (!secrets.YTIMESY_REALTIME_URL || !secrets.YTIMESY_REALTIME_SECRET) {

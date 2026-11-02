@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { YTIMESY_MENTION } from "./pr-repair-signal";
+import { githubAppMentionPattern } from "./github-bot";
 
 /** What starts or wakes a pull request's chat. */
 export type PullRequestWakeKind = "fix" | "ci" | "comment" | "review_comment";
@@ -49,9 +49,12 @@ export type WakeComment = {
 
 const PROMPT_LIMIT = 30_000;
 
-/** The instruction after the mention; an empty one means "look at the failures and fix them". */
-export function mentionInstruction(body: string): string | null {
-	const match = YTIMESY_MENTION.exec(body);
+/** The instruction after the App's mention; an empty one means "look at the failures and fix them". */
+export function mentionInstruction(
+	body: string,
+	appSlug?: string | null,
+): string | null {
+	const match = githubAppMentionPattern(appSlug).exec(body);
 	if (!match) return null;
 	return body
 		.slice(match.index + match[0].length)
@@ -116,7 +119,7 @@ export function pullRequestWakePrompt(input: {
 					: "Fix this pull request: make the failing checks pass and address open review feedback."
 				: input.comment?.instruction
 					? `@${input.comment.author} asked on GitHub:\n${input.comment.instruction}`
-					: `@${input.comment?.author ?? "a collaborator"} mentioned @ytimesy on GitHub without an instruction: fix the failing checks and open review feedback.`;
+					: `@${input.comment?.author ?? "a collaborator"} mentioned ytimesy on GitHub without an instruction: fix the failing checks and open review feedback.`;
 	const parts = [ask, header];
 	if (input.comment && input.kind !== "fix") {
 		const where = input.comment.path
@@ -164,17 +167,4 @@ export function pullRequestFixPath(projectId: string, linkId: string) {
 
 export function chatPath(projectId: string, sessionId: string) {
 	return `/?${new URLSearchParams({ project: projectId, chat: sessionId })}`;
-}
-
-const FIX_START = "<!-- ytimesy-fix:start -->";
-const FIX_END = "<!-- ytimesy-fix:end -->";
-
-/** The description's "Fix with ytimesy" section; replaces an earlier one. */
-export function withFixSection(body: string, fixUrl: string) {
-	const section = `${FIX_START}\n---\n[Fix with ytimesy](${fixUrl}) · or comment \`@ytimesy <what to change>\` on this pull request.\n${FIX_END}`;
-	const start = body.indexOf(FIX_START);
-	const end = body.indexOf(FIX_END);
-	if (start !== -1 && end > start)
-		return `${body.slice(0, start)}${section}${body.slice(end + FIX_END.length)}`;
-	return body.trim() ? `${body.trimEnd()}\n\n${section}` : section;
 }

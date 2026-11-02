@@ -89,7 +89,11 @@ async function commitChatTurn(
 	const [authorship, bot] = await Promise.all([
 		commitAuthorForUser(session.userId),
 		// GitHub shows the app beside the user, as a Co-authored-by trailer.
-		resolveGithubAppBot().catch(() => null),
+		// resolveGithubAppBot logs (never silently drops) a missing identity.
+		resolveGithubAppBot({
+			installationId: project.installationId,
+			repositoryName: project.fullName.split("/")[1],
+		}),
 	]);
 	const coAuthor = publicationCoAuthor({ author: authorship.author, bot });
 	const host = runtime ?? workspaceRuntimeFromEnv();

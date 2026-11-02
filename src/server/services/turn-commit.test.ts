@@ -167,6 +167,29 @@ it("neither commits nor pushes a root chat of an eval user or evaluation run", a
 	expect(publication.publish).not.toHaveBeenCalled();
 });
 
+it("credits the GitHub App as Co-authored-by on a turn commit when its identity is configured", async () => {
+	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-agent");
+	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
+	try {
+		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+		publication.publish.mockResolvedValue({
+			branch: "ytimesy/fix-parser-0c4a1e",
+			pullRequestUrl: null,
+		});
+		const runtime = new MemoryWorkspaceRuntime();
+		await commitCompletedSessionTurn(chat, items, runtime);
+		expect(runtime.commands).toHaveLength(1);
+		expect(runtime.commands[0].argv[5]).toContain(
+			"-m 'Co-authored-by: ytimesy-agent[bot] <328807657+ytimesy-agent[bot]@users.noreply.github.com>'",
+		);
+		expect(runtime.commands[0].argv[5]).toContain(
+			"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
+		);
+	} finally {
+		vi.unstubAllEnvs();
+	}
+});
+
 it("says why a commit kept the ytimesy author when GitHub returned no login", async () => {
 	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
 	identity.forToken.mockResolvedValue(null);

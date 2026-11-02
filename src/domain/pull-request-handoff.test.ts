@@ -39,7 +39,8 @@ it("publishes the agent's description, then files and checks it did not already 
 	expect(body.startsWith(written)).toBe(true);
 	expect(body).toContain("`src/parser.ts`");
 	expect(body).toContain("`pnpm test` (exit 0)");
-	expect(body).toContain("@ytimesy");
+	// The App's handle is in the footer ensureAppDraftPullRequest adds.
+	expect(body).not.toContain("@ytimesy");
 	expect(body).not.toContain("Automatic draft handoff");
 });
 
@@ -57,7 +58,7 @@ it("assembles a specific body from the turn when the agent did not write one", (
 	expect(body).not.toContain("`1`");
 	expect(body).toContain("exit 0");
 	expect(body).not.toContain("Automatic draft handoff");
-	expect(body.indexOf("## Summary")).toBeLessThan(body.indexOf("@ytimesy"));
+	expect(body).not.toContain("@ytimesy");
 });
 
 it("does not invent a description when the turn recorded nothing", () => {

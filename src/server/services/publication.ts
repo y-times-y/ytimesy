@@ -115,7 +115,12 @@ export function publishProject(
 			authorizedRepository(token, project.installationId, project.repositoryId),
 		);
 		const directory = repositoryDirectory(project.fullName);
-		const bot = yield* Effect.tryPromise(() => resolveGithubAppBot());
+		const bot = yield* Effect.tryPromise(() =>
+			resolveGithubAppBot({
+				installationId: project.installationId,
+				repositoryName: project.fullName.split("/")[1],
+			}),
+		);
 		const author = publicationCommitAuthor({
 			name: input.authorName,
 			email: input.authorEmail,
