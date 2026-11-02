@@ -468,6 +468,34 @@
 	font-weight: var(--list-heading-weight);
 	letter-spacing: 0.02em;
 }
+/* A section's heading with its plan's usage at the end of the same row. */
+.model-section-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	min-width: 0;
+}
+.model-section-head h3 {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.section-plan-usage {
+	display: inline-flex;
+	flex-shrink: 0;
+	gap: 10px;
+	padding-right: var(--list-row-pad-x);
+	color: var(--list-text-muted);
+	font-size: var(--list-meta-size);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	cursor: default;
+}
+.section-plan-usage > [data-low] {
+	color: #f87171;
+}
 .model-picker-list {
 	display: flex;
 	flex-direction: column;
