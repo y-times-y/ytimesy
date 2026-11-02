@@ -5,7 +5,10 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
-import type { ApiModelSpeedId } from "#/domain/api-model-list";
+import {
+	type ApiModelSpeedId,
+	directApiModelSpeeds,
+} from "#/domain/api-model-list";
 import type { ModelProvider } from "#/domain/model-connection";
 import { timedModelFetch } from "../services/turn-timing";
 import { openRouterCacheFetch } from "./api-prompt-cache";
@@ -15,6 +18,7 @@ import {
 	withOpenRouterReasoning,
 } from "./openrouter-reasoning";
 import { preservedThinkingFetch } from "./preserved-thinking";
+import { xaiServiceTierFetch } from "./xai-service-tier";
 
 export function connectedLanguageModel(
 	input: {
@@ -22,7 +26,7 @@ export function connectedLanguageModel(
 		baseUrl: string;
 		apiKey: string;
 		modelId: string;
-		/** Faster maker endpoints; only OpenRouter keys reach them. */
+		/** Faster maker endpoints: OpenRouter's tiered ones, or xAI's priority tier. */
 		speed?: ApiModelSpeedId;
 	},
 	transport: typeof globalThis.fetch,
@@ -52,11 +56,12 @@ export function connectedLanguageModel(
 				})(input.modelId),
 			);
 		case "compatible":
-			if (
-				["https://api.x.ai", "https://api.meta.ai"].includes(
-					new URL(input.baseUrl).origin,
-				)
-			)
+			if (new URL(input.baseUrl).origin === "https://api.x.ai")
+				return createOpenAI({
+					...options,
+					fetch: input.speed ? xaiSpeedFetch(fetch, input) : fetch,
+				}).responses(input.modelId);
+			if (new URL(input.baseUrl).origin === "https://api.meta.ai")
 				return createOpenAI(options).responses(input.modelId);
 			if (new URL(input.baseUrl).origin === "https://api.deepseek.com")
 				return createDeepSeek(options)(input.modelId);
@@ -66,4 +71,17 @@ export function connectedLanguageModel(
 				fetch: preservedThinkingFetch(input.baseUrl, fetch),
 			})(input.modelId);
 	}
+}
+
+/** xAI's own API at a faster speed: the speed's `service_tier` on every request. */
+function xaiSpeedFetch(
+	fetch: typeof globalThis.fetch,
+	input: { readonly modelId: string; readonly speed?: ApiModelSpeedId },
+) {
+	const tier = directApiModelSpeeds(input.modelId).find(
+		(speed) => speed.id === input.speed,
+	)?.serviceTier;
+	if (!tier)
+		throw new Error(`${input.modelId} has no ${input.speed} tier from xAI.`);
+	return xaiServiceTierFetch(fetch, tier);
 }

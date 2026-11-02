@@ -174,3 +174,51 @@ it("resolves every Settings key choice to a client on an allowed endpoint", () =
 		);
 	}
 });
+
+it("sends xAI's priority tier on its own API when the turn is fast", async () => {
+	const bodies: unknown[] = [];
+	const fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+		bodies.push(JSON.parse(String(init?.body)));
+		return new Response("{}", { status: 500 });
+	});
+	const model = connectedLanguageModel(
+		{
+			provider: "compatible",
+			baseUrl: "https://api.x.ai/v1",
+			apiKey: "test-only-key",
+			modelId: "grok-4.7",
+			speed: "fast",
+		},
+		fetch as unknown as typeof globalThis.fetch,
+	);
+	await generateText({ model, prompt: "hi", maxRetries: 0 }).catch(() => {});
+	expect(bodies[0]).toMatchObject({
+		model: "grok-4.7",
+		service_tier: "priority",
+	});
+	expect(() =>
+		connectedLanguageModel(
+			{
+				provider: "compatible",
+				baseUrl: "https://api.x.ai/v1",
+				apiKey: "test-only-key",
+				modelId: "grok-4.20-0309-reasoning",
+				speed: "fast",
+			},
+			fetch as unknown as typeof globalThis.fetch,
+		),
+	).toThrow("no fast tier");
+	const standard = connectedLanguageModel(
+		{
+			provider: "compatible",
+			baseUrl: "https://api.x.ai/v1",
+			apiKey: "test-only-key",
+			modelId: "grok-4.7",
+		},
+		fetch as unknown as typeof globalThis.fetch,
+	);
+	await generateText({ model: standard, prompt: "hi", maxRetries: 0 }).catch(
+		() => {},
+	);
+	expect(bodies.at(-1)).not.toHaveProperty("service_tier");
+});
