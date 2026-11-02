@@ -8,6 +8,7 @@ import {
 	setAnalyticsStrictRegion,
 	setAnalyticsUser,
 } from "./client";
+import { captureFirstTouch, firstTouchEventProperties } from "./first-touch";
 import { startWebVitals } from "./web-vitals";
 
 export function Analytics() {
@@ -18,9 +19,15 @@ export function Analytics() {
 	const replay = !strict;
 	// Before any effect below can start the client.
 	setAnalyticsStrictRegion(strict);
+	const strictRegion = strict;
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
+	// After hydration, so the first paint is untouched: where this visitor
+	// first came from, then ref/utm_* removed from the address bar.
+	useEffect(() => {
+		captureFirstTouch({ strictRegion });
+	}, [strictRegion]);
 	useEffect(() => {
 		startWebVitals();
 	}, []);
@@ -29,7 +36,10 @@ export function Analytics() {
 	}, [isPending, userId, replay]);
 	useEffect(() => {
 		if (!isPending)
-			captureAnalytics("app_viewed", { surface: analyticsSurface(pathname) });
+			captureAnalytics("app_viewed", {
+				surface: analyticsSurface(pathname),
+				...firstTouchEventProperties(),
+			});
 	}, [isPending, pathname]);
 	return null;
 }

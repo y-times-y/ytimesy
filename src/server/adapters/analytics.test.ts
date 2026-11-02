@@ -108,3 +108,24 @@ it("records per-tool timing and model buckets but strips private payloads", asyn
 	});
 	expect(JSON.stringify(sent)).not.toContain("PRIVATE_");
 });
+
+it("sends sign-up attribution as event properties and $set_once person properties", async () => {
+	const { captureServerAnalytics } = await import("./analytics");
+	const initial = { initial_ref: "x", initial_utm_source: "twitter" };
+	await captureServerAnalytics("user", "account_created", initial, {
+		key: "user",
+		timestamp: new Date(),
+		setOnce: initial,
+	});
+	expect(sdk.captureImmediate.mock.calls[0][0].properties).toMatchObject({
+		...initial,
+		$set_once: initial,
+	});
+	await captureServerAnalytics(
+		"user2",
+		"account_created",
+		{ initial_ref: "<bad>" },
+		{ key: "user2", timestamp: new Date() },
+	);
+	expect(sdk.captureImmediate).toHaveBeenCalledTimes(1);
+});
