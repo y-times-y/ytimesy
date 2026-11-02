@@ -247,14 +247,20 @@ const webVars = new Set(
 		).vars ?? {},
 	),
 );
-webBuild(
-	["secret", "bulk"],
-	JSON.stringify(
-		Object.fromEntries(
-			Object.entries(secrets).filter(([name]) => !webVars.has(name)),
-		),
+// The web hands environment setup and background jobs to the edge over
+// signed HTTPS, as the development server wires it (development-server.ts);
+// unset, a new project's setup is never handed off and stays queued.
+const webSecrets: Record<string, string> = {
+	...Object.fromEntries(
+		Object.entries(secrets).filter(([name]) => !webVars.has(name)),
 	),
-);
+	YTIMESY_ENVIRONMENT_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
+	YTIMESY_ENVIRONMENT_WORKFLOW_SECRET: secrets.ENVIRONMENT_WORKFLOW_SECRET,
+	YTIMESY_BACKGROUND_WORKFLOW_URL: secrets.YTIMESY_GIT_PROXY_URL,
+	YTIMESY_BACKGROUND_WORKFLOW_SECRET: secrets.BACKGROUND_WORKFLOW_SECRET,
+	YTIMESY_PR_REPAIR_INGRESS_SECRET: secrets.PR_REPAIR_INGRESS_SECRET,
+};
+webBuild(["secret", "bulk"], JSON.stringify(webSecrets));
 console.log(
 	process.env.YTIMESY_GO_LIVE === "1"
 		? `Production deployed and live at ${secrets.APP_URL}.`
