@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { fetchedBranchCommand } from "#/domain/git-branch-switch";
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import { redactSecrets } from "#/domain/redact-secrets";
 import type { GitTransferHost } from "./git-broker";
 
 type Repository = {
@@ -49,6 +50,19 @@ const TRANSFER_FAILED =
 /** Fetches, pushes and the checkout of what was fetched. */
 const NETWORK_GIT_TIMEOUT_MS = 120_000;
 
+/** The last lines of a command's stderr, without URLs or credentials. */
+function stderrTail(result: { stderr?: unknown }, limit: number) {
+	return redactSecrets(
+		String(result.stderr ?? "")
+			.replace(/https?:\/\/\S+/g, "<url>")
+			.trim()
+			.split("\n")
+			.slice(-3)
+			.join(" | "),
+		limit,
+	);
+}
+
 async function checked(
 	host: GitTransferHost,
 	command: string,
@@ -61,17 +75,40 @@ async function checked(
 		console.warn("Workspace Git command failed", {
 			failure,
 			exitCode: result.exitCode,
-			stderr: String((result as { stderr?: unknown }).stderr ?? "")
-				.replace(/https?:\/\/\S+/g, "<url>")
-				.trim()
-				.split("\n")
-				.slice(-3)
-				.join(" | ")
-				.slice(0, 400),
+			stderr: stderrTail(result, 400),
 		});
 		throw new Error(failure);
 	}
 	return result.stdout.trim();
+}
+
+/**
+ * Only Git's own "not a valid branch name" is a rejected name; any other
+ * failure (the command could not run, timed out, Git refused the directory)
+ * says so with its exit code and a short cause.
+ */
+export async function checkBranchNames(
+	host: GitTransferHost,
+	branches: readonly string[],
+) {
+	const result = await host.exec(
+		branches
+			.map((branch) => `git check-ref-format --branch ${quote(branch)}`)
+			.join(" && "),
+		15_000,
+	);
+	if (result.exitCode === 0) return;
+	const cause = stderrTail(result, 160);
+	if (/is not a valid branch name/.test(cause))
+		throw new Error("Workspace Git rejected the branch name.");
+	console.warn("Workspace Git command failed", {
+		failure: "check-ref-format",
+		exitCode: result.exitCode,
+		stderr: stderrTail(result, 400),
+	});
+	throw new Error(
+		`Workspace Git could not check the branch name (exit ${result.exitCode}${cause ? `: ${cause}` : ""}).`,
+	);
 }
 
 /**
@@ -138,11 +175,7 @@ export async function receiveProxiedRepository(
 ) {
 	const dest = quote(input.destination);
 	const branch = input.workingBranch || input.branch;
-	await checked(
-		host,
-		`git check-ref-format --branch ${quote(input.branch)} && git check-ref-format --branch ${quote(branch)}`,
-		"Workspace Git rejected the branch name.",
-	);
+	await checkBranchNames(host, [input.branch, branch]);
 	if (input.mode !== "clone") {
 		const dirty = await checked(
 			host,
@@ -203,11 +236,7 @@ export async function pushProxiedRepository(
 		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
 	)
 		throw new Error("Invalid completed-turn revision.");
-	await checked(
-		host,
-		`git check-ref-format --branch ${quote(input.branch)}`,
-		"Workspace Git rejected the branch name.",
-	);
+	await checkBranchNames(host, [input.branch]);
 	await withProxyGit(host, input, "write", async (git, url, temporary) => {
 		// The checkout's own config is the agent's to write (http.proxy,
 		// url.*.insteadOf, http.curloptResolve...), so the push runs from a

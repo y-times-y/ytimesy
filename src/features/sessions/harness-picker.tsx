@@ -13,7 +13,11 @@ import {
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
 import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
-import { isClaudeCodeRoute } from "#/domain/claude-code-route";
+import {
+	claudeCodeCoveredOpenRouterIds,
+	claudeCodeSearchMatches,
+	isClaudeCodeRoute,
+} from "#/domain/claude-code-route";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { apiPickerSections } from "#/domain/provider-access";
 import { authClient } from "#/features/auth/client";
@@ -301,6 +305,18 @@ export function HarnessPicker({
 					>
 						{searching ? (
 							<>
+								{claudeData ? (
+									<ClaudeCodeSearch
+										models={claudeData.models}
+										search={search}
+										selectedRoute={harnessId === "api" ? modelId : ""}
+										onSelect={(id) => {
+											if (harnessId !== "api") onHarnessIdChange("api");
+											onModelIdChange(id);
+											setOpen(false);
+										}}
+									/>
+								) : null}
 								<CodexModelSearch
 									search={search}
 									fallbackModels={harnessId === "codex" ? models : []}
@@ -313,6 +329,16 @@ export function HarnessPicker({
 								<ApiModelBrowser
 									author={null}
 									search={search}
+									// The subscription row above is the usable one; no locked copy.
+									coveredIds={
+										claudeData
+											? claudeCodeCoveredOpenRouterIds(claudeData.models)
+											: undefined
+									}
+									hasOtherResults={
+										claudeCodeSearchMatches(claudeData?.models ?? [], search)
+											.length > 0
+									}
 									onBrowseProvider={(author) => {
 										setApiProvider(author);
 										setBrowse(true);
@@ -497,6 +523,43 @@ function ClaudeCodeModels({
 					</p>
 				) : null}
 			</div>
+		</>
+	);
+}
+
+/** Search results from the connected Claude subscription, ranked above API-key models. */
+function ClaudeCodeSearch({
+	models,
+	search,
+	selectedRoute,
+	onSelect,
+}: {
+	models: readonly { readonly id: string; readonly label: string }[];
+	search: string;
+	selectedRoute: string;
+	onSelect: (id: string) => void;
+}) {
+	const results = claudeCodeSearchMatches(models, search);
+	if (!results.length) return null;
+	return (
+		<>
+			<h3>Claude Code · Claude subscription</h3>
+			{results.map((model) => (
+				<button
+					type="button"
+					className="model-browser-option"
+					key={model.id}
+					aria-pressed={model.id === selectedRoute}
+					title={`${model.label} in Claude Code`}
+					onClick={() => onSelect(model.id)}
+				>
+					<ModelProviderLogo provider="anthropic" size={16} />
+					<span>{model.label}</span>
+					{model.id === selectedRoute ? (
+						<Check size={14} aria-hidden="true" />
+					) : null}
+				</button>
+			))}
 		</>
 	);
 }
