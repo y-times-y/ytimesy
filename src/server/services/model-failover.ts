@@ -1,5 +1,11 @@
 import { API_MODEL_LIST } from "#/domain/api-model-list";
 import {
+	CLAUDE_CODE_KEY,
+	CLAUDE_CODE_LABEL,
+	CLAUDE_CODE_MODELS,
+	claudeSubscriptionEnabled,
+} from "#/domain/claude-code-route";
+import {
 	apiModelReasoning,
 	connectionModels,
 	type PublicModelConnection,
@@ -24,6 +30,7 @@ import {
 } from "#/domain/model-failover";
 import type { ApiTurn } from "../adapters/api-turns";
 import { browseModels } from "../adapters/browse-models";
+import { hasClaudeSubscription } from "../adapters/claude-subscription";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { listModelConnections } from "../adapters/model-connections";
 import { loadModelFailoverPreferences } from "../adapters/model-failover-preferences";
@@ -50,6 +57,27 @@ async function subscriptionConnection(
 			...(model.reasoning
 				? { reasoning: model.reasoning.levels.map((level) => level.id) }
 				: {}),
+		})),
+	};
+}
+
+/** The Claude subscription (Claude Code) when it is switched on and connected. */
+async function claudeCodeConnection(
+	userId: string,
+): Promise<FailoverConnection | null> {
+	if (
+		!claudeSubscriptionEnabled() ||
+		!(await hasClaudeSubscription(userId).catch(() => false))
+	)
+		return null;
+	return {
+		key: CLAUDE_CODE_KEY,
+		label: CLAUDE_CODE_LABEL,
+		kind: "subscription",
+		revision: "",
+		models: CLAUDE_CODE_MODELS.map((model) => ({
+			id: model.id,
+			label: model.label,
 		})),
 	};
 }
@@ -82,8 +110,9 @@ export function apiFailoverConnections(
 export async function failoverConnections(
 	userId: string,
 ): Promise<FailoverConnection[]> {
-	const [subscription, connections] = await Promise.all([
+	const [subscription, claudeCode, connections] = await Promise.all([
 		subscriptionConnection(userId),
+		claudeCodeConnection(userId),
 		listModelConnections(userId),
 	]);
 	const browsed = connections.some((row) => row.provider === "openrouter")
@@ -91,6 +120,7 @@ export async function failoverConnections(
 		: [];
 	return [
 		...(subscription ? [subscription] : []),
+		...(claudeCode ? [claudeCode] : []),
 		...apiFailoverConnections(connections, browsed),
 	];
 }
@@ -103,7 +133,10 @@ export function routeLabel(
 	const connection = connections.find((row) => row.key === key);
 	const canonical = canonicalModelId(
 		connection ?? {
-			kind: key === SUBSCRIPTION_KEY ? "subscription" : "custom",
+			kind:
+				key === SUBSCRIPTION_KEY || key === CLAUDE_CODE_KEY
+					? "subscription"
+					: "custom",
 		},
 		route.modelId,
 	);
@@ -114,7 +147,11 @@ export function routeLabel(
 			route.modelId,
 		connection:
 			connection?.label ??
-			(key === SUBSCRIPTION_KEY ? SUBSCRIPTION_LABEL : "API connection"),
+			(key === SUBSCRIPTION_KEY
+				? SUBSCRIPTION_LABEL
+				: key === CLAUDE_CODE_KEY
+					? CLAUDE_CODE_LABEL
+					: "API connection"),
 	};
 }
 

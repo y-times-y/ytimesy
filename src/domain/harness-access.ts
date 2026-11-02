@@ -4,6 +4,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "./agent-provider";
+import { parseClaudeCodeRouteId } from "./claude-code-route";
 import { parseModelRouteId } from "./model-connection";
 import {
 	isTurnRunning,
@@ -206,7 +207,10 @@ export function composerSendIsEnabled(input: {
 	if (composerCanStartSignIn(input)) return true;
 	// A send during a run is queued for that run's next step.
 	if (input.harnessId === "api")
-		return parseModelRouteId(input.modelId) !== null;
+		return (
+			parseModelRouteId(input.modelId) !== null ||
+			parseClaudeCodeRouteId(input.modelId) !== null
+		);
 	const harnessReady = selectedHarnessIsConnected(
 		input.connection,
 		input.harnessId,
