@@ -211,9 +211,6 @@ function Benchmark() {
 					</figcaption>
 					<ScoreCostChart />
 				</figure>
-				<p className="bench-writeup">
-					<a href={HARNESS_POST_PATH}>Introducing ytimesy harness 1.0</a>
-				</p>
 				<div className="bench-foot">
 					<span>{BENCHMARK.setup}</span>
 					<span className="bench-links">
@@ -226,6 +223,14 @@ function Benchmark() {
 					</span>
 				</div>
 			</div>
+			<p className="bench-writeup">
+				<a href={HARNESS_POST_PATH}>
+					<span className="bench-writeup-read">
+						For more details, read the post
+					</span>
+					Introducing ytimesy harness 1.0
+				</a>
+			</p>
 		</section>
 	);
 }

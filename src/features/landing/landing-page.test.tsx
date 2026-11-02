@@ -57,6 +57,10 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	expect(text).not.toContain("Preliminary");
 	expect(html).toContain('href="/blog/harness-1-0"');
 	expect(html).toContain('class="bench-writeup"');
+	expect(html.indexOf("bench-writeup")).toBeGreaterThan(
+		html.indexOf("bench-foot"),
+	);
+	expect(text).toContain("For more details, read the post");
 	expect(text).toContain("Introducing ytimesy harness 1.0");
 	for (const job of [
 		"6aacc762-8e07-4be2-ab4e-17495141235d",
