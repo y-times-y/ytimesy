@@ -21,7 +21,12 @@ vi.mock("../adapters/memory-settings", () => ({
 		repo: null,
 		dreamedThrough: null,
 	})),
-	memoryProjectName: vi.fn(async () => "acme/web"),
+	memoryProject: vi.fn(async () => ({
+		fullName: "acme/web",
+		name: "Web",
+		repositoryIds: [7],
+	})),
+	recordMemoryRecalls: vi.fn(async () => {}),
 	memoryEmbeddings: vi.fn(async () => new Map()),
 	saveMemoryEmbeddings: vi.fn(async () => {}),
 	recentUnsavedMessages: vi.fn(async () => []),
@@ -39,6 +44,8 @@ vi.mock("../adapters/background-job-dispatch", () => ({
 const { turnMemory, readHook, subagentMemory, hedgedQuery } = await import(
 	"./turn-memory"
 );
+/** The chat's project: its notes live in projects/acme-web--7/. */
+const ACME = { fullName: "acme/web", name: "Web", repositoryIds: [7] };
 const { memorySettings } = await import("../adapters/memory-settings");
 
 function fakeRepo(files: Record<string, string>): MemoryRepo {
@@ -88,7 +95,7 @@ async function memoryFor(
 			embed: null,
 			appUrl: "https://ytimesy.test",
 			today: () => "2026-10-15",
-			projectName: null,
+			project: null,
 			wording: wording === "default" ? undefined : wording,
 			writer: writer === "default" ? undefined : writer,
 		},
@@ -114,7 +121,12 @@ describe("MEMORY.md at chat start", () => {
 			items,
 			workspace,
 		);
-		expect(recall).toEqual({ head: "abc", index: true, lines: [] });
+		expect(recall).toEqual({
+			head: "abc",
+			index: true,
+			indexLines: 3,
+			lines: [],
+		});
 		expect(attached).toHaveLength(1);
 		expect(attached[0].content).toEqual([
 			{ type: "text", text: "Fix the build" },
@@ -209,7 +221,7 @@ describe("read hook", () => {
 				repo: fakeRepo(files),
 				embed,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 			},
 		);
 		if (!memory) throw new Error("memory should be on");
@@ -297,12 +309,15 @@ describe("read hook", () => {
 		]);
 	});
 
-	it("adds a rule for every new file to a request that adds one, without a match", async () => {
+	it("adds a project's rule for every new file to a request that adds one, without a match", async () => {
 		const snapshot = {
 			head: "a",
 			files: {
-				"style.md":
+				"projects/acme-web--7/style.md":
 					'- New source files start with "# SPDX-License-Identifier: Apache-2.0" and indent with tabs [added: 2026-05-30]\n',
+				// A personal note is recalled only by a match.
+				"personal/style.md":
+					"- New files I write use tabs [added: 2026-05-30]\n",
 			},
 		};
 		const base = {
@@ -311,7 +326,7 @@ describe("read hook", () => {
 			userId: "u1",
 			alreadyShown: () => false,
 			today: "2026-10-15",
-			project: null,
+			project: ACME,
 			cache,
 		};
 		const adds = await readHook({
@@ -319,7 +334,9 @@ describe("read hook", () => {
 			// No word in common: only the new-file rule brings it.
 			query: "Add util/timestamps.py with to_utc(value)",
 		});
-		expect(adds.lines.map((entry) => entry.path)).toEqual(["style.md"]);
+		expect(adds.lines.map((entry) => entry.path)).toEqual([
+			"projects/acme-web--7/style.md",
+		]);
 		const edits = await readHook({
 			...base,
 			query: "Fix the timestamps bug in util/timestamps.py",
@@ -339,7 +356,7 @@ describe("read hook", () => {
 				repo: { ...fakeRepo(files), snapshot },
 				embed,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 			},
 		);
 		if (!memory) throw new Error("memory should be on");
@@ -364,11 +381,8 @@ describe("read hook", () => {
 				embeddedLines: 2,
 			}),
 		});
-		// The standing pnpm rule rides as a project rule; the hook adds the match.
-		expect(recall?.lines.map((line) => line.path)).toEqual([
-			"tooling.md",
-			"time.md",
-		]);
+		// No line is marked always-on: only the hook's match rides along.
+		expect(recall?.lines.map((line) => line.path)).toEqual(["time.md"]);
 	});
 });
 
@@ -392,7 +406,7 @@ describe("freshness", () => {
 				repo: fakeRepo({ "MEMORY.md": EMPTY_MEMORY }),
 				embed: null,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 				recentMessages,
 			},
 		);
@@ -429,7 +443,7 @@ describe("freshness", () => {
 			{
 				repo: fakeRepo({}),
 				embed: null,
-				projectName: null,
+				project: null,
 				recentMessages: async () => {
 					throw new Error("database down");
 				},
@@ -448,12 +462,12 @@ describe("freshness", () => {
 describe("project rules", () => {
 	const files = {
 		"MEMORY.md": EMPTY_MEMORY,
-		"ids.md":
+		"personal/ids.md":
 			"# ids\n- New entity IDs use ULIDs [added: 2026-10-01]\n- Order IDs were sequential in v1 [added: 2026-10-02]\n",
-		"web.md":
-			"# web\n- Every HTTP call goes through lib/http.ts [project: acme/web; scope: always]\n",
-		"other.md":
-			"# other\n- Never log tokens [project: other/app; scope: always]\n",
+		"projects/acme-web--7/web.md":
+			"# web\n- Every HTTP call goes through lib/http.ts [scope: always]\n",
+		"projects/other-app--9/other.md":
+			"# other\n- Never log tokens [scope: always]\n",
 	};
 
 	it("rides on the chat's first request whatever its wording, once, and is not matched again", async () => {
@@ -467,7 +481,7 @@ describe("project rules", () => {
 				repo: fakeRepo(files),
 				embed,
 				today: () => "2026-10-15",
-				projectName: "acme/web",
+				project: ACME,
 				wording: "rules",
 			},
 		);
@@ -480,20 +494,21 @@ describe("project rules", () => {
 		);
 		const parts = messages[0].content as { text: string }[];
 		expect(parts[1].text).toContain(MEMORY_PROJECT_RULES_HEADER);
-		// Scope always first, then conventions; facts and other projects stay out.
+		// Only scope: always lines, only this project's; a convention without
+		// the key is matched like any other line.
 		expect(parts[1].text).toContain(
-			"- Every HTTP call goes through lib/http.ts\n- New entity IDs use ULIDs\n",
+			"- Every HTTP call goes through lib/http.ts\n",
 		);
-		expect(parts[1].text).not.toContain("sequential");
+		expect(parts[1].text).not.toContain("ULIDs");
 		expect(JSON.stringify(parts)).not.toContain("Never log tokens");
 		// The hook's matches never repeat a rule.
 		expect(parts.slice(2).map((part) => part.text)).toEqual([
-			expect.not.stringContaining("ULIDs"),
+			expect.not.stringContaining("lib/http.ts"),
 		]);
 		expect(recall?.lines.map((line) => line.path)).toEqual([
-			"web.md",
-			"ids.md",
-			"ids.md",
+			"projects/acme-web--7/web.md",
+			"personal/ids.md",
+			"personal/ids.md",
 		]);
 		const later = await memory.attach(
 			[
@@ -550,7 +565,7 @@ describe("saves still running in other chats", () => {
 			repo: { ...fakeRepo(before), snapshot },
 			embed: null,
 			today: () => "2026-10-15",
-			projectName: null,
+			project: null,
 			pendingSaves,
 		});
 		if (!memory) throw new Error("memory should be on");
@@ -573,7 +588,7 @@ describe("saves still running in other chats", () => {
 				repo: fakeRepo(before),
 				embed: null,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 				pendingSaves: async () => 1,
 			});
 			const attaching = memory?.attach(
@@ -589,7 +604,7 @@ describe("saves still running in other chats", () => {
 		const broken = await turnMemory(owner, {
 			repo: fakeRepo(before),
 			embed: null,
-			projectName: null,
+			project: null,
 			pendingSaves: async () => {
 				throw new Error("database down");
 			},
@@ -610,7 +625,7 @@ describe("saves still running in other chats", () => {
 		const memory = await turnMemory(owner, {
 			repo: fakeRepo(before),
 			embed: null,
-			projectName: null,
+			project: null,
 			writer: "agent",
 			pendingSaves,
 		});
@@ -637,7 +652,7 @@ describe("memory markers", () => {
 				}),
 				embed,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 				chatTitles: async (ids) =>
 					new Map(ids.map((id) => [id, "Set up the monorepo"])),
 			},
@@ -648,12 +663,13 @@ describe("memory markers", () => {
 			[user("a", "install a date library please")],
 			workspace,
 		);
-		// A standing rule is recalled as a project rule, so the hook finds nothing more.
+		// Not marked always-on, so the hook recalls it by its match.
 		expect(recall).toEqual({
 			head: "abc",
 			index: true,
+			indexLines: 2,
 			hook: {
-				outcome: "none",
+				outcome: "matched",
 				ms: expect.any(Number),
 				spans: expect.any(Object),
 			},
@@ -661,8 +677,6 @@ describe("memory markers", () => {
 				{
 					path: "tooling.md",
 					text: "Uses pnpm to install any library, never npm",
-					// A standing rule attached to every chat, shown in its own group.
-					rule: true,
 					source: {
 						chatId: otherChat,
 						title: "Set up the monorepo",
@@ -696,7 +710,7 @@ describe("memory markers", () => {
 		};
 		const memory = await turnMemory(
 			{ id: chatId, userId: "u1", projectId: null },
-			{ repo, embed: null, today: () => "2026-10-15", projectName: null },
+			{ repo, embed: null, today: () => "2026-10-15", project: null },
 		);
 		if (!memory) throw new Error("memory should be on");
 		const items = [
@@ -725,7 +739,7 @@ describe("memory markers", () => {
 					snapshot: async () => ({ head: "h1", files: before }),
 				},
 				embed: null,
-				projectName: null,
+				project: null,
 			},
 		);
 		repo.snapshotAt.mockClear();
@@ -879,7 +893,7 @@ describe("the VM's memory token", () => {
 				userId: "u1",
 				projectId: null,
 			},
-			{ repo, embed: null, appUrl: "https://ytimesy.test", projectName: null },
+			{ repo, embed: null, appUrl: "https://ytimesy.test", project: null },
 		);
 		if (!memory) throw new Error("memory should be on");
 		const exec = vi.fn(async (_vm: string, _command: string) => ({
@@ -947,7 +961,7 @@ describe("the VM's memory token", () => {
 			repo,
 			embed: null,
 			appUrl: "https://ytimesy.test",
-			projectName: null,
+			project: null,
 			vmTokenLedger,
 		};
 		const exec = vi.fn(async (_vm: string, _command: string) => ({
@@ -987,11 +1001,11 @@ describe("the VM's memory token", () => {
 describe("subagents and the checker (read only)", () => {
 	const files = {
 		"MEMORY.md": "# Memory\n\n- Prefers tabs\n",
-		"ids.md":
-			"# ids\n- New entity IDs use ULIDs [added: 2026-10-01]\n- Order IDs were sequential in v1 [added: 2026-10-02]\n",
-		"time.md": "# time\n- Store timestamps in UTC [source: y]\n",
-		"other.md":
-			"# other\n- Never log tokens [project: other/app; scope: always]\n",
+		"projects/acme-web--7/ids.md":
+			"# ids\n- New entity IDs use ULIDs [scope: always; added: 2026-10-01]\n- Order IDs were sequential in v1 [added: 2026-10-02]\n- Never bump the API version [added: 2026-10-03]\n",
+		"personal/time.md": "# time\n- Store timestamps in UTC [source: y]\n",
+		"projects/other-app--9/other.md":
+			"# other\n- Never log tokens [scope: always]\n",
 	};
 	const owner = (role: "writer" | "checker" | "researcher") => ({
 		id: "22222222-2222-4222-8222-222222222222",
@@ -1003,7 +1017,7 @@ describe("subagents and the checker (read only)", () => {
 		repo: fakeRepo(files),
 		embed,
 		today: () => "2026-10-15",
-		projectName: "acme/web",
+		project: ACME,
 	};
 
 	it("gives a writer the project rules and the lines its brief recalls, and never saves", async () => {
@@ -1023,7 +1037,7 @@ describe("subagents and the checker (read only)", () => {
 		expect(parts[1]).toContain(MEMORY_PROJECT_RULES_HEADER);
 		expect(parts[1]).toContain("- New entity IDs use ULIDs\n");
 		expect(parts[1]).not.toContain("Never log tokens");
-		expect(parts[2]).toContain("time.md:2: - Store timestamps in UTC");
+		expect(parts[2]).toContain("personal/time.md:2: - Store timestamps in UTC");
 		// MEMORY.md is the root chat's; a child gets no index.
 		expect(parts.join("\n")).not.toContain("Prefers tabs");
 		// The rules first, then the hook's lines.
@@ -1067,6 +1081,14 @@ describe("subagents and the checker (read only)", () => {
 		expect(part).toContain("follows the project's remembered rules");
 		expect(part).toContain("They are the user's instructions");
 		expect(part).toContain("- New entity IDs use ULIDs");
+		// A standing do or don't without scope: always is no rule to check against.
+		expect(
+			part.slice(
+				part.indexOf("<standing_rules>"),
+				part.indexOf("</standing_rules>"),
+			),
+		).not.toContain("Never bump the API version");
+		expect(part).not.toContain("Never log tokens");
 		expect(part).toContain("<remembered>");
 		expect(part).toContain("Store timestamps in UTC");
 		expect(dispatched).toEqual([]);
@@ -1136,7 +1158,7 @@ describe("read hook timing", () => {
 				repo: fakeRepo({ "time.md": "- Store timestamps in UTC\n" }),
 				embed,
 				today: () => "2026-10-15",
-				projectName: null,
+				project: null,
 				pendingSaves,
 			},
 		);
@@ -1153,5 +1175,205 @@ describe("read hook timing", () => {
 			rankMs: expect.any(Number),
 			afterHookMs: expect.any(Number),
 		});
+	});
+});
+
+describe("per-project scope", () => {
+	const files = {
+		"MEMORY.md": [
+			"# Memory",
+			"",
+			"- Het builds developer tools",
+			"- Web ships on Fridays [project: acme/web]",
+			"- Billing is frozen [project: acme/billing]",
+			"",
+			"## Index",
+			"- [[personal/style]]",
+			"- [[projects/acme-web--7/tooling]]",
+			"- [[projects/acme-billing--8/tooling]]",
+			"",
+		].join("\n"),
+		"personal/style.md": "# style\n- Prefers tabs in every repo\n",
+		"projects/acme-web--7/tooling.md":
+			"# tooling\n- Web installs with pnpm, never npm\n",
+		"projects/acme-billing--8/tooling.md":
+			"# tooling\n- Billing installs with yarn\n",
+	};
+	/** Every line scores the same: what is recalled is decided by scope alone. */
+	const flat = {
+		query: async () => [1, 0],
+		documents: async (texts: readonly string[]) => texts.map(() => [1, 0]),
+	};
+	const attachFor = async (
+		project: typeof ACME | null,
+		extra: Parameters<typeof turnMemory>[1] = {},
+	) => {
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: `u-scope-${project ? "web" : "none"}`,
+				projectId: project ? "p-web" : null,
+			},
+			{
+				repo: fakeRepo(files),
+				embed: flat,
+				today: () => "2026-10-15",
+				project,
+				wording: "notes",
+				recentMessages: async () => [],
+				...extra,
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		return memory.attach(
+			[{ role: "user", content: "set up the install step" }],
+			[user("a", "set up the install step")],
+			workspace,
+		);
+	};
+
+	it("recalls personal/ and this project's folder only, and filters MEMORY.md", async () => {
+		const { messages, recall } = await attachFor(ACME);
+		const text = JSON.stringify(messages[0].content);
+		expect(text).toContain("Prefers tabs in every repo");
+		expect(text).toContain("Web installs with pnpm");
+		expect(text).toContain("Web ships on Fridays");
+		expect(text).toContain("[[projects/acme-web--7/tooling]]");
+		expect(text).not.toContain("yarn");
+		expect(text).not.toContain("Billing is frozen");
+		expect(text).not.toContain("acme-billing--8");
+		expect(recall?.lines.map((line) => line.path).sort()).toEqual([
+			"personal/style.md",
+			"projects/acme-web--7/tooling.md",
+		]);
+	});
+
+	it("gives a chat without a project its personal notes only", async () => {
+		const { messages } = await attachFor(null);
+		const text = JSON.stringify(messages[0].content);
+		expect(text).toContain("Prefers tabs in every repo");
+		expect(text).toContain("Het builds developer tools");
+		expect(text).not.toContain("pnpm");
+		expect(text).not.toContain("yarn");
+		expect(text).not.toContain("projects/");
+		expect(text).not.toContain("Web ships on Fridays");
+	});
+
+	it("caps MEMORY.md and counts the index lines it attached", async () => {
+		const long = {
+			...files,
+			"MEMORY.md": `# Memory\n\n${Array.from({ length: 80 }, (_, index) => `- Fact ${index} ${"x".repeat(40)}`).join("\n")}\n`,
+		};
+		const { messages, recall } = await attachFor(ACME, {
+			repo: fakeRepo(long),
+		});
+		const index = (messages[0].content as { text: string }[])[1].text;
+		expect(index.length).toBeLessThan(2400);
+		expect(index).toContain("more lines: `cat ~/memory/MEMORY.md`");
+		expect(recall?.indexLines).toBeGreaterThan(10);
+		expect(recall?.indexLines).toBeLessThan(80);
+	});
+
+	it("attaches other chats' messages of this project and records them on the recall", async () => {
+		const { recentUnsavedMessages } = await import(
+			"../adapters/memory-settings"
+		);
+		vi.mocked(recentUnsavedMessages).mockClear();
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u-recent",
+				projectId: "p-web",
+			},
+			{
+				repo: fakeRepo(files),
+				embed: null,
+				today: () => "2026-10-15",
+				project: ACME,
+			},
+		);
+		await memory?.attach(
+			[{ role: "user", content: "hello" }],
+			[user("a", "hello")],
+			workspace,
+		);
+		expect(recentUnsavedMessages).toHaveBeenCalledWith(
+			"u-recent",
+			"11111111-1111-4111-8111-111111111111",
+			600,
+			"p-web",
+		);
+		const { recall } = await attachFor(ACME, {
+			recentMessages: async () => [
+				{
+					sessionId: "33333333-3333-4333-8333-333333333333",
+					title: "Billing",
+					text: "Prices are in cents from now on",
+					at: new Date(),
+				},
+			],
+			writer: "both",
+		} as Parameters<typeof turnMemory>[1]);
+		expect(recall?.recent).toEqual([
+			{
+				chatId: "33333333-3333-4333-8333-333333333333",
+				title: "Billing",
+				text: "Prices are in cents from now on",
+			},
+		]);
+	});
+
+	it("notes which lines it recalled, without waiting on it", async () => {
+		const recordRecalls = vi.fn(async () => {});
+		await attachFor(ACME, { recordRecalls });
+		await vi.waitFor(() => expect(recordRecalls).toHaveBeenCalledTimes(1));
+		expect(
+			[...(recordRecalls.mock.calls[0] as unknown as [string[]])[0]].sort(),
+		).toEqual([
+			"Prefers tabs in every repo",
+			"Web installs with pnpm, never npm",
+		]);
+	});
+
+	it("recalls at most four lines after the chat's first request", async () => {
+		const many = {
+			"MEMORY.md": EMPTY_MEMORY,
+			"personal/notes.md": `# notes\n${Array.from({ length: 10 }, (_, index) => `- Note ${index}`).join("\n")}\n`,
+		};
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u-limit",
+				projectId: null,
+			},
+			{
+				repo: fakeRepo(many),
+				embed: flat,
+				today: () => "2026-10-15",
+				project: null,
+				wording: "notes",
+				recentMessages: async () => [],
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		const first = await memory.attach(
+			[{ role: "user", content: "set up the install step" }],
+			[user("a", "set up the install step")],
+			workspace,
+		);
+		expect(first.recall?.lines).toHaveLength(6);
+		const later = await memory.attach(
+			[
+				...first.messages,
+				{ role: "assistant", content: "ok" },
+				{ role: "user", content: "and the deploy step too" },
+			],
+			[
+				user("a", "set up the install step"),
+				user("b", "and the deploy step too"),
+			],
+			workspace,
+		);
+		expect(later.recall?.lines).toHaveLength(4);
 	});
 });

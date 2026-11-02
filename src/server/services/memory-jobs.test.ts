@@ -11,8 +11,13 @@ vi.mock("./api-agent-runtime", () => ({ runApiAgent: vi.fn() }));
 vi.mock("./codex-subscription-agent", () => ({
 	runCodexSubscriptionAgent: vi.fn(),
 }));
-const { dreamChat, runMemoryDream, runMemorySave, saveHookChanges } =
-	await import("./memory-jobs");
+const {
+	dreamChat,
+	runMemoryDream,
+	runMemorySave,
+	saveHookChanges,
+	withoutNearDuplicates,
+} = await import("./memory-jobs");
 type Deps = NonNullable<Parameters<typeof runMemoryDream>[1]>;
 
 const SINCE = new Date("2026-10-14T00:00:00Z");
@@ -25,9 +30,14 @@ const chat = (
 	id,
 	title: `Chat ${id}`,
 	project: "acme/web",
+	projectRef: { fullName: "acme/web", name: "Web", repositoryIds: [7] },
 	updatedAt: new Date(updatedAt),
 	items,
 });
+/** The chat's project folder in the per-project layout. */
+const WEB = "projects/acme-web--7";
+/** A repo already in the per-project layout: no migration commit first. */
+const LAYOUT = { ".memory-layout": "2\n" };
 const apiRoute = {
 	connectionId: "c1",
 	connectionRevision: "rev-1",
@@ -52,11 +62,18 @@ function harness(options: {
 	answer?: string;
 	/** The last whole-repo review; a day ago unless given. */
 	lastReview?: Date | null;
+	/** Files as given, without the layout marker (a repo from before the layout). */
+	legacy?: boolean;
+	/** Each new entry's closest existing line, as embeddings would find it. */
+	closest?: Deps["closestLines"];
 }) {
 	const commits: { changes: unknown; message: string }[] = [];
 	const repo: MemoryRepo = {
 		name: "memory-u1",
-		snapshot: async () => ({ head: "h1", files: { ...(options.files ?? {}) } }),
+		snapshot: async () => ({
+			head: "h1",
+			files: { ...(options.legacy ? {} : LAYOUT), ...(options.files ?? {}) },
+		}),
 		snapshotAt: async () => ({ head: "h1", files: {} }),
 		commit: async (_base, changes, message) => {
 			commits.push({ changes, message });
@@ -138,6 +155,11 @@ function harness(options: {
 			calls.warmed.push([...texts]);
 		},
 		similarity: async () => null,
+		closestLines: options.closest ?? (async () => null),
+		projects: async () => [
+			{ fullName: "acme/web", name: "Web", repositoryIds: [7] },
+		],
+		recalls: async () => ({ recalled: new Map(), since: null }),
 		lastReview: async () =>
 			options.lastReview === undefined
 				? new Date("2026-10-14T00:00:00Z")
@@ -255,7 +277,7 @@ describe("dreaming", () => {
 		const { deps, calls, commits, call } = harness({
 			files: {
 				"MEMORY.md": "# Memory\n\n## Index\n",
-				"old.md": "- Freeze deploys [expires: 2026-01-01]\n",
+				"personal/old.md": "- Freeze deploys [expires: 2026-01-01]\n",
 			},
 			chats,
 			steps: 2,
@@ -295,16 +317,21 @@ describe("dreaming", () => {
 			expect.arrayContaining([
 				{ path: "tooling.md", content: expect.stringContaining("Uses pnpm") },
 				// Expired entries are removed in full mode.
-				{ path: "old.md", content: "" },
+				{ path: "personal/old.md", content: "" },
 			]),
 		);
 		expect(calls.dreamed).toEqual([new Date("2026-10-15T11:00:00Z")]);
+		// The dream is told the layout, each chat's project and the project folders.
+		const prompt = String(calls.agent[0].messages[0].content);
+		expect(prompt).toContain("· project acme/web ·");
+		expect(prompt).toContain(`Project folders:\n- ${WEB}/ = acme/web`);
+		expect(calls.agent[0].instructions).toContain("personal/<topic>.md");
 	});
 
 	it("also reviews the whole repo once a week, with more steps, and records it", async () => {
 		const files = {
-			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
-			"tooling.md":
+			"MEMORY.md": "# Memory\n\n## Index\n- [[personal/tooling]]\n",
+			"personal/tooling.md":
 				"# tooling\n- Use npm for installs [added: 2026-02-03]\n- Install packages with pnpm [added: 2026-06-01]\n",
 		};
 		const script = async (tools: ModelAgentInput["tools"]) => {
@@ -318,10 +345,13 @@ describe("dreaming", () => {
 		});
 		expect(await runMemoryDream("u1", deps, 5)).toBe("unchanged");
 		const prompt = String(calls.agent[0].messages[0].content);
-		expect(prompt).toContain("Whole-repo review");
 		expect(prompt).toContain(
-			"### tooling.md\n1: # tooling\n2: - Use npm for installs",
+			"Review: this dream also does the periodic pass over personal/",
 		);
+		expect(prompt).toContain(
+			"### personal/tooling.md\n1: # tooling\n2: - Use npm for installs",
+		);
+		expect(prompt).toContain("Sort personal/");
 		expect(calls.agent[0].maxSteps).toBe(36);
 		expect(calls.usage).toEqual([
 			expect.objectContaining({ kind: "dream", outcome: "completed:review" }),
@@ -336,19 +366,28 @@ describe("dreaming", () => {
 			});
 			await runMemoryDream("u1", recent.deps, 5);
 			expect(String(recent.calls.agent[0].messages[0].content)).not.toContain(
-				"Whole-repo review",
+				"Review: this dream",
 			);
 			expect(recent.calls.agent[0].maxSteps).toBe(5);
 		}
+		// A memory past the budget is still reviewed: the folders (and files) that fit.
 		const huge = harness({
-			files: { ...files, "big.md": "- x\n".repeat(20_000) },
+			files: {
+				...files,
+				"personal/big.md": "- x\n".repeat(20_000),
+				[`${WEB}/api.md`]: "# api\n- Errors are JSON [added: 2026-10-01]\n",
+			},
 			chats,
 			lastReview: null,
 		});
 		await runMemoryDream("u1", huge.deps, 5);
-		expect(String(huge.calls.agent[0].messages[0].content)).not.toContain(
-			"Whole-repo review",
+		const big = String(huge.calls.agent[0].messages[0].content);
+		expect(big).toContain(
+			`periodic pass over personal/ (in part), ${WEB}/ (next time: personal/)`,
 		);
+		expect(big).toContain("### personal/tooling.md");
+		expect(big).toContain(`### ${WEB}/api.md`);
+		expect(big).not.toContain("### personal/big.md");
 	});
 
 	it("uses the ChatGPT plan without an API reservation", async () => {
@@ -398,7 +437,7 @@ describe("save hook", () => {
 			files: { "MEMORY.md": "# Memory\n\n## Index\n" },
 			chats,
 			answer:
-				'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm","project":"acme/web"}]}',
+				'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm","personal":""}]}',
 		});
 		expect(
 			await runMemorySave("u1", "11111111-1111-4111-8111-111111111111", deps),
@@ -408,13 +447,17 @@ describe("save hook", () => {
 		expect(calls.usage).toEqual([
 			expect.objectContaining({ kind: "save", outcome: "completed" }),
 		]);
+		// The chat's project folder by default; the folder says where it applies.
 		expect(commits[0].changes).toEqual([
 			{
-				path: "tooling.md",
+				path: `${WEB}/tooling.md`,
 				content:
-					"# tooling\n- Uses pnpm, never npm [project: acme/web; source: https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111; added: 2026-10-15]\n",
+					"# tooling\n- Uses pnpm, never npm [source: https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111; added: 2026-10-15]\n",
 			},
-			{ path: "MEMORY.md", content: "# Memory\n\n## Index\n- [[tooling]]\n" },
+			{
+				path: "MEMORY.md",
+				content: `# Memory\n\n## Index\n- [[${WEB}/tooling]]\n`,
+			},
 		]);
 		// The chat shows the saved line under the turn whose message it came from.
 		expect(calls.saved).toEqual([
@@ -422,7 +465,7 @@ describe("save hook", () => {
 				"u1",
 				"11111111-1111-4111-8111-111111111111",
 				"1",
-				[{ path: "tooling.md", text: "Uses pnpm, never npm" }],
+				[{ path: `${WEB}/tooling.md`, text: "Uses pnpm, never npm" }],
 			],
 		]);
 		// The new line is embedded before the next chat's read hook needs it.
@@ -433,7 +476,11 @@ describe("save hook", () => {
 		const plain = harness({
 			chats: [
 				chat("c9", [
-					item({ kind: "userMessage", id: "1", text: "Fix the failing test" }),
+					item({
+						kind: "userMessage",
+						id: "1",
+						text: "We should keep the retry count at 3",
+					}),
 				]),
 			],
 			answer: '{"entries":[]}',
@@ -463,8 +510,11 @@ describe("save hook", () => {
 			"# tooling\n- Use npm for installs [source: a]\n- Node is pinned to 22 [source: b]\n";
 		const { deps, calls, commits } = harness({
 			files: {
-				"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
-				"tooling.md": tooling,
+				"MEMORY.md": `# Memory\n\n## Index\n- [[${WEB}/tooling]]\n`,
+				[`${WEB}/tooling.md`]: tooling,
+				// Another project's line is never shown, so never replaced.
+				"projects/acme-api--8/tooling.md":
+					"# tooling\n- Use yarn [source: c]\n",
 			},
 			chats: [
 				chat("11111111-1111-4111-8111-111111111111", [
@@ -475,8 +525,7 @@ describe("save hook", () => {
 					}),
 				]),
 			],
-			answer:
-				'{"entries":[{"file":"tooling.md","text":"Install packages with pnpm, not npm","project":"","replaces":"tooling.md:2"}]}',
+			answer: `{"entries":[{"file":"tooling.md","text":"Install packages with pnpm, not npm","replaces":"${WEB}/tooling.md:2"}]}`,
 		});
 		expect(
 			await runMemorySave("u1", "11111111-1111-4111-8111-111111111111", deps),
@@ -484,15 +533,16 @@ describe("save hook", () => {
 		// The prompt showed the memory lines with their ids (without their
 		// source links), not the index link.
 		const prompt = String(calls.agent[0].messages[0].content);
-		expect(prompt).toContain("tooling.md:2: - Use npm for installs\n");
+		expect(prompt).toContain(`${WEB}/tooling.md:2: - Use npm for installs\n`);
 		expect(prompt).not.toContain("[source: a]");
-		expect(prompt).not.toContain("[[tooling]]");
+		expect(prompt).not.toContain("[[");
+		expect(prompt).not.toContain("Use yarn");
 		expect(calls.agent[0].instructions).toContain('"replaces"');
 		const source =
 			"https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111";
 		expect(commits[0].changes).toEqual([
 			{
-				path: "tooling.md",
+				path: `${WEB}/tooling.md`,
 				content: `# tooling\n- Use npm for installs [source: a] [superseded-by: ${source}]\n- Node is pinned to 22 [source: b]\n- Install packages with pnpm, not npm [source: ${source}; added: 2026-10-15]\n`,
 			},
 		]);
@@ -507,7 +557,6 @@ describe("save hook", () => {
 					{
 						file: "logging.md",
 						text: "Log lines in orders.py start with [orders]",
-						project: "",
 					},
 				],
 				{ source: "s", today: "2026-10-15" },
@@ -528,7 +577,6 @@ describe("save hook", () => {
 				{
 					file: "api.md",
 					text: "API error codes are UPPER_SNAKE_CASE, e.g. ITEMS_REQUIRED",
-					project: "",
 					replaces: {
 						path: "api.md",
 						raw: '- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]',
@@ -551,7 +599,6 @@ describe("save hook", () => {
 				{
 					file: "api.md",
 					text: 'API errors return {"error": {"code": "<UPPER_SNAKE_CASE>", "message": "<text>"}}',
-					project: "",
 					scope: "always",
 					replaces: {
 						path: "api.md",
@@ -569,10 +616,12 @@ describe("save hook", () => {
 
 	it("orders its prompt for the prompt cache and records the run once it is done", async () => {
 		const files = {
-			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n- [[api]]\n",
-			"tooling.md":
+			"MEMORY.md": `# Memory\n\n## Index\n- [[${WEB}/tooling]]\n- [[personal/api]]\n`,
+			[`${WEB}/tooling.md`]:
 				"# tooling\n- Use pnpm [source: https://ytimesy.test/?chat=a; added: 2026-10-01]\n",
-			"api.md": "# api\n- Errors are JSON [scope: always; source: b]\n",
+			"personal/api.md":
+				"# api\n- Errors are JSON [scope: always; source: b]\n",
+			"projects/other--9/x.md": "# x\n- Not this project\n",
 		};
 		const order: string[] = [];
 		const run = async (text: string) => {
@@ -584,7 +633,7 @@ describe("save hook", () => {
 					]),
 				],
 				answer:
-					'{"entries":[{"file":"tooling.md","text":"Node is pinned to 22","project":""}]}',
+					'{"entries":[{"file":"tooling.md","text":"Node is pinned to 22"}]}',
 			});
 			const { recordUsage, recordSaved, warmLines } = setup.deps;
 			setup.deps.recordUsage = async (row) => {
@@ -606,17 +655,22 @@ describe("save hook", () => {
 			);
 			return setup.calls.agent[0];
 		};
-		const first = await run("Pin Node to 22");
-		const second = await run("Also, the API is versioned by header");
+		const first = await run("Always pin Node to 22");
+		const second = await run("Also, our API is versioned by header");
 		// Static instructions, then the whole memory in file order; the message last.
 		const a = String(first.messages[0].content);
 		const b = String(second.messages[0].content);
 		const prefix = a.slice(0, a.indexOf("Project of this chat"));
 		expect(b.startsWith(prefix)).toBe(true);
+		// Only this chat's scope: personal/ and its project's folder.
 		expect(prefix).toContain(
-			"Existing memory files: MEMORY.md, api.md, tooling.md\n\nThe user's memory, every line (id: line):\napi.md:2: - Errors are JSON [scope: always]\ntooling.md:2: - Use pnpm [added: 2026-10-01]\n",
+			`Existing memory files: personal/api.md, ${WEB}/tooling.md\n\nThe user's memory for this chat, every line (id: line):\npersonal/api.md:2: - Errors are JSON [scope: always]\n${WEB}/tooling.md:2: - Use pnpm [added: 2026-10-01]\n`,
 		);
-		expect(a.endsWith("Pin Node to 22")).toBe(true);
+		expect(a).toContain(
+			`Project of this chat: acme/web (entries go to ${WEB}/ unless "personal" is set)`,
+		);
+		expect(a).not.toContain("Not this project");
+		expect(a.endsWith("Always pin Node to 22")).toBe(true);
 		expect(first.instructions).toBe(second.instructions);
 		expect(first.cacheScopeId).toBe("memory-save:u1");
 		// The usage row says the save is done: after the lines are embedded and shown.
@@ -657,7 +711,7 @@ describe("save hook", () => {
 				files: { "MEMORY.md": "# Memory\n\n## Index\n" },
 				chats,
 				answer:
-					'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm","project":""}]}',
+					'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm"}]}',
 			});
 			const run = setup.deps.runAgent;
 			let calls = 0;
@@ -710,9 +764,171 @@ describe("save hook", () => {
 		expect(
 			saveHookChanges(
 				{ "tooling.md": "- Uses pnpm, never npm [source: x]\n" },
-				[{ file: "tooling.md", text: "Uses pnpm, never npm", project: "" }],
+				[{ file: "tooling.md", text: "Uses pnpm, never npm" }],
 				{ source: "s", today: "2026-10-15" },
 			),
 		).toEqual([]);
+	});
+});
+
+describe("save hook scope", () => {
+	const ID = "11111111-1111-4111-8111-111111111111";
+	const said = (text: string, project = true) => {
+		const row = chat(ID, [item({ kind: "userMessage", id: "1", text })]);
+		return project ? row : { ...row, project: null, projectRef: null };
+	};
+
+	it("saves to personal/ only an entry the model marks personal, with a reason", async () => {
+		const { deps, commits } = harness({
+			chats: [said("I always want short replies; also we deploy on Fly")],
+			answer:
+				'{"entries":[{"file":"style.md","text":"Prefers short replies","personal":"how they like answers in every project"},{"file":"deploy.md","text":"Deploys on Fly"}]}',
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("saved");
+		const paths = (commits[0].changes as { path: string }[]).map(
+			(change) => change.path,
+		);
+		expect(paths).toEqual(
+			expect.arrayContaining(["personal/style.md", `${WEB}/deploy.md`]),
+		);
+	});
+
+	it("keeps only personal entries in a chat without a project", async () => {
+		const { deps, commits, calls } = harness({
+			chats: [
+				said("Remember: I prefer tabs; this script uses argparse", false),
+			],
+			answer:
+				'{"entries":[{"file":"style.md","text":"Prefers tabs","personal":"their style everywhere"},{"file":"cli.md","text":"The script uses argparse"}]}',
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("saved");
+		expect(commits[0].changes).toEqual([
+			expect.objectContaining({ path: "personal/style.md" }),
+			expect.objectContaining({ path: "MEMORY.md" }),
+		]);
+		expect(String(calls.agent[0].messages[0].content)).toContain(
+			"Project of this chat: (none): save only personal entries",
+		);
+	});
+
+	it("skips the model call for a message with nothing durable in it", async () => {
+		const { deps, calls } = harness({
+			chats: [said("run the tests again please")],
+			answer: '{"entries":[]}',
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("no-cue");
+		expect(calls.agent).toEqual([]);
+		// Recorded as found-nothing, so other chats neither wait for it nor show it.
+		expect(calls.usage).toEqual([
+			expect.objectContaining({
+				kind: "save",
+				steps: 0,
+				outcome: "skipped:nothing-new",
+			}),
+		]);
+	});
+
+	it("drops an entry that says what a line already says, by embedding and words", async () => {
+		const files = {
+			[`${WEB}/tooling.md`]:
+				"# tooling\n- Uses pnpm for every install [source: a]\n",
+		};
+		const answer =
+			'{"entries":[{"file":"tooling.md","text":"Uses pnpm for all installs"},{"file":"tooling.md","text":"Node is pinned to 22"}]}';
+		const { deps, commits } = harness({
+			files,
+			chats: [said("From now on pin Node to 22; we use pnpm for all installs")],
+			answer,
+			closest: async (_user, lines, entries) =>
+				entries.map((entry) => ({
+					line: lines[0],
+					similarity: entry.text.includes("pnpm") ? 0.95 : 0.4,
+				})),
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("saved");
+		const content = (commits[0].changes as { content: string }[])[0].content;
+		expect(content).toContain("Node is pinned to 22");
+		expect(content).not.toContain("Uses pnpm for all installs");
+	});
+
+	it("keeps a close entry that changes the word that matters", async () => {
+		const line = {
+			path: "t.md",
+			line: 1,
+			raw: "- Use npm for installs",
+			text: "Use npm for installs",
+			meta: {},
+		};
+		const kept = await withoutNearDuplicates(
+			[{ file: "t.md", text: "Use pnpm for installs" }],
+			[line],
+			async () => [{ line, similarity: 0.93 }],
+		);
+		expect(kept).toHaveLength(1);
+	});
+
+	it("does not count another project's line as already known", () => {
+		const files = {
+			"projects/acme-api--8/tooling.md": "# tooling\n- Uses pnpm [source: x]\n",
+		};
+		const changes = saveHookChanges(
+			files,
+			[{ file: "tooling.md", text: "Uses pnpm", folder: WEB }],
+			{ source: "s", today: "2026-10-15", folder: WEB },
+		);
+		expect(changes.map((change) => change.path)).toContain(`${WEB}/tooling.md`);
+	});
+
+	it("moves a repo from before the layout first, as its own commit", async () => {
+		const { deps, commits } = harness({
+			legacy: true,
+			files: {
+				"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+				"tooling.md":
+					"# tooling\n- Prefers tabs [added: 2026-10-01]\n- Uses Vitest [project: acme/web; added: 2026-10-02]\n",
+			},
+			chats: [said("Remember that the API is versioned by header")],
+			answer: '{"entries":[]}',
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("nothing-new");
+		expect(commits).toHaveLength(1);
+		expect(commits[0].message).toBe("Reorganize memory by project");
+		expect(commits[0].changes).toEqual(
+			expect.arrayContaining([
+				{ path: "tooling.md", content: null },
+				{
+					path: "personal/tooling.md",
+					content: "# tooling\n- Prefers tabs [added: 2026-10-01]\n",
+				},
+				{
+					path: `${WEB}/tooling.md`,
+					content:
+						"# tooling\n\n- Uses Vitest [project: acme/web; added: 2026-10-02]\n",
+				},
+				{ path: ".memory-layout", content: "2\nsort-personal: pending\n" },
+			]),
+		);
+	});
+
+	it("has the next dream sort personal/ after the move, then stops asking", async () => {
+		const { deps, calls, commits, call } = harness({
+			files: {
+				".memory-layout": "2\nsort-personal: pending\n",
+				"personal/tooling.md": "# tooling\n- Web pins Node 22\n",
+			},
+			chats: [said("Remember that the API is versioned by header")],
+			// A review ran yesterday: only the pending sort brings this one.
+			lastReview: new Date("2026-10-14T00:00:00Z"),
+			script: async (tools) => {
+				await call(tools, "commit", { message: "Sorted personal" });
+			},
+		});
+		expect(await runMemoryDream("u1", deps, 5)).toBe("committed");
+		expect(String(calls.agent[0].messages[0].content)).toContain(
+			"Sort personal/",
+		);
+		expect(commits.at(-1)?.changes).toEqual([
+			{ path: ".memory-layout", content: "2\n" },
+		]);
 	});
 });

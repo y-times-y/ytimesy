@@ -7,22 +7,30 @@ import {
 	memoryEntryText,
 	memoryProjectValue,
 	memoryTopicPath,
+	resolveProjectKey,
 	suggestMemoryTopic,
 	updateMemoryLine,
 } from "./memory-edit";
 import { memoryLines, withMemoryChanges } from "./memory-repo";
 
+const WEB = "projects/acme-web--7";
 const files = {
-	"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
-	"tooling.md":
-		"# Tooling\n\n- Use pnpm, never npm [scope: always; source: /?chat=a; added: 2026-10-02]\n- Uses Vitest [kind: inferred; project: acme/web; added: 2026-10-12]\n- Prefers early returns. kind: inferred. [added: 2026-10-14]\n",
+	"MEMORY.md": `# Memory\n\n## Index\n- [[personal/tooling]]\n- [[${WEB}/tooling]]\n`,
+	"personal/tooling.md":
+		"# Tooling\n\n- Use pnpm, never npm [scope: always; source: /?chat=a; added: 2026-10-02]\n- Prefers early returns. kind: inferred. [added: 2026-10-14]\n",
+	[`${WEB}/tooling.md`]:
+		"# Tooling\n\n- Uses Vitest [kind: inferred; added: 2026-10-12]\n",
 };
 const today = "2026-10-21";
-const ref = (line: number, text: string) => ({
-	path: "tooling.md",
+const ref = (path: string, line: number, text: string) => ({
+	path,
 	line,
 	text,
 });
+const personal = (line: number, text: string) =>
+	ref("personal/tooling.md", line, text);
+const web = (line: number, text: string) =>
+	ref(`${WEB}/tooling.md`, line, text);
 const applied = (result: ReturnType<typeof addMemoryLine>) => {
 	if (!result.ok) throw new Error(result.error);
 	return withMemoryChanges(files, result.changes);
@@ -40,12 +48,22 @@ describe("memory edits", () => {
 		expect(memoryEntryText("See [[api]] for errors")).toBe(
 			"See [[api]] for errors",
 		);
-		expect(memoryProjectValue(" acme/web ")).toBe("acme/web");
+		expect(memoryProjectValue(" acme-web--7 ")).toBe("acme-web--7");
+		// An owner/name from an older view becomes its folder slug.
+		expect(memoryProjectValue("Acme/Web")).toBe("acme-web");
 		expect(memoryProjectValue("a;b")).toBeNull();
 		expect(memoryTopicPath("notes.md")).toBe("notes.md");
 		expect(memoryTopicPath("MEMORY.md")).toBeNull();
 		expect(memoryTopicPath("../x.md")).toBeNull();
 		expect(memoryTopicPath("notes.txt")).toBeNull();
+	});
+
+	it("resolves a project to its existing folder by repository id, then by slug", () => {
+		expect(resolveProjectKey(files, "acme-web--7")).toBe("acme-web--7");
+		// The repo was renamed: same id, new slug, same folder.
+		expect(resolveProjectKey(files, "acme-site--7")).toBe("acme-web--7");
+		expect(resolveProjectKey(files, "acme-web")).toBe("acme-web--7");
+		expect(resolveProjectKey(files, "other--9")).toBe("other--9");
 	});
 
 	it("adds a Personal line stated by the user, dated today, to an existing topic", () => {
@@ -59,47 +77,51 @@ describe("memory edits", () => {
 		expect(result).toMatchObject({
 			ok: true,
 			message: "Add memory (Personal): Use httpx, not requests",
+			added: { path: "personal/tooling.md", line: 5 },
 		});
-		const added = memoryLines(applied(result)).at(-1);
+		const added = memoryLines(applied(result)).find(
+			(entry) => entry.text === "Use httpx, not requests",
+		);
 		expect(added?.raw).toBe(
 			"- Use httpx, not requests [source: manual; added: 2026-10-21]",
 		);
-		expect(added?.meta).toEqual({ source: "manual", added: today });
+		expect(added?.path).toBe("personal/tooling.md");
 	});
 
-	it("adds an always-on project rule to a new topic and links it from the index", () => {
+	it("adds an always-on project rule to a new topic in the project's folder and links it", () => {
 		const result = addMemoryLine(files, {
 			text: "Deploy only on Tuesdays",
-			project: "acme/web",
+			project: "acme-web--7",
 			always: true,
 			topic: "deploy.md",
 			today,
 		});
 		expect(result).toMatchObject({
 			ok: true,
-			message: "Add always-on rule (project acme/web): Deploy only on Tuesdays",
+			message: "Add always-on rule (project acme-web): Deploy only on Tuesdays",
 		});
 		const next = applied(result);
-		expect(next["deploy.md"]).toBe(
-			"# deploy\n- Deploy only on Tuesdays [scope: always; project: acme/web; source: manual; added: 2026-10-21]\n",
+		expect(next[`${WEB}/deploy.md`]).toBe(
+			"# deploy\n- Deploy only on Tuesdays [scope: always; source: manual; added: 2026-10-21]\n",
 		);
-		expect(next["MEMORY.md"]).toContain("- [[deploy]]");
+		expect(next["MEMORY.md"]).toContain(`- [[${WEB}/deploy]]`);
 	});
 
-	it("files a new line under the topic it shares the most words with, else notes", () => {
+	it("files a new line under the folder's topic it shares the most words with, else notes", () => {
 		const topics = {
 			...files,
-			"api.md": "# API\n\n- Errors use problem+json [added: 2026-10-01]\n",
+			"personal/api.md":
+				"# API\n\n- Errors use problem+json [added: 2026-10-01]\n",
 		};
 		expect(suggestMemoryTopic(topics, "Run tests with Vitest in CI")).toBe(
-			"tooling.md",
+			`${WEB}/tooling.md`,
 		);
-		expect(suggestMemoryTopic(topics, "API errors include a trace id")).toBe(
-			"api.md",
+		expect(suggestMemoryTopic(topics, "Use pnpm in CI too", "personal")).toBe(
+			"personal/tooling.md",
 		);
-		expect(suggestMemoryTopic(topics, "Likes dark roast coffee")).toBe(
-			"notes.md",
-		);
+		expect(
+			suggestMemoryTopic(topics, "Likes dark roast coffee", "personal"),
+		).toBe("personal/notes.md");
 		const result = addMemoryLine(topics, {
 			text: "API errors include a trace id",
 			project: null,
@@ -108,7 +130,22 @@ describe("memory edits", () => {
 		});
 		expect(result).toMatchObject({
 			ok: true,
-			added: { path: "api.md", line: 4, text: "API errors include a trace id" },
+			added: {
+				path: "personal/api.md",
+				line: 4,
+				text: "API errors include a trace id",
+			},
+		});
+		// A project's line goes to a topic in that project's folder, never personal/.
+		const project = addMemoryLine(topics, {
+			text: "API errors include a trace id",
+			project: "acme-web--7",
+			always: false,
+			today,
+		});
+		expect(project).toMatchObject({
+			ok: true,
+			added: { path: `${WEB}/notes.md` },
 		});
 	});
 
@@ -127,14 +164,16 @@ describe("memory edits", () => {
 	});
 
 	it("finds a line by number, or by its text after the file moved", () => {
-		expect(findMemoryLine(files, ref(4, "Uses Vitest"))?.line).toBe(4);
-		const shifted = { "tooling.md": `# Moved\n\n\n${files["tooling.md"]}` };
-		expect(findMemoryLine(shifted, ref(4, "Uses Vitest"))?.line).toBe(7);
-		expect(findMemoryLine(files, ref(4, "Gone"))).toBeNull();
+		expect(findMemoryLine(files, web(3, "Uses Vitest"))?.line).toBe(3);
+		const shifted = {
+			[`${WEB}/tooling.md`]: `# Moved\n\n\n${files[`${WEB}/tooling.md`]}`,
+		};
+		expect(findMemoryLine(shifted, web(3, "Uses Vitest"))?.line).toBe(6);
+		expect(findMemoryLine(files, web(3, "Gone"))).toBeNull();
 	});
 
 	it("edits text in place, keeping the line's metadata", () => {
-		const result = updateMemoryLine(files, ref(4, "Uses Vitest"), {
+		const result = updateMemoryLine(files, web(3, "Uses Vitest"), {
 			text: "Uses Vitest with jsdom",
 		});
 		expect(result).toMatchObject({
@@ -142,49 +181,74 @@ describe("memory edits", () => {
 			message: "Edit memory: Uses Vitest with jsdom",
 		});
 		if (!result.ok) return;
-		expect(result.changes[0].content?.split("\n")[3]).toBe(
-			"- Uses Vitest with jsdom [kind: inferred; project: acme/web; added: 2026-10-12]",
+		expect(result.changes[0].content?.split("\n")[2]).toBe(
+			"- Uses Vitest with jsdom [kind: inferred; added: 2026-10-12]",
 		);
 	});
 
-	it("moves a line between a project and Personal by its project key", () => {
-		const personal = updateMemoryLine(files, ref(4, "Uses Vitest"), {
+	it("moves a line between a project's folder and personal/, to the same topic", () => {
+		const toPersonal = updateMemoryLine(files, web(3, "Uses Vitest"), {
 			project: null,
 		});
-		expect(personal).toMatchObject({
-			ok: true,
-			message: "Move memory to Personal: Uses Vitest",
-		});
-		if (!personal.ok) return;
-		expect(personal.changes[0].content?.split("\n")[3]).toBe(
-			"- Uses Vitest [kind: inferred; added: 2026-10-12]",
+		if (!toPersonal.ok) throw new Error(toPersonal.error);
+		expect(toPersonal.message).toBe("Move memory to Personal: Uses Vitest");
+		const next = withMemoryChanges(files, toPersonal.changes);
+		expect(next[`${WEB}/tooling.md`]).toBe("# Tooling\n\n");
+		expect(next["personal/tooling.md"]).toContain(
+			"- Uses Vitest [kind: inferred; added: 2026-10-12]\n",
 		);
-		const project = updateMemoryLine(files, ref(3, "Use pnpm, never npm"), {
-			project: "acme/api",
-		});
-		if (!project.ok) throw new Error(project.error);
-		expect(project.message).toBe(
-			"Move memory to project acme/api: Use pnpm, never npm",
+		const toProject = updateMemoryLine(
+			files,
+			personal(3, "Use pnpm, never npm"),
+			{ project: "acme-api--8" },
 		);
-		expect(project.changes[0].content?.split("\n")[2]).toBe(
-			"- Use pnpm, never npm [scope: always; source: /?chat=a; added: 2026-10-02; project: acme/api]",
+		if (!toProject.ok) throw new Error(toProject.error);
+		expect(toProject.message).toBe(
+			"Move memory to project acme-api: Use pnpm, never npm",
 		);
-		// The same project in another case is no move.
+		const moved = withMemoryChanges(files, toProject.changes);
+		expect(moved["projects/acme-api--8/tooling.md"]).toBe(
+			"# tooling\n- Use pnpm, never npm [scope: always; source: /?chat=a; added: 2026-10-02]\n",
+		);
+		expect(moved["MEMORY.md"]).toContain("- [[projects/acme-api--8/tooling]]");
+		// Its own folder, or the same repository under a new name, is no move.
 		expect(
-			updateMemoryLine(files, ref(4, "Uses Vitest"), { project: "ACME/web" }),
+			updateMemoryLine(files, web(3, "Uses Vitest"), {
+				project: "acme-site--7",
+			}),
 		).toEqual({ ok: false, error: "Nothing changed." });
 	});
 
+	it("moves a legacy tagged line into the layout, dropping its project key", () => {
+		const legacy = {
+			"tooling.md":
+				"# Tooling\n\n- Uses Go [project: acme/api; added: 2026-10-01]\n",
+		};
+		expect(
+			updateMemoryLine(legacy, ref("tooling.md", 3, "Uses Go"), {
+				project: "acme-api--8",
+			}),
+		).toEqual({ ok: false, error: "Nothing changed." });
+		const result = updateMemoryLine(legacy, ref("tooling.md", 3, "Uses Go"), {
+			project: null,
+		});
+		if (!result.ok) throw new Error(result.error);
+		const next = withMemoryChanges(legacy, result.changes);
+		expect(next["personal/tooling.md"]).toContain(
+			"- Uses Go [added: 2026-10-01]\n",
+		);
+	});
+
 	it("pins and unpins an always-on rule, folding trailing key text into the metadata", () => {
-		const pin = updateMemoryLine(files, ref(5, "Prefers early returns."), {
+		const pin = updateMemoryLine(files, personal(4, "Prefers early returns."), {
 			always: true,
 		});
 		if (!pin.ok) throw new Error(pin.error);
 		expect(pin.message).toBe("Pin as always-on rule: Prefers early returns.");
-		expect(pin.changes[0].content?.split("\n")[4]).toBe(
+		expect(pin.changes[0].content?.split("\n")[3]).toBe(
 			"- Prefers early returns. [added: 2026-10-14; kind: inferred; scope: always]",
 		);
-		const unpin = updateMemoryLine(files, ref(3, "Use pnpm, never npm"), {
+		const unpin = updateMemoryLine(files, personal(3, "Use pnpm, never npm"), {
 			always: false,
 		});
 		if (!unpin.ok) throw new Error(unpin.error);
@@ -198,7 +262,7 @@ describe("memory edits", () => {
 			files,
 			{
 				op: "update",
-				ref: ref(4, "Uses Vitest"),
+				ref: web(3, "Uses Vitest"),
 				text: "Uses Vitest 3",
 				project: null,
 				always: true,
@@ -210,19 +274,25 @@ describe("memory edits", () => {
 			message:
 				"Edit memory; Move memory to Personal; Pin as always-on rule: Uses Vitest 3",
 		});
+		if (!result.ok) return;
+		expect(
+			withMemoryChanges(files, result.changes)["personal/tooling.md"],
+		).toContain(
+			"- Uses Vitest 3 [kind: inferred; added: 2026-10-12; scope: always]",
+		);
 	});
 
 	it("deletes one line and leaves the rest of the file", () => {
-		const result = deleteMemoryLine(files, ref(4, "Uses Vitest"));
+		const result = deleteMemoryLine(files, personal(3, "Use pnpm, never npm"));
 		if (!result.ok) throw new Error(result.error);
-		expect(result.message).toBe("Delete memory: Uses Vitest");
+		expect(result.message).toBe("Delete memory: Use pnpm, never npm");
 		const next = withMemoryChanges(files, result.changes);
-		expect(memoryLines(next).map((entry) => entry.text)).toEqual([
-			"[[tooling]]",
-			"Use pnpm, never npm",
-			"Prefers early returns.",
-		]);
-		expect(deleteMemoryLine(files, ref(4, "Not there"))).toEqual({
+		expect(
+			memoryLines(next)
+				.filter((entry) => entry.path === "personal/tooling.md")
+				.map((entry) => entry.text),
+		).toEqual(["Prefers early returns."]);
+		expect(deleteMemoryLine(files, web(3, "Not there"))).toEqual({
 			ok: false,
 			error: "Memory no longer has that line.",
 		});

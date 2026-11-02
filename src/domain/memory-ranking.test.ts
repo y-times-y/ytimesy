@@ -60,12 +60,24 @@ describe("memory ranking", () => {
 			[other, 0.31],
 		]);
 		const none = new Map(lines.map((entry) => [entry, 0]));
-		const weights = { lexical: 0.2, half: 4, file: 0.25 };
+		const weights = { lexical: 0.2, half: 4, file: 0.25, strong: 0.5 };
 		const scores = hybridScores(lines, similarity, none, weights);
 		expect(scores.get(hit)).toBeCloseTo(0.6);
 		// 0.3 + 0.25 x (0.6 - 0.3): the neighbour now outranks the unrelated line.
 		expect(scores.get(neighbour)).toBeCloseTo(0.375);
 		expect(scores.get(other)).toBeCloseTo(0.31);
+		// A weak best hit lifts nothing: its file is no evidence for its neighbours.
+		const weak = hybridScores(
+			lines,
+			new Map([
+				[hit, 0.45],
+				[neighbour, 0.3],
+				[other, 0.31],
+			]),
+			none,
+			weights,
+		);
+		expect(weak.get(neighbour)).toBeCloseTo(0.3);
 		// Lexical: bm25 4 is half the weight, and it never exceeds the weight.
 		const lexical = new Map([
 			[hit, 0],

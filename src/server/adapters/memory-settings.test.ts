@@ -3,8 +3,13 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	lastMemoryReview,
+	memoryChat,
+	memoryProject,
+	memoryProjects,
+	memoryRecalls,
 	pendingMemorySaves,
 	recentUnsavedMessages,
+	recordMemoryRecalls,
 } from "./memory-settings";
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
@@ -13,7 +18,10 @@ vi.mock("./database", () => ({ database: () => holder }));
 let db: PGlite;
 beforeEach(async () => {
 	db = new PGlite();
-	await db.exec(`create table agent_session(id uuid primary key,user_id text,parent_session_id uuid,title text,items jsonb not null default '[]',updated_at timestamptz default now());
+	await db.exec(`create table agent_session(id uuid primary key,user_id text,parent_session_id uuid,project_id uuid,title text,items jsonb not null default '[]',updated_at timestamptz default now());
+	 create table project(id uuid primary key,user_id text,repository_id bigint,full_name text,name text,created_at timestamptz default now());
+	 create table project_repository(project_id uuid,repository_id bigint,position integer);
+	 create table memory_line_recall(user_id text not null,line_hash text not null,first_recalled_at timestamptz not null default now(),recalled_at timestamptz not null default now(),recall_count integer not null default 1,primary key(user_id,line_hash));
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,updated_at timestamptz default now());
 	 create table memory_model_usage(id uuid primary key,user_id text,kind text,session_id uuid,outcome text,created_at timestamptz default now());`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) =>
@@ -28,12 +36,19 @@ async function chat(input: {
 	state?: string;
 	minutesAgo?: number;
 	parent?: string;
+	project?: string;
 }) {
 	const id = randomUUID();
 	const at = `now()-interval '${input.minutesAgo ?? 0} minutes'`;
 	await db.query(
-		`insert into agent_session(id,user_id,parent_session_id,title,items,updated_at) values($1,$2,$3,'Chat',$4,${at})`,
-		[id, input.user ?? "u1", input.parent ?? null, JSON.stringify(input.items)],
+		`insert into agent_session(id,user_id,parent_session_id,project_id,title,items,updated_at) values($1,$2,$3,$4,'Chat',$5,${at})`,
+		[
+			id,
+			input.user ?? "u1",
+			input.parent ?? null,
+			input.project ?? null,
+			JSON.stringify(input.items),
+		],
 	);
 	await db.query(
 		`insert into api_turn(id,session_id,user_id,state,updated_at) values($1,$2,$3,$4,${at})`,
@@ -71,7 +86,7 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 	await chat({ items: [said("someone else")], user: "u2" });
 	await chat({ items: [said("a child task")], parent: fresh });
 	await chat({ items: [said("failed")], state: "failed" });
-	expect(await recentUnsavedMessages("u1", current, 600)).toEqual([
+	expect(await recentUnsavedMessages("u1", current, 600, null)).toEqual([
 		{
 			sessionId: fresh,
 			title: "Chat",
@@ -94,7 +109,7 @@ it("counts a chat from when its message was sent: queued and running turns too",
 		minutesAgo: 30,
 	});
 	await chat({ items: [said("long done")], minutesAgo: 30 });
-	const rows = await recentUnsavedMessages("u1", current, 600);
+	const rows = await recentUnsavedMessages("u1", current, 600, null);
 	expect(rows.map((row) => row.sessionId).sort()).toEqual(
 		[running, queued].sort(),
 	);
@@ -145,4 +160,85 @@ it("finds the last dream that reviewed the whole repo", async () => {
 	expect(await lastMemoryReview("u1")).toEqual(
 		new Date("2026-10-01T00:00:00Z"),
 	);
+});
+
+it("returns only recent messages of the asking chat's own project", async () => {
+	const web = randomUUID();
+	const api = randomUUID();
+	const current = await chat({ items: [said("this chat")], project: web });
+	const same = await chat({
+		items: [said("New JSON files use 4 spaces")],
+		project: web,
+	});
+	await chat({ items: [said("Use Go modules")], project: api });
+	await chat({ items: [said("No project here")] });
+	expect(
+		(await recentUnsavedMessages("u1", current, 600, web)).map(
+			(row) => row.sessionId,
+		),
+	).toEqual([same]);
+	expect(
+		(await recentUnsavedMessages("u1", current, 600, null)).map(
+			(row) => row.text,
+		),
+	).toEqual(["No project here"]);
+});
+
+it("reads a project with its repository ids, and a chat with its project", async () => {
+	const id = randomUUID();
+	await db.query(
+		"insert into project(id,user_id,repository_id,full_name,name) values($1,'u1',7,'acme/web','Web')",
+		[id],
+	);
+	await db.query(
+		"insert into project_repository(project_id,repository_id,position) values($1,7,0),($1,9,1)",
+		[id],
+	);
+	const solo = randomUUID();
+	await db.query(
+		"insert into project(id,user_id,repository_id,full_name,name) values($1,'u1',11,'acme/api',null)",
+		[solo],
+	);
+	expect(await memoryProject("u1", id)).toEqual({
+		fullName: "acme/web",
+		name: "Web",
+		repositoryIds: [7, 9],
+	});
+	expect(await memoryProject("u2", id)).toBeNull();
+	// A project without repository rows falls back to its primary repository.
+	expect((await memoryProjects("u1")).map((row) => row.repositoryIds)).toEqual([
+		[7, 9],
+		[11],
+	]);
+	const session = await chat({ items: [said("hi there")], project: id });
+	expect((await memoryChat("u1", session))?.projectRef).toEqual({
+		fullName: "acme/web",
+		name: "Web",
+		repositoryIds: [7, 9],
+	});
+});
+
+it("records recalls by normalized text and reads when each line was last used", async () => {
+	expect(await memoryRecalls("u1", ["Uses pnpm"])).toEqual({
+		recalled: new Map(),
+		since: null,
+	});
+	await recordMemoryRecalls("u1", [
+		"Uses  pnpm",
+		"Uses pnpm",
+		"Deploys on Fly",
+	]);
+	await recordMemoryRecalls("u1", ["uses pnpm"]);
+	const { recalled, since } = await memoryRecalls("u1", [
+		"Uses pnpm",
+		"Never used",
+	]);
+	const today = new Date().toISOString().slice(0, 10);
+	expect([...recalled]).toEqual([["uses pnpm", today]]);
+	expect(since).toBe(today);
+	const counts = await db.query<{ recall_count: number }>(
+		"select recall_count from memory_line_recall order by recall_count desc",
+	);
+	expect(counts.rows.map((row) => row.recall_count)).toEqual([2, 1]);
+	expect((await memoryRecalls("u2", ["Uses pnpm"])).since).toBeNull();
 });
