@@ -793,6 +793,29 @@ describe("save hook scope", () => {
 		);
 	});
 
+	it("saves an entry about the project's data to its folder even when the model marks it personal", async () => {
+		const { deps, commits } = harness({
+			chats: [
+				said(
+					"Note that orders in customer summaries count input rows, not quantities",
+				),
+			],
+			answer:
+				'{"entries":[{"file":"customer-reporting.md","text":"In customer summaries, `orders` counts input rows per customer, not item quantities","personal":"a general reporting rule"},{"file":"style.md","text":"Prefers short replies","personal":"how they like answers"}]}',
+		});
+		expect(await runMemorySave("u1", ID, deps)).toBe("saved");
+		const paths = (commits[0].changes as { path: string }[]).map(
+			(change) => change.path,
+		);
+		expect(paths).toEqual(
+			expect.arrayContaining([
+				`${WEB}/customer-reporting.md`,
+				"personal/style.md",
+			]),
+		);
+		expect(paths).not.toContain("personal/customer-reporting.md");
+	});
+
 	it("keeps only personal entries in a chat without a project", async () => {
 		const { deps, commits, calls } = harness({
 			chats: [

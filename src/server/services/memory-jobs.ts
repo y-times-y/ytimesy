@@ -33,6 +33,7 @@ import {
 	hasDurableCue,
 	isNearDuplicate,
 	isRetired,
+	looksProjectSpecific,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
@@ -438,8 +439,13 @@ export async function runMemorySave(
 	);
 	const parsed = parseSaveHookAnswer(run.text).flatMap(
 		({ replaces, personal, ...entry }): SaveHookEntry[] => {
-			// A chat without a project keeps only notes about the user.
-			const target = personal ? PERSONAL_FOLDER : folder;
+			// A chat without a project keeps only notes about the user; in a
+			// project chat, an entry about its code or data is the project's
+			// whatever the model said.
+			const target =
+				personal && !(folder && looksProjectSpecific(entry.text))
+					? PERSONAL_FOLDER
+					: folder;
 			if (!target) return [];
 			const raw = replaces && shown.get(`${replaces.path}:${replaces.line}`);
 			return [

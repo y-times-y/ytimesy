@@ -309,6 +309,71 @@ describe("read hook", () => {
 		]);
 	});
 
+	it("keeps only the lines the reranker finds relevant, and none when it finds none", async () => {
+		const base = {
+			snapshot: { head: "a", files },
+			embed,
+			userId: "u1",
+			alreadyShown: () => false,
+			today: "2026-10-15",
+			project: null,
+			cache,
+			query: "fix the timestamps in the export",
+		};
+		const rerank = vi.fn(async (_query: string, texts: readonly string[]) =>
+			texts.map((text) => (text.includes("UTC") ? 0.9 : 1e-5)),
+		);
+		const found = await readHook({ ...base, rerank });
+		expect(found.lines.map((entry) => entry.text)).toEqual([
+			"Store timestamps in UTC",
+		]);
+		// The reranker reads the line with its topic.
+		expect(rerank).toHaveBeenCalledWith(base.query, [
+			"time: Store timestamps in UTC",
+		]);
+		expect(found.spans).toMatchObject({
+			rerankMs: expect.any(Number),
+			rerankLines: 1,
+		});
+		const vetoed = await readHook({
+			...base,
+			rerank: async (_query, texts) => texts.map(() => 1e-5),
+		});
+		expect(vetoed).toMatchObject({ lines: [], outcome: "none" });
+	});
+
+	it("falls back to the hybrid alone when the reranker fails or is slow, and says so", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const base = {
+				snapshot: { head: "a", files },
+				embed,
+				userId: "u1",
+				alreadyShown: () => false,
+				today: "2026-10-15",
+				project: null,
+				cache,
+				query: "fix the timestamps in the export",
+			};
+			for (const rerank of [
+				async () => {
+					throw new TypeError("reranker down");
+				},
+				() => new Promise<never>(() => {}),
+			]) {
+				warn.mockClear();
+				const hook = await readHook({ ...base, rerank, rerankTimeoutMs: 20 });
+				expect(hook.lines.map((entry) => entry.text)).toEqual([
+					"Store timestamps in UTC",
+				]);
+				expect(hook.spans).toMatchObject({ rerankFallback: 1 });
+				expect(warn).toHaveBeenCalledTimes(1);
+			}
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it("adds a project's rule for every new file to a request that adds one, without a match", async () => {
 		const snapshot = {
 			head: "a",

@@ -110,13 +110,13 @@ export function memoryInstructions(
 	const dir = MEMORY_DIRECTORY;
 	const folder = chat.project && chat.folder ? chat.folder : null;
 	const layout = folder
-		? `${dir}/personal/<topic>.md holds notes about the user for every project; ${dir}/${folder}/<topic>.md holds this project's (other folders under ${dir}/projects/ are other projects: ignore them)`
+		? `${dir}/personal/<topic>.md holds notes about the user for every project; ${dir}/${folder}/<topic>.md holds this project's: its code, data, domain and decisions (other folders under ${dir}/projects/ are other projects: ignore them)`
 		: `${dir}/personal/<topic>.md holds notes about the user for every project (this chat has no project: ignore ${dir}/projects/)`;
 	const search = folder
 		? `\`grep -rn <term> ${dir}/personal ${dir}/${folder}\``
 		: `\`grep -rn <term> ${dir}/personal\``;
 	const target = folder
-		? `${folder}/<topic>.md, or personal/<topic>.md only for something about the user that holds in every project`
+		? `${folder}/<topic>.md for anything learned here about this project's code, data or domain (even when it sounds general), or personal/<topic>.md only for something about the user themself (their preferences, working style, identity, tools they use everywhere)`
 		: "personal/<topic>.md";
 	const keys =
 		mode === "full"
@@ -478,13 +478,48 @@ export const MEMORY_MATCH_MIN_SCORE = 0.37;
 /**
  * Relative cut: a line must score within this of the request's best line,
  * so a request with a strong hit (0.65) no longer drags in the 0.37-0.45
- * tail, while one with only weak hits keeps them. On the offline precision
- * fixture (memory-precision.test.ts) the closest right line sat 0.197 below
- * its best (0.12 lost it) and the wrong lines above the floor 0.28+ below.
- * To confirm on dev: memory-two-chat-eval.ts --recall and
+ * tail. A request with only weak hits is left to the reranker below, which
+ * drops them all when none is relevant. On the offline precision fixture
+ * (memory-precision.test.ts) the closest right line sat 0.197 below its best
+ * (0.12 lost it) and the wrong lines above the floor 0.28+ below. To confirm
+ * on dev: memory-two-chat-eval.ts --recall and
  * memory-long-history-eval.ts --recall-check.
  */
 export const MEMORY_MATCH_GAP = 0.2;
+/**
+ * The reranker (a cross-encoder, bge-reranker-base) reads the request with
+ * each line the hybrid picked and keeps only lines scoring at least this
+ * (0-1); when none does, nothing is recalled. Set 2026-11-02 with
+ * scripts/memory-rerank-calibrate.ts (real Qwen3 hybrid and reranker scores,
+ * lines as memoryRerankText) on the precision fixture: the lowest right line
+ * scored 9.7e-4 ("Never deploy on Fridays" for "deploy the latest build"),
+ * the highest pooled line of a must-recall-nothing message other than a
+ * reply-style preference 7.4e-4 ("continue" -> "Routes live under /api/v2");
+ * this is their geometric middle, a thin margin. The two dev misfires score
+ * far below it ("Reply with just the word OK." -> customer-reporting 3.7e-5,
+ * "…what was my first message…" -> startup-lessons 8.3e-5). Fixture: right
+ * lines 9/9 either way; wrong lines 6 -> 2; lines for must-recall-nothing
+ * messages 21 -> 4, all "Prefers short replies without preamble", which the
+ * reranker ties to messages about replies (0.37 for "Reply with just the
+ * word OK."). Cost: the two-chat eval's implicit rules ("Add service/net.py
+ * …" -> "Don't add third-party dependencies") score 4e-5-4e-4, so its
+ * --recall probes keep 4/10 rules (8/10 without the reranker); `scope:
+ * always` rules skip the reranker. A wider pool (pre-floor 0.30, no gap)
+ * kept about 3x the wrong lines for no right one, so the reranker vetoes and
+ * reorders the hybrid's picks rather than widening them.
+ */
+export const MEMORY_RERANK_MIN_SCORE = 8.5e-4;
+/** Lines the reranker scores at most (the hybrid's best within floor and gap, and convention lines). */
+export const MEMORY_RERANK_POOL = 20;
+/**
+ * When the reranker fails or times out, the hybrid selection with this
+ * floor instead of MEMORY_MATCH_MIN_SCORE. On the same fixture and run: the
+ * lowest right line 0.490 ("Run vitest for unit tests" for "add a unit test
+ * for the price parser"), the highest line of a must-recall-nothing message
+ * other than the reply-style preference 0.457 ("thanks, looks good" ->
+ * customer-reporting); 0.47 keeps 9/9 right lines and drops those.
+ */
+export const MEMORY_RERANK_FALLBACK_MIN_SCORE = 0.47;
 /**
  * Beyond the top lines: the best convention line (a rule for every new X)
  * scoring at least this. A request rarely names the convention it is subject
@@ -508,12 +543,20 @@ export type MemoryMatchPolicy = {
 	readonly gap: number;
 	/** Rules for new files apply to project lines only (false: any line). */
 	readonly alwaysProjectOnly: boolean;
+	/** With reranker scores: the score a line needs to be kept. */
+	readonly rerankMinScore: number;
 };
 export const MEMORY_MATCH_POLICY: MemoryMatchPolicy = {
 	limit: MEMORY_MATCH_LIMIT,
 	minScore: MEMORY_MATCH_MIN_SCORE,
 	gap: MEMORY_MATCH_GAP,
 	alwaysProjectOnly: true,
+	rerankMinScore: MEMORY_RERANK_MIN_SCORE,
+};
+/** The selection when the reranker failed: the hybrid alone, with a stricter floor. */
+export const MEMORY_FALLBACK_POLICY: MemoryMatchPolicy = {
+	...MEMORY_MATCH_POLICY,
+	minScore: MEMORY_RERANK_FALLBACK_MIN_SCORE,
 };
 
 /** A rule about every new thing of a kind: "new CLI scripts go in tools/", "every endpoint …". */
@@ -638,6 +681,11 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]) {
 	return left && right ? dot / Math.sqrt(left * right) : 0;
 }
 
+/** A line of personal/: about the user, in every project. */
+function isPersonalPath(path: string) {
+	return path.startsWith("personal/");
+}
+
 /** A line of one project: in projects/<key>/, or a legacy line tagged `project:`. */
 function projectScoped(entry: Pick<MemoryLine, "path" | "meta">) {
 	return (
@@ -645,32 +693,21 @@ function projectScoped(entry: Pick<MemoryLine, "path" | "meta">) {
 	);
 }
 
-/**
- * The read hook's selection from `lines` (already only this chat's scope:
- * personal/ and its project's folder), never a line already in context
- * (MEMORY.md or an earlier injection) nor a retired one:
- * 1. the best lines at or above the floor and within the gap of the best;
- * 2. the best convention line below that cut, when it scores well enough
- *    (it takes the last of the `limit` slots);
- * 3. project rules for a new file that apply whatever the similarity
- *    (`alwaysApplies`), newest first;
- * then each line is swapped for a later line that restates it as changed, so
- * an old decision no dream has resolved yet is not shown on its own; at most
- * `limit` lines in all.
- */
-export function selectMemoryMatches(input: {
+type MatchInput = {
 	lines: readonly MemoryLine[];
 	scores: ReadonlyMap<MemoryLine, number>;
 	alreadyShown: (raw: string) => boolean;
 	today: string;
-	/** The request's text: enables the always-applicable rules. */
-	query?: string;
-	/** Lines at most (MEMORY_MATCH_LIMIT on a chat's first request, else MEMORY_MATCH_LATER_LIMIT). */
-	limit?: number;
 	policy?: MemoryMatchPolicy;
-}) {
+};
+
+/**
+ * The hybrid's candidates: live lines not in context, best first; those at or
+ * above the floor and within the gap of the best; and convention lines
+ * scoring well enough for the extra slot.
+ */
+function matchCandidates(input: MatchInput) {
 	const policy = input.policy ?? MEMORY_MATCH_POLICY;
-	const limit = input.limit ?? policy.limit;
 	const live = input.lines.filter(
 		(entry) =>
 			entry.path !== MEMORY_ENTRY && !isRetired(entry.meta, input.today),
@@ -684,16 +721,80 @@ export function selectMemoryMatches(input: {
 		(entry) =>
 			score(entry) >= policy.minScore && score(entry) >= best - policy.gap,
 	);
-	const convention = candidates
-		.filter(
-			(entry) =>
-				!above.slice(0, limit).includes(entry) &&
-				score(entry) >= MEMORY_CONVENTION_MIN_SCORE &&
-				CONVENTION_LINE.test(entry.text),
-		)
+	const conventions = candidates.filter(
+		(entry) =>
+			score(entry) >= Math.max(MEMORY_CONVENTION_MIN_SCORE, policy.minScore) &&
+			CONVENTION_LINE.test(entry.text),
+	);
+	return { policy, live, candidates, above, conventions };
+}
+
+/**
+ * What the reranker reads for a line: its topic name (words, not a file
+ * name) and its text, as the embedding does. Calibrated in this form
+ * (MEMORY_RERANK_MIN_SCORE): "customer reporting: In customer summaries…".
+ */
+export function memoryRerankText(entry: Pick<MemoryLine, "path" | "text">) {
+	return `${memoryTopicName(entry.path).replaceAll(/[-_]+/g, " ")}: ${entry.text.slice(0, 1000)}`;
+}
+
+/**
+ * The lines the reranker scores for a request: the hybrid's best within floor
+ * and gap, and the convention lines that could take the extra slot, at most
+ * MEMORY_RERANK_POOL. Always-applicable rules are not reranked.
+ */
+export function memoryRerankPool(input: MatchInput): MemoryLine[] {
+	const { above, conventions } = matchCandidates(input);
+	return [
+		...new Set([
+			...above.slice(0, MEMORY_RERANK_POOL),
+			...conventions.slice(0, MEMORY_CONVENTION_EXTRA + 2),
+		]),
+	].slice(0, MEMORY_RERANK_POOL);
+}
+
+/**
+ * The read hook's selection from `lines` (already only this chat's scope:
+ * personal/ and its project's folder), never a line already in context
+ * (MEMORY.md or an earlier injection) nor a retired one:
+ * 1. the best lines at or above the floor and within the gap of the best;
+ *    with `rerank` (the reranker's scores for memoryRerankPool), only those
+ *    the reranker scores at least `rerankMinScore`, best reranked first, so
+ *    a request nothing is relevant to recalls nothing;
+ * 2. the best convention line below that cut, when it scores well enough
+ *    (and passes the reranker; it takes the last of the `limit` slots);
+ * 3. project rules for a new file that apply whatever the similarity
+ *    (`alwaysApplies`), newest first;
+ * then each line is swapped for a later line that restates it as changed, so
+ * an old decision no dream has resolved yet is not shown on its own; at most
+ * `limit` lines in all.
+ */
+export function selectMemoryMatches(
+	input: MatchInput & {
+		/** The request's text: enables the always-applicable rules. */
+		query?: string;
+		/** Lines at most (MEMORY_MATCH_LIMIT on a chat's first request, else MEMORY_MATCH_LATER_LIMIT). */
+		limit?: number;
+		/** Reranker scores (0-1) of the pool's lines; a line without one is not kept. */
+		rerank?: ReadonlyMap<MemoryLine, number>;
+	},
+) {
+	const { policy, live, candidates, above, conventions } =
+		matchCandidates(input);
+	const limit = input.limit ?? policy.limit;
+	const rerank = input.rerank;
+	const relevant = (entry: MemoryLine) =>
+		!rerank || (rerank.get(entry) ?? -1) >= policy.rerankMinScore;
+	const kept = rerank
+		? above
+				.filter(relevant)
+				.sort((a, b) => (rerank.get(b) ?? 0) - (rerank.get(a) ?? 0))
+		: above;
+	const convention = conventions
+		.filter((entry) => !kept.slice(0, limit).includes(entry) && relevant(entry))
 		.slice(0, MEMORY_CONVENTION_EXTRA);
 	// The convention line keeps its slot within the limit.
-	const top = above.slice(0, Math.max(1, limit - convention.length));
+	const top = kept.slice(0, Math.max(1, limit - convention.length));
 	const picked = [...top, ...convention];
 	const query = input.query;
 	const always =
@@ -741,7 +842,9 @@ export function isAlwaysRule(entry: Pick<MemoryLine, "meta">) {
 /**
  * The always-on "Project rules": only lines the save hook, a dream or the
  * user marked `scope: always`, from `lines` (already only this chat's
- * scope), the user's own before inferred ones, newest first, within
+ * scope) outside personal/ (a personal line is recalled by match like any
+ * other, so a misfiled one never rides on every chat of every project), the
+ * user's own before inferred ones, newest first, within
  * PROJECT_RULES_LIMIT lines and PROJECT_RULES_CHARS characters. Everything
  * else is recalled by match. Retired lines never show, and an old decision
  * is swapped for the later line that restates it as changed.
@@ -758,7 +861,7 @@ export function projectRules(input: {
 		(entry) => entry.meta.added && CHANGE_WORDS.test(entry.text),
 	);
 	const ranked = live
-		.filter(isAlwaysRule)
+		.filter((entry) => isAlwaysRule(entry) && !isPersonalPath(entry.path))
 		.sort(
 			(a, b) =>
 				Number(a.meta.kind === "inferred") -
@@ -1074,7 +1177,7 @@ export function dreamReviewSection(
 	const stale = options.stale ?? [];
 	return `Review: this dream also does the periodic pass over ${covered.join(", ")}${left.length ? ` (next time: ${left.join(", ")})` : ""}, so here (and only here) work beyond what the new chats touch; those files are below, numbered, so you need not read them.
 3. In the files below, merge duplicates into one line and, where two lines contradict, keep the newer decision (by \`added:\` date, or read_source when unclear) as one standalone line that keeps every detail of the older one still in force (shapes, formats, exceptions), and delete the older one. Rewrite each file you change with write_file.
-4. Sort personal/: a line stays there only if it is about the user in every project (preferences, style, accounts, how they like to work). A line about a codebase, its stack, files, deploys or conventions moves to that project's folder (same topic file name; read_source when its project is unclear). Files outside personal/ and projects/ move the same way.
+4. Sort personal/: a line stays there only if it is about the user themself in every project (preferences, style, identity, accounts, how they like to work, tools they use everywhere). A line about a codebase, its stack, files, deploys, conventions, data, reports or domain moves to that project's folder (same topic file name; read_source when its project is unclear). Files outside personal/ and projects/ move the same way.
 5. Project-wide rules a change can break without the request naming them (a header on every new file, the library every HTTP call uses, the format of new IDs, a commit style, checks before saying done) get \`scope: always\` in their metadata, so every chat of that project sees them as its rules. Keep that set small: at most ${PROJECT_RULES_LIMIT} per folder, each short; merge overlapping ones and drop the key from facts and topic-bound rules.${pairs.length ? `\nLines that look replaced by a later line (older -> newer; check each, and resolve the ones that really conflict):\n${pairs.join("\n")}` : ""}${stale.length ? `\nLines no chat has used for a long time (delete each unless it is still clearly true and useful; a fact the user stated about themselves stays):\n${stale.join("\n")}` : ""}
 
 ${parts.join("\n\n")}`;
@@ -1094,7 +1197,7 @@ Your two jobs:
 1. Add new memory: spot patterns across the new chats below and save ${WORTH_SAVING} that are not in memory yet.
 2. Clean up: merge duplicates, remove outdated entries, fix [[links]], keep MEMORY.md short (a few lines every chat needs, plus its ## Index). When a later line replaces an earlier one, delete the earlier one and make sure the later one still carries every detail of it that holds. When entries contradict, check their sources with read_source and keep what the chat actually says; the most recent statement wins unless the source shows otherwise.
 
-Layout: where a line lives is where it applies. personal/<topic>.md is about the user in every project (preferences, style, accounts, how they work); projects/<project folder>/<topic>.md is one project only (its stack, files, deploys, conventions, decisions). Each chat below names its project; what it teaches about that project goes to that project's folder (listed below), and only what is about the user everywhere goes to personal/. When unsure, it is the project's. Never write topic files outside these folders.
+Layout: where a line lives is where it applies. personal/<topic>.md is about the user themself in every project (preferences, style, identity, accounts, how they work, tools they use everywhere); projects/<project folder>/<topic>.md is one project only (its stack, files, deploys, conventions, decisions, and facts about its data, reports, customers or domain). Each chat below names its project; what it teaches about that project goes to that project's folder (listed below), and only what is about the user everywhere goes to personal/. When unsure, it is the project's. Never write topic files outside these folders.
 
 Format: one bullet per entry, \`${memoryBullet("<entry>", { source: "<chat link>", added: today })}\`, in a topic file linked from MEMORY.md's ## Index as [[path]] (without .md). Edit a line in place instead of adding a contradicting one.${inferred}
 
@@ -1109,7 +1212,7 @@ Tools: search (regex over all lines), read_file (a line range), write_file, dele
 
 export const SAVE_HOOK_INSTRUCTIONS = `You check whether a coding chat's latest user message stated something a future chat should remember that is not yet in the user's memory.
 Save only ${WORTH_SAVING} about the user, their projects or their way of working. Skip ${NOT_WORTH_SAVING}, and anything already covered by the memory lines shown.
-Where an entry goes: the chat's project by default. Set "personal" to a short reason only when the entry is about the user in every project (a preference, their style, their accounts, how they like to work); anything about a codebase, its stack, files, deploys or conventions belongs to the project, so leave "personal" empty. A chat without a project saves only personal entries.
+Where an entry goes: the chat's project by default. Set "personal" to a short reason only when the entry is about the user themself in every project (a preference, their style, their identity or accounts, how they like to work, tools they use everywhere); anything learned in this chat about its codebase, stack, files, deploys, conventions, data, reports, customers or domain belongs to the project even when it sounds general, so leave "personal" empty; when unsure, leave it empty. A chat without a project saves only personal entries.
 When an entry changes or contradicts a memory line shown (a new decision replacing an old one), set "replaces" to that line's id (the "<file>:<line>" before it) so the old line is retired. The old line is then gone, so the entry must stand alone: carry over every detail of the old line that still holds (its exact shapes, formats, field names, paths, examples and exceptions) and change only what the user changed. If the message changes one part of a structured rule (one field of a response shape, the case of a code), restate the whole rule with that part changed; if you cannot, leave "replaces" empty so the old line stays.
 Set "scope" to "always" for a rule a change can break without the request naming it (a header on every new file, the library every HTTP call or log line uses, the format of new IDs, the commit style, checks before saying done): these are shown in every chat of the project as its rules, so keep them few and short. Leave it empty for facts and for rules about one topic, file or feature.
 Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","personal":"<why it holds in every project, or empty>","replaces":"<file>:<line> or empty","scope":"always or empty"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each at most ${MEMORY_ENTRY_MAX_CHARS} characters, written as a fact (e.g. "${EXAMPLE_ENTRY}"). "file" is a topic name only, no folder. Keep the user's exact identifiers and punctuation (paths, prefixes like [orders], names).`;
@@ -1152,6 +1255,38 @@ ${input.message}`;
  */
 const DURABLE_CUE =
 	/\b(?:remember|always|never|from now on|going forward|in (?:the )?future|next time|every ?time|whenever|by default|default to|prefer\w*|rather|instead|don'?t|do not|doesn'?t|stop\w*|avoid|should(?:n'?t)?|must|make sure|convention|rules?|style|we use|i use|we'?re using|i'?m using|uses|switch(?:ed)? (?:to|from)|moved? to|migrat\w+ to|no longer|not anymore|deprecated|keep (?:it|them|using)|note that|fyi|keep in mind|important|policy|standard|wrong|that'?s not|actually|is (?:hosted|deployed) (?:on|at)|lives (?:in|at)|our (?:stack|team|api|db|database|repo|project|convention|style|setup|deploy\w*)|my (?:name|email|username|handle|account|preference|style|machine|setup|laptop)|call me|i'?m (?:a|an|the)|i am (?:a|an|the))\b/i;
+
+/**
+ * Says an entry is about the user themself: a preference, their own habits,
+ * what holds everywhere ("Prefers tabs in every repo", "I use zsh").
+ */
+const ABOUT_THE_USER =
+	/\b(?:prefer\w*|likes?|dislikes?|wants?|hates?|the user|user's|i|i'm|my|me|myself|everywhere|every (?:project|repo\w*|codebase)|all (?:projects|repos\w*)|across projects|in any project|call(?:s)? (?:me|them))\b/i;
+/**
+ * Marks of one project's code, data or domain: inline code, a file path, "this
+ * repo", or a word for its data, interfaces or deploys.
+ */
+const PROJECT_MARKS = [
+	/`[^`]+`/,
+	/(?:^|\s)\.{0,2}[\w-]+\/[\w./-]+|\b[\w-]+\.(?:py|tsx?|jsx?|mjs|json|ya?ml|toml|sql|md|go|rs|rb|java|sh|css|html|csv)\b/i,
+	/\b(?:this|the|our) (?:project|repo(?:sitory)?|codebase|app|service|api|backend|frontend|database|schema)\b/i,
+	/\b(?:summar(?:y|ies)|reports?|tables?|columns?|fields?|rows?|records?|schemas?|endpoints?|routes?|migrations?|deploy\w*|staging|customers?|orders?|invoices?|users? table|functions?|modules?|classes)\b/i,
+];
+
+/**
+ * Whether an entry the save hook marked personal reads as one project's
+ * instead: it carries a project mark (`PROJECT_MARKS`) and nothing says it
+ * is about the user (`ABOUT_THE_USER`). "In customer summaries, `orders`
+ * counts input rows" is the project's; "Prefers short replies" and "Works on
+ * a Mac with zsh" stay personal. A chat with a project saves such an entry to
+ * that project's folder.
+ */
+export function looksProjectSpecific(text: string) {
+	return (
+		!ABOUT_THE_USER.test(text) &&
+		PROJECT_MARKS.some((pattern) => pattern.test(text))
+	);
+}
 
 /** Whether the save hook should look at this message at all (a cheap, generous test). */
 export function hasDurableCue(message: string) {

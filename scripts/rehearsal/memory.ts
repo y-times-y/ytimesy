@@ -83,6 +83,19 @@ export function registerRehearsalMemory() {
 	registerMemoryRepos(namespace);
 	registerMemoryEmbeddings({
 		async run(_model, input) {
+			// The reranker: the same vectors' cosine as relevance.
+			if ("query" in input) {
+				const query = vector(input.query);
+				return {
+					response: input.contexts.map((context, id) => ({
+						id,
+						score: vector(context.text).reduce(
+							(sum, value, index) => sum + value * query[index],
+							0,
+						),
+					})),
+				};
+			}
 			return {
 				data: [...(input.queries ?? []), ...(input.documents ?? [])].map(
 					vector,
