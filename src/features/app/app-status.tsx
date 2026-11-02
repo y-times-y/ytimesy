@@ -2,6 +2,7 @@ import type { ErrorComponentProps } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Wordmark } from "#/components/brand/wordmark";
 import { OnboardingShell } from "../auth/onboarding-shell";
+import { NotFoundPage } from "../landing/landing-page";
 
 function AppStatus({
 	title,
@@ -27,13 +28,7 @@ function AppStatus({
 }
 
 export function AppNotFound() {
-	return (
-		<AppStatus title="Not found" detail="That page does not exist.">
-			<a className="setup-primary" href="/">
-				Go home
-			</a>
-		</AppStatus>
-	);
+	return <NotFoundPage />;
 }
 
 export function AppError({ error, reset }: ErrorComponentProps) {

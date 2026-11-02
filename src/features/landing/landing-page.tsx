@@ -46,24 +46,59 @@ function SignUp({ className, label }: { className: string; label: string }) {
 }
 
 /** What signed-out visitors see at `/`. Signed-in users get the app. */
+function LandingHeader() {
+	return (
+		<header className="landing-header">
+			<div className="landing-header-inner">
+				<YtimesyBrand />
+				<nav className="landing-nav" aria-label="Account">
+					<Link
+						to="/auth/$path"
+						params={{ path: "sign-in" }}
+						search={NO_SEARCH}
+					>
+						Sign in
+					</Link>
+					<SignUp className="landing-button" label="Get started" />
+				</nav>
+			</div>
+		</header>
+	);
+}
+
+/** Any unknown address: the site's own header and footer around a short 404. */
+export function NotFoundPage() {
+	return (
+		<div className="landing">
+			<LandingHeader />
+			<main>
+				<section className="landing-404" aria-labelledby="not-found-title">
+					<p className="landing-404-code" aria-hidden="true">
+						404
+					</p>
+					<h1 id="not-found-title">This page doesn't exist</h1>
+					<p className="landing-dim">
+						It may have moved, or the link is wrong.
+					</p>
+					<div className="landing-404-actions">
+						<a className="landing-button landing-button-large" href="/">
+							Go to ytimesy
+						</a>
+						<Link className="landing-404-secondary" to="/blog">
+							Read the blog
+						</Link>
+					</div>
+				</section>
+			</main>
+			<SiteFooter />
+		</div>
+	);
+}
+
 export function LandingPage() {
 	return (
 		<div className="landing">
-			<header className="landing-header">
-				<div className="landing-header-inner">
-					<YtimesyBrand />
-					<nav className="landing-nav" aria-label="Account">
-						<Link
-							to="/auth/$path"
-							params={{ path: "sign-in" }}
-							search={NO_SEARCH}
-						>
-							Sign in
-						</Link>
-						<SignUp className="landing-button" label="Get started" />
-					</nav>
-				</div>
-			</header>
+			<LandingHeader />
 			<main>
 				<section className="landing-hero" aria-labelledby="landing-title">
 					<h1 id="landing-title">AI Software Engineer in the Cloud</h1>
@@ -433,6 +468,7 @@ export function SiteFooter() {
 				<Wordmark size={18} />
 			</span>
 			<nav aria-label="Legal and support">
+				<Link to="/blog">Blog</Link>
 				<Link to="/terms">Terms</Link>
 				<Link to="/privacy">Privacy</Link>
 				<a href="mailto:support@ytimesy.com">support@ytimesy.com</a>
