@@ -558,8 +558,8 @@ export function WorkspaceHome({
 	}, [chatCache, listedChatIds]);
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
 	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
-	/** The Memory page's view; the graph first, the list kept while open. */
-	const [memoryView, setMemoryView] = useState<MemoryView>("graph");
+	/** The Memory page's view; the folder tree first, the list kept while open. */
+	const [memoryView, setMemoryView] = useState<MemoryView>("tree");
 	const startSession = useServerFn(startProjectAgentSession);
 	const prewarmSession = useServerFn(prewarmProjectAgentSession);
 	/** Chats whose machine copy was already asked for in this page. */

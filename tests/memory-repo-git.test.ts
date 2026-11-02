@@ -7,7 +7,15 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import http from "isomorphic-git/http/web";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { EMPTY_MEMORY, memoryCloneScript } from "#/domain/memory-repo";
+import {
+	MEMORY_LAYOUT_COMMIT,
+	memoryLayoutChanges,
+} from "#/domain/memory-layout";
+import {
+	EMPTY_MEMORY,
+	memoryCloneScript,
+	withMemoryChanges,
+} from "#/domain/memory-repo";
 import { pushChanges } from "#/server/adapters/memory-repos";
 
 /**
@@ -227,5 +235,70 @@ describe("Worker writer", () => {
 			"Save hook\nDream: tooling\nCreate memory repo",
 		);
 		expect(await readFile(join(check, "tooling.md"), "utf8")).toContain("pnpm");
+	}, 60_000);
+});
+
+describe("layout migration on a real repo", () => {
+	it("moves files in one commit that git revert undoes exactly", async () => {
+		const remote = await bareRepo("memory-layout.git");
+		const legacy = {
+			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+			"tooling.md":
+				"# tooling\n- Prefers tabs [added: 2026-10-01]\n- Web pins Node 22 [project: acme/web; added: 2026-10-02]\n",
+		};
+		const seeded = await pushChanges({
+			http,
+			remote,
+			token: TOKEN,
+			base: { head: null, files: {} },
+			changes: Object.entries(legacy).map(([path, content]) => ({
+				path,
+				content,
+			})),
+			message: "Seed",
+		});
+		const head = seeded !== "raced" && seeded.ok ? seeded.hash : null;
+		const changes =
+			memoryLayoutChanges(legacy, [
+				{ fullName: "acme/web", repositoryIds: [7] },
+			]) ?? [];
+		const moved = await pushChanges({
+			http,
+			remote,
+			token: TOKEN,
+			base: { head, files: legacy },
+			changes,
+			message: MEMORY_LAYOUT_COMMIT,
+		});
+		expect(moved).toMatchObject({ ok: true });
+		const check = await mkdtemp(join(root, "layout-"));
+		await run("git", ["clone", "-q", join(root, "memory-layout.git"), check]);
+		expect(await git(check, "log", "--format=%s")).toBe(
+			"Reorganize memory by project\nSeed",
+		);
+		const after = withMemoryChanges(legacy, changes);
+		expect(await git(check, "ls-files")).toBe(
+			[
+				".memory-layout",
+				"MEMORY.md",
+				"personal/tooling.md",
+				"projects/acme-web--7/tooling.md",
+			].join("\n"),
+		);
+		expect(
+			await readFile(join(check, "projects/acme-web--7/tooling.md"), "utf8"),
+		).toBe(after["projects/acme-web--7/tooling.md"]);
+		// Reversible: reverting the one commit restores the old tree byte for byte.
+		await git(
+			check,
+			"-c",
+			"user.name=t",
+			"-c",
+			"user.email=t@t",
+			"revert",
+			"--no-edit",
+			"HEAD",
+		);
+		expect(await git(check, "diff", "--stat", "HEAD~2", "HEAD")).toBe("");
 	}, 60_000);
 });

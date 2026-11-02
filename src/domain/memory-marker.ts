@@ -42,12 +42,24 @@ export type MemoryReadHookOutcome =
 	| "timeout"
 	| "error";
 
+/** Another chat's latest message attached because memory may not hold it yet. */
+export type RecalledChatMessage = {
+	readonly chatId: string;
+	readonly title?: string;
+	/** The message, clipped for display. */
+	readonly text: string;
+};
+
 export type MemoryRecall = {
 	/** Memory commit when the request was read; this turn's saves are diffed against it. */
 	readonly head: string | null;
 	/** MEMORY.md (the memory index) was attached at chat start. */
 	readonly index?: true;
+	/** Non-empty lines of MEMORY.md attached (after the project filter and cap). */
+	readonly indexLines?: number;
 	readonly lines: readonly RecalledMemoryLine[];
+	/** Other chats' recent messages attached with this request. */
+	readonly recent?: readonly RecalledChatMessage[];
 	/** The read hook's outcome and wall time (full mode with embeddings only). */
 	readonly hook?: {
 		readonly outcome: MemoryReadHookOutcome;
@@ -61,6 +73,43 @@ export type MemoryRecall = {
 		readonly spans?: Readonly<Record<string, number>>;
 	};
 };
+
+/**
+ * Everything a request's memory put in context, by kind: the index (one
+ * item), always-on rules, matched lines and other chats' messages.
+ */
+export function memoryRecallCounts(recall: MemoryRecall) {
+	const rules = recall.lines.filter((line) => line.rule).length;
+	const matches = recall.lines.length - rules;
+	const index = recall.index ? 1 : 0;
+	const recent = recall.recent?.length ?? 0;
+	return {
+		index,
+		rules,
+		matches,
+		recent,
+		total: index + rules + matches + recent,
+	};
+}
+
+/** "Index · 2 rules · 3 matches · 1 chat message": the count's breakdown, for its tooltip. */
+export function memoryRecallBreakdown(recall: MemoryRecall) {
+	const counts = memoryRecallCounts(recall);
+	const plural = (count: number, one: string, many: string) =>
+		`${count} ${count === 1 ? one : many}`;
+	return [
+		counts.index
+			? recall.indexLines
+				? `Index (${plural(recall.indexLines, "line", "lines")})`
+				: "Index"
+			: "",
+		counts.rules ? plural(counts.rules, "rule", "rules") : "",
+		counts.matches ? plural(counts.matches, "match", "matches") : "",
+		counts.recent ? plural(counts.recent, "chat message", "chat messages") : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
 
 export type SavedMemoryLine = {
 	readonly path: string;
@@ -191,15 +240,33 @@ export function withSavedMemory(
 	];
 }
 
-/** Whether memory still holds this entry (by its text, in its file). */
-export function memoryHoldsLine(files: MemoryFiles, line: SavedMemoryLine) {
-	const content = files[line.path];
-	if (content === undefined) return false;
+function holdsIn(content: string | undefined, key: string) {
+	return Boolean(
+		content
+			?.split("\n")
+			.some((raw) => normalized(parseMemoryLine(raw)?.text ?? "") === key),
+	);
+}
+
+/**
+ * The file that holds this entry: its own, else (a line the per-project
+ * layout moved: `tooling.md` -> `personal/tooling.md`) the one file of the
+ * same topic name that holds it. Null when memory no longer holds it.
+ */
+function holdingPath(files: MemoryFiles, line: SavedMemoryLine) {
 	// Older records kept trailing key text ("kind: inferred.") in the line.
 	const key = normalized(trailingMemoryKeys(line.text).text);
-	return content
-		.split("\n")
-		.some((raw) => normalized(parseMemoryLine(raw)?.text ?? "") === key);
+	if (holdsIn(files[line.path], key)) return line.path;
+	const name = `/${line.path.split("/").pop() ?? line.path}`;
+	const moved = Object.keys(files).filter(
+		(path) => path.endsWith(name) && holdsIn(files[path], key),
+	);
+	return moved.length === 1 ? moved[0] : null;
+}
+
+/** Whether memory still holds this entry (by its text, in its file or where the layout moved it). */
+export function memoryHoldsLine(files: MemoryFiles, line: SavedMemoryLine) {
+	return holdingPath(files, line) !== null;
 }
 
 /** Undo: the file without the entry, or null when memory no longer holds it. */
@@ -207,11 +274,11 @@ export function withoutMemoryLine(
 	files: MemoryFiles,
 	line: SavedMemoryLine,
 ): MemoryChange | null {
-	const content = files[line.path];
-	if (content === undefined || !memoryHoldsLine(files, line)) return null;
+	const path = holdingPath(files, line);
+	if (path === null) return null;
 	const key = normalized(trailingMemoryKeys(line.text).text);
-	const kept = content
+	const kept = (files[path] ?? "")
 		.split("\n")
 		.filter((raw) => normalized(parseMemoryLine(raw)?.text ?? "") !== key);
-	return { path: line.path, content: kept.join("\n") };
+	return { path, content: kept.join("\n") };
 }

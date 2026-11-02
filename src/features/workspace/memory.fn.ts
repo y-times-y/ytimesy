@@ -11,7 +11,6 @@ import {
 	MEMORY_PROJECT_MAX,
 	type MemoryEdit,
 } from "#/domain/memory-edit";
-import { memoryEntries, memoryRows } from "#/domain/memory-overview";
 import {
 	type MEMORY_MODES,
 	memoryPath,
@@ -27,8 +26,8 @@ import {
 	lastMemoryDreamRun,
 	lastMemoryReview,
 	markMemoryDreamed,
-	memoryChatTitles,
 	memoryLastActivity,
+	memoryProjects,
 	memorySettings,
 	saveMemoryMode,
 } from "#/server/adapters/memory-settings";
@@ -42,6 +41,7 @@ import {
 	DREAM_IDLE_SECONDS,
 	DREAM_REVIEW_DAYS,
 } from "#/server/services/memory-jobs";
+import { memoryInLayout } from "#/server/services/memory-layout";
 import { removeMemoryLine } from "#/server/services/memory-undo";
 
 export type MemoryOverview = {
@@ -58,14 +58,19 @@ async function userRepo(userId: string) {
 	};
 }
 
-/** The signed-in user's memory repo at its latest commit. */
+/**
+ * The signed-in user's memory repo at its latest commit, moved into the
+ * per-project layout first when it is not yet (one commit, once).
+ */
 export const readMemoryFn = createServerFn({ method: "GET" }).handler(
 	async (): Promise<MemoryOverview> => {
 		const user = await requireUser(getRequest().headers);
 		if (!memoryReposAvailable())
 			return { available: false, mode: "off", files: [] };
 		const { settings, repo } = await userRepo(user.id);
-		const snapshot = repo ? await repo.snapshot() : { files: {} };
+		const snapshot = repo
+			? await memoryInLayout(repo, () => memoryProjects(user.id))
+			: { files: {} };
 		return {
 			available: true,
 			mode: settings.mode,
@@ -242,22 +247,5 @@ export const readMemoryModeFn = createServerFn({ method: "GET" }).handler(
 			return { available: false, mode: "off" as const };
 		const settings = await memorySettings(user.id);
 		return { available: true, mode: settings.mode };
-	},
-);
-
-/** What the memory graph adds to the files: each source chat's title. */
-export const readMemoryGraphFn = createServerFn({ method: "GET" }).handler(
-	async (): Promise<{ titles: Record<string, string> }> => {
-		const user = await requireUser(getRequest().headers);
-		if (!memoryReposAvailable()) return { titles: {} };
-		const { repo } = await userRepo(user.id);
-		if (!repo) return { titles: {} };
-		const snapshot = await repo.snapshot();
-		const rows = memoryEntries(memoryRows(snapshot.files, memoryToday()));
-		const titles = await memoryChatTitles(
-			user.id,
-			rows.flatMap((row) => (row.chatId ? [row.chatId] : [])),
-		).catch(() => new Map<string, string>());
-		return { titles: Object.fromEntries(titles) };
 	},
 );

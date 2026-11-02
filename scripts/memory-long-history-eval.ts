@@ -1885,12 +1885,10 @@ async function recallCheck() {
 			const index = annotateMemoryText(files["MEMORY.md"] ?? "", {
 				today: memoryToday(),
 			});
-			// The always-on project rules ride with it (project: null leaves out
-			// rules tied to a project, as in an eval chat without one).
+			// The always-on rules (scope: always) ride with it.
 			const rules = projectRules({
 				lines,
 				today: memoryToday(),
-				project: null,
 			});
 			const shown = `${index}\n${memoryRulesPart(rules)}`;
 			totals.rules += rules.length;
@@ -1924,7 +1922,6 @@ async function recallCheck() {
 					scores,
 					alreadyShown: (raw) => memoryLineShown(raw, shown),
 					today: memoryToday(),
-					project: null,
 					query,
 				});
 				const inIndex = index
@@ -2027,7 +2024,7 @@ async function hookLatency() {
 		});
 		rows.push([label, prompt.slice(0, 40), result.outcome, String(result.ms)]);
 	};
-	const lines = recallableLines(snapshot).length;
+	const lines = recallableLines(snapshot, null).length;
 	await run(`cold (embed ${lines} lines)`, PROBES[0].prompt);
 	for (const probe of PROBES.slice(1, 4)) {
 		resetWarmLineEmbeddings();
