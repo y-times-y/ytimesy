@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { API_MODEL_LIST, apiModelSpeeds } from "./api-model-list";
+import {
+	API_MODEL_LIST,
+	type ApiModelSpeed,
+	apiModelSpeeds,
+	directApiModelSpeeds,
+} from "./api-model-list";
 import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
 import type { XaiSubscriptionStatus } from "./xai-subscription";
 
@@ -135,6 +140,33 @@ export function modelRouteId(connectionId: string, modelId: string): string {
 	return `api/${connectionId}/${encodeURIComponent(modelId)}`;
 }
 
+/**
+ * The faster speeds a model offers on a connection: the maker's tiered
+ * endpoints through OpenRouter, or xAI's priority tier on its own API (a key
+ * or the Grok plan). Other direct connections offer none.
+ */
+export function connectionModelSpeeds(
+	connection: { readonly provider: ModelProvider; readonly baseUrl: string },
+	modelId: string,
+): readonly ApiModelSpeed[] {
+	if (connection.provider === "openrouter") return apiModelSpeeds(modelId);
+	return isXaiDirectEndpoint(connection.baseUrl)
+		? directApiModelSpeeds(modelId)
+		: [];
+}
+
+/** xAI's own API, where a speed is a `service_tier` on the request. */
+export function isXaiDirectEndpoint(baseUrl: string) {
+	try {
+		return (
+			new URL(baseUrl).origin ===
+			new URL(DIRECT_MODEL_ENDPOINTS["x-ai"] as string).origin
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function availableConnectionModels(
 	connections: readonly PublicModelConnection[],
 	browseModels: readonly BrowseModel[],
@@ -142,14 +174,9 @@ export function availableConnectionModels(
 	return connections.flatMap((connection) =>
 		connectionModels(connection, browseModels).map((model) => {
 			const reasoning = apiModelReasoning(connection.provider, model.id);
-			// Faster maker endpoints are reachable through OpenRouter only.
-			const speeds =
-				connection.provider === "openrouter"
-					? apiModelSpeeds(model.id).map(({ id, priceMultiple }) => ({
-							id,
-							priceMultiple,
-						}))
-					: [];
+			const speeds = connectionModelSpeeds(connection, model.id).map(
+				({ id, priceMultiple }) => ({ id, priceMultiple }),
+			);
 			return {
 				id: modelRouteId(connection.id, model.id),
 				label: `${model.label} · ${connection.label}`,
