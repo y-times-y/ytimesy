@@ -148,7 +148,7 @@ when you install it. It asks for: repository contents (read and write), pull
 requests (read and write), checks (read), issues (read), actions (read) and
 metadata (read). We use this to clone your code into your workspace, push
 branches, open and update pull requests, read check results and CI job logs,
-and read comments that mention @ytimesy on pull requests ytimesy opened, so
+and read comments that mention the ytimesy GitHub App on pull requests ytimesy opened, so
 your chat can fix a failed check or follow a collaborator's request. The agent
 does not merge pull requests. You can change the App's repositories or
 uninstall it at any time in GitHub settings.

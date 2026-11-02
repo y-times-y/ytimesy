@@ -1,10 +1,9 @@
 import { EVIDENCE_END, EVIDENCE_START } from "./pr-evidence";
+import { insertBeforePullRequestFooter } from "./pull-request-footer";
 import type { SessionItem } from "./session-item";
 
 const PULL_REQUEST_START = "<pull-request>";
 const PULL_REQUEST_END = "</pull-request>";
-const CHANGE_NOTE =
-	"Comment `@ytimesy <what to change>` on this pull request to ask for a change.";
 
 /** Body used when the turn did not say what changed. Not a stand-in description. */
 export const PULL_REQUEST_DESCRIPTION_MISSING =
@@ -61,7 +60,7 @@ export function pullRequestHandoffBody(input: {
 	const verification = input.verification.slice(0, 8);
 	const written = input.description?.trim() || null;
 	if (written && !isAutomaticDraftBoilerplate(written))
-		return withChangeNote(withUnmentionedFacts(written, files, verification));
+		return withUnmentionedFacts(written, files, verification);
 	const summary = summaryFromFinalAnswer(input.finalAnswer);
 	if (!summary && files.length === 0 && verification.length === 0)
 		return PULL_REQUEST_DESCRIPTION_MISSING;
@@ -72,7 +71,7 @@ export function pullRequestHandoffBody(input: {
 			"The chat's branch changes the files below. This turn did not include a written description of why.",
 	];
 	appendFacts(lines, files, verification);
-	return withChangeNote(lines.join("\n"));
+	return lines.join("\n");
 }
 
 /** Files from `git diff --name-only -z` (or a line-oriented listing). */
@@ -132,7 +131,7 @@ export function descriptionKeepingEvidence(
 	const evidence = evidenceSection(current);
 	const text = description.trim();
 	if (!evidence || text.includes(EVIDENCE_START)) return text;
-	return `${text}\n\n${evidence}`;
+	return insertBeforePullRequestFooter(text, evidence);
 }
 
 /**
@@ -238,11 +237,6 @@ function appendFacts(
 			}),
 		);
 	}
-}
-
-function withChangeNote(body: string) {
-	if (body.includes("@ytimesy")) return body.trim();
-	return `${body.trim()}\n\n${CHANGE_NOTE}`;
 }
 
 function uniquePaths(paths: readonly string[]) {

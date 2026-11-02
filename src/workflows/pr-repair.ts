@@ -73,6 +73,7 @@ export default {
 						throw new Error("Repair persistence needs operator retry.");
 				}
 			},
+			env.GITHUB_APP_SLUG,
 		);
 	},
 };

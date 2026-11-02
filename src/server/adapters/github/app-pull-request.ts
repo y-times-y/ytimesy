@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { pullRequestFixPath, withFixSection } from "#/domain/pull-request-wake";
+import { githubAppMention } from "#/domain/github-bot";
+import { withPullRequestFooter } from "#/domain/pull-request-footer";
+import { chatPath, pullRequestFixPath } from "#/domain/pull-request-wake";
 import { ensureDraftPullRequest } from "../github";
 import { recordPullRequestLink } from "../pull-request-links";
 import { githubInstallationAccessToken } from "./installation-token";
@@ -16,8 +18,9 @@ export type PullRequestOrigin = {
  * Opens or updates the draft pull request as the signed-in user: GitHub sets
  * the author to whoever the token authenticates as. Without a user token the
  * installed app opens it instead, so the work still ships under the app's
- * name. With an origin, the description links to "Fix with ytimesy" and the
- * pull request is recorded for GitHub wake-ups.
+ * name. With an origin, the description links to "Fix with ytimesy", names
+ * the App's handle (`@<slug>`) and the pull request is recorded for GitHub
+ * wake-ups. Every description ends with one "Generated with ytimesy" line.
  */
 export async function ensureAppDraftPullRequest(
 	installationId: number | string,
@@ -45,13 +48,20 @@ export async function ensureAppDraftPullRequest(
 	}
 	const linkId = randomUUID();
 	const app = process.env.APP_URL?.replace(/\/+$/, "");
-	const body =
-		origin && app
-			? withFixSection(
-					draft.body,
-					`${app}${pullRequestFixPath(origin.projectId, linkId)}`,
-				)
-			: draft.body;
+	// One footer at the end: how to ask for a change (only when the pull
+	// request is recorded, so a comment can wake its chat) and "Generated with
+	// ytimesy", linking the chat when there is one.
+	const body = withPullRequestFooter(draft.body, {
+		fixUrl:
+			origin && app
+				? `${app}${pullRequestFixPath(origin.projectId, linkId)}`
+				: null,
+		mention: origin ? githubAppMention(process.env.GITHUB_APP_SLUG) : null,
+		chatUrl:
+			origin?.sessionId && app
+				? `${app}${chatPath(origin.projectId, origin.sessionId)}`
+				: null,
+	});
 	const pull = await ensureDraftPullRequest(token, fullName, {
 		...draft,
 		body,

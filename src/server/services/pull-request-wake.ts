@@ -250,7 +250,7 @@ async function deliverWake(machines: WorkspaceMachines, wake: ClaimedWake) {
 }
 
 /**
- * Delivers due GitHub wake-ups (CI failures, @ytimesy comments) for pull
+ * Delivers due GitHub wake-ups (CI failures, comments mentioning @<GITHUB_APP_SLUG>) for pull
  * requests ytimesy opened. Fails closed unless PR repair is enabled.
  */
 export async function deliverPullRequestWakes(machines: WorkspaceMachines) {

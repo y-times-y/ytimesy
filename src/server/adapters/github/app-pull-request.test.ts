@@ -31,7 +31,13 @@ it("opens the pull request as the signed-in user, and as the app only without on
 		"user-token",
 	);
 	expect(api.token).not.toHaveBeenCalled();
-	expect(api.pull).toHaveBeenCalledWith("user-token", "owner/repo", draft);
+	const signed = {
+		...draft,
+		body: expect.stringMatching(
+			/^The parser rejects an empty token\.\n\n<!-- ytimesy-fix:start -->[\s\S]*Generated with ytimesy\n<!-- ytimesy-fix:end -->$/,
+		),
+	};
+	expect(api.pull).toHaveBeenCalledWith("user-token", "owner/repo", signed);
 	api.pull.mockClear();
 	api.token.mockResolvedValue("app-token");
 	vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -41,7 +47,7 @@ it("opens the pull request as the signed-in user, and as the app only without on
 		contents: "read",
 		pullRequests: "write",
 	});
-	expect(api.pull).toHaveBeenCalledWith("app-token", "owner/repo", draft);
+	expect(api.pull).toHaveBeenCalledWith("app-token", "owner/repo", signed);
 });
 
 afterEach(() => {
@@ -51,6 +57,7 @@ afterEach(() => {
 
 it("links a project's pull request to Fix with ytimesy and records it for GitHub wake-ups", async () => {
 	vi.stubEnv("APP_URL", "https://app.example/");
+	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-agent");
 	api.pull.mockResolvedValue({
 		number: 7,
 		url: "https://github.com/owner/repo/pull/7",
@@ -78,7 +85,10 @@ it("links a project's pull request to Fix with ytimesy and records it for GitHub
 	const sent = api.pull.mock.calls[0]?.[2];
 	const linkId = api.record.mock.calls[0]?.[0].id;
 	expect(sent.body).toContain(
-		`[Fix with ytimesy](https://app.example/projects/project/pulls/${linkId}/fix)`,
+		`[Fix with ytimesy](https://app.example/projects/project/pulls/${linkId}/fix) · or comment \`@ytimesy-agent <what to change>\``,
+	);
+	expect(sent.body).toMatch(
+		/Generated with \[ytimesy\]\(https:\/\/app\.example\/\?project=project&chat=chat\)\n<!-- ytimesy-fix:end -->$/,
 	);
 	expect(api.record).toHaveBeenCalledWith({
 		id: linkId,

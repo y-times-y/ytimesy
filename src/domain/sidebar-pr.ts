@@ -41,6 +41,8 @@ export function sidebarChatPrNeedFromPullRequest(pr: {
 	readonly merged: boolean;
 	readonly mergeable: boolean | null;
 	readonly mergeableState: string | null;
+	/** The head's check runs and statuses, when they were read. */
+	readonly checks?: PullRequestChecksSummary | null;
 }): SidebarChatPrNeed {
 	if (pr.merged) return "merged";
 	if (pr.state === "closed") return "closed";
@@ -49,7 +51,15 @@ export function sidebarChatPrNeedFromPullRequest(pr: {
 	if (mergeableState === "blocked" || mergeableState === "behind") {
 		return "blocked";
 	}
-	if (mergeableState === "unstable") return "checks_failed";
+	// GitHub says "unstable" for any non-passing status: pending ones too, and
+	// check suites other Apps queue on every push even where no CI is
+	// configured. Only a check that actually failed reads as failed.
+	if (mergeableState === "unstable") {
+		if (!pr.checks || pr.checks.failed > 0) return "checks_failed";
+		if (pr.draft) return "draft";
+		if (pr.checks.pending > 0) return "pending";
+		return pr.mergeable === true ? "ready" : "pending";
+	}
 	if (pr.draft || mergeableState === "draft") return "draft";
 	if (
 		pr.state === "open" &&
