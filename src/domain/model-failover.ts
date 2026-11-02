@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { API_MODEL_LIST } from "./api-model-list";
 import { type ApiTurnSettings, apiTurnSettings } from "./api-turn-settings";
+import {
+	CLAUDE_CODE_KEY,
+	CLAUDE_CODE_LABEL,
+	CLAUDE_CODE_MODEL_EQUIVALENTS,
+	claudeCodeTurnRevision,
+	isClaudeCodeRevision,
+} from "./claude-code-route";
 import { isDevelopmentEnvironment } from "./development-environment";
 import {
 	directAuthor,
@@ -27,7 +34,9 @@ export type FailoverReason =
 	| "usage-limit"
 	| "timeout"
 	/** A subscription sign-in (SuperGrok) was rejected; only the user can renew it. */
-	| "plan-access";
+	| "plan-access"
+	/** A subscription token the provider refused (Claude Code's setup-token). */
+	| "signed-out";
 
 const REASON_TEXT: Record<FailoverReason, string> = {
 	outage: "outage",
@@ -36,6 +45,7 @@ const REASON_TEXT: Record<FailoverReason, string> = {
 	"usage-limit": "usage limit reached",
 	timeout: "timed out",
 	"plan-access": "sign-in needs renewing",
+	"signed-out": "token refused",
 };
 
 /** Why a route stopped, for the person reading the chat. */
@@ -43,7 +53,13 @@ function failingSentence(from: RouteLabel, reason: FailoverReason) {
 	if (reason === "usage-limit")
 		return from.connection === SUBSCRIPTION_LABEL
 			? "Your ChatGPT plan's Codex usage is used up"
-			: `${from.connection} is out of usage`;
+			: from.connection === CLAUDE_CODE_LABEL
+				? "Your Claude plan's usage is used up"
+				: `${from.connection} is out of usage`;
+	if (reason === "signed-out")
+		return from.connection === CLAUDE_CODE_LABEL
+			? "Anthropic refused your Claude token"
+			: `${from.connection} refused its sign-in`;
 	return {
 		outage: `${from.connection} is down right now`,
 		overloaded: `${from.connection} is overloaded right now`,
@@ -70,11 +86,21 @@ export type ModelRoute = {
 	readonly settings?: ApiTurnSettings;
 };
 
-export function routeConnectionKey(route: Pick<ModelRoute, "connectionId">) {
-	return route.connectionId ?? SUBSCRIPTION_KEY;
+/** The connection a route uses: an API connection's id, or which subscription. */
+export function routeConnectionKey(
+	route: Pick<ModelRoute, "connectionId"> &
+		Partial<Pick<ModelRoute, "connectionRevision">>,
+) {
+	if (route.connectionId) return route.connectionId;
+	return isClaudeCodeRevision(route.connectionRevision)
+		? CLAUDE_CODE_KEY
+		: SUBSCRIPTION_KEY;
 }
 
-export function routeKey(route: Pick<ModelRoute, "connectionId" | "modelId">) {
+export function routeKey(
+	route: Pick<ModelRoute, "connectionId" | "modelId"> &
+		Partial<Pick<ModelRoute, "connectionRevision">>,
+) {
 	return `${routeConnectionKey(route)}|${route.modelId}`;
 }
 
@@ -200,7 +226,11 @@ export function canonicalModelId(
 ): string | null {
 	switch (connection.kind) {
 		case "subscription":
-			return SUBSCRIPTION_MODEL_EQUIVALENTS[modelId] ?? null;
+			return (
+				SUBSCRIPTION_MODEL_EQUIVALENTS[modelId] ??
+				CLAUDE_CODE_MODEL_EQUIVALENTS[modelId] ??
+				null
+			);
 		case "gateway":
 			return API_MODEL_LIST.some((entry) => entry.openRouterId === modelId)
 				? modelId
@@ -271,6 +301,12 @@ function candidateRoute(
 ): ModelRoute {
 	const kept =
 		reasoning && model.reasoning?.includes(reasoning) ? reasoning : undefined;
+	if (connection.kind === "subscription" && connection.key === CLAUDE_CODE_KEY)
+		return {
+			connectionId: null,
+			connectionRevision: claudeCodeTurnRevision(),
+			modelId: model.id,
+		};
 	if (connection.kind === "subscription")
 		return {
 			connectionId: null,
@@ -303,7 +339,7 @@ export function failoverCandidates(input: {
 	const originalKey = routeConnectionKey(input.original);
 	const originalConnection =
 		input.connections.find((row) => row.key === originalKey) ??
-		(originalKey === SUBSCRIPTION_KEY
+		(originalKey === SUBSCRIPTION_KEY || originalKey === CLAUDE_CODE_KEY
 			? { kind: "subscription" as const }
 			: null);
 	const canonical = originalConnection

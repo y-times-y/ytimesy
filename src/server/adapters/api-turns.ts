@@ -6,6 +6,7 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { isClaudeCodeRevision } from "#/domain/claude-code-route";
 import { CONVERSATION_FORK_REQUEST_ID } from "#/domain/conversation-fork";
 import { jsonbText } from "#/domain/jsonb";
 import {
@@ -140,7 +141,8 @@ export async function enqueueApiTurn(input: {
 	try {
 		await client.query("begin");
 		const subscription = subscriptionTurnSettings(input.revision);
-		if (subscription && input.connectionId !== null)
+		const claudeCode = isClaudeCodeRevision(input.revision);
+		if ((subscription || claudeCode) && input.connectionId !== null)
 			throw new Error("Subscription turns cannot use an API connection.");
 		// One statement: the connection (or Codex sign-in) is share-locked,
 		// the chat row locked for update, and a turn this send already queued
@@ -157,14 +159,16 @@ export async function enqueueApiTurn(input: {
 			`with connection as (${
 				subscription
 					? "select 1 from agent_account where user_id=$2 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share"
-					: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
+					: claudeCode
+						? "select 1 from claude_subscription where user_id=$2 and status in ('connected','limited') for share"
+						: "select 1 from model_connection where id=$4 and user_id=$2 and revision=$5 for share"
 			}),
 			 chat as (select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update)
 			 select exists(select 1 from connection) as connected,chat.id is not null as found,
 			 chat.turn_status,chat.parent_session_id,chat.task_state,chat.task_access,
 			 ($3::text is not null and exists(select 1 from api_turn t where t.session_id=$1 and t.user_id=$2 and t.idempotency_key=$3::text)) as existing
 			 from (select 1) one left join chat on true`,
-			subscription
+			subscription || claudeCode
 				? [input.sessionId, input.userId, input.idempotencyKey ?? null]
 				: [
 						input.sessionId,
