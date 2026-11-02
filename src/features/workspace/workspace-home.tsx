@@ -2176,6 +2176,15 @@ export function WorkspaceHome({
 			return;
 		}
 		if (view !== "terminal" && view !== "desktop") return;
+		wakeChatMachine(projectId, sessionId);
+	}
+
+	/**
+	 * Starts a chat's machine if it has one and it sleeps (a paused machine
+	 * resumes in about 0.3 s, then answers its first command), at most once a
+	 * minute per chat. Never creates one.
+	 */
+	function wakeChatMachine(projectId: string, sessionId: string) {
 		const asked = resumedMachines.current.get(sessionId) ?? 0;
 		if (Date.now() - asked < MACHINE_RESUME_INTERVAL_MS) return;
 		resumedMachines.current.set(sessionId, Date.now());
@@ -2340,18 +2349,21 @@ export function WorkspaceHome({
 			});
 	}
 
-	/** Typing in an empty new chat copies its machine while the message is written. */
+	/**
+	 * Typing in an empty new chat copies its machine while the message is
+	 * written; typing a follow-up in a chat whose machine sleeps wakes it, so
+	 * the turn finds it running. Typing, not opening: a chat opened only to
+	 * read must not start its machine (vCPU is billed while it runs).
+	 */
 	function prewarmOpenChat() {
 		const chatId = session.agentSessionId;
 		const projectId = selectedProject?.id;
-		if (
-			!chatId ||
-			!projectId ||
-			session.items.length ||
-			session.turnStatus === "running" ||
-			prewarmedChats.current.has(chatId)
-		)
+		if (!chatId || !projectId || session.turnStatus === "running") return;
+		if (session.items.length) {
+			wakeChatMachine(projectId, chatId);
 			return;
+		}
+		if (prewarmedChats.current.has(chatId)) return;
 		prewarmedChats.current.add(chatId);
 		void prewarmSession({ data: { projectId, sessionId: chatId } }).catch(
 			() => undefined,

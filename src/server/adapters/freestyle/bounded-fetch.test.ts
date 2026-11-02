@@ -2,6 +2,7 @@ import { Freestyle, FreestyleApiError } from "freestyle";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	boundedFreestyleFetch,
+	FAST_POLL_DELAYS_MS,
 	fastPollFreestyleFetch,
 	PROVIDER_OPERATION_MS,
 	PROVIDER_TIMEOUT_CODE,
@@ -133,4 +134,13 @@ it("follows a backgrounded call itself, sooner than the SDK's 2 s polls", async 
 	await vi.advanceTimersByTimeAsync(5_000);
 	await start;
 	expect(polls).toEqual([250, 500, 1_000]);
+});
+
+it("polls a long backgrounded call every second for its first half minute, then every 2 s", () => {
+	const elapsed = (count: number) =>
+		FAST_POLL_DELAYS_MS.slice(0, count).reduce((sum, ms) => sum + ms, 0);
+	expect(FAST_POLL_DELAYS_MS.slice(0, 4)).toEqual([250, 250, 500, 500]);
+	expect(Math.max(...FAST_POLL_DELAYS_MS.slice(4))).toBe(1_000);
+	expect(elapsed(FAST_POLL_DELAYS_MS.length)).toBeGreaterThanOrEqual(28_000);
+	expect(elapsed(FAST_POLL_DELAYS_MS.length)).toBeLessThanOrEqual(31_000);
 });

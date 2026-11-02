@@ -19,6 +19,7 @@ import {
 	type EnvironmentModel,
 	environmentModel,
 } from "#/domain/environment-model";
+import { machineSize } from "#/domain/machine-size";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { projectCheckoutPath } from "#/domain/project-checkout";
 import type { EnvironmentRecipe } from "#/domain/project-environment";
@@ -47,6 +48,7 @@ import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
 import { receiveBrokeredRepository } from "../adapters/github/git-broker";
+import { projectMachineSize } from "../adapters/project-machine-size";
 import { loadProjectSecretsForOwner } from "../adapters/project-secrets";
 import { projectForOwner } from "../adapters/projects";
 import { guestNodePath } from "../adapters/repository-setup";
@@ -984,7 +986,15 @@ export async function activateEnvironmentBuild(
 		);
 	// Setup command logs may echo secrets; they must not reach the task template.
 	await runtime.exec(vm, ["rm", "-rf", DETACHED_COMMAND_ROOT], {}, 15_000);
-	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`);
+	// Chats copy this snapshot: it holds the project's disk size and a running
+	// desktop, so a copy needs neither a disk grow nor a desktop start.
+	const size = await projectMachineSize(input.userId, input.projectId).catch(
+		() => null,
+	);
+	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`, {
+		storageMiB: size ? machineSize(size).storage : undefined,
+		desktop: true,
+	});
 	const result = await database().query(
 		`with activated as (
       update workspace set provider_ref=$2,template_snapshot_id=$3,status='ready',error_message=null,
