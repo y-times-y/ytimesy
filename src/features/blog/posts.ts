@@ -69,7 +69,7 @@ export const SITE_PREVIEW_META = sitePreviewMeta({
 	description:
 		"Give it a task and it builds in its own cloud machine, then opens a pull request. Use your ChatGPT, Claude or Grok plan, or your API keys.",
 	url: `${SITE_ORIGIN}/`,
-	image: "/og/home.jpg",
+	image: "/og/home-card.jpg",
 	imageAlt:
-		"ytimesy: AI Software Engineer in the Cloud, above the ytimesy app with a chat and its todos.",
+		"ytimesy: AI Software Engineer in the Cloud. Runs on your ChatGPT, Claude or Grok plan, or your API keys.",
 });
