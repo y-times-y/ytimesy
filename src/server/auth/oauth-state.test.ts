@@ -61,6 +61,10 @@ afterEach(() => vi.unstubAllGlobals());
 it("never skips the browser-bound state cookie check", () => {
 	expect(oauthAccountPolicy).not.toHaveProperty("skipStateCookieCheck");
 	expect(oauthAccountPolicy.storeStateStrategy).toBe("database");
+	expect(oauthAccountPolicy.accountLinking).toEqual({
+		enabled: true,
+		requireLocalEmailVerified: true,
+	});
 });
 
 it("rejects an OAuth callback whose state is not bound to this browser", async () => {
