@@ -5,6 +5,7 @@ import { CLAUDE_CODE_TURN_REQUEST_CAP } from "#/domain/claude-code-proxy";
 import { claudeCodeTurnRevision } from "#/domain/claude-code-route";
 import {
 	authorizeClaudeCodeProxy,
+	checkClaudeSetupToken,
 	claudeSubscriptionStatus,
 	disconnectClaudeSubscription,
 	normalizedSetupToken,
@@ -41,8 +42,17 @@ beforeEach(async () => {
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) =>
 		db.query(sql, values),
 	);
+	// Saving asks Anthropic once; the other tests see a token it accepts.
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response("{}", { status: 200 })),
+	);
 });
-afterEach(() => db.close());
+afterEach(async () => {
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+	await db.close();
+});
 
 async function turn(state = "running", revision = claudeCodeTurnRevision()) {
 	const session = randomUUID();
@@ -193,4 +203,75 @@ it("accepts a setup token the terminal wrapped across lines", () => {
 	expect(normalizedSetupToken(wrapped)).toBe(token);
 	expect(normalizedSetupToken(`"${token}"`)).toBe(token);
 	expect(normalizedSetupToken("not a token")).toBeNull();
+});
+
+describe("checks the token with Anthropic before saving", () => {
+	const answering = (status: number) =>
+		vi.fn<typeof fetch>(async () => new Response("{}", { status }));
+
+	it("sends one token-counting call with the OAuth headers", async () => {
+		const fetch = answering(200);
+		expect(await checkClaudeSetupToken(token, { fetch })).toBe("accepted");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		const [url, init] = fetch.mock.calls[0] ?? [];
+		expect(url).toBe("https://api.anthropic.com/v1/messages/count_tokens");
+		const headers = new Headers(init?.headers);
+		expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+		expect(headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
+		expect(headers.get("anthropic-version")).toBe("2023-06-01");
+		expect(JSON.parse(String(init?.body))).toEqual({
+			model: "claude-haiku-5-5",
+			messages: [{ role: "user", content: "hi" }],
+		});
+	});
+
+	it("rejects a token Anthropic refuses and stores nothing", async () => {
+		for (const status of [401, 403]) {
+			await expect(
+				saveClaudeSubscriptionToken("u1", token, {
+					fetch: answering(status),
+				}),
+			).rejects.toThrow(
+				"Anthropic refused this token. Run claude setup-token again.",
+			);
+		}
+		expect(await claudeSubscriptionStatus("u1")).toEqual({
+			status: "disconnected",
+		});
+	});
+
+	it("saves a token Anthropic accepts as connected", async () => {
+		await saveClaudeSubscriptionToken("u1", token, {
+			fetch: answering(200),
+		});
+		expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
+	});
+
+	it("saves anyway when Anthropic is busy, without logging the token", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await saveClaudeSubscriptionToken("u1", token, {
+			fetch: answering(429),
+		});
+		expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
+		expect(warn).toHaveBeenCalled();
+		expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+	});
+
+	it("saves anyway when Anthropic does not answer in time", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const hanging = vi.fn<typeof fetch>(
+			(_url, init) =>
+				new Promise((_resolve, reject) =>
+					init?.signal?.addEventListener("abort", () =>
+						reject(init.signal?.reason),
+					),
+				),
+		);
+		await saveClaudeSubscriptionToken("u1", token, {
+			fetch: hanging,
+			timeoutMs: 20,
+		});
+		expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
+		expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+	});
 });
