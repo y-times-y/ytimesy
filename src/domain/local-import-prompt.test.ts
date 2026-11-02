@@ -6,7 +6,7 @@ it("carries the code in the command the local agent runs", () => {
 	const code = newImportCode();
 	const prompt = localImportPrompt(code);
 	expect(localImportCommand(code)).toBe(
-		`npx -y ytimesy continue --code ${code}`,
+		`npx -y ytimesy@latest continue --code ${code}`,
 	);
 	expect(prompt).toContain(localImportCommand(code));
 	expect(prompt.split(code)).toHaveLength(2);
@@ -37,4 +37,17 @@ it("stays short enough to paste comfortably", () => {
 	const prompt = localImportPrompt("YTM-AAAA-BBBB-CCCC");
 	expect(prompt.length).toBeLessThan(1200);
 	expect(prompt.split("\n").length).toBeLessThanOrEqual(14);
+});
+
+it("names this app's server unless it is the CLI's default", () => {
+	const code = "YTM-AAAA-BBBB-CCCC";
+	expect(localImportCommand(code, "https://ytimesy.com/")).toBe(
+		`npx -y ytimesy@latest continue --code ${code}`,
+	);
+	expect(localImportCommand(code, "http://127.0.0.1:8793/x")).toBe(
+		`npx -y ytimesy@latest continue --code ${code} --api http://127.0.0.1:8793`,
+	);
+	expect(localImportPrompt(code, "https://dev.example.workers.dev")).toContain(
+		"--api https://dev.example.workers.dev",
+	);
 });
