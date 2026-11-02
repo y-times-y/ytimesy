@@ -10,6 +10,13 @@ import { scopedResource } from "./database-scope";
 import { trackInvocationTask } from "./invocation-tasks";
 
 let client: Promise<PostHog> | undefined;
+
+type AnalyticsIdentity = {
+	key: string;
+	timestamp: Date;
+	/** Person properties PostHog keeps from the first time they are set. */
+	setOnce?: Record<string, string>;
+};
 const analyticsResource = Symbol("invocation-analytics");
 
 /** Best-effort telemetry: never block coding or propagate ingestion failures. */
@@ -17,7 +24,7 @@ export function captureServerAnalytics<E extends ServerAnalyticsEvent>(
 	userId: string,
 	event: E,
 	properties: ServerAnalyticsProperties<E>,
-	identity: { key: string; timestamp: Date },
+	identity: AnalyticsIdentity,
 ): Promise<void> {
 	return trackInvocationTask(
 		captureAnalytics(userId, event, properties, identity),
@@ -28,7 +35,7 @@ async function captureAnalytics<E extends ServerAnalyticsEvent>(
 	userId: string,
 	event: E,
 	properties: ServerAnalyticsProperties<E>,
-	identity: { key: string; timestamp: Date },
+	identity: AnalyticsIdentity,
 ): Promise<void> {
 	try {
 		const token = process.env.POSTHOG_PROJECT_TOKEN;
@@ -49,6 +56,9 @@ async function captureAnalytics<E extends ServerAnalyticsEvent>(
 			properties: {
 				...parsed.data,
 				$geoip_disable: true,
+				...(identity.setOnce && Object.keys(identity.setOnce).length > 0
+					? { $set_once: identity.setOnce }
+					: {}),
 				environment:
 					process.env.NODE_ENV === "test"
 						? "verification"

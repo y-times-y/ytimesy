@@ -96,6 +96,14 @@ names. IP-based location lookup is turned off. If your browser sends "Do Not
 Track", the web app sends no analytics or session replays; server events are
 still recorded.
 
+**Referral attribution.** When you first visit, the web app keeps where you
+came from (a `ref` or `utm_*` link tag, the referring site's host name and the
+page you landed on) in a first-party cookie for 90 days, and when you create an
+account we save it with your account and send it to PostHog with the "account
+created" event, so we can see which channels bring sign-ups. It is not set for
+visitors in the EU, EEA, UK or Switzerland, or under "Do Not Track" or Global
+Privacy Control.
+
 **Session replays.** While you are signed in, PostHog records masked
 session replays of how you use the web app (clicks, scrolling, which screens
 you open), linked to your account id, so we can fix bugs and improve the
@@ -118,8 +126,9 @@ verification resend use Cloudflare Turnstile to block bots.
 from noreply@ytimesy.com; replies go to support@ytimesy.com. Mail you send to
 our addresses is forwarded to a mailbox hosted by Google.
 
-**Cookies and browser storage.** We use a sign-in cookie and a few cookies
-that remember interface state (such as open panels). The browser also stores
+**Cookies and browser storage.** We use a sign-in cookie, a few cookies
+that remember interface state (such as open panels) and the referral
+attribution cookie described above. The browser also stores
 unsent message drafts and the analytics identifier. We
 use no advertising cookies.
 
@@ -282,6 +291,7 @@ whoever can see the repository on GitHub.
 | Cloud usage ledger (amounts and times, linked to your account id) | Kept after account deletion as our spend record |
 | Session replays | 30 days, or until your account is deleted |
 | Analytics events | PostHog's retention for our project, or until your account is deleted |
+| Referral attribution | The browser cookie for 90 days; on your account until it is deleted |
 | Hosting logs | The hosting provider's log retention period |
 | Database backups | Rolled off on our database provider's backup schedule |
 
