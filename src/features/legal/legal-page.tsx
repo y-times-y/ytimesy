@@ -18,8 +18,7 @@ const LEGAL_LINKS: Record<string, "/terms" | "/privacy" | "/training"> = {
 
 /**
  * Drops the internal part of a draft before it is shown: everything from the
- * exact heading line `cutAt` onward. `[OWNER/COUNSEL: ...]` placeholders stay
- * visible on purpose until the owner resolves them in the source file.
+ * exact heading line `cutAt` onward.
  */
 export function publicLegalMarkdown(markdown: string, cutAt?: string) {
 	if (!cutAt) return markdown;

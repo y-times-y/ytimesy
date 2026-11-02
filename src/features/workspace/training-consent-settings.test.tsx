@@ -30,10 +30,10 @@ it("keeps every training commitment in the details", () => {
 		"your prompts, your code and its results",
 		"We never use replies or code written by AI models.",
 		"train our own models",
-		"We remove account details and secrets first",
 		"never share it with model providers",
-		"Your API keys, secrets and attachments are never included.",
-		"we stop immediately and delete what we kept within 30 days",
+		"Your stored API keys, secrets and your attachments are never included.",
+		"Nothing is copied out for training yet.",
+		"it stops immediately, for earlier chats too",
 	])
 		expect(TRAINING_DETAILS).toContain(commitment);
 });
