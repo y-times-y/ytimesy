@@ -195,7 +195,7 @@ export async function sendApiWorkspaceTask(
 		continueOn?: string;
 		/** The branch a new chat starts from (its first send only). */
 		baseBranch?: string;
-		/** Sent from "Set up environment" (its first send only). */
+		/** A project setup request (its first send only). */
 		environmentSetup?: boolean;
 	},
 	preparedTask = false,

@@ -138,7 +138,7 @@ export function sendHarnessWorkspaceTask(
 		readonly continueOn?: string;
 		/** The branch a new chat starts from (its first send only). */
 		readonly baseBranch?: string;
-		/** Sent from "Set up environment" (its first send only). */
+		/** A project setup request (its first send only). */
 		readonly environmentSetup?: boolean;
 	},
 	/** The chat as the caller just read it (by id, for this user), saving a read. */

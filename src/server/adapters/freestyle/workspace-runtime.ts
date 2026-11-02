@@ -27,14 +27,50 @@ import {
 } from "./usage-admission";
 import { waitUntilGuestReady, waitUntilVmRunning } from "./wait-until-running";
 
+/**
+ * A command needing at most this long may reuse a recent admission: one
+ * admission holds the machine's runtime for at least 300 s past its usage
+ * then, which covers a 60 s reuse window plus this plus the 15 s margin.
+ */
+const REUSABLE_ADMISSION_SECONDS = 120;
+const MAX_ADMISSION_REUSE_MS = 60_000;
+
 export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
+	/** When each machine was last admitted, for `admissionReuseMs`. */
+	private readonly admittedAt = new Map<string, number>();
+
 	constructor(
 		private readonly apiKey: string,
 		private readonly options: {
 			fetch?: typeof fetch;
 			streamSetupCommands?: boolean;
+			/**
+			 * An environment build runs dozens of short commands back to back on
+			 * its own machine: each re-checked the machine and its admission
+			 * (several provider and database reads, about 0.25 s). Within this
+			 * window (at most 60 s) a short command reuses the last admission.
+			 */
+			admissionReuseMs?: number;
 		} = {},
 	) {}
+
+	/** Admits the machine for a command (resuming it if needed), unless a recent admission covers it. */
+	private async admitCommand(providerRef: string, requiredSeconds: number) {
+		const reuseMs = Math.min(
+			this.options.admissionReuseMs ?? 0,
+			MAX_ADMISSION_REUSE_MS,
+		);
+		const last = this.admittedAt.get(providerRef);
+		if (
+			reuseMs > 0 &&
+			last !== undefined &&
+			Date.now() - last < reuseMs &&
+			requiredSeconds <= REUSABLE_ADMISSION_SECONDS
+		)
+			return;
+		await this.recover(providerRef, requiredSeconds);
+		if (reuseMs > 0) this.admittedAt.set(providerRef, Date.now());
+	}
 
 	async findBySlug(slug: string) {
 		const { vms } = await this.client().vms.list({ slug, limit: 1 });
@@ -117,7 +153,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		timeoutMs: number,
 	) {
 		if (infrastructureAdmissionEnabled())
-			await this.recover(providerRef, Math.ceil(timeoutMs / 1000));
+			await this.admitCommand(providerRef, Math.ceil(timeoutMs / 1000));
 		const vm = this.client().vms.ref(providerRef);
 		if (
 			timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX ||
@@ -155,7 +191,8 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async writeTextFile(providerRef: string, path: string, contents: string) {
-		if (infrastructureAdmissionEnabled()) await this.recover(providerRef);
+		if (infrastructureAdmissionEnabled())
+			await this.admitCommand(providerRef, 60);
 		// Writing the same contents again is harmless.
 		await retryTransientProviderFailure(() =>
 			this.client().vms.ref(providerRef).fs.writeTextFile(path, contents),
@@ -189,6 +226,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	/** Also takes down the VM's desktop and tool-service routes; a later start republishes them. */
 	async pause(providerRef: string) {
 		const vm = this.client().vms.ref(providerRef);
+		this.admittedAt.delete(providerRef);
 		forgetRunningGuest(providerRef);
 		await withdrawVmEdgeRoutes(this.client(), providerRef, [
 			"desk",

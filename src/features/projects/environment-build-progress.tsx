@@ -1,6 +1,14 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { Check, Clock3, LoaderCircle, Minus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+	Check,
+	ChevronRight,
+	Clock3,
+	LoaderCircle,
+	Minus,
+	Wrench,
+	X,
+} from "lucide-react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	type EnvironmentBuildFailure,
@@ -9,6 +17,10 @@ import {
 	environmentFailureSummary,
 	stepDuration,
 } from "#/domain/environment-build-progress";
+import {
+	isSetupRequestMessage,
+	PROJECT_SETUP_NAME,
+} from "#/domain/environment-setup";
 import { requestJson } from "./api";
 
 /** How often the live view reads a running build (ms). */
@@ -169,13 +181,20 @@ export function HeldForSetupMessage({
 		enabled: true,
 		waiting: !failed,
 	});
-	const build = progress.data?.build ?? null;
-	const showFailure = failed && build?.status !== "running";
-	// Until a retried build starts, the last one's steps are not this setup's.
-	const steps =
-		build?.status === "running" || showFailure
-			? (progress.data?.steps ?? [])
-			: [];
+	const showFailure = failed && progress.data?.build?.status !== "running";
+	// The setup's own request is the system's, not the person's message.
+	if (isSetupRequestMessage(text))
+		return (
+			<>
+				{showMessage ? <SetupRequestRow /> : null}
+				<ProjectSetupBuild
+					projectId={projectId}
+					waiting
+					failed={failed}
+					actions={actions}
+				/>
+			</>
+		);
 	return (
 		<>
 			<div className="session-message" data-role="user" data-queued="true">
@@ -243,28 +262,138 @@ export function HeldForSetupMessage({
 					) : null}
 				</p>
 			</div>
-			<section
-				className="environment-build"
-				aria-label="Project setup"
-				data-state={showFailure ? "failed" : "running"}
-			>
-				<p className="environment-build-title">
-					{showFailure ? (
-						<X size={14} aria-hidden="true" />
-					) : (
-						<MatrixDotLoader />
-					)}
+			<ProjectSetupBuild
+				projectId={projectId}
+				waiting
+				failed={failed}
+				actions={actions}
+			/>
+		</>
+	);
+}
+
+/** The open chat's project, for the setup's request shown in its transcript. */
+export const SetupProjectContext = createContext<string | null>(null);
+
+/** The setup's request in its chat: one line where a message would be. */
+export function SetupRequestRow() {
+	return (
+		<p className="setup-request-row">
+			<Wrench size={13} aria-hidden="true" />
+			<span>{PROJECT_SETUP_NAME}</span>
+		</p>
+	);
+}
+
+/**
+ * The setup's request once sent (the agent took it): its line, then the
+ * environment build it ran after, done and folded (or a rebuild running).
+ */
+export function SetupRequestItem() {
+	const projectId = useContext(SetupProjectContext);
+	return (
+		<>
+			<SetupRequestRow />
+			{projectId ? <ProjectSetupBuild projectId={projectId} /> : null}
+		</>
+	);
+}
+
+/** "43s", "2m 05s": how long the build took, or has taken so far. */
+function buildDuration(build: EnvironmentBuildProgress["build"], now: number) {
+	return build
+		? stepDuration(
+				{ startedAt: build.startedAt, completedAt: build.completedAt },
+				now,
+			)
+		: null;
+}
+
+/**
+ * The project's environment build in its setup chat: every step with its
+ * time and the running command's last lines while it runs; folded to one
+ * line once ready; the failure with what to do next.
+ */
+export function ProjectSetupBuild({
+	projectId,
+	waiting = false,
+	failed = false,
+	actions,
+}: {
+	projectId: string;
+	/** A request waits for this build: read until it runs, even before it shows. */
+	waiting?: boolean;
+	/** The project's setup failed (its status), even before the build row shows it. */
+	failed?: boolean;
+	/** For the request still waiting: Retry, Send anyway, the agent. */
+	actions?: HeldSetupActions;
+}) {
+	const progress = useEnvironmentProgress(projectId, {
+		enabled: true,
+		waiting: waiting && !failed,
+	});
+	const build = progress.data?.build ?? null;
+	const running = build?.status === "running";
+	const showFailure =
+		(failed && !running) || (!waiting && build?.status === "failed");
+	const now = useNow(running);
+	// Until a retried build starts, the last one's steps are not this setup's.
+	const steps =
+		running || showFailure || build?.status === "ready"
+			? (progress.data?.steps ?? [])
+			: [];
+	if (!waiting && !build) return null;
+	// Ready: one line (the agent, when the request waits, starts in a moment).
+	if (build?.status === "ready" && !showFailure)
+		return (
+			<details className="environment-build" data-state="ready">
+				<summary className="environment-build-title">
+					<Check size={14} aria-hidden="true" />
 					<span>
-						{showFailure ? "Setup failed" : "Setting up your project"}
+						{build.rebuild ? "Environment updated" : "Environment ready"}
 					</span>
-				</p>
+					<span className="session-activity-status">
+						{buildDuration(build, now)}
+					</span>
+					<ChevronRight
+						size={14}
+						strokeWidth={1.5}
+						className="session-activity-chevron"
+						aria-hidden="true"
+					/>
+				</summary>
 				<EnvironmentBuildSteps steps={steps} />
-				{showFailure ? (
-					<>
-						<EnvironmentBuildFailureDetail
-							failure={build?.failure ?? null}
-							message={build?.errorMessage ?? null}
-						/>
+			</details>
+		);
+	return (
+		<section
+			className="environment-build"
+			aria-label="Project setup"
+			data-state={showFailure ? "failed" : "running"}
+		>
+			<p className="environment-build-title">
+				{showFailure ? <X size={14} aria-hidden="true" /> : <MatrixDotLoader />}
+				<span>
+					{showFailure
+						? "Setup failed"
+						: build?.rebuild
+							? "Updating the environment"
+							: "Setting up project"}
+				</span>
+				{running ? (
+					<span className="session-activity-status">
+						{buildDuration(build, now)}
+					</span>
+				) : null}
+			</p>
+			<EnvironmentBuildSteps steps={steps} />
+			{showFailure ? (
+				<>
+					<EnvironmentBuildFailureDetail
+						failure={build?.failure ?? null}
+						message={build?.errorMessage ?? null}
+					/>
+					{actions ? (
 						<div className="environment-build-actions">
 							<button
 								type="button"
@@ -288,13 +417,13 @@ export function HeldForSetupMessage({
 									onClick={actions.onSetUpWithAgent}
 									title="The agent fixes the setup first, then saves it"
 								>
-									Set up with the agent
+									Fix with the agent
 								</button>
 							) : null}
 						</div>
-					</>
-				) : null}
-			</section>
-		</>
+					) : null}
+				</>
+			) : null}
+		</section>
 	);
 }

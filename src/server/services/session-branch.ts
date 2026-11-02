@@ -38,7 +38,7 @@ export async function commitChatBranchForSubmission(input: {
 	session?: AgentSessionRecord | null;
 	/** The branch a new chat starts from; ignored once the chat has a conversation. */
 	baseBranch?: string;
-	/** Sent from "Set up environment": the new chat is a setup chat (never publishes). */
+	/** A project setup request: the new chat is a setup chat (never publishes). */
 	environmentSetup?: boolean;
 }) {
 	const session =

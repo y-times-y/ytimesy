@@ -10,6 +10,18 @@ const OUTPUT_LIMIT = 1024 * 1024;
 const POLL_MS = 5_000;
 /** While someone watches the output (a live setup view), it is read this often. */
 const WATCHED_POLL_MS = 2_000;
+/**
+ * Most setup commands (a small repository's fetch and checkout) finish in
+ * about a second: the first status reads come quickly, then back off to the
+ * poll interval. A flat 5 s wait made each of them take 5 s.
+ */
+const FIRST_POLLS_MS = [250, 500, 1_000] as const;
+
+/** The wait before the status read after `polls` reads found it still running. */
+export function detachedPollDelay(polls: number, watched: boolean) {
+	const steady = watched ? WATCHED_POLL_MS : POLL_MS;
+	return Math.min(FIRST_POLLS_MS[polls] ?? steady, steady);
+}
 /** Bytes of output a watched poll reads back. */
 const WATCHED_TAIL_BYTES = 4_096;
 const TAIL_MARKER = "\n--ytimesy-output--\n";
@@ -56,7 +68,7 @@ export async function runDetachedCommand(
 		throw new Error("Detached command could not be started.");
 	const listener = commandOutputListener();
 	let reported = "";
-	for (;;) {
+	for (let polls = 0; ; polls++) {
 		// A watched command's status read also returns its output's tail.
 		const status = await exec(
 			listener
@@ -86,7 +98,7 @@ export async function runDetachedCommand(
 				stderr: "",
 			};
 		}
-		const poll = listener ? WATCHED_POLL_MS : POLL_MS;
+		const poll = detachedPollDelay(polls, Boolean(listener));
 		if (Date.now() + poll > deadline) throw new ResumeLater();
 		await sleep(poll);
 	}

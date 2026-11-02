@@ -152,3 +152,41 @@ it("no turn end, Send or step takes a held message; the ready environment releas
 	const [row] = await listSidebarAgentSessions("alice", project);
 	expect(row).not.toHaveProperty("waitsForSetup");
 });
+
+it("a message typed during setup waits behind the setup's request, and each goes once", async () => {
+	const setupChat = await chat("Set up project");
+	const setupId = "22222222-2222-4222-8222-222222222222";
+	await holdUserMessageForSetup("alice", setupChat, {
+		...send,
+		item: {
+			kind: "userMessage",
+			id: SessionItemId(setupId),
+			text: "Set up this project.",
+		},
+		message: "Set up this project.",
+		environmentSetup: true,
+	});
+	// Typed in the setup chat while the build runs: held too, after it.
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	await holdUserMessageForSetup("alice", setupChat, send);
+	expect(
+		(await queuedUserMessageItems(setupChat)).map((item) => item.id),
+	).toEqual([setupId, messageId]);
+	expect(await takeNextQueuedUserMessage("alice", setupChat)).toBeNull();
+
+	await db.query(
+		"update workspace set status='ready',template_snapshot_id='snap' where id=$1",
+		[workspace],
+	);
+	expect(await releaseHeldUserMessages(setupChat)).toBe(true);
+	expect(await releaseHeldUserMessages(setupChat)).toBe(false);
+	// The setup's request starts the turn; the typed message goes after it.
+	expect(await takeNextQueuedUserMessage("alice", setupChat)).toMatchObject({
+		item: { id: setupId },
+		environmentSetup: true,
+	});
+	expect(await takeNextQueuedUserMessage("alice", setupChat)).toMatchObject({
+		item: { id: messageId, text: "Add a login page" },
+	});
+	expect(await takeNextQueuedUserMessage("alice", setupChat)).toBeNull();
+});

@@ -277,12 +277,16 @@ export function SessionLauncher({
 		items: readonly SessionItem[] | null,
 	) => Promise<void>;
 	initialDraft?: string;
-	/** Text put in the message box (focused) whenever `at` changes. */
-	/** Text put in the message box; `send` also sends it once the chat can take it. */
+	/**
+	 * Text put in the message box whenever `at` changes. With `send` it goes
+	 * by itself once the chat can take it, without passing through the box
+	 * (the setup's request), as `messageId` when given.
+	 */
 	prefill?: {
 		readonly text: string;
 		readonly at: number;
 		readonly send?: boolean;
+		readonly messageId?: string;
 	};
 	/** A `send` prefill went (or showed why it cannot); the page drops it. */
 	onPrefillSent?: () => void;
@@ -559,14 +563,26 @@ export function SessionLauncher({
 			setDraft((current) => current || typedBeforeHydration);
 	}, [typedBeforeHydration]);
 	const prefillAt = prefill?.at;
+	/** When the request in `autoSend` came: state, so its readiness renders. */
+	const [autoSendAt, setAutoSendAt] = useState<number | null>(null);
 	/** A prefill to send by itself as soon as the new chat can take it. */
-	const autoSend = useRef<string | null>(null);
+	const autoSend = useRef<{
+		readonly text: string;
+		readonly messageId?: string;
+	} | null>(null);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new request (its time), not each render.
 	useEffect(() => {
 		if (!prefill) return;
+		if (prefill.send) {
+			autoSend.current = {
+				text: prefill.text,
+				...(prefill.messageId ? { messageId: prefill.messageId } : {}),
+			};
+			setAutoSendAt(prefill.at);
+			return;
+		}
 		setDraft(prefill.text);
-		if (prefill.send) autoSend.current = prefill.text;
-		else requestAnimationFrame(() => textareaRef.current?.focus());
+		requestAnimationFrame(() => textareaRef.current?.focus());
 	}, [prefillAt]);
 	// Saved as it is typed, under the chat it was typed in; cleared at once
 	// when it empties (a send). Moving to another chat or unmounting saves
@@ -1005,41 +1021,44 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	// "Set up in new chat": the setup request goes as soon as the new chat
+	// Project setup: its request goes as soon as the new chat
 	// can take it. A send block (no model connected, say) shows its fix after
 	// a moment instead of the request waiting silently.
 	const autoSendReady =
+		autoSendAt !== null &&
 		autoSend.current !== null &&
-		autoSend.current === draft &&
 		// The new chat exists: a send before that is refused as "still opening".
 		Boolean(session.agentSessionId) &&
-		composerCanSend(draft, false);
+		composerCanSend(autoSend.current.text, false);
 	const autoSendWaiting =
+		autoSendAt !== null &&
 		autoSend.current !== null &&
 		Boolean(session.agentSessionId) &&
 		Boolean(sendBlock);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: fires on readiness, sending the text it holds.
 	useEffect(() => {
-		const text = autoSend.current;
-		if (text === null || !autoSendReady) return;
+		const request = autoSend.current;
+		if (request === null || !autoSendReady) return;
 		autoSend.current = null;
+		setAutoSendAt(null);
 		onPrefillSent?.();
-		sendText(text);
+		sendText(request.text, undefined, request.messageId);
 	}, [autoSendReady]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a block that outlasts loading is shown once.
 	useEffect(() => {
 		if (!autoSendWaiting) return;
 		const timer = setTimeout(() => {
-			const text = autoSend.current;
-			if (text === null) return;
+			const request = autoSend.current;
+			if (request === null) return;
 			autoSend.current = null;
+			setAutoSendAt(null);
 			onPrefillSent?.();
-			sendText(text);
+			sendText(request.text, undefined, request.messageId);
 		}, 4000);
 		return () => clearTimeout(timer);
 	}, [autoSendWaiting]);
 
-	function sendText(typed: string, continueOn?: string) {
+	function sendText(typed: string, continueOn?: string, messageId?: string) {
 		const text = sendableDraft(typed);
 		const projectNotice = text
 			? composerProjectNotice({ selectedProjectId: selectedProject?.id })
@@ -1061,7 +1080,8 @@ export function SessionLauncher({
 		});
 		const retry = unsentSend.current;
 		const userMessageId =
-			retry && sameSend(retry, text, files) ? retry.id : crypto.randomUUID();
+			messageId ??
+			(retry && sameSend(retry, text, files) ? retry.id : crypto.randomUUID());
 		startInteraction("first_token", userMessageId);
 		unsentSend.current = null;
 		setOptimisticItems((current) => [
@@ -1299,6 +1319,7 @@ export function SessionLauncher({
 				<SessionTimeline
 					// Another chat opens as a new list, at its end.
 					key={session.agentSessionId ?? "new"}
+					setupProjectId={selectedProject?.id}
 					recoveryControls={recoveryControls}
 					tasks={childTasks}
 					helperLines={helperLines}
