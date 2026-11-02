@@ -15,6 +15,18 @@ export const ANALYTICS_ENABLED = Boolean(
 );
 
 let client: Promise<PostHog | null> | undefined;
+// EU/EEA/UK/Swiss visitors: nothing is stored in the browser (no consent
+// banner needed); the identifier lives in memory for the page's life.
+let storeNothing = false;
+
+/** Set from the server-known region before the client starts (Analytics). */
+export function setAnalyticsStrictRegion(strict: boolean) {
+	if (!client) storeNothing = strict;
+}
+
+export function analyticsPersistence(strict: boolean) {
+	return strict ? ("memory" as const) : ("localStorage" as const);
+}
 function analyticsClient(): Promise<PostHog | null> {
 	if (typeof window === "undefined") return Promise.resolve(null);
 	const token = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN;
@@ -42,7 +54,7 @@ function analyticsClient(): Promise<PostHog | null> {
 				disable_external_dependency_loading: false,
 				advanced_disable_feature_flags: true,
 				person_profiles: "identified_only",
-				persistence: "localStorage",
+				persistence: analyticsPersistence(storeNothing),
 				respect_dnt: true,
 				before_send: (event) => {
 					if (!event) return null;
