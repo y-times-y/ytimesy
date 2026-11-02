@@ -165,6 +165,12 @@ for (const name of [
 	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
 	// Owner alerts go to het@ytimesy.com unless this names another address.
 	"YTIMESY_ALERT_EMAIL",
+	// OAuth apps for MCP services without dynamic client registration
+	// (src/server/services/mcp-oauth-client.ts). Redirect: {APP_URL}/api/mcp/oauth/callback
+	"MCP_OAUTH_SLACK_CLIENT_ID",
+	"MCP_OAUTH_SLACK_CLIENT_SECRET",
+	"MCP_OAUTH_GITHUB_CLIENT_ID",
+	"MCP_OAUTH_GITHUB_CLIENT_SECRET",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }

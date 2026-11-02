@@ -291,3 +291,47 @@ it("signs each user in through a reviewed sign-in URL instead of a shared keyles
 	]);
 	await removeInstall("alice", installed.id);
 });
+
+it("lets a plugin's credential stay empty when the owner's sign-in app is set up", async () => {
+	const withApp = {
+		...entry,
+		signInApp: "TESTAPP",
+		settings: [
+			{
+				key: "api_token",
+				title: "API token",
+				description: "Key",
+				sensitive: true,
+			},
+		],
+	};
+	const base = {
+		userId: "alice",
+		catalogId: "linear-tools",
+		projectId: null,
+		catalog: [withApp],
+		fetch: (async () => new Response(new Uint8Array(archive))) as typeof fetch,
+		mcpFetch,
+		config: {},
+	};
+	await expect(installCatalogPlugin({ ...base, env: {} })).rejects.toThrow(
+		"API token",
+	);
+	const installed = await installCatalogPlugin({
+		...base,
+		env: {
+			MCP_OAUTH_TESTAPP_CLIENT_ID: "id",
+			MCP_OAUTH_TESTAPP_CLIENT_SECRET: "secret",
+		},
+	});
+	expect(installed.needsSignIn).toEqual(["linear-tools-api"]);
+	const [server] = (await listMcpServersWithOAuth("alice")).map(
+		(row) => row.server,
+	);
+	expect(server).toMatchObject({
+		name: "linear-tools-api",
+		auth: "oauth",
+		headerNames: [],
+	});
+	await removeInstall("alice", installed.id);
+});
