@@ -32,6 +32,7 @@ async function setup(
 		token: realToken,
 	}));
 	const onUpstream = vi.fn(async () => {});
+	const onUsage = vi.fn();
 	const log = vi.fn();
 	const call = (path: string, init: RequestInit = {}) =>
 		proxyClaudeCode(
@@ -52,11 +53,12 @@ async function setup(
 				secret,
 				authorize,
 				onUpstream,
+				onUsage,
 				upstream: upstream as unknown as typeof fetch,
 				log,
 			},
 		);
-	return { grant, upstream, authorize, onUpstream, log, call };
+	return { grant, upstream, authorize, onUpstream, onUsage, log, call };
 }
 
 describe("Claude Code proxy", () => {
@@ -192,5 +194,47 @@ describe("Claude Code proxy", () => {
 		for (const secretText of [realToken, grant, "body-text"])
 			expect(logged).not.toContain(secretText);
 		warn.mockRestore();
+	});
+
+	it("hands the plan's usage headers to onUsage without holding the response", async () => {
+		const { call, onUsage } = await setup(
+			() =>
+				new Response("{}", {
+					status: 200,
+					headers: {
+						"anthropic-ratelimit-unified-status": "allowed",
+						"anthropic-ratelimit-unified-reset": "1900000000",
+						"anthropic-ratelimit-unified-5h-utilization": "0.42",
+						"anthropic-ratelimit-unified-5h-reset": "1900000000",
+						"anthropic-ratelimit-unified-7d-utilization": "0.1",
+						"anthropic-ratelimit-unified-7d-reset": "1900500000",
+					},
+				}),
+		);
+		const response = await call("/claude-code/v1/messages");
+		expect(response.status).toBe(200);
+		expect(
+			response.headers.get("anthropic-ratelimit-unified-5h-utilization"),
+		).toBe("0.42");
+		expect(onUsage).toHaveBeenCalledTimes(1);
+		expect(onUsage.mock.calls[0]?.[0]).toMatchObject({ userId: scope.userId });
+		expect(onUsage.mock.calls[0]?.[1]).toMatchObject({
+			status: "allowed",
+			windows: [
+				{ id: "5h", usedPercent: 42, resetsAt: 1_900_000_000_000 },
+				{ id: "7d", usedPercent: 10, resetsAt: 1_900_500_000_000 },
+			],
+		});
+	});
+
+	it("still answers when recording usage throws, and skips responses without the headers", async () => {
+		const quiet = await setup(() => new Response("{}", { status: 200 }));
+		await quiet.call("/claude-code/v1/messages");
+		expect(quiet.onUsage).not.toHaveBeenCalled();
+		const throwing = await setup();
+		throwing.onUsage.mockImplementation(() => {
+			throw new Error("boom");
+		});
+		expect((await throwing.call("/claude-code/v1/messages")).status).toBe(200);
 	});
 });

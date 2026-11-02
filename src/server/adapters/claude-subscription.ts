@@ -6,6 +6,10 @@ import {
 	type ClaudeCodeUpstreamOutcome,
 } from "#/domain/claude-code-proxy";
 import { isClaudeCodeSessionId } from "#/domain/claude-code-stream";
+import {
+	type ClaudePlanUsage,
+	claudePlanUsageFromJson,
+} from "#/domain/claude-plan-usage";
 import { seal, unseal } from "../auth/token-vault";
 import { database } from "./database";
 
@@ -228,6 +232,40 @@ export async function recordClaudeCodeUpstream(
 					outcome.resetsAt,
 				],
 	);
+}
+
+/** How often a busy turn rewrites the reading; a status change writes at once. */
+const PLAN_USAGE_WRITE_EVERY_SECONDS = 15;
+
+/**
+ * Keeps the plan's latest reading (from the proxy's response headers) on the
+ * user's subscription row. Most of a turn's requests skip the write.
+ */
+export async function recordClaudePlanUsage(
+	userId: string,
+	usage: ClaudePlanUsage,
+) {
+	await database().query(
+		`update claude_subscription set plan_usage=$2::jsonb,plan_usage_at=now()
+		 where user_id=$1 and (plan_usage_at is null
+		 or plan_usage_at < now() - make_interval(secs => $3)
+		 or plan_usage->>'status' is distinct from $2::jsonb->>'status')`,
+		[userId, JSON.stringify(usage), PLAN_USAGE_WRITE_EVERY_SECONDS],
+	);
+}
+
+/** The latest reading while Claude is connected, or null when there is none. */
+export async function readClaudePlanUsage(
+	userId: string,
+): Promise<ClaudePlanUsage | null> {
+	const row = (
+		await database().query<{ plan_usage: unknown }>(
+			`select plan_usage from claude_subscription
+			 where user_id=$1 and status in ('connected','limited')`,
+			[userId],
+		)
+	).rows[0];
+	return claudePlanUsageFromJson(row?.plan_usage);
 }
 
 export type ClaudeCodeSessionRecord = {

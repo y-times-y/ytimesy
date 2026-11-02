@@ -3,6 +3,10 @@ import {
 	presentedClaudeCodeGrant,
 	verifyClaudeCodeGrant,
 } from "./claude-code-grant";
+import {
+	type ClaudePlanUsage,
+	claudePlanUsageFromHeaders,
+} from "./claude-plan-usage";
 
 /**
  * The edge's model proxy for Claude Code turns. The VM's Claude Code has
@@ -98,6 +102,12 @@ export async function proxyClaudeCode(
 			grant: ClaudeCodeGrant,
 			outcome: ClaudeCodeUpstreamOutcome,
 		) => Promise<void>;
+		/**
+		 * The plan's usage from each response's headers. Called without
+		 * waiting, so the response is never held up; the caller keeps any
+		 * write alive (waitUntil).
+		 */
+		readonly onUsage?: (grant: ClaudeCodeGrant, usage: ClaudePlanUsage) => void;
 		readonly upstream?: typeof fetch;
 		readonly log?: (message: string, detail: Record<string, unknown>) => void;
 	},
@@ -202,6 +212,15 @@ export async function proxyClaudeCode(
 		log("Claude Code upstream refused.", { status: response.status, route });
 		await options.onUpstream?.(grant, outcome).catch(() => undefined);
 	}
+	const usage = options.onUsage
+		? claudePlanUsageFromHeaders(response.headers, Date.now())
+		: null;
+	if (usage)
+		try {
+			options.onUsage?.(grant, usage);
+		} catch {
+			log("Claude Code proxy could not record plan usage.", { route });
+		}
 	const forwarded = new Headers({ "cache-control": "no-store" });
 	for (const [name, value] of response.headers) {
 		const lower = name.toLowerCase();

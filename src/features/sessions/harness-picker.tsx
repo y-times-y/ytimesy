@@ -43,7 +43,9 @@ import {
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
 import {
+	CLAUDE_PLAN_USAGE_HINT,
 	ModelPickerPlanUsage,
+	useClaudePlanUsageBars,
 	usePlanUsageBars,
 	usePrefetchPlanUsage,
 } from "./plan-usage";
@@ -133,6 +135,10 @@ export function HarnessPicker({
 		staleTime: 30_000,
 	});
 	const claudeData = claude.data?.enabled ? claude.data : null;
+	const claudeBars = useClaudePlanUsageBars(
+		open,
+		claudeData?.status === "connected" || claudeData?.status === "limited",
+	);
 	const [apiProvider, setApiProvider] = useState("openai");
 	// The Grok subscription's own rail entry: the xAI models, on the plan.
 	const [grokView, setGrokView] = useState(false);
@@ -512,6 +518,11 @@ export function HarnessPicker({
 					</section>
 				</div>
 				<ModelPickerPlanUsage bars={planBars} />
+				<ModelPickerPlanUsage
+					bars={claudeBars}
+					label="Claude plan"
+					hint={CLAUDE_PLAN_USAGE_HINT}
+				/>
 				<ModelPickerUsage windows={usageWindows} />
 			</PopoverContent>
 		</Popover>
