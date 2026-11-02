@@ -140,7 +140,6 @@ function Benchmark() {
 										<td
 											key={BENCH_COLUMNS[index].job}
 											data-ours={index === 0 || undefined}
-											data-best={row.best === index || undefined}
 										>
 											{cell.href ? (
 												<a

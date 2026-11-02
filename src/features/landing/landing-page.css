@@ -656,10 +656,10 @@
 	color: #d4d4d4;
 	font-size: 15px;
 }
-/* Every value dim but the best in its row, whichever column it is in. */
+/* Every value in the same plain style: the numbers speak for themselves. */
 .bench-table td {
 	width: 22%;
-	color: #8a8a8a;
+	color: #e5e5e5;
 	font-size: 22px;
 	letter-spacing: -0.01em;
 	white-space: nowrap;
@@ -673,10 +673,6 @@
 }
 .bench-table tbody tr:last-child [data-ours] {
 	border-radius: 0 0 12px 12px;
-}
-.bench-table td[data-best] {
-	color: #fff;
-	font-weight: 600;
 }
 .bench-job {
 	border-bottom: 1px solid #ffffff2e;
