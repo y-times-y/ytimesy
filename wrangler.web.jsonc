@@ -34,6 +34,8 @@
       "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1", "YTIMESY_ENVIRONMENT": "production" },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
       "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-production" }],
+      // Go live: the public app host. The deploy refuses it unless YTIMESY_GO_LIVE=1.
+      "routes": [{ "pattern": "ytimesy.com", "custom_domain": true }],
       "workers_dev": false,
       "preview_urls": false
     }

@@ -105,6 +105,7 @@ for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
 		text: await readFile(file, "utf8"),
 		gitProxyUrl: secrets.YTIMESY_GIT_PROXY_URL,
 		appUrl: secrets.APP_URL,
+		goLive: process.env.YTIMESY_GO_LIVE === "1",
 	});
 
 // Every migration must be applied to production before its code ships.
