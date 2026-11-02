@@ -10,9 +10,18 @@ import {
 	type MemoryWriter,
 } from "#/domain/harness-variant";
 import {
+	byRecency,
+	lineInScope,
+	type MemoryProject,
+	memoryIndexFor,
+	memoryProjectKey,
+	projectFolderPath,
+} from "#/domain/memory-layout";
+import {
 	currentMemoryRecall,
 	type MemoryReadHookOutcome,
 	type MemoryRecall,
+	type RecalledChatMessage,
 	recalledMemoryLine,
 	savedMemoryLines,
 	withSavedMemory,
@@ -28,6 +37,8 @@ import {
 	entryPaths,
 	MEMORY_CHECKER_RULES_HEADER,
 	MEMORY_ENTRY,
+	MEMORY_MATCH_LATER_LIMIT,
+	MEMORY_MATCH_LIMIT,
 	type MemoryLine,
 	type MemoryMode,
 	memoryAppUrl,
@@ -74,11 +85,12 @@ import {
 } from "../adapters/memory-repos";
 import {
 	memoryChatTitles,
-	memoryProjectName,
+	memoryProject,
 	memorySettings,
 	pendingMemorySaves,
 	type RecentChatMessage,
 	recentUnsavedMessages,
+	recordMemoryRecalls,
 } from "../adapters/memory-settings";
 import {
 	type MemoryVmTokenLedger,
@@ -168,8 +180,11 @@ type MemoryOptions = {
 	repo?: MemoryRepo | null;
 	embed?: Embed | null;
 	today?: () => string;
-	projectName?: string | null;
+	/** The chat's project (its repository ids pick its memory folder); looked up when absent. */
+	project?: MemoryProject | null;
 	chatTitles?: (ids: readonly string[]) => Promise<Map<string, string>>;
+	/** Notes which lines were attached, for dreams to retire unused ones; never awaited by a turn. */
+	recordRecalls?: (texts: readonly string[]) => Promise<void>;
 	/** Development harness variant: how recalled memory is presented. */
 	wording?: MemoryWording;
 };
@@ -198,17 +213,22 @@ async function memorySource(owner: TurnMemoryOwner, options: MemoryOptions) {
 	const embed = options.embed === undefined ? memoryEmbedder() : options.embed;
 	const setupStarted = Date.now();
 	let prefetched: Prefetched | null | undefined;
-	// Started before the project's name is looked up: they are independent.
-	const prefetching = repo
-		.snapshot()
-		.then((snapshot) => {
+	// Independent: the snapshot and the project that scopes it.
+	const projectLookup: Promise<MemoryProject | null> =
+		options.project !== undefined
+			? Promise.resolve(options.project)
+			: owner.projectId
+				? memoryProject(owner.userId, owner.projectId).catch(() => null)
+				: Promise.resolve(null);
+	const prefetching = Promise.all([repo.snapshot(), projectLookup])
+		.then(([snapshot, project]) => {
 			const snapshotMs = Date.now() - setupStarted;
 			const stats = emptyEmbeddingStats();
 			const vectors =
 				mode === "full" && embed
 					? cachedLineEmbeddings(
 							owner.userId,
-							recallableLines(snapshot).map(memoryLineEmbeddingText),
+							recallableLines(snapshot, project).map(memoryLineEmbeddingText),
 							embed,
 							undefined,
 							{ stats, saveInBackground: true },
@@ -225,23 +245,26 @@ async function memorySource(owner: TurnMemoryOwner, options: MemoryOptions) {
 			prefetched = null;
 			return null;
 		});
-	const projectName =
-		options.projectName !== undefined
-			? options.projectName
-			: owner.projectId
-				? await memoryProjectName(owner.userId, owner.projectId).catch(
-						() => null,
-					)
-				: null;
+	const project = await projectLookup;
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
+	const recordRecalls =
+		options.recordRecalls ??
+		((texts: readonly string[]) => recordMemoryRecalls(owner.userId, texts));
 	return {
 		mode,
 		repo,
 		embed,
-		projectName,
+		project,
 		today: options.today ?? memoryToday,
+		/** Notes recalled lines in the background; a turn never waits on it. */
+		noteRecalled(lines: readonly MemoryLine[]) {
+			if (!lines.length) return;
+			Promise.resolve()
+				.then(() => recordRecalls(lines.map((entry) => entry.text)))
+				.catch(() => {});
+		},
 		wording: options.wording ?? DEFAULT_HARNESS_VARIANT.memoryWording,
 		/** The prefetched snapshot, and how long the request waited for it. */
 		async loaded() {
@@ -294,13 +317,18 @@ export async function turnMemory(
 ): Promise<TurnMemory | null> {
 	const source = await memorySource(owner, options);
 	if (!source) return null;
-	const { mode, repo, embed, projectName, today, wording } = source;
+	const { mode, repo, embed, project, today, wording } = source;
 	const writer = options.writer ?? DEFAULT_HARNESS_VARIANT.memoryWriter;
 	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
 	const recentMessages =
 		options.recentMessages ??
 		(() =>
-			recentUnsavedMessages(owner.userId, owner.id, RECENT_WINDOW_SECONDS));
+			recentUnsavedMessages(
+				owner.userId,
+				owner.id,
+				RECENT_WINDOW_SECONDS,
+				owner.projectId,
+			));
 	const pendingSaves =
 		options.pendingSaves ??
 		(() =>
@@ -316,7 +344,8 @@ export async function turnMemory(
 			mode,
 			{
 				url,
-				project: projectName,
+				project: project?.fullName ?? null,
+				folder: project ? projectFolderPath(memoryProjectKey(project)) : null,
 			},
 			wording,
 			writer,
@@ -394,9 +423,9 @@ export async function turnMemory(
 		},
 		async attach(messages, items, workspace) {
 			const unchanged = { messages, recall: null };
-			const index = currentRequestIndex(messages, items);
-			if (index < 0) return unchanged;
-			const current = messages[index];
+			const at = currentRequestIndex(messages, items);
+			if (at < 0) return unchanged;
+			const current = messages[at];
 			// A resumed step replays the parts it already attached.
 			if (attachedMemory([current]).length) return unchanged;
 			const loaded = await source.loaded();
@@ -426,23 +455,26 @@ export async function turnMemory(
 			const firstMessage =
 				items.filter((item) => item.kind === "userMessage").length === 1;
 			const firstRequest = firstMessage && !memoryIndexShown(shown);
-			const entry = snapshot.files[MEMORY_ENTRY];
+			const rawEntry = snapshot.files[MEMORY_ENTRY];
+			// MEMORY.md as this chat sees it: other projects' links and lines out, capped.
+			const index =
+				rawEntry !== undefined && rawEntry.trim() !== EMPTY_MEMORY.trim()
+					? memoryIndexFor(rawEntry, project)
+					: null;
+			const entry = index?.content;
 			const showEntry =
-				firstRequest &&
-				entry !== undefined &&
-				entry.trim() !== EMPTY_MEMORY.trim();
+				firstRequest && entry !== undefined && Boolean(entry.trim());
 			const rules =
 				mode === "full" && firstMessage && !projectRulesShown(shown)
 					? projectRules({
-							lines: recallableLines(snapshot),
+							lines: scopedLines(snapshot, project),
 							today: today(),
-							project: projectName,
 						})
 					: [];
 			const rulesPart = rules.length ? memoryRulesPart(rules, wording) : null;
 			const inContext = rulesPart ? `${shown}\n${rulesPart}` : shown;
 			// Freshness without a model call: what the user just said in another
-			// chat, while its save hook may still be running.
+			// chat of this project, while its save hook may still be running.
 			const recent =
 				mode === "full" && writer !== "agent"
 					? recentLines(recentMessages, shown)
@@ -460,13 +492,17 @@ export async function turnMemory(
 								memoryLineShown(raw, inContext) ||
 								(showEntry && (entry ?? "").includes(raw)),
 							today: today(),
-							project: projectName,
+							project,
+							limit: firstMessage
+								? MEMORY_MATCH_LIMIT
+								: MEMORY_MATCH_LATER_LIMIT,
 							timeoutMs: firstMessage
 								? FIRST_READ_HOOK_TIMEOUT_MS
 								: READ_HOOK_TIMEOUT_MS,
 						})
 					: null;
 			const matches = hook?.lines ?? [];
+			source.noteRecalled([...rules, ...matches]);
 			// Independent of each other: the source chats' titles, the other
 			// chats' recent messages and the checkout's missing paths.
 			const afterStarted = Date.now();
@@ -490,8 +526,11 @@ export async function turnMemory(
 			spans.afterHookMs = Date.now() - afterStarted;
 			const recall: MemoryRecall = {
 				head: snapshot.head,
-				...(showEntry ? { index: true as const } : {}),
+				...(showEntry
+					? { index: true as const, indexLines: index?.lines ?? 0 }
+					: {}),
 				lines,
+				...(fresh.length ? { recent: fresh.map((item) => item.recalled) } : {}),
 				...(hook ? { hook: recalledHook(hook, spans) } : {}),
 			};
 			if (!showEntry && !rulesPart && !matches.length && !fresh.length)
@@ -514,10 +553,17 @@ export async function turnMemory(
 				...(matches.length
 					? [memoryMatchesPart(matches, missing, wording)]
 					: []),
-				...(fresh.length ? [memoryRecentPart(fresh, wording)] : []),
+				...(fresh.length
+					? [
+							memoryRecentPart(
+								fresh.map((item) => item.line),
+								wording,
+							),
+						]
+					: []),
 			];
 			const next = [...messages];
-			next[index] = withMemoryParts(
+			next[at] = withMemoryParts(
 				current as { role: "user"; content: string },
 				parts,
 			) as ModelMessage;
@@ -604,7 +650,7 @@ export async function subagentMemory(
 ): Promise<SubagentMemory | null> {
 	const source = await memorySource(owner, options);
 	if (source?.mode !== "full") return null;
-	const { embed, projectName, today, wording } = source;
+	const { embed, project, today, wording } = source;
 	const checker = owner.role === "checker";
 	return {
 		async attach(messages, items) {
@@ -616,8 +662,8 @@ export async function subagentMemory(
 			const loaded = await source.loaded();
 			if (!loaded) return unchanged;
 			const { snapshot, vectors } = loaded;
-			// An empty memory leaves the child's request as it was.
-			if (!recallableLines(snapshot).length) return unchanged;
+			// An empty memory (for this project) leaves the child's request as it was.
+			if (!recallableLines(snapshot, project).length) return unchanged;
 			const spans: Record<string, number> = {
 				snapshotMs: loaded.snapshotMs,
 				prefetchWaitMs: loaded.waitedMs,
@@ -628,9 +674,8 @@ export async function subagentMemory(
 			const rules =
 				firstMessage && !projectRulesShown(shown)
 					? projectRules({
-							lines: recallableLines(snapshot),
+							lines: scopedLines(snapshot, project),
 							today: today(),
-							project: projectName,
 						})
 					: [];
 			const rulesPart = rules.length
@@ -653,7 +698,8 @@ export async function subagentMemory(
 						query: (checker ? reviewBriefRequest(brief) : null) ?? brief,
 						alreadyShown: (raw) => memoryLineShown(raw, inContext),
 						today: today(),
-						project: projectName,
+						project,
+						limit: firstMessage ? MEMORY_MATCH_LIMIT : MEMORY_MATCH_LATER_LIMIT,
 						timeoutMs: firstMessage
 							? FIRST_READ_HOOK_TIMEOUT_MS
 							: READ_HOOK_TIMEOUT_MS,
@@ -701,11 +747,17 @@ function markedRules<T extends object>(lines: readonly T[], count: number) {
 	);
 }
 
-/** Recent messages as attached lines, minus any already attached in this chat; never fails. */
+/** The recall's record of an attached message: shorter than what the model saw. */
+const RECENT_SHOWN_CHARS = 280;
+
+/**
+ * Recent messages as attached lines (with what the chat shows of each),
+ * minus any already attached in this chat; never fails.
+ */
 async function recentLines(
 	load: () => Promise<readonly RecentChatMessage[]>,
 	shown: string,
-) {
+): Promise<{ line: string; recalled: RecalledChatMessage }[]> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const work = Promise.resolve().then(load);
 	try {
@@ -721,9 +773,24 @@ async function recentLines(
 			});
 			return [];
 		}
-		return messages
-			.map(memoryRecentLine)
-			.filter((line) => !shown.includes(line));
+		return messages.flatMap((message) => {
+			const line = memoryRecentLine(message);
+			if (shown.includes(line)) return [];
+			const text = message.text.replaceAll(/\s+/g, " ").trim();
+			return [
+				{
+					line,
+					recalled: {
+						chatId: message.sessionId,
+						...(message.title.trim() ? { title: message.title.trim() } : {}),
+						text:
+							text.length > RECENT_SHOWN_CHARS
+								? `${text.slice(0, RECENT_SHOWN_CHARS - 1)}…`
+								: text,
+					},
+				},
+			];
+		});
 	} catch (error) {
 		console.warn("Recent chat messages could not be read for memory.", {
 			error: error instanceof Error ? error.name : "unknown",
@@ -796,10 +863,27 @@ function latestUserText(items: readonly SessionItem[]) {
 	return "";
 }
 
-/** The lines the read hook ranks: every topic-file entry (MEMORY.md is attached whole). */
-export function recallableLines(snapshot: MemorySnapshot) {
-	return memoryLines(snapshot.files)
-		.filter((entry) => entry.path !== MEMORY_ENTRY)
+/**
+ * Every topic-file entry in this chat's scope: personal/ and its project's
+ * folder (project-less chats: personal/ only), plus untagged legacy lines
+ * until the layout migration moves them. MEMORY.md is attached on its own.
+ */
+export function scopedLines(
+	snapshot: MemorySnapshot,
+	project: MemoryProject | null,
+) {
+	return memoryLines(snapshot.files).filter(
+		(entry) => entry.path !== MEMORY_ENTRY && lineInScope(entry, project),
+	);
+}
+
+/** The lines the read hook ranks: this chat's scope, newest first, at most MAX_EMBEDDED_LINES. */
+export function recallableLines(
+	snapshot: MemorySnapshot,
+	project: MemoryProject | null,
+) {
+	return scopedLines(snapshot, project)
+		.sort(byRecency)
 		.slice(0, MAX_EMBEDDED_LINES);
 }
 
@@ -880,7 +964,7 @@ function recalledHook(
 }
 
 /**
- * Supermemory-style recall: embed the message, rank every memory line by
+ * Supermemory-style recall: embed the message, rank this chat's lines by
  * cosine similarity merged with word overlap and its topic file's best hit
  * (memory-ranking.ts), keep the best few above the cutoff. Never throws: a
  * timeout or an error yields no lines and says which it was.
@@ -892,7 +976,10 @@ export async function readHook(input: {
 	query: string;
 	alreadyShown: (raw: string) => boolean;
 	today: string;
-	project: string | null;
+	/** The chat's project: only personal/ and its folder are recalled. */
+	project: MemoryProject | null;
+	/** Lines at most (MEMORY_MATCH_LIMIT by default). */
+	limit?: number;
 	/** The snapshot's line vectors when already loading (recallableLines order). */
 	vectors?: Promise<number[][]>;
 	/** Where those vectors come from, filled in as they load. */
@@ -919,7 +1006,7 @@ export async function readHook(input: {
 	};
 	const query = memoryQueryText(input.query);
 	if (!query) return result("skipped");
-	const lines = recallableLines(input.snapshot);
+	const lines = recallableLines(input.snapshot, input.project);
 	if (!lines.length) return result("none");
 	const stats = input.vectors ? input.vectorStats : emptyEmbeddingStats();
 	const work = (async () => {
@@ -956,8 +1043,8 @@ export async function readHook(input: {
 			scores,
 			alreadyShown: input.alreadyShown,
 			today: input.today,
-			project: input.project,
 			query,
+			limit: input.limit,
 		});
 		spans.rankMs = Date.now() - ranking;
 		return selected;

@@ -198,3 +198,53 @@ it("still finds a saved line recorded with its trailing key text", () => {
 		}),
 	).toBe(true);
 });
+
+describe("what a request's memory counts", () => {
+	it("counts the index, rules, matches and other chats' messages", async () => {
+		const { memoryRecallCounts, memoryRecallBreakdown } = await import(
+			"./memory-marker"
+		);
+		const recall = {
+			head: "h",
+			index: true as const,
+			indexLines: 4,
+			lines: [
+				{ path: "a.md", text: "Rule", rule: true as const },
+				{ path: "a.md", text: "Match one" },
+				{ path: "b.md", text: "Match two" },
+			],
+			recent: [{ chatId: "c", text: "Said elsewhere" }],
+		};
+		expect(memoryRecallCounts(recall)).toEqual({
+			index: 1,
+			rules: 1,
+			matches: 2,
+			recent: 1,
+			total: 5,
+		});
+		expect(memoryRecallBreakdown(recall)).toBe(
+			"Index (4 lines) · 1 rule · 2 matches · 1 chat message",
+		);
+		expect(memoryRecallCounts({ head: null, lines: [] }).total).toBe(0);
+	});
+});
+
+describe("undo after the per-project layout moved a line", () => {
+	it("finds the line under the same topic name in its new folder", async () => {
+		const { memoryHoldsLine, withoutMemoryLine } = await import(
+			"./memory-marker"
+		);
+		const files = {
+			"personal/tooling.md": "# tooling\n- Prefers tabs [added: 2026-10-01]\n",
+		};
+		const line = { path: "tooling.md", text: "Prefers tabs" };
+		expect(memoryHoldsLine(files, line)).toBe(true);
+		expect(withoutMemoryLine(files, line)).toEqual({
+			path: "personal/tooling.md",
+			content: "# tooling\n",
+		});
+		expect(memoryHoldsLine(files, { path: "tooling.md", text: "Gone" })).toBe(
+			false,
+		);
+	});
+});

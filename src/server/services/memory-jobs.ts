@@ -3,6 +3,21 @@ import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { clip } from "#/domain/clip";
 import { DREAM_COMMIT_PREFIX } from "#/domain/memory-dream-schedule";
+import {
+	layoutMarker,
+	lineInScope,
+	MEMORY_LAYOUT_MARKER,
+	type MemoryProject,
+	memoryFolderOf,
+	memoryPathScope,
+	PERSONAL_FOLDER,
+	personalSortPending,
+	projectFolderListing,
+	projectFolderPath,
+	projectKeyFor,
+	projectNameMatches,
+	staleMemoryLines,
+} from "#/domain/memory-layout";
 import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
 import { lexicalScores, memoryMatchScores } from "#/domain/memory-ranking";
 import {
@@ -15,6 +30,9 @@ import {
 	dreamInstructions,
 	dreamReviewSection,
 	droppedDetails,
+	hasDurableCue,
+	isNearDuplicate,
+	isRetired,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
@@ -59,12 +77,15 @@ import {
 	markMemoryDreamed,
 	memoryChat,
 	memoryChatsSince,
+	memoryProjects,
+	memoryRecalls,
 	memorySettings,
 	recordMemoryModelUsage,
 	recordMemorySaved,
 } from "../adapters/memory-settings";
 import { runApiAgent } from "./api-agent-runtime";
 import { runCodexSubscriptionAgent } from "./codex-subscription-agent";
+import { memoryInLayout } from "./memory-layout";
 import type { ModelAgentInput } from "./model-agent-loop";
 
 /** Seconds a user's chats must be idle before their memory is dreamed. */
@@ -116,6 +137,22 @@ export type MemoryJobDeps = {
 		lines: readonly MemoryLine[],
 		message: string,
 	): Promise<Map<MemoryLine, number> | null>;
+	/**
+	 * For each new entry (as a line in `file`), the existing line it embeds
+	 * closest to and their cosine; null without embeddings.
+	 */
+	closestLines(
+		userId: string,
+		lines: readonly MemoryLine[],
+		entries: readonly { file: string; text: string }[],
+	): Promise<({ line: MemoryLine; similarity: number } | null)[] | null>;
+	/** The user's projects: legacy `project:` names map to their folders. */
+	projects(userId: string): Promise<MemoryProject[]>;
+	/** When lines were last recalled, and since when recalls are tracked. */
+	recalls(
+		userId: string,
+		texts: readonly string[],
+	): Promise<{ recalled: Map<string, string>; since: string | null }>;
 	appUrl: string;
 	today(): string;
 	/** Waits before a retry; tests skip the wait. */
@@ -164,6 +201,34 @@ export function memoryJobDeps(): MemoryJobDeps {
 				]),
 			);
 		},
+		closestLines: async (userId, lines, entries) => {
+			const embed = memoryEmbedder();
+			if (!embed || !entries.length) return null;
+			if (!lines.length) return entries.map(() => null);
+			const [vectors, fresh] = await Promise.all([
+				cachedLineEmbeddings(
+					userId,
+					lines.map((entry) => memoryLineEmbeddingText(entry)),
+					embed,
+				),
+				embed.documents(
+					entries.map((entry) =>
+						memoryLineEmbeddingText({ path: entry.file, text: entry.text }),
+					),
+				),
+			]);
+			return fresh.map((vector) => {
+				let best: { line: MemoryLine; similarity: number } | null = null;
+				lines.forEach((line, index) => {
+					const similarity = cosineSimilarity(vector, vectors[index] ?? []);
+					if (!best || similarity > best.similarity)
+						best = { line, similarity };
+				});
+				return best;
+			});
+		},
+		projects: memoryProjects,
+		recalls: memoryRecalls,
 		appUrl: memoryAppUrl(),
 		today: memoryToday,
 	};
@@ -294,14 +359,38 @@ export async function runMemorySave(
 	if (message?.kind !== "userMessage") return "skipped";
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
-	let snapshot = await repo.snapshot();
+	// The first access after the per-project layout shipped moves the repo into it.
+	let snapshot = await memoryInLayout(repo, () => deps.projects(userId));
+	if (!hasDurableCue(message.text)) {
+		// Nothing in the message reads as worth keeping: no model call. Recorded
+		// as found-nothing, so other chats stop waiting for it and showing it.
+		await deps
+			.recordUsage({
+				userId,
+				kind: "save",
+				sessionId,
+				modelId: route.modelId,
+				usage: null,
+				steps: 0,
+				outcome: `skipped${SAVE_NOTHING_OUTCOME}`,
+			})
+			.catch(() => console.warn("Memory model usage could not be recorded."));
+		return "no-cue";
+	}
+	const project = chat.projectRef ?? null;
+	const folder = project
+		? projectFolderPath(projectKeyFor(snapshot.files, project))
+		: null;
+	const inScope = (path: string) =>
+		lineInScope({ path, meta: {} }, project) ||
+		memoryPathScope(path).kind === "legacy";
 	const listing = await saveHookListing(
 		snapshot.files,
 		message.text,
 		deps.today(),
 		(lines) => deps.similarity(userId, lines, message.text).catch(() => null),
+		project,
 	);
-	const project = chat.project;
 	const saveRun = () =>
 		runOnUserModel(deps, {
 			userId,
@@ -314,9 +403,13 @@ export async function runMemorySave(
 				memory: listing.lines.map(saveHookLine).join("\n"),
 				whole: listing.whole,
 				files: Object.keys(snapshot.files)
-					.filter((path) => path.endsWith(".md"))
+					.filter(
+						(path) =>
+							path.endsWith(".md") && path !== MEMORY_ENTRY && inScope(path),
+					)
 					.sort(),
-				project,
+				project: chat.project,
+				folder,
 			}),
 			tools: {},
 			maxSteps: 1,
@@ -343,11 +436,31 @@ export async function runMemorySave(
 	const shown = new Map(
 		listing.lines.map((entry) => [`${entry.path}:${entry.line}`, entry.raw]),
 	);
-	const entries = parseSaveHookAnswer(run.text).map(
-		({ replaces, ...entry }) => {
+	const parsed = parseSaveHookAnswer(run.text).flatMap(
+		({ replaces, personal, ...entry }): SaveHookEntry[] => {
+			// A chat without a project keeps only notes about the user.
+			const target = personal ? PERSONAL_FOLDER : folder;
+			if (!target) return [];
 			const raw = replaces && shown.get(`${replaces.path}:${replaces.line}`);
-			return raw ? { ...entry, replaces: { path: replaces.path, raw } } : entry;
+			return [
+				{
+					...entry,
+					folder: target,
+					...(raw ? { replaces: { path: replaces.path, raw } } : {}),
+				},
+			];
 		},
+	);
+	const entries = await withoutNearDuplicates(
+		parsed,
+		memoryLines(snapshot.files).filter(
+			(entry) =>
+				entry.path !== MEMORY_ENTRY &&
+				lineInScope(entry, project) &&
+				!isRetired(entry.meta, deps.today()),
+		),
+		(lines, candidates) =>
+			deps.closestLines(userId, lines, candidates).catch(() => null),
 	);
 	if (!entries.length) return finish("nothing-new", SAVE_NOTHING_OUTCOME);
 	const source = chatSourceUrl(deps.appUrl, sessionId);
@@ -357,6 +470,7 @@ export async function runMemorySave(
 				source,
 				today: deps.today(),
 				message: message.text,
+				folder,
 			});
 			if (!changes.length)
 				return await finish("nothing-new", SAVE_NOTHING_OUTCOME);
@@ -403,9 +517,11 @@ export function retryableSaveFailure(outcome: string) {
 }
 
 export type SaveHookEntry = {
+	/** Topic file name, without a folder. */
 	file: string;
 	text: string;
-	project: string;
+	/** `personal` or `projects/<key>`: where the entry goes (empty: the file as named). */
+	folder?: string;
 	/** An existing line (by its file and text) this entry replaces. */
 	replaces?: { path: string; raw: string };
 	/** "always": a rule every change follows (memory-repo.ts `scope: always`). */
@@ -413,43 +529,92 @@ export type SaveHookEntry = {
 };
 
 /**
- * Appends each new entry, citing its chat, and marks the line it replaces
- * `superseded-by` that chat (the read side hides it; a dream removes it).
- * A replacement that would lose structured details of the old line the
- * user did not change (`droppedDetails`) leaves the old line in place.
+ * Entries that say what an existing line of this chat's scope already says
+ * (isNearDuplicate) are dropped; a replacement never is. Without embeddings
+ * every entry is kept and the substring check in saveHookChanges remains.
+ */
+export async function withoutNearDuplicates(
+	entries: readonly SaveHookEntry[],
+	lines: readonly MemoryLine[],
+	closest: (
+		lines: readonly MemoryLine[],
+		entries: readonly { file: string; text: string }[],
+	) => Promise<({ line: MemoryLine; similarity: number } | null)[] | null>,
+): Promise<SaveHookEntry[]> {
+	const fresh = entries.filter((entry) => !entry.replaces);
+	if (!fresh.length || !lines.length) return [...entries];
+	const found = await closest(lines, fresh);
+	if (!found) return [...entries];
+	const copies = new Set(
+		fresh.filter((entry, index) => {
+			const hit = found[index];
+			return hit && isNearDuplicate(hit.similarity, hit.line.text, entry.text);
+		}),
+	);
+	return entries.filter((entry) => !copies.has(entry));
+}
+
+/**
+ * Appends each new entry to its folder's topic file, citing its chat, and
+ * marks the line it replaces `superseded-by` that chat (the read side hides
+ * it; a dream removes it). A replacement that would lose structured details
+ * of the old line the user did not change (`droppedDetails`) leaves the old
+ * line in place. An entry another line of its scope (personal/, the chat's
+ * folder, or its own) already holds is skipped.
  */
 export function saveHookChanges(
 	files: MemoryFiles,
 	entries: readonly SaveHookEntry[],
-	context: { source: string; today: string; message?: string },
+	context: {
+		source: string;
+		today: string;
+		message?: string;
+		/** The chat's project folder (`projects/<key>`), or null. */
+		folder?: string | null;
+	},
 ) {
 	let working = files;
 	const changed = new Set<string>();
-	const known = memoryLines(files).map((entry) => entry.text.toLowerCase());
+	const lines = memoryLines(files);
+	const known = (folder: string | undefined) => {
+		const scope = new Set(
+			[PERSONAL_FOLDER, context.folder, folder].filter(Boolean),
+		);
+		return lines
+			.filter((entry) => {
+				const own = memoryFolderOf(entry.path);
+				return own === null || scope.has(own);
+			})
+			.map((entry) => entry.text.toLowerCase());
+	};
+	const added: string[] = [];
 	for (const entry of entries) {
 		if (entry.replaces) {
 			const { path, raw } = entry.replaces;
 			const content = working[path];
-			const lines = content?.split("\n") ?? [];
-			const index = lines.indexOf(raw);
+			const fileLines = content?.split("\n") ?? [];
+			const index = fileLines.indexOf(raw);
 			const old = parseMemoryLine(raw);
 			const keeps =
 				!old ||
 				!droppedDetails(old.text, entry.text, context.message ?? "").length;
 			if (content !== undefined && index >= 0 && keeps) {
-				lines[index] = supersededLine(raw, context.source);
+				fileLines[index] = supersededLine(raw, context.source);
 				working = withMemoryChanges(working, [
-					{ path, content: lines.join("\n") },
+					{ path, content: fileLines.join("\n") },
 				]);
 				changed.add(path);
 			}
 		}
-		if (known.some((text) => text.includes(entry.text.toLowerCase()))) continue;
+		const text = entry.text.toLowerCase();
+		if (
+			[...known(entry.folder), ...added].some((other) => other.includes(text))
+		)
+			continue;
 		const appended = appendMemoryEntry(
 			working,
-			entry.file,
+			entry.folder ? `${entry.folder}/${entry.file}` : entry.file,
 			memoryBullet(entry.text, {
-				project: entry.project,
 				scope: entry.scope,
 				source: context.source,
 				added: context.today,
@@ -457,7 +622,7 @@ export function saveHookChanges(
 		);
 		working = withMemoryChanges(working, appended);
 		for (const change of appended) changed.add(change.path);
-		known.push(entry.text.toLowerCase());
+		added.push(text);
 	}
 	return [...changed].map((path) => ({
 		path,
@@ -479,7 +644,7 @@ export function newLineTexts(before: MemoryFiles, after: MemoryFiles) {
 const RELATED_LINES = 24;
 
 /**
- * The memory lines the save hook sees, so it can skip what is known and
+ * The memory lines the save hook sees (this chat's scope), so it can skip what is known and
  * replace what changed: the whole memory in file and line order when it fits
  * SAVE_HOOK_MEMORY_CHARS (a prefix that stays the same from one save to the
  * next, so the provider caches it), else the best matches for the message by
@@ -494,11 +659,23 @@ export async function saveHookListing(
 	similarity: (
 		lines: readonly MemoryLine[],
 	) => Promise<Map<MemoryLine, number> | null>,
+	/** Only this chat's scope (personal/ and its project's folder) is listed; undefined: all. */
+	project?: MemoryProject | null,
 ): Promise<{ lines: MemoryLine[]; whole: boolean }> {
 	const lines = memoryLines(
 		withMemoryChanges(files, withoutExpired(files, today)),
 	)
-		.filter((entry) => !/^\[\[[^\]]+\]\]$/.test(entry.text))
+		.filter(
+			(entry) =>
+				!/^\[\[[^\]]+\]\]$/.test(entry.text) &&
+				(project === undefined ||
+					(entry.path === MEMORY_ENTRY
+						? !entry.meta.project?.trim() ||
+							Boolean(
+								project && projectNameMatches(entry.meta.project, project),
+							)
+						: lineInScope(entry, project))),
+		)
 		.sort(byFileAndLine);
 	if (!lines.length) return { lines: [], whole: true };
 	const size = lines.reduce(
@@ -562,6 +739,7 @@ export function dreamChat(
 	return {
 		url: chatSourceUrl(appUrl, chat.id),
 		title: chat.title,
+		project: chat.project,
 		updatedAt: chat.updatedAt.toISOString(),
 		userMessages,
 		agentReplies,
@@ -677,6 +855,28 @@ function dreamTools(input: {
 	};
 }
 
+/** Lines the read hook has long not used, for the review to retire; none when unknown. */
+async function staleLines(
+	deps: MemoryJobDeps,
+	userId: string,
+	files: MemoryFiles,
+) {
+	try {
+		const texts = memoryLines(files)
+			.filter((entry) => entry.path !== MEMORY_ENTRY)
+			.map((entry) => entry.text);
+		const { recalled, since } = await deps.recalls(userId, texts);
+		return staleMemoryLines({
+			files,
+			today: deps.today(),
+			recalled,
+			trackingSince: since,
+		});
+	} catch {
+		return [];
+	}
+}
+
 function dreamChanges(before: MemoryFiles, after: MemoryFiles): MemoryChange[] {
 	return [
 		...Object.entries(after)
@@ -730,7 +930,11 @@ export async function runMemoryDream(
 	}
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
-	const snapshot: MemorySnapshot = await repo.snapshot();
+	const projects = await deps.projects(userId).catch(() => []);
+	const snapshot: MemorySnapshot = await memoryInLayout(
+		repo,
+		async () => projects,
+	);
 	const working: MemoryFiles =
 		mode === "full"
 			? withMemoryChanges(
@@ -752,23 +956,36 @@ export async function runMemoryDream(
 	});
 	const last =
 		mode === "full" ? await deps.lastReview(userId).catch(() => null) : null;
-	const review =
-		mode === "full" &&
-		(!last ||
-			Date.parse(`${deps.today()}T00:00:00Z`) - last.getTime() >=
-				DREAM_REVIEW_DAYS * 86_400_000)
-			? dreamReviewSection(working)
-			: null;
+	// Right after the move into the layout, the next dream sorts personal/.
+	const sorting = mode === "full" && personalSortPending(working);
+	const reviewing =
+		sorting ||
+		(mode === "full" &&
+			(!last ||
+				Date.parse(`${deps.today()}T00:00:00Z`) - last.getTime() >=
+					DREAM_REVIEW_DAYS * 86_400_000));
+	const review = reviewing
+		? dreamReviewSection(working, {
+				// A different project folder leads each week's review.
+				rotate: Math.floor(
+					Date.parse(`${deps.today()}T00:00:00Z`) /
+						(DREAM_REVIEW_DAYS * 86_400_000),
+				),
+				stale: await staleLines(deps, userId, working),
+			})
+		: null;
 	const listing = Object.entries(working)
+		.filter(([path]) => path.endsWith(".md"))
 		.map(([path, content]) => `${path} (${content.split("\n").length} lines)`)
 		.join("\n");
+	const folders = projectFolderListing(working, projects);
 	const run = await runOnUserModel(deps, {
 		userId,
 		kind: "dream",
 		sessionId: null,
 		route,
 		instructions: dreamInstructions(mode, deps.today()),
-		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}${review ? `\n\n${review}` : ""}`,
+		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nProject folders:\n${folders || "(none yet)"}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}${review ? `\n\n${review}` : ""}`,
 		tools,
 		maxSteps: review ? Math.max(maxSteps, REVIEW_MAX_STEPS) : maxSteps,
 		outcomeSuffix: review ? DREAM_REVIEW_OUTCOME : undefined,
@@ -781,6 +998,9 @@ export async function runMemoryDream(
 		await deps.markDreamed(userId, through);
 		return "incomplete";
 	}
+	// A finished review sorted personal/: the marker stops asking for it.
+	if (sorting && review?.includes("### personal/"))
+		working[MEMORY_LAYOUT_MARKER] = layoutMarker(false);
 	const changes = dreamChanges(snapshot.files, working);
 	if (changes.length) {
 		const outcome = await repo.commit(

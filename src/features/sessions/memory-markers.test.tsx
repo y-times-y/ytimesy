@@ -46,8 +46,10 @@ describe("recalled memory under a request", () => {
 		);
 		expect(html).toContain("<details");
 		expect(html).not.toContain("open=");
-		expect(html).toContain("Used 2 memories");
-		expect(html).toContain("Memory index");
+		// The index counts too: everything the request put in context.
+		expect(html).toContain("Used 3 memories");
+		expect(html).toContain('title="Index · 2 matches"');
+		expect(html).toContain("MEMORY.md");
 		expect(html).toContain("Uses pnpm, never npm");
 		expect(html).toContain("tooling.md");
 		expect(html).toContain(`href="/?chat=${OTHER}"`);
@@ -56,12 +58,14 @@ describe("recalled memory under a request", () => {
 		expect(html).not.toMatch(EMOJI);
 	});
 
-	it("says only that the index loaded when no line was recalled, and nothing when empty", () => {
-		expect(
-			renderToStaticMarkup(
-				<MemoryRecallNote recall={{ head: "h1", index: true, lines: [] }} />,
-			),
-		).toContain("Used the memory index");
+	it("counts the index alone when no line was recalled, and shows nothing when empty", () => {
+		const html = renderToStaticMarkup(
+			<MemoryRecallNote
+				recall={{ head: "h1", index: true, indexLines: 6, lines: [] }}
+			/>,
+		);
+		expect(html).toContain("Used 1 memory");
+		expect(html).toContain('title="Index (6 lines)"');
 		expect(
 			renderToStaticMarkup(
 				<MemoryRecallNote recall={{ head: "h1", lines: [] }} />,
@@ -71,7 +75,7 @@ describe("recalled memory under a request", () => {
 });
 
 describe("memory marker layout", () => {
-	it("groups the standing project rules apart from the lines matched for the request", () => {
+	it("groups the rules, the matched lines and other chats' messages, all counted", () => {
 		const html = renderToStaticMarkup(
 			<MemoryRecallNote
 				recall={{
@@ -84,13 +88,24 @@ describe("memory marker layout", () => {
 						},
 						{ path: "tooling.md", text: "Uses pnpm" },
 					],
+					recent: [
+						{
+							chatId: OTHER,
+							title: "Billing",
+							text: "Prices are in cents from now on",
+						},
+					],
 				}}
 			/>,
 		);
-		expect(html).toContain("Used 2 memories");
-		expect(html).toContain("1 project rule");
+		expect(html).toContain("Used 3 memories");
+		expect(html).toContain('title="1 rule · 1 match · 1 chat message"');
 		expect(html).toContain('aria-label="Project rules"');
-		expect(html).toContain("Matched this request");
+		expect(html).toContain('aria-label="Matched this request"');
+		expect(html).toContain('aria-label="From other chats"');
+		expect(html).toContain("Prices are in cents from now on");
+		expect(html).toContain(`href="/?chat=${OTHER}"`);
+		expect(html.indexOf("Uses pnpm")).toBeLessThan(html.indexOf("Prices are"));
 		expect(html.indexOf("license header")).toBeLessThan(
 			html.indexOf("Uses pnpm"),
 		);
@@ -106,6 +121,7 @@ describe("memory marker layout", () => {
 		);
 		expect(html).not.toContain("Project rules");
 		expect(html).not.toContain("Matched this request");
+		expect(html).toContain("Used 1 memory");
 	});
 
 	it("clips a long line with a More control instead of a wall of text", () => {

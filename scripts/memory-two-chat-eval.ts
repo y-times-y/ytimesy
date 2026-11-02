@@ -329,7 +329,7 @@ async function recall() {
 	}));
 	const today = memoryToday();
 	const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
-	const rules = projectRules({ lines, today, project: null });
+	const rules = projectRules({ lines, today });
 	const rulesPart = memoryRulesPart(rules);
 	const rows = [
 		[
@@ -381,7 +381,6 @@ async function recall() {
 			scores,
 			alreadyShown: (raw) => memoryLineShown(raw, rulesPart),
 			today,
-			project: null,
 			query: probe.query,
 		});
 		const rule = lines.find((line) => line.id === probe.scenario);
