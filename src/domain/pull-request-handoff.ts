@@ -1,4 +1,8 @@
-import { EVIDENCE_END, EVIDENCE_START } from "./pr-evidence";
+import {
+	EVIDENCE_END,
+	EVIDENCE_START,
+	normalizedEvidenceSections,
+} from "./pr-evidence";
 import { insertBeforePullRequestFooter } from "./pull-request-footer";
 import type { SessionItem } from "./session-item";
 
@@ -131,7 +135,9 @@ export function descriptionKeepingEvidence(
 	const evidence = evidenceSection(current);
 	const text = description.trim();
 	if (!evidence || text.includes(EVIDENCE_START)) return text;
-	return insertBeforePullRequestFooter(text, evidence);
+	return normalizedEvidenceSections(
+		insertBeforePullRequestFooter(text, evidence),
+	);
 }
 
 /**
@@ -180,6 +186,10 @@ function stripKnownSections(body: string) {
 			"",
 		)
 		.replace(/<!-- ytimesy-fix:start -->[\s\S]*?<!-- ytimesy-fix:end -->/g, "")
+		.replace(
+			/<!-- ytimesy-captures:start -->[\s\S]*?<!-- ytimesy-captures:end -->/g,
+			"",
+		)
 		.trim();
 }
 

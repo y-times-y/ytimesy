@@ -74,7 +74,8 @@ export const HARNESS_VARIANT_VALUES = {
 	 * short recording or CLI output from the pushed commit when a turn's
 	 * draft handoff has visible changes (or a `ytimesy-evidence` plan), store
 	 * them and keep an Evidence section in the PR description current
-	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
+	 * (src/server/services/pr-evidence.ts); on is the default, off (an eval) changes
+	 * nothing. The agent's own ytimesy-browser captures are evidence either way.
 	 */
 	prEvidence: ["off", "on"],
 	/**
@@ -299,7 +300,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	promptCacheScope: "chat",
 	codeMode: "off",
 	subagents: "off",
-	prEvidence: "off",
+	prEvidence: "on",
 	instructions: "default",
 	attempts: "1",
 	review: "off",

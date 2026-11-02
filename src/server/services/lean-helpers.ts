@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import { EVIDENCE_LIMITS } from "#/domain/pr-evidence";
 import { browserUseSetup } from "../adapters/browser-use-cli";
 import { desktopWallpaperBase64 } from "../adapters/freestyle/desktop-wallpaper";
 import {
 	DESKTOP_X_ENVIRONMENT,
 	START_WORKSPACE_DESKTOP,
 } from "../adapters/freestyle/start-desktop";
+import { AGENT_CAPTURES_DIRECTORY } from "./agent-captures";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { chromeOpenCommand } from "./api-agent-browser-tools";
@@ -152,6 +154,26 @@ esac
 
 const INSPECT_ARGUMENTS = "__YTIMESY_INSPECT_ARGUMENTS__";
 
+/** ffmpeg for `ytimesy-browser record` on VMs from an image without it (desktop-image.ts preinstalls it): once per workspace. */
+const RECORDER_INSTALL = `if ! command -v ffmpeg >/dev/null 2>&1; then
+      { sudo -n apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ffmpeg ||
+        { sudo -n apt-get -o DPkg::Lock::Timeout=180 update -qq && sudo -n apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends ffmpeg; }
+      } >/tmp/ytimesy-ffmpeg-install.log 2>&1 || { echo "ffmpeg is unavailable; see /tmp/ytimesy-ffmpeg-install.log" >&2; exit 1; }
+    fi`;
+
+/**
+ * Records the shared desktop (display :0, its cookie from
+ * DESKTOP_X_ENVIRONMENT) for `seconds` with ffmpeg's x11grab: 15 fps at the
+ * screen's size, H.264 MP4 that browsers and GitHub play, or VP8 WebM.
+ * Arguments are shell words, already quoted.
+ */
+export function recordCommand(seconds: string, format: string, file: string) {
+	return `size=$(xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')
+    if [ ${format} = webm ]; then codec=(-c:v libvpx -deadline realtime -cpu-used 8 -b:v 1M)
+    else codec=(-c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p -movflags +faststart); fi
+    ffmpeg -hide_banner -loglevel error -nostdin -y -f x11grab -draw_mouse 1 -framerate 15 -video_size "\${size:-1440x900}" -i "$DISPLAY" -t ${seconds} -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' "\${codec[@]}" ${file}`;
+}
+
 function browserScript(sessionId: string) {
 	const inspection = guestCapabilityCommand(
 		"browser",
@@ -162,16 +184,36 @@ function browserScript(sessionId: string) {
 	if (!inspection.includes(placeholder))
 		throw new Error("Browser inspection arguments could not be bound.");
 	return `#!/usr/bin/env bash
-# ytimesy-browser open|screenshot|inspect|exec: the shared desktop browser for visual checks.
+# ytimesy-browser open|screenshot|record|inspect|exec: the shared desktop browser for visual checks.
 set -u
 usage() {
   cat >&2 <<'EOF'
-usage: ytimesy-browser open <url>           open a page in the shared desktop's Chrome (the user can watch)
-       ytimesy-browser screenshot [file]    save the desktop as a PNG and print its path; view it with your image tool
-       ytimesy-browser inspect <url> [ms]   rendered text, controls, console and network of an open page, as JSON
-       ytimesy-browser exec [code]          run Browser Use CLI Python (code argument or stdin) in that Chrome:
-                                            new_tab(url), page_info(), js(code), click_at_xy(x, y), fill_input(selector, text), wait_for_load()
+usage: ytimesy-browser open <url>                 open a page in the shared desktop's Chrome (the user can watch)
+       ytimesy-browser screenshot [file]          save the desktop as a PNG and print its path; view it with your image tool
+       ytimesy-browser record <seconds> [file]    record the desktop for 1-${EVIDENCE_LIMITS.agentVideoSeconds} s as MP4 (WebM if file ends .webm) and print its path
+       ytimesy-browser inspect <url> [ms]         rendered text, controls, console and network of an open page, as JSON
+       ytimesy-browser exec [code]                run Browser Use CLI Python (code argument or stdin) in that Chrome:
+                                                  new_tab(url), page_info(), js(code), click_at_xy(x, y), fill_input(selector, text), wait_for_load()
+Screenshots and recordings are kept in ~/.ytimesy/captures (outside the repository) and shown in the chat and in the
+pull request description. A file argument also copies one there: only when the user wants it in the repository.
 EOF
+}
+captures=${AGENT_CAPTURES_DIRECTORY}
+capture_name() { printf '%s-%s-%s.%s' "$1" "$(date +%Y%m%d-%H%M%S)" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \\n')" "$2"; }
+# Registers a capture for the chat: the runtime stores it after this command.
+register() {
+  install -d -m 700 "$captures/pending"
+  printf '{"name": "%s", "seconds": %s, "capturedAt": "%s"}\\n' "$(basename "$1")" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$captures/pending/$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n' | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\\1-\\2-\\3-\\4-\\5/').json"
+}
+# Prints where the capture is: the copy at the file argument when one was given.
+deliver() {
+  register "$1" "$2"
+  if [ -n "$3" ]; then
+    mkdir -p "$(dirname "$3")" && cp "$1" "$3" || exit 1
+    echo "$3"
+  else
+    echo "$1"
+  fi
 }
 desktop() {
   if python3 -c 'import socket, sys; s = socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(("127.0.0.1", 6080)) == 0 else 1)'; then return 0; fi
@@ -192,8 +234,22 @@ case "\${1:-}" in
     echo "Opening $url in the shared desktop browser." ;;
   screenshot)
     desktop
-    path=\${2:-/tmp/ytimesy-screenshot-$(date +%Y%m%d-%H%M%S).png}
-    ${DESKTOP_X_ENVIRONMENT}; scrot -o -z "$path" && echo "$path" ;;
+    install -d -m 700 "$captures"
+    file="$captures/$(capture_name screenshot png)"
+    ${DESKTOP_X_ENVIRONMENT}; scrot -o -z "$file" || exit 1
+    deliver "$file" null "\${2:-}" ;;
+  record)
+    seconds=\${2:-}
+    if ! [[ "$seconds" =~ ^[0-9]{1,3}$ ]] || [ "$seconds" -lt 1 ] || [ "$seconds" -gt ${EVIDENCE_LIMITS.agentVideoSeconds} ]; then usage; exit 2; fi
+    target=\${3:-}; format=mp4
+    case "$target" in *.webm) format=webm ;; esac
+    desktop
+    ${RECORDER_INSTALL}
+    install -d -m 700 "$captures"
+    file="$captures/$(capture_name recording "$format")"
+    ${DESKTOP_X_ENVIRONMENT}
+    ${recordCommand('"$seconds"', '"$format"', '"$file"')} || { echo "The recording failed." >&2; exit 1; }
+    deliver "$file" "$seconds" "$target" ;;
   inspect)
     url=\${2:-}; [[ "$url" =~ ^https?:// ]] || { usage; exit 2; }
     desktop

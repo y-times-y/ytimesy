@@ -141,7 +141,7 @@ for c in "node --version" "npm --version" "corepack --version" "pnpm --version" 
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
   "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version" \\
-  "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version" \\
+  "command -v Xvfb" "x11vnc -version" "websockify --help" "google-chrome-stable --version" "ffmpeg -version" \\
   "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version" "${CLAUDE_CODE_BINARY} --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"

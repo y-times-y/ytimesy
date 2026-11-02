@@ -3,6 +3,7 @@ import {
 	EVIDENCE_KEPT_PER_PULL,
 	type EvidenceManifest,
 	type EvidenceRecord,
+	type EvidenceSource,
 	type EvidenceStatus,
 	evidenceManifest,
 } from "#/domain/pr-evidence";
@@ -14,9 +15,11 @@ type Row = {
 	id: string;
 	project_id: string;
 	session_id: string | null;
-	full_name: string;
-	pull_number: number;
-	commit_sha: string;
+	source: EvidenceSource;
+	item_id: string | null;
+	full_name: string | null;
+	pull_number: number | null;
+	commit_sha: string | null;
 	head_sha: string | null;
 	kind: EvidenceManifest["kind"];
 	status: EvidenceStatus;
@@ -34,7 +37,7 @@ type Row = {
 };
 
 const COLUMNS =
-	"id, project_id, session_id, full_name, pull_number, commit_sha, head_sha, kind, status, reason, start_command, urls, files, manifest, browser, video_seconds, capture_started_at, capture_finished_at, created_at, expires_at";
+	"id, project_id, session_id, source, item_id, full_name, pull_number, commit_sha, head_sha, kind, status, reason, start_command, urls, files, manifest, browser, video_seconds, capture_started_at, capture_finished_at, created_at, expires_at";
 
 const iso = (value: Date | string | null) =>
 	value === null ? null : new Date(value).toISOString();
@@ -64,9 +67,11 @@ function toRecord(row: Row): EvidenceRecord {
 		id: row.id,
 		projectId: row.project_id,
 		sessionId: row.session_id,
-		fullName: row.full_name,
-		pullNumber: Number(row.pull_number),
-		commitSha: row.commit_sha,
+		source: row.source === "agent" ? "agent" : "harness",
+		itemId: row.item_id,
+		fullName: row.full_name ?? "",
+		pullNumber: Number(row.pull_number ?? 0),
+		commitSha: row.commit_sha ?? "",
 		headSha: row.head_sha,
 		kind: row.kind,
 		status: row.status,
@@ -155,6 +160,50 @@ export async function finishEvidence(
 	);
 }
 
+/** Records a capture the agent made with ytimesy-browser; a retried collection changes nothing. */
+export async function insertAgentCapture(input: {
+	id: string;
+	userId: string;
+	projectId: string;
+	sessionId: string;
+	itemId: string | null;
+	file: { name: string; bytes: number; sha256: string };
+	videoSeconds: number | null;
+	capturedAt: string | null;
+}) {
+	await database().query(
+		`insert into pr_evidence (id, user_id, project_id, session_id, source, item_id, plan_key, kind, status, files, video_seconds, capture_started_at, capture_finished_at)
+		values ($1,$2,$3,$4,'agent',$5,'agent','web','captured',$6::jsonb,$7,$8,$8)
+		on conflict (id) do nothing`,
+		[
+			input.id,
+			input.userId,
+			input.projectId,
+			input.sessionId,
+			input.itemId?.slice(0, 300) ?? null,
+			jsonbText([input.file]),
+			input.videoSeconds,
+			input.capturedAt ? timestamp(input.capturedAt) : null,
+		],
+	);
+}
+
+/** A chat's agent captures, newest first (the pull request's count and the evidence page). */
+export async function listAgentCaptures(
+	userId: string,
+	projectId: string,
+	sessionId: string,
+	limit: number,
+) {
+	const result = await database().query<Row>(
+		`select ${COLUMNS} from pr_evidence
+		where user_id=$1 and project_id=$2 and session_id=$3 and source='agent' and status='captured'
+		order by created_at desc limit $4`,
+		[userId, projectId, sessionId, limit],
+	);
+	return result.rows.map(toRecord);
+}
+
 /** One capture, only for the signed-in owner of its project. */
 export async function evidenceForOwner(
 	userId: string,
@@ -179,7 +228,7 @@ export async function listSessionEvidence(
 	const result = await database().query<Row>(
 		`select ${COLUMNS} from pr_evidence
 		where user_id=$1 and project_id=$2 and session_id=$3
-		order by created_at desc limit 20`,
+		order by created_at desc limit 60`,
 		[userId, projectId, sessionId],
 	);
 	return result.rows.map(toRecord).reverse();
@@ -240,7 +289,7 @@ export async function evidenceRepositories(limit = 200) {
 		installation_id: string | number;
 		full_name: string;
 	}>(
-		"select installation_id, full_name from pr_evidence group by installation_id, full_name order by min(created_at) limit $1",
+		"select installation_id, full_name from pr_evidence where installation_id is not null and full_name is not null group by installation_id, full_name order by min(created_at) limit $1",
 		[limit],
 	);
 	return result.rows.map((row) => ({

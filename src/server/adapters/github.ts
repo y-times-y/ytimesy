@@ -1,5 +1,9 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+	agentCapturesSection,
+	withAgentCapturesSection,
+} from "../../domain/pr-evidence";
 import type { RepositoryChoice } from "../../domain/projects";
 import {
 	descriptionKeepingEvidence,
@@ -508,8 +512,13 @@ async function refreshPullRequestDescription(
 	existing: { number: number; body: string },
 	description: string,
 ) {
-	if (!shouldReplacePullRequestBody(existing.body, description)) return;
-	const body = descriptionKeepingEvidence(existing.body, description);
+	// A placeholder keeps the written description; its captures still update.
+	const body = shouldReplacePullRequestBody(existing.body, description)
+		? descriptionKeepingEvidence(existing.body, description)
+		: withAgentCapturesSection(
+				existing.body,
+				agentCapturesSection(description),
+			);
 	if (body === existing.body) return;
 	const { owner, repo } = repositoryOwnerName(fullName);
 	await githubClient(token).pulls.update({

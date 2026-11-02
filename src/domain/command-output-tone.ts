@@ -225,11 +225,16 @@ const BAD_WORDS = word(
 const EXCEPTION_NAME = /(?<![\w/.-])[A-Z]\w*(?:Error|Exception)\b(?![\w/.-])/;
 const NPM_ERROR = /\b(?:npm|yarn|pnpm) ERR!/;
 const WARN_WORDS = word("warn(?:ings?)?|deprecated|deprecation");
+const LEADING_VERDICT = /^\s*(PASSED|PASS|OK|SUCCESS|FAILED|FAIL|ERROR):\s/;
 const GOOD_WORDS = word(
 	"success(?:ful(?:ly)?)?|succeeded|done|passed|passing|completed",
 );
 
 export function genericTone(text: string): OutputTone | undefined {
+	// A line that opens with its verdict ("PASSED: clean-copy run of ...") is
+	// that verdict, whatever words the command it quotes contains.
+	const verdict = LEADING_VERDICT.exec(text)?.[1];
+	if (verdict) return /^(?:FAIL|FAILED|ERROR)$/.test(verdict) ? "bad" : "good";
 	const words = withoutUrls(text);
 	if (
 		BAD_WORDS.test(words) ||

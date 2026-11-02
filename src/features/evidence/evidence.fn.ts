@@ -19,7 +19,12 @@ export const getEvidencePage = createServerFn({ method: "GET" })
 	.handler(
 		async ({
 			data,
-		}): Promise<{ signedIn: boolean; evidence: EvidenceRecord | null }> => {
+		}): Promise<{
+			signedIn: boolean;
+			evidence: EvidenceRecord | null;
+			/** For an agent capture: every agent capture of its chat, newest first. */
+			captures?: EvidenceRecord[];
+		}> => {
 			let user: { id: string };
 			try {
 				user = await requireUser(getRequest().headers);
@@ -30,16 +35,28 @@ export const getEvidencePage = createServerFn({ method: "GET" })
 			}
 			if (!UUID.test(data.projectId) || !UUID.test(data.evidenceId))
 				return { signedIn: true, evidence: null };
-			const { evidenceForOwner } = await import(
+			const { evidenceForOwner, listAgentCaptures } = await import(
 				"#/server/adapters/pr-evidence-records"
 			);
+			const evidence = await evidenceForOwner(
+				user.id,
+				data.projectId,
+				data.evidenceId,
+			);
+			// A pull request links its chat's newest agent capture; the page shows them all.
+			const captures =
+				evidence?.source === "agent" && evidence.sessionId
+					? await listAgentCaptures(
+							user.id,
+							data.projectId,
+							evidence.sessionId,
+							60,
+						)
+					: undefined;
 			return {
 				signedIn: true,
-				evidence: await evidenceForOwner(
-					user.id,
-					data.projectId,
-					data.evidenceId,
-				),
+				evidence,
+				...(captures ? { captures } : {}),
 			};
 		},
 	);

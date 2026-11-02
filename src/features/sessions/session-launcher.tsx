@@ -495,7 +495,8 @@ export function SessionLauncher({
 		}
 	}
 	const loadEvidence = useServerFn(listChatEvidence);
-	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
+	// Pull request evidence (prEvidence) arrives after the turn, from a background
+	// job; the agent's own captures (ytimesy-browser) during it.
 	const chatEvidence = useQuery({
 		queryKey: chatSideKeys.evidence(
 			selectedProject?.id,
@@ -517,6 +518,8 @@ export function SessionLauncher({
 		},
 		refetchInterval: (query) => {
 			const data = query.state.data;
+			// The agent's own screenshots and recordings arrive during its turn.
+			if (session.turnStatus === "running") return 10_000;
 			if (!data?.enabled) return false;
 			return data.evidence.some((record) => record.status === "capturing")
 				? 10_000
