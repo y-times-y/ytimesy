@@ -19,6 +19,7 @@ import { PickerUsageLine } from "../workspace/usage-windows";
 
 /** Shared with Settings' ChatGPT subscription limits. */
 const PLAN_USAGE_KEY = ["codex-subscription-usage"] as const;
+const CLAUDE_PLAN_USAGE_KEY = ["claude-plan-usage"] as const;
 const PLAN_USAGE_STALE_MS = 30_000;
 const PLAN_LOW_PERCENT = 85;
 
@@ -46,17 +47,29 @@ function usePlanUsageQueryFn() {
 	return () => readUsage();
 }
 
-/** Starts the plan usage read before the picker opens (hover or focus on its trigger). */
-export function usePrefetchPlanUsage() {
+/**
+ * Starts the plan usage reads before the picker opens (hover or focus on its
+ * trigger), so each section's line is there when it opens.
+ */
+export function usePrefetchPlanUsage(claudeConnected = false) {
 	const queryClient = useQueryClient();
 	const queryFn = usePlanUsageQueryFn();
-	return () =>
+	const readClaude = useServerFn(claudePlanUsageFn);
+	return () => {
 		void queryClient.prefetchQuery({
 			queryKey: PLAN_USAGE_KEY,
 			queryFn,
 			staleTime: PLAN_USAGE_STALE_MS,
 			retry: false,
 		});
+		if (claudeConnected)
+			void queryClient.prefetchQuery({
+				queryKey: CLAUDE_PLAN_USAGE_KEY,
+				queryFn: () => readClaude(),
+				staleTime: PLAN_USAGE_STALE_MS,
+				retry: false,
+			});
+	};
 }
 
 /**
@@ -65,6 +78,17 @@ export function usePrefetchPlanUsage() {
  * the plan's limit.
  */
 export function usePlanUsageBars(open: boolean): PlanUsageBar[] {
+	return usePlanUsageLine(open).bars;
+}
+
+/** A plan's bars, and whether its first reading is still on the way. */
+export type PlanUsageLine = {
+	readonly bars: PlanUsageBar[];
+	readonly pending: boolean;
+};
+
+/** The ChatGPT plan's line for the picker's Codex section. */
+export function usePlanUsageLine(open: boolean): PlanUsageLine {
 	const queryFn = usePlanUsageQueryFn();
 	const usage = useQuery({
 		queryKey: PLAN_USAGE_KEY,
@@ -74,8 +98,11 @@ export function usePlanUsageBars(open: boolean): PlanUsageBar[] {
 		retry: false,
 	});
 	const limit = usePlanLimit();
-	if (!open) return [];
-	return withPlanLimitReached(planUsageBars(usage.data), limit, Date.now());
+	if (!open) return { bars: [], pending: false };
+	return {
+		bars: withPlanLimitReached(planUsageBars(usage.data), limit, Date.now()),
+		pending: usage.isPending && usage.fetchStatus === "fetching",
+	};
 }
 
 /**
@@ -105,17 +132,15 @@ export function useMarkPlanLimitFromSwitches(items: readonly SessionItem[]) {
 	}, [items, queryClient]);
 }
 
-const CLAUDE_PLAN_USAGE_KEY = ["claude-plan-usage"] as const;
-
 /**
- * The Claude plan's windows while the picker is open, from the last reading
- * the edge took off Anthropic's responses. Empty while Claude is not
- * connected or has not been used yet.
+ * The Claude plan's line while the picker is open: the edge's last reading,
+ * which the server reads afresh when it is over five minutes old. Empty
+ * while Claude is not connected or its usage cannot be read.
  */
-export function useClaudePlanUsageBars(
+export function useClaudePlanUsageLine(
 	open: boolean,
 	connected: boolean,
-): PlanUsageBar[] {
+): PlanUsageLine {
 	const readUsage = useServerFn(claudePlanUsageFn);
 	const usage = useQuery({
 		queryKey: CLAUDE_PLAN_USAGE_KEY,
@@ -124,26 +149,65 @@ export function useClaudePlanUsageBars(
 		staleTime: PLAN_USAGE_STALE_MS,
 		retry: false,
 	});
-	if (!open || !connected) return [];
-	return claudePlanUsageBars(usage.data, Date.now());
+	if (!open || !connected) return { bars: [], pending: false };
+	return {
+		bars: claudePlanUsageBars(usage.data, Date.now()),
+		pending: usage.isPending && usage.fetchStatus === "fetching",
+	};
 }
 
-export const CLAUDE_PLAN_USAGE_HINT = "Updates after Claude is used";
+export const CLAUDE_PLAN_USAGE_HINT = "Reading it uses a tiny bit of your plan";
+
+/**
+ * A plan's line inside its own section of the picker. While the first
+ * reading is on the way it keeps the line's height, so nothing jumps.
+ */
+export function SectionPlanUsage({
+	line,
+	label,
+	hint,
+}: {
+	line: PlanUsageLine;
+	label: string;
+	hint?: string;
+}) {
+	if (line.bars.length)
+		return (
+			<ModelPickerPlanUsage
+				bars={line.bars}
+				label={label}
+				hint={hint}
+				className={SECTION_LINE_CLASS}
+			/>
+		);
+	return line.pending ? (
+		<div
+			className={`model-picker-usage ${SECTION_LINE_CLASS}`}
+			aria-hidden="true"
+			data-pending=""
+		/>
+	) : null;
+}
+
+const SECTION_LINE_CLASS = "model-picker-usage-section";
 
 /** A subscription plan's line in the model picker (ChatGPT by default). */
 export function ModelPickerPlanUsage({
 	bars,
 	label = "ChatGPT plan",
 	hint,
+	className,
 }: {
 	bars: readonly PlanUsageBar[];
 	label?: string;
 	hint?: string;
+	className?: string;
 }) {
 	return (
 		<PickerUsageLine
 			label={label}
 			hint={hint}
+			className={className}
 			bars={bars.map((bar) => ({
 				id: bar.id,
 				label: bar.label,

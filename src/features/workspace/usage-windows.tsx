@@ -78,15 +78,22 @@ export function PickerUsageLine({
 	label,
 	bars,
 	hint,
+	className,
 }: {
 	label: string;
 	bars: readonly PickerUsageBar[];
 	/** The label's tooltip. */
 	hint?: string;
+	className?: string;
 }) {
 	if (!bars.length) return null;
 	return (
-		<section className="model-picker-usage" aria-label={`${label} usage`}>
+		<section
+			className={
+				className ? `model-picker-usage ${className}` : "model-picker-usage"
+			}
+			aria-label={`${label} usage`}
+		>
 			<span className="model-picker-usage-label" title={hint}>
 				{label}
 			</span>
