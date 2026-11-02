@@ -36,6 +36,7 @@ export type SideChatSend = {
 	readonly idempotencyKey: string;
 	readonly variant?: string;
 	readonly speed?: "standard" | "fast" | "ultrafast";
+	readonly alternateContext?: boolean;
 };
 
 /**
@@ -83,6 +84,9 @@ export async function sendSideChatMessage(
 			idempotencyKey: input.idempotencyKey,
 			...(input.variant ? { variant: input.variant } : {}),
 			...(input.speed ? { speed: input.speed } : {}),
+			...(input.alternateContext !== undefined
+				? { alternateContext: input.alternateContext }
+				: {}),
 		}),
 	);
 	return { sideSessionId: side.id, view: await withQueuedMessages(sent) };
@@ -174,5 +178,8 @@ async function queueSideTurn(
 		modelId: input.modelId,
 		...(input.variant ? { variant: input.variant } : {}),
 		...(input.speed ? { speed: input.speed } : {}),
+		...(input.alternateContext !== undefined
+			? { alternateContext: input.alternateContext }
+			: {}),
 	});
 }

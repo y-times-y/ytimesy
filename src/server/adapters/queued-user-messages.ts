@@ -17,6 +17,7 @@ export type QueuedUserSend = {
 	readonly variant?: string;
 	readonly speed?: "standard" | "fast" | "ultrafast";
 	readonly fast?: boolean;
+	readonly alternateContext?: boolean;
 	/**
 	 * Send was pressed. Absent or false waits for Send or the turn's end;
 	 * true is taken at the next model step.

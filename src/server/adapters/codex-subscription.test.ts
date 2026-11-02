@@ -287,6 +287,82 @@ it("offers fast mode where the plan's catalog lists the priority tier, and sends
 	).rejects.toThrow("Fast mode");
 });
 
+it("offers the plan's larger window where max_context_window exceeds the standard one, and budgets against it", async () => {
+	vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				models: [
+					{
+						slug: "wide",
+						context_window: 272_000,
+						max_context_window: 872_000,
+						auto_compact_token_limit: 240_000,
+					},
+					{
+						slug: "fixed",
+						context_window: 272_000,
+						max_context_window: 272_000,
+					},
+					{ slug: "plain", context_window: 272_000 },
+				],
+			}),
+		),
+	);
+	const models = await codexSubscriptionCatalog("window-owner");
+	expect(models.map((model) => model.contextWindow)).toEqual([
+		{
+			standard: 272_000,
+			alternate: 872_000,
+			note: "Longer chats use your plan's limits faster",
+		},
+		undefined,
+		undefined,
+	]);
+	const standard = await codexSubscriptionModel(
+		"window-owner",
+		"wide",
+		undefined,
+		false,
+		"chat",
+	);
+	expect(standard).toMatchObject({
+		contextWindow: 272_000,
+		autoCompactTokenLimit: 240_000,
+	});
+	const large = await codexSubscriptionModel(
+		"window-owner",
+		"wide",
+		undefined,
+		false,
+		"chat",
+		true,
+	);
+	// The catalog's compaction limit was set for the standard window.
+	expect(large.contextWindow).toBe(872_000);
+	expect(large.autoCompactTokenLimit).toBeUndefined();
+	// Nothing about the window is sent: Codex applies it to local limits only.
+	expect(large.requestSettings("x")).toEqual(standard.requestSettings("x"));
+	const budget = (runtime: typeof large) =>
+		modelContextBudget({
+			contextWindow: runtime.contextWindow,
+			autoCompactTokenLimit: runtime.autoCompactTokenLimit,
+			maxOutputTokens: 32_000,
+		}).compactAtTokens;
+	expect(budget(standard)).toBeLessThanOrEqual(240_000);
+	expect(budget(large)).toBeGreaterThan(600_000);
+	expect(budget(large)).toBeLessThan(872_000);
+	await expect(
+		codexSubscriptionModel(
+			"window-owner",
+			"fixed",
+			undefined,
+			false,
+			undefined,
+			true,
+		),
+	).rejects.toThrow("larger context window");
+});
+
 it.each([
 	{ measuredTokens: 70_000, providerLimit: null, compacted: false },
 	{ measuredTokens: 210_000, providerLimit: null, compacted: true },

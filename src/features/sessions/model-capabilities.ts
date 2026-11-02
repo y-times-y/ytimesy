@@ -1,3 +1,4 @@
+import type { ListedContextWindow } from "#/domain/context-window-option";
 import {
 	type ListedModel,
 	type ListedModelPreference,
@@ -44,6 +45,8 @@ export interface SessionModel {
 	} | null;
 	/** Faster speeds than standard; empty when the model has none. */
 	speeds: readonly ListedSpeed[];
+	/** A second context window the route offers; null when it has none. */
+	contextWindow: ListedContextWindow | null;
 }
 
 /** The composer's speed choice; "" is standard speed. */
@@ -71,6 +74,7 @@ export function sessionModelsFromListed(
 		readonly fast?: boolean;
 		readonly speeds?: readonly ListedSpeed[];
 		readonly reasoning?: SessionModel["reasoning"];
+		readonly contextWindow?: ListedContextWindow;
 	}[],
 ): SessionModel[] {
 	return models.map((model) => ({
@@ -81,6 +85,7 @@ export function sessionModelsFromListed(
 		speeds:
 			model.speeds ??
 			(listedModelSupportsFastMode(model) ? [{ id: "fast" as const }] : []),
+		contextWindow: model.contextWindow ?? null,
 	}));
 }
 

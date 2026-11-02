@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	apiContextWindowOption,
 	availableConnectionModels,
 	connectionModelSpeeds,
 	modelConnectionInput,
@@ -74,6 +75,96 @@ describe("officialProviderEndpoint", () => {
 				baseUrl: "https://openrouter.ai/api/v1",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("apiContextWindowOption", () => {
+	const openai = {
+		provider: "openai" as const,
+		baseUrl: "https://api.openai.com/v1",
+	};
+	const openrouter = {
+		provider: "openrouter" as const,
+		baseUrl: "https://openrouter.ai/api/v1",
+	};
+	const xai = {
+		provider: "compatible" as const,
+		baseUrl: "https://api.x.ai/v1",
+	};
+	it("keeps the full window by default and offers the cheaper price tier", () => {
+		expect(apiContextWindowOption(openai, "gpt-6.1-sol")).toEqual({
+			standard: 1_050_000,
+			alternate: 272_000,
+			note: "Stays under the 272K price tier (2× input, 1.5× output past it)",
+		});
+		expect(
+			apiContextWindowOption(openrouter, "openai/gpt-6-astra"),
+		).toMatchObject({ standard: 1_050_000, alternate: 272_000 });
+		expect(apiContextWindowOption(xai, "grok-4.7")).toMatchObject({
+			standard: 500_000,
+			alternate: 200_000,
+		});
+		expect(apiContextWindowOption(openrouter, "x-ai/grok-4.6")).toMatchObject({
+			standard: 500_000,
+			alternate: 200_000,
+		});
+		expect(
+			apiContextWindowOption(
+				{ provider: "anthropic", baseUrl: "https://api.anthropic.com/v1" },
+				"claude-haiku-5-5",
+			),
+		).toMatchObject({ standard: 1_000_000, alternate: 100_000 });
+	});
+	it("offers nothing where the window is single-priced, a plan, or a custom host", () => {
+		const anthropic = {
+			provider: "anthropic" as const,
+			baseUrl: "https://api.anthropic.com/v1",
+		};
+		expect(
+			apiContextWindowOption(anthropic, "claude-opus-5-5"),
+		).toBeUndefined();
+		expect(
+			apiContextWindowOption(openrouter, "google/gemini-4-argon"),
+		).toBeUndefined();
+		expect(
+			apiContextWindowOption(
+				{ ...xai, subscription: { provider: "xai", status: "ready" } },
+				"grok-4.7",
+			),
+		).toBeUndefined();
+		expect(
+			apiContextWindowOption(
+				{ provider: "compatible", baseUrl: "https://gateway.example.com/v1" },
+				"gpt-6.1-sol",
+			),
+		).toBeUndefined();
+		// A direct id on another maker's key is not that maker's route.
+		expect(apiContextWindowOption(xai, "gpt-6.1-sol")).toBeUndefined();
+	});
+	it("lists the option on the composer's route", () => {
+		const [model] = availableConnectionModels(
+			[
+				{
+					id: "c1",
+					provider: "openai",
+					label: "OpenAI",
+					baseUrl: "https://api.openai.com/v1",
+					models: [
+						{
+							id: "gpt-6.1-sol",
+							label: "GPT-6.1 Sol",
+							toolStreamingVerified: true,
+						},
+					],
+					revision: "r1",
+				},
+			],
+			[],
+		);
+		expect(model?.contextWindow).toMatchObject({
+			standard: 1_050_000,
+			alternate: 272_000,
+		});
 	});
 });
 
