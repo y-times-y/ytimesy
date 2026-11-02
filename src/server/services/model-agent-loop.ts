@@ -75,6 +75,8 @@ import {
 	type FallbackContextPolicy,
 	inStreamCompactedHistory,
 	modelContextBudget,
+	recalledContextMeasurement,
+	rememberContextMeasurement,
 	retainedUserMessages,
 	STATE_SNAPSHOT_HEADING,
 	type UserRequestPredicate,
@@ -282,6 +284,9 @@ export async function runModelAgent(
 		);
 	return result.messages;
 }
+
+/** Native compaction declined by the harness's own size checks, not by the provider. */
+class NativeCompactionRefused extends Error {}
 
 const STREAM_RETRIES = 4;
 
@@ -633,6 +638,11 @@ export type ModelAgentRuntime = {
 	 * contract of the route (OpenAI compaction on Bedrock).
 	 */
 	compactFallback?: boolean;
+	/**
+	 * The route answers only streamed requests (the ChatGPT Codex backend:
+	 * "Stream must be set to true"), so the harness's own summary streams.
+	 */
+	streamOnly?: boolean;
 	compact?: (
 		input: NativeCompactionInput,
 	) => Promise<{ messages: ModelMessage[]; usage: LanguageModelUsage }>;
@@ -734,17 +744,22 @@ async function executeModelSteps(
 	let pendingCompaction = forceCompaction;
 	let compactFirst = input.compactFirst === true;
 	// A rejected request proved the last measurement wrong; estimate afresh.
-	let measured =
-		!forceCompaction &&
-		input.previousContext &&
-		input.previousContext.modelContextWindow === runtime.contextWindow
-			? {
-					tokens: input.previousContext.tokens,
-					estimatedHistory: estimateContextTokens(
-						history.at(-1)?.role === "user" ? history.slice(0, -1) : history,
-					),
-				}
-			: undefined;
+	// Otherwise a run continuing a history this process measured (a follow-up
+	// run, a helper's next round, a resumed or retried run) starts from that
+	// measurement: a fresh byte estimate of a long reasoning history reads it
+	// several times larger than the provider counts it.
+	let measured = forceCompaction
+		? undefined
+		: (recalledContextMeasurement(history, runtime.contextWindow) ??
+			(input.previousContext &&
+			input.previousContext.modelContextWindow === runtime.contextWindow
+				? {
+						tokens: input.previousContext.tokens,
+						estimatedHistory: estimateContextTokens(
+							history.at(-1)?.role === "user" ? history.slice(0, -1) : history,
+						),
+					}
+				: undefined));
 	const toolSchemas = await Promise.all(
 		Object.entries(tools).map(async ([name, definition]) => ({
 			name,
@@ -1054,6 +1069,30 @@ async function executeModelSteps(
 							await recordUsage(native.usage);
 							return native.messages;
 						}
+						const maxOutputTokens =
+							runtime.maxOutputTokens === undefined
+								? undefined
+								: Math.min(runtime.maxOutputTokens, SUMMARY_MAX_OUTPUT_TOKENS);
+						if (runtime.streamOnly) {
+							const streamed = streamText({
+								...cacheSettings,
+								model,
+								...withoutToolSettings(
+									summaryRequestSettings(
+										requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+									),
+								),
+								prompt: JSON.stringify(older),
+								maxRetries: 1,
+								maxOutputTokens,
+								abortSignal: runSignal,
+								onError: () => {},
+							});
+							for await (const part of streamed.fullStream)
+								if (part.type === "error") throw part.error;
+							await recordUsage(await streamed.totalUsage);
+							return await streamed.text;
+						}
 						const summary = await generateText({
 							...cacheSettings,
 							model,
@@ -1062,13 +1101,7 @@ async function executeModelSteps(
 							),
 							prompt: JSON.stringify(older),
 							maxRetries: 1,
-							maxOutputTokens:
-								runtime.maxOutputTokens === undefined
-									? undefined
-									: Math.min(
-											runtime.maxOutputTokens,
-											SUMMARY_MAX_OUTPUT_TOKENS,
-										),
+							maxOutputTokens,
 							abortSignal: runSignal,
 						});
 						await recordUsage(summary.usage);
@@ -1104,7 +1137,7 @@ async function executeModelSteps(
 					compacted: boolean;
 				}> => {
 					if (contextTokens > budget.inputLimitTokens)
-						throw new Error(
+						throw new NativeCompactionRefused(
 							"Conversation exceeds this model's context window; native compaction cannot safely accept it.",
 						);
 					const lastUser = history.reduce(
@@ -1138,7 +1171,7 @@ async function executeModelSteps(
 						...recent,
 					];
 					if (estimateContextTokens(messages) >= budget.inputLimitTokens)
-						throw new Error(
+						throw new NativeCompactionRefused(
 							"Compacted history leaves insufficient context; original checkpoint was preserved.",
 						);
 					return { messages, compacted: true };
@@ -1150,7 +1183,17 @@ async function executeModelSteps(
 					try {
 						prepared = await nativeCompaction();
 					} catch (error) {
-						if (!runtime.compactFallback || runSignal.aborted) throw error;
+						// The harness's own refusal (nothing usable came back, or nothing
+						// was sent) falls back on every route; a provider's failure only
+						// where the route asks for it.
+						if (
+							runSignal.aborted ||
+							!(
+								runtime.compactFallback ||
+								error instanceof NativeCompactionRefused
+							)
+						)
+							throw error;
 						console.warn(
 							"Native compaction failed; using the harness's own compaction.",
 							{
@@ -1391,13 +1434,15 @@ async function executeModelSteps(
 				else if (
 					step.usage.inputTokens !== undefined &&
 					step.usage.outputTokens !== undefined
-				)
+				) {
 					measured = contextMeasurement(
 						historyBeforeStep,
 						step.response.messages,
 						step.usage.inputTokens,
 						step.usage.outputTokens,
 					);
+					rememberContextMeasurement(history, measured, runtime.contextWindow);
+				}
 				await input.onStep(history);
 			},
 		});
