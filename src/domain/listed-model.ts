@@ -1,3 +1,10 @@
+import { API_MODEL_LIST } from "./api-model-list";
+import {
+	claudeCodeModelLabel,
+	parseClaudeCodeRouteId,
+} from "./claude-code-route";
+import { parseModelRouteId } from "./model-connection";
+
 export type ListedReasoning = {
 	readonly levels: readonly [
 		{ readonly id: string; readonly label: string },
@@ -272,11 +279,23 @@ export function listedModelPreferenceFromSessions(input: {
 	return { listedModelId, blockedListedModelIds };
 }
 
+/**
+ * A listed id's name when its route is not listed (a refused subscription, a
+ * removed key): a model ytimesy offers keeps its label, anything else shows
+ * its catalog id tail.
+ */
 export function listedModelDisplayName(modelId: string) {
 	const id = modelId.trim();
 	if (!id) return "";
-	const slash = id.lastIndexOf("/");
-	return slash >= 0 ? id.slice(slash + 1) : id;
+	const claudeCode = parseClaudeCodeRouteId(id);
+	if (claudeCode) return claudeCodeModelLabel(claudeCode);
+	const routed = parseModelRouteId(id)?.modelId ?? id;
+	const offered = API_MODEL_LIST.find(
+		(model) => model.openRouterId === routed || model.directId === routed,
+	);
+	if (offered) return offered.label;
+	const slash = routed.lastIndexOf("/");
+	return slash >= 0 ? routed.slice(slash + 1) : routed;
 }
 
 export function preferredListedModelId(

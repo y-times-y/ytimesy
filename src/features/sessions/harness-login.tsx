@@ -4,7 +4,11 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { harnessAccess, harnessLoginShouldShow } from "#/domain/harness-access";
+import {
+	connectionFailureIsSignIn,
+	harnessAccess,
+	harnessLoginShouldShow,
+} from "#/domain/harness-access";
 import { AgentProviderMark } from "./agent-provider-mark";
 
 export function HarnessLogin({
@@ -29,7 +33,9 @@ export function HarnessLogin({
 	}
 	const title = {
 		authorizing: `Sign in to ${provider.name}`,
-		failed: `${provider.name} sign-in failed`,
+		failed: connectionFailureIsSignIn(access.summary)
+			? `${provider.name} sign-in failed`
+			: "Couldn't start the chat",
 		expired: `${provider.name} sign-in expired`,
 	}[access.readiness];
 	// Every expiry cause needs the same action; never imply that work was lost.

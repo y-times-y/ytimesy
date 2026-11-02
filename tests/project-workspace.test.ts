@@ -135,3 +135,13 @@ it("holds a message while the environment is not ready, failed included, and rel
 	for (const status of ["failed", "installing", undefined] as const)
 		expect(heldSendReleases(status), String(status)).toBe(false);
 });
+
+it("never shows an empty or serialized-object failure", () => {
+	for (const lost of ["{}", "", "  ", "[object Object]", "null"])
+		expect(publicFailureMessage(new Error(lost))).toBe(
+			"Something went wrong. Retry in a moment.",
+		);
+	expect(publicFailureMessage(new Response(null, { status: 409 }))).toBe(
+		"Something went wrong. Retry in a moment.",
+	);
+});

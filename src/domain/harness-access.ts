@@ -92,6 +92,15 @@ export function harnessAccess(
 	return unsignedAccess(provider, options);
 }
 
+/**
+ * A failed connection is a sign-in failure only when its message says so
+ * (every device-login failure ends "Sign in again"). Others, like an
+ * environment that is not ready, are not the provider's sign-in.
+ */
+export function connectionFailureIsSignIn(message: string): boolean {
+	return /\b(sign[ -]?in|log[ -]?in|login)\b/i.test(message);
+}
+
 export function harnessLoginIsPending(connection: AgentConnection): boolean {
 	return connection.status === "awaiting_device_code";
 }

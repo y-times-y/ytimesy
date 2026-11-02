@@ -90,6 +90,10 @@ export function blocksDuplicateProvision(status: WorkspaceStatus) {
 	);
 }
 
+/** Shown when a failure carries no readable message (an empty error, a serialized "{}"). */
+export const GENERIC_FAILURE_MESSAGE =
+	"Something went wrong. Retry in a moment.";
+
 export function publicFailureMessage(error: unknown) {
 	const message =
 		error instanceof Error
@@ -97,9 +101,19 @@ export function publicFailureMessage(error: unknown) {
 			: error instanceof Response
 				? error.statusText
 				: "Workspace preparation failed. Retry after checking GitHub access.";
+	if (!readableMessage(message)) return GENERIC_FAILURE_MESSAGE;
 	return redactInfrastructure(
 		workspaceCapacityMessage(redactSecrets(message)),
 	).slice(0, 300);
+}
+
+/** False for "", "{}", "[]", "null", "[object Object]": a lost error, not a message. */
+function readableMessage(message: string) {
+	const text = message.trim();
+	return (
+		text !== "" &&
+		!/^(\{\s*\}|\[\s*\]|null|undefined|\[object \w+\])$/.test(text)
+	);
 }
 
 function workspaceCapacityMessage(message: string) {

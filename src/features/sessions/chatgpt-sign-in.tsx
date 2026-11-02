@@ -12,9 +12,12 @@ import { pollCodexLogin, startChatgptSignIn } from "./codex-session.fn";
 export function ChatgptSignIn({
 	label = "Sign in with ChatGPT",
 	onConnected,
+	showHint = true,
 }: {
 	label?: string;
 	onConnected?: () => void;
+	/** False where the caller shows DeviceCodeHint itself (a settings row's text column). */
+	showHint?: boolean;
 }) {
 	const start = useServerFn(startChatgptSignIn);
 	const poll = useServerFn(pollCodexLogin);
@@ -63,7 +66,7 @@ export function ChatgptSignIn({
 					{signIn.isPending ? "Starting…" : label}
 				</button>
 			)}
-			<DeviceCodeHint />
+			{showHint ? <DeviceCodeHint /> : null}
 			{login?.status === "failed" ? (
 				<small role="alert">{login.message}</small>
 			) : signIn.error ? (
@@ -77,7 +80,7 @@ export function ChatgptSignIn({
  * ChatGPT refuses the code until device code sign-in is on for the account
  * (Settings > Security). On a workspace, an admin turns it on instead.
  */
-function DeviceCodeHint() {
+export function DeviceCodeHint() {
 	return (
 		<p
 			className="chatgpt-sign-in-hint"
