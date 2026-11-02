@@ -42,7 +42,7 @@ import {
 	writeModelFavorites,
 } from "./model-picker-favorites";
 import { ModelPickerSettings } from "./model-picker-settings";
-import { ModelProviderLogo } from "./model-provider-logo";
+import { ModelProviderLogo, modelLogoProvider } from "./model-provider-logo";
 import {
 	CLAUDE_PLAN_USAGE_HINT,
 	SectionPlanUsage,
@@ -209,8 +209,7 @@ export function HarnessPicker({
 						provider={
 							isClaudeCodeRoute(modelId)
 								? "anthropic"
-								: (parseModelRouteId(modelId)?.modelId.split("/")[0] ??
-									"openrouter")
+								: modelLogoProvider(parseModelRouteId(modelId)?.modelId ?? "")
 						}
 						size={16}
 					/>
