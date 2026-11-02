@@ -8,12 +8,13 @@ vi.mock("@tanstack/react-start", () => ({
 vi.mock("./memory.fn", () => ({
 	readMemoryFn: async () => null,
 	readMemoryDreamsFn: async () => null,
+	readMemoryGraphFn: async () => null,
 	readMemoryHistoryFn: async () => [],
 	clearMemoryFn: async () => undefined,
 	editMemoryFn: async () => ({ ok: true }),
 }));
 
-const { MemoryPage } = await import("./memory-page");
+const { MemoryPage, parseMemoryView } = await import("./memory-page");
 
 const CHAT = "11111111-1111-4111-8111-111111111111";
 const WEB = "projects/acme-web--7";
@@ -46,7 +47,7 @@ const projects = [
 	},
 ];
 
-function render(view: "tree" | "list") {
+function render(view: "blocks" | "files") {
 	const client = new QueryClient();
 	client.setQueryData(["memory"], { available: true, mode: "full", files });
 	return renderToStaticMarkup(
@@ -65,11 +66,35 @@ function render(view: "tree" | "list") {
 const EMOJI = /\p{Extended_Pictographic}/u;
 
 describe("Memory page", () => {
-	it("shows the repo's folder tree by default: Personal, then each project by name", () => {
-		const html = render("tree");
+	it("shows Blocks by default: one block per folder, Personal then each project by name", () => {
+		const html = render("blocks");
 		expect(html).toContain("<h1>Memory</h1>");
-		expect(html).toMatch(/aria-pressed="true"[^>]*>Folders</);
-		expect(html).toMatch(/aria-pressed="false"[^>]*>List</);
+		expect(html).toMatch(/aria-pressed="true"[^>]*>Blocks</);
+		expect(html).toMatch(/aria-pressed="false"[^>]*>Files</);
+		// Two views only.
+		const views = html.slice(
+			html.indexOf('aria-label="View"'),
+			html.indexOf("</fieldset>"),
+		);
+		expect(views.match(/<button/g)).toHaveLength(2);
+		// The graph renders on the server too, in its final layout.
+		expect(html).toContain('class="memory-graph-page"');
+		expect(html).toContain('<div class="memory-blocks-world">');
+		const titles = [
+			...html.matchAll(/<section class="memory-block" aria-label="([^"]+)"/g),
+		].map((match) => match[1]);
+		expect(titles).toEqual(["Personal", "old-tool", "Website"]);
+		expect(html).toContain("Memory blocks: 4 memories in 3 folders");
+		expect(html).not.toContain("memory-folder");
+		expect(html).not.toContain("<select");
+		expect(html).not.toMatch(EMOJI);
+	});
+
+	it("shows the repo's folder tree as Files: Personal, then each project by name", () => {
+		const html = render("files");
+		expect(html).toContain("<h1>Memory</h1>");
+		expect(html).toMatch(/aria-pressed="false"[^>]*>Blocks</);
+		expect(html).toMatch(/aria-pressed="true"[^>]*>Files</);
 		const folders = [
 			...html.matchAll(/<details class="memory-folder" open="">/g),
 		];
@@ -98,11 +123,10 @@ describe("Memory page", () => {
 		expect(html).not.toMatch(EMOJI);
 	});
 
-	it("shows the list in the same page", () => {
-		const html = render("list");
-		expect(html).toMatch(/aria-pressed="true"[^>]*>List</);
-		expect(html).toContain("memory-inspector");
-		expect(html).toContain('aria-label="Order lines"');
-		expect(html).not.toContain('class="memory-folder"');
+	it("remembers only the two views, Blocks when unsure", () => {
+		expect(parseMemoryView("files")).toBe("files");
+		expect(parseMemoryView("blocks")).toBe("blocks");
+		expect(parseMemoryView("tree")).toBe("blocks");
+		expect(parseMemoryView(null)).toBe("blocks");
 	});
 });
