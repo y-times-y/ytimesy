@@ -1,7 +1,28 @@
 import { Box, Server } from "lucide-react";
 import { ClaudeMark } from "./claude-mark";
+import { GrokMark } from "./grok-mark";
 import icons from "./model-provider-icons.json";
 import { XaiMark } from "./xai-mark";
+
+/**
+ * The maker of a model from its id: "x-ai/grok-4.7" by its prefix, and a
+ * plan's or direct key's bare id ("grok-4.7", "gpt-6.1-sol") by its family.
+ */
+export function modelLogoProvider(modelId: string) {
+	const [prefix, rest] = modelId.split("/", 2);
+	if (rest) return rest.startsWith("grok") ? "grok" : prefix;
+	const id = modelId.toLowerCase();
+	if (id.startsWith("grok")) return "grok";
+	if (/^(gpt|o\d|codex|chatgpt)/.test(id)) return "openai";
+	if (id.startsWith("claude")) return "anthropic";
+	if (id.startsWith("gemini")) return "google";
+	if (id.startsWith("deepseek")) return "deepseek";
+	if (id.startsWith("qwen")) return "qwen";
+	if (id.startsWith("kimi")) return "moonshotai";
+	if (/^(llama|muse)/.test(id)) return "meta";
+	if (id.startsWith("glm")) return "z-ai";
+	return "openrouter";
+}
 
 // Curated local subset of Simple Icons 1.2.97 (CC0); no remote image requests.
 export function ModelProviderLogo({
@@ -14,6 +35,7 @@ export function ModelProviderLogo({
 	if (provider === "anthropic") return <ClaudeMark size={size} />;
 	if (provider === "custom") return <Server size={size} aria-hidden="true" />;
 	if (provider === "x-ai") return <XaiMark size={size} />;
+	if (provider === "grok") return <GrokMark size={size} />;
 	if (provider === "z-ai")
 		return (
 			<svg
