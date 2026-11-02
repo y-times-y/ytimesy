@@ -554,6 +554,7 @@ export async function executeSessionMachinePlan(input: {
 		snapshotId = await input.machines.snapshotEnvironment(
 			WorkspaceId(plan.providerRef),
 			projectEnvironmentSnapshotSlug(input.workspaceId),
+			input.machineSize,
 		);
 		await input.saveTemplateSnapshot(snapshotId);
 		plan = sessionMachinePlan({
@@ -655,6 +656,7 @@ async function copyAgentSessionFromTemplate(
 			const nextSnapshotId = await input.machines.snapshotEnvironment(
 				WorkspaceId(input.templateProviderRef),
 				projectEnvironmentSnapshotSlug(input.workspaceId),
+				input.machineSize,
 			);
 			await input.saveTemplateSnapshot(nextSnapshotId);
 			return await input.machines.provisionSession(
