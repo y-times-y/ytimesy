@@ -207,7 +207,7 @@ export async function sendSubscriptionTask(
 		variant?: string;
 		fast?: boolean;
 		/** The plan model's larger window; absent on internal follow-ups, which inherit it. */
-		largeContext?: boolean;
+		alternateContext?: boolean;
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
@@ -291,9 +291,10 @@ export async function sendSubscriptionTask(
 	// Continuing on a fallback during an outage: the fallback route is checked below.
 	if (!continuing && !view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");
-	const largeContext = input.largeContext ?? inherited?.largeContext === true;
+	const alternateContext =
+		input.alternateContext ?? inherited?.alternateContext === true;
 	if (
-		largeContext &&
+		alternateContext &&
 		!continuing &&
 		!view.models.find((model) => model.id === input.modelId)?.contextWindow
 	)
@@ -303,7 +304,7 @@ export async function sendSubscriptionTask(
 	const revision = subscriptionTurnRevision(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
-		largeContext,
+		alternateContext,
 	);
 	// The send's key is its message id: a replayed request was already queued.
 	if (sendWasQueued(view.items, input.idempotencyKey))

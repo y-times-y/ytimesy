@@ -18,8 +18,8 @@ interface SessionControlsProps {
 	onReasoningIdChange: (id: string) => void;
 	speed: ComposerSpeed;
 	onSpeedChange: (speed: ComposerSpeed) => void;
-	largeContext: boolean;
-	onLargeContextChange: (large: boolean) => void;
+	alternateContext: boolean;
+	onAlternateContextChange: (alternate: boolean) => void;
 	onConnect: () => void;
 	catalogStatus: "loading" | "error" | "ready";
 	providerConnected: boolean;
@@ -39,8 +39,8 @@ export function SessionControls({
 	onReasoningIdChange,
 	speed,
 	onSpeedChange,
-	largeContext,
-	onLargeContextChange,
+	alternateContext,
+	onAlternateContextChange,
 	onConnect,
 	catalogStatus,
 	providerConnected,
@@ -86,20 +86,20 @@ export function SessionControls({
 					onReasoningIdChange={onReasoningIdChange}
 					speed={speed}
 					onSpeedChange={onSpeedChange}
-					largeContext={largeContext}
-					onLargeContextChange={onLargeContextChange}
+					alternateContext={alternateContext}
+					onAlternateContextChange={onAlternateContextChange}
 					onModelIdChange={(id) => {
 						onModelIdChange(id);
 						onReasoningIdChange("");
 						onSpeedChange("");
-						onLargeContextChange(false);
+						onAlternateContextChange(false);
 					}}
 					onHarnessIdChange={(id) => {
 						onHarnessIdChange(id);
 						onModelIdChange("");
 						onReasoningIdChange("");
 						onSpeedChange("");
-						onLargeContextChange(false);
+						onAlternateContextChange(false);
 					}}
 				/>
 				{contextIndicator}

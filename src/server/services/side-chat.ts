@@ -36,7 +36,7 @@ export type SideChatSend = {
 	readonly idempotencyKey: string;
 	readonly variant?: string;
 	readonly speed?: "standard" | "fast" | "ultrafast";
-	readonly largeContext?: boolean;
+	readonly alternateContext?: boolean;
 };
 
 /**
@@ -84,8 +84,8 @@ export async function sendSideChatMessage(
 			idempotencyKey: input.idempotencyKey,
 			...(input.variant ? { variant: input.variant } : {}),
 			...(input.speed ? { speed: input.speed } : {}),
-			...(input.largeContext !== undefined
-				? { largeContext: input.largeContext }
+			...(input.alternateContext !== undefined
+				? { alternateContext: input.alternateContext }
 				: {}),
 		}),
 	);
@@ -178,8 +178,8 @@ async function queueSideTurn(
 		modelId: input.modelId,
 		...(input.variant ? { variant: input.variant } : {}),
 		...(input.speed ? { speed: input.speed } : {}),
-		...(input.largeContext !== undefined
-			? { largeContext: input.largeContext }
+		...(input.alternateContext !== undefined
+			? { alternateContext: input.alternateContext }
 			: {}),
 	});
 }

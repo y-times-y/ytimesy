@@ -21,16 +21,16 @@ export function ModelPickerSettings({
 	onReasoningIdChange,
 	speed,
 	onSpeedChange,
-	largeContext = false,
-	onLargeContextChange,
+	alternateContext = false,
+	onAlternateContextChange,
 }: {
 	model: SessionModel;
 	reasoningId: string;
 	onReasoningIdChange?: (id: string) => void;
 	speed: ComposerSpeed;
 	onSpeedChange?: (speed: ComposerSpeed) => void;
-	largeContext?: boolean;
-	onLargeContextChange?: (large: boolean) => void;
+	alternateContext?: boolean;
+	onAlternateContextChange?: (alternate: boolean) => void;
 }) {
 	const reasoning = resolveReasoningLevel(model, reasoningId);
 	const selectedSpeed = model.speeds.find((option) => option.id === speed);
@@ -81,24 +81,28 @@ export function ModelPickerSettings({
 					/>
 				</div>
 			) : null}
-			{onLargeContextChange && window ? (
+			{onAlternateContextChange && window ? (
 				<div className="model-picker-setting">
 					<Layers size={16} aria-hidden="true" />
 					<span>Context</span>
 					<MenuSelect
-						value={largeContext ? "large" : "standard"}
-						onValueChange={(id) => onLargeContextChange(id === "large")}
+						value={alternateContext ? "alternate" : "standard"}
+						onValueChange={(id) => onAlternateContextChange(id === "alternate")}
 						options={[
 							{
 								value: "standard",
 								label: contextWindowLabel(window.standard),
 							},
 							{
-								value: "large",
-								label: contextWindowLabel(window.large),
-								...(window.costNote ? { title: window.costNote } : {}),
+								value: "alternate",
+								label: contextWindowLabel(window.alternate),
+								...(window.note ? { title: window.note } : {}),
 							},
-						]}
+						].sort(
+							(a, b) =>
+								(a.value === "standard" ? window.standard : window.alternate) -
+								(b.value === "standard" ? window.standard : window.alternate),
+						)}
 						className="model-reasoning-select"
 						side="right"
 						aria-label="Context window"

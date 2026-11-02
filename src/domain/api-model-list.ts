@@ -35,27 +35,28 @@ export type ListedApiModel = {
 	readonly zeroRetention?: boolean;
 	/**
 	 * The maker prices a whole request higher once its prompt reaches this
-	 * many tokens. Its window up to here is the route's standard window; the
-	 * full window is the larger option (context-window-option.ts).
+	 * many tokens. The route runs its full window by default (as benchmarks
+	 * ran); staying under this tier is the opt-in choice
+	 * (context-window-option.ts).
 	 */
 	readonly longContext?: ApiLongContextTier;
 };
 
 export type ApiLongContextTier = {
 	readonly threshold: number;
-	/** How the larger window costs more, from the maker's pricing page. */
-	readonly costNote: string;
+	/** What staying under the tier saves, from the maker's pricing page. */
+	readonly note: string;
 };
 
 /** developers.openai.com/api/docs/pricing: "more than 272K input tokens are priced at 2x input and cache rates and 1.5x output for the full request". */
 const OPENAI_LONG_CONTEXT: ApiLongContextTier = {
 	threshold: 272_000,
-	costNote: "Past 272K: 2× input, 1.5× output price",
+	note: "Stays under the 272K price tier (2× input, 1.5× output past it)",
 };
 /** docs.x.ai/docs/models: prompts reaching 200K are billed at the higher rate ($4/$12 vs $2/$6) for all tokens. */
 const XAI_LONG_CONTEXT: ApiLongContextTier = {
 	threshold: 200_000,
-	costNote: "Past 200K: 2× price",
+	note: "Stays under the 200K price tier (2× price past it)",
 };
 
 const OPENAI_FAST: ApiModelSpeed = {
@@ -124,7 +125,10 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		directId: "claude-haiku-5-5",
 		// platform.claude.com/docs/en/about-claude/pricing: prompts over 100K
 		// cost $0.50/$2.50 instead of $0.10/$0.50 per MTok.
-		longContext: { threshold: 100_000, costNote: "Past 100K: 5× price" },
+		longContext: {
+			threshold: 100_000,
+			note: "Stays under the 100K price tier (5× price past it)",
+		},
 	},
 	{
 		author: "anthropic",

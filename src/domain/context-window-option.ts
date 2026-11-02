@@ -1,16 +1,16 @@
 /**
- * A larger context window a route offers beside its standard one: Codex's
- * `max_context_window`, Claude Code's `[1m]` models, a maker's long-context
- * tier. A model without one never shows the option, so it is never offered
- * where it would do nothing.
+ * A second context window a route offers beside its standard one: a Codex
+ * plan model's larger `max_context_window`, or the cheaper price tier of an
+ * API model whose maker charges more for long prompts. A model without one
+ * never shows the option, so it is never offered where it would do nothing.
  */
 export type ListedContextWindow = {
-	/** The route's default window, in tokens. */
+	/** The route's default window, in tokens: what a turn runs without a choice. */
 	readonly standard: number;
-	/** The larger window the user may choose, in tokens. */
-	readonly large: number;
-	/** One short line on how the larger window costs more, from the maker's docs. */
-	readonly costNote?: string;
+	/** The window the user may choose instead (larger or smaller), in tokens. */
+	readonly alternate: number;
+	/** One short line on what the alternate window means for cost, from the maker's docs. */
+	readonly note?: string;
 };
 
 /** A window as the picker shows it: 272K, 872K, 1M, 1.05M. */
@@ -19,33 +19,34 @@ export function contextWindowLabel(tokens: number): string {
 	return `${Math.round(tokens / 1000)}K`;
 }
 
-/** A listed window, kept only when it is real (a larger window than the standard). */
+/** A listed window, kept only when it is real (a different window than the standard). */
 export function listedContextWindow(
 	value: unknown,
 ): ListedContextWindow | undefined {
 	if (!value || typeof value !== "object") return undefined;
-	const { standard, large, costNote } = value as Record<string, unknown>;
+	const { standard, alternate, note } = value as Record<string, unknown>;
 	if (
 		typeof standard !== "number" ||
-		typeof large !== "number" ||
+		typeof alternate !== "number" ||
 		!Number.isSafeInteger(standard) ||
-		!Number.isSafeInteger(large) ||
+		!Number.isSafeInteger(alternate) ||
 		standard <= 0 ||
-		large <= standard
+		alternate <= 0 ||
+		alternate === standard
 	)
 		return undefined;
 	return {
 		standard,
-		large,
-		...(typeof costNote === "string" && costNote ? { costNote } : {}),
+		alternate,
+		...(typeof note === "string" && note ? { note } : {}),
 	};
 }
 
-/** The window a turn runs with: the larger one only when chosen and offered. */
+/** The window a turn runs with: the alternate one only when chosen and offered. */
 export function chosenContextWindow(
 	option: ListedContextWindow | undefined,
-	largeContext: boolean | undefined,
+	alternateContext: boolean | undefined,
 ): number | undefined {
 	if (!option) return undefined;
-	return largeContext ? option.large : option.standard;
+	return alternateContext ? option.alternate : option.standard;
 }

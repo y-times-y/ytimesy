@@ -228,8 +228,13 @@ export function codexContextWindowOption(
 ): ListedContextWindow | undefined {
 	return listedContextWindow({
 		standard: row.context_window,
-		large: row.max_context_window,
-		costNote: CODEX_LARGE_CONTEXT_NOTE,
+		alternate:
+			row.max_context_window &&
+			row.context_window &&
+			row.max_context_window > row.context_window
+				? row.max_context_window
+				: undefined,
+		note: CODEX_LARGE_CONTEXT_NOTE,
 	});
 }
 /** Longer prompts use more of the plan's limits (developers.openai.com/codex/pricing). */
@@ -246,10 +251,10 @@ export function codexTurnContext(
 		CatalogRow,
 		"context_window" | "max_context_window" | "auto_compact_token_limit"
 	>,
-	largeContext: boolean,
+	alternateContext: boolean,
 ): { contextWindow?: number; autoCompactTokenLimit?: number } {
-	const option = largeContext ? codexContextWindowOption(row) : undefined;
-	if (option) return { contextWindow: option.large };
+	const option = alternateContext ? codexContextWindowOption(row) : undefined;
+	if (option) return { contextWindow: option.alternate };
 	return {
 		contextWindow: row.context_window,
 		autoCompactTokenLimit: row.auto_compact_token_limit ?? undefined,
@@ -415,7 +420,7 @@ export async function codexSubscriptionModel(
 	reasoning?: string,
 	fast = false,
 	cacheScopeId: string = randomUUID(),
-	largeContext = false,
+	alternateContext = false,
 ) {
 	// The catalog and the account's token are independent reads; a catalog
 	// failure is still reported first.
@@ -436,7 +441,7 @@ export async function codexSubscriptionModel(
 		throw new Error(
 			"Fast mode is not available for this model on your ChatGPT plan.",
 		);
-	if (largeContext && !codexContextWindowOption(selected))
+	if (alternateContext && !codexContextWindowOption(selected))
 		throw new Error(
 			"A larger context window is not available for this model on your ChatGPT plan.",
 		);
@@ -532,7 +537,7 @@ export async function codexSubscriptionModel(
 	});
 	return {
 		model,
-		...codexTurnContext(selected, largeContext),
+		...codexTurnContext(selected, alternateContext),
 		// Initial reads use a stable preflight prefix; complete current bodies and
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,

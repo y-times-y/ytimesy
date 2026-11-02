@@ -6,9 +6,9 @@ import { ModelPickerSettings } from "./model-picker-settings";
 
 function settings(
 	contextWindow:
-		| { standard: number; large: number; costNote?: string }
+		| { standard: number; alternate: number; note?: string }
 		| undefined,
-	largeContext: boolean,
+	alternateContext: boolean,
 ) {
 	const [model] = sessionModelsFromListed([
 		{
@@ -22,26 +22,26 @@ function settings(
 			model: model as NonNullable<typeof model>,
 			reasoningId: "",
 			speed: "",
-			largeContext,
-			onLargeContextChange: () => {},
+			alternateContext,
+			onAlternateContextChange: () => {},
 		}),
 	);
 }
 
 describe("context window row", () => {
-	it("shows the chosen window where the route offers a larger one", () => {
+	it("shows the chosen window where the route offers a second one", () => {
 		const option = {
-			standard: 272_000,
-			large: 1_050_000,
-			costNote: "Past 272K: 2× input, 1.5× output price",
+			standard: 1_050_000,
+			alternate: 272_000,
+			note: "Stays under the 272K price tier",
 		};
 		const standard = settings(option, false);
 		expect(standard).toContain("<span>Context</span>");
 		expect(standard).toContain('aria-label="Context window"');
-		expect(standard).toContain("272K");
-		expect(settings(option, true)).toContain("1.05M");
+		expect(standard).toContain("1.05M");
+		expect(settings(option, true)).toContain("272K");
 	});
-	it("shows no row for a model without a larger window", () => {
+	it("shows no row for a model without a second window", () => {
 		expect(settings(undefined, false)).not.toContain("Context");
 	});
 });

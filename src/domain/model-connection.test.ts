@@ -90,29 +90,29 @@ describe("apiContextWindowOption", () => {
 		provider: "compatible" as const,
 		baseUrl: "https://api.x.ai/v1",
 	};
-	it("offers the full window above a maker's long-context price tier", () => {
+	it("keeps the full window by default and offers the cheaper price tier", () => {
 		expect(apiContextWindowOption(openai, "gpt-6.1-sol")).toEqual({
-			standard: 272_000,
-			large: 1_050_000,
-			costNote: "Past 272K: 2× input, 1.5× output price",
+			standard: 1_050_000,
+			alternate: 272_000,
+			note: "Stays under the 272K price tier (2× input, 1.5× output past it)",
 		});
 		expect(
 			apiContextWindowOption(openrouter, "openai/gpt-6-astra"),
-		).toMatchObject({ standard: 272_000, large: 1_050_000 });
+		).toMatchObject({ standard: 1_050_000, alternate: 272_000 });
 		expect(apiContextWindowOption(xai, "grok-4.7")).toMatchObject({
-			standard: 200_000,
-			large: 500_000,
+			standard: 500_000,
+			alternate: 200_000,
 		});
 		expect(apiContextWindowOption(openrouter, "x-ai/grok-4.6")).toMatchObject({
-			standard: 200_000,
-			large: 500_000,
+			standard: 500_000,
+			alternate: 200_000,
 		});
 		expect(
 			apiContextWindowOption(
 				{ provider: "anthropic", baseUrl: "https://api.anthropic.com/v1" },
 				"claude-haiku-5-5",
 			),
-		).toMatchObject({ standard: 100_000, large: 1_000_000 });
+		).toMatchObject({ standard: 1_000_000, alternate: 100_000 });
 	});
 	it("offers nothing where the window is single-priced, a plan, or a custom host", () => {
 		const anthropic = {
@@ -161,8 +161,8 @@ describe("apiContextWindowOption", () => {
 			[],
 		);
 		expect(model?.contextWindow).toMatchObject({
-			standard: 272_000,
-			large: 1_050_000,
+			standard: 1_050_000,
+			alternate: 272_000,
 		});
 	});
 });

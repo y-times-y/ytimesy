@@ -141,9 +141,10 @@ export function apiModelReasoning(
 }
 
 /**
- * The larger window an API route offers: a maker that prices a request
+ * The second window an API route offers: where a maker prices a request
  * higher past a prompt size (OpenAI past 272K, xAI past 200K, Haiku 5.5 past
- * 100K) runs within that size by default, and the full window is the option.
+ * 100K), the route keeps its full window by default, as benchmarks ran it,
+ * and staying under that size is the opt-in choice.
  * Only on the maker's own API or OpenRouter (which bills the maker's tiers),
  * never on a plan sign-in (the Grok plan documents no such tier) or a
  * custom endpoint.
@@ -166,10 +167,12 @@ export function apiContextWindowOption(
 			sameOrigin(connection.baseUrl, DIRECT_MODEL_ENDPOINTS["x-ai"]));
 	if (!official || !officialRouteProvider(connection.provider, modelId))
 		return undefined;
+	const full = knownModelLimits(modelId)?.contextWindow;
+	if (!full || full <= tier.threshold) return undefined;
 	return listedContextWindow({
-		standard: tier.threshold,
-		large: knownModelLimits(modelId)?.contextWindow,
-		costNote: tier.costNote,
+		standard: full,
+		alternate: tier.threshold,
+		note: tier.note,
 	});
 }
 
