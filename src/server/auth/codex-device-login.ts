@@ -216,7 +216,20 @@ export async function advanceCodexDeviceLogin(
 		});
 		// The issuer answers 403/404 until the user approves the code.
 		if (poll.status === 403 || poll.status === 404) {
-			await poll.body?.cancel().catch(() => {});
+			// Its error code says why (pending, not found, denied); never the ids.
+			const reason = await poll
+				.text()
+				.then(
+					(text) => /"code"\s*:\s*"([a-z_]{1,64})"/.exec(text)?.[1] ?? "none",
+				)
+				.catch(() => "unreadable");
+			console.info("ChatGPT device sign-in still waiting.", {
+				status: poll.status,
+				reason,
+				codeAgeSeconds: Math.round(
+					(now - (login.expiresAt - 15 * 60_000)) / 1000,
+				),
+			});
 			await client.query(
 				"update agent_account set encrypted_device_login=$2,updated_at=now() where user_id=$1 and provider='codex'",
 				[
@@ -234,6 +247,7 @@ export async function advanceCodexDeviceLogin(
 		}
 		if (!poll.ok) {
 			await poll.body?.cancel().catch(() => {});
+			console.warn("ChatGPT device sign-in refused.", { status: poll.status });
 			return await finish({
 				status: "failed",
 				message: "ChatGPT sign-in was not approved. Sign in again.",
@@ -253,6 +267,9 @@ export async function advanceCodexDeviceLogin(
 		);
 		if (!exchange.ok) {
 			await exchange.body?.cancel().catch(() => {});
+			console.warn("ChatGPT sign-in token exchange failed.", {
+				status: exchange.status,
+			});
 			return await finish({
 				status: "failed",
 				message: "ChatGPT sign-in could not be completed. Sign in again.",
