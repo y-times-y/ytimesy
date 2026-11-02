@@ -103,6 +103,8 @@ for (const name of [
 	// The account whose login probes Codex egress paths every 5 minutes.
 	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
 	"YTIMESY_PR_REPAIR_ENABLED",
+	// SuperGrok subscription sign-in and turns (off unless "1").
+	"YTIMESY_XAI_SUBSCRIPTION_ENABLED",
 	// Cloudflare Email Service sender for verification and password-reset mail.
 	"AUTH_EMAIL_FROM",
 	"CLOUDFLARE_EMAIL_ACCOUNT_ID",

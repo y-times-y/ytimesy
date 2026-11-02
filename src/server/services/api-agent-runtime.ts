@@ -22,7 +22,10 @@ import {
 	runModelAgent,
 	runModelAgentStep,
 } from "./model-agent-loop";
-import { availableApiModelRoutes, connectionApiKey } from "./model-connections";
+import {
+	availableApiModelRoutes,
+	connectionModelAccess,
+} from "./model-connections";
 
 export type { ApiAgentEvent, ModelAgentInput } from "./model-agent-loop";
 export { runModelAgent } from "./model-agent-loop";
@@ -99,13 +102,17 @@ async function prepareApiModel<T>(
 	const transport = modelEndpointTransport(connection.baseUrl);
 	try {
 		onStage("credential");
-		const apiKey = await connectionApiKey(input.userId, connection);
+		const access = await connectionModelAccess(
+			input.userId,
+			connection,
+			transport.fetch,
+		);
 		return await run(
 			await apiModelRuntime(
 				{
 					provider: connection.provider,
 					baseUrl: connection.baseUrl,
-					apiKey,
+					apiKey: access.apiKey,
 					modelId: input.modelId,
 					speed: input.speed,
 					userId: input.userId,
@@ -122,7 +129,7 @@ async function prepareApiModel<T>(
 					)?.contextWindow,
 					reasoning: input.reasoning,
 					maxOutputTokens: input.maxOutputTokens,
-					fetch: transport.fetch,
+					fetch: access.fetch,
 				},
 				onStage,
 			),

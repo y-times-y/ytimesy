@@ -9,6 +9,9 @@ vi.mock("@tanstack/react-start", () => ({
 vi.mock("../sessions/chatgpt-sign-in", () => ({
 	ChatgptSignIn: () => <button type="button">Sign in with ChatGPT</button>,
 }));
+vi.mock("../sessions/xai-subscription-sign-in", () => ({
+	XaiSubscriptionSignIn: () => <button type="button">Sign in with xAI</button>,
+}));
 vi.mock("../sessions/codex-session.fn", () => ({
 	pollCodexLogin: vi.fn(),
 	startChatgptSignIn: vi.fn(),
@@ -78,6 +81,24 @@ it("offers the Codex subscription or an API key, and Later until one is set", ()
 		</QueryClientProvider>,
 	);
 	expect(ready).not.toContain("Later");
+});
+
+it("offers SuperGrok only while its feature switch is on", () => {
+	const off = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ModelStep ready={false} />
+		</QueryClientProvider>,
+	);
+	expect(off).not.toContain("SuperGrok");
+	expect(off).not.toContain("Sign in with xAI");
+	const on = renderToStaticMarkup(
+		<QueryClientProvider client={new QueryClient()}>
+			<ModelStep ready={false} xaiSubscription />
+		</QueryClientProvider>,
+	);
+	expect(on).toContain("Your SuperGrok subscription");
+	expect(on).toContain("Sign in with xAI");
+	expect(on).toContain('data-count="3"');
 });
 
 import { SessionsStep } from "./first-run";

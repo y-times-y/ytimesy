@@ -82,3 +82,32 @@ it("pins an approved fallback for the follow-up turn, whatever the paid-key sett
 		pinnedTurnFailover("owner", original, "codex|gpt-6.1-sol"),
 	).rejects.toThrow("no longer available");
 });
+
+import { apiFailoverConnections } from "./model-failover";
+
+it("offers a SuperGrok subscription as a prepaid fallback only while it is ready", () => {
+	const supergrok = {
+		id: "00000000-0000-4000-8000-0000000000a1",
+		provider: "compatible" as const,
+		label: "SuperGrok",
+		baseUrl: "https://api.x.ai/v1",
+		revision: "sg-rev",
+		models: [
+			{ id: "grok-4.7", label: "Grok 4.7", toolStreamingVerified: false },
+		],
+		subscription: { provider: "xai" as const, status: "ready" as const },
+	};
+	const [ready] = apiFailoverConnections([supergrok], []);
+	expect(ready).toMatchObject({ kind: "plan", label: "SuperGrok" });
+	expect(ready.models.map((model) => model.id)).toEqual(["grok-4.7"]);
+	const [waiting] = apiFailoverConnections(
+		[
+			{
+				...supergrok,
+				subscription: { provider: "xai", status: "reconnect" },
+			},
+		],
+		[],
+	);
+	expect(waiting.models).toEqual([]);
+});

@@ -168,9 +168,11 @@ export function ApiModelBrowser({
 								{available.map((connection) => (
 									<SelectItem key={connection.id} value={connection.id}>
 										{connection.label} ·{" "}
-										{connection.provider === "openrouter"
-											? "OpenRouter"
-											: "Direct API"}
+										{connection.subscription
+											? "Subscription"
+											: connection.provider === "openrouter"
+												? "OpenRouter"
+												: "Direct API"}
 									</SelectItem>
 								))}
 							</SelectContent>

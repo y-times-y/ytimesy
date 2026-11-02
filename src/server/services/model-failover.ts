@@ -14,6 +14,7 @@ import {
 	failoverConnectionKind,
 	type ModelRoute,
 	nextTurnFailover,
+	prepaidKind,
 	type RouteLabel,
 	routeConnectionKey,
 	routeKey,
@@ -65,7 +66,12 @@ export function apiFailoverConnections(
 		provider: connection.provider,
 		baseUrl: connection.baseUrl,
 		revision: connection.revision,
-		models: connectionModels(connection, browsed).map((model) => {
+		// A subscription waiting for the user to sign in again serves nothing.
+		models: (connection.subscription &&
+		connection.subscription.status !== "ready"
+			? []
+			: connectionModels(connection, browsed)
+		).map((model) => {
 			const reasoning = apiModelReasoning(connection.provider, model.id);
 			return {
 				id: model.id,
@@ -165,6 +171,12 @@ export async function planModelFailover(input: {
 			candidates,
 			askBeforePaid: preferences.askBeforePaid,
 			canAsk: !input.child,
+			servingPrepaid:
+				serving.connectionId === null ||
+				prepaidKind(
+					connections.find((row) => row.key === serving.connectionId)?.kind ??
+						"key",
+				),
 		}),
 		failing,
 		previous,

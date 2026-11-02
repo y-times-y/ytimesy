@@ -119,6 +119,8 @@ export function ModelConnections({
 		onSuccess: update,
 	});
 	const busy = save.isPending || verify.isPending;
+	// A SuperGrok subscription has its own card above; this list is API keys.
+	const keys = connections.data?.filter((row) => !row.subscription);
 	const [adding, setAdding] = useState(startAdding);
 	const formOpen = adding || Boolean(replacing);
 	function closeForm() {
@@ -153,9 +155,9 @@ export function ModelConnections({
 			{connections.isError ? (
 				<p role="alert">Could not load your API keys. Please retry.</p>
 			) : null}
-			{connections.data?.length ? (
+			{keys?.length ? (
 				<ul className="settings-group">
-					{connections.data.map((connection) => {
+					{keys.map((connection) => {
 						const connectionChoice = connectionKeyChoice(connection);
 						const visibleIds = new Set(
 							availableConnectionModels(
@@ -268,7 +270,7 @@ export function ModelConnections({
 						);
 					})}
 				</ul>
-			) : connections.data && !formOpen ? (
+			) : keys && !formOpen ? (
 				<div className="settings-group settings-empty">No API keys yet.</div>
 			) : null}
 			{formOpen ? (
