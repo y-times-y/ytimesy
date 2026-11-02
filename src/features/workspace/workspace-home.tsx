@@ -252,7 +252,13 @@ import {
 import { prefetchWorkspaceFiles } from "./files-inspector";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
-import { MemoryPage, type MemoryView, prefetchMemoryPage } from "./memory-page";
+import {
+	DEFAULT_MEMORY_VIEW,
+	MemoryPage,
+	type MemoryView,
+	prefetchMemoryPage,
+	readSavedMemoryView,
+} from "./memory-page";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar, type SidebarAccount } from "./project-sidebar";
 import {
@@ -573,8 +579,13 @@ export function WorkspaceHome({
 	}, [chatCache, listedChatIds]);
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
 	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
-	/** The Memory page's view; the folder tree first, the list kept while open. */
-	const [memoryView, setMemoryView] = useState<MemoryView>("tree");
+	/** The Memory page's view: Blocks first, then this browser's last choice. */
+	const [memoryView, setMemoryView] = useState<MemoryView>(DEFAULT_MEMORY_VIEW);
+	/** Opens the Memory page in its saved view, in one update: no snap. */
+	const openMemoryPage = () => {
+		setMemoryView(readSavedMemoryView());
+		setMemoryPageOpen(true);
+	};
 	const startSession = useServerFn(startProjectAgentSession);
 	const prewarmSession = useServerFn(prewarmProjectAgentSession);
 	/** Chats whose machine copy was already asked for in this page. */
@@ -3051,7 +3062,7 @@ export function WorkspaceHome({
 			id: "memory",
 			group: "Actions",
 			label: "Open memory",
-			run: () => setMemoryPageOpen(true),
+			run: openMemoryPage,
 		},
 		{
 			id: "model",
@@ -3157,7 +3168,7 @@ export function WorkspaceHome({
 							openChat(chatId);
 						}}
 						onOpenMemory={() => {
-							setMemoryPageOpen(true);
+							openMemoryPage();
 							if (compact) setProjectsOpen(false);
 						}}
 						memoryActive={memoryPageOpen}
