@@ -1,31 +1,78 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { readMemoryFn } from "./memory.fn";
+import { readMemoryFn, readMemoryGraphFn } from "./memory.fn";
+import { MemoryGraphPage } from "./memory-graph-page";
 import { MemoryInspector, type MemoryViewProject } from "./memory-inspector";
 import "./memory-inspector.css";
 
-export type MemoryView = "tree" | "list";
+export type MemoryView = "blocks" | "files";
 
-/** Reads what the Memory page shows before it opens; its queries then answer from the cache. */
+/** This browser's last Memory page view. */
+export const MEMORY_VIEW_KEY = "yt.memory.view";
+export const DEFAULT_MEMORY_VIEW: MemoryView = "blocks";
+
+export function parseMemoryView(raw: string | null): MemoryView {
+	return raw === "files" ? "files" : DEFAULT_MEMORY_VIEW;
+}
+
+/**
+ * The view to open the Memory page in. The page never renders on the
+ * server (it opens from the sidebar), so reading it as the page opens, in
+ * the same update, makes its first paint the final one.
+ */
+export function readSavedMemoryView(): MemoryView {
+	try {
+		return parseMemoryView(window.localStorage.getItem(MEMORY_VIEW_KEY));
+	} catch {
+		return DEFAULT_MEMORY_VIEW;
+	}
+}
+
+export function saveMemoryView(view: MemoryView) {
+	try {
+		window.localStorage.setItem(MEMORY_VIEW_KEY, view);
+	} catch {
+		// No storage: the page opens in Blocks next time.
+	}
+}
+
+/**
+ * Reads what the Memory page shows first (the files, then the chat titles
+ * the Blocks card names) before it opens; its queries then answer from the
+ * cache.
+ */
 export function prefetchMemoryPage(queryClient: QueryClient) {
 	void queryClient
-		.prefetchQuery({ queryKey: ["memory"], queryFn: () => readMemoryFn() })
+		.fetchQuery({ queryKey: ["memory"], queryFn: () => readMemoryFn() })
+		.then((memory) =>
+			memory.available
+				? queryClient.prefetchQuery({
+						queryKey: ["memory-graph", memory.files],
+						queryFn: () => readMemoryGraphFn(),
+						staleTime: 60_000,
+					})
+				: undefined,
+		)
 		.catch(() => undefined);
 }
 
 const VIEWS: readonly { value: MemoryView; label: string; hint: string }[] = [
 	{
-		value: "tree",
-		label: "Folders",
-		hint: "Personal, then each project, as the memory repo holds them",
+		value: "blocks",
+		label: "Blocks",
+		hint: "One block per folder, newest first",
 	},
-	{ value: "list", label: "List", hint: "Every line, by topic or newest" },
+	{
+		value: "files",
+		label: "Files",
+		hint: "The memory repo's folders and files, with history",
+	},
 ];
 
 /**
- * The one full-page Memory view from the left sidebar: the repo's folder
- * tree by default (Personal, each project, their topic files), the
- * searchable list one switch away. Both render on the server as they will
- * on the client: the tree's folders are open <details>, no layout step.
+ * The one full-page Memory view from the left sidebar: Blocks by default
+ * (one block of squares per folder: Personal, then each project), the
+ * repo's folder tree with per-file history one switch away. Both lay out
+ * from the data alone, so the first render is the final one.
  */
 export function MemoryPage({
 	view,
@@ -52,20 +99,27 @@ export function MemoryPage({
 							type="button"
 							title={option.hint}
 							aria-pressed={view === option.value}
-							onClick={() => onViewChange(option.value)}
+							onClick={() => {
+								saveMemoryView(option.value);
+								onViewChange(option.value);
+							}}
 						>
 							{option.label}
 						</button>
 					))}
 				</fieldset>
 			</header>
-			<MemoryInspector
-				active
-				layout="page"
-				arrangement={view === "tree" ? "tree" : "list"}
-				projects={projects}
-				onOpenChat={onOpenChat}
-			/>
+			{view === "blocks" ? (
+				<MemoryGraphPage active projects={projects} onOpenChat={onOpenChat} />
+			) : (
+				<MemoryInspector
+					active
+					layout="page"
+					arrangement="tree"
+					projects={projects}
+					onOpenChat={onOpenChat}
+				/>
+			)}
 		</section>
 	);
 }
