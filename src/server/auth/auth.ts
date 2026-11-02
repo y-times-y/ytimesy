@@ -43,7 +43,10 @@ import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
  */
 export const oauthAccountPolicy = {
 	encryptOAuthTokens: true,
-	accountLinking: { enabled: false },
+	// GitHub or Google may sign into an email account with the same address.
+	// Both sides must already have verified that email. Providers are not
+	// trusted blindly, so an unverified address cannot take the account over.
+	accountLinking: { enabled: true, requireLocalEmailVerified: true },
 	storeStateStrategy: "database" as const,
 };
 

@@ -52,7 +52,10 @@ it("turns OAuth callback failures into a retryable sign-in message", () => {
 		"Sign-in was interrupted. Try again from this page.",
 	);
 	expect(authCallbackErrorMessage("unable_to_link_account")).toBe(
-		"That email already uses a different sign-in method.",
+		"That email already uses a different sign-in method. Sign in with it once that email is verified, then try GitHub again.",
+	);
+	expect(authCallbackErrorMessage("account_not_linked")).toBe(
+		"That email already uses a different sign-in method. Sign in with it once that email is verified, then try GitHub again.",
 	);
 	expect(authCallbackErrorMessage("unknown")).toBe(
 		"Sign-in did not complete. Try again.",
