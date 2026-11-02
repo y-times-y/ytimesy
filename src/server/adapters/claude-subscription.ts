@@ -29,7 +29,9 @@ export type ClaudeSubscriptionStatus =
  * shape is checked here; Anthropic decides whether it works on first use.
  */
 export function normalizedSetupToken(value: string): string | null {
-	const token = value.trim().replace(/^["']|["']$/g, "");
+	// The terminal wraps the long token; a copy picks up line breaks and
+	// spaces, and a token never contains whitespace.
+	const token = value.replace(/\s+/g, "").replace(/^["']|["']$/g, "");
 	return /^sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,400}$/.test(token) ? token : null;
 }
 

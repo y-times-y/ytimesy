@@ -186,3 +186,11 @@ describe("Claude subscription", () => {
 		).rejects.toThrow();
 	});
 });
+
+it("accepts a setup token the terminal wrapped across lines", () => {
+	const token = `sk-ant-oat01-${"a".repeat(40)}_${"B".repeat(40)}-AA`;
+	const wrapped = `${token.slice(0, 50)}\n  ${token.slice(50, 80)}\r\n${token.slice(80)} \n`;
+	expect(normalizedSetupToken(wrapped)).toBe(token);
+	expect(normalizedSetupToken(`"${token}"`)).toBe(token);
+	expect(normalizedSetupToken("not a token")).toBeNull();
+});
