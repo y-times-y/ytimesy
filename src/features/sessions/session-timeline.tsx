@@ -43,6 +43,7 @@ import {
 import { commandActivityTitle } from "#/domain/command-activity-title";
 import { mcpServerLabel, mcpToolLabel } from "#/domain/connector-name";
 import { fileChangeTotals } from "#/domain/diff-preview";
+import { isSetupRequestMessage } from "#/domain/environment-setup";
 import {
 	fileChangeActivity,
 	fileChangeActivityTitle,
@@ -89,6 +90,11 @@ import {
 	sameJsonValue,
 } from "#/domain/unchanged-items";
 import { userQuestionReply } from "#/domain/user-question";
+import {
+	SetupProjectContext,
+	SetupRequestItem,
+	SetupRequestRow,
+} from "#/features/projects/environment-build-progress";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { HandoffCard } from "../local-import/handoff-card";
@@ -173,12 +179,15 @@ export function SessionTimeline({
 	readPastedText,
 	olderItems,
 	trailing,
+	setupProjectId,
 }: {
 	/**
 	 * Shown after everything else: a message waiting for the project's setup,
 	 * with the setup's progress (workspace-home.tsx).
 	 */
 	trailing?: ReactNode;
+	/** The chat's project: a setup chat shows its build under the setup's request. */
+	setupProjectId?: string;
 	/**
 	 * The chat holds turns before `items`: they load as the reader nears the
 	 * top, and the message being read stays where it is.
@@ -480,6 +489,7 @@ export function SessionTimeline({
 		<TimelineProviders
 			memoryActions={stableMemoryActions}
 			readPastedText={readPasted}
+			setupProjectId={setupProjectId}
 		>
 			<SenderContext.Provider value={senderName ?? null}>
 				<AgentMentionContext.Provider value={mentions}>
@@ -680,16 +690,20 @@ function textLines(text: string, perLine: number) {
 function TimelineProviders({
 	memoryActions,
 	readPastedText,
+	setupProjectId,
 	children,
 }: {
 	memoryActions?: MemoryMarkerActions;
 	readPastedText?: (attachmentId: string) => Promise<PastedTextPreview>;
+	setupProjectId?: string;
 	children: ReactNode;
 }) {
 	return (
 		<MemoryMarkerProvider actions={memoryActions}>
 			<PastedTextReader.Provider value={readPastedText ?? null}>
-				{children}
+				<SetupProjectContext.Provider value={setupProjectId ?? null}>
+					{children}
+				</SetupProjectContext.Provider>
 			</PastedTextReader.Provider>
 		</MemoryMarkerProvider>
 	);
@@ -881,6 +895,8 @@ const QueuedMessage = memo(function QueuedMessage({
 	const [draft, setDraft] = useState<string | null>(null);
 	const editing = draft !== null;
 	const shown = (draft ?? item.text).trim();
+	// The setup's request waiting its turn: one line, not its paragraph.
+	if (isSetupRequestMessage(item.text)) return <SetupRequestRow />;
 	return (
 		<div className="session-message" data-role="user" data-queued="true">
 			<MessageAttachments attachments={item.attachments} />
@@ -1134,6 +1150,8 @@ function SessionItemView({
 					</LazyDetails>
 				);
 			}
+			// The setup's own request: one line and the build it ran after.
+			if (isSetupRequestMessage(item.text)) return <SetupRequestItem />;
 			return (
 				<div className="session-message" data-role="user">
 					<MessageAttachments attachments={item.attachments} />

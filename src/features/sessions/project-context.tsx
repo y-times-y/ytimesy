@@ -4,6 +4,7 @@ import { Sparkles } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { offersEnvironmentSetup } from "#/domain/environment-detection";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
+import { RERUN_SETUP_LABEL } from "#/domain/environment-setup";
 import type { Project } from "../../domain/projects";
 import { getProjectEnvironmentFn } from "../projects/environment.fn";
 import {
@@ -32,7 +33,7 @@ export function ProjectContext({
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
 	projectLocked?: boolean;
-	/** Starts the environment setup; shown on a new chat until a setup is saved. */
+	/** Reruns project setup; shown on a new chat until a setup is saved. */
 	onSetUpEnvironment?: () => void;
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
@@ -84,9 +85,10 @@ export function ProjectContext({
 }
 
 /**
- * "Set up environment", until one of the project's repositories has a setup
- * of its own (saved, or its .ytimesy/environment.json). Read again whenever
- * a build finishes, so a setup just saved hides it.
+ * "Rerun setup", until one of the project's repositories has a setup of its
+ * own (saved, or its .ytimesy/environment.json). Read again whenever a build
+ * finishes, so a setup just saved hides it. Hidden while the project's first
+ * setup runs: that has its own chat.
  */
 function SetUpEnvironmentChip({
 	projectId,
@@ -118,11 +120,12 @@ function SetUpEnvironmentChip({
 		});
 	}, [buildKey, projectId, queryClient]);
 	if (!environment.data) return null;
+	if (workspace.data?.status !== "ready") return null;
 	if (!offersEnvironmentSetup(environment.data.repositories)) return null;
 	return (
 		<button type="button" className="environment-chip" onClick={onSetUp}>
 			<Sparkles size={13} />
-			Set up environment
+			{RERUN_SETUP_LABEL}
 		</button>
 	);
 }

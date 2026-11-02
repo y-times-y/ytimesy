@@ -12,6 +12,7 @@ import {
 	detectedSetupLine,
 	type RepositorySetup,
 } from "#/domain/environment-detection";
+import { RERUN_SETUP_LABEL } from "#/domain/environment-setup";
 import {
 	type EnvironmentRecipe,
 	unverifiedItemDetails,
@@ -38,7 +39,7 @@ export const environmentQueryKey = (projectId: string) =>
 
 /** The setup button's tooltip: what pressing it does, in one line. */
 export const ENVIRONMENT_SETUP_BUTTON_TITLE =
-	"The agent installs, builds and tests this project in a new chat, then saves the setup here.";
+	"Runs project setup again in a new chat: the agent checks install, build and tests, then saves the setup here.";
 
 const SOURCE = {
 	agent: "Set up by the agent",
@@ -85,7 +86,7 @@ export function EnvironmentSettings({
 						title={ENVIRONMENT_SETUP_BUTTON_TITLE}
 						onClick={onSetUpWithAgent}
 					>
-						Set up in new chat
+						{RERUN_SETUP_LABEL}
 					</button>
 				) : null}
 			</header>

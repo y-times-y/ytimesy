@@ -78,7 +78,7 @@ it("tells the agent to install what it needs only when no setup was verified", (
 	const none = environmentSetupNotice([repo({ source: "none" })]);
 	expect(none).toContain("org/app: no saved environment setup");
 	expect(none).toContain("Install what this task needs yourself");
-	expect(none).toContain("Set up environment");
+	expect(none).toContain("Rerun setup");
 	expect(environmentSetupNotice([repo({ source: "plain" })])).toContain(
 		"setup was skipped",
 	);
@@ -116,7 +116,7 @@ it("says in Settings what the active build actually detected", () => {
 	).toBe("Not set up yet: Rust install failed (exit 101).");
 });
 
-it("offers Set up environment until a repository has a saved or committed setup", () => {
+it("offers Rerun setup until a repository has a saved or committed setup", () => {
 	expect(offersEnvironmentSetup([{ saved: null, setup: null }])).toBe(true);
 	expect(
 		offersEnvironmentSetup([{ saved: null, setup: { source: "detected" } }]),

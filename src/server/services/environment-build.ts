@@ -509,13 +509,22 @@ export async function prepareEnvironmentRepositories(
 			"done",
 			reused ? { note: "Updated the existing checkout" } : {},
 		);
+		const detectStep = `detect:${id}`;
+		await steps.start(detectStep, "Detecting the stack");
 		const listing = await host.exec(`ls -1 ${quote(directory)}`, 15_000);
 		const files = listing.stdout.split("\n").map((line) => line.trim());
 		const chosen = await chooseRepositorySetup(input, repo, directory, files, {
 			exec: host.exec,
 			event,
+		}).catch(async (cause: unknown) => {
+			if (!(cause instanceof ResumeLater))
+				await steps.finish(detectStep, "failed");
+			throw cause;
 		});
 		const { recipe, source, detected } = chosen;
+		await steps.finish(detectStep, source === "plain" ? "skipped" : "done", {
+			note: detectedStackNote(source, detected),
+		});
 		const setup: RepositorySetup = {
 			repositoryId: repo.repositoryId,
 			fullName: repo.fullName,
@@ -725,6 +734,17 @@ async function chooseRepositorySetup(
 		detected,
 		install: detected.install,
 	};
+}
+
+/** What the detect step says it found, in a few words. */
+export function detectedStackNote(
+	source: EnvironmentSetupSource,
+	detected: Pick<DetectedEnvironment, "label"> | null,
+) {
+	if (source === "plain") return "Setup skipped";
+	if (source === "saved") return "Saved setup";
+	if (source === "file") return ENVIRONMENT_RECIPE_PATH;
+	return detected?.label ?? "Nothing to install detected";
 }
 
 export function assertDistinctEnvironmentServicePorts(
