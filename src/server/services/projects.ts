@@ -12,6 +12,7 @@ import {
 	projectFolderName,
 	projectMachineRefsToDestroy,
 	type RepositoryChoice,
+	repositoriesForProject,
 } from "../../domain/projects";
 import {
 	isGeneratedSessionBranch,
@@ -46,6 +47,7 @@ import {
 import { githubAccessToken } from "../auth/github-connection";
 import { CLEANUP_CONCURRENCY, eachLimited } from "./account-deletion";
 import { cancelServerTurn } from "./cancel-server-turn";
+import { removeRepositoryDependencyCaches } from "./dependency-cache";
 import { rejectRequest } from "./errors";
 import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -329,6 +331,16 @@ export async function removeProjectMachine(
 	await removeHandoffObjects(input.userId, input.projectId).catch(() => {
 		throw new Response(
 			"The project was not removed because its imported sessions could not be deleted. Try again.",
+			{ status: 503 },
+		);
+	});
+	// Installed dependencies kept between its builds (they may hold private packages).
+	await removeRepositoryDependencyCaches(
+		input.userId,
+		repositoriesForProject(project).map((repo) => repo.repositoryId),
+	).catch(() => {
+		throw new Response(
+			"The project was not removed because its saved dependencies could not be deleted. Try again.",
 			{ status: 503 },
 		);
 	});

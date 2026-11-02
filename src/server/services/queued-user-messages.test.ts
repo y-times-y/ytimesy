@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(async (_job: unknown) => true),
 	markSetup: vi.fn(async (..._args: unknown[]) => true),
 	otherSetup: vi.fn(async (..._args: unknown[]) => null as string | null),
+	claimSetup: vi.fn(async (..._args: unknown[]) => null as unknown),
 }));
 vi.mock("../adapters/environment-setup-chats", () => ({
 	markEnvironmentSetupChat: mocks.markSetup,
@@ -47,6 +48,7 @@ vi.mock("../adapters/agent-sessions", () => ({
 	claimChatForSend: mocks.claim,
 	reusableEmptyChat: mocks.reusable,
 	insertAgentSession: mocks.insert,
+	claimInitialSetupChat: mocks.claimSetup,
 }));
 vi.mock("../adapters/workspaces", () => ({
 	workspaceForProject: mocks.workspace,

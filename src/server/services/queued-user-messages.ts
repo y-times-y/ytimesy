@@ -21,6 +21,7 @@ import {
 	agentSessionForOwner,
 	agentSessionPageForOwner,
 	claimChatForSend,
+	claimInitialSetupChat,
 	insertAgentSession,
 	reusableEmptyChat,
 } from "../adapters/agent-sessions";
@@ -82,31 +83,48 @@ function harnessTask(
  */
 export function sendComposerMessage(
 	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
+	requested: HarnessSessionScope,
 	input: ComposerSend,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.flatMap(
-		Effect.promise(async () => {
-			const started = await initialSetupStarted(scope, input);
-			if (started) return { view: started };
-			const queued = await timed("send:queueCheck", () =>
-				queueBehindRunningTurn(scope, input),
-			);
-			if ("view" in queued) return queued;
-			const held = await holdUntilEnvironmentReady(
-				machines,
-				scope,
-				input,
-				queued,
-			);
-			return held ? { view: held } : queued;
-		}),
+		Effect.promise(
+			async (): Promise<
+				| { readonly view: PublicCodexSession }
+				| {
+						readonly storedAttachments?: readonly MessageAttachment[];
+						readonly session?: AgentSessionRecord | null;
+						readonly scope: HarnessSessionScope;
+				  }
+			> => {
+				const started = await initialSetupStarted(requested, input);
+				if (started && "view" in started) return { view: started.view };
+				// A project's own setup start sends into the chat it claimed.
+				const scope = started?.scope ?? requested;
+				const queued = await timed("send:queueCheck", () =>
+					queueBehindRunningTurn(scope, input),
+				);
+				if ("view" in queued) return queued;
+				const held = await holdUntilEnvironmentReady(
+					machines,
+					scope,
+					input,
+					queued,
+				);
+				return held
+					? { view: held }
+					: {
+							storedAttachments: queued.storedAttachments,
+							session: queued.session,
+							scope,
+						};
+			},
+		),
 		(queued) =>
 			"view" in queued
 				? Effect.succeed(queued.view)
 				: sendHarnessWorkspaceTask(
 						machines,
-						scope,
+						queued.scope,
 						{
 							...harnessTask(input),
 							...(queued.storedAttachments
@@ -126,11 +144,19 @@ export function sendComposerMessage(
  * project's own message id (initialSetupMessageId). Another start of it (a
  * second tab, a reload, a retried request) gets the chat that already has
  * it instead of a second setup.
+ *
+ * A start into a new chat claims the project's one setup chat in the
+ * database (claimInitialSetupChat: a fixed id, insert or get), so two
+ * starts at the same moment get one chat, and only the start that created
+ * it sends: one turn. A chat a start created but never sent into (its
+ * request died) is taken over by the next start after a short while.
  */
 async function initialSetupStarted(
 	scope: HarnessSessionScope,
 	input: ComposerSend,
-): Promise<PublicCodexSession | null> {
+): Promise<
+	{ view: PublicCodexSession } | { scope: HarnessSessionScope } | null
+> {
 	if (
 		!input.environmentSetup ||
 		// Its own delivery once the environment is ready is not another start.
@@ -139,22 +165,51 @@ async function initialSetupStarted(
 		input.idempotencyKey !== initialSetupMessageId(scope.projectId)
 	)
 		return null;
+	const projectId = scope.projectId;
 	const current = scope.createNew ? null : (scope.sessionId ?? null);
 	const holding = await chatHoldingMessage(
 		scope.userId,
-		scope.projectId,
+		projectId,
 		input.idempotencyKey,
 	);
 	const existing =
 		holding && holding !== current
 			? holding
-			: await otherProjectSetupChat(scope.userId, scope.projectId, current);
-	if (!existing) return null;
-	return publicSessionView({
-		...scope,
-		sessionId: existing,
-		createNew: false,
+			: await otherProjectSetupChat(scope.userId, projectId, current);
+	if (existing)
+		return {
+			view: await publicSessionView({
+				...scope,
+				sessionId: existing,
+				createNew: false,
+			}),
+		};
+	if (current) return null;
+	const workspace = await workspaceForProject(scope.userId, projectId);
+	if (!workspace) return null;
+	const claimed = await claimInitialSetupChat({
+		userId: scope.userId,
+		projectId,
+		workspaceId: workspace.id,
+		harness: scope.harnessId,
+		title: sessionTitleFromText(input.text),
 	});
+	if (!claimed) return null;
+	const own = { ...scope, sessionId: claimed.session.id, createNew: false };
+	if (claimed.created || (await setupStartAbandoned(claimed.session, input)))
+		return { scope: own };
+	return { view: await publicSessionView(own) };
+}
+
+/** A start's chat that never got its request (the start died before sending). */
+async function setupStartAbandoned(
+	session: AgentSessionRecord,
+	input: ComposerSend,
+) {
+	if (Date.now() - new Date(session.createdAt).getTime() < 30_000) return false;
+	if (sessionItemsFromUnknown(session.items).length) return false;
+	const waiting = await queuedUserMessageItems(session.id);
+	return !waiting.some((item) => item.id === input.idempotencyKey);
 }
 
 async function queueBehindRunningTurn(
