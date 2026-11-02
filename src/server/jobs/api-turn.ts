@@ -33,6 +33,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { isDevelopmentEnvironment } from "#/domain/development-environment";
 import { fusionPairFor } from "#/domain/fusion-pairs";
 import {
 	leadReasoningEffort,
@@ -2518,8 +2519,7 @@ async function runApiTurnAttempt(
 				stage: coordinationFailure ? "coordination" : failureStage,
 				...apiTurnFailureClassification(coordinationFailure ?? error),
 				// Development diagnostics only: messages can contain provider details.
-				...(process.env.YTIMESY_DEBUG_TURN_ERRORS === "1" &&
-				error instanceof Error
+				...(debugTurnErrors() && error instanceof Error
 					? {
 							debug: `${error.name}: ${error.message}`.slice(0, 400),
 							stack: error.stack?.split("\n").slice(0, 6).join(" | "),
@@ -3024,13 +3024,16 @@ class TurnTimeLimitReached extends Error {
 	}
 }
 
+/** YTIMESY_DEBUG_TURN_ERRORS=1, honoured only in development: provider details can leak. */
+function debugTurnErrors() {
+	return (
+		process.env.YTIMESY_DEBUG_TURN_ERRORS === "1" && isDevelopmentEnvironment()
+	);
+}
+
 /** Development diagnostics only (YTIMESY_DEBUG_TURN_ERRORS=1): the provider's own error. */
 function developmentFailureDetail(error: unknown) {
-	if (
-		process.env.YTIMESY_DEBUG_TURN_ERRORS !== "1" ||
-		!(error instanceof Error)
-	)
-		return "";
+	if (!debugTurnErrors() || !(error instanceof Error)) return "";
 	const inner = (error as { providerError?: unknown }).providerError;
 	const detail =
 		inner instanceof Error
