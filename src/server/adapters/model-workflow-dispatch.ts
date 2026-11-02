@@ -1,22 +1,18 @@
-import { createHmac } from "node:crypto";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { edgeSigningSecret } from "#/domain/edge-signing-secret";
 import type { ApiTurn } from "./api-turns";
 import { executorFetch } from "./executor-fetch";
 
 /** Domain-separated key; only this derived key is shared with the development Workflow. */
 export function modelWorkflowSigningSecret() {
-	const explicit = process.env.YTIMESY_MODEL_WORKFLOW_SECRET;
-	if (explicit) {
-		if (explicit.length < 32)
-			throw new Error("Invalid model workflow signing secret.");
-		return explicit;
-	}
-	const root = process.env.BETTER_AUTH_SECRET;
-	if (!root || root.length < 32)
-		throw new Error("Missing model workflow signing secret.");
-	return createHmac("sha256", root)
-		.update("ytimesy:model-workflows:development:v1")
-		.digest("hex");
+	const secret = edgeSigningSecret(
+		"YTIMESY_MODEL_WORKFLOW_SECRET",
+		"model-workflows",
+	);
+	if (!secret) throw new Error("Missing model workflow signing secret.");
+	if (secret.length < 32)
+		throw new Error("Invalid model workflow signing secret.");
+	return secret;
 }
 
 /**
@@ -24,18 +20,14 @@ export function modelWorkflowSigningSecret() {
  * /pr-repair-event deliveries; the executor accepts nothing else with it.
  */
 export function prRepairIngressSigningSecret() {
-	const explicit = process.env.YTIMESY_PR_REPAIR_INGRESS_SECRET;
-	if (explicit) {
-		if (explicit.length < 32)
-			throw new Error("Invalid PR repair ingress signing secret.");
-		return explicit;
-	}
-	const root = process.env.BETTER_AUTH_SECRET;
-	if (!root || root.length < 32)
-		throw new Error("Missing PR repair ingress signing secret.");
-	return createHmac("sha256", root)
-		.update("ytimesy:pr-repair-ingress:development:v1")
-		.digest("hex");
+	const secret = edgeSigningSecret(
+		"YTIMESY_PR_REPAIR_INGRESS_SECRET",
+		"pr-repair-ingress",
+	);
+	if (!secret) throw new Error("Missing PR repair ingress signing secret.");
+	if (secret.length < 32)
+		throw new Error("Invalid PR repair ingress signing secret.");
+	return secret;
 }
 
 function modelWorkflowConfiguration() {

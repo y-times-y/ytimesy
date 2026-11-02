@@ -1,5 +1,6 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { edgeSigningSecret } from "#/domain/edge-signing-secret";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { environmentWorkflowRequest } from "#/domain/environment-workflow";
 import { executorFetch } from "./executor-fetch";
@@ -14,14 +15,10 @@ export async function dispatchEnvironmentWorkflow(
 	const endpoint = process.env.YTIMESY_ENVIRONMENT_WORKFLOW_URL;
 	if (!endpoint) return false;
 	const origin = new URL(endpoint);
-	const root = process.env.BETTER_AUTH_SECRET;
-	const secret =
-		process.env.YTIMESY_ENVIRONMENT_WORKFLOW_SECRET ||
-		(root && root.length >= 32
-			? createHmac("sha256", root)
-					.update("ytimesy:environment-workflows:development:v1")
-					.digest("hex")
-			: undefined);
+	const secret = edgeSigningSecret(
+		"YTIMESY_ENVIRONMENT_WORKFLOW_SECRET",
+		"environment-workflows",
+	);
 	if (
 		origin.protocol !== "https:" ||
 		origin.pathname !== "/" ||
