@@ -853,7 +853,7 @@ export function apiTurnFailureMessage(
 				)
 			)
 				return "This conversation exceeds the API context safety limit. Start a new chat with a handoff summary; no model request was sent.";
-			return "The API usage safety limit blocked this run before a model request. Check usage before retrying.";
+			return "This API key reached its daily safety limit in ytimesy. It resets tomorrow; no model request was sent.";
 		case "model":
 			return apiModelFailureMessage(error);
 		case "saving":

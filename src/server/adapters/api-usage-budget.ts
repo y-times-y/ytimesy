@@ -28,7 +28,7 @@ export async function reserveApiTokens(
 		if (!root.rows[0]) throw new Error("Invalid task hierarchy.");
 		return {
 			scope: `task:${root.rows[0].id}`,
-			limit: dailyLimit("YTIMESY_API_TASK_DAILY_TOKENS", 5_000_000),
+			limit: dailyLimit("YTIMESY_API_TASK_DAILY_TOKENS", 40_000_000),
 		};
 	});
 }
@@ -70,7 +70,7 @@ async function reserveScopedTokens(
 		await client.query("begin");
 		const selected = await authorizedScope(client);
 		for (const [scope, limit] of [
-			["account", dailyLimit("YTIMESY_API_ACCOUNT_DAILY_TOKENS", 20_000_000)],
+			["account", dailyLimit("YTIMESY_API_ACCOUNT_DAILY_TOKENS", 150_000_000)],
 			[selected.scope, selected.limit],
 		] as const) {
 			const saved = await client.query(
