@@ -65,3 +65,26 @@ export function projectSetupStep(input: {
 		return "start";
 	return null;
 }
+
+/**
+ * A new project's first build is running and nothing has been sent: the empty
+ * chat shows the setup streaming in place, where the person is looking.
+ */
+export function showsFirstSetupInChat(input: {
+	readonly projectId: string | undefined;
+	readonly workspace: Parameters<typeof startsProjectSetup>[0]["workspace"];
+	readonly chats: readonly unknown[] | undefined;
+	readonly chatOpen: boolean;
+}) {
+	const { projectId, workspace, chats } = input;
+	return Boolean(
+		projectId &&
+			!input.chatOpen &&
+			workspace &&
+			workspace.projectId === projectId &&
+			FIRST_BUILD_RUNNING.has(workspace.status) &&
+			!workspace.build?.rebuild &&
+			chats !== undefined &&
+			chats.length === 0,
+	);
+}
