@@ -245,7 +245,9 @@ if [ ! -s "$WALLPAPER" ]; then
   echo "ytimesy desktop wallpaper could not be decoded" >&2
   exit 1
 fi
-printf 'session.screen0.rootCommand: feh --bg-fill %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
+# The overlay takes style keys only. Ubuntu's default fluxbox style sets
+# background.pixmap to its own logo and repaints it over feh's wallpaper.
+printf 'background: fullscreen\\nbackground.pixmap: %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
 write_desktop_launchers
 
 ${DESKTOP_WAIT_UNTIL}
