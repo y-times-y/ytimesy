@@ -58,7 +58,7 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { openChatCookie } from "#/domain/open-chat-cookie";
-import { startsProjectSetup } from "#/domain/project-setup-start";
+import { projectSetupStep } from "#/domain/project-setup-start";
 import {
 	heldSendReleases,
 	publicFailureMessage,
@@ -1899,19 +1899,21 @@ export function WorkspaceHome({
 	const projectSetupStatus = projectSetup.data?.status;
 	// A project just added starts its setup by itself, in its own chat.
 	const setupStartedInTab = useRef(new Set<string>());
+	const setupAwaitedInTab = useRef(new Set<string>());
 	// biome-ignore lint/correctness/useExhaustiveDependencies: decided when the project, its status or its chats change.
 	useEffect(() => {
 		const projectId = selectedProject?.id;
-		if (
-			!projectId ||
-			!startsProjectSetup({
-				projectId,
-				workspace: projectSetup.data,
-				chats: chats.data,
-				startedInThisTab: setupStartedInTab.current,
-			})
-		)
-			return;
+		if (!projectId) return;
+		const step = projectSetupStep({
+			projectId,
+			workspace: projectSetup.data,
+			chats: chats.data,
+			startedInThisTab: setupStartedInTab.current,
+			awaitingInThisTab: setupAwaitedInTab.current,
+			taskHeld: Boolean(heldForSetupRef.current),
+		});
+		if (step === "await") setupAwaitedInTab.current.add(projectId);
+		if (step !== "start") return;
 		setupStartedInTab.current.add(projectId);
 		startProjectSetup(projectId, { initial: true });
 	}, [selectedProject?.id, projectSetup.data, chats.data]);

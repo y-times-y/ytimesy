@@ -37,3 +37,31 @@ const FIRST_BUILD_RUNNING = new Set([
 	"cloning",
 	"installing",
 ]);
+
+/**
+ * The setup chat can only start once its environment exists (the server
+ * refuses a chat before that), so a tab that sees a new project's first build
+ * running waits ("await"), then starts the setup agent when the build is
+ * ready ("start"). A task the person sent during the build goes first and
+ * takes the place of the setup chat: it runs in its own chat and opens a PR.
+ */
+export function projectSetupStep(input: {
+	readonly projectId: string | undefined;
+	readonly workspace: Parameters<typeof startsProjectSetup>[0]["workspace"];
+	readonly chats: readonly unknown[] | undefined;
+	readonly startedInThisTab: ReadonlySet<string>;
+	/** Projects whose first build this tab saw running. */
+	readonly awaitingInThisTab: ReadonlySet<string>;
+	/** The person sent a task while the build ran. */
+	readonly taskHeld: boolean;
+}): "await" | "start" | null {
+	const { projectId, workspace, chats } = input;
+	if (!projectId || input.startedInThisTab.has(projectId)) return null;
+	if (!workspace || workspace.projectId !== projectId) return null;
+	if (chats === undefined || chats.length > 0 || input.taskHeld) return null;
+	if (FIRST_BUILD_RUNNING.has(workspace.status) && !workspace.build?.rebuild)
+		return input.awaitingInThisTab.has(projectId) ? null : "await";
+	if (workspace.status === "ready" && input.awaitingInThisTab.has(projectId))
+		return "start";
+	return null;
+}
