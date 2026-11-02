@@ -58,7 +58,10 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { openChatCookie } from "#/domain/open-chat-cookie";
-import { projectSetupStep } from "#/domain/project-setup-start";
+import {
+	projectSetupStep,
+	showsFirstSetupInChat,
+} from "#/domain/project-setup-start";
 import {
 	heldSendReleases,
 	publicFailureMessage,
@@ -194,6 +197,8 @@ import { requestJson, retryTransientRead } from "../projects/api";
 import {
 	environmentProgressQuery,
 	HeldForSetupMessage,
+	ProjectSetupBuild,
+	SetupRequestRow,
 } from "../projects/environment-build-progress";
 import { FirstProjectHeading } from "../projects/first-project-heading";
 import { deleteOwnedProject } from "../projects/project.fn";
@@ -361,6 +366,9 @@ function withoutSearchParam(name: string) {
 /** Re-reads of a PR list while GitHub has not said whether an open PR can merge. */
 const MERGE_ANSWER_READS = 5;
 const MERGE_ANSWER_POLL_MS = 3_000;
+
+/** The empty chat showing a new project's first setup (no message is held). */
+const FIRST_SETUP_PREVIEW_ID = "first-setup-preview";
 
 export function WorkspaceHome({
 	initialSession,
@@ -2061,13 +2069,26 @@ export function WorkspaceHome({
 	// The project whose setup the open chat shows in place (its banner steps aside).
 	const storedHeldProjectId =
 		storedHeld && selectedProject ? selectedProject.id : null;
-	const heldProjects = useMemo(
-		() =>
-			storedHeldProjectId
-				? new Set([...heldForSetup, storedHeldProjectId])
-				: heldForSetup,
-		[heldForSetup, storedHeldProjectId],
-	);
+	// A new project's first setup streams in the empty chat, not a banner.
+	const firstSetupInChat =
+		!storedHeld &&
+		!(selectedProject && heldForSetup.has(selectedProject.id)) &&
+		session.items.length === 0 &&
+		!session.agentSessionId &&
+		showsFirstSetupInChat({
+			projectId: selectedProject?.id,
+			workspace: projectSetup.data,
+			chats: chats.data,
+			chatOpen: Boolean(selectedSessionId),
+		});
+	const firstSetupProjectId =
+		firstSetupInChat && selectedProject ? selectedProject.id : null;
+	const heldProjects = useMemo(() => {
+		const extra = [storedHeldProjectId, firstSetupProjectId].filter(
+			(id): id is string => Boolean(id),
+		);
+		return extra.length ? new Set([...heldForSetup, ...extra]) : heldForSetup;
+	}, [heldForSetup, storedHeldProjectId, firstSetupProjectId]);
 	// The server sends a held message once the environment is ready, a few
 	// seconds after this tab may see it ready: the open chat is read until the
 	// message's turn shows (sessionRead polls while awaitingHeldDelivery).
@@ -3440,7 +3461,20 @@ export function WorkspaceHome({
 															/>
 														),
 													}
-												: undefined
+												: firstSetupInChat && selectedProject
+													? {
+															messageId: FIRST_SETUP_PREVIEW_ID,
+															render: () => (
+																<>
+																	<SetupRequestRow />
+																	<ProjectSetupBuild
+																		projectId={selectedProject.id}
+																		waiting
+																	/>
+																</>
+															),
+														}
+													: undefined
 										}
 										prefill={
 											composerPrefill?.send &&

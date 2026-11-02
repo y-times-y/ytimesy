@@ -60,7 +60,7 @@ beforeEach(() => {
 	row = undefined;
 	statements.length = 0;
 	// Like the real vault: a blob opens only with the binding it was sealed with.
-	const bound = (binding?: { purpose?: string; userId?: string }) =>
+	const bound = (binding?: { purpose?: string; userId?: string | null }) =>
 		`${binding?.purpose ?? "none"}/${binding?.userId ?? "none"}`;
 	vi.mocked(seal).mockImplementation(
 		async (value, binding) => `sealed:${bound(binding)}:${value}`,
