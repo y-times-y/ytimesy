@@ -1,5 +1,6 @@
-import { Brain, Zap } from "lucide-react";
+import { Brain, Layers, Zap } from "lucide-react";
 import { MenuSelect } from "#/components/ui/menu-select";
+import { contextWindowLabel } from "#/domain/context-window-option";
 import {
 	type ComposerSpeed,
 	reasoningLevelLabel,
@@ -20,15 +21,20 @@ export function ModelPickerSettings({
 	onReasoningIdChange,
 	speed,
 	onSpeedChange,
+	alternateContext = false,
+	onAlternateContextChange,
 }: {
 	model: SessionModel;
 	reasoningId: string;
 	onReasoningIdChange?: (id: string) => void;
 	speed: ComposerSpeed;
 	onSpeedChange?: (speed: ComposerSpeed) => void;
+	alternateContext?: boolean;
+	onAlternateContextChange?: (alternate: boolean) => void;
 }) {
 	const reasoning = resolveReasoningLevel(model, reasoningId);
 	const selectedSpeed = model.speeds.find((option) => option.id === speed);
+	const window = model.contextWindow;
 	return (
 		<div className="model-picker-settings">
 			<p className="model-picker-current">{model.label}</p>
@@ -72,6 +78,34 @@ export function ModelPickerSettings({
 						className="model-reasoning-select"
 						side="right"
 						aria-label="Speed"
+					/>
+				</div>
+			) : null}
+			{onAlternateContextChange && window ? (
+				<div className="model-picker-setting">
+					<Layers size={16} aria-hidden="true" />
+					<span>Context</span>
+					<MenuSelect
+						value={alternateContext ? "alternate" : "standard"}
+						onValueChange={(id) => onAlternateContextChange(id === "alternate")}
+						options={[
+							{
+								value: "standard",
+								label: contextWindowLabel(window.standard),
+							},
+							{
+								value: "alternate",
+								label: contextWindowLabel(window.alternate),
+								...(window.note ? { title: window.note } : {}),
+							},
+						].sort(
+							(a, b) =>
+								(a.value === "standard" ? window.standard : window.alternate) -
+								(b.value === "standard" ? window.standard : window.alternate),
+						)}
+						className="model-reasoning-select"
+						side="right"
+						aria-label="Context window"
 					/>
 				</div>
 			) : null}

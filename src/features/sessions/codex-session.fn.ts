@@ -552,6 +552,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			variant?: string;
 			fast?: boolean;
 			speed?: string;
+			/** The route's alternate context window, when it offers one. */
+			alternateContext?: boolean;
 			approvesPlan?: boolean;
 			/** Continue on the fallback route the user approved (`<connection>|<model>`). */
 			continueOn?: string;
@@ -591,6 +593,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 						: data.speed === "ultrafast"
 							? ("ultrafast" as const)
 							: ("standard" as const),
+				// Likewise its context window.
+				alternateContext: data.alternateContext === true,
 				...(data.approvesPlan === true ? { approvesPlan: true } : {}),
 				...(data.continueOn
 					? { continueOn: failoverRouteKey.parse(data.continueOn) }

@@ -17,6 +17,7 @@ import type {
 	MessageAttachment,
 } from "#/domain/message-attachment";
 import {
+	apiContextWindowOption,
 	connectionModelSpeeds,
 	parseModelRouteId,
 } from "#/domain/model-connection";
@@ -182,6 +183,8 @@ export async function sendApiWorkspaceTask(
 		variant?: string;
 		/** Absent on internal follow-ups, which keep the previous turn's settings. */
 		speed?: "standard" | ApiModelSpeedId;
+		/** The route's alternate context window; absent on internal follow-ups. */
+		alternateContext?: boolean;
 		runtimeText?: string;
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
@@ -252,7 +255,9 @@ export async function sendApiWorkspaceTask(
 		return sendClaudeCodeTask(scope, sessionId, input, preparedTask, read);
 	const selected = parseModelRouteId(input.modelId);
 	const inheritsSettings =
-		input.speed === undefined && input.variant === undefined;
+		input.speed === undefined &&
+		input.variant === undefined &&
+		input.alternateContext === undefined;
 	// The chat, its connection, the settings it inherits and the catalog the
 	// response shows are independent reads; each is checked in order below.
 	const catalog = apiModelCatalog(scope.userId);
@@ -290,7 +295,15 @@ export async function sendApiWorkspaceTask(
 				...(input.speed && input.speed !== "standard"
 					? { speed: input.speed }
 					: {}),
+				...(input.alternateContext ? { alternateContext: true as const } : {}),
 			};
+	if (
+		settings.alternateContext &&
+		!apiContextWindowOption(connection, selected.modelId)
+	)
+		throw new Error(
+			"That context window is not available for this model on this connection.",
+		);
 	if (
 		settings.speed &&
 		!connectionModelSpeeds(connection, selected.modelId).some(

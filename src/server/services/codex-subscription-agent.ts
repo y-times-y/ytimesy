@@ -11,6 +11,7 @@ export async function runCodexSubscriptionAgent(input: ModelAgentInput) {
 		input.reasoning,
 		input.fast,
 		input.cacheScopeId,
+		input.alternateContext === true,
 	);
 	return runModelAgent(input, runtime);
 }
@@ -23,6 +24,7 @@ export async function runCodexSubscriptionAgentStep(input: ModelAgentInput) {
 			input.reasoning,
 			input.fast,
 			input.cacheScopeId,
+			input.alternateContext === true,
 		),
 	);
 	return runModelAgentStep(input, runtime);

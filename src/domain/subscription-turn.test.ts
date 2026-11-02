@@ -20,3 +20,17 @@ it("rejects corrupt durable transport settings", () => {
 		subscriptionTurnSettings("codex-subscription:v1:not-json"),
 	).toThrow();
 });
+
+it("records the larger window only when chosen, so standard revisions are unchanged", () => {
+	expect(subscriptionTurnRevision("high", false)).toBe(
+		'codex-subscription:v1:{"reasoning":"high","fast":false}',
+	);
+	expect(
+		subscriptionTurnSettings(subscriptionTurnRevision("high", false, true)),
+	).toEqual({ reasoning: "high", fast: false, alternateContext: true });
+	expect(() =>
+		subscriptionTurnSettings(
+			'codex-subscription:v1:{"fast":false,"alternateContext":"yes"}',
+		),
+	).toThrow();
+});

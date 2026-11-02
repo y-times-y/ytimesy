@@ -2,7 +2,11 @@ import type { LanguageModel, ModelMessage } from "ai";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
-import { type ModelProvider, modelRouteId } from "#/domain/model-connection";
+import {
+	apiContextWindowOption,
+	type ModelProvider,
+	modelRouteId,
+} from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -49,6 +53,7 @@ type ApiModelInput = Pick<
 	| "connectionRevision"
 	| "modelId"
 	| "speed"
+	| "alternateContext"
 	| "cacheScopeId"
 	| "reasoning"
 	| "maxOutputTokens"
@@ -115,6 +120,10 @@ async function prepareApiModel<T>(
 					apiKey: access.apiKey,
 					modelId: input.modelId,
 					speed: input.speed,
+					alternateContext: input.alternateContext === true,
+					...(connection.subscription
+						? { subscription: connection.subscription }
+						: {}),
 					userId: input.userId,
 					connectionId: input.connectionId,
 					cacheScopeId: input.cacheScopeId ?? "default",
@@ -140,6 +149,27 @@ async function prepareApiModel<T>(
 }
 
 /**
+ * The window an API turn budgets against: the reported window, exactly as
+ * before the option existed, unless the route's cheaper tier was chosen;
+ * then the tier, never above what the provider reports.
+ */
+export function apiTurnContextWindow(
+	input: {
+		provider: ModelProvider;
+		baseUrl: string;
+		modelId: string;
+		alternateContext?: boolean;
+		subscription?: unknown;
+	},
+	reported: number | undefined,
+): number | undefined {
+	if (!input.alternateContext) return reported;
+	const option = apiContextWindowOption(input, input.modelId);
+	if (!option) return reported;
+	return reported ? Math.min(option.alternate, reported) : option.alternate;
+}
+
+/**
  * The model runtime of an API route, from the route's endpoint and key: the
  * request settings, prompt-cache routing, reasoning effort, context window
  * and native compaction every API-harness turn uses. prepareApiModel calls
@@ -153,6 +183,13 @@ export async function apiModelRuntime(
 		apiKey: string;
 		modelId: string;
 		speed?: ApiModelSpeedId;
+		/**
+		 * On a route with a long-context price tier (apiContextWindowOption),
+		 * true budgets within that tier; otherwise the full window, as always.
+		 */
+		alternateContext?: boolean;
+		/** Set on a plan sign-in (the Grok plan), which has no such tier. */
+		subscription?: unknown;
 		userId: string;
 		connectionId: string;
 		cacheScopeId: string;
@@ -249,7 +286,7 @@ export async function apiModelRuntime(
 		maxOutputTokens:
 			input.maxOutputTokens ??
 			defaultMaxOutputTokens(input.provider, input.modelId),
-		contextWindow: context.contextWindow,
+		contextWindow: apiTurnContextWindow(input, context.contextWindow),
 		imageInput: context.imageInput,
 		fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
 		backgroundCompaction: input.provider === "openai",
