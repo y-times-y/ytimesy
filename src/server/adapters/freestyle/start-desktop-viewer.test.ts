@@ -18,6 +18,7 @@ import {
 	DESKTOP_CREDENTIAL_DROP_SETUP,
 	DESKTOP_PRIVATE_DIRECTORY,
 	DESKTOP_PRIVATE_READY,
+	DESKTOP_THROWAWAY_CREDENTIALS,
 	DESKTOP_WAIT_UNTIL,
 	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
@@ -37,6 +38,9 @@ function viewerBlock(dir: string) {
 }
 
 let dir: string;
+/** The proxy as the start script launches it: it rereads its credential file. */
+const rereadingProxy = () =>
+	`websockify --auth-plugin ytimesy_desk_auth.LiveFileBasicHTTPAuth --auth-source ${dir}/viewer.credential --unix-target=${dir}/rfb.sock 0.0.0.0:6080`;
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "desk-viewer-"));
 	const stub = (name: string, body: string) => {
@@ -71,10 +75,7 @@ function run(
 
 it("listens publicly only behind the credential, and records which one", () => {
 	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret");
-	expect(run()).toEqual([
-		"pkill -x websockify",
-		`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/viewer.credential --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
-	]);
+	expect(run()).toEqual(["pkill -x websockify", rereadingProxy()]);
 	// The credential is read from its file, never passed in argv.
 	expect(readFileSync(join(dir, "calls"), "utf8")).not.toContain("secret");
 	expect(readFileSync(join(dir, "viewer.applied"), "utf8")).toBe(
@@ -88,15 +89,36 @@ it("keeps a proxy that already runs with the current credential", () => {
 		join(dir, "viewer.applied"),
 		createHash("sha256").update("ytimesy:secret").digest("hex"),
 	);
-	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")).toEqual([]);
+	expect(
+		run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n", rereadingProxy()),
+	).toEqual([]);
 });
 
-it("replaces a proxy started with an older credential", () => {
+it("gives a running proxy a new credential in place, without a restart", () => {
+	// A chat copied from a template that already ran its desktop.
+	writeFileSync(join(dir, "viewer.credential"), "ytimesy:template");
+	writeFileSync(join(dir, "viewer.applied"), "old");
+	writeFileSync(join(dir, "viewer.auth"), "ytimesy:new");
+	expect(
+		run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n", rereadingProxy()),
+	).toEqual([]);
+	expect(readFileSync(join(dir, "viewer.credential"), "utf8")).toBe(
+		"ytimesy:new",
+	);
+	expect(readFileSync(join(dir, "viewer.applied"), "utf8")).toBe(
+		createHash("sha256").update("ytimesy:new").digest("hex"),
+	);
+});
+
+it("replaces a proxy that read its credential only once at start", () => {
 	writeFileSync(join(dir, "viewer.auth"), "ytimesy:new");
 	writeFileSync(join(dir, "viewer.applied"), "old");
-	expect(run("LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n")[0]).toBe(
-		"pkill -x websockify",
-	);
+	expect(
+		run(
+			"LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n",
+			`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/viewer.credential --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
+		),
+	).toEqual(["pkill -x websockify", rereadingProxy()]);
 });
 
 it("without a credential, stops an open public proxy and listens on loopback only", () => {
@@ -131,11 +153,11 @@ it("restarts a proxy left from the TCP viewer even when its credential is curren
 	).toBe("pkill -x websockify");
 });
 
-it("loads the viewer credential from its file in the auth plugin", () => {
+it("checks each connection against the credential file as it is then", () => {
 	execFileSync("/bin/sh", ["-eu", "-c", viewerBlock(dir)], {
 		env: { PATH: `${dir}:/usr/bin:/bin` },
 	});
-	// A stand-in for websockify's BasicHTTPAuth, which compares user:password to src.
+	// A stand-in for websockify's BasicHTTPAuth (it keeps src; the plugin checks).
 	const fake = join(dir, "fake", "websockify");
 	execFileSync("mkdir", ["-p", fake]);
 	writeFileSync(join(fake, "__init__.py"), "");
@@ -143,22 +165,65 @@ it("loads the viewer credential from its file in the auth plugin", () => {
 		join(fake, "auth_plugins.py"),
 		"class BasicHTTPAuth:\n    def __init__(self, src=None):\n        self.src = src\n",
 	);
-	writeFileSync(join(dir, "viewer.auth"), "ytimesy:secret\n");
-	const src = execFileSync(
-		"python3",
-		[
-			"-c",
-			"import sys, ytimesy_desk_auth as a; print(a.FileBasicHTTPAuth(sys.argv[1]).src)",
-			join(dir, "viewer.auth"),
-		],
-		{
-			env: {
-				PYTHONPATH: `${join(dir, ".ytimesy", "desk-auth")}:${join(dir, "fake")}`,
+	const file = join(dir, "credential");
+	const check = (user: string, password: string) =>
+		execFileSync(
+			"python3",
+			[
+				"-c",
+				"import sys, ytimesy_desk_auth as a; p = a.LiveFileBasicHTTPAuth(sys.argv[1]); print(p.validate_creds(sys.argv[2], sys.argv[3]), p.src)",
+				file,
+				user,
+				password,
+			],
+			{
+				env: {
+					PYTHONPATH: `${join(dir, ".ytimesy", "desk-auth")}:${join(dir, "fake")}`,
+				},
+				encoding: "utf8",
 			},
-			encoding: "utf8",
-		},
-	);
-	expect(src).toBe("ytimesy:secret\n");
+		).trim();
+	// No file yet (or an empty one): nobody gets in.
+	expect(check("ytimesy", "")).toBe("False None");
+	writeFileSync(file, "");
+	expect(check("ytimesy", "")).toBe("False None");
+	writeFileSync(file, "ytimesy:secret\n");
+	expect(check("ytimesy", "secret")).toBe("True None");
+	expect(check("ytimesy", "wrong")).toBe("False None");
+	// A replaced file applies to the next connection; the old one stops working.
+	writeFileSync(file, "ytimesy:rotated");
+	expect(check("ytimesy", "rotated")).toBe("True None");
+	expect(check("ytimesy", "secret")).toBe("False None");
+});
+
+it("a template's throwaway credentials are random, private and match no real one", () => {
+	const path = join(dir, "private");
+	const once = () => {
+		const result = spawnSync(
+			"/bin/sh",
+			[
+				"-c",
+				DESKTOP_THROWAWAY_CREDENTIALS.replaceAll(
+					DESKTOP_PRIVATE_DIRECTORY,
+					path,
+				),
+			],
+			{ encoding: "utf8" },
+		);
+		expect(result.status).toBe(0);
+		return {
+			viewer: readFileSync(join(path, "viewer.auth"), "utf8"),
+			vnc: readFileSync(join(path, "vnc.password"), "utf8"),
+		};
+	};
+	const first = once();
+	expect(first.viewer).toMatch(/^ytimesy:[0-9a-f]{40}$/);
+	expect(first.vnc).toMatch(/^[0-9a-f]{8}$/);
+	expect(statSync(join(path, "viewer.auth")).mode & 0o777).toBe(0o600);
+	expect(statSync(join(path, "vnc.password")).mode & 0o777).toBe(0o600);
+	const second = once();
+	expect(second.viewer).not.toBe(first.viewer);
+	expect(second.vnc).not.toBe(first.vnc);
 });
 
 it("moves the dropped credential into the proxy's own 0600 file and removes the drop", () => {
@@ -247,12 +312,17 @@ function vncBlock() {
 	).replaceAll(DESKTOP_PRIVATE_DIRECTORY, dir)}`;
 }
 
-function runVnc(listening: string, x11vncRunning = false) {
+function runVnc(listening: string, x11vncRunning: boolean | string = false) {
 	writeFileSync(join(dir, "ss.out"), listening);
-	writeFileSync(join(dir, "pgrep.out"), x11vncRunning ? "x11vnc" : "");
+	writeFileSync(
+		join(dir, "pgrep.out"),
+		x11vncRunning === false
+			? ""
+			: `x11vnc\n${typeof x11vncRunning === "string" ? x11vncRunning : ""}\n`,
+	);
 	writeFileSync(
 		join(dir, "pgrep"),
-		`#!/bin/sh\nif [ "$1" = -x ]; then grep -qx -- "$2" "${dir}/pgrep.out" 2>/dev/null; else exit 1; fi\n`,
+		`#!/bin/sh\nif [ "$1" = -x ]; then grep -qx -- "$2" "${dir}/pgrep.out" 2>/dev/null; else grep -q -- "$2" "${dir}/pgrep.out" 2>/dev/null; fi\n`,
 	);
 	chmodSync(join(dir, "pgrep"), 0o755);
 	writeFileSync(
@@ -276,7 +346,8 @@ it("serves VNC on its Unix socket only, behind the dropped password", () => {
 	const started = runVnc("");
 	expect(started.status).toBe(0);
 	const x11vnc = started.calls.find((call) => call.startsWith("x11vnc"));
-	expect(x11vnc).toContain(`-passwdfile ${dir}/vnc.passwd`);
+	// Reread as each client connects, so a new password needs no restart.
+	expect(x11vnc).toContain(`-passwdfile read:${dir}/vnc.passwd `);
 	expect(x11vnc).toContain("-rfbport 0 -rfbportv6 -1 -noipv6");
 	expect(x11vnc).not.toContain("-nopw");
 	expect(existsSync(join(dir, "vnc.password"))).toBe(false);
@@ -291,4 +362,30 @@ it("restarts an x11vnc found on TCP and refuses the desktop if it stays there", 
 	expect(exposed.calls).toContain("pkill -x x11vnc");
 	expect(exposed.status).not.toBe(0);
 	expect(exposed.stderr).toContain("x11vnc listened on TCP");
+});
+
+it("keeps an x11vnc that rereads its password file and only replaces the file", () => {
+	writeFileSync(join(dir, "vnc.passwd"), "template\n");
+	writeFileSync(join(dir, "vnc.password"), "chatpass\n");
+	const kept = runVnc(
+		"",
+		`x11vnc -display :0 -passwdfile read:${dir}/vnc.passwd -unixsock x`,
+	);
+	expect(kept.status).toBe(0);
+	expect(kept.calls).toEqual([]);
+	expect(readFileSync(join(dir, "vnc.passwd"), "utf8")).toBe("chatpass\n");
+});
+
+it("restarts an x11vnc that read its password only at start", () => {
+	writeFileSync(join(dir, "vnc.password"), "chatpass\n");
+	const restarted = runVnc(
+		"",
+		`x11vnc -display :0 -passwdfile ${dir}/vnc.passwd -unixsock x`,
+	);
+	expect(restarted.calls[0]).toBe("pkill -x x11vnc");
+});
+
+it("waits on conditions, never on fixed sleeps", () => {
+	// Fixed one- and two-second sleeps made most of a desktop restart.
+	expect(START_WORKSPACE_DESKTOP).not.toMatch(/^\s*sleep [0-9]+\s*$/m);
 });

@@ -21,6 +21,10 @@ import { retryTransientProviderFailure } from "./provider-retry";
 import { forgetRunningGuest } from "./recent-guest-state";
 import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
+	prepareTemplateSnapshot,
+	type TemplateSnapshotPreparation,
+} from "./template-snapshot";
+import {
 	admitVmCreate,
 	admitVmResume,
 	infrastructureAdmissionEnabled,
@@ -217,7 +221,16 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		);
 	}
 
-	async snapshot(providerRef: string, slug: string) {
+	async snapshot(
+		providerRef: string,
+		slug: string,
+		preparation?: TemplateSnapshotPreparation,
+	) {
+		if (preparation)
+			await prepareTemplateSnapshot(
+				this.client().vms.ref(providerRef),
+				preparation,
+			);
 		await scrubAgentSecrets(this.client().vms.ref(providerRef));
 		const created = await this.client().vms.ref(providerRef).snapshot({
 			slug,

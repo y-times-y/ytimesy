@@ -110,6 +110,8 @@ export interface WorkspaceMachines {
 	readonly snapshotEnvironment: (
 		workspaceId: WorkspaceId,
 		slug: string,
+		/** The project's size: the template's disk is grown to it first, so copies need no disk grow. */
+		sizeId?: MachineSizeId,
 	) => Promise<string>;
 	readonly provisionSession: (
 		slug: string,

@@ -56,6 +56,7 @@ import {
 	rememberRunningGuest,
 } from "./recent-guest-state";
 import { scrubAgentSecrets } from "./scrub-agent-secrets";
+import { prepareTemplateSnapshot } from "./template-snapshot";
 import {
 	admitVmCreate,
 	admitVmResume,
@@ -355,10 +356,16 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
-		async snapshotEnvironment(workspaceId, slug) {
+		async snapshotEnvironment(workspaceId, slug, sizeId) {
 			// A snapshot may pause the machine; the next operation reads it fresh.
 			forgetRunningGuest(workspaceId);
 			try {
+				// Only the disk: this runs while a chat waits for its copy, and
+				// starting a desktop here would add its seconds to that wait.
+				if (sizeId)
+					await prepareTemplateSnapshot(freestyle.vms.ref(workspaceId), {
+						storageMiB: machineSize(sizeId).storage,
+					});
 				await scrubAgentSecrets(freestyle.vms.ref(workspaceId));
 				const created = await freestyle.vms.ref(workspaceId).snapshot({
 					slug,

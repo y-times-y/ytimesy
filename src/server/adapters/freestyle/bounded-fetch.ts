@@ -174,8 +174,19 @@ async function timed(
 	}
 }
 
-/** Poll waits for a backgrounded call: quick at first, then the SDK's own 2 s. */
-export const FAST_POLL_DELAYS_MS = [250, 250, 500, 500, 1_000, 1_000] as const;
+/**
+ * Poll waits for a backgrounded call: quick at first, then every second for
+ * its first half minute (a create from a snapshot the host has not cached
+ * took 15 s on dev, and 2 s polls added up to 2 s to it), then the SDK's own
+ * 2 s for long commands.
+ */
+export const FAST_POLL_DELAYS_MS: readonly number[] = [
+	250,
+	250,
+	500,
+	500,
+	...Array<number>(27).fill(1_000),
+];
 const SLOW_POLL_MS = 2_000;
 
 /**
