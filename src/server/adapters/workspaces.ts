@@ -129,11 +129,26 @@ export async function saveWorkspaceStatus(
 	return toWorkspace(result.rows[0]);
 }
 
-export async function listReadyWorkspaceIds() {
+/** Projects idle longer than this are not refreshed hourly; their next chat's build catches up. */
+export const ENVIRONMENT_REFRESH_ACTIVE_DAYS = 7;
+
+/**
+ * Ready workspaces worth refreshing: a chat in the project moved in the last
+ * week, and no build is running for it already.
+ */
+export async function listReadyWorkspaceIds(
+	activeDays = ENVIRONMENT_REFRESH_ACTIVE_DAYS,
+) {
 	const result = await database().query(
-		`select id from workspace
-		 where status='ready' and template_snapshot_id is not null
-		 order by updated_at desc`,
+		`select w.id from workspace w
+		 where w.status='ready' and w.template_snapshot_id is not null
+		   and exists (select 1 from agent_session s
+		     where s.user_id=w.user_id and s.project_id=w.project_id
+		       and s.updated_at > now() - ($1 * interval '1 day'))
+		   and not exists (select 1 from environment_build b
+		     where b.workspace_id=w.id and b.status='running')
+		 order by w.updated_at desc`,
+		[activeDays],
 	);
 	return result.rows.map((row: { id: string }) => row.id);
 }

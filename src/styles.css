@@ -4523,6 +4523,154 @@ a.session-title-meta:focus-visible {
 	}
 }
 
+/* Setup and rebuild progress, beside the repository and in the chat
+   (workspace-status.tsx, environment-build-progress.tsx). */
+.workspace-status-live {
+	position: relative;
+	display: inline-flex;
+	flex-direction: column;
+	min-width: 0;
+}
+button.workspace-status-progress {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+button.workspace-status-progress:hover {
+	color: #e6e6e6;
+}
+.workspace-status-details {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 20;
+	width: min(520px, calc(100vw - 32px));
+	padding: 10px 12px;
+	border: 1px solid #ffffff17;
+	border-radius: 10px;
+	background: #161616;
+	box-shadow: 0 8px 24px #0006;
+}
+.workspace-status-message {
+	min-width: 0;
+}
+.environment-build {
+	margin: 8px 0 12px;
+	padding: 10px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.015);
+	color: rgba(255, 255, 255, 0.5);
+	font-size: 13px;
+}
+.environment-build-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 6px;
+	color: rgba(255, 255, 255, 0.78);
+}
+.environment-build[data-state="failed"] .environment-build-title svg {
+	color: #ff6764;
+}
+.environment-build-steps {
+	display: grid;
+	gap: 2px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.environment-build-step {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 22px;
+	margin: 0;
+	min-width: 0;
+	font-size: 13px;
+	line-height: 18px;
+}
+.environment-build-icon {
+	display: inline-flex;
+	flex: none;
+	width: 14px;
+	color: rgba(255, 255, 255, 0.45);
+}
+.environment-build-steps li[data-state="done"] .environment-build-icon {
+	color: #40c977;
+}
+.environment-build-steps li[data-state="failed"] .environment-build-icon {
+	color: #ff6764;
+}
+.environment-build-label {
+	flex: none;
+	color: rgba(255, 255, 255, 0.62);
+}
+.environment-build-steps li[data-state="running"] .environment-build-label {
+	color: rgba(255, 255, 255, 0.85);
+}
+.environment-build-command {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: rgba(255, 255, 255, 0.45);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+}
+.environment-build-output {
+	max-height: 156px;
+	margin: 4px 0 6px 20px;
+	padding: 6px 8px;
+	overflow: auto;
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.3);
+	color: rgba(255, 255, 255, 0.62);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11.5px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.environment-build-failure p {
+	margin: 8px 0 0;
+	color: rgba(255, 255, 255, 0.78);
+	overflow-wrap: anywhere;
+}
+.environment-build-failure .environment-build-output {
+	margin-left: 0;
+}
+.environment-build-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 10px;
+}
+.environment-build-actions button {
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid #ffffff1a;
+	border-radius: 7px;
+	background: transparent;
+	color: #d6d6d6;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.environment-build-actions button:first-child {
+	background: #ffffff14;
+}
+.environment-build-actions button:hover:not(:disabled) {
+	border-color: #ffffff3a;
+	color: #fff;
+}
+.environment-build-actions button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
 /* Sign in with ChatGPT in place (chatgpt-sign-in.tsx). */
 .chatgpt-sign-in {
 	display: flex;

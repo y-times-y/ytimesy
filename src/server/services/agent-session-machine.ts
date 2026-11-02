@@ -49,6 +49,7 @@ import { conversationForkPending } from "../adapters/conversation-fork";
 import { prewarmedMachine } from "../adapters/machine-prewarm";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { cancelServerTurn } from "./cancel-server-turn";
+import { startEnvironmentServices } from "./environment-services";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -340,6 +341,16 @@ export async function bindAgentSessionMachine(
 			),
 	});
 	await applyProjectNetworkPolicy(machines, policy, executed.providerRef);
+	// A fresh copy of the template has none of the project's saved services
+	// running: they start in the background, and how each went is added to
+	// the environment report the agent reads.
+	if (executed.planKind !== "resume")
+		void startEnvironmentServices(
+			machines,
+			WorkspaceId(executed.providerRef),
+		).catch(() =>
+			console.warn("The project's saved services could not be started."),
+		);
 	return {
 		session: { ...selectedSession, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,

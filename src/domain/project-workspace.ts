@@ -143,3 +143,20 @@ export function redactSecrets(value: string) {
 		)
 		.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
 }
+
+/**
+ * A message sent while the project's environment is not ready is held in the
+ * chat: during setup, and after a failed setup too (it shows the failure with
+ * Retry and Send anyway; a held message is never dropped). Unknown status
+ * (still loading) sends as usual.
+ */
+export function sendWaitsForSetup(
+	status: WorkspaceStatus | "missing" | undefined,
+) {
+	return status !== undefined && status !== "ready";
+}
+
+/** A held message goes out only once the environment is ready. */
+export function heldSendReleases(status: WorkspaceStatus | undefined) {
+	return status === "ready";
+}

@@ -10,6 +10,18 @@ type DiagnoseEnvironmentFailure = (
 	failure: RuntimeCommandResult,
 ) => Promise<EnvironmentRepairPlan>;
 
+/** The install still failed after repairs; carries its last result. */
+export class EnvironmentInstallFailed extends Error {
+	readonly result: RuntimeCommandResult;
+	constructor(result: RuntimeCommandResult) {
+		super(
+			"Environment setup could not be repaired within two attempts. Check missing credentials, required tooling, or the install command; then retry.",
+		);
+		this.name = "EnvironmentInstallFailed";
+		this.result = result;
+	}
+}
+
 /** Two repairs at most; the original install remains the authority on success. */
 export async function installWithEnvironmentRepair(input: {
 	runtime: WorkspaceRuntime;
@@ -20,6 +32,7 @@ export async function installWithEnvironmentRepair(input: {
 	diagnose: DiagnoseEnvironmentFailure;
 	onRepair: (attempt: number) => Promise<void>;
 }) {
+	let last: RuntimeCommandResult | null = null;
 	for (let attempt = 0; attempt <= 2; attempt++) {
 		const result = await input.runtime.exec(
 			input.vm,
@@ -28,10 +41,13 @@ export async function installWithEnvironmentRepair(input: {
 			input.timeoutMs,
 		);
 		if (result.exitCode === 0) return;
+		last = result;
 		if (attempt === 2) break;
 		await input.onRepair(attempt + 1);
-		const plan = await input.diagnose(result);
-		if (plan.action === "blocked") break;
+		// Without an authorized model (or a usable diagnosis) the install's own
+		// failure is what the person sees.
+		const plan = await input.diagnose(result).catch(() => null);
+		if (!plan || plan.action === "blocked") break;
 		const command =
 			plan.action === "enable-corepack"
 				? guestNodePath()
@@ -48,7 +64,7 @@ export async function installWithEnvironmentRepair(input: {
 			if (repaired.exitCode !== 0) break;
 		}
 	}
-	throw new Error(
-		"Environment setup could not be repaired within two attempts. Check missing credentials, required tooling, or the install command; then retry.",
+	throw new EnvironmentInstallFailed(
+		last ?? { exitCode: 1, stdout: "", stderr: "" },
 	);
 }

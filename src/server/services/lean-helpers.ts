@@ -224,6 +224,8 @@ if os.path.isfile(source) and (not os.path.exists(target) or os.path.getmtime(so
     lines = ['# How this workspace was prepared', '', 'Written before this conversation started; historical, so verify against the checkout. A check that already failed in the baseline is an existing problem, not your regression: fix it only if it is part of the task, and never weaken checks to make them pass.', '']
     try:
         report = json.loads(raw)
+        if report.get('notice'):
+            lines += ['## Setup', '', str(report['notice']), '']
         for repo in report.get('repositories') or []:
             lines.append('## ' + str(repo.get('fullName') or repo.get('directory') or 'Repository'))
             for key in ('directory', 'branch', 'commit'):
@@ -232,6 +234,8 @@ if os.path.isfile(source) and (not os.path.exists(target) or os.path.getmtime(so
                 if key != 'version' and value: lines.append('- recipe ' + key + ': ' + json.dumps(value))
             for result in repo.get('checkResults') or []:
                 lines.append('- baseline check \`' + str(result.get('command')) + '\`: exit ' + str(result.get('exitCode')))
+            for service in repo.get('services') or repo.get('serviceResults') or []:
+                lines.append('- service ' + str(service.get('name')) + ' (port ' + str(service.get('port')) + '): ' + ('ready' if service.get('ready') else 'did not start'))
             lines.append('')
     except (ValueError, AttributeError):
         pass

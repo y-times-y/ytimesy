@@ -31,7 +31,10 @@ import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
 } from "#/domain/default-branch-cookie";
-import { ENVIRONMENT_SETUP_PROMPT } from "#/domain/environment-setup";
+import {
+	ENVIRONMENT_SETUP_PROMPT,
+	setupRequestKeeping,
+} from "#/domain/environment-setup";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -54,7 +57,12 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { openChatCookie } from "#/domain/open-chat-cookie";
-import { publicFailureMessage } from "#/domain/project-workspace";
+import {
+	heldSendReleases,
+	publicFailureMessage,
+	sendWaitsForSetup,
+	workspacePrepareStalled,
+} from "#/domain/project-workspace";
 import {
 	type Project,
 	projectDisplayName,
@@ -173,9 +181,15 @@ import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
 import { useImportFinishAlert } from "../local-import/use-import-finish-alert";
 import { requestJson, retryTransientRead } from "../projects/api";
+import {
+	environmentProgressQuery,
+	HeldForSetupMessage,
+} from "../projects/environment-build-progress";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
 	HeldForSetupContext,
+	retryWorkspace,
+	type WorkspaceRetryMode,
 	workspaceStatusQuery,
 } from "../projects/workspace-status";
 import {
@@ -224,6 +238,7 @@ import {
 	prepareWorkspaceDesktopFn,
 	startWorkspaceDesktopFn,
 } from "./desktop.fn";
+import { environmentQueryKey } from "./environment-settings";
 import {
 	readWorkspaceChangesFn,
 	resumeWorkspaceMachineFn,
@@ -694,11 +709,18 @@ export function WorkspaceHome({
 	 */
 	const environmentSetupEpochRef = useRef<number | null>(null);
 	// A message sent while the project's environment is still being set up
-	// waits for it, then goes as usual (or is dropped if the setup fails).
+	// shows in the chat with the setup's progress, then goes by itself. A
+	// failed setup keeps it there (Retry, Send anyway); it is never dropped.
 	const heldForSetupRef = useRef<PendingSend | null>(null);
 	const [heldForSetup, setHeldForSetup] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
+	const [heldMessage, setHeldMessage] = useState<{
+		readonly projectId: string;
+		readonly messageId: string;
+		readonly text: string;
+		readonly startsNewChat: boolean;
+	} | null>(null);
 	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
 	const stopRequestedFor = useRef<string | null>(null);
 	const abandonSendRef = useRef<
@@ -1796,24 +1818,72 @@ export function WorkspaceHome({
 	useEffect(() => {
 		const held = heldForSetupRef.current;
 		if (!held) return;
-		if (projectSetupStatus !== "ready" && projectSetupStatus !== "failed")
-			return;
+		// Another project's status says nothing about this message.
+		if (held.scope.projectId !== selectedProject?.id) return;
+		// A failed setup keeps the message held with its actions.
+		if (!heldSendReleases(projectSetupStatus)) return;
 		heldForSetupRef.current = null;
 		setHeldForSetup(new Set());
-		if (projectSetupStatus === "failed") {
-			abandonSend(
-				held,
-				"The project could not be set up. Retry it, then send again.",
-			);
-			return;
-		}
+		setHeldMessage(null);
 		if (session.connection.status === "authenticated")
 			void deliverSend(
 				held,
 				held.startsNewChat ? { ...session, agentSessionId: null } : session,
 			);
 		else void connectThenSend(held);
-	}, [projectSetupStatus]);
+	}, [projectSetupStatus, selectedProject?.id]);
+
+	// The setup a turn saved (save_project_environment) shows without a reload.
+	const previousTurnStatus = useRef(session.turnStatus);
+	useEffect(() => {
+		const was = previousTurnStatus.current;
+		previousTurnStatus.current = session.turnStatus;
+		if (was !== "running" || session.turnStatus === "running") return;
+		const projectId = selectedProject?.id;
+		if (!projectId) return;
+		void queryClient.invalidateQueries({
+			queryKey: workspaceStatusQuery(projectId).queryKey,
+		});
+		void queryClient.invalidateQueries({
+			queryKey: environmentQueryKey(projectId),
+		});
+	}, [queryClient, selectedProject?.id, session.turnStatus]);
+
+	const heldSetup = useMutation({
+		mutationFn: (mode: WorkspaceRetryMode) => {
+			const workspaceId = projectSetup.data?.id;
+			if (!workspaceId) throw new Error("The project is still loading.");
+			return retryWorkspace({ workspaceId, mode });
+		},
+		onSuccess: () => {
+			const projectId = selectedProject?.id;
+			if (!projectId) return;
+			void projectSetup.refetch();
+			void queryClient.invalidateQueries({
+				queryKey: environmentProgressQuery(projectId).queryKey,
+			});
+		},
+		onError: (cause) => toast.error(publicFailureMessage(cause)),
+	});
+	/** "Set up with the agent": the held message becomes a setup chat's request. */
+	function setUpHeldWithAgent() {
+		const held = heldForSetupRef.current;
+		if (!held?.startsNewChat) return;
+		const text = setupRequestKeeping(held.text);
+		heldForSetupRef.current = { ...held, text, environmentSetup: true };
+		setHeldMessage((current) => (current ? { ...current, text } : current));
+		heldSetup.mutate("plain");
+	}
+	const heldView =
+		heldMessage && heldMessage.projectId === selectedProject?.id
+			? heldMessage
+			: null;
+	const heldFailed =
+		projectSetupStatus === "failed" ||
+		Boolean(
+			projectSetup.data &&
+				workspacePrepareStalled(projectSetup.data, Date.now()),
+		);
 
 	function openInspector(view: ToolsView) {
 		if (
@@ -2982,6 +3052,29 @@ export function WorkspaceHome({
 									data-layout={followUpLayout ? "chat" : "empty"}
 								>
 									<SessionLauncher
+										setupHold={
+											heldView && selectedProject
+												? {
+														messageId: heldView.messageId,
+														render: (showMessage) => (
+															<HeldForSetupMessage
+																projectId={selectedProject.id}
+																text={heldView.text}
+																showMessage={showMessage}
+																failed={heldFailed}
+																actions={{
+																	pending: heldSetup.isPending,
+																	onRetry: () => heldSetup.mutate("retry"),
+																	onSendAnyway: () => heldSetup.mutate("plain"),
+																	...(heldView.startsNewChat
+																		? { onSetUpWithAgent: setUpHeldWithAgent }
+																		: {}),
+																}}
+															/>
+														),
+													}
+												: undefined
+										}
 										prefill={composerPrefill}
 										onSetUpEnvironment={() =>
 											selectedProject &&
@@ -3126,16 +3219,19 @@ export function WorkspaceHome({
 													projectSetup.data === null
 														? "missing"
 														: projectSetup.data?.status;
-												if (
-													selectedProject &&
-													setupStatus &&
-													setupStatus !== "ready" &&
-													setupStatus !== "failed"
-												) {
+												// Held while the project is set up, and after a failed
+												// setup too: the chat shows why, with Retry and Send anyway.
+												if (selectedProject && sendWaitsForSetup(setupStatus)) {
 													if (heldForSetupRef.current)
 														abandonSend(heldForSetupRef.current, null);
 													heldForSetupRef.current = pending;
 													setHeldForSetup(new Set([selectedProject.id]));
+													setHeldMessage({
+														projectId: selectedProject.id,
+														messageId: pending.messageId,
+														text: pending.text,
+														startsNewChat: pending.startsNewChat,
+													});
 													return;
 												}
 												// A newer send replaces one still waiting for sign-in.

@@ -172,7 +172,13 @@ export function SessionTimeline({
 	queuedSteering = [],
 	readPastedText,
 	olderItems,
+	trailing,
 }: {
+	/**
+	 * Shown after everything else: a message waiting for the project's setup,
+	 * with the setup's progress (workspace-home.tsx).
+	 */
+	trailing?: ReactNode;
 	/**
 	 * The chat holds turns before `items`: they load as the reader nears the
 	 * top, and the message being read stays where it is.
@@ -314,6 +320,7 @@ export function SessionTimeline({
 		childTasks.length === 0 &&
 		evidence.length === 0 &&
 		turnStatus !== "running" &&
+		!trailing &&
 		!fill
 	)
 		return null;
@@ -461,6 +468,13 @@ export function SessionTimeline({
 				</p>
 			),
 		});
+	if (trailing)
+		add({
+			key: "environment-setup",
+			kind: "environment-setup",
+			estimate: 220,
+			content: trailing,
+		});
 
 	return (
 		<TimelineProviders
@@ -483,7 +497,11 @@ export function SessionTimeline({
 								: undefined
 						}
 						followEnd={autoScroll}
-						followKey={queued.at(-1)?.id ?? sentMessageId(presented)}
+						followKey={
+							trailing
+								? "environment-setup"
+								: (queued.at(-1)?.id ?? sentMessageId(presented))
+						}
 						onNearStart={
 							olderItems && !olderItems.loading ? olderItems.onLoad : undefined
 						}

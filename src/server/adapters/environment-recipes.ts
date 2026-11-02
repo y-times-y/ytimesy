@@ -101,3 +101,17 @@ export async function environmentRecipeHistory(
 		return saved ? [saved] : [];
 	});
 }
+
+/** One saved setup of the project, by id (Settings' history restore). */
+export async function environmentRecipeById(
+	userId: string,
+	projectId: string,
+	id: string,
+): Promise<SavedEnvironmentRecipe | null> {
+	const result = await database().query<Row>(
+		`select id, repository_id, recipe, source, summary, created_at
+		 from project_environment_recipe where id=$1 and project_id=$2 and user_id=$3`,
+		[id, projectId, userId],
+	);
+	return result.rows[0] ? fromRow(result.rows[0]) : null;
+}

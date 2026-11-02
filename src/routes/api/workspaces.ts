@@ -3,17 +3,23 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { environmentModelRequest } from "#/domain/environment-model";
 import { ProjectId } from "../../domain/ids";
+import { environmentBuildProgress } from "../../server/adapters/environment-build-steps";
 import { workspaceForProject } from "../../server/adapters/workspaces";
 import { requireUser } from "../../server/auth/auth";
 import { endpoint, requireSameOrigin } from "../../server/http";
 import {
 	enqueueProjectWorkspace,
-	workspaceView,
+	workspaceStatusView,
 } from "../../server/services/workspaces";
 
 const selection = z.object({
 	projectId: z.string().uuid(),
 	repairModel: environmentModelRequest.optional(),
+});
+const read = z.object({
+	projectId: z.string().uuid(),
+	/** "1": the newest build's steps and output, polled while it runs. */
+	progress: z.literal("1").optional(),
 });
 
 export const Route = createFileRoute("/api/workspaces")({
@@ -22,14 +28,18 @@ export const Route = createFileRoute("/api/workspaces")({
 			GET: ({ request }) =>
 				endpoint(async () => {
 					const user = await requireUser(request.headers);
-					const projectId = selection.parse(
+					const { projectId, progress } = read.parse(
 						Object.fromEntries(new URL(request.url).searchParams),
-					).projectId;
+					);
 					const workspace = await workspaceForProject(
 						user.id,
 						ProjectId(projectId),
 					);
-					return workspace ? workspaceView(workspace) : null;
+					if (progress)
+						return workspace
+							? environmentBuildProgress(workspace.id)
+							: { build: null, steps: [] };
+					return workspace ? workspaceStatusView(workspace) : null;
 				}),
 			POST: ({ request }) =>
 				endpoint(async () => {
@@ -49,7 +59,7 @@ export const Route = createFileRoute("/api/workspaces")({
 						),
 					);
 					if (result._tag === "Left") throw result.left.error;
-					return workspaceView(result.right);
+					return workspaceStatusView(result.right);
 				}),
 		},
 	},
