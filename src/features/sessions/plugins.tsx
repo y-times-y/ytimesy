@@ -230,9 +230,7 @@ export function Plugins() {
 												) : servers.isPending ? (
 													<StatusBadge tone="muted">Checking…</StatusBadge>
 												) : needsToken.length ? (
-													<StatusBadge tone="warning">
-														Needs a token
-													</StatusBadge>
+													<StatusBadge tone="muted">Needs a token</StatusBadge>
 												) : pending.length ? (
 													<StatusBadge tone="warning">
 														Needs sign-in

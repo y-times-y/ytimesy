@@ -27,13 +27,43 @@ export function signInOutcome(
 	return { done: true };
 }
 
+/** Where each service hands out a token, for the one-line help link. */
+const TOKEN_HELP: readonly { host: RegExp; href: string }[] = [
+	{ host: /(^|\.)slack\.com$/, href: "https://api.slack.com/apps" },
+	{
+		host: /(^|\.)github(copilot)?\.com$/,
+		href: "https://github.com/settings/tokens",
+	},
+	{
+		host: /(^|\.)render\.com$/,
+		href: "https://dashboard.render.com/u/settings#api-keys",
+	},
+	{
+		host: /(^|\.)pagerduty\.com$/,
+		href: "https://support.pagerduty.com/main/docs/api-access-keys",
+	},
+];
+
+export function tokenHelpLink(url: string | undefined) {
+	if (!url) return null;
+	try {
+		const host = new URL(url).host;
+		return TOKEN_HELP.find((entry) => entry.host.test(host))?.href ?? null;
+	} catch {
+		return null;
+	}
+}
+
 /** A row's inline field for the user's own token or API key, sealed on our server. */
 export function McpTokenPrompt({
 	ask,
+	url,
 	onSaved,
 	onCancel,
 }: {
 	ask: TokenAsk;
+	/** The server's address, for the "Get a token" link. */
+	url?: string;
 	onSaved: (servers: PublicMcpServer[]) => void;
 	onCancel: () => void;
 }) {
@@ -46,46 +76,57 @@ export function McpTokenPrompt({
 			onSaved(servers);
 		},
 	});
+	const help = tokenHelpLink(url);
 	return (
 		<li className="integration-row integration-token">
 			<form
+				className="integration-token-form"
 				onSubmit={(event) => {
 					event.preventDefault();
 					mutation.mutate();
 				}}
 			>
-				<label className="integration-field">
+				<div className="integration-token-line">
 					<span>{tokenAskLine(ask.reason)}</span>
+					{help ? (
+						<a href={help} target="_blank" rel="noreferrer">
+							Get a token
+						</a>
+					) : null}
+				</div>
+				<div className="integration-token-input">
 					<input
 						type="password"
 						autoComplete="off"
 						spellCheck={false}
 						required
+						autoFocus
+						aria-label="Token or API key"
 						value={token}
-						placeholder="Token or API key"
+						placeholder="Paste a token or API key"
 						title="Sent as a bearer token. Use Header-Name: value for another header."
 						onChange={(event) => setToken(event.target.value)}
 					/>
-				</label>
-				{mutation.error ? (
-					<p role="alert">{saveErrorMessage(mutation.error)}</p>
-				) : null}
-				<div className="integration-actions">
 					<button
 						type="button"
-						className="integration-button-quiet"
+						className="integration-token-cancel"
 						onClick={onCancel}
 					>
 						Cancel
 					</button>
 					<button
 						type="submit"
-						className="integration-button-primary"
+						className="integration-token-save"
 						disabled={mutation.isPending || !token.trim()}
 					>
 						{mutation.isPending ? "Checking…" : "Save"}
 					</button>
 				</div>
+				{mutation.error ? (
+					<p className="integration-token-error" role="alert">
+						{saveErrorMessage(mutation.error)}
+					</p>
+				) : null}
 			</form>
 		</li>
 	);

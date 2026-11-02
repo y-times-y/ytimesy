@@ -259,7 +259,7 @@ export function McpServers() {
 											{!server.enabled ? (
 												<StatusBadge tone="muted">Off</StatusBadge>
 											) : needsToken ? (
-												<StatusBadge tone="warning">Needs a token</StatusBadge>
+												<StatusBadge tone="muted">Needs a token</StatusBadge>
 											) : needsSignIn ? (
 												<StatusBadge tone="warning">Needs sign-in</StatusBadge>
 											) : server.signIn === "unreachable" ? (
@@ -331,6 +331,7 @@ export function McpServers() {
 								{asking ? (
 									<McpTokenPrompt
 										ask={asking}
+										url={server.url}
 										onCancel={() => setAsk(null)}
 										onSaved={(next) => {
 											setAsk(null);
