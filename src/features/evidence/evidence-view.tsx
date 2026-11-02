@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Camera, ExternalLink } from "lucide-react";
+import { Camera, ExternalLink, Video } from "lucide-react";
 import {
+	agentCapturesSummary,
 	EVIDENCE_RETENTION_DAYS,
 	type EvidenceRecord,
 	type EvidenceStatus,
@@ -8,6 +9,7 @@ import {
 	evidenceMediaSummary,
 	evidencePagePath,
 	evidenceVerifiedAtHead,
+	evidenceVideoFile,
 } from "#/domain/pr-evidence";
 import { useHydrated } from "#/features/app/first-paint";
 
@@ -198,8 +200,53 @@ function EvidenceHeader({
 	);
 }
 
+/** The agent's own screenshot or recording, shown where it was made; opens full size. */
+function AgentCapture({ evidence }: { evidence: EvidenceRecord }) {
+	const file = evidence.files[0];
+	if (!file) return null;
+	const src = media(evidence, file.name);
+	const video = evidenceVideoFile(file.name);
+	return (
+		<figure
+			className="agent-capture"
+			aria-label={video ? "Screen recording" : "Screenshot"}
+		>
+			{video ? (
+				<video controls preload="metadata" src={src}>
+					<track kind="captions" />
+				</video>
+			) : (
+				<a href={src} target="_blank" rel="noreferrer" title="Open full size">
+					<img src={src} alt={file.name} loading="lazy" />
+				</a>
+			)}
+			<figcaption>
+				{video ? (
+					<Video size={14} aria-hidden="true" />
+				) : (
+					<Camera size={14} aria-hidden="true" />
+				)}
+				<span>
+					{video
+						? `Recording${evidence.videoSeconds ? `, ${Math.max(1, Math.round(evidence.videoSeconds))} s` : ""}`
+						: "Screenshot"}
+				</span>
+				<a
+					className="evidence-open"
+					href={src}
+					target="_blank"
+					rel="noreferrer"
+				>
+					Open <ExternalLink size={14} aria-hidden="true" />
+				</a>
+			</figcaption>
+		</figure>
+	);
+}
+
 /** The chat timeline's card for one capture: thumbnails, the recording and the facts. */
 export function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
+	if (evidence.source === "agent") return <AgentCapture evidence={evidence} />;
 	const shots = screenshots(evidence);
 	const video = videoFile(evidence);
 	const summary = evidenceMediaSummary({
@@ -286,7 +333,37 @@ function CliOutput({
 }
 
 /** The evidence page: every stored file of one capture with how it was produced. */
-export function EvidenceDetail({ evidence }: { evidence: EvidenceRecord }) {
+export function EvidenceDetail({
+	evidence,
+	captures,
+}: {
+	evidence: EvidenceRecord;
+	/** For an agent capture: its chat's agent captures, newest first. */
+	captures?: readonly EvidenceRecord[];
+}) {
+	if (evidence.source === "agent") {
+		const shown = [...(captures?.length ? captures : [evidence])].reverse();
+		return (
+			<article className="evidence-card evidence-page">
+				<header className="evidence-header">
+					<Camera size={14} aria-hidden="true" />
+					<strong>Screenshots and recordings</strong>
+					<span className="evidence-status" data-status="captured">
+						{agentCapturesSummary(shown)}
+					</span>
+				</header>
+				<div className="evidence-body">
+					<p className="evidence-note">
+						Captured by the agent on its desktop. Kept for{" "}
+						{EVIDENCE_RETENTION_DAYS} days.
+					</p>
+					{shown.map((capture) => (
+						<AgentCapture key={capture.id} evidence={capture} />
+					))}
+				</div>
+			</article>
+		);
+	}
 	const shots = screenshots(evidence);
 	const video = videoFile(evidence);
 	const cli = evidence.manifest?.cli;

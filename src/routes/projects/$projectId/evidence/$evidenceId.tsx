@@ -53,7 +53,7 @@ function EvidenceContent() {
 				<YtimesyBrand />
 			</nav>
 			{evidence ? (
-				<EvidenceDetail evidence={evidence} />
+				<EvidenceDetail evidence={evidence} captures={page.data?.captures} />
 			) : page.isPending ? (
 				<p className="evidence-missing">Loading evidence</p>
 			) : (

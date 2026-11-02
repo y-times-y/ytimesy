@@ -503,3 +503,16 @@ it("splits shell commands into simple commands", () => {
 		["tail"],
 	]);
 });
+
+describe("verdict lines", () => {
+	it("tones a line that opens with its verdict by that verdict, not the words it quotes", () => {
+		const inner =
+			"test -s docs/a.mp4 && ffprobe -v error -show_entries format=duration docs/a.mp4";
+		const tones = commandOutputTones(
+			`ytimesy-check --files README.md -- bash -lc '${inner}'`,
+			`PASSED: clean-copy run of ${JSON.stringify(inner)}\nFAILED: clean-copy run of "true"`,
+		).lines.map((line) => line.tone);
+		expect(tones).toEqual(["good", "bad"]);
+		expect(genericTone("Error: no such file")).toBe("bad");
+	});
+});

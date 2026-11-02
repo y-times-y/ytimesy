@@ -328,7 +328,9 @@ describe("lean instructions", () => {
 		);
 		expect(claude).toContain("`~/.ytimesy/history/`");
 		expect(claude).toContain("`~/.ytimesy/environment.md` (if present)");
-		expect(claude).toContain("`ytimesy-browser open|screenshot|inspect|exec`");
+		expect(claude).toContain(
+			"`ytimesy-browser open|screenshot|record|inspect|exec`",
+		);
 		expect(leanToolInstructions("codex")).toContain(
 			"apply_patch changes files",
 		);
@@ -354,6 +356,8 @@ describe("lean instructions", () => {
 		expect(lean).toContain("You are the coding agent for this chat");
 		expect(lean).toContain("`ytimesy-browser screenshot`");
 		expect(lean).toContain("look at the PNG it prints with read_file");
+		expect(lean).toContain("`record <seconds>`");
+		expect(lean).toContain("never commit media files");
 		// Main hands off instead of waiting; a subagent's turn end is its report.
 		expect(lean).toContain("When only waiting is left, do not wait or poll");
 		expect(
@@ -364,8 +368,9 @@ describe("lean instructions", () => {
 			}),
 		).not.toContain("When only waiting is left");
 		// The lean surface adds its tools (with ytimesy-check's flags, so the model
-		// does not run --help) and Main's hand-off rule (HANDOFF_INSTRUCTIONS).
-		expect(lean.length).toBeLessThan(current.length + 2700);
+		// does not run --help), Main's hand-off rule (HANDOFF_INSTRUCTIONS) and
+		// the capture line (LEAN_CAPTURES_INSTRUCTION).
+		expect(lean.length).toBeLessThan(current.length + 2950);
 		const knowing = agentTurnInstructions({
 			...input,
 			projectKnowledge: "Billing lives in billing/.",

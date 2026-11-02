@@ -1,5 +1,6 @@
 import { turnPublicationRole } from "#/domain/agent-task";
 import { posixShellQuoted } from "#/domain/posix-command";
+import { withAgentCapturesSection } from "#/domain/pr-evidence";
 import { repositoriesForProject } from "#/domain/projects";
 import {
 	changedPathsFromDiff,
@@ -18,6 +19,10 @@ import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { githubAccessToken } from "../auth/github-connection";
+import {
+	agentCapturesPullRequestSection,
+	collectAgentCaptures,
+} from "./agent-captures";
 import { queuePullRequestEvidence } from "./pr-evidence-job";
 import { availableChatBranchName, projectBaseBranch } from "./session-branch";
 
@@ -79,6 +84,21 @@ export async function publishCompletedSessionTurn(
 		throw new Error("The chat's project is unavailable for automatic handoff.");
 	const providerRef = session.providerRef;
 	if (!providerRef) return;
+	// Screenshots and recordings the agent made after its last command (a
+	// recording it ran in the background) are stored before the description
+	// lists them.
+	await collectAgentCaptures({
+		shell: (command, timeout) =>
+			runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
+		userId: session.userId,
+		projectId: session.projectId,
+		sessionId: session.id,
+		itemId: null,
+	}).catch((error) =>
+		console.warn("Agent captures were not collected at handoff.", {
+			message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+		}),
+	);
 	// A chat publishes only its own working branch (taken below if it has
 	// none yet).
 	let head = session.workingBranch;
@@ -191,6 +211,15 @@ export async function publishCompletedSessionTurn(
 			directory,
 			revision,
 		);
+		// The Evidence section for the agent's screenshots and recordings: a count
+		// and a link to them in ytimesy (never media in the repository or body).
+		const captures = primary
+			? await agentCapturesPullRequestSection({
+					userId: session.userId,
+					projectId: session.projectId,
+					sessionId: session.id,
+				}).catch(() => null)
+			: null;
 		const pull = await ensureAppDraftPullRequest(
 			repo.installationId,
 			repo.fullName,
@@ -198,12 +227,15 @@ export async function publishCompletedSessionTurn(
 				title:
 					session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
 					"Agent changes",
-				body: pullRequestHandoffBody({
-					description: facts.description,
-					finalAnswer: facts.finalAnswer,
-					files: [...facts.files, ...files],
-					verification: facts.verification,
-				}),
+				body: withAgentCapturesSection(
+					pullRequestHandoffBody({
+						description: facts.description,
+						finalAnswer: facts.finalAnswer,
+						files: [...facts.files, ...files],
+						verification: facts.verification,
+					}),
+					captures,
+				),
 				head,
 				base,
 			},
