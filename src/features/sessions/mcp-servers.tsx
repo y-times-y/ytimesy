@@ -6,8 +6,9 @@ import {
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { mcpServerLabel as serverLabel } from "#/domain/connector-name";
+import { mcpTokenHeaders } from "#/domain/mcp-token";
 import {
 	cacheWrite,
 	optimisticMutation,
@@ -24,6 +25,12 @@ import {
 	startMcpOAuthFn,
 } from "./mcp-servers.fn";
 import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
+import {
+	McpTokenPrompt,
+	SIGN_IN_FAILED,
+	signInOutcome,
+	type TokenAsk,
+} from "./mcp-token-prompt";
 
 const SERVERS_KEY = ["mcp-servers"];
 
@@ -96,19 +103,25 @@ export function McpServers() {
 	const [url, setUrl] = useState("");
 	const [apiKey, setApiKey] = useState("");
 	const [added, setAdded] = useState<number | null>(null);
+	// A server that cannot sign the user in here asks for their token instead.
+	const [ask, setAsk] = useState<TokenAsk | null>(null);
+	const [signInFailed, setSignInFailed] = useState(false);
 	const update = (next: PublicMcpServer[]) =>
 		queryClient.setQueryData(["mcp-servers"], next);
 	// OAuth servers: the provider's sign-in page, then back to /api/mcp/oauth/callback.
 	const signIn = useMutation({
-		mutationFn: async (id: string) => ({
-			id,
-			...(await startSignIn({ data: { id } })),
-		}),
-		onSuccess: (result) => {
-			if (result.url) {
-				rememberMcpSignInReturn("mcp", result.id);
-				window.location.assign(result.url);
-			} else void servers.refetch();
+		mutationFn: async (id: string) =>
+			signInOutcome(id, await startSignIn({ data: { id } })),
+		onMutate: () => setSignInFailed(false),
+		onSuccess: (outcome, id) => {
+			if ("go" in outcome) {
+				rememberMcpSignInReturn("mcp", id);
+				window.location.assign(outcome.go);
+				return;
+			}
+			if ("ask" in outcome) setAsk(outcome.ask);
+			if ("failed" in outcome) setSignInFailed(true);
+			void servers.refetch();
 		},
 	});
 	const add = useMutation({
@@ -117,13 +130,7 @@ export function McpServers() {
 				data: {
 					name,
 					url,
-					headers: apiKey
-						? {
-								Authorization: /^(Bearer|Basic) /i.test(apiKey)
-									? apiKey
-									: `Bearer ${apiKey}`,
-							}
-						: {},
+					headers: mcpTokenHeaders(apiKey),
 					projectId: null,
 				},
 			}),
@@ -165,6 +172,7 @@ export function McpServers() {
 			</header>
 			{servers.isError ? <p role="alert">Could not load MCP servers.</p> : null}
 			{error ? <p role="alert">{saveErrorMessage(error)}</p> : null}
+			{signInFailed ? <p role="alert">{SIGN_IN_FAILED}</p> : null}
 			{added !== null ? (
 				<p className="integration-desc">
 					Connected · {added} tools available to the agent.
@@ -233,73 +241,104 @@ export function McpServers() {
 				<ul className="integration-list">
 					{servers.data.map((server) => {
 						const needsSignIn = server.signIn === "needs-sign-in";
+						const needsToken = server.signIn === "needs-token";
+						const asking = ask?.id === server.id ? ask : null;
 						return (
-							<li className="integration-row" key={server.id}>
-								<BrandLogo
-									id={server.name}
-									name={server.name}
-									url={server.url}
-								/>
-								<div className="integration-main">
-									<div className="integration-title">
-										<strong>{serverLabel(server.name)}</strong>
+							<Fragment key={server.id}>
+								<li className="integration-row">
+									<BrandLogo
+										id={server.name}
+										name={server.name}
+										url={server.url}
+									/>
+									<div className="integration-main">
+										<div className="integration-title">
+											<strong>{serverLabel(server.name)}</strong>
+										</div>
+										<div className="integration-status">
+											{!server.enabled ? (
+												<StatusBadge tone="muted">Off</StatusBadge>
+											) : needsToken ? (
+												<StatusBadge tone="warning">Needs a token</StatusBadge>
+											) : needsSignIn ? (
+												<StatusBadge tone="warning">Needs sign-in</StatusBadge>
+											) : server.signIn === "unreachable" ? (
+												<StatusBadge tone="muted">
+													Can't reach server
+												</StatusBadge>
+											) : server.signIn === "signed-in" ? (
+												<StatusBadge tone="success">Signed in</StatusBadge>
+											) : (
+												<StatusBadge tone="success">Connected</StatusBadge>
+											)}
+											<span className="integration-desc">
+												{new URL(server.url).host}
+											</span>
+										</div>
 									</div>
-									<div className="integration-status">
-										{!server.enabled ? (
-											<StatusBadge tone="muted">Off</StatusBadge>
-										) : needsSignIn ? (
-											<StatusBadge tone="warning">Needs sign-in</StatusBadge>
-										) : server.signIn === "unreachable" ? (
-											<StatusBadge tone="muted">Can't reach server</StatusBadge>
-										) : server.signIn === "signed-in" ? (
-											<StatusBadge tone="success">Signed in</StatusBadge>
-										) : (
-											<StatusBadge tone="success">Connected</StatusBadge>
-										)}
-										<span className="integration-desc">
-											{new URL(server.url).host}
-										</span>
-									</div>
-								</div>
-								<div className="integration-actions">
-									{server.auth === "oauth" && server.enabled ? (
+									<div className="integration-actions">
+										{needsToken && server.enabled && !asking ? (
+											<button
+												type="button"
+												className="integration-button-primary"
+												disabled={busy}
+												onClick={() =>
+													setAsk({ id: server.id, reason: "token" })
+												}
+											>
+												Add token
+											</button>
+										) : server.auth === "oauth" &&
+											server.enabled &&
+											!needsToken ? (
+											<button
+												type="button"
+												className={
+													needsSignIn
+														? "integration-button-primary"
+														: "integration-button-quiet"
+												}
+												disabled={busy}
+												onClick={() => signIn.mutate(server.id)}
+											>
+												{signIn.isPending && signIn.variables === server.id
+													? "Opening…"
+													: needsSignIn
+														? "Sign in"
+														: "Reconnect"}
+											</button>
+										) : null}
+										<IntegrationSwitch
+											label={`${server.name} enabled`}
+											checked={server.enabled}
+											disabled={busy}
+											onChange={(enabled) =>
+												toggle.mutate({ id: server.id, enabled })
+											}
+										/>
 										<button
 											type="button"
-											className={
-												needsSignIn
-													? "integration-button-primary"
-													: "integration-button-quiet"
-											}
+											className="integration-icon-button"
+											aria-label="Remove"
+											title="Remove"
 											disabled={busy}
-											onClick={() => signIn.mutate(server.id)}
+											onClick={() => remove.mutate(server.id)}
 										>
-											{signIn.isPending && signIn.variables === server.id
-												? "Opening…"
-												: needsSignIn
-													? "Sign in"
-													: "Reconnect"}
+											<Trash2 size={16} />
 										</button>
-									) : null}
-									<IntegrationSwitch
-										label={`${server.name} enabled`}
-										checked={server.enabled}
-										disabled={busy}
-										onChange={(enabled) =>
-											toggle.mutate({ id: server.id, enabled })
-										}
+									</div>
+								</li>
+								{asking ? (
+									<McpTokenPrompt
+										ask={asking}
+										onCancel={() => setAsk(null)}
+										onSaved={(next) => {
+											setAsk(null);
+											update(next);
+										}}
 									/>
-									<button
-										type="button"
-										className="integration-icon-button"
-										aria-label="Remove"
-										title="Remove"
-										disabled={busy}
-										onClick={() => remove.mutate(server.id)}
-									>
-										<Trash2 size={16} />
-									</button>
-								</div>
-							</li>
+								) : null}
+							</Fragment>
 						);
 					})}
 				</ul>

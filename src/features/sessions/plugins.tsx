@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
 	cacheWrite,
 	optimisticMutation,
@@ -17,6 +17,12 @@ import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
 import { getMcpServersFn, startMcpOAuthFn } from "./mcp-servers.fn";
 import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
+import {
+	McpTokenPrompt,
+	SIGN_IN_FAILED,
+	signInOutcome,
+	type TokenAsk,
+} from "./mcp-token-prompt";
 import {
 	getPluginsFn,
 	installPluginFn,
@@ -112,21 +118,27 @@ export function Plugins() {
 	);
 	// A catalog plugin with settings opens them inline before installing.
 	const [configuring, setConfiguring] = useState<string | null>(null);
+	// A server that cannot sign the user in here asks for their token instead.
+	const [ask, setAsk] = useState<TokenAsk | null>(null);
+	const [signInFailed, setSignInFailed] = useState(false);
 	const refresh = () =>
 		Promise.all([
 			queryClient.invalidateQueries({ queryKey: ["plugins"] }),
 			queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
 		]);
 	const signIn = useMutation({
-		mutationFn: async (id: string) => ({
-			id,
-			...(await startSignIn({ data: { id } })),
-		}),
-		onSuccess: (result) => {
-			if (result.url) {
-				rememberMcpSignInReturn("plugins", result.id);
-				window.location.assign(result.url);
-			} else void refresh();
+		mutationFn: async (id: string) =>
+			signInOutcome(id, await startSignIn({ data: { id } })),
+		onMutate: () => setSignInFailed(false),
+		onSuccess: (outcome, id) => {
+			if ("go" in outcome) {
+				rememberMcpSignInReturn("plugins", id);
+				window.location.assign(outcome.go);
+				return;
+			}
+			if ("ask" in outcome) setAsk(outcome.ask);
+			if ("failed" in outcome) setSignInFailed(true);
+			void refresh();
 		},
 	});
 	const installMutation = useMutation({
@@ -174,6 +186,7 @@ export function Plugins() {
 				) : null}
 			</header>
 			{error ? <p role="alert">{saveErrorMessage(error)}</p> : null}
+			{signInFailed ? <p role="alert">{SIGN_IN_FAILED}</p> : null}
 			{installed.length ? (
 				<>
 					<h4 className="integrations-label">Installed</h4>
@@ -187,6 +200,13 @@ export function Plugins() {
 							const pending = oauth.filter(
 								(server) => server.signIn === "needs-sign-in",
 							);
+							const needsToken = oauth.filter(
+								(server) => server.signIn === "needs-token",
+							);
+							const asking =
+								ask && oauth.some((server) => server.id === ask.id)
+									? ask
+									: null;
 							const unreachable = oauth.filter(
 								(server) => server.signIn === "unreachable",
 							);
@@ -197,69 +217,104 @@ export function Plugins() {
 									count(row.mcpServers.length, "tool server"),
 							].filter(Boolean);
 							return (
-								<li className="integration-row" key={row.id}>
-									<BrandLogo id={row.catalogId} name={row.pluginName} />
-									<div className="integration-main">
-										<div className="integration-title">
-											<strong>{entry?.displayName ?? row.pluginName}</strong>
+								<Fragment key={row.id}>
+									<li className="integration-row">
+										<BrandLogo id={row.catalogId} name={row.pluginName} />
+										<div className="integration-main">
+											<div className="integration-title">
+												<strong>{entry?.displayName ?? row.pluginName}</strong>
+											</div>
+											<div className="integration-status">
+												{!row.enabled ? (
+													<StatusBadge tone="muted">Off</StatusBadge>
+												) : servers.isPending ? (
+													<StatusBadge tone="muted">Checking…</StatusBadge>
+												) : needsToken.length ? (
+													<StatusBadge tone="warning">
+														Needs a token
+													</StatusBadge>
+												) : pending.length ? (
+													<StatusBadge tone="warning">
+														Needs sign-in
+													</StatusBadge>
+												) : unreachable.length ? (
+													<StatusBadge tone="muted">
+														Can't reach server
+													</StatusBadge>
+												) : oauth.length ? (
+													<StatusBadge tone="success">Signed in</StatusBadge>
+												) : (
+													<StatusBadge tone="success">Ready</StatusBadge>
+												)}
+												<span className="integration-desc">
+													{parts.join(" · ") || entry?.description}
+												</span>
+											</div>
 										</div>
-										<div className="integration-status">
-											{!row.enabled ? (
-												<StatusBadge tone="muted">Off</StatusBadge>
-											) : servers.isPending ? (
-												<StatusBadge tone="muted">Checking…</StatusBadge>
-											) : pending.length ? (
-												<StatusBadge tone="warning">Needs sign-in</StatusBadge>
-											) : unreachable.length ? (
-												<StatusBadge tone="muted">
-													Can't reach server
-												</StatusBadge>
-											) : oauth.length ? (
-												<StatusBadge tone="success">Signed in</StatusBadge>
-											) : (
-												<StatusBadge tone="success">Ready</StatusBadge>
-											)}
-											<span className="integration-desc">
-												{parts.join(" · ") || entry?.description}
-											</span>
+										<div className="integration-actions">
+											{row.enabled
+												? pending.map((server) => (
+														<button
+															type="button"
+															className="integration-button-primary"
+															key={server.id}
+															disabled={busy}
+															onClick={() => signIn.mutate(server.id)}
+														>
+															{signIn.isPending &&
+															signIn.variables === server.id
+																? "Opening…"
+																: "Sign in"}
+														</button>
+													))
+												: null}
+											{row.enabled && !asking
+												? needsToken.map((server) => (
+														<button
+															type="button"
+															className="integration-button-primary"
+															key={server.id}
+															disabled={busy}
+															onClick={() =>
+																setAsk({ id: server.id, reason: "token" })
+															}
+														>
+															Add token
+														</button>
+													))
+												: null}
+											<IntegrationSwitch
+												label={`${row.pluginName} enabled`}
+												checked={row.enabled}
+												disabled={busy}
+												onChange={(enabled) =>
+													toggleMutation.mutate({ id: row.id, enabled })
+												}
+											/>
+											<button
+												type="button"
+												className="integration-icon-button"
+												aria-label="Remove"
+												title="Remove"
+												disabled={busy}
+												onClick={() => uninstallMutation.mutate(row.id)}
+											>
+												<Trash2 size={16} />
+											</button>
 										</div>
-									</div>
-									<div className="integration-actions">
-										{row.enabled
-											? pending.map((server) => (
-													<button
-														type="button"
-														className="integration-button-primary"
-														key={server.id}
-														disabled={busy}
-														onClick={() => signIn.mutate(server.id)}
-													>
-														{signIn.isPending && signIn.variables === server.id
-															? "Opening…"
-															: "Sign in"}
-													</button>
-												))
-											: null}
-										<IntegrationSwitch
-											label={`${row.pluginName} enabled`}
-											checked={row.enabled}
-											disabled={busy}
-											onChange={(enabled) =>
-												toggleMutation.mutate({ id: row.id, enabled })
-											}
+									</li>
+									{asking ? (
+										<McpTokenPrompt
+											ask={asking}
+											onCancel={() => setAsk(null)}
+											onSaved={(next) => {
+												setAsk(null);
+												queryClient.setQueryData(SERVERS_KEY, next);
+												void refresh();
+											}}
 										/>
-										<button
-											type="button"
-											className="integration-icon-button"
-											aria-label="Remove"
-											title="Remove"
-											disabled={busy}
-											onClick={() => uninstallMutation.mutate(row.id)}
-										>
-											<Trash2 size={16} />
-										</button>
-									</div>
-								</li>
+									) : null}
+								</Fragment>
 							);
 						})}
 					</ul>

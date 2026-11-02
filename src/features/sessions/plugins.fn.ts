@@ -9,20 +9,31 @@ import {
 } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
-import { installCatalogPlugin } from "#/server/services/plugin-install";
+import {
+	installCatalogPlugin,
+	signInReplacesSettings,
+} from "#/server/services/plugin-install";
 
 export const getPluginsFn = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await requireUser(getRequest().headers);
 		return {
-			catalog: PLUGIN_CATALOG.map(
-				({ id, displayName, description, settings }) => ({
-					id,
-					displayName,
-					description,
-					settings: settings ?? [],
-				}),
-			),
+			catalog: PLUGIN_CATALOG.map((entry) => {
+				const optional = signInReplacesSettings(entry);
+				return {
+					id: entry.id,
+					displayName: entry.displayName,
+					description: entry.description,
+					settings: (entry.settings ?? []).map((setting) =>
+						optional.has(setting.key)
+							? {
+									...setting,
+									description: "Optional: leave empty to sign in",
+								}
+							: setting,
+					),
+				};
+			}),
 			installed: await listInstalls(user.id),
 			requestUrl: process.env.YTIMESY_PLUGIN_REQUEST_URL ?? null,
 		};

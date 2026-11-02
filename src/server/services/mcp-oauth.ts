@@ -13,13 +13,26 @@ import {
 	saveMcpOAuthState,
 	takeMcpOAuthState,
 } from "../adapters/mcp-servers";
+import {
+	chooseClientRegistration,
+	fetchAuthorizationServerMetadata,
+	McpSignInUnavailable,
+	mcpOAuthAppCredentials,
+} from "./mcp-oauth-client";
 
 /** What we keep per OAuth server, sealed: the registered client and the user's tokens. */
-type OAuthRecord = {
+export type OAuthRecord = {
 	client?: OAuthClientInformation;
 	dynamic?: boolean;
+	/**
+	 * Signs in with the owner's registered app for this service ("SLACK"). Its
+	 * credentials are read from settings each time, never copied here.
+	 */
+	app?: string;
 	tokens?: OAuthTokens;
 	authorizationServer?: OAuthAuthorizationServerInformation;
+	/** The last sign-in start found no way to get a client: the user needs a token. */
+	unavailable?: { reason: "setup" | "token"; authorizationServer: string };
 };
 
 class McpSignInRequired extends Error {
@@ -30,6 +43,22 @@ class McpSignInRequired extends Error {
 
 export const mcpOAuthRedirectUrl = (appUrl: string) =>
 	new URL("/api/mcp/oauth/callback", appUrl).toString();
+
+/** Our Client ID Metadata Document: its URL is our client id where servers accept one. */
+export const mcpClientMetadataUrl = (appUrl: string) =>
+	new URL("/api/mcp/oauth/client-metadata", appUrl).toString();
+
+export function mcpClientMetadataDocument(appUrl: string) {
+	return {
+		client_id: mcpClientMetadataUrl(appUrl),
+		client_name: "ytimesy",
+		client_uri: new URL("/", appUrl).toString(),
+		redirect_uris: [mcpOAuthRedirectUrl(appUrl)],
+		grant_types: ["authorization_code", "refresh_token"],
+		response_types: ["code"],
+		token_endpoint_auth_method: "none",
+	};
+}
 
 export async function readOAuthRecord(sealed: string | null, userId: string) {
 	return sealed
@@ -50,6 +79,16 @@ export function storedOAuthProvider(input: {
 	persist: (record: OAuthRecord) => Promise<void>;
 	verifier?: string;
 	state?: string;
+	/**
+	 * Starting sign-in: pick how to get a client for this authorization server
+	 * (our registered app, dynamic registration, or our metadata document).
+	 */
+	choose?: {
+		clientMetadataUrl: string;
+		fetchFn?: typeof fetch;
+	};
+	/** Where the owner's registered apps are configured; process.env by default. */
+	env?: Record<string, string | undefined>;
 }): OAuthClientProvider & { authorizationUrl?: URL; verifier?: string } {
 	const record = input.record;
 	const save = () => input.persist(record);
@@ -70,7 +109,10 @@ export function storedOAuthProvider(input: {
 				token_endpoint_auth_method: "none",
 			};
 		},
-		clientInformation: () => record.client,
+		clientInformation: () =>
+			record.app
+				? (mcpOAuthAppCredentials(record.app, input.env) ?? undefined)
+				: record.client,
 		isClientInformationDynamicallyRegistered: () => record.dynamic === true,
 		saveClientInformation: async (client) => {
 			record.client = client;
@@ -98,14 +140,48 @@ export function storedOAuthProvider(input: {
 			return provider.verifier;
 		},
 		state: () => input.state ?? randomBytes(32).toString("base64url"),
-		validateAuthorizationServerURL: (_server, authorizationServer) => {
+		validateAuthorizationServerURL: async (_server, authorizationServer) => {
 			if (new URL(authorizationServer).protocol !== "https:")
 				throw new Error("MCP authorization servers must use HTTPS.");
+			const choose = input.choose;
+			if (
+				!choose ||
+				record.client ||
+				(record.app && mcpOAuthAppCredentials(record.app, input.env))
+			)
+				return;
+			record.app = undefined;
+			const server = String(authorizationServer);
+			const choice = chooseClientRegistration({
+				authorizationServer: server,
+				metadata: await fetchAuthorizationServerMetadata(
+					server,
+					choose.fetchFn,
+				).catch(() => undefined),
+				clientMetadataUrl: choose.clientMetadataUrl,
+				env: input.env,
+			});
+			const hadUnavailable = record.unavailable !== undefined;
+			record.unavailable = undefined;
+			if (choice.kind === "app") record.app = choice.service;
+			else if (choice.kind === "metadata-document") {
+				record.client = choice.client;
+				record.dynamic = false;
+			} else if (choice.kind === "token") {
+				record.unavailable = {
+					reason: choice.reason,
+					authorizationServer: server,
+				};
+				await save();
+				throw new McpSignInUnavailable(choice.reason);
+			}
+			if (choice.kind !== "dynamic" || hadUnavailable) await save();
 		},
 		invalidateCredentials: async (scope) => {
 			if (scope === "all" || scope === "client") {
 				record.client = undefined;
 				record.dynamic = undefined;
+				record.app = undefined;
 			}
 			if (scope === "all" || scope === "tokens") record.tokens = undefined;
 			await save();
@@ -122,12 +198,17 @@ const persistFor =
 			await seal(JSON.stringify(record), { purpose: "mcp-oauth", userId }),
 		);
 
-/** Starts sign-in: returns the provider's authorization URL, or null if already signed in. */
+/**
+ * Starts sign-in: returns the provider's authorization URL, or null if already
+ * signed in. Throws McpSignInUnavailable when the service cannot sign users in
+ * (no registered app, dynamic registration or metadata document).
+ */
 export async function startMcpOAuth(input: {
 	userId: string;
 	serverId: string;
 	appUrl: string;
 	fetchFn?: typeof fetch;
+	env?: Record<string, string | undefined>;
 }) {
 	const server = await mcpServerForOwner(input.userId, input.serverId);
 	if (server?.auth !== "oauth") throw new Error("MCP server not found.");
@@ -137,6 +218,11 @@ export async function startMcpOAuth(input: {
 		redirectUrl: mcpOAuthRedirectUrl(input.appUrl),
 		persist: persistFor(input.userId, server.id),
 		state,
+		choose: {
+			clientMetadataUrl: mcpClientMetadataUrl(input.appUrl),
+			fetchFn: input.fetchFn,
+		},
+		env: input.env,
 	});
 	const result = await auth(provider, {
 		serverUrl: server.url,
@@ -157,6 +243,7 @@ export async function finishMcpOAuth(input: {
 	issuer?: string;
 	appUrl: string;
 	fetchFn?: typeof fetch;
+	env?: Record<string, string | undefined>;
 }) {
 	const pending = await takeMcpOAuthState(input.userId, input.state);
 	if (!pending) throw new Error("Sign-in expired. Start again.");
@@ -168,6 +255,7 @@ export async function finishMcpOAuth(input: {
 		persist: persistFor(input.userId, server.id),
 		verifier: pending.verifier,
 		state: input.state,
+		env: input.env,
 	});
 	const result = await auth(provider, {
 		serverUrl: server.url,
