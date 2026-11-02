@@ -9,7 +9,7 @@ export const PRIVACY_VERSION = "2026-11-02";
 export const TRAINING_POLICY_VERSION = "2026-11-02";
 
 /**
- * False until counsel has reviewed the drafts and the owner publishes them.
- * While false, every legal page carries a "Draft, not yet in effect" banner.
+ * True once the owner publishes the documents. While false, every legal page
+ * carries a "Draft, not yet in effect" banner.
  */
-export const LEGAL_DOCUMENTS_IN_EFFECT = false;
+export const LEGAL_DOCUMENTS_IN_EFFECT = true;

@@ -85,7 +85,7 @@ export function projectTrainingChange(
 
 /** Every commitment the setting makes; shown behind the info tooltip. */
 export const TRAINING_DETAILS =
-	"Let ytimesy use your chats from now on, including your prompts, your code and its results (such as test output and merged pull requests), to improve our agents and train our own models. We never use replies or code written by AI models. We remove account details and secrets first, and never share it with model providers. Your API keys, secrets and attachments are never included. Turn this off any time; we stop immediately and delete what we kept within 30 days.";
+	"Let ytimesy use your chats from now on, including your prompts, your code and its results (such as test output and merged pull requests), to improve our agents and train our own models. We never use replies or code written by AI models. We never share it with model providers. Your stored API keys, secrets and your attachments are never included. Nothing is copied out for training yet. Turn this off any time; it stops immediately, for earlier chats too.";
 
 /**
  * The details open below the icon and stay in the viewport. The tooltip is
