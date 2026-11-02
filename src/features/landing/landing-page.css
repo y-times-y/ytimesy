@@ -1335,3 +1335,10 @@
 .landing-404-secondary:hover {
 	color: #fff;
 }
+
+.model-logos-many {
+	flex-wrap: wrap;
+	gap: 14px 18px;
+	height: auto;
+	min-height: 36px;
+}
