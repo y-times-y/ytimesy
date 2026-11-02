@@ -45,21 +45,32 @@ function SignUp({ className, label }: { className: string; label: string }) {
 	);
 }
 
-/** What signed-out visitors see at `/`. Signed-in users get the app. */
-function LandingHeader() {
+/**
+ * The site's top bar: the landing page, 404 and evidence page. A signed-in
+ * viewer gets a way into the app instead of Sign in / Get started.
+ */
+export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 	return (
 		<header className="landing-header">
 			<div className="landing-header-inner">
 				<YtimesyBrand />
 				<nav className="landing-nav" aria-label="Account">
-					<Link
-						to="/auth/$path"
-						params={{ path: "sign-in" }}
-						search={NO_SEARCH}
-					>
-						Sign in
-					</Link>
-					<SignUp className="landing-button" label="Get started" />
+					{signedIn ? (
+						<a className="landing-button" href="/">
+							Open ytimesy
+						</a>
+					) : (
+						<>
+							<Link
+								to="/auth/$path"
+								params={{ path: "sign-in" }}
+								search={NO_SEARCH}
+							>
+								Sign in
+							</Link>
+							<SignUp className="landing-button" label="Get started" />
+						</>
+					)}
 				</nav>
 			</div>
 		</header>

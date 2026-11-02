@@ -589,3 +589,73 @@ export function withAgentCapturesSection(
 		? normalizedEvidenceSections(insertBeforePullRequestFooter(rest, section))
 		: rest;
 }
+
+/** What the evidence page says a capture belongs to; null fields are unknown. */
+export type EvidenceContext = {
+	readonly chatTitle: string | null;
+	readonly chatPath: string | null;
+	readonly pullRequest: {
+		readonly fullName: string;
+		readonly number: number;
+		readonly url: string;
+	} | null;
+	readonly branch: string | null;
+	/** Short commit sha; harness captures only. */
+	readonly commit: string | null;
+	readonly capturedAt: string;
+};
+
+const GITHUB_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * Combines a capture with its chat and pull request link. A harness capture
+ * names its own pull request; an agent capture takes its chat's.
+ */
+export function evidenceContext(
+	evidence: EvidenceRecord,
+	found: {
+		chatTitle: string | null;
+		chatBranch: string | null;
+		link: {
+			fullName: string;
+			pullNumber: number;
+			headRef: string | null;
+		} | null;
+	},
+): EvidenceContext {
+	const fullName = evidence.fullName || found.link?.fullName || "";
+	const number = evidence.pullNumber || found.link?.pullNumber || 0;
+	const pullRequest =
+		GITHUB_FULL_NAME.test(fullName) && number > 0
+			? {
+					fullName,
+					number,
+					url: `https://github.com/${fullName}/pull/${number}`,
+				}
+			: null;
+	const title = found.chatTitle?.trim();
+	return {
+		chatTitle: title && title !== "New session" ? title : null,
+		chatPath:
+			evidence.sessionId && found.chatTitle !== null
+				? `/?project=${evidence.projectId}&chat=${evidence.sessionId}`
+				: null,
+		pullRequest,
+		branch: found.link?.headRef || found.chatBranch || null,
+		commit: evidence.commitSha ? evidence.commitSha.slice(0, 7) : null,
+		capturedAt: evidence.captureStartedAt ?? evidence.createdAt,
+	};
+}
+
+/** "just now", "5 min ago", "2 h ago", "3 days ago"; "" for a bad date. */
+export function evidenceAge(at: string, nowMs: number) {
+	const then = Date.parse(at);
+	if (!Number.isFinite(then)) return "";
+	const minutes = Math.floor(Math.max(0, nowMs - then) / 60_000);
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours} h ago`;
+	const days = Math.floor(hours / 24);
+	return `${days} day${days === 1 ? "" : "s"} ago`;
+}

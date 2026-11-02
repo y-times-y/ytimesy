@@ -160,6 +160,7 @@
 .evidence-files a {
 	color: #d6d6d6;
 }
+/* The pull request "Fix with ytimesy" page. */
 .evidence-shell {
 	min-height: 100dvh;
 	padding: 16px;
@@ -169,9 +170,98 @@
 	max-width: 56em;
 	margin: 0 auto 12px;
 }
-.evidence-page {
-	max-width: 56em;
+
+/* The evidence page, inside the site's header and footer. */
+.evidence-main {
+	width: min(100%, calc(56em + 48px));
 	margin: 0 auto;
+	padding: 40px 24px 64px;
+}
+.evidence-summary {
+	display: grid;
+	gap: 10px;
+	margin-bottom: 24px;
+	min-width: 0;
+}
+.evidence-summary-kicker {
+	color: #8a8a8a;
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.evidence-summary h1 {
+	color: #ededed;
+	font-size: clamp(22px, 3.2vw, 30px);
+	line-height: 1.2;
+	overflow-wrap: anywhere;
+}
+.evidence-summary-number {
+	color: #7a7a7a;
+}
+.evidence-summary-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 18px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	color: #a3a3a3;
+	font-size: 13px;
+}
+.evidence-summary-facts li {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.evidence-summary-code {
+	color: #d6d6d6;
+	font-size: 12.5px;
+}
+.evidence-summary-facts time {
+	text-decoration: underline dotted #ffffff40;
+	text-underline-offset: 3px;
+	cursor: help;
+}
+.evidence-summary-links {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 20px;
+	margin-top: 6px;
+}
+.evidence-summary-primary,
+.evidence-summary-secondary {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 14px;
+	text-decoration: none;
+}
+.evidence-summary-primary {
+	min-height: 34px;
+	padding: 0 14px;
+	border-radius: 999px;
+	background: #ededed;
+	color: #0a0a0a;
+	font-weight: 550;
+}
+.evidence-summary-primary:hover {
+	background: #fff;
+}
+.evidence-summary-secondary {
+	color: #bdbdbd;
+}
+.evidence-summary-secondary:hover {
+	color: #fff;
+}
+@media (max-width: 720px) {
+	.evidence-main {
+		padding: 24px 16px 48px;
+	}
+}
+.evidence-page {
+	max-width: none;
+	margin: 0;
 }
 .evidence-missing {
 	max-width: 56em;
