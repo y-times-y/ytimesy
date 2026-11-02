@@ -3,7 +3,7 @@
 The curated Simple Icons subset is from `@iconify-json/simple-icons` 1.2.97,
 licensed CC0-1.0. Provider marks identify third-party services, not affiliation.
 
-The xAI mark is from [LobeHub Icons](https://github.com/lobehub/lobe-icons),
+The xAI and Grok marks are from [LobeHub Icons](https://github.com/lobehub/lobe-icons),
 `packages/static-svg/icons/xai.svg`, under the following license:
 
 MIT License

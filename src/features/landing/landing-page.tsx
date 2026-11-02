@@ -18,8 +18,8 @@ import { ScoreCostChart } from "#/features/blog/score-cost-chart";
 import { AgentIcon } from "#/features/sessions/agent-icon";
 import { ClaudeMark } from "#/features/sessions/claude-mark";
 import { CodexMark } from "#/features/sessions/codex-mark";
+import { GrokMark } from "#/features/sessions/grok-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
-import { XaiMark } from "#/features/sessions/xai-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
 	BENCH_COLUMNS,
@@ -275,7 +275,7 @@ function Models() {
 				</li>
 				<li className="model-card">
 					<span className="model-logos">
-						<XaiMark size={26} />
+						<GrokMark size={26} />
 					</span>
 					<div>
 						<h3>Your Grok subscription</h3>
