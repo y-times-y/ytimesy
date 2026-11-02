@@ -70,6 +70,7 @@ beforeAll(async () => {
 	for (const file of [
 		"20260927183000_model_connections.sql",
 		"20261101140000_xai_subscription.sql",
+		"20261102150000_xai_plan_usage.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 }, 120_000);
