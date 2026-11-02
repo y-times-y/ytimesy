@@ -18,6 +18,8 @@ export class WorkspaceProvisionError extends Data.TaggedError(
 	readonly operation: "create" | "destroy" | "reconcile" | "snapshot";
 	readonly message: string;
 	readonly providerWorkspaceId?: string;
+	/** The raw provider failure, redacted (machine-failure.ts): for logs and the owner, never the user's message. */
+	readonly detail?: string;
 }> {}
 
 export class WorkspaceCommandError extends Data.TaggedError(

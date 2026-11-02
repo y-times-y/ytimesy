@@ -98,6 +98,7 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
+	progressReopenDelayMs,
 	progressRevivesStoppedTurn,
 	progressStreamWanted,
 	SEND_TIMEOUT_MESSAGE,
@@ -1732,7 +1733,11 @@ export function WorkspaceHome({
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	const pageRestores = usePageRestores();
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reopens the stream.
+	// A stream the browser gave up on (a deploy answered a reconnect with an
+	// error) is reopened here with backoff, without telling the user.
+	const [progressReopens, setProgressReopens] = useState(0);
+	const progressReopenAttempt = useRef(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache, or a reopen after the browser gave up, reopens the stream.
 	useEffect(() => {
 		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
@@ -1809,8 +1814,10 @@ export function WorkspaceHome({
 					.catch(() => undefined);
 			}
 		});
+		let reopenTimer: ReturnType<typeof setTimeout> | undefined;
 		source.onopen = () => {
 			progressStreamOpen.current = activeSessionId;
+			progressReopenAttempt.current = 0;
 		};
 		source.onerror = () => {
 			liveProgress.current = null;
@@ -1819,8 +1826,17 @@ export function WorkspaceHome({
 				progressStreamOpen.current = null;
 				refetchOpenSession.current();
 			}
+			// The browser retries by itself unless the reconnect was refused.
+			if (source.readyState === EventSource.CLOSED && !reopenTimer) {
+				const attempt = progressReopenAttempt.current++;
+				reopenTimer = setTimeout(
+					() => setProgressReopens((count) => count + 1),
+					progressReopenDelayMs(attempt),
+				);
+			}
 		};
 		return closeOnPageHide(() => {
+			clearTimeout(reopenTimer);
 			source.close();
 			liveProgress.current = null;
 			if (progressStreamOpen.current === activeSessionId)
@@ -1832,6 +1848,7 @@ export function WorkspaceHome({
 		listenForProgress,
 		harnessId,
 		pageRestores,
+		progressReopens,
 	]);
 
 	const backgroundIds = backgroundTurnPollChatIds({

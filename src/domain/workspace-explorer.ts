@@ -7,10 +7,11 @@ export type WorkspaceExplorerListing = {
 	readonly root: string | null;
 	readonly paths: readonly string[];
 	/**
-	 * No machine for this chat yet, or it is asleep: then the paths, when
-	 * there are any, are the files its git index tracks.
+	 * No machine for this chat yet, one still starting (the chat has run a
+	 * turn but its machine is not bound yet), or it is asleep: then the paths,
+	 * when there are any, are the files its git index tracks.
 	 */
-	readonly machine?: "none" | "asleep";
+	readonly machine?: "none" | "starting" | "asleep";
 	/** The file Files opens first, read with the listing; null if it has no text. */
 	readonly opened?: WorkspaceSourceFile | null;
 };

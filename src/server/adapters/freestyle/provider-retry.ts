@@ -67,3 +67,30 @@ export async function retryTransientProviderFailure<T>(
 		}
 	}
 }
+
+/** Cloudflare's wording when a Durable Object is reset for a new version mid-operation. */
+const PLATFORM_RESTART =
+	/Durable Object reset because|Durable Object's code has been updated|its code was updated|code was updated, this version can no longer/i;
+
+/**
+ * The failure is this Worker being replaced by a new version (a deploy or a
+ * secret change), not the operation's own: the step must be resumed on the
+ * new version, never settled as failed.
+ */
+export function isPlatformRestart(error: unknown, depth = 0): boolean {
+	if (depth > 5 || !error || typeof error !== "object") return false;
+	if (error instanceof Error && PLATFORM_RESTART.test(error.message))
+		return true;
+	const record = error as {
+		cause?: unknown;
+		error?: unknown;
+		providerError?: unknown;
+		lastError?: unknown;
+	};
+	return [
+		record.cause,
+		record.error,
+		record.providerError,
+		record.lastError,
+	].some((inner) => isPlatformRestart(inner, depth + 1));
+}

@@ -150,3 +150,14 @@ export function withinTimeout<T>(
 		);
 	});
 }
+
+/**
+ * Wait before reopening a progress stream the browser closed for good (its
+ * reconnect was refused, e.g. while a deploy swaps the Worker): quick at
+ * first, then up to 10 s, with jitter so a fleet of tabs does not return at
+ * once. Polling covers the gap.
+ */
+export function progressReopenDelayMs(attempt: number, random = Math.random) {
+	const base = Math.min(10_000, 500 * 2 ** Math.max(0, attempt));
+	return Math.round(base * (0.75 + random() * 0.5));
+}

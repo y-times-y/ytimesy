@@ -5,6 +5,7 @@ import {
 	DESKTOP_SOCKET_OPEN_TIMEOUT_MS,
 	desktopClientViewerUrl,
 	desktopDisconnectMessage,
+	silentReconnectDelayMs,
 } from "#/domain/workspace-desktop";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { RetryButton } from "./retry-button";
@@ -75,6 +76,8 @@ export function DesktopStage({
 	const [phase, setPhase] = useState<StagePhase>({ kind: "connecting" });
 	const [generation, setGeneration] = useState(0);
 	const pageRestores = usePageRestores();
+	// Silent reconnects since the screen was last shown (a deploy drops the socket).
+	const reconnects = useRef(0);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reconnects.
 	useEffect(() => {
@@ -134,12 +137,31 @@ export function DesktopStage({
 				client.addEventListener("connect", () => {
 					if (disposed || settled) return;
 					connected = true;
+					reconnects.current = 0;
 					for (const timer of timers) window.clearTimeout(timer);
 					setPhase({ kind: "connected" });
 				});
 				// noVNC removes its canvas on disconnect; without this the panel goes black.
 				client.addEventListener("disconnect", (event) => {
 					rfb = null;
+					// A live screen that dropped without a reason reconnects quietly.
+					const delay = silentReconnectDelayMs({
+						wasConnected: connected,
+						reason: closeReason,
+						attempt: reconnects.current,
+					});
+					if (delay !== null && !disposed && !settled) {
+						settled = true;
+						reconnects.current += 1;
+						setPhase({ kind: "connecting" });
+						timers.push(
+							window.setTimeout(
+								() => setGeneration((value) => value + 1),
+								delay,
+							),
+						);
+						return;
+					}
 					fail(
 						desktopDisconnectMessage({
 							reason: closeReason,
