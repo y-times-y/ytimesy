@@ -77,7 +77,7 @@ export function leanToolInstructions(
 		"- `~/.ytimesy/environment.md` (if present) describes how this workspace was prepared.",
 		options.unattended
 			? ""
-			: "- `ytimesy-browser open|screenshot|inspect|exec` drives the desktop browser for visual checks.",
+			: "- `ytimesy-browser open|screenshot|record|inspect|exec` drives the desktop browser for visual checks.",
 		editLine(shape),
 		BACKGROUND_COMMANDS,
 	]

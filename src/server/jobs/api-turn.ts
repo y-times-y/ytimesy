@@ -155,6 +155,10 @@ import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
+import {
+	agentCapturesNote,
+	collectAgentCaptures,
+} from "../services/agent-captures";
 import { withMentionNote } from "../services/agent-mentions";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
 import { agentTurnInstructions } from "../services/agent-turn-instructions";
@@ -1209,6 +1213,27 @@ async function runApiTurnAttempt(
 				toolCallPrefix: step ? `step-${step.index}:` : undefined,
 				signal: abort.signal,
 				memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+				// The agent's ytimesy-browser screenshots and recordings show in
+				// its chat at the call that made them (agent-captures.ts).
+				...(rootChat && owner.projectId
+					? {
+							collectCaptures: async (captureWorkspace, toolCallId) =>
+								agentCapturesNote(
+									await collectAgentCaptures({
+										shell: (command, timeout) =>
+											captureWorkspace.machines.exec(
+												captureWorkspace.vm,
+												command,
+												timeout,
+											),
+										userId: owner.userId,
+										projectId: owner.projectId as string,
+										sessionId: owner.id,
+										itemId: `${turn.id}:${toolCallId}`,
+									}),
+								),
+						}
+					: {}),
 			},
 		});
 		const surfaceTools = surface.tools;

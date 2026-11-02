@@ -22,6 +22,8 @@ export const EVIDENCE_LIMITS = {
 	screenshotBytes: 3 * 1024 * 1024,
 	videoSeconds: 45,
 	videoBytes: 8 * 1024 * 1024,
+	/** `ytimesy-browser record`: the longest recording the agent can make. */
+	agentVideoSeconds: 60,
 	/** The whole capture in the workspace, tooling install included. */
 	captureSeconds: 300,
 	startCommandChars: 500,
@@ -159,7 +161,7 @@ export function evidencePlanKey(plan: EvidencePlan, sha256Hex: string) {
 const sha = z.string().regex(/^[a-f0-9]{40}([a-f0-9]{24})?$/);
 const fileName = z
 	.string()
-	.regex(/^[a-z0-9][a-z0-9-]{0,40}\.(png|webm|txt|json)$/);
+	.regex(/^[a-z0-9][a-z0-9-]{0,40}\.(png|webm|mp4|txt|json)$/);
 const isoTime = z.string().max(40);
 
 export const evidenceManifest = z.object({
@@ -286,10 +288,11 @@ export function evidencePageUrl(
 	}
 }
 
-type EvidenceExtension = "png" | "webm" | "txt" | "json";
+type EvidenceExtension = "png" | "webm" | "mp4" | "txt" | "json";
 const EVIDENCE_CONTENT_TYPES: Record<EvidenceExtension, string> = {
 	png: "image/png",
 	webm: "video/webm",
+	mp4: "video/mp4",
 	txt: "text/plain; charset=utf-8",
 	json: "application/json",
 };
@@ -299,9 +302,14 @@ export function evidenceContentType(name: string) {
 	return EVIDENCE_CONTENT_TYPES[extension] ?? null;
 }
 
+/** Whether a stored file is a screen recording. */
+export function evidenceVideoFile(name: string) {
+	return name.endsWith(".webm") || name.endsWith(".mp4");
+}
+
 /** Bytes a manifest may name, by kind; anything above was dropped in the workspace or is refused. */
 export function evidenceFileLimit(name: string) {
-	if (name.endsWith(".webm")) return EVIDENCE_LIMITS.videoBytes;
+	if (evidenceVideoFile(name)) return EVIDENCE_LIMITS.videoBytes;
 	if (name.endsWith(".png")) return EVIDENCE_LIMITS.screenshotBytes;
 	return 256 * 1024;
 }
@@ -319,7 +327,7 @@ export function evidenceMediaSummary(input: {
 	const parts = [
 		shots ? `${shots} screenshot${shots === 1 ? "" : "s"}` : "",
 		input.videoSeconds !== null &&
-		input.files.some((file) => file.name.endsWith(".webm"))
+		input.files.some((file) => evidenceVideoFile(file.name))
 			? `${Math.max(1, Math.round(input.videoSeconds))} s screen recording`
 			: "",
 		input.kind === "cli" &&
@@ -350,9 +358,11 @@ export function withEvidenceSection(
 	const current = body ?? "";
 	const start = current.indexOf(EVIDENCE_START);
 	const end = current.indexOf(EVIDENCE_END, start);
-	if (start >= 0 && end > start)
-		return `${current.slice(0, start)}${section}${current.slice(end + EVIDENCE_END.length)}`;
-	return insertBeforePullRequestFooter(current, section);
+	return normalizedEvidenceSections(
+		start >= 0 && end > start
+			? `${current.slice(0, start)}${section}${current.slice(end + EVIDENCE_END.length)}`
+			: insertBeforePullRequestFooter(current, section),
+	);
 }
 
 function plain(text: string, max = 300) {
@@ -431,11 +441,21 @@ export function renderEvidenceSection(input: RenderedEvidence) {
 	return lines.join("\n");
 }
 
+/**
+ * Who made a capture: the harness, from a pull request's pushed commit, or
+ * the agent itself with `ytimesy-browser screenshot|record` during a turn.
+ */
+export type EvidenceSource = "harness" | "agent";
+
 /** One stored capture as the app shows it (evidence page and chat card). */
 export type EvidenceRecord = {
 	readonly id: string;
 	readonly projectId: string;
 	readonly sessionId: string | null;
+	readonly source: EvidenceSource;
+	/** The chat item (tool call) an agent capture was made in, when known. */
+	readonly itemId: string | null;
+	/** Pull request and commit: empty ("" and 0) for agent captures, which belong to the chat. */
 	readonly fullName: string;
 	readonly pullNumber: number;
 	readonly commitSha: string;
@@ -458,3 +478,114 @@ export type EvidenceRecord = {
 	readonly createdAt: string;
 	readonly expiresAt: string;
 };
+
+export const CAPTURES_START = "<!-- ytimesy-captures:start -->";
+export const CAPTURES_END = "<!-- ytimesy-captures:end -->";
+
+/** "1 screenshot, 1 recording (5 s)" for a chat's agent captures. */
+export function agentCapturesSummary(
+	captures: readonly {
+		readonly files: readonly { readonly name: string }[];
+		readonly videoSeconds: number | null;
+	}[],
+) {
+	let shots = 0;
+	const recordings: number[] = [];
+	for (const capture of captures)
+		for (const file of capture.files)
+			if (evidenceVideoFile(file.name))
+				recordings.push(Math.max(1, Math.round(capture.videoSeconds ?? 0)));
+			else if (file.name.endsWith(".png")) shots++;
+	return [
+		shots ? `${shots} screenshot${shots === 1 ? "" : "s"}` : "",
+		recordings.length
+			? `${recordings.length} recording${recordings.length === 1 ? "" : "s"} (${recordings.map((seconds) => `${seconds} s`).join(", ")})`
+			: "",
+	]
+		.filter(Boolean)
+		.join(", ");
+}
+
+const EVIDENCE_HEADING = "## Evidence";
+
+/**
+ * The pull request's Evidence section for the agent's own screenshots and
+ * recordings (`ytimesy-browser screenshot|record`): a count and a link to the
+ * evidence page in ytimesy, like the harness section. No media is embedded
+ * and nothing is stored in the repository. Next to a harness Evidence
+ * section it drops its own heading (normalizedEvidenceSections).
+ */
+export function renderAgentCapturesSection(input: {
+	summary: string;
+	pageUrl: string | null;
+}) {
+	if (!input.summary) return null;
+	return [
+		CAPTURES_START,
+		EVIDENCE_HEADING,
+		"",
+		`Captured by the agent on its desktop: ${input.summary}.`,
+		"",
+		input.pageUrl
+			? `[View the evidence](${input.pageUrl}) in ytimesy (sign-in required). It is kept for ${EVIDENCE_RETENTION_DAYS} days.`
+			: "The evidence page is unavailable.",
+		CAPTURES_END,
+	].join("\n");
+}
+
+function sectionBetween(body: string, start: string, end: string) {
+	const from = body.indexOf(start);
+	const to = body.indexOf(end, from);
+	if (from < 0 || to < 0) return null;
+	return body.slice(from, to + end.length);
+}
+
+/** The captures section of a description, or null when it has none. */
+export function agentCapturesSection(body: string | null | undefined) {
+	return sectionBetween(body ?? "", CAPTURES_START, CAPTURES_END);
+}
+
+function withoutSection(body: string, section: string) {
+	const at = body.indexOf(section);
+	return [
+		body.slice(0, at).trimEnd(),
+		body.slice(at + section.length).trimStart(),
+	]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
+/**
+ * One Evidence heading: with a harness Evidence section, the captures
+ * section follows it without its own heading; alone, it has the heading.
+ */
+export function normalizedEvidenceSections(body: string) {
+	const captures = agentCapturesSection(body);
+	if (!captures) return body;
+	const harness = sectionBetween(body, EVIDENCE_START, EVIDENCE_END);
+	const rest = withoutSection(body, captures);
+	const inner = captures
+		.slice(CAPTURES_START.length, -CAPTURES_END.length)
+		.trim()
+		.replace(/^## Evidence\s*/, "");
+	if (!harness)
+		return insertBeforePullRequestFooter(
+			rest,
+			`${CAPTURES_START}\n${EVIDENCE_HEADING}\n\n${inner}\n${CAPTURES_END}`,
+		);
+	const end = rest.indexOf(EVIDENCE_END) + EVIDENCE_END.length;
+	return `${rest.slice(0, end)}\n${CAPTURES_START}\n${inner}\n${CAPTURES_END}${rest.slice(end)}`;
+}
+
+/** Replaces the captures section (null removes it), or adds one before the footer. */
+export function withAgentCapturesSection(
+	body: string | null | undefined,
+	section: string | null,
+) {
+	const current = body ?? "";
+	const existing = agentCapturesSection(current);
+	const rest = existing ? withoutSection(current, existing) : current;
+	return section
+		? normalizedEvidenceSections(insertBeforePullRequestFooter(rest, section))
+		: rest;
+}
