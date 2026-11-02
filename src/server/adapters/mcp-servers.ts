@@ -36,7 +36,12 @@ export type PublicMcpServer = {
 	signIn: McpSignInState | null;
 };
 
-export type McpSignInState = "signed-in" | "needs-sign-in" | "unreachable";
+/** "needs-token": the service cannot sign users in here; the user pastes a token. */
+export type McpSignInState =
+	| "signed-in"
+	| "needs-sign-in"
+	| "needs-token"
+	| "unreachable";
 
 type Row = {
 	id: string;
@@ -162,11 +167,36 @@ export async function mcpServerForOwner(userId: string, id: string) {
 	return row
 		? {
 				id: row.id,
+				name: row.name,
 				url: row.url,
 				auth: row.auth,
 				sealedOAuth: row.sealed_oauth,
 			}
 		: null;
+}
+
+/**
+ * The user's own token instead of a sign-in: the server becomes a header
+ * server, the token sealed like other MCP credentials, any sign-in record dropped.
+ */
+export async function saveMcpServerToken(
+	userId: string,
+	id: string,
+	headers: Record<string, string>,
+) {
+	const parsed = mcpServerInput.shape.headers.parse(headers);
+	const names = Object.keys(parsed);
+	if (!names.length) throw new Error("Paste a token.");
+	await database().query(
+		`update mcp_server set auth='headers', sealed_headers=$3, header_names=$4,
+		 sealed_oauth=null, updated_at=now() where user_id=$1 and id=$2`,
+		[
+			userId,
+			id,
+			await seal(JSON.stringify(parsed), { purpose: "mcp-headers", userId }),
+			names,
+		],
+	);
 }
 
 export async function saveMcpOAuth(
