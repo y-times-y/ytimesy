@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { claudePlanUsageBars } from "#/domain/claude-plan-usage";
+import { grokPlanUsageBars } from "#/domain/grok-plan-usage";
 import {
 	type PlanLimitReached,
 	type PlanUsageBar,
@@ -14,12 +15,14 @@ import { usageResetLabel } from "#/domain/usage-warning";
 import {
 	claudePlanUsageFn,
 	codexSubscriptionUsageFn,
+	grokPlanUsageFn,
 } from "../workspace/subscription-usage.fn";
 import { PickerUsageLine } from "../workspace/usage-windows";
 
 /** Shared with Settings' ChatGPT subscription limits. */
 const PLAN_USAGE_KEY = ["codex-subscription-usage"] as const;
 const CLAUDE_PLAN_USAGE_KEY = ["claude-plan-usage"] as const;
+const GROK_PLAN_USAGE_KEY = ["grok-plan-usage"] as const;
 const PLAN_USAGE_STALE_MS = 30_000;
 const PLAN_LOW_PERCENT = 85;
 
@@ -51,10 +54,14 @@ function usePlanUsageQueryFn() {
  * Starts the plan usage reads before the picker opens (hover or focus on its
  * trigger), so each section's line is there when it opens.
  */
-export function usePrefetchPlanUsage(claudeConnected = false) {
+export function usePrefetchPlanUsage(
+	claudeConnected = false,
+	grokConnected = false,
+) {
 	const queryClient = useQueryClient();
 	const queryFn = usePlanUsageQueryFn();
 	const readClaude = useServerFn(claudePlanUsageFn);
+	const readGrok = useServerFn(grokPlanUsageFn);
 	return () => {
 		void queryClient.prefetchQuery({
 			queryKey: PLAN_USAGE_KEY,
@@ -66,6 +73,13 @@ export function usePrefetchPlanUsage(claudeConnected = false) {
 			void queryClient.prefetchQuery({
 				queryKey: CLAUDE_PLAN_USAGE_KEY,
 				queryFn: () => readClaude(),
+				staleTime: PLAN_USAGE_STALE_MS,
+				retry: false,
+			});
+		if (grokConnected)
+			void queryClient.prefetchQuery({
+				queryKey: GROK_PLAN_USAGE_KEY,
+				queryFn: () => readGrok(),
 				staleTime: PLAN_USAGE_STALE_MS,
 				retry: false,
 			});
@@ -152,6 +166,30 @@ export function useClaudePlanUsageLine(
 	if (!open || !connected) return { bars: [], pending: false };
 	return {
 		bars: claudePlanUsageBars(usage.data, Date.now()),
+		pending: usage.isPending && usage.fetchStatus === "fetching",
+	};
+}
+
+/**
+ * The Grok plan's line while the picker (or Settings) is open: the last
+ * reading, which the server reads afresh when it is over five minutes old.
+ * Empty while the plan is not connected or its usage cannot be read.
+ */
+export function useGrokPlanUsageLine(
+	open: boolean,
+	connected: boolean,
+): PlanUsageLine {
+	const readUsage = useServerFn(grokPlanUsageFn);
+	const usage = useQuery({
+		queryKey: GROK_PLAN_USAGE_KEY,
+		queryFn: () => readUsage(),
+		enabled: open && connected,
+		staleTime: PLAN_USAGE_STALE_MS,
+		retry: false,
+	});
+	if (!open || !connected) return { bars: [], pending: false };
+	return {
+		bars: grokPlanUsageBars(usage.data, Date.now()),
 		pending: usage.isPending && usage.fetchStatus === "fetching",
 	};
 }

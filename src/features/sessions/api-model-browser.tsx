@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Check, ChevronRight, LockKeyhole } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
 import { API_MODEL_LIST } from "#/domain/api-model-list";
 import { AUTHOR_LABELS, visibleModelChoices } from "#/domain/browse-models";
@@ -37,6 +37,7 @@ export function ApiModelBrowser({
 	coveredIds,
 	hasOtherResults = false,
 	source,
+	usage,
 }: {
 	author: string | null;
 	search: string;
@@ -49,6 +50,8 @@ export function ApiModelBrowser({
 	hasOtherResults?: boolean;
 	/** "plan": only the provider's subscription (Grok's own rail entry); "keys": only API keys. */
 	source?: "plan" | "keys";
+	/** The plan's usage line, under its caption (Grok's own rail entry). */
+	usage?: ReactNode;
 }) {
 	const client = useQueryClient();
 	const identity = authClient.useSession();
@@ -162,6 +165,7 @@ export function ApiModelBrowser({
 						: "Connect your Grok plan in Settings › Agents"}
 				</p>
 			) : null}
+			{plan && activeConnection ? usage : null}
 			{author && activeConnection && !plan ? (
 				<div className="model-source-row">
 					<span className="model-source-caption">Using</span>

@@ -258,7 +258,8 @@ export function xaiSubscriptionFetch(
 /**
  * Stores a completed sign-in as the user's one SuperGrok connection. A
  * reconnect keeps the connection's id (fallback order, picker choices) and
- * gets a new revision, as replacing an API key does.
+ * gets a new revision, as replacing an API key does; its plan usage reading
+ * is dropped, since the sign-in may be another account.
  */
 export async function saveXaiSubscription(
 	client: { query: ReturnType<typeof database>["query"] },
@@ -278,7 +279,8 @@ export async function saveXaiSubscription(
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,models,revision,kind,status)
 		 values($1,$2,'compatible',$3,$4,$5,$6::jsonb,$7,'xai-subscription','ready')
 		 on conflict (id) do update set sealed_credential=excluded.sealed_credential,
-		 models=excluded.models,revision=excluded.revision,status='ready',updated_at=now()`,
+		 models=excluded.models,revision=excluded.revision,status='ready',
+		 plan_usage=null,plan_usage_at=null,updated_at=now()`,
 		[
 			id,
 			userId,
