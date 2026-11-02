@@ -56,7 +56,7 @@ it("logs only recognized failure classifications, never arbitrary error properti
 
 it("distinguishes safe failure stages without exposing provider details", () => {
 	expect(apiTurnFailureMessage("workspace")).toContain("cloud machine");
-	expect(apiTurnFailureMessage("budget")).toContain("before a model request");
+	expect(apiTurnFailureMessage("budget")).toContain("no model request was sent");
 	expect(apiTurnFailureMessage("model")).toContain("Retry");
 });
 

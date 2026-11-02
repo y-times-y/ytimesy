@@ -614,6 +614,9 @@ async function runApiTurnAttempt(
 	// Claude Code on the user's Claude subscription: the CLI runs on the VM.
 	const claudeCode =
 		!route.connectionId && isClaudeCodeRevision(route.connectionRevision);
+	// Prepaid plans (ChatGPT, Claude, Grok) draw from the user's plan, not a
+	// paid key: the API token safety budget does not apply to them.
+	let prepaidPlan = Boolean(subscription) || claudeCode;
 	const checkingCodexAuth =
 		subscription && !route.connectionId
 			? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
@@ -796,6 +799,7 @@ async function runApiTurnAttempt(
 				throw new Error(
 					"The API connection changed after this turn was submitted.",
 				);
+			if (connection.subscription) prepaidPlan = true;
 			nativePatch =
 				connection.provider === "openai" &&
 				connection.baseUrl.startsWith("https://api.openai.com/");
@@ -1953,11 +1957,12 @@ async function runApiTurnAttempt(
 						turn.model_id,
 						turn.connection_revision,
 					);
-				if (!subscription)
+				if (!prepaidPlan)
 					await reserveApiTokens(
 						owner.userId,
 						owner.id,
-						Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
+						Math.ceil(Buffer.byteLength(JSON.stringify(history), "utf8") / 3) +
+							24_000,
 					);
 				failureStage = "model";
 				timing?.mark("modelRequestSent");
@@ -1970,11 +1975,12 @@ async function runApiTurnAttempt(
 						turn.model_id,
 						turn.connection_revision,
 					);
-				if (!subscription)
+				if (!prepaidPlan)
 					await reserveApiTokens(
 						owner.userId,
 						owner.id,
-						Buffer.byteLength(JSON.stringify(older), "utf8") + 4_000,
+						Math.ceil(Buffer.byteLength(JSON.stringify(older), "utf8") / 3) +
+							4_000,
 					);
 				failureStage = "model";
 			},
