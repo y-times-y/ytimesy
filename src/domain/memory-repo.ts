@@ -472,14 +472,25 @@ export const MEMORY_MATCH_LATER_LIMIT = 4;
  * 4/8); 0.36 once standing rules rode on every chat (2026-10-20: two-chat
  * recall 10/10 at 0.33-0.37, wrong lines 34 -> 24 at 0.36, 9/10 from 0.38).
  * 2026-11-01, with per-project scope: 0.37, the highest floor those notes
- * show kept every right line; the relative gap below does the rest.
+ * show kept every right line. 2026-11-02: 0.47, after dev recalled unrelated
+ * personal lines for "Reply with just the word OK." (hybrid 0.433) and
+ * "…what was my first message…" (0.382), since below the best line's gap a
+ * request with only weak hits kept them all. Real Qwen3 scores on the
+ * precision fixture (memory-rerank-calibrate.ts, replayed in
+ * memory-precision.test.ts): lowest right line 0.490, highest line of a
+ * must-recall-nothing message 0.457 (excluding a reply-style preference).
+ * Floor 0.45 / 0.47 / 0.50: right lines 9/9 / 9/9 / 8/9, wrong lines 4 / 3
+ * / 2, lines on must-recall-nothing messages 1 / 0 / 0, the two-chat eval's
+ * implicit rules 4 / 4 / 3 of 10 (0.37: 9/9, 6, 20, 8/10). The reranker
+ * (MEMORY_RERANK_ON) scored the same except one wrong line fewer, for a
+ * model call of 0.4-2.5 s; ruling rules by the floor and facts by the
+ * reranker: 9/9, 2, 0, 3/10.
  */
-export const MEMORY_MATCH_MIN_SCORE = 0.37;
+export const MEMORY_MATCH_MIN_SCORE = 0.47;
 /**
  * Relative cut: a line must score within this of the request's best line,
- * so a request with a strong hit (0.65) no longer drags in the 0.37-0.45
- * tail. A request with only weak hits is left to the reranker below, which
- * drops them all when none is relevant. On the offline precision fixture
+ * so a request with a strong hit (0.65) no longer drags in the tail just
+ * above the floor. On the offline precision fixture
  * (memory-precision.test.ts) the closest right line sat 0.197 below its best
  * (0.12 lost it) and the wrong lines above the floor 0.28+ below. To confirm
  * on dev: memory-two-chat-eval.ts --recall and
@@ -487,39 +498,28 @@ export const MEMORY_MATCH_MIN_SCORE = 0.37;
  */
 export const MEMORY_MATCH_GAP = 0.2;
 /**
- * The reranker (a cross-encoder, bge-reranker-base) reads the request with
- * each line the hybrid picked and keeps only lines scoring at least this
- * (0-1); when none does, nothing is recalled. Set 2026-11-02 with
- * scripts/memory-rerank-calibrate.ts (real Qwen3 hybrid and reranker scores,
- * lines as memoryRerankText) on the precision fixture: the lowest right line
- * scored 9.7e-4 ("Never deploy on Fridays" for "deploy the latest build"),
- * the highest pooled line of a must-recall-nothing message other than a
- * reply-style preference 7.4e-4 ("continue" -> "Routes live under /api/v2");
- * this is their geometric middle, a thin margin. The two dev misfires score
- * far below it ("Reply with just the word OK." -> customer-reporting 3.7e-5,
- * "…what was my first message…" -> startup-lessons 8.3e-5). Fixture: right
- * lines 9/9 either way; wrong lines 6 -> 2; lines for must-recall-nothing
- * messages 21 -> 4, all "Prefers short replies without preamble", which the
- * reranker ties to messages about replies (0.37 for "Reply with just the
- * word OK."). Cost: the two-chat eval's implicit rules ("Add service/net.py
- * …" -> "Don't add third-party dependencies") score 4e-5-4e-4, so its
- * --recall probes keep 4/10 rules (8/10 without the reranker); `scope:
- * always` rules skip the reranker. A wider pool (pre-floor 0.30, no gap)
- * kept about 3x the wrong lines for no right one, so the reranker vetoes and
- * reorders the hybrid's picks rather than widening them.
+ * The reranker switch: off. With it on, a cross-encoder (bge-reranker-base)
+ * reads the request with each line the hybrid picked at the old 0.37 floor
+ * (MEMORY_RERANK_POLICY) and keeps only lines scoring MEMORY_RERANK_MIN_SCORE
+ * or more; it measured no better than the 0.47 floor alone (see
+ * MEMORY_MATCH_MIN_SCORE) and adds a model call to every request.
+ */
+export const MEMORY_RERANK_ON = false;
+/**
+ * The reranker's cutoff (0-1), set 2026-11-02 with
+ * scripts/memory-rerank-calibrate.ts (lines as memoryRerankText): the lowest
+ * right line on the precision fixture scored 9.7e-4 ("Never deploy on
+ * Fridays" for "deploy the latest build"), the highest pooled line of a
+ * must-recall-nothing message other than a reply-style preference 7.4e-4
+ * ("continue" -> "Routes live under /api/v2"); this is their geometric
+ * middle. The two dev misfires scored 3.7e-5 and 8.3e-5. The two-chat
+ * eval's implicit rules ("Add service/net.py…" -> "Don't add third-party
+ * dependencies") score 4e-5-4e-4, as low as unrelated lines. A wider pool
+ * (pre-floor 0.30, no gap) kept about 3x the wrong lines for no right one.
  */
 export const MEMORY_RERANK_MIN_SCORE = 8.5e-4;
 /** Lines the reranker scores at most (the hybrid's best within floor and gap, and convention lines). */
 export const MEMORY_RERANK_POOL = 20;
-/**
- * When the reranker fails or times out, the hybrid selection with this
- * floor instead of MEMORY_MATCH_MIN_SCORE. On the same fixture and run: the
- * lowest right line 0.490 ("Run vitest for unit tests" for "add a unit test
- * for the price parser"), the highest line of a must-recall-nothing message
- * other than the reply-style preference 0.457 ("thanks, looks good" ->
- * customer-reporting); 0.47 keeps 9/9 right lines and drops those.
- */
-export const MEMORY_RERANK_FALLBACK_MIN_SCORE = 0.47;
 /**
  * Beyond the top lines: the best convention line (a rule for every new X)
  * scoring at least this. A request rarely names the convention it is subject
@@ -553,10 +553,10 @@ export const MEMORY_MATCH_POLICY: MemoryMatchPolicy = {
 	alwaysProjectOnly: true,
 	rerankMinScore: MEMORY_RERANK_MIN_SCORE,
 };
-/** The selection when the reranker failed: the hybrid alone, with a stricter floor. */
-export const MEMORY_FALLBACK_POLICY: MemoryMatchPolicy = {
+/** With the reranker (MEMORY_RERANK_ON): the hybrid picks its pool at the 2026-11-01 floor. */
+export const MEMORY_RERANK_POLICY: MemoryMatchPolicy = {
 	...MEMORY_MATCH_POLICY,
-	minScore: MEMORY_RERANK_FALLBACK_MIN_SCORE,
+	minScore: 0.37,
 };
 
 /** A rule about every new thing of a kind: "new CLI scripts go in tools/", "every endpoint …". */

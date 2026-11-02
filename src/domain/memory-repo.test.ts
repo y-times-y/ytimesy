@@ -15,6 +15,7 @@ import {
 	isNewFileRequest,
 	likelySupersededPairs,
 	looksProjectSpecific,
+	MEMORY_RERANK_POLICY,
 	memoryEntryPart,
 	memoryInstructions,
 	memoryLineShown,
@@ -189,9 +190,9 @@ describe("memory on the request", () => {
 				today: "2026-10-15",
 			}),
 		).toEqual([]);
-		// Only weak hits: no strong line to be near, so all of them above the floor stay.
+		// Only weak hits: below the floor, so nothing is recalled.
 		const weak = new Map(
-			lines.map((entry) => [entry, rule(entry.text) < 3 ? 0.4 : 0.3]),
+			lines.map((entry) => [entry, rule(entry.text) < 3 ? 0.45 : 0.3]),
 		);
 		expect(
 			selectMemoryMatches({
@@ -200,7 +201,7 @@ describe("memory on the request", () => {
 				alreadyShown: () => false,
 				today: "2026-10-15",
 			}).map((entry) => entry.text),
-		).toEqual(["Rule 0", "Rule 1", "Rule 2"]);
+		).toEqual([]);
 	});
 });
 
@@ -411,6 +412,7 @@ describe("rules a request must follow without naming them", () => {
 			scores,
 			alreadyShown: () => false,
 			today: "2026-10-18",
+			policy: MEMORY_RERANK_POLICY,
 		};
 		// The pool: the hybrid's picks and the convention line.
 		const pool = memoryRerankPool(match);

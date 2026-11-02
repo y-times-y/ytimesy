@@ -1,5 +1,6 @@
-// Calibrates the read hook's reranker cutoff (MEMORY_RERANK_MIN_SCORE) and
-// its fallback floor (MEMORY_RERANK_FALLBACK_MIN_SCORE). Development only.
+// Calibrates the read hook's hybrid floor (MEMORY_MATCH_MIN_SCORE) and the
+// reranker's cutoff (MEMORY_RERANK_MIN_SCORE, off by MEMORY_RERANK_ON).
+// Development only.
 //
 //   CLOUDFLARE_API_TOKEN=$(npx wrangler auth token) node --import tsx scripts/memory-rerank-calibrate.ts
 //       Scores every probe of the offline precision fixture (positive and
@@ -25,10 +26,9 @@ import {
 import { memoryMatchScores } from "../src/domain/memory-ranking";
 import {
 	cosineSimilarity,
-	MEMORY_FALLBACK_POLICY,
 	MEMORY_MATCH_POLICY,
-	MEMORY_RERANK_FALLBACK_MIN_SCORE,
 	MEMORY_RERANK_MIN_SCORE,
+	MEMORY_RERANK_POLICY,
 	type MemoryLine,
 	memoryLineEmbeddingText,
 	memoryLines,
@@ -167,7 +167,8 @@ async function main() {
 	}
 
 	const today = memoryToday();
-	const select = (item: Scored, mode: "none" | "rerank" | "fallback") => {
+	/** "old": the 2026-11-01 floor (0.37); "hybrid": MEMORY_MATCH_POLICY; "rerank": the reranker on. */
+	const select = (item: Scored, mode: "old" | "hybrid" | "rerank") => {
 		const match = {
 			lines: item.lines,
 			scores: item.hybrid,
@@ -175,13 +176,14 @@ async function main() {
 			today,
 			query: item.probe.query,
 		};
-		if (mode === "fallback")
-			return selectMemoryMatches({ ...match, policy: MEMORY_FALLBACK_POLICY });
-		if (mode === "none")
+		if (mode === "old")
+			return selectMemoryMatches({ ...match, policy: MEMORY_RERANK_POLICY });
+		if (mode === "hybrid")
 			return selectMemoryMatches({ ...match, policy: MEMORY_MATCH_POLICY });
-		const pool = memoryRerankPool(match);
+		const pool = memoryRerankPool({ ...match, policy: MEMORY_RERANK_POLICY });
 		return selectMemoryMatches({
 			...match,
+			policy: MEMORY_RERANK_POLICY,
 			rerank: new Map(
 				pool.map((entry) => [entry, item.rerank.get(entry) ?? 0]),
 			),
@@ -203,6 +205,7 @@ async function main() {
 			scores: item.hybrid,
 			alreadyShown: () => false,
 			today,
+			policy: MEMORY_RERANK_POLICY,
 		});
 		const right = item.lines.filter((entry) =>
 			item.probe.right.includes(entry.text),
@@ -241,6 +244,7 @@ async function main() {
 				scores: item.hybrid,
 				alreadyShown: () => false,
 				today,
+				policy: MEMORY_RERANK_POLICY,
 			}),
 		);
 	const rightScores = (set: Probe["set"]) =>
@@ -298,7 +302,7 @@ async function main() {
 	}
 	console.log(`\n${table(sweep)}`);
 
-	// The fallback floor: the hybrid alone.
+	// The hybrid floor alone.
 	const fallbackRight = scored
 		.filter((item) => item.probe.set === "fixture" && !item.probe.negative)
 		.flatMap((item) =>
@@ -322,7 +326,7 @@ async function main() {
 	for (const row of fallbackNegative)
 		console.log(`  ${fmt(row.score)}  ${row.text}`);
 
-	const count = (mode: "none" | "rerank" | "fallback") => {
+	const count = (mode: "old" | "hybrid" | "rerank") => {
 		let right = 0;
 		let wanted = 0;
 		let wrong = 0;
@@ -350,13 +354,13 @@ async function main() {
 		return `fixture right ${right}/${wanted}, wrong ${wrong}; negative lines ${negative}; two-chat rules ${twoChat}/${RECALL_PROBES.length}`;
 	};
 	console.log(
-		`\nNo reranker (floor ${MEMORY_MATCH_POLICY.minScore}, gap ${MEMORY_MATCH_POLICY.gap}): ${count("none")}`,
+		`\nFloor ${MEMORY_RERANK_POLICY.minScore}, gap ${MEMORY_MATCH_POLICY.gap}: ${count("old")}`,
 	);
 	console.log(
-		`Reranker (cutoff ${MEMORY_RERANK_MIN_SCORE}): ${count("rerank")}`,
+		`Floor ${MEMORY_MATCH_POLICY.minScore} (the default): ${count("hybrid")}`,
 	);
 	console.log(
-		`Fallback (floor ${MEMORY_RERANK_FALLBACK_MIN_SCORE}): ${count("fallback")}`,
+		`Reranker (cutoff ${MEMORY_RERANK_MIN_SCORE}, pool at ${MEMORY_RERANK_POLICY.minScore}): ${count("rerank")}`,
 	);
 	const times = scored.map((item) => item.ms).sort((a, b) => a - b);
 	console.log(
