@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import type { EvidenceRecord } from "#/domain/pr-evidence";
+import type { EvidenceContext, EvidenceRecord } from "#/domain/pr-evidence";
 import { requireUser } from "#/server/auth/auth";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -24,6 +24,10 @@ export const getEvidencePage = createServerFn({ method: "GET" })
 			evidence: EvidenceRecord | null;
 			/** For an agent capture: every agent capture of its chat, newest first. */
 			captures?: EvidenceRecord[];
+			/** Its chat and pull request, for the page's header. */
+			context?: EvidenceContext;
+			/** The server's clock, so the first paint's "2 h ago" matches hydration. */
+			now?: string;
 		}> => {
 			let user: { id: string };
 			try {
@@ -35,28 +39,27 @@ export const getEvidencePage = createServerFn({ method: "GET" })
 			}
 			if (!UUID.test(data.projectId) || !UUID.test(data.evidenceId))
 				return { signedIn: true, evidence: null };
-			const { evidenceForOwner, listAgentCaptures } = await import(
-				"#/server/adapters/pr-evidence-records"
-			);
+			const { evidenceContextForOwner, evidenceForOwner, listAgentCaptures } =
+				await import("#/server/adapters/pr-evidence-records");
 			const evidence = await evidenceForOwner(
 				user.id,
 				data.projectId,
 				data.evidenceId,
 			);
 			// A pull request links its chat's newest agent capture; the page shows them all.
-			const captures =
-				evidence?.source === "agent" && evidence.sessionId
-					? await listAgentCaptures(
-							user.id,
-							data.projectId,
-							evidence.sessionId,
-							60,
-						)
-					: undefined;
+			if (!evidence) return { signedIn: true, evidence };
+			const [captures, context] = await Promise.all([
+				evidence.source === "agent" && evidence.sessionId
+					? listAgentCaptures(user.id, data.projectId, evidence.sessionId, 60)
+					: undefined,
+				evidenceContextForOwner(user.id, evidence),
+			]);
 			return {
 				signedIn: true,
 				evidence,
 				...(captures ? { captures } : {}),
+				context,
+				now: new Date().toISOString(),
 			};
 		},
 	);
