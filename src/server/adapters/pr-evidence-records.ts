@@ -1,10 +1,12 @@
 import { jsonbText } from "#/domain/jsonb";
 import {
 	EVIDENCE_KEPT_PER_PULL,
+	type EvidenceContext,
 	type EvidenceManifest,
 	type EvidenceRecord,
 	type EvidenceSource,
 	type EvidenceStatus,
+	evidenceContext,
 	evidenceManifest,
 } from "#/domain/pr-evidence";
 import { database } from "./database";
@@ -357,4 +359,54 @@ export async function failStaleCaptures(now: Date, minutes = 30) {
 		[new Date(now.getTime() - minutes * 60_000).toISOString()],
 	);
 	return result.rowCount ?? 0;
+}
+
+/**
+ * What a capture belongs to, for the evidence page's header: its chat's title
+ * and branch and its pull request. Only rows the same owner has are read.
+ */
+export async function evidenceContextForOwner(
+	userId: string,
+	evidence: EvidenceRecord,
+): Promise<EvidenceContext> {
+	const result = await database().query<{
+		title: string | null;
+		branch: string | null;
+		full_name: string | null;
+		pull_number: number | null;
+		head_ref: string | null;
+	}>(
+		`select s.title, coalesce(s.working_branch, s.selected_branch) as branch,
+		  l.full_name, l.pull_number, l.head_ref
+		from (select 1) one
+		left join agent_session s on s.id=$3::uuid and s.user_id=$1 and s.project_id=$2
+		left join lateral (
+		  select full_name, pull_number, head_ref from pull_request_link l
+		  where l.user_id=$1 and l.project_id=$2 and (
+		    ($4 <> '' and l.full_name=$4 and l.pull_number=$5)
+		    or ($4 = '' and $3::uuid is not null
+		      and (l.origin_session_id=$3::uuid or l.session_id=$3::uuid)))
+		  order by l.updated_at desc limit 1
+		) l on true`,
+		[
+			userId,
+			evidence.projectId,
+			evidence.sessionId,
+			evidence.fullName,
+			evidence.pullNumber,
+		],
+	);
+	const row = result.rows[0];
+	return evidenceContext(evidence, {
+		chatTitle: row?.title ?? null,
+		chatBranch: row?.branch ?? null,
+		link:
+			row?.full_name && row.pull_number
+				? {
+						fullName: row.full_name,
+						pullNumber: row.pull_number,
+						headRef: row.head_ref,
+					}
+				: null,
+	});
 }
