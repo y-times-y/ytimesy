@@ -88,6 +88,9 @@ if (
 	secrets.DATABASE_URL.includes(DEVELOPMENT_DATABASE_REF)
 )
 	throw new Error("DATABASE_URL is not the production database.");
+// The edge checks this itself (server config); without it every edge job fails.
+if (database.searchParams.get("sslmode") !== "verify-full")
+	throw new Error("DATABASE_URL needs sslmode=verify-full and sslrootcert.");
 for (const name of ["APP_URL", "YTIMESY_GIT_PROXY_URL"] as const) {
 	const url = new URL(secrets[name]);
 	if (
