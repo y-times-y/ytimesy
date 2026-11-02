@@ -206,6 +206,8 @@ export async function sendSubscriptionTask(
 		runtimeHandoff?: string;
 		variant?: string;
 		fast?: boolean;
+		/** The plan model's larger window; absent on internal follow-ups, which inherit it. */
+		largeContext?: boolean;
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
@@ -289,9 +291,19 @@ export async function sendSubscriptionTask(
 	// Continuing on a fallback during an outage: the fallback route is checked below.
 	if (!continuing && !view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");
+	const largeContext = input.largeContext ?? inherited?.largeContext === true;
+	if (
+		largeContext &&
+		!continuing &&
+		!view.models.find((model) => model.id === input.modelId)?.contextWindow
+	)
+		throw new Error(
+			"A larger context window is not available for this model on your ChatGPT plan.",
+		);
 	const revision = subscriptionTurnRevision(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
+		largeContext,
 	);
 	// The send's key is its message id: a replayed request was already queued.
 	if (sendWasQueued(view.items, input.idempotencyKey))

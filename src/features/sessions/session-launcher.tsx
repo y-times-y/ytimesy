@@ -256,6 +256,8 @@ export function SessionLauncher({
 		options?: {
 			readonly reasoningId?: string;
 			readonly speed?: ComposerSpeed;
+			/** The route's larger context window; every send states it. */
+			readonly largeContext?: boolean;
 			readonly approvesPlan?: boolean;
 			/** Continue on the fallback route the user approved after an outage. */
 			readonly continueOn?: string;
@@ -617,6 +619,7 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [speed, setSpeed] = useState<ComposerSpeed>("");
+	const [largeContext, setLargeContext] = useState(false);
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -986,6 +989,7 @@ export function SessionLauncher({
 	useEffect(() => {
 		setReasoningId(selectedModel?.reasoning?.defaultLevelId ?? "");
 		setSpeed("");
+		setLargeContext(false);
 	}, [selectedModel?.id, selectedModel?.reasoning?.defaultLevelId]);
 
 	useEffect(() => {
@@ -1102,6 +1106,7 @@ export function SessionLauncher({
 			onSend(text, modelId, {
 				...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
 				...(speed ? { speed } : {}),
+				largeContext: largeContext && Boolean(selectedModel?.contextWindow),
 				...(continueOn ? { continueOn } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
@@ -1571,6 +1576,8 @@ export function SessionLauncher({
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
 								onSpeedChange={setSpeed}
+								largeContext={largeContext}
+								onLargeContextChange={setLargeContext}
 								onAttachFiles={attachFiles}
 							/>
 							{turnStatus === "running" ? (
@@ -1729,6 +1736,9 @@ export function SideChat({
 							? { reasoningId: options.reasoningId }
 							: {}),
 						...(options?.speed ? { speed: options.speed } : {}),
+						...(options?.largeContext !== undefined
+							? { largeContext: options.largeContext }
+							: {}),
 						...(options?.userMessageId
 							? { userMessageId: options.userMessageId }
 							: {}),

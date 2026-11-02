@@ -33,3 +33,11 @@ it("hides the locked API-key copy of a model the subscription covers", () => {
 	expect(locked.map((model) => model.label)).not.toContain("Claude Opus 5.5");
 	expect(claudeCodeCoveredOpenRouterIds([])).toEqual([]);
 });
+
+it("offers no context window option: the subscription's models already run 1M", () => {
+	// code.claude.com/docs/en/model-config: Opus, Sonnet and Haiku 5.5 run the
+	// 1M window by default, and a [1m] suffix has no effect on them.
+	expect(
+		claudeCodeListedModels().filter((model) => model.contextWindow),
+	).toEqual([]);
+});

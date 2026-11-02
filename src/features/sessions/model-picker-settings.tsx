@@ -1,5 +1,6 @@
-import { Brain, Zap } from "lucide-react";
+import { Brain, Layers, Zap } from "lucide-react";
 import { MenuSelect } from "#/components/ui/menu-select";
+import { contextWindowLabel } from "#/domain/context-window-option";
 import {
 	type ComposerSpeed,
 	reasoningLevelLabel,
@@ -20,15 +21,20 @@ export function ModelPickerSettings({
 	onReasoningIdChange,
 	speed,
 	onSpeedChange,
+	largeContext = false,
+	onLargeContextChange,
 }: {
 	model: SessionModel;
 	reasoningId: string;
 	onReasoningIdChange?: (id: string) => void;
 	speed: ComposerSpeed;
 	onSpeedChange?: (speed: ComposerSpeed) => void;
+	largeContext?: boolean;
+	onLargeContextChange?: (large: boolean) => void;
 }) {
 	const reasoning = resolveReasoningLevel(model, reasoningId);
 	const selectedSpeed = model.speeds.find((option) => option.id === speed);
+	const window = model.contextWindow;
 	return (
 		<div className="model-picker-settings">
 			<p className="model-picker-current">{model.label}</p>
@@ -72,6 +78,30 @@ export function ModelPickerSettings({
 						className="model-reasoning-select"
 						side="right"
 						aria-label="Speed"
+					/>
+				</div>
+			) : null}
+			{onLargeContextChange && window ? (
+				<div className="model-picker-setting">
+					<Layers size={16} aria-hidden="true" />
+					<span>Context</span>
+					<MenuSelect
+						value={largeContext ? "large" : "standard"}
+						onValueChange={(id) => onLargeContextChange(id === "large")}
+						options={[
+							{
+								value: "standard",
+								label: contextWindowLabel(window.standard),
+							},
+							{
+								value: "large",
+								label: contextWindowLabel(window.large),
+								...(window.costNote ? { title: window.costNote } : {}),
+							},
+						]}
+						className="model-reasoning-select"
+						side="right"
+						aria-label="Context window"
 					/>
 				</div>
 			) : null}

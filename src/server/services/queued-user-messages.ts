@@ -164,6 +164,9 @@ async function queueBehindRunningTurn(
 		...(input.variant ? { variant: input.variant } : {}),
 		...(input.speed ? { speed: input.speed } : {}),
 		...(input.fast !== undefined ? { fast: input.fast } : {}),
+		...(input.largeContext !== undefined
+			? { largeContext: input.largeContext }
+			: {}),
 		// Send, or the turn ending, is what the model receives. Until then it
 		// stays out of the next step so Edit can still change it.
 		released: input.released === true,
@@ -237,6 +240,9 @@ async function holdUntilEnvironmentReady(
 			...(input.variant ? { variant: input.variant } : {}),
 			...(input.speed ? { speed: input.speed } : {}),
 			...(input.fast !== undefined ? { fast: input.fast } : {}),
+			...(input.largeContext !== undefined
+				? { largeContext: input.largeContext }
+				: {}),
 			...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
 			...(input.environmentSetup ? { environmentSetup: true } : {}),
 		});
@@ -399,6 +405,9 @@ async function deliverQueuedSend(
 					...(next.variant ? { variant: next.variant } : {}),
 					...(next.speed ? { speed: next.speed } : {}),
 					...(next.fast !== undefined ? { fast: next.fast } : {}),
+					...(next.largeContext !== undefined
+						? { largeContext: next.largeContext }
+						: {}),
 					idempotencyKey: next.item.id,
 					storedAttachments: next.item.attachments ?? [],
 					...(next.baseBranch ? { baseBranch: next.baseBranch } : {}),

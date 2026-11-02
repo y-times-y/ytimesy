@@ -9,3 +9,11 @@ it("keeps only settings a turn can use", () => {
 	expect(apiTurnSettings({ reasoning: "", speed: "turbo" })).toEqual({});
 	expect(apiTurnSettings(null)).toEqual({});
 });
+
+it("keeps the larger context window only when it was chosen", () => {
+	expect(apiTurnSettings({ largeContext: true })).toEqual({
+		largeContext: true,
+	});
+	expect(apiTurnSettings({ largeContext: "yes" })).toEqual({});
+	expect(apiTurnSettings({ largeContext: false })).toEqual({});
+});

@@ -1702,6 +1702,8 @@ async function runApiTurnAttempt(
 				? leadReasoningEffort(turnReasoning, variant.leadEffort)
 				: turnReasoning,
 			speed: apiSettings.speed,
+			largeContext:
+				(subscription?.largeContext ?? apiSettings.largeContext) === true,
 			...(deferral ? { toolOrder: deferral.order } : {}),
 			...(owner.agentRole === "checker"
 				? { toolsOff: () => checkerFinal }
