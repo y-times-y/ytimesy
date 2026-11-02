@@ -10,7 +10,13 @@ export type ClaudeCodePlanStep = {
 	readonly status: "pending" | "in_progress" | "completed";
 };
 
-export type ClaudeCodeFailure = "usage-limit" | "refused" | "error";
+export type ClaudeCodeFailure =
+	| "usage-limit"
+	| "refused"
+	| "rate-limited"
+	| "overloaded"
+	| "outage"
+	| "error";
 
 export type ClaudeCodeResult = {
 	readonly ok: boolean;
@@ -32,7 +38,9 @@ export type ClaudeCodeEffect =
 			/** MCP servers that failed to connect (ytimesy's own tools are then missing). */
 			readonly failedMcpServers: readonly string[];
 	  }
-	| { readonly kind: "result"; readonly result: ClaudeCodeResult };
+	| { readonly kind: "result"; readonly result: ClaudeCodeResult }
+	/** Claude Code's own API error, written as an assistant line: never the agent's reply. */
+	| { readonly kind: "api-error"; readonly text: string };
 
 type Block = Record<string, unknown> & { type?: unknown };
 
@@ -125,12 +133,49 @@ export function claudeCodeFailure(text: string): {
 		};
 	}
 	if (
-		/\b40[13]\b|authentication_error|permission_error|invalid api key|oauth token|\/login|invalid bearer|token (has )?expired/i.test(
+		/\b40[13]\b|authentication_error|permission_error|invalid api key|oauth token|\/login|invalid bearer|token (has )?expired|failed to authenticate/i.test(
 			text,
 		)
 	)
 		return { failure: "refused", resetsAt: null };
+	if (/API Error: 429\b|rate_limit_error/i.test(text))
+		return { failure: "rate-limited", resetsAt: null };
+	if (/API Error: 529\b|overloaded/i.test(text))
+		return { failure: "overloaded", resetsAt: null };
+	if (
+		/API Error: 5\d\d\b|api_error|Connection error|Request timed out/i.test(
+			text,
+		)
+	)
+		return { failure: "outage", resetsAt: null };
 	return { failure: "error", resetsAt: null };
+}
+
+/**
+ * Claude Code writes a failed model request as an assistant message of its
+ * own ("API Error: 403 …", "Failed to authenticate. …"), which the SDK
+ * marks with an `error` field. Its text is the run's failure, never the
+ * agent's reply.
+ */
+const API_ERROR_TEXT =
+	/^\s*(?:Failed to authenticate\.|API Error(?: \(|:\s*\d{3}\b)|Invalid API key\b|OAuth token (?:has )?expired|Credit balance is too low\b|Please run \/login\b)/i;
+
+export function isClaudeCodeApiErrorText(text: string) {
+	return API_ERROR_TEXT.test(text);
+}
+
+function apiErrorText(event: Record<string, unknown>): string | null {
+	const text = blocks(event.message)
+		.flatMap((block) =>
+			block.type === "text" && typeof block.text === "string"
+				? [block.text]
+				: [],
+		)
+		.join("\n")
+		.trim();
+	if (!text) return null;
+	if (typeof event.error === "string" && event.error) return text;
+	return isClaudeCodeApiErrorText(text) ? text : null;
 }
 
 /**
@@ -175,7 +220,10 @@ export function claudeCodeEffects(
 	}
 	if (event.type === "result") {
 		const text = typeof event.result === "string" ? event.result : "";
-		const ok = event.is_error !== true && event.subtype === "success";
+		const ok =
+			event.is_error !== true &&
+			event.subtype === "success" &&
+			!isClaudeCodeApiErrorText(text);
 		const failure = ok ? null : claudeCodeFailure(text);
 		return [
 			{
@@ -196,6 +244,8 @@ export function claudeCodeEffects(
 	}
 	if (event.parent_tool_use_id) return [];
 	if (event.type === "assistant") {
+		const failed = apiErrorText(event);
+		if (failed) return [{ kind: "api-error", text: failed.slice(0, 2000) }];
 		const effects: ClaudeCodeEffect[] = [];
 		blocks(event.message).forEach((block, index) => {
 			const id = `cc-${lineKey}-${index}`;

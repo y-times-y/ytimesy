@@ -4,6 +4,7 @@ import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { ClaudeCodeRunFailure } from "#/domain/api-turn-failure";
 import type { ClaudeCodePlanStep } from "#/domain/claude-code-stream";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
+import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
 import {
 	downloadCheckpoint,
@@ -29,6 +30,7 @@ import {
 import {
 	type ClaudeCodeStepResult,
 	runClaudeCodeStep,
+	stopClaudeCodeRun,
 } from "./claude-code-runner";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -158,4 +160,29 @@ export async function runClaudeCodeTurnStep(input: {
 		]);
 		if (ended) closeClaudeCodeBridge(input.turnId);
 	}
+}
+
+/**
+ * Stops the turn's Claude Code CLI on the chat's machine once the turn moved
+ * to another model, so its trailing output is never read. Never throws.
+ */
+export async function stopClaudeCodeTurnRun(input: {
+	readonly machines: WorkspaceMachines;
+	readonly vm: WorkspaceId | null;
+	readonly turnId: string;
+}): Promise<void> {
+	const { vm } = input;
+	if (!vm) return;
+	await stopClaudeCodeRun(async (command, timeoutMs) => {
+		const result = await input.machines.exec(vm, command, timeoutMs);
+		return {
+			exitCode: result.exitCode,
+			stdout: result.stdout,
+			stderr: result.stderr,
+		};
+	}, input.turnId).catch((error: unknown) =>
+		console.warn("Claude Code could not be stopped after a failover.", {
+			message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+		}),
+	);
 }

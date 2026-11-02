@@ -303,6 +303,20 @@ export class ClaudeSubscriptionRefused extends Error {
 	}
 }
 
+/** Claude Code reported Anthropic down, overloaded or limiting requests: another route may serve. */
+export class ClaudeCodeApiUnavailable extends Error {
+	constructor(readonly reason: "outage" | "overloaded" | "rate-limited") {
+		super(
+			reason === "rate-limited"
+				? "Anthropic is limiting your Claude plan's requests right now. Wait a minute, then retry. Your work is saved."
+				: reason === "overloaded"
+					? "Anthropic is overloaded right now. Retry in a minute. Your work is saved."
+					: "Anthropic is having problems right now. Retry in a few minutes. Your work is saved.",
+		);
+		this.name = "ClaudeCodeApiUnavailable";
+	}
+}
+
 /** Claude Code itself stopped without an answer (not a subscription problem). */
 export class ClaudeCodeRunFailure extends Error {
 	constructor(detail: string) {
@@ -693,6 +707,7 @@ export function apiModelFailureMessage(error: unknown): string {
 		error instanceof ClaudeSubscriptionLimitReached ||
 		error instanceof ClaudeSubscriptionRefused ||
 		error instanceof ClaudeCodeRunFailure ||
+		error instanceof ClaudeCodeApiUnavailable ||
 		error instanceof UnsupportedEdgeModelEndpoint ||
 		error instanceof ApiModelPreparationFailure ||
 		error instanceof XaiSubscriptionUnavailable

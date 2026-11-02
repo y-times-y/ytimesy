@@ -224,6 +224,78 @@ describe("Claude Code stream-json", () => {
 		expect(claudeCodeFailure("Something broke").failure).toBe("error");
 	});
 
+	it("reads Claude Code's own API error lines as the run's failure, never as the reply", () => {
+		const refused =
+			'Failed to authenticate. API Error: 403 {"type":"error","error":{"type":"permission_error","message":"This turn\'s access ended."}}';
+		// As the CLI writes it: an assistant line the SDK marks with `error`.
+		expect(
+			claudeCodeEffects(
+				line({
+					type: "assistant",
+					parent_tool_use_id: null,
+					error: "authentication_failed",
+					message: {
+						model: "<synthetic>",
+						role: "assistant",
+						content: [{ type: "text", text: refused }],
+					},
+				}),
+				"9",
+				context,
+			),
+		).toEqual([{ kind: "api-error", text: refused }]);
+		// Older CLIs leave the mark out; the wording still gives it away.
+		expect(
+			claudeCodeEffects(
+				line({
+					type: "assistant",
+					message: {
+						content: [{ type: "text", text: "API Error: 529 Overloaded" }],
+					},
+				}),
+				"10",
+				context,
+			),
+		).toEqual([{ kind: "api-error", text: "API Error: 529 Overloaded" }]);
+		// A reply that merely mentions an error is the agent's own text.
+		expect(
+			claudeCodeEffects(
+				line({
+					type: "assistant",
+					message: {
+						content: [{ type: "text", text: "The log shows API Error: 500." }],
+					},
+				}),
+				"11",
+				context,
+			)[0],
+		).toMatchObject({ kind: "event", event: { type: "text-delta" } });
+		// A result that only repeats the error never passes as an answer.
+		const [result] = claudeCodeEffects(
+			line({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: refused,
+			}),
+			"12",
+			context,
+		);
+		expect(result).toMatchObject({
+			kind: "result",
+			result: { ok: false, failure: "refused" },
+		});
+		expect(claudeCodeFailure("API Error: 429 rate_limit_error").failure).toBe(
+			"rate-limited",
+		);
+		expect(claudeCodeFailure("API Error: 529 Overloaded").failure).toBe(
+			"overloaded",
+		);
+		expect(claudeCodeFailure("API Error: 500 Internal error").failure).toBe(
+			"outage",
+		);
+	});
+
 	it("ignores lines that are not JSON", () => {
 		expect(claudeCodeEffects("not json", "0", context)).toEqual([]);
 	});

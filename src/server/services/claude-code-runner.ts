@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
+	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
@@ -32,7 +33,11 @@ import type {
 	ClaudeCodeSessionRecord,
 	ClaudeSubscriptionStatus,
 } from "../adapters/claude-subscription";
-import { scopedShellCommand } from "./api-command-scope";
+import {
+	COMMAND_STOP_SCRIPT,
+	commandScopeRoot,
+	scopedShellCommand,
+} from "./api-command-scope";
 
 /**
  * One durable step of a Claude Code turn: the unmodified CLI runs detached
@@ -259,6 +264,8 @@ export async function runClaudeCodeStep(
 	const runDirectory = `${turnDirectory}/${run}`;
 	let commit = -1;
 	let wait = POLL_MIN_MS;
+	/** Claude Code's own API error line (never shown): why the run is failing. */
+	let apiError: string | null = null;
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
@@ -293,6 +300,7 @@ export async function runClaudeCodeStep(
 					if (effect.failedMcpServers.includes(CLAUDE_CODE_MCP_SERVER))
 						console.warn("Claude Code could not connect to ytimesy's tools.");
 				} else if (effect.kind === "plan") input.onPlan(effect.plan);
+				else if (effect.kind === "api-error") apiError = effect.text;
 				else if (effect.kind === "result") result = effect.result;
 				else await emit(input, effect.event);
 			}
@@ -308,7 +316,7 @@ export async function runClaudeCodeStep(
 							error instanceof Error ? error.message.slice(0, 200) : "unknown",
 					}),
 				);
-			return completeRun(input, result, home);
+			return completeRun(input, result, home, apiError);
 		}
 		const exited =
 			typeof header.status === "string" &&
@@ -316,7 +324,12 @@ export async function runClaudeCodeStep(
 			header.next === header.size;
 		if (exited) {
 			await finishRun(shell, runDirectory, commit);
-			throw await exitFailure(input, runDirectory, header.status as string);
+			throw await exitFailure(
+				input,
+				runDirectory,
+				header.status as string,
+				apiError,
+			);
 		}
 		// Yield at the deadline, never with a ytimesy tool call still answering.
 		const due = now() + wait >= input.deadline;
@@ -505,6 +518,7 @@ exec ${argv.map(quote).join(" ")} --append-system-prompt "$(cat ${quote(`${input
 		cwd: input.cwd,
 		command,
 		seconds: PROCESS_SECONDS,
+		commandId: claudeCodeCommandId(input.turnId, run),
 	});
 	await checked(
 		shell,
@@ -589,6 +603,7 @@ async function completeRun(
 	input: ClaudeCodeStepInput,
 	result: ClaudeCodeResult,
 	home: string,
+	apiError: string | null,
 ): Promise<ClaudeCodeStepResult> {
 	if (result.sessionId && isClaudeCodeSessionId(result.sessionId)) {
 		await input
@@ -598,7 +613,13 @@ async function completeRun(
 			)
 			.catch(() => undefined);
 	}
-	if (!result.ok) throw await subscriptionFailure(input, result);
+	if (!result.ok)
+		throw await subscriptionFailure(
+			input,
+			result.failure === "error" && apiError
+				? { ...result, ...claudeCodeFailure(apiError) }
+				: result,
+		);
 	if (result.usage) await input.onEvent({ type: "usage", usage: result.usage });
 	await input.onEvent({
 		type: "finish",
@@ -639,6 +660,12 @@ async function subscriptionFailure(
 			resetsAt ? new Date(resetsAt) : null,
 		);
 	}
+	if (
+		result.failure === "outage" ||
+		result.failure === "overloaded" ||
+		result.failure === "rate-limited"
+	)
+		return new ClaudeCodeApiUnavailable(result.failure);
 	return new ClaudeCodeRunFailure(
 		result.subtype === "error_max_turns"
 			? "it reached its turn limit."
@@ -650,6 +677,7 @@ async function exitFailure(
 	input: ClaudeCodeStepInput,
 	runDirectory: string,
 	status: string,
+	apiError: string | null,
 ) {
 	const stderr = await input
 		.shell(
@@ -658,7 +686,11 @@ async function exitFailure(
 		)
 		.then((result) => result.stdout)
 		.catch(() => "");
-	const classified = claudeCodeFailure(stderr);
+	const fromStderr = claudeCodeFailure(stderr);
+	const classified =
+		fromStderr.failure === "error" && apiError
+			? claudeCodeFailure(apiError)
+			: fromStderr;
 	if (classified.failure !== "error")
 		return subscriptionFailure(input, {
 			failure: classified.failure,
@@ -671,5 +703,28 @@ async function exitFailure(
 		status === "124"
 			? "it ran past its time limit."
 			: `it exited without an answer (code ${/^\d{1,3}$/.test(status) ? status : "unknown"}).`,
+	);
+}
+
+/** The scoped command id of a turn's Claude Code run, so that run alone can be stopped. */
+export function claudeCodeCommandId(turnId: string, run: number) {
+	return `cc-${turnId}-${run}`;
+}
+
+/**
+ * Stops the turn's running Claude Code CLI, if any, and marks its run
+ * consumed, so nothing re-attaches to it and its trailing output (often an
+ * error after the turn moved to another model) is never read. Best effort:
+ * the turn's command scope still stops it when the turn ends.
+ */
+export async function stopClaudeCodeRun(
+	shell: ClaudeCodeShell,
+	turnId: string,
+): Promise<void> {
+	if (!/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("Invalid turn id.");
+	const root = commandScopeRoot(turnId);
+	await shell(
+		`d="$HOME"/${RUNS}/${turnId}; n=$(cat "$d/current" 2>/dev/null || true); case "$n" in ''|*[!0-9]*) exit 0;; esac; python3 -c ${quote(COMMAND_STOP_SCRIPT)} ${quote(root)} "cc-${turnId}-$n"; : > "$d/$n/consumed"; rm -f "$d/$n/env" "$d/$n/mcp.json"; true`,
+		20_000,
 	);
 }

@@ -139,6 +139,36 @@ describe("Claude subscription", () => {
 		});
 	});
 
+	it("ends a turn's access once it failed over off Claude Code, and grants it to a turn that moved onto it", async () => {
+		await saveClaudeSubscriptionToken("u1", token);
+		const movedOff = await turn();
+		await db.query("update api_turn set failover=$1 where id=$2", [
+			JSON.stringify({
+				route: { connectionRevision: "or-rev", connectionId: "x" },
+			}),
+			movedOff.turnId,
+		]);
+		expect(await authorizeClaudeCodeProxy(movedOff)).toEqual({
+			kind: "refused",
+			status: 401,
+		});
+		// Only a retry count in the column: still on Claude Code.
+		const retried = await turn();
+		await db.query("update api_turn set failover=$1 where id=$2", [
+			JSON.stringify({ retry: { route: "claude-code|x", count: 1 } }),
+			retried.turnId,
+		]);
+		expect((await authorizeClaudeCodeProxy(retried)).kind).toBe("ok");
+		const movedOn = await turn("running", "api-revision");
+		await db.query("update api_turn set failover=$1 where id=$2", [
+			JSON.stringify({
+				route: { connectionRevision: claudeCodeTurnRevision() },
+			}),
+			movedOn.turnId,
+		]);
+		expect((await authorizeClaudeCodeProxy(movedOn)).kind).toBe("ok");
+	});
+
 	it("marks a refused token and a spent plan, and forgets on disconnect", async () => {
 		await saveClaudeSubscriptionToken("u1", token);
 		const running = await turn();
