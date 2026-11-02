@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
+	ClaudeCodeApiUnavailable,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
@@ -8,7 +9,9 @@ import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
 import {
 	type ClaudeCodeStepInput,
 	type ClaudeCodeStore,
+	claudeCodeCommandId,
 	runClaudeCodeStep,
+	stopClaudeCodeRun,
 } from "./claude-code-runner";
 
 const HOME = "/home/ubuntu";
@@ -443,6 +446,78 @@ describe("Claude Code runner", () => {
 		vm.stderr = "API Error: 401 OAuth token has expired";
 		const failure = await runClaudeCodeStep(input(vm)).catch((error) => error);
 		expect(failure).toBeInstanceOf(ClaudeSubscriptionRefused);
+	});
+
+	it("never shows Claude Code's own API error as the reply; a refused token fails the step", async () => {
+		const vm = new FakeVm();
+		const refused =
+			'Failed to authenticate. API Error: 403 {"type":"error","error":{"type":"permission_error","message":"This turn\'s access ended."}}';
+		vm.emit(
+			init,
+			{
+				type: "assistant",
+				error: "authentication_failed",
+				message: {
+					model: "<synthetic>",
+					content: [{ type: "text", text: refused }],
+				},
+			},
+			{
+				type: "result",
+				subtype: "success",
+				is_error: true,
+				result: refused,
+				session_id: CLAUDE_SESSION,
+			},
+		);
+		vm.status = "1";
+		const step = input(vm);
+		const failure = await runClaudeCodeStep(step).catch((error) => error);
+		expect(failure).toBeInstanceOf(ClaudeSubscriptionRefused);
+		expect(step.events.some((event) => event.type === "text-delta")).toBe(
+			false,
+		);
+	});
+
+	it("fails over when Claude Code reports Anthropic overloaded", async () => {
+		const vm = new FakeVm();
+		vm.emit(
+			init,
+			{
+				type: "assistant",
+				message: {
+					content: [{ type: "text", text: "API Error: 529 Overloaded" }],
+				},
+			},
+			{ type: "result", subtype: "success", is_error: true, result: "" },
+		);
+		vm.status = "1";
+		const step = input(vm);
+		const failure = await runClaudeCodeStep(step).catch((error) => error);
+		expect(failure).toBeInstanceOf(ClaudeCodeApiUnavailable);
+		expect((failure as ClaudeCodeApiUnavailable).reason).toBe("overloaded");
+		expect(step.events.some((event) => event.type === "text-delta")).toBe(
+			false,
+		);
+	});
+
+	it("stops the run it launched, alone, once the turn moves to another model", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		await runClaudeCodeStep(input(vm));
+		const launch = vm.shell.mock.calls
+			.map(([command]) => String(command))
+			.find((command) => command.includes("setsid nohup"));
+		expect(launch).toContain(claudeCodeCommandId(TURN, 1));
+		vm.shell.mockClear();
+		await stopClaudeCodeRun(vm.shell, TURN);
+		const [stop] = vm.shell.mock.calls.map(([command]) => String(command));
+		expect(stop).toContain(`/.ytimesy/claude-runs/${TURN}`);
+		expect(stop).toContain(`"cc-${TURN}-$n"`);
+		expect(stop).toContain(`/tmp/ytimesy-api-command-scopes/${TURN}`);
+		expect(stop).toContain('"$d/$n/consumed"');
+		await expect(stopClaudeCodeRun(vm.shell, "../x")).rejects.toThrow();
 	});
 
 	it("runs a read-only helper as the reader user without write tools", async () => {

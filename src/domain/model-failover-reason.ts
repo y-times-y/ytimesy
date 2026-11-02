@@ -2,6 +2,7 @@ import { APICallError, RetryError } from "ai";
 import {
 	ApiModelPreparationFailure,
 	ApiTurnCancelled,
+	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
@@ -155,6 +156,7 @@ export function failoverReason(error: unknown): FailoverReason | null {
 			return current.reason === "unavailable" ? "outage" : "plan-access";
 		if (current instanceof ClaudeSubscriptionLimitReached) return "usage-limit";
 		if (current instanceof ClaudeSubscriptionRefused) return "signed-out";
+		if (current instanceof ClaudeCodeApiUnavailable) return current.reason;
 		if (current instanceof ClaudeCodeRunFailure) return null;
 		// Every egress path is blocked: another provider route still works.
 		if (current instanceof CodexEgressUnavailable) return "outage";
@@ -200,6 +202,60 @@ export function failoverReason(error: unknown): FailoverReason | null {
 			current.isRetryable
 		)
 			return "outage";
+	}
+	return null;
+}
+
+const OUT_OF_CREDIT_CODES = new Set([
+	"insufficient_quota",
+	"insufficient_credits",
+	"billing_hard_limit_reached",
+]);
+const KEY_REFUSED_CODES = new Set([
+	"invalid_api_key",
+	"authentication_error",
+	"permission_error",
+]);
+/** Streamed or status-less wordings of a spent provider balance. */
+const OUT_OF_CREDIT_TEXT =
+	/can only afford|requires more credits|insufficient (credits|balance|funds)|credit balance is too low/i;
+/** A 403 that refuses the request's content, which a different account would not fix. */
+const CONTENT_REFUSAL =
+	/moderation|flagged|content[ _-]?(policy|filter)|safety|age confirmation/i;
+
+/**
+ * Why a fallback route cannot serve at all, when its provider account is
+ * the problem: out of credit (402), or its key refused (401, 403). A route
+ * the user chose fails the turn for these (only they can fix it); a fallback
+ * the turn moved to on its own is skipped for the next candidate instead.
+ */
+export function fallbackAccountReason(
+	error: unknown,
+): "out-of-credit" | "key-refused" | null {
+	const chain = failureChain(error);
+	for (const current of chain) {
+		// A fallback on the ChatGPT plan whose sign-in needs renewing.
+		if (current instanceof CodexReconnectRequired) return "key-refused";
+		if (NEVER_FAIL_OVER.some((type) => current instanceof type)) return null;
+	}
+	for (const current of chain) {
+		if (typeof current !== "object" || current === null) continue;
+		const record = current as ErrorRecord;
+		const codes = [...strings(record, "code"), ...strings(record, "type")];
+		if (codes.some((code) => OUT_OF_CREDIT_CODES.has(code)))
+			return "out-of-credit";
+		const text = `${typeof record.message === "string" ? record.message : ""} ${
+			APICallError.isInstance(current) ? (current.responseBody ?? "") : ""
+		}`.slice(0, 4096);
+		if (record.statusCode === 402 || OUT_OF_CREDIT_TEXT.test(text))
+			return "out-of-credit";
+		if (CONTENT_REFUSAL.test(text)) return null;
+		if (
+			record.statusCode === 401 ||
+			record.statusCode === 403 ||
+			codes.some((code) => KEY_REFUSED_CODES.has(code))
+		)
+			return "key-refused";
 	}
 	return null;
 }

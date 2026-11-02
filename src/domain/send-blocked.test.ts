@@ -53,6 +53,17 @@ describe("composerSendBlock", () => {
 		expect(block?.action).toBe("model_picker");
 	});
 
+	it("sends on a refused Claude token while its model still lists (failover carries the turn)", () => {
+		expect(
+			composerSendBlock({
+				harnessId: "api",
+				blockers: ["claude_token"],
+				modelId: claudeModel,
+				availableModelIds: [claudeModel, keyModel],
+			}),
+		).toBeNull();
+	});
+
 	it("does not blame a refused Claude token when another model is chosen", () => {
 		expect(
 			composerSendBlock({

@@ -7,6 +7,7 @@ import {
 	SafeApiModelFailure,
 	SubscriptionUsageLimitReached,
 } from "#/domain/api-turn-failure";
+import { claudeCodeTurnRevision } from "#/domain/claude-code-route";
 import { SessionItemId } from "#/domain/ids";
 import {
 	routeRetries,
@@ -30,6 +31,8 @@ const mocks = vi.hoisted(() => ({
 	analytics: vi.fn(),
 	owner: vi.fn(),
 	result: vi.fn(),
+	claudeStatus: vi.fn(),
+	stopClaudeCode: vi.fn(),
 	// Same-route retry waits; the failover tests below run without retries.
 	retryDelays: [] as number[],
 }));
@@ -134,6 +137,15 @@ vi.mock("../adapters/codex-subscription", () => ({
 	]),
 }));
 vi.mock("../adapters/browse-models", () => ({ browseModels: async () => [] }));
+vi.mock("../adapters/claude-subscription", () => ({
+	claudeSubscriptionStatus: mocks.claudeStatus,
+	hasClaudeSubscription: async () => false,
+}));
+vi.mock("../services/claude-code-turn", () => ({
+	claudeCodeBridgeToolSet: () => ({}),
+	runClaudeCodeTurnStep: vi.fn(),
+	stopClaudeCodeTurnRun: mocks.stopClaudeCode,
+}));
 vi.mock("../adapters/model-connections", () => {
 	const openRouter = {
 		id: "11111111-1111-4111-8111-111111111111",
@@ -210,6 +222,8 @@ beforeEach(() => {
 	mocks.checkpoint.mockResolvedValue(undefined);
 	mocks.analytics.mockResolvedValue(undefined);
 	mocks.result.mockResolvedValue(null);
+	mocks.claudeStatus.mockResolvedValue({ status: "disconnected" });
+	mocks.stopClaudeCode.mockResolvedValue(undefined);
 	mocks.preferences.mockResolvedValue({
 		enabled: true,
 		askBeforePaid: false,
@@ -674,4 +688,198 @@ it("retries the local worker's turn in the same call", async () => {
 	expect(local).toHaveBeenCalledTimes(2);
 	const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
 	expect(items.some((item) => item.kind === "modelSwitch")).toBe(false);
+});
+
+it("moves past a fallback that is out of credit to the next connection, never back", async () => {
+	const OPENAI_KEY = "22222222-2222-4222-8222-222222222222";
+	const connections = vi.mocked(await import("../adapters/model-connections"));
+	const [openRouter] = await connections.listModelConnections("owner");
+	const openAiKey = {
+		...openRouter,
+		id: OPENAI_KEY,
+		provider: "openai",
+		label: "OpenAI",
+		baseUrl: "https://api.openai.com/v1",
+		revision: "oa-rev",
+		models: [
+			{ id: "gpt-6.1-sol", label: "gpt-6.1-sol", toolStreamingVerified: true },
+		],
+	} as typeof openRouter;
+	connections.listModelConnections.mockResolvedValue([openRouter, openAiKey]);
+	connections.loadModelConnection.mockImplementation(async (_user, id) =>
+		id === OPENAI_KEY
+			? { ...openAiKey, sealedCredential: "sealed" }
+			: ({ ...openRouter, sealedCredential: "sealed" } as never),
+	);
+	const outOfCredit = () =>
+		new SafeApiModelFailure(
+			new APICallError({
+				message: "Payment Required",
+				url: "https://api.openai.com/v1/responses",
+				requestBodyValues: {},
+				statusCode: 402,
+				responseBody:
+					'{"error":{"message":"You requested up to 64000 tokens, but can only afford 1253."}}',
+			}),
+		);
+	try {
+		// Codex is down: the first fallback is the same model on the OpenAI key.
+		mocks.subscriptionStep.mockRejectedValueOnce(
+			new SafeApiModelFailure(
+				new APICallError({
+					message: "Service Unavailable",
+					url: "https://chatgpt.com/backend-api/codex/responses",
+					requestBodyValues: {},
+					statusCode: 503,
+					isRetryable: true,
+				}),
+			),
+		);
+		let turn = codexTurn();
+		expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+			"continue",
+		);
+		turn = afterCheckpoint(turn);
+		expect((turn.failover as TurnFailover).route.connectionId).toBe(OPENAI_KEY);
+		// That key is out of credit: the turn continues on OpenRouter.
+		mocks.apiStep.mockRejectedValueOnce(outOfCredit());
+		expect(await runApiTurn({} as WorkspaceMachines, turn, step(2))).toBe(
+			"continue",
+		);
+		turn = afterCheckpoint(turn);
+		const failover = turn.failover as TurnFailover;
+		expect(failover).toMatchObject({
+			route: { connectionId: OPENROUTER },
+			switches: 2,
+			fallbackHops: 1,
+			excluded: [OPENAI_KEY],
+		});
+		const notes = turn.items.filter(
+			(item): item is ModelSwitchItem => item.kind === "modelSwitch",
+		);
+		expect(notes.map((note) => note.message)).toEqual([
+			"Codex is down right now, so this chat continued on GPT-6.1 Sol via OpenAI.",
+			"OpenAI is out of credit, so this chat continued on GPT-6.1 Sol via OpenRouter.",
+		]);
+		expect(mocks.analytics).toHaveBeenCalledWith(
+			"owner",
+			"model_failover",
+			expect.objectContaining({ reason: "out-of-credit", outcome: "switched" }),
+			expect.anything(),
+		);
+		// OpenRouter is out of credit too: nothing is left, and the turn says why.
+		mocks.apiStep.mockRejectedValueOnce(outOfCredit());
+		expect(await runApiTurn({} as WorkspaceMachines, turn, step(3))).toBe(
+			"failed",
+		);
+		const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
+		expect(items.at(-1)).toMatchObject({
+			kind: "error",
+			message: expect.stringContaining(
+				"Codex is down right now. Switching to OpenAI and OpenRouter didn't work either: Your API provider account is out of credit.",
+			),
+		});
+		expect(mocks.subscriptionStep).toHaveBeenCalledTimes(1);
+	} finally {
+		connections.listModelConnections.mockResolvedValue([openRouter]);
+		connections.loadModelConnection.mockImplementation(
+			async () =>
+				({
+					...openRouter,
+					sealedCredential: "sealed",
+				}) as never,
+		);
+	}
+});
+
+it("never moves a turn off the route the user chose for its own spent credit", async () => {
+	mocks.apiStep.mockRejectedValueOnce(
+		new SafeApiModelFailure(
+			new APICallError({
+				message: "Payment Required",
+				url: "https://openrouter.ai/api/v1/chat/completions",
+				requestBodyValues: {},
+				statusCode: 402,
+			}),
+		),
+	);
+	const turn: ApiTurn = {
+		...codexTurn(),
+		connection_id: OPENROUTER,
+		connection_revision: "or-rev",
+		model_id: "openai/gpt-6.1-sol",
+	};
+	expect(await runApiTurn({} as WorkspaceMachines, turn, step(1))).toBe(
+		"failed",
+	);
+	expect(mocks.subscriptionStep).not.toHaveBeenCalled();
+	const items = mocks.finalize.mock.calls.at(-1)?.[2] as SessionItem[];
+	expect(items.some((item) => item.kind === "modelSwitch")).toBe(false);
+	expect(items.at(-1)).toMatchObject({
+		kind: "error",
+		message: expect.stringContaining("out of credit"),
+	});
+});
+
+it("moves a refused Claude Code turn to the ChatGPT plan before a paid key, and stops the CLI", async () => {
+	process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED = "1";
+	const connections = vi.mocked(await import("../adapters/model-connections"));
+	const [openRouter] = await connections.listModelConnections("owner");
+	// OpenRouter also serves the very model the user chose.
+	connections.listModelConnections.mockResolvedValue([
+		{
+			...openRouter,
+			models: [
+				{
+					id: "anthropic/claude-opus-5.5",
+					label: "anthropic/claude-opus-5.5",
+					toolStreamingVerified: true,
+				},
+				...openRouter.models,
+			],
+		} as typeof openRouter,
+	]);
+	try {
+		mocks.claudeStatus.mockResolvedValue({ status: "refused" });
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			parentSessionId: null,
+			taskAccess: null,
+			providerRef: "vm-1",
+		});
+		const turn: ApiTurn = {
+			...codexTurn(),
+			connection_revision: claudeCodeTurnRevision(),
+			model_id: "claude-opus-5-5",
+		};
+		expect(await runApiTurn({} as WorkspaceMachines, turn, step(2))).toBe(
+			"continue",
+		);
+		const next = afterCheckpoint(turn);
+		const failover = next.failover as TurnFailover;
+		// The ChatGPT plan (prepaid) before Claude Opus on the OpenRouter key.
+		expect(failover.route).toMatchObject({
+			connectionId: null,
+			modelId: "gpt-6.1-sol",
+		});
+		expect(failover.excluded).toEqual(["claude-code"]);
+		expect(
+			next.items.find((item) => item.kind === "modelSwitch"),
+		).toMatchObject({
+			reason: "signed-out",
+			message:
+				"Anthropic refused your Claude token, so this chat continued on GPT-6.1-Sol via Codex.",
+		});
+		expect(mocks.stopClaudeCode).toHaveBeenCalledWith(
+			expect.objectContaining({ turnId: "turn", vm: "vm-1" }),
+		);
+		// The user's choice stays the turn's own route.
+		expect(next.model_id).toBe("claude-opus-5-5");
+	} finally {
+		delete process.env.YTIMESY_CLAUDE_SUBSCRIPTION_ENABLED;
+		connections.listModelConnections.mockResolvedValue([openRouter]);
+	}
 });

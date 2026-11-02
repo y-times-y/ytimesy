@@ -165,8 +165,9 @@ export async function claudeSubscriptionTokenForRedaction(userId: string) {
 
 /**
  * The edge proxy's per-request check: the grant's turn is still running,
- * in that user's chat, on Claude Code; the request is counted against the
- * turn's cap; and the user's real token is opened.
+ * in that user's chat, and still served by Claude Code (a turn that failed
+ * over to another route has no more Claude Code access); the request is
+ * counted against the turn's cap; and the user's real token is opened.
  */
 export async function authorizeClaudeCodeProxy(
 	grant: ClaudeCodeGrant,
@@ -180,8 +181,7 @@ export async function authorizeClaudeCodeProxy(
 			`with turn as (
 			   select t.id from api_turn t
 			   where t.id=$1 and t.user_id=$2 and t.session_id=$3 and t.state='running'
-			   and (t.connection_revision like 'claude-code:v1:%'
-			        or t.failover->'route'->>'connectionRevision' like 'claude-code:v1:%')
+			   and coalesce(t.failover->'route'->>'connectionRevision',t.connection_revision) like 'claude-code:v1:%'
 			 ), counted as (
 			   insert into claude_code_turn_request(turn_id,user_id,requests)
 			   select id,$2,1 from turn
