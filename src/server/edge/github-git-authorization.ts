@@ -9,6 +9,21 @@ import { githubAccessToken } from "../auth/github-connection";
 
 /** Re-check current owner and GitHub access on every operation, including after disconnect. */
 export async function authorizeGitProxy(grant: GitProxyGrant) {
+	// The owner's row, their GitHub connection and the installation token are
+	// independent reads: they run together, and the token is only returned
+	// once every check passed.
+	const userTokenRead = githubAccessToken(grant.userId).catch(() => {
+		throw new GitProxyFailure("user-connection");
+	});
+	const installationTokenRead = githubInstallationAccessToken(
+		grant.installationId,
+		{ repositoryNames: [grant.name], contents: grant.access },
+	).catch(() => {
+		throw new GitProxyFailure("installation-token");
+	});
+	// Settled here so a refusal before they are awaited is not unhandled.
+	userTokenRead.catch(() => undefined);
+	installationTokenRead.catch(() => undefined);
 	const repository = (
 		await database()
 			.query<{ repositoryId: number }>(
@@ -75,9 +90,7 @@ export async function authorizeGitProxy(grant: GitProxyGrant) {
 			})
 	).rows[0];
 	if (!repository) return null;
-	const userToken = await githubAccessToken(grant.userId).catch(() => {
-		throw new GitProxyFailure("user-connection");
-	});
+	const userToken = await userTokenRead;
 	await authorizedRepository(
 		userToken,
 		grant.installationId,
@@ -93,12 +106,7 @@ export async function authorizeGitProxy(grant: GitProxyGrant) {
 			});
 		if (!access.data.permissions?.push) return null;
 	}
-	return githubInstallationAccessToken(grant.installationId, {
-		repositoryNames: [grant.name],
-		contents: grant.access,
-	}).catch(() => {
-		throw new GitProxyFailure("installation-token");
-	});
+	return installationTokenRead;
 }
 
 /** Spends a push grant once; false when it was already used. */

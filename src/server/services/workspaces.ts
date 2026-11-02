@@ -5,6 +5,7 @@ import {
 	canStartPrepare,
 	type ProjectWorkspace,
 } from "../../domain/project-workspace";
+import { startAfterResponse } from "../adapters/after-response";
 import { database } from "../adapters/database";
 import {
 	activeEnvironmentSetup,
@@ -21,6 +22,7 @@ import {
 } from "../adapters/workspaces";
 import { postgresJobQueue, type WorkspaceJobQueue } from "../jobs/queue";
 import { resolveEnvironmentModel } from "./environment-model";
+import { startEnvironmentMachineEarly } from "./environment-prestart";
 
 export function workspaceView(workspace: ProjectWorkspace) {
 	return {
@@ -138,6 +140,10 @@ export function enqueueProjectWorkspace(
 			: yield* Effect.tryPromise(() =>
 					insertQueuedWorkspace(userId, projectId),
 				);
+		// A first build's machine boots while this request and the build's
+		// dispatch finish; the build takes it (environment-prestart.ts).
+		if (!workspace.templateSnapshotId)
+			startAfterResponse(() => startEnvironmentMachineEarly(workspace.id));
 		const jobId = yield* Effect.tryPromise(() =>
 			queue.enqueuePrepare(workspace.id, repairModel).catch(async () => {
 				await recordWorkspaceEvent(

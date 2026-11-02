@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	dependencyCacheSpec,
+	dependencyUploadsSettledCommand,
+} from "#/domain/dependency-cache";
+import {
 	ENVIRONMENT_BUILD_RECOVERY_SECONDS,
 	ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
 } from "#/domain/environment-build-limits";
@@ -59,7 +63,15 @@ import {
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
 import { readToolsSnapshotId } from "../records/tools-snapshot-store";
+import {
+	restoreDependencyCache,
+	startDependencyCacheUpload,
+} from "./dependency-cache";
 import { diagnoseEnvironmentFailure } from "./environment-diagnosis";
+import {
+	releaseUntakenEnvironmentMachine,
+	takeEarlyEnvironmentMachine,
+} from "./environment-prestart";
 import {
 	EnvironmentInstallFailed,
 	installWithEnvironmentRepair,
@@ -421,16 +433,29 @@ export async function provisionEnvironmentBuild(
 	const steps = databaseBuildSteps(id);
 	await steps.start("machine", "Starting machine");
 	const from = input.incremental?.snapshotId ?? input.baseSnapshotId;
-	const providerRef = await runtime
-		.provision(`ytimesy-build-${id}`, {
-			...(from ? { snapshotId: from } : {}),
-			maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
-		})
-		.catch(async (cause: unknown) => {
-			await steps.finish("machine", "failed");
-			throw cause;
-		});
-	await steps.finish("machine", "done");
+	// A first build takes the machine adding the project started; any other
+	// boots its own.
+	const early = await takeEarlyEnvironmentMachine(
+		input,
+		hasActive,
+		runtime,
+	).catch(() => null);
+	const providerRef =
+		early ??
+		(await runtime
+			.provision(`ytimesy-build-${id}`, {
+				...(from ? { snapshotId: from } : {}),
+				maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
+			})
+			.catch(async (cause: unknown) => {
+				await steps.finish("machine", "failed");
+				throw cause;
+			}));
+	await steps.finish(
+		"machine",
+		"done",
+		early ? { note: "Started while the project was added" } : {},
+	);
 	await database().query(
 		"update environment_build set provider_ref=$2 where id=$1",
 		[id, providerRef],
@@ -449,6 +474,11 @@ export async function prepareEnvironmentRepositories(
 	const host = {
 		exec: (command: string, timeoutMs: number) =>
 			runtime.exec(vm, ["bash", "-lc", command], {}, timeoutMs),
+		execWithEnv: (
+			command: string,
+			env: Record<string, string>,
+			timeoutMs: number,
+		) => runtime.exec(vm, ["bash", "-lc", command], env, timeoutMs),
 		writeTextFile: (path: string, contents: string) =>
 			runtime.writeTextFile(vm, path, contents),
 	};
@@ -576,6 +606,30 @@ export async function prepareEnvironmentRepositories(
 		);
 		const secretValues = Object.values(secrets);
 		await steps.start(installStep, "Installing dependencies", chosen.install);
+		// The same person's same lockfile on the same image installed before:
+		// its archive is restored instead (a miss installs as usual).
+		const cacheSpec = dependencyCacheSpec(files, chosen.install);
+		const cached = cacheSpec
+			? await restoreDependencyCache({
+					host,
+					directory,
+					spec: cacheSpec,
+					userId: input.userId,
+					repositoryId: repo.repositoryId,
+					install: chosen.install,
+					baseSnapshotId: input.baseSnapshotId,
+				}).catch(() => null)
+			: null;
+		if (cached?.restored && cacheSpec?.afterRestore === "skip") {
+			await event(
+				`${repo.fullName}: restored dependencies installed earlier from the same lockfile.`,
+			);
+			await steps.finish(installStep, "done", {
+				note: "Restored from the dependency cache",
+			});
+			prepared.push({ ...repo, directory, recipe, setup });
+			continue;
+		}
 		try {
 			await withCommandOutput(
 				(tail) =>
@@ -603,7 +657,19 @@ export async function prepareEnvironmentRepositories(
 							),
 					}),
 			);
-			await steps.finish(installStep, "done");
+			await steps.finish(
+				installStep,
+				"done",
+				cached?.restored ? { note: "Restored from the dependency cache" } : {},
+			);
+			// Stored in the background; activation waits for it before the snapshot.
+			if (cacheSpec && cached && !cached.restored)
+				await startDependencyCacheUpload({
+					host,
+					directory,
+					spec: cacheSpec,
+					key: cached.key,
+				}).catch(() => false);
 		} catch (cause) {
 			if (cause instanceof ResumeLater) throw cause;
 			const result =
@@ -982,6 +1048,11 @@ export async function activateEnvironmentBuild(
 		throw new Error(
 			"Could not remove credentials from the environment template.",
 		);
+	// A dependency upload still running must not be in the template: it
+	// gets a little longer (it overlapped the checks), then is stopped.
+	await runtime
+		.exec(vm, ["bash", "-c", dependencyUploadsSettledCommand(25)], {}, 30_000)
+		.catch(() => undefined);
 	// Setup command logs may echo secrets; they must not reach the task template.
 	await runtime.exec(vm, ["rm", "-rf", DETACHED_COMMAND_ROOT], {}, 15_000);
 	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`);
@@ -1167,8 +1238,10 @@ export async function failEnvironmentPreflight(workspaceId: string) {
 		 returning user_id`,
 		[workspaceId, message],
 	);
-	if (failed.rows[0])
+	if (failed.rows[0]) {
 		await recordWorkspaceEvent(failed.rows[0].user_id, workspaceId, message);
+		await releaseUntakenEnvironmentMachine(workspaceId).catch(() => undefined);
+	}
 }
 
 /** Files whose change means installed dependencies may be stale. */

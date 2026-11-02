@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type {
 	AgentTaskAccess,
@@ -673,6 +673,64 @@ export async function insertAgentSession(input: {
 		{ key: session.id, timestamp: new Date(session.createdAt) },
 	);
 	return session;
+}
+
+/**
+ * The one chat a new project's own setup starts in. Its id is derived from
+ * the project's, so the primary key makes the start idempotent in the
+ * database: two tabs (or a retried request) starting it together insert the
+ * same row, and the second gets the first's chat. Null only if that id were
+ * somehow another person's or project's row.
+ */
+export function initialSetupChatId(projectId: string): string {
+	const hex = createHash("sha256")
+		.update(`ytimesy:initial-setup-chat:${projectId}`)
+		.digest("hex");
+	const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(
+		16,
+	);
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+export async function claimInitialSetupChat(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly workspaceId: string;
+	readonly harness: AgentProviderId;
+	readonly title: string;
+}): Promise<{ session: AgentSessionRecord; created: boolean } | null> {
+	const id = initialSetupChatId(input.projectId);
+	const inserted = await database().query(
+		`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,status)
+		 values($1,$2,$3,$4,$5,$6,'starting')
+		 on conflict (id) do nothing
+		 returning ${SESSION_COLUMNS}`,
+		[
+			id,
+			input.userId,
+			input.projectId,
+			input.workspaceId,
+			input.harness,
+			input.title,
+		],
+	);
+	if (inserted.rows[0]) {
+		const session = toSession(inserted.rows[0]);
+		void captureServerAnalytics(
+			session.userId,
+			"agent_created",
+			{ runtime: session.harness, role: "lead" },
+			{ key: session.id, timestamp: new Date(session.createdAt) },
+		);
+		return { session, created: true };
+	}
+	const existing = await database().query(
+		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2 and project_id=$3`,
+		[id, input.userId, input.projectId],
+	);
+	return existing.rows[0]
+		? { session: toSession(existing.rows[0]), created: false }
+		: null;
 }
 
 export async function saveAgentTaskState(

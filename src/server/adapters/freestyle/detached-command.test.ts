@@ -64,17 +64,21 @@ it("reports a watched command's output tail while it runs, polling faster", asyn
 	// Unchanged output is not reported again.
 	expect(tails).toEqual(["installing 1/3", "installing 3/3"]);
 	// The first reads come quickly: a short command is not held for a full poll.
-	expect(sleeps).toEqual([250, 500]);
+	expect(sleeps).toEqual([250, 250]);
 });
 
-it("reads a short command's status within a second, then backs off to the poll interval", async () => {
+it("reads a short command's status often for four seconds, then backs off to the poll interval", async () => {
 	const { detachedPollDelay } = await import("./detached-command");
+	const first = [
+		250, 250, 250, 250, 500, 500, 500, 500, 500, 500, 1_000, 1_000, 1_000,
+		1_000, 2_000, 2_000,
+	];
 	expect(
-		[0, 1, 2, 3, 4].map((polls) => detachedPollDelay(polls, false)),
-	).toEqual([250, 500, 1_000, 5_000, 5_000]);
-	expect([0, 1, 2, 3].map((polls) => detachedPollDelay(polls, true))).toEqual([
-		250, 500, 1_000, 2_000,
-	]);
+		Array.from({ length: 18 }, (_, polls) => detachedPollDelay(polls, false)),
+	).toEqual([...first, 5_000, 5_000]);
+	expect(
+		Array.from({ length: 18 }, (_, polls) => detachedPollDelay(polls, true)),
+	).toEqual([...first, 2_000, 2_000]);
 });
 
 function ok(stdout: string) {

@@ -12,6 +12,7 @@ import { removeHandoffObjects } from "../adapters/handoff-store";
 import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { cancelServerTurn } from "./cancel-server-turn";
+import { removeUserDependencyCaches } from "./dependency-cache";
 import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -100,6 +101,13 @@ export async function deleteAccount(
 	await removeHandoffObjects(userId).catch(() => {
 		throw new Response(
 			"Your account was not deleted because its imported sessions could not be removed. Try again.",
+			{ status: 503 },
+		);
+	});
+	// Installed dependencies kept between its builds (they may hold private packages).
+	await removeUserDependencyCaches(userId).catch(() => {
+		throw new Response(
+			"Your account was not deleted because its saved dependencies could not be removed. Try again.",
 			{ status: 503 },
 		);
 	});

@@ -107,4 +107,29 @@ describe("FreestyleWorkspaceRuntime admission reuse", () => {
 			await recoveries({ admissionReuseMs: 30_000 }, [15_000, 200_000]),
 		).toEqual([15, 200]);
 	});
+	it("counts provisioning the machine as its first commands' admission", async () => {
+		const previous = process.env.YTIMESY_INFRASTRUCTURE_ADMISSION;
+		process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+		try {
+			const runtime = new FreestyleWorkspaceRuntime("fs_test", {
+				fetch,
+				admissionReuseMs: 30_000,
+			});
+			const recovered: number[] = [];
+			runtime.findBySlug = async () => "vm-1";
+			runtime.recover = async (ref: string, seconds = 60) => {
+				recovered.push(seconds);
+				return ref;
+			};
+			await runtime.provision("ytimesy-ws-x");
+			await runtime.exec("vm-1", ["true"], {}, 15_000);
+			await runtime.exec("vm-1", ["true"], {}, 15_000);
+			// The provision's own start, and no other.
+			expect(recovered).toEqual([60]);
+		} finally {
+			if (previous === undefined)
+				delete process.env.YTIMESY_INFRASTRUCTURE_ADMISSION;
+			else process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = previous;
+		}
+	});
 });
