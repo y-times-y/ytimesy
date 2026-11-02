@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ChevronRight, LockKeyhole } from "lucide-react";
+import { Check, ChevronRight, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
 import { API_MODEL_LIST } from "#/domain/api-model-list";
@@ -36,6 +36,7 @@ export function ApiModelBrowser({
 	selectedRoute,
 	coveredIds,
 	hasOtherResults = false,
+	source,
 }: {
 	author: string | null;
 	search: string;
@@ -46,6 +47,8 @@ export function ApiModelBrowser({
 	coveredIds?: readonly string[];
 	/** Search found models above this list, so an empty list says nothing. */
 	hasOtherResults?: boolean;
+	/** "plan": only the provider's subscription (Grok's own rail entry); "keys": only API keys. */
+	source?: "plan" | "keys";
 }) {
 	const client = useQueryClient();
 	const identity = authClient.useSession();
@@ -66,8 +69,12 @@ export function ApiModelBrowser({
 		queryFn: () => load(),
 	});
 	const available = author
-		? providerConnections(author, connections.data ?? [])
+		? providerConnections(author, connections.data ?? []).filter(
+				(connection) =>
+					!source || (source === "plan") === Boolean(connection.subscription),
+			)
 		: [];
+	const plan = source === "plan";
 	const activeConnection = selectedProviderConnection(
 		available,
 		selectedRoute ?? "",
@@ -124,6 +131,7 @@ export function ApiModelBrowser({
 	const locked = visibleModelChoices(
 		API_MODEL_LIST.filter(
 			(model) =>
+				!plan &&
 				authors.includes(model.author) &&
 				!coveredIds?.includes(model.openRouterId) &&
 				!(author
@@ -141,9 +149,20 @@ export function ApiModelBrowser({
 	return (
 		<>
 			<h3>
-				{author ? (AUTHOR_LABELS[author] ?? author) : "Models across providers"}
+				{plan && author === "x-ai"
+					? "Grok"
+					: author
+						? (AUTHOR_LABELS[author] ?? author)
+						: "Models across providers"}
 			</h3>
-			{author && activeConnection ? (
+			{plan ? (
+				<p className="model-browser-caption">
+					{activeConnection
+						? "Grok subscription"
+						: "Connect your Grok plan in Settings › Agents"}
+				</p>
+			) : null}
+			{author && activeConnection && !plan ? (
 				<div className="model-source-row">
 					<span className="model-source-caption">Using</span>
 					{available.length > 1 ? (
@@ -185,6 +204,7 @@ export function ApiModelBrowser({
 			) : null}
 			{author &&
 			author !== CUSTOM_SECTION &&
+			!plan &&
 			!activeConnection &&
 			!connections.isPending ? (
 				<div className="inline-model-connect provider-key-connect">
@@ -238,10 +258,12 @@ export function ApiModelBrowser({
 			/>
 			{visibleConnected.map((model) => {
 				const route = modelRouteId(model.connectionId, model.id);
+				const chosen = plan && route === selectedRoute;
 				return (
 					<div
 						className="model-picker-row"
 						key={`${model.connectionId}:${model.id}`}
+						data-selected={plan ? chosen : undefined}
 					>
 						<button
 							type="button"
@@ -257,7 +279,13 @@ export function ApiModelBrowser({
 									? model.label
 									: `${AUTHOR_LABELS[model.author] ?? model.author} · ${model.label}`}
 							</span>
-							<ChevronRight size={14} />
+							{plan ? (
+								chosen ? (
+									<Check size={14} aria-hidden="true" />
+								) : null
+							) : (
+								<ChevronRight size={14} />
+							)}
 						</button>
 					</div>
 				);

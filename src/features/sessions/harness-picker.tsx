@@ -398,8 +398,16 @@ export function HarnessPicker({
 							/>
 						) : browse ? (
 							<ApiModelBrowser
-								key={apiProvider}
+								key={`${apiProvider}:${grokView ? "plan" : "keys"}`}
 								author={apiProvider}
+								// Grok's plan has its own rail entry; xAI lists API keys only.
+								source={
+									apiProvider === "x-ai" && grokSubscription
+										? grokView
+											? "plan"
+											: "keys"
+										: undefined
+								}
 								search={search}
 								selectedRoute={modelId}
 								onSelect={(id) => {
