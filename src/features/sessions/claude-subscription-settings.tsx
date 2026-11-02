@@ -77,7 +77,7 @@ export function ClaudeSubscriptionSettings() {
 		},
 	});
 	const removing = useMutation({
-		mutationFn: () => disconnect(),
+		mutationFn: () => disconnect({ data: {} }),
 		onSuccess: (data) => {
 			setConfirming(false);
 			refresh(data);

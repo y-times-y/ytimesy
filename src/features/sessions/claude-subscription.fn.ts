@@ -66,10 +66,13 @@ export const saveClaudeSubscriptionFn = createServerFn({ method: "POST" })
 
 export const disconnectClaudeSubscriptionFn = createServerFn({
 	method: "POST",
-}).handler(async () => {
-	const request = getRequest();
-	requireSameOrigin(request);
-	const user = await requireUser(request.headers);
-	await disconnectClaudeSubscription(user.id);
-	return readView(user.id);
-});
+})
+	// An empty object, so the call has the JSON body requireSameOrigin needs.
+	.validator((data: unknown) => z.object({}).strict().parse(data))
+	.handler(async () => {
+		const request = getRequest();
+		requireSameOrigin(request);
+		const user = await requireUser(request.headers);
+		await disconnectClaudeSubscription(user.id);
+		return readView(user.id);
+	});

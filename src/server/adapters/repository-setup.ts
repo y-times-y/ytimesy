@@ -43,6 +43,40 @@ export function configureCommitAuthorArgv(
 	];
 }
 
+/** Directories of generated files, at the root or anywhere below it. */
+const GENERATED_DIRECTORIES = [
+	"__pycache__",
+	"node_modules",
+	".pytest_cache",
+	".mypy_cache",
+	".ruff_cache",
+	".venv",
+	"venv",
+	".tox",
+	".next",
+	".turbo",
+	"coverage",
+];
+const GENERATED_PATTERNS = [
+	...GENERATED_DIRECTORIES.flatMap((name) => [`${name}/*`, `*/${name}/*`]),
+	"*.egg-info/*",
+	"*.pyc",
+	"*.pyo",
+	".DS_Store",
+	"*/.DS_Store",
+	".coverage",
+	"*/.coverage",
+];
+
+/**
+ * Unstages newly added generated files (caches, virtualenvs, build output)
+ * so an automatic commit leaves them on disk but out of history. Files the
+ * repository already tracks still commit when changed, moved or deleted.
+ * Paths travel NUL-separated and literal, so spaces, newlines and glob
+ * characters in names are safe.
+ */
+export const UNSTAGE_NEW_GENERATED_FILES = `git diff --cached --name-only --diff-filter=A --find-renames -z | { while IFS= read -r -d '' path; do case "$path" in ${GENERATED_PATTERNS.join("|")}) printf '%s\\0' "$path";; esac; done; } | xargs -0 -r git --literal-pathspecs rm -q --cached --ignore-unmatch --`;
+
 export function commitAllArgv(
 	directory: string,
 	message: string,
@@ -61,6 +95,7 @@ export function commitAllArgv(
 		[
 			`cd ${shellSingleQuote(directory)}`,
 			"git add -A",
+			UNSTAGE_NEW_GENERATED_FILES,
 			SECRET_COMMIT_GUARD,
 			`git config user.name ${name}`,
 			`git config user.email ${email}`,
