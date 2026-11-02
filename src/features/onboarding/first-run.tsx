@@ -312,7 +312,7 @@ export function ModelStep({
 						<span className="first-run-logos">
 							<XaiMark size={26} />
 						</span>
-						<strong>Your SuperGrok subscription</strong>
+						<strong>Your Grok subscription</strong>
 						<XaiSubscriptionSignIn onConnected={() => setGrokConnected(true)} />
 					</div>
 				) : null}
