@@ -434,24 +434,6 @@
 	padding: var(--menu-pad);
 	overscroll-behavior: contain;
 }
-/* Subscriptions (subscription-mark.tsx): each brand's glyph on its own
-   colored badge, apart from the plain API-key logos. */
-.subscription-mark {
-	display: grid;
-	flex-shrink: 0;
-	place-items: center;
-	border-radius: 6px;
-}
-.subscription-mark[data-brand="codex"] {
-	color: #78b7ff;
-}
-.subscription-mark[data-brand="claude"] {
-	background: #d97757;
-}
-.subscription-mark[data-brand="grok"] {
-	background: #f2f2f2;
-	color: #0a0a0a;
-}
 .model-provider-rail
 	.model-provider-subscription:not([aria-pressed="true"])
 	.subscription-mark:not([data-brand="codex"]) {

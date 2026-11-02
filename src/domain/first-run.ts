@@ -4,6 +4,8 @@ export type FirstRunState = {
 	readonly modelReady: boolean;
 	/** SuperGrok sign-in is offered (its feature switch is on). */
 	readonly xaiSubscription?: boolean;
+	/** Claude plan sign-in (a setup token) is offered (its feature switch is on). */
+	readonly claudeSubscription?: boolean;
 };
 
 /**
