@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -116,6 +123,64 @@ it("commits tracked and new files once under concurrent completion observations 
 				await exec("git", ["-C", repo, "rev-list", "--count", "HEAD"])
 			).stdout.trim(),
 		).toBe("3");
+	});
+});
+
+it("leaves new generated files out of the commit but commits tracked ones", async () => {
+	await repository(async (repo) => {
+		const committedFiles = async () =>
+			(await exec("git", ["-C", repo, "ls-files", "-z"])).stdout
+				.split("\0")
+				.filter(Boolean)
+				.sort();
+		// A compiled file the repository chose to track.
+		await writeFile(join(repo, "kept.pyc"), "old bytecode\n");
+		await exec("git", ["-C", repo, "add", "kept.pyc"]);
+		await exec("git", [
+			"-C",
+			repo,
+			"-c",
+			"user.name=Test",
+			"-c",
+			"user.email=test@example.test",
+			"commit",
+			"-qm",
+			"Track bytecode",
+		]);
+		await mkdir(join(repo, "src dir/__pycache__"), { recursive: true });
+		await writeFile(join(repo, "src dir/__pycache__/app.cpython-312.pyc"), "x");
+		await writeFile(join(repo, "src dir/app.py"), "print('hi')\n");
+		await writeFile(join(repo, "src dir/stray.pyc"), "x");
+		await writeFile(join(repo, "line\nbreak *.pyc"), "x");
+		await mkdir(join(repo, "node_modules/pkg"), { recursive: true });
+		await writeFile(join(repo, "node_modules/pkg/index.js"), "x");
+		await mkdir(join(repo, "pkg.egg-info"));
+		await writeFile(join(repo, "pkg.egg-info/PKG-INFO"), "x");
+		await writeFile(join(repo, ".DS_Store"), "x");
+		await writeFile(join(repo, "notes with spaces.txt"), "kept\n");
+		await writeFile(join(repo, "build.log"), "kept\n");
+		await writeFile(join(repo, "kept.pyc"), "new bytecode\n");
+		await commit(repo);
+		expect(await committedFiles()).toEqual([
+			"build.log",
+			"kept.pyc",
+			"notes with spaces.txt",
+			"src dir/app.py",
+			"tracked.txt",
+		]);
+		expect(
+			(await exec("git", ["-C", repo, "show", "HEAD:kept.pyc"])).stdout,
+		).toBe("new bytecode\n");
+		// The junk stays on disk, untracked.
+		expect(
+			await readFile(
+				join(repo, "src dir/__pycache__/app.cpython-312.pyc"),
+				"utf8",
+			),
+		).toBe("x");
+		await rm(join(repo, "kept.pyc"));
+		await commit(repo, "b".repeat(64));
+		expect(await committedFiles()).not.toContain("kept.pyc");
 	});
 });
 

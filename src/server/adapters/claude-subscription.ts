@@ -1,6 +1,7 @@
 import type { ClaudeCodeGrant } from "#/domain/claude-code-grant";
 import {
 	CLAUDE_CODE_TURN_REQUEST_CAP,
+	CLAUDE_CODE_UPSTREAM,
 	type ClaudeCodeProxyAuthorization,
 	type ClaudeCodeUpstreamOutcome,
 } from "#/domain/claude-code-proxy";
@@ -26,7 +27,7 @@ export type ClaudeSubscriptionStatus =
 
 /**
  * A token from `claude setup-token` (a long-lived OAuth token). Only its
- * shape is checked here; Anthropic decides whether it works on first use.
+ * shape is checked here; saving also asks Anthropic once.
  */
 export function normalizedSetupToken(value: string): string | null {
 	// The terminal wraps the long token; a copy picks up line breaks and
@@ -35,14 +36,66 @@ export function normalizedSetupToken(value: string): string | null {
 	return /^sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,400}$/.test(token) ? token : null;
 }
 
+export type SetupTokenCheck = "accepted" | "refused" | "unknown";
+
+/**
+ * One free call (token counting) with the token, sent the way Claude Code
+ * sends an OAuth token through the proxy. Only a 401/403 says the token is
+ * bad; a busy or unreachable Anthropic is "unknown", which must not block
+ * the save. Nothing here logs the token.
+ */
+export async function checkClaudeSetupToken(
+	token: string,
+	options: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<SetupTokenCheck> {
+	let response: Response;
+	try {
+		response = await (options.fetch ?? fetch)(
+			`${CLAUDE_CODE_UPSTREAM}/v1/messages/count_tokens`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"anthropic-version": "2023-06-01",
+					"anthropic-beta": "oauth-2025-04-20",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					model: "claude-haiku-5-5",
+					messages: [{ role: "user", content: "hi" }],
+				}),
+				redirect: "manual",
+				signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
+			},
+		);
+	} catch (error) {
+		console.warn("Claude setup token check could not reach Anthropic.", {
+			reason: error instanceof Error ? error.name : "unknown",
+		});
+		return "unknown";
+	}
+	await response.body?.cancel().catch(() => undefined);
+	if (response.status === 401 || response.status === 403) return "refused";
+	if (response.ok) return "accepted";
+	console.warn("Claude setup token check got no answer from Anthropic.", {
+		status: response.status,
+	});
+	return "unknown";
+}
+
 export async function saveClaudeSubscriptionToken(
 	userId: string,
 	token: string,
+	check: { fetch?: typeof fetch; timeoutMs?: number } = {},
 ) {
 	const normalized = normalizedSetupToken(token);
 	if (!normalized)
 		throw new Error(
 			"That is not a Claude Code token. Run `claude setup-token` and paste the token it prints.",
+		);
+	if ((await checkClaudeSetupToken(normalized, check)) === "refused")
+		throw new Error(
+			"Anthropic refused this token. Run claude setup-token again.",
 		);
 	const sealed = await seal(normalized, binding(userId));
 	await database().query(
