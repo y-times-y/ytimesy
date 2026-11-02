@@ -5,9 +5,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Info } from "lucide-react";
 import { useState } from "react";
-import { Switch } from "#/components/ui/switch";
 import {
 	Tooltip,
 	TooltipContent,
@@ -21,10 +19,7 @@ import {
 	optimisticMutation,
 	saveErrorMessage,
 } from "#/lib/optimistic-mutation";
-import {
-	chooseReplay,
-	useReplayConsent,
-} from "../analytics/replay-consent-banner";
+import { SettingsSwitch } from "./settings-switch";
 import {
 	readProjectTrainingFn,
 	readTrainingConsentFn,
@@ -32,7 +27,7 @@ import {
 	saveTrainingConsentFn,
 } from "./training-consent.fn";
 
-const CONSENT_KEY = ["training-consent"];
+export const CONSENT_KEY = ["training-consent"];
 
 /** The account switch moves at once; the server's record replaces it. */
 export function trainingConsentChange(
@@ -83,12 +78,12 @@ export function projectTrainingChange(
 	};
 }
 
-/** Every commitment the setting makes; shown behind the info tooltip. */
+/** Every commitment the setting makes; shown as the "Learn more" link's tooltip. */
 export const TRAINING_DETAILS =
 	"Let ytimesy use your chats from now on, including your prompts, your code and its results (such as test output and merged pull requests), to improve our agents and train our own models. We never use replies or code written by AI models. We never share it with model providers. Your stored API keys, secrets and your attachments are never included. Nothing is copied out for training yet. Turn this off any time; it stops immediately, for earlier chats too.";
 
 /**
- * The details open below the icon and stay in the viewport. The tooltip is
+ * The details open below the link and stay in the viewport. The tooltip is
  * portaled to the page, so it sits above the Settings overlay (z-index 200);
  * at the default z-50 it opened behind the dialog and only its top line
  * showed above the dialog's edge.
@@ -113,8 +108,7 @@ export function TrainingConsentSettings() {
 	const change = useMutation(trainingConsentChange(queryClient, save));
 	return (
 		<TrainingConsentView
-			enabled={consent.data?.enabled ?? false}
-			loading={consent.isPending}
+			enabled={consent.data?.enabled}
 			error={saveErrorMessage(change.error) ?? consent.error?.message}
 			onChange={(enabled) => change.mutate(enabled)}
 		/>
@@ -122,8 +116,8 @@ export function TrainingConsentSettings() {
 }
 
 export function TrainingConsentView(props: {
-	readonly enabled: boolean;
-	readonly loading?: boolean;
+	/** Undefined until the saved setting is known: the switch shows as loading. */
+	readonly enabled: boolean | undefined;
 	readonly error?: string;
 	readonly onChange: (enabled: boolean) => void;
 }) {
@@ -143,37 +137,14 @@ export function TrainingConsentView(props: {
 							Help improve ytimesy
 						</label>
 						<span className="settings-row-meta">
-							Use your chats to improve our agents and models.{" "}
-							<TooltipProvider>
-								<Tooltip>
-									<TooltipTrigger
-										type="button"
-										aria-label="Training details"
-										className="settings-info-trigger"
-									>
-										<Info aria-hidden="true" className="size-3.5" />
-									</TooltipTrigger>
-									<TooltipContent {...TRAINING_TOOLTIP_PLACEMENT}>
-										{TRAINING_DETAILS}
-									</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>{" "}
-							<a
-								href="/training"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="underline underline-offset-4"
-							>
-								Learn more<span className="sr-only"> about training data</span>
-							</a>
-							<span className="sr-only"> {TRAINING_DETAILS}</span>
+							<TrainingLearnMore />
 						</span>
 					</div>
 					<div className="settings-row-actions">
-						<Switch
+						<SettingsSwitch
 							id="training-consent"
 							checked={props.enabled}
-							disabled={props.loading || confirming}
+							disabled={confirming}
 							onCheckedChange={(checked) => {
 								if (checked) setConfirming(true);
 								else props.onChange(false);
@@ -191,10 +162,11 @@ export function TrainingConsentView(props: {
 							<span id="training-confirm-title" className="settings-row-title">
 								Share your chats to improve ytimesy?
 							</span>
-							<span className="settings-row-meta">
-								New chats will be eligible. Leave this off for code you are not
-								permitted to share, or exclude those projects in project
-								settings.
+							<span
+								className="settings-row-meta"
+								title="Leave this off for code you are not permitted to share, or exclude those projects in project settings."
+							>
+								New chats will be eligible.
 							</span>
 						</div>
 						<div className="settings-row-actions">
@@ -218,37 +190,32 @@ export function TrainingConsentView(props: {
 						</div>
 					</div>
 				) : null}
-				<ReplayConsentRow />
 			</div>
 			{props.error ? <p role="alert">{props.error}</p> : null}
 		</section>
 	);
 }
 
-/** Withdrawing replay consent is as easy as giving it (this browser only). */
-function ReplayConsentRow() {
-	const choice = useReplayConsent();
+/** "Learn more" to the Training Data page; the commitments show as its tooltip. */
+export function TrainingLearnMore() {
 	return (
-		<div className="settings-row">
-			<div className="settings-row-text">
-				<label htmlFor="replay-consent" className="settings-row-title">
-					Session recording
-				</label>
-				<span className="settings-row-meta">
-					Records how you use ytimesy here. Text, code and chats stay hidden.
-				</span>
-			</div>
-			<div className="settings-row-actions">
-				<Switch
-					id="replay-consent"
-					checked={choice === "accepted"}
-					disabled={choice === undefined}
-					onCheckedChange={(checked) =>
-						chooseReplay(checked ? "accepted" : "declined")
-					}
-				/>
-			</div>
-		</div>
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<a
+						href="/training"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="training-learn-more"
+					>
+						Learn more<span className="sr-only"> about training data</span>
+					</a>
+				</TooltipTrigger>
+				<TooltipContent {...TRAINING_TOOLTIP_PLACEMENT}>
+					{TRAINING_DETAILS}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 }
 
@@ -274,10 +241,10 @@ export function ProjectTrainingSettings({ projectId }: { projectId: string }) {
 	const change = useMutation(
 		projectTrainingChange(queryClient, projectId, save),
 	);
-	if (!consent.data?.enabled || !project.data) return null;
+	if (!consent.data?.enabled) return null;
 	return (
 		<ProjectTrainingView
-			excluded={project.data.excluded}
+			excluded={project.data?.excluded}
 			error={saveErrorMessage(change.error)}
 			onChange={(excluded) => change.mutate(excluded)}
 		/>
@@ -285,31 +252,42 @@ export function ProjectTrainingSettings({ projectId }: { projectId: string }) {
 }
 
 export function ProjectTrainingView(props: {
-	readonly excluded: boolean;
+	/** Undefined while the project's setting loads. */
+	readonly excluded: boolean | undefined;
 	readonly error?: string;
 	readonly onChange: (excluded: boolean) => void;
 }) {
 	return (
-		<div className="settings-group">
-			<div className="settings-row">
-				<div className="settings-row-text">
-					<label htmlFor="project-training" className="settings-row-title">
-						Never use this project for training
-					</label>
-					<span className="settings-row-meta">
-						Chats in this project are never used to improve ytimesy, even though
-						your account setting is on.
-					</span>
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<div>
+					<h3>Training</h3>
+					<p>Your account helps improve ytimesy.</p>
 				</div>
-				<div className="settings-row-actions">
-					<Switch
-						id="project-training"
-						checked={props.excluded}
-						onCheckedChange={props.onChange}
-					/>
+			</header>
+			<div className="settings-group">
+				<div className="settings-row">
+					<div className="settings-row-text">
+						<label htmlFor="project-training" className="settings-row-title">
+							Never use this project for training
+						</label>
+						<span
+							className="settings-row-meta"
+							title="Chats in this project are never used to improve ytimesy, even though your account setting is on."
+						>
+							Overrides your account setting.
+						</span>
+					</div>
+					<div className="settings-row-actions">
+						<SettingsSwitch
+							id="project-training"
+							checked={props.excluded}
+							onCheckedChange={props.onChange}
+						/>
+					</div>
 				</div>
 			</div>
 			{props.error ? <p role="alert">{props.error}</p> : null}
-		</div>
+		</section>
 	);
 }

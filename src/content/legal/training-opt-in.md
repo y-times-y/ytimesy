@@ -9,11 +9,13 @@ use, what it never uses, and where things stand today. It is part of our
 ## Your choice
 
 - **New accounts** see a "Help improve ytimesy" card as the last step of
-  setup. Its switch starts **on**; you can turn it off right there. Your
+  setup. Its switch starts **on** (**off** if you are in the EU, EEA, UK or
+  Switzerland); you can change it right there. Your
   choice (on or off) is saved only when you press **Continue**, together with
   the version of this policy shown.
 - **Accounts created before the card existed**, which never chose, see the
-  same card once in the app, switch on. **Continue** saves the choice.
+  same card once in the app, with the same starting position. **Continue**
+  saves the choice.
   Closing the card saves nothing, and the setting stays **off**.
 - Until you press Continue or change it in Settings, the setting is **off**.
   A change to this policy never turns it on for you.

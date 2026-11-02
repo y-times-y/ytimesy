@@ -41,7 +41,7 @@ describe("PostHog client", () => {
 			autocapture: false,
 			capture_pageview: false,
 			capture_pageleave: false,
-			// Replay is off until the visitor accepts it.
+			// Replay starts per user (setAnalyticsUser), never at init.
 			disable_session_recording: true,
 			enable_recording_console_log: false,
 			capture_performance: false,
@@ -117,35 +117,45 @@ describe("PostHog client", () => {
 		expect(replayPrivacy.recordHeaders).toBe(false);
 		expect(replayPrivacy.recordBody).toBe(false);
 	});
-	it("records sessions only after the visitor accepts, and stops on decline", async () => {
+	it("records masked sessions for a signed-in user, and stops on sign-out", async () => {
 		vi.stubGlobal("localStorage", storage());
-		const { captureAnalytics } = await import("./client");
-		const { saveReplayConsent } = await import("./replay-consent");
-		captureAnalytics("app_viewed", { surface: "workspace" });
-		await vi.waitFor(() => expect(sdk.capture).toHaveBeenCalled());
-		expect(sdk.startSessionRecording).not.toHaveBeenCalled();
-		saveReplayConsent("accepted");
-		expect(sdk.startSessionRecording).toHaveBeenCalledTimes(1);
-		sdk.sessionRecordingStarted.mockReturnValue(true);
-		saveReplayConsent("declined");
-		expect(sdk.stopSessionRecording).toHaveBeenCalledTimes(1);
-		sdk.sessionRecordingStarted.mockReturnValue(false);
-	});
-	it("resumes recording on a later visit only for a stored acceptance", async () => {
-		vi.stubGlobal(
-			"localStorage",
-			storage({ "ytimesy.replay-consent": "accepted" }),
-		);
-		const { captureAnalytics } = await import("./client");
-		captureAnalytics("app_viewed", { surface: "workspace" });
+		const { setAnalyticsUser } = await import("./client");
+		setAnalyticsUser("user-id", { replay: true });
 		await vi.waitFor(() =>
 			expect(sdk.startSessionRecording).toHaveBeenCalledTimes(1),
 		);
+		sdk.sessionRecordingStarted.mockReturnValue(true);
+		setAnalyticsUser(null, { replay: true });
+		await vi.waitFor(() =>
+			expect(sdk.stopSessionRecording).toHaveBeenCalledTimes(1),
+		);
+		sdk.sessionRecordingStarted.mockReturnValue(false);
+	});
+	it("never records in the EU/UK, under Do Not Track, or after an earlier decline", async () => {
+		vi.stubGlobal("localStorage", storage());
+		let client = await import("./client");
+		client.setAnalyticsUser("user-id", { replay: false });
+		await vi.waitFor(() => expect(sdk.identify).toHaveBeenCalled());
+		vi.resetModules();
+		vi.stubGlobal("navigator", { doNotTrack: "1" });
+		client = await import("./client");
+		client.setAnalyticsUser("user-id", { replay: true });
+		await vi.waitFor(() => expect(sdk.identify).toHaveBeenCalledTimes(2));
+		vi.resetModules();
+		vi.stubGlobal("navigator", { doNotTrack: "0" });
+		vi.stubGlobal(
+			"localStorage",
+			storage({ "ytimesy.replay-consent": "declined" }),
+		);
+		client = await import("./client");
+		client.setAnalyticsUser("user-id", { replay: true });
+		await vi.waitFor(() => expect(sdk.identify).toHaveBeenCalledTimes(3));
+		expect(sdk.startSessionRecording).not.toHaveBeenCalled();
 	});
 	it("identifies by internal ID only and resets on logout", async () => {
 		const { setAnalyticsUser } = await import("./client");
-		setAnalyticsUser("user-id");
-		setAnalyticsUser(null);
+		setAnalyticsUser("user-id", { replay: false });
+		setAnalyticsUser(null, { replay: false });
 		await vi.waitFor(() => expect(sdk.reset).toHaveBeenCalledTimes(1));
 		expect(sdk.identify).toHaveBeenCalledExactlyOnceWith("user-id");
 	});
