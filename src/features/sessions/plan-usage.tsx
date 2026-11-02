@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { claudePlanUsageBars } from "#/domain/claude-plan-usage";
 import {
 	type PlanLimitReached,
 	type PlanUsageBar,
@@ -10,7 +11,10 @@ import {
 } from "#/domain/plan-usage-bars";
 import type { SessionItem } from "#/domain/session-item";
 import { usageResetLabel } from "#/domain/usage-warning";
-import { codexSubscriptionUsageFn } from "../workspace/subscription-usage.fn";
+import {
+	claudePlanUsageFn,
+	codexSubscriptionUsageFn,
+} from "../workspace/subscription-usage.fn";
 import { PickerUsageLine } from "../workspace/usage-windows";
 
 /** Shared with Settings' ChatGPT subscription limits. */
@@ -101,15 +105,45 @@ export function useMarkPlanLimitFromSwitches(items: readonly SessionItem[]) {
 	}, [items, queryClient]);
 }
 
-/** The ChatGPT plan's line in the model picker. */
+const CLAUDE_PLAN_USAGE_KEY = ["claude-plan-usage"] as const;
+
+/**
+ * The Claude plan's windows while the picker is open, from the last reading
+ * the edge took off Anthropic's responses. Empty while Claude is not
+ * connected or has not been used yet.
+ */
+export function useClaudePlanUsageBars(
+	open: boolean,
+	connected: boolean,
+): PlanUsageBar[] {
+	const readUsage = useServerFn(claudePlanUsageFn);
+	const usage = useQuery({
+		queryKey: CLAUDE_PLAN_USAGE_KEY,
+		queryFn: () => readUsage(),
+		enabled: open && connected,
+		staleTime: PLAN_USAGE_STALE_MS,
+		retry: false,
+	});
+	if (!open || !connected) return [];
+	return claudePlanUsageBars(usage.data, Date.now());
+}
+
+export const CLAUDE_PLAN_USAGE_HINT = "Updates after Claude is used";
+
+/** A subscription plan's line in the model picker (ChatGPT by default). */
 export function ModelPickerPlanUsage({
 	bars,
+	label = "ChatGPT plan",
+	hint,
 }: {
 	bars: readonly PlanUsageBar[];
+	label?: string;
+	hint?: string;
 }) {
 	return (
 		<PickerUsageLine
-			label="ChatGPT plan"
+			label={label}
+			hint={hint}
 			bars={bars.map((bar) => ({
 				id: bar.id,
 				label: bar.label,

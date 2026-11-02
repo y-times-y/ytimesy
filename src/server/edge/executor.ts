@@ -831,7 +831,11 @@ export default {
 			}
 		await Promise.all([...failures, probe]);
 	},
-	async fetch(request: Request, env: EdgeExecutorEnvironment) {
+	async fetch(
+		request: Request,
+		env: EdgeExecutorEnvironment,
+		ctx?: ExecutionContext,
+	) {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
@@ -1091,7 +1095,11 @@ export default {
 				);
 			}
 			if (isClaudeCodeEdgePath(new URL(request.url).pathname))
-				return await routeClaudeCodeEdge(request, env);
+				return await routeClaudeCodeEdge(
+					request,
+					env,
+					ctx ? (promise) => ctx.waitUntil(promise) : undefined,
+				);
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });
