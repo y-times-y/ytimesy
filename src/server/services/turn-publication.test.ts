@@ -273,10 +273,9 @@ it("publishes the turn's description, files, and checks instead of a generic han
 	expect(body).toContain("rejects an empty token");
 	expect(body).toContain("`src/parser.ts`");
 	expect(body).toContain("`pnpm test` (exit 0)");
-	expect(body).toContain("@ytimesy");
-	expect(body.indexOf("rejects an empty token")).toBeLessThan(
-		body.indexOf("@ytimesy"),
-	);
+	// The mention and "Generated with ytimesy" are the footer's job
+	// (ensureAppDraftPullRequest); @ytimesy is an unrelated GitHub user.
+	expect(body).not.toContain("@ytimesy");
 	expect(body).not.toContain("Automatic draft handoff");
 	expect(deps.pull.mock.calls[0][4]).toBe("owner-token");
 });

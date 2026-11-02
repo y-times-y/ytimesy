@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { insertBeforePullRequestFooter } from "./pull-request-footer";
 
 /**
  * Pull request evidence (harness variant prEvidence=on): screenshots, a short
@@ -341,7 +342,7 @@ export function evidenceSectionState(body: string | null | undefined) {
 	return match ? { sha: match[1], plan: match[2] } : null;
 }
 
-/** Replaces the evidence section, or appends one; the rest of the description is kept. */
+/** Replaces the evidence section, or adds one before the footer; the rest of the description is kept. */
 export function withEvidenceSection(
 	body: string | null | undefined,
 	section: string,
@@ -351,7 +352,7 @@ export function withEvidenceSection(
 	const end = current.indexOf(EVIDENCE_END, start);
 	if (start >= 0 && end > start)
 		return `${current.slice(0, start)}${section}${current.slice(end + EVIDENCE_END.length)}`;
-	return current.trim() ? `${current.trimEnd()}\n\n${section}` : section;
+	return insertBeforePullRequestFooter(current, section);
 }
 
 function plain(text: string, max = 300) {

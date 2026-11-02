@@ -39,6 +39,7 @@ export async function receivePrRepairWebhook(request: Request) {
 	const signal = parsePrRepairSignal(
 		request.headers.get("x-github-event") ?? "",
 		payload,
+		process.env.GITHUB_APP_SLUG,
 	);
 	if (!signal) return Response.json({ accepted: true, ignored: true });
 	await stageVerifiedPrRepairSignal(deliveryId.data, signal);

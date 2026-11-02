@@ -69,7 +69,7 @@ export async function pullRequestWakeGitHub(link: {
 				baseRepositoryId: pr.base.repo.id,
 			};
 		},
-		/** The comment, when a person wrote it on this pull request and it still mentions @ytimesy. */
+		/** The comment, when a person wrote it on this pull request and it still mentions the App (`@<GITHUB_APP_SLUG>`). */
 		async comment(
 			kind: "comment" | "review_comment",
 			id: number,
@@ -97,7 +97,10 @@ export async function pullRequestWakeGitHub(link: {
 						comment.issue_url.endsWith(`/issues/${pull_number}`);
 			if (!onThisPull || comment.user?.type !== "User" || !comment.user.login)
 				return null;
-			const instruction = mentionInstruction(comment.body ?? "");
+			const instruction = mentionInstruction(
+				comment.body ?? "",
+				process.env.GITHUB_APP_SLUG,
+			);
 			if (instruction === null) return null;
 			return {
 				author: comment.user.login,

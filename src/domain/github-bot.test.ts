@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { githubAppBotFromEnv, githubAppBotIdentity } from "./github-bot";
+import {
+	githubAppBotFromEnv,
+	githubAppBotIdentity,
+	githubAppMention,
+	githubAppMentionPattern,
+} from "./github-bot";
 
 describe("githubAppBotIdentity", () => {
 	it("uses the bot user id so GitHub attaches the App logo", () => {
@@ -26,5 +31,34 @@ describe("githubAppBotIdentity", () => {
 			name: "ytimesy-cloud[bot]",
 			email: "328807657+ytimesy-cloud[bot]@users.noreply.github.com",
 		});
+	});
+});
+
+describe("githubAppMention", () => {
+	it("is the App's own handle, never the unrelated @ytimesy user", () => {
+		expect(githubAppMention("ytimesy-agent")).toBe("@ytimesy-agent");
+		expect(githubAppMention(" ")).toBeNull();
+	});
+
+	it("recognises @<slug> (and legacy @ytimesy) only as a whole mention", () => {
+		const pattern = githubAppMentionPattern("ytimesy-agent");
+		for (const body of [
+			"@ytimesy-agent fix it",
+			"please @ytimesy-agent",
+			"(@YTIMESY-AGENT) fix",
+			"@ytimesy-agent[bot] fix",
+			"@ytimesy fix it",
+		])
+			expect(pattern.test(body), body).toBe(true);
+		for (const body of [
+			"@ytimesy-agents hi",
+			"@ytimesy-agent-x hi",
+			"me@ytimesy-agent.dev",
+			"see org/@ytimesy-agent",
+			"@ytimesy-bot hi",
+			"no mention",
+		])
+			expect(pattern.test(body), body).toBe(false);
+		expect(githubAppMentionPattern(null).test("@ytimesy go")).toBe(true);
 	});
 });

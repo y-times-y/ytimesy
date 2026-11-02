@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { githubAppMentionPattern } from "./github-bot";
 
 const repository = z.object({
 	id: z.number().int().positive(),
@@ -20,7 +21,7 @@ export const prRepairSignal = z.object({
 	prNumbers: z.array(z.number().int().positive()).max(10).default([]),
 });
 export type PrRepairSignal = z.infer<typeof prRepairSignal>;
-/** A new comment that mentions @ytimesy on a pull request; its text is re-read later. */
+/** A new comment that mentions the App (`@<slug>`) on a pull request; its text is re-read later. */
 export const prCommentSignal = z.object({
 	repositoryId: z.number().int().positive(),
 	fullName: repository.shape.full_name,
@@ -45,9 +46,6 @@ export function isPrCommentSignal(
 	return signal.kind === "comment" || signal.kind === "review_comment";
 }
 
-/** `@ytimesy` as a whole mention (not part of an e-mail address or a longer handle). */
-export const YTIMESY_MENTION = /(^|[^\w@/.-])@ytimesy(?![\w-])/i;
-
 const pullNumbers = z
 	.array(z.object({ number: z.number().int().positive() }))
 	.catch([])
@@ -55,12 +53,14 @@ const pullNumbers = z
 
 /**
  * Failed completed checks and change-requesting reviews can start repair work;
- * a human's new comment that mentions @ytimesy on a pull request can wake its
- * chat. Only bounded identifiers are kept: text is re-read from GitHub later.
+ * a human's new comment that mentions the App (`@<appSlug>`) on a pull
+ * request can wake its chat. Only bounded identifiers are kept: text is
+ * re-read from GitHub later.
  */
 export function parsePrRepairSignal(
 	event: string,
 	raw: unknown,
+	appSlug?: string | null,
 ): GitHubPrSignal | null {
 	const common = z
 		.object({
@@ -139,7 +139,7 @@ export function parsePrRepairSignal(
 			common.data.action !== "created" ||
 			parsed.data.comment.user.type !== "User" ||
 			parsed.data.sender.type !== "User" ||
-			!YTIMESY_MENTION.test(parsed.data.comment.body ?? "")
+			!githubAppMentionPattern(appSlug).test(parsed.data.comment.body ?? "")
 		)
 			return null;
 		return {
