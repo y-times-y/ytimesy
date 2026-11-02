@@ -1,0 +1,704 @@
+{
+	"install the date-fns package": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.29869,
+			"rerank": 0.00003911
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.27189,
+			"rerank": 0.00003729
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.36505,
+			"rerank": 0.00008419
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.34381,
+			"rerank": 0.0000373
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.1941,
+			"rerank": 0.00003819
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.58271,
+			"rerank": 0.01513
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.38458,
+			"rerank": 0.0008823
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.48238,
+			"rerank": 0.00003736
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.34804,
+			"rerank": 0.00008082
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.37192,
+			"rerank": 0.00004872
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.46567,
+			"rerank": 0.00003756
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.36692,
+			"rerank": 0.0001169
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.44744,
+			"rerank": 0.00009682
+		}
+	},
+	"add a unit test for the price parser": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.22623,
+			"rerank": 0.00003729
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.19318,
+			"rerank": 0.0000374
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.21876,
+			"rerank": 0.00004569
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.31499,
+			"rerank": 0.00003736
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.12439,
+			"rerank": 0.00003731
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.25941,
+			"rerank": 0.00003972
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.48961,
+			"rerank": 0.01928
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.28077,
+			"rerank": 0.00003935
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.2748,
+			"rerank": 0.00003821
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.2212,
+			"rerank": 0.00003729
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.26962,
+			"rerank": 0.00003731
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.19838,
+			"rerank": 0.00003729
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.18384,
+			"rerank": 0.00003735
+		}
+	},
+	"deploy the latest build": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.33703,
+			"rerank": 0.0001951
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.35271,
+			"rerank": 0.00003729
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.33507,
+			"rerank": 0.0003879
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.34331,
+			"rerank": 0.00003736
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.30658,
+			"rerank": 0.0002373
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.48475,
+			"rerank": 0.0008773
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.42072,
+			"rerank": 0.002123
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.48172,
+			"rerank": 0.00022
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.41624,
+			"rerank": 0.0004568
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.48701,
+			"rerank": 0.000902
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.37797,
+			"rerank": 0.00009257
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.76599,
+			"rerank": 0.005543
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.76415,
+			"rerank": 0.0009701
+		}
+	},
+	"return an error from the orders route when items are missing": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.29116,
+			"rerank": 0.00009268
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.23579,
+			"rerank": 0.00003729
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.27365,
+			"rerank": 0.00004703
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.63196,
+			"rerank": 0.00317
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.20277,
+			"rerank": 0.00003729
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.29708,
+			"rerank": 0.0001951
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.27421,
+			"rerank": 0.0006374
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.37752,
+			"rerank": 0.00004314
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.66308,
+			"rerank": 0.03586
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.53335,
+			"rerank": 0.004973
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.43369,
+			"rerank": 0.00009514
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.30932,
+			"rerank": 0.0000374
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.305,
+			"rerank": 0.00007895
+		}
+	},
+	"store the created timestamp on each order": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.29357,
+			"rerank": 0.00003731
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.26523,
+			"rerank": 0.00003737
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.19468,
+			"rerank": 0.00003735
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.59696,
+			"rerank": 0.00013
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.20157,
+			"rerank": 0.00003728
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.21555,
+			"rerank": 0.0001038
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.19685,
+			"rerank": 0.00003744
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.29804,
+			"rerank": 0.00003729
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.38521,
+			"rerank": 0.00003729
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.43392,
+			"rerank": 0.0000373
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.69442,
+			"rerank": 0.4399
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.25837,
+			"rerank": 0.00003737
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.34031,
+			"rerank": 0.00003733
+		}
+	},
+	"run the tests": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.26203,
+			"rerank": 0.0000374
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.26643,
+			"rerank": 0.00003729
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.32933,
+			"rerank": 0.0001701
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.3779,
+			"rerank": 0.0003819
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.26091,
+			"rerank": 0.0003935
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.4616,
+			"rerank": 0.0002418
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.7706,
+			"rerank": 0.9725
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.47346,
+			"rerank": 0.00003778
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.39418,
+			"rerank": 0.002136
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.40683,
+			"rerank": 0.001146
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.30282,
+			"rerank": 0.0002928
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.3789,
+			"rerank": 0.00004633
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.36728,
+			"rerank": 0.0000922
+		}
+	},
+	"add an orders column to the customer summary report": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.28266,
+			"rerank": 0.0005237
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.2815,
+			"rerank": 0.0001109
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.19098,
+			"rerank": 0.00006544
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.86942,
+			"rerank": 0.7079
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.15045,
+			"rerank": 0.00003728
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.16736,
+			"rerank": 0.00004294
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.21399,
+			"rerank": 0.00005352
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.19509,
+			"rerank": 0.0000501
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.25665,
+			"rerank": 0.00008298
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.29888,
+			"rerank": 0.00003759
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.24938,
+			"rerank": 0.00003729
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.1992,
+			"rerank": 0.00003728
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.23373,
+			"rerank": 0.00003728
+		}
+	},
+	"Reply with just the word OK.": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.51632,
+			"rerank": 0.3725
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.43138,
+			"rerank": 0.0004224
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.39728,
+			"rerank": 0.00003739
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.4325,
+			"rerank": 0.00003743
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.33825,
+			"rerank": 0.00003741
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.31481,
+			"rerank": 0.00003743
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.33088,
+			"rerank": 0.00003743
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.3926,
+			"rerank": 0.00003733
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.39826,
+			"rerank": 0.00003812
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.43179,
+			"rerank": 0.00003743
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.3436,
+			"rerank": 0.00003743
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.37852,
+			"rerank": 0.00003743
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.4148,
+			"rerank": 0.00003744
+		}
+	},
+	"Without running anything: what exactly was my first message in this chat, and what did you reply?": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.62817,
+			"rerank": 0.003393
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.48771,
+			"rerank": 0.00007857
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.41785,
+			"rerank": 0.00003741
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.37486,
+			"rerank": 0.00003743
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.38217,
+			"rerank": 0.00008347
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.33845,
+			"rerank": 0.00003729
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.336,
+			"rerank": 0.00003728
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.41344,
+			"rerank": 0.00003741
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.41287,
+			"rerank": 0.00003745
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.39151,
+			"rerank": 0.00003736
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.34076,
+			"rerank": 0.0000374
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.34929,
+			"rerank": 0.00003736
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.34034,
+			"rerank": 0.00003729
+		}
+	},
+	"hi": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.41219,
+			"rerank": 0.001515
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.34938,
+			"rerank": 0.001456
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.31802,
+			"rerank": 0.001283
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.3244,
+			"rerank": 0.00008252
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.23766,
+			"rerank": 0.0007893
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.22239,
+			"rerank": 0.0005948
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.26556,
+			"rerank": 0.01011
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.31615,
+			"rerank": 0.0001878
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.31448,
+			"rerank": 0.0002633
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.36597,
+			"rerank": 0.004487
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.29395,
+			"rerank": 0.0002258
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.28591,
+			"rerank": 0.0008287
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.28645,
+			"rerank": 0.0000381
+		}
+	},
+	"thanks, looks good": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.49184,
+			"rerank": 0.00003742
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.39554,
+			"rerank": 0.00003732
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.40559,
+			"rerank": 0.00003729
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.45692,
+			"rerank": 0.00003739
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.29055,
+			"rerank": 0.00003761
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.33234,
+			"rerank": 0.00003729
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.31737,
+			"rerank": 0.00003729
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.42351,
+			"rerank": 0.00003729
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.39433,
+			"rerank": 0.0000373
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.43331,
+			"rerank": 0.00003742
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.335,
+			"rerank": 0.00003743
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.34845,
+			"rerank": 0.0000374
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.35738,
+			"rerank": 0.00003736
+		}
+	},
+	"what did you just do?": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.35395,
+			"rerank": 0.0004528
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.31324,
+			"rerank": 0.003368
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.2926,
+			"rerank": 0.0001675
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.3599,
+			"rerank": 0.00256
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.29656,
+			"rerank": 0.002857
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.29509,
+			"rerank": 0.0003725
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.30102,
+			"rerank": 0.0004082
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.35348,
+			"rerank": 0.00003848
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.34381,
+			"rerank": 0.00004362
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.37949,
+			"rerank": 0.00003729
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.29973,
+			"rerank": 0.00003731
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.39679,
+			"rerank": 0.0001952
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.36294,
+			"rerank": 0.00004516
+		}
+	},
+	"continue": {
+		"Prefers short replies without preamble": {
+			"hybrid": 0.43955,
+			"rerank": 0.003519
+		},
+		"Writes commit messages in the imperative mood": {
+			"hybrid": 0.36977,
+			"rerank": 0.001063
+		},
+		"Works on a Mac with zsh": {
+			"hybrid": 0.32208,
+			"rerank": 0.0008047
+		},
+		"In customer summaries, `orders` counts input rows per customer, not item quantities; keep order counts distinct from quantity totals.": {
+			"hybrid": 0.41016,
+			"rerank": 0.0004855
+		},
+		"From the Notion page on startup strategy: talk to users every week, launch before it feels ready, and win one narrow wedge before expanding.": {
+			"hybrid": 0.33894,
+			"rerank": 0.0003809
+		},
+		"Install packages with pnpm, never npm": {
+			"hybrid": 0.27698,
+			"rerank": 0.001536
+		},
+		"Run vitest for unit tests": {
+			"hybrid": 0.28859,
+			"rerank": 0.00691
+		},
+		"Node is pinned to 22": {
+			"hybrid": 0.38274,
+			"rerank": 0.0003783
+		},
+		"API errors return problem+json": {
+			"hybrid": 0.36955,
+			"rerank": 0.00181
+		},
+		"Routes live under /api/v2": {
+			"hybrid": 0.42335,
+			"rerank": 0.0007363
+		},
+		"Timestamps are stored in UTC": {
+			"hybrid": 0.31064,
+			"rerank": 0.0008221
+		},
+		"Deploy with wrangler to Cloudflare Workers": {
+			"hybrid": 0.33053,
+			"rerank": 0.0006184
+		},
+		"Never deploy on Fridays": {
+			"hybrid": 0.35383,
+			"rerank": 0.005964
+		}
+	}
+}

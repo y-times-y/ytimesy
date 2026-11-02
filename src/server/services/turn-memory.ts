@@ -39,6 +39,9 @@ import {
 	MEMORY_ENTRY,
 	MEMORY_MATCH_LATER_LIMIT,
 	MEMORY_MATCH_LIMIT,
+	MEMORY_MATCH_POLICY,
+	MEMORY_RERANK_ON,
+	MEMORY_RERANK_POLICY,
 	type MemoryLine,
 	type MemoryMode,
 	memoryAppUrl,
@@ -54,6 +57,8 @@ import {
 	memoryQueryText,
 	memoryRecentLine,
 	memoryRecentPart,
+	memoryRerankPool,
+	memoryRerankText,
 	memoryRulesPart,
 	memoryToday,
 	projectRuleLine,
@@ -76,6 +81,8 @@ import {
 	type Embed,
 	type LineEmbeddingStats,
 	memoryEmbedder,
+	memoryReranker,
+	type Rerank,
 } from "../adapters/memory-embeddings";
 import {
 	type MemoryRepo,
@@ -179,6 +186,8 @@ type MemoryOptions = {
 	appUrl?: string;
 	repo?: MemoryRepo | null;
 	embed?: Embed | null;
+	/** The read hook's reranker (by default only when MEMORY_RERANK_ON); null: the hybrid alone. */
+	rerank?: Rerank | null;
 	today?: () => string;
 	/** The chat's project (its repository ids pick its memory folder); looked up when absent. */
 	project?: MemoryProject | null;
@@ -211,6 +220,12 @@ async function memorySource(owner: TurnMemoryOwner, options: MemoryOptions) {
 			: options.repo;
 	if (!repo) return null;
 	const embed = options.embed === undefined ? memoryEmbedder() : options.embed;
+	const rerank =
+		options.rerank === undefined
+			? MEMORY_RERANK_ON
+				? memoryReranker()
+				: null
+			: options.rerank;
 	const setupStarted = Date.now();
 	let prefetched: Prefetched | null | undefined;
 	// Independent: the snapshot and the project that scopes it.
@@ -256,6 +271,7 @@ async function memorySource(owner: TurnMemoryOwner, options: MemoryOptions) {
 		mode,
 		repo,
 		embed,
+		rerank,
 		project,
 		today: options.today ?? memoryToday,
 		/** Notes recalled lines in the background; a turn never waits on it. */
@@ -317,7 +333,7 @@ export async function turnMemory(
 ): Promise<TurnMemory | null> {
 	const source = await memorySource(owner, options);
 	if (!source) return null;
-	const { mode, repo, embed, project, today, wording } = source;
+	const { mode, repo, embed, rerank, project, today, wording } = source;
 	const writer = options.writer ?? DEFAULT_HARNESS_VARIANT.memoryWriter;
 	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
 	const recentMessages =
@@ -484,6 +500,7 @@ export async function turnMemory(
 					? await readHook({
 							snapshot,
 							embed,
+							rerank,
 							vectors: vectors ?? undefined,
 							vectorStats: vectors ? loaded.stats : undefined,
 							userId: owner.userId,
@@ -650,7 +667,7 @@ export async function subagentMemory(
 ): Promise<SubagentMemory | null> {
 	const source = await memorySource(owner, options);
 	if (source?.mode !== "full") return null;
-	const { embed, project, today, wording } = source;
+	const { embed, rerank, project, today, wording } = source;
 	const checker = owner.role === "checker";
 	return {
 		async attach(messages, items) {
@@ -691,6 +708,7 @@ export async function subagentMemory(
 				? await readHook({
 						snapshot,
 						embed,
+						rerank,
 						vectors: vectors ?? undefined,
 						vectorStats: vectors ? loaded.stats : undefined,
 						userId: owner.userId,
@@ -964,14 +982,59 @@ function recalledHook(
 }
 
 /**
+ * The reranker's budget within the read hook (over REST from a laptop,
+ * 13-17 lines: median 0.44 s, slowest 2.5 s of 23 calls, 2026-11-02; the
+ * edge binding is not measured yet); past it, or on an error, the hook keeps
+ * the hybrid selection alone.
+ */
+const RERANK_TIMEOUT_MS = 1500;
+
+/** Reranker scores for `pool`, or null (and one warning) when it failed or took too long. */
+async function rerankScores(
+	rerank: Rerank,
+	query: string,
+	pool: readonly MemoryLine[],
+	timeoutMs: number,
+): Promise<Map<MemoryLine, number> | null> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const call = Promise.resolve().then(() =>
+		rerank(query, pool.map(memoryRerankText)),
+	);
+	try {
+		const scores = await Promise.race([
+			call,
+			new Promise<"timeout">((resolve) => {
+				timer = setTimeout(() => resolve("timeout"), timeoutMs);
+			}),
+		]);
+		if (scores === "timeout") throw new Error("Reranker timed out.");
+		return new Map(pool.map((entry, index) => [entry, scores[index] ?? 0]));
+	} catch (error) {
+		console.warn("Memory reranker failed; using the hybrid ranking alone.", {
+			error: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+			lines: pool.length,
+		});
+		return null;
+	} finally {
+		clearTimeout(timer);
+		call.catch(() => {});
+	}
+}
+
+/**
  * Supermemory-style recall: embed the message, rank this chat's lines by
  * cosine similarity merged with word overlap and its topic file's best hit
- * (memory-ranking.ts), keep the best few above the cutoff. Never throws: a
- * timeout or an error yields no lines and says which it was.
+ * (memory-ranking.ts), keep the best few above the floor (none when none
+ * is). With a reranker (MEMORY_RERANK_ON), it reads the message with each of
+ * the best and keeps only the lines it finds relevant; a failed one leaves
+ * the hybrid alone. Never throws: a timeout or an error yields no lines and
+ * says which it was.
  */
 export async function readHook(input: {
 	snapshot: MemorySnapshot;
 	embed: Embed;
+	/** Null: the hybrid alone (MEMORY_MATCH_POLICY). */
+	rerank?: Rerank | null;
 	userId: string;
 	query: string;
 	alreadyShown: (raw: string) => boolean;
@@ -987,6 +1050,7 @@ export async function readHook(input: {
 	cache?: Parameters<typeof cachedLineEmbeddings>[3];
 	timeoutMs?: number;
 	hedgeMs?: number;
+	rerankTimeoutMs?: number;
 }): Promise<ReadHookResult> {
 	const started = Date.now();
 	const spans: Record<string, number> = {};
@@ -1038,16 +1102,35 @@ export async function readHook(input: {
 			]),
 		);
 		const scores = memoryMatchScores(lines, similarity, query);
-		const selected = selectMemoryMatches({
+		const match = {
 			lines,
 			scores,
 			alreadyShown: input.alreadyShown,
 			today: input.today,
+			...(input.rerank ? { policy: MEMORY_RERANK_POLICY } : {}),
+		};
+		spans.rankMs = Date.now() - ranking;
+		const pool = input.rerank ? memoryRerankPool(match) : [];
+		let rerank: Map<MemoryLine, number> | null = null;
+		if (input.rerank && pool.length) {
+			const reranking = Date.now();
+			rerank = await rerankScores(
+				input.rerank,
+				query,
+				pool,
+				input.rerankTimeoutMs ?? RERANK_TIMEOUT_MS,
+			);
+			spans.rerankMs = Date.now() - reranking;
+			spans.rerankLines = pool.length;
+			if (!rerank) spans.rerankFallback = 1;
+		}
+		return selectMemoryMatches({
+			...match,
 			query,
 			limit: input.limit,
+			// A failed reranker leaves the hybrid alone, at its own floor.
+			...(rerank ? { rerank } : { policy: MEMORY_MATCH_POLICY }),
 		});
-		spans.rankMs = Date.now() - ranking;
-		return selected;
 	})();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
