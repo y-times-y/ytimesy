@@ -138,3 +138,16 @@ describe("Claude Code edge routes", () => {
 		closeClaudeCodeBridge(scope.turnId);
 	});
 });
+
+describe("Claude plan usage writes", () => {
+	it("write once per user per 15 seconds, at once on a status change", async () => {
+		const { shouldWritePlanUsage } = await import("./claude-code-routes");
+		expect(shouldWritePlanUsage("throttle-user", "allowed", 1_000)).toBe(true);
+		expect(shouldWritePlanUsage("throttle-user", "allowed", 5_000)).toBe(false);
+		expect(shouldWritePlanUsage("throttle-user", "rejected", 6_000)).toBe(true);
+		expect(shouldWritePlanUsage("throttle-user", "rejected", 22_000)).toBe(
+			true,
+		);
+		expect(shouldWritePlanUsage("other-user", "rejected", 22_000)).toBe(true);
+	});
+});

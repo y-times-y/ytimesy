@@ -77,14 +77,19 @@ export type PickerUsageBar = {
 export function PickerUsageLine({
 	label,
 	bars,
+	hint,
 }: {
 	label: string;
 	bars: readonly PickerUsageBar[];
+	/** The label's tooltip. */
+	hint?: string;
 }) {
 	if (!bars.length) return null;
 	return (
 		<section className="model-picker-usage" aria-label={`${label} usage`}>
-			<span className="model-picker-usage-label">{label}</span>
+			<span className="model-picker-usage-label" title={hint}>
+				{label}
+			</span>
 			{bars.map((bar) => {
 				const left = Math.max(0, Math.min(100, 100 - bar.usedPercent));
 				return (
