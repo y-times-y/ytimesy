@@ -1,8 +1,8 @@
 import type { LocalAgent } from "#/domain/local-import-view";
 import { ClaudeMark } from "../sessions/claude-mark";
 import { CodexMark } from "../sessions/codex-mark";
+import { GrokMark } from "../sessions/grok-mark";
 import { ModelProviderLogo } from "../sessions/model-provider-logo";
-import { XaiMark } from "../sessions/xai-mark";
 
 /**
  * A local coding agent's small mark: the bundled logos where ytimesy already
@@ -22,7 +22,7 @@ export function LocalAgentMark({
 		case "codex":
 			return <CodexMark size={size} />;
 		case "grok":
-			return <XaiMark size={size} />;
+			return <GrokMark size={size} />;
 		case "gemini":
 			return <ModelProviderLogo provider="google" size={size} />;
 		case "opencode":

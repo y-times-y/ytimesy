@@ -1,6 +1,6 @@
 import { ClaudeMark } from "./claude-mark";
 import { CodexMark } from "./codex-mark";
-import { XaiMark } from "./xai-mark";
+import { GrokMark } from "./grok-mark";
 import "./subscription-mark.css";
 
 export type SubscriptionBrand = "codex" | "claude" | "grok";
@@ -34,7 +34,7 @@ export function SubscriptionMark({
 			{brand === "claude" ? (
 				<ClaudeMark size={glyph} />
 			) : (
-				<XaiMark size={glyph} />
+				<GrokMark size={glyph} />
 			)}
 		</span>
 	);

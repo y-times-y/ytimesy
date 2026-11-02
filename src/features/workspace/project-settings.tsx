@@ -59,11 +59,11 @@ import {
 	CodexSubscriptionUsage,
 	GrokSubscriptionUsage,
 } from "../sessions/codex-usage";
+import { GrokMark } from "../sessions/grok-mark";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
-import { XaiMark } from "../sessions/xai-mark";
 import { disconnectXaiSubscriptionFn } from "../sessions/xai-subscription.fn";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import { ArchivedSettings } from "./archived-settings";
@@ -1184,7 +1184,7 @@ function XaiSubscriptionRow({
 		<li className="settings-row">
 			<div className="settings-row-main">
 				<span className="settings-row-icon">
-					<XaiMark size={18} />
+					<GrokMark size={18} />
 				</span>
 				<div className="settings-row-text">
 					<span className="settings-row-title">Grok subscription</span>
