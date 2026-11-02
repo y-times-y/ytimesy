@@ -153,6 +153,7 @@ import {
 	withEarlierPages,
 	withOlderPage,
 } from "#/domain/transcript-page";
+import { sessionStoppedByUser } from "#/domain/turn-end";
 import { replyStartedAfter } from "#/domain/web-vitals";
 import {
 	desktopInspectorShouldStart,
@@ -879,6 +880,19 @@ export function WorkspaceHome({
 					};
 				// The server sends the chat's last turns; older ones read stay above.
 				next = withEarlierPages(current, next);
+				// A view from before the stop settled must not bring the stopped turn back.
+				if (
+					progressRevivesStoppedTurn({
+						stopRequested: Boolean(
+							next.agentSessionId &&
+								stopRequestedFor.current === next.agentSessionId,
+						),
+						current: current.items,
+						next: next.items,
+						nextStatus: next.turnStatus,
+					})
+				)
+					return current;
 				const awaited = awaitedHeldRef.current;
 				if (
 					awaited &&
@@ -2943,21 +2957,32 @@ export function WorkspaceHome({
 		const chatId = activeSessionId;
 		const epoch = sessionEpoch.current;
 		// The stopped turn ends idle; accept that view even if the
-		// live progress stream never reports the stop.
+		// live progress stream never reports the stop, and ignore the
+		// running views sent before the stop settled.
 		stopRequestedFor.current = chatId ?? null;
+		// Stopped on click: the composer is free at once, the partial answer
+		// stays with its "Stopped" notice. The server's settled view replaces
+		// these items when it arrives.
+		setSession((current) =>
+			current.agentSessionId && current.agentSessionId !== chatId
+				? current
+				: sessionStoppedByUser(current, Date.now()),
+		);
 		// The turn settles on the server after this answers; keep
-		// listening so its "Stopped" marker shows without a reload.
+		// listening so its settled transcript shows without a reload.
 		if (chatId) setWakeWatch({ sessionId: chatId, since: Date.now() });
-		setBusyChatIds((ids) => withBusyChat(ids, chatId));
 		void stopTurn({
 			data: sessionScope(),
 		})
 			.then((next) => applySessionView(epoch, next))
-			.catch((cause) => toast.error(publicFailureMessage(cause)))
-			.finally(() => {
-				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-				void chats.refetch();
-			});
+			.catch((cause) => {
+				// The stop never reached the server: show the chat as it is.
+				if (stopRequestedFor.current === chatId)
+					stopRequestedFor.current = null;
+				toast.error(publicFailureMessage(cause));
+				refetchOpenSession.current();
+			})
+			.finally(() => void chats.refetch());
 	}
 
 	function copyLastReply() {
