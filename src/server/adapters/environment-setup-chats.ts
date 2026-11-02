@@ -1,4 +1,7 @@
-import { ENVIRONMENT_SETUP_TITLE } from "#/domain/environment-setup";
+import {
+	ENVIRONMENT_SETUP_TITLE,
+	PREVIOUS_SETUP_TITLES,
+} from "#/domain/environment-setup";
 import { UNTITLED_SESSION_TITLE } from "#/domain/session-item";
 import { database } from "./database";
 
@@ -15,13 +18,14 @@ export async function markEnvironmentSetupChat(
 	const result = await database().query(
 		`update agent_session set environment_setup=true, title=$3
 		 where user_id=$1 and id=$2 and parent_session_id is null
-		 and (environment_setup or title in ($4, $5))`,
+		 and (environment_setup or title in ($4, $5) or title = any($6::text[]))`,
 		[
 			userId,
 			sessionId,
 			ENVIRONMENT_SETUP_TITLE,
 			UNTITLED_SESSION_TITLE,
 			claimedTitle,
+			[...PREVIOUS_SETUP_TITLES],
 		],
 	);
 	return (result.rowCount ?? 0) > 0;
@@ -37,4 +41,23 @@ export async function isEnvironmentSetupChat(
 		[userId, sessionId],
 	);
 	return result.rows[0]?.environment_setup === true;
+}
+
+/**
+ * The project's setup chat other than `exceptSessionId`, oldest first: a new
+ * project's setup runs once, so a second start opens this one instead.
+ */
+export async function otherProjectSetupChat(
+	userId: string,
+	projectId: string,
+	exceptSessionId: string | null,
+): Promise<string | null> {
+	const result = await database().query<{ id: string }>(
+		`select id from agent_session where user_id=$1 and project_id=$2
+		 and environment_setup and parent_session_id is null
+		 and ($3::uuid is null or id<>$3::uuid)
+		 order by created_at limit 1`,
+		[userId, projectId, exceptSessionId],
+	);
+	return result.rows[0]?.id ?? null;
 }

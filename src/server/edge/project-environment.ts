@@ -161,6 +161,8 @@ export class ProjectEnvironment extends DurableObject<EdgeExecutorEnvironment> {
 			workspaceRuntimeFromEnv(process.env, {
 				fetch: environmentFreestyleFetch(counts, boundedFreestyleFetch()),
 				streamSetupCommands: true,
+				// Its own machine, commands back to back: see FreestyleWorkspaceRuntime.
+				admissionReuseMs: 30_000,
 			}),
 			request.requestId,
 			journal,

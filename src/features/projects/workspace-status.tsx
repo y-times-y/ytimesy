@@ -169,7 +169,7 @@ export function WorkspaceStatus({
 					<LoaderCircle size={13} className="workspace-status-spin" />
 					<span>
 						{rebuilding
-							? "Rebuilding environment…"
+							? "Updating the environment…"
 							: `Setting up the project · ${SETUP_STEPS[current.status as keyof typeof SETUP_STEPS] ?? "Starting"}`}
 					</span>
 				</button>

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
+import { initialSetupMessageId } from "#/domain/environment-setup";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
@@ -27,6 +28,10 @@ import {
 	backgroundJobId,
 	dispatchBackgroundJob,
 } from "../adapters/background-job-dispatch";
+import {
+	markEnvironmentSetupChat,
+	otherProjectSetupChat,
+} from "../adapters/environment-setup-chats";
 import {
 	chatHoldingMessage,
 	chatsWithReleasableHeldSends,
@@ -82,6 +87,8 @@ export function sendComposerMessage(
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.flatMap(
 		Effect.promise(async () => {
+			const started = await initialSetupStarted(scope, input);
+			if (started) return { view: started };
 			const queued = await timed("send:queueCheck", () =>
 				queueBehindRunningTurn(scope, input),
 			);
@@ -112,6 +119,42 @@ export function sendComposerMessage(
 						queued.session,
 					),
 	);
+}
+
+/**
+ * A new project starts its setup by itself, once: its request carries the
+ * project's own message id (initialSetupMessageId). Another start of it (a
+ * second tab, a reload, a retried request) gets the chat that already has
+ * it instead of a second setup.
+ */
+async function initialSetupStarted(
+	scope: HarnessSessionScope,
+	input: ComposerSend,
+): Promise<PublicCodexSession | null> {
+	if (
+		!input.environmentSetup ||
+		// Its own delivery once the environment is ready is not another start.
+		input.released ||
+		!scope.projectId ||
+		input.idempotencyKey !== initialSetupMessageId(scope.projectId)
+	)
+		return null;
+	const current = scope.createNew ? null : (scope.sessionId ?? null);
+	const holding = await chatHoldingMessage(
+		scope.userId,
+		scope.projectId,
+		input.idempotencyKey,
+	);
+	const existing =
+		holding && holding !== current
+			? holding
+			: await otherProjectSetupChat(scope.userId, scope.projectId, current);
+	if (!existing) return null;
+	return publicSessionView({
+		...scope,
+		sessionId: existing,
+		createNew: false,
+	});
 }
 
 async function queueBehindRunningTurn(
@@ -211,6 +254,14 @@ async function holdUntilEnvironmentReady(
 	);
 	// An opened, untitled chat is named after the message, as a send names it.
 	await claimChatForSend(scope.userId, session.id, input.text);
+	// A setup request marks its chat as the project's setup chat now, not
+	// when the build finishes: it never publishes, and a second start finds it.
+	if (input.environmentSetup)
+		await markEnvironmentSetupChat(
+			scope.userId,
+			session.id,
+			sessionTitleFromText(input.text),
+		);
 	const sessionScope = { ...scope, sessionId: session.id, createNew: false };
 	const waiting = await queuedUserMessageItems(session.id);
 	if (
@@ -470,7 +521,7 @@ export function updateQueuedComposerMessage(
 	scope: HarnessSessionScope,
 	messageId: string,
 	text: string,
-	/** "Set up with the agent" on a held message: it goes as a setup chat's request. */
+	/** "Fix with the agent" on a held message: it goes as a setup chat's request. */
 	environmentSetup = false,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.promise(async () => {

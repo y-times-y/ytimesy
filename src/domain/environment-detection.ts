@@ -110,7 +110,7 @@ export function setupIsMissing(setup: Pick<RepositorySetup, "source">) {
 
 /**
  * What the agent is told when a repository has no verified setup: install
- * what the task needs, and point the user at Set up environment.
+ * what the task needs, and point the user at Rerun setup.
  */
 export function environmentSetupNotice(
 	setups: readonly RepositorySetup[],
@@ -131,7 +131,7 @@ export function environmentSetupNotice(
 		return [];
 	});
 	if (!lines.length) return null;
-	return `${lines.join(" ")} Install what this task needs yourself before building or testing. Mention once that the person can use Set up environment to save a verified setup for future chats.`;
+	return `${lines.join(" ")} Install what this task needs yourself before building or testing. Mention once that the person can use Rerun setup to save a verified setup for future chats.`;
 }
 
 /** Settings' one line for a repository without a saved setup. */
@@ -151,7 +151,7 @@ export function detectedSetupLine(setup: RepositorySetup | null | undefined) {
 }
 
 /**
- * Whether to offer "Set up environment": until one repository has a setup of
+ * Whether to offer "Rerun setup": until one repository has a setup of
  * its own, saved in ytimesy or committed as .ytimesy/environment.json (seen
  * by the active build).
  */

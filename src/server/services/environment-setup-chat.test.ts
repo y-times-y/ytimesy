@@ -3,7 +3,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "#/domain/environment-setup";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { commitChatBranchForSubmission } from "./session-branch";
 
-/** A chat started from "Set up environment" is marked at its first send. */
+/** A chat started by project setup is marked at its first send. */
 const store = vi.hoisted(() => ({
 	chat: null as AgentSessionRecord | null,
 	mark: vi.fn(async () => true),
@@ -85,7 +85,7 @@ it("marks a chat sent from the setup chip and names its branch after setup", asy
 		newChat.id,
 		expect.stringMatching(/^Set up this project/),
 	);
-	expect(chat.workingBranch).toBe("ytimesy/set-up-environment-b2c3d4");
+	expect(chat.workingBranch).toBe("ytimesy/set-up-project-b2c3d4");
 });
 
 it("leaves an ordinary chat unmarked", async () => {

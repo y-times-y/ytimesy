@@ -25,7 +25,7 @@ export type QueuedUserSend = {
 	readonly released?: boolean;
 	/** A new chat's first send: the branch it starts from (held for setup). */
 	readonly baseBranch?: string;
-	/** Sent from "Set up environment", or "Set up with the agent" on a held message. */
+	/** A project setup request, or "Fix with the agent" on a held message. */
 	readonly environmentSetup?: boolean;
 };
 
@@ -104,7 +104,7 @@ export async function updateQueuedUserMessage(
 	messageId: string,
 	text: string,
 	modelMessage: string,
-	/** "Set up with the agent" on a held message: it goes as a setup chat's request. */
+	/** "Fix with the agent" on a held message: it goes as a setup chat's request. */
 	environmentSetup = false,
 ): Promise<boolean> {
 	const result = await database().query(
