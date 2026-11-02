@@ -10,6 +10,7 @@ import {
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 	SubscriptionUsageLimitReached,
+	XaiSubscriptionUnavailable,
 } from "./api-turn-failure";
 import {
 	canonicalModelId,
@@ -18,6 +19,7 @@ import {
 	type FailoverConnection,
 	failoverCandidates,
 	failoverChainFailure,
+	failoverConnectionKind,
 	failoverExhaustedDetail,
 	failoverNotice,
 	forcedDevelopmentOutage,
@@ -734,5 +736,109 @@ describe("failoverChainFailure", () => {
 			"Your ChatGPT plan's Codex usage is used up (resets in 3 h 45 min). Switching to OpenRouter didn't work either: Your API provider account is out of credit.",
 		);
 		expect(failoverChainFailure([], "t1", "x", now)).toBeNull();
+	});
+});
+
+describe("SuperGrok subscription", () => {
+	const SUPERGROK = "00000000-0000-4000-8000-0000000000a1";
+	const XAI_KEY = "00000000-0000-4000-8000-0000000000a2";
+	const supergrok: FailoverConnection = {
+		key: SUPERGROK,
+		label: "SuperGrok",
+		kind: "plan",
+		provider: "compatible",
+		baseUrl: "https://api.x.ai/v1",
+		revision: "sg-rev",
+		models: [{ id: "grok-4.7", label: "Grok 4.7" }],
+	};
+	const xaiKey: FailoverConnection = {
+		...supergrok,
+		key: XAI_KEY,
+		label: "xAI",
+		kind: "key",
+		revision: "xk-rev",
+	};
+	const onSupergrok: ModelRoute = {
+		connectionId: SUPERGROK,
+		connectionRevision: "sg-rev",
+		modelId: "grok-4.7",
+		settings: {},
+	};
+
+	it("is a prepaid plan, ranked with subscriptions", () => {
+		expect(
+			failoverConnectionKind({
+				provider: "compatible",
+				baseUrl: "https://api.x.ai/v1",
+				subscription: { provider: "xai", status: "ready" },
+			}),
+		).toBe("plan");
+		expect(
+			orderedFailoverConnections([xaiKey, supergrok]).map((row) => row.key),
+		).toEqual([SUPERGROK, XAI_KEY]);
+	});
+
+	it("moves a rejected sign-in to the same Grok on an xAI key, with a notice", () => {
+		for (const reason of ["reconnect", "not-eligible"] as const)
+			expect(failoverReason(new XaiSubscriptionUnavailable(reason))).toBe(
+				"plan-access",
+			);
+		// Wrapped by the SDK's safe failure, the cause still decides.
+		expect(
+			failoverReason(
+				new SafeApiModelFailure(new XaiSubscriptionUnavailable("reconnect")),
+			),
+		).toBe("plan-access");
+		expect(failoverReason(new XaiSubscriptionUnavailable("unavailable"))).toBe(
+			"outage",
+		);
+		expect(
+			retriesSameRoute(
+				new XaiSubscriptionUnavailable("reconnect"),
+				"plan-access",
+			),
+		).toBe(false);
+		const [candidate] = failoverCandidates({
+			original: onSupergrok,
+			connections: [supergrok, xaiKey],
+			tried: [routeKey(onSupergrok)],
+		});
+		expect(candidate).toMatchObject({
+			connectionKey: XAI_KEY,
+			modelLabel: "Grok 4.7",
+			sameModel: true,
+			paid: true,
+		});
+		expect(
+			failoverNotice(
+				{ model: "Grok 4.7", connection: "SuperGrok" },
+				{ model: "Grok 4.7", connection: "xAI" },
+				"plan-access",
+			),
+		).toBe(
+			"SuperGrok needs reconnecting in Settings, so this chat continued on Grok 4.7 via xAI.",
+		);
+		// Leaving the prepaid plan for a key asks first when the user wants that.
+		expect(
+			decideFailover({
+				policy: "any-model",
+				switches: 0,
+				serving: onSupergrok,
+				candidates: [candidate],
+				askBeforePaid: true,
+				canAsk: true,
+				servingPrepaid: true,
+			}).kind,
+		).toBe("ask");
+	});
+
+	it("is free to fail over onto", () => {
+		const onKey = { ...onSupergrok, connectionId: XAI_KEY };
+		const [candidate] = failoverCandidates({
+			original: onKey,
+			connections: [supergrok, xaiKey],
+			tried: [routeKey(onKey)],
+		});
+		expect(candidate).toMatchObject({ connectionKey: SUPERGROK, paid: false });
 	});
 });

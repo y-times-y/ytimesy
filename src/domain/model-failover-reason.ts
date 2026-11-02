@@ -12,6 +12,7 @@ import {
 	SubscriptionMetadataFailure,
 	SubscriptionUsageLimitReached,
 	UnsupportedEdgeModelEndpoint,
+	XaiSubscriptionUnavailable,
 } from "./api-turn-failure";
 import type { FailoverReason } from "./model-failover";
 import { publicToolDetail } from "./tool-detail";
@@ -142,6 +143,9 @@ export function failoverReason(error: unknown): FailoverReason | null {
 	for (const current of chain) {
 		if (NEVER_FAIL_OVER.some((type) => current instanceof type)) return null;
 		if (current instanceof SubscriptionUsageLimitReached) return "usage-limit";
+		// A rejected SuperGrok sign-in waits for the user; other routes still work.
+		if (current instanceof XaiSubscriptionUnavailable)
+			return current.reason === "unavailable" ? "outage" : "plan-access";
 		// Every egress path is blocked: another provider route still works.
 		if (current instanceof CodexEgressUnavailable) return "outage";
 		if (current instanceof SubscriptionMetadataFailure)

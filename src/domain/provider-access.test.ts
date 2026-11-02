@@ -240,3 +240,31 @@ describe("Settings key choices", () => {
 			expect(makers).not.toContain(author);
 	});
 });
+
+describe("SuperGrok subscription", () => {
+	const key = {
+		id: "55555555-5555-4555-8555-555555555555",
+		provider: "compatible",
+		label: "xAI",
+		baseUrl: "https://api.x.ai/v1",
+		revision: "r",
+		models: [
+			{ id: "grok-4.7", label: "Grok 4.7", toolStreamingVerified: false },
+		],
+	} as PublicModelConnection;
+	const plan = {
+		...key,
+		id: "66666666-6666-4666-8666-666666666666",
+		label: "SuperGrok",
+		subscription: { provider: "xai", status: "ready" },
+	} as PublicModelConnection;
+
+	it("serves the xAI section first, its models labelled as on the subscription", () => {
+		expect(
+			providerConnections("x-ai", [key, plan]).map((row) => row.id),
+		).toEqual([plan.id, key.id]);
+		expect(
+			availableConnectionModels([plan], []).map((model) => model.label),
+		).toEqual(["Grok 4.7 · SuperGrok"]);
+	});
+});

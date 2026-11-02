@@ -34,12 +34,11 @@ beforeAll(async () => {
 	await db.exec(
 		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values ('alice'),('bob');",
 	);
-	await db.exec(
-		await readFile(
-			"supabase/migrations/20260927183000_model_connections.sql",
-			"utf8",
-		),
-	);
+	for (const file of [
+		"20260927183000_model_connections.sql",
+		"20261101140000_xai_subscription.sql",
+	])
+		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 });
 afterAll(() => db.close());
 

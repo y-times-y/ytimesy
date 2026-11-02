@@ -1,22 +1,35 @@
 import { randomUUID } from "node:crypto";
 import type { PublicModelConnection } from "#/domain/model-connection";
+import { xaiSubscriptionEnabled } from "#/domain/xai-subscription";
 import { database } from "./database";
 
 export type StoredModelConnection = PublicModelConnection & {
 	sealedCredential: string;
 };
-const PUBLIC_COLUMNS =
-	'id,provider,label,base_url as "baseUrl",models,revision';
+const PUBLIC_COLUMNS = `id,provider,label,base_url as "baseUrl",models,revision,
+	case when kind='xai-subscription' then jsonb_build_object('provider','xai','status',status) end as subscription`;
+
+/** A SuperGrok subscription row exists only for its feature switch: off, nothing reads it. */
+function visibleKinds() {
+	return xaiSubscriptionEnabled() ? "" : " and kind='key'";
+}
+
+function publicRow<T extends PublicModelConnection>(
+	row: T & { subscription?: PublicModelConnection["subscription"] | null },
+): T {
+	const { subscription, ...rest } = row;
+	return (subscription ? { ...rest, subscription } : rest) as T;
+}
 
 export async function listModelConnections(
 	userId: string,
 ): Promise<PublicModelConnection[]> {
 	return (
 		await database().query<PublicModelConnection>(
-			`select ${PUBLIC_COLUMNS} from model_connection where user_id=$1 order by created_at,id`,
+			`select ${PUBLIC_COLUMNS} from model_connection where user_id=$1${visibleKinds()} order by created_at,id`,
 			[userId],
 		)
-	).rows;
+	).rows.map(publicRow);
 }
 
 export async function loadModelConnection(
@@ -24,10 +37,11 @@ export async function loadModelConnection(
 	id: string,
 ): Promise<StoredModelConnection | null> {
 	const result = await database().query<StoredModelConnection>(
-		`select ${PUBLIC_COLUMNS}, sealed_credential as "sealedCredential" from model_connection where user_id=$1 and id=$2`,
+		`select ${PUBLIC_COLUMNS}, sealed_credential as "sealedCredential" from model_connection where user_id=$1 and id=$2${visibleKinds()}`,
 		[userId, id],
 	);
-	return result.rows[0] ?? null;
+	const row = result.rows[0];
+	return row ? publicRow(row) : null;
 }
 
 export async function saveModelConnection(
@@ -47,7 +61,7 @@ export async function saveModelConnection(
 	];
 	const result = replacing
 		? await database().query(
-				`update model_connection set provider=$3,label=$4,base_url=$5,sealed_credential=$6,models=$7::jsonb,revision=$8,updated_at=now() where id=$1 and user_id=$2 returning id`,
+				`update model_connection set provider=$3,label=$4,base_url=$5,sealed_credential=$6,models=$7::jsonb,revision=$8,updated_at=now() where id=$1 and user_id=$2 and kind='key' returning id`,
 				values,
 			)
 		: await database().query(

@@ -139,6 +139,9 @@
 	grid-template-columns: 1fr 1fr;
 	gap: 12px;
 }
+.first-run-models[data-count="3"] {
+	grid-template-columns: repeat(3, 1fr);
+}
 .first-run-model {
 	display: flex;
 	flex-direction: column;
@@ -265,7 +268,8 @@
 	text-decoration: none;
 }
 @media (max-width: 560px) {
-	.first-run-models {
+	.first-run-models,
+	.first-run-models[data-count="3"] {
 		grid-template-columns: 1fr;
 	}
 }

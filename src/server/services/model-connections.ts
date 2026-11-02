@@ -21,6 +21,10 @@ import {
 import { modelEndpointTransport } from "#/server/adapters/model-endpoint";
 import { devAllowsAnyModel } from "#/server/adapters/openrouter-official";
 import { seal, unseal } from "#/server/auth/token-vault";
+import {
+	xaiSubscriptionAccessToken,
+	xaiSubscriptionFetch,
+} from "#/server/auth/xai-subscription";
 
 export async function availableApiModelRoutes(
 	connections: readonly PublicModelConnection[],
@@ -105,6 +109,32 @@ export async function connectionApiKey(
 	return value.apiKey;
 }
 
+/** Stands in for the key a SuperGrok turn's SDK wants; its fetch sends the real bearer. */
+const SUBSCRIPTION_KEY_PLACEHOLDER = "xai-subscription-oauth";
+
+/**
+ * How a connection's requests authenticate: its API key, or for a SuperGrok
+ * subscription the user's OAuth bearer token, injected (and refreshed) by the
+ * returned fetch. The subscription's token is read once here, so a dead
+ * sign-in fails before any model request.
+ */
+export async function connectionModelAccess(
+	userId: string,
+	connection: StoredModelConnection,
+	transport: typeof globalThis.fetch,
+): Promise<{ apiKey: string; fetch: typeof globalThis.fetch }> {
+	if (!connection.subscription)
+		return {
+			apiKey: await connectionApiKey(userId, connection),
+			fetch: transport,
+		};
+	await xaiSubscriptionAccessToken(userId, connection.id);
+	return {
+		apiKey: SUBSCRIPTION_KEY_PLACEHOLDER,
+		fetch: xaiSubscriptionFetch(userId, connection.id, transport),
+	};
+}
+
 /** An explicit, bounded billable probe. Never executes shell commands or falls back to another credential. */
 export function verifyApiModel(
 	userId: string,
@@ -119,13 +149,14 @@ export function verifyApiModel(
 			throw new Error("Wait before retrying model verification.");
 		const transport = modelEndpointTransport(connection.baseUrl);
 		try {
-			const model = connectedLanguageModel(
-				{
-					...connection,
-					apiKey: await connectionApiKey(userId, connection),
-					modelId,
-				},
+			const access = await connectionModelAccess(
+				userId,
+				connection,
 				transport.fetch,
+			);
+			const model = connectedLanguageModel(
+				{ ...connection, apiKey: access.apiKey, modelId },
+				access.fetch,
 			);
 			const result = streamText({
 				model,

@@ -17,6 +17,7 @@ import {
 
 const KIND_LABELS = {
 	subscription: "Subscription",
+	plan: "Subscription",
 	key: "API key",
 	gateway: "Gateway",
 	custom: "Custom endpoint",

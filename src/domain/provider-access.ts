@@ -62,13 +62,18 @@ export function providerConnections(
 	connections: readonly PublicModelConnection[],
 ) {
 	if (author === CUSTOM_SECTION) return connections.filter(isCustomConnection);
-	return connections.filter(
+	const serving = connections.filter(
 		(connection) =>
 			connection.provider === "openrouter" ||
 			connection.provider === author ||
 			(connection.provider === "compatible" &&
 				connection.baseUrl === DIRECT_MODEL_ENDPOINTS[author]),
 	);
+	// A prepaid subscription (SuperGrok) comes first: it costs nothing extra.
+	return [
+		...serving.filter((connection) => connection.subscription),
+		...serving.filter((connection) => !connection.subscription),
+	];
 }
 
 export function selectedProviderConnection(

@@ -2,6 +2,8 @@
 export type FirstRunState = {
 	readonly githubConnected: boolean;
 	readonly modelReady: boolean;
+	/** SuperGrok sign-in is offered (its feature switch is on). */
+	readonly xaiSubscription?: boolean;
 };
 
 /**
