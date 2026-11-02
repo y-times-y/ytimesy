@@ -1,3 +1,4 @@
+import { Wordmark } from "#/components/brand/wordmark";
 import { authClient } from "../auth/client";
 import { IdentityGate } from "../auth/identity-gate";
 import { OnboardingShell } from "../auth/onboarding-shell";
@@ -10,8 +11,7 @@ export function ProjectOnboarding() {
 			<OnboardingShell>
 				<section className="onboarding-card">
 					<a href="/" className="brand">
-						<img src="/brand/mark.svg" width="28" height="28" alt="" />
-						<span className="brand-name">ytimesy</span>
+						<Wordmark />
 					</a>
 					<h1>Add a project</h1>
 					<AddProjectForm

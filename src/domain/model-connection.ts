@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { API_MODEL_LIST, apiModelSpeeds } from "./api-model-list";
 import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
+import type { XaiSubscriptionStatus } from "./xai-subscription";
 
 export const modelProvider = z.enum([
 	"openai",
@@ -84,6 +85,14 @@ export type PublicModelConnection = {
 	readonly baseUrl: string;
 	readonly models: readonly ConnectedModel[];
 	readonly revision: string;
+	/**
+	 * Set on a prepaid plan signed in with OAuth (SuperGrok) rather than an
+	 * API key: its status, and why it waits for the user when it does.
+	 */
+	readonly subscription?: {
+		readonly provider: "xai";
+		readonly status: XaiSubscriptionStatus;
+	};
 };
 
 type ApiModelReasoning = {

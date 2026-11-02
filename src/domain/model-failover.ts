@@ -25,7 +25,9 @@ export type FailoverReason =
 	| "overloaded"
 	| "rate-limited"
 	| "usage-limit"
-	| "timeout";
+	| "timeout"
+	/** A subscription sign-in (SuperGrok) was rejected; only the user can renew it. */
+	| "plan-access";
 
 const REASON_TEXT: Record<FailoverReason, string> = {
 	outage: "outage",
@@ -33,6 +35,7 @@ const REASON_TEXT: Record<FailoverReason, string> = {
 	"rate-limited": "rate limited",
 	"usage-limit": "usage limit reached",
 	timeout: "timed out",
+	"plan-access": "sign-in needs renewing",
 };
 
 /** Why a route stopped, for the person reading the chat. */
@@ -46,6 +49,7 @@ function failingSentence(from: RouteLabel, reason: FailoverReason) {
 		overloaded: `${from.connection} is overloaded right now`,
 		"rate-limited": `${from.connection} is limiting requests right now`,
 		timeout: `${from.connection} stopped responding`,
+		"plan-access": `${from.connection} needs reconnecting in Settings`,
 	}[reason];
 }
 
@@ -74,9 +78,14 @@ export function routeKey(route: Pick<ModelRoute, "connectionId" | "modelId">) {
 	return `${routeConnectionKey(route)}|${route.modelId}`;
 }
 
-/** Subscriptions are prepaid; keys and gateways bill the user's provider account. */
+/**
+ * Subscriptions are prepaid; keys and gateways bill the user's provider
+ * account. "subscription" is the ChatGPT plan (Codex's own route); "plan" is a
+ * prepaid plan reached as an API connection (SuperGrok).
+ */
 export type FailoverConnectionKind =
 	| "subscription"
+	| "plan"
 	| "key"
 	| "gateway"
 	| "custom";
@@ -103,13 +112,21 @@ export type FailoverConnection = {
 export function failoverConnectionKind(connection: {
 	provider: ModelProvider;
 	baseUrl: string;
+	subscription?: unknown;
 }): FailoverConnectionKind {
+	if (connection.subscription) return "plan";
 	if (connection.provider === "openrouter") return "gateway";
 	return isCustomConnection(connection) ? "custom" : "key";
 }
 
+/** Prepaid plans: moving off one onto a key bills the user. */
+export function prepaidKind(kind: FailoverConnectionKind): boolean {
+	return kind === "subscription" || kind === "plan";
+}
+
 const KIND_RANK: Record<FailoverConnectionKind, number> = {
 	subscription: 0,
+	plan: 0,
 	key: 1,
 	gateway: 2,
 	custom: 3,
@@ -188,6 +205,7 @@ export function canonicalModelId(
 			return API_MODEL_LIST.some((entry) => entry.openRouterId === modelId)
 				? modelId
 				: null;
+		case "plan":
 		case "key": {
 			const author =
 				connection.provider && connection.baseUrl
@@ -317,7 +335,7 @@ export function failoverCandidates(input: {
 					connectionKey: connection.key,
 					connectionLabel: connection.label,
 					modelLabel: model.label,
-					paid: connection.kind !== "subscription",
+					paid: !prepaidKind(connection.kind),
 					sameModel,
 				});
 			}
@@ -360,6 +378,8 @@ export function decideFailover(input: {
 	readonly askBeforePaid: boolean;
 	/** Someone is there to answer a question (a root chat, not a child agent). */
 	readonly canAsk: boolean;
+	/** The serving route is prepaid; default: it is the ChatGPT plan. */
+	readonly servingPrepaid?: boolean;
 }): FailoverDecision {
 	if (input.policy === "off" || input.switches >= MAX_TURN_FAILOVERS)
 		return { kind: "stop" };
@@ -371,7 +391,7 @@ export function decideFailover(input: {
 	if (
 		input.askBeforePaid &&
 		candidate.paid &&
-		input.serving.connectionId === null
+		(input.servingPrepaid ?? input.serving.connectionId === null)
 	)
 		return input.canAsk ? { kind: "ask", candidate } : { kind: "stop" };
 	return { kind: "switch", candidate };

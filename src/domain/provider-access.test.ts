@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { API_MODEL_LIST, apiModelSections } from "./api-model-list";
 import {
+	availableConnectionModels,
 	connectionModels,
 	isCustomConnection,
+	modelConnectionInput,
 	type PublicModelConnection,
 } from "./model-connection";
 import {
 	apiPickerSections,
+	connectionKeyChoice,
+	directKeyProvider,
+	keyChoiceConnection,
+	keyChoiceLabel,
+	keyProviderChoices,
 	providerConnections,
 	providerKeyConnection,
 	selectedProviderConnection,
@@ -131,5 +139,132 @@ describe("custom OpenAI-compatible endpoints", () => {
 				baseUrl: "https://openrouter.ai/api/v1",
 			}),
 		).toBe(false);
+	});
+});
+
+describe("Settings key choices", () => {
+	const choices = keyProviderChoices();
+	const makers = choices
+		.map((row) => row.id)
+		.filter((id) => id !== "openrouter" && id !== "custom");
+
+	it("offers every catalog maker whose own key unlocks a listed model, then OpenRouter and Custom", () => {
+		expect(choices.map((row) => row.id)).toEqual([
+			"openai",
+			"anthropic",
+			"google",
+			"x-ai",
+			"openrouter",
+			"custom",
+		]);
+		for (const author of apiModelSections())
+			expect(makers.includes(author)).toBe(directKeyProvider(author) !== null);
+		expect(keyChoiceLabel("x-ai")).toBe("xAI");
+		expect(choices.find((row) => row.id === "x-ai")?.hint).toBe(
+			"Unlocks Grok 4.7, Grok 4.6",
+		);
+	});
+
+	it("saves each choice as a valid connection that maps back to it", () => {
+		for (const choice of choices.map((row) => row.id)) {
+			const raw = keyChoiceConnection(choice, {
+				label: " ",
+				apiKey: " test-only-key ",
+				baseUrl: "https://llm.example.com/v1",
+			});
+			const input = modelConnectionInput.parse(raw);
+			expect(input.apiKey).toBe("test-only-key");
+			expect(input.label).toBe(keyChoiceLabel(choice));
+			expect(connectionKeyChoice(input)).toBe(choice);
+		}
+		expect(
+			keyChoiceConnection("x-ai", {
+				label: "Work",
+				apiKey: "test-only-key",
+				baseUrl: "",
+			}),
+		).toEqual({
+			provider: "compatible",
+			label: "Work",
+			apiKey: "test-only-key",
+			baseUrl: "https://api.x.ai/v1",
+		});
+	});
+
+	it("unlocks exactly the chosen maker's listed models", () => {
+		for (const author of makers) {
+			const input = modelConnectionInput.parse(
+				keyChoiceConnection(author, {
+					label: "",
+					apiKey: "test-only-key",
+					baseUrl: "",
+				}),
+			);
+			// The key's own catalog lists every maker's direct id; only the
+			// chosen maker's entries may be offered.
+			const connection = {
+				id: "55555555-5555-4555-8555-555555555555",
+				provider: input.provider,
+				label: input.label,
+				baseUrl: input.baseUrl,
+				revision: "r",
+				models: API_MODEL_LIST.flatMap((entry) =>
+					entry.directId
+						? [
+								{
+									id: entry.directId,
+									label: entry.label,
+									toolStreamingVerified: false,
+								},
+							]
+						: [],
+				),
+			} as PublicModelConnection;
+			const expected = API_MODEL_LIST.filter(
+				(entry) => entry.author === author && entry.directId,
+			).map((entry) => entry.label);
+			expect(connectionModels(connection, []).map((row) => row.label)).toEqual(
+				expected,
+			);
+			expect(availableConnectionModels([connection], [])).toHaveLength(
+				expected.length,
+			);
+			expect(
+				providerConnections(author, [connection]).map((row) => row.id),
+			).toEqual([connection.id]);
+		}
+	});
+
+	it("does not offer a direct key for makers without listed direct ids", () => {
+		for (const author of ["meta", "deepseek", "z-ai", "moonshotai", "qwen"])
+			expect(makers).not.toContain(author);
+	});
+});
+
+describe("SuperGrok subscription", () => {
+	const key = {
+		id: "55555555-5555-4555-8555-555555555555",
+		provider: "compatible",
+		label: "xAI",
+		baseUrl: "https://api.x.ai/v1",
+		revision: "r",
+		models: [
+			{ id: "grok-4.7", label: "Grok 4.7", toolStreamingVerified: false },
+		],
+	} as PublicModelConnection;
+	const plan = {
+		...key,
+		id: "66666666-6666-4666-8666-666666666666",
+		label: "SuperGrok",
+		subscription: { provider: "xai", status: "ready" },
+	} as PublicModelConnection;
+
+	it("serves the xAI section first, its models labelled as on the subscription", () => {
+		expect(
+			providerConnections("x-ai", [key, plan]).map((row) => row.id),
+		).toEqual([plan.id, key.id]);
+		expect(
+			availableConnectionModels([plan], []).map((model) => model.label),
+		).toEqual(["Grok 4.7 · SuperGrok"]);
 	});
 });

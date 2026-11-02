@@ -25,6 +25,7 @@ import {
 	TRANSCRIPT_PAGE_TURNS,
 	type TranscriptPage,
 } from "#/domain/transcript-page";
+import { xaiSubscriptionEnabled } from "#/domain/xai-subscription";
 import {
 	agentSessionMetadataForOwner,
 	agentSessionPageForOwner,
@@ -486,6 +487,7 @@ async function firstRunState(userId: string): Promise<FirstRunState> {
 	return {
 		githubConnected,
 		modelReady: account.status === "connected" || connections.length > 0,
+		...(xaiSubscriptionEnabled() ? { xaiSubscription: true } : {}),
 	};
 }
 
