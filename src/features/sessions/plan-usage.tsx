@@ -209,25 +209,35 @@ export function SectionPlanUsage({
 	label: string;
 	hint?: string;
 }) {
-	if (line.bars.length)
-		return (
-			<ModelPickerPlanUsage
-				bars={line.bars}
-				label={label}
-				hint={hint}
-				className={SECTION_LINE_CLASS}
-			/>
-		);
-	return line.pending ? (
-		<div
-			className={`model-picker-usage ${SECTION_LINE_CLASS}`}
-			aria-hidden="true"
-			data-pending=""
-		/>
-	) : null;
+	// Sits at the end of the section's heading row, so it never moves the list.
+	if (!line.bars.length) return null;
+	return (
+		<span
+			className="section-plan-usage"
+			aria-label={`${label} usage`}
+			title={hint}
+		>
+			{line.bars.map((bar) => {
+				const used = Math.min(100, Math.max(0, bar.usedPercent));
+				const left = 100 - used;
+				return (
+					<span
+						key={bar.id}
+						data-low={used >= PLAN_LOW_PERCENT || undefined}
+						title={
+							bar.resetsAt
+								? `${left}% left · Resets ${usageResetLabel(bar.resetsAt)}`
+								: `${left}% left`
+						}
+					>
+						{`${bar.label} ${left}% left`}
+					</span>
+				);
+			})}
+		</span>
+	);
 }
 
-const SECTION_LINE_CLASS = "model-picker-usage-section";
 
 /** A subscription plan's line in the model picker (ChatGPT by default). */
 export function ModelPickerPlanUsage({

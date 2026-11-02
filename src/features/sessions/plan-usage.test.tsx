@@ -75,10 +75,9 @@ describe("the Grok plan's line", () => {
 			/>,
 		);
 		expect(html).toContain('aria-label="Grok plan usage"');
-		expect(html).toContain(">Grok plan</span>");
-		expect(html).toContain("<span>90% left</span>");
-		expect(html).toContain('title="Resets ');
-		expect(html).not.toContain('data-tone="low"');
+		expect(html).toContain(">Week 90% left</span>");
+		expect(html).toContain('title="90% left · Resets ');
+		expect(html).not.toContain("data-low");
 	});
 });
 
@@ -88,15 +87,16 @@ describe("plan usage inside its picker section", () => {
 		{ id: "7d", label: "Week", usedPercent: 10, resetsAt: null },
 	];
 
-	it("shows the plan's line in the section's own style, low from 85% used", () => {
+	it("reads as short text in the heading row, low from 85% used", () => {
 		const html = renderToStaticMarkup(
 			<SectionPlanUsage line={{ bars, pending: false }} label="ChatGPT plan" />,
 		);
 		expect(html).toContain(
-			'class="model-picker-usage model-picker-usage-section" aria-label="ChatGPT plan usage"',
+			'class="section-plan-usage" aria-label="ChatGPT plan usage"',
 		);
-		expect(html).toContain("<span>15% left</span>");
-		expect(html.match(/data-tone="low"/g)).toHaveLength(1);
+		expect(html).toContain("5h 15% left");
+		expect(html).not.toContain("model-picker-usage-bar");
+		expect(html.match(/data-low/g)).toHaveLength(1);
 	});
 
 	it("shows a spent window as 0% left and low", () => {
@@ -109,20 +109,18 @@ describe("plan usage inside its picker section", () => {
 				label="Claude plan"
 			/>,
 		);
-		expect(html).toContain("<span>0% left</span>");
-		expect(html).toContain('data-tone="low"');
+		expect(html).toContain("5h 0% left");
+		expect(html).toContain("data-low");
 	});
 
-	it("keeps the line's height while the first reading is on the way", () => {
+	it("adds nothing while the first reading is on the way (the heading row holds its place)", () => {
 		const html = renderToStaticMarkup(
 			<SectionPlanUsage
 				line={{ bars: [], pending: true }}
 				label="Claude plan"
 			/>,
 		);
-		expect(html).toBe(
-			'<div class="model-picker-usage model-picker-usage-section" aria-hidden="true" data-pending=""></div>',
-		);
+		expect(html).toBe("");
 	});
 
 	it("shows nothing when there is no reading", () => {
@@ -136,7 +134,7 @@ describe("plan usage inside its picker section", () => {
 		).toBe("");
 	});
 
-	it("puts the Claude plan's line under the Claude subscription caption", () => {
+	it("puts the Claude plan's usage in the Claude Code heading row, above the caption", () => {
 		const html = renderToStaticMarkup(
 			<ClaudeCodeModels
 				models={[{ id: "claude-code:opus", label: "Opus" }]}
@@ -151,11 +149,12 @@ describe("plan usage inside its picker section", () => {
 				onSelect={() => {}}
 			/>,
 		);
-		const caption = html.indexOf("Claude subscription</p>");
+		const heading = html.indexOf("Claude Code</h3>");
 		const line = html.indexOf('aria-label="Claude plan usage"');
-		const list = html.indexOf('class="model-picker-list"');
-		expect(caption).toBeGreaterThan(-1);
-		expect(line).toBeGreaterThan(caption);
-		expect(list).toBeGreaterThan(line);
+		const caption = html.indexOf("Claude subscription</p>");
+		expect(heading).toBeGreaterThan(-1);
+		expect(line).toBeGreaterThan(heading);
+		expect(caption).toBeGreaterThan(line);
+		expect(html).toContain('class="model-section-head"');
 	});
 });

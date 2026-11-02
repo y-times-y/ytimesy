@@ -445,18 +445,18 @@ export function HarnessPicker({
 							/>
 						) : (
 							<>
-								<h3>
-									{favoritesOnly
-										? `Favorites · ${selected.name}`
-										: selected.name}
-								</h3>
-								{harnessId === "codex" ? (
-									<>
-										<p className="model-browser-caption">
-											ChatGPT subscription
-										</p>
+								<div className="model-section-head">
+									<h3>
+										{favoritesOnly
+											? `Favorites · ${selected.name}`
+											: selected.name}
+									</h3>
+									{harnessId === "codex" ? (
 										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
-									</>
+									) : null}
+								</div>
+								{harnessId === "codex" ? (
+									<p className="model-browser-caption">ChatGPT subscription</p>
 								) : null}
 								<div className="model-picker-list">
 									{connectionContent}
@@ -562,14 +562,16 @@ export function ClaudeCodeModels({
 }) {
 	return (
 		<>
-			<h3>Claude Code</h3>
+			<div className="model-section-head">
+				<h3>Claude Code</h3>
+				{usage}
+			</div>
 			<p
 				className="model-browser-caption"
 				title="Runs Claude Code on the chat's machine, billed to your Claude plan."
 			>
 				Claude subscription
 			</p>
-			{usage}
 			<div className="model-picker-list">
 				{models.map((model) => (
 					<div

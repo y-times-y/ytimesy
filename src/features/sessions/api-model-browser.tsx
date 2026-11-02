@@ -151,13 +151,16 @@ export function ApiModelBrowser({
 		return null;
 	return (
 		<>
-			<h3>
-				{plan && author === "x-ai"
-					? "Grok"
-					: author
-						? (AUTHOR_LABELS[author] ?? author)
-						: "Models across providers"}
-			</h3>
+			<div className="model-section-head">
+				<h3>
+					{plan && author === "x-ai"
+						? "Grok"
+						: author
+							? (AUTHOR_LABELS[author] ?? author)
+							: "Models across providers"}
+				</h3>
+				{plan && activeConnection ? usage : null}
+			</div>
 			{plan ? (
 				<p className="model-browser-caption">
 					{activeConnection
@@ -165,7 +168,6 @@ export function ApiModelBrowser({
 						: "Connect your Grok plan in Settings › Agents"}
 				</p>
 			) : null}
-			{plan && activeConnection ? usage : null}
 			{author && activeConnection && !plan ? (
 				<div className="model-source-row">
 					<span className="model-source-caption">Using</span>
