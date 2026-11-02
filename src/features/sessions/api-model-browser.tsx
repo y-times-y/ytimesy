@@ -2,13 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronRight, LockKeyhole } from "lucide-react";
 import { useState } from "react";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
+import { MenuSelect } from "#/components/ui/menu-select";
 import { API_MODEL_LIST } from "#/domain/api-model-list";
 import { AUTHOR_LABELS, visibleModelChoices } from "#/domain/browse-models";
 import {
@@ -144,7 +138,7 @@ export function ApiModelBrowser({
 				<div className="model-source-row">
 					<span className="model-source-caption">Using</span>
 					{available.length > 1 ? (
-						<Select
+						<MenuSelect
 							value={activeConnection.id}
 							onValueChange={(id) =>
 								setChosenConnections((current) => ({
@@ -152,31 +146,21 @@ export function ApiModelBrowser({
 									[author]: id,
 								}))
 							}
-						>
-							<SelectTrigger
-								className="model-source-trigger"
-								aria-label={`API connection for ${AUTHOR_LABELS[author]}`}
-							>
-								<SelectValue>{activeConnection.label}</SelectValue>
-							</SelectTrigger>
-							<SelectContent
-								position="popper"
-								side="bottom"
-								align="start"
-								className="model-source-menu"
-							>
-								{available.map((connection) => (
-									<SelectItem key={connection.id} value={connection.id}>
-										{connection.label} ·{" "}
-										{connection.subscription
-											? "Subscription"
-											: connection.provider === "openrouter"
-												? "OpenRouter"
-												: "Direct API"}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+							valueLabel={activeConnection.label}
+							options={available.map((connection) => ({
+								value: connection.id,
+								label: `${connection.label} · ${
+									connection.subscription
+										? "Subscription"
+										: connection.provider === "openrouter"
+											? "OpenRouter"
+											: "Direct API"
+								}`,
+							}))}
+							className="model-source-trigger"
+							menuClassName="model-source-menu"
+							aria-label={`API connection for ${AUTHOR_LABELS[author]}`}
+						/>
 					) : (
 						<span className="model-source-label">{activeConnection.label}</span>
 					)}

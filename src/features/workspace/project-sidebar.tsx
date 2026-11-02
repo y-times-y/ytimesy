@@ -5,6 +5,7 @@ import {
 	BookMarked,
 	Check,
 	ChevronRight,
+	Clock3,
 	GitMerge,
 	GitPullRequest,
 	GitPullRequestClosed,
@@ -299,6 +300,7 @@ export function ProjectSidebar({
 		return sidebarStatusGroup({
 			running: chatRunning(chat),
 			waitingOn: chatWaitingOn(chat),
+			waitsForSetup: chat.waitsForSetup,
 		});
 	}
 
@@ -310,6 +312,7 @@ export function ProjectSidebar({
 		const selected = chat.id === selectedChatId;
 		return sidebarChatStatus({
 			running,
+			waitsForSetup: chat.waitsForSetup,
 			workingSince: chat.workingSince,
 			waitingOn: chatWaitingOn(chat),
 			pr: chat.pr,
@@ -919,6 +922,17 @@ function SidebarChatStatusMark({
 					aria-label={label ?? undefined}
 				>
 					<MessageCircleQuestion size={14} strokeWidth={2} aria-hidden="true" />
+				</span>
+			);
+		case "setup":
+			return (
+				<span
+					className="sidebar-chat-status"
+					data-status="setup"
+					role="img"
+					aria-label={label ?? undefined}
+				>
+					<Clock3 size={14} strokeWidth={2} aria-hidden="true" />
 				</span>
 			);
 		case "failed":

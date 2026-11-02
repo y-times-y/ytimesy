@@ -7,13 +7,7 @@ import {
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import "./model-connections.css";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
+import { MenuSelect } from "#/components/ui/menu-select";
 import {
 	availableConnectionModels,
 	modelRouteId,
@@ -220,26 +214,19 @@ export function ModelConnections({
 								</div>
 								{visibleModels.length ? (
 									<div className="model-connection-verify">
-										<Select
+										<MenuSelect
 											value={model?.id ?? ""}
 											onValueChange={(value) =>
 												setSelected({ ...selected, [connection.id]: value })
 											}
-										>
-											<SelectTrigger
-												className="model-connection-select"
-												aria-label={`Model for ${connection.label}`}
-											>
-												<SelectValue placeholder="Choose a model" />
-											</SelectTrigger>
-											<SelectContent>
-												{visibleModels.map((row) => (
-													<SelectItem key={row.id} value={row.id}>
-														{row.label}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
+											options={visibleModels.map((row) => ({
+												value: row.id,
+												label: row.label,
+											}))}
+											placeholder="Choose a model"
+											className="model-connection-select"
+											aria-label={`Model for ${connection.label}`}
+										/>
 										{model?.toolStreamingVerified ? (
 											<span className="settings-badge" data-tone="ok">
 												Tools verified

@@ -1,13 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { type FormEvent, useRef, useState } from "react";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
+import { MenuSelect } from "#/components/ui/menu-select";
 import type { UsageWindowState } from "#/domain/infrastructure-usage";
 import { usageWarning } from "#/domain/usage-warning";
 import { InfrastructureStatements } from "./infrastructure-statements";
@@ -198,38 +192,34 @@ export function InfrastructureUsage() {
 					<h4>Admin allowance controls</h4>
 					<label htmlFor="usage-account">
 						Account
-						<Select value={target} onValueChange={setTarget}>
-							<SelectTrigger id="usage-account" aria-label="Account">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="self">My account</SelectItem>
-								{users.data
+						<MenuSelect
+							id="usage-account"
+							aria-label="Account"
+							value={target}
+							onValueChange={setTarget}
+							options={[
+								{ value: "self", label: "My account" },
+								...(users.data
 									?.filter((user) => user.id !== usage.data?.userId)
-									.map((user) => (
-										<SelectItem key={user.id} value={user.id}>
-											{user.name || user.email}
-										</SelectItem>
-									))}
-							</SelectContent>
-						</Select>
+									.map((user) => ({
+										value: user.id,
+										label: user.name || user.email,
+									})) ?? []),
+							]}
+						/>
 					</label>
 					<label htmlFor="usage-adjustment">
 						Adjustment
-						<Select
+						<MenuSelect
+							id="usage-adjustment"
+							aria-label="Adjustment"
 							value={kind}
 							onValueChange={(value) => setKind(value as typeof kind)}
-						>
-							<SelectTrigger id="usage-adjustment" aria-label="Adjustment">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="five_hour_limit">
-									Set 5-hour limit
-								</SelectItem>
-								<SelectItem value="weekly_limit">Set weekly limit</SelectItem>
-							</SelectContent>
-						</Select>
+							options={[
+								{ value: "five_hour_limit", label: "Set 5-hour limit" },
+								{ value: "weekly_limit", label: "Set weekly limit" },
+							]}
+						/>
 					</label>
 					<label>
 						Limit (USD)

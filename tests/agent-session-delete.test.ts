@@ -75,7 +75,9 @@ vi.mock("../src/server/config", () => {
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");
-	await db.exec("create table api_turn(session_id uuid,state text)");
+	await db.exec(
+		"create table api_turn(session_id uuid,state text); create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false,created_at timestamptz default now())",
+	);
 	for (const file of [
 		"20260913010000_enable_automatic_rls.sql",
 		"20260913193000_identity_and_projects.sql",

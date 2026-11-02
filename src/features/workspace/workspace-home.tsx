@@ -74,6 +74,7 @@ import {
 	chatHeaderTitle,
 	composerSubmitTarget,
 	fileChangesFromSessionItems,
+	heldForSetupMessage,
 	isTurnRunning,
 	lastAgentMessageText,
 	lastUserMessageText,
@@ -121,6 +122,7 @@ import {
 	unsentSendReturnsHere,
 	visibleSidebarChats,
 	withBusyChat,
+	withChatHeldForSetup,
 	withChatSent,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -288,6 +290,11 @@ type PendingSend = {
 	readonly baseBranch?: string;
 	/** Sent from the chat "Set up environment" opened: it becomes a setup chat. */
 	readonly environmentSetup?: boolean;
+	/**
+	 * Sent while the project's environment is not ready: the server holds it
+	 * in the chat (persisted) and sends it once the environment is ready.
+	 */
+	readonly heldForSetup?: boolean;
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
@@ -1865,8 +1872,113 @@ export function WorkspaceHome({
 		},
 		onError: (cause) => toast.error(publicFailureMessage(cause)),
 	});
+	/** Takes back a message still waiting in the open chat (queued, or held for setup). */
+	function removeQueuedMessage(messageId: string) {
+		const epoch = sessionEpoch.current;
+		const index = session.items.findIndex((item) => item.id === messageId);
+		const removed = session.items[index];
+		setSession((current) => ({
+			...current,
+			items: current.items.filter((item) => item.id !== messageId),
+		}));
+		void removeQueued({
+			data: { ...sessionScope(), messageId },
+		})
+			.then((next) => applySessionView(epoch, next))
+			.catch((cause) => {
+				toast.error(publicFailureMessage(cause));
+				// Put the queued message back where it was, in the same chat.
+				if (!removed || epoch !== sessionEpoch.current) return;
+				setSession((current) =>
+					current.items.some((item) => item.id === messageId)
+						? current
+						: {
+								...current,
+								items: [
+									...current.items.slice(0, index),
+									removed,
+									...current.items.slice(index),
+								],
+							},
+				);
+			});
+	}
+
+	/** Rewrites a waiting message; `environmentSetup` makes a held one a setup chat's request. */
+	function editQueuedMessage(
+		messageId: string,
+		text: string,
+		environmentSetup = false,
+	) {
+		const epoch = sessionEpoch.current;
+		const previous = session.items.find((item) => item.id === messageId);
+		setSession((current) => ({
+			...current,
+			items: current.items.map((item) =>
+				item.kind === "userMessage" && item.id === messageId
+					? { ...item, text }
+					: item,
+			),
+		}));
+		return updateQueued({
+			data: {
+				...sessionScope(),
+				messageId,
+				text,
+				...(environmentSetup ? { environmentSetup: true } : {}),
+			},
+		})
+			.then((next) => applySessionView(epoch, next))
+			.catch((cause) => {
+				toast.error(publicFailureMessage(cause));
+				if (!previous || epoch !== sessionEpoch.current) return;
+				setSession((current) => ({
+					...current,
+					items: current.items.map((item) =>
+						item.id === messageId ? previous : item,
+					),
+				}));
+			});
+	}
+
+	// The open chat's message held for setup, as the server stores it: it
+	// shows after a reload and on every device, and goes by itself once the
+	// environment is ready (the server sends it, tab open or not).
+	const storedHeld = heldForSetupMessage(session.items);
+	// The project whose setup the open chat shows in place (its banner steps aside).
+	const storedHeldProjectId =
+		storedHeld && selectedProject ? selectedProject.id : null;
+	const heldProjects = useMemo(
+		() =>
+			storedHeldProjectId
+				? new Set([...heldForSetup, storedHeldProjectId])
+				: heldForSetup,
+		[heldForSetup, storedHeldProjectId],
+	);
+	// The server sends a held message once the environment is ready; the open
+	// chat reads itself again then (its live updates usually bring it first).
+	const releasedHeldRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!storedHeld || !heldSendReleases(projectSetupStatus)) return;
+		if (releasedHeldRef.current === storedHeld.id) return;
+		releasedHeldRef.current = storedHeld.id;
+		const timer = window.setTimeout(() => {
+			void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+			void queryClient.invalidateQueries({
+				queryKey: ["session-reconciliation"],
+			});
+		}, 1500);
+		return () => window.clearTimeout(timer);
+	}, [projectSetupStatus, queryClient, storedHeld]);
 	/** "Set up with the agent": the held message becomes a setup chat's request. */
 	function setUpHeldWithAgent() {
+		if (storedHeld) {
+			const text = setupRequestKeeping(storedHeld.text);
+			void editQueuedMessage(storedHeld.id, text, true).then(() =>
+				heldSetup.mutate("plain"),
+			);
+			return;
+		}
 		const held = heldForSetupRef.current;
 		if (!held?.startsNewChat) return;
 		const text = setupRequestKeeping(held.text);
@@ -1876,8 +1988,19 @@ export function WorkspaceHome({
 	}
 	const heldView =
 		heldMessage && heldMessage.projectId === selectedProject?.id
-			? heldMessage
-			: null;
+			? { ...heldMessage, stored: false }
+			: storedHeld && selectedProject
+				? {
+						projectId: selectedProject.id,
+						messageId: storedHeld.id,
+						text: storedHeld.text,
+						// Its chat's first message: nothing but waiting messages in it.
+						startsNewChat: session.items.every(
+							(item) => item.kind === "userMessage" && item.queued,
+						),
+						stored: true,
+					}
+				: null;
 	const heldFailed =
 		projectSetupStatus === "failed" ||
 		Boolean(
@@ -2459,7 +2582,17 @@ export function WorkspaceHome({
 					excludedIds: view.blockedListedModelIds,
 				});
 			if (!resolvedModel) throw new Error("Select a model before sending.");
-			if (epoch === sessionEpoch.current) {
+			if (epoch === sessionEpoch.current && pending.heldForSetup) {
+				// Shown held at once; no turn starts until the environment is ready.
+				setSession((current) => ({
+					...current,
+					items: itemsWithSentMessage(current.items, pending).map((item) =>
+						item.kind === "userMessage" && item.id === pending.messageId
+							? { ...item, queued: true as const, heldForSetup: true as const }
+							: item,
+					),
+				}));
+			} else if (epoch === sessionEpoch.current) {
 				stopRequestedFor.current = null;
 				setSession((current) => {
 					const items = itemsWithSentMessage(current.items, pending);
@@ -2478,7 +2611,9 @@ export function WorkspaceHome({
 				queryClient.setQueryData(
 					["agent-sessions", scope.projectId],
 					(current: readonly SidebarChat[] | undefined) =>
-						withChatSent(current ?? [], chatId, pending.text),
+						pending.heldForSetup
+							? withChatHeldForSetup(current ?? [], chatId, pending.text)
+							: withChatSent(current ?? [], chatId, pending.text),
 				);
 			}
 			requested = true;
@@ -2874,7 +3009,7 @@ export function WorkspaceHome({
 
 	return (
 		<SavedDefaultBranchesContext.Provider value={savedDefaultBranches}>
-			<HeldForSetupContext.Provider value={heldForSetup}>
+			<HeldForSetupContext.Provider value={heldProjects}>
 				<div className="workspace-shell">
 					<CommandPalette
 						open={paletteOpen}
@@ -3062,6 +3197,17 @@ export function WorkspaceHome({
 																text={heldView.text}
 																showMessage={showMessage}
 																failed={heldFailed}
+																{...(heldView.stored
+																	? {
+																			onEdit: (text: string) =>
+																				void editQueuedMessage(
+																					heldView.messageId,
+																					text,
+																				),
+																			onRemove: () =>
+																				removeQueuedMessage(heldView.messageId),
+																		}
+																	: {})}
 																actions={{
 																	pending: heldSetup.isPending,
 																	onRetry: () => heldSetup.mutate("retry"),
@@ -3184,6 +3330,15 @@ export function WorkspaceHome({
 											// (a failed first send is retried flagged too).
 											const environmentSetup =
 												environmentSetupEpochRef.current === epoch;
+											const setupStatus =
+												projectSetup.data === null
+													? "missing"
+													: projectSetup.data?.status;
+											// Not ready: the server holds it in the chat until it is.
+											const heldForSetup =
+												Boolean(selectedProject) &&
+												setupStatus !== "missing" &&
+												sendWaitsForSetup(setupStatus);
 											return new Promise<ComposerSendResult>((settle) => {
 												const pending: PendingSend = {
 													epoch,
@@ -3213,15 +3368,14 @@ export function WorkspaceHome({
 													...(environmentSetup
 														? { environmentSetup: true }
 														: {}),
+													...(heldForSetup ? { heldForSetup: true } : {}),
 													settle,
 												};
-												const setupStatus =
-													projectSetup.data === null
-														? "missing"
-														: projectSetup.data?.status;
-												// Held while the project is set up, and after a failed
-												// setup too: the chat shows why, with Retry and Send anyway.
-												if (selectedProject && sendWaitsForSetup(setupStatus)) {
+												// A project with no environment record yet: held in this
+												// tab until there is one (the server cannot store it).
+												// Otherwise a send during setup, or after a failed setup,
+												// goes to the server, which keeps it in the chat.
+												if (selectedProject && setupStatus === "missing") {
 													if (heldForSetupRef.current)
 														abandonSend(heldForSetupRef.current, null);
 													heldForSetupRef.current = pending;
@@ -3256,70 +3410,8 @@ export function WorkspaceHome({
 												? { loading: olderLoading, onLoad: loadOlderItems }
 												: undefined
 										}
-										onRemoveQueued={(messageId) => {
-											const epoch = sessionEpoch.current;
-											const index = session.items.findIndex(
-												(item) => item.id === messageId,
-											);
-											const removed = session.items[index];
-											setSession((current) => ({
-												...current,
-												items: current.items.filter(
-													(item) => item.id !== messageId,
-												),
-											}));
-											void removeQueued({
-												data: { ...sessionScope(), messageId },
-											})
-												.then((next) => applySessionView(epoch, next))
-												.catch((cause) => {
-													toast.error(publicFailureMessage(cause));
-													// Put the queued message back where it was, in the same chat.
-													if (!removed || epoch !== sessionEpoch.current)
-														return;
-													setSession((current) =>
-														current.items.some((item) => item.id === messageId)
-															? current
-															: {
-																	...current,
-																	items: [
-																		...current.items.slice(0, index),
-																		removed,
-																		...current.items.slice(index),
-																	],
-																},
-													);
-												});
-										}}
-										onEditQueued={(messageId, text) => {
-											const epoch = sessionEpoch.current;
-											const previous = session.items.find(
-												(item) => item.id === messageId,
-											);
-											setSession((current) => ({
-												...current,
-												items: current.items.map((item) =>
-													item.kind === "userMessage" && item.id === messageId
-														? { ...item, text }
-														: item,
-												),
-											}));
-											void updateQueued({
-												data: { ...sessionScope(), messageId, text },
-											})
-												.then((next) => applySessionView(epoch, next))
-												.catch((cause) => {
-													toast.error(publicFailureMessage(cause));
-													if (!previous || epoch !== sessionEpoch.current)
-														return;
-													setSession((current) => ({
-														...current,
-														items: current.items.map((item) =>
-															item.id === messageId ? previous : item,
-														),
-													}));
-												});
-										}}
+										onRemoveQueued={removeQueuedMessage}
+										onEditQueued={editQueuedMessage}
 										onSendQueued={(messageId, text) => {
 											const epoch = sessionEpoch.current;
 											const previous = session.items.find(
