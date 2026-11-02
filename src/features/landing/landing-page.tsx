@@ -22,9 +22,10 @@ import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
 import { XaiMark } from "#/features/sessions/xai-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
+	BENCH_COLUMNS,
+	BENCH_ROWS,
 	BENCHMARK,
 	HARNESS_POST_PATH,
-	SAVING_VS_CODEX_MAX,
 } from "./landing-facts";
 import "./landing-page.css";
 
@@ -93,40 +94,7 @@ export function LandingPage() {
 	);
 }
 
-type Row = {
-	label: string;
-	detail: string;
-	ours: string;
-	codex: string;
-	/** Which side reads better, if either. */
-	lead: "ours" | "codex" | null;
-};
-
 function Benchmark() {
-	const { ours, codex, codexMax, tasks } = BENCHMARK;
-	const rows: Row[] = [
-		{
-			label: "Score",
-			detail: "Average over 5 attempts per task",
-			ours: `${ours.score.toFixed(1)}%`,
-			codex: `${codex.score.toFixed(1)}%`,
-			lead: null,
-		},
-		{
-			label: "Tasks solved at least once",
-			detail: "In any of the 5 attempts",
-			ours: `${ours.solved} of ${tasks}`,
-			codex: `${codex.solved} of ${tasks}`,
-			lead: "ours",
-		},
-		{
-			label: "Cost per attempt",
-			detail: "At OpenAI list prices",
-			ours: `$${ours.cost.toFixed(2)}`,
-			codex: `$${codex.cost.toFixed(2)}`,
-			lead: "codex",
-		},
-	];
 	return (
 		<section className="landing-bench" aria-labelledby="landing-bench-title">
 			<h2 id="landing-bench-title">
@@ -137,51 +105,64 @@ function Benchmark() {
 				</span>
 			</h2>
 			<div className="bench-card">
-				<table className="bench-table">
-					<thead>
-						<tr>
-							<th scope="col">
-								{BENCHMARK.final ? null : (
-									<span className="landing-chip landing-chip-small">
-										Preliminary
-									</span>
-								)}
-							</th>
-							<th scope="col" data-ours="true">
-								ytimesy
-								<small>GPT-6 Astra xhigh</small>
-							</th>
-							<th scope="col">
-								Codex
-								<small>GPT-6 Astra xhigh</small>
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{rows.map((row) => (
-							<tr key={row.label}>
-								<th scope="row">
-									{row.label}
-									<small>{row.detail}</small>
+				{/* Scrolls sideways inside the card on a phone, never the page. */}
+				<div className="bench-scroll">
+					<table className="bench-table">
+						<thead>
+							<tr>
+								<th scope="col">
+									{BENCHMARK.final ? null : (
+										<span className="landing-chip landing-chip-small">
+											Preliminary
+										</span>
+									)}
 								</th>
-								<td
-									data-ours="true"
-									data-lead={row.lead === "ours" || undefined}
-								>
-									{row.ours}
-								</td>
-								<td data-lead={row.lead === "codex" || undefined}>
-									{row.codex}
-								</td>
+								{BENCH_COLUMNS.map((run, index) => (
+									<th
+										key={run.job}
+										scope="col"
+										data-ours={index === 0 || undefined}
+									>
+										{run.agent}
+										<small>GPT-6 Astra {run.effort}</small>
+									</th>
+								))}
 							</tr>
-						))}
-					</tbody>
-				</table>
-				<p className="bench-note">
-					Codex with GPT-6 Astra max scores {codexMax.score.toFixed(1)}% at $
-					{codexMax.cost.toFixed(2)} per attempt. ytimesy matches that score at
-					about {SAVING_VS_CODEX_MAX}% lower cost.
-				</p>
+						</thead>
+						<tbody>
+							{BENCH_ROWS.map((row) => (
+								<tr key={row.label}>
+									<th scope="row">
+										{row.label}
+										<small>{row.detail}</small>
+									</th>
+									{row.cells.map((cell, index) => (
+										<td
+											key={BENCH_COLUMNS[index].job}
+											data-ours={index === 0 || undefined}
+											data-best={row.best === index || undefined}
+										>
+											{cell.href ? (
+												<a
+													href={cell.href}
+													className="bench-job"
+													target="_blank"
+													rel="noreferrer"
+												>
+													{cell.value}
+												</a>
+											) : (
+												cell.value
+											)}
+											{cell.ci ? <small>{cell.ci}</small> : null}
+										</td>
+									))}
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+				<p className="bench-note">{BENCHMARK.timeNote}</p>
 				<figure className="bench-chart">
 					<figcaption className="bench-chart-head">
 						<span>Score vs cost</span>

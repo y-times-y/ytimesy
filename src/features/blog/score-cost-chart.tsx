@@ -25,7 +25,7 @@ type Label = {
 	dx: number;
 	/** From the point to the first line's baseline. */
 	dy: number;
-	anchor: "start" | "end";
+	anchor: "start" | "middle" | "end";
 	lineGap: number;
 };
 
@@ -46,8 +46,6 @@ type Layout = {
 	ours: { radius: number; logoScale: number };
 	others: { radius: number };
 	labels: Record<string, Label>;
-	/** The dashed line down from our point to its cost; the wide chart only. */
-	costGuide: boolean;
 	scoreTitle: boolean;
 	tag: { height: number; scoreWidth: number; costWidth: number; text: number };
 };
@@ -73,7 +71,6 @@ const WIDE: Layout = {
 		"Codex-max": { dx: 14, dy: 24, anchor: "start", lineGap: 18 },
 		"Codex-xhigh": { dx: 14, dy: -8, anchor: "start", lineGap: 18 },
 	},
-	costGuide: true,
 	scoreTitle: true,
 	tag: { height: 22, scoreWidth: 50, costWidth: 54, text: 16 },
 };
@@ -86,22 +83,23 @@ const NARROW: Layout = {
 	right: 14,
 	top: 18,
 	bottom: 58,
+	// Down to $5.50, so Codex xhigh's label fits right of our cost line.
 	costFrom: 10.5,
-	costTo: 6.5,
-	costTicks: [10, 9, 8, 7],
+	costTo: 5.5,
+	costTicks: [10, 9, 8, 7, 6],
 	scoreFrom: 56,
 	scoreTo: 60,
 	ours: { radius: 13, logoScale: 0.54 },
 	others: { radius: 4.5 },
 	labels: {
-		"ytimesy-xhigh": { dx: -20, dy: -28, anchor: "end", lineGap: 16 },
+		// Centred above its point, clear of the score ticks at the left.
+		"ytimesy-xhigh": { dx: 0, dy: -44, anchor: "middle", lineGap: 16 },
 		"Codex-max": { dx: 12, dy: 24, anchor: "start", lineGap: 16 },
-		// Right-aligned to the plot's edge, below its point.
+		// Right-aligned to the plot's edge, below its point and clear of our cost line.
 		"Codex-xhigh": { dx: 0, dy: 24, anchor: "end", lineGap: 16 },
 	},
-	costGuide: false,
 	scoreTitle: false,
-	tag: { height: 18, scoreWidth: 44, costWidth: 0, text: 13 },
+	tag: { height: 18, scoreWidth: 44, costWidth: 44, text: 13 },
 };
 
 const pointKey = (point: ScoreCostPoint) => `${point.agent}-${point.effort}`;
@@ -319,33 +317,30 @@ function Drawing({
 					>
 						{percent(ours.score)}
 					</text>
-					{layout.costGuide ? (
-						<>
-							<line
-								x1={ours.px}
-								x2={ours.px}
-								y1={ours.py + layout.ours.radius + 1}
-								y2={plotBottom}
-								className="scc-guide"
-							/>
-							<rect
-								x={ours.px - layout.tag.costWidth / 2}
-								y={plotBottom - 6 - layout.tag.height}
-								width={layout.tag.costWidth}
-								height={layout.tag.height}
-								rx={6}
-								className="scc-tag-bg"
-							/>
-							<text
-								x={ours.px}
-								y={plotBottom - 12}
-								className="scc-tag"
-								textAnchor="middle"
-							>
-								{money(ours.cost)}
-							</text>
-						</>
-					) : null}
+					{/* The dashed line down to our cost, at every width. */}
+					<line
+						x1={ours.px}
+						x2={ours.px}
+						y1={ours.py + layout.ours.radius + 1}
+						y2={plotBottom}
+						className="scc-guide"
+					/>
+					<rect
+						x={ours.px - layout.tag.costWidth / 2}
+						y={plotBottom - 6 - layout.tag.height}
+						width={layout.tag.costWidth}
+						height={layout.tag.height}
+						rx={6}
+						className="scc-tag-bg"
+					/>
+					<text
+						x={ours.px}
+						y={plotBottom - 6 - layout.tag.height / 2 + layout.tag.text / 2 - 3}
+						className="scc-tag"
+						textAnchor="middle"
+					>
+						{money(ours.cost)}
+					</text>
 				</g>
 			) : null}
 

@@ -29,23 +29,52 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	const text = html.replace(/<[^>]+>/g, " ");
 	expect(text).toContain("AI Software Engineer in the Cloud");
 	expect(text).toContain("Terminal-Bench 4.0");
-	expect(text).toContain("58.5%");
-	expect(text).toContain("57.9%");
-	expect(text).toContain("49 of 66");
-	expect(text).toContain("46 of 66");
-	expect(text).toContain("$7.47");
-	expect(text).toContain("$7.12");
-	expect(text.replace(/\s+/g, " ")).toContain(
-		"Codex with GPT-6 Astra max scores 58.2% at $9.90 per attempt. ytimesy matches that score at about 25% lower cost.",
+	const flat = text.replace(/\s+/g, " ");
+	// The post's three columns and nine rows.
+	expect(flat).toContain(
+		"ytimesy GPT-6 Astra xhigh Codex GPT-6 Astra max Codex GPT-6 Astra xhigh",
 	);
-	// Final numbers, and no speed claim.
+	for (const value of [
+		"58.5% 47.9–68.8",
+		"58.2% 47.6–68.5",
+		"57.9% 47.3–68.2",
+		"— −0.3 −6.1 to +4.8 −0.6 −6.4 to +5.5",
+		"49 of 66 47 of 66 46 of 66",
+		"$7.47 $9.90 $7.12",
+		"$2,466 $3,267 $2,351",
+		"3.34M 4.56M 3.60M",
+		"48k 73k 45k",
+		"33.2 min* 43.4 min 33.3 min",
+		"6aacc762 0f01715e caf6e433",
+		"* at OpenAI speed; the difference from Codex xhigh is within noise",
+		"Terminal-Bench 4.0 · GPT-6 Astra · all 66 tasks · 5 attempts each",
+	])
+		expect(flat).toContain(value);
+	// The best value in each row is marked, whichever column it is in.
+	const best = [
+		...html.matchAll(/<td[^>]*data-best="true"[^>]*>(.*?)<\/td>/g),
+	].map((m) => m[1].replace(/<small>.*?<\/small>/, "").replace(/<[^>]+>/g, ""));
+	expect(best).toEqual([
+		"58.5%",
+		"49 of 66",
+		"$7.12",
+		"$2,351",
+		"3.34M",
+		"45k",
+	]);
+	// The Codex max sentence is gone: the table shows max.
+	expect(flat).not.toContain("Codex with GPT-6 Astra max scores");
 	expect(text).not.toContain("Preliminary");
-	expect(text).not.toMatch(/Time per|min\b/);
 	expect(html).toContain('href="/blog/harness-1-0"');
 	expect(text).toContain("Read how we built it");
-	expect(html).toContain(
-		'href="https://hub.harborframework.com/jobs/6aacc762-8e07-4be2-ab4e-17495141235d"',
-	);
+	for (const job of [
+		"6aacc762-8e07-4be2-ab4e-17495141235d",
+		"0f01715e-2f98-40e3-836f-1ac4fdce39a4",
+		"caf6e433-9fff-4475-b0bc-977f14ac7052",
+	])
+		expect(html).toContain(
+			`href="https://hub.harborframework.com/jobs/${job}"`,
+		);
 	// The score-vs-cost chart, wide and narrow.
 	expect(html.match(/class="scc-svg/g)?.length).toBe(2);
 	expect(html).toContain('href="/auth/sign-in"');

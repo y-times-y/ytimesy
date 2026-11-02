@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
+	BENCH_ROWS,
 	BENCHMARK,
 	HARBOR_JOBS,
 	HARNESS_POST_PATH,
-	SAVING_VS_CODEX_MAX,
 	SCORE_COST_POINTS,
 } from "./landing-facts";
 
@@ -14,48 +14,72 @@ const post = readFileSync(
 	"utf8",
 );
 
-/** A results-table row's cell texts: ytimesy, Codex max, Codex xhigh. */
-function row(label: string): string[] {
-	const match = post.match(
-		new RegExp(`<th scope="row">${label}</th>(.*?)</tr>`),
-	);
-	if (!match) throw new Error(`no row ${label}`);
-	return [...match[1].matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((cell) =>
-		cell[1]
-			.replace(/<span class="ci">.*?<\/span>/g, "")
-			.replace(/<[^>]+>/g, "")
-			.trim(),
+const text = (html: string) => html.replace(/<[^>]+>/g, "").trim();
+
+/** The post's results-table rows: label, then each cell as the front page holds it. */
+function postRows() {
+	const table = post.match(/<table class="rt">([\s\S]*?)<\/table>/)?.[1];
+	if (!table) throw new Error("no results table");
+	return [...table.matchAll(/<tr><th scope="row">(.*?)<\/th>(.*?)<\/tr>/g)].map(
+		([, label, body]) => {
+			const tds = [...body.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1]);
+			const best = tds.findIndex((td) => td.includes('class="best"'));
+			return {
+				label,
+				best: best === -1 ? null : best,
+				cells: tds.map((td) => {
+					const ci = td.match(/<span class="ci">(.*?)<\/span>/)?.[1];
+					const href = td.match(/<a href="([^"]+)"/)?.[1];
+					return {
+						value: text(td.replace(/<span class="ci">.*?<\/span>/, "")),
+						...(ci ? { ci } : {}),
+						...(href ? { href } : {}),
+					};
+				}),
+			};
+		},
 	);
 }
 
-it("front-page numbers match the post's results table", () => {
-	const { ours, codex, codexMax, tasks } = BENCHMARK;
-	expect(row("Score")).toEqual([
-		`${ours.score.toFixed(1)}%`,
-		`${codexMax.score.toFixed(1)}%`,
-		`${codex.score.toFixed(1)}%`,
+it("the front-page table is the post's results table: rows, cells, intervals, links and best values", () => {
+	const rows = postRows();
+	expect(rows.map((row) => row.label)).toEqual([
+		"Score",
+		"vs ytimesy",
+		"Tasks solved at least once",
+		"Cost per attempt",
+		"Total cost",
+		"Input tokens per attempt",
+		"Output tokens per attempt",
+		"Time per attempt",
+		"Harbor job",
 	]);
-	expect(row("Tasks solved at least once")).toEqual([
-		`${ours.solved} of ${tasks}`,
-		`${codexMax.solved} of ${tasks}`,
-		`${codex.solved} of ${tasks}`,
-	]);
-	expect(row("Cost per attempt")).toEqual([
-		`$${ours.cost.toFixed(2)}`,
-		`$${codexMax.cost.toFixed(2)}`,
-		`$${codex.cost.toFixed(2)}`,
-	]);
+	expect(
+		BENCH_ROWS.map(({ label, cells, best }) => ({ label, cells, best })),
+	).toEqual(rows);
+});
+
+it("the column headers, setup line and time footnote", () => {
+	expect(post).toContain(
+		'<th class="us">ytimesy<small>GPT-6 Astra xhigh</small></th><th>Codex<small>GPT-6 Astra max</small></th><th>Codex<small>GPT-6 Astra xhigh</small></th>',
+	);
 	expect(BENCHMARK.final).toBe(true);
 	expect(BENCHMARK.setup).toBe(
-		"Terminal-Bench 4.0 · GPT-6 Astra xhigh for both · all 66 tasks · 5 attempts each",
+		"Terminal-Bench 4.0 · GPT-6 Astra · all 66 tasks · 5 attempts each",
 	);
-	expect(BENCHMARK).not.toHaveProperty("ours.minutes");
+	expect(BENCHMARK.timeNote).toBe(
+		"* at OpenAI speed; the difference from Codex xhigh is within noise",
+	);
+	// The post's footnote says both things.
+	expect(post).toContain("* Converted to OpenAI speed");
+	expect(post).toContain(
+		"The difference from Codex with GPT-6 Astra at xhigh is within noise, so no value in this row is underlined.",
+	);
 });
 
 it("links the public Harbor jobs the post links", () => {
 	expect(BENCHMARK.runUrl).toBe(HARBOR_JOBS.ours);
 	for (const url of Object.values(HARBOR_JOBS)) expect(post).toContain(url);
-	expect(post).toContain("6aacc762");
 	expect(HARNESS_POST_PATH).toBe("/blog/harness-1-0");
 });
 
@@ -79,13 +103,4 @@ it("the chart's points round to the table's numbers", () => {
 	expect(ours.href).toBe(HARBOR_JOBS.ours);
 	expect(max.href).toBe(HARBOR_JOBS.codexMax);
 	expect(xhigh.href).toBe(HARBOR_JOBS.codexXhigh);
-});
-
-it("the cost note says 'about 25% lower' only because it is", () => {
-	// $7.47 vs $9.90 is 24.5% lower.
-	expect(1 - BENCHMARK.ours.cost / BENCHMARK.codexMax.cost).toBeCloseTo(
-		0.245,
-		3,
-	);
-	expect(SAVING_VS_CODEX_MAX).toBe(25);
 });
