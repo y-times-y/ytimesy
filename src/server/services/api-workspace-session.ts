@@ -3,7 +3,7 @@ import {
 	assertApiContextFits,
 	nextTurnMessages,
 } from "#/domain/api-conversation";
-import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
+import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import {
 	claudeCodeListedModels,
@@ -16,7 +16,10 @@ import type {
 	IncomingAttachment,
 	MessageAttachment,
 } from "#/domain/message-attachment";
-import { parseModelRouteId } from "#/domain/model-connection";
+import {
+	connectionModelSpeeds,
+	parseModelRouteId,
+} from "#/domain/model-connection";
 import type { SendBlocker } from "#/domain/send-blocked";
 import {
 	sendWasQueued,
@@ -290,10 +293,9 @@ export async function sendApiWorkspaceTask(
 			};
 	if (
 		settings.speed &&
-		(connection.provider !== "openrouter" ||
-			!apiModelSpeeds(selected.modelId).some(
-				(speed) => speed.id === settings.speed,
-			))
+		!connectionModelSpeeds(connection, selected.modelId).some(
+			(speed) => speed.id === settings.speed,
+		)
 	)
 		throw new Error(
 			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
