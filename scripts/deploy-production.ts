@@ -196,10 +196,13 @@ function run(command: string, args: string[], input?: string, env?: object) {
 		});
 		console.log(output);
 	} catch (error) {
-		if (!input) {
-			const { stdout, stderr } = error as { stdout?: string; stderr?: string };
-			console.error(`${stdout ?? ""}${stderr ?? ""}`);
-		}
+		const { stdout, stderr } = error as { stdout?: string; stderr?: string };
+		let shown = `${stdout ?? ""}${stderr ?? ""}`;
+		// Calls with secret input show wrangler's error with every value masked.
+		if (input)
+			for (const value of Object.values(secrets))
+				if (value.length >= 4) shown = shown.split(value).join("[redacted]");
+		console.error(shown);
 		throw new Error(
 			"Production deployment failed. Secret material was not logged.",
 		);
@@ -233,7 +236,25 @@ const webBuild = (args: string[], input?: string) =>
 		input,
 	);
 webBuild(["deploy"]);
-webBuild(["secret", "bulk"], JSON.stringify(secrets));
+// A name the build already sets as a plain variable (YTIMESY_ENVIRONMENT)
+// cannot also be a secret: Cloudflare rejects the whole upload.
+const webVars = new Set(
+	Object.keys(
+		(
+			JSON.parse(await readFile("dist/server/wrangler.json", "utf8")) as {
+				vars?: Record<string, unknown>;
+			}
+		).vars ?? {},
+	),
+);
+webBuild(
+	["secret", "bulk"],
+	JSON.stringify(
+		Object.fromEntries(
+			Object.entries(secrets).filter(([name]) => !webVars.has(name)),
+		),
+	),
+);
 console.log(
 	process.env.YTIMESY_GO_LIVE === "1"
 		? `Production deployed and live at ${secrets.APP_URL}.`
