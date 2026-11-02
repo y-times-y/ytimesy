@@ -71,7 +71,10 @@ function loggedPath(url: URL) {
 	return url.pathname.replace(/[^A-Za-z0-9/._-]/g, "_").slice(0, 120);
 }
 
-function upstreamOutcome(response: Response): ClaudeCodeUpstreamOutcome | null {
+/** What a response from Anthropic says about the subscription, if anything. */
+export function claudeCodeUpstreamOutcome(
+	response: Response,
+): ClaudeCodeUpstreamOutcome | null {
 	if (response.status === 401 || response.status === 403)
 		return { kind: "refused", status: response.status };
 	if (response.status !== 429) return null;
@@ -207,7 +210,7 @@ export async function proxyClaudeCode(
 		log("Claude Code proxy refused an upstream redirect.", { route });
 		return new Response(null, { status: 502 });
 	}
-	const outcome = upstreamOutcome(response);
+	const outcome = claudeCodeUpstreamOutcome(response);
 	if (outcome) {
 		log("Claude Code upstream refused.", { status: response.status, route });
 		await options.onUpstream?.(grant, outcome).catch(() => undefined);
