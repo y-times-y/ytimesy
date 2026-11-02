@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { grokPlanUsageBars } from "#/domain/grok-plan-usage";
 import { ClaudeCodeModels } from "./harness-picker";
 import {
 	CLAUDE_PLAN_USAGE_HINT,
@@ -47,6 +48,37 @@ describe("model picker plan usage", () => {
 		expect(html).toContain("<span>10% left</span>");
 		expect(html.match(/data-tone="low"/g)).toHaveLength(1);
 		expect(html).not.toContain("ChatGPT");
+	});
+});
+
+describe("the Grok plan's line", () => {
+	it("shows its weekly window from a reading, with the reset in a tooltip", () => {
+		const html = renderToStaticMarkup(
+			<SectionPlanUsage
+				line={{
+					bars: grokPlanUsageBars(
+						{
+							windows: [
+								{
+									id: "weekly",
+									usedPercent: 10,
+									resetsAt: Date.now() + 3_600_000,
+								},
+							],
+							readAt: Date.now(),
+						},
+						Date.now(),
+					),
+					pending: false,
+				}}
+				label="Grok plan"
+			/>,
+		);
+		expect(html).toContain('aria-label="Grok plan usage"');
+		expect(html).toContain(">Grok plan</span>");
+		expect(html).toContain("<span>90% left</span>");
+		expect(html).toContain('title="Resets ');
+		expect(html).not.toContain('data-tone="low"');
 	});
 });
 

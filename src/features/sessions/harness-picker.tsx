@@ -47,6 +47,7 @@ import {
 	CLAUDE_PLAN_USAGE_HINT,
 	SectionPlanUsage,
 	useClaudePlanUsageLine,
+	useGrokPlanUsageLine,
 	usePlanUsageLine,
 	usePrefetchPlanUsage,
 } from "./plan-usage";
@@ -142,7 +143,6 @@ export function HarnessPicker({
 	const claudeConnected =
 		claudeData?.status === "connected" || claudeData?.status === "limited";
 	const claudeUsage = useClaudePlanUsageLine(open, claudeConnected);
-	const prefetchPlanUsage = usePrefetchPlanUsage(claudeConnected);
 	const [apiProvider, setApiProvider] = useState("openai");
 	// The Grok subscription's own rail entry: the xAI models, on the plan.
 	const [grokView, setGrokView] = useState(false);
@@ -153,6 +153,11 @@ export function HarnessPicker({
 	});
 	const grokSubscription = connections.data?.some(
 		(connection) => connection.subscription?.provider === "xai",
+	);
+	const grokUsage = useGrokPlanUsageLine(open, Boolean(grokSubscription));
+	const prefetchPlanUsage = usePrefetchPlanUsage(
+		claudeConnected,
+		Boolean(grokSubscription),
 	);
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -427,6 +432,7 @@ export function HarnessPicker({
 											: "keys"
 										: undefined
 								}
+								usage={<SectionPlanUsage line={grokUsage} label="Grok plan" />}
 								search={search}
 								selectedRoute={modelId}
 								onSelect={(id) => {

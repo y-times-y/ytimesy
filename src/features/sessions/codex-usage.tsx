@@ -3,6 +3,7 @@ import { usageResetLabel } from "#/domain/usage-warning";
 import {
 	CLAUDE_PLAN_USAGE_HINT,
 	useClaudePlanUsageLine,
+	useGrokPlanUsageLine,
 	usePlanUsageBars,
 } from "./plan-usage";
 
@@ -98,17 +99,15 @@ export function ClaudeSubscriptionUsage() {
 	);
 }
 
-/** xAI shares no plan usage with apps; say so instead of showing numbers. */
+/** Settings' Grok plan usage: the picker's reading, read afresh past five minutes. */
 export function GrokSubscriptionUsage() {
+	const line = useGrokPlanUsageLine(true, true);
 	return (
-		<section
-			className="settings-group settings-group-body codex-subscription-usage"
-			aria-label="Grok plan usage"
-		>
-			<p className="settings-row-title">Grok plan usage</p>
-			<p className="settings-row-meta">
-				xAI doesn't share plan usage with apps. See it in the Grok app.
-			</p>
-		</section>
+		<PlanUsageCard
+			title="Grok plan usage"
+			label="Grok plan usage"
+			bars={line.bars}
+			pending={line.pending}
+		/>
 	);
 }
