@@ -32,7 +32,7 @@ export function desktopViewerCredential(vmId: string) {
 }
 
 /**
- * x11vnc's VNC password (VNC keeps 8 characters): the guest's x11vnc asks
+ * The desktop's VNC password (VNC keeps 8 characters): the guest's VNC server asks
  * every client for it, and only the owner's viewer is given it.
  */
 export function desktopVncPassword(vmId: string) {

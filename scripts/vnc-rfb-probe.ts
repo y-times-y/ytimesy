@@ -1,7 +1,7 @@
 /**
- * RFB handshake against x11vnc's Unix socket: the security types the server
+ * RFB handshake against the VNC server's Unix socket: the security types the server
  * offers. Reads exactly (the banner can arrive in pieces), retries while
- * x11vnc is still starting, and reports a 3.3 server's single type or a
+ * the server is still starting, and reports a 3.3 server's single type or a
  * refusal reason, so a missing password shows up as "types=1", never as a
  * broken pipe.
  */
@@ -54,4 +54,66 @@ export function rfbRequiresPassword(answer: string): boolean {
 	return (
 		!types.includes(1) && types.some((t) => t === 2 || t === 18 || t === 19)
 	);
+}
+
+/**
+ * Full VNC password authentication over a viewer WebSocket (the edge, the
+ * proxy, then the VNC server): true only when the server accepts `password`.
+ * Uses noVNC's own DES (OpenSSL 3 dropped it; not in its package exports).
+ */
+export async function vncPasswordAuthenticates(
+	url: string,
+	headers: Record<string, string>,
+	password: string,
+) {
+	const { DESECBCipher } = (await import(
+		new URL("../node_modules/@novnc/novnc/core/crypto/des.js", import.meta.url)
+			.href
+	)) as {
+		DESECBCipher: {
+			importKey(key: number[]): {
+				encrypt(a: unknown, x: Uint8Array): Uint8Array;
+			};
+		};
+	};
+	const { default: WebSocket } = await import("ws");
+	return new Promise<boolean>((resolve) => {
+		const socket = new WebSocket(url, ["binary"], { headers });
+		let buffer = Buffer.alloc(0);
+		let stage = 0;
+		const done = (ok: boolean) => {
+			clearTimeout(timer);
+			socket.terminate();
+			resolve(ok);
+		};
+		const timer = setTimeout(() => done(false), 15_000);
+		socket.on("error", () => done(false));
+		socket.on("unexpected-response", () => done(false));
+		socket.on("close", () => done(false));
+		socket.on("message", (data: Buffer) => {
+			buffer = Buffer.concat([buffer, data]);
+			if (stage === 0 && buffer.length >= 12) {
+				buffer = buffer.subarray(12);
+				socket.send(Buffer.from("RFB 003.008\n"));
+				stage = 1;
+			}
+			if (stage === 1 && buffer.length >= 1 && buffer.length >= 1 + buffer[0]) {
+				const types = [...buffer.subarray(1, 1 + buffer[0])];
+				buffer = buffer.subarray(1 + buffer[0]);
+				if (!types.includes(2) || types.includes(1)) return done(false);
+				socket.send(Buffer.from([2]));
+				stage = 2;
+			}
+			if (stage === 2 && buffer.length >= 16) {
+				const challenge = new Uint8Array(buffer.subarray(0, 16));
+				buffer = buffer.subarray(16);
+				const key = DESECBCipher.importKey(
+					password.split("").map((c) => c.charCodeAt(0)),
+				);
+				socket.send(Buffer.from(key.encrypt({ name: "DES-ECB" }, challenge)));
+				stage = 3;
+			}
+			if (stage === 3 && buffer.length >= 4) done(buffer.readUInt32BE(0) === 0);
+		});
+	});
 }

@@ -10,7 +10,7 @@ import { privateDirectoryShell } from "#/domain/posix-command";
 export const DESKTOP_PRIVATE_DIRECTORY = "/tmp/ytimesy-desktop-private";
 export const DESKTOP_VIEWER_CREDENTIAL_PATH = `${DESKTOP_PRIVATE_DIRECTORY}/viewer.auth`;
 export const DESKTOP_XAUTHORITY = `${DESKTOP_PRIVATE_DIRECTORY}/Xauthority`;
-/** The VNC password the runtime drops; x11vnc asks every client for it. */
+/** The VNC password the runtime drops; the VNC server asks every client for it. */
 export const DESKTOP_VNC_PASSWORD_PATH = `${DESKTOP_PRIVATE_DIRECTORY}/vnc.password`;
 const DESKTOP_AUTH_APPLIED = `${DESKTOP_PRIVATE_DIRECTORY}/viewer.applied`;
 
@@ -273,6 +273,10 @@ ${DESKTOP_WAIT_UNTIL}
 # socket when a viewer connects.
 VNC_DIR="\${HOME}/.ytimesy/vnc"
 VNC_SOCKET="$VNC_DIR/rfb.sock"
+# TigerVNC's server binary itself: Ubuntu's x0vncserver and x0tigervncserver
+# are Perl wrappers that copy the password file at start, so a new password
+# would never apply.
+VNC_TIGER=/usr/bin/X0tigervnc
 DESK_PROXY_STARTED=0
 # The viewer port is published at the edge, so it only listens publicly behind
 # the server-held credential (BasicHTTPAuth). Without one it stays local. The
@@ -346,9 +350,9 @@ if pgrep -f '[X]vfb :0 .*-ac' >/dev/null 2>&1; then
     pkill -TERM -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1 || true
     wait_until "! pgrep -x 'chrome|chromium|chromium-browse'"
   fi
-  pkill -x x11vnc >/dev/null 2>&1 || true
+  pkill -x 'x11vnc|X0tigervnc' >/dev/null 2>&1 || true
   pkill -x Xvfb >/dev/null 2>&1 || true
-  wait_until '! pgrep -x Xvfb && ! pgrep -x x11vnc'
+  wait_until "! pgrep -x Xvfb && ! pgrep -x 'x11vnc|X0tigervnc'"
 fi
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   (umask 077; touch "$XAUTH")
@@ -377,19 +381,25 @@ if ! find_chrome_bin >/dev/null 2>&1; then
 elif [ "$CHROME_REOPEN" = 1 ] && ! pgrep -x 'chrome|chromium|chromium-browse' >/dev/null 2>&1; then
   nohup "$(find_chrome_bin)" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --restore-last-session --window-size=1240,780 --window-position=100,19 --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &
 fi
-# VNC listens only on a Unix socket in a 0700 directory, never on TCP (IPv4
-# or IPv6: x11vnc's -rfbport 0 alone still listened on [::]:5900), and asks
-# for the VNC password the runtime drops (the owner's viewer gets it from the
-# server); the proxy below is its one client. x11vnc rereads the password
-# file as each client connects (read:), so a new password needs no restart;
-# one on TCP, or one that does not reread its file, restarts (the display
-# and Chrome stay).
-# -sb 0: after a minute without changes x11vnc naps 1.5 s between polls, so
-# the first frame of a viewer opened after a quiet spell (every copy of a
-# template) waited for the nap: about 2.0 s from connect, 0.5 s with -sb 0
-# on dev. One started without it restarts while no viewer is connected.
+# VNC listens only on a Unix socket in a 0700 directory, never on TCP, and
+# asks for the VNC password the runtime drops (the owner's viewer gets it
+# from the server); the proxy above is its one client.
+# The server is TigerVNC's X0tigervnc: it pushes frames as the screen changes
+# and paces them to the link (continuous updates and fences), where x11vnc
+# waits for the viewer to ask for each one. On dev that was 132 vs 31 frames/s
+# while scrolling and 35 vs 59 ms from a key to the screen. It reads its
+# password file as each client authenticates, so a new password needs no
+# restart; the file is the plain one in TigerVNC's obfuscated format.
+# An x11vnc (an older template or image) hands over while no viewer is
+# connected, or at once if it is on TCP or never rereads its password. An
+# image without TigerVNC keeps x11vnc: -rfbport 0 -rfbportv6 -1 -noipv6
+# (-rfbport 0 alone still listened on [::]:5900), its password file reread
+# (read:), and -sb 0 (it otherwise naps 1.5 s between polls after an idle
+# minute, which delayed a template copy's first frame by that much).
+# The display and Chrome stay whatever restarts.
 VNC_PASS_DROP=${DESKTOP_VNC_PASSWORD_PATH}
 VNC_PASS_FILE="$DESK_PRIVATE/vnc.passwd"
+VNC_PASS_OBF="$DESK_PRIVATE/vnc.obf"
 VNC_APPLIED="$DESK_PRIVATE/vnc.applied"
 if [ -f "$VNC_PASS_DROP" ] && [ ! -L "$VNC_PASS_DROP" ]; then
   (umask 077; head -n 1 "$VNC_PASS_DROP" > "$VNC_PASS_FILE.new")
@@ -404,20 +414,42 @@ vnc_on_tcp() { ss -ltnH 2>/dev/null | grep -qE ':590[0-9][[:space:]]'; }
 vnc_rereads() { pgrep -f "[x]11vnc .*-passwdfile read:$VNC_PASS_FILE " >/dev/null 2>&1; }
 vnc_wakes() { pgrep -f "[x]11vnc .*-passwdfile read:$VNC_PASS_FILE .*-sb 0" >/dev/null 2>&1; }
 vnc_viewed() { ss -xH state connected 2>/dev/null | grep -qF "$VNC_SOCKET "; }
-if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads || { ! vnc_wakes && ! vnc_viewed; }; }; then
-  pkill -x x11vnc >/dev/null 2>&1 || true
-  wait_until '! pgrep -x x11vnc'
-fi
-if ! pgrep -x x11vnc >/dev/null 2>&1; then
-  install -d -m 0700 "$VNC_DIR"
-  rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "read:$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 -sb 0 >/tmp/ytimesy-desk.log 2>&1 &
-  wait_until '[ -S "$VNC_SOCKET" ]'
+stop_vnc() {
+  pkill -x "$1" >/dev/null 2>&1 || true
+  wait_until "! pgrep -x $1"
+}
+if [ -x "$VNC_TIGER" ] && command -v vncpasswd >/dev/null 2>&1; then
+  if [ ! -s "$VNC_PASS_OBF" ] || [ "$(cat "$VNC_APPLIED" 2>/dev/null)" != "$VNC_PASS_DIGEST" ]; then
+    (umask 077; vncpasswd -f < "$VNC_PASS_FILE" > "$VNC_PASS_OBF.new")
+    mv -f "$VNC_PASS_OBF.new" "$VNC_PASS_OBF"
+  fi
+  if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads || ! vnc_viewed; }; then
+    stop_vnc x11vnc
+  fi
+  if pgrep -x X0tigervnc >/dev/null 2>&1 && vnc_on_tcp; then
+    stop_vnc X0tigervnc
+  fi
+  if ! pgrep -x 'x11vnc|X0tigervnc' >/dev/null 2>&1; then
+    install -d -m 0700 "$VNC_DIR"
+    rm -f "$VNC_SOCKET"
+    XAUTHORITY="$XAUTH" "$VNC_TIGER" -display :0 -rfbport -1 -rfbunixpath "$VNC_SOCKET" -rfbunixmode 0600 -SecurityTypes VncAuth -PasswordFile "$VNC_PASS_OBF" -AlwaysShared=1 -DisconnectClients=0 -AcceptSetDesktopSize=0 >/tmp/ytimesy-desk.log 2>&1 &
+    wait_until '[ -S "$VNC_SOCKET" ]'
+  fi
+else
+  if pgrep -x x11vnc >/dev/null 2>&1 && { vnc_on_tcp || ! vnc_rereads || { ! vnc_wakes && ! vnc_viewed; }; }; then
+    stop_vnc x11vnc
+  fi
+  if ! pgrep -x x11vnc >/dev/null 2>&1; then
+    install -d -m 0700 "$VNC_DIR"
+    rm -f "$VNC_SOCKET"
+    x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "read:$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 -sb 0 >/tmp/ytimesy-desk.log 2>&1 &
+    wait_until '[ -S "$VNC_SOCKET" ]'
+  fi
 fi
 printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
 if vnc_on_tcp; then
-  pkill -x x11vnc >/dev/null 2>&1 || true
-  echo "ytimesy: x11vnc listened on TCP; it was stopped and the desktop refused" >&2
+  pkill -x 'x11vnc|X0tigervnc' >/dev/null 2>&1 || true
+  echo "ytimesy: a VNC server listened on TCP; it was stopped and the desktop refused" >&2
   exit 1
 fi
 # The proxy started above has had the display's startup to come up.
