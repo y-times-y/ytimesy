@@ -150,72 +150,136 @@ export async function touchWorkspaceRetention(
 	);
 }
 
+/**
+ * A recycle that stopped safely before retiring anything: the source VM is
+ * kept, the row backs off (retry_after), and a later tick tries again. Not an
+ * operational failure: nothing here needs a human.
+ */
+export class RecycleDeferred extends Error {
+	override name = "RecycleDeferred";
+}
+
+/** Provider calls in flight per verification walk; the walk is otherwise one round trip per file. */
+const VERIFICATION_CONCURRENCY = 8;
+/** Per walk. Two walks and the snapshot run inside one 90-second VM lease (usage-admission LEASE_SECONDS). */
+const VERIFICATION_BUDGET_MS = 30_000;
+
 /** Hash every regular file in the project roots, including ignored files; fail closed on unsupported entries or limits. */
 export async function retainedTreeDigest(vm: Vm, roots: string[]) {
-	const digest = createHash("sha256");
 	let entries = 0;
 	let bytes = 0;
-	const deadline = Date.now() + 30_000;
-	const walk = async (path: string): Promise<void> => {
+	let stopped = false;
+	const deadline = Date.now() + VERIFICATION_BUDGET_MS;
+	const call = limit(VERIFICATION_CONCURRENCY);
+	const provider = <T>(run: () => Promise<T>) =>
+		call(() => {
+			if (stopped) throw new RecycleDeferred("Recovery verification stopped.");
+			if (Date.now() > deadline)
+				throw new RecycleDeferred(
+					"Recovery verification exceeded its time budget; preserve the source VM.",
+				);
+			return run();
+		});
+	// Each entry yields its lines in path order, so the digest is the same
+	// whatever order the concurrent provider calls finish in.
+	const walk = async (path: string): Promise<string[]> => {
 		if (Date.now() > deadline)
-			throw new Error(
+			throw new RecycleDeferred(
 				"Recovery verification exceeded its time budget; preserve the source VM.",
 			);
 		if (++entries > 10_000)
-			throw new Error(
+			throw new RecycleDeferred(
 				"Recovery verification exceeds its bounded file limit; preserve the source VM.",
 			);
-		const stat = await vm.fs.stat(path);
-		digest.update(
-			JSON.stringify([
-				path,
-				stat.permissions,
-				stat.owner,
-				stat.group,
-				stat.isFile,
-				stat.isDirectory,
-				stat.isSymlink,
-				stat.isFile ? stat.size : null,
-			]),
-		);
+		const stat = await provider(() => vm.fs.stat(path));
+		const meta = JSON.stringify([
+			path,
+			stat.permissions,
+			stat.owner,
+			stat.group,
+			stat.isFile,
+			stat.isDirectory,
+			stat.isSymlink,
+			stat.isFile ? stat.size : null,
+		]);
 		if (stat.isSymlink)
-			throw new Error(
+			throw new RecycleDeferred(
 				"Recovery verification cannot independently verify symlinks; preserve the source VM.",
 			);
 		if (stat.isDirectory) {
-			const children = await vm.fs.readDir(path);
-			for (const entry of children.sort((a, b) =>
-				a.name.localeCompare(b.name),
-			)) {
+			const children = await provider(() => vm.fs.readDir(path));
+			for (const entry of children)
 				if (
 					!entry.name ||
 					/[/\0]/.test(entry.name) ||
 					[".", ".."].includes(entry.name)
 				)
 					throw new Error("Invalid recovery file path.");
-				await walk(`${path}/${entry.name}`);
-			}
-		} else if (stat.isFile) {
+			const nested = await Promise.all(
+				children
+					.sort((a, b) => a.name.localeCompare(b.name))
+					.map((entry) => walk(`${path}/${entry.name}`)),
+			);
+			return [meta, ...nested.flat()];
+		}
+		if (stat.isFile) {
 			bytes += stat.size;
 			if (
 				!Number.isSafeInteger(stat.size) ||
 				stat.size < 0 ||
 				bytes > 32 * 1024 * 1024
 			)
-				throw new Error(
+				throw new RecycleDeferred(
 					"Recovery verification exceeds its transfer allowance; preserve the source VM.",
 				);
-			const content = await vm.fs.readFile(path);
+			const content = await provider(() => vm.fs.readFile(path));
 			if (content.byteLength !== stat.size)
-				throw new Error("Recovery file changed during verification.");
-			digest.update(content);
-		} else
-			throw new Error(
-				"Recovery verification encountered a special file; preserve the source VM.",
-			);
+				throw new RecycleDeferred("Recovery file changed during verification.");
+			return [meta, createHash("sha256").update(content).digest("hex")];
+		}
+		throw new RecycleDeferred(
+			"Recovery verification encountered a special file; preserve the source VM.",
+		);
 	};
-	for (const root of [...roots].sort()) await walk(root);
-	return digest.digest("hex");
+	try {
+		const digest = createHash("sha256");
+		for (const root of [...roots].sort())
+			for (const line of await walk(root)) digest.update(`${line}\n`);
+		return digest.digest("hex");
+	} finally {
+		stopped = true;
+	}
+}
+
+/** Runs at most `max` calls at once; the rest wait their turn in order. */
+function limit(max: number) {
+	let active = 0;
+	const waiting: (() => void)[] = [];
+	return async <T>(run: () => Promise<T>) => {
+		if (active < max) active++;
+		else await new Promise<void>((resolve) => waiting.push(resolve));
+		try {
+			return await run();
+		} finally {
+			const next = waiting.shift();
+			if (next) next();
+			else active--;
+		}
+	};
+}
+
+function isNotFound(error: unknown) {
+	return error instanceof FreestyleApiError && error.status === 404;
+}
+
+/** True only when the provider itself answers 404 for this VM now. */
+async function vmGone(vm: Vm) {
+	try {
+		await vm.data();
+		return false;
+	} catch (error) {
+		return isNotFound(error);
+	}
 }
 
 async function stillIdle(client: PoolClient, row: Retention, vm: Vm) {
@@ -231,13 +295,13 @@ async function stillIdle(client: PoolClient, row: Retention, vm: Vm) {
 		data.state !== "paused" ||
 		data.totalRunSeconds == null
 	)
-		throw new Error("Workspace is no longer safely idle.");
+		throw new RecycleDeferred("Workspace is no longer safely idle.");
 	const activity = Date.parse(data.lastNetworkActivity ?? data.createdAt);
 	if (
 		!Number.isFinite(activity) ||
 		Date.now() - activity < WORKSPACE_RECYCLE_IDLE_SECONDS * 1000
 	)
-		throw new Error("Workspace has recent interactive activity.");
+		throw new RecycleDeferred("Workspace has recent interactive activity.");
 	return data;
 }
 
@@ -360,6 +424,26 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 				await client.vms.snapshots
 					.delete(row.snapshot_id)
 					.catch(() => undefined);
+		} catch (error) {
+			if (!isNotFound(error)) throw error;
+			// Deleted after its recovery was persisted: retired as intended.
+			if (retained) return;
+			// The source VM no longer exists (deleted elsewhere): nothing is left
+			// to retain. Drop its row, like reconcile settles a deleted VM's hold.
+			if (!(await vmGone(vm))) throw error;
+			const removed = await connection.query(
+				"delete from workspace_retention where session_id=$1 and vm_id=$2 and phase='capturing' returning session_id",
+				[sessionId, row.vm_id],
+			);
+			if (snapshotId && removed.rowCount)
+				await client.vms.snapshots.delete(snapshotId).catch(() => undefined);
+			snapshotId = undefined;
+			console.info(
+				"Workspace VM already gone; its retention row was removed.",
+				{
+					sessionId,
+				},
+			);
 		} finally {
 			if (verification) {
 				try {
@@ -514,7 +598,17 @@ export async function recycleIdleWorkspaces(client: Freestyle) {
 	const rows = await database().query<{ session_id: string }>(
 		"select session_id from workspace_retention where phase='active' and retry_after <= now() and last_activity_at < now()-interval '1 hour' order by last_activity_at limit 1",
 	);
-	for (const row of rows.rows) await recycleWorkspace(client, row.session_id);
+	// One workspace per tick: each verification takes up to two 30-second walks.
+	for (const row of rows.rows)
+		try {
+			await recycleWorkspace(client, row.session_id);
+		} catch (error) {
+			if (!(error instanceof RecycleDeferred)) throw error;
+			console.info("Workspace recycling deferred; the source VM is kept.", {
+				sessionId: row.session_id,
+				reason: error.message,
+			});
+		}
 }
 
 /** Expire only application-owned recovery artifacts; conversation records and source machines are untouched. */

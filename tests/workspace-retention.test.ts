@@ -6,7 +6,9 @@ import { snapshotSupportsRetention } from "../src/domain/workspace-retention";
 import { SCRUB_WORKSPACE_SECRETS } from "../src/server/adapters/freestyle/scrub-agent-secrets";
 import {
 	expireRetainedWorkspace,
+	RecycleDeferred,
 	rebindWorkspaceRetention,
+	recycleIdleWorkspaces,
 	recycleWorkspace,
 	restoreRetainedWorkspace,
 	retainedTreeDigest,
@@ -405,4 +407,148 @@ it("expires only the owned recovery artifact, preserving conversation and VM", a
 	expect(
 		(await query("select phase,snapshot_id from workspace_retention")).rows[0],
 	).toMatchObject({ phase: "expired", snapshot_id: null });
+});
+
+it("defers a verification past its time budget: keeps the VM, logs once, no throw", async () => {
+	const { client, source } = provider();
+	const realNow = Date.now.bind(Date);
+	let skew = 0;
+	const now = vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+	const stat = source.fs.stat;
+	source.fs.stat = async (path: string) => {
+		skew += 31_000;
+		return stat(path);
+	};
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	try {
+		await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
+	} finally {
+		now.mockRestore();
+	}
+	expect(source.snapshot).not.toHaveBeenCalled();
+	expect(source.delete).not.toHaveBeenCalled();
+	expect(info).toHaveBeenCalledTimes(1);
+	expect(info.mock.calls[0][1]).toMatchObject({
+		sessionId: session,
+		reason: expect.stringContaining("time budget"),
+	});
+	info.mockRestore();
+	expect(
+		(
+			await query(
+				"select phase, retry_after > now() as deferred from workspace_retention",
+			)
+		).rows[0],
+	).toMatchObject({ phase: "active", deferred: true });
+	// A direct call still reports the deferral to its caller.
+	await query("update workspace_retention set retry_after=now()");
+	skew = 0;
+	const slow = provider();
+	slow.source.fs.stat = async () => {
+		throw new RecycleDeferred(
+			"Recovery verification exceeded its time budget; preserve the source VM.",
+		);
+	};
+	await expect(recycleWorkspace(slow.client, session)).rejects.toBeInstanceOf(
+		RecycleDeferred,
+	);
+});
+
+it("treats a source VM the provider no longer has as already gone", async () => {
+	const { client, source } = provider();
+	const missing = new FreestyleApiError(
+		404,
+		{ code: "NOT_FOUND", message: "not found: vm source" },
+		"/v5/vms/source",
+	);
+	source.data = async () => {
+		throw missing;
+	};
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
+	info.mockRestore();
+	expect(source.snapshot).not.toHaveBeenCalled();
+	expect((await query("select * from workspace_retention")).rows).toHaveLength(
+		0,
+	);
+	expect((await query("select * from agent_session")).rows).toHaveLength(1);
+});
+
+it("keeps a 404 from anything but the source VM a failure", async () => {
+	const { client, source } = provider();
+	const update = source.update;
+	source.update = vi.fn(async (input: { maxRunTotalSeconds: number }) => {
+		await update(input);
+		throw new FreestyleApiError(
+			404,
+			{ code: "NOT_FOUND", message: "not found" },
+			"/v5/other",
+		);
+	});
+	await expect(recycleWorkspace(client, session)).rejects.toBeInstanceOf(
+		FreestyleApiError,
+	);
+	expect(
+		(await query("select phase from workspace_retention")).rows[0],
+	).toMatchObject({ phase: "active" });
+});
+
+it("walks the tree with bounded concurrency and an order-independent digest", async () => {
+	const tree = (delays: (index: number) => number) => {
+		let active = 0;
+		let peak = 0;
+		const names = Array.from({ length: 40 }, (_, index) => `f${index}`);
+		const timed = async <T>(index: number, value: T) => {
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) =>
+				setTimeout(resolve, Math.max(0, delays(index))),
+			);
+			active--;
+			return value;
+		};
+		const file = {
+			size: 3,
+			isFile: true,
+			isDirectory: false,
+			isSymlink: false,
+			permissions: "0600",
+			owner: "ubuntu",
+			group: "ubuntu",
+		};
+		const vm = {
+			fs: {
+				stat: (path: string) => {
+					const index = Number(path.split("/f")[1] ?? -1);
+					return timed(
+						index,
+						index < 0 ? { ...file, isFile: false, isDirectory: true } : file,
+					);
+				},
+				readDir: () =>
+					timed(
+						0,
+						names.map((name) => ({ name, kind: "file" })),
+					),
+				readFile: (path: string) =>
+					timed(
+						Number(path.split("/f")[1]),
+						new TextEncoder().encode(path.slice(-3).padStart(3, "_")),
+					),
+			},
+		};
+		return {
+			vm: vm as unknown as Parameters<typeof retainedTreeDigest>[0],
+			peak: () => peak,
+		};
+	};
+	const forward = tree((index) => index % 7);
+	const backward = tree((index) => 7 - (index % 7));
+	const [a, b] = await Promise.all([
+		retainedTreeDigest(forward.vm, ["/home/ubuntu/repo"]),
+		retainedTreeDigest(backward.vm, ["/home/ubuntu/repo"]),
+	]);
+	expect(a).toBe(b);
+	expect(forward.peak()).toBeGreaterThan(1);
+	expect(forward.peak()).toBeLessThanOrEqual(8);
 });
