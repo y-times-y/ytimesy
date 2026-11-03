@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	DESKTOP_CONNECT_TIMEOUT_MS,
+	DESKTOP_JPEG_QUALITY,
 	DESKTOP_SOCKET_OPEN_TIMEOUT_MS,
 	desktopClientViewerUrl,
 	desktopDisconnectMessage,
@@ -69,7 +70,7 @@ export function DesktopStage({
 }: {
 	projectId: string;
 	sessionId: string;
-	/** The desktop's VNC password; its x11vnc asks every client for it. */
+	/** The desktop's VNC password; its VNC server asks every client for it. */
 	password?: string;
 }) {
 	const host = useRef<HTMLDivElement>(null);
@@ -127,6 +128,7 @@ export function DesktopStage({
 				client.clipViewport = true;
 				client.resizeSession = false;
 				client.showDotCursor = true;
+				client.qualityLevel = DESKTOP_JPEG_QUALITY;
 				client.background = "#111111";
 				// The canvas is positioned by CSS. Scrollbars would change the
 				// measured size and make every frame lay out the chat.

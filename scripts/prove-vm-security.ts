@@ -82,6 +82,7 @@ import {
 	desktopEdgeHostname,
 	desktopViewerAuthorization,
 	desktopViewerCredential,
+	desktopVncPassword,
 	previewHostname,
 	sharedPreviewHostname,
 } from "../src/server/services/vm-edge-keys";
@@ -93,7 +94,11 @@ import {
 import { attachTerminalUpgrade } from "../src/server/terminal-ws";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import { createEvalUser, MEMORY_NAMESPACE } from "./smoke/eval-user";
-import { RFB_SECURITY_PY, rfbRequiresPassword } from "./vnc-rfb-probe";
+import {
+	RFB_SECURITY_PY,
+	rfbRequiresPassword,
+	vncPasswordAuthenticates,
+} from "./vnc-rfb-probe";
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
@@ -709,16 +714,25 @@ try {
 			15_000,
 		)
 	).stdout.trim();
-	const vncArgs = (await exec(vm, "pgrep -a -x x11vnc | head -1", 15_000))
-		.stdout;
+	// TigerVNC on an image that has it; x11vnc on an older template or image.
+	const vncArgs = (
+		await exec(vm, "pgrep -a -x 'X0tigervnc|x11vnc' | head -1", 15_000)
+	).stdout;
+	const tiger = vncArgs.includes("X0tigervnc");
+	const vncLocked = tiger
+		? vncArgs.includes("-rfbport -1") &&
+			vncArgs.includes("-rfbunixpath") &&
+			vncArgs.includes("-SecurityTypes VncAuth") &&
+			vncArgs.includes("-PasswordFile")
+		: vncArgs.includes("-unixsock") &&
+			vncArgs.includes("-passwdfile") &&
+			vncArgs.includes("-rfbport 0") &&
+			vncArgs.includes("-noipv6");
 	record(
 		"1",
-		"x11vnc: no TCP listener on 590x (127.0.0.1, [::]), Unix socket + password file",
-		vncTcp === "" &&
-			vncArgs.includes("-unixsock") &&
-			vncArgs.includes("-passwdfile") &&
-			vncArgs.includes("-rfbport 0"),
-		`TCP listeners: ${vncTcp || "none"}; -unixsock ${vncArgs.includes("-unixsock")}, -passwdfile ${vncArgs.includes("-passwdfile")}, -noipv6 ${vncArgs.includes("-noipv6")}`,
+		"VNC server: no TCP listener on 590x (127.0.0.1, [::]), Unix socket + password file",
+		vncTcp === "" && vncLocked,
+		`server ${tiger ? "TigerVNC" : vncArgs ? "x11vnc" : "none"}; TCP listeners: ${vncTcp || "none"}; socket and password flags ${vncLocked}`,
 	);
 	const rfbSecurity = (
 		await exec(
@@ -733,7 +747,7 @@ try {
 		rfbRequiresPassword(rfbSecurity),
 		`${rfbSecurity || "no answer"} (1 = none, 2 = VNC password, 18/19 = TLS/VeNCrypt)`,
 	);
-	// A VNC server on TCP makes the start script stop x11vnc and refuse.
+	// A VNC server on TCP makes the start script stop its VNC server and refuse.
 	await execOk(
 		vm,
 		`printf %s ${b64(LISTENERS_PY)} | base64 -d > /tmp/vmsec-vnc-tcp.py && (nohup setsid python3 /tmp/vmsec-vnc-tcp.py 127.0.0.1:5901 >/dev/null 2>&1 &) && sleep 2`,
@@ -741,7 +755,7 @@ try {
 	);
 	const refused = await exec(vm, START_WORKSPACE_DESKTOP, 300_000);
 	const vncAfterRefusal = (
-		await exec(vm, "pgrep -c -x x11vnc || true", 15_000)
+		await exec(vm, "pgrep -c -x 'x11vnc|X0tigervnc' || true", 15_000)
 	).stdout.trim();
 	await exec(vm, "pkill -f '[v]msec-vnc-tcp'; sleep 1", 15_000);
 	const recovered = await exec(vm, START_WORKSPACE_DESKTOP, 300_000);
@@ -752,7 +766,7 @@ try {
 			/listened on TCP/.test(refused.stderr) &&
 			vncAfterRefusal === "0" &&
 			recovered.exitCode === 0,
-		`with TCP 5901: exit ${refused.exitCode}, refusal message ${/listened on TCP/.test(refused.stderr)}, x11vnc running ${vncAfterRefusal}; after removing it: exit ${recovered.exitCode}`,
+		`with TCP 5901: exit ${refused.exitCode}, refusal message ${/listened on TCP/.test(refused.stderr)}, VNC server running ${vncAfterRefusal}; after removing it: exit ${recovered.exitCode}`,
 	);
 	await publishDesktopViewer(machines, vm);
 	credentialPassword = desktopViewerCredential(vm).split(":")[1];
@@ -812,6 +826,28 @@ try {
 		"desktop WebSocket, server-held credentials: VNC answers (no regression)",
 		wsRight.status === 101 && wsRight.detail.includes("RFB "),
 		`handshake ${wsRight.status ?? ""} ${wsRight.detail}`,
+	);
+	const vncWrong = await vncPasswordAuthenticates(
+		deskWs,
+		{ authorization: right },
+		randomBytes(4).toString("hex"),
+	);
+	record(
+		"1",
+		"desktop VNC, server-held route credential but a wrong VNC password",
+		!vncWrong,
+		`accepted ${vncWrong}`,
+	);
+	const vncRight = await vncPasswordAuthenticates(
+		deskWs,
+		{ authorization: right },
+		desktopVncPassword(vm),
+	);
+	record(
+		"1",
+		"desktop VNC, the VM's own VNC password (no regression)",
+		vncRight,
+		`accepted ${vncRight}`,
 	);
 
 	// ---- 5. cross-site WebSocket --------------------------------------------

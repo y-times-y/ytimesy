@@ -136,6 +136,7 @@ export function redactInfrastructure(value: string) {
 		.replace(/\bnoVNC\b/g, "desktop")
 		.replace(/\bnovnc\b/gi, "desktop")
 		.replace(/\bx11vnc\b/gi, "desktop")
+		.replace(/\b(?:X0tigervnc|x0vncserver|tigervnc)\b/gi, "desktop")
 		.replace(/\bwebsockify\b/gi, "desktop")
 		.replace(/\bvnc\.html\b/gi, "desktop")
 		.replace(/\bvcpu_time\b/gi, "compute")

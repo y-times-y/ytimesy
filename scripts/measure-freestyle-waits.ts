@@ -131,7 +131,7 @@ async function viewerBanner(
 	}
 }
 
-/** Full VNC password authentication through the edge, the proxy and x11vnc. */
+/** Full VNC password authentication through the edge, the proxy and the VNC server. */
 async function vncAuthenticates(vmId: string, password: string) {
 	const { DESECBCipher } = (await import(
 		// noVNC's own DES (OpenSSL 3 dropped it), not in its package exports.
@@ -277,10 +277,12 @@ try {
 			throw new Error("SECURITY: the viewer accepted a wrong credential");
 		console.info("  viewer refused a wrong credential");
 		if (!(await vncAuthenticates(vmId, desktopVncPassword(vmId))))
-			throw new Error("x11vnc refused this VM's own password");
+			throw new Error("the VNC server refused this VM's own password");
 		if (await vncAuthenticates(vmId, "wrongpw1"))
-			throw new Error("SECURITY: x11vnc accepted a wrong password");
-		console.info("  x11vnc took this VM's password and refused a wrong one");
+			throw new Error("SECURITY: the VNC server accepted a wrong password");
+		console.info(
+			"  the VNC server took this VM's password and refused a wrong one",
+		);
 		forgetRunningGuest(vmId);
 		await phase("(c) desktop, running chat", async () => {
 			await machines.ensureRunning(vmId);
