@@ -1,5 +1,5 @@
 import { alertHour, fleetBudgetAlerts } from "#/domain/owner-alerts";
-import { captureServerException } from "../adapters/analytics";
+import { captureServerException, redactErrorText } from "../adapters/analytics";
 import { fleetInfrastructureUsage } from "../adapters/infrastructure-usage";
 import { alertOwner } from "../adapters/owner-alerts";
 
@@ -35,7 +35,11 @@ export async function alertCronFailure(
 		kind: "cron-failure",
 		key: `${name}:${alertHour(now)}`,
 		subject: `ytimesy: scheduled job ${name} failed`,
-		text: `The scheduled job ${name} failed (${error instanceof Error ? error.name : "unknown error"}). It is retried every tick; check the edge executor logs. Further failures of this job this hour are not emailed.`,
+		text: `The scheduled job ${name} failed (${error instanceof Error ? error.name : "unknown error"}). It is retried every tick; check the edge executor logs. Further failures of this job this hour are not emailed.${
+			error instanceof Error && error.message
+				? `\n\nReason: ${redactErrorText(error.message).slice(0, 500)}`
+				: ""
+		}`,
 	});
 }
 
