@@ -25,7 +25,8 @@ export class MaintenanceStepsFailed extends Error {
 /**
  * Failures the next tick resolves on its own: a deliberate deferral, a VM
  * that is already gone (404), or a transient provider answer (429, 5xx and
- * this client's own provider timeout, shaped as 504).
+ * this client's own provider timeout, shaped as 504, or Freestyle refusing
+ * to place a VM while its host recovers capacity).
  */
 export function maintenanceFailureNeedsHuman(error: unknown) {
 	if (error instanceof RecycleDeferred) return false;
@@ -33,10 +34,14 @@ export function maintenanceFailureNeedsHuman(error: unknown) {
 		return !(
 			error.status === 404 ||
 			error.status === 429 ||
-			error.status >= 500
+			error.status >= 500 ||
+			PLACEMENT_REJECTED.test(error.message)
 		);
 	return true;
 }
+
+/** "placement rejected: shared memory pool is recovering from allocation stalls" (2026-11-03). */
+const PLACEMENT_REJECTED = /\bplacement rejected\b/i;
 
 /**
  * Runs every step, even after one fails, and logs each failure with its step
