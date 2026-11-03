@@ -168,6 +168,26 @@ it("records the failing stage so the backstop backs off instead of waking the VM
 	expect(mocks.clearFailure).not.toHaveBeenCalled();
 });
 
+it("logs a wake failure's redacted cause with its stage", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	vi.mocked(machines.ensureRunning).mockRejectedValueOnce(
+		Object.assign(
+			new Error("VM vm did not wake: Authorization: Bearer abcdefgh12345678"),
+			{ name: "WorkspaceStartError" },
+		),
+	);
+	await expect(
+		captureSessionCheckpoint(machines, "owner", "chat"),
+	).rejects.toThrow("did not wake");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "wake");
+	expect(warn).toHaveBeenCalledWith("Session checkpoint failed", {
+		stage: "wake",
+		sessionId: "chat",
+		cause: "WorkspaceStartError: VM vm did not wake: Authorization: [redacted]",
+	});
+	warn.mockRestore();
+});
+
 it("records an upload failure at its stage", async () => {
 	mocks.upload.mockRejectedValue(new Error("storage unavailable"));
 	await expect(

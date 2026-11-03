@@ -247,6 +247,45 @@ export function machineFailureCause(error: unknown): string | null {
 	);
 }
 
+function errorLine(error: unknown): string {
+	if (error instanceof Error) {
+		const tag = (error as { _tag?: unknown })._tag;
+		const code = (error as { code?: unknown }).code;
+		const name = typeof tag === "string" ? tag : error.name;
+		// Only string codes (ECONNRESET, 40001): DOMException's legacy numeric code says nothing.
+		return `${name}${typeof code === "string" && code ? ` [${code}]` : ""}: ${error.message}`;
+	}
+	if (typeof error === "string") return error;
+	try {
+		return JSON.stringify(error) ?? String(error);
+	} catch {
+		return String(error);
+	}
+}
+
+/**
+ * The raw cause of any turn failure, redacted and at most 600 characters, for
+ * the owner (logs and the turn's stored error item; never its message): the
+ * machine detail when there is one, else the error's own text and up to two
+ * inner causes (`providerError`, a retry's last error, or `cause`).
+ */
+export function failureCause(error: unknown): string | null {
+	if (error === undefined || error === null) return null;
+	const machine = machineFailureCause(error);
+	if (machine) return machine;
+	const lines: string[] = [];
+	let current: unknown = error;
+	for (let depth = 0; depth < 3 && current != null; depth++) {
+		const line = errorLine(current);
+		if (!lines.includes(line)) lines.push(line);
+		if (!(current instanceof Error)) break;
+		current =
+			(current as { providerError?: unknown }).providerError ??
+			(RetryError.isInstance(current) ? current.lastError : current.cause);
+	}
+	return redactSecrets(lines.join(" <- "), 600) || null;
+}
+
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
 	if (workspaceGitFailed(error)) return WORKSPACE_GIT_FAILURE;
@@ -351,7 +390,9 @@ export class ClaudeCodeApiUnavailable extends Error {
 /** Claude Code itself stopped without an answer (not a subscription problem). */
 export class ClaudeCodeRunFailure extends Error {
 	constructor(detail: string) {
-		super(`Claude Agent stopped: ${detail} Your work is saved; retry the turn.`);
+		super(
+			`Claude Agent stopped: ${detail} Your work is saved; retry the turn.`,
+		);
 		this.name = "ClaudeCodeRunFailure";
 	}
 }
