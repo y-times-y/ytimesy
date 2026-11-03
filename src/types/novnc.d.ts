@@ -10,6 +10,8 @@ declare module "@novnc/novnc" {
 		clipViewport: boolean;
 		resizeSession: boolean;
 		showDotCursor: boolean;
+		/** JPEG quality, 0-9 (noVNC default 6). */
+		qualityLevel: number;
 		background: string;
 		disconnect(): void;
 	}

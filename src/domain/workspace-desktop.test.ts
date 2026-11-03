@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	DESKTOP_JPEG_QUALITY,
 	desktopClientViewerUrl,
 	desktopDisconnectMessage,
 	desktopInspectorPrompt,
@@ -243,5 +244,12 @@ describe("desktopDisconnectMessage", () => {
 		expect(desktopDisconnectMessage({ connected: true, clean: true })).toBe(
 			"The desktop connection closed.",
 		);
+	});
+});
+
+describe("desktop viewer quality", () => {
+	it("trades JPEG detail for frames on slower links, within noVNC's 0-9", () => {
+		// 6 (noVNC's default) took 49 Mbps scrolling; 4 took 30 at the same rate.
+		expect(DESKTOP_JPEG_QUALITY).toBe(4);
 	});
 });

@@ -122,6 +122,15 @@ export const DESKTOP_SOCKET_OPEN_TIMEOUT_MS = 15_000;
 export const DESKTOP_CONNECT_TIMEOUT_MS = 120_000;
 
 /**
+ * noVNC's JPEG quality (0-9; its default is 6). TigerVNC pushes frames as
+ * fast as the link takes them; at 4, scrolling Chrome took 30 Mbps instead
+ * of 49 at the same ~130 frames/s on dev, and 23 frames/s instead of 13 on a
+ * 10 Mbps link. Text and flat areas stay lossless (the screen after a
+ * scroll matched a fresh quality-9 frame); only photos lose detail.
+ */
+export const DESKTOP_JPEG_QUALITY = 4;
+
+/**
  * The one line under "Desktop disconnected": the server's close reason when
  * it gave one (its relay closes with why), else what the viewer saw.
  */
