@@ -303,8 +303,8 @@ export function HarnessPicker({
 							<button
 								className="model-provider-subscription"
 								type="button"
-								title="Claude Code · Claude subscription"
-								aria-label="Claude Code"
+								title="Claude Agent · Claude subscription"
+								aria-label="Claude Agent"
 								aria-pressed={claudeView && !browse && !favoritesOnly}
 								onClick={() => {
 									setFavoritesOnly(false);
@@ -358,7 +358,7 @@ export function HarnessPicker({
 								: browse
 									? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
 									: claudeView && claudeData
-										? "Claude Code"
+										? "Claude Agent"
 										: selected.name
 						}
 					>
@@ -571,12 +571,12 @@ export function ClaudeCodeModels({
 	return (
 		<>
 			<div className="model-section-head">
-				<h3>Claude Code</h3>
+				<h3>Claude Agent</h3>
 				{usage}
 			</div>
 			<p
 				className="model-browser-caption"
-				title="Runs Claude Code on the chat's machine, billed to your Claude plan."
+				title="Runs the Claude Agent SDK on the chat's machine, billed to your Claude plan."
 			>
 				Claude subscription
 			</p>
@@ -591,7 +591,7 @@ export function ClaudeCodeModels({
 							type="button"
 							className="model-picker-option"
 							aria-pressed={model.id === selectedRoute}
-							title={`${model.label} in Claude Code`}
+							title={`${model.label} in Claude Agent`}
 							onClick={() => onSelect(model.id)}
 						>
 							<ModelProviderLogo provider="anthropic" size={16} />
@@ -628,14 +628,14 @@ function ClaudeCodeSearch({
 	if (!results.length) return null;
 	return (
 		<>
-			<h3>Claude Code · Claude subscription</h3>
+			<h3>Claude Agent · Claude subscription</h3>
 			{results.map((model) => (
 				<button
 					type="button"
 					className="model-browser-option"
 					key={model.id}
 					aria-pressed={model.id === selectedRoute}
-					title={`${model.label} in Claude Code`}
+					title={`${model.label} in Claude Agent`}
 					onClick={() => onSelect(model.id)}
 				>
 					<ModelProviderLogo provider="anthropic" size={16} />

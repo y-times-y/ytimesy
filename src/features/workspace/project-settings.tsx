@@ -1190,7 +1190,7 @@ function XaiSubscriptionRow({
 					<span className="settings-row-title">Grok subscription</span>
 					<span
 						className="settings-row-meta"
-						title="Grok runs on your SuperGrok or X subscription (X Premium and the X Subscription plans), with no API bill. Usage counts against your plan's limits."
+						title="Grok runs on your SuperGrok or X subscription, with no API bill. Usage counts against your plan's limits."
 					>
 						{meta}
 					</span>

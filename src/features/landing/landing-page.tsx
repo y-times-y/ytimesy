@@ -264,7 +264,7 @@ function Models() {
 					</span>
 					<div>
 						<h3>Your ChatGPT subscription</h3>
-						<p>Your ChatGPT plan, on our harness.</p>
+						<p>Codex subscription, on our harness.</p>
 					</div>
 				</li>
 				<li className="model-card">
@@ -282,7 +282,7 @@ function Models() {
 					</span>
 					<div>
 						<h3>Your Grok subscription</h3>
-						<p>SuperGrok or X Premium, on our harness.</p>
+						<p>SuperGrok or X subscription, on our harness.</p>
 					</div>
 				</li>
 				<li className="model-card">

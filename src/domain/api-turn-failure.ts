@@ -351,7 +351,7 @@ export class ClaudeCodeApiUnavailable extends Error {
 /** Claude Code itself stopped without an answer (not a subscription problem). */
 export class ClaudeCodeRunFailure extends Error {
 	constructor(detail: string) {
-		super(`Claude Code stopped: ${detail} Your work is saved; retry the turn.`);
+		super(`Claude Agent stopped: ${detail} Your work is saved; retry the turn.`);
 		this.name = "ClaudeCodeRunFailure";
 	}
 }

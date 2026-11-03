@@ -134,7 +134,7 @@ describe("plan usage inside its picker section", () => {
 		).toBe("");
 	});
 
-	it("puts the Claude plan's usage in the Claude Code heading row, above the caption", () => {
+	it("puts the Claude plan's usage in the Claude Agent heading row, above the caption", () => {
 		const html = renderToStaticMarkup(
 			<ClaudeCodeModels
 				models={[{ id: "claude-code:opus", label: "Opus" }]}
@@ -149,7 +149,7 @@ describe("plan usage inside its picker section", () => {
 				onSelect={() => {}}
 			/>,
 		);
-		const heading = html.indexOf("Claude Code</h3>");
+		const heading = html.indexOf("Claude Agent</h3>");
 		const line = html.indexOf('aria-label="Claude plan usage"');
 		const caption = html.indexOf("Claude subscription</p>");
 		expect(heading).toBeGreaterThan(-1);
