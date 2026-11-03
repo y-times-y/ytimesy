@@ -10,6 +10,7 @@ import {
 	saveMcpServerToken,
 	setMcpServerEnabled,
 } from "#/server/adapters/mcp-servers";
+import { pruneRemovedInstalls } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
 import { serverConfig } from "#/server/config";
 import { requireSameOrigin } from "#/server/http";
@@ -24,6 +25,7 @@ import { connectMcpTools } from "#/server/services/mcp-tools";
 export const getMcpServersFn = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await requireUser(getRequest().headers);
+		await pruneRemovedInstalls(user.id);
 		return listMcpServersChecked(user.id);
 	},
 );

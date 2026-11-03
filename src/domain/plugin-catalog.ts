@@ -229,3 +229,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		path: "plugins/frontend-design",
 	},
 ];
+
+/** Ids still in the reviewed catalog; an install of any other id counts as removed. */
+export function catalogIds() {
+	return PLUGIN_CATALOG.map((entry) => entry.id);
+}
