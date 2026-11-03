@@ -2276,9 +2276,11 @@ async function runApiTurnAttempt(
 		// the check gave reaches the model in a next step.
 		if (earlyPromptCheck) {
 			failureStage = "workspace";
-			await workspace();
+			// The reply is already shown: a Stop must not wait out a slow VM call
+			// (machine calls ignore the signal; preparation stops at its next check).
+			await untilAborted(workspace(), abort.signal);
 			failureStage = "model";
-			const submitted = await earlyPromptCheck;
+			const submitted = await untilAborted(earlyPromptCheck, abort.signal);
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
 			const withFeedback = hooks.drain(messages);
 			if (withFeedback !== messages) {
@@ -3110,6 +3112,27 @@ function modelSwitchItem(
 		...(usageBefore ? { usageBefore } : {}),
 		...(resetsAt !== undefined ? { resetsAt } : {}),
 	};
+}
+
+/**
+ * Settles with `work`, or rejects with the signal's reason once it aborts;
+ * the work itself keeps running to its own end.
+ */
+export function untilAborted<T>(
+	work: Promise<T>,
+	signal: AbortSignal,
+): Promise<T> {
+	if (signal.aborted) {
+		work.catch(() => {});
+		return Promise.reject(signal.reason);
+	}
+	return new Promise<T>((resolve, reject) => {
+		const stop = () => reject(signal.reason);
+		signal.addEventListener("abort", stop, { once: true });
+		work
+			.then(resolve, reject)
+			.finally(() => signal.removeEventListener("abort", stop));
+	});
 }
 
 /** Waits `ms`, or rejects with the signal's reason once it aborts. */
