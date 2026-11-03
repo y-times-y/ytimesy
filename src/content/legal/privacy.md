@@ -1,6 +1,6 @@
 # ytimesy Privacy Policy
 
-Last updated: 2026-11-02.
+Last updated: 2026-11-03.
 
 This policy explains what ytimesy ("ytimesy", "we") collects when you use
 ytimesy, why, who else receives it, how long we keep it, and your choices. It
@@ -108,9 +108,9 @@ Privacy Control.
 session replays of how you use the web app (clicks, scrolling, which screens
 you open), linked to your account id, so we can fix bugs and improve the
 product. Replays are masked in
-your browser before anything is sent: all text is masked, every input is
-masked, and code, diffs, terminals, file contents, chat content, secrets,
-images, previews and the desktop view are blocked. Sign-in pages, network
+your browser before anything is sent: all text, including chat content, is
+masked, every input is masked, and code, diffs, terminals, file contents,
+secrets, images, previews and the desktop view are blocked. Sign-in pages, network
 traffic and console logs are not recorded. Replays are kept for 30 days and
 deleted with your account. **We do not record session replays for people in
 the EU, EEA, UK or Switzerland**, based on the country our hosting provider
