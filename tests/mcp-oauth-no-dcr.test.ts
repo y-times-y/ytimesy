@@ -38,6 +38,7 @@ beforeAll(async () => {
 	);
 	for (const file of [
 		"20261011120000_mcp_servers.sql",
+		"20261011130000_plugin_installs.sql",
 		"20261011150000_mcp_oauth.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
