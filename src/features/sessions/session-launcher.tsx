@@ -970,12 +970,19 @@ export function SessionLauncher({
 		return false;
 	}
 
+	// A model picked from another harness's section switches the harness
+	// first; until that harness's own catalog arrives, the list above is a
+	// stand-in that may not hold the pick, so the pick is kept, not replaced.
+	const catalogSettled =
+		connectedProviderId(session.connection) === harnessId ||
+		(catalog.isFetched && !catalog.isPlaceholderData);
 	useEffect(() => {
 		const connectedHarness = connectedProviderId(session.connection);
 		const lastUsedForCatalog =
 			lastModelByHarness[harnessId] ||
 			(connectedHarness === harnessId ? session.listedModelId : "");
 		setModelId((current) => {
+			if (current && !catalogSettled) return current;
 			const next = composerModelIdForCatalog({
 				requestedId: current,
 				catalog: models,
@@ -985,6 +992,7 @@ export function SessionLauncher({
 			return next === current ? current : next;
 		});
 	}, [
+		catalogSettled,
 		harnessId,
 		lastModelByHarness,
 		session.blockedListedModelIds,
