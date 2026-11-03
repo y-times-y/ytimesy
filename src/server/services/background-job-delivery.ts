@@ -35,6 +35,7 @@ import {
 import { prepareForkWorkspace } from "./conversation-recovery";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import { sweepUnusedChatMachines } from "./machine-prewarm";
+import { runMaintenanceSteps } from "./maintenance-steps";
 import {
 	DREAM_IDLE_SECONDS,
 	runMemoryDream,
@@ -115,10 +116,20 @@ export async function deliverBackgroundJob(
 						apiKey: Effect.runSync(readFreestyleApiKey()),
 						fetch: boundedFreestyleFetch(),
 					});
-					await reconcileInfrastructureVms(client);
-					await observeFleetCosts(client);
-					await recycleIdleWorkspaces(client);
-					await alertFleetBudget();
+					// Independent steps: one failing never skips the others, and
+					// only a failure that needs a human fails the job (and alerts).
+					await runMaintenanceSteps("maintenance:infrastructure", [
+						{
+							name: "reconcile-vms",
+							run: () => reconcileInfrastructureVms(client),
+						},
+						{ name: "fleet-costs", run: () => observeFleetCosts(client) },
+						{
+							name: "recycle-workspaces",
+							run: () => recycleIdleWorkspaces(client),
+						},
+						{ name: "fleet-budget", run: () => alertFleetBudget() },
+					]);
 					break;
 				}
 				case "memory-dreams":

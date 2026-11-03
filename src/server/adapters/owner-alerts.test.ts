@@ -3,10 +3,22 @@ import type { OwnerAlert } from "#/domain/owner-alerts";
 import { redactErrorText } from "./analytics";
 import { alertOwner, ownerAlertsEnabled } from "./owner-alerts";
 
+// The owner_alert table, shared by every isolate (module instance) below.
+const table = vi.hoisted(() => ({
+	rows: new Set<string>(),
+	down: true,
+}));
 vi.mock("./database", () => ({
-	database: () => {
-		throw new Error("no database in this test");
-	},
+	database: () => ({
+		query: async (_sql: string, [kind, key]: string[]) => {
+			if (table.down)
+				throw new Error("connect ETIMEDOUT postgres://u:hunter2@db");
+			const id = `${kind}:${key}`;
+			if (table.rows.has(id)) return { rowCount: 0, rows: [] };
+			table.rows.add(id);
+			return { rowCount: 1, rows: [{ "?column?": 1 }] };
+		},
+	}),
 }));
 
 const alert = {
@@ -54,22 +66,58 @@ it("emails the owner once per alert key", async () => {
 	expect(send.mock.calls[1][0].to).toBe("ops@example.test");
 });
 
-it("falls back to once per isolate when the database is unreachable, and never throws", async () => {
+it("never emails when the claim cannot be recorded, and never throws", async () => {
 	vi.stubEnv("YTIMESY_ENVIRONMENT", "production");
+	table.down = true;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	const send = vi.fn(async () => true);
-	const isolated = { ...alert, key: "isolate-only" };
-	expect(await alertOwner(isolated, { send })).toBe("sent");
-	expect(await alertOwner(isolated, { send })).toBe("duplicate");
+	const unrecorded = { ...alert, key: "database-down" };
+	expect(await alertOwner(unrecorded, { send })).toBe("duplicate");
+	expect(await alertOwner(unrecorded, { send })).toBe("duplicate");
+	expect(send).not.toHaveBeenCalled();
+	expect(JSON.stringify(warn.mock.calls)).not.toContain("hunter2");
+	warn.mockRestore();
 	expect(
 		await alertOwner(
 			{ ...alert, key: "broken-sender" },
 			{
+				claim: async () => true,
 				send: async () => {
 					throw new Error("binding down");
 				},
 			},
 		),
 	).toBe("failed");
+});
+
+it("emails once per key across isolates, as cron ticks land in fresh ones", async () => {
+	vi.stubEnv("YTIMESY_ENVIRONMENT", "production");
+	table.down = false;
+	const send = vi.fn(async () => true);
+	const hourly = { ...alert, key: "maintenance:infrastructure:2026-11-03T00" };
+	// Five failures in one hour, each in a newly loaded module (a new isolate).
+	const outcomes = [];
+	for (let tick = 0; tick < 5; tick++) {
+		vi.resetModules();
+		const isolate = await import("./owner-alerts");
+		outcomes.push(await isolate.alertOwner(hourly, { send }));
+	}
+	expect(outcomes).toEqual([
+		"sent",
+		"duplicate",
+		"duplicate",
+		"duplicate",
+		"duplicate",
+	]);
+	expect(send).toHaveBeenCalledTimes(1);
+	// The next hour's key is a new alert.
+	const next = await import("./owner-alerts");
+	expect(
+		await next.alertOwner(
+			{ ...hourly, key: "maintenance:infrastructure:2026-11-03T01" },
+			{ send },
+		),
+	).toBe("sent");
 });
 
 it("redacts tokens and URL credentials from tracked error text", () => {

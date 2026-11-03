@@ -1,10 +1,9 @@
 import type { OwnerAlert } from "#/domain/owner-alerts";
+import { redactErrorText } from "./analytics";
 import { database } from "./database";
 import { sendOperationalEmail } from "./email";
 
 const DEFAULT_ALERT_EMAIL = "het@ytimesy.com";
-/** Keys already sent by this isolate, for when the database is unreachable. */
-const sentInIsolate = new Set<string>();
 
 /** Production alerts the owner; other environments only when asked to. */
 export function ownerAlertsEnabled(
@@ -52,18 +51,30 @@ export async function alertOwner(
 	}
 }
 
-async function claimAlert(alert: OwnerAlert) {
-	const id = `${alert.kind}:${alert.key}`;
+/**
+ * The owner_alert row is the only claim: it holds across isolates and
+ * invocations. When the insert fails the alert is not sent, since a
+ * per-isolate fallback cannot dedupe cron ticks that each land in a fresh
+ * isolate (which emailed every failure).
+ */
+export async function claimAlert(alert: OwnerAlert) {
 	try {
 		const result = await database().query(
 			"insert into owner_alert(kind,dedupe_key,subject) values($1,$2,$3) on conflict do nothing returning 1",
 			[alert.kind, alert.key.slice(0, 200), alert.subject.slice(0, 200)],
 		);
 		return (result.rowCount ?? result.rows.length) > 0;
-	} catch {
-		if (sentInIsolate.has(id)) return false;
-		sentInIsolate.add(id);
-		return true;
+	} catch (error) {
+		console.warn("Owner alert not claimed; not sent.", {
+			kind: alert.kind,
+			key: alert.key,
+			reason: redactErrorText(
+				error instanceof Error
+					? `${error.name}: ${error.message}`
+					: String(error),
+			).slice(0, 300),
+		});
+		return false;
 	}
 }
 
