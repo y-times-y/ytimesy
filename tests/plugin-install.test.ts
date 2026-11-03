@@ -23,6 +23,15 @@ vi.mock("../src/server/adapters/database", () => ({
 		query: (sql: string, params: unknown[]) => db.query(sql, params),
 	}),
 }));
+// Installs here use stand-in catalog entries; turns only use catalog plugins.
+vi.mock("../src/domain/plugin-catalog", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("../src/domain/plugin-catalog")>();
+	return {
+		...original,
+		catalogIds: () => [...original.catalogIds(), "linear-tools", "exa"],
+	};
+});
 vi.mock("../src/server/config", () => {
 	const serverConfig = () => ({
 		BETTER_AUTH_SECRET: "fixture-secret-longer-than-thirty-two-characters",

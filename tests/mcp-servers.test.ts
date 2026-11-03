@@ -30,7 +30,11 @@ beforeAll(async () => {
 	await db.exec(
 		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values ('alice'),('bob'); create table project(id uuid primary key); insert into project values ('11111111-1111-4111-8111-111111111111');",
 	);
-	for (const file of ["20261011120000_mcp_servers", "20261011150000_mcp_oauth"])
+	for (const file of [
+		"20261011120000_mcp_servers",
+		"20261011130000_plugin_installs",
+		"20261011150000_mcp_oauth",
+	])
 		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 });
 afterAll(() => db.close());
