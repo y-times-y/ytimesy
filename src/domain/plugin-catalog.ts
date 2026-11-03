@@ -35,29 +35,11 @@ export type PluginCatalogEntry = {
 // Reviewed 2026-10-11 from Anthropic's official marketplace (anthropics/claude-plugins-official@f359d43);
 // each entry was fetched and parsed at this exact commit. Sign-in (OAuth) MCP servers install as
 // OAuth servers that join turns once the user signs in.
-// Removed 2026-11-03: Vercel and Figma. Their MCP sign-in accepts only apps they
-// have approved (Vercel refuses our redirect URI, Figma's registration answers
-// 403), so neither could ever connect here.
+// Removed 2026-11-03: Vercel and Figma (their MCP sign-in accepts only apps they
+// have approved: Vercel refuses our redirect URI, Figma's registration answers
+// 403), and GitHub and Slack (sign-in needs our own registered app; the owner
+// chose to drop them rather than ask users for tokens).
 export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
-	{
-		id: "github",
-		displayName: "GitHub",
-		description:
-			"Issues, pull requests, code review and repository search on GitHub.",
-		owner: "anthropics",
-		repo: "claude-plugins-official",
-		sha: "f359d43b406057f1a8cdbc4ea93b827642c162e6",
-		path: "external_plugins/github",
-		signInApp: "GITHUB",
-		settings: [
-			{
-				key: "GITHUB_PERSONAL_ACCESS_TOKEN",
-				title: "GITHUB_PERSONAL_ACCESS_TOKEN",
-				description: "Required by the github MCP server",
-				sensitive: true,
-			},
-		],
-	},
 	{
 		id: "gitlab",
 		displayName: "GitLab",
@@ -103,15 +85,6 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		owner: "atlassian",
 		repo: "atlassian-mcp-server",
 		sha: "eb9a5956a7ac6380c731c725a8382da53ad6d980",
-		path: "",
-	},
-	{
-		id: "slack",
-		displayName: "Slack",
-		description: "Search Slack messages, channels and threads.",
-		owner: "slackapi",
-		repo: "slack-mcp-plugin",
-		sha: "b073ebc2fc500b52e781f5fd17ebb9ad462363dc",
 		path: "",
 	},
 	{
