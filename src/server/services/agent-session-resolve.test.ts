@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
 	workspace: vi.fn(),
@@ -23,15 +24,31 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	deleteAgentSessionForOwner: vi.fn(),
 	descendantAgentSessions: vi.fn(),
 	providerRefsHeldOutside: vi.fn(),
-	saveAgentSessionProviderRef: vi.fn(),
+	saveAgentSessionProviderRef: vi.fn(async () => undefined),
 	selectAgentSessionHarness: vi.fn(),
 }));
 vi.mock("#/domain/project-workspace", () => ({
 	workspaceEnvironmentIsReady: () => true,
 }));
+vi.mock("../adapters/conversation-fork", () => ({
+	conversationForkPending: async () => false,
+}));
+vi.mock("#/server/adapters/project-machine-size", () => ({
+	projectMachineSize: async () => undefined,
+}));
+vi.mock("./environment-services", () => ({
+	startEnvironmentServices: async (
+		machines: Pick<WorkspaceMachines, "exec" | "writeTextFile">,
+		vm: never,
+	) => {
+		await machines.exec(vm, "start services", 60_000);
+		await machines.writeTextFile(vm, "/report", "services started");
+	},
+}));
 
 const { bindAgentSessionMachine, openAgentSession, peekAgentSessionMachine } =
 	await import("./agent-session-machine");
+const { cancellableMachines } = await import("./machine-call-signal");
 
 const chat = {
 	id: "chat",
@@ -126,4 +143,42 @@ it("peeks a named chat by id and the latest chat from the list", async () => {
 			.session,
 	).toBe(chat);
 	expect(mocks.list).toHaveBeenCalledOnce();
+});
+
+it("starts a fresh copy's saved services to the end even if the turn stops", async () => {
+	mocks.session.mockResolvedValue({ ...chat, providerRef: null });
+	let releaseServices = () => {};
+	const servicesStarted = new Promise<void>((resolve) => {
+		releaseServices = resolve;
+	});
+	const writeTextFile = vi.fn(async () => {});
+	const raw = {
+		provisionSession: vi.fn(async () => "vm-new"),
+		exec: vi.fn(async (_vm: unknown, command: string) => {
+			// The services' start answers only after the user's Stop.
+			if (command === "start services") await servicesStarted;
+			return { exitCode: 0, stdout: "", stderr: "" };
+		}),
+		writeTextFile,
+	};
+	const turn = new AbortController();
+	const bound = await bindAgentSessionMachine(
+		cancellableMachines(raw as unknown as WorkspaceMachines, turn.signal),
+		{
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			sessionId: "chat",
+		},
+	);
+	expect(bound.providerRef).toBe("vm-new");
+	turn.abort(new Error("Stopped"));
+	releaseServices();
+	await vi.waitFor(() =>
+		expect(writeTextFile).toHaveBeenCalledWith(
+			"vm-new",
+			"/report",
+			"services started",
+		),
+	);
 });
