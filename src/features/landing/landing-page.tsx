@@ -263,8 +263,8 @@ function Models() {
 						<CodexMark size={30} />
 					</span>
 					<div>
-						<h3>Your Codex subscription</h3>
-						<p>Your ChatGPT plan, through Codex.</p>
+						<h3>Your ChatGPT subscription</h3>
+						<p>Your ChatGPT plan, on our harness.</p>
 					</div>
 				</li>
 				<li className="model-card">
@@ -273,7 +273,7 @@ function Models() {
 					</span>
 					<div>
 						<h3>Your Claude subscription</h3>
-						<p>Runs Claude Code itself, on your Pro or Max plan.</p>
+						<p>Pro or Max, through the Claude Agent SDK.</p>
 					</div>
 				</li>
 				<li className="model-card">
