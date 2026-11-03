@@ -1121,12 +1121,15 @@ it("classifies asynchronous progress-storage errors as failures rather than user
 				expect.objectContaining({
 					kind: "error",
 					message: expect.stringContaining("progress could not be saved"),
+					// The raw cause is kept for the owner, never in the message.
+					cause: "Error: private database detail",
 				}),
 			]),
 		);
-		expect(JSON.stringify(mocks.finalize.mock.calls)).not.toContain(
-			"private database detail",
+		const error = mocks.finalize.mock.calls[0]?.[2]?.find(
+			(item: { kind: string }) => item.kind === "error",
 		);
+		expect(error?.message).not.toContain("private database detail");
 	} finally {
 		warn.mockRestore();
 	}
@@ -1167,12 +1170,15 @@ it("saves and queues child failures, including failures before runtime startup",
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
 });
 
-it("distinguishes completion coordination failures from progress-save failures without logging details", async () => {
+it("distinguishes completion coordination failures from progress-save failures, logging only the redacted cause", async () => {
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	try {
 		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
 			if (action === "release")
-				throw new DOMException("private host and token", "TimeoutError");
+				throw new DOMException(
+					"coordinator at private host refused token=abc123",
+					"TimeoutError",
+				);
 			return true;
 		});
 		mocks.runtime.mockImplementation(async (input) =>
@@ -1183,8 +1189,9 @@ it("distinguishes completion coordination failures from progress-save failures w
 			stage: "coordination",
 			name: "TimeoutError",
 			code: "unknown",
+			cause: expect.stringContaining("token=[redacted]"),
 		});
-		expect(JSON.stringify(warn.mock.calls)).not.toContain("private host");
+		expect(JSON.stringify(warn.mock.calls)).not.toContain("abc123");
 		expect(mocks.finalize).toHaveBeenCalledWith(
 			expect.anything(),
 			"failed",

@@ -13,9 +13,9 @@ import {
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	ClaudeSubscriptionRefused,
+	failureCause,
 	IncompleteAgentTurn,
 	LifecycleHookRefusal,
-	machineFailureCause,
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import type { ApiTurnSettings } from "#/domain/api-turn-settings";
@@ -2623,14 +2623,15 @@ async function runApiTurnAttempt(
 				});
 			}
 		}
-		// A machine failure's raw cause (redacted) is always logged and kept on
-		// the turn's error item, so the owner can see why it failed.
-		const machineCause = machineFailureCause(error);
+		// Every failure's raw cause (redacted) is always logged, production too,
+		// and kept on the turn's error item, so the owner can see why it failed.
+		// The user-facing message stays the fixed wording.
+		const turnCause = failureCause(coordinationFailure ?? error);
 		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
 			console.warn("API turn failed", {
 				stage: coordinationFailure ? "coordination" : failureStage,
 				...apiTurnFailureClassification(coordinationFailure ?? error),
-				...(machineCause ? { machineCause } : {}),
+				...(turnCause ? { cause: turnCause } : {}),
 				// Development diagnostics only: messages can contain provider details.
 				...(debugTurnErrors() && error instanceof Error
 					? {
@@ -2837,7 +2838,7 @@ async function runApiTurnAttempt(
 						kind: "error",
 						id: SessionItemId(`${turn.id}:error`),
 						message: failureMessage,
-						...(machineCause ? { cause: machineCause } : {}),
+						...(turnCause ? { cause: turnCause } : {}),
 					},
 				];
 		items = applyApiProgress(items, turn.id, {
