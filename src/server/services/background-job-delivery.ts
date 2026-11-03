@@ -15,6 +15,7 @@ import {
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
+import { releaseReplacedTemplateSnapshots } from "../adapters/freestyle/template-snapshot-release";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
 import { memoryReposAvailable } from "../adapters/memory-repos";
@@ -127,6 +128,10 @@ export async function deliverBackgroundJob(
 						{
 							name: "recycle-workspaces",
 							run: () => recycleIdleWorkspaces(client),
+						},
+						{
+							name: "release-replaced-templates",
+							run: () => releaseReplacedTemplateSnapshots(client),
 						},
 						{ name: "fleet-budget", run: () => alertFleetBudget() },
 					]);
