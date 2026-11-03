@@ -64,8 +64,11 @@ export function sitePreviewMeta({
 }
 
 /** The front page's preview: what a shared ytimesy.com link shows. */
+/** The landing page's title in search results and link previews. */
+export const SITE_TITLE = "ytimesy: AI software engineer in the cloud";
+
 export const SITE_PREVIEW_META = sitePreviewMeta({
-	title: "ytimesy: AI software engineer in the cloud",
+	title: SITE_TITLE,
 	description:
 		"Give it a task and it builds in its own cloud machine, then opens a pull request. Use your ChatGPT, Claude or Grok plan, or your API keys.",
 	url: `${SITE_ORIGIN}/`,

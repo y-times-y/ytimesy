@@ -2,7 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ReactNode, Suspense, use } from "react";
 import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
-import { SITE_PREVIEW_META } from "../features/blog/posts";
+import {
+	SITE_ORIGIN,
+	SITE_PREVIEW_META,
+	SITE_TITLE,
+} from "../features/blog/posts";
 import { LandingPage } from "../features/landing/landing-page";
 import { FirstRun } from "../features/onboarding/first-run";
 import {
@@ -48,7 +52,11 @@ export const Route = createFileRoute("/")({
 	// paint the chat full width, its transcript at the top, then move both.
 	// Browsers without render-blocking expect links ignore it.
 	head: ({ loaderData }) => ({
-		meta: SITE_PREVIEW_META,
+		// Search results show the landing page's own title; the signed-in
+		// app keeps the short tab title.
+		meta: loaderData?.signedIn
+			? SITE_PREVIEW_META
+			: [{ title: SITE_TITLE }, ...SITE_PREVIEW_META],
 		links: loaderData?.signedIn
 			? [
 					{
@@ -57,7 +65,7 @@ export const Route = createFileRoute("/")({
 						blocking: "render",
 					},
 				]
-			: [],
+			: [{ rel: "canonical", href: `${SITE_ORIGIN}/` }],
 	}),
 	component: HomePage,
 });
