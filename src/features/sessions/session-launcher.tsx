@@ -200,6 +200,7 @@ export function SessionLauncher({
 	projectPickerOpen,
 	onProjectPickerOpenChange,
 	memoryActions,
+	stopping,
 	onRemoveQueued,
 	onEditQueued,
 	onSendQueued,
@@ -240,6 +241,8 @@ export function SessionLauncher({
 	backgroundRuns?: readonly BackgroundRun[];
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
 	memoryActions?: MemoryMarkerActions;
+	/** The user pressed Stop and the server has not settled the turn yet. */
+	stopping?: boolean;
 	/** Takes back a message still waiting behind the running turn. */
 	onRemoveQueued?: (messageId: string) => void;
 	/** Replaces a waiting message's text. */
@@ -1374,6 +1377,7 @@ export function SessionLauncher({
 								)
 							: undefined
 					}
+					stopping={stopping}
 					onRemoveQueued={onRemoveQueued}
 					onEditQueued={onEditQueued}
 					onSendQueued={onSendQueued}

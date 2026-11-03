@@ -783,6 +783,8 @@ export function WorkspaceHome({
 	} | null>(null);
 	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
 	const stopRequestedFor = useRef<string | null>(null);
+	// Rendered: the chat whose Stop request has not answered yet.
+	const [stoppingChatId, setStoppingChatId] = useState<string | null>(null);
 	const abandonSendRef = useRef<
 		(pending: PendingSend, message: string | null) => void
 	>(() => undefined);
@@ -2812,6 +2814,7 @@ export function WorkspaceHome({
 				}));
 			} else if (epoch === sessionEpoch.current) {
 				stopRequestedFor.current = null;
+				setStoppingChatId(null);
 				setSession((current) => {
 					const items = itemsWithSentMessage(current.items, pending);
 					return {
@@ -3079,6 +3082,7 @@ export function WorkspaceHome({
 		// live progress stream never reports the stop, and ignore the
 		// running views sent before the stop settled.
 		stopRequestedFor.current = chatId ?? null;
+		setStoppingChatId(chatId ?? null);
 		// Stopped on click: the composer is free at once, the partial answer
 		// stays with its "Stopped" notice. The server's settled view replaces
 		// these items when it arrives.
@@ -3101,7 +3105,10 @@ export function WorkspaceHome({
 				toast.error(publicFailureMessage(cause));
 				refetchOpenSession.current();
 			})
-			.finally(() => void chats.refetch());
+			.finally(() => {
+				setStoppingChatId((id) => (id === chatId ? null : id));
+				void chats.refetch();
+			});
 	}
 
 	function copyLastReply() {
@@ -3719,6 +3726,9 @@ export function WorkspaceHome({
 											session.hasOlderItems
 												? { loading: olderLoading, onLoad: loadOlderItems }
 												: undefined
+										}
+										stopping={
+											!!activeSessionId && stoppingChatId === activeSessionId
 										}
 										onRemoveQueued={removeQueuedMessage}
 										onEditQueued={editQueuedMessage}

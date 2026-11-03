@@ -173,6 +173,7 @@ export function SessionTimeline({
 	onRemoveQueued,
 	onEditQueued,
 	onSendQueued,
+	stopping = false,
 	evidence = [],
 	helperLines,
 	senderName,
@@ -212,6 +213,8 @@ export function SessionTimeline({
 	}[];
 	/** Pull request evidence captured for this chat's turns (prEvidence). */
 	evidence?: readonly EvidenceRecord[];
+	/** The user pressed Stop and the turn has not settled yet: queued messages say so. */
+	stopping?: boolean;
 	/** Takes back a message still waiting behind the running turn. */
 	onRemoveQueued?: (messageId: string) => void;
 	/** Replaces a waiting message's text. */
@@ -435,6 +438,7 @@ export function SessionTimeline({
 			content: (
 				<QueuedMessage
 					item={item}
+					stopping={stopping}
 					onRemove={removeQueued}
 					onEdit={editQueued}
 					onSend={sendQueued}
@@ -884,11 +888,13 @@ function MessageAttachments({
 
 const QueuedMessage = memo(function QueuedMessage({
 	item,
+	stopping = false,
 	onRemove,
 	onEdit,
 	onSend,
 }: {
 	item: UserMessageItem;
+	stopping?: boolean;
 	onRemove?: (messageId: string) => void;
 	onEdit?: (messageId: string, text: string) => void;
 	onSend?: (messageId: string, text?: string) => void;
@@ -919,9 +925,11 @@ const QueuedMessage = memo(function QueuedMessage({
 				<span>
 					{item.heldForSetup
 						? "Waiting for setup"
-						: item.released
-							? "Sends after this step"
-							: "Queued in this chat"}
+						: stopping
+							? "Stopping…"
+							: item.released
+								? "Sends after this step"
+								: "Queued in this chat"}
 				</span>
 				{onEdit ? (
 					editing ? (

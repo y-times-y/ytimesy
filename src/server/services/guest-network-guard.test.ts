@@ -13,6 +13,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.setConfig({ testTimeout: 30_000 });
 
 import {
+	apiTurnFailureMessage,
+	failureCause,
+	MachineNotResponding,
+} from "#/domain/api-turn-failure";
+import {
 	GUEST_METADATA_BLOCK_SCRIPT,
 	guestMetadataBlockCommand,
 } from "#/domain/guest-network-guard";
@@ -138,7 +143,59 @@ it("runs as root, and a machine that cannot block metadata runs no turn", async 
 		stdout: "",
 		stderr: "ytimesy: iptables unavailable; cloud metadata cannot be blocked",
 	}));
-	await expect(blockGuestMetadata({ exec }, "vm" as never)).rejects.toThrow(
-		"Cloud metadata could not be blocked",
+	const ensureRunning = vi.fn(async () => "vm" as never);
+	await expect(
+		blockGuestMetadata({ exec, ensureRunning }, "vm" as never),
+	).rejects.toThrow("Cloud metadata could not be blocked");
+	// A guard that ran and refused is not retried.
+	expect(exec).toHaveBeenCalledTimes(1);
+	expect(ensureRunning).not.toHaveBeenCalled();
+});
+
+it("wakes a machine that did not answer the guard and retries it", async () => {
+	const exec = vi
+		.fn()
+		.mockResolvedValueOnce({ exitCode: 124, stdout: "", stderr: "" })
+		.mockRejectedValueOnce(new Error("exec timed out"))
+		.mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" });
+	const ensureRunning = vi.fn(async () => "vm" as never);
+	await blockGuestMetadata(
+		{ exec, ensureRunning },
+		"vm" as never,
+		undefined,
+		[0, 0],
 	);
+	expect(exec).toHaveBeenCalledTimes(3);
+	expect(ensureRunning).toHaveBeenCalledTimes(2);
+});
+
+it("fails closed as an unresponsive machine, keeping the cause for the owner", async () => {
+	const exec = vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "" }));
+	const ensureRunning = vi.fn(async () => "vm" as never);
+	const failure = await blockGuestMetadata(
+		{ exec, ensureRunning },
+		"vm" as never,
+		undefined,
+		[0, 0],
+	).catch((error: unknown) => error);
+	expect(failure).toBeInstanceOf(MachineNotResponding);
+	expect(exec).toHaveBeenCalledTimes(3);
+	expect(apiTurnFailureMessage("workspace", failure)).toBe(
+		"This chat's machine isn't responding. Retry in a minute; your work is saved.",
+	);
+	expect(failureCause(failure)).toBe(
+		"MachineNotResponding: This chat's machine isn't responding. Retry in a minute; your work is saved. <- Error: The metadata guard exited 1 without an answer.",
+	);
+});
+
+it("stops retrying the guard once the turn is aborted", async () => {
+	const abort = new AbortController();
+	const exec = vi.fn(async () => {
+		abort.abort();
+		return { exitCode: 124, stdout: "", stderr: "" };
+	});
+	await expect(
+		blockGuestMetadata({ exec }, "vm" as never, abort.signal, [0, 0]),
+	).rejects.toThrow();
+	expect(exec).toHaveBeenCalledTimes(1);
 });
