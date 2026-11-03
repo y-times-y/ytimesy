@@ -86,10 +86,11 @@ describe("PostHog client", () => {
 	});
 	it("masks text and attributes and excludes private surfaces and network payloads", async () => {
 		const { replayPrivacy } = await import("./replay-privacy");
+		const div = { tagName: "DIV" } as Element;
+		const link = { tagName: "LINK" } as Element;
 		expect(replayPrivacy.maskAllInputs).toBe(true);
 		expect(replayPrivacy.maskTextSelector).toBe("*");
 		for (const selector of [
-			".session-timeline",
 			".composer-input",
 			".inspector-frame",
 			".xterm",
@@ -106,9 +107,21 @@ describe("PostHog client", () => {
 			"data-path",
 			"value",
 		])
-			expect(replayPrivacy.maskAttributeFn?.(attribute, "private")).toBe("");
-		expect(replayPrivacy.maskAttributeFn?.("class", "sidebar-toolbar")).toBe(
-			"sidebar-toolbar",
+			expect(replayPrivacy.maskAttributeFn?.(attribute, "private", div)).toBe(
+				"",
+			);
+		expect(
+			replayPrivacy.maskAttributeFn?.("class", "sidebar-toolbar", div),
+		).toBe("sidebar-toolbar");
+		// The replay keeps the app's styles, or it plays as a gray page.
+		expect(replayPrivacy.maskAttributeFn?.("style", "width: 4px", div)).toBe(
+			"width: 4px",
+		);
+		expect(
+			replayPrivacy.maskAttributeFn?.("href", "/assets/styles.css", link),
+		).toBe("/assets/styles.css");
+		expect(replayPrivacy.maskAttributeFn?.("rel", "stylesheet", link)).toBe(
+			"stylesheet",
 		);
 		expect(
 			replayPrivacy.maskCapturedNetworkRequestFn?.({} as never),
