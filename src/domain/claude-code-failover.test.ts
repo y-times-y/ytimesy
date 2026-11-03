@@ -41,7 +41,7 @@ const claudeRoute = {
 const connections: FailoverConnection[] = [
 	{
 		key: CLAUDE_CODE_KEY,
-		label: "Claude Code",
+		label: "Claude Agent",
 		kind: "subscription",
 		revision: "",
 		models: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5" }],
@@ -127,7 +127,7 @@ describe("Claude Code routes", () => {
 		);
 		expect(
 			failoverNotice(
-				{ model: "Claude Opus 5.5", connection: "Claude Code" },
+				{ model: "Claude Opus 5.5", connection: "Claude Agent" },
 				{ model: "Claude Opus 5.5", connection: "Anthropic" },
 				"usage-limit",
 			),
@@ -136,7 +136,7 @@ describe("Claude Code routes", () => {
 		);
 		expect(
 			failoverNotice(
-				{ model: "Claude Opus 5.5", connection: "Claude Code" },
+				{ model: "Claude Opus 5.5", connection: "Claude Agent" },
 				{ model: "Claude Opus 5.5", connection: "Anthropic" },
 				"signed-out",
 			),
@@ -270,7 +270,7 @@ describe("the 2026-11-02 live failover", () => {
 			null,
 			{
 				route: claudeRoute,
-				label: { model: "Claude Opus 5.5", connection: "Claude Code" },
+				label: { model: "Claude Opus 5.5", connection: "Claude Agent" },
 			},
 			toOpenRouter,
 			"signed-out",

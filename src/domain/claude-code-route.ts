@@ -12,7 +12,7 @@ const REVISION_PREFIX = "claude-code:v1:";
 /** The connection key routes, failover and preferences use for the subscription. */
 export const CLAUDE_CODE_KEY = "claude-code";
 /** How the chat names the connection. */
-export const CLAUDE_CODE_LABEL = "Claude Code";
+export const CLAUDE_CODE_LABEL = "Claude Agent";
 
 /** The models a Claude subscription covers, as Claude Code's `--model` names them. */
 export const CLAUDE_CODE_MODELS: readonly ListedModel[] = [

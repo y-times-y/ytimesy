@@ -59,7 +59,7 @@ export const saveClaudeSubscriptionFn = createServerFn({ method: "POST" })
 		requireSameOrigin(request);
 		const user = await requireUser(request.headers);
 		if (!claudeSubscriptionEnabled())
-			throw new Error("Claude Code is not available.");
+			throw new Error("Claude Agent is not available.");
 		await saveClaudeSubscriptionToken(user.id, data.token);
 		return readView(user.id);
 	});

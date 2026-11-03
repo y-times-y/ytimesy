@@ -19,9 +19,9 @@ export function claudeSubscriptionMeta(
 	switch (view.status) {
 		case "connected":
 			return {
-				text: "Runs Claude Code on your plan",
+				text: "Runs on your Claude plan",
 				tooltip:
-					"Chats on these models run Claude Code on the chat's machine. Your token stays on our servers.",
+					"Chats on these models run the Claude Agent SDK on the chat's machine. Your token stays on our servers.",
 			};
 		case "limited": {
 			const minutes = view.limitedUntil
