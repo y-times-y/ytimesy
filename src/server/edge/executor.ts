@@ -1109,21 +1109,32 @@ export default {
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });
-				return proxyGithubGit(
-					request,
-					config.data.GIT_PROXY_SECRET,
-					(grant) =>
-						withDatabaseScope(
-							env.HYPERDRIVE.connectionString,
-							() => authorizeGitProxy(grant),
-							null,
-						),
-					fetch,
-					(nonce, expiresAt) =>
-						withDatabaseScope(
-							env.HYPERDRIVE.connectionString,
-							() => claimGitProxyGrant(nonce, expiresAt),
-							null,
+				const gitPath = new URL(request.url).pathname;
+				return withStepTrace(
+					{
+						git: gitPath.endsWith("/info/refs")
+							? "refs"
+							: gitPath.split("/").at(-1),
+					},
+					() =>
+						proxyGithubGit(
+							request,
+							config.data.GIT_PROXY_SECRET,
+							(grant) =>
+								timed("git:authorize", () =>
+									withDatabaseScope(
+										env.HYPERDRIVE.connectionString,
+										() => authorizeGitProxy(grant),
+										null,
+									),
+								),
+							fetch,
+							(nonce, expiresAt) =>
+								withDatabaseScope(
+									env.HYPERDRIVE.connectionString,
+									() => claimGitProxyGrant(nonce, expiresAt),
+									null,
+								),
 						),
 				);
 			}

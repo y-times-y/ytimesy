@@ -24,6 +24,10 @@ vi.mock("../adapters/agent-sessions", () => ({
 const publication = vi.hoisted(() => ({
 	publish: vi.fn(),
 	excluded: vi.fn(async () => false),
+	pending: vi.fn(
+		async (_runtime: unknown, _vm: string, repos: { fullName: string }[]) =>
+			new Set(repos.map((repo) => repo.fullName)),
+	),
 }));
 const identity = vi.hoisted(() => ({
 	forToken: vi.fn(),
@@ -40,6 +44,7 @@ vi.mock("./turn-publication", async (original) => ({
 	).ChatPublicationSkipped,
 	publishCompletedSessionTurn: publication.publish,
 	turnPublicationExcluded: publication.excluded,
+	unpublishedTurnRepositories: publication.pending,
 }));
 
 const session = {
@@ -122,6 +127,8 @@ it("commits a root chat's turn without the verification gate and returns where i
 		runtime,
 		runtime.commands[0].argv[4],
 		expect.objectContaining({ description: null, files: [] }),
+		new Set(["owner/primary"]),
+		undefined,
 	);
 	expect(outcome).toEqual({
 		publication: {
@@ -352,5 +359,52 @@ describe("commitSubject", () => {
 		expect(commitSubject(null, "Title")).toBe("Title");
 		expect(commitSubject("ok", "")).toBe("ok");
 		expect(commitSubject("x ".repeat(60), null)).toHaveLength(72);
+	});
+});
+
+describe("commitSessionTurn", () => {
+	it("commits now and leaves the push and pull request to its publish", async () => {
+		const { commitSessionTurn } = await import("./turn-commit");
+		lookup.mockResolvedValue({
+			fullName: "owner/primary",
+			repositoryId: 1,
+			installationId: 2,
+			branch: "main",
+		});
+		publication.publish.mockClear();
+		publication.publish.mockResolvedValue({
+			branch: "ytimesy/fix-parser-0c4a1e",
+			pullRequestUrl: "https://github.com/owner/primary/pull/3",
+		});
+		const chat = { ...session, parentSessionId: null, agentRole: null };
+		const runtime = new MemoryWorkspaceRuntime();
+		const committed = await commitSessionTurn(chat, items, runtime);
+		expect(runtime.commands).toHaveLength(1);
+		expect(publication.publish).not.toHaveBeenCalled();
+		expect(committed?.publish).toBeTypeOf("function");
+		await expect(committed?.publish?.()).resolves.toEqual({
+			publication: {
+				branch: "ytimesy/fix-parser-0c4a1e",
+				pullRequestUrl: "https://github.com/owner/primary/pull/3",
+			},
+		});
+	});
+
+	it("has nothing to publish when the checkout holds no unpushed commits", async () => {
+		const { commitSessionTurn } = await import("./turn-commit");
+		lookup.mockResolvedValue({
+			fullName: "owner/primary",
+			repositoryId: 1,
+			installationId: 2,
+			branch: "main",
+		});
+		publication.pending.mockResolvedValueOnce(new Set());
+		const chat = { ...session, parentSessionId: null, agentRole: null };
+		const committed = await commitSessionTurn(
+			chat,
+			items,
+			new MemoryWorkspaceRuntime(),
+		);
+		expect(committed).toEqual({});
 	});
 });

@@ -1258,6 +1258,18 @@ a.session-title-meta {
 	flex-shrink: 0;
 	text-decoration: none;
 }
+.session-title-pending {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 6px;
+}
+.session-system-notice[data-kind="pull-request"] a.session-activity-title {
+	color: inherit;
+	text-decoration: underline;
+	text-decoration-color: rgba(255, 255, 255, 0.25);
+	text-underline-offset: 3px;
+}
 a.session-title-meta:hover,
 a.session-title-meta:focus-visible {
 	color: #f2f2f2;

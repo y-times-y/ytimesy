@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { githubAppMention } from "#/domain/github-bot";
 import { withPullRequestFooter } from "#/domain/pull-request-footer";
 import { chatPath, pullRequestFixPath } from "#/domain/pull-request-wake";
-import { ensureDraftPullRequest } from "../github";
+import { ensureDraftPullRequest, type FoundPullRequest } from "../github";
 import { recordPullRequestLink } from "../pull-request-links";
 import { githubInstallationAccessToken } from "./installation-token";
 
@@ -28,6 +28,8 @@ export async function ensureAppDraftPullRequest(
 	draft: { title: string; body: string; head: string; base: string },
 	origin?: PullRequestOrigin,
 	userAccessToken?: string,
+	/** A lookup of the open pull request already under way (with the same user token). */
+	existing?: Promise<FoundPullRequest | null>,
 ) {
 	const parts = fullName.split("/");
 	if (
@@ -62,10 +64,10 @@ export async function ensureAppDraftPullRequest(
 				? `${app}${chatPath(origin.projectId, origin.sessionId)}`
 				: null,
 	});
-	const pull = await ensureDraftPullRequest(token, fullName, {
-		...draft,
-		body,
-	});
+	const lookup = userAccessToken?.trim() ? existing : undefined;
+	const pull = lookup
+		? await ensureDraftPullRequest(token, fullName, { ...draft, body }, lookup)
+		: await ensureDraftPullRequest(token, fullName, { ...draft, body });
 	if (origin && "number" in pull && typeof pull.number === "number")
 		await recordPullRequestLink({
 			id: linkId,
