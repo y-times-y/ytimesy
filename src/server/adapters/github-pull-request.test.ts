@@ -147,7 +147,12 @@ it("retries as a normal PR when the repository's plan has no draft PRs", async (
 		})
 		.mockResolvedValueOnce({ data: { ...pull, draft: false } });
 	const created = await ensureDraftPullRequest("token", "owner/repo", draft);
-	expect(created).toEqual({ number: 1, url: pull.html_url, draft: false });
+	expect(created).toEqual({
+		number: 1,
+		url: pull.html_url,
+		draft: false,
+		created: true,
+	});
 	expect(api.create).toHaveBeenNthCalledWith(
 		1,
 		expect.objectContaining({ draft: true }),

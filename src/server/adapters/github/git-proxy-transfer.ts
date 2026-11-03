@@ -339,29 +339,101 @@ export async function pushProxiedRepository(
 		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
 	)
 		throw new Error("Invalid completed-turn revision.");
-	await checkBranchNames(host, [input.branch]);
-	await withProxyGit(host, input, "write", async (git, url, temporary) => {
+	const config = gitProxyConfiguration();
+	if (!config || !input.userId || !input.projectId)
+		throw new Error("Owner-scoped Git proxy configuration is missing.");
+	// Three guest round trips: the branch name and a private directory, the
+	// grant's config file (never in a command's text), then preparing,
+	// pushing and cleaning up in one command.
+	const [headers, prepared] = await Promise.all([
+		issueGitProxyGrant(config.secret, {
+			userId: input.userId,
+			projectId: input.projectId,
+			owner: input.owner,
+			name: input.name,
+			installationId: Number(input.installationId),
+			access: "write",
+			branch: input.branch,
+		}),
+		host.exec(
+			`git check-ref-format --branch ${quote(input.branch)} >/dev/null || exit ${PUSH_EXIT.branchName}
+umask 077; mktemp -d /tmp/ytimesy-git-proxy-XXXXXXXX || exit ${PUSH_EXIT.prepare}`,
+			15_000,
+		),
+	]);
+	if (prepared.exitCode !== 0) {
+		const cause = stderrTail(prepared, 160);
+		if (
+			prepared.exitCode === PUSH_EXIT.branchName &&
+			/is not a valid branch name/.test(cause)
+		)
+			throw new Error("Workspace Git rejected the branch name.");
+		console.warn("Workspace Git command failed", {
+			failure: "push-prepare",
+			exitCode: prepared.exitCode,
+			stderr: stderrTail(prepared, 400),
+		});
+		throw new Error(
+			prepared.exitCode === PUSH_EXIT.branchName
+				? `Workspace Git could not check the branch name (exit ${prepared.exitCode}${cause ? `: ${cause}` : ""}).`
+				: "Workspace Git could not prepare its private configuration.",
+		);
+	}
+	const temporary = prepared.stdout.trim();
+	if (!/^\/tmp\/ytimesy-git-proxy-[a-zA-Z0-9]+$/.test(temporary))
+		throw new Error("Invalid private Git configuration directory.");
+	const url = `${config.origin}/git/${input.owner}/${input.name}.git`;
+	let ran = false;
+	try {
+		await host.writeTextFile(
+			`${temporary}/config`,
+			proxyGitConfig(config.origin, headers),
+		);
+		const git = proxyGit(quote(`${temporary}/config`));
 		// The checkout's own config is the agent's to write (http.proxy,
 		// url.*.insteadOf, http.curloptResolve...), so the push runs from a
 		// fresh repository that borrows the checkout's objects but none of
 		// its config.
 		const directory = quote(input.directory);
 		const publish = quote(`${temporary}/push.git`);
-		await checked(
-			host,
-			`set -eu
+		const result = await host.exec(
+			`set -u
+trap 'rm -rf ${quote(temporary)}' EXIT
+(set -eu
 objects=$(cd ${directory} && cd "$(git rev-parse --git-path objects)" && pwd -P)
 commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.revision || "HEAD"}^{commit}`)})
 ${git} init -q --bare ${publish}
 printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
-${git} --git-dir=${publish} update-ref refs/heads/publish "$commit"`,
-			"Workspace Git could not prepare the commit to push.",
-		);
-		await checked(
-			host,
-			`${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)}`,
-			TRANSFER_FAILED,
+${git} --git-dir=${publish} update-ref refs/heads/publish "$commit") || exit ${PUSH_EXIT.commit}
+${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)} || exit ${PUSH_EXIT.push}`,
 			NETWORK_GIT_TIMEOUT_MS,
 		);
-	});
+		ran = true;
+		if (result.exitCode !== 0) {
+			const failure =
+				result.exitCode === PUSH_EXIT.commit
+					? "Workspace Git could not prepare the commit to push."
+					: TRANSFER_FAILED;
+			console.warn("Workspace Git command failed", {
+				failure,
+				exitCode: result.exitCode,
+				stderr: stderrTail(result, 400),
+			});
+			throw new Error(failure);
+		}
+	} finally {
+		// The push command removes its directory itself; this is for when it never ran.
+		if (!ran)
+			await host
+				.exec(`rm -rf ${quote(temporary)}`, 10_000)
+				.catch(() => undefined);
+	}
 }
+
+/** Exit codes of the push's guest commands, one per step that can fail. */
+const PUSH_EXIT = {
+	branchName: 64,
+	prepare: 65,
+	commit: 66,
+	push: 67,
+} as const;

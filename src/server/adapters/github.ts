@@ -481,15 +481,27 @@ async function createDraftPullRequest(
 				status: 409,
 			});
 		if (/no commits between/i.test(text))
-			throw new Response(
-				"This branch has no commits ahead of the base branch, so there is nothing to open a pull request for.",
-				{ status: 422 },
-			);
+			throw new Response(NO_COMMITS_AHEAD, { status: 422 });
 		throw new Response(
 			`GitHub refused to open the pull request${text ? `: ${text}` : "."}`,
 			{ status: 422 },
 		);
 	}
+}
+
+const NO_COMMITS_AHEAD =
+	"This branch has no commits ahead of the base branch, so there is nothing to open a pull request for.";
+
+/** GitHub refused to open a pull request because the branch adds nothing to its base. */
+export async function isNothingAheadToOpen(error: unknown) {
+	return (
+		error instanceof Response &&
+		error.status === 422 &&
+		(await error
+			.clone()
+			.text()
+			.catch(() => "")) === NO_COMMITS_AHEAD
+	);
 }
 
 function githubStatus(error: unknown) {
@@ -498,42 +510,57 @@ function githubStatus(error: unknown) {
 		: 0;
 }
 
+/** The open pull request from `head` into `base` in this repository, if any. */
+export async function findOpenPullRequest(
+	token: string,
+	fullName: string,
+	branches: { head: string; base: string },
+): Promise<FoundPullRequest | null> {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const result = await githubClient(token).pulls.list({
+		owner,
+		repo,
+		state: "open",
+		head: `${owner}:${branches.head}`,
+		base: branches.base,
+		per_page: 100,
+	});
+	const existing = result.data.find(
+		(pull) =>
+			pull.head.ref === branches.head &&
+			pull.head.repo?.full_name === fullName &&
+			pull.base.ref === branches.base,
+	);
+	return existing
+		? {
+				number: existing.number,
+				url: existing.html_url,
+				draft: Boolean(existing.draft),
+				body: existing.body ?? "",
+			}
+		: null;
+}
+
+export type FoundPullRequest = {
+	number: number;
+	url: string;
+	draft: boolean;
+	body: string;
+};
+
+/**
+ * `existing`, when given, is a lookup already started (findOpenPullRequest),
+ * e.g. beside the push, so it is not asked again. `created` says whether
+ * this call opened the pull request.
+ */
 export async function ensureDraftPullRequest(
 	token: string,
 	fullName: string,
 	draft: { title: string; body: string; head: string; base: string },
+	existing?: Promise<FoundPullRequest | null>,
 ) {
-	const { owner, repo } = repositoryOwnerName(fullName);
-	const find = async () => {
-		const result = await githubClient(token).pulls.list({
-			owner,
-			repo,
-			state: "open",
-			head: `${owner}:${draft.head}`,
-			base: draft.base,
-			per_page: 100,
-		});
-		const existing = result.data.find(
-			(pull) =>
-				pull.head.ref === draft.head &&
-				pull.head.repo?.full_name === fullName &&
-				pull.base.ref === draft.base,
-		);
-		return existing
-			? {
-					number: existing.number,
-					url: existing.html_url,
-					draft: Boolean(existing.draft),
-					body: existing.body ?? "",
-				}
-			: null;
-	};
-	const reuse = async (found: {
-		number: number;
-		url: string;
-		draft: boolean;
-		body: string;
-	}) => {
+	const find = () => findOpenPullRequest(token, fullName, draft);
+	const reuse = async (found: FoundPullRequest) => {
 		await refreshPullRequestDescription(
 			token,
 			fullName,
@@ -545,12 +572,20 @@ export async function ensureDraftPullRequest(
 					error instanceof Error ? error.message.slice(0, 300) : "unknown",
 			});
 		});
-		return { number: found.number, url: found.url, draft: found.draft };
+		return {
+			number: found.number,
+			url: found.url,
+			draft: found.draft,
+			created: false,
+		};
 	};
-	const existing = await find();
-	if (existing) return reuse(existing);
+	const open = await (existing ?? find());
+	if (open) return reuse(open);
 	try {
-		return await createDraftPullRequest(token, fullName, draft);
+		return {
+			...(await createDraftPullRequest(token, fullName, draft)),
+			created: true,
+		};
 	} catch (error) {
 		if (error instanceof Response && error.status === 409) {
 			const raced = await find();

@@ -569,6 +569,42 @@ export async function finalizeApiTurn(
 	return result.rows[0]?.state ?? null;
 }
 
+/** `items` with the element whose id is $2 replaced by $3 (removed when $3 is null). */
+const REPLACED_ITEM = `(select coalesce(jsonb_agg(case when e->>'id'=$2 then $3::jsonb else e end order by o)
+ filter (where e->>'id'<>$2 or $3::jsonb is not null),'[]'::jsonb) from jsonb_array_elements(items) with ordinality x(e,o))`;
+const HAS_ITEM =
+	"jsonb_typeof(items)='array' and items @> jsonb_build_array(jsonb_build_object('id',$2::text))";
+
+/**
+ * Replaces one item of a turn already marked done (with null, removes it):
+ * in the turn's row, the chat, and any turn of the chat queued or started
+ * since, which copied the chat's items. Element by element, so a message
+ * sent meanwhile stays. The chat's open progress stream gets the change.
+ * False when the chat no longer holds the item.
+ */
+export async function replaceSettledTurnItem(
+	turn: Pick<ApiTurn, "id" | "session_id" | "user_id">,
+	itemId: string,
+	item: SessionItem | null,
+) {
+	const result = await database().query<{ id: string }>(
+		`with turns as (update api_turn set items=${REPLACED_ITEM},updated_at=now()
+		 where session_id=$4 and user_id=$5 and (id=$1 or state in ('queued','running')) and ${HAS_ITEM} returning id)
+		 update agent_session set items=${REPLACED_ITEM},updated_at=now()
+		 where id=$4 and user_id=$5 and ${HAS_ITEM} returning id`,
+		[
+			turn.id,
+			itemId,
+			item ? jsonbText(item) : null,
+			turn.session_id,
+			turn.user_id,
+		],
+	);
+	if (!result.rows[0]) return false;
+	await wakeConversationProgress();
+	return true;
+}
+
 export async function cancelApiTurn(userId: string, sessionId: string) {
 	const result = await database().query<
 		{ id: string; lease_id: string | null } & Partial<SettledTurnRow>
