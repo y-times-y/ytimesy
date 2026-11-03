@@ -100,4 +100,18 @@ it("does not fail the job for deferrals, gone VMs or transient provider answers"
 		),
 	).toBe(true);
 	expect(maintenanceFailureNeedsHuman(new Error("boom"))).toBe(true);
+	// Freestyle refusing placement while its host recovers: the next tick retries.
+	expect(
+		maintenanceFailureNeedsHuman(
+			new FreestyleApiError(
+				409,
+				{
+					code: "PLACEMENT_REJECTED",
+					message:
+						"placement rejected: shared memory pool is recovering from allocation stalls at /sys/fs/cgroup/freestyle-vms-3h7u",
+				},
+				"/",
+			),
+		),
+	).toBe(false);
 });
