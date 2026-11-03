@@ -40,6 +40,15 @@ export const Route = createRootRoute({
 			},
 		],
 		links: [
+			// For search engines, which read neither SVG media queries nor the
+			// tab icons below: the opaque Y (brand/github-avatar.png), square,
+			// a multiple of 48 px; /favicon.ico holds 16-48 px of the same.
+			{
+				rel: "icon",
+				type: "image/png",
+				sizes: "96x96",
+				href: "/brand/favicon-96.png",
+			},
 			// The Y mark in the tab: dark artwork on light tab bars, light on dark.
 			{
 				rel: "icon",
@@ -53,7 +62,7 @@ export const Route = createRootRoute({
 				href: "/brand/mark-light.svg",
 				media: "(prefers-color-scheme: dark)",
 			},
-			{ rel: "apple-touch-icon", href: "/brand/github-avatar.png" },
+			{ rel: "apple-touch-icon", href: "/brand/favicon-192.png" },
 			// The text's font downloads with the stylesheet instead of after it.
 			{
 				rel: "preload",
