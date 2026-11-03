@@ -35,6 +35,9 @@ function analyticsClient(): Promise<PostHog | null> {
 		.then(({ default: posthog }) => {
 			posthog.init(token, {
 				api_host: ANALYTICS_HOST,
+				// With VITE_POSTHOG_HOST on our managed proxy (so ad blockers do
+				// not drop events and replays), PostHog's own links still go to its app.
+				ui_host: "https://us.posthog.com",
 				autocapture: false,
 				capture_pageview: false,
 				capture_pageleave: false,
