@@ -68,9 +68,10 @@ try {
 		});
 		await source.fs.writeFile(`${root}/local.bin`, new Uint8Array([0, 1, 255]));
 	}
+	// The digest runs in the guest, so take it while the source still runs.
+	const expected = await retainedTreeDigest(source, roots);
 	await source.pause();
 	await reconcilePausedVm(source);
-	const expected = await retainedTreeDigest(source, roots);
 	const enrolled = await database().query(
 		"update workspace_retention set last_activity_at=now()-interval '2 hours' where session_id=$1 returning session_id",
 		[session.id],
@@ -105,9 +106,9 @@ try {
 	if (!restoredId || restoredId === sourceId)
 		throw new Error("Recovery did not replace the deleted source.");
 	const restored = client.vms.ref(restoredId);
-	await restored.pause();
 	if ((await retainedTreeDigest(restored, roots)) !== expected)
 		throw new Error("Full-state recovery changed ignored data or permissions.");
+	await restored.pause();
 	const binding = await database().query<{ provider_ref: string }>(
 		"select provider_ref from agent_session where id=$1",
 		[session.id],

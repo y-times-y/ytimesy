@@ -60,11 +60,24 @@ requires both retention and compute admission enabled and a valid cutover timest
 Never advance the cutover on restart. Templates, workspace desktops, operator VMs
 and older sessions are outside automatic retirement; this is not fleet-wide cleanup.
 
-Verification is deliberately bounded: at most 10,000 entries, 32 MiB of regular
-file content and a 30-second traversal budget. Symlinks and special files fail
-closed. These limits mean many dependency-heavy repositories retain their VM;
-they must not be advertised as recycled. The full-state provider snapshot captures
-more than the project roots independently checked by the manifest.
+Verification hashes each project root inside the guest with one command (as
+root): a sorted manifest of type, mode, owner, group, file size and path plus
+every file's sha256, ignored files included, reduced to one digest. It runs on the
+source and on the deny-network copy restored from the snapshot, and the two must
+match. Bounds: 250,000 entries, 4 GiB of content and 20 seconds per digest.
+Symlinks and special files fail closed. A 7,990-entry repository (53 MB) hashes in
+under a second; the whole recycle takes about 7 seconds. The full-state provider
+snapshot captures more than the project roots independently checked.
+
+The source is fenced at its used runtime, so exec is refused there. Recycling
+opens a funded 45-second run window to scrub secrets and hash the tree, pauses
+the source and re-fences it before the snapshot. Network activity stamped after
+the fence is that window's own resume; earlier activity still defers.
+
+The previous check walked the tree with Freestyle's file API, one request per
+stat and per read. On a paused VM that API reads the disk image, without writes
+still in the guest page cache, and it could not finish a real repository inside
+its budget.
 
 Evidence: 50 targeted tests passed across recovery, allowance, fleet-cost and
 session-machine suites; typecheck and production build passed. Two disposable live

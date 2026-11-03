@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
 	type Freestyle,
 	FreestyleApiError,
@@ -159,113 +159,174 @@ export class RecycleDeferred extends Error {
 	override name = "RecycleDeferred";
 }
 
-/** Provider calls in flight per verification walk; the walk is otherwise one round trip per file. */
-const VERIFICATION_CONCURRENCY = 8;
-/** Per walk. Two walks and the snapshot run inside one 90-second VM lease (usage-admission LEASE_SECONDS). */
-const VERIFICATION_BUDGET_MS = 30_000;
+/** Wall clock for one in-guest tree digest. Both digests and the snapshot run inside one 90-second VM lease (usage-admission LEASE_SECONDS). */
+export const TREE_DIGEST_TIMEOUT_MS = 20_000;
+/** Bounds on what one digest may hash; past them the source VM is kept. */
+const TREE_DIGEST_MAX_ENTRIES = 250_000;
+const TREE_DIGEST_MAX_BYTES = 4 * 1024 ** 3;
+/**
+ * Runtime the fenced source may use to scrub secrets and hash its tree:
+ * the scrub's 15 seconds, the digest's 20 and resume/pause slack. The
+ * provider cap enforces it; a hold of the same length pays for it.
+ */
+const CAPTURE_WINDOW_SECONDS = 45;
+/** The verification copy's runtime cap: boot plus one digest, under its 80-second hold. */
+const VERIFICATION_RUN_SECONDS = 45;
 
-/** Hash every regular file in the project roots, including ignored files; fail closed on unsupported entries or limits. */
-export async function retainedTreeDigest(vm: Vm, roots: string[]) {
-	let entries = 0;
-	let bytes = 0;
-	let stopped = false;
-	const deadline = Date.now() + VERIFICATION_BUDGET_MS;
-	const call = limit(VERIFICATION_CONCURRENCY);
-	const provider = <T>(run: () => Promise<T>) =>
-		call(() => {
-			if (stopped) throw new RecycleDeferred("Recovery verification stopped.");
-			if (Date.now() > deadline)
-				throw new RecycleDeferred(
-					"Recovery verification exceeded its time budget; preserve the source VM.",
-				);
-			return run();
-		});
-	// Each entry yields its lines in path order, so the digest is the same
-	// whatever order the concurrent provider calls finish in.
-	const walk = async (path: string): Promise<string[]> => {
-		if (Date.now() > deadline)
-			throw new RecycleDeferred(
-				"Recovery verification exceeded its time budget; preserve the source VM.",
-			);
-		if (++entries > 10_000)
-			throw new RecycleDeferred(
-				"Recovery verification exceeds its bounded file limit; preserve the source VM.",
-			);
-		const stat = await provider(() => vm.fs.stat(path));
-		const meta = JSON.stringify([
-			path,
-			stat.permissions,
-			stat.owner,
-			stat.group,
-			stat.isFile,
-			stat.isDirectory,
-			stat.isSymlink,
-			stat.isFile ? stat.size : null,
-		]);
-		if (stat.isSymlink)
-			throw new RecycleDeferred(
-				"Recovery verification cannot independently verify symlinks; preserve the source VM.",
-			);
-		if (stat.isDirectory) {
-			const children = await provider(() => vm.fs.readDir(path));
-			for (const entry of children)
-				if (
-					!entry.name ||
-					/[/\0]/.test(entry.name) ||
-					[".", ".."].includes(entry.name)
-				)
-					throw new Error("Invalid recovery file path.");
-			const nested = await Promise.all(
-				children
-					.sort((a, b) => a.name.localeCompare(b.name))
-					.map((entry) => walk(`${path}/${entry.name}`)),
-			);
-			return [meta, ...nested.flat()];
-		}
-		if (stat.isFile) {
-			bytes += stat.size;
-			if (
-				!Number.isSafeInteger(stat.size) ||
-				stat.size < 0 ||
-				bytes > 32 * 1024 * 1024
-			)
-				throw new RecycleDeferred(
-					"Recovery verification exceeds its transfer allowance; preserve the source VM.",
-				);
-			const content = await provider(() => vm.fs.readFile(path));
-			if (content.byteLength !== stat.size)
-				throw new RecycleDeferred("Recovery file changed during verification.");
-			return [meta, createHash("sha256").update(content).digest("hex")];
-		}
-		throw new RecycleDeferred(
-			"Recovery verification encountered a special file; preserve the source VM.",
-		);
-	};
-	try {
-		const digest = createHash("sha256");
-		for (const root of [...roots].sort())
-			for (const line of await walk(root)) digest.update(`${line}\n`);
-		return digest.digest("hex");
-	} finally {
-		stopped = true;
-	}
+const TREE_DIGEST_REFUSALS: Record<number, string> = {
+	64: "Recovery verification cannot independently verify symlinks; preserve the source VM.",
+	65: "Recovery verification encountered a special file; preserve the source VM.",
+	66: "Recovery verification exceeds its bounded file limit; preserve the source VM.",
+	67: "Recovery verification exceeds its content allowance; preserve the source VM.",
+	68: "Recovery verification could not read the project tree; preserve the source VM.",
+	69: "Recovery file changed or became unreadable during verification; preserve the source VM.",
+};
+
+/**
+ * One shell command (POSIX sh, GNU find/coreutils) that hashes every entry
+ * under the roots, ignored files included, into one sha256: a sorted
+ * manifest of type, mode, owner, group, size (files only) and path, then the
+ * sorted per-file content hashes. Symlinks and special files fail closed,
+ * checked before and after hashing. Prints one bounded line.
+ */
+export function treeDigestCommand(roots: string[]) {
+	if (!roots.length) throw new Error("Recovery verification has no roots.");
+	for (const root of roots)
+		if (
+			!/^\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(root) ||
+			/(^|\/)\.\.?(\/|$)/.test(root)
+		)
+			throw new Error("Invalid recovery file path.");
+	const paths = [...roots]
+		.sort()
+		.map((root) => `'${root}'`)
+		.join(" ");
+	return [
+		"export LC_ALL=C",
+		"t=$(mktemp -d) || exit 70",
+		"trap 'rm -rf \"$t\"' EXIT",
+		`refuse() { find ${paths} -type l -print -quit >"$t/l" 2>/dev/null || exit 68; [ -s "$t/l" ] && exit 64; find ${paths} ! -type f ! -type d -print -quit >"$t/s" 2>/dev/null || exit 68; [ -s "$t/s" ] && exit 65; return 0; }`,
+		"refuse",
+		`find ${paths} -type f -printf 'f %m %u %g %s %p\\0' -o -printf '%y %m %u %g - %p\\0' >"$t/m0" 2>/dev/null || exit 68`,
+		'sort -z "$t/m0" >"$t/m" || exit 70',
+		`n=$(tr -cd '\\000' <"$t/m" | wc -c)`,
+		`[ "$n" -le ${TREE_DIGEST_MAX_ENTRIES} ] || exit 66`,
+		`b=$(find ${paths} -type f -printf '%s\\n' 2>/dev/null | awk '{s+=$1} END {printf "%.0f", s}')`,
+		`[ "$b" -le ${TREE_DIGEST_MAX_BYTES} ] || exit 67`,
+		`find ${paths} -type f -print0 >"$t/f0" 2>/dev/null || exit 68`,
+		'sort -z "$t/f0" >"$t/f" || exit 70',
+		'xargs -0 -r sha256sum <"$t/f" >"$t/h" 2>/dev/null || exit 69',
+		"refuse",
+		'd=$(cat "$t/m" "$t/h" | sha256sum) || exit 70',
+		`printf 'ytimesy-tree-v1 %s %s %s\\n' "$n" "$b" "\${d%% *}"`,
+	].join("\n");
 }
 
-/** Runs at most `max` calls at once; the rest wait their turn in order. */
-function limit(max: number) {
-	let active = 0;
-	const waiting: (() => void)[] = [];
-	return async <T>(run: () => Promise<T>) => {
-		if (active < max) active++;
-		else await new Promise<void>((resolve) => waiting.push(resolve));
-		try {
-			return await run();
-		} finally {
-			const next = waiting.shift();
-			if (next) next();
-			else active--;
-		}
+/** Reads a tree digest command's result; anything unexpected keeps the source VM. */
+export function parseTreeDigest(result: {
+	statusCode?: number | null;
+	stdout?: string | null;
+}) {
+	if (result.statusCode == null)
+		throw new RecycleDeferred(
+			"Recovery verification exceeded its time budget; preserve the source VM.",
+		);
+	if (result.statusCode !== 0)
+		throw new RecycleDeferred(
+			TREE_DIGEST_REFUSALS[result.statusCode] ??
+				`Recovery verification failed (exit ${result.statusCode}); preserve the source VM.`,
+		);
+	const match = /^ytimesy-tree-v1 (\d+) (\d+) ([0-9a-f]{64})\n?$/.exec(
+		result.stdout ?? "",
+	);
+	if (!match)
+		throw new RecycleDeferred(
+			"Recovery verification returned no digest; preserve the source VM.",
+		);
+	return {
+		digest: match[3],
+		entries: Number(match[1]),
+		bytes: Number(match[2]),
 	};
+}
+
+/**
+ * Hashes every entry in the project roots inside the guest with one command,
+ * as root so no file is unreadable. Runs the VM: a paused VM resumes, and a
+ * fenced one refuses (the caller opens a run window first).
+ */
+export async function retainedTreeDigest(
+	vm: Pick<Vm, "exec">,
+	roots: string[],
+) {
+	const result = await vm.exec({
+		command: treeDigestCommand(roots),
+		linuxUser: "root",
+		timeoutMs: TREE_DIGEST_TIMEOUT_MS,
+	});
+	return parseTreeDigest(result).digest;
+}
+
+/**
+ * Opens a short funded run window on the fenced, paused source to scrub
+ * secrets and hash its tree in the guest, then pauses it and closes the
+ * fence at the runtime it used. A window that cannot be closed and
+ * confirmed keeps its hold (the provider cap still bounds it).
+ */
+async function captureSourceTree(
+	connection: PoolClient,
+	row: Retention,
+	vm: Vm,
+	data: VmData,
+	roots: string[],
+) {
+	const before = data.totalRunSeconds ?? 0;
+	const hourlyMicroUsd = computeHourlyMicroUsd(data.resources);
+	const hold = randomUUID();
+	await reserveInfrastructureUsage(
+		{
+			id: hold,
+			userId: row.user_id,
+			resourceKey: `recovery-capture:${row.vm_id}`,
+			amountMicroUsd: Math.ceil(
+				(hourlyMicroUsd * CAPTURE_WINDOW_SECONDS) / 3600,
+			),
+			hourlyMicroUsd,
+		},
+		connection,
+	);
+	try {
+		await vm.update({
+			maxRunTotalSeconds: Math.floor(before) + CAPTURE_WINDOW_SECONDS,
+			automaticRestart: false,
+		});
+		await scrubAgentSecrets(vm);
+		return await retainedTreeDigest(vm, roots);
+	} finally {
+		if ((await vm.data()).state === "running") await vm.pause();
+		const stopped = await vm.data();
+		if (stopped.state === "paused" && stopped.totalRunSeconds != null) {
+			await vm.update({
+				maxRunTotalSeconds: Math.floor(stopped.totalRunSeconds),
+				automaticRestart: false,
+			});
+			await settleInfrastructureUsage(
+				{
+					id: hold,
+					userId: row.user_id,
+					consumedMicroUsd: Math.ceil(
+						(hourlyMicroUsd *
+							Math.min(
+								CAPTURE_WINDOW_SECONDS,
+								Math.max(0, stopped.totalRunSeconds - before),
+							)) /
+							3600,
+					),
+				},
+				connection,
+			);
+		}
+	}
 }
 
 function isNotFound(error: unknown) {
@@ -282,7 +343,21 @@ async function vmGone(vm: Vm) {
 	}
 }
 
-async function stillIdle(client: PoolClient, row: Retention, vm: Vm) {
+/** Clock skew allowed between this server and the provider's activity stamps. */
+const ACTIVITY_SKEW_MS = 5_000;
+
+/**
+ * `fencedAt`: once the source is fenced, nothing but this recycle can run it,
+ * so network activity stamped from then on is the capture window's own
+ * resume (the provider reports it some seconds late). Earlier activity
+ * within the idle period still defers.
+ */
+async function stillIdle(
+	client: PoolClient,
+	row: Retention,
+	vm: Vm,
+	fencedAt?: number,
+) {
 	const active = await client.query(
 		`select 1 from agent_session s where s.provider_ref=$1 and
 	 (s.turn_status='running' or exists(select 1 from api_turn t where t.session_id=s.id and t.state in ('queued','running'))) limit 1`,
@@ -299,7 +374,8 @@ async function stillIdle(client: PoolClient, row: Retention, vm: Vm) {
 	const activity = Date.parse(data.lastNetworkActivity ?? data.createdAt);
 	if (
 		!Number.isFinite(activity) ||
-		Date.now() - activity < WORKSPACE_RECYCLE_IDLE_SECONDS * 1000
+		(Date.now() - activity < WORKSPACE_RECYCLE_IDLE_SECONDS * 1000 &&
+			(fencedAt === undefined || activity < fencedAt - ACTIVITY_SKEW_MS))
 	)
 		throw new RecycleDeferred("Workspace has recent interactive activity.");
 	return data;
@@ -327,13 +403,11 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 		const verificationHold = randomUUID();
 		try {
 			const data = await stillIdle(connection, row, vm);
+			const fencedAt = Date.now();
 			await vm.update({
 				maxRunTotalSeconds: Math.floor(data.totalRunSeconds ?? 0),
 				automaticRestart: false,
 			});
-			const fenced = await stillIdle(connection, row, vm);
-			if (fenced.maxRunTotalSeconds !== Math.floor(fenced.totalRunSeconds ?? 0))
-				throw new Error("Provider did not confirm the recycling fence.");
 			const binding = await connection.query<{ project_id: string }>(
 				"select project_id from agent_session where id=$1 and user_id=$2",
 				[sessionId, row.user_id],
@@ -347,8 +421,16 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 			const roots = repositoriesForProject(project).map((repo) =>
 				repositoryDirectory(repo.fullName),
 			);
-			const digest = await retainedTreeDigest(vm, roots);
-			await scrubAgentSecrets(vm);
+			const digest = await captureSourceTree(
+				connection,
+				row,
+				vm,
+				await stillIdle(connection, row, vm, fencedAt),
+				roots,
+			);
+			const fenced = await stillIdle(connection, row, vm, fencedAt);
+			if (fenced.maxRunTotalSeconds !== Math.floor(fenced.totalRunSeconds ?? 0))
+				throw new Error("Provider did not confirm the recycling fence.");
 			const created = await vm.snapshot({
 				slug: `ytimesy-recovery-${randomUUID()}`,
 				autoDeleteSeconds: -1,
@@ -389,7 +471,7 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 			const clone = await client.vms.create({
 				snapshotId,
 				firewall: { rules: [] },
-				maxRunTotalSeconds: 20,
+				maxRunTotalSeconds: VERIFICATION_RUN_SECONDS,
 				automaticRestart: false,
 				autoDeleteSeconds: 300,
 				metadata: { purpose: "ytimesy-retention-verification" },
@@ -397,14 +479,14 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 			verification = clone.vm;
 			if ((await verification.data()).state === "starting")
 				await waitUntilVmRunning(verification, "Recovery verification machine");
+			// The copy resumes at the snapshot's instant, network denied, and is
+			// hashed by the same command before anything else runs in it.
+			const restored = await retainedTreeDigest(verification, roots);
 			if ((await verification.data()).state === "running")
 				await verification.pause();
-			if (
-				(await verification.data()).state !== "paused" ||
-				(await retainedTreeDigest(verification, roots)) !== digest
-			)
+			if (restored !== digest)
 				throw new Error("Independent recovery verification failed.");
-			await stillIdle(connection, row, vm);
+			await stillIdle(connection, row, vm, fencedAt);
 			const persisted = await connection.query(
 				`update workspace_retention set phase='retained',snapshot_id=$2,resources=$3,expires_at=$4,verified_at=now() where session_id=$1 and vm_id=$5 and phase='capturing' returning session_id`,
 				[
@@ -598,7 +680,7 @@ export async function recycleIdleWorkspaces(client: Freestyle) {
 	const rows = await database().query<{ session_id: string }>(
 		"select session_id from workspace_retention where phase='active' and retry_after <= now() and last_activity_at < now()-interval '1 hour' order by last_activity_at limit 1",
 	);
-	// One workspace per tick: each verification takes up to two 30-second walks.
+	// One workspace per tick: each verification runs two in-guest digests of up to 20 seconds.
 	for (const row of rows.rows)
 		try {
 			await recycleWorkspace(client, row.session_id);
