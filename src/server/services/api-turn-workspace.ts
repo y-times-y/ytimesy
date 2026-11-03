@@ -1,4 +1,5 @@
 import { Effect, Either } from "effect";
+import { MachineNotResponding } from "#/domain/api-turn-failure";
 import { guestMetadataBlockCommand } from "#/domain/guest-network-guard";
 import { WorkspaceId } from "#/domain/ids";
 import {
@@ -208,7 +209,7 @@ export function deferredApiTurnWorkspace(
 		signal.throwIfAborted();
 		// Cloud metadata is refused for every user on the VM, re-applied each
 		// turn (a cold boot drops the rules); it overlaps the checkout.
-		const metadataBlocked = blockGuestMetadata(machines, vm);
+		const metadataBlocked = blockGuestMetadata(machines, vm, signal);
 		metadataBlocked.catch(() => {});
 		await Effect.runPromise(
 			Effect.gen(function* () {
@@ -346,16 +347,60 @@ function startsNewChatBranch(checkout: ProjectCheckout) {
 	);
 }
 
-/** Fails closed: a VM whose metadata cannot be blocked runs no turn. */
+/** Waits before each retry of a metadata guard the machine did not answer. */
+const METADATA_GUARD_RETRY_MS = [2_000, 5_000] as const;
+
+/**
+ * Fails closed: a VM whose metadata cannot be blocked runs no turn. A guard
+ * the machine did not answer (the command threw, timed out, or failed with no
+ * output) is not a guard failure: the machine is woken and the guard retried
+ * twice before the turn fails as "machine isn't responding". A guard that
+ * ran and refused (with stderr) fails at once.
+ */
 export async function blockGuestMetadata(
-	machines: Pick<WorkspaceMachines, "exec">,
+	machines: Pick<WorkspaceMachines, "exec"> &
+		Partial<Pick<WorkspaceMachines, "ensureRunning">>,
 	vm: WorkspaceId,
+	signal?: AbortSignal,
+	retryDelays: readonly number[] = METADATA_GUARD_RETRY_MS,
 ) {
-	const result = await machines.exec(vm, guestMetadataBlockCommand(), 30_000);
-	if (result.exitCode !== 0)
-		throw new Error(
-			`Cloud metadata could not be blocked on this machine: ${result.stderr.slice(-300)}`,
+	let lastFailure: unknown;
+	for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+		if (attempt > 0) {
+			await new Promise<void>((resolve) => {
+				const timer = setTimeout(done, retryDelays[attempt - 1]);
+				signal?.addEventListener("abort", done, { once: true });
+				function done() {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", done);
+					resolve();
+				}
+			});
+			signal?.throwIfAborted();
+			await machines.ensureRunning?.(vm).catch((error: unknown) => {
+				lastFailure = error;
+			});
+			signal?.throwIfAborted();
+		}
+		let result: Awaited<ReturnType<WorkspaceMachines["exec"]>>;
+		try {
+			result = await machines.exec(vm, guestMetadataBlockCommand(), 30_000);
+		} catch (error) {
+			signal?.throwIfAborted();
+			lastFailure = error;
+			continue;
+		}
+		if (result.exitCode === 0) return;
+		const stderr = result.stderr.trim();
+		if (stderr && result.exitCode !== 124)
+			throw new Error(
+				`Cloud metadata could not be blocked on this machine: ${stderr.slice(-300)}`,
+			);
+		lastFailure = new Error(
+			`The metadata guard exited ${result.exitCode} without an answer${stderr ? `: ${stderr.slice(-200)}` : ""}.`,
 		);
+	}
+	throw new MachineNotResponding(lastFailure);
 }
 
 /** How long a reader waits for its parent's VM (a writer's fork pauses it). */

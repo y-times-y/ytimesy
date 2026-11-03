@@ -5,15 +5,28 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 	// JWTs (header.payload[.signature]).
 	/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]*)?/g,
 	/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+	// AWS access key ids (also inside presigned URLs' X-Amz-Credential).
+	/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
 	// Credential-looking query/form values of any length.
 	/\b((?:access_|refresh_|id_)?token|code|key|secret|password|api_key|apikey|signature|sig|state|verifier)=[^&\s"'#]+/gi,
 	/\/\/[^/\s:@]+:[^/\s@]+@/g,
 	/\b[A-Za-z0-9_+-]{40,}={0,2}/g,
 ];
 
+/**
+ * Header and JSON style credentials (`Authorization: Basic ..`, `x-api-key: ..`,
+ * `"token": ".."`): the name and separator stay, the value goes.
+ */
+const CREDENTIAL_FIELD =
+	/\b((?:x-)?api[-_]?key|(?:proxy-)?authorization|(?:access|refresh|id)[-_]?token|token|client[-_]?secret|secret|password)(["']?\s*[:=]\s*["']?)(?:(?:Basic|Bearer|Token)\s+)?[^\s"',;}&]+/gi;
+
 /** Text with tokens, credentials in URLs and long opaque strings removed. */
 export function redactSecrets(text: string, limit = 4000) {
-	let redacted = text;
+	let redacted = text.replace(
+		CREDENTIAL_FIELD,
+		(_match, name: string, separator: string) =>
+			`${name}${separator}[redacted]`,
+	);
 	for (const pattern of SECRET_PATTERNS)
 		redacted = redacted.replace(pattern, (match, name?: string) =>
 			match.startsWith("//")

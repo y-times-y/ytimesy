@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { failureCause } from "#/domain/api-turn-failure";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
@@ -50,6 +51,12 @@ export async function captureSessionCheckpoint(
 	try {
 		await captureSessionCheckpointStages(machines, userId, sessionId, progress);
 	} catch (error) {
+		// Only the stage is stored; the redacted cause goes to the logs.
+		console.warn("Session checkpoint failed", {
+			stage: progress.stage,
+			sessionId,
+			cause: failureCause(error),
+		});
 		await recordCheckpointFailure(sessionId, progress.stage).catch(
 			() => undefined,
 		);

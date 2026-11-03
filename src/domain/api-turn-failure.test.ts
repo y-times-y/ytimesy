@@ -8,6 +8,7 @@ import {
 	CodexReconnectRequired,
 	ContextWindowExhausted,
 	contextOverflow,
+	failureCause,
 	HarnessRuntimeFailure,
 	MachineUsageLimitReached,
 	SafeApiModelFailure,
@@ -56,7 +57,9 @@ it("logs only recognized failure classifications, never arbitrary error properti
 
 it("distinguishes safe failure stages without exposing provider details", () => {
 	expect(apiTurnFailureMessage("workspace")).toContain("cloud machine");
-	expect(apiTurnFailureMessage("budget")).toContain("no model request was sent");
+	expect(apiTurnFailureMessage("budget")).toContain(
+		"no model request was sent",
+	);
 	expect(apiTurnFailureMessage("model")).toContain("Retry");
 });
 
@@ -532,4 +535,45 @@ it("words the harness's own failures as such, redacted, and classifies them apar
 			new HarnessRuntimeFailure("step-preparation", new Error("disk full")),
 		),
 	).toMatch(/^Run step preparation failed: disk full/);
+});
+
+it("keeps every failure's redacted cause for the owner, not just machine failures", () => {
+	// The machine detail wins when there is one.
+	expect(
+		failureCause(
+			Object.assign(
+				taggedMachineError("WorkspaceProvisionError", "vm failed"),
+				{
+					detail: "provider said 503 with key sk-live-abcdefghijkl",
+				},
+			),
+		),
+	).toBe("provider said 503 with key [redacted]");
+	// Otherwise the error's own text and up to two inner causes.
+	const inner = new TypeError("fetch failed", {
+		cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), {
+			code: "ECONNREFUSED",
+			cause: new Error("too deep to include"),
+		}),
+	});
+	expect(
+		failureCause(
+			new Error("Could not wake https://user:pass@vm.internal/x?token=abc", {
+				cause: inner,
+			}),
+		),
+	).toBe(
+		"Error: Could not wake https://[redacted]@vm.internal/x?token=[redacted] <- TypeError: fetch failed <- Error [ECONNREFUSED]: connect ECONNREFUSED 10.0.0.1:443",
+	);
+	// A model failure's provider error is followed.
+	expect(
+		failureCause(
+			Object.assign(new Error("Model failed"), {
+				providerError: new Error("401 Authorization: Bearer abcdefgh12345678"),
+			}),
+		),
+	).toBe("Error: Model failed <- Error: 401 Authorization: [redacted]");
+	expect(failureCause("plain text failure")).toBe("plain text failure");
+	expect(failureCause(undefined)).toBeNull();
+	expect(failureCause(new Error(" y".repeat(600)))?.length).toBe(600);
 });
