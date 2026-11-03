@@ -679,7 +679,7 @@ describe("where saves go and when they run", () => {
 			"projects/acme-web--7/<topic>.md for anything learned here about this project's code, data or domain",
 		);
 		expect(project).toContain(
-			"personal/<topic>.md only for something about the user themself",
+			"personal/<topic>.md for something about the user themself, even when said here (their preferences and opinions, such as which language or framework they think is better",
 		);
 		expect(SAVE_HOOK_INSTRUCTIONS).toContain(
 			"data, reports, customers or domain belongs to the project even when it sounds general",

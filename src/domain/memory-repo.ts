@@ -116,7 +116,7 @@ export function memoryInstructions(
 		? `\`grep -rn <term> ${dir}/personal ${dir}/${folder}\``
 		: `\`grep -rn <term> ${dir}/personal\``;
 	const target = folder
-		? `${folder}/<topic>.md for anything learned here about this project's code, data or domain (even when it sounds general), or personal/<topic>.md only for something about the user themself (their preferences, working style, identity, tools they use everywhere)`
+		? `${folder}/<topic>.md for anything learned here about this project's code, data or domain (even when it sounds general), or personal/<topic>.md for something about the user themself, even when said here (their preferences and opinions, such as which language or framework they think is better, working style, identity, tools they use everywhere)`
 		: "personal/<topic>.md";
 	const keys =
 		mode === "full"
