@@ -6,6 +6,7 @@ import { database } from "../adapters/database";
 import { authorizedRepository, githubClient } from "../adapters/github";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { githubAccessToken } from "../auth/github-connection";
+import { timed } from "../services/step-timing";
 
 /** Re-check current owner and GitHub access on every operation, including after disconnect. */
 export async function authorizeGitProxy(grant: GitProxyGrant) {
@@ -15,15 +16,36 @@ export async function authorizeGitProxy(grant: GitProxyGrant) {
 	const userTokenRead = githubAccessToken(grant.userId).catch(() => {
 		throw new GitProxyFailure("user-connection");
 	});
-	const installationTokenRead = githubInstallationAccessToken(
-		grant.installationId,
-		{ repositoryNames: [grant.name], contents: grant.access },
+	const installationTokenRead = timed("git:installationToken", () =>
+		githubInstallationAccessToken(grant.installationId, {
+			repositoryNames: [grant.name],
+			contents: grant.access,
+		}),
 	).catch(() => {
 		throw new GitProxyFailure("installation-token");
 	});
+	// A push also needs the user's own push permission; that read needs only
+	// their token, so it runs beside the owner and repository checks.
+	const pushAllowedRead =
+		grant.access === "write"
+			? userTokenRead.then((userToken) =>
+					timed("git:reposGet", () =>
+						githubClient(userToken).repos.get({
+							owner: grant.owner,
+							repo: grant.name,
+						}),
+					).then(
+						(access) => Boolean(access.data.permissions?.push),
+						() => {
+							throw new GitProxyFailure("repository-access");
+						},
+					),
+				)
+			: Promise.resolve(true);
 	// Settled here so a refusal before they are awaited is not unhandled.
 	userTokenRead.catch(() => undefined);
 	installationTokenRead.catch(() => undefined);
+	pushAllowedRead.catch(() => undefined);
 	const repository = (
 		await database()
 			.query<{ repositoryId: number }>(
@@ -91,21 +113,16 @@ export async function authorizeGitProxy(grant: GitProxyGrant) {
 	).rows[0];
 	if (!repository) return null;
 	const userToken = await userTokenRead;
-	await authorizedRepository(
-		userToken,
-		grant.installationId,
-		repository.repositoryId,
+	await timed("git:authorizedRepository", () =>
+		authorizedRepository(
+			userToken,
+			grant.installationId,
+			repository.repositoryId,
+		),
 	).catch(() => {
 		throw new GitProxyFailure("repository-access");
 	});
-	if (grant.access === "write") {
-		const access = await githubClient(userToken)
-			.repos.get({ owner: grant.owner, repo: grant.name })
-			.catch(() => {
-				throw new GitProxyFailure("repository-access");
-			});
-		if (!access.data.permissions?.push) return null;
-	}
+	if (!(await pushAllowedRead)) return null;
 	return installationTokenRead;
 }
 

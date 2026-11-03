@@ -53,6 +53,7 @@ export async function withStepTrace<T>(
 		JSON.stringify({
 			...meta,
 			...extra,
+			startedAt: trace.startedAt,
 			totalMs: Date.now() - trace.startedAt,
 			spans: Object.fromEntries(
 				[...trace.spans].map(([name, span]) => [
@@ -77,6 +78,24 @@ export async function withStepTrace<T>(
 	} finally {
 		clearTimeout(slow);
 		console.log("step-timing", line({ colo: await isolateColo() }));
+		// The handoff's phases alone, so a long step's line is never too big to read.
+		const handoff = [...trace.spans].filter(([name]) =>
+			/^(commit|handoff|publish):|^turn:(commit|finalize|stopCommands|publication)/.test(
+				name,
+			),
+		);
+		if (handoff.length)
+			console.log(
+				"handoff-timing",
+				JSON.stringify(
+					Object.fromEntries(
+						handoff.map(([name, span]) => [
+							name,
+							[trace.startedAt + span.firstAt, span.ms, span.count],
+						]),
+					),
+				),
+			);
 	}
 }
 

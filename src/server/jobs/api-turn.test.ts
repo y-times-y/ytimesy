@@ -14,6 +14,7 @@ import { runApiTurn } from "./api-turn";
 const mocks = vi.hoisted(() => ({
 	attachments: vi.fn(async (..._args: unknown[]) => {}),
 	renew: vi.fn(),
+	replaceItem: vi.fn(async (..._args: unknown[]) => true),
 	finalize: vi.fn(),
 	stop: vi.fn(),
 	runtime: vi.fn(),
@@ -134,7 +135,7 @@ vi.mock("../services/api-agent-command-tools", () => ({
 	completedAgentCommands: mocks.commandCompletions,
 }));
 vi.mock("../services/turn-commit", () => ({
-	commitCompletedSessionTurn: mocks.commit,
+	commitSessionTurn: mocks.commit,
 }));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: mocks.knowledge,
@@ -146,6 +147,7 @@ vi.mock("../adapters/api-turns", () => ({
 	checkpointApiTurn: mocks.checkpoint,
 	publishApiTurnProgress: mocks.progress,
 	apiTurnCancelRequested: mocks.cancelRequested,
+	replaceSettledTurnItem: mocks.replaceItem,
 }));
 vi.mock("../adapters/conversation-turn-control", () => ({
 	coordinateConversationTurn: vi.fn(async () => true),
@@ -520,6 +522,82 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 			expect.arrayContaining([
 				expect.objectContaining({ kind: "notice", id: "turn:publication" }),
 			]),
+		);
+	});
+
+	it("shows the answer as done first, then opens the pull request and links it live", async () => {
+		codexOwner();
+		answering();
+		const order: string[] = [];
+		mocks.finalize.mockImplementation(async (_turn, state) => {
+			order.push("finalize");
+			return state;
+		});
+		mocks.commit.mockResolvedValueOnce({
+			publish: async () => {
+				order.push("publish");
+				return {
+					publication: {
+						branch: "ytimesy/fix-branches-abc123",
+						pullRequestUrl: "https://github.com/owner/repo/pull/4",
+						pullRequest: {
+							number: 4,
+							url: "https://github.com/owner/repo/pull/4",
+							draft: true,
+							created: true,
+						},
+					},
+				};
+			},
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(order).toEqual(["finalize", "publish"]);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "notice",
+					id: "turn:pull-request",
+					message: "Opening pull request…",
+					pullRequest: expect.objectContaining({ state: "opening" }),
+				}),
+			]),
+		);
+		expect(mocks.replaceItem).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "turn" }),
+			"turn:pull-request",
+			expect.objectContaining({
+				message: "Opened draft PR #4",
+				pullRequest: expect.objectContaining({
+					state: "opened",
+					url: "https://github.com/owner/repo/pull/4",
+				}),
+			}),
+		);
+	});
+
+	it("replaces the opening item with why the push failed", async () => {
+		codexOwner();
+		answering();
+		mocks.commit.mockResolvedValueOnce({
+			publish: async () => ({
+				failure: "Changes are committed in this chat but were not pushed.",
+			}),
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(mocks.replaceItem).toHaveBeenCalledWith(
+			expect.anything(),
+			"turn:pull-request",
+			{
+				kind: "notice",
+				id: "turn:pull-request",
+				message: "Changes are committed in this chat but were not pushed.",
+			},
 		);
 	});
 

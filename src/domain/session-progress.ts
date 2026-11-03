@@ -86,8 +86,15 @@ export function progressStreamWanted(input: {
 	readonly turnRunning: boolean;
 	readonly helpersWorking: boolean;
 	readonly watchingForWake: boolean;
+	/** A done turn still opening its pull request; its link arrives on the stream. */
+	readonly openingPullRequest?: boolean;
 }): boolean {
-	return input.turnRunning || input.helpersWorking || input.watchingForWake;
+	return (
+		input.turnRunning ||
+		input.helpersWorking ||
+		input.watchingForWake ||
+		Boolean(input.openingPullRequest)
+	);
 }
 
 import type { CodexUsage } from "./codex-usage";

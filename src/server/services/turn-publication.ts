@@ -11,7 +11,11 @@ import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { adoptChatPublicationBranch } from "../adapters/agent-sessions";
 import { isDevEvalUser } from "../adapters/dev-eval-users";
 import { isEnvironmentSetupChat } from "../adapters/environment-setup-chats";
-import { authorizedRepository, compareBranchAhead } from "../adapters/github";
+import {
+	authorizedRepository,
+	findOpenPullRequest,
+	isNothingAheadToOpen,
+} from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
 import { evaluationRunForTask } from "../adapters/harness-evaluation";
@@ -25,6 +29,7 @@ import {
 } from "./agent-captures";
 import { queuePullRequestEvidence } from "./pr-evidence-job";
 import { availableChatBranchName, projectBaseBranch } from "./session-branch";
+import { timed } from "./step-timing";
 
 export type TurnGitRuntime = Pick<WorkspaceRuntime, "exec"> &
 	Partial<Pick<WorkspaceRuntime, "readTextFile" | "writeTextFile">>;
@@ -33,6 +38,14 @@ export type TurnGitRuntime = Pick<WorkspaceRuntime, "exec"> &
 export type TurnPublication = {
 	readonly branch: string | null;
 	readonly pullRequestUrl: string | null;
+	/** The pull request this turn opened or pushed to. */
+	readonly pullRequest?: {
+		readonly number: number;
+		readonly url: string;
+		readonly draft: boolean;
+		/** Opened by this turn, not an open one it pushed to. */
+		readonly created: boolean;
+	};
 };
 
 /** A root chat's turn was kept local on purpose; the message is shown in the chat. */
@@ -73,6 +86,16 @@ export async function publishCompletedSessionTurn(
 	runtime: TurnGitRuntime,
 	turn: string,
 	facts: PullRequestHandoffFacts = EMPTY_HANDOFF,
+	/**
+	 * The repositories (full names) unpublishedTurnRepositories found with
+	 * something to push; the others are skipped without asking the checkout
+	 * or GitHub again. Omitted, every repository is checked.
+	 */
+	pending?: ReadonlySet<string>,
+	/** Told the primary repository's pull request as soon as GitHub returns it. */
+	onPullRequest?: (
+		pull: NonNullable<TurnPublication["pullRequest"]>,
+	) => unknown,
 ): Promise<TurnPublication | undefined> {
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn handoff identity.");
@@ -86,15 +109,17 @@ export async function publishCompletedSessionTurn(
 	if (!providerRef) return;
 	// Screenshots and recordings the agent made after its last command (a
 	// recording it ran in the background) are stored before the description
-	// lists them.
-	await collectAgentCaptures({
-		shell: (command, timeout) =>
-			runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
-		userId: session.userId,
-		projectId: session.projectId,
-		sessionId: session.id,
-		itemId: null,
-	}).catch((error) =>
+	// lists them; collecting them runs beside the push.
+	const capturesCollected = timed("handoff:captures", () =>
+		collectAgentCaptures({
+			shell: (command, timeout) =>
+				runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
+			userId: session.userId,
+			projectId: session.projectId,
+			sessionId: session.id,
+			itemId: null,
+		}),
+	).catch((error) =>
 		console.warn("Agent captures were not collected at handoff.", {
 			message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
 		}),
@@ -103,26 +128,42 @@ export async function publishCompletedSessionTurn(
 	// none yet).
 	let head = session.workingBranch;
 	let chatBase = session.baseBranch;
-	let token: string | undefined;
+	let tokenRead: Promise<string> | undefined;
+	const userTokenFor = () => {
+		tokenRead ??= timed("handoff:userToken", () =>
+			githubAccessToken(session.userId),
+		);
+		return tokenRead;
+	};
 	let published: TurnPublication | undefined;
-	const repositories = repositoriesForProject(project);
+	const repositories = repositoriesForProject(project).filter(
+		(repo) => !pending || pending.has(repo.fullName),
+	);
 	for (const repo of repositories) {
 		const directory = repositoryDirectory(repo.fullName);
-		const changed = await runtime.exec(
-			providerRef,
-			["bash", "-lc", unpublishedCommitCountCommand(directory, revision)],
-			{},
-			15_000,
+		// A repository known to have commits to push asks GitHub for access
+		// while the checkout is checked; otherwise only after.
+		const authorization = () =>
+			userTokenFor().then((token) =>
+				timed("handoff:authorizedRepository", () =>
+					authorizedRepository(token, repo.installationId, repo.repositoryId),
+				),
+			);
+		const early = pending ? authorization() : undefined;
+		early?.catch(() => undefined);
+		const changed = await timed("handoff:unpublished", () =>
+			runtime.exec(
+				providerRef,
+				["bash", "-lc", unpublishedCommitCountCommand(directory, revision)],
+				{},
+				15_000,
+			),
 		);
 		if (changed.exitCode !== 0)
 			throw new Error(`Could not check committed changes in ${repo.fullName}.`);
 		if (changed.stdout.trim() === "0") continue;
-		token ??= await githubAccessToken(session.userId);
-		const repository = await authorizedRepository(
-			token,
-			repo.installationId,
-			repo.repositoryId,
-		);
+		const repository = await (early ?? authorization());
+		const token = await userTokenFor();
 		if (!head) {
 			// A chat opened before chats published: it takes its branch now,
 			// once, and its checkout moves onto it so later turns stay there.
@@ -165,108 +206,198 @@ export async function publishCompletedSessionTurn(
 			if (moved.exitCode !== 0)
 				throw new Error(`Could not move the chat's checkout onto ${head}.`);
 		}
+		const branch = head;
 		const primary = repo.fullName === project.fullName;
 		const base = primary
 			? chatBase || projectBaseBranch(project, repository)
 			: repo.branch || repository.defaultBranch;
-		if (head === base || head === repository.defaultBranch)
+		if (branch === base || branch === repository.defaultBranch)
 			throw new ChatPublicationSkipped(
-				`Changes are committed in this chat but were not pushed: it works directly on ${head}, and ytimesy never pushes to a base or default branch automatically. Start a new chat to get its own branch.`,
+				`Changes are committed in this chat but were not pushed: it works directly on ${branch}, and ytimesy never pushes to a base or default branch automatically. Start a new chat to get its own branch.`,
 			);
-		await pushBrokeredRepository(
-			{
-				exec: (command, timeout) =>
-					runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
-				writeTextFile: (path, contents) => {
-					if (!runtime.writeTextFile)
-						throw new Error("Workspace file transfer unavailable.");
-					return runtime.writeTextFile(providerRef, path, contents);
-				},
-				readTextFile: (path) => {
-					if (!runtime.readTextFile)
-						throw new Error("Workspace file transfer unavailable.");
-					return runtime.readTextFile(providerRef, path);
-				},
-			},
-			{
-				owner: repo.fullName.split("/")[0],
-				userId: session.userId,
-				projectId: project.id,
-				name: repo.fullName.split("/")[1],
-				branch: head,
-				baseBranch: base,
-				installationId: repo.installationId,
-				directory,
-				revision,
-			},
+		// What the pull request needs and the push does not change runs beside
+		// it: the open pull request's lookup, the changed paths and the
+		// Evidence section (a count and a link to the agent's screenshots and
+		// recordings in ytimesy, never media in the repository or body).
+		const existing = timed("handoff:findPullRequest", () =>
+			findOpenPullRequest(token, repo.fullName, { head: branch, base }),
 		);
-		if ((await compareBranchAhead(token, repo.fullName, base, head)) < 1) {
-			await markPublished(runtime, providerRef, directory, revision);
-			if (primary) published = { branch: head, pullRequestUrl: null };
-			continue;
-		}
-		const files = await changedFilesOnBranch(
+		existing.catch(() => undefined);
+		const files = changedFilesOnBranch(
 			runtime,
 			providerRef,
 			directory,
 			revision,
 		);
-		// The Evidence section for the agent's screenshots and recordings: a count
-		// and a link to them in ytimesy (never media in the repository or body).
 		const captures = primary
-			? await agentCapturesPullRequestSection({
+			? capturesCollected.then(() =>
+					agentCapturesPullRequestSection({
+						userId: session.userId,
+						projectId: session.projectId,
+						sessionId: session.id,
+					}).catch(() => null),
+				)
+			: Promise.resolve(null);
+		await timed("handoff:push", () =>
+			pushBrokeredRepository(
+				{
+					exec: (command, timeout) =>
+						runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
+					writeTextFile: (path, contents) => {
+						if (!runtime.writeTextFile)
+							throw new Error("Workspace file transfer unavailable.");
+						return runtime.writeTextFile(providerRef, path, contents);
+					},
+					readTextFile: (path) => {
+						if (!runtime.readTextFile)
+							throw new Error("Workspace file transfer unavailable.");
+						return runtime.readTextFile(providerRef, path);
+					},
+				},
+				{
+					owner: repo.fullName.split("/")[0],
+					userId: session.userId,
+					projectId: project.id,
+					name: repo.fullName.split("/")[1],
+					branch,
+					baseBranch: base,
+					installationId: repo.installationId,
+					directory,
+					revision,
+				},
+			),
+		);
+		const [changedFiles, capturesSection] = await Promise.all([
+			files,
+			captures,
+		]);
+		// No separate "is it ahead" question: GitHub refuses to open a pull
+		// request for a branch that adds nothing, and an open one is only
+		// updated.
+		const pull = await timed("handoff:pullRequest", () =>
+			ensureAppDraftPullRequest(
+				repo.installationId,
+				repo.fullName,
+				{
+					title:
+						session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
+						"Agent changes",
+					body: withAgentCapturesSection(
+						pullRequestHandoffBody({
+							description: facts.description,
+							finalAnswer: facts.finalAnswer,
+							files: [...facts.files, ...changedFiles],
+							verification: facts.verification,
+						}),
+						capturesSection,
+					),
+					head: branch,
+					base,
+				},
+				{
 					userId: session.userId,
 					projectId: session.projectId,
+					repositoryId: repo.repositoryId,
 					sessionId: session.id,
-				}).catch(() => null)
-			: null;
-		const pull = await ensureAppDraftPullRequest(
-			repo.installationId,
-			repo.fullName,
-			{
-				title:
-					session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
-					"Agent changes",
-				body: withAgentCapturesSection(
-					pullRequestHandoffBody({
-						description: facts.description,
-						finalAnswer: facts.finalAnswer,
-						files: [...facts.files, ...files],
-						verification: facts.verification,
-					}),
-					captures,
-				),
-				head,
-				base,
-			},
-			{
-				userId: session.userId,
-				projectId: session.projectId,
-				repositoryId: repo.repositoryId,
-				sessionId: session.id,
-			},
-			token,
-		);
-		// Harness-captured evidence (prEvidence=on) runs as a background job after
-		// the handoff; queueing never blocks or fails the turn.
-		if (primary && "number" in pull && typeof pull.number === "number")
-			await queuePullRequestEvidence({
-				userId: session.userId,
-				sessionId: session.id,
-				revision,
-				installationId: Number(repo.installationId),
-				fullName: repo.fullName,
-				pullNumber: pull.number,
-			}).catch((error) =>
-				console.warn("Pull request evidence could not be queued.", {
-					message:
-						error instanceof Error ? error.message.slice(0, 300) : "unknown",
-				}),
-			);
-		await markPublished(runtime, providerRef, directory, revision);
-		if (primary) published = { branch: head, pullRequestUrl: pull.url };
+				},
+				token,
+				existing,
+			),
+		).catch(async (error: unknown) => {
+			if (await isNothingAheadToOpen(error)) return null;
+			throw error;
+		});
+		if (!pull) {
+			await markPublished(runtime, providerRef, directory, revision);
+			if (primary) published = { branch, pullRequestUrl: null };
+			continue;
+		}
+		const pullNumber =
+			"number" in pull && typeof pull.number === "number" ? pull.number : null;
+		const pullRequest =
+			pullNumber !== null
+				? {
+						number: pullNumber,
+						url: pull.url,
+						draft: "draft" in pull ? Boolean(pull.draft) : true,
+						created: "created" in pull ? Boolean(pull.created) : false,
+					}
+				: undefined;
+		await Promise.all([
+			primary && pullRequest
+				? Promise.resolve()
+						.then(() => onPullRequest?.(pullRequest))
+						.catch(() => undefined)
+				: undefined,
+			// Harness-captured evidence (prEvidence=on) runs as a background job
+			// after the handoff; queueing never blocks or fails the turn.
+			primary && pullNumber !== null
+				? queuePullRequestEvidence({
+						userId: session.userId,
+						sessionId: session.id,
+						revision,
+						installationId: Number(repo.installationId),
+						fullName: repo.fullName,
+						pullNumber,
+					}).catch((error) =>
+						console.warn("Pull request evidence could not be queued.", {
+							message:
+								error instanceof Error
+									? error.message.slice(0, 300)
+									: "unknown",
+						}),
+					)
+				: undefined,
+			markPublished(runtime, providerRef, directory, revision),
+		]);
+		if (primary)
+			published = {
+				branch,
+				pullRequestUrl: pull.url,
+				...(pullRequest ? { pullRequest } : {}),
+			};
 	}
 	return published;
+}
+
+/**
+ * The repositories (full names) whose checkout holds this turn's commits not
+ * yet pushed: a turn that changed nothing publishes nothing. One guest
+ * command per repository, all at once.
+ */
+export async function unpublishedTurnRepositories(
+	runtime: TurnGitRuntime,
+	providerRef: string,
+	repositories: readonly { fullName: string }[],
+	turn: string,
+): Promise<ReadonlySet<string>> {
+	if (!/^[a-f0-9]{64}$/.test(turn))
+		throw new Error("Invalid turn handoff identity.");
+	const revision = `refs/ytimesy/turn-commits/${turn}`;
+	const counts = await Promise.all(
+		repositories.map(async (repo) => {
+			const result = await runtime
+				.exec(
+					providerRef,
+					[
+						"bash",
+						"-lc",
+						unpublishedCommitCountCommand(
+							repositoryDirectory(repo.fullName),
+							revision,
+						),
+					],
+					{},
+					15_000,
+				)
+				.catch(() => null);
+			// An unreadable checkout is left to publication, which says why.
+			return result?.exitCode === 0 && result.stdout.trim() === "0"
+				? null
+				: repo.fullName;
+		}),
+	);
+	return new Set(counts.filter((name): name is string => name !== null));
 }
 
 /** Paths this branch changed since its base. A failed listing does not block the pull request. */

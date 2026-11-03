@@ -78,6 +78,12 @@ import {
 	agentSecretsEnvFile,
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
+import { publicFailureMessage } from "#/domain/project-workspace";
+import {
+	openedPullRequestItem,
+	openingPullRequestItem,
+	pullRequestHandoffItemId,
+} from "#/domain/pull-request-handoff-item";
 import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
@@ -120,6 +126,7 @@ import {
 	finalizeApiTurn,
 	publishApiTurnProgress,
 	renewApiTurn,
+	replaceSettledTurnItem,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { claudeSubscriptionStatus } from "../adapters/claude-subscription";
@@ -277,7 +284,11 @@ import {
 import { thinLeadTools } from "../services/thin-lead-tools";
 import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
-import { commitCompletedSessionTurn } from "../services/turn-commit";
+import {
+	type CommittedTurn,
+	commitSessionTurn,
+	type PublishedTurn,
+} from "../services/turn-commit";
 import { forgetTurnMemo, setTurnMemo, turnMemo } from "../services/turn-memo";
 import {
 	subagentMemory,
@@ -342,6 +353,43 @@ type ApiTurnStep = {
  * the local worker. A turn that failed over keeps its lease: in step mode its
  * next step runs on the fallback; the local worker continues it here.
  */
+/**
+ * Pushes a done turn's branch and opens or updates its draft pull request,
+ * then replaces its "Opening pull request…" item: with the pull request's
+ * link, with why the changes were not pushed, or (nothing reached a pull
+ * request) with nothing. GitHub trouble never fails the turn.
+ */
+async function finishPullRequestHandoff(
+	turn: Pick<ApiTurn, "id" | "session_id" | "user_id">,
+	publish: NonNullable<CommittedTurn["publish"]>,
+) {
+	const id = pullRequestHandoffItemId(turn.id);
+	const show = (item: SessionItem | null) =>
+		replaceSettledTurnItem(turn, id, item).catch((error) => {
+			console.warn("The pull request handoff could not be shown in the chat.", {
+				message:
+					error instanceof Error ? error.message.slice(0, 300) : "unknown",
+			});
+			return false;
+		});
+	// The link reaches the chat the moment GitHub returns the pull request.
+	let shown: Promise<boolean> | undefined;
+	const outcome = await publish((pull) => {
+		shown = show(openedPullRequestItem(turn.id, pull));
+		return shown;
+	}).catch(
+		(error: unknown): PublishedTurn => ({
+			failure: `Changes are committed in this chat but were not pushed: ${publicFailureMessage(error) || "GitHub did not accept the push."}`,
+		}),
+	);
+	if (shown && !outcome.failure && outcome.publication?.pullRequest) return;
+	await show(
+		outcome.failure
+			? { kind: "notice", id, message: outcome.failure }
+			: openedPullRequestItem(turn.id, outcome.publication?.pullRequest),
+	);
+}
+
 /**
  * A chat's turn ended: helper reports and other notices held while it ran
  * are delivered now (after any queued user message's turn, which holds
@@ -2356,9 +2404,11 @@ async function runApiTurnAttempt(
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
 		// patch and ref), never as a commit or a published branch.
+		// The turn's changes are committed here, before it shows as done (the
+		// commit keeps the work); the push and pull request follow right after.
 		const committed = !owner.agentRole
 			? await timed("turn:commit", () =>
-					commitCompletedSessionTurn(
+					commitSessionTurn(
 						{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
 						items,
 						{
@@ -2393,6 +2443,14 @@ async function runApiTurnAttempt(
 					message: committed.notice,
 				},
 			];
+		// "Opening pull request…" shows with the answer, until GitHub answers.
+		if (committed?.publish)
+			items = [
+				...items.filter(
+					(item) => item.id !== pullRequestHandoffItemId(turn.id),
+				),
+				openingPullRequestItem(turn.id, Date.now()),
+			];
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))
@@ -2407,10 +2465,24 @@ async function runApiTurnAttempt(
 			finalizeApiTurn(turn, "completed", items),
 		);
 		if (saved !== "completed") {
+			// A stop that raced completion still hands off what was committed.
+			if (saved === "cancelled" && committed?.publish)
+				await finishPullRequestHandoff(turn, committed.publish);
 			abort.abort();
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		// The turn shows as done; its branch is pushed and its draft pull
+		// request opened now, and the chat's item becomes the link (live, over
+		// the progress stream). A cut-off handoff leaves the commit, which the
+		// next turn pushes.
+		if (committed?.publish)
+			await timed("turn:publication", () =>
+				finishPullRequestHandoff(
+					turn,
+					committed.publish as NonNullable<typeof committed.publish>,
+				),
+			);
 		// The writer lives as long as the chat: an idle one waits for the next
 		// message (until its idle TTL); one still working finishes its round
 		// and its report wakes Main.
