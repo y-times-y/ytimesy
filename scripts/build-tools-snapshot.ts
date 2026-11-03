@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { Freestyle, type Vm } from "freestyle";
 import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
 import {
-	CLAUDE_CODE_BINARY,
-	claudeCodeInstallScript,
+	CLAUDE_AGENT_SDK_CLAUDE_BINARY,
+	claudeAgentSdkInstallScript,
 } from "#/domain/guest-cli-pin";
 import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
 import { BROWSER_USE_INSTALL } from "#/server/adapters/browser-use-cli";
@@ -120,10 +120,10 @@ corepack enable --install-directory /usr/local/bin pnpm yarn`,
 		script: DESKTOP_IMAGE_SCRIPT,
 	},
 	{
-		// Claude Code chats run the pinned CLI; the first turn then starts at once.
-		name: "claude code",
-		script: `${claudeCodeInstallScript(true)}
-rm -f /tmp/ytimesy-claude-code-install.lock`,
+		// Claude Code chats run the pinned Agent SDK; the first turn then starts at once.
+		name: "claude agent sdk",
+		script: `${claudeAgentSdkInstallScript(true)}
+rm -f /tmp/ytimesy-claude-agent-sdk-install.lock`,
 	},
 ];
 
@@ -142,7 +142,7 @@ for c in "node --version" "npm --version" "corepack --version" "pnpm --version" 
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
   "git --version" "docker --version" "setfacl --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader" "iptables --version" "ip6tables --version" \\
   "command -v Xvfb" "x11vnc -version" "/usr/bin/X0tigervnc -version" "command -v vncpasswd" "websockify --help" "google-chrome-stable --version" "ffmpeg -version" \\
-  "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version" "${CLAUDE_CODE_BINARY} --version"; do
+  "$HOME/.ytimesy-cli/browser-use-bin/browser-use --version" "${CLAUDE_AGENT_SDK_CLAUDE_BINARY} --version"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done

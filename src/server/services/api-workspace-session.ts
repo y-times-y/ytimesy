@@ -402,7 +402,7 @@ export async function sendApiWorkspaceTask(
 }
 
 /**
- * A send to a Claude Code model: the turn runs the Claude Code CLI on the
+ * A send to a Claude Code model: the turn runs Claude Code (Agent SDK) on the
  * chat's VM, billed to the user's Claude subscription (no API connection).
  */
 async function sendClaudeCodeTask(

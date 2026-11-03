@@ -163,7 +163,7 @@ export async function runClaudeCodeTurnStep(input: {
 }
 
 /**
- * Stops the turn's Claude Code CLI on the chat's machine once the turn moved
+ * Stops the turn's Claude Code run on the chat's machine once the turn moved
  * to another model, so its trailing output is never read. Never throws.
  */
 export async function stopClaudeCodeTurnRun(input: {

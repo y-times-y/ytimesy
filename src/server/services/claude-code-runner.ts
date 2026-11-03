@@ -6,6 +6,7 @@ import {
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
+import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { issueClaudeCodeGrant } from "#/domain/claude-code-grant";
 import { CLAUDE_CODE_PROXY_PREFIX } from "#/domain/claude-code-proxy";
 import {
@@ -19,8 +20,8 @@ import {
 	isClaudeCodeSessionId,
 } from "#/domain/claude-code-stream";
 import {
-	CLAUDE_CODE_BINARY,
-	claudeCodeInstallScript,
+	CLAUDE_AGENT_SDK_MODULE,
+	claudeAgentSdkInstallScript,
 } from "#/domain/guest-cli-pin";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
@@ -40,8 +41,9 @@ import {
 } from "./api-command-scope";
 
 /**
- * One durable step of a Claude Code turn: the unmodified CLI runs detached
- * on the chat's VM (`claude -p --output-format stream-json`), and each step
+ * One durable step of a Claude Code turn: the Claude Agent SDK runs Claude
+ * Code detached on the chat's VM (src/domain/claude-agent-runner.ts prints
+ * its messages as stream-json lines), and each step
  * reads what it wrote since the last one, maps it into the chat's timeline,
  * and either yields at its deadline (the CLI keeps running; the next step
  * re-attaches) or ends when the CLI reports its result. The process runs in
@@ -115,6 +117,15 @@ export type ClaudeCodeStepResult = {
 };
 
 const RUNS = ".ytimesy/claude-runs";
+/** The files a run reads; a read-only helper gets its own copies. */
+const RUN_INPUTS = [
+	"env",
+	"mcp.json",
+	"system",
+	"prompt",
+	"options.json",
+	"runner.mjs",
+] as const;
 const CONFIG = ".ytimesy/claude-code";
 const READ_LIMIT = 512 * 1024;
 const PROCESS_SECONDS = 6 * 60 * 60;
@@ -405,8 +416,8 @@ async function launchRun(
 		throw new ClaudeCodeRunFailure("this turn ran Claude Code too many times.");
 	await checked(
 		shell,
-		claudeCodeInstallScript(false),
-		"the Claude Code CLI could not be installed on this machine.",
+		claudeAgentSdkInstallScript(false),
+		"the Claude Agent SDK could not be installed on this machine.",
 		300_000,
 	);
 	const resumeId = input.reader
@@ -471,29 +482,33 @@ async function launchRun(
 		systemPrompt(input.cwd, input.reader),
 	);
 	await writeThroughShell(shell, `${runDirectory}/prompt`, prompt);
+	await writeThroughShell(
+		shell,
+		`${runDirectory}/options.json`,
+		JSON.stringify({
+			model: input.modelId,
+			disallowedTools: input.reader
+				? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
+				: ["AskUserQuestion"],
+			resume: resumeId ?? null,
+		}),
+	);
+	await writeThroughShell(
+		shell,
+		`${runDirectory}/runner.mjs`,
+		CLAUDE_AGENT_RUNNER_SCRIPT,
+	);
 	const argv = [
-		CLAUDE_CODE_BINARY,
-		"-p",
-		"--output-format",
-		"stream-json",
-		"--verbose",
-		"--model",
-		input.modelId,
-		"--permission-mode",
-		"bypassPermissions",
-		"--mcp-config",
-		`${inputs}/mcp.json`,
-		"--strict-mcp-config",
-		"--disallowedTools",
-		input.reader
-			? "AskUserQuestion,Write,Edit,MultiEdit,NotebookEdit"
-			: "AskUserQuestion",
-		...(resumeId ? ["--resume", resumeId] : []),
+		"/usr/local/bin/node",
+		`${inputs}/runner.mjs`,
+		CLAUDE_AGENT_SDK_MODULE,
+		inputs,
+		input.cwd,
 	];
 	const cli = `cd ${quote(input.cwd)}
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
 set -a; . ${quote(`${inputs}/env`)}; set +a
-exec ${argv.map(quote).join(" ")} --append-system-prompt "$(cat ${quote(`${inputs}/system`)})" < ${quote(`${inputs}/prompt`)}`;
+exec ${argv.map(quote).join(" ")} </dev/null`;
 	let command = cli;
 	if (input.reader) {
 		await input.prepareReader?.();
@@ -503,7 +518,7 @@ exec ${argv.map(quote).join(" ")} --append-system-prompt "$(cat ${quote(`${input
 			shell,
 			[
 				`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${quote(inputs)} ${quote(configDirectory)}`,
-				...["env", "mcp.json", "system", "prompt"].map(
+				...RUN_INPUTS.map(
 					(name) =>
 						`sudo -n install -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0600 ${quote(`${runDirectory}/${name}`)} ${quote(`${inputs}/${name}`)}`,
 				),
@@ -712,7 +727,7 @@ export function claudeCodeCommandId(turnId: string, run: number) {
 }
 
 /**
- * Stops the turn's running Claude Code CLI, if any, and marks its run
+ * Stops the turn's running Claude Code, if any, and marks its run
  * consumed, so nothing re-attaches to it and its trailing output (often an
  * error after the turn moved to another model) is never read. Best effort:
  * the turn's command scope still stops it when the turn ends.

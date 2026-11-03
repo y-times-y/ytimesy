@@ -5,7 +5,9 @@ import {
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
+import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
+import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import {
 	type ClaudeCodeStepInput,
 	type ClaudeCodeStore,
@@ -42,7 +44,7 @@ class FakeVm {
 				`${run}\n${consumed ? "consumed" : "active"}\n${this.files.get(`${RUNS}/session`) ?? ""}`,
 			);
 		}
-		if (command.includes("npm install -g")) {
+		if (command.includes("npm install --silent --no-save")) {
 			this.installs.push(command);
 			return ok();
 		}
@@ -283,12 +285,20 @@ describe("Claude Code runner", () => {
 			headers: { Authorization: `Bearer ${grant}` },
 		});
 		expect(vm.files.get(`${RUNS}/1/prompt`)).toBe("Fix the failing test.");
+		// The Agent SDK runs it: our runner script, the pinned SDK, its options.
 		const launched = vm.launched[0] ?? "";
-		expect(launched).toContain("'--output-format' 'stream-json' '--verbose'");
-		expect(launched).toContain("'--model' 'claude-opus-5-5'");
-		expect(launched).toContain("'--permission-mode' 'bypassPermissions'");
+		expect(launched).toContain(
+			`'/usr/local/bin/node' '${RUNS}/1/runner.mjs' '${CLAUDE_AGENT_SDK_MODULE}' '${RUNS}/1' '${CWD}'`,
+		);
 		expect(launched).toContain("unset ANTHROPIC_API_KEY");
-		expect(launched).not.toContain("--resume");
+		expect(vm.files.get(`${RUNS}/1/runner.mjs`)).toBe(
+			CLAUDE_AGENT_RUNNER_SCRIPT,
+		);
+		expect(JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "")).toEqual({
+			model: "claude-opus-5-5",
+			disallowedTools: ["AskUserQuestion"],
+			resume: null,
+		});
 		// The timeline: redacted text, the tool call and result, usage, finish.
 		expect(step.events.map((event) => event.type)).toEqual([
 			"text-delta",
@@ -394,7 +404,9 @@ describe("Claude Code runner", () => {
 				`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
 			),
 		).toBe('{"type":"user"}\n');
-		expect(vm.launched[0]).toContain(`'--resume' '${CLAUDE_SESSION}'`);
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
+		).toBe(CLAUDE_SESSION);
 		expect(vm.files.get(`${RUNS}/1/prompt`)).toBe("Second.");
 	});
 
@@ -410,7 +422,9 @@ describe("Claude Code runner", () => {
 			],
 		});
 		await runClaudeCodeStep(step);
-		expect(vm.launched[0]).not.toContain("--resume");
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
+		).toBeNull();
 		expect(vm.files.get(`${RUNS}/1/prompt`)).toContain("User: First.");
 	});
 
@@ -530,6 +544,15 @@ describe("Claude Code runner", () => {
 		const launch = vm.launched[0] ?? "";
 		expect(launch).toContain("sudo -n -u ytimesy-reader");
 		expect(launch).not.toContain("unshare --net");
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").disallowedTools,
+		).toEqual([
+			"AskUserQuestion",
+			"Write",
+			"Edit",
+			"MultiEdit",
+			"NotebookEdit",
+		]);
 		expect(
 			vm.shell.mock.calls.some(([command]) =>
 				String(command).includes("sudo -n install -o ytimesy-reader"),
