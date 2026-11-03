@@ -12,6 +12,19 @@ export function machineCallSignal(): AbortSignal | undefined {
 	return callSignal.getStore();
 }
 
+/** Set inside work a turn starts and does not wait for (detachedFromTurn). */
+const detached = new AsyncLocalStorage<true>();
+
+/**
+ * Runs work a turn starts without awaiting (starting the project's saved
+ * services, warming the desktop) on plain machine calls: a Stop or the
+ * turn's failure never cuts it off. Every machine call inside `work`, through
+ * any cancellable view, runs as it would outside a turn.
+ */
+export function detachedFromTurn<T>(work: () => T): T {
+	return detached.run(true, () => callSignal.run(undefined, work));
+}
+
 /** Settles with `work`, or rejects with the signal's reason once it aborts. */
 function settleOnAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -43,7 +56,8 @@ export function cancellableMachines<M extends WorkspaceMachines>(
 				? (...args: unknown[]) => {
 						const call = () =>
 							(value as (...args: unknown[]) => unknown).apply(machines, args);
-						if (signal.aborted) return callSignal.run(undefined, call);
+						if (signal.aborted || detached.getStore())
+							return callSignal.run(undefined, call);
 						const result = callSignal.run(signal, call);
 						return result instanceof Promise
 							? settleOnAbort(result, signal)

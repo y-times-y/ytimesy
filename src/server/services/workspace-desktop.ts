@@ -29,6 +29,7 @@ import {
 	bindAgentSessionMachine,
 	peekAgentSessionMachine,
 } from "./agent-session-machine";
+import { detachedFromTurn } from "./machine-call-signal";
 import {
 	desktopEdgeHostname,
 	desktopViewerAuthorization,
@@ -385,10 +386,17 @@ function recoverRunningDesktop(
 		);
 		if (!recovered) return null;
 		remotes.set(scopeKey(scope), providerRef);
-		void machines
-			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)
-			.catch(() => undefined);
-		void publishDesktopViewer(machines, providerRef).catch(() => undefined);
+		// Not awaited: plain machine calls, so a turn's Stop never cuts them off.
+		void detachedFromTurn(() =>
+			machines.exec(
+				WorkspaceId(providerRef),
+				ENSURE_WORKSPACE_DESKTOP,
+				120_000,
+			),
+		).catch(() => undefined);
+		void detachedFromTurn(() =>
+			publishDesktopViewer(machines, providerRef),
+		).catch(() => undefined);
 		return clientFacingDesktop(recovered, scope);
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
