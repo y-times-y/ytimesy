@@ -76,53 +76,68 @@ afterAll(async () => {
 	vi.unstubAllEnvs();
 	await db.close();
 });
+const DIGEST = `ytimesy-tree-v1 2 6 ${"a".repeat(64)}\n`;
 function provider(
-	options: { public?: boolean; mismatch?: boolean; recent?: boolean } = {},
+	options: {
+		public?: boolean;
+		mismatch?: boolean;
+		recent?: boolean;
+		/** Activity the provider reports only after the window resumes the VM. */
+		lateActivity?: string;
+	} = {},
 ) {
 	let sourceCap = 300;
-	const stat = {
-		size: 6,
-		isFile: true,
-		isDirectory: false,
-		isSymlink: false,
-		permissions: "0600",
-		owner: "ubuntu",
-		group: "ubuntu",
-		modified: "date",
-	};
-	const fs = {
-		stat: async (path: string) =>
-			path.endsWith("/repo")
-				? { ...stat, isFile: false, isDirectory: true }
-				: stat,
-		readDir: async () => [{ name: ".env", kind: "file" }],
-		readFile: async () => new TextEncoder().encode("secret"),
-	};
+	let sourceState = "paused";
+	let sourceRun = 20;
+	let activity = options.recent ? new Date().toISOString() : "2026-01-01";
 	const source = {
-		fs,
 		data: async () => ({
 			id: "source",
 			slug: "ytimesy-ag-0000000000004000",
-			state: "paused",
+			state: sourceState,
 			resources,
-			totalRunSeconds: 20,
+			totalRunSeconds: sourceRun,
 			maxRunTotalSeconds: sourceCap,
 			createdAt: "2026-01-01",
-			lastNetworkActivity: options.recent
-				? new Date().toISOString()
-				: "2026-01-01",
+			lastNetworkActivity: activity,
 		}),
 		update: vi.fn(async (input: { maxRunTotalSeconds: number }) => {
 			sourceCap = input.maxRunTotalSeconds;
 		}),
-		exec: vi.fn(async (_input: { command: string }) => ({ statusCode: 0 })),
+		// Like Freestyle: exec resumes a paused VM, and a VM at its runtime cap refuses.
+		exec: vi.fn(
+			async (input: {
+				command: string;
+			}): Promise<{ statusCode: number | null; stdout?: string }> => {
+				if (sourceRun >= sourceCap)
+					throw new FreestyleApiError(
+						409,
+						{ code: "CONFLICT", message: "used its total runtime budget" },
+						"/v5/vms/source/exec-await",
+					);
+				sourceState = "running";
+				sourceRun += 1;
+				// Resuming stamps network activity, as Freestyle does.
+				activity = options.lateActivity ?? new Date().toISOString();
+				return {
+					statusCode: 0,
+					stdout: input.command.includes("ytimesy-tree-v1") ? DIGEST : "",
+				};
+			},
+		),
+		pause: vi.fn(async () => {
+			sourceState = "paused";
+		}),
 		snapshot: vi.fn(async () => ({ snapshotId: "snapshot" })),
 		delete: vi.fn(async () => {}),
 	};
 	const verification = {
-		fs: options.mismatch
-			? { ...fs, readFile: async () => new TextEncoder().encode("broken") }
-			: fs,
+		exec: vi.fn(async () => ({
+			statusCode: 0,
+			stdout: options.mismatch
+				? `ytimesy-tree-v1 2 6 ${"b".repeat(64)}\n`
+				: DIGEST,
+		})),
 		pause: vi.fn(async () => {}),
 		data: async () => ({ state: "paused", resources, totalRunSeconds: 1 }),
 		delete: vi.fn(async () => {}),
@@ -185,10 +200,66 @@ it("persists verified recovery BEFORE source deletion and includes ignored files
 	expect(client.vms.create).toHaveBeenCalledWith(
 		expect.objectContaining({
 			firewall: { rules: [] },
-			maxRunTotalSeconds: 20,
+			maxRunTotalSeconds: 45,
 			automaticRestart: false,
 		}),
 	);
+});
+it("runs the fenced source only inside a funded window, then re-fences it at its runtime", async () => {
+	const { client, source, verification } = provider();
+	await recycleWorkspace(client, session);
+	// Fence at 20s, open the window to 20+45s, close it at the 22s used.
+	expect(
+		source.update.mock.calls.map(([input]) => input.maxRunTotalSeconds),
+	).toEqual([20, 65, 22]);
+	expect(source.pause).toHaveBeenCalled();
+	expect(source.pause.mock.invocationCallOrder[0]).toBeLessThan(
+		source.snapshot.mock.invocationCallOrder[0] ?? 0,
+	);
+	// Both digests run the same single command as root with a time bound.
+	const sourceDigest = source.exec.mock.calls[1][0] as unknown as {
+		command: string;
+		linuxUser: string;
+		timeoutMs: number;
+	};
+	expect(sourceDigest).toMatchObject({ linuxUser: "root", timeoutMs: 20_000 });
+	expect(verification.exec).toHaveBeenCalledWith(sourceDigest);
+	const holds = await query(
+		"select resource_key,consumed_micro_usd from infrastructure_usage_reservation where resource_key like 'recovery-capture:%'",
+	);
+	expect(holds.rows).toEqual([
+		{
+			resource_key: "recovery-capture:source",
+			consumed_micro_usd: expect.anything(),
+		},
+	]);
+});
+it("treats activity from its own capture window as idle, but not earlier activity", async () => {
+	// The default mock stamps activity "now" on every exec: still recycled.
+	const own = provider();
+	await recycleWorkspace(own.client, session);
+	expect(own.source.delete).toHaveBeenCalledOnce();
+	// Activity from before the fence, reported late, still defers.
+	await query(
+		"update workspace_retention set phase='active',snapshot_id=null,retry_after=now()",
+	);
+	const late = provider({
+		lateActivity: new Date(Date.now() - 10 * 60_000).toISOString(),
+	});
+	await expect(recycleWorkspace(late.client, session)).rejects.toThrow(
+		"recent interactive activity",
+	);
+	expect(late.source.snapshot).not.toHaveBeenCalled();
+	expect(late.source.delete).not.toHaveBeenCalled();
+});
+it("re-fences the source even when its digest fails", async () => {
+	const { client, source } = provider();
+	source.exec.mockImplementationOnce(async () => ({ statusCode: 0 }));
+	source.exec.mockImplementationOnce(async () => ({ statusCode: 64 }));
+	await expect(recycleWorkspace(client, session)).rejects.toThrow("symlinks");
+	expect(source.update.mock.calls.at(-1)?.[0].maxRunTotalSeconds).toBe(20);
+	expect(source.snapshot).not.toHaveBeenCalled();
+	expect(source.delete).not.toHaveBeenCalled();
 });
 it.each([{ public: true }, { mismatch: true }, { recent: true }])(
 	"never deletes the source after failed verification %j",
@@ -224,23 +295,10 @@ it("refuses silently replacing an expired retained snapshot", async () => {
 	).toBeNull();
 });
 it("fails closed rather than skipping symlinks during restore checks", async () => {
-	const { source } = provider();
-	source.fs.stat = async () => ({
-		size: 1,
-		isFile: false,
-		isDirectory: false,
-		isSymlink: true,
-		permissions: "0777",
-		owner: "ubuntu",
-		group: "ubuntu",
-		modified: "date",
-	});
-	await expect(
-		retainedTreeDigest(
-			source as unknown as Parameters<typeof retainedTreeDigest>[0],
-			["/home/ubuntu/repo"],
-		),
-	).rejects.toThrow("symlinks");
+	const vm = { exec: async () => ({ statusCode: 64, stdout: "" }) };
+	await expect(retainedTreeDigest(vm, ["/home/ubuntu/repo"])).rejects.toThrow(
+		"symlinks",
+	);
 });
 it("retention metadata stays server-only and deleting it does not delete a chat", async () => {
 	expect(
@@ -411,20 +469,14 @@ it("expires only the owned recovery artifact, preserving conversation and VM", a
 
 it("defers a verification past its time budget: keeps the VM, logs once, no throw", async () => {
 	const { client, source } = provider();
-	const realNow = Date.now.bind(Date);
-	let skew = 0;
-	const now = vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
-	const stat = source.fs.stat;
-	source.fs.stat = async (path: string) => {
-		skew += 31_000;
-		return stat(path);
-	};
+	// The in-guest digest is killed by its exec timeout: no status code.
+	source.exec.mockImplementation(async (input: { command: string }) =>
+		input.command.includes("ytimesy-tree-v1")
+			? { statusCode: null }
+			: { statusCode: 0 },
+	);
 	const info = vi.spyOn(console, "info").mockImplementation(() => {});
-	try {
-		await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
-	} finally {
-		now.mockRestore();
-	}
+	await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
 	expect(source.snapshot).not.toHaveBeenCalled();
 	expect(source.delete).not.toHaveBeenCalled();
 	expect(info).toHaveBeenCalledTimes(1);
@@ -442,13 +494,12 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 	).toMatchObject({ phase: "active", deferred: true });
 	// A direct call still reports the deferral to its caller.
 	await query("update workspace_retention set retry_after=now()");
-	skew = 0;
 	const slow = provider();
-	slow.source.fs.stat = async () => {
-		throw new RecycleDeferred(
-			"Recovery verification exceeded its time budget; preserve the source VM.",
-		);
-	};
+	slow.source.exec.mockImplementation(async (input: { command: string }) =>
+		input.command.includes("ytimesy-tree-v1")
+			? { statusCode: null }
+			: { statusCode: 0 },
+	);
 	await expect(recycleWorkspace(slow.client, session)).rejects.toBeInstanceOf(
 		RecycleDeferred,
 	);
@@ -491,64 +542,4 @@ it("keeps a 404 from anything but the source VM a failure", async () => {
 	expect(
 		(await query("select phase from workspace_retention")).rows[0],
 	).toMatchObject({ phase: "active" });
-});
-
-it("walks the tree with bounded concurrency and an order-independent digest", async () => {
-	const tree = (delays: (index: number) => number) => {
-		let active = 0;
-		let peak = 0;
-		const names = Array.from({ length: 40 }, (_, index) => `f${index}`);
-		const timed = async <T>(index: number, value: T) => {
-			active++;
-			peak = Math.max(peak, active);
-			await new Promise((resolve) =>
-				setTimeout(resolve, Math.max(0, delays(index))),
-			);
-			active--;
-			return value;
-		};
-		const file = {
-			size: 3,
-			isFile: true,
-			isDirectory: false,
-			isSymlink: false,
-			permissions: "0600",
-			owner: "ubuntu",
-			group: "ubuntu",
-		};
-		const vm = {
-			fs: {
-				stat: (path: string) => {
-					const index = Number(path.split("/f")[1] ?? -1);
-					return timed(
-						index,
-						index < 0 ? { ...file, isFile: false, isDirectory: true } : file,
-					);
-				},
-				readDir: () =>
-					timed(
-						0,
-						names.map((name) => ({ name, kind: "file" })),
-					),
-				readFile: (path: string) =>
-					timed(
-						Number(path.split("/f")[1]),
-						new TextEncoder().encode(path.slice(-3).padStart(3, "_")),
-					),
-			},
-		};
-		return {
-			vm: vm as unknown as Parameters<typeof retainedTreeDigest>[0],
-			peak: () => peak,
-		};
-	};
-	const forward = tree((index) => index % 7);
-	const backward = tree((index) => 7 - (index % 7));
-	const [a, b] = await Promise.all([
-		retainedTreeDigest(forward.vm, ["/home/ubuntu/repo"]),
-		retainedTreeDigest(backward.vm, ["/home/ubuntu/repo"]),
-	]);
-	expect(a).toBe(b);
-	expect(forward.peak()).toBeGreaterThan(1);
-	expect(forward.peak()).toBeLessThanOrEqual(8);
 });

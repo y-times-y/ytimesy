@@ -37,10 +37,10 @@ try {
 		"/home/ubuntu/recovery-proof/local.bin",
 		new Uint8Array([0, 1, 2, 255]),
 	);
-	await source.vm.pause();
 	const expected = await retainedTreeDigest(source.vm, [
 		"/home/ubuntu/recovery-proof",
 	]);
+	await source.vm.pause();
 	const created = await source.vm.snapshot({
 		autoDeleteSeconds: -1,
 		ttlSeconds: -1,
@@ -67,7 +67,6 @@ try {
 	});
 	cloneId = copy.vmId;
 	await waitUntilVmRunning(copy.vm, "Disposable recovery verification");
-	await copy.vm.pause();
 	if (
 		(await retainedTreeDigest(copy.vm, ["/home/ubuntu/recovery-proof"])) !==
 		expected
