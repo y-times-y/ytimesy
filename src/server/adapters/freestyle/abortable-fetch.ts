@@ -1,3 +1,17 @@
+import { machineCallSignal } from "#/server/services/machine-call-signal";
+
+/**
+ * Every request made inside a turn's machine call carries that call's
+ * signal (machine-call-signal.ts); requests outside one are unchanged.
+ */
+export function callSignalFetch(transport: typeof fetch): typeof fetch {
+	return async (request, init) => {
+		const callSignal = machineCallSignal();
+		if (!callSignal) return transport(request, init);
+		return abortableFreestyleFetch(callSignal, transport)(request, init);
+	};
+}
+
 /** SDK background polls omit the initial request signal; retain it across the entire operation. */
 export function abortableFreestyleFetch(
 	operationSignal: AbortSignal,

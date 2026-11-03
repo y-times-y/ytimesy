@@ -234,6 +234,7 @@ import {
 } from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { registerLiveTurn } from "../services/live-turn-abort";
+import { cancellableMachines } from "../services/machine-call-signal";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
 import { connectMcpTools } from "../services/mcp-tools";
@@ -522,6 +523,12 @@ async function runApiTurnAttempt(
 	// Subagents address the parent's and forks' VMs directly, so they get the
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
+	// This turn's own workspace calls stop at once on Stop or a deadline, and
+	// their provider requests are aborted; calls after the abort (stopping the
+	// turn's commands, releasing ~/memory) still run. Subagents, the next
+	// queued turn and other turns keep the plain machines.
+	const turnMachines = cancellableMachines(machines, abort.signal);
+	let queueMachines = machines;
 	let subagentSession: AgentSessionRecord | undefined;
 	/** A side chat's failure stays in its column; it does not report to Main. */
 	let sideConversation = false;
@@ -952,7 +959,7 @@ async function runApiTurnAttempt(
 							: "harness-variant";
 		if (earlyIneligible) timing?.early(false, earlyIneligible);
 		const prepareWorkspace = deferredApiTurnWorkspace(
-			machines,
+			turnMachines,
 			owner,
 			abort.signal,
 			workspaceReuse,
@@ -1091,7 +1098,8 @@ async function runApiTurnAttempt(
 				console.warn("Attached files could not be restored.", error);
 			});
 		};
-		machines = machinesForAgentSession(machines, owner);
+		machines = machinesForAgentSession(turnMachines, owner);
+		queueMachines = machinesForAgentSession(unscopedMachines, owner);
 		publishProgress = async (turnStatus) => {
 			if (turnStatus === "running") {
 				progress.offer(items);
@@ -2533,9 +2541,11 @@ async function runApiTurnAttempt(
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
-		await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
-			() => {},
-		);
+		await startQueuedUserTurn(
+			queueMachines,
+			turn.user_id,
+			turn.session_id,
+		).catch(() => {});
 		await deliverHeldReports(owner.id, owner.parentSessionId);
 		return "completed";
 	} catch (error) {
@@ -2907,9 +2917,11 @@ async function runApiTurnAttempt(
 		}
 		// Messages sent during the turn outlive its stop or failure: the first starts the next turn.
 		if (saved) {
-			await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
-				() => {},
-			);
+			await startQueuedUserTurn(
+				queueMachines,
+				turn.user_id,
+				turn.session_id,
+			).catch(() => {});
 			await deliverHeldReports(
 				turn.session_id,
 				subagentSession?.parentSessionId,

@@ -358,11 +358,11 @@ vi.mock("../services/project-secrets", () => ({
 	writeAgentProjectSecrets: vi.fn(async () => undefined),
 }));
 vi.mock("../services/api-turn-workspace", () => ({
-	deferredApiTurnWorkspace: () => {
+	deferredApiTurnWorkspace: (machines: unknown) => {
 		let prepared: Promise<unknown> | undefined;
 		return Object.assign(
 			() => {
-				prepared ??= mocks.workspace();
+				prepared ??= mocks.workspace(machines);
 				return prepared;
 			},
 			{
@@ -1430,6 +1430,33 @@ function hangUntilAborted(input: { signal: AbortSignal }) {
 		input.signal.addEventListener("abort", () => reject(input.signal.reason)),
 	);
 }
+
+it("cancels at once when Stop lands during a machine call that never answers", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+		mocks.cancelRequested.mockResolvedValue(true);
+		const exec = vi.fn(() => new Promise(() => {}));
+		// Preparing the workspace runs a guest command on a VM that is not answering.
+		mocks.workspace.mockImplementation(
+			(machines: Pick<WorkspaceMachines, "exec">) =>
+				machines.exec("vm" as never, "guard", 30_000),
+		);
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+		});
+		const outcome = runApiTurn(
+			{ exec } as unknown as WorkspaceMachines,
+			childTurn,
+			{ index: 1, signal: new AbortController().signal },
+		);
+		await vi.advanceTimersByTimeAsync(1_500);
+		expect(exec).toHaveBeenCalledOnce();
+		expect(await outcome).toBe("cancelled");
+	} finally {
+		vi.useRealTimers();
+	}
+});
 
 it("treats a Stop noticed by the heartbeat as the user's clean stop", async () => {
 	vi.useFakeTimers();
