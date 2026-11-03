@@ -6,6 +6,7 @@ import {
 	codexRelaySettingsProblem,
 } from "../src/domain/codex-egress";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
+import { PRODUCTION_RETENTION_ENROLL_AFTER } from "./production-settings";
 
 // Deliberately fixed to development. Secrets travel over stdin, never shell arguments or logs.
 const configuration = "wrangler.edge-executor.jsonc";
@@ -63,6 +64,13 @@ secrets.YTIMESY_ENVIRONMENT = "development";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+// Idle chat VMs are snapshotted and deleted as in production. Dev and
+// production share one Freestyle account, so without this every dev test
+// chat's paused VM stays (and bills its disk) forever.
+secrets.YTIMESY_WORKSPACE_RETENTION = "true";
+secrets.YTIMESY_RETENTION_ENROLL_AFTER =
+	process.env.YTIMESY_RETENTION_ENROLL_AFTER ||
+	PRODUCTION_RETENTION_ENROLL_AFTER;
 // New chat, environment and job objects start near the development database
 // (Supabase us-west-2); see src/server/edge/durable-object-location.ts.
 secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =

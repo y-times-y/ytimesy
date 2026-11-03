@@ -213,7 +213,7 @@ export async function startMcpOAuth(input: {
 }) {
 	const server = await mcpServerForOwner(input.userId, input.serverId);
 	if (server?.auth !== "oauth") throw new Error("MCP server not found.");
-	// Workers throw on the SDK's redirect: "error" (see workers-fetch.ts).
+	// Workers throw on the SDK's refuse-redirects fetch option (see workers-fetch.ts).
 	const fetchFn = input.fetchFn ?? redirectRefusingFetch();
 	const state = randomBytes(32).toString("base64url");
 	const provider = storedOAuthProvider({

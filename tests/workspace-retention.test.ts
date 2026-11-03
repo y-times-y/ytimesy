@@ -208,10 +208,10 @@ it("persists verified recovery BEFORE source deletion and includes ignored files
 it("runs the fenced source only inside a funded window, then re-fences it at its runtime", async () => {
 	const { client, source, verification } = provider();
 	await recycleWorkspace(client, session);
-	// Fence at 20s, open the window to 20+45s, close it at the 22s used.
+	// Fence at 20s, open the window to 20+120s, close it at the 22s used.
 	expect(
 		source.update.mock.calls.map(([input]) => input.maxRunTotalSeconds),
-	).toEqual([20, 65, 22]);
+	).toEqual([20, 140, 22]);
 	expect(source.pause).toHaveBeenCalled();
 	expect(source.pause.mock.invocationCallOrder[0]).toBeLessThan(
 		source.snapshot.mock.invocationCallOrder[0] ?? 0,
