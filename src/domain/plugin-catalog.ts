@@ -35,6 +35,9 @@ export type PluginCatalogEntry = {
 // Reviewed 2026-10-11 from Anthropic's official marketplace (anthropics/claude-plugins-official@f359d43);
 // each entry was fetched and parsed at this exact commit. Sign-in (OAuth) MCP servers install as
 // OAuth servers that join turns once the user signs in.
+// Removed 2026-11-03: Vercel and Figma. Their MCP sign-in accepts only apps they
+// have approved (Vercel refuses our redirect URI, Figma's registration answers
+// 403), so neither could ever connect here.
 export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "github",
@@ -112,15 +115,6 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		path: "",
 	},
 	{
-		id: "vercel",
-		displayName: "Vercel",
-		description: "Vercel deployments, build status, logs and domains.",
-		owner: "vercel",
-		repo: "vercel-plugin",
-		sha: "882e66c2698689324c341b7bb8fd8beb92c27bf6",
-		path: "",
-	},
-	{
 		id: "stripe",
 		displayName: "Stripe",
 		description: "Stripe payments, customers and API docs for development.",
@@ -146,15 +140,6 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		owner: "supabase-community",
 		repo: "supabase-plugin",
 		sha: "f3f332e0164c34a8392772811737fda0cb972d06",
-		path: "",
-	},
-	{
-		id: "figma",
-		displayName: "Figma",
-		description: "Read Figma files, components and design tokens.",
-		owner: "figma",
-		repo: "mcp-server-guide",
-		sha: "f0493295acf5f7cbdebcbcc483c06de814420cb1",
 		path: "",
 	},
 	{
