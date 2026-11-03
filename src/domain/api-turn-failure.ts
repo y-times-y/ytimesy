@@ -42,6 +42,7 @@ const FAILURE_NAMES = new Set([
 	"WorkspaceCommandError",
 	"MachineUsageLimitReached",
 	"XaiSubscriptionUnavailable",
+	"MachineNotResponding",
 ]);
 const FAILURE_CODES = new Set([
 	"ECONNRESET",
@@ -107,6 +108,21 @@ export class MachineUsageLimitReached extends Error {
 	constructor() {
 		super(MACHINE_USAGE_LIMIT_MESSAGE);
 		this.name = "MachineUsageLimitReached";
+	}
+}
+
+/**
+ * The chat's machine stopped answering (a guard command timed out or failed
+ * with no output, even after a wake and retries). Its `cause` keeps the last
+ * underlying error for the owner's diagnostics.
+ */
+export class MachineNotResponding extends Error {
+	constructor(cause: unknown) {
+		super(
+			"This chat's machine isn't responding. Retry in a minute; your work is saved.",
+			{ cause },
+		);
+		this.name = "MachineNotResponding";
 	}
 }
 
@@ -891,6 +907,7 @@ export function apiTurnFailureMessage(
 	if (error instanceof CodexEgressUnavailable) return error.message;
 	if (error instanceof VerificationPolicyFailure) return error.message;
 	if (error instanceof LifecycleHookRefusal) return error.message;
+	if (error instanceof MachineNotResponding) return error.message;
 	const reconnect = reconnectCause(error);
 	if (reconnect) return reconnect.message;
 	const machine = machineFailureMessage(error);
