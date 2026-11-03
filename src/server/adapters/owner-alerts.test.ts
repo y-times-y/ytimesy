@@ -66,17 +66,28 @@ it("emails the owner once per alert key", async () => {
 	expect(send.mock.calls[1][0].to).toBe("ops@example.test");
 });
 
-it("never emails when the claim cannot be recorded, and never throws", async () => {
+it("still alerts once when the database claim fails, using the shared cache, and never throws", async () => {
 	vi.stubEnv("YTIMESY_ENVIRONMENT", "production");
 	table.down = true;
+	// The Workers cache, shared by every isolate in the cron's location.
+	const store = new Map<string, Response>();
+	vi.stubGlobal("caches", {
+		default: {
+			match: async (request: Request) => store.get(request.url),
+			put: async (request: Request, response: Response) => {
+				store.set(request.url, response);
+			},
+		},
+	});
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	const send = vi.fn(async () => true);
 	const unrecorded = { ...alert, key: "database-down" };
+	expect(await alertOwner(unrecorded, { send })).toBe("sent");
 	expect(await alertOwner(unrecorded, { send })).toBe("duplicate");
-	expect(await alertOwner(unrecorded, { send })).toBe("duplicate");
-	expect(send).not.toHaveBeenCalled();
+	expect(send).toHaveBeenCalledTimes(1);
 	expect(JSON.stringify(warn.mock.calls)).not.toContain("hunter2");
 	warn.mockRestore();
+	vi.unstubAllGlobals();
 	expect(
 		await alertOwner(
 			{ ...alert, key: "broken-sender" },

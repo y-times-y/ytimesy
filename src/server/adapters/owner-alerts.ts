@@ -52,10 +52,10 @@ export async function alertOwner(
 }
 
 /**
- * The owner_alert row is the only claim: it holds across isolates and
- * invocations. When the insert fails the alert is not sent, since a
- * per-isolate fallback cannot dedupe cron ticks that each land in a fresh
- * isolate (which emailed every failure).
+ * The owner_alert row is the claim: it holds across isolates and
+ * invocations. When the insert fails the claim falls back to the Workers
+ * cache (shared across isolates), so the owner is alerted once per key
+ * rather than never or on every tick.
  */
 export async function claimAlert(alert: OwnerAlert) {
 	try {
@@ -65,7 +65,7 @@ export async function claimAlert(alert: OwnerAlert) {
 		);
 		return (result.rowCount ?? result.rows.length) > 0;
 	} catch (error) {
-		console.warn("Owner alert not claimed; not sent.", {
+		console.warn("Owner alert not claimed in the database; using the cache.", {
 			kind: alert.kind,
 			key: alert.key,
 			reason: redactErrorText(
@@ -74,8 +74,29 @@ export async function claimAlert(alert: OwnerAlert) {
 					: String(error),
 			).slice(0, 300),
 		});
-		return false;
+		// The owner is still alerted: the Workers cache is shared by every
+		// isolate in the location the cron runs in, so it still sends once per
+		// key. Without a cache (Node), it sends rather than staying silent.
+		return claimInCache(alert).catch(() => true);
 	}
+}
+
+/** One claim per alert key in the Workers cache, for a day. */
+async function claimInCache(alert: OwnerAlert) {
+	const cacheStorage = (globalThis as { caches?: { default?: Cache } }).caches
+		?.default;
+	if (!cacheStorage) return true;
+	const key = new Request(
+		`https://owner-alerts.ytimesy.internal/${encodeURIComponent(`${alert.kind}:${alert.key}`)}`,
+	);
+	if (await cacheStorage.match(key)) return false;
+	await cacheStorage.put(
+		key,
+		new Response("claimed", {
+			headers: { "cache-control": "max-age=86400" },
+		}),
+	);
+	return true;
 }
 
 function escapeHtml(text: string) {
