@@ -157,7 +157,27 @@ export async function touchWorkspaceRetention(
  */
 export class RecycleDeferred extends Error {
 	override name = "RecycleDeferred";
+	constructor(
+		message: string,
+		/** A short, stable reason for logs: what kept the source VM. */
+		readonly category: RecycleDeferCategory = "other",
+	) {
+		super(message);
+	}
 }
+
+export type RecycleDeferCategory =
+	| "busy"
+	| "activity"
+	| "symlinked-root"
+	| "special-file"
+	| "size"
+	| "unreadable"
+	| "changed"
+	| "timeout"
+	| "digest-output"
+	| "mismatch"
+	| "other";
 
 /** Wall clock for one in-guest tree digest. Both digests and the snapshot run inside one 90-second VM lease (usage-admission LEASE_SECONDS). */
 export const TREE_DIGEST_TIMEOUT_MS = 20_000;
@@ -173,21 +193,46 @@ const CAPTURE_WINDOW_SECONDS = 45;
 /** The verification copy's runtime cap: boot plus one digest, under its 80-second hold. */
 const VERIFICATION_RUN_SECONDS = 45;
 
-const TREE_DIGEST_REFUSALS: Record<number, string> = {
-	64: "Recovery verification cannot independently verify symlinks; preserve the source VM.",
-	65: "Recovery verification encountered a special file; preserve the source VM.",
-	66: "Recovery verification exceeds its bounded file limit; preserve the source VM.",
-	67: "Recovery verification exceeds its content allowance; preserve the source VM.",
-	68: "Recovery verification could not read the project tree; preserve the source VM.",
-	69: "Recovery file changed or became unreadable during verification; preserve the source VM.",
+const TREE_DIGEST_REFUSALS: Record<
+	number,
+	[message: string, category: RecycleDeferCategory]
+> = {
+	64: [
+		"Recovery verification refuses a symlinked project root; preserve the source VM.",
+		"symlinked-root",
+	],
+	65: [
+		"Recovery verification encountered a special file; preserve the source VM.",
+		"special-file",
+	],
+	66: [
+		"Recovery verification exceeds its bounded file limit; preserve the source VM.",
+		"size",
+	],
+	67: [
+		"Recovery verification exceeds its content allowance; preserve the source VM.",
+		"size",
+	],
+	68: [
+		"Recovery verification could not read the project tree; preserve the source VM.",
+		"unreadable",
+	],
+	69: [
+		"Recovery file changed or became unreadable during verification; preserve the source VM.",
+		"changed",
+	],
 };
 
 /**
  * One shell command (POSIX sh, GNU find/coreutils) that hashes every entry
- * under the roots, ignored files included, into one sha256: a sorted
- * manifest of type, mode, owner, group, size (files only) and path, then the
- * sorted per-file content hashes. Symlinks and special files fail closed,
- * checked before and after hashing. Prints one bounded line.
+ * under the roots, ignored files included, into one sha256 over four sorted
+ * sections: a manifest of type, mode, owner, group, size (files only) and
+ * path; each file's content hash; the symlink paths; and, in the same order,
+ * each link's target text (readlink, never followed). Links are covered
+ * exactly without reading what they point to. A symlinked root is refused:
+ * hashing it would cover only the link, not the project behind it. Fifos,
+ * sockets and devices fail closed, checked before and after hashing.
+ * Prints one bounded line.
  */
 export function treeDigestCommand(roots: string[]) {
 	if (!roots.length) throw new Error("Recovery verification has no roots.");
@@ -205,7 +250,7 @@ export function treeDigestCommand(roots: string[]) {
 		"export LC_ALL=C",
 		"t=$(mktemp -d) || exit 70",
 		"trap 'rm -rf \"$t\"' EXIT",
-		`refuse() { find ${paths} -type l -print -quit >"$t/l" 2>/dev/null || exit 68; [ -s "$t/l" ] && exit 64; find ${paths} ! -type f ! -type d -print -quit >"$t/s" 2>/dev/null || exit 68; [ -s "$t/s" ] && exit 65; return 0; }`,
+		`refuse() { for r in ${paths}; do [ -L "$r" ] && exit 64; done; find ${paths} ! -type f ! -type d ! -type l -print -quit >"$t/s" 2>/dev/null || exit 68; [ -s "$t/s" ] && exit 65; return 0; }`,
 		"refuse",
 		`find ${paths} -type f -printf 'f %m %u %g %s %p\\0' -o -printf '%y %m %u %g - %p\\0' >"$t/m0" 2>/dev/null || exit 68`,
 		'sort -z "$t/m0" >"$t/m" || exit 70',
@@ -216,9 +261,12 @@ export function treeDigestCommand(roots: string[]) {
 		`find ${paths} -type f -print0 >"$t/f0" 2>/dev/null || exit 68`,
 		'sort -z "$t/f0" >"$t/f" || exit 70',
 		'xargs -0 -r sha256sum <"$t/f" >"$t/h" 2>/dev/null || exit 69',
+		`find ${paths} -type l -print0 >"$t/l0" 2>/dev/null || exit 68`,
+		'sort -z "$t/l0" >"$t/l" || exit 70',
+		'xargs -0 -r readlink -z -- <"$t/l" >"$t/lt" 2>/dev/null || exit 69',
 		"refuse",
-		'd=$(cat "$t/m" "$t/h" | sha256sum) || exit 70',
-		`printf 'ytimesy-tree-v1 %s %s %s\\n' "$n" "$b" "\${d%% *}"`,
+		'd=$(for s in m h l lt; do sha256sum <"$t/$s" || exit 70; done | sha256sum) || exit 70',
+		`printf 'ytimesy-tree-v2 %s %s %s\\n' "$n" "$b" "\${d%% *}"`,
 	].join("\n");
 }
 
@@ -230,18 +278,22 @@ export function parseTreeDigest(result: {
 	if (result.statusCode == null)
 		throw new RecycleDeferred(
 			"Recovery verification exceeded its time budget; preserve the source VM.",
+			"timeout",
 		);
-	if (result.statusCode !== 0)
-		throw new RecycleDeferred(
-			TREE_DIGEST_REFUSALS[result.statusCode] ??
-				`Recovery verification failed (exit ${result.statusCode}); preserve the source VM.`,
-		);
-	const match = /^ytimesy-tree-v1 (\d+) (\d+) ([0-9a-f]{64})\n?$/.exec(
+	if (result.statusCode !== 0) {
+		const [message, category] = TREE_DIGEST_REFUSALS[result.statusCode] ?? [
+			`Recovery verification failed (exit ${result.statusCode}); preserve the source VM.`,
+			"other",
+		];
+		throw new RecycleDeferred(message, category);
+	}
+	const match = /^ytimesy-tree-v2 (\d+) (\d+) ([0-9a-f]{64})\n?$/.exec(
 		result.stdout ?? "",
 	);
 	if (!match)
 		throw new RecycleDeferred(
 			"Recovery verification returned no digest; preserve the source VM.",
+			"digest-output",
 		);
 	return {
 		digest: match[3],
@@ -370,14 +422,17 @@ async function stillIdle(
 		data.state !== "paused" ||
 		data.totalRunSeconds == null
 	)
-		throw new RecycleDeferred("Workspace is no longer safely idle.");
+		throw new RecycleDeferred("Workspace is no longer safely idle.", "busy");
 	const activity = Date.parse(data.lastNetworkActivity ?? data.createdAt);
 	if (
 		!Number.isFinite(activity) ||
 		(Date.now() - activity < WORKSPACE_RECYCLE_IDLE_SECONDS * 1000 &&
 			(fencedAt === undefined || activity < fencedAt - ACTIVITY_SKEW_MS))
 	)
-		throw new RecycleDeferred("Workspace has recent interactive activity.");
+		throw new RecycleDeferred(
+			"Workspace has recent interactive activity.",
+			"activity",
+		);
 	return data;
 }
 
@@ -484,8 +539,14 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 			const restored = await retainedTreeDigest(verification, roots);
 			if ((await verification.data()).state === "running")
 				await verification.pause();
+			// Usually a process still writing in the project between the two
+			// digests. The source VM and its row are kept either way; a later
+			// tick retries.
 			if (restored !== digest)
-				throw new Error("Independent recovery verification failed.");
+				throw new RecycleDeferred(
+					"Independent recovery verification failed: the restored tree differs; preserve the source VM.",
+					"mismatch",
+				);
 			await stillIdle(connection, row, vm, fencedAt);
 			const persisted = await connection.query(
 				`update workspace_retention set phase='retained',snapshot_id=$2,resources=$3,expires_at=$4,verified_at=now() where session_id=$1 and vm_id=$5 and phase='capturing' returning session_id`,
@@ -688,6 +749,7 @@ export async function recycleIdleWorkspaces(client: Freestyle) {
 			if (!(error instanceof RecycleDeferred)) throw error;
 			console.info("Workspace recycling deferred; the source VM is kept.", {
 				sessionId: row.session_id,
+				category: error.category,
 				reason: error.message,
 			});
 		}

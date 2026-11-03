@@ -90,28 +90,75 @@ describe.skipIf(!native && !docker)("in-guest tree digest", () => {
 		expect(await digest()).not.toBe(before);
 	});
 
+	// What `npm ci` leaves behind: relative links in node_modules/.bin, plus
+	// absolute and dangling links. Covered by their target text, never followed.
+	const links = `cd ${root} && mkdir -p node_modules/.bin node_modules/vite/bin && printf 'js' > node_modules/vite/bin/vite.js && ln -s ../vite/bin/vite.js node_modules/.bin/vite && ln -s /etc/hostname abs && ln -s /nowhere dangling && ln -s src dirlink`;
+
+	it("covers symlinks exactly: same tree, same digest, without following them", async () => {
+		sh(build);
+		const plain = await digest();
+		sh(links);
+		const linked = await digest();
+		expect(linked).not.toBe(plain);
+		sh(`sleep 1; ${build} && ${links}`);
+		expect(await digest()).toBe(linked);
+		// A linked directory is not walked, and a target's content is not read.
+		const out = parseTreeDigest(sh(treeDigestCommand([root])));
+		// 4 new directories, 1 file and 4 links.
+		expect(out.entries).toBe(11 + 4 + 1 + 4);
+		expect(out.bytes).toBe(5 + 1 + 3 + 8 + 3 + 2);
+		sh("echo changed-host > /etc/hostname 2>/dev/null || true");
+		expect(await digest()).toBe(linked);
+	});
+
 	it.each([
-		["a symlink", `ln -s a.txt ${root}/link`, "symlinks"],
-		["a dangling symlink", `ln -s /nowhere ${root}/src/link`, "symlinks"],
+		[
+			"link target",
+			`ln -sfn ../vite/bin/other.js ${root}/node_modules/.bin/vite`,
+		],
+		["link path", `mv ${root}/abs ${root}/abs2`],
+		["link owner", `chown -h 1000 ${root}/abs`],
+		[
+			"link to file swap",
+			`rm ${root}/dangling && printf '/nowhere' > ${root}/dangling`,
+		],
+		[
+			"links swapped",
+			`ln -sfn /nowhere ${root}/abs && ln -sfn /etc/hostname ${root}/dangling`,
+		],
+	])("differs on a %s change", async (_label, change) => {
+		sh(`${build} && ${links}`);
+		const before = await digest();
+		expect(sh(change).statusCode).toBe(0);
+		expect(await digest()).not.toBe(before);
+	});
+
+	it.each([
 		[
 			"a symlinked root",
 			`mv ${root} ${base}/real && ln -s ${base}/real ${root}`,
-			"symlinks",
+			"symlinked project root",
+			"symlinked-root",
 		],
-		["a fifo", `mkfifo ${root}/src/pipe`, "special file"],
+		["a fifo", `mkfifo ${root}/src/pipe`, "special file", "special-file"],
 		[
 			"a socket",
 			`python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.bind('${root}/sock')" 2>/dev/null || mkfifo ${root}/sock`,
 			"special file",
+			"special-file",
 		],
-		["a missing root", `rm -rf ${root}`, "could not read"],
-	])("refuses %s and keeps the source VM", async (_label, change, reason) => {
-		sh(build);
-		expect(sh(change).statusCode).toBe(0);
-		const failure = digest().catch((error) => error);
-		expect(await failure).toBeInstanceOf(RecycleDeferred);
-		expect((await failure).message).toContain(reason);
-	});
+		["a missing root", `rm -rf ${root}`, "could not read", "unreadable"],
+	])(
+		"refuses %s and keeps the source VM",
+		async (_label, change, reason, category) => {
+			sh(build);
+			expect(sh(change).statusCode).toBe(0);
+			const failure = digest().catch((error) => error);
+			expect(await failure).toBeInstanceOf(RecycleDeferred);
+			expect((await failure).message).toContain(reason);
+			expect((await failure).category).toBe(category);
+		},
+	);
 
 	it("handles spaces and newlines in names without ambiguity", async () => {
 		sh(build);
@@ -136,7 +183,7 @@ it("maps timeouts and odd output to a deferral, never a digest", () => {
 	expect(
 		parseTreeDigest({
 			statusCode: 0,
-			stdout: `ytimesy-tree-v1 3 7 ${"a".repeat(64)}\n`,
+			stdout: `ytimesy-tree-v2 3 7 ${"a".repeat(64)}\n`,
 		}),
 	).toEqual({ digest: "a".repeat(64), entries: 3, bytes: 7 });
 });

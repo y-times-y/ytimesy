@@ -65,7 +65,12 @@ root): a sorted manifest of type, mode, owner, group, file size and path plus
 every file's sha256, ignored files included, reduced to one digest. It runs on the
 source and on the deny-network copy restored from the snapshot, and the two must
 match. Bounds: 250,000 entries, 4 GiB of content and 20 seconds per digest.
-Symlinks and special files fail closed. A 7,990-entry repository (53 MB) hashes in
+Symlinks (such as `node_modules/.bin`) are covered by path, owner and target
+text from `readlink`, never followed. A symlinked project root is refused,
+since its digest would cover only the link. Fifos, sockets and devices fail
+closed. A process still writing in the project makes the two digests differ;
+that defers (category `mismatch`) and keeps the VM. Every deferral is logged at
+info with a short `category`. A 7,990-entry repository (53 MB) hashes in
 under a second; the whole recycle takes about 7 seconds. The full-state provider
 snapshot captures more than the project roots independently checked.
 

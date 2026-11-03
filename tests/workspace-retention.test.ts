@@ -76,7 +76,7 @@ afterAll(async () => {
 	vi.unstubAllEnvs();
 	await db.close();
 });
-const DIGEST = `ytimesy-tree-v1 2 6 ${"a".repeat(64)}\n`;
+const DIGEST = `ytimesy-tree-v2 2 6 ${"a".repeat(64)}\n`;
 function provider(
 	options: {
 		public?: boolean;
@@ -121,7 +121,7 @@ function provider(
 				activity = options.lateActivity ?? new Date().toISOString();
 				return {
 					statusCode: 0,
-					stdout: input.command.includes("ytimesy-tree-v1") ? DIGEST : "",
+					stdout: input.command.includes("ytimesy-tree-v2") ? DIGEST : "",
 				};
 			},
 		),
@@ -135,7 +135,7 @@ function provider(
 		exec: vi.fn(async () => ({
 			statusCode: 0,
 			stdout: options.mismatch
-				? `ytimesy-tree-v1 2 6 ${"b".repeat(64)}\n`
+				? `ytimesy-tree-v2 2 6 ${"b".repeat(64)}\n`
 				: DIGEST,
 		})),
 		pause: vi.fn(async () => {}),
@@ -256,10 +256,23 @@ it("re-fences the source even when its digest fails", async () => {
 	const { client, source } = provider();
 	source.exec.mockImplementationOnce(async () => ({ statusCode: 0 }));
 	source.exec.mockImplementationOnce(async () => ({ statusCode: 64 }));
-	await expect(recycleWorkspace(client, session)).rejects.toThrow("symlinks");
+	await expect(recycleWorkspace(client, session)).rejects.toThrow(
+		"symlinked project root",
+	);
 	expect(source.update.mock.calls.at(-1)?.[0].maxRunTotalSeconds).toBe(20);
 	expect(source.snapshot).not.toHaveBeenCalled();
 	expect(source.delete).not.toHaveBeenCalled();
+});
+it("defers, not alerts, when the restored tree differs, and removes the snapshot", async () => {
+	const { client, source } = provider({ mismatch: true });
+	const failure = await recycleWorkspace(client, session).catch((e) => e);
+	expect(failure).toBeInstanceOf(RecycleDeferred);
+	expect(failure.category).toBe("mismatch");
+	expect(source.delete).not.toHaveBeenCalled();
+	expect(client.vms.snapshots.delete).toHaveBeenCalledWith("snapshot");
+	expect(
+		(await query("select phase,snapshot_id from workspace_retention")).rows[0],
+	).toMatchObject({ phase: "active", snapshot_id: null });
 });
 it.each([{ public: true }, { mismatch: true }, { recent: true }])(
 	"never deletes the source after failed verification %j",
@@ -294,10 +307,10 @@ it("refuses silently replacing an expired retained snapshot", async () => {
 		),
 	).toBeNull();
 });
-it("fails closed rather than skipping symlinks during restore checks", async () => {
+it("fails closed on a symlinked project root during restore checks", async () => {
 	const vm = { exec: async () => ({ statusCode: 64, stdout: "" }) };
 	await expect(retainedTreeDigest(vm, ["/home/ubuntu/repo"])).rejects.toThrow(
-		"symlinks",
+		"symlinked project root",
 	);
 });
 it("retention metadata stays server-only and deleting it does not delete a chat", async () => {
@@ -471,7 +484,7 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 	const { client, source } = provider();
 	// The in-guest digest is killed by its exec timeout: no status code.
 	source.exec.mockImplementation(async (input: { command: string }) =>
-		input.command.includes("ytimesy-tree-v1")
+		input.command.includes("ytimesy-tree-v2")
 			? { statusCode: null }
 			: { statusCode: 0 },
 	);
@@ -482,6 +495,7 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 	expect(info).toHaveBeenCalledTimes(1);
 	expect(info.mock.calls[0][1]).toMatchObject({
 		sessionId: session,
+		category: "timeout",
 		reason: expect.stringContaining("time budget"),
 	});
 	info.mockRestore();
@@ -496,7 +510,7 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 	await query("update workspace_retention set retry_after=now()");
 	const slow = provider();
 	slow.source.exec.mockImplementation(async (input: { command: string }) =>
-		input.command.includes("ytimesy-tree-v1")
+		input.command.includes("ytimesy-tree-v2")
 			? { statusCode: null }
 			: { statusCode: 0 },
 	);
