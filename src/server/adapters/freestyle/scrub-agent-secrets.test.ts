@@ -9,6 +9,7 @@ import {
 	SCRUB_AGENT_SECRETS,
 } from "#/domain/project-secret";
 import {
+	SCRUB_TIMEOUT_MS,
 	SCRUB_WORKSPACE_SECRETS,
 	scrubAgentSecrets,
 } from "./scrub-agent-secrets";
@@ -19,8 +20,10 @@ describe("scrubAgentSecrets", () => {
 		await scrubAgentSecrets({ exec } as never);
 		expect(exec).toHaveBeenCalledWith({
 			command: SCRUB_WORKSPACE_SECRETS,
-			timeoutMs: 15_000,
+			timeoutMs: SCRUB_TIMEOUT_MS,
 		});
+		// A stopped VM boots inside this budget (15 s timed out in production).
+		expect(SCRUB_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_AGENT_SECRETS);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_MEMORY_CREDENTIAL);
 		expect(SCRUB_AGENT_SECRETS).toBe(
@@ -28,13 +31,19 @@ describe("scrubAgentSecrets", () => {
 		);
 	});
 
-	it("refuses the snapshot when removal is not proven", async () => {
-		for (const statusCode of [1, undefined]) {
+	it("refuses the snapshot when removal is not proven, and says when it timed out", async () => {
+		for (const statusCode of [1, undefined, null]) {
 			const exec = vi.fn(async () => ({ statusCode }));
 			await expect(scrubAgentSecrets({ exec } as never)).rejects.toThrow(
 				"the snapshot was not taken",
 			);
 		}
+		await expect(
+			scrubAgentSecrets({ exec: async () => ({ statusCode: null }) } as never),
+		).rejects.toThrow("timed out");
+		await expect(
+			scrubAgentSecrets({ exec: async () => ({ statusCode: 1 }) } as never),
+		).rejects.toThrow("Could not remove project secrets");
 	});
 
 	it("removes the memory clone's token header and passes without a clone", () => {

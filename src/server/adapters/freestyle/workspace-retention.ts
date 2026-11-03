@@ -186,10 +186,11 @@ const TREE_DIGEST_MAX_ENTRIES = 250_000;
 const TREE_DIGEST_MAX_BYTES = 4 * 1024 ** 3;
 /**
  * Runtime the fenced source may use to scrub secrets and hash its tree:
- * the scrub's 15 seconds, the digest's 20 and resume/pause slack. The
- * provider cap enforces it; a hold of the same length pays for it.
+ * the scrub's 90 seconds (a stopped VM boots inside it), the digest's 20
+ * and resume/pause slack. The provider cap enforces it; a hold of the same
+ * length pays for it.
  */
-const CAPTURE_WINDOW_SECONDS = 45;
+const CAPTURE_WINDOW_SECONDS = 120;
 /** The verification copy's runtime cap: boot plus one digest, under its 80-second hold. */
 const VERIFICATION_RUN_SECONDS = 45;
 
