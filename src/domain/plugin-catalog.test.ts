@@ -13,14 +13,9 @@ it("pins every reviewed plugin to a full commit with a safe source and unique id
 		expect(ids.has(entry.id)).toBe(false);
 		ids.add(entry.id);
 	}
-	expect(
-		PLUGIN_CATALOG.find((entry) => entry.id === "github")?.settings,
-	).toEqual([
-		expect.objectContaining({
-			key: "GITHUB_PERSONAL_ACCESS_TOKEN",
-			sensitive: true,
-		}),
-	]);
+	// Removed for good: their sign-in cannot work here (see the catalog note).
+	for (const removed of ["github", "slack", "vercel", "figma"])
+		expect(ids.has(removed)).toBe(false);
 });
 
 it("describes plugins in ytimesy's words, not another agent's", () => {
