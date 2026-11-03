@@ -321,7 +321,7 @@ try {
 		phone: { width: 390, height: 844 },
 	};
 	const pages = [
-		{ name: "landing", path: "/", signedIn: false, expect: "Free beta" },
+		{ name: "landing", path: "/", signedIn: false, expect: "Start building" },
 		{ name: "home", path: "/", signedIn: true, expect: "Short chat" },
 		{
 			name: "chat-rich",
