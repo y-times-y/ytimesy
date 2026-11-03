@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public pages for search engines; the signed-in app is not listed. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://ytimesy.com/</loc></url>
+  <url><loc>https://ytimesy.com/blog</loc></url>
+  <url><loc>https://ytimesy.com/blog/harness-1-0</loc></url>
+  <url><loc>https://ytimesy.com/privacy</loc></url>
+  <url><loc>https://ytimesy.com/terms</loc></url>
+  <url><loc>https://ytimesy.com/training</loc></url>
+</urlset>
