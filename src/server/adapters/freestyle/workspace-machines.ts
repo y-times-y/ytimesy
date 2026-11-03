@@ -24,7 +24,7 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
-import { abortableFreestyleFetch } from "./abortable-fetch";
+import { abortableFreestyleFetch, callSignalFetch } from "./abortable-fetch";
 import { boundedFreestyleFetch, fastPollFreestyleFetch } from "./bounded-fetch";
 import {
 	ensureVmEdgeAuthorizer,
@@ -114,8 +114,9 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const transport = requestIdRecordingFetch(
-		fastPollFreestyleFetch(boundedFreestyleFetch()),
+	// A turn's machine call (cancellableMachines) aborts its requests on Stop.
+	const transport = callSignalFetch(
+		requestIdRecordingFetch(fastPollFreestyleFetch(boundedFreestyleFetch())),
 	);
 	const freestyle = new Freestyle({
 		apiKey,
