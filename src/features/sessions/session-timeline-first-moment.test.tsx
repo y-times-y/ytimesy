@@ -40,3 +40,23 @@ it("replaces Thinking with the reply's first words", () => {
 		/data-kind="agentMessage"[^>]*data-follows="userMessage"/,
 	);
 });
+
+it("shows a queued message as stopping until the stopped turn settles", () => {
+	const queued = {
+		kind: "userMessage",
+		id: SessionItemId("u2"),
+		text: "Then run the tests",
+		queued: true,
+	} as const;
+	const render = (stopping: boolean) =>
+		renderToStaticMarkup(
+			<SessionTimeline
+				items={[sent, queued]}
+				turnStatus="idle"
+				stopping={stopping}
+			/>,
+		);
+	expect(render(false)).toContain("Queued in this chat");
+	expect(render(true)).toContain("Stopping…");
+	expect(render(true)).not.toContain("Queued in this chat");
+});
