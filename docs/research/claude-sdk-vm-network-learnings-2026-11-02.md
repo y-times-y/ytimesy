@@ -140,3 +140,30 @@ which is why a refresh "fixed" it. Fix `d8d86a46`
   before committing.
 - Auto mode refuses prod deploys from the agent; preflight
   (`--preflight-only`) is allowed. Give the user the deploy command.
+
+## 6. Memory: user opinions filed under the project
+
+Prod message "i actually think that we should use ts over js because i think
+it is a better choice also i think effect ts is a really helpful framework"
+was saved as "Prefers TypeScript over JavaScript for this project ..." under
+`projects/<key>/stack.md`. Cause: the save step's rule ("the chat's project by
+default ... stack ... belongs to the project even when it sounds general") plus
+"we should use", so the model added "for this project". Fixed in `af9c72bd`:
+decide what each fact is about; the user's own likes and opinions (including
+which language or framework is better) are personal even in a project chat or
+phrased "we should use X"; one entry per fact; never add "for this project"
+unprompted. The dream's sort rules say the same.
+
+How to reproduce and check placement (reuse this):
+- Read the real message, not a paraphrase: synthetic "I like TS over JS"
+  variants were filed right 40/40 on the old wording; only the real message
+  ("we should use ... because i think") reproduced it (5/5 wrong).
+- Find it read-only in prod: `memory_model_usage` (kind, model, outcome) →
+  `agent_session.items` item `<userMessageId>:memory-saved` has the saved
+  paths; the user message is the item with that id.
+- Run the save prompt (`SAVE_HOOK_INSTRUCTIONS` + `saveHookPrompt`) on the
+  dev owner's Codex subscription, each case 5x, with and without project stack
+  lines in memory, and apply `looksProjectSpecific` as the save does.
+  Results: before 0/5 on the message; after 15/15; controls 20/20.
+- A line already misfiled stays where it is (a dream only sorts personal/
+  outward); move it from the Memory page.
