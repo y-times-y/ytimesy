@@ -13,6 +13,7 @@ import {
 	saveMcpOAuthState,
 	takeMcpOAuthState,
 } from "../adapters/mcp-servers";
+import { redirectRefusingFetch } from "../adapters/workers-fetch";
 import {
 	chooseClientRegistration,
 	fetchAuthorizationServerMetadata,
@@ -212,6 +213,8 @@ export async function startMcpOAuth(input: {
 }) {
 	const server = await mcpServerForOwner(input.userId, input.serverId);
 	if (server?.auth !== "oauth") throw new Error("MCP server not found.");
+	// Workers throw on the SDK's redirect: "error" (see workers-fetch.ts).
+	const fetchFn = input.fetchFn ?? redirectRefusingFetch();
 	const state = randomBytes(32).toString("base64url");
 	const provider = storedOAuthProvider({
 		record: await readOAuthRecord(server.sealedOAuth, input.userId),
@@ -220,13 +223,13 @@ export async function startMcpOAuth(input: {
 		state,
 		choose: {
 			clientMetadataUrl: mcpClientMetadataUrl(input.appUrl),
-			fetchFn: input.fetchFn,
+			fetchFn,
 		},
 		env: input.env,
 	});
 	const result = await auth(provider, {
 		serverUrl: server.url,
-		fetchFn: input.fetchFn,
+		fetchFn,
 	});
 	if (result === "AUTHORIZED") return null;
 	if (!provider.authorizationUrl || !provider.verifier)
@@ -262,7 +265,7 @@ export async function finishMcpOAuth(input: {
 		authorizationCode: input.code,
 		callbackState: input.state,
 		callbackIssuer: input.issuer,
-		fetchFn: input.fetchFn,
+		fetchFn: input.fetchFn ?? redirectRefusingFetch(),
 	});
 	if (result !== "AUTHORIZED") throw new Error("Sign-in did not complete.");
 	return server.id;
