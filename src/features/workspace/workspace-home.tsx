@@ -6,7 +6,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Maximize2, Minimize2, PanelRight } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, PanelRight } from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -75,6 +75,10 @@ import {
 	selectedProjectIdAfterDelete,
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
+import {
+	latestPullRequestHandoff,
+	OPENING_PULL_REQUEST_TEXT,
+} from "#/domain/pull-request-handoff-item";
 import { composerSendBlock } from "#/domain/send-blocked";
 import {
 	chatHeaderTitle,
@@ -1140,11 +1144,29 @@ export function WorkspaceHome({
 		const timer = window.setTimeout(() => setWakeWatch(null), WAKE_WATCH_MS);
 		return () => window.clearTimeout(timer);
 	}, [wakeWatch]);
+	// The newest turn's pull request handoff, which finishes after the turn
+	// shows as done: "Opening pull request…", then the pull request.
+	const pullRequestHandoff = latestPullRequestHandoff(
+		session.items,
+		isTurnRunning(session.turnStatus),
+		Date.now(),
+	);
 	const listenForProgress = progressStreamWanted({
 		turnRunning: session.turnStatus === "running",
 		helpersWorking,
 		watchingForWake: !!wakeWatch && wakeWatch.sessionId === activeSessionId,
+		openingPullRequest: pullRequestHandoff?.state === "opening",
 	});
+	// The pull request arrived over the progress stream: the PR list and the
+	// chat's row read it now instead of at their next refresh.
+	const handedOffPullRequestUrl =
+		pullRequestHandoff?.state === "opened" ? pullRequestHandoff.url : null;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reads again only when a new pull request link arrives.
+	useEffect(() => {
+		if (!handedOffPullRequestUrl) return;
+		void refetchPullRequests();
+		void chats.refetch();
+	}, [handedOffPullRequestUrl]);
 	const settledTurn = useRef<{
 		readonly chatId?: string;
 		readonly status: SessionTurnStatus;
@@ -2955,8 +2977,18 @@ export function WorkspaceHome({
 		pullRequestsRead || !activeChat?.pr || !activeHead
 			? sessionPullRequests
 			: [savedListedPullRequest(activeChat.pr, activeHead)];
+	// The handoff's link stands in until the PR list has read it.
+	const handedOffPullRequest =
+		pullRequestHandoff?.state === "opened"
+			? {
+					number: pullRequestHandoff.number,
+					url: pullRequestHandoff.url,
+					draft: pullRequestHandoff.draft,
+				}
+			: undefined;
 	const headerPullRequest =
 		sessionPullRequest ??
+		handedOffPullRequest ??
 		(savedChatPr
 			? {
 					number: savedChatPr.number,
@@ -2964,6 +2996,8 @@ export function WorkspaceHome({
 					draft: savedChatPr.state === "draft",
 				}
 			: undefined);
+	const headerOpeningPullRequest =
+		!headerPullRequest && pullRequestHandoff?.state === "opening";
 	function connectHarness() {
 		const epoch = sessionEpoch.current;
 		const scope = sessionScope();
@@ -3409,6 +3443,19 @@ export function WorkspaceHome({
 													{headerPullRequest.draft ? "Draft PR" : "PR"} #
 													{headerPullRequest.number}
 												</a>
+											)}
+											{headerOpeningPullRequest && (
+												<span
+													className="session-title-meta session-title-pending"
+													role="status"
+												>
+													<LoaderCircle
+														size={12}
+														className="workspace-status-spin"
+														aria-hidden="true"
+													/>
+													{OPENING_PULL_REQUEST_TEXT}
+												</span>
 											)}
 										</div>
 									</div>

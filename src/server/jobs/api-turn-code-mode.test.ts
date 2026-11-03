@@ -68,7 +68,7 @@ vi.mock("../services/api-agent-command-tools", async (importOriginal) => ({
 	completedAgentCommands: mocks.commandCompletions,
 }));
 vi.mock("../services/turn-commit", () => ({
-	commitCompletedSessionTurn: mocks.commit,
+	commitSessionTurn: mocks.commit,
 }));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: mocks.knowledge,

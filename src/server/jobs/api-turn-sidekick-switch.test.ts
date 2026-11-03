@@ -89,7 +89,7 @@ vi.mock("../services/api-agent-command-tools", () => ({
 	completedAgentCommands: vi.fn(async () => []),
 }));
 vi.mock("../services/turn-commit", () => ({
-	commitCompletedSessionTurn: vi.fn(async () => undefined),
+	commitSessionTurn: vi.fn(async () => undefined),
 }));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: vi.fn(async () => ""),

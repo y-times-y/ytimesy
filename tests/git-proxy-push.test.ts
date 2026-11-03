@@ -83,7 +83,10 @@ it("pushes from a fresh repository that ignores the checkout's own Git config", 
 		exec: vi.fn(async (command: string) => {
 			// Stand in for the proxy origin with a local bare repository.
 			const local = command
-				.replace("GIT_ALLOW_PROTOCOL=https ", "GIT_ALLOW_PROTOCOL=https:file ")
+				.replaceAll(
+					"GIT_ALLOW_PROTOCOL=https ",
+					"GIT_ALLOW_PROTOCOL=https:file ",
+				)
 				.replace(
 					quote("https://proxy.invalid/git/fixture/repository.git"),
 					quote(remote),
@@ -124,4 +127,7 @@ it("pushes from a fresh repository that ignores the checkout's own Git config", 
 	).toMatchObject({ access: "write", branch: "ytimesy/chat" });
 	expect(temporary).toMatch(/^\/tmp\/ytimesy-git-proxy-/);
 	expect(existsSync(temporary)).toBe(false);
+	// Three guest round trips: name and directory, the config file, the push.
+	expect(host.exec).toHaveBeenCalledTimes(2);
+	expect(host.writeTextFile).toHaveBeenCalledTimes(1);
 });

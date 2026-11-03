@@ -130,6 +130,7 @@ import {
 	type FailoverActions,
 	ModelSwitchCard,
 } from "./model-switch-card";
+import { PullRequestHandoffRow } from "./pull-request-handoff-row";
 import {
 	type SecretRequestActions,
 	SecretRequestCard,
@@ -1588,6 +1589,7 @@ function SessionItemView({
 						{item.message}
 					</p>
 				);
+			if (item.pullRequest) return <PullRequestHandoffRow item={item} />;
 			return (
 				<div
 					className="session-activity session-system-notice"

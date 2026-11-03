@@ -208,7 +208,28 @@ export type NoticeSessionItem = {
 	 */
 	readonly wake?: true;
 	readonly timing?: UserMessageItem["timing"];
+	/**
+	 * The turn's pull request handoff (pull-request-handoff-item.ts): pushing
+	 * and opening it continue after the turn shows as done, so the chat says
+	 * so until GitHub answers, then links the pull request.
+	 */
+	readonly pullRequest?: PullRequestHandoffState;
 };
+
+export type PullRequestHandoffState =
+	| {
+			readonly state: "opening";
+			/** When the handoff started (epoch ms); an old one is no longer shown. */
+			readonly since: number;
+	  }
+	| {
+			readonly state: "opened";
+			readonly number: number;
+			readonly url: string;
+			readonly draft: boolean;
+			/** Opened by this turn, not an open one it pushed to. */
+			readonly created: boolean;
+	  };
 
 /**
  * The start of a chat continued from a local agent session ("Continue your

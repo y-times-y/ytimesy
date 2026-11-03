@@ -145,7 +145,7 @@ vi.mock("../services/api-agent-command-tools", async (importOriginal) => ({
 	completedAgentCommands: async () => [],
 }));
 vi.mock("../services/turn-commit", () => ({
-	commitCompletedSessionTurn: vi.fn(),
+	commitSessionTurn: vi.fn(),
 }));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: async () => null,
