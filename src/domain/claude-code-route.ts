@@ -1,7 +1,7 @@
 import type { ListedModel } from "./listed-model";
 
 /**
- * "Claude Code": chats that run the unmodified Claude Code CLI on the chat's
+ * "Claude Code": chats that run Claude Code through the Claude Agent SDK on the chat's
  * own VM, billed to the user's Claude Pro/Max subscription (the token from
  * `claude setup-token`). The chat's runtime stays "api" (same transcript,
  * subagents and checkout plumbing); the route says which harness runs it.

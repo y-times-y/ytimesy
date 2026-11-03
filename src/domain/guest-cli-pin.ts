@@ -9,36 +9,44 @@ export function pinnedCodexInstallCommand(): string {
 }
 
 /**
- * The Claude Code CLI that Claude Code chats run, unmodified, on the chat's
- * VM. Verified with the edge proxy on 2026-11-01. Installed under /opt (root
- * owned, readable by every user, so a read-only helper running as the
- * reader user can run it too); auto-updates stay off so a turn never
- * changes version under itself.
+ * The Claude Agent SDK that Claude Code chats run on the chat's VM. The SDK
+ * starts the Claude Code build bundled with its release: 0.3.296 bundles
+ * Claude Code 2.1.296, the version verified with the edge proxy on
+ * 2026-11-01. Installed under /opt (root owned, readable by every user, so a
+ * read-only helper running as the reader user can run it too); auto-updates
+ * stay off so a turn never changes version under itself.
  */
-export const PINNED_CLAUDE_CODE_VERSION = "2.1.296";
-export const CLAUDE_CODE_PREFIX = `/opt/ytimesy-claude-code/${PINNED_CLAUDE_CODE_VERSION}`;
-export const CLAUDE_CODE_BINARY = `${CLAUDE_CODE_PREFIX}/bin/claude`;
+export const PINNED_CLAUDE_AGENT_SDK_VERSION = "0.3.296";
+export const CLAUDE_AGENT_SDK_PREFIX = `/opt/ytimesy-claude-agent-sdk/${PINNED_CLAUDE_AGENT_SDK_VERSION}`;
+const SDK_PACKAGES = `${CLAUDE_AGENT_SDK_PREFIX}/node_modules/@anthropic-ai`;
+/** The SDK's entry module, which the runner imports by path. */
+export const CLAUDE_AGENT_SDK_MODULE = `${SDK_PACKAGES}/claude-agent-sdk/sdk.mjs`;
+/** The Claude Code build the SDK starts on the VM's platform (linux-x64, glibc). */
+export const CLAUDE_AGENT_SDK_CLAUDE_BINARY = `${SDK_PACKAGES}/claude-agent-sdk-linux-x64/claude`;
 
 /**
- * Installs the pinned CLI unless it is there: as root in the tools image
+ * Installs the pinned SDK unless it is there: as root in the tools image
  * (scripts/build-tools-snapshot.ts), through passwordless sudo on a VM
  * booted from an older image (the first Claude Code turn). Idempotent and
  * serialized, so parallel turns on one VM install it once.
  */
-export function claudeCodeInstallScript(asRoot: boolean): string {
+export function claudeAgentSdkInstallScript(asRoot: boolean): string {
 	const sudo = asRoot ? "" : "sudo -n ";
 	return `set -eu
-if [ ! -x ${CLAUDE_CODE_BINARY} ]; then
-  ${sudo}mkdir -p /opt/ytimesy-claude-code
+if [ ! -f ${CLAUDE_AGENT_SDK_MODULE} ] || [ ! -x ${CLAUDE_AGENT_SDK_CLAUDE_BINARY} ]; then
+  ${sudo}mkdir -p /opt/ytimesy-claude-agent-sdk
   (
     flock -w 300 9
-    if [ ! -x ${CLAUDE_CODE_BINARY} ]; then
-      ${sudo}rm -rf ${CLAUDE_CODE_PREFIX}.tmp
-      ${sudo}env npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false npm install -g --silent --prefix ${CLAUDE_CODE_PREFIX}.tmp @anthropic-ai/claude-code@${PINNED_CLAUDE_CODE_VERSION} >/dev/null
-      ${sudo}rm -rf ${CLAUDE_CODE_PREFIX}
-      ${sudo}mv ${CLAUDE_CODE_PREFIX}.tmp ${CLAUDE_CODE_PREFIX}
+    if [ ! -f ${CLAUDE_AGENT_SDK_MODULE} ] || [ ! -x ${CLAUDE_AGENT_SDK_CLAUDE_BINARY} ]; then
+      ${sudo}rm -rf ${CLAUDE_AGENT_SDK_PREFIX}.tmp
+      ${sudo}mkdir -p ${CLAUDE_AGENT_SDK_PREFIX}.tmp
+      ${sudo}env npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false npm install --silent --no-save --prefix ${CLAUDE_AGENT_SDK_PREFIX}.tmp @anthropic-ai/claude-agent-sdk@${PINNED_CLAUDE_AGENT_SDK_VERSION} >/dev/null
+      # The read-only helper runs it as another user: readable and runnable by all.
+      ${sudo}chmod -R a+rX ${CLAUDE_AGENT_SDK_PREFIX}.tmp
+      ${sudo}rm -rf ${CLAUDE_AGENT_SDK_PREFIX}
+      ${sudo}mv ${CLAUDE_AGENT_SDK_PREFIX}.tmp ${CLAUDE_AGENT_SDK_PREFIX}
     fi
-  ) 9>/tmp/ytimesy-claude-code-install.lock
+  ) 9>/tmp/ytimesy-claude-agent-sdk-install.lock
 fi
-${CLAUDE_CODE_BINARY} --version >/dev/null`;
+${CLAUDE_AGENT_SDK_CLAUDE_BINARY} --version >/dev/null`;
 }

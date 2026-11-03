@@ -154,8 +154,8 @@ export function readerCommand(sessionId: string, command: string) {
 }
 
 /**
- * A read-only Claude Code helper's CLI, run as the reader (the checkout
- * stays unwritable) but outside the network namespace: the unmodified CLI
+ * A read-only Claude Code helper's run, as the reader (the checkout
+ * stays unwritable) but outside the network namespace: Claude Code
  * must reach ytimesy's edge for every model request. Its commands can
  * therefore reach the VM's loopback services, unlike a reader on our own
  * harness. Only Claude Code read-only helpers use it.
