@@ -14,7 +14,7 @@ import {
 	RefreshCw,
 	Search,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	Popover,
 	PopoverContent,
@@ -83,6 +83,25 @@ export function ProjectPicker({
 		staleTime: 5 * 60_000,
 		placeholderData: keepPreviousData,
 	});
+	// "Add from GitHub" installs the app in another tab; the cached list
+	// (staleTime) would otherwise hide the new account's repositories until
+	// it expires. Coming back to this tab asks GitHub again.
+	const installOpened = useRef(false);
+	const { refetch: refetchRepositories } = repositories;
+	useEffect(() => {
+		const returned = () => {
+			if (!installOpened.current || document.visibilityState !== "visible")
+				return;
+			installOpened.current = false;
+			void refetchRepositories();
+		};
+		window.addEventListener("focus", returned);
+		document.addEventListener("visibilitychange", returned);
+		return () => {
+			window.removeEventListener("focus", returned);
+			document.removeEventListener("visibilitychange", returned);
+		};
+	}, [refetchRepositories]);
 	const connection = useMutation({
 		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
 		onSuccess: ({ url }) => {
@@ -320,6 +339,9 @@ export function ProjectPicker({
 									href={repositories.data.installationUrl}
 									target="_blank"
 									rel="noreferrer"
+									onClick={() => {
+										installOpened.current = true;
+									}}
 								>
 									<ExternalLink size={16} />
 									Add from GitHub
