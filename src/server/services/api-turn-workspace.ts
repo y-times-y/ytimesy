@@ -367,9 +367,15 @@ export async function blockGuestMetadata(
 	let lastFailure: unknown;
 	for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
 		if (attempt > 0) {
-			await new Promise((resolve) =>
-				setTimeout(resolve, retryDelays[attempt - 1]),
-			);
+			await new Promise<void>((resolve) => {
+				const timer = setTimeout(done, retryDelays[attempt - 1]);
+				signal?.addEventListener("abort", done, { once: true });
+				function done() {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", done);
+					resolve();
+				}
+			});
 			signal?.throwIfAborted();
 			await machines.ensureRunning?.(vm).catch((error: unknown) => {
 				lastFailure = error;

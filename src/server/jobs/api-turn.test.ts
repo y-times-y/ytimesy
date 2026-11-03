@@ -2078,6 +2078,34 @@ describe("a builder's first request before its workspace is ready", () => {
 		expect(sentAfter).toBeLessThan(FIRST_REQUEST_WORKSPACE_WAIT_MS);
 	});
 
+	it("lands a Stop after the early reply without waiting for a slow workspace", async () => {
+		vi.useFakeTimers();
+		try {
+			mocks.preparedDirectory.mockResolvedValue("/repo");
+			heldWorkspace(); // never ready: the VM is not answering
+			mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+			mocks.cancelRequested.mockResolvedValue(true);
+			mocks.stepRuntime.mockImplementation(async (input) => {
+				await input.onEvent({
+					type: "text-delta",
+					id: "reply",
+					text: "ananab",
+				});
+				return { messages: input.messages, outcome: "completed" };
+			});
+			const outcome = runApiTurn(
+				{} as WorkspaceMachines,
+				rootTurn,
+				firstStep(),
+			);
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(await outcome).toBe("cancelled");
+			expect(mocks.commit).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("calls the model before the VM is ready, naming the path the chat reported", async () => {
 		const workspace = heldWorkspace();
 		mocks.preparedDirectory.mockResolvedValue("/repo");
