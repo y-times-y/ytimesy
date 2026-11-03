@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { catalogIds } from "#/domain/plugin-catalog";
 import type { PluginCommand, PluginSkill } from "#/domain/plugin-package";
 import { seal } from "#/server/auth/token-vault";
 import { database } from "./database";
@@ -86,6 +87,25 @@ export async function listInstalls(
 	}));
 }
 
+/**
+ * Deletes the user's installs of plugins dropped from the catalog, with their
+ * MCP servers. Servers the user added themselves have no plugin_id and stay.
+ */
+export async function pruneRemovedInstalls(
+	userId: string,
+	ids: string[] = catalogIds(),
+) {
+	await database().query(
+		`delete from mcp_server where user_id=$1 and plugin_id in
+		 (select id::text from plugin_install where user_id=$1 and not (catalog_id = any($2)))`,
+		[userId, ids],
+	);
+	await database().query(
+		"delete from plugin_install where user_id=$1 and not (catalog_id = any($2))",
+		[userId, ids],
+	);
+}
+
 /** Enabled personal installs plus this project's, for commands and skills. */
 export async function enabledPluginComponents(
 	userId: string,
@@ -93,8 +113,9 @@ export async function enabledPluginComponents(
 ) {
 	const { rows } = await database().query<Row>(
 		`select * from plugin_install where user_id=$1 and enabled
-		 and (project_id is null or project_id=$2) order by plugin_name`,
-		[userId, projectId],
+		 and (project_id is null or project_id=$2) and catalog_id = any($3)
+		 order by plugin_name`,
+		[userId, projectId, catalogIds()],
 	);
 	return rows.map((row) => ({ plugin: row.plugin_name, ...row.components }));
 }

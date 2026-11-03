@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { catalogIds } from "#/domain/plugin-catalog";
 import { seal, unseal } from "#/server/auth/token-vault";
 import { database } from "./database";
 
@@ -128,15 +129,21 @@ export async function removeMcpServer(userId: string, id: string) {
 	]);
 }
 
-/** Server-side only: enabled personal servers plus this project's, with unsealed headers. */
+/**
+ * Server-side only: enabled personal servers plus this project's, with unsealed
+ * headers. A plugin's servers join only while its install is still in the catalog.
+ */
 export async function connectableMcpServers(
 	userId: string,
 	projectId: string | null,
 ) {
 	const { rows } = await database().query<Row>(
 		`select * from mcp_server where user_id=$1 and enabled
-		 and (project_id is null or project_id=$2) order by name`,
-		[userId, projectId],
+		 and (project_id is null or project_id=$2)
+		 and (plugin_id is null or plugin_id in (select id::text from plugin_install
+		  where user_id=$1 and catalog_id = any($3)))
+		 order by name`,
+		[userId, projectId, catalogIds()],
 	);
 	return Promise.all(
 		rows.map(async (row) => ({

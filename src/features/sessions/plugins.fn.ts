@@ -4,6 +4,7 @@ import { z } from "zod";
 import { PLUGIN_CATALOG } from "#/domain/plugin-catalog";
 import {
 	listInstalls,
+	pruneRemovedInstalls,
 	removeInstall,
 	setInstallEnabled,
 } from "#/server/adapters/plugin-installs";
@@ -17,6 +18,7 @@ import {
 export const getPluginsFn = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await requireUser(getRequest().headers);
+		await pruneRemovedInstalls(user.id);
 		return {
 			catalog: PLUGIN_CATALOG.map((entry) => {
 				const optional = signInReplacesSettings(entry);
