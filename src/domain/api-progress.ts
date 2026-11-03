@@ -13,7 +13,9 @@ import {
 	REQUEST_PROJECT_SECRET_TOOL,
 	REQUESTABLE_SECRET_KINDS,
 	type RequestableSecretKind,
+	type RequestedSecret,
 	SECRET_REASON_LIMIT,
+	SECRET_REQUEST_LIMIT,
 } from "./secret-request";
 import type { SessionItem } from "./session-item";
 import { publicToolDetail } from "./tool-detail";
@@ -201,27 +203,40 @@ function startedBackgroundCommand(value: unknown) {
 		: null;
 }
 
-/** The request an accepted request_project_secret call returned, if any. */
-function requestedSecret(value: unknown, failed: boolean | undefined) {
+/**
+ * The secrets an accepted request_project_secret call asked for, if any:
+ * its list, or the one name an older call returned.
+ */
+function requestedSecret(
+	value: unknown,
+	failed: boolean | undefined,
+): { secrets: RequestedSecret[] } | null {
 	const output = value as {
 		requested?: unknown;
-		name?: unknown;
-		kind?: unknown;
-		reason?: unknown;
+		secrets?: unknown;
 	} | null;
-	if (
-		failed ||
-		output?.requested !== true ||
-		typeof output.name !== "string" ||
-		!REQUESTABLE_SECRET_KINDS.includes(output.kind as RequestableSecretKind)
-	)
-		return null;
-	return {
-		name: output.name,
-		secretKind: output.kind as RequestableSecretKind,
-		reason:
-			typeof output.reason === "string"
-				? output.reason.slice(0, SECRET_REASON_LIMIT)
-				: "",
-	};
+	if (failed || output?.requested !== true) return null;
+	const asked = Array.isArray(output.secrets) ? output.secrets : [output];
+	const secrets: RequestedSecret[] = [];
+	for (const entry of asked.slice(0, SECRET_REQUEST_LIMIT)) {
+		const secret = entry as {
+			name?: unknown;
+			kind?: unknown;
+			reason?: unknown;
+		};
+		if (
+			typeof secret?.name !== "string" ||
+			!REQUESTABLE_SECRET_KINDS.includes(secret.kind as RequestableSecretKind)
+		)
+			return null;
+		secrets.push({
+			name: secret.name,
+			secretKind: secret.kind as RequestableSecretKind,
+			reason:
+				typeof secret.reason === "string"
+					? secret.reason.slice(0, SECRET_REASON_LIMIT)
+					: "",
+		});
+	}
+	return secrets.length ? { secrets } : null;
 }

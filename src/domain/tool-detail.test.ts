@@ -70,6 +70,28 @@ it("marks a command left running as a background start", () => {
 	).toBe(true);
 });
 
+it("labels a secret request by its one name or its count", () => {
+	const asked = (input: unknown) =>
+		toolActivity({
+			kind: "dynamicToolCall",
+			id: SessionItemId("turn:secret"),
+			tool: "request_project_secret",
+			input: JSON.stringify(input),
+			status: "completed",
+		});
+	expect(asked({ name: "STRIPE_KEY" })).toMatchObject({
+		verb: "Asked for secret",
+		target: "STRIPE_KEY",
+	});
+	expect(asked({ secrets: [{ name: "STRIPE_KEY" }] })).toMatchObject({
+		target: "STRIPE_KEY",
+	});
+	expect(asked({ secrets: [{ name: "A" }, { name: "B" }] })).toMatchObject({
+		verb: "Asked for",
+		target: "2 secrets",
+	});
+});
+
 it("labels a web_fetch call with the page it fetched", () => {
 	expect(
 		toolActivity({

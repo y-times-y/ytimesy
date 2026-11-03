@@ -14,7 +14,7 @@ import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
 import { visibleRuntimeUserText } from "./runtime-handoff";
-import type { RequestableSecretKind } from "./secret-request";
+import type { RequestableSecretKind, RequestedSecret } from "./secret-request";
 import {
 	fileChangesFromShellCommand,
 	remainingShellCommandAfterWrites,
@@ -85,14 +85,24 @@ export type PlanProposalItem = {
 	readonly text: string;
 };
 
-/** A project secret the agent asked for with request_project_secret; the turn ended to wait for the user. */
-export type SecretRequestItem = {
-	readonly kind: "secretRequest";
-	readonly id: SessionItemId;
-	readonly name: string;
-	readonly secretKind: RequestableSecretKind;
-	readonly reason: string;
-};
+/**
+ * Project secrets the agent asked for with request_project_secret, in one
+ * card; the turn ended to wait for the user. Chats from before the list
+ * carry one name (read both with requestedSecrets).
+ */
+export type SecretRequestItem =
+	| {
+			readonly kind: "secretRequest";
+			readonly id: SessionItemId;
+			readonly secrets: readonly RequestedSecret[];
+	  }
+	| {
+			readonly kind: "secretRequest";
+			readonly id: SessionItemId;
+			readonly name: string;
+			readonly secretKind: RequestableSecretKind;
+			readonly reason: string;
+	  };
 
 /** Questions the agent asked with ask_user; the turn ended to wait for the user's choice. */
 export type UserQuestionItem = {

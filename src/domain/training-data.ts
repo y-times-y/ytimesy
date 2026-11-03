@@ -121,7 +121,15 @@ export function sessionItemTrainingParts(
 		case "planProposal":
 			return part("model", "text", item.text);
 		case "secretRequest":
-			return part("model", "reason", item.reason);
+			return part(
+				"model",
+				"reason",
+				"secrets" in item
+					? item.secrets
+							.map(({ name, reason }) => `${name}: ${reason}`)
+							.join("\n")
+					: item.reason,
+			);
 		case "userQuestion":
 			return part("model", "questions", JSON.stringify(item.questions));
 		case "memorySave":
