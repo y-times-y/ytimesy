@@ -577,8 +577,15 @@ function harnessToolActivity(
 			return { verb: "Proposed a plan" };
 		case "ask_user":
 			return { verb: "Asked you to choose" };
-		case "request_project_secret":
-			return { verb: "Asked for secret", target: text("name"), code: true };
+		case "request_project_secret": {
+			const secrets = Array.isArray(input.secrets) ? input.secrets : null;
+			if (!secrets)
+				return { verb: "Asked for secret", target: text("name"), code: true };
+			const first = (secrets[0] as { name?: unknown } | undefined)?.name;
+			return secrets.length === 1 && typeof first === "string"
+				? { verb: "Asked for secret", target: first, code: true }
+				: { verb: "Asked for", target: plural(secrets.length, "secret") };
+		}
 		case "search_mcp_tools":
 			return {
 				verb: "Searched MCP tools",

@@ -2417,8 +2417,48 @@ code.session-tool-target {
 	outline: 1px solid #ffffff70;
 	outline-offset: 1px;
 }
-.secret-request-note {
-	flex-basis: 100%;
+/* One row per requested secret; a long list scrolls inside the card. */
+.secret-request-list {
+	margin: 0;
+	padding: 4px 14px;
+	list-style: none;
+	max-height: 360px;
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+.secret-request-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 12px;
+	padding: 6px 0;
+}
+.secret-request-row + .secret-request-row {
+	border-top: 1px solid #ffffff0a;
+}
+.secret-request-label {
+	display: flex;
+	flex: 1 1 14em;
+	flex-direction: column;
+	min-width: 0;
+	color: #ececec;
+	font-size: 12px;
+}
+.secret-request-label span {
+	overflow: hidden;
+	color: #888;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.secret-request-saved {
+	display: inline-flex;
+	flex: 1 1 16em;
+	align-items: center;
+	gap: 4px;
+	color: #8fd19e;
+	font-size: 12px;
 }
 /* Cross-chat memory markers: a quiet icon row, collapsed to a count. */
 .memory-marker {

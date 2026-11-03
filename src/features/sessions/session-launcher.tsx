@@ -68,10 +68,7 @@ import {
 	nextPastedTextNumber,
 } from "#/domain/pasted-text";
 import type { Project } from "#/domain/projects";
-import {
-	secretDeclinedText,
-	secretProvidedText,
-} from "#/domain/secret-request";
+import { secretsAnsweredText } from "#/domain/secret-request";
 import {
 	blockedSendAttempt,
 	type ComposerSendBlock,
@@ -1354,9 +1351,9 @@ export function SessionLauncher({
 												kind,
 											},
 										});
-										sendText(secretProvidedText(name));
 									},
-									onDecline: (name) => sendText(secretDeclinedText(name)),
+									onAnswer: (saved, skipped) =>
+										sendText(secretsAnsweredText(saved, skipped)),
 								}
 							: undefined
 					}
