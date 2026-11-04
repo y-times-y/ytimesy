@@ -234,6 +234,22 @@ it("runs the fenced source only inside a funded window, then re-fences it at its
 		},
 	]);
 });
+it("moves the VM's own admission past the capture window it paid for, so a later wake never counts it twice", async () => {
+	// The VM's admission, settled at its own 20 s before recycling ran it.
+	await query(
+		"insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd,consumed_micro_usd,settled_at) values('30000000-0000-4000-8000-0000000000aa','alice','vm:source',date_trunc('month',now()),1000,500,now())",
+	);
+	await query(
+		"insert into infrastructure_vm_admission(slug,vm_id,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd) values('ytimesy-ag-0000000000004000','source','alice','30000000-0000-4000-8000-0000000000aa',20,0,1000)",
+	);
+	const { client } = provider();
+	await recycleWorkspace(client, session);
+	// The window ran 20 -> 22 s: those 2 s are the capture hold's, not the VM's.
+	const admission = await query(
+		"select baseline_seconds::int as baseline,max_run_total_seconds::int as cap from infrastructure_vm_admission where vm_id='source'",
+	);
+	expect(admission.rows).toEqual([{ baseline: 2, cap: 22 }]);
+});
 it("treats activity from its own capture window as idle, but not earlier activity", async () => {
 	// The default mock stamps activity "now" on every exec: still recycled.
 	const own = provider();
