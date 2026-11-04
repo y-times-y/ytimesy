@@ -150,7 +150,11 @@ import { getAgentModelCatalog } from "./model-catalog.fn";
 import { readPastedTextFn } from "./pasted-text.fn";
 import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
-import { approvePushRequestFn } from "./push-approval.fn";
+import {
+	cancelPushApprovalFn,
+	pushApprovalStatusFn,
+	pushApprovedChangeFn,
+} from "./push-approval.fn";
 import { SendBlockNotice } from "./send-block-notice";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -630,7 +634,9 @@ export function SessionLauncher({
 	}, [drafting]);
 	const loadProjectCommands = useServerFn(listProjectCommandsFn);
 	const saveProjectSecret = useServerFn(saveProjectSecretFn);
-	const approvePushRequest = useServerFn(approvePushRequestFn);
+	const pushApprovalStatus = useServerFn(pushApprovalStatusFn);
+	const pushApprovedChange = useServerFn(pushApprovedChangeFn);
+	const cancelPushApproval = useServerFn(cancelPushApprovalFn);
 	const projectCommands = useQuery({
 		queryKey: ["project-commands", selectedProject?.id, session.agentSessionId],
 		// Only when the user starts a slash command; never wakes a paused VM.
@@ -1376,14 +1382,20 @@ export function SessionLauncher({
 					pushActions={
 						session.agentSessionId
 							? {
-									disabled: busy || turnStatus === "running",
-									onApprove: async (itemId) => {
-										if (!session.agentSessionId) return;
-										await approvePushRequest({
-											data: { sessionId: session.agentSessionId, itemId },
-										});
-									},
-									onAnswer: (text) => sendText(text),
+									// Neither answer starts a turn, so a running turn does not block it.
+									disabled: false,
+									status: (itemId) =>
+										pushApprovalStatus({
+											data: { sessionId: session.agentSessionId ?? "", itemId },
+										}),
+									push: (itemId) =>
+										pushApprovedChange({
+											data: { sessionId: session.agentSessionId ?? "", itemId },
+										}),
+									cancel: (itemId) =>
+										cancelPushApproval({
+											data: { sessionId: session.agentSessionId ?? "", itemId },
+										}),
 								}
 							: undefined
 					}

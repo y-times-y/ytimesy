@@ -11,7 +11,6 @@ import {
 } from "./machine-git-grant";
 
 const pushes = vi.hoisted(() => ({
-	claimApproved: vi.fn(async () => false),
 	recordRefused: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/git-push-requests", () => ({ gitPushRequests: pushes }));
@@ -321,7 +320,6 @@ describe("machineGitHooks", () => {
 		ref: "refs/heads/main",
 	};
 	beforeEach(() => {
-		pushes.claimApproved.mockReset().mockResolvedValue(false);
 		pushes.recordRefused.mockReset().mockResolvedValue(undefined);
 	});
 
@@ -342,13 +340,13 @@ describe("machineGitHooks", () => {
 		).toBeNull();
 	});
 
-	it("allows main by the project setting, else spends an approval of exactly this push, else records it", async () => {
+	it("allows main only by the project setting, else records the push for the card", async () => {
 		expect(
 			await machineGitHooks(
 				sources({ projectAllowsDefaultBranchPush: async () => true }),
 			).defaultBranchPush(grant, update),
 		).toBe(true);
-		expect(pushes.claimApproved).not.toHaveBeenCalled();
+		expect(pushes.recordRefused).not.toHaveBeenCalled();
 
 		expect(
 			await machineGitHooks(sources()).defaultBranchPush(grant, update),
@@ -361,19 +359,6 @@ describe("machineGitHooks", () => {
 			name: "app",
 			branch: "main",
 			oldId: update.oldId,
-			newId: update.newId,
-		});
-
-		pushes.claimApproved.mockResolvedValueOnce(true);
-		expect(
-			await machineGitHooks(sources()).defaultBranchPush(grant, update),
-		).toBe(true);
-		expect(pushes.claimApproved).toHaveBeenLastCalledWith({
-			userId: "alice",
-			projectId: chat.projectId,
-			owner: "acme",
-			name: "app",
-			branch: "main",
 			newId: update.newId,
 		});
 	});

@@ -260,9 +260,9 @@ import {
 	loadAgentProjectSecrets,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
+import { withPushResultNotices } from "../services/push-approval";
 import {
 	countCommitsCommand,
-	PUSH_APPROVAL_END_TURN_TOOLS,
 	pushApprovalTools,
 } from "../services/push-approval-tool";
 import { startQueuedUserTurn } from "../services/queued-user-messages";
@@ -1575,6 +1575,7 @@ async function runApiTurnAttempt(
 					? pushApprovalTools({
 							userId: owner.userId,
 							projectId: owner.projectId,
+							sessionId: owner.id,
 							requests: gitPushRequests,
 							countCommits: async (oldId, newId) => {
 								const ready = await workspace();
@@ -1845,7 +1846,6 @@ async function runApiTurnAttempt(
 						endTurnTools: [
 							...SECRET_REQUEST_END_TURN_TOOLS,
 							...ASK_USER_END_TURN_TOOLS,
-							...PUSH_APPROVAL_END_TURN_TOOLS,
 						],
 					}
 				: {}),
@@ -2023,6 +2023,19 @@ async function runApiTurnAttempt(
 				if (background?.changed) {
 					items = background.items;
 					history = messages = background.messages;
+					await saveCheckpoint();
+					await publishProgress?.("running");
+				}
+				// Push cards the user answered meanwhile: the chat's notice, and the agent reads it.
+				const pushResults = await withPushResultNotices({
+					userId: owner.userId,
+					sessionId: owner.id,
+					items,
+					messages: history,
+				}).catch(() => null);
+				if (pushResults) {
+					items = pushResults.items;
+					history = messages = pushResults.messages;
 					await saveCheckpoint();
 					await publishProgress?.("running");
 				}
@@ -2408,6 +2421,14 @@ async function runApiTurnAttempt(
 			claim: false,
 		}).catch(() => null);
 		if (background?.changed) items = background.items;
+		// A push card answered during the last step still gets its notice.
+		const pushResults = await withPushResultNotices({
+			userId: owner.userId,
+			sessionId: owner.id,
+			items,
+			messages,
+		}).catch(() => null);
+		if (pushResults) items = pushResults.items;
 		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
 		const historyBeforeCompletion = messages;
 		const finalHistory = await withBackgroundCommandContext({
@@ -2450,7 +2471,6 @@ async function runApiTurnAttempt(
 					// A proposed plan or a secret request is the turn's result; it waits for the user.
 					item.kind === "planProposal" ||
 					item.kind === "secretRequest" ||
-					item.kind === "pushApproval" ||
 					item.kind === "userQuestion",
 			)
 		)

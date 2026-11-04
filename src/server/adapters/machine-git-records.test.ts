@@ -22,7 +22,11 @@ beforeEach(async () => {
 		insert into project values ('${project}', 'alice');
 		insert into agent_session values ('${chat}', 'alice', '${project}', null);`);
 	await db.exec(
-		["20261104120000_machine_git", "20261104130000_machine_git_token_holder"]
+		[
+			"20261104120000_machine_git",
+			"20261104130000_machine_git_token_holder",
+			"20261104140000_push_request_answers",
+		]
 			.map((file) => readFileSync(`supabase/migrations/${file}.sql`, "utf8"))
 			.join("\n"),
 	);
@@ -117,56 +121,80 @@ describe("git push requests", () => {
 			newId,
 		});
 
-	it("approve exactly the refused push, once, and only for its owner", async () => {
+	it("offer a refused push for one card, which then starts its lifetime", async () => {
 		await refuse(next);
 		const refused = await gitPushRequests.latestRefused({
 			...push,
 			owner: "ACME",
 		});
 		expect(refused).toMatchObject({ oldId: head, newId: next });
-		// Nothing is approved yet.
-		expect(await gitPushRequests.claimApproved({ ...push, newId: next })).toBe(
-			false,
-		);
-		expect(await gitPushRequests.approve("bob", refused?.id ?? "")).toBe(false);
-		expect(await gitPushRequests.approve("alice", refused?.id ?? "")).toBe(
-			true,
-		);
-		expect(await gitPushRequests.approve("alice", refused?.id ?? "")).toBe(
-			false,
-		);
-		// Approved requests are no longer offered for a new card.
+		expect(
+			await gitPushRequests.latestRefused({ ...push, userId: "bob" }),
+		).toBeNull();
+		expect(
+			await gitPushRequests.markRequested("bob", refused?.id ?? "", chat),
+		).toBe(false);
+		expect(
+			await gitPushRequests.markRequested("alice", refused?.id ?? "", chat),
+		).toBe(true);
+		// Asked for once: no second card for the same refused push.
 		expect(await gitPushRequests.latestRefused(push)).toBeNull();
-		// Another commit, branch or repository is not covered.
 		expect(
-			await gitPushRequests.claimApproved({ ...push, newId: "c".repeat(40) }),
-		).toBe(false);
-		expect(
-			await gitPushRequests.claimApproved({
-				...push,
-				branch: "release",
-				newId: next,
-			}),
-		).toBe(false);
-		expect(await gitPushRequests.claimApproved({ ...push, newId: next })).toBe(
-			true,
-		);
-		expect(await gitPushRequests.claimApproved({ ...push, newId: next })).toBe(
-			false,
-		);
+			await gitPushRequests.record("alice", refused?.id ?? ""),
+		).toMatchObject({
+			requestedAt: expect.any(Date),
+			approvedAt: null,
+			answer: null,
+			sessionId: chat,
+		});
 	});
 
-	it("offer the newest refused push for the card", async () => {
+	it("start one server push and keep the first answer only", async () => {
+		await refuse(next);
+		const id = (await gitPushRequests.latestRefused(push))?.id ?? "";
+		expect(await gitPushRequests.claimPush("bob", id)).toBe(false);
+		expect(await gitPushRequests.claimPush("alice", id)).toBe(true);
+		expect(await gitPushRequests.claimPush("alice", id)).toBe(false);
+		expect(await gitPushRequests.answer("alice", id, "pushed", "bbbbbbb")).toBe(
+			true,
+		);
+		expect(await gitPushRequests.answer("alice", id, "cancelled", "")).toBe(
+			false,
+		);
+		expect(await gitPushRequests.record("alice", id)).toMatchObject({
+			answer: "pushed",
+			answerDetail: "bbbbbbb",
+		});
+	});
+
+	it("tell a newer refused push of the branch apart", async () => {
 		await refuse(next);
 		await db.exec(
 			"update git_push_request set created_at = now() - interval '1 minute'",
 		);
-		await refuse("c".repeat(40));
-		expect((await gitPushRequests.latestRefused(push))?.newId).toBe(
-			"c".repeat(40),
+		const first = await gitPushRequests.record(
+			"alice",
+			(await gitPushRequests.latestRefused(push))?.id ?? "",
 		);
-		expect(
-			await gitPushRequests.latestRefused({ ...push, userId: "bob" }),
-		).toBeNull();
+		expect(first && (await gitPushRequests.newerRefused("alice", first))).toBe(
+			false,
+		);
+		await refuse("c".repeat(40));
+		expect(first && (await gitPushRequests.newerRefused("alice", first))).toBe(
+			true,
+		);
+	});
+
+	it("hand each answered card's notice out once, and take one back", async () => {
+		await refuse(next);
+		const id = (await gitPushRequests.latestRefused(push))?.id ?? "";
+		expect(await gitPushRequests.claimUnnoticed("alice", chat)).toEqual([]);
+		await gitPushRequests.answer("alice", id, "cancelled", "");
+		expect(await gitPushRequests.claimUnnoticed("alice", chat)).toEqual([
+			expect.objectContaining({ id, answer: "cancelled" }),
+		]);
+		expect(await gitPushRequests.claimUnnoticed("alice", chat)).toEqual([]);
+		await gitPushRequests.releaseNotice("alice", id);
+		expect(await gitPushRequests.claimUnnoticed("alice", chat)).toHaveLength(1);
 	});
 });

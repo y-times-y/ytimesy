@@ -1,6 +1,7 @@
 import type { AgentProviderId } from "./agent-provider";
 import { startsTurn } from "./child-task-activity";
 import { isSetupChatTitle } from "./environment-setup";
+import { pushApprovalOutcome } from "./push-approval";
 import {
 	isTurnRunning,
 	type SessionItem,
@@ -542,7 +543,11 @@ export function chatWaitingOn(
 		if (!item || startsTurn(item)) break;
 		if (item.kind === "userQuestion") return "question";
 		if (item.kind === "secretRequest") return "secret";
-		if (item.kind === "pushApproval") return "push";
+		if (
+			item.kind === "pushApproval" &&
+			pushApprovalOutcome(items, item.id).answer === "pending"
+		)
+			return "push";
 		if (item.kind === "planProposal") return "plan";
 		if (item.kind === "modelSwitch" && item.state === "awaitingApproval")
 			return "paused";

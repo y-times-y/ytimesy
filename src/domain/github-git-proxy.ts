@@ -9,6 +9,8 @@ export const repositoryPart = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 /**
  * A write grant names the one branch it may update and carries a nonce the
  * proxy consumes on the ref update, so a copied grant cannot be replayed.
+ * One naming a commit (an approved push to a default branch) may set the
+ * branch to exactly that commit.
  */
 const grantSchema = z
 	.object({
@@ -28,12 +30,16 @@ const grantSchema = z
 			.string()
 			.regex(/^[a-f0-9]{32}$/)
 			.optional(),
+		commit: z
+			.string()
+			.regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/)
+			.optional(),
 	})
 	.strict()
 	.refine((grant) =>
 		grant.access === "write"
 			? Boolean(grant.branch && grant.nonce)
-			: !grant.branch && !grant.nonce,
+			: !grant.branch && !grant.nonce && !grant.commit,
 	);
 export type GitProxyGrant = z.infer<typeof grantSchema>;
 type GitProxyGrantInput = Omit<GitProxyGrant, "nonce">;
@@ -379,8 +385,8 @@ export type MachineGitHooks = {
 	authorize(grant: MachineGitGrant): Promise<MachineGitAccess | null>;
 	/**
 	 * Whether this push to the default branch may go ahead: the project
-	 * allows it, or the user approved exactly this push (spent here). When
-	 * not, the push is recorded for request_push_approval.
+	 * allows it. When not, the push is recorded for request_push_approval,
+	 * whose card's Push pushes it server-side.
 	 */
 	defaultBranchPush(
 		grant: MachineGitGrant,
@@ -519,8 +525,8 @@ function defaultBranchExplanation(grant: MachineGitGrant, branch: string) {
 		];
 	return [
 		`Pushing to ${branch} on ${grant.owner}/${grant.name} needs the user's approval.`,
-		`Call request_push_approval with repo "${grant.owner}/${grant.name}", branch "${branch}" and a one-line summary, then push the same commit again once approved.`,
-		"Or push to your own branch instead.",
+		`Call request_push_approval with repo "${grant.owner}/${grant.name}", branch "${branch}" and a one-line summary; the user's Push pushes this commit for you, so do not push it again.`,
+		"Keep working on your own branch meanwhile.",
 	];
 }
 
@@ -619,7 +625,8 @@ export async function proxyGithubGit(
 				commands.updates.some(
 					(update) =>
 						update.ref !== `refs/heads/${grant.branch}` ||
-						/^0+$/.test(update.newId),
+						/^0+$/.test(update.newId) ||
+						(grant.commit !== undefined && update.newId !== grant.commit),
 				)
 			)
 				return new Response(null, { status: 403 });

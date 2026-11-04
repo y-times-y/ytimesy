@@ -191,12 +191,12 @@ export function machineGitHooks(sources: MachineGitSources): MachineGitHooks {
 				name: grant.name,
 				branch: update.ref.slice("refs/heads/".length),
 			};
+			// The user's Push on the card pushes server-side, never through here.
 			if (
-				(await sources.projectAllowsDefaultBranchPush(
+				await sources.projectAllowsDefaultBranchPush(
 					grant.userId,
 					grant.projectId,
-				)) ||
-				(await gitPushRequests.claimApproved({ ...push, newId: update.newId }))
+				)
 			)
 				return true;
 			await gitPushRequests.recordRefused({

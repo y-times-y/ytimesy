@@ -4,11 +4,19 @@ import type { SessionItem } from "./session-item";
 /**
  * The git proxy refuses a workspace push to a repository's default branch
  * unless the project allows it; the refusal tells the agent to call this
- * tool, which ends the turn on a Push / Cancel card for that exact push.
+ * tool, which posts a Push / Cancel card for that exact commit and returns
+ * at once: the agent keeps working, and the user's Push pushes server-side.
  */
 export const REQUEST_PUSH_APPROVAL_TOOL = "request_push_approval";
 
 export const PUSH_SUMMARY_LIMIT = 300;
+
+/** An unanswered card can be pushed this long after it was posted. */
+export const PUSH_CARD_LIFETIME_MS = 24 * 60 * 60_000;
+
+/** What the agent reads once the card is posted; the turn goes on. */
+export const PUSH_APPROVAL_REQUESTED_NOTE =
+	"Approval requested; continue with any work that does not need main updated. If nothing is left, finish your turn and say the push waits for approval.";
 
 /** What the card shows and the user approves: one refused push. */
 export const pushApprovalRequest = z.object({
@@ -35,14 +43,6 @@ export function requestedPushApproval(
 	return parsed.success ? parsed.data : null;
 }
 
-export function pushApprovedText(branch: string) {
-	return `Approved: push to ${branch}.`;
-}
-
-export function pushCancelledText(branch: string) {
-	return `Don't push to ${branch}; leave it on the branch/PR.`;
-}
-
 /** The card's question, e.g. "Push 3 commits to main on acme/app?". */
 export function pushApprovalQuestion(request: PushApprovalRequest) {
 	const commits =
@@ -52,19 +52,76 @@ export function pushApprovalQuestion(request: PushApprovalRequest) {
 	return `Push ${commits} to ${request.branch} on ${request.repo}?`;
 }
 
-/** How a push approval card was answered, from the transcript alone. */
+/** How a card ended; kept on its git_push_request row and in the chat's notice. */
+export const PUSH_ANSWERS = [
+	"pushed",
+	"failed",
+	"cancelled",
+	"outdated",
+	"expired",
+] as const;
+export type PushAnswer = (typeof PUSH_ANSWERS)[number];
+
+/** A card's answer: `detail` is the short sha when pushed, else the one-line reason. */
+export type PushResult = {
+	readonly requestId: string;
+	readonly answer: PushAnswer;
+	readonly detail: string;
+};
+
+/** What a card shows: waiting, or its answer. */
+export type PushCardState =
+	| { readonly answer: "pending" }
+	| Omit<PushResult, "requestId">;
+
+/** The card's one line for an answer. */
+export function pushAnswerLine(
+	branch: string,
+	result: Omit<PushResult, "requestId">,
+) {
+	switch (result.answer) {
+		case "pushed":
+			return `Pushed to ${branch} (${result.detail})`;
+		case "cancelled":
+			return "Cancelled";
+		case "expired":
+			return "Expired. Ask again to push.";
+		case "outdated":
+			return `Outdated: ${result.detail}`;
+		case "failed":
+			return `Not pushed: ${result.detail}`;
+	}
+}
+
+/** The chat's notice once a card is answered: what the agent and the user read. */
+export function pushResultNotice(
+	request: { repo: string; branch: string },
+	result: Omit<PushResult, "requestId">,
+) {
+	const where = `${request.branch} on ${request.repo}`;
+	switch (result.answer) {
+		case "pushed":
+			return `The user approved the push: ${result.detail} is now on ${where}.`;
+		case "cancelled":
+			return `The user cancelled the push to ${where}; leave the work on its branch or pull request.`;
+		case "expired":
+			return `The push request for ${where} expired unanswered.`;
+		case "outdated":
+			return `The push request for ${where} is outdated (${result.detail}); request approval again for the current commit if it is still needed.`;
+		case "failed":
+			return `The approved push to ${where} failed and nothing was pushed: ${result.detail}`;
+	}
+}
+
+/** A card's answer from the transcript: its notice, else still pending. */
 export function pushApprovalOutcome(
 	items: readonly SessionItem[],
-	requestId: SessionItem["id"],
-): "pending" | "approved" | "cancelled" | "answered" {
-	const index = items.findIndex((item) => item.id === requestId);
-	const request = items[index];
-	if (index < 0 || request?.kind !== "pushApproval") return "answered";
-	const reply = items
-		.slice(index + 1)
-		.find((item) => item.kind === "userMessage");
-	if (!reply || reply.kind !== "userMessage") return "pending";
-	if (reply.text === pushApprovedText(request.branch)) return "approved";
-	if (reply.text === pushCancelledText(request.branch)) return "cancelled";
-	return "answered";
+	itemId: SessionItem["id"],
+): PushCardState {
+	const card = items.find((item) => item.id === itemId);
+	if (card?.kind !== "pushApproval") return { answer: "pending" };
+	for (const item of items)
+		if (item.kind === "notice" && item.pushResult?.requestId === card.requestId)
+			return { answer: item.pushResult.answer, detail: item.pushResult.detail };
+	return { answer: "pending" };
 }
