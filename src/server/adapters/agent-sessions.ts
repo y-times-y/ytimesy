@@ -6,7 +6,10 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
-import { ENVIRONMENT_SETUP_TITLE } from "#/domain/environment-setup";
+import {
+	ENVIRONMENT_SETUP_TITLE,
+	PREVIOUS_SETUP_TITLES,
+} from "#/domain/environment-setup";
 import { jsonbText } from "#/domain/jsonb";
 import { sessionTitleFromText } from "#/domain/session-item";
 import type { ChatWaitingOn } from "#/domain/sidebar-chats";
@@ -427,7 +430,19 @@ export async function chatToOpenMetadata(
 		)
 			return linked;
 	}
-	return latestAgentSessionMetadata(userId, projectId);
+	// Never the project's setup chat: it runs in the background and opens
+	// only when picked (chatOpenedWithProject).
+	const result = await database().query(
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session
+		 where user_id=$1 and project_id=$2 and parent_session_id is null
+		   and archived_at is null and not environment_setup
+		   and not (title = any($3::text[]))
+		 order by updated_at desc limit 1`,
+		[userId, projectId, [ENVIRONMENT_SETUP_TITLE, ...PREVIOUS_SETUP_TITLES]],
+	);
+	if (!result.rows[0]) return null;
+	const { items: _items, ...metadata } = toSession(result.rows[0]);
+	return metadata;
 }
 
 /** Selection is a chat draft; it must never invalidate the project template. */

@@ -12,7 +12,7 @@ const project = randomUUID();
 beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated;
-	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,archived_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now());
+	 create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_summary text,task_review_state text,task_branch text,selected_branch text,base_branch text,working_branch text,agent_role text,agent_budget jsonb,agent_fork jsonb,agent_steps int not null default 0,environment_setup boolean not null default false,archived_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,state text,created_at timestamptz default now());
 	 create table agent_peer_inbox(id text primary key,recipient_id uuid,message text,queued_send jsonb,accepted boolean not null default false,created_at timestamptz default now());`);
 	for (const file of [
@@ -196,6 +196,20 @@ it("finds the chat a page opens as the sidebar list would pick it, without readi
 		expect(found && "items" in found).toBeFalsy();
 	}
 	expect(await chatToOpenMetadata("bob", project, older)).toBeNull();
+});
+
+it("never opens the project's setup chat by itself, only when it is linked", async () => {
+	const { chatToOpenMetadata } = await import("./agent-sessions");
+	const setup = await chat("Set up project");
+	await db.query(
+		"update agent_session set environment_setup=true, updated_at=now()+interval '1 hour' where id=$1",
+		[setup],
+	);
+	// The new project's only chat is its setup chat: nothing opens.
+	expect(await chatToOpenMetadata("alice", project)).toBeNull();
+	const task = await chat("Fix login");
+	expect((await chatToOpenMetadata("alice", project))?.id).toBe(task);
+	expect((await chatToOpenMetadata("alice", project, setup))?.id).toBe(setup);
 });
 
 it("marks only opened, never-used chats as unused", async () => {

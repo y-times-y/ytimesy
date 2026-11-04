@@ -1373,18 +1373,21 @@ export function WorkspaceHome({
 		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
 
+	// Nothing open when the project's list arrives (or changes): its latest
+	// chat opens, never its setup chat (chatOpenedWithProject). The setup
+	// chat the background start creates, or its turn starting or asking for
+	// something, never takes the screen from a new empty chat.
 	useEffect(() => {
 		if (
-			composerDraft ||
 			// A chat is open, or opened since this render (a linked chat).
 			selectedSessionIdRef.current ||
 			selectedSessionId ||
 			pendingNewChatRef.current ||
-			creatingChatEpoch.current === sessionEpoch.current ||
-			!chats.data?.[0]
+			creatingChatEpoch.current === sessionEpoch.current
 		)
 			return;
-		const first = chats.data[0];
+		const first = chatOpenedWithProject({ chats: chats.data, composerDraft });
+		if (!first) return;
 		setSelectedSessionId(first.id);
 		if (first.harnessId) setHarnessId(first.harnessId);
 		if (first.listedModelId) {
@@ -2349,7 +2352,7 @@ export function WorkspaceHome({
 		const latest = chatOpenedWithProject({
 			chats: listed,
 			composerDraft: composerDraftRef.current,
-		});
+		})?.id;
 		selectedSessionIdRef.current = latest;
 		setSelectedSessionId(latest);
 		setSession((current) => sessionWithoutOpenChat(current));

@@ -16,6 +16,7 @@ import {
 	projectsByRecentActivity,
 	projectsLatestChatsToReadAhead,
 	recentSidebarChats,
+	type SidebarChat,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sessionWithoutOpenChat,
@@ -452,15 +453,60 @@ describe("chatOpenedWithProject", () => {
 	it("opens the project's latest chat", () => {
 		expect(
 			chatOpenedWithProject({
-				chats: [{ id: "new" }, { id: "old" }],
+				chats: [
+					{ id: "new", title: "Fix login" },
+					{ id: "old", title: "Add tests" },
+				],
+				composerDraft: false,
+			})?.id,
+		).toBe("new");
+	});
+
+	it("never opens the project's setup chat by itself", () => {
+		expect(
+			chatOpenedWithProject({
+				chats: [
+					{ id: "setup", title: "Set up project" },
+					{ id: "task", title: "Fix login" },
+				],
+				composerDraft: false,
+			})?.id,
+		).toBe("task");
+		expect(
+			chatOpenedWithProject({
+				chats: [{ id: "legacy", title: "Set up environment" }],
 				composerDraft: false,
 			}),
-		).toBe("new");
+		).toBeUndefined();
+	});
+
+	it("background setup start never changes the selected chat: a new project's empty chat stays open through the whole setup", () => {
+		// What the list holds as the background setup goes: created and held
+		// for the build, its turn running once the build is ready, asking for a
+		// secret, done. Nothing else is in the project; the new empty chat is
+		// open (no chat selected), so each list arrival asks what opens.
+		const setup = { id: "setup", title: "Set up project" };
+		const lists: readonly SidebarChat[][] = [
+			[],
+			[{ ...setup, waitsForSetup: true }],
+			[{ ...setup, turnStatus: "running" as const }],
+			[{ ...setup, waitingOn: "secret" as const }],
+			[{ ...setup, turnStatus: "completed" as const }],
+		];
+		for (const chats of lists)
+			for (const composerDraft of [false, true])
+				expect(
+					chatOpenedWithProject({ chats, composerDraft }),
+					JSON.stringify(chats),
+				).toBeUndefined();
 	});
 
 	it("opens nothing over a new-chat draft or for a project without chats", () => {
 		expect(
-			chatOpenedWithProject({ chats: [{ id: "a" }], composerDraft: true }),
+			chatOpenedWithProject({
+				chats: [{ id: "a", title: "Fix login" }],
+				composerDraft: true,
+			}),
 		).toBeUndefined();
 		expect(
 			chatOpenedWithProject({ chats: [], composerDraft: false }),
