@@ -4604,7 +4604,9 @@ button.workspace-status-progress:hover {
 }
 .workspace-status-details {
 	position: absolute;
-	top: calc(100% + 6px);
+	/* Opens upward: the status sits just above the composer, so a panel
+	   opening downward landed beneath the screen's edge, out of view. */
+	bottom: calc(100% + 6px);
 	left: 0;
 	z-index: 20;
 	width: min(520px, calc(100vw - 32px));
