@@ -8,7 +8,8 @@ import { isRealtimeRoute } from "../../realtime/worker";
  */
 export function executorIngressRoute(
 	path: string,
-): "room" | "turn-start" | "jobs-start" | "other" {
+): "health" | "room" | "turn-start" | "jobs-start" | "other" {
+	if (path === "/health") return "health";
 	if (isRealtimeRoute(path)) return "room";
 	if (path === "/turn/start") return "turn-start";
 	if (path === "/jobs/start") return "jobs-start";

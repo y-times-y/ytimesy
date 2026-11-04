@@ -84,3 +84,39 @@ export function codexEgressExhaustedAlert(
 		text: `No Codex subscription egress path could reach chatgpt.com: ${tried || "none configured"}. Codex subscription chats fail (or fail over to another model) until a path recovers. Add or repair a relay (YTIMESY_CODEX_RELAY_URL_N with its signing key) or check Workers VPC egress. Further occurrences this hour are not emailed.`,
 	};
 }
+
+/**
+ * A deploy's blips land within a few minutes of each other (the edge and
+ * the web Worker swap versions one after the other).
+ */
+export const CRON_BLIP_GRACE_MINUTES = 3;
+
+/**
+ * How long a scheduled job's runtime blip counts as the start of a failure
+ * episode: two of the job's runs, and always longer than the grace, so a
+ * job that keeps failing after the deploy is reached.
+ */
+export function cronBlipWindowMinutes(everyMinutes: number) {
+	return Math.max(2 * everyMinutes, CRON_BLIP_GRACE_MINUTES + everyMinutes) + 1;
+}
+
+/**
+ * Whether a scheduled job's runtime blip (a Workers "internal error", a Durable
+ * Object reset for new code) is emailed, given when the job's current blip
+ * episode began (null: none recorded). The first blip, and any within the
+ * grace after it, are one deploy and only logged; a blip later in the same
+ * episode means the job keeps failing, and is emailed like any failure.
+ */
+export function cronBlipNeedsAlert(input: {
+	readonly episodeStartedAt: Date | null;
+	readonly now: Date;
+	readonly everyMinutes: number;
+}) {
+	if (!input.episodeStartedAt) return false;
+	const minutes =
+		(input.now.getTime() - input.episodeStartedAt.getTime()) / 60_000;
+	return (
+		minutes >= CRON_BLIP_GRACE_MINUTES &&
+		minutes <= cronBlipWindowMinutes(input.everyMinutes)
+	);
+}

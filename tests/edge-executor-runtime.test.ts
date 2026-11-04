@@ -34,6 +34,16 @@ afterAll(async () => {
 	await worker?.stop();
 });
 
+it("answers the deploy's health check with its build, without signing", async () => {
+	const health = await worker.fetch("http://localhost/health");
+	expect(health.status).toBe(200);
+	expect(health.headers.get("cache-control")).toBe("no-store");
+	expect(await health.json()).toEqual({ build: expect.any(String) });
+	expect(
+		(await worker.fetch("http://localhost/health", { method: "POST" })).status,
+	).toBe(405);
+});
+
 it("rejects unsigned background jobs before admitting any job", async () => {
 	expect(
 		(

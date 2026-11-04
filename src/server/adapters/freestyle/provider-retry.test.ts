@@ -2,8 +2,48 @@ import { FreestyleApiError } from "freestyle";
 import { expect, it, vi } from "vitest";
 import {
 	isTransientProviderFailure,
+	isWorkersRuntimeBlip,
 	retryTransientProviderFailure,
 } from "./provider-retry";
+
+it("recognizes the Workers runtime's answers while a deploy swaps versions", () => {
+	for (const message of [
+		"internal error; reference = 9a1fq3l2k0mrp8s4bd7c",
+		"Network connection lost.",
+		"The Durable Object's code has been updated, this version can no longer access storage.",
+		"Durable Object reset because its code was updated.",
+		"Cannot resolve Durable Object due to transient issue on remote node.",
+	])
+		expect(isWorkersRuntimeBlip(new Error(message))).toBe(true);
+	expect(
+		isWorkersRuntimeBlip(
+			new Error("step failed", {
+				cause: new Error("internal error; reference = abc"),
+			}),
+		),
+	).toBe(true);
+	expect(isWorkersRuntimeBlip(new Error("relation does not exist"))).toBe(
+		false,
+	);
+	expect(isWorkersRuntimeBlip(internal())).toBe(false);
+	// Collected failures are a blip only when every one is.
+	expect(
+		isWorkersRuntimeBlip(
+			new AggregateError([
+				new Error("Network connection lost."),
+				new Error("internal error; reference = abc"),
+			]),
+		),
+	).toBe(true);
+	expect(
+		isWorkersRuntimeBlip(
+			new AggregateError([
+				new Error("Network connection lost."),
+				new Error("permission denied for table"),
+			]),
+		),
+	).toBe(false);
+});
 
 const internal = () =>
 	new FreestyleApiError(

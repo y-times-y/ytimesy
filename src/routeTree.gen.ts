@@ -16,6 +16,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as TrainingRouteImport } from './routes/training'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
+import { Route as ApiVersionRouteImport } from './routes/api/version'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
 import { Route as AuthPathRouteImport } from './routes/auth/$path'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
@@ -84,6 +85,11 @@ const ApiAccountRoute = ApiAccountRouteImport.update({
 const ApiProjectsRoute = ApiProjectsRouteImport.update({
   id: '/api/projects',
   path: '/api/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVersionRoute = ApiVersionRouteImport.update({
+  id: '/api/version',
+  path: '/api/version',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiWorkspacesRoute = ApiWorkspacesRouteImport.update({
@@ -272,6 +278,7 @@ export interface FileRoutesByFullPath {
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
@@ -315,6 +322,7 @@ export interface FileRoutesByTo {
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
@@ -359,6 +367,7 @@ export interface FileRoutesById {
   '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/version': typeof ApiVersionRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
@@ -404,6 +413,7 @@ export interface FileRouteTypes {
     | '/training'
     | '/api/account'
     | '/api/projects'
+    | '/api/version'
     | '/api/workspaces'
     | '/auth/$path'
     | '/blog/harness'
@@ -447,6 +457,7 @@ export interface FileRouteTypes {
     | '/training'
     | '/api/account'
     | '/api/projects'
+    | '/api/version'
     | '/api/workspaces'
     | '/auth/$path'
     | '/blog/harness'
@@ -490,6 +501,7 @@ export interface FileRouteTypes {
     | '/training'
     | '/api/account'
     | '/api/projects'
+    | '/api/version'
     | '/api/workspaces'
     | '/auth/$path'
     | '/blog/harness'
@@ -534,6 +546,7 @@ export interface RootRouteChildren {
   TrainingRoute: typeof TrainingRoute
   ApiAccountRoute: typeof ApiAccountRoute
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
+  ApiVersionRoute: typeof ApiVersionRoute
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
   AuthPathRoute: typeof AuthPathRoute
   BlogHarnessRoute: typeof BlogHarnessRoute
@@ -616,6 +629,13 @@ declare module '@tanstack/react-router' {
       path: '/api/projects'
       fullPath: '/api/projects'
       preLoaderRoute: typeof ApiProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/version': {
+      id: '/api/version'
+      path: '/api/version'
+      fullPath: '/api/version'
+      preLoaderRoute: typeof ApiVersionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/workspaces': {
@@ -894,6 +914,7 @@ const rootRouteChildren: RootRouteChildren = {
   TrainingRoute: TrainingRoute,
   ApiAccountRoute: ApiAccountRoute,
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
+  ApiVersionRoute: ApiVersionRoute,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
   AuthPathRoute: AuthPathRoute,
   BlogHarnessRoute: BlogHarnessRoute,
@@ -930,3 +951,12 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}

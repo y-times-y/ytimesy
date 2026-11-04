@@ -81,6 +81,36 @@ export async function claimAlert(alert: OwnerAlert) {
 	}
 }
 
+/**
+ * Records a scheduled job's runtime blip and returns when its blip episode
+ * began: the earlier blip's time while it is within `windowMinutes`, else
+ * null (this blip starts a new episode). Kept as a "blip:<job>" row of
+ * owner_alert, which never collides with an hourly alert key. Throws when
+ * the database is unreachable; the caller then alerts as before.
+ */
+export async function recordCronBlip(job: string, windowMinutes: number) {
+	const result = await database().query<{ started_at: Date | null }>(
+		`with previous as (
+			select created_at from owner_alert
+			where kind = 'cron-failure' and dedupe_key = $1
+				and created_at >= now() - $3::int * interval '1 minute'
+		), upsert as (
+			insert into owner_alert(kind, dedupe_key, subject)
+			values ('cron-failure', $1, $2)
+			on conflict (kind, dedupe_key) do update set created_at = now()
+			where owner_alert.created_at < now() - $3::int * interval '1 minute'
+		)
+		select (select created_at from previous) as started_at`,
+		[
+			`blip:${job}`.slice(0, 200),
+			`runtime blip: ${job}`.slice(0, 200),
+			windowMinutes,
+		],
+	);
+	const startedAt = result.rows[0]?.started_at;
+	return startedAt ? new Date(startedAt) : null;
+}
+
 /** One claim per alert key in the Workers cache, for a day. */
 async function claimInCache(alert: OwnerAlert) {
 	const cacheStorage = (globalThis as { caches?: { default?: Cache } }).caches

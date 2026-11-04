@@ -21,6 +21,10 @@ await build({
 	conditions: ["workerd", "worker", "browser"],
 	mainFields: ["module", "main"],
 	external: ["node:*", "cloudflare:*", ...builtinModules],
+	// The deploy's build id (src/lib/build-id.ts), which GET /health reports.
+	define: {
+		__YTIMESY_BUILD_ID__: JSON.stringify(process.env.YTIMESY_BUILD_ID ?? ""),
+	},
 	plugins: [
 		{
 			// Wrangler bundles the module next to the output as precompiled WebAssembly.

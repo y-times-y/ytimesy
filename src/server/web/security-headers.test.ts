@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { BUILD_ID, BUILD_ID_HEADER } from "../../lib/build-id";
 import { SECURITY_HEADERS, withSecurityHeaders } from "./security-headers";
 
 it("adds the baseline headers and keeps the body and status", async () => {
@@ -17,4 +18,10 @@ it("keeps a route's own policy", () => {
 		new Response(null, { headers: { "Referrer-Policy": "no-referrer" } }),
 	);
 	expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+});
+
+it("names the build that answered", () => {
+	expect(
+		withSecurityHeaders(new Response(null)).headers.get(BUILD_ID_HEADER),
+	).toBe(BUILD_ID);
 });

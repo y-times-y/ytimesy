@@ -1,5 +1,34 @@
 import { expect, it } from "vitest";
-import { alertHour, fleetBudgetAlerts } from "./owner-alerts";
+import {
+	alertHour,
+	cronBlipNeedsAlert,
+	cronBlipWindowMinutes,
+	fleetBudgetAlerts,
+} from "./owner-alerts";
+
+it("emails a job's runtime blip only when its later runs blip too", () => {
+	const now = new Date("2026-11-03T18:00:00Z");
+	const blipped = (minutesAgo: number | null, everyMinutes: number) =>
+		cronBlipNeedsAlert({
+			episodeStartedAt:
+				minutesAgo === null
+					? null
+					: new Date(now.getTime() - minutesAgo * 60_000),
+			now,
+			everyMinutes,
+		});
+	// The first blip, and others of the same deploy, are only logged.
+	expect(blipped(null, 1)).toBe(false);
+	expect(blipped(2, 1)).toBe(false);
+	// Still failing a few runs later (an every-minute job), or on the next
+	// run of a job that runs every 5 minutes or every 6 hours.
+	expect(blipped(3, 1)).toBe(true);
+	expect(blipped(5, 5)).toBe(true);
+	expect(blipped(360, 360)).toBe(true);
+	expect(cronBlipWindowMinutes(1)).toBe(5);
+	expect(cronBlipWindowMinutes(5)).toBe(11);
+	expect(cronBlipWindowMinutes(360)).toBe(721);
+});
 
 const usage = (monthly: number, lifetime: number) => ({
 	period: "2026-10-01",
