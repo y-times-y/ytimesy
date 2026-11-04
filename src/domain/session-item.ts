@@ -236,6 +236,11 @@ export type NoticeSessionItem = {
 	readonly pullRequest?: PullRequestHandoffState;
 	/** How a push approval card (request_push_approval) was answered. */
 	readonly pushResult?: PushResult;
+	/**
+	 * The turn answered and is committing its changes ("Saving changes…",
+	 * turn-saving.ts); removed before the turn is marked done.
+	 */
+	readonly savingChanges?: true;
 };
 
 export type PullRequestHandoffState =
@@ -732,6 +737,8 @@ export function showTurnWorking(
 	)
 		return false;
 	if (last.kind === "reasoning") return false;
+	// It shows its own "Saving changes…" line.
+	if (last.kind === "notice" && last.savingChanges) return false;
 	if (last.kind === "commandExecution" && last.status === "inProgress") {
 		return false;
 	}

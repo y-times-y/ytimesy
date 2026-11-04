@@ -508,5 +508,15 @@ it("tells whether a UserPromptSubmit hook is configured without the workspace", 
 	expect(await hooks(async () => null, true).promptSubmitConfigured()).toBe(
 		false,
 	);
+	// The same journaled configuration answers for Stop hooks, read once.
+	const stopOnly = vi.fn(async () => config("Stop"));
+	const stopHooks = hooks(stopOnly);
+	expect(await stopHooks.stopConfigured()).toBe(true);
+	expect(await stopHooks.promptSubmitConfigured()).toBe(false);
+	expect(stopOnly).toHaveBeenCalledTimes(1);
+	expect(
+		await hooks(async () => config("UserPromptSubmit")).stopConfigured(),
+	).toBe(false);
+	expect(await hooks(async () => null).stopConfigured()).toBeNull();
 	expect(workspace).not.toHaveBeenCalled();
 });

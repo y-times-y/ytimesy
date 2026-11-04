@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
 	commit: vi.fn(),
 	commandCompletions: vi.fn(),
 	progress: vi.fn(),
+	/** The next message waiting in the chat, started at the turn's end. */
+	startQueued: vi.fn(async (..._args: unknown[]) => false),
 	checkpoint: vi.fn(),
 	promptSubmit: vi.fn(),
 	cancelRequested: vi.fn(),
@@ -137,6 +139,12 @@ vi.mock("../services/api-agent-command-tools", () => ({
 vi.mock("../services/turn-commit", () => ({
 	commitSessionTurn: mocks.commit,
 }));
+vi.mock("../services/queued-user-messages", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../services/queued-user-messages")
+	>()),
+	startQueuedUserTurn: mocks.startQueued,
+}));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: mocks.knowledge,
 	recordCloudProjectReport: mocks.report,
@@ -172,6 +180,7 @@ beforeEach(() => {
 	mocks.beforeModel.mockReset().mockResolvedValue({ kind: "run" });
 	mocks.afterAttempt.mockReset();
 	mocks.progress.mockReset().mockResolvedValue(undefined);
+	mocks.startQueued.mockReset().mockResolvedValue(false);
 	mocks.checkpoint.mockReset().mockResolvedValue(undefined);
 	vi.mocked(coordinateConversationTurn).mockReset().mockResolvedValue(true);
 	mocks.knowledge.mockResolvedValue(
@@ -211,6 +220,7 @@ beforeEach(() => {
 it("refuses publication when leftover command fencing cannot be confirmed", async () => {
 	mocks.stepRuntime.mockImplementation(async (input) => {
 		await input.tools.workspace();
+		await editsFiles(input);
 		await input.onEvent({ type: "text-delta", id: "reply", text: "Finished." });
 		return { messages: input.messages, outcome: "completed" };
 	});
@@ -482,6 +492,7 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 	const answering = () =>
 		mocks.subscriptionRuntime.mockImplementation(async (input) => {
 			await input.tools.workspace();
+			await editsFiles(input);
 			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
 			return [];
 		});
@@ -1285,6 +1296,7 @@ it.each([false, true])(
 		});
 		mocks.runtime.mockImplementation(async (input) => {
 			order.push("model");
+			await editsFiles(input);
 			await input.onEvent({
 				type: "text-delta",
 				id: "reply",
@@ -1429,6 +1441,23 @@ function hangUntilAborted(input: { signal: AbortSignal }) {
 	return new Promise((_resolve, reject) =>
 		input.signal.addEventListener("abort", () => reject(input.signal.reason)),
 	);
+}
+
+/** The model edited a file: the turn has changes to commit. */
+function editsFiles(input: {
+	onEvent: (event: {
+		type: "tool-call";
+		id: string;
+		name: string;
+		input: unknown;
+	}) => unknown;
+}) {
+	return input.onEvent({
+		type: "tool-call",
+		id: "edit",
+		name: "apply_patch",
+		input: {},
+	});
 }
 
 it("cancels at once when Stop lands during a machine call that never answers", async () => {
@@ -1714,6 +1743,7 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 	const durable = () => ({ index: 2, signal: new AbortController().signal });
 	const finishing = () =>
 		mocks.stepRuntime.mockImplementation(async (input) => {
+			await editsFiles(input);
 			await input.onEvent({ type: "text-delta", id: "reply", text: "Fixed." });
 			return { messages: input.messages, outcome: "completed" };
 		});
@@ -1916,6 +1946,13 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		});
 		const items = [
 			...rootTurn.items,
+			// An earlier step's edit: the kept attempt has changes to commit.
+			{
+				kind: "fileChange",
+				id: SessionItemId("turn:step-1:edit"),
+				status: "completed",
+				changes: [],
+			},
 			{ kind: "agentMessage", id: SessionItemId("a3"), text: "Attempt 3." },
 			{
 				kind: "agentMessage",
@@ -2025,6 +2062,121 @@ describe("the VM's memory token is released however a step ends", () => {
 	});
 });
 
+describe("a turn's end after its final answer", () => {
+	const rootTurn = {
+		id: "turn-end",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [{ role: "user", content: "hi" }],
+		items: [{ kind: "userMessage", id: SessionItemId("user"), text: "hi" }],
+		lease_id: "lease",
+	} as ApiTurn;
+	const firstStep = () => ({ index: 1, signal: new AbortController().signal });
+	const savingShown = () =>
+		mocks.progress.mock.calls.some(([, items]) =>
+			(items as { savingChanges?: true }[]).some((item) => item.savingChanges),
+		);
+
+	it("ends a turn that only answered at its answer: no command fence, commit or saving state", async () => {
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Hello." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+		).toBe("completed");
+		expect(mocks.stop).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(savingShown()).toBe(false);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "turn-end" }),
+			"completed",
+			expect.anything(),
+		);
+		// A message sent meanwhile starts now.
+		expect(mocks.startQueued).toHaveBeenCalledOnce();
+	});
+
+	it("commits a turn with changes before it is done, saying so instead of running, and starts the next message only after its publication", async () => {
+		const order: string[] = [];
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await editsFiles(input);
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		let committing = () => {};
+		mocks.commit.mockImplementation(async () => {
+			order.push("commit");
+			// The answer is final: the chat shows "Saving changes…" meanwhile.
+			await vi.waitFor(() => expect(savingShown()).toBe(true));
+			await new Promise<void>((resolve) => {
+				committing = resolve;
+			});
+			return {
+				publish: async () => {
+					order.push("publish");
+					return {};
+				},
+			};
+		});
+		mocks.finalize.mockImplementation(async (_turn, state, items) => {
+			order.push(state);
+			// "Saving changes…" is gone once the turn is marked done.
+			expect(
+				(items as { savingChanges?: true }[]).some(
+					(item) => item.savingChanges,
+				),
+			).toBe(false);
+			return state;
+		});
+		mocks.startQueued.mockImplementation(async () => {
+			order.push("next message");
+			return true;
+		});
+		const outcome = runApiTurn({} as WorkspaceMachines, rootTurn, firstStep());
+		await vi.waitFor(() => expect(order).toEqual(["commit"]));
+		// Its commands are fenced before the commit, so none outlives it.
+		expect(mocks.stop).toHaveBeenCalledOnce();
+		committing();
+		// A message sent while it saved is delivered after the publication; the
+		// turn is not cancelled for it.
+		expect(await outcome).toBe("completed");
+		expect(order).toEqual(["commit", "completed", "publish", "next message"]);
+	});
+
+	it("still commits when the only change came from an earlier step of the turn", async () => {
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			{
+				...rootTurn,
+				items: [
+					...rootTurn.items,
+					{
+						kind: "commandExecution",
+						id: SessionItemId("turn-end:step-1:run"),
+						command: "touch file",
+						cwd: "/repo",
+						status: "completed",
+						output: "",
+						exitCode: 0,
+					},
+				],
+			} as ApiTurn,
+			{ index: 2, signal: new AbortController().signal },
+		);
+		expect(mocks.commit).toHaveBeenCalledOnce();
+	});
+});
+
 describe("a builder's first request before its workspace is ready", () => {
 	const rootTurn = {
 		id: "turn-early",
@@ -2105,13 +2257,11 @@ describe("a builder's first request before its workspace is ready", () => {
 		expect(sentAfter).toBeLessThan(FIRST_REQUEST_WORKSPACE_WAIT_MS);
 	});
 
-	it("lands a Stop after the early reply without waiting for a slow workspace", async () => {
+	it("ends an answer-only turn at its answer without waiting for a slow workspace", async () => {
 		vi.useFakeTimers();
 		try {
 			mocks.preparedDirectory.mockResolvedValue("/repo");
 			heldWorkspace(); // never ready: the VM is not answering
-			mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
-			mocks.cancelRequested.mockResolvedValue(true);
 			mocks.stepRuntime.mockImplementation(async (input) => {
 				await input.onEvent({
 					type: "text-delta",
@@ -2125,8 +2275,17 @@ describe("a builder's first request before its workspace is ready", () => {
 				rootTurn,
 				firstStep(),
 			);
-			await vi.advanceTimersByTimeAsync(3_000);
-			expect(await outcome).toBe("cancelled");
+			// Marked done right after the answer, before the workspace answers.
+			await vi.advanceTimersByTimeAsync(100);
+			expect(mocks.finalize).toHaveBeenCalledWith(
+				expect.objectContaining({ id: "turn-early" }),
+				"completed",
+				expect.anything(),
+			);
+			expect(mocks.commit).not.toHaveBeenCalled();
+			// The step itself lets the preparation finish, bounded.
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(await outcome).toBe("completed");
 			expect(mocks.commit).not.toHaveBeenCalled();
 		} finally {
 			vi.useRealTimers();
@@ -2140,6 +2299,7 @@ describe("a builder's first request before its workspace is ready", () => {
 		mocks.stepRuntime.mockImplementation(async (input) => {
 			order.push("model");
 			expect(input.instructions).toContain("/repo");
+			await editsFiles(input);
 			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
 			setTimeout(() => {
 				order.push("workspace");
@@ -2805,6 +2965,7 @@ describe("a builder's first request before its workspace is ready", () => {
 		const workspace = heldWorkspace();
 		mocks.preparedDirectory.mockResolvedValue("/repo");
 		mocks.stepRuntime.mockImplementation(async (input) => {
+			await editsFiles(input);
 			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
 			workspace.fail(new Error("Workspace sizing did not complete."));
 			return { messages: input.messages, outcome: "completed" };
@@ -2826,6 +2987,7 @@ describe("a builder's first request before its workspace is ready", () => {
 		});
 		mocks.stepRuntime.mockImplementation(async (input) => {
 			workspace.ready();
+			await editsFiles(input);
 			return { messages: input.messages, outcome: "completed" };
 		});
 		expect(

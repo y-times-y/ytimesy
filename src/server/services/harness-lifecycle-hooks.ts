@@ -116,6 +116,22 @@ export function harnessLifecycleHooks(input: {
 		return configured;
 	}
 
+	let known: Promise<unknown> | undefined;
+	async function configuredWithoutWorkspace(
+		event: z.infer<typeof lifecycleHookConfig>["hooks"][number]["event"],
+	): Promise<boolean | null> {
+		if (input.readOnly) return false;
+		try {
+			known ??= Promise.resolve(input.knownConfig?.());
+			const parsed = lifecycleHookConfig.safeParse(await known);
+			return parsed.success
+				? parsed.data.hooks.some((hook) => hook.event === event)
+				: null;
+		} catch {
+			return null;
+		}
+	}
+
 	async function baselineConfig(workspace: AgentToolWorkspace, base: string) {
 		// One guest round trip: 91 means the baseline has no configuration,
 		// 90 that the baseline itself could not be listed.
@@ -304,19 +320,14 @@ export function harnessLifecycleHooks(input: {
 		 * Whether a UserPromptSubmit hook is configured, answered without the
 		 * workspace; null when that needs the workspace.
 		 */
-		promptSubmitConfigured: async (): Promise<boolean | null> => {
-			if (input.readOnly) return false;
-			try {
-				const known = lifecycleHookConfig.safeParse(
-					await input.knownConfig?.(),
-				);
-				return known.success
-					? known.data.hooks.some((hook) => hook.event === "UserPromptSubmit")
-					: null;
-			} catch {
-				return null;
-			}
-		},
+		promptSubmitConfigured: () =>
+			configuredWithoutWorkspace("UserPromptSubmit"),
+		/**
+		 * Whether a Stop hook is configured, answered without the workspace;
+		 * null when that needs the workspace. A turn that ran no tools ends
+		 * without waiting for its checkout when this is false.
+		 */
+		stopConfigured: () => configuredWithoutWorkspace("Stop"),
 		/** Before the turn's first model request; a block ends the turn unsent. */
 		userPromptSubmit: async (prompt: string) => {
 			if (

@@ -139,7 +139,8 @@ async function commitChatTurn(
 		};
 	const turn = turnIdentity(session, items);
 	const description = turnDescription(session, items);
-	const [authorship, bot] = await timed("commit:identity", () =>
+	// GitHub's answers overlap the checkout reads below.
+	const identity = timed("commit:identity", () =>
 		Promise.all([
 			commitAuthorForUser(session.userId),
 			// GitHub shows the app beside the user, as a Co-authored-by trailer.
@@ -150,7 +151,7 @@ async function commitChatTurn(
 			}),
 		]),
 	);
-	const coAuthor = publicationCoAuthor({ author: authorship.author, bot });
+	identity.catch(() => {});
 	const host = runtime ?? workspaceRuntimeFromEnv();
 	const repositories = await turnRepositories(
 		host,
@@ -164,6 +165,8 @@ async function commitChatTurn(
 		repositories.find(({ repo }) => repo.fullName === project.fullName)
 			?.directory,
 	);
+	const [authorship, bot] = await identity;
+	const coAuthor = publicationCoAuthor({ author: authorship.author, bot });
 	for (const { repo, directory } of repositories) {
 		signal?.throwIfAborted();
 		const result = await timed("commit:exec", () =>
