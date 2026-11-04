@@ -76,7 +76,7 @@ export function setupIndicator(input: SetupState): {
 	return running
 		? {
 				kind: "running",
-				text: "Setup is running in another chat. You can send now.",
+				text: "Setup is running in another chat. You can keep working.",
 				action: "View setup",
 				chatId,
 			}
