@@ -356,26 +356,41 @@ async function settleHold(
 	client: PoolClient,
 	input: { id: string; userId: string; consumedMicroUsd: number },
 ) {
-	// Reads the hold and settles it in one statement; the update only
-	// applies where the checks below pass, and any refusal rolls back.
+	// Settling never blocks a machine: a hold settles once, at most at what
+	// it reserved. Usage past the hold (a VM that ran past its cap) settles at
+	// the hold and is logged; a second, different settlement keeps the first
+	// and is logged. Throwing here once left a chat unable to wake its VM.
 	const result = await client.query<{
 		reserved_micro_usd: string;
 		consumed_micro_usd: string | null;
 	}>(
 		`with hold as (select reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1 and user_id=$2),
-		 settled as (update infrastructure_usage_reservation set consumed_micro_usd=$3,settled_at=now()
-		  where id=$1 and user_id=$2 and consumed_micro_usd is null and reserved_micro_usd>=$3 returning 1)
+		 settled as (update infrastructure_usage_reservation set consumed_micro_usd=least($3,reserved_micro_usd),settled_at=now()
+		  where id=$1 and user_id=$2 and consumed_micro_usd is null returning 1)
 		 select reserved_micro_usd,consumed_micro_usd from hold`,
 		[input.id, input.userId, input.consumedMicroUsd],
 	);
 	const row = result.rows[0];
-	if (!row || input.consumedMicroUsd > Number(row.reserved_micro_usd))
-		throw new Error("Infrastructure settlement exceeds its reservation.");
-	if (
-		row.consumed_micro_usd !== null &&
-		Number(row.consumed_micro_usd) !== input.consumedMicroUsd
-	)
-		throw new Error("Infrastructure settlement changed after confirmation.");
+	if (!row) throw new Error("Infrastructure settlement has no reservation.");
+	const reserved = Number(row.reserved_micro_usd);
+	if (row.consumed_micro_usd !== null) {
+		if (Number(row.consumed_micro_usd) !== input.consumedMicroUsd)
+			console.warn("Infrastructure hold was already settled; kept the first.", {
+				reservationId: input.id,
+				settledMicroUsd: Number(row.consumed_micro_usd),
+				laterMicroUsd: input.consumedMicroUsd,
+			});
+		return;
+	}
+	if (input.consumedMicroUsd > reserved)
+		console.warn(
+			"Infrastructure usage exceeded its hold; settled at the hold.",
+			{
+				reservationId: input.id,
+				reservedMicroUsd: reserved,
+				measuredMicroUsd: input.consumedMicroUsd,
+			},
+		);
 }
 
 /** Kinds an admin may set now: a per-user override of one usage window's limit. */

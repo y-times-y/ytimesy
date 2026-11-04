@@ -452,30 +452,30 @@ it("replays a reservation idempotently and refuses a changed identity", async ()
 		undefined,
 		"increase",
 	);
-	expect(
-		await outcome(() =>
-			settleInfrastructureUsage({
-				id,
-				userId: "alice",
-				consumedMicroUsd: 1501,
-			}),
-		),
-	).toBe("Infrastructure settlement exceeds its reservation.");
+	// Settling never refuses (a refusal once left a chat unable to wake its
+	// VM): usage past the hold settles at the hold, and a later, different
+	// settlement keeps the first.
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	await settleInfrastructureUsage({
 		id,
 		userId: "alice",
-		consumedMicroUsd: 700,
+		consumedMicroUsd: 1501,
 	});
 	await settleInfrastructureUsage({
 		id,
 		userId: "alice",
-		consumedMicroUsd: 700,
+		consumedMicroUsd: 1500,
 	});
-	expect(
-		await outcome(() =>
-			settleInfrastructureUsage({ id, userId: "alice", consumedMicroUsd: 600 }),
-		),
-	).toBe("Infrastructure settlement changed after confirmation.");
+	await settleInfrastructureUsage({
+		id,
+		userId: "alice",
+		consumedMicroUsd: 600,
+	});
+	expect(warn.mock.calls.map(([message]) => message)).toEqual([
+		"Infrastructure usage exceeded its hold; settled at the hold.",
+		"Infrastructure hold was already settled; kept the first.",
+	]);
+	warn.mockRestore();
 	expect(
 		await outcome(() =>
 			reserveInfrastructureUsage(input, undefined, "increase"),
