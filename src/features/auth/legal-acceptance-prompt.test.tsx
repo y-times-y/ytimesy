@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LegalUpdateCard, legalPromptPending } from "./legal-acceptance-prompt";
+import {
+	LegalUpdateCard,
+	legalPromptPending,
+	replayAllowedByLegal,
+} from "./legal-acceptance-prompt";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, "");
 
@@ -33,4 +37,21 @@ describe("legalPromptPending", () => {
 		expect(legalPromptPending(base)).toBe(false);
 		expect(legalPromptPending({ ...base, userId: undefined })).toBe(false);
 	});
+});
+
+it("allows session replay only after the current policy is accepted", () => {
+	expect(replayAllowedByLegal({ statusError: false, current: true })).toBe(
+		true,
+	);
+	// The update notice is open: no recording until it is accepted.
+	expect(replayAllowedByLegal({ statusError: false, current: false })).toBe(
+		false,
+	);
+	// Still loading, or unreadable: fail closed.
+	expect(replayAllowedByLegal({ statusError: false, current: undefined })).toBe(
+		false,
+	);
+	expect(replayAllowedByLegal({ statusError: true, current: true })).toBe(
+		false,
+	);
 });
