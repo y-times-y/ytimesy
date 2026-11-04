@@ -1,8 +1,16 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { SCRUB_MACHINE_GIT_CREDENTIAL } from "#/domain/machine-git";
 import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import {
 	AGENT_SECRETS_DIRECTORY,
@@ -10,12 +18,13 @@ import {
 } from "#/domain/project-secret";
 import {
 	SCRUB_TIMEOUT_MS,
+	SCRUB_VM_TOKENS,
 	SCRUB_WORKSPACE_SECRETS,
 	scrubAgentSecrets,
 } from "./scrub-agent-secrets";
 
 describe("scrubAgentSecrets", () => {
-	it("deletes the env directory and the memory token and checks both are gone", async () => {
+	it("deletes the env directory, the memory token and the git machine tokens and checks they are gone", async () => {
 		const exec = vi.fn(async () => ({ statusCode: 0 }));
 		await scrubAgentSecrets({ exec } as never);
 		expect(exec).toHaveBeenCalledWith({
@@ -26,6 +35,7 @@ describe("scrubAgentSecrets", () => {
 		expect(SCRUB_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_AGENT_SECRETS);
 		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_MEMORY_CREDENTIAL);
+		expect(SCRUB_WORKSPACE_SECRETS).toContain(SCRUB_MACHINE_GIT_CREDENTIAL);
 		expect(SCRUB_AGENT_SECRETS).toBe(
 			`rm -rf ${AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY}`,
 		);
@@ -44,6 +54,28 @@ describe("scrubAgentSecrets", () => {
 		await expect(
 			scrubAgentSecrets({ exec: async () => ({ statusCode: 1 }) } as never),
 		).rejects.toThrow("Could not remove project secrets");
+	});
+
+	it("removes plain git's machine tokens and config, keeping the rest of its folder", () => {
+		const home = mkdtempSync(join(tmpdir(), "ytimesy-scrub-home-"));
+		try {
+			const run = () =>
+				spawnSync("sh", ["-c", SCRUB_VM_TOKENS], {
+					env: { ...process.env, HOME: home },
+				}).status;
+			expect(run()).toBe(0);
+			const folder = join(home, ".ytimesy-git");
+			mkdirSync(join(folder, "tokens"), { recursive: true });
+			writeFileSync(join(folder, "tokens", "chat"), "ygm_secret");
+			writeFileSync(join(folder, "config"), "[url]");
+			writeFileSync(join(folder, "credential-helper"), "#!/bin/sh");
+			expect(run()).toBe(0);
+			expect(existsSync(join(folder, "tokens"))).toBe(false);
+			expect(existsSync(join(folder, "config"))).toBe(false);
+			expect(existsSync(join(folder, "credential-helper"))).toBe(true);
+		} finally {
+			rmSync(home, { recursive: true });
+		}
 	});
 
 	it("removes the memory clone's token header and passes without a clone", () => {

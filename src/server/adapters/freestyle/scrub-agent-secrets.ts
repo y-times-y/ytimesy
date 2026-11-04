@@ -1,11 +1,15 @@
 import type { Freestyle } from "freestyle";
+import { SCRUB_MACHINE_GIT_CREDENTIAL } from "#/domain/machine-git";
 import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import { SCRUB_AGENT_SECRETS } from "#/domain/project-secret";
 
 type Vm = Pick<ReturnType<Freestyle["vms"]["ref"]>, "exec">;
 
-/** The project env file and the memory clone's token, both removed before a snapshot. */
-export const SCRUB_WORKSPACE_SECRETS = `${SCRUB_AGENT_SECRETS} && { ${SCRUB_MEMORY_CREDENTIAL}; }`;
+/** The chat's own short-lived tokens: the memory clone's and plain git's. */
+export const SCRUB_VM_TOKENS = `{ ${SCRUB_MEMORY_CREDENTIAL}; } && { ${SCRUB_MACHINE_GIT_CREDENTIAL}; }`;
+
+/** The project env file and the chat's tokens, all removed before a snapshot. */
+export const SCRUB_WORKSPACE_SECRETS = `${SCRUB_AGENT_SECRETS} && ${SCRUB_VM_TOKENS}`;
 
 /**
  * The scrub is often the first command on a stopped VM, so its budget covers

@@ -67,6 +67,7 @@ import { Plugins } from "../sessions/plugins";
 import { disconnectXaiSubscriptionFn } from "../sessions/xai-subscription.fn";
 import { XaiSubscriptionSignIn } from "../sessions/xai-subscription-sign-in";
 import { ArchivedSettings } from "./archived-settings";
+import { DefaultBranchPushSettings } from "./default-branch-push-settings";
 import { EnvironmentSettings } from "./environment-settings";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
@@ -398,6 +399,10 @@ function ProjectPage({
 			/>
 			<MachineSizeSettings projectId={project.id} />
 			<NetworkAccessSettings projectId={project.id} />
+			<DefaultBranchPushSettings
+				projectId={project.id}
+				branch={project.branch}
+			/>
 			<ProjectSecretsSection project={project} />
 			<ProjectTrainingSettings projectId={project.id} />
 		</>

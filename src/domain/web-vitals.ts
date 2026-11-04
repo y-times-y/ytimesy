@@ -111,6 +111,7 @@ const replyKinds = new Set<SessionItem["kind"]>([
 	"dynamicToolCall",
 	"webSearch",
 	"userQuestion",
+	"pushApproval",
 ]);
 
 /** The agent's first output after the user message with this id has arrived. */

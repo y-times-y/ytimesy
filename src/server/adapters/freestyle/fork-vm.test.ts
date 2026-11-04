@@ -109,7 +109,7 @@ describe("forking a live VM for a writer", () => {
 			adapter.indexOf("async forkWorkspace("),
 			adapter.indexOf("async provisionSession("),
 		);
-		expect(fork).toMatch(/scrubFork: async[\s\S]*SCRUB_MEMORY_CREDENTIAL/);
+		expect(fork).toMatch(/scrubFork: async[\s\S]*SCRUB_VM_TOKENS/);
 	});
 
 	it("is the only snapshot path in the adapter without scrubAgentSecrets", () => {

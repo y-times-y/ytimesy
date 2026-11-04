@@ -369,8 +369,8 @@ describe("lean instructions", () => {
 		).not.toContain("When only waiting is left");
 		// The lean surface adds its tools (with ytimesy-check's flags, so the model
 		// does not run --help), Main's hand-off rule (HANDOFF_INSTRUCTIONS), the
-		// capture line (LEAN_CAPTURES_INSTRUCTION) and the no-credentials Git
-		// line (GIT_REMOTE_LINE, ~170 characters).
+		// capture line (LEAN_CAPTURES_INSTRUCTION) and the plain-git
+		// line (GIT_REMOTE_LINE, ~190 characters).
 		expect(lean.length).toBeLessThan(current.length + 3130);
 		const knowing = agentTurnInstructions({
 			...input,

@@ -86,6 +86,12 @@ import {
 	claimGitProxyGrant,
 } from "./github-git-authorization";
 import { executorIngressRoute } from "./ingress-route";
+import {
+	answerMachineGitGrant,
+	MACHINE_GIT_GRANT_PATH,
+	machineGitHooks,
+	machineGitSources,
+} from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
@@ -1132,10 +1138,35 @@ export default {
 					env,
 					ctx ? (promise) => ctx.waitUntil(promise) : undefined,
 				);
+			if (new URL(request.url).pathname === MACHINE_GIT_GRANT_PATH) {
+				const config = gitProxySecrets.safeParse(env);
+				if (!config.success) return new Response(null, { status: 503 });
+				return withStepTrace({ git: "grant" }, () =>
+					withDatabaseScope(
+						env.HYPERDRIVE.connectionString,
+						() =>
+							answerMachineGitGrant(
+								request,
+								config.data.GIT_PROXY_SECRET,
+								machineGitSources,
+							),
+						null,
+					),
+				);
+			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });
 				const gitPath = new URL(request.url).pathname;
+				const scoped =
+					<A extends unknown[], T>(run: (...args: A) => Promise<T>) =>
+					(...args: A) =>
+						withDatabaseScope(
+							env.HYPERDRIVE.connectionString,
+							() => run(...args),
+							null,
+						);
+				const machine = machineGitHooks(machineGitSources);
 				return withStepTrace(
 					{
 						git: gitPath.endsWith("/info/refs")
@@ -1161,6 +1192,12 @@ export default {
 									() => claimGitProxyGrant(nonce, expiresAt),
 									null,
 								),
+							{
+								authorize: scoped((grant) =>
+									timed("git:authorizeMachine", () => machine.authorize(grant)),
+								),
+								defaultBranchPush: scoped(machine.defaultBranchPush),
+							},
 						),
 				);
 			}

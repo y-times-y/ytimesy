@@ -107,6 +107,52 @@ function repositoryChoice(
 		private: repo.private,
 	};
 }
+/** A repository as the user's own token sees it; null when GitHub says it is not there for them. */
+export async function authorizedGithubRepository(
+	token: string,
+	owner: string,
+	name: string,
+) {
+	try {
+		const { data } = await githubClient(token).repos.get({
+			owner,
+			repo: name,
+		});
+		return {
+			private: data.private,
+			defaultBranch: data.default_branch,
+			push: Boolean(data.permissions?.push) && !data.archived,
+		};
+	} catch (cause) {
+		const status =
+			cause && typeof cause === "object" && "status" in cause
+				? cause.status
+				: null;
+		if (status === 404 || status === 403) return null;
+		throw cause;
+	}
+}
+
+/** The user's usable installation of our app on this account (user or organization), else null. */
+export async function userInstallationForAccount(
+	token: string,
+	account: string,
+): Promise<number | null> {
+	const github = githubClient(token);
+	const installations = await github.paginate(
+		github.apps.listInstallationsForAuthenticatedUser,
+		{ per_page: 100 },
+	);
+	const found = installations.find(
+		(installation) =>
+			installation.account &&
+			"login" in installation.account &&
+			installation.account.login.toLowerCase() === account.toLowerCase() &&
+			usableInstallation(installation),
+	);
+	return found?.id ?? null;
+}
+
 export async function listAuthorizedRepositories(
 	token: string,
 ): Promise<RepositoryChoice[]> {

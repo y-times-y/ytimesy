@@ -18,6 +18,7 @@ beforeEach(async () => {
 	for (const file of [
 		"20261026100000_agent_session_item",
 		"20261026110000_agent_session_waiting_on",
+		"20261104120100_agent_session_waiting_on_push",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
@@ -104,6 +105,10 @@ it("lists what each chat waits on from the stored column, as the whole history w
 			{ kind: "notice", wake: false, text: "not a turn start" },
 			{ kind: "secretRequest", name: "X" },
 		],
+		push: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "pushApproval", branch: "main" },
+		],
 		running: [{ kind: "userMessage", text: "go" }, { kind: "userQuestion" }],
 		empty: [],
 		notArray: { kind: "userQuestion" },
@@ -145,6 +150,7 @@ it("lists what each chat waits on from the stored column, as the whole history w
 		planned: "plan",
 		woken: null,
 		secret: "secret",
+		push: "push",
 		running: null,
 		empty: null,
 		notArray: null,
