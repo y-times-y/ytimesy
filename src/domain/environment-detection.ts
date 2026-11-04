@@ -62,7 +62,7 @@ export function detectEnvironment(
 					? "corepack yarn install --frozen-lockfile"
 					: has("package-lock.json")
 						? "npm ci"
-						: "npm install";
+						: "npm install --no-package-lock";
 		return {
 			label: `Node (${manager})`,
 			install,

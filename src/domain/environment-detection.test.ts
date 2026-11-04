@@ -23,7 +23,9 @@ it("detects Node installs and their checks from the lockfile and scripts", () =>
 	expect(detectEnvironment(["package.json", "package-lock.json"]).install).toBe(
 		"npm ci",
 	);
-	expect(detectEnvironment(["package.json"]).install).toBe("npm install");
+	expect(detectEnvironment(["package.json"]).install).toBe(
+		"npm install --no-package-lock",
+	);
 	expect(detectEnvironment(["package.json", "yarn.lock"]).label).toBe(
 		"Node (yarn)",
 	);
