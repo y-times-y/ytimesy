@@ -4630,10 +4630,16 @@ details.environment-build[open] > summary .session-activity-chevron {
 }
 .environment-build-steps {
 	display: grid;
+	/* Rows stay inside the card: a long command shortens with an ellipsis
+	   instead of pushing the step's status past the card's edge. */
+	grid-template-columns: minmax(0, 1fr);
 	gap: 2px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
+}
+.environment-build-steps > li {
+	min-width: 0;
 }
 .environment-build-step {
 	display: flex;
@@ -4665,6 +4671,7 @@ details.environment-build[open] > summary .session-activity-chevron {
 	color: rgba(255, 255, 255, 0.85);
 }
 .environment-build-command {
+	flex: 0 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
