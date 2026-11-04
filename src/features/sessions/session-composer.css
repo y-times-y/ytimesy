@@ -2435,6 +2435,16 @@ code.session-tool-target {
 	gap: 4px 12px;
 	padding: 6px 0;
 }
+/* Skip for now and Save stay together on the right; on a narrow screen the
+   note takes its own line above them instead of splitting the buttons. */
+.secret-request-note ~ .plan-proposal-revise {
+	margin-left: auto;
+}
+@media (max-width: 520px) {
+	.plan-proposal-actions .secret-request-note {
+		flex-basis: 100%;
+	}
+}
 .secret-request-row + .secret-request-row {
 	border-top: 1px solid #ffffff0a;
 }
