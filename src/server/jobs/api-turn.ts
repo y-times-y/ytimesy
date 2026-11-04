@@ -569,6 +569,13 @@ async function runApiTurnAttempt(
 		| ((status: "running" | "completed" | "failed" | "idle") => Promise<void>)
 		| undefined;
 	let heartbeatBusy = false;
+	/**
+	 * The turn is marked completed: its lease is no longer needed, and a
+	 * renewal that fails because the row is no longer 'running' is expected.
+	 * What follows (publication, the preparation wait, the next queued
+	 * message) must not be aborted by it.
+	 */
+	let turnSettled = false;
 	let heartbeatPending: Promise<void> | undefined;
 	let coordinationHeartbeatPending: Promise<void> | undefined;
 	let coordinationHeartbeatBusy = false;
@@ -638,6 +645,7 @@ async function runApiTurnAttempt(
 	const heartbeat = setInterval(() => {
 		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
 			operation.catch((error: unknown) => {
+				if (turnSettled) return;
 				heartbeatFailed = true;
 				if (error instanceof CoordinationFailure) coordinationFailure ??= error;
 				console.warn("Turn heartbeat failed", {
@@ -668,12 +676,12 @@ async function runApiTurnAttempt(
 				coordinationHeartbeatBusy = false;
 			});
 		}
-		if (heartbeatBusy || abort.signal.aborted) return;
+		if (turnSettled || heartbeatBusy || abort.signal.aborted) return;
 		heartbeatBusy = true;
 		const databaseHeartbeat = guardHeartbeat(
 			"database-renewal",
 			renewApiTurn(turn).then(async (alive) => {
-				if (!alive)
+				if (!alive && !turnSettled)
 					abort.abort(
 						new Error("Turn ownership or cancellation state changed."),
 					);
@@ -2614,6 +2622,9 @@ async function runApiTurnAttempt(
 		failureStage = "saving";
 		workspaceReuse?.forget();
 		await progress.drain();
+		// Set before the write: a renewal racing it may see the row completed.
+		// finalize itself refuses a turn whose cancel was requested.
+		turnSettled = true;
 		const saved = await timed("turn:finalize", () =>
 			finalizeApiTurn(turn, "completed", items),
 		);
