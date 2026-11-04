@@ -865,18 +865,30 @@ export function WorkspaceHome({
 	/** The open project's setup chat (the server starts it; it never opens by itself). */
 	const setupChatIdRef = useRef<string | undefined>(undefined);
 	const applySessionView = useCallback(
-		(epoch: number, next: PublicCodexSession) => {
+		(epoch: number, received: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
 			if (composerDraftRef.current) return;
 			// With no chat open (a new project's empty chat), the setup chat's
-			// view never lands on the person's composer: its running turn would
-			// make their Send a queue or a stop.
-			if (
+			// own transcript and running turn never land on the person's
+			// composer (they would make Send a queue or a stop); the account's
+			// connection, models and canSend in the same view still do, or Send
+			// would wait on a connection that never arrives.
+			let next: PublicCodexSession =
 				!selectedSessionIdRef.current &&
-				next.agentSessionId &&
-				next.agentSessionId === setupChatIdRef.current
-			)
-				return;
+				received.agentSessionId &&
+				received.agentSessionId === setupChatIdRef.current
+					? {
+							...received,
+							agentSessionId: null,
+							workspaceId: null,
+							selectedBranch: undefined,
+							listedModelId: "",
+							turnStatus: "idle",
+							items: [],
+							hasOlderItems: false,
+							usage: undefined,
+						}
+					: received;
 			if (pendingNewChatRef.current && next.agentSessionId) {
 				// The draft send's new chat: adopt it before the open-chat check.
 				pendingNewChatRef.current = false;
