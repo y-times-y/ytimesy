@@ -24,6 +24,7 @@ import {
 	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
+import { BUILD_ID } from "../../lib/build-id";
 import {
 	ConversationRoom,
 	isRealtimeRoute,
@@ -714,6 +715,19 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 }
 
+/**
+ * How often the scheduled jobs below run that are not every minute, by
+ * action; keep in step with the schedule. A runtime blip is emailed only
+ * when the job's next run fails the same way (alertCronFailure).
+ */
+const CRON_EVERY_MINUTES: Readonly<Record<string, number>> = {
+	infrastructure: 5,
+	"memory-dreams": 5,
+	refresh: 60,
+	"evidence-expiry": 360,
+	"archive-expiry": 360,
+};
+
 export default {
 	async scheduled(
 		controller: ScheduledController,
@@ -823,12 +837,15 @@ export default {
 		const failures: Promise<unknown>[] = [];
 		for (const [index, result] of results.entries())
 			if (result.status === "rejected") {
+				const action = "action" in jobs[index] ? jobs[index].action : undefined;
 				const job = {
 					kind: jobs[index].kind,
-					action: "action" in jobs[index] ? jobs[index].action : undefined,
+					action,
+					everyMinutes: (action && CRON_EVERY_MINUTES[action]) || 1,
 				};
 				console.warn("Scheduled job failed.", job);
-				// Error tracking and an owner email (at most hourly per job).
+				// Error tracking and an owner email (at most hourly per job); a
+				// single runtime blip (a deploy swapping versions) is not emailed.
 				failures.push(
 					withDatabaseScope(env.HYPERDRIVE.connectionString, () =>
 						alertCronFailure(job, result.reason),
@@ -849,6 +866,15 @@ export default {
 		try {
 			const path = new URL(request.url).pathname;
 			const route = executorIngressRoute(path);
+			// Readiness for the production deploy's smoke check: this version
+			// booted and answers. Public, no bindings touched.
+			if (route === "health")
+				return request.method === "GET"
+					? Response.json(
+							{ build: BUILD_ID },
+							{ headers: { "Cache-Control": "no-store" } },
+						)
+					: new Response(null, { status: 405 });
 			// By exact name: /turn/start below is not the room's.
 			if (route === "room") {
 				const secret = process.env.YTIMESY_REALTIME_SECRET;

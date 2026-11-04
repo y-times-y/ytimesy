@@ -53,6 +53,23 @@ function productionAnalyticsGuard(): Plugin {
 	};
 }
 
+/**
+ * Bakes the build id (src/lib/build-id.ts) into the page and the web Worker
+ * alike: the production deploy passes YTIMESY_BUILD_ID, other builds get a
+ * fresh one, and the dev server stays "development".
+ */
+function buildIdentity(): Plugin {
+	return {
+		name: "ytimesy-build-identity",
+		config(_, { command }) {
+			const id =
+				process.env.YTIMESY_BUILD_ID ||
+				(command === "build" ? `local-${Date.now().toString(36)}` : "");
+			return { define: { __YTIMESY_BUILD_ID__: JSON.stringify(id) } };
+		},
+	};
+}
+
 // The local dev server runs on Node; YTIMESY_TARGET=cloudflare builds the web Worker.
 const cloudflareTarget = process.env.YTIMESY_TARGET === "cloudflare";
 
@@ -77,6 +94,7 @@ const config = defineConfig({
 		terminalWebsocketPlugin(),
 		guestProgramAssets(),
 		productionAnalyticsGuard(),
+		buildIdentity(),
 	],
 });
 

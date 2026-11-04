@@ -10,15 +10,19 @@ export type MaintenanceStep = {
 /** One or more steps of a maintenance job failed in a way a human should look at. */
 export class MaintenanceStepsFailed extends Error {
 	override name = "MaintenanceStepsFailed";
+	/** Each failed step's error, in step order; the first is also `cause`. */
+	readonly errors: readonly unknown[];
 	constructor(
 		readonly job: string,
 		readonly steps: readonly string[],
-		cause: unknown,
+		errors: readonly unknown[],
 	) {
+		const cause = errors[0];
 		super(
 			`${job}: ${steps.join(", ")} failed (${errorSummary(cause).slice(0, 300)})`,
 			{ cause },
 		);
+		this.errors = errors;
 	}
 }
 
@@ -53,7 +57,7 @@ export async function runMaintenanceSteps(
 	steps: readonly MaintenanceStep[],
 ) {
 	const failed: string[] = [];
-	let first: unknown;
+	const errors: unknown[] = [];
 	for (const step of steps)
 		try {
 			await step.run();
@@ -68,9 +72,9 @@ export async function runMaintenanceSteps(
 			});
 			if (!needsHuman) continue;
 			failed.push(step.name);
-			first ??= error;
+			errors.push(error);
 		}
-	if (failed.length) throw new MaintenanceStepsFailed(job, failed, first);
+	if (failed.length) throw new MaintenanceStepsFailed(job, failed, errors);
 }
 
 function errorSummary(error: unknown) {

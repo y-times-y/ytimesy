@@ -94,3 +94,29 @@ export function isPlatformRestart(error: unknown, depth = 0): boolean {
 		record.lastError,
 	].some((inner) => isPlatformRestart(inner, depth + 1));
 }
+
+/**
+ * The Workers runtime's own answers while a deploy swaps versions (or an
+ * isolate is recycled): "internal error; reference = …", a lost connection
+ * to another Worker or Durable Object, a Durable Object reset for new code.
+ */
+const RUNTIME_BLIP =
+	/internal error; reference =|network connection lost|Worker (was|has been) restarted|transient issue on remote node/i;
+
+/**
+ * The failure is the platform's, not the code's: retrying on the next run
+ * succeeds unless something is really broken. When several failures were
+ * collected (`errors`, as MaintenanceStepsFailed and AggregateError keep
+ * them), every one must be such a blip.
+ */
+export function isWorkersRuntimeBlip(error: unknown, depth = 0): boolean {
+	if (depth > 5 || !error || typeof error !== "object") return false;
+	const record = error as { errors?: unknown; cause?: unknown };
+	if (Array.isArray(record.errors) && record.errors.length)
+		return record.errors.every((inner) =>
+			isWorkersRuntimeBlip(inner, depth + 1),
+		);
+	if (isPlatformRestart(error)) return true;
+	if (error instanceof Error && RUNTIME_BLIP.test(error.message)) return true;
+	return isWorkersRuntimeBlip(record.cause, depth + 1);
+}

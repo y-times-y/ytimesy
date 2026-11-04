@@ -105,6 +105,7 @@ import {
 	keyFocusOf,
 	useShortcutHint,
 } from "#/features/app/keyboard-shortcuts";
+import { useHoldNewBuildReload } from "#/features/app/new-build-reload";
 import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -608,6 +609,13 @@ export function SessionLauncher({
 		void draftKey;
 		return () => draftSaver.current?.flush();
 	}, [draftKey]);
+	// A reload (onto a new deploy, new-build-reload.ts) or leaving the page
+	// keeps text typed in the last moment before it.
+	useEffect(() => {
+		const flush = () => draftSaver.current?.flush();
+		window.addEventListener("pagehide", flush);
+		return () => window.removeEventListener("pagehide", flush);
+	}, []);
 	/** A send: this chat's saved draft goes now, before the chat can change. */
 	const clearSavedDraft = () => {
 		savedDraft.current = "";
@@ -672,6 +680,9 @@ export function SessionLauncher({
 		[items, heldMessageId],
 	);
 	const turnStatus = session.turnStatus;
+	// No reload onto a new deploy mid-send or while this chat's turn streams.
+	useHoldNewBuildReload("send", busy);
+	useHoldNewBuildReload("turn", turnStatus === "running");
 	/** The agents list: the lead, then this request's helpers; one is open in the chat view. */
 	const agents = agentPanelRows({
 		tasks: childTasks,

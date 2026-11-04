@@ -1,7 +1,13 @@
-import { alertHour, fleetBudgetAlerts } from "#/domain/owner-alerts";
+import {
+	alertHour,
+	cronBlipNeedsAlert,
+	cronBlipWindowMinutes,
+	fleetBudgetAlerts,
+} from "#/domain/owner-alerts";
 import { captureServerException, redactErrorText } from "../adapters/analytics";
+import { isWorkersRuntimeBlip } from "../adapters/freestyle/provider-retry";
 import { fleetInfrastructureUsage } from "../adapters/infrastructure-usage";
-import { alertOwner } from "../adapters/owner-alerts";
+import { alertOwner, recordCronBlip } from "../adapters/owner-alerts";
 
 /** Emails the owner once the fleet's monthly or lifetime budget reaches 80% and 95%. */
 export async function alertFleetBudget() {
@@ -21,13 +27,42 @@ export async function alertAbandonedTurns(count: number, now = new Date()) {
 	});
 }
 
-/** A scheduled maintenance job threw; the next tick retries it. */
+/**
+ * A scheduled maintenance job threw; the next tick retries it. A failure
+ * that is the Workers runtime's own (isWorkersRuntimeBlip: a deploy swapping
+ * versions) is only logged, unless the job keeps failing that way on later
+ * runs (cronBlipNeedsAlert).
+ */
 export async function alertCronFailure(
-	job: { kind: string; action?: string },
+	job: { kind: string; action?: string; everyMinutes?: number },
 	error: unknown,
 	now = new Date(),
+	deps: { recordBlip?: typeof recordCronBlip } = {},
 ) {
 	const name = job.action ? `${job.kind}:${job.action}` : job.kind;
+	if (isWorkersRuntimeBlip(error)) {
+		const everyMinutes = job.everyMinutes ?? 1;
+		const episodeStartedAt = await (deps.recordBlip ?? recordCronBlip)(
+			name,
+			cronBlipWindowMinutes(everyMinutes),
+		).catch(() => "unrecorded" as const);
+		// Unrecorded (database unreachable): alerted as any failure is.
+		if (
+			episodeStartedAt !== "unrecorded" &&
+			!cronBlipNeedsAlert({ episodeStartedAt, now, everyMinutes })
+		) {
+			console.warn(
+				"Scheduled job hit a runtime blip; the next tick retries it.",
+				{
+					job: name,
+					reason: redactErrorText(
+						error instanceof Error ? error.message : String(error),
+					).slice(0, 300),
+				},
+			);
+			return;
+		}
+	}
 	await captureServerException(error, {
 		source: `cron:${name}`,
 	});

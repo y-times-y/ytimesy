@@ -10,6 +10,9 @@ import {
 import {
 	IN_FLIGHT_WORK_NOTE,
 	productionDeploySteps,
+	rollbackStep,
+	type ServingVersions,
+	servingVersions,
 } from "./production-deploy-steps";
 import {
 	missingDeployedSettings,
@@ -21,6 +24,11 @@ import {
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
 } from "./production-settings";
+import {
+	productionBuildId,
+	productionSmokeChecks,
+	runSmokeChecks,
+} from "./production-smoke-check";
 
 /**
  * Production deploy for the edge executor and the web Worker. It refuses to
@@ -263,6 +271,15 @@ function deployedSecretNames(config: string[]): string[] {
 	}
 }
 
+// One build id for both Workers and the page (src/lib/build-id.ts): the web
+// build bakes it in here, the edge's wrangler build reads it from the
+// environment. Open tabs reload onto it; the smoke check below expects it.
+const buildId = productionBuildId(
+	execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }),
+	Date.now(),
+);
+process.env.YTIMESY_BUILD_ID = buildId;
+
 // Build the web first: its plain variables are part of what it runs with, and
 // the preflight below checks both Workers before anything is deployed.
 run("pnpm", ["exec", "vite", "build"], {
@@ -322,6 +339,26 @@ if (problems.length)
 console.log("Production preflight passed for the web and edge Workers.");
 if (preflightOnly) process.exit(0);
 
+/** The versions a Worker serves now (none before its first deploy). */
+function currentVersions(config: string[]): ServingVersions {
+	try {
+		return servingVersions(
+			execFileSync(
+				"pnpm",
+				["exec", "wrangler", "deployments", "status", "--json", ...config],
+				{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+			),
+		);
+	} catch {
+		return [];
+	}
+}
+const workers = {
+	edge: { config: EDGE_CONFIG, previous: currentVersions(EDGE_CONFIG) },
+	web: { config: WEB_CONFIG, previous: currentVersions(WEB_CONFIG) },
+};
+const deployedWorkers: (keyof typeof workers)[] = [];
+
 // Code and secrets go up together as one version per Worker, so new code
 // never boots without a setting it needs and each Worker restarts once.
 // The secrets files live only for the deploy, readable by this user alone.
@@ -337,11 +374,68 @@ try {
 		webConfig: WEB_CONFIG,
 		edgeSecretsFile,
 		webSecretsFile,
-	}))
+	})) {
 		run("pnpm", ["exec", "wrangler", ...args], { masked: true });
+		deployedWorkers.push(args.includes(edgeSecretsFile) ? "edge" : "web");
+	}
 } finally {
 	await rm(secretsDirectory, { recursive: true, force: true });
 }
+
+// Smoke check: each Worker answers with this build, retried for about a
+// minute while the new versions reach every location. Otherwise every Worker
+// deployed above goes back to what it served before, web first.
+const smokeProblems = await runSmokeChecks(
+	productionSmokeChecks({
+		appUrl: process.env.YTIMESY_GO_LIVE === "1" ? secrets.APP_URL : null,
+		edgeUrl: secrets.YTIMESY_GIT_PROXY_URL,
+		buildId,
+	}),
+	async (url) => {
+		const response = await fetch(url, {
+			headers: { "cache-control": "no-cache" },
+			redirect: "manual",
+			signal: AbortSignal.timeout(10_000),
+		});
+		return {
+			status: response.status,
+			headers: response.headers,
+			body: await response.text(),
+		};
+	},
+	{ attempts: 7, delayMs: 10_000, log: (line) => console.log(line) },
+);
+if (smokeProblems.length) {
+	console.error(
+		`Production smoke check failed for build ${buildId}:\n- ${smokeProblems.join("\n- ")}`,
+	);
+	const notRolledBack: string[] = [];
+	for (const name of [...deployedWorkers].reverse()) {
+		const { config, previous } = workers[name];
+		if (!previous.length) {
+			notRolledBack.push(`${name}: no earlier version to roll back to`);
+			continue;
+		}
+		const step = rollbackStep(config, previous);
+		try {
+			run("pnpm", ["exec", "wrangler", ...step], { masked: true });
+			console.error(
+				`Rolled ${name} back to ${previous.map((row) => `${row.versionId} (${row.percentage}%)`).join(", ")}.`,
+			);
+		} catch {
+			const command = step
+				.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg))
+				.join(" ");
+			notRolledBack.push(
+				`${name}: rollback failed; run pnpm exec wrangler ${command}`,
+			);
+		}
+	}
+	if (notRolledBack.length)
+		console.error(`Not rolled back:\n- ${notRolledBack.join("\n- ")}`);
+	process.exit(1);
+}
+console.log(`Production smoke check passed for build ${buildId}.`);
 
 // What actually landed: every required name on each Worker.
 const missing = [
