@@ -15,7 +15,9 @@ const FIRST_BUILD_RUNNING = new Set([
 ]);
 
 /** The project's first environment build runs (a rebuild keeps its working environment). */
-export function firstBuildRunning(workspace: SetupWorkspace) {
+export function firstBuildRunning(
+	workspace: Pick<SetupWorkspace, "status" | "build">,
+) {
 	return FIRST_BUILD_RUNNING.has(workspace.status) && !workspace.build?.rebuild;
 }
 
@@ -68,33 +70,4 @@ export function projectSetupChat<Chat extends SetupChat>(
 	chats: readonly Chat[] | undefined,
 ): Chat | null {
 	return chats?.find((chat) => isSetupChatTitle(chat.title)) ?? null;
-}
-
-/**
- * The one line beside the composer while the project is set up in the
- * background: during the first build, and while its setup chat works or
- * waits for the person. Its View opens the setup chat once there is one.
- * None in the setup chat itself, nor after a failed build (its failure
- * shows instead).
- */
-export function backgroundSetupLine(input: {
-	readonly workspace: SetupWorkspace | null | undefined;
-	readonly setupChat: SetupChat | null;
-	readonly openChatId: string | undefined;
-}): { readonly text: string; readonly chatId: string | null } | null {
-	const { workspace, setupChat } = input;
-	if (!workspace || workspace.status === "failed") return null;
-	if (setupChat && setupChat.id === input.openChatId) return null;
-	const needsYou = Boolean(
-		setupChat?.waitingOn && setupChat.waitingOn !== "failed",
-	);
-	const working =
-		setupChat?.turnStatus === "running" || Boolean(setupChat?.waitsForSetup);
-	if (!firstBuildRunning(workspace) && !needsYou && !working) return null;
-	return {
-		text: needsYou
-			? "Project setup needs you"
-			: "Setting up this project in the background",
-		chatId: setupChat?.id ?? null,
-	};
 }

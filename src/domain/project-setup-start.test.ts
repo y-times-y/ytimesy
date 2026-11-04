@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initialSetupMessageId } from "./environment-setup";
 import {
-	backgroundSetupLine,
 	projectSetupChat,
 	startsBackgroundProjectSetup,
 } from "./project-setup-start";
@@ -94,100 +93,6 @@ describe("startsBackgroundProjectSetup", () => {
 				workspace: { ...building, projectId: "p2" },
 			}),
 		).toBe(false);
-	});
-});
-
-describe("backgroundSetupLine", () => {
-	const setupChat = {
-		id: "setup",
-		title: "Set up project",
-		turnStatus: "idle",
-		waitsForSetup: true,
-	};
-
-	it("shows one line while the first build runs, with View once the setup chat exists", () => {
-		expect(
-			backgroundSetupLine({
-				workspace: building,
-				setupChat: null,
-				openChatId: "task",
-			}),
-		).toEqual({
-			text: "Setting up this project in the background",
-			chatId: null,
-		});
-		expect(
-			backgroundSetupLine({
-				workspace: building,
-				setupChat,
-				openChatId: "task",
-			}),
-		).toEqual({
-			text: "Setting up this project in the background",
-			chatId: "setup",
-		});
-	});
-
-	it("keeps the line while the setup chat works or needs the person, after the build", () => {
-		expect(
-			backgroundSetupLine({
-				workspace: ready,
-				setupChat: {
-					...setupChat,
-					waitsForSetup: false,
-					turnStatus: "running",
-				},
-				openChatId: "task",
-			})?.text,
-		).toBe("Setting up this project in the background");
-		expect(
-			backgroundSetupLine({
-				workspace: ready,
-				setupChat: {
-					...setupChat,
-					waitsForSetup: false,
-					waitingOn: "secret",
-				},
-				openChatId: undefined,
-			}),
-		).toEqual({ text: "Project setup needs you", chatId: "setup" });
-	});
-
-	it("shows nothing once setup is done, in the setup chat itself, or after a failed build", () => {
-		const done = {
-			...setupChat,
-			waitsForSetup: false,
-			turnStatus: "completed",
-		};
-		expect(
-			backgroundSetupLine({
-				workspace: ready,
-				setupChat: done,
-				openChatId: "task",
-			}),
-		).toBeNull();
-		expect(
-			backgroundSetupLine({
-				workspace: building,
-				setupChat,
-				openChatId: "setup",
-			}),
-		).toBeNull();
-		expect(
-			backgroundSetupLine({
-				workspace: { ...building, status: "failed" },
-				setupChat,
-				openChatId: "task",
-			}),
-		).toBeNull();
-		// A rebuild of a working environment is not the project's setup.
-		expect(
-			backgroundSetupLine({
-				workspace: { ...building, build: { rebuild: true } },
-				setupChat: null,
-				openChatId: "task",
-			}),
-		).toBeNull();
 	});
 });
 

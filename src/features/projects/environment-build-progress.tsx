@@ -55,7 +55,7 @@ export function useEnvironmentProgress(
 }
 
 /** Re-renders every second while `live`, for running durations. */
-function useNow(live: boolean) {
+export function useNow(live: boolean) {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!live) return;
