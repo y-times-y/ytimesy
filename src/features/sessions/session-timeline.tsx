@@ -380,6 +380,7 @@ export function SessionTimeline({
 								item={row.item}
 								outcome={pushApprovalOutcome(items, row.item.id)}
 								actions={stablePushActions}
+								revision={`${items.length}:${turnStatus}`}
 							/>
 						) : row.kind === "item" &&
 							row.item.kind === "modelSwitch" &&

@@ -1,11 +1,12 @@
 import { Check, GitBranch } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type PushCardState,
 	pushAnswerLine,
 	pushApprovalQuestion,
 } from "#/domain/push-approval";
 import type { PushApprovalItem } from "#/domain/session-item";
+import { createPushCardChecker } from "./push-card-checker";
 
 export type PushApprovalActions = {
 	readonly disabled: boolean;
@@ -26,11 +27,14 @@ export function PushApprovalCard({
 	item,
 	outcome,
 	actions,
+	revision,
 }: {
 	item: PushApprovalItem;
 	/** The answer the transcript shows (its notice), else pending. */
 	outcome: PushCardState;
 	actions?: PushApprovalActions;
+	/** Changes when the chat's transcript or turn status does; a pending card then checks again. */
+	revision?: string;
 }) {
 	const [state, setState] = useState<PushCardState>(outcome);
 	const [working, setWorking] = useState<"push" | "cancel" | null>(null);
@@ -43,27 +47,39 @@ export function PushApprovalCard({
 		if (shownAnswer !== "pending")
 			setState({ answer: shownAnswer, detail: shownDetail });
 	}, [shownAnswer, shownDetail]);
-	// A pending card is checked once when shown: it may have expired or gone stale.
+	// A pending card asks the server when shown, whenever the chat changes
+	// after it, and every 30 s while the tab is visible, until settled.
+	const checker = useRef<ReturnType<typeof createPushCardChecker> | null>(null);
+	const [checking, setChecking] = useState(false);
 	useEffect(() => {
 		if (shownAnswer !== "pending" || !status) return;
-		let current = true;
-		status(item.id).then(
-			(next) => {
-				if (current) setState(next);
-			},
-			() => {},
-		);
+		const next = createPushCardChecker({
+			status: () => status(item.id),
+			onState: setState,
+			onChecking: setChecking,
+			visible: () => document.visibilityState !== "hidden",
+		});
+		checker.current = next;
+		void next.start();
 		return () => {
-			current = false;
+			next.stop();
+			checker.current = null;
+			setChecking(false);
 		};
 	}, [item.id, shownAnswer, status]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `revision` is the trigger: it changes with the chat's items and turn status.
+	useEffect(() => {
+		void checker.current?.check();
+	}, [revision]);
 
 	async function answer(kind: "push" | "cancel") {
 		if (!actions || working) return;
 		setWorking(kind);
 		setError(null);
 		try {
-			setState(await actions[kind](item.id));
+			const next = await actions[kind](item.id);
+			if (next.answer !== "pending") checker.current?.settle();
+			setState(next);
 		} catch (cause) {
 			setError(
 				cause instanceof Error ? cause.message : "Could not answer the card.",
@@ -124,7 +140,7 @@ export function PushApprovalCard({
 					<button
 						type="button"
 						className="plan-proposal-revise"
-						disabled={actions.disabled || working !== null}
+						disabled={actions.disabled || working !== null || checking}
 						onClick={() => answer("cancel")}
 					>
 						Cancel
@@ -132,7 +148,7 @@ export function PushApprovalCard({
 					<button
 						type="button"
 						className="plan-proposal-approve"
-						disabled={actions.disabled || working !== null}
+						disabled={actions.disabled || working !== null || checking}
 						onClick={() => answer("push")}
 					>
 						{working === "push" ? "Pushing…" : "Push"}

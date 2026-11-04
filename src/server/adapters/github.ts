@@ -324,6 +324,36 @@ export async function listBranches(
 	return { names, truncated };
 }
 
+/**
+ * Whether a branch on GitHub is ahead of (or has diverged from) a commit.
+ * False when it is at or behind it (not yet published), or when either side
+ * is not on GitHub: this answers from GitHub alone and never guesses.
+ */
+export async function branchHasCommitsBeyond(
+	token: string,
+	fullName: string,
+	commit: string,
+	branch: string,
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	try {
+		const { data } = await githubClient(token).repos.compareCommits({
+			owner,
+			repo,
+			base: commit,
+			head: branch,
+		});
+		return data.status === "ahead" || data.status === "diverged";
+	} catch (error) {
+		const status =
+			typeof error === "object" && error !== null && "status" in error
+				? Number(error.status)
+				: 0;
+		if (status === 404 || status === 422) return false;
+		throw error;
+	}
+}
+
 export async function repositoryBranchSha(
 	token: string,
 	fullName: string,

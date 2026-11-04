@@ -49,6 +49,7 @@ function harness(
 		remote?: string | null;
 		verdict?: string;
 		newer?: boolean;
+		branchAdvanced?: boolean;
 		push?: () => Promise<void>;
 	} = {},
 ) {
@@ -117,9 +118,11 @@ function harness(
 					userId: "alice",
 					items,
 					providerRef: "vm-1",
+					workingBranch: "ytimesy/chat",
 					turnStatus: options.turnStatus ?? "completed",
 				}) as unknown as AgentSessionRecord,
 		),
+		chatBranchAdvanced: vi.fn(async () => options.branchAdvanced ?? false),
 		installation: vi.fn(async () => 11),
 		remoteBranchSha: vi.fn(async () =>
 			options.remote === undefined ? base : options.remote,
@@ -146,6 +149,34 @@ describe("push approval card", () => {
 		});
 		expect(deps.push).not.toHaveBeenCalled();
 		expect(deps.replaceIdleItems).not.toHaveBeenCalled();
+	});
+
+	it("shows Outdated after a later committing turn without waking the machine, still pending when nothing is newer", async () => {
+		const fresh = harness();
+		expect(await pushApprovalCardStatus(input, fresh.deps)).toEqual({
+			answer: "pending",
+		});
+		expect(fresh.deps.chatBranchAdvanced).toHaveBeenCalledWith(
+			11,
+			expect.objectContaining({ newId: commit }),
+			"ytimesy/chat",
+		);
+		const later = harness({ branchAdvanced: true });
+		expect(await pushApprovalCardStatus(input, later.deps)).toEqual({
+			answer: "outdated",
+			detail: BRANCH_MOVED,
+		});
+		// Display never needs the machine: no workspace, no push, no command.
+		for (const { deps, exec } of [fresh, later]) {
+			expect(deps.workspace).not.toHaveBeenCalled();
+			expect(deps.push).not.toHaveBeenCalled();
+			expect(exec).not.toHaveBeenCalled();
+		}
+		// The settled answer stands on the next view and on Push.
+		expect(await pushApprovedChange(input, later.deps)).toMatchObject({
+			answer: "outdated",
+		});
+		expect(later.deps.push).not.toHaveBeenCalled();
 	});
 
 	it("expires after 24 hours unanswered, on view and on Push", async () => {
