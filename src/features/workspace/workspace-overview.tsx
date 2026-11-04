@@ -1,4 +1,5 @@
 import { ChevronRight, GitPullRequest } from "lucide-react";
+import type { ReactNode } from "react";
 import type { AgentTask } from "#/domain/agent-task";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import type { FileChangeEntry, SessionItem } from "#/domain/session-item";
@@ -23,7 +24,10 @@ export function WorkspaceOverview({
 	desktop,
 	onOpen,
 	onIntent,
+	setup,
 }: {
+	/** The project's setup while it runs in the background: its progress card. */
+	setup?: ReactNode;
 	/** The pointer or focus reached a view's card: it may open next. */
 	onIntent?: (view: ToolsView) => void;
 	tasks: readonly AgentTask[];
@@ -74,6 +78,12 @@ export function WorkspaceOverview({
 	] as const;
 	return (
 		<section className="workspace-overview" aria-label="Overview">
+			{setup ? (
+				<section className="overview-section overview-setup">
+					<h2>Project setup</h2>
+					{setup}
+				</section>
+			) : null}
 			{/* The pull request first: it stays in view however long the lists get. */}
 			{pullRequests.length > 0 ? (
 				<section className="overview-section">

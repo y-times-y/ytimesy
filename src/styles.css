@@ -869,6 +869,96 @@ button:enabled:active {
 .workspace-inspector-expand {
 	right: 44px;
 }
+/* The project setup's pill (setup-pill.tsx), left of the right panel's
+   toggles. Out of the flow (as the toggles are): showing it never moves the
+   header; it fades in. */
+.setup-pill {
+	position: absolute;
+	top: 10px;
+	right: 48px;
+	z-index: 5;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: min(360px, 50%);
+	height: 24px;
+	padding: 0 10px;
+	border: 1px solid #ffffff14;
+	border-radius: 999px;
+	background: #ffffff0a;
+	color: #a3a3a3;
+	font-size: 12px;
+	line-height: 1;
+	white-space: nowrap;
+	animation: setup-pill-in 180ms ease-out both;
+}
+button.setup-pill {
+	cursor: pointer;
+	transition:
+		color 120ms ease,
+		border-color 120ms ease;
+}
+button.setup-pill:hover {
+	border-color: #ffffff2e;
+	color: #ededed;
+}
+button.setup-pill:focus-visible {
+	outline: 1px solid #929292;
+	outline-offset: 2px;
+}
+.workspace-main[data-can-expand-inspector="true"] > .setup-pill {
+	right: 88px;
+}
+.setup-pill-icon {
+	display: inline-flex;
+	flex: none;
+}
+.setup-pill-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.setup-pill-time {
+	flex: none;
+	color: #737373;
+	font-variant-numeric: tabular-nums;
+}
+.setup-pill[data-kind="needs-you"] {
+	border-color: #f59e0b40;
+	background: #f59e0b1f;
+	color: #fbbf24;
+}
+.setup-pill[data-kind="ready"] {
+	border-color: #16a34a40;
+	background: #16a34a1f;
+	color: #4ade80;
+}
+.setup-pill[data-kind="failed"] {
+	border-color: #f8717140;
+	background: #f871711a;
+	color: #f87171;
+}
+@keyframes setup-pill-in {
+	from {
+		opacity: 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.setup-pill {
+		animation: none;
+	}
+}
+.overview-setup-chat {
+	margin-top: 8px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: #a3a3a3;
+	font-size: 12px;
+	cursor: pointer;
+}
+.overview-setup-chat:hover {
+	color: #ededed;
+}
 /* The open sidebar's toggle: in its header, beside the logo. */
 .sidebar-brand-toggle {
 	position: static;

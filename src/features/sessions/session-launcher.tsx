@@ -208,7 +208,10 @@ export function SessionLauncher({
 	variant = "main",
 	setupHold,
 	onOpenSettings,
+	setupPlaceholder,
 }: {
+	/** The project's setup runs in the background: the empty composer says so. */
+	setupPlaceholder?: string | null;
 	/** Opens Settings at a section: the fix a blocked send points to. */
 	onOpenSettings?: (section: SettingsSection) => void;
 	/**
@@ -1486,11 +1489,13 @@ export function SessionLauncher({
 											? agents.helpers.some((row) => row.status === "working")
 												? "Ask Main anything while helpers work"
 												: "Ask Main anything while commands run"
-											: continuedChatAwaitsMessage(items)
-												? "Continue where you left off…"
-												: followUpLayout
-													? "Follow up…"
-													: "What would you like to work on?"
+											: setupPlaceholder
+												? setupPlaceholder
+												: continuedChatAwaitsMessage(items)
+													? "Continue where you left off…"
+													: followUpLayout
+														? "Follow up…"
+														: "What would you like to work on?"
 							}
 							onKeyDown={(event) =>
 								handleMentionKey(event) ||
