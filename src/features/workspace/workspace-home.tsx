@@ -867,7 +867,20 @@ export function WorkspaceHome({
 	const applySessionView = useCallback(
 		(epoch: number, received: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
-			if (composerDraftRef.current) return;
+			// A draft (a project just picked, no chat yet) keeps its empty view,
+			// but takes the account's sign-in, models and send permission, or
+			// Send stays disabled until the person starts a new chat by hand.
+			if (composerDraftRef.current) {
+				setSession((current) => ({
+					...current,
+					connection: received.connection,
+					models: received.models,
+					blockedListedModelIds: received.blockedListedModelIds,
+					canSend: received.canSend,
+					sendBlockers: received.sendBlockers,
+				}));
+				return;
+			}
 			// With no chat open (a new project's empty chat), the setup chat's
 			// own transcript and running turn never land on the person's
 			// composer (they would make Send a queue or a stop); the account's
@@ -2327,6 +2340,9 @@ export function WorkspaceHome({
 		bumpSessionEpoch();
 		selectedSessionIdRef.current = undefined;
 		setSelectedSessionId(undefined);
+		// Only the open chat is cleared: sign-in, models and canSend belong to
+		// the account, and nothing reads them back while the draft has no chat,
+		// so clearing them left Send disabled after a project was added.
 		setSession((current) => ({
 			...current,
 			workspaceId: null,
@@ -2334,7 +2350,6 @@ export function WorkspaceHome({
 			selectedBranch: undefined,
 			items: [],
 			turnStatus: "idle",
-			canSend: false,
 		}));
 		setComposerDraft(true);
 		setProjectPickerOpen(true);
