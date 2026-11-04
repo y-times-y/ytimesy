@@ -2547,10 +2547,10 @@ async function runApiTurnAttempt(
 			items = await timed("turn:memorySaved", () =>
 				memory.recordSaved(items, turn.id),
 			);
-		failureStage = "commit";
 		// A subagent's work reaches its parent as a report (a writer's as a
 		// patch and ref), never as a commit or a published branch.
 		const commits = !owner.agentRole && changedWorkspace;
+		failureStage = commits ? "commit" : "saving";
 		// The answer is done: the chat shows "Saving changes…" (the composer
 		// offers Send, which waits for the commit, instead of Stop).
 		if (commits) {
@@ -2558,12 +2558,24 @@ async function runApiTurnAttempt(
 			progress.offer(items);
 		}
 		// Fence even commands whose acknowledgement was lost before it reached the durable cards.
-		// Unlike best-effort cancellation on failure, publication requires a confirmed stop.
+		// Unlike best-effort cancellation on failure, a commit requires a confirmed stop.
+		// A turn that commits nothing (a subagent) keeps its finished answer if the
+		// stop cannot be confirmed.
 		// Commands start only from this turn's tools.
-		if (execution && changedWorkspace)
-			await timed("turn:stopCommands", () =>
-				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
-			);
+		if (execution && changedWorkspace) {
+			const stop = () =>
+				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id);
+			if (commits) await timed("turn:stopCommands", stop);
+			else
+				await timed("turn:stopCommands", () =>
+					stop().catch((error) =>
+						console.warn("turn:stopCommands unconfirmed", {
+							turnId: turn.id,
+							...apiTurnFailureClassification(error),
+						}),
+					),
+				);
+		}
 		// The turn's changes are committed here, before it shows as done (the
 		// commit keeps the work); the push and pull request follow right after.
 		// A turn that ran no tool able to change files commits nothing: its
