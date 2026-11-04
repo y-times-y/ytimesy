@@ -36,7 +36,8 @@ function analyticsClient(): Promise<PostHog | null> {
 				// $pageview on load and route changes, for PostHog's Web analytics;
 				// before_send keeps only origin, path and referring domain.
 				capture_pageview: "history_change",
-				capture_pageleave: false,
+				// Time on page and bounce rate for PostHog's Web analytics.
+				capture_pageleave: true,
 				// Uncaught errors and unhandled rejections, as $exception events.
 				capture_exceptions: {
 					capture_unhandled_errors: true,
@@ -48,7 +49,9 @@ function analyticsClient(): Promise<PostHog | null> {
 				disable_session_recording: true,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
-				capture_performance: false,
+				// $web_vitals for PostHog's Web vitals page (values only, see
+				// filteredAnalyticsProperties); no network timing.
+				capture_performance: { web_vitals: true, network_timing: false },
 				disable_surveys: true,
 				disable_external_dependency_loading: false,
 				advanced_disable_feature_flags: true,
