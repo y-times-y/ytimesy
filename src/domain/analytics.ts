@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { githubConnectionFailureReasons } from "./github-connection-callback";
 import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
 import { interactionTimingEvent, webVitalEvent } from "./web-vitals";
 
@@ -93,6 +94,14 @@ export const serverAnalyticsEvents = {
 	environment_finished: z.object({
 		outcome: z.enum(["ready", "failed"]),
 	}),
+	/** Onboarding, in order: where a new account stops (the browser may send nothing). */
+	github_connect_started: z.object({}),
+	github_connect_finished: z.object({
+		outcome: z.enum(["connected", ...githubConnectionFailureReasons]),
+	}),
+	repositories_listed: z.object({
+		repositories: z.number().int().nonnegative(),
+	}),
 	project_connected: z.object({ repositories: z.number().int().positive() }),
 	pull_request_created: z.object({}),
 };
@@ -131,10 +140,47 @@ export function analyticsSurface(pathname: string): z.infer<typeof surface> {
 }
 
 /** Allow categories, never arbitrary text or SDK URL/referrer data. */
+/**
+ * The page a $pageview names, for PostHog's Web analytics: origin and path
+ * only, with project pages collapsed to /projects (their ids are not
+ * analytics). Sign-in pages are not counted (reset tokens live there).
+ */
+export function pageviewPath(pathname: string): string | null {
+	if (pathname === "/auth" || pathname.startsWith("/auth/")) return null;
+	if (pathname === "/projects" || pathname.startsWith("/projects/"))
+		return "/projects";
+	return pathname.slice(0, 200);
+}
+
+function pageviewProperties(
+	properties: Record<string, unknown>,
+): Record<string, unknown> | null {
+	if (typeof properties.$current_url !== "string") return null;
+	let url: URL;
+	try {
+		url = new URL(properties.$current_url);
+	} catch {
+		return null;
+	}
+	const path = pageviewPath(url.pathname);
+	if (path === null) return null;
+	const referrer = properties.$referring_domain;
+	return {
+		$current_url: `${url.origin}${path}`,
+		$host: url.host,
+		$pathname: path,
+		...(typeof referrer === "string" &&
+		/^[a-z0-9.-]{1,100}$|^\$direct$/.test(referrer)
+			? { $referring_domain: referrer }
+			: {}),
+	};
+}
+
 export function filteredAnalyticsProperties(
 	event: string,
 	properties: Record<string, unknown>,
 ): Record<string, unknown> | null {
+	if (event === "$pageview") return pageviewProperties(properties);
 	if (event === "$identify")
 		return typeof properties.$anon_distinct_id === "string"
 			? { $anon_distinct_id: properties.$anon_distinct_id }

@@ -36,6 +36,44 @@ describe("analytics privacy boundary", () => {
 			}),
 		).toBeNull();
 	});
+	it("keeps a pageview's origin, path and referring domain only", () => {
+		expect(
+			filteredAnalyticsProperties("$pageview", {
+				$current_url: "https://ytimesy.com/blog/harness-1-0?ref=x#top",
+				$pathname: "/blog/harness-1-0",
+				$referring_domain: "t.co",
+				$referrer: "https://t.co/abc?secret=1",
+				$browser: "Chrome",
+				title: "private",
+			}),
+		).toEqual({
+			$current_url: "https://ytimesy.com/blog/harness-1-0",
+			$host: "ytimesy.com",
+			$pathname: "/blog/harness-1-0",
+			$referring_domain: "t.co",
+		});
+		expect(
+			filteredAnalyticsProperties("$pageview", {
+				$current_url: "https://ytimesy.com/projects/p-123/sessions/s-9",
+				$referring_domain: "$direct",
+			}),
+		).toMatchObject({ $pathname: "/projects", $referring_domain: "$direct" });
+		expect(
+			filteredAnalyticsProperties("$pageview", {
+				$current_url: "https://ytimesy.com/auth/reset-password?token=t",
+			}),
+		).toBeNull();
+		expect(
+			filteredAnalyticsProperties("$pageview", {
+				$current_url: "https://ytimesy.com/",
+				$referring_domain: "https://evil/?x",
+			}),
+		).toEqual({
+			$current_url: "https://ytimesy.com/",
+			$host: "ytimesy.com",
+			$pathname: "/",
+		});
+	});
 	it("identifies without email or profile attributes", () => {
 		expect(
 			filteredAnalyticsProperties("$identify", {
