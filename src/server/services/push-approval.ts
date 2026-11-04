@@ -24,7 +24,10 @@ import {
 	gitPushRequests,
 	type PushRequestRecord,
 } from "../adapters/git-push-requests";
-import { repositoryBranchSha } from "../adapters/github";
+import {
+	branchHasCommitsBeyond,
+	repositoryBranchSha,
+} from "../adapters/github";
 import type { GitTransferHost } from "../adapters/github/git-broker";
 import { pushProxiedRepository } from "../adapters/github/git-proxy-transfer";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
@@ -70,6 +73,16 @@ export type PushApprovalDependencies = {
 		installationId: number,
 		request: PushRequestRecord,
 	): Promise<string | null>;
+	/**
+	 * Whether the chat's own branch on GitHub has commits beyond the approved
+	 * one (a later turn committed and published, or the agent pushed). Reads
+	 * GitHub only, so showing a card never wakes the chat's machine.
+	 */
+	chatBranchAdvanced(
+		installationId: number,
+		request: PushRequestRecord,
+		branch: string,
+	): Promise<boolean>;
 	workspace(
 		session: AgentSessionRecord,
 		request: PushRequestRecord,
@@ -121,6 +134,7 @@ async function cardRequest(input: CardInput, deps: PushApprovalDependencies) {
  */
 async function staleness(
 	userId: string,
+	session: AgentSessionRecord,
 	request: PushRequestRecord,
 	deps: PushApprovalDependencies,
 ): Promise<{ answer: PushAnswer; detail: string } | null> {
@@ -138,6 +152,14 @@ async function staleness(
 	const remote = await deps.remoteBranchSha(installation, request);
 	if (remote !== request.oldId)
 		return { answer: "outdated", detail: MAIN_MOVED(request.branch) };
+	// A later turn's commits reach GitHub on the chat's own branch.
+	const chatBranch = session.workingBranch || session.taskBranch;
+	if (
+		chatBranch &&
+		chatBranch !== request.branch &&
+		(await deps.chatBranchAdvanced(installation, request, chatBranch))
+	)
+		return { answer: "outdated", detail: BRANCH_MOVED };
 	return null;
 }
 
@@ -192,7 +214,7 @@ export async function pushApprovalCardStatus(
 			deps,
 		);
 	}
-	const stale = await staleness(input.userId, request, deps);
+	const stale = await staleness(input.userId, session, request, deps);
 	return stale
 		? settle(input.userId, session, request, stale, deps)
 		: stateOf(request);
@@ -227,7 +249,7 @@ export async function pushApprovedChange(
 ): Promise<PushCardState> {
 	const { session, request } = await cardRequest(input, deps);
 	if (request.answer) return stateOf(request);
-	const stale = await staleness(input.userId, request, deps);
+	const stale = await staleness(input.userId, session, request, deps);
 	if (stale) return settle(input.userId, session, request, stale, deps);
 	if (!(await deps.requests.claimPush(input.userId, request.id)))
 		return { answer: "pending" };
@@ -438,6 +460,18 @@ export const pushApprovalDependencies: PushApprovalDependencies = {
 			token,
 			`${request.owner}/${request.name}`,
 			request.branch,
+		);
+	},
+	async chatBranchAdvanced(installationId, request, branch) {
+		const token = await githubInstallationAccessToken(installationId, {
+			repositoryNames: [request.name],
+			contents: "read",
+		});
+		return branchHasCommitsBeyond(
+			token,
+			`${request.owner}/${request.name}`,
+			request.newId,
+			branch,
 		);
 	},
 	async workspace(session, request) {
