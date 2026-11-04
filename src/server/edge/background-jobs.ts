@@ -63,9 +63,13 @@ export function runBackgroundJob(
 						});
 						return "delivered";
 					}
-					// Memory jobs and held sends run on the user's model route, which
-					// may be their ChatGPT plan.
-					if (job.kind === "memory" || job.kind === "held-sends")
+					// Memory jobs, held sends and a project's setup start run on the
+					// user's model route, which may be their ChatGPT plan.
+					if (
+						job.kind === "memory" ||
+						job.kind === "held-sends" ||
+						job.kind === "project-setup"
+					)
 						return withCodexSubscriptionEgress(
 							(input, options) => env.CODEX_EGRESS.fetch(input, options),
 							() =>

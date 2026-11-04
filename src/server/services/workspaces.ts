@@ -6,6 +6,10 @@ import {
 	type ProjectWorkspace,
 } from "../../domain/project-workspace";
 import { startAfterResponse } from "../adapters/after-response";
+import {
+	backgroundJobId,
+	dispatchBackgroundJob,
+} from "../adapters/background-job-dispatch";
 import { database } from "../adapters/database";
 import {
 	activeEnvironmentSetup,
@@ -156,6 +160,17 @@ export function enqueueProjectWorkspace(
 		);
 		if (jobId)
 			yield* Effect.tryPromise(() => saveLastJobId(workspace.id, jobId));
+		// A new project's setup chat starts on the server, tab open or not; its
+		// request waits there for this build (project-setup-background.ts). A
+		// lost dispatch is caught when the first build is ready.
+		if (!existing)
+			yield* Effect.promise(() =>
+				dispatchBackgroundJob({
+					id: backgroundJobId(`project-setup:${workspace.id}`),
+					kind: "project-setup",
+					workspaceId: workspace.id,
+				}).catch(() => false),
+			);
 		return workspace;
 	});
 }

@@ -67,6 +67,15 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 			workspaceId: reference,
 		})
 		.strict(),
+	// A new project's own setup chat, started by the server when its first
+	// environment is queued (project-setup-background.ts).
+	z
+		.object({
+			...identity,
+			kind: z.literal("project-setup"),
+			workspaceId: reference,
+		})
+		.strict(),
 	// A background command's exit callback (background-exit-wake.ts): one per command.
 	z
 		.object({

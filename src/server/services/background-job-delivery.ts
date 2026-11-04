@@ -51,6 +51,10 @@ import { expirePullRequestEvidence } from "./pr-evidence-cleanup";
 import { runPullRequestEvidenceJob } from "./pr-evidence-job";
 import { deliverPrRepairEvents } from "./pr-repair";
 import {
+	startProjectSetupAfterFirstBuild,
+	startProjectSetupForWorkspace,
+} from "./project-setup-background";
+import {
 	deliverHeldSends,
 	dispatchReleasableHeldSends,
 } from "./queued-user-messages";
@@ -201,8 +205,19 @@ export async function deliverBackgroundJob(
 			await captureSessionCheckpoint(machines, job.userId, job.sessionId);
 			break;
 		case "held-sends":
-			// The workspace's environment just became ready.
+			// The workspace's environment just became ready. A first build's
+			// project gets its setup chat if nothing started it when added; its
+			// request then goes with the other held sends.
+			await startProjectSetupAfterFirstBuild(machines, job.workspaceId).catch(
+				(error: unknown) =>
+					console.warn("The project's setup could not be started.", {
+						message: error instanceof Error ? error.message.slice(0, 200) : "",
+					}),
+			);
 			await deliverHeldSends(machines, job.workspaceId);
+			break;
+		case "project-setup":
+			await startProjectSetupForWorkspace(machines, job.workspaceId);
 			break;
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
