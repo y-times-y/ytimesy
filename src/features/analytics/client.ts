@@ -33,7 +33,9 @@ function analyticsClient(): Promise<PostHog | null> {
 				api_host: ANALYTICS_PROXY_PATH,
 				ui_host: "https://us.posthog.com",
 				autocapture: false,
-				capture_pageview: false,
+				// $pageview on load and route changes, for PostHog's Web analytics;
+				// before_send keeps only origin, path and referring domain.
+				capture_pageview: "history_change",
 				capture_pageleave: false,
 				// Uncaught errors and unhandled rejections, as $exception events.
 				capture_exceptions: {
@@ -153,7 +155,11 @@ export function setAnalyticsUser(
 		.then((posthog) => {
 			if (!posthog) return;
 			if (userId) posthog.identify(userId);
-			else posthog.reset();
+			// Only a sign-out clears the identity. Resetting a visitor who was
+			// never identified gave them a new ID on every page load, and split
+			// one page's events across two IDs.
+			else if (posthog.get_property("$user_state") === "identified")
+				posthog.reset();
 			return applyReplay(posthog, Boolean(userId) && options.replay);
 		})
 		.catch(() => undefined);

@@ -5,6 +5,7 @@ const sdk = vi.hoisted(() => ({
 	capture: vi.fn(),
 	identify: vi.fn(),
 	reset: vi.fn(),
+	get_property: vi.fn((): string | undefined => undefined),
 	startSessionRecording: vi.fn(),
 	stopSessionRecording: vi.fn(),
 	sessionRecordingStarted: vi.fn(() => false),
@@ -39,7 +40,7 @@ describe("PostHog client", () => {
 		const config = sdk.init.mock.calls[0][1];
 		expect(config).toMatchObject({
 			autocapture: false,
-			capture_pageview: false,
+			capture_pageview: "history_change",
 			capture_pageleave: false,
 			// Replay starts per user (setAnalyticsUser), never at init.
 			disable_session_recording: true,
@@ -168,9 +169,21 @@ describe("PostHog client", () => {
 	it("identifies by internal ID only and resets on logout", async () => {
 		const { setAnalyticsUser } = await import("./client");
 		setAnalyticsUser("user-id", { replay: false });
+		sdk.get_property.mockReturnValue("identified");
 		setAnalyticsUser(null, { replay: false });
 		await vi.waitFor(() => expect(sdk.reset).toHaveBeenCalledTimes(1));
 		expect(sdk.identify).toHaveBeenCalledExactlyOnceWith("user-id");
+		sdk.get_property.mockReturnValue(undefined);
+	});
+	it("keeps a signed-out visitor's anonymous ID across page loads", async () => {
+		const { setAnalyticsUser } = await import("./client");
+		sdk.get_property.mockReturnValue("anonymous");
+		setAnalyticsUser(null, { replay: false });
+		await vi.waitFor(() =>
+			expect(sdk.get_property).toHaveBeenCalledWith("$user_state"),
+		);
+		expect(sdk.reset).not.toHaveBeenCalled();
+		sdk.get_property.mockReturnValue(undefined);
 	});
 	it("does nothing during SSR or when unconfigured", async () => {
 		vi.stubGlobal("window", undefined);

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Effect } from "effect";
 import { z } from "zod";
 import { scratchRepositoryName } from "../../../domain/add-project";
+import { captureServerAnalytics } from "../../../server/adapters/analytics";
 import {
 	githubRepositoryCreation,
 	listAuthorizedRepositories,
@@ -31,6 +32,14 @@ export const Route = createFileRoute("/api/github/repositories")({
 							canCreate: false,
 						})),
 					]);
+					// Once per user per day: the picker reloads this list often.
+					const now = new Date();
+					void captureServerAnalytics(
+						user.id,
+						"repositories_listed",
+						{ repositories: repositories.length },
+						{ key: now.toISOString().slice(0, 10), timestamp: now },
+					);
 					return {
 						repositories,
 						installationUrl: `https://github.com/apps/${serverConfig().GITHUB_APP_SLUG}/installations/new`,
