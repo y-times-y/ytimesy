@@ -578,12 +578,117 @@ describe("messages held while the project's environment is set up", () => {
 				text: "Add a login page",
 				modelId: "connection|model",
 				idempotencyKey: messageId,
+				environmentSetup: true,
 			}),
 		);
 		expect(mocks.insert).not.toHaveBeenCalled();
 		expect(mocks.reusable).not.toHaveBeenCalled();
 		expect(mocks.hold).not.toHaveBeenCalled();
 		expect(mocks.send).not.toHaveBeenCalled();
+	});
+
+	const buildingWorkspace = {
+		id: "workspace",
+		status: "cloning",
+		providerRef: null,
+		templateSnapshotId: null,
+	};
+
+	it("never holds a task during the first build: it starts at once, and the project's setup starts beside it", async () => {
+		mocks.workspace.mockResolvedValue(buildingWorkspace);
+		mocks.session.mockImplementation(async (_owner: string, id: string) => ({
+			...heldChat,
+			id,
+		}));
+		mocks.claimSetup.mockResolvedValue({
+			session: { ...heldChat, id: "setup-chat", items: [] },
+			created: true,
+		});
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+				variant: "high",
+				idempotencyKey: messageId,
+			}),
+		);
+		// The task's own turn starts now, in its own chat.
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(mocks.send.mock.calls[0]?.[1]).toMatchObject({ sessionId: "chat" });
+		// The setup chat is claimed once per project and its request waits there
+		// for the build, on the task's model.
+		expect(mocks.claimSetup).toHaveBeenCalledOnce();
+		expect(mocks.hold).toHaveBeenCalledOnce();
+		const [owner, chat, held] = mocks.hold.mock.calls[0] as [
+			string,
+			string,
+			Record<string, unknown>,
+		];
+		expect([owner, chat]).toEqual(["owner", "setup-chat"]);
+		expect(held).toMatchObject({
+			item: {
+				id: initialSetupMessageId("project"),
+				text: ENVIRONMENT_SETUP_PROMPT,
+			},
+			modelId: "connection|model",
+			variant: "high",
+			environmentSetup: true,
+		});
+		expect(mocks.markSetup).toHaveBeenCalledWith(
+			"owner",
+			"setup-chat",
+			"Set up project",
+		);
+	});
+
+	it("starts no second setup beside a task when the project has its setup chat", async () => {
+		mocks.workspace.mockResolvedValue(buildingWorkspace);
+		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });
+		mocks.otherSetup.mockResolvedValue("setup-chat");
+		mocks.read.mockReturnValue(Effect.succeed(view("idle")));
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+			}),
+		);
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(mocks.claimSetup).not.toHaveBeenCalled();
+		expect(mocks.hold).not.toHaveBeenCalled();
+	});
+
+	it("never holds a task after a failed build either, and starts no setup beside it", async () => {
+		mocks.workspace.mockResolvedValue(failedWorkspace);
+		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+			}),
+		);
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(mocks.hold).not.toHaveBeenCalled();
+		expect(mocks.claimSetup).not.toHaveBeenCalled();
+	});
+
+	it("still sends the task when its setup chat cannot be started", async () => {
+		mocks.workspace.mockResolvedValue(buildingWorkspace);
+		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });
+		mocks.claimSetup.mockRejectedValue(new Error("database is busy"));
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await Effect.runPromise(
+			sendComposerMessage(machines, scope, {
+				text: "Add a login page",
+				modelId: "connection|model",
+			}),
+		);
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
 	});
 
 	it("sends at once when the environment became ready while the message was stored", async () => {
@@ -605,6 +710,7 @@ describe("messages held while the project's environment is set up", () => {
 				text: "Add a login page",
 				modelId: "connection|model",
 				idempotencyKey: messageId,
+				environmentSetup: true,
 			}),
 		);
 		expect(mocks.releaseHeld).toHaveBeenCalledWith("held-chat");
@@ -682,6 +788,7 @@ describe("messages held while the project's environment is set up", () => {
 					modelId: "claude-code/claude-opus-5-5",
 					variant: "high",
 					idempotencyKey: messageId,
+					environmentSetup: true,
 				},
 			),
 		);

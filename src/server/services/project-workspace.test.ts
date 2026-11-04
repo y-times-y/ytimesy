@@ -56,6 +56,35 @@ it("fetches a pinned revision even when the checkout is already on its branch", 
 	);
 });
 
+it("clones on a machine booted without the template and names the primary checkout as the chat's directory", async () => {
+	const host = {
+		exec: vi.fn(async (_vm: unknown, command: string) => ({
+			exitCode: 0,
+			stdout: command.includes("printf") ? "/home/ubuntu" : "",
+			stderr: "",
+		})),
+		writeTextFile: vi.fn(async () => undefined),
+	} as unknown as WorkspaceMachines;
+	const primary = await run(host, {
+		...checkout,
+		preserveCurrentBranch: false,
+		additionalRepositories: [
+			{ ...checkout, name: "api", fullName: "acme/api" },
+		],
+	});
+	expect(primary).toBe("/home/ubuntu/app");
+	expect(receive).toHaveBeenCalledWith(
+		expect.anything(),
+		expect.objectContaining({ mode: "clone", destination: "/home/ubuntu/app" }),
+	);
+	const written = vi.mocked(host.writeTextFile).mock.calls as unknown[][];
+	expect(written.at(-1)).toEqual([
+		"vm",
+		"/tmp/ytimesy-project-cwd",
+		"/home/ubuntu/app\n",
+	]);
+});
+
 it("fails instead of keeping a stale checkout when a pinned update fails", async () => {
 	transfer.failing = true;
 	const outcome = (pinnedRevision?: string) =>

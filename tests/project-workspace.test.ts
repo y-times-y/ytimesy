@@ -3,11 +3,14 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
+	firstEnvironmentBuildRunning,
 	heldSendReleases,
 	publicFailureMessage,
 	redactInfrastructure,
 	redactSecrets,
+	sendWaitsForEnvironment,
 	sendWaitsForSetup,
+	startsSetupBesideTask,
 	workspacePrepareShowsStatus,
 	workspacePrepareStalled,
 } from "../src/domain/project-workspace";
@@ -118,22 +121,66 @@ it("flags a prepare request that stayed queued past the stall timeout", () => {
 	);
 });
 
-it("holds a message while the environment is not ready, failed included, and releases it only when ready", () => {
+const notReady = [
+	"missing",
+	"queued",
+	"provisioning",
+	"cloning",
+	"installing",
+	"failed",
+] as const;
+const setupRequest = { environmentSetup: true };
+
+it("holds only the setup request while the environment is not ready, failed included, and releases it only when ready", () => {
+	for (const status of notReady)
+		expect(sendWaitsForSetup(status, setupRequest), status).toBe(true);
+	expect(sendWaitsForSetup("ready", setupRequest)).toBe(false);
+	// Still loading: nothing to wait for yet.
+	expect(sendWaitsForSetup(undefined, setupRequest)).toBe(false);
+	expect(heldSendReleases("ready")).toBe(true);
+	for (const status of ["failed", "installing", undefined] as const)
+		expect(heldSendReleases(status), String(status)).toBe(false);
+});
+
+it("never holds a task for the environment: it starts at once on its own machine", () => {
+	for (const status of [...notReady, "ready", undefined] as const)
+		expect(sendWaitsForSetup(status, {}), String(status)).toBe(false);
+	// A task the tab held while the project had no environment record goes once it has one.
+	for (const status of ["queued", "installing", "failed", "ready"] as const)
+		expect(heldSendReleases(status, {}), status).toBe(true);
+	expect(heldSendReleases(undefined, {})).toBe(false);
+});
+
+it("starts the setup beside a person's task during the first build only", () => {
+	expect(startsSetupBesideTask({})).toBe(true);
+	expect(startsSetupBesideTask(setupRequest)).toBe(false);
+	expect(startsSetupBesideTask({ runtimeText: "notice" })).toBe(false);
+	expect(startsSetupBesideTask({ approvesPlan: true })).toBe(false);
+	expect(startsSetupBesideTask({ continueOn: "c|m" })).toBe(false);
+	expect(sendWaitsForEnvironment({ ...setupRequest, runtimeText: "x" })).toBe(
+		false,
+	);
 	for (const status of [
-		"missing",
 		"queued",
 		"provisioning",
 		"cloning",
 		"installing",
-		"failed",
 	] as const)
-		expect(sendWaitsForSetup(status), status).toBe(true);
-	expect(sendWaitsForSetup("ready")).toBe(false);
-	// Still loading: nothing to wait for yet.
-	expect(sendWaitsForSetup(undefined)).toBe(false);
-	expect(heldSendReleases("ready")).toBe(true);
-	for (const status of ["failed", "installing", undefined] as const)
-		expect(heldSendReleases(status), String(status)).toBe(false);
+		expect(
+			firstEnvironmentBuildRunning({ status, templateSnapshotId: null }),
+			status,
+		).toBe(true);
+	// A rebuild keeps the template; a failed or ready one is not running.
+	expect(
+		firstEnvironmentBuildRunning({
+			status: "installing",
+			templateSnapshotId: "sh-1",
+		}),
+	).toBe(false);
+	for (const status of ["failed", "ready"] as const)
+		expect(
+			firstEnvironmentBuildRunning({ status, templateSnapshotId: null }),
+		).toBe(false);
 });
 
 it("never shows an empty or serialized-object failure", () => {

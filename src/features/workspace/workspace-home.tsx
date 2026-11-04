@@ -1949,6 +1949,8 @@ export function WorkspaceHome({
 	// A project just added starts its setup by itself, in its own chat.
 	const setupStartedInTab = useRef(new Set<string>());
 	const setupAwaitedInTab = useRef(new Set<string>());
+	/** Projects this tab sent a task in: their setup starts beside it, on the server. */
+	const taskSentInTab = useRef(new Set<string>());
 	// biome-ignore lint/correctness/useExhaustiveDependencies: decided when the project, its status or its chats change.
 	useEffect(() => {
 		const projectId = selectedProject?.id;
@@ -1959,7 +1961,9 @@ export function WorkspaceHome({
 			chats: chats.data,
 			startedInThisTab: setupStartedInTab.current,
 			awaitingInThisTab: setupAwaitedInTab.current,
-			taskHeld: Boolean(heldForSetupRef.current),
+			taskSent:
+				taskSentInTab.current.has(projectId) ||
+				Boolean(heldForSetupRef.current),
 		});
 		if (step === "await") setupAwaitedInTab.current.add(projectId);
 		if (step !== "start") return;
@@ -1972,8 +1976,10 @@ export function WorkspaceHome({
 		if (!held) return;
 		// Another project's status says nothing about this message.
 		if (held.scope.projectId !== selectedProject?.id) return;
-		// A failed setup keeps the message held with its actions.
-		if (!heldSendReleases(projectSetupStatus)) return;
+		// Held only while the project had no environment record: a task goes
+		// once there is one; the setup request waits for the environment (a
+		// failed setup keeps it held with its actions).
+		if (!heldSendReleases(projectSetupStatus, held)) return;
 		heldForSetupRef.current = null;
 		setHeldForSetup(new Set());
 		setHeldMessage(null);
@@ -3648,11 +3654,20 @@ export function WorkspaceHome({
 												projectSetup.data === null
 													? "missing"
 													: projectSetup.data?.status;
-											// Not ready: the server holds it in the chat until it is.
+											// Only the setup request waits for the environment (the
+											// server holds it in its chat); a task goes at once.
 											const heldForSetup =
 												Boolean(selectedProject) &&
 												setupStatus !== "missing" &&
-												sendWaitsForSetup(setupStatus);
+												sendWaitsForSetup(setupStatus, {
+													environmentSetup,
+													approvesPlan: options?.approvesPlan,
+													continueOn: options?.continueOn,
+												});
+											// The server starts the project's setup beside a task
+											// sent during the first build: this tab must not open it too.
+											if (selectedProject && !environmentSetup)
+												taskSentInTab.current.add(selectedProject.id);
 											return new Promise<ComposerSendResult>((settle) => {
 												const pending: PendingSend = {
 													epoch,

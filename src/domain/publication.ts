@@ -24,11 +24,14 @@ export function publicationBlockedReason(
 	return null;
 }
 
+/** A chat with its own machine publishes whatever the project's environment is doing. */
 export function publicationWorkspaceBlockedReason(
 	workspace: WorkspaceEnvironmentState | null,
+	sessionProviderRef: string | null = null,
 ) {
 	if (workspaceEnvironmentIsReady(workspace)) return null;
 	if (!workspace) return "Prepare a workspace before publishing.";
+	if (sessionProviderRef) return null;
 	if (workspace.status === "failed")
 		return (
 			workspace.errorMessage ??

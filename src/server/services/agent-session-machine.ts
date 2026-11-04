@@ -14,7 +14,6 @@ import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
 import { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
-import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import { sessionTitleFromText } from "#/domain/session-item";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
@@ -48,6 +47,8 @@ import {
 import { conversationForkPending } from "../adapters/conversation-fork";
 import { prewarmedMachine } from "../adapters/machine-prewarm";
 import { purgeConversationState } from "../adapters/realtime-delivery";
+import { markFreshChatMachine } from "../adapters/setup-catch-up";
+import { workspaceBootSnapshotId } from "../records/tools-snapshot-store";
 import { cancelServerTurn } from "./cancel-server-turn";
 import { startEnvironmentServices } from "./environment-services";
 import { detachedFromTurn } from "./machine-call-signal";
@@ -81,7 +82,11 @@ async function resolveAgentSessionRecord(input: {
 			? agentSessionForOwner(input.userId, input.parentSessionId)
 			: null,
 	]);
-	if (!workspace || !workspaceEnvironmentIsReady(workspace)) {
+	// A chat never waits for the project's environment (being built, or its
+	// build failed): without a template its machine boots fresh
+	// (sessionMachinePlan). Only a project with no environment record is
+	// refused: the chat row needs it.
+	if (!workspace) {
 		throw new Error("Prepare a project environment before starting an agent.");
 	}
 	let listed: Promise<AgentSessionRecord[]> | undefined;
@@ -340,6 +345,10 @@ export async function bindAgentSessionMachine(
 			saveAgentSessionProviderRef(session.id, providerRef).then(
 				() => undefined,
 			),
+		freshBoot: {
+			snapshotId: workspaceBootSnapshotId,
+			record: () => markFreshChatMachine(session.id),
+		},
 	});
 	await applyProjectNetworkPolicy(machines, policy, executed.providerRef);
 	// A fresh copy of the template has none of the project's saved services
@@ -347,7 +356,8 @@ export async function bindAgentSessionMachine(
 	// the environment report the agent reads.
 	// Not awaited, so it runs on plain machine calls: a Stop or a failure of
 	// the turn that made the copy never leaves the services unstarted.
-	if (executed.planKind !== "resume")
+	// A fresh boot has no saved services yet (fresh-machine-setup.ts).
+	if (executed.planKind !== "resume" && executed.planKind !== "boot-fresh")
 		void detachedFromTurn(() =>
 			startEnvironmentServices(machines, WorkspaceId(executed.providerRef)),
 		).catch(() =>
@@ -538,6 +548,15 @@ export async function executeSessionMachinePlan(input: {
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
+	/**
+	 * A chat whose project has no template yet: the image it boots from, and
+	 * the record that it did (made before the machine is named on the chat,
+	 * so a retry finds it). Left out, such a chat is refused as before.
+	 */
+	readonly freshBoot?: {
+		readonly snapshotId: () => Promise<string>;
+		readonly record: () => Promise<void>;
+	};
 }): Promise<{
 	providerRef: string;
 	planKind:
@@ -565,7 +584,6 @@ export async function executeSessionMachinePlan(input: {
 			templateProviderRef: input.templateProviderRef,
 		});
 	}
-	if (plan.kind === "blocked") throw new Error(plan.reason);
 	if (plan.kind === "resume") {
 		try {
 			await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
@@ -610,6 +628,20 @@ export async function executeSessionMachinePlan(input: {
 		if (!input.sessionProviderRef)
 			await input.saveSessionProviderRef(plan.providerRef);
 		return { providerRef: plan.providerRef, planKind: plan.kind };
+	}
+	if (plan.kind === "boot-fresh") {
+		if (!input.freshBoot)
+			throw new Error(
+				"Prepare a project environment before starting an agent.",
+			);
+		// Nothing to reseal (there is no template): only capacity lag is retried.
+		const booted = await copyAgentSessionFromTemplate(
+			input,
+			await input.freshBoot.snapshotId(),
+		);
+		await input.freshBoot.record();
+		await input.saveSessionProviderRef(booted);
+		return { providerRef: booted, planKind: plan.kind };
 	}
 	if (plan.kind !== "copy-snapshot") {
 		throw new Error("Could not copy the project snapshot.");

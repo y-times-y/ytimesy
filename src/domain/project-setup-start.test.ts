@@ -71,7 +71,7 @@ describe("projectSetupStep", () => {
 		chats: [] as unknown[],
 		startedInThisTab: new Set<string>(),
 		awaitingInThisTab: new Set<string>(),
-		taskHeld: false,
+		taskSent: false,
 	};
 	const ready = { ...building, status: "ready" };
 
@@ -89,7 +89,7 @@ describe("projectSetupStep", () => {
 		).toBe("start");
 	});
 
-	it("never starts a chat before the environment exists", () => {
+	it("never opens the setup chat before the build's report exists", () => {
 		for (const status of ["queued", "provisioning", "cloning", "installing"])
 			expect(
 				projectSetupStep({
@@ -100,17 +100,23 @@ describe("projectSetupStep", () => {
 			).not.toBe("start");
 	});
 
-	it("leaves an existing ready project alone, and lets a task sent during the build go first", () => {
+	it("never opens the setup chat over a task sent in this tab (the server starts it beside the task)", () => {
+		for (const workspace of [building, ready])
+			expect(
+				projectSetupStep({
+					...base,
+					workspace,
+					awaitingInThisTab: new Set(["p1"]),
+					taskSent: true,
+				}),
+			).toBeNull();
+		// Sent before this tab saw the build: it does not start waiting either.
+		expect(projectSetupStep({ ...base, taskSent: true })).toBeNull();
+	});
+
+	it("leaves an existing ready project alone", () => {
 		// Ready, but this tab never saw its first build: an old project.
 		expect(projectSetupStep({ ...base, workspace: ready })).toBeNull();
-		expect(
-			projectSetupStep({
-				...base,
-				workspace: ready,
-				awaitingInThisTab: new Set(["p1"]),
-				taskHeld: true,
-			}),
-		).toBeNull();
 		expect(
 			projectSetupStep({
 				...base,

@@ -33,11 +33,17 @@ export function parseTerminalClientMessage(
 	}
 }
 
+/**
+ * A chat with its own machine opens a terminal whatever the project's
+ * environment is doing (a chat started during setup boots without it).
+ */
 export function terminalConnectBlockedReason(
 	workspace: WorkspaceEnvironmentState | null,
+	sessionProviderRef: string | null = null,
 ) {
 	if (workspaceEnvironmentIsReady(workspace)) return null;
 	if (!workspace) return "Prepare a workspace before opening the terminal.";
+	if (sessionProviderRef) return null;
 	if (workspace.status === "failed")
 		return (
 			workspace.errorMessage ??

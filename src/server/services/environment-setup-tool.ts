@@ -14,6 +14,8 @@ export const SAVE_PROJECT_ENVIRONMENT_TOOL = "save_project_environment";
 export function environmentSetupTools(context: {
 	readonly userId: string;
 	readonly projectId: string;
+	/** The chat the agent runs in. */
+	readonly sessionId?: string;
 }): ToolSet {
 	return {
 		[SAVE_PROJECT_ENVIRONMENT_TOOL]: tool({
@@ -99,6 +101,9 @@ export function environmentSetupTools(context: {
 						recipe: recipe.data,
 						source: "agent",
 						summary,
+						...(context.sessionId
+							? { savedInSessionId: context.sessionId }
+							: {}),
 					});
 					return {
 						saved: true,

@@ -85,22 +85,25 @@ export function publishProject(
 		if (!checkout) {
 			return yield* reject("Repository name is missing.");
 		}
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(userId, input.projectId),
+		const [workspace, peeked] = yield* Effect.tryPromise(() =>
+			Promise.all([
+				readyWorkspaceForOwner(userId, input.projectId),
+				peekAgentSessionMachine({
+					userId,
+					projectId: input.projectId,
+					sessionId: input.sessionId,
+				}),
+			]),
 		);
-		const workspaceBlocked = publicationWorkspaceBlockedReason(workspace);
+		const workspaceBlocked = publicationWorkspaceBlockedReason(
+			workspace,
+			peeked.providerRef,
+		);
 		if (workspaceBlocked || !workspace) {
 			return yield* reject(
 				workspaceBlocked ?? "Prepare a workspace before publishing.",
 			);
 		}
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId,
-				projectId: input.projectId,
-				sessionId: input.sessionId,
-			}),
-		);
 		const providerRef = copiedAgentMachineRef({
 			sessionProviderRef: peeked.providerRef,
 			templateProviderRef: workspace.providerRef,

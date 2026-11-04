@@ -39,11 +39,13 @@ const FIRST_BUILD_RUNNING = new Set([
 ]);
 
 /**
- * The setup chat can only start once its environment exists (the server
- * refuses a chat before that), so a tab that sees a new project's first build
- * running waits ("await"), then starts the setup agent when the build is
- * ready ("start"). A task the person sent during the build goes first and
- * takes the place of the setup chat: it runs in its own chat and opens a PR.
+ * The setup agent starts from the build's report, so a tab that sees a new
+ * project's first build running, with nothing sent, waits ("await"), then
+ * opens the setup chat when the build is ready ("start"): the person is
+ * looking at it. A task sent during the build never waits and never loses
+ * its place: it runs at once in its own chat, and the server starts the
+ * setup beside it, in the background (startProjectSetupBesideTask), so the
+ * tab opens nothing.
  */
 export function projectSetupStep(input: {
 	readonly projectId: string | undefined;
@@ -52,13 +54,13 @@ export function projectSetupStep(input: {
 	readonly startedInThisTab: ReadonlySet<string>;
 	/** Projects whose first build this tab saw running. */
 	readonly awaitingInThisTab: ReadonlySet<string>;
-	/** The person sent a task while the build ran. */
-	readonly taskHeld: boolean;
+	/** The person sent a task in this project from this tab. */
+	readonly taskSent: boolean;
 }): "await" | "start" | null {
 	const { projectId, workspace, chats } = input;
 	if (!projectId || input.startedInThisTab.has(projectId)) return null;
 	if (!workspace || workspace.projectId !== projectId) return null;
-	if (chats === undefined || chats.length > 0 || input.taskHeld) return null;
+	if (chats === undefined || chats.length > 0 || input.taskSent) return null;
 	if (FIRST_BUILD_RUNNING.has(workspace.status) && !workspace.build?.rebuild)
 		return input.awaitingInThisTab.has(projectId) ? null : "await";
 	if (workspace.status === "ready" && input.awaitingInThisTab.has(projectId))

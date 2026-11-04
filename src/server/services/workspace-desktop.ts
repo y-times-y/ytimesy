@@ -93,7 +93,12 @@ export function ensureSessionMachine(
 				}),
 			]),
 		);
-		if (!workspace || !workspaceEnvironmentIsReady(workspace)) return null;
+		// A chat started during setup has its own machine before the template.
+		if (
+			!workspace ||
+			(!workspaceEnvironmentIsReady(workspace) && !peeked.providerRef)
+		)
+			return null;
 		const existing = peeked.session;
 		if (!existing) return null;
 		let providerRef = copiedAgentMachineRef({
