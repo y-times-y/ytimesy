@@ -251,6 +251,42 @@ it("refuses publication when leftover command fencing cannot be confirmed", asyn
 	);
 });
 
+it("keeps a subagent's finished answer when the command stop cannot be confirmed", async () => {
+	mocks.owner.mockResolvedValue({
+		id: "session",
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		parentSessionId: "parent",
+		agentRole: "researcher",
+	});
+	mocks.stepRuntime.mockImplementation(async (input) => {
+		await input.tools.workspace();
+		await editsFiles(input);
+		await input.onEvent({ type: "text-delta", id: "reply", text: "Found it." });
+		return { messages: input.messages, outcome: "completed" };
+	});
+	mocks.stop.mockRejectedValueOnce(new Error("Cancellation uncertain"));
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		expect(
+			await runApiTurn({} as WorkspaceMachines, childTurn, {
+				index: 1,
+				signal: new AbortController().signal,
+			}),
+		).toBe("completed");
+	} finally {
+		warn.mockRestore();
+	}
+	expect(mocks.stop).toHaveBeenCalledOnce();
+	expect(mocks.commit).not.toHaveBeenCalled();
+	expect(mocks.finalize).toHaveBeenCalledWith(
+		expect.anything(),
+		"completed",
+		expect.anything(),
+	);
+});
+
 it.each(["running", "completed"])(
 	"does not publish a final answer before %s background work has been reviewed",
 	async (state) => {
