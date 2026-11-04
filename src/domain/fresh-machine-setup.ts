@@ -87,6 +87,16 @@ export type RepositoryInstall = {
  * first waits (bounded) for that install to finish, so two installs never
  * write the same dependencies at once.
  */
+/** Folders detected installs create inside a repository. */
+const INSTALL_OUTPUTS = [
+	".venv/",
+	"venv/",
+	"node_modules/",
+	"__pycache__/",
+	"*.egg-info/",
+	".pnpm-store/",
+];
+
 export function backgroundInstallCommand(input: {
 	readonly installs: readonly RepositoryInstall[];
 	readonly files: BackgroundInstallFiles;
@@ -118,7 +128,18 @@ ${waitForEarlier}code=0
 ${repositories}
 printf 'exit %s\\n' "$code" > "$HOME/${files.status}.tmp"
 mv "$HOME/${files.status}.tmp" "$HOME/${files.status}"`;
+	// What an install writes inside a repository (a venv, node_modules) must
+	// not read as uncommitted changes, or the chat's next branch switch is
+	// refused. Git's local exclude file is never committed; tracked files
+	// stay unaffected.
+	const excludes = input.installs
+		.map(({ directory }) => {
+			const file = quote(`${directory}/.git/info/exclude`);
+			return `if [ -d ${quote(`${directory}/.git`)} ]; then mkdir -p ${quote(`${directory}/.git/info`)}; for p in ${INSTALL_OUTPUTS.map(quote).join(" ")}; do grep -qxF "$p" ${file} 2>/dev/null || printf '%s\\n' "$p" >> ${file}; done; fi`;
+		})
+		.join("\n");
 	const launch = `mkdir -p "$HOME/.ytimesy"
+${excludes}
 rm -f "$HOME/${files.status}"
 : > "$HOME/${files.log}"
 if command -v tmux >/dev/null 2>&1; then

@@ -89,6 +89,34 @@ describe("background installs", () => {
 		);
 	}, 30_000);
 
+	it("keeps what an install creates out of git status, so the chat can still switch branches", () => {
+		const { repo, run } = guest();
+		run(
+			`cd ${repo} && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init`,
+		);
+		const command = backgroundInstallCommand({
+			installs: [
+				{
+					directory: repo,
+					install:
+						"mkdir -p .venv/bin node_modules/x && touch .venv/bin/python",
+				},
+			],
+			files: FRESH_INSTALL_FILES,
+			prelude: "true",
+			terminal: "ytimesy-install-test",
+		});
+		run(command);
+		run(installStatusWaitCommand(FRESH_INSTALL_FILES, 20));
+		expect(run(`git -C ${repo} status --porcelain`)).toBe("");
+		// Running it twice adds each pattern once.
+		run(command);
+		run(installStatusWaitCommand(FRESH_INSTALL_FILES, 20));
+		expect(run(`grep -c '^.venv/$' ${repo}/.git/info/exclude`).trim()).toBe(
+			"1",
+		);
+	}, 30_000);
+
 	it("waits for the boot's install before the setup's own runs", () => {
 		const { home, repo, run } = guest();
 		// The boot's install started (its log exists) and has not finished.
