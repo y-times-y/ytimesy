@@ -1,6 +1,6 @@
 # ytimesy Privacy Policy
 
-Last updated: 2026-11-03.
+Last updated: 2026-11-04.
 
 This policy explains what ytimesy ("ytimesy", "we") collects when you use
 ytimesy, why, who else receives it, how long we keep it, and your choices. It
@@ -87,12 +87,17 @@ no payments, so we hold no payment details.
 
 **Product analytics.** We use PostHog. From the web app we send a fixed set of
 events (for example "app viewed", "prompt submitted", which inspector panel
-was opened, page speed measurements) and error reports (the error and stack
-trace with secrets redacted, and the page path). Our servers send events such
-as "account created", "turn started/finished", "pull request created" and
-agent performance measurements (timings, token counts, tool outcomes). Events
-are linked to your account id and do not contain prompts, code or repository
-names. IP-based location lookup is turned off. If your browser sends "Do Not
+was opened, page speed measurements), the pages you view (the page's path
+only, with project pages shown as "/projects"; sign-in pages are not
+counted), the referring site's host name, time spent and how far you
+scrolled on a page, and error reports (the error and stack trace with secrets
+redacted, and the page path). Our servers send events such as "account
+created", the steps of connecting GitHub and a project, "turn
+started/finished", "pull request created" and agent performance measurements
+(timings, token counts, tool outcomes). Events are linked to your account id,
+or before you sign in to a random analytics identifier, and do not contain
+prompts, code or repository names. The web app sends them to PostHog through
+our own domain. IP-based location lookup is turned off. If your browser sends "Do Not
 Track", the web app sends no analytics or session replays; server events are
 still recorded.
 
