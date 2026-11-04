@@ -188,6 +188,8 @@ export type CaughtUpRepository = {
 export type SetupCatchUpInstall =
 	| BackgroundInstallState
 	| { readonly state: "none" }
+	/** Told, not run: the chat's machine keeps the install it booted with. */
+	| { readonly state: "not-run" }
 	| { readonly state: "failed-to-start"; readonly reason: string };
 
 /**
@@ -208,6 +210,8 @@ export function setupCatchUpNote(input: {
 		switch (input.install.state) {
 			case "none":
 				return "It saved no install command, so nothing was installed here.";
+			case "not-run":
+				return `Its install command is ${commands}. This machine ran its own install when it started (log: ${shown(FRESH_INSTALL_FILES.log)}) and nothing was changed here; run setup's command yourself only if something your task needs is missing.`;
 			case "failed-to-start":
 				return `Its install (${commands}) could not be run on this machine (${input.install.reason}); run it yourself if you need it.`;
 			case "running":

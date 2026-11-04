@@ -6,11 +6,7 @@ import {
 	FRESH_INSTALL_FILES,
 	freshMachineEnvironmentReport,
 	freshMachineInstall,
-	installStatusWaitCommand,
-	parseInstallStatus,
 	type RepositoryInstall,
-	SETUP_INSTALL_FILES,
-	SETUP_INSTALL_WAIT_SECONDS,
 	type SetupCatchUpInstall,
 	setupCatchUpNote,
 } from "#/domain/fresh-machine-setup";
@@ -180,7 +176,13 @@ export async function withSetupCatchUp(
 		).flatMap((repo): CaughtUpRepository[] =>
 			repo.recipe ? [{ fullName: repo.fullName, recipe: repo.recipe }] : [],
 		);
-		const install = await runSetupInstall(input, saved);
+		// The running chat is never paused or changed: its machine keeps the
+		// install it booted with, and the agent only learns what setup saved.
+		const install: SetupCatchUpInstall = saved.some(
+			(repo) => repo.recipe.install,
+		)
+			? { state: "not-run" }
+			: { state: "none" };
 		return {
 			messages: [
 				...input.messages,
@@ -193,62 +195,5 @@ export async function withSetupCatchUp(
 		};
 	} finally {
 		await dependencies.finish(input.sessionId).catch(() => undefined);
-	}
-}
-
-async function runSetupInstall(
-	input: Parameters<typeof withSetupCatchUp>[0],
-	saved: readonly CaughtUpRepository[],
-): Promise<SetupCatchUpInstall> {
-	if (!saved.some((repo) => repo.recipe.install)) return { state: "none" };
-	try {
-		const guest = await input.workspace();
-		const home = await guestHome(guest);
-		const installs = saved.flatMap((repo): RepositoryInstall[] =>
-			repo.recipe.install
-				? [
-						{
-							directory: projectCheckoutPath(
-								home,
-								projectFolderName(repo.fullName),
-							),
-							install: repo.recipe.install,
-						},
-					]
-				: [],
-		);
-		const started = await guest.machines.exec(
-			guest.vm,
-			backgroundInstallCommand({
-				installs,
-				files: SETUP_INSTALL_FILES,
-				prelude: guestNodePath(),
-				// The boot's own install may still be running: this one waits for it.
-				after: FRESH_INSTALL_FILES,
-				terminal: "ytimesy-setup-install",
-			}),
-			30_000,
-		);
-		if (started.exitCode !== 0)
-			return {
-				state: "failed-to-start",
-				reason: `exit ${started.exitCode}`,
-			};
-		const now = input.now ?? Date.now;
-		const seconds = Math.min(
-			SETUP_INSTALL_WAIT_SECONDS,
-			Math.max(0, Math.floor((input.waitUntil - now()) / 1000)),
-		);
-		const waited = await guest.machines.exec(
-			guest.vm,
-			installStatusWaitCommand(SETUP_INSTALL_FILES, seconds),
-			(seconds + 30) * 1000,
-		);
-		return parseInstallStatus(waited.stdout);
-	} catch (error) {
-		return {
-			state: "failed-to-start",
-			reason: failureMessage(error).slice(0, 160),
-		};
 	}
 }
