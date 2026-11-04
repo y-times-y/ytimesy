@@ -58,6 +58,8 @@ const machineGrantSchema = z
 		name: repositoryPart,
 		installationId: z.number().int().positive().optional(),
 		access: z.enum(["read", "write"]),
+		/** Absent: the chat's agent. A terminal's push to the default branch is approved from the chat. */
+		holder: z.literal("terminal").optional(),
 		branch: branchName.optional(),
 		nonce: z
 			.string()
@@ -510,6 +512,11 @@ async function pushRefusal(
 }
 
 function defaultBranchExplanation(grant: MachineGitGrant, branch: string) {
+	if (grant.holder === "terminal")
+		return [
+			`Pushing to ${branch} on ${grant.owner}/${grant.name} needs your approval.`,
+			`Ask the agent in this chat to push it and approve the card, or turn on "Allow pushes to ${branch} without asking" in project settings.`,
+		];
 	return [
 		`Pushing to ${branch} on ${grant.owner}/${grant.name} needs the user's approval.`,
 		`Call request_push_approval with repo "${grant.owner}/${grant.name}", branch "${branch}" and a one-line summary, then push the same commit again once approved.`,

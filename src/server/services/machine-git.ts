@@ -58,7 +58,7 @@ export function machineGitStep(
 					workspace.vm,
 					machineGitSetupScript({
 						origin,
-						sessionId: owner.id,
+						holder: owner.id,
 						token,
 					}),
 					30_000,

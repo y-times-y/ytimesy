@@ -41,8 +41,6 @@ function sources(
 						defaultBranch: "main",
 						push: name !== "readonly",
 					},
-		installationFor: async (_token, account) =>
-			account.toLowerCase() === "acme" ? 11 : null,
 		installationToken: async (_id, name) => {
 			if (name === "not-installed") throw new Error("not in installation");
 			return `installation-token-${name}`;
@@ -105,14 +103,38 @@ describe("resolveMachineAccess", () => {
 		).toMatchObject({ message: expect.stringContaining("cannot push") });
 	});
 
-	it("reads any repository the installation reaches, public ones anonymously", async () => {
+	it("reads the project's repositories and public ones (anonymously), no other private one", async () => {
 		expect(
 			await resolveMachineAccess(
 				chat,
-				{ owner: "acme", name: "lib", access: "read" },
+				{ owner: "acme", name: "app", access: "read" },
 				sources(),
 			),
-		).toMatchObject({ installationId: 11, token: "installation-token-lib" });
+		).toMatchObject({ installationId: 11, token: "installation-token-app" });
+		// The user's installation reaches acme/lib, but it is not in the project.
+		const installationToken = vi.fn(async () => "installation-token");
+		expect(
+			await refusal(
+				resolveMachineAccess(
+					chat,
+					{ owner: "acme", name: "lib", access: "read" },
+					sources({ installationToken }),
+				),
+			),
+		).toEqual({
+			status: 403,
+			message:
+				"acme/lib is not in this project; add it to the project to use it here.",
+		});
+		expect(installationToken).not.toHaveBeenCalled();
+		expect(
+			await resolveMachineAccess(
+				chat,
+				{ owner: "acme", name: "public", access: "read" },
+				sources({ installationToken }),
+			),
+		).toMatchObject({ token: null });
+		expect(installationToken).not.toHaveBeenCalled();
 		expect(
 			await resolveMachineAccess(
 				chat,
@@ -134,7 +156,9 @@ describe("resolveMachineAccess", () => {
 				),
 			),
 		).toMatchObject({
-			message: expect.stringContaining("cannot reach someone/private"),
+			message: expect.stringContaining(
+				"someone/private is not in this project",
+			),
 		});
 		expect(
 			await refusal(
@@ -182,7 +206,24 @@ describe("answerMachineGitGrant", () => {
 			headers: { authorization: `Bearer ${token}` },
 			body: JSON.stringify(body),
 		});
-	const owner = async (token: string) => (token === "ygm_valid" ? chat : null);
+	const owner = async (token: string) =>
+		token === "ygm_valid"
+			? { ...chat, holder: "step" as const }
+			: token === "ygm_terminal"
+				? { ...chat, holder: "terminal" as const }
+				: null;
+	const grantOf = async (response: Response) => {
+		const { password } = (await response.clone().json()) as {
+			password: string;
+		};
+		const headers = JSON.parse(
+			atob(password.replaceAll("-", "+").replaceAll("_", "/")),
+		) as Record<string, string>;
+		return JSON.parse(headers["x-ytimesy-git-grant"]) as Record<
+			string,
+			unknown
+		>;
+	};
 
 	it("trades a live token for Basic credentials carrying a signed grant", async () => {
 		const response = await answerMachineGitGrant(
@@ -209,6 +250,25 @@ describe("answerMachineGitGrant", () => {
 			installationId: 11,
 			access: "write",
 		});
+	});
+
+	it("marks a terminal's grant, so its push to main points at the chat; a step's carries no holder", async () => {
+		const request = { owner: "acme", name: "app", access: "write" };
+		expect(
+			await grantOf(
+				await answerMachineGitGrant(
+					post(request, "ygm_terminal"),
+					SECRET,
+					sources(),
+					owner,
+				),
+			),
+		).toMatchObject({ holder: "terminal" });
+		expect(
+			await grantOf(
+				await answerMachineGitGrant(post(request), SECRET, sources(), owner),
+			),
+		).not.toHaveProperty("holder");
 	});
 
 	it("refuses an unknown token, a malformed request and says why for a refused repository", async () => {

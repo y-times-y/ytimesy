@@ -22,7 +22,9 @@ beforeEach(async () => {
 		insert into project values ('${project}', 'alice');
 		insert into agent_session values ('${chat}', 'alice', '${project}', null);`);
 	await db.exec(
-		readFileSync("supabase/migrations/20261104120000_machine_git.sql", "utf8"),
+		["20261104120000_machine_git", "20261104130000_machine_git_token_holder"]
+			.map((file) => readFileSync(`supabase/migrations/${file}.sql`, "utf8"))
+			.join("\n"),
 	);
 	holder.query.mockImplementation((sql: string, values: unknown[]) =>
 		db.query(sql, values),
@@ -45,6 +47,7 @@ describe("machine git tokens", () => {
 			userId: "alice",
 			sessionId: chat,
 			projectId: project,
+			holder: "step",
 		});
 		expect(await machineGitTokens.owner(`ygm_${"0".repeat(64)}`)).toBeNull();
 		expect(await machineGitTokens.owner("not-a-token")).toBeNull();
@@ -53,6 +56,39 @@ describe("machine git tokens", () => {
 		await db.exec(`update agent_session set archived_at=null`);
 		await machineGitTokens.revokeForSession("alice", chat);
 		expect(await machineGitTokens.owner(token)).toBeNull();
+	});
+
+	it("a terminal's token survives the turn's release, renews while open and goes when revoked", async () => {
+		const expiresAt = new Date(Date.now() + 60_000);
+		const step = await machineGitTokens.mint({
+			userId: "alice",
+			sessionId: chat,
+			expiresAt,
+		});
+		const terminal = await machineGitTokens.mint({
+			userId: "alice",
+			sessionId: chat,
+			expiresAt,
+			holder: "terminal",
+		});
+		expect(await machineGitTokens.owner(terminal)).toMatchObject({
+			holder: "terminal",
+		});
+		await machineGitTokens.revokeForSession("alice", chat);
+		expect(await machineGitTokens.owner(step)).toBeNull();
+		expect(await machineGitTokens.owner(terminal)).not.toBeNull();
+		expect(
+			await machineGitTokens.extend(
+				terminal,
+				new Date(Date.now() + 30 * 60_000),
+			),
+		).toBe(true);
+		await machineGitTokens.revoke(terminal);
+		expect(await machineGitTokens.owner(terminal)).toBeNull();
+		// A revoked token is not renewed back to life.
+		expect(
+			await machineGitTokens.extend(terminal, new Date(Date.now() + 60_000)),
+		).toBe(false);
 	});
 
 	it("stop working once expired", async () => {

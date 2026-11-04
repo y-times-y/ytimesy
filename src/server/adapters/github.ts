@@ -133,26 +133,6 @@ export async function authorizedGithubRepository(
 	}
 }
 
-/** The user's usable installation of our app on this account (user or organization), else null. */
-export async function userInstallationForAccount(
-	token: string,
-	account: string,
-): Promise<number | null> {
-	const github = githubClient(token);
-	const installations = await github.paginate(
-		github.apps.listInstallationsForAuthenticatedUser,
-		{ per_page: 100 },
-	);
-	const found = installations.find(
-		(installation) =>
-			installation.account &&
-			"login" in installation.account &&
-			installation.account.login.toLowerCase() === account.toLowerCase() &&
-			usableInstallation(installation),
-	);
-	return found?.id ?? null;
-}
-
 export async function listAuthorizedRepositories(
 	token: string,
 ): Promise<RepositoryChoice[]> {

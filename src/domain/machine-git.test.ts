@@ -1,5 +1,12 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -28,6 +35,8 @@ import {
 const SECRET = "machine-git-test-secret-0123456789abcdef";
 const SESSION = "00000000-0000-4000-8000-0000000000aa";
 const TOKEN = `ygm_${"1".repeat(64)}`;
+const TERMINAL_TOKEN = `ygm_${"2".repeat(64)}`;
+const TERMINAL = `${SESSION}-terminal-${"c".repeat(16)}`;
 const root = mkdtempSync(join(tmpdir(), "ytimesy-machine-git-"));
 const home = join(root, "home");
 const github = join(root, "github");
@@ -111,10 +120,9 @@ async function githubBackend(target: string, init: RequestInit) {
 async function edge(request: Request) {
 	const url = new URL(request.url);
 	if (url.pathname === MACHINE_GIT_GRANT_ROUTE) {
-		if (
-			!tokenValid ||
-			request.headers.get("authorization") !== `Bearer ${TOKEN}`
-		)
+		const bearer = request.headers.get("authorization");
+		const terminal = bearer === `Bearer ${TERMINAL_TOKEN}`;
+		if (!tokenValid || (bearer !== `Bearer ${TOKEN}` && !terminal))
 			return Response.json({ error: "token expired" }, { status: 401 });
 		const input = (await request.json()) as {
 			owner: string;
@@ -135,6 +143,7 @@ async function edge(request: Request) {
 			name: input.name,
 			installationId: 7,
 			access: input.access,
+			...(terminal ? { holder: "terminal" as const } : {}),
 		});
 		return Response.json({
 			username: GIT_GRANT_USERNAME,
@@ -211,7 +220,7 @@ beforeAll(async () => {
 	origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	const setup = spawnSync(
 		"sh",
-		["-c", machineGitSetupScript({ origin, sessionId: SESSION, token: TOKEN })],
+		["-c", machineGitSetupScript({ origin, holder: SESSION, token: TOKEN })],
 		{ env: { PATH: process.env.PATH, HOME: home }, encoding: "utf8" },
 	);
 	expect(setup.stderr).toBe("");
@@ -229,10 +238,7 @@ describe("plain git on a workspace VM", async () => {
 	it("is set up privately and only once in the global config", async () => {
 		const again = spawnSync(
 			"sh",
-			[
-				"-c",
-				machineGitSetupScript({ origin, sessionId: SESSION, token: TOKEN }),
-			],
+			["-c", machineGitSetupScript({ origin, holder: SESSION, token: TOKEN })],
 			{ env: { PATH: process.env.PATH, HOME: home } },
 		);
 		expect(again.status).toBe(0);
@@ -401,6 +407,60 @@ describe("plain git on a workspace VM", async () => {
 		expect(answer.stderr).toContain("token expired");
 	});
 
+	it("keeps the user's terminal working after the turn's release, and points its main push at the chat", async () => {
+		const env = { PATH: process.env.PATH, HOME: home };
+		const tokens = join(home, ".ytimesy-git/tokens");
+		expect(
+			spawnSync(
+				"sh",
+				[
+					"-c",
+					machineGitSetupScript({
+						origin,
+						holder: TERMINAL,
+						token: TERMINAL_TOKEN,
+					}),
+				],
+				{ env },
+			).status,
+		).toBe(0);
+		// The turn's step ends: its token goes, the terminal's and the config stay.
+		spawnSync("sh", ["-c", machineGitReleaseScript(SESSION)], { env });
+		expect(existsSync(join(tokens, SESSION))).toBe(false);
+		expect(existsSync(join(tokens, TERMINAL))).toBe(true);
+		expect(existsSync(join(home, ".ytimesy-git/config"))).toBe(true);
+		defaultBranchApproved = false;
+		await git(
+			[
+				"-c",
+				"user.name=u",
+				"-c",
+				"user.email=u@u",
+				"commit",
+				"-q",
+				"--allow-empty",
+				"-m",
+				"from the terminal",
+			],
+			work,
+		);
+		expect(
+			(await git(["push", "-q", "origin", "HEAD:feature-2"], work)).status,
+		).toBe(0);
+		const refused = await git(["push", "origin", "HEAD:main"], work);
+		expect(refused.status).not.toBe(0);
+		expect(refused.stderr).toContain("remote: Ask the agent in this chat");
+		expect(refused.stderr).toContain('"Allow pushes to main without asking"');
+		expect(refused.stderr).not.toContain("request_push_approval");
+		// A holder that never released (e.g. a dropped terminal) is cleared as stale.
+		const stale = `${SESSION.slice(0, -2)}bb`;
+		writeFileSync(join(tokens, stale), "ygm_old");
+		execFileSync("touch", ["-t", "202001010000", join(tokens, stale)]);
+		spawnSync("sh", ["-c", machineGitReleaseScript(TERMINAL)], { env });
+		expect(existsSync(join(tokens, stale))).toBe(false);
+		expect(existsSync(join(home, ".ytimesy-git/config"))).toBe(false);
+	});
+
 	it("removes the chat's token and, with the last one, the config; the scrub removes all", async () => {
 		const env = { PATH: process.env.PATH, HOME: home };
 		spawnSync("sh", ["-c", machineGitReleaseScript(SESSION)], { env });
@@ -410,10 +470,7 @@ describe("plain git on a workspace VM", async () => {
 		);
 		spawnSync(
 			"sh",
-			[
-				"-c",
-				machineGitSetupScript({ origin, sessionId: SESSION, token: TOKEN }),
-			],
+			["-c", machineGitSetupScript({ origin, holder: SESSION, token: TOKEN })],
 			{ env },
 		);
 		const scrub = spawnSync("sh", ["-c", SCRUB_MACHINE_GIT_CREDENTIAL], {

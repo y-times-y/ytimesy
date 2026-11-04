@@ -5,16 +5,23 @@ import { posixShellQuoted as quote } from "./posix-command";
  * agent user's ~/.gitconfig includes ~/.ytimesy-git/config, which rewrites
  * GitHub URLs to the proxy and names a credential helper that trades the
  * chat's short-lived machine token for a one-minute grant per operation. No
- * GitHub credential ever reaches the machine; the token works only while the
- * chat's step runs, and the config goes with the last token, so between
- * turns git talks to github.com directly as it did before.
+ * GitHub credential ever reaches the machine. A token works only while its
+ * holder lives: the chat's agent step, or the user's terminal open on the
+ * chat (renewed while open). The config goes with the last token, so with no
+ * holder git talks to github.com directly as it did before.
  */
 export const MACHINE_GIT_HOME_FOLDER = ".ytimesy-git";
 export const MACHINE_GIT_INCLUDE = `~/${MACHINE_GIT_HOME_FOLDER}/config`;
 /** The edge path the credential helper asks for grants (machine-git-grant.ts). */
 export const MACHINE_GIT_GRANT_ROUTE = "/machine-git/grant";
 
-const sessionFile = /^[0-9a-f-]{36}$/;
+/** A chat id, or a chat id and a terminal connection's id. */
+const holderFile = /^[0-9a-f-]{36}(-terminal-[a-f0-9]{16})?$/;
+/**
+ * Older token files belong to no live holder: a step's token lives at most
+ * about 20 minutes, and an open terminal touches its file every 10.
+ */
+const STALE_TOKEN_FILE_MINUTES = 45;
 
 /** git config text: GitHub URLs to the proxy, and the helper for the proxy's origin. */
 export function machineGitConfig(origin: string) {
@@ -109,17 +116,18 @@ fi
 }
 
 /**
- * Writes this step's token (one file per chat, so chats sharing a VM keep
- * theirs), the helper and the config, and includes the config from the
- * agent user's global git config once. Everything is private to that user.
+ * Writes a holder's token (one file per holder, so chats sharing a VM and a
+ * terminal open beside a turn keep theirs), the helper and the config, and
+ * includes the config from the agent user's global git config once.
+ * Everything is private to that user.
  */
 export function machineGitSetupScript(input: {
 	origin: string;
-	sessionId: string;
+	holder: string;
 	token: string;
 }) {
-	if (!sessionFile.test(input.sessionId))
-		throw new Error("Invalid chat id for workspace git.");
+	if (!holderFile.test(input.holder))
+		throw new Error("Invalid holder id for workspace git.");
 	const token = quote(input.token);
 	return `set -eu
 umask 077
@@ -127,8 +135,8 @@ d="$HOME/${MACHINE_GIT_HOME_FOLDER}"
 if [ -L "$d" ] || { [ -e "$d" ] && [ ! -O "$d" ]; }; then echo "${MACHINE_GIT_HOME_FOLDER} is not this user's directory" >&2; exit 1; fi
 mkdir -p "$d/tokens"
 chmod 700 "$d" "$d/tokens"
-printf '%s' ${token} > "$d/tokens/.${input.sessionId}"
-mv -f "$d/tokens/.${input.sessionId}" "$d/tokens/${input.sessionId}"
+printf '%s' ${token} > "$d/tokens/.${input.holder}"
+mv -f "$d/tokens/.${input.holder}" "$d/tokens/${input.holder}"
 printf '%s' ${quote(machineGitCredentialHelper(input.origin))} > "$d/.credential-helper"
 chmod 700 "$d/.credential-helper"
 mv -f "$d/.credential-helper" "$d/credential-helper"
@@ -139,16 +147,36 @@ git config --global --get-all include.path 2>/dev/null | grep -qxF ${quote(MACHI
 }
 
 /**
- * Removes this chat's token at the end of its step, and the config with the
- * last token, so git between turns goes to github.com as before. Never fails.
+ * Removes a holder's token (a step's end, a terminal's close), files no
+ * holder released in time, and the config with the last token, so git with
+ * no holder goes to github.com as before. Never fails.
  */
-export function machineGitReleaseScript(sessionId: string) {
-	if (!sessionFile.test(sessionId))
-		throw new Error("Invalid chat id for workspace git.");
+export function machineGitReleaseScript(holder: string) {
+	if (!holderFile.test(holder))
+		throw new Error("Invalid holder id for workspace git.");
 	return `d="$HOME/${MACHINE_GIT_HOME_FOLDER}"
-rm -f "$d/tokens/${sessionId}"
+rm -f "$d/tokens/${holder}"
+find "$d/tokens" -type f -mmin +${STALE_TOKEN_FILE_MINUTES} -exec rm -f {} + 2>/dev/null
 [ -n "$(ls -A "$d/tokens" 2>/dev/null)" ] || rm -f "$d/config"
 true`;
+}
+
+/** A terminal still open renews its token; its file is touched so releases keep it. */
+export function machineGitTouchScript(holder: string) {
+	if (!holderFile.test(holder))
+		throw new Error("Invalid holder id for workspace git.");
+	return `touch -c "$HOME/${MACHINE_GIT_HOME_FOLDER}/tokens/${holder}"`;
+}
+
+/** The token file of a terminal open on a chat; one per connection, so two terminals keep theirs. */
+export function terminalMachineGitHolder(
+	sessionId: string,
+	connection: string,
+) {
+	const holder = `${sessionId}-terminal-${connection}`;
+	if (!holderFile.test(holder))
+		throw new Error("Invalid holder id for workspace git.");
+	return holder;
 }
 
 /** Shell run before any snapshot: every machine token and the config go, proven gone. */
