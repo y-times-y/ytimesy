@@ -4,6 +4,7 @@ import {
 	projectSetupChat,
 	SETUP_RUNNING_PLACEHOLDER,
 	setupComposerPlaceholder,
+	setupIndicator,
 } from "./project-setup-start";
 
 const building = { status: "cloning", build: null };
@@ -103,4 +104,68 @@ it("finds the project's setup chat by its title, the newest first", () => {
 	).toBe("new");
 	expect(projectSetupChat([{ id: "task", title: "Add" }])).toBeNull();
 	expect(projectSetupChat(undefined)).toBeNull();
+});
+
+describe("setupIndicator", () => {
+	it("says setup runs in another chat, with View setup once that chat exists", () => {
+		expect(
+			setupIndicator({
+				workspace: building,
+				setupChat: null,
+				openChatId: "task",
+			}),
+		).toEqual({
+			kind: "running",
+			text: "Setup is running in another chat. You can send now.",
+			action: "View setup",
+			chatId: null,
+		});
+		expect(
+			setupIndicator({
+				workspace: ready,
+				setupChat: {
+					...setupChat,
+					waitsForSetup: false,
+					turnStatus: "running",
+				},
+				openChatId: undefined,
+			})?.chatId,
+		).toBe("setup");
+	});
+
+	it("says when setup needs a secret, with Open", () => {
+		expect(
+			setupIndicator({
+				workspace: ready,
+				setupChat: { ...setupChat, waitsForSetup: false, waitingOn: "secret" },
+				openChatId: "task",
+			}),
+		).toEqual({
+			kind: "needs-you",
+			text: "Setup needs a secret",
+			action: "Open",
+			chatId: "setup",
+		});
+	});
+
+	it("is gone once setup finishes, in the setup chat itself, and after a failed build", () => {
+		const done = {
+			...setupChat,
+			waitsForSetup: false,
+			turnStatus: "completed",
+		};
+		expect(
+			setupIndicator({ workspace: ready, setupChat: done, openChatId: "task" }),
+		).toBeNull();
+		expect(
+			setupIndicator({ workspace: building, setupChat, openChatId: "setup" }),
+		).toBeNull();
+		expect(
+			setupIndicator({
+				workspace: { status: "failed", build: null },
+				setupChat,
+				openChatId: "task",
+			}),
+		).toBeNull();
+	});
 });

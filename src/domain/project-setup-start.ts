@@ -37,24 +37,53 @@ export function projectSetupChat<Chat extends SetupChat>(
 export const SETUP_RUNNING_PLACEHOLDER =
 	"Describe a task. Setup keeps running in the background.";
 
-/**
- * The composer's placeholder while the project's setup runs (its first
- * build, or its setup chat working, waiting for the build, or waiting on
- * the person): any chat but the setup chat says it need not wait. Null for
- * the usual placeholder.
- */
-export function setupComposerPlaceholder(input: {
+type SetupState = {
 	readonly workspace: SetupWorkspace | null | undefined;
 	readonly setupChat: SetupChat | null;
 	readonly openChatId: string | undefined;
-}): string | null {
+};
+
+/**
+ * The line beside the person's composer while the project is set up in its
+ * own chat: running (its first build, or the setup chat working or waiting
+ * for the build) or needing the person (a secret, a question). None in the
+ * setup chat itself, once setup is done, or after a failed build (its
+ * failure shows there instead).
+ */
+export function setupIndicator(input: SetupState): {
+	readonly kind: "running" | "needs-you";
+	readonly text: string;
+	readonly action: string;
+	/** The setup chat the action opens; null before it exists. */
+	readonly chatId: string | null;
+} | null {
 	const { workspace, setupChat } = input;
 	if (!workspace || workspace.status === "failed") return null;
 	if (setupChat && setupChat.id === input.openChatId) return null;
+	const chatId = setupChat?.id ?? null;
+	const waitingOn = setupChat?.waitingOn;
+	if (waitingOn && waitingOn !== "failed")
+		return {
+			kind: "needs-you",
+			text: waitingOn === "secret" ? "Setup needs a secret" : "Setup needs you",
+			action: "Open",
+			chatId,
+		};
 	const running =
 		firstBuildRunning(workspace) ||
 		setupChat?.turnStatus === "running" ||
-		Boolean(setupChat?.waitsForSetup) ||
-		Boolean(setupChat?.waitingOn && setupChat.waitingOn !== "failed");
-	return running ? SETUP_RUNNING_PLACEHOLDER : null;
+		Boolean(setupChat?.waitsForSetup);
+	return running
+		? {
+				kind: "running",
+				text: "Setup is running in another chat. You can send now.",
+				action: "View setup",
+				chatId,
+			}
+		: null;
+}
+
+/** The composer's placeholder while setup runs (setupIndicator); null for the usual one. */
+export function setupComposerPlaceholder(input: SetupState): string | null {
+	return setupIndicator(input) ? SETUP_RUNNING_PLACEHOLDER : null;
 }
