@@ -55,6 +55,26 @@ export function useLegalPromptPending(): boolean {
 	});
 }
 
+/**
+ * Session replay may record only once the signed-in user has accepted the
+ * current Privacy Policy (which discloses it): consent before recording, so
+ * not while the update notice is open, still loading, or unreadable.
+ */
+export function replayAllowedByLegal(input: {
+	readonly statusError: boolean;
+	readonly current: boolean | undefined;
+}): boolean {
+	return !input.statusError && input.current === true;
+}
+
+export function useLegalAcceptedForReplay(): boolean {
+	const { status } = useLegalAcceptance();
+	return replayAllowedByLegal({
+		statusError: status.isError,
+		current: status.data?.current,
+	});
+}
+
 export function LegalUpdateNotice() {
 	const { userId, status } = useLegalAcceptance();
 	const queryClient = useQueryClient();
