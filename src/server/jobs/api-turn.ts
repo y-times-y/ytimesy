@@ -576,6 +576,8 @@ async function runApiTurnAttempt(
 	 * message) must not be aborted by it.
 	 */
 	let turnSettled = false;
+	/** The turn passed its last stop check and is being marked done. */
+	let finalizing = false;
 	let heartbeatPending: Promise<void> | undefined;
 	let coordinationHeartbeatPending: Promise<void> | undefined;
 	let coordinationHeartbeatBusy = false;
@@ -2566,6 +2568,16 @@ async function runApiTurnAttempt(
 		// commit keeps the work); the push and pull request follow right after.
 		// A turn that ran no tool able to change files commits nothing: its
 		// answer ends it (a later turn's commit takes anything else left).
+		// The commit and its publication stop with the turn until the turn is
+		// being marked done; from then on its publication (which runs after the
+		// turn shows as done) is not cut off by a late abort of this step, such
+		// as a heartbeat that raced the final writes.
+		const publicationStop = new AbortController();
+		const stopPublication = () => {
+			if (!finalizing) publicationStop.abort(abort.signal.reason);
+		};
+		if (abort.signal.aborted) stopPublication();
+		else abort.signal.addEventListener("abort", stopPublication);
 		const committed = commits
 			? await timed("turn:commit", () =>
 					commitSessionTurn(
@@ -2590,7 +2602,7 @@ async function runApiTurnAttempt(
 									path,
 								),
 						},
-						abort.signal,
+						publicationStop.signal,
 					),
 				)
 			: undefined;
@@ -2613,6 +2625,7 @@ async function runApiTurnAttempt(
 				openingPullRequestItem(turn.id, Date.now()),
 			];
 		abort.signal.throwIfAborted();
+		finalizing = true;
 		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))
 			throw new Error(

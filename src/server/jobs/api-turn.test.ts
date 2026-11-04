@@ -665,6 +665,45 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 		);
 	});
 
+	it("publishes even when the step is aborted while the turn is being marked done", async () => {
+		codexOwner();
+		answering();
+		let releasing = false;
+		// Releasing the conversation is slow; a heartbeat renewal fails meanwhile
+		// (the row is no longer ours to renew) and aborts the step.
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			if (action === "release") {
+				releasing = true;
+				await new Promise((resolve) => setTimeout(resolve, 1_600));
+			}
+			return true;
+		});
+		mocks.renew.mockImplementation(async () => !releasing);
+		let published = false;
+		mocks.commit.mockImplementationOnce(
+			async (_session, _items, _runtime, signal) => ({
+				publish: async () => {
+					await new Promise((resolve) => setTimeout(resolve, 1_000));
+					if (signal?.aborted)
+						return {
+							failure: "Turn ownership or cancellation state changed.",
+						};
+					published = true;
+					return {};
+				},
+			}),
+		);
+		await runApiTurn({} as WorkspaceMachines, subscriptionTurn());
+		expect(published).toBe(true);
+		expect(mocks.replaceItem).not.toHaveBeenCalledWith(
+			expect.anything(),
+			"turn:pull-request",
+			expect.objectContaining({
+				message: expect.stringContaining("ownership"),
+			}),
+		);
+	});
+
 	it("commits nothing for a subagent", async () => {
 		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
 		answering();
