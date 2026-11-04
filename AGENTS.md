@@ -16,6 +16,8 @@ Before database schema changes, Supabase setup, or migration deployment, read [S
 
 Cloudflare execution: there are no Workflows. Before adding one, moving work into a Durable Object alarm or cron, or changing how chat turns or environment builds run or resume, read [Cloudflare execution model](docs/edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12). Alarms and cron stop after 15 minutes, and Durable Objects restart on every deploy.
 
+Bookkeeping never blocks the user: usage accounting, analytics, logging, alerts and other records about an action must not fail the action itself (starting a VM, sending a message, saving work). When their numbers disagree or their write fails, log it (and alert if it repeats) and let the action through. A usage-settlement mismatch once refused to wake a chat's VM forever (`settleHold`, 2026-11-04), and a crash-looping log source once used most of the log quota.
+
 Deploys and open tabs: a tab keeps running the old page until it reloads onto the new build (`src/features/app/new-build-reload.ts`), so for one deploy it calls the new server with the old client. When you change a server function's or API route's input shape, accept both the old and the new shape for one deploy, and drop the old one in a later deploy.
 
 Before starting or changing any benchmark run, read [docs/benchmark-lessons.md](docs/benchmark-lessons.md): its checklist exists because each item cost real GPU hours or results.

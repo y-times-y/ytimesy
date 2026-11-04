@@ -57,6 +57,8 @@ export function leanToolInstructions(
 		codeMode?: boolean | "primary";
 		/** An unattended run (the Harbor bridge): no desktop browser line. */
 		unattended?: boolean;
+		/** The chat's own agent (not a subagent): the shell-git line applies. */
+		gitRemote?: boolean;
 	} = {},
 ) {
 	const runCode =
@@ -78,7 +80,7 @@ export function leanToolInstructions(
 		options.unattended
 			? ""
 			: "- `ytimesy-browser open|screenshot|record|inspect|exec` drives the desktop browser for visual checks.",
-		options.unattended ? "" : GIT_REMOTE_LINE,
+		options.unattended || options.gitRemote === false ? "" : GIT_REMOTE_LINE,
 		editLine(shape),
 		BACKGROUND_COMMANDS,
 	]

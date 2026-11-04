@@ -3,7 +3,8 @@ export type OwnerAlertKind =
 	| "abandoned-turns"
 	| "cron-failure"
 	| "email-failed"
-	| "codex-egress";
+	| "codex-egress"
+	| "chat-wake-failed";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;

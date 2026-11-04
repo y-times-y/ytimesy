@@ -587,7 +587,7 @@ it("retries a hold once and rejects changing its owner or amount", async () => {
 	).rejects.toThrow("identity changed");
 	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(60);
 });
-it("settles once, releases only verified unused usage, and refuses overspend or replay", async () => {
+it("settles once, keeps the first total, and releases only verified unused usage", async () => {
 	const hold = reservation();
 	await reserveInfrastructureUsage(hold);
 	await expect(
@@ -597,13 +597,6 @@ it("settles once, releases only verified unused usage, and refuses overspend or 
 			consumedMicroUsd: 20,
 		}),
 	).rejects.toThrow();
-	await expect(
-		settleInfrastructureUsage({
-			id: hold.id,
-			userId: "alice",
-			consumedMicroUsd: 61,
-		}),
-	).rejects.toThrow();
 	await settleInfrastructureUsage({
 		id: hold.id,
 		userId: "alice",
@@ -614,13 +607,22 @@ it("settles once, releases only verified unused usage, and refuses overspend or 
 		userId: "alice",
 		consumedMicroUsd: 20,
 	});
-	await expect(
-		settleInfrastructureUsage({
-			id: hold.id,
-			userId: "alice",
-			consumedMicroUsd: 0,
-		}),
-	).rejects.toThrow("changed after confirmation");
+	// A later, different settlement (more than reserved, or less) never
+	// refuses (a refusal once kept a chat's VM from waking): it keeps the
+	// first total and logs the difference.
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await settleInfrastructureUsage({
+		id: hold.id,
+		userId: "alice",
+		consumedMicroUsd: 61,
+	});
+	await settleInfrastructureUsage({
+		id: hold.id,
+		userId: "alice",
+		consumedMicroUsd: 0,
+	});
+	expect(warn).toHaveBeenCalledTimes(2);
+	warn.mockRestore();
 	await expect(reserveInfrastructureUsage(hold)).rejects.toThrow(
 		"already settled",
 	);
