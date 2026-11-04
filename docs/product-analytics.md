@@ -2,7 +2,7 @@
 
 PostHog project **ytimesy**, ID **640524**, in the separate ytimesy organization (US Cloud). The browser account differs from the existing MCP connection; the MCP connection cannot read this project until reconnected to that account. No GitHub, Supabase, or warehouse integration is required.
 
-The official `posthog-js` SDK loads asynchronously after hydration. Analytics never gates rendering, sending, or workspace execution. Set `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST=https://us.i.posthog.com` before starting development or building a deployment. The token is public and write-only; never put personal PostHog API credentials in client variables. Omit the token to disable capture.
+The official `posthog-js` SDK loads asynchronously after hydration. Analytics never gates rendering, sending, or workspace execution. Set `VITE_POSTHOG_PROJECT_TOKEN` before starting development or building a deployment. The browser sends to `/r/*` on our own origin, which the web Worker forwards to PostHog US (`src/server/web/analytics-proxy.ts`), so blockers that list PostHog's hosts or its managed proxy (`proxyhog.com`) do not drop events. Session replay's recorder is bundled and fetched only when a recording starts, so no request names `posthog-recorder.js`. The token is public and write-only; never put personal PostHog API credentials in client variables. Omit the token to disable capture.
 
 ## Initial events
 

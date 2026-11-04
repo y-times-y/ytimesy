@@ -3,6 +3,7 @@ import { captureServerException } from "./server/adapters/analytics";
 import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
+import { proxyAnalytics } from "./server/web/analytics-proxy";
 import { canonicalOriginRedirect } from "./server/web/canonical-origin";
 import { EARLY_HINT_LINKS } from "./server/web/early-hints";
 import type { WebWorkerEnvironment } from "./server/web/environment";
@@ -61,6 +62,9 @@ export default createServerEntry({
 		if (crossOrigin) return withSecurityHeaders(crossOrigin);
 		const request = limitRequestBody(incoming);
 		if (request instanceof Response) return withSecurityHeaders(request);
+		// Browser analytics through our own origin (no database, no app render).
+		const analytics = await proxyAnalytics(request);
+		if (analytics) return analytics;
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(
 				await monitored(request, () => renderPage(request)),

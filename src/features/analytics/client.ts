@@ -1,18 +1,12 @@
 import type { PostHog } from "posthog-js";
 import {
+	ANALYTICS_PROXY_PATH,
 	type AnalyticsEvent,
 	type AnalyticsProperties,
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
 import { redactDeep, replaySafeUrl } from "#/domain/redact-secrets";
 import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
-
-/** Where analytics events go; the page preconnects to it (src/routes/__root.tsx). */
-export const ANALYTICS_HOST =
-	import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
-export const ANALYTICS_ENABLED = Boolean(
-	import.meta.env.VITE_POSTHOG_PROJECT_TOKEN,
-);
 
 let client: Promise<PostHog | null> | undefined;
 // EU/EEA/UK/Swiss visitors: nothing is stored in the browser (no consent
@@ -34,9 +28,9 @@ function analyticsClient(): Promise<PostHog | null> {
 	client ??= import("posthog-js")
 		.then(({ default: posthog }) => {
 			posthog.init(token, {
-				api_host: ANALYTICS_HOST,
-				// With VITE_POSTHOG_HOST on our managed proxy (so ad blockers do
-				// not drop events and replays), PostHog's own links still go to its app.
+				// Our own origin (src/server/web/analytics-proxy.ts), which blockers
+				// can't tell apart from the app; PostHog's links still go to its app.
+				api_host: ANALYTICS_PROXY_PATH,
 				ui_host: "https://us.posthog.com",
 				autocapture: false,
 				capture_pageview: false,
@@ -121,8 +115,11 @@ function replayDeclined() {
  * (privacy-region.ts), under Do Not Track, or after an earlier decline;
  * signing out stops it.
  */
-function applyReplay(posthog: PostHog, record: boolean) {
+async function applyReplay(posthog: PostHog, record: boolean) {
 	if (record && !doNotTrack() && !replayDeclined()) {
+		// Our own copy of the recorder, fetched only now: the SDK's would load
+		// from /static/<v>/posthog-recorder.js, a file name blockers list.
+		await import("./replay-recorder");
 		if (!posthog.sessionRecordingStarted()) posthog.startSessionRecording();
 	} else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
 }
@@ -157,7 +154,7 @@ export function setAnalyticsUser(
 			if (!posthog) return;
 			if (userId) posthog.identify(userId);
 			else posthog.reset();
-			applyReplay(posthog, Boolean(userId) && options.replay);
+			return applyReplay(posthog, Boolean(userId) && options.replay);
 		})
 		.catch(() => undefined);
 }
