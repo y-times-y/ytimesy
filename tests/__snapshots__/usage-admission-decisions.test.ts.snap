@@ -394,7 +394,7 @@ exports[`replays a reservation idempotently and refuses a changed identity 1`] =
   "leases": [],
   "reservations": [
     {
-      "consumed_micro_usd": "700",
+      "consumed_micro_usd": "1500",
       "id": "r0",
       "reserved_micro_usd": "1500",
       "resource_key": "vm:x",

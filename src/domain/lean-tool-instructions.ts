@@ -78,12 +78,21 @@ export function leanToolInstructions(
 		options.unattended
 			? ""
 			: "- `ytimesy-browser open|screenshot|record|inspect|exec` drives the desktop browser for visual checks.",
+		options.unattended ? "" : GIT_REMOTE_LINE,
 		editLine(shape),
 		BACKGROUND_COMMANDS,
 	]
 		.filter(Boolean)
 		.join("\n");
 }
+
+/**
+ * The workspace's origin holds no GitHub credentials (the server fetches and
+ * pushes with a short-lived grant), so a shell `git fetch`/`pull`/`push` can
+ * only fail with "could not read Username"; say so before the agent tries.
+ */
+const GIT_REMOTE_LINE =
+	"- `git fetch/pull/push` to origin fails here (no credentials; don't retry): your branch is already checked out, and your commits are pushed and the PR opened for you.";
 
 /** Small edits over rewrites: a whole file re-sent through a heredoc costs its full length in output. */
 function editLine(shape: LeanToolShape) {
