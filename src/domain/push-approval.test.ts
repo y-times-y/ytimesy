@@ -3,10 +3,10 @@ import { applyApiProgress } from "./api-progress";
 import { SessionItemId } from "./ids";
 import {
 	type PushApprovalRequest,
+	pushAnswerLine,
 	pushApprovalOutcome,
 	pushApprovalQuestion,
-	pushApprovedText,
-	pushCancelledText,
+	pushResultNotice,
 	REQUEST_PUSH_APPROVAL_TOOL,
 } from "./push-approval";
 import type { PushApprovalItem, SessionItem } from "./session-item";
@@ -81,32 +81,65 @@ describe("request_push_approval in the transcript", () => {
 		);
 	});
 
-	it("reads the answer from the user's next message", () => {
-		expect(pushApprovalOutcome([user("a"), card], card.id)).toBe("pending");
-		expect(
-			pushApprovalOutcome(
-				[user("a"), card, user("b", pushApprovedText("main"))],
-				card.id,
-			),
-		).toBe("approved");
-		expect(
-			pushApprovalOutcome(
-				[user("a"), card, user("b", pushCancelledText("main"))],
-				card.id,
-			),
-		).toBe("cancelled");
-		expect(
-			pushApprovalOutcome([user("a"), card, user("b", "push it")], card.id),
-		).toBe("answered");
-		expect(pushApprovalOutcome([user("a")], card.id)).toBe("answered");
+	const notice = (
+		answer: "pushed" | "cancelled",
+		detail = "",
+	): SessionItem => ({
+		kind: "notice",
+		id: SessionItemId(`push-result:${request.requestId}`),
+		message: pushResultNotice(request, { answer, detail }),
+		pushResult: { requestId: request.requestId, answer, detail },
 	});
 
-	it("marks the chat as needing the user until it is answered", () => {
-		expect(chatWaitingOn([user("a"), card], "completed")).toBe("push");
+	it("reads the answer from the chat's notice, not from messages", () => {
+		expect(pushApprovalOutcome([user("a"), card], card.id)).toEqual({
+			answer: "pending",
+		});
+		expect(
+			pushApprovalOutcome([user("a"), card, user("b", "push it")], card.id),
+		).toEqual({ answer: "pending" });
+		expect(
+			pushApprovalOutcome(
+				[user("a"), card, notice("pushed", "abc1234")],
+				card.id,
+			),
+		).toEqual({ answer: "pushed", detail: "abc1234" });
+		expect(
+			pushApprovalOutcome([user("a"), card, notice("cancelled")], card.id),
+		).toEqual({ answer: "cancelled", detail: "" });
+	});
+
+	it("says each answer in one line", () => {
+		expect(
+			pushAnswerLine("main", { answer: "pushed", detail: "abc1234" }),
+		).toBe("Pushed to main (abc1234)");
+		expect(pushAnswerLine("main", { answer: "expired", detail: "" })).toBe(
+			"Expired. Ask again to push.",
+		);
+		expect(
+			pushAnswerLine("main", {
+				answer: "outdated",
+				detail: "main has moved; ask the agent to rebase",
+			}),
+		).toBe("Outdated: main has moved; ask the agent to rebase");
+		expect(
+			pushResultNotice(request, { answer: "pushed", detail: "abc1234" }),
+		).toBe("The user approved the push: abc1234 is now on main on acme/app.");
+	});
+
+	it("marks the chat as needing the user until the card's notice arrives", () => {
+		const finished: SessionItem = {
+			kind: "agentMessage",
+			id: SessionItemId("final"),
+			text: "Done; the push to main waits for approval.",
+		};
+		expect(chatWaitingOn([user("a"), card, finished], "completed")).toBe(
+			"push",
+		);
 		expect(chatWaitingOn([user("a"), card], "running")).toBe(null);
 		expect(
 			chatWaitingOn(
-				[user("a"), card, user("b", pushApprovedText("main"))],
+				[user("a"), card, finished, notice("cancelled")],
 				"completed",
 			),
 		).toBe(null);

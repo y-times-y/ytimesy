@@ -91,10 +91,11 @@ export function leanToolInstructions(
 /**
  * Shell git reaches GitHub through the git proxy with a short-lived grant
  * per operation (src/domain/machine-git.ts); the proxy refuses a push to the
- * default branch until the user approves it, unless the project allows it.
+ * default branch unless the project allows it, and the user's approval
+ * (request_push_approval's card) pushes it server-side while the agent works on.
  */
 const GIT_REMOTE_LINE =
-	"- git to GitHub works normally here. Push work to your own branch; pushing to the repo's default branch needs the user's approval (request_push_approval) unless the project allows it.";
+	"- git to GitHub works normally here. Push work to your own branch; a push to the default branch needs the user's approval (request_push_approval, then keep working) unless the project allows it.";
 
 /** Small edits over rewrites: a whole file re-sent through a heredoc costs its full length in output. */
 function editLine(shape: LeanToolShape) {

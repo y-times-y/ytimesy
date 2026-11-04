@@ -13,7 +13,7 @@ import type { LocalAgent } from "./local-import-view";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
-import type { PushApprovalRequest } from "./push-approval";
+import type { PushApprovalRequest, PushResult } from "./push-approval";
 import { visibleRuntimeUserText } from "./runtime-handoff";
 import type { RequestableSecretKind, RequestedSecret } from "./secret-request";
 import {
@@ -234,6 +234,8 @@ export type NoticeSessionItem = {
 	 * so until GitHub answers, then links the pull request.
 	 */
 	readonly pullRequest?: PullRequestHandoffState;
+	/** How a push approval card (request_push_approval) was answered. */
+	readonly pushResult?: PushResult;
 };
 
 export type PullRequestHandoffState =

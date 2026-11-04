@@ -1268,7 +1268,7 @@ function SessionItemView({
 		case "secretRequest":
 			return <SecretRequestCard item={item} outcome="answered" />;
 		case "pushApproval":
-			return <PushApprovalCard item={item} outcome="answered" />;
+			return <PushApprovalCard item={item} outcome={{ answer: "pending" }} />;
 		case "planProposal":
 			return <PlanMessage text={item.text} onOpenFile={onOpenFile} />;
 		case "commandExecution": {

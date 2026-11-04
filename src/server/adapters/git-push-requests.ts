@@ -1,3 +1,4 @@
+import type { PushAnswer } from "#/domain/push-approval";
 import { database } from "./database";
 
 /** A workspace push to a default branch the proxy refused, waiting for the user. */
@@ -10,15 +11,31 @@ export type RefusedPush = {
 	newId: string;
 };
 
-/** A refused push stays approvable this long; the agent pushes again right after. */
+/** A refused push with what the card and the server push need. */
+export type PushRequestRecord = RefusedPush & {
+	projectId: string;
+	sessionId: string;
+	createdAt: Date;
+	/** When request_push_approval posted its card; null before. */
+	requestedAt: Date | null;
+	/** When the user's Push started the server's push; null before. */
+	approvedAt: Date | null;
+	answer: PushAnswer | null;
+	answerDetail: string | null;
+};
+
+/** A refused push stays requestable this long; the agent asks right after. */
 const REQUEST_HOURS = 6;
-/** An approval is spent on the agent's retry, which follows within minutes. */
-const APPROVAL_HOURS = 1;
+
+const RECORD_COLUMNS = `id, owner, name, branch, old_id as "oldId", new_id as "newId",
+ project_id as "projectId", session_id as "sessionId", created_at as "createdAt",
+ requested_at as "requestedAt", approved_at as "approvedAt", answer, answer_detail as "answerDetail"`;
 
 /**
  * Rows in git_push_request: the proxy records a refused default-branch push,
- * request_push_approval reads it for the card, the card's Push approves it,
- * and the proxy spends the approval on that exact push, once.
+ * request_push_approval posts its card, and the card's answer (the
+ * server's push, a cancel, or outdated/expired) is kept on the row until the
+ * chat shows it.
  */
 export const gitPushRequests = {
 	async recordRefused(input: {
@@ -50,7 +67,7 @@ export const gitPushRequests = {
 		);
 	},
 
-	/** The newest refused, unapproved push of this branch in the chat's project. */
+	/** The newest refused push of this branch in the chat's project that no card has asked for yet. */
 	async latestRefused(input: {
 		userId: string;
 		projectId: string;
@@ -62,7 +79,7 @@ export const gitPushRequests = {
 			`select id, owner, name, branch, old_id as "oldId", new_id as "newId"
 			 from git_push_request
 			 where user_id=$1 and project_id=$2 and lower(owner)=lower($3) and lower(name)=lower($4)
-			   and branch=$5 and approved_at is null and used_at is null
+			   and branch=$5 and answer is null and requested_at is null
 			   and created_at > now() - make_interval(hours => $6)
 			 order by created_at desc limit 1`,
 			[
@@ -77,48 +94,93 @@ export const gitPushRequests = {
 		return result.rows[0] ?? null;
 	},
 
-	/** The user's Push on the card; false when the request is gone or already answered. */
-	async approve(userId: string, requestId: string) {
+	/**
+	 * The card was posted in this chat: its lifetime starts now, and its
+	 * notice goes to this chat (a helper's refused push is shown by its lead).
+	 */
+	async markRequested(userId: string, requestId: string, sessionId: string) {
 		const result = await database().query(
-			`update git_push_request set approved_at=now()
-			 where id=$1 and user_id=$2 and approved_at is null and used_at is null
-			   and created_at > now() - make_interval(hours => $3)
-			 returning id`,
-			[requestId, userId, REQUEST_HOURS],
+			"update git_push_request set requested_at=now(), session_id=$3 where id=$1 and user_id=$2 and requested_at is null returning id",
+			[requestId, userId, sessionId],
 		);
 		return result.rows.length === 1;
 	},
 
-	/** Spends an approval for exactly this push; false when there is none. */
-	async claimApproved(input: {
-		userId: string;
-		projectId: string;
-		owner: string;
-		name: string;
-		branch: string;
-		newId: string;
-	}) {
+	async record(
+		userId: string,
+		requestId: string,
+	): Promise<PushRequestRecord | null> {
+		const result = await database().query<PushRequestRecord>(
+			`select ${RECORD_COLUMNS} from git_push_request where id=$1 and user_id=$2`,
+			[requestId, userId],
+		);
+		return result.rows[0] ?? null;
+	},
+
+	/** Whether the agent hit the same branch again since: a newer commit was refused after this one. */
+	async newerRefused(userId: string, request: PushRequestRecord) {
 		const result = await database().query(
-			`update git_push_request set used_at=now()
-			 where id = (
-			   select id from git_push_request
-			   where user_id=$1 and project_id=$2 and lower(owner)=lower($3) and lower(name)=lower($4)
-			     and branch=$5 and new_id=$6 and used_at is null
-			     and approved_at > now() - make_interval(hours => $7)
-			   order by approved_at desc limit 1
-			   for update skip locked
-			 ) and used_at is null
-			 returning id`,
+			`select 1 from git_push_request
+			 where user_id=$1 and project_id=$2 and lower(owner)=lower($3) and lower(name)=lower($4)
+			   and branch=$5 and new_id<>$6 and created_at > $7 limit 1`,
 			[
-				input.userId,
-				input.projectId,
-				input.owner,
-				input.name,
-				input.branch,
-				input.newId,
-				APPROVAL_HOURS,
+				userId,
+				request.projectId,
+				request.owner,
+				request.name,
+				request.branch,
+				request.newId,
+				request.createdAt,
 			],
 		);
+		return result.rows.length > 0;
+	},
+
+	/** The user's Push starts the server's push; false when one already started or the card is answered. */
+	async claimPush(userId: string, requestId: string) {
+		const result = await database().query(
+			"update git_push_request set approved_at=now() where id=$1 and user_id=$2 and approved_at is null and answer is null returning id",
+			[requestId, userId],
+		);
 		return result.rows.length === 1;
+	},
+
+	/**
+	 * Settles a card once: false when it was already answered (another tab's
+	 * click, a concurrent status check), so only one answer ever stands.
+	 */
+	async answer(
+		userId: string,
+		requestId: string,
+		answer: PushAnswer,
+		detail: string,
+	) {
+		const result = await database().query(
+			`update git_push_request set answer=$3, answer_detail=$4, answered_at=now()
+			 where id=$1 and user_id=$2 and answer is null returning id`,
+			[requestId, userId, answer, detail.slice(0, 300)],
+		);
+		return result.rows.length === 1;
+	},
+
+	/**
+	 * Answered requests of a chat whose notice is not in the chat yet, each
+	 * claimed once; release() hands one back when its notice was not saved.
+	 */
+	async claimUnnoticed(userId: string, sessionId: string) {
+		const result = await database().query<PushRequestRecord>(
+			`update git_push_request set noticed_at=now()
+			 where user_id=$1 and session_id=$2 and answer is not null and noticed_at is null
+			 returning ${RECORD_COLUMNS}`,
+			[userId, sessionId],
+		);
+		return result.rows;
+	},
+
+	async releaseNotice(userId: string, requestId: string) {
+		await database().query(
+			"update git_push_request set noticed_at=null where id=$1 and user_id=$2",
+			[requestId, userId],
+		);
 	},
 };

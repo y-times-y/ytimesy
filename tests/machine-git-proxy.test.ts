@@ -3,6 +3,7 @@ import {
 	DEFAULT_BRANCH_PUSH_REFUSAL,
 	GIT_GRANT_USERNAME,
 	gitGrantPassword,
+	issueGitProxyGrant,
 	issueMachineGitGrant,
 	type MachineGitHooks,
 	machinePushVerdicts,
@@ -284,6 +285,66 @@ describe("plain git's grants at the proxy", () => {
 		).rejects.toThrow();
 		await expect(
 			issueMachineGitGrant(secret, { ...machine, access: "read", branch: "x" }),
+		).rejects.toThrow();
+	});
+});
+
+describe("an approved push's server grant", () => {
+	it("updates the branch to exactly the commit it names, once", async () => {
+		const headers = await issueGitProxyGrant(secret, {
+			userId: machine.userId,
+			projectId: machine.projectId,
+			owner: "owner",
+			name: "repo",
+			installationId: 123,
+			access: "write",
+			branch: "main",
+			commit,
+		});
+		const request = (newId: string) =>
+			new Request("https://proxy.test/git/owner/repo.git/git-receive-pack", {
+				method: "POST",
+				headers: {
+					...headers,
+					"content-type": "application/x-git-receive-pack-request",
+				},
+				body: `${pkt(`${other} ${newId} refs/heads/main\0report-status`)}0000PACK`,
+			});
+		const upstream = ok();
+		const claim = claims();
+		expect(
+			(
+				await proxyGithubGit(
+					await request(other),
+					secret,
+					async () => "t",
+					upstream as unknown as typeof fetch,
+					claim,
+				)
+			).status,
+		).toBe(403);
+		expect(
+			(
+				await proxyGithubGit(
+					await request(commit),
+					secret,
+					async () => "t",
+					upstream as unknown as typeof fetch,
+					claim,
+				)
+			).status,
+		).toBe(200);
+		expect(upstream).toHaveBeenCalledTimes(1);
+		await expect(
+			issueGitProxyGrant(secret, {
+				userId: machine.userId,
+				projectId: machine.projectId,
+				owner: "owner",
+				name: "repo",
+				installationId: 123,
+				access: "read",
+				commit,
+			}),
 		).rejects.toThrow();
 	});
 });

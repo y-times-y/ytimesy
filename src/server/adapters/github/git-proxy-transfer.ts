@@ -332,6 +332,11 @@ export async function pushProxiedRepository(
 		directory: string;
 		baseBranch?: string;
 		revision?: string;
+		/**
+		 * Pushes exactly this commit (an approved push to a default branch);
+		 * the grant names it, so the proxy refuses any other.
+		 */
+		commit?: string;
 	},
 ) {
 	if (
@@ -339,6 +344,8 @@ export async function pushProxiedRepository(
 		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
 	)
 		throw new Error("Invalid completed-turn revision.");
+	if (input.commit && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(input.commit))
+		throw new Error("Invalid commit to push.");
 	const config = gitProxyConfiguration();
 	if (!config || !input.userId || !input.projectId)
 		throw new Error("Owner-scoped Git proxy configuration is missing.");
@@ -354,6 +361,7 @@ export async function pushProxiedRepository(
 			installationId: Number(input.installationId),
 			access: "write",
 			branch: input.branch,
+			...(input.commit ? { commit: input.commit } : {}),
 		}),
 		host.exec(
 			`git check-ref-format --branch ${quote(input.branch)} >/dev/null || exit ${PUSH_EXIT.branchName}
@@ -401,7 +409,7 @@ umask 077; mktemp -d /tmp/ytimesy-git-proxy-XXXXXXXX || exit ${PUSH_EXIT.prepare
 trap 'rm -rf ${quote(temporary)}' EXIT
 (set -eu
 objects=$(cd ${directory} && cd "$(git rev-parse --git-path objects)" && pwd -P)
-commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.revision || "HEAD"}^{commit}`)})
+commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.commit || input.revision || "HEAD"}^{commit}`)})
 ${git} init -q --bare ${publish}
 printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
 ${git} --git-dir=${publish} update-ref refs/heads/publish "$commit") || exit ${PUSH_EXIT.commit}

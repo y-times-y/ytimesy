@@ -19,6 +19,7 @@ beforeEach(async () => {
 		"20261026100000_agent_session_item",
 		"20261026110000_agent_session_waiting_on",
 		"20261104120100_agent_session_waiting_on_push",
+		"20261104140100_agent_session_waiting_on_push_answered",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
@@ -107,7 +108,19 @@ it("lists what each chat waits on from the stored column, as the whole history w
 		],
 		push: [
 			{ kind: "userMessage", text: "go" },
-			{ kind: "pushApproval", branch: "main" },
+			{ kind: "pushApproval", id: "card", requestId: "r1", branch: "main" },
+			{ kind: "agentMessage", text: "the push waits for approval" },
+		],
+		pushed: [
+			{ kind: "userMessage", text: "go" },
+			{ kind: "pushApproval", id: "card", requestId: "r1", branch: "main" },
+			{ kind: "agentMessage", text: "the push waits for approval" },
+			{
+				kind: "notice",
+				id: "push-result:r1",
+				message: "pushed",
+				pushResult: { requestId: "r1", answer: "pushed", detail: "abc1234" },
+			},
 		],
 		running: [{ kind: "userMessage", text: "go" }, { kind: "userQuestion" }],
 		empty: [],
@@ -151,6 +164,7 @@ it("lists what each chat waits on from the stored column, as the whole history w
 		woken: null,
 		secret: "secret",
 		push: "push",
+		pushed: null,
 		running: null,
 		empty: null,
 		notArray: null,
