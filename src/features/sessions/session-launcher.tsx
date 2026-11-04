@@ -92,6 +92,7 @@ import {
 	type SlashCommand,
 	slashMenuCommands,
 } from "#/domain/slash-command";
+import { turnSavingChanges } from "#/domain/turn-saving";
 import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
 import { startInteraction } from "#/features/analytics/web-vitals";
@@ -688,6 +689,10 @@ export function SessionLauncher({
 		[items, heldMessageId],
 	);
 	const turnStatus = session.turnStatus;
+	// The turn answered and only commits its changes: Send (which waits for
+	// the commit) instead of Stop.
+	const stoppable =
+		turnStatus === "running" && !turnSavingChanges(items, turnStatus);
 	// No reload onto a new deploy mid-send or while this chat's turn streams.
 	useHoldNewBuildReload("send", busy);
 	useHoldNewBuildReload("turn", turnStatus === "running");
@@ -1233,7 +1238,7 @@ export function SessionLauncher({
 
 	/** Esc in an empty composer stops the running turn, as in Codex and Claude Code. */
 	function handleStopKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-		if (turnStatus !== "running" || attachments.length) return false;
+		if (!stoppable || attachments.length) return false;
 		if (
 			!shortcutMatches(
 				"stopFromComposer",
@@ -1656,7 +1661,7 @@ export function SessionLauncher({
 								onAlternateContextChange={setAlternateContext}
 								onAttachFiles={attachFiles}
 							/>
-							{turnStatus === "running" ? (
+							{stoppable ? (
 								<button
 									type="button"
 									className="session-send"
@@ -1686,9 +1691,7 @@ export function SessionLauncher({
 										<ArrowUp className="size-4" />
 									</span>
 								</button>
-							) : turnStatus !== "running" ||
-								draft.trim() ||
-								attachments.length ? (
+							) : !stoppable || draft.trim() || attachments.length ? (
 								<button
 									type="button"
 									className="session-send"
@@ -1709,7 +1712,9 @@ export function SessionLauncher({
 										sendBlock
 											? sendBlock.message
 											: turnStatus === "running"
-												? "Queue in this chat"
+												? stoppable
+													? "Queue in this chat"
+													: "Sends once the changes are saved"
 												: canResumeFollowUp
 													? "Resume and send"
 													: harnessReady

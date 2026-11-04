@@ -109,6 +109,11 @@ import {
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { withStoppedNotice } from "#/domain/turn-end";
+import {
+	savingChangesItem,
+	turnMayHaveChangedWorkspace,
+	withoutSavingChanges,
+} from "#/domain/turn-saving";
 import { ASK_USER_TOOL } from "#/domain/user-question";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import {
@@ -622,6 +627,12 @@ async function runApiTurnAttempt(
 	// Plain git on the VM; its machine token, too, goes when this step ends.
 	let machineGit: MachineGitStep | null = null;
 	let machineGitPrepared: Promise<void> | undefined;
+	/**
+	 * The first step's workspace preparation, settled. A turn that ran no
+	 * tools ends without it; the step still lets it finish (the chat's next
+	 * turn waits for this step, so two preparations never share the VM).
+	 */
+	let preparation: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -1131,7 +1142,11 @@ async function runApiTurnAttempt(
 		// out early, below); start it now so the VM work overlaps the remaining
 		// setup. It is the same memoized preparation, so a failure still
 		// surfaces where the workspace is awaited.
-		if (firstStep && writable) void workspace().catch(() => {});
+		if (firstStep && writable)
+			preparation = workspace().then(
+				() => {},
+				() => {},
+			);
 		/** Set when the first request goes out before the workspace is ready. */
 		let earlyPromptCheck: Promise<PromptCheck> | undefined;
 		// Repository instructions a first request went out without are
@@ -2364,15 +2379,24 @@ async function runApiTurnAttempt(
 				retried = 0;
 			}
 		}
-		// An early first request: the step ends only once its workspace is
+		// A turn that ran no tool able to change files has nothing to commit:
+		// it ends at its answer, without waiting for a checkout still being
+		// prepared (its tools would have waited for it, and the metadata guard).
+		const answerOnly = () =>
+			!claudeCode && !turnMayHaveChangedWorkspace(items, turn.id);
+		// An early first request: the step ends only once its checkout is
 		// ready (a workspace failure fails the turn as before, and the turn's
 		// code point exists) and the UserPromptSubmit check passed. Feedback
-		// the check gave reaches the model in a next step.
-		if (earlyPromptCheck) {
+		// the check gave reaches the model in a next step. A turn that only
+		// answered does not wait: the chat's journaled configuration had no
+		// UserPromptSubmit hook (or the request would not have gone early),
+		// and it ran nothing on the machine.
+		if (earlyPromptCheck && (checkoutReady || !answerOnly())) {
 			failureStage = "workspace";
 			// The reply is already shown: a Stop must not wait out a slow VM call
 			// (machine calls ignore the signal; preparation stops at its next check).
-			await untilAborted(workspace(), abort.signal);
+			// Tools already waited for ~/memory; committing needs the checkout.
+			await untilAborted(checkout(), abort.signal);
 			failureStage = "model";
 			const submitted = await untilAborted(earlyPromptCheck, abort.signal);
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
@@ -2386,7 +2410,13 @@ async function runApiTurnAttempt(
 				}
 			}
 		}
-		while (!step && (await hooks.stop(messages))) {
+		// A Stop hook runs in the checkout; a turn that only answered does not
+		// wait for one being prepared when the journaled configuration has none.
+		const stopHooks = async (history: ModelMessage[]) =>
+			!checkoutReady && answerOnly() && (await hooks.stopConfigured()) === false
+				? false
+				: hooks.stop(history);
+		while (!step && (await stopHooks(messages))) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
 			result = await runAgent({ ...agentInput, messages });
@@ -2395,7 +2425,7 @@ async function runApiTurnAttempt(
 			step &&
 			!Array.isArray(result) &&
 			result.outcome === "completed" &&
-			(await hooks.stop(messages))
+			(await stopHooks(messages))
 		) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
@@ -2413,13 +2443,18 @@ async function runApiTurnAttempt(
 			return "continue";
 		}
 		// Background command exits already announced or seen reach their cards; new exits wake the chat later.
-		const background = await withBackgroundCommandNotices({
-			workspace,
-			sessionId: owner.id,
-			items,
-			messages,
-			claim: false,
-		}).catch(() => null);
+		// A turn that only answered does not wait for a machine still being
+		// prepared to read them (an earlier turn's dev server, say).
+		const background =
+			checkoutReady || !answerOnly()
+				? await withBackgroundCommandNotices({
+						workspace,
+						sessionId: owner.id,
+						items,
+						messages,
+						claim: false,
+					}).catch(() => null)
+				: null;
 		if (background?.changed) items = background.items;
 		// A push card answered during the last step still gets its notice.
 		const pushResults = await withPushResultNotices({
@@ -2494,23 +2529,36 @@ async function runApiTurnAttempt(
 			messages = next.messages;
 			await saveCheckpoint();
 		}
-		// What the agent committed to ~/memory this turn, shown after its answer.
-		if (memory)
+		// Decided once the answer is final: tools no longer run.
+		const changedWorkspace = !answerOnly();
+		// What the agent committed to ~/memory this turn, shown after its answer
+		// (only a tool writes it).
+		if (memory && changedWorkspace)
 			items = await timed("turn:memorySaved", () =>
 				memory.recordSaved(items, turn.id),
 			);
 		failureStage = "commit";
+		// A subagent's work reaches its parent as a report (a writer's as a
+		// patch and ref), never as a commit or a published branch.
+		const commits = !owner.agentRole && changedWorkspace;
+		// The answer is done: the chat shows "Saving changes…" (the composer
+		// offers Send, which waits for the commit, instead of Stop).
+		if (commits) {
+			items = [...withoutSavingChanges(items), savingChangesItem(turn.id)];
+			progress.offer(items);
+		}
 		// Fence even commands whose acknowledgement was lost before it reached the durable cards.
 		// Unlike best-effort cancellation on failure, publication requires a confirmed stop.
-		if (execution)
+		// Commands start only from this turn's tools.
+		if (execution && changedWorkspace)
 			await timed("turn:stopCommands", () =>
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
-		// A subagent's work reaches its parent as a report (a writer's as a
-		// patch and ref), never as a commit or a published branch.
 		// The turn's changes are committed here, before it shows as done (the
 		// commit keeps the work); the push and pull request follow right after.
-		const committed = !owner.agentRole
+		// A turn that ran no tool able to change files commits nothing: its
+		// answer ends it (a later turn's commit takes anything else left).
+		const committed = commits
 			? await timed("turn:commit", () =>
 					commitSessionTurn(
 						{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
@@ -2538,6 +2586,7 @@ async function runApiTurnAttempt(
 					),
 				)
 			: undefined;
+		if (commits) items = withoutSavingChanges(items);
 		if (committed?.notice)
 			items = [
 				...items.filter((item) => item.id !== `${turn.id}:publication`),
@@ -3030,6 +3079,10 @@ async function runApiTurnAttempt(
 		// Tools wait for the clone; a step that called none may end while it
 		// runs, so it is awaited before its token is released.
 		forgetLiveTurn();
+		// A turn that ended at its answer lets its preparation finish, bounded
+		// (a VM that does not answer); a stopped step's ends at its next check.
+		if (preparation && !abort.signal.aborted)
+			await settledWithin(preparation, PREPARATION_SETTLE_MS, abort.signal);
 		await memoryCloning?.catch(() => {});
 		const cloned = memoryCloned;
 		const vm = execution;
@@ -3244,6 +3297,27 @@ export function untilAborted<T>(
 		work
 			.then(resolve, reject)
 			.finally(() => signal.removeEventListener("abort", stop));
+	});
+}
+
+/** How long a finished step waits for a preparation its turn did not need. */
+const PREPARATION_SETTLE_MS = 60_000;
+
+/** Waits for `work` to settle, at most `ms` and never past the signal's abort. */
+function settledWithin(
+	work: Promise<unknown>,
+	ms: number,
+	signal: AbortSignal,
+) {
+	return new Promise<void>((resolve) => {
+		const timer = setTimeout(done, ms);
+		signal.addEventListener("abort", done, { once: true });
+		work.then(done, done);
+		function done() {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", done);
+			resolve();
+		}
 	});
 }
 

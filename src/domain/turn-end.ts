@@ -2,6 +2,7 @@ import { applyApiProgress } from "./api-progress";
 import { isWakeTurnStart, turnStartTiming } from "./child-task-activity";
 import { SessionItemId } from "./ids";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
+import { withoutSavingChanges } from "./turn-saving";
 
 /** The quiet line that closes a turn the user stopped. */
 export const STOPPED_NOTICE = "Stopped";
@@ -18,7 +19,8 @@ export function settledTurnItems(
 	items: readonly SessionItem[],
 	endedAt: number,
 ): SessionItem[] {
-	const next = [...items];
+	// "Saving changes…" belongs to the running turn only.
+	const next = withoutSavingChanges(items);
 	for (let index = next.length - 1; index >= 0; index--) {
 		const item = next[index];
 		if (item?.kind !== "userMessage" || item.queued || !item.timing) continue;

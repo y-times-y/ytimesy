@@ -1621,6 +1621,23 @@ function SessionItemView({
 					</p>
 				);
 			if (item.pullRequest) return <PullRequestHandoffRow item={item} />;
+			if (item.savingChanges)
+				return (
+					<div
+						className="session-activity session-system-notice"
+						data-kind="saving-changes"
+						role="status"
+					>
+						<p>
+							<LoaderCircle
+								size={14}
+								className="workspace-status-spin"
+								aria-hidden="true"
+							/>
+							<span className="session-activity-title">{item.message}</span>
+						</p>
+					</div>
+				);
 			return (
 				<div
 					className="session-activity session-system-notice"
