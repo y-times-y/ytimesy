@@ -21,6 +21,7 @@ import { incomingAttachments } from "#/domain/message-attachment";
 import { openChatFromCookies } from "#/domain/open-chat-cookie";
 import { isValidBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { chatOpenedWithProject } from "#/domain/sidebar-chats";
 import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
 import {
 	TRANSCRIPT_PAGE_TURNS,
@@ -233,12 +234,17 @@ export type OpenChatView = PublicCodexSession & {
 /** An open chat read past OPEN_CHAT_WAIT_MS: the page streams it in. */
 export type StreamedChatView = Promise<OpenChatView | undefined>;
 
-/** The chat the page opens: the linked chat if it is listed, else the latest. */
-function chatToOpen<Chat extends { readonly id: string }>(
-	chats: readonly Chat[] | undefined,
-	linkedChatId: string | undefined,
-) {
-	return chats?.find((chat) => chat.id === linkedChatId) ?? chats?.[0];
+/**
+ * The chat the page opens: the linked chat if it is listed, else the latest
+ * that is not the project's setup chat (chatOpenedWithProject).
+ */
+function chatToOpen<
+	Chat extends { readonly id: string; readonly title: string },
+>(chats: readonly Chat[] | undefined, linkedChatId: string | undefined) {
+	return (
+		chats?.find((chat) => chat.id === linkedChatId) ??
+		chatOpenedWithProject({ chats, composerDraft: false })
+	);
 }
 
 /** The read, or undefined once `ms` pass first. */

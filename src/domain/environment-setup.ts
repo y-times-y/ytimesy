@@ -26,6 +26,14 @@ export const ENVIRONMENT_SETUP_TITLE = PROJECT_SETUP_NAME;
 /** Setup chats titled before setup became one flow. */
 export const PREVIOUS_SETUP_TITLES = ["Set up environment"] as const;
 
+/** A project's setup chat, as a chat list names it. */
+export function isSetupChatTitle(title: string) {
+	return (
+		title === ENVIRONMENT_SETUP_TITLE ||
+		(PREVIOUS_SETUP_TITLES as readonly string[]).includes(title)
+	);
+}
+
 const SETUP_KEEPING_MARKER =
 	"\n\nThe setup failed before this message could be sent. Keep it for after setup, in a new chat (not here):\n";
 

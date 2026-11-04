@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import { startsTurn } from "./child-task-activity";
+import { isSetupChatTitle } from "./environment-setup";
 import {
 	isTurnRunning,
 	type SessionItem,
@@ -374,15 +375,20 @@ export function chatsToReadAhead(input: {
 }
 
 /**
- * The chat a project opens on when the sidebar switches to it: its latest,
- * unless a new-chat draft is on screen (the draft keeps the composer).
+ * The chat a project opens on by itself (a project switch, a page load, the
+ * list arriving with nothing open): its latest, unless a new-chat draft is
+ * on screen (the draft keeps the composer). Never the project's setup chat:
+ * setup runs in the background and opens only when the person picks it (its
+ * row, View, Rerun setup); with nothing else, a new empty chat stays open.
  */
-export function chatOpenedWithProject(input: {
-	readonly chats: readonly Pick<SidebarChat, "id">[] | undefined;
+export function chatOpenedWithProject<
+	Chat extends Pick<SidebarChat, "id" | "title">,
+>(input: {
+	readonly chats: readonly Chat[] | undefined;
 	readonly composerDraft: boolean;
-}): string | undefined {
+}): Chat | undefined {
 	if (input.composerDraft) return undefined;
-	return input.chats?.[0]?.id;
+	return input.chats?.find((chat) => !isSetupChatTitle(chat.title));
 }
 
 /**

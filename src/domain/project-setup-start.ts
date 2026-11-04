@@ -1,7 +1,4 @@
-import {
-	ENVIRONMENT_SETUP_TITLE,
-	PREVIOUS_SETUP_TITLES,
-} from "./environment-setup";
+import { isSetupChatTitle } from "./environment-setup";
 import type { ChatWaitingOn } from "./sidebar-chats";
 
 type SetupWorkspace = {
@@ -70,11 +67,7 @@ type SetupChat = {
 export function projectSetupChat<Chat extends SetupChat>(
 	chats: readonly Chat[] | undefined,
 ): Chat | null {
-	const titles: readonly string[] = [
-		ENVIRONMENT_SETUP_TITLE,
-		...PREVIOUS_SETUP_TITLES,
-	];
-	return chats?.find((chat) => titles.includes(chat.title)) ?? null;
+	return chats?.find((chat) => isSetupChatTitle(chat.title)) ?? null;
 }
 
 /**
