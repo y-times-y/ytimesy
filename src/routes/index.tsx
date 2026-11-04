@@ -67,7 +67,7 @@ export const Route = createFileRoute("/")({
 					},
 				]
 			: [{ rel: "canonical", href: `${SITE_ORIGIN}/` }],
-		headScripts: loaderData?.signedIn
+		scripts: loaderData?.signedIn
 			? []
 			: [{ type: "application/ld+json", children: SITE_JSON_LD }],
 	}),
