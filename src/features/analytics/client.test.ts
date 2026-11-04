@@ -62,6 +62,10 @@ describe("PostHog client", () => {
 					$current_url: "private",
 					prompt: "secret",
 					token: "wrong",
+					$lib: "web",
+					$lib_version: "1.435.6",
+					$lib_custom_api_host: "/r",
+					$browser: "Chrome",
 				},
 			}).properties,
 		).toEqual({
@@ -72,6 +76,9 @@ describe("PostHog client", () => {
 			$geoip_disable: true,
 			$session_id: undefined,
 			$window_id: undefined,
+			$lib: "web",
+			$lib_version: "1.435.6",
+			$lib_custom_api_host: "/r",
 			environment: "development",
 		});
 		const snapshot = [{ type: 2, timestamp: 1, data: { node: {} } }];
