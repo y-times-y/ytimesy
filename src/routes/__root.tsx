@@ -3,10 +3,6 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import interLatin from "../assets/fonts/inter-latin-wght-400-700.woff2?url";
 import { Analytics } from "../features/analytics/analytics";
-import {
-	ANALYTICS_ENABLED,
-	ANALYTICS_HOST,
-} from "../features/analytics/client";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { FIRST_PAINT_SCRIPT } from "../features/app/first-paint";
 import { PrivacyRegionProvider } from "../features/app/privacy-region";
@@ -75,16 +71,6 @@ export const Route = createRootRoute({
 				rel: "stylesheet",
 				href: appCss,
 			},
-			// Analytics posts here once the session is known; connect early.
-			...(ANALYTICS_ENABLED
-				? [
-						{
-							rel: "preconnect",
-							href: new URL(ANALYTICS_HOST).origin,
-							crossOrigin: "anonymous" as const,
-						},
-					]
-				: []),
 		],
 	}),
 	shellComponent: RootDocument,

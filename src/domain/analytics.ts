@@ -2,6 +2,9 @@ import { z } from "zod";
 import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
 import { interactionTimingEvent, webVitalEvent } from "./web-vitals";
 
+/** Browser analytics path on our own origin (src/server/web/analytics-proxy.ts). */
+export const ANALYTICS_PROXY_PATH = "/r";
+
 const surface = z.enum(["workspace", "onboarding", "auth", "other"]);
 const runtime = z.enum(["codex", "api"]);
 const role = z.enum(["lead", "builder", "reader"]);
