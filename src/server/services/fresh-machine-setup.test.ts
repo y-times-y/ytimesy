@@ -80,51 +80,22 @@ describe("withSetupCatchUp", () => {
 		expect(deps.finished).toEqual([]);
 	});
 
-	it("runs the saved install in the checkout, waits for it, then adds one note", async () => {
-		const machine = guest("exit 0\n");
+	it("never touches the running chat's machine: one note says what setup saved", async () => {
+		const machine = guest();
+		const workspace = vi.fn(machine.workspace);
 		const deps = dependencies();
-		const result = await withSetupCatchUp(input(machine.workspace), deps);
+		const result = await withSetupCatchUp(input(workspace), deps);
 		expect(result.changed).toBe(true);
 		expect(result.messages).toHaveLength(2);
 		const note = String(result.messages[1]?.content);
-		expect(note).toContain("ran on this machine and passed");
+		expect(note).toContain(
+			"Its install command is `corepack pnpm install --frozen-lockfile`",
+		);
+		expect(note).toContain("nothing was changed here");
 		expect(note).toContain("web (`pnpm dev`, port 3000)");
-		const launch = machine.commands.find((command) =>
-			command.includes("echo started"),
-		);
-		expect(launch).toContain("/home/ubuntu/web");
-		expect(launch).toContain("corepack pnpm install --frozen-lockfile");
-		// It waits for the boot's own install before running.
-		expect(launch).toContain(".ytimesy/install.status");
-		// Waited at most the cap, inside the step's deadline.
-		expect(machine.commands.at(-1)).toContain("seq 0 150");
-		expect(deps.finished).toEqual(["chat"]);
-	});
-
-	it("names an install that failed or still runs, and the chat continues", async () => {
-		const failed = await withSetupCatchUp(
-			input(guest("exit 2\n").workspace),
-			dependencies(),
-		);
-		expect(String(failed.messages[1]?.content)).toContain("failed (exit 2");
-		const running = await withSetupCatchUp(
-			{ ...input(guest("running\n").workspace), waitUntil: 10_000 },
-			dependencies(),
-		);
-		expect(String(running.messages[1]?.content)).toContain("still running");
-	});
-
-	it("tells the agent when its machine could not run the install", async () => {
-		const deps = dependencies();
-		const result = await withSetupCatchUp(
-			input(async () => {
-				throw new Error("The machine is not responding.");
-			}),
-			deps,
-		);
-		expect(String(result.messages[1]?.content)).toContain(
-			"could not be run on this machine (The machine is not responding.)",
-		);
+		// No install, no waiting: the machine is never called.
+		expect(workspace).not.toHaveBeenCalled();
+		expect(machine.commands).toEqual([]);
 		expect(deps.finished).toEqual(["chat"]);
 	});
 
