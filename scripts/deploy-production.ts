@@ -7,6 +7,7 @@ import {
 	codexRelaySettingNames,
 	codexRelaySettingsProblem,
 } from "../src/domain/codex-egress";
+import { acquireDeployLock } from "./deploy-lock";
 import {
 	IN_FLIGHT_WORK_NOTE,
 	productionDeploySteps,
@@ -269,6 +270,17 @@ function deployedSecretNames(config: string[]): string[] {
 	} catch {
 		return [];
 	}
+}
+
+// One production deploy at a time (scripts/deploy-lock.ts).
+if (!preflightOnly) {
+	const releaseDeployLock = acquireDeployLock("production");
+	process.on("exit", releaseDeployLock);
+	for (const signal of ["SIGINT", "SIGTERM"] as const)
+		process.on(signal, () => {
+			releaseDeployLock();
+			process.exit(130);
+		});
 }
 
 // One build id for both Workers and the page (src/lib/build-id.ts): the web
