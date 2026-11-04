@@ -41,11 +41,11 @@ describe("PostHog client", () => {
 		expect(config).toMatchObject({
 			autocapture: false,
 			capture_pageview: "history_change",
-			capture_pageleave: false,
+			capture_pageleave: true,
 			// Replay starts per user (setAnalyticsUser), never at init.
 			disable_session_recording: true,
 			enable_recording_console_log: false,
-			capture_performance: false,
+			capture_performance: { web_vitals: true, network_timing: false },
 			capture_exceptions: {
 				capture_unhandled_errors: true,
 				capture_unhandled_rejections: true,

@@ -74,6 +74,53 @@ describe("analytics privacy boundary", () => {
 			$pathname: "/",
 		});
 	});
+	it("keeps a pageleave's page and previous-page numbers only", () => {
+		expect(
+			filteredAnalyticsProperties("$pageleave", {
+				$current_url: "https://ytimesy.com/projects/p-1?tab=x",
+				$prev_pageview_pathname: "/projects/p-1",
+				$prev_pageview_duration: 12.5,
+				$prev_pageview_max_scroll_percentage: 0.8,
+				$prev_pageview_last_content: "not a number",
+				$el_text: "private",
+			}),
+		).toEqual({
+			$current_url: "https://ytimesy.com/projects",
+			$host: "ytimesy.com",
+			$pathname: "/projects",
+			$prev_pageview_pathname: "/projects",
+			$prev_pageview_duration: 12.5,
+			$prev_pageview_max_scroll_percentage: 0.8,
+		});
+	});
+	it("keeps web vitals values and drops their attribution", () => {
+		expect(
+			filteredAnalyticsProperties("$web_vitals", {
+				$current_url: "https://ytimesy.com/blog?x=1",
+				$web_vitals_LCP_value: 1234,
+				$web_vitals_LCP_event: { attribution: { element: "#private" } },
+				$web_vitals_CLS_value: 0.02,
+				$web_vitals_INP_value: Number.NaN,
+			}),
+		).toEqual({
+			$current_url: "https://ytimesy.com/blog",
+			$host: "ytimesy.com",
+			$pathname: "/blog",
+			$web_vitals_LCP_value: 1234,
+			$web_vitals_CLS_value: 0.02,
+		});
+		expect(
+			filteredAnalyticsProperties("$web_vitals", {
+				$current_url: "https://ytimesy.com/",
+			}),
+		).toBeNull();
+		expect(
+			filteredAnalyticsProperties("$web_vitals", {
+				$current_url: "https://ytimesy.com/auth/reset-password?token=t",
+				$web_vitals_LCP_value: 1,
+			}),
+		).toBeNull();
+	});
 	it("identifies without email or profile attributes", () => {
 		expect(
 			filteredAnalyticsProperties("$identify", {

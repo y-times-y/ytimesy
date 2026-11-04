@@ -152,9 +152,26 @@ export function pageviewPath(pathname: string): string | null {
 	return pathname.slice(0, 200);
 }
 
-function pageviewProperties(
-	properties: Record<string, unknown>,
-): Record<string, unknown> | null {
+/** Time and scroll on the previous page, numbers only (PostHog's names). */
+const PREVIOUS_PAGE_NUMBERS = [
+	"$prev_pageview_id",
+	"$prev_pageview_duration",
+	"$prev_pageview_last_scroll",
+	"$prev_pageview_last_scroll_percentage",
+	"$prev_pageview_max_scroll",
+	"$prev_pageview_max_scroll_percentage",
+	"$prev_pageview_last_content",
+	"$prev_pageview_last_content_percentage",
+	"$prev_pageview_max_content",
+	"$prev_pageview_max_content_percentage",
+];
+const WEB_VITALS = ["LCP", "INP", "CLS", "FCP"];
+
+const finiteNumber = (value: unknown): value is number =>
+	typeof value === "number" && Number.isFinite(value);
+
+/** The page an automatic event names: origin and the cleaned path, or null. */
+function pageLocation(properties: Record<string, unknown>) {
 	if (typeof properties.$current_url !== "string") return null;
 	let url: URL;
 	try {
@@ -164,23 +181,63 @@ function pageviewProperties(
 	}
 	const path = pageviewPath(url.pathname);
 	if (path === null) return null;
-	const referrer = properties.$referring_domain;
 	return {
 		$current_url: `${url.origin}${path}`,
 		$host: url.host,
 		$pathname: path,
+	};
+}
+
+/** $pageview and $pageleave: the page, referring domain and previous-page numbers. */
+function pageviewProperties(
+	properties: Record<string, unknown>,
+): Record<string, unknown> | null {
+	const location = pageLocation(properties);
+	if (!location) return null;
+	const referrer = properties.$referring_domain;
+	const previousPath =
+		typeof properties.$prev_pageview_pathname === "string"
+			? pageviewPath(properties.$prev_pageview_pathname)
+			: null;
+	return {
+		...location,
 		...(typeof referrer === "string" &&
 		/^[a-z0-9.-]{1,100}$|^\$direct$/.test(referrer)
 			? { $referring_domain: referrer }
 			: {}),
+		...(previousPath === null ? {} : { $prev_pageview_pathname: previousPath }),
+		...Object.fromEntries(
+			PREVIOUS_PAGE_NUMBERS.filter((key) => finiteNumber(properties[key])).map(
+				(key) => [key, properties[key]],
+			),
+		),
 	};
+}
+
+/**
+ * $web_vitals, for PostHog's Web vitals page: each metric's value only. The
+ * SDK's per-metric attribution (element selectors, URLs) is dropped.
+ */
+function webVitalsProperties(
+	properties: Record<string, unknown>,
+): Record<string, unknown> | null {
+	const location = pageLocation(properties);
+	if (!location) return null;
+	const values = Object.fromEntries(
+		WEB_VITALS.map((name) => `$web_vitals_${name}_value`)
+			.filter((key) => finiteNumber(properties[key]))
+			.map((key) => [key, properties[key]]),
+	);
+	return Object.keys(values).length > 0 ? { ...location, ...values } : null;
 }
 
 export function filteredAnalyticsProperties(
 	event: string,
 	properties: Record<string, unknown>,
 ): Record<string, unknown> | null {
-	if (event === "$pageview") return pageviewProperties(properties);
+	if (event === "$pageview" || event === "$pageleave")
+		return pageviewProperties(properties);
+	if (event === "$web_vitals") return webVitalsProperties(properties);
 	if (event === "$identify")
 		return typeof properties.$anon_distinct_id === "string"
 			? { $anon_distinct_id: properties.$anon_distinct_id }
