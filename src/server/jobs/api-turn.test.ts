@@ -612,6 +612,59 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 		);
 	});
 
+	it("finishes its publication when a heartbeat renewal fails after the turn was marked done", async () => {
+		codexOwner();
+		answering();
+		let done = false;
+		mocks.finalize.mockImplementation(async (_turn, state) => {
+			done = true;
+			return state;
+		});
+		// The row is no longer 'running' once finalized: renewals say so.
+		mocks.renew.mockImplementation(async () => !done);
+		let published = false;
+		mocks.commit.mockImplementationOnce(
+			async (_session, _items, _runtime, signal) => ({
+				publish: async () => {
+					// Long enough for several heartbeat ticks after finalize.
+					await new Promise((resolve) => setTimeout(resolve, 2_500));
+					// Like the real publish, a cut-off turn reports a failure.
+					if (signal?.aborted)
+						return { failure: "Turn ownership or cancellation state changed." };
+					published = true;
+					return {
+						publication: {
+							branch: "b",
+							pullRequestUrl: "https://github.com/owner/repo/pull/4",
+							pullRequest: {
+								number: 4,
+								url: "https://github.com/owner/repo/pull/4",
+								draft: true,
+								created: true,
+							},
+						},
+					};
+				},
+			}),
+		);
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(published).toBe(true);
+		expect(mocks.replaceItem).toHaveBeenCalledWith(
+			expect.anything(),
+			"turn:pull-request",
+			expect.objectContaining({ message: "Opened draft PR #4" }),
+		);
+		expect(mocks.replaceItem).not.toHaveBeenCalledWith(
+			expect.anything(),
+			"turn:pull-request",
+			expect.objectContaining({
+				message: expect.stringContaining("ownership"),
+			}),
+		);
+	});
+
 	it("commits nothing for a subagent", async () => {
 		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
 		answering();
