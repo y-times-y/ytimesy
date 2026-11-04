@@ -87,6 +87,11 @@ function analyticsClient(): Promise<PostHog | null> {
 						$geoip_disable: true,
 						$session_id: event.properties.$session_id,
 						$window_id: event.properties.$window_id,
+						// SDK metadata, no user data: PostHog's health checks read the
+						// browser SDK version and whether events came through our proxy.
+						$lib: event.properties.$lib,
+						$lib_version: event.properties.$lib_version,
+						$lib_custom_api_host: event.properties.$lib_custom_api_host,
 						environment: import.meta.env.PROD ? "production" : "development",
 					};
 					delete event.$set;
