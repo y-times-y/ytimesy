@@ -378,6 +378,20 @@ async function captureSourceTree(
 				},
 				connection,
 			);
+			// This window's runtime was paid by the hold above, not by the VM's
+			// own admission: move the admission's baseline past it (and its cap
+			// to the fenced runtime), or the next wake counts it again, finds
+			// more usage than the VM's reservation, and refuses to start it.
+			await connection.query(
+				`update infrastructure_vm_admission
+				 set baseline_seconds=baseline_seconds+$2, max_run_total_seconds=$3, updated_at=now()
+				 where vm_id=$1`,
+				[
+					row.vm_id,
+					Math.max(0, Math.floor(stopped.totalRunSeconds) - Math.floor(before)),
+					Math.floor(stopped.totalRunSeconds),
+				],
+			);
 		}
 	}
 }
