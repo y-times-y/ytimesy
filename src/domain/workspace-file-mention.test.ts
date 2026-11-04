@@ -24,6 +24,39 @@ it("distinguishes workspace paths from external URLs and fragments", () => {
 		expect(workspaceFileMention(url)).toBeNull();
 });
 
+it("links only what is plausibly a file or an explicit folder, never a branch, repo, code or domain", () => {
+	for (const path of [
+		"src/main.ts",
+		"package.json",
+		"src/styles.css",
+		"scripts/deploy.sh",
+		"supabase/migrations/20261104_x.sql",
+		"Dockerfile",
+		".gitignore",
+		".env.example",
+		"src/server/",
+		"./src/a.ts",
+	])
+		expect(workspaceFileMention(path)).toBe(path);
+	for (const text of [
+		"origin/main",
+		"refs/heads/main",
+		"ytimesy/hi-58de94",
+		"y-times-y/ytimesy",
+		"owner/repo",
+		"src/server",
+		"process.env",
+		"Date.now",
+		"console.log",
+		"ytimesy.com",
+		"api.ytimesy.com",
+		"Node.js",
+		"Next.js",
+		"e.g.",
+	])
+		expect(workspaceFileMention(text)).toBeNull();
+});
+
 it("opens the file a line reference names, and labels it short", () => {
 	for (const [text, path, lines] of [
 		[
