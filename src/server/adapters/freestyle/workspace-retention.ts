@@ -14,10 +14,6 @@ import {
 	WORKSPACE_RETENTION_SECONDS,
 } from "#/domain/workspace-retention";
 import { database } from "../database";
-import {
-	reserveInfrastructureUsage,
-	settleInfrastructureUsage,
-} from "../infrastructure-usage";
 import { projectForOwner } from "../projects";
 import { repositoryDirectory } from "../repository-setup";
 import { productCreateVmFields } from "./product-vm";
@@ -25,7 +21,6 @@ import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import { sessionSlugMatch } from "./slug-sql";
 import {
 	admitVmCreate,
-	computeHourlyMicroUsd,
 	infrastructureAdmissionEnabled,
 	lockedVm,
 } from "./usage-admission";
@@ -321,10 +316,12 @@ export async function retainedTreeDigest(
 }
 
 /**
- * Opens a short funded run window on the fenced, paused source to scrub
- * secrets and hash its tree in the guest, then pauses it and closes the
- * fence at the runtime it used. A window that cannot be closed and
- * confirmed keeps its hold (the provider cap still bounds it).
+ * Opens a short run window on the fenced, paused source to scrub secrets and
+ * hash its tree in the guest, then pauses it and closes the fence at the
+ * runtime it used. This is maintenance, not the user's work: it is bounded by
+ * the provider cap (CAPTURE_WINDOW_SECONDS), never reserved against the
+ * user's allowance, and the VM's own admission moves past it so a later wake
+ * does not count it (two ledgers for one VM once locked a chat out).
  */
 async function captureSourceTree(
 	connection: PoolClient,
@@ -334,20 +331,6 @@ async function captureSourceTree(
 	roots: string[],
 ) {
 	const before = data.totalRunSeconds ?? 0;
-	const hourlyMicroUsd = computeHourlyMicroUsd(data.resources);
-	const hold = randomUUID();
-	await reserveInfrastructureUsage(
-		{
-			id: hold,
-			userId: row.user_id,
-			resourceKey: `recovery-capture:${row.vm_id}`,
-			amountMicroUsd: Math.ceil(
-				(hourlyMicroUsd * CAPTURE_WINDOW_SECONDS) / 3600,
-			),
-			hourlyMicroUsd,
-		},
-		connection,
-	);
 	try {
 		await vm.update({
 			maxRunTotalSeconds: Math.floor(before) + CAPTURE_WINDOW_SECONDS,
@@ -363,34 +346,15 @@ async function captureSourceTree(
 				maxRunTotalSeconds: Math.floor(stopped.totalRunSeconds),
 				automaticRestart: false,
 			});
-			await settleInfrastructureUsage(
-				{
-					id: hold,
-					userId: row.user_id,
-					consumedMicroUsd: Math.ceil(
-						(hourlyMicroUsd *
-							Math.min(
-								CAPTURE_WINDOW_SECONDS,
-								Math.max(0, stopped.totalRunSeconds - before),
-							)) /
-							3600,
-					),
-				},
-				connection,
+			const ranSeconds = Math.max(
+				0,
+				Math.floor(stopped.totalRunSeconds) - Math.floor(before),
 			);
-			// This window's runtime was paid by the hold above, not by the VM's
-			// own admission: move the admission's baseline past it (and its cap
-			// to the fenced runtime), or the next wake counts it again, finds
-			// more usage than the VM's reservation, and refuses to start it.
 			await connection.query(
 				`update infrastructure_vm_admission
 				 set baseline_seconds=baseline_seconds+$2, max_run_total_seconds=$3, updated_at=now()
 				 where vm_id=$1`,
-				[
-					row.vm_id,
-					Math.max(0, Math.floor(stopped.totalRunSeconds) - Math.floor(before)),
-					Math.floor(stopped.totalRunSeconds),
-				],
+				[row.vm_id, ranSeconds, Math.floor(stopped.totalRunSeconds)],
 			);
 		}
 	}
@@ -470,7 +434,6 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 		let snapshotId: string | undefined;
 		let verification: Vm | undefined;
 		let retained = false;
-		const verificationHold = randomUUID();
 		try {
 			const data = await stillIdle(connection, row, vm);
 			const fencedAt = Date.now();
@@ -526,18 +489,7 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 				throw new Error(
 					"Private snapshot does not satisfy the recovery window.",
 				);
-			await reserveInfrastructureUsage(
-				{
-					id: verificationHold,
-					userId: row.user_id,
-					resourceKey: `recovery-verification:${snapshotId}`,
-					amountMicroUsd: Math.ceil(
-						(computeHourlyMicroUsd(data.resources) * 80) / 3600,
-					),
-					hourlyMicroUsd: computeHourlyMicroUsd(data.resources),
-				},
-				connection,
-			);
+			// Maintenance: bounded by VERIFICATION_RUN_SECONDS, not the user's allowance.
 			const clone = await client.vms.create({
 				snapshotId,
 				firewall: { rules: [] },
@@ -607,23 +559,9 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 				try {
 					if ((await verification.data()).state === "running")
 						await verification.pause();
-					const stopped = await verification.data();
 					await verification.delete();
-					if (stopped.state === "paused" && stopped.totalRunSeconds != null)
-						await settleInfrastructureUsage(
-							{
-								id: verificationHold,
-								userId: row.user_id,
-								consumedMicroUsd: Math.ceil(
-									(computeHourlyMicroUsd(stopped.resources) *
-										stopped.totalRunSeconds) /
-										3600,
-								),
-							},
-							connection,
-						);
 				} catch {
-					/* Unknown provider outcomes keep the verification hold. */
+					/* The provider cap bounds a clone that could not be deleted here. */
 				}
 			}
 			if (!retained) {

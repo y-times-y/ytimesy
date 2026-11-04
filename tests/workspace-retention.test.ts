@@ -205,7 +205,7 @@ it("persists verified recovery BEFORE source deletion and includes ignored files
 		}),
 	);
 });
-it("runs the fenced source only inside a funded window, then re-fences it at its runtime", async () => {
+it("runs the fenced source only inside a capped window, then re-fences it at its runtime", async () => {
 	const { client, source, verification } = provider();
 	await recycleWorkspace(client, session);
 	// Fence at 20s, open the window to 20+120s, close it at the 22s used.
@@ -224,15 +224,11 @@ it("runs the fenced source only inside a funded window, then re-fences it at its
 	};
 	expect(sourceDigest).toMatchObject({ linuxUser: "root", timeoutMs: 20_000 });
 	expect(verification.exec).toHaveBeenCalledWith(sourceDigest);
+	// Maintenance never reserves against the user's allowance.
 	const holds = await query(
-		"select resource_key,consumed_micro_usd from infrastructure_usage_reservation where resource_key like 'recovery-capture:%'",
+		"select resource_key from infrastructure_usage_reservation where resource_key like 'recovery-%'",
 	);
-	expect(holds.rows).toEqual([
-		{
-			resource_key: "recovery-capture:source",
-			consumed_micro_usd: expect.anything(),
-		},
-	]);
+	expect(holds.rows).toEqual([]);
 });
 it("moves the VM's own admission past the capture window it paid for, so a later wake never counts it twice", async () => {
 	// The VM's admission, settled at its own 20 s before recycling ran it.
