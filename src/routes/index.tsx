@@ -3,6 +3,7 @@ import { type ReactNode, Suspense, use } from "react";
 import { WORKSPACE_PANES_END } from "../features/app/first-paint";
 import { IdentityGate } from "../features/auth/identity-gate";
 import {
+	SITE_JSON_LD,
 	SITE_ORIGIN,
 	SITE_PREVIEW_META,
 	SITE_TITLE,
@@ -66,6 +67,9 @@ export const Route = createFileRoute("/")({
 					},
 				]
 			: [{ rel: "canonical", href: `${SITE_ORIGIN}/` }],
+		headScripts: loaderData?.signedIn
+			? []
+			: [{ type: "application/ld+json", children: SITE_JSON_LD }],
 	}),
 	component: HomePage,
 });
