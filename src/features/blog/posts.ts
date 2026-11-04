@@ -67,6 +67,27 @@ export function sitePreviewMeta({
 /** The landing page's title in search results and link previews. */
 export const SITE_TITLE = "ytimesy: AI software engineer in the cloud";
 
+/**
+ * Tells search engines that "ytimesy" is a site and a brand, not a typo of
+ * another name, and ties it to the GitHub organization.
+ */
+export const SITE_JSON_LD = JSON.stringify([
+	{
+		"@context": "https://schema.org",
+		"@type": "WebSite",
+		name: "ytimesy",
+		url: `${SITE_ORIGIN}/`,
+	},
+	{
+		"@context": "https://schema.org",
+		"@type": "Organization",
+		name: "ytimesy",
+		url: `${SITE_ORIGIN}/`,
+		logo: `${SITE_ORIGIN}/brand/favicon-192.png`,
+		sameAs: ["https://github.com/y-times-y"],
+	},
+]);
+
 export const SITE_PREVIEW_META = sitePreviewMeta({
 	title: SITE_TITLE,
 	description:
