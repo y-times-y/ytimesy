@@ -19,6 +19,8 @@ import {
 	bindPreparedAgentTaskMachine,
 } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
+import { startFreshMachineInstall } from "./fresh-machine-setup";
+import { detachedFromTurn } from "./machine-call-signal";
 import {
 	checkoutGitHubReads,
 	ensureProjectCheckout,
@@ -236,6 +238,19 @@ export function deferredApiTurnWorkspace(
 		);
 		await metadataBlocked;
 		options.onPhase?.("checkoutPrepared");
+		// A machine that booted without the project's template installs in the
+		// background once its checkout is there; the turn does not wait.
+		if (!owner.parentSessionId)
+			void detachedFromTurn(() =>
+				startFreshMachineInstall(
+					{ machines: scoped, vm },
+					{
+						userId: owner.userId,
+						projectId: owner.projectId,
+						sessionId: owner.id,
+					},
+				),
+			);
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))

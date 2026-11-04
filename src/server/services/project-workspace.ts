@@ -130,6 +130,12 @@ function ensureSingleProjectCheckout(
 				{ ...checkout, destination, mode: "clone" },
 			),
 		);
+		// As a reused checkout does: a machine booted without the project's
+		// template (no build wrote it) finds its repository here. The primary
+		// repository is cloned last, so its path is the one left.
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(workspaceId, PROJECT_CWD_PATH, `${destination}\n`),
+		);
 		return destination;
 	}).pipe(Effect.mapError((cause) => new Error(failureMessage(cause))));
 }

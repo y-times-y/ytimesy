@@ -74,17 +74,14 @@ describe("sessionMachinePlan", () => {
 		).toEqual({ kind: "needs-snapshot", providerRef: "vm-template" });
 	});
 
-	it("blocks when the project environment is missing", () => {
+	it("boots a fresh machine instead of waiting for the project's first template", () => {
 		expect(
 			sessionMachinePlan({
 				sessionProviderRef: null,
 				templateSnapshotId: null,
 				templateProviderRef: null,
 			}),
-		).toEqual({
-			kind: "blocked",
-			reason: "Prepare a project environment before starting an agent.",
-		});
+		).toEqual({ kind: "boot-fresh" });
 	});
 });
 

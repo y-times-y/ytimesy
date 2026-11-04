@@ -49,6 +49,21 @@ describe("workspace terminal", () => {
 		).toBeNull();
 	});
 
+	it("opens a chat's own machine while the project is still being set up", () => {
+		expect(
+			terminalConnectBlockedReason(
+				{ status: "cloning", providerRef: null },
+				"vm-chat",
+			),
+		).toBeNull();
+		expect(
+			terminalConnectBlockedReason(
+				{ status: "failed", providerRef: null },
+				null,
+			),
+		).toMatch(/failed/);
+	});
+
 	it("does not open a terminal on the unused template", () => {
 		expect(terminalSessionBlockedReason("vm-agent")).toBeNull();
 		expect(terminalSessionBlockedReason(null)).toMatch(/Connect an agent/);

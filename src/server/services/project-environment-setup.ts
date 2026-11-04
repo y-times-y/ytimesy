@@ -9,6 +9,7 @@ import {
 	saveEnvironmentRecipe,
 } from "../adapters/environment-recipes";
 import { projectForOwner } from "../adapters/projects";
+import { readySetupCatchUps } from "../adapters/setup-catch-up";
 import { workspaceForProject } from "../adapters/workspaces";
 
 /**
@@ -24,6 +25,8 @@ export async function saveProjectEnvironment(input: {
 	readonly recipe: EnvironmentRecipe;
 	readonly source: EnvironmentRecipeSource;
 	readonly summary?: string | null;
+	/** The chat whose agent saved it (it set the project up itself). */
+	readonly savedInSessionId?: string;
 }) {
 	const project = await projectForOwner(input.userId, input.projectId);
 	if (!project) throw new Error("Project is not available.");
@@ -56,5 +59,16 @@ export async function saveProjectEnvironment(input: {
 				repairModel: null,
 			}).catch(() => false)
 		: false;
+	// Chats that started before the project had a template catch up at their
+	// next model step (fresh-machine-setup.ts); a failure here only skips that.
+	await readySetupCatchUps({
+		userId: input.userId,
+		projectId: input.projectId,
+		savedInSessionId: input.savedInSessionId,
+	}).catch((error: unknown) =>
+		console.warn("Chats could not be told the project's setup finished.", {
+			message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+		}),
+	);
 	return { saved, repository: repository.fullName, rebuilding };
 }

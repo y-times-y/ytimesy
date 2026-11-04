@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
-import { initialSetupMessageId } from "#/domain/environment-setup";
+import {
+	ENVIRONMENT_SETUP_PROMPT,
+	initialSetupMessageId,
+} from "#/domain/environment-setup";
 import type { MessageAttachment } from "#/domain/message-attachment";
 import { withAttachmentNote } from "#/domain/message-attachment";
-import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
+import {
+	firstEnvironmentBuildRunning,
+	sendWaitsForEnvironment,
+	startsSetupBesideTask,
+	workspaceEnvironmentIsReady,
+} from "#/domain/project-workspace";
 import type { UserMessageItem } from "#/domain/session-item";
 import {
 	sendWasQueued,
@@ -110,13 +118,15 @@ export function sendComposerMessage(
 					input,
 					queued,
 				);
-				return held
-					? { view: held }
-					: {
-							storedAttachments: queued.storedAttachments,
-							session: queued.session,
-							scope,
-						};
+				if (held) return { view: held };
+				await timed("send:setupBeside", () =>
+					startProjectSetupBesideTask(machines, scope, input),
+				);
+				return {
+					storedAttachments: queued.storedAttachments,
+					session: queued.session,
+					scope,
+				};
 			},
 		),
 		(queued) =>
@@ -275,12 +285,13 @@ async function queueBehindRunningTurn(
 }
 
 /**
- * A send while the project's environment is not ready (being set up, or its
- * setup failed) waits in its chat, stored like a queued message: a new chat
- * is opened for it so it lists in the sidebar, every device shows it, and it
- * goes by itself once the environment is ready (deliverHeldSends), even with
- * no tab open. Null when the environment is ready (or missing: the send
- * reports that as before) or the send is the runtime's own.
+ * The project's setup request, sent while its environment is not ready
+ * (being built, or the build failed), waits in its chat, stored like a
+ * queued message: the setup agent starts from the build's report, so it
+ * starts once the environment is ready (deliverHeldSends), even with no tab
+ * open. The chat lists in the sidebar and every device shows it. Null for
+ * any other send: a task never waits for setup (its machine boots fresh,
+ * sessionMachinePlan), and when the environment is ready or missing.
  */
 async function holdUntilEnvironmentReady(
 	machines: WorkspaceMachines,
@@ -288,13 +299,7 @@ async function holdUntilEnvironmentReady(
 	input: ComposerSend,
 	known: { readonly session?: AgentSessionRecord | null },
 ): Promise<PublicCodexSession | null> {
-	if (
-		!scope.projectId ||
-		input.runtimeText !== undefined ||
-		input.approvesPlan ||
-		input.continueOn
-	)
-		return null;
+	if (!scope.projectId || !sendWaitsForEnvironment(input)) return null;
 	const projectId = scope.projectId;
 	const workspace = await workspaceForProject(scope.userId, projectId);
 	if (!workspace || workspaceEnvironmentIsReady(workspace)) return null;
@@ -359,6 +364,46 @@ async function holdUntilEnvironmentReady(
 			await deliverHeldSendsInChat(machines, scope.userId, session.id);
 	}
 	return publicSessionView(sessionScope);
+}
+
+/**
+ * A task sent while the project's first build runs starts at once on its own
+ * machine, and the project's setup still runs: its chat is opened beside the
+ * task (the project's one setup chat, as a tab starts it: same message id,
+ * claimed once) with the setup request waiting in it for the build. Nothing
+ * here navigates; the chat appears in the sidebar. A failure only skips the
+ * setup chat (Rerun setup in Settings starts it); the task goes on.
+ */
+async function startProjectSetupBesideTask(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	input: ComposerSend,
+) {
+	if (!scope.projectId || !startsSetupBesideTask(input)) return;
+	const projectId = scope.projectId;
+	try {
+		const workspace = await workspaceForProject(scope.userId, projectId);
+		if (!workspace || !firstEnvironmentBuildRunning(workspace)) return;
+		const setup: ComposerSend = {
+			text: ENVIRONMENT_SETUP_PROMPT,
+			modelId: input.modelId,
+			...(input.variant ? { variant: input.variant } : {}),
+			...(input.speed ? { speed: input.speed } : {}),
+			...(input.fast !== undefined ? { fast: input.fast } : {}),
+			idempotencyKey: initialSetupMessageId(projectId),
+			environmentSetup: true,
+		};
+		const started = await initialSetupStarted(
+			{ ...scope, sessionId: undefined, createNew: true },
+			setup,
+		);
+		if (!started || "view" in started) return;
+		await holdUntilEnvironmentReady(machines, started.scope, setup, {});
+	} catch (error) {
+		console.warn("The project's setup chat could not be started.", {
+			message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+		});
+	}
 }
 
 /**

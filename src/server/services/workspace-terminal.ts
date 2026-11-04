@@ -29,7 +29,7 @@ export async function connectWorkspaceTerminal(input: {
 			sessionId: input.sessionId,
 		}),
 	]);
-	const blocked = terminalConnectBlockedReason(workspace);
+	const blocked = terminalConnectBlockedReason(workspace, peeked.providerRef);
 	if (blocked || !workspace) {
 		throw new Error(
 			blocked ?? "Prepare a workspace before opening the terminal.",

@@ -159,19 +159,69 @@ export function redactSecrets(value: string) {
 		.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
 }
 
+/** What a composer send says about itself, as far as setup is concerned. */
+export type SetupRelevantSend = {
+	/** The project's setup request (a new project's own, or Rerun setup). */
+	readonly environmentSetup?: boolean;
+	/** Runtime sends (notices, plan approvals, fallback continuations). */
+	readonly runtimeText?: string;
+	readonly approvesPlan?: boolean;
+	readonly continueOn?: string;
+};
+
+const sentByPerson = (send: SetupRelevantSend) =>
+	send.runtimeText === undefined && !send.approvesPlan && !send.continueOn;
+
 /**
- * A message sent while the project's environment is not ready is held in the
- * chat: during setup, and after a failed setup too (it shows the failure with
- * Retry and Send anyway; a held message is never dropped). Unknown status
- * (still loading) sends as usual.
+ * Only the project's setup request waits for the environment: the setup
+ * agent starts from the build's report. A task never waits; its machine
+ * boots without the template (sessionMachinePlan).
+ */
+export function sendWaitsForEnvironment(send: SetupRelevantSend) {
+	return Boolean(send.environmentSetup) && sentByPerson(send);
+}
+
+/** A task the person sent (not the setup's own request) may start the setup beside it. */
+export function startsSetupBesideTask(send: SetupRelevantSend) {
+	return !send.environmentSetup && sentByPerson(send);
+}
+
+/** The project's first environment build is under way: no template exists yet. */
+export function firstEnvironmentBuildRunning(
+	workspace: Pick<ProjectWorkspace, "status" | "templateSnapshotId">,
+) {
+	return (
+		!workspace.templateSnapshotId &&
+		(workspace.status === "queued" ||
+			workspace.status === "provisioning" ||
+			workspace.status === "cloning" ||
+			workspace.status === "installing")
+	);
+}
+
+/**
+ * The setup request sent while the project's environment is not ready is
+ * held in its chat: during the build, and after a failed build too (it
+ * shows the failure with Retry; a held message is never dropped). Any other
+ * send goes at once. Unknown status (still loading) sends as usual.
  */
 export function sendWaitsForSetup(
 	status: WorkspaceStatus | "missing" | undefined,
+	send: SetupRelevantSend,
 ) {
-	return status !== undefined && status !== "ready";
+	return (
+		status !== undefined && status !== "ready" && sendWaitsForEnvironment(send)
+	);
 }
 
-/** A held message goes out only once the environment is ready. */
-export function heldSendReleases(status: WorkspaceStatus | undefined) {
-	return status === "ready";
+/**
+ * A held message goes out once nothing holds it: the setup request (the
+ * default) once the environment is ready; a task held only because the
+ * project had no environment record yet, once it has one.
+ */
+export function heldSendReleases(
+	status: WorkspaceStatus | undefined,
+	send: SetupRelevantSend = { environmentSetup: true },
+) {
+	return status !== undefined && !sendWaitsForSetup(status, send);
 }

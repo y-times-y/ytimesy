@@ -35,6 +35,7 @@ import {
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
+import { SETUP_CAUGHT_UP_NOTICE } from "#/domain/fresh-machine-setup";
 import { fusionPairFor } from "#/domain/fusion-pairs";
 import {
 	leadReasoningEffort,
@@ -219,6 +220,7 @@ import {
 	settlesWithin,
 	withPromptCheckGate,
 } from "../services/first-request-gate";
+import { withSetupCatchUp } from "../services/fresh-machine-setup";
 import {
 	type FusionLeadGateInput,
 	fusionLeadGate,
@@ -1547,6 +1549,7 @@ async function runApiTurnAttempt(
 					? environmentSetupTools({
 							userId: owner.userId,
 							projectId: owner.projectId,
+							sessionId: owner.id,
 						})
 					: {},
 		});
@@ -1984,7 +1987,8 @@ async function runApiTurnAttempt(
 					await saveCheckpoint();
 					await publishProgress?.("running");
 				}
-				return injectServerPeerMessages(
+				let setupCatchUpReady = false;
+				history = await injectServerPeerMessages(
 					owner.id,
 					history,
 					async (injected, delivered) => {
@@ -2002,7 +2006,37 @@ async function runApiTurnAttempt(
 						await saveCheckpoint();
 					},
 					(messageId) => items.some((item) => item.id === messageId),
+					() => {
+						setupCatchUpReady = true;
+					},
 				);
+				// The project's setup finished after this chat's machine booted
+				// without its template: its install runs here (no command of the
+				// agent's is running between steps), then one note.
+				if (setupCatchUpReady && owner.projectId && !owner.parentSessionId) {
+					const caughtUp = await withSetupCatchUp({
+						sessionId: owner.id,
+						userId: owner.userId,
+						projectId: owner.projectId,
+						messages: history,
+						workspace,
+						waitUntil: step?.waitDeadlineAt ?? Date.now() + 10 * 60_000,
+					});
+					if (caughtUp.changed) {
+						history = messages = caughtUp.messages;
+						items = [
+							...items,
+							{
+								kind: "notice",
+								id: SessionItemId(`${turn.id}:setup-catch-up`),
+								message: SETUP_CAUGHT_UP_NOTICE,
+							},
+						];
+						await saveCheckpoint();
+						await publishProgress?.("running");
+					}
+				}
+				return history;
 			},
 			beforeStep: async (history) => {
 				timing?.mark("promptBuilt");

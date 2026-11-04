@@ -327,6 +327,78 @@ describe("executeSessionMachinePlan", () => {
 		]);
 	});
 
+	it("boots a chat from the tools image when the project has no template yet, recording it before naming the machine", async () => {
+		const runtime = machines({ copied: "fresh-vm" });
+		const events: string[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: null,
+			templateProviderRef: null,
+			saveTemplateSnapshot: async () => {
+				throw new Error("there is no template to seal");
+			},
+			saveSessionProviderRef: async (providerRef) => {
+				events.push(`save:${providerRef}`);
+			},
+			freshBoot: {
+				snapshotId: async () => "sh-tools",
+				record: async () => {
+					events.push("record");
+				},
+			},
+		});
+		expect(result).toEqual({ providerRef: "fresh-vm", planKind: "boot-fresh" });
+		expect(runtime.provisioned).toEqual([
+			{ slug: "ytimesy-ag-1111111122223333", snapshotId: "sh-tools" },
+		]);
+		expect(runtime.snapshots).toEqual([]);
+		expect(events).toEqual(["record", "save:fresh-vm"]);
+	});
+
+	it("copies the template, never boots fresh, once the project has one", async () => {
+		const runtime = machines({ copied: "agent-vm" });
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-ready",
+			templateProviderRef: null,
+			saveTemplateSnapshot: async () => {},
+			saveSessionProviderRef: async () => {},
+			freshBoot: {
+				snapshotId: async () => {
+					throw new Error("must not boot fresh");
+				},
+				record: async () => {
+					throw new Error("must not record a fresh boot");
+				},
+			},
+		});
+		expect(result.planKind).toBe("copy-snapshot");
+		expect(runtime.provisioned[0]?.snapshotId).toBe("snap-ready");
+	});
+
+	it("refuses a chat with no template when the caller cannot boot one fresh", async () => {
+		const runtime = machines({});
+		await expect(
+			executeSessionMachinePlan({
+				machines: runtime.api,
+				sessionId: "11111111-2222-3333-4444-555555555555",
+				sessionProviderRef: null,
+				workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				templateSnapshotId: null,
+				templateProviderRef: null,
+				saveTemplateSnapshot: async () => {},
+				saveSessionProviderRef: async () => {},
+			}),
+		).rejects.toThrow(/Prepare a project environment/);
+		expect(runtime.provisioned).toEqual([]);
+	});
+
 	it("snapshots the prepared VM before copying a second agent", async () => {
 		const runtime = machines({ snapshot: "snap-late", copied: "agent-2" });
 		const snapshots: string[] = [];

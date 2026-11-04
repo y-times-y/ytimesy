@@ -18,12 +18,15 @@ export type SessionMachinePlan =
 	| { readonly kind: "resume"; readonly providerRef: string }
 	| { readonly kind: "copy-snapshot"; readonly snapshotId: string }
 	| { readonly kind: "needs-snapshot"; readonly providerRef: string }
-	| { readonly kind: "blocked"; readonly reason: string };
+	| { readonly kind: "boot-fresh" };
 
 /**
  * A project environment is the prepared template. Agents never edit it.
  * New sessions copy from its snapshot onto their own VM. A missing snapshot
- * is sealed from the unused template, then copied — never attached.
+ * is sealed from the unused template, then copied — never attached. Before
+ * the project's first template exists a chat never waits for it: its machine
+ * boots from the shared tools image, and the chat's turn clones the project
+ * and installs it in the background (fresh-machine-setup.ts).
  */
 export function sessionMachinePlan(input: {
 	readonly sessionProviderRef: string | null;
@@ -36,10 +39,7 @@ export function sessionMachinePlan(input: {
 		return { kind: "copy-snapshot", snapshotId: input.templateSnapshotId };
 	if (input.templateProviderRef)
 		return { kind: "needs-snapshot", providerRef: input.templateProviderRef };
-	return {
-		kind: "blocked",
-		reason: "Prepare a project environment before starting an agent.",
-	};
+	return { kind: "boot-fresh" };
 }
 
 export function shouldResealProjectSnapshotAfterCopyFailure(message: string) {
