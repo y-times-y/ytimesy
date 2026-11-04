@@ -1,5 +1,5 @@
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
+import { KeyRound, LoaderCircle } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { EnvironmentBuildView } from "#/domain/environment-build-progress";
 import type { RepositorySetup } from "#/domain/environment-detection";
@@ -26,6 +26,19 @@ import { GithubSetupLink } from "./github-setup-link";
 export const HeldForSetupContext = createContext<ReadonlySet<string>>(
 	new Set(),
 );
+
+/**
+ * The project's setup running in its own chat (setupIndicator), per
+ * project: one line beside the person's composer, with a way to the chat.
+ */
+export const SetupIndicatorContext = createContext<{
+	readonly projectId: string;
+	readonly kind: "running" | "needs-you";
+	readonly text: string;
+	readonly action: string;
+	/** Opens the setup chat; absent until it exists. */
+	readonly onOpen?: () => void;
+} | null>(null);
 
 const SETUP_STEPS = {
 	queued: "Starting",
@@ -93,6 +106,9 @@ export function WorkspaceStatus({
 	repairModelLabel?: string;
 }) {
 	const held = useContext(HeldForSetupContext);
+	const indicatorContext = useContext(SetupIndicatorContext);
+	const indicator =
+		indicatorContext?.projectId === projectId ? indicatorContext : null;
 	const workspace = useQuery({
 		...workspaceStatusQuery(projectId),
 		retry: retryTransientRead,
@@ -158,7 +174,32 @@ export function WorkspaceStatus({
 	const stalled = workspacePrepareStalled(current, Date.now());
 	const rebuilding =
 		current.status === "ready" && current.build?.status === "running";
-	// The first build shows as the top bar's setup pill (setup-pill.tsx).
+	// The setup runs in its own chat: one line here says so, the first
+	// build's steps show in that chat.
+	if (indicator && !stalled && current.status !== "failed")
+		return (
+			<p
+				className="workspace-status setup-indicator"
+				data-kind={indicator.kind}
+				role="status"
+			>
+				{indicator.kind === "needs-you" ? (
+					<KeyRound size={13} aria-hidden="true" />
+				) : (
+					<LoaderCircle
+						size={13}
+						className="workspace-status-spin"
+						aria-hidden="true"
+					/>
+				)}
+				<span>{indicator.text}</span>
+				{indicator.onOpen ? (
+					<button type="button" onClick={indicator.onOpen}>
+						{indicator.action}
+					</button>
+				) : null}
+			</p>
+		);
 	if (!stalled && firstBuildRunning(current)) return null;
 	if (!stalled && (rebuilding || current.status !== "ready") && building)
 		return (

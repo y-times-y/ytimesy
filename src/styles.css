@@ -3290,6 +3290,41 @@ a.session-title-meta:focus-visible {
 	color: #eee;
 	font-size: 12px;
 }
+/* The project's setup running in its own chat (workspace-status.tsx): one
+   quiet line, its action a text link, not a button block. */
+.setup-indicator {
+	gap: 6px;
+	white-space: nowrap;
+}
+.setup-indicator > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.setup-indicator svg {
+	flex: none;
+}
+.setup-indicator[data-kind="needs-you"] {
+	color: #fbbf24;
+}
+.workspace-status.setup-indicator button {
+	flex: none;
+	min-height: 24px;
+	padding: 0 2px;
+	background: transparent;
+	color: #ededed;
+	font-weight: 500;
+	text-decoration: underline;
+	text-decoration-color: #ffffff40;
+	text-underline-offset: 3px;
+	cursor: pointer;
+}
+.workspace-status.setup-indicator button:hover {
+	text-decoration-color: currentColor;
+}
+.workspace-status.setup-indicator button:focus-visible {
+	outline: 1px solid #929292;
+	outline-offset: 2px;
+}
 .publication-action {
 	flex: 0 0 auto;
 	display: flex;
