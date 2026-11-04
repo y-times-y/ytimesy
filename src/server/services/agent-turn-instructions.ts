@@ -146,6 +146,8 @@ function leanTurnInstructions(
 					readOnly,
 					codeMode,
 					unattended: input.unattended,
+					// A subagent's work reaches GitHub only through its parent.
+					gitRemote: !input.session.agentRole,
 				}),
 		codeMode === "primary"
 			? primaryCodeModeInstructions(input.leanShape, { readOnly })

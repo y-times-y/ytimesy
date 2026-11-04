@@ -10,6 +10,10 @@ import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
+	clearWakeFailures,
+	recordWakeFailure,
+} from "#/server/adapters/machine-wake-failures";
+import {
 	WorkspaceCommandError,
 	WorkspaceProvisionError,
 } from "#/server/services/errors";
@@ -295,8 +299,10 @@ export function createFreestyleWorkspaceMachines(
 					},
 					{ operation: "ensureRunning", vmId: workspaceId },
 				);
+				await clearWakeFailures(workspaceId);
 				return workspaceId;
 			} catch (cause) {
+				await recordWakeFailure(workspaceId, cause);
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
