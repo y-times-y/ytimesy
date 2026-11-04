@@ -33,7 +33,6 @@ import {
 } from "#/domain/default-branch-cookie";
 import {
 	ENVIRONMENT_SETUP_PROMPT,
-	initialSetupMessageId,
 	setupRequestKeeping,
 } from "#/domain/environment-setup";
 import {
@@ -59,9 +58,8 @@ import {
 } from "#/domain/message-attachment";
 import { openChatCookie } from "#/domain/open-chat-cookie";
 import {
-	firstBuildRunning,
 	projectSetupChat,
-	startsBackgroundProjectSetup,
+	setupComposerPlaceholder,
 } from "#/domain/project-setup-start";
 import {
 	heldSendReleases,
@@ -116,7 +114,6 @@ import {
 	WAKE_WATCH_MS,
 	withinTimeout,
 } from "#/domain/session-progress";
-import { setupComposerPlaceholder } from "#/domain/setup-pill";
 import type { SidebarPullRequest } from "#/domain/sidebar-chat-status";
 import {
 	backgroundTurnPollChatIds,
@@ -203,11 +200,9 @@ import { requestJson, retryTransientRead } from "../projects/api";
 import {
 	environmentProgressQuery,
 	HeldForSetupMessage,
-	ProjectSetupBuild,
 } from "../projects/environment-build-progress";
 import { FirstProjectHeading } from "../projects/first-project-heading";
 import { deleteOwnedProject } from "../projects/project.fn";
-import { SetupStatusPill, useSetupPill } from "../projects/setup-pill";
 import {
 	HeldForSetupContext,
 	retryWorkspace,
@@ -1948,90 +1943,16 @@ export function WorkspaceHome({
 		enabled: Boolean(selectedProject?.id),
 	});
 	const projectSetupStatus = projectSetup.data?.status;
-	// A project just added starts its setup by itself, in the background: in
-	// its own chat on the server, never in the open chat, never navigating.
-	const setupStartedInTab = useRef(new Set<string>());
-	const firstBuildSeenInTab = useRef(new Set<string>());
-	/** Projects this tab sent a task in: their setup starts beside it, on the server. */
-	const taskSentInTab = useRef(new Set<string>());
-	// The model the setup runs on: the one a send from this composer would use.
-	const backgroundSetupModel = preferredSessionModelId(
-		sessionModelsFromListed(session.models),
-		{
-			lastUsedId: session.listedModelId,
-			excludedIds: session.blockedListedModelIds,
-		},
-	);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: decided when the project, its status, its chats or the model change.
-	useEffect(() => {
-		const projectId = selectedProject?.id;
-		const workspace = projectSetup.data;
-		if (!projectId) return;
-		if (workspace?.projectId === projectId && firstBuildRunning(workspace))
-			firstBuildSeenInTab.current.add(projectId);
-		if (
-			!backgroundSetupModel ||
-			!startsBackgroundProjectSetup({
-				projectId,
-				workspace,
-				chats: chats.data,
-				startedInThisTab: setupStartedInTab.current,
-				sawFirstBuildInThisTab: firstBuildSeenInTab.current,
-				taskSent:
-					taskSentInTab.current.has(projectId) ||
-					Boolean(heldForSetupRef.current),
-			})
-		)
-			return;
-		setupStartedInTab.current.add(projectId);
-		void sendTask({
-			data: {
-				projectId,
-				harnessId,
-				createNew: true,
-				text: ENVIRONMENT_SETUP_PROMPT,
-				modelId: backgroundSetupModel,
-				userMessageId: initialSetupMessageId(projectId),
-				environmentSetup: true,
-			},
-		})
-			.then(() =>
-				queryClient.invalidateQueries({
-					queryKey: ["agent-sessions", projectId],
-				}),
-			)
-			.catch((cause: unknown) => {
-				// Another look (a status or chat-list change) may start it again.
-				setupStartedInTab.current.delete(projectId);
-				console.warn("The project's setup could not be started.", cause);
-			});
-	}, [
-		selectedProject?.id,
-		projectSetup.data,
-		chats.data,
-		backgroundSetupModel,
-	]);
-	// The setup's pill in the top bar while the project is set up in the background.
-	const setupChat = projectSetupChat(chats.data);
-	const setupPill = useSetupPill({
-		projectId: selectedProject?.id,
-		setupChat,
+	// A new project's setup runs in its own chat, started by the server
+	// (project-setup-background.ts); the person's chat says it need not wait.
+	const setupPlaceholder = setupComposerPlaceholder({
+		workspace:
+			projectSetup.data?.projectId === selectedProject?.id
+				? projectSetup.data
+				: null,
+		setupChat: projectSetupChat(chats.data),
 		openChatId: activeSessionId,
 	});
-	const setupChatId = setupChat?.id;
-	/** The pill clicked: what to do lives in the setup chat, progress in the panel. */
-	function openSetupFromPill() {
-		if (!setupPill) return;
-		if (
-			setupChatId &&
-			(setupPill.kind === "needs-you" || setupPill.kind === "failed")
-		) {
-			openChat(setupChatId);
-			return;
-		}
-		setInspectorView("overview");
-		setInspectorOpen(true);
-	}
 	// biome-ignore lint/correctness/useExhaustiveDependencies: runs as the setup status changes; the held send carries its own scope.
 	useEffect(() => {
 		const held = heldForSetupRef.current;
@@ -3452,9 +3373,6 @@ export function WorkspaceHome({
 						>
 							<PanelRight size={16} />
 						</button>
-						{setupPill && !memoryPageOpen ? (
-							<SetupStatusPill pill={setupPill} onOpen={openSetupFromPill} />
-						) : null}
 						{memoryPageOpen ? (
 							<MemoryPage
 								view={memoryView}
@@ -3536,7 +3454,7 @@ export function WorkspaceHome({
 											setSettingsSection(section);
 											setSettingsOpen(true);
 										}}
-										setupPlaceholder={setupComposerPlaceholder(setupPill)}
+										setupPlaceholder={setupPlaceholder}
 										setupHold={
 											heldView && selectedProject
 												? {
@@ -3699,10 +3617,6 @@ export function WorkspaceHome({
 													approvesPlan: options?.approvesPlan,
 													continueOn: options?.continueOn,
 												});
-											// The server starts the project's setup beside a task
-											// sent during the first build: this tab must not open it too.
-											if (selectedProject && !environmentSetup)
-												taskSentInTab.current.add(selectedProject.id);
 											return new Promise<ComposerSendResult>((settle) => {
 												const pending: PendingSend = {
 													epoch,
@@ -3909,28 +3823,6 @@ export function WorkspaceHome({
 											onOpen={openInspector}
 											onIntent={intendView}
 											pullRequests={overviewPullRequests}
-											setup={
-												setupPill &&
-												setupPill.kind !== "ready" &&
-												selectedProject ? (
-													<>
-														<ProjectSetupBuild
-															projectId={selectedProject.id}
-															waiting={setupPill.kind === "running"}
-															failed={setupPill.kind === "failed"}
-														/>
-														{setupChatId ? (
-															<button
-																type="button"
-																className="overview-setup-chat"
-																onClick={() => openChat(setupChatId)}
-															>
-																Open setup chat
-															</button>
-														) : null}
-													</>
-												) : undefined
-											}
 										/>
 									}
 								/>

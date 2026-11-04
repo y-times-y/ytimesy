@@ -404,6 +404,24 @@ export async function latestAgentSessionMetadata(
 	return metadata;
 }
 
+/** The route and model of the person's latest top-level chat that names one, in any project. */
+export async function latestListedModelForUser(
+	userId: string,
+): Promise<{ harnessId: AgentProviderId; modelId: string } | null> {
+	const result = await database().query<{
+		harness: AgentProviderId;
+		listed_model_id: string;
+	}>(
+		`select harness,listed_model_id from agent_session
+		 where user_id=$1 and parent_session_id is null
+		   and coalesce(listed_model_id,'')<>''
+		 order by updated_at desc limit 1`,
+		[userId],
+	);
+	const row = result.rows[0];
+	return row ? { harnessId: row.harness, modelId: row.listed_model_id } : null;
+}
+
 /**
  * The chat a page opens in a project, without its history: the linked chat
  * when it is one of the project's top-level chats (as the sidebar lists
