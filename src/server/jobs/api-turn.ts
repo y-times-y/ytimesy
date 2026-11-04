@@ -74,7 +74,7 @@ import {
 } from "#/domain/model-failover-reason";
 import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
-import { posixShellCommand } from "#/domain/posix-command";
+import { posixShellCommand, posixShellQuoted } from "#/domain/posix-command";
 import {
 	agentSecretsEnvFile,
 	sessionReceivesProjectSecrets,
@@ -85,6 +85,7 @@ import {
 	openingPullRequestItem,
 	pullRequestHandoffItemId,
 } from "#/domain/pull-request-handoff-item";
+import { REQUEST_PUSH_APPROVAL_TOOL } from "#/domain/push-approval";
 import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
@@ -140,6 +141,7 @@ import {
 	harnessVariantForUser,
 	isDevEvalUser,
 } from "../adapters/dev-eval-users";
+import { gitPushRequests } from "../adapters/git-push-requests";
 import {
 	assertEvaluationActive,
 	type EvaluationRun,
@@ -237,6 +239,7 @@ import {
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { registerLiveTurn } from "../services/live-turn-abort";
 import { cancellableMachines } from "../services/machine-call-signal";
+import { type MachineGitStep, machineGitStep } from "../services/machine-git";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
 import { connectMcpTools } from "../services/mcp-tools";
@@ -257,6 +260,11 @@ import {
 	loadAgentProjectSecrets,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
+import {
+	countCommitsCommand,
+	PUSH_APPROVAL_END_TURN_TOOLS,
+	pushApprovalTools,
+} from "../services/push-approval-tool";
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { hasRepositoryInstructions } from "../services/repository-instructions";
@@ -611,6 +619,9 @@ async function runApiTurnAttempt(
 	let memoryCloned: Promise<void> | undefined;
 	/** The clone once the workspace started it (settled with it). */
 	let memoryCloning: Promise<void> | undefined;
+	// Plain git on the VM; its machine token, too, goes when this step ends.
+	let machineGit: MachineGitStep | null = null;
+	let machineGitPrepared: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -926,6 +937,8 @@ async function runApiTurnAttempt(
 		// Values every tool result is redacted of. The memory clone's token
 		// joins once it is on the VM, so tools read this list at call time.
 		const redact: string[] = [...(projectSecrets?.redact ?? [])];
+		// Readers' commands run as another user without the network; evaluations never reach GitHub.
+		machineGit = receivesSecrets && !evaluation ? machineGitStep(owner) : null;
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		let handoffWritten: Promise<void> | undefined;
@@ -1016,6 +1029,10 @@ async function runApiTurnAttempt(
 				secretsReady = secretsWritten;
 				secretsReady.catch(() => {});
 			}
+			// Outside the repository too; its token joins the redaction list first.
+			machineGitPrepared ??= machineGit?.prepareVm(ready, (token) => {
+				if (!redact.includes(token)) redact.push(token);
+			});
 			attachmentsWritten ??= materializeMessageAttachments(
 				ready.machines,
 				ready.vm,
@@ -1073,6 +1090,7 @@ async function runApiTurnAttempt(
 			await attachmentsWritten;
 			await handoffWritten;
 			await secretsReady;
+			await machineGitPrepared;
 			checkoutReady = true;
 			timing?.mark("checkoutReady");
 			return execution;
@@ -1552,6 +1570,26 @@ async function runApiTurnAttempt(
 							sessionId: owner.id,
 						})
 					: {},
+			pushApproval:
+				rootChat && owner.projectId
+					? pushApprovalTools({
+							userId: owner.userId,
+							projectId: owner.projectId,
+							requests: gitPushRequests,
+							countCommits: async (oldId, newId) => {
+								const ready = await workspace();
+								const counted = await ready.machines.exec(
+									ready.vm,
+									`cd ${posixShellQuoted(ready.cwd)} && ${countCommitsCommand(oldId, newId)}`,
+									15_000,
+								);
+								const count = Number(counted.stdout.trim());
+								return counted.exitCode === 0 && Number.isInteger(count)
+									? count
+									: null;
+							},
+						})
+					: {},
 		});
 		// Harness variant plan (on in the product): the root builder's
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
@@ -1807,6 +1845,7 @@ async function runApiTurnAttempt(
 						endTurnTools: [
 							...SECRET_REQUEST_END_TURN_TOOLS,
 							...ASK_USER_END_TURN_TOOLS,
+							...PUSH_APPROVAL_END_TURN_TOOLS,
 						],
 					}
 				: {}),
@@ -2411,6 +2450,7 @@ async function runApiTurnAttempt(
 					// A proposed plan or a secret request is the turn's result; it waits for the user.
 					item.kind === "planProposal" ||
 					item.kind === "secretRequest" ||
+					item.kind === "pushApproval" ||
 					item.kind === "userQuestion",
 			)
 		)
@@ -2980,6 +3020,8 @@ async function runApiTurnAttempt(
 				await memory.releaseVm(cloned ? vm : undefined);
 			})
 			.catch(() => {});
+		await machineGitPrepared?.catch(() => {});
+		await machineGit?.releaseVm(machineGitPrepared ? vm : undefined);
 		await closeMcp?.().catch(() => {});
 		clearInterval(heartbeat);
 		await heartbeatPending;
@@ -3027,6 +3069,8 @@ function turnTools(input: {
 	redact: readonly string[];
 	/** save_project_environment, in a person's root chats (not evaluations). */
 	environmentSetup: ToolSet;
+	/** request_push_approval, in a person's root chats. */
+	pushApproval: ToolSet;
 }) {
 	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
@@ -3052,6 +3096,7 @@ function turnTools(input: {
 					...secretTools,
 					...questionTools,
 					...input.environmentSetup,
+					...input.pushApproval,
 				},
 				redact,
 			),
@@ -3084,6 +3129,7 @@ function inLeanToolOrder(
 		...groups.webSearch,
 		REQUEST_PROJECT_SECRET_TOOL,
 		ASK_USER_TOOL,
+		REQUEST_PUSH_APPROVAL_TOOL,
 	].filter((name) => name in tools);
 	const names = [
 		...new Set([

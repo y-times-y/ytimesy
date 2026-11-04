@@ -6,7 +6,6 @@ import {
 	machineSize,
 	machineSizeId,
 } from "#/domain/machine-size";
-import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
@@ -66,7 +65,7 @@ import {
 	recentlyRunningGuest,
 	rememberRunningGuest,
 } from "./recent-guest-state";
-import { scrubAgentSecrets } from "./scrub-agent-secrets";
+import { SCRUB_VM_TOKENS, scrubAgentSecrets } from "./scrub-agent-secrets";
 import { prepareTemplateSnapshot } from "./template-snapshot";
 import {
 	admitVmCreate,
@@ -437,11 +436,11 @@ export function createFreestyleWorkspaceMachines(
 					scrubFork: async (vmId) => {
 						const scrubbed = await machines.exec(
 							WorkspaceId(vmId),
-							SCRUB_MEMORY_CREDENTIAL,
+							SCRUB_VM_TOKENS,
 							30_000,
 						);
 						if (scrubbed.exitCode !== 0)
-							throw new Error("the memory clone still holds a token");
+							throw new Error("the fork still holds the parent's tokens");
 					},
 					deleteVm: (vmId) => freestyle.vms.ref(vmId).delete(),
 				});

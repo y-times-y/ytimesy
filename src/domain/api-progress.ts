@@ -10,6 +10,10 @@ import {
 import { SessionItemId } from "./ids";
 import { CALL_MCP_TOOL_TOOL, calledMcpTool } from "./mcp-tool-call";
 import {
+	REQUEST_PUSH_APPROVAL_TOOL,
+	requestedPushApproval,
+} from "./push-approval";
+import {
 	REQUEST_PROJECT_SECRET_TOOL,
 	REQUESTABLE_SECRET_KINDS,
 	type RequestableSecretKind,
@@ -114,6 +118,20 @@ export function applyApiProgress(
 		if (!output) return [...items];
 		next = { kind: "secretRequest", id, ...output };
 	} else if (
+		event.type === "tool-result" &&
+		event.name === REQUEST_PUSH_APPROVAL_TOOL &&
+		requestedPushApproval(event.output, event.failed)
+	) {
+		// Only a card the tool showed waits for the user; a refused call stays a tool call.
+		const request = requestedPushApproval(event.output, event.failed);
+		if (!request) return [...items];
+		next = { kind: "pushApproval", id, ...request };
+	} else if (
+		event.type === "tool-call" &&
+		event.name === REQUEST_PUSH_APPROVAL_TOOL
+	)
+		return [...items];
+	else if (
 		event.type === "tool-result" &&
 		event.name === ASK_USER_TOOL &&
 		askedQuestions(event.output, event.failed)

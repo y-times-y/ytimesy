@@ -3,6 +3,7 @@ import { requestJson } from "../projects/api";
 import { getClaudeSubscription } from "../sessions/claude-subscription.fn";
 import { getModelConnections } from "../sessions/model-connections.fn";
 import { getModelFailoverSettings } from "../sessions/model-failover.fn";
+import { readDefaultBranchPushFn } from "./default-branch-push.fn";
 import { readMachineSizeFn } from "./machine-size.fn";
 import { readMemoryModeFn } from "./memory.fn";
 import { readNetworkAccessFn } from "./network-access.fn";
@@ -35,6 +36,10 @@ export function prefetchSettings(queryClient: QueryClient, projectId?: string) {
 				() => readNetworkAccessFn({ data }),
 			],
 			[["project-training", projectId], () => readProjectTrainingFn({ data })],
+			[
+				["project-default-branch-push", projectId],
+				() => readDefaultBranchPushFn({ data }),
+			],
 		);
 	}
 	for (const [queryKey, queryFn] of reads)

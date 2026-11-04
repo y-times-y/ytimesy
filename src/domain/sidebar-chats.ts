@@ -522,13 +522,14 @@ export function projectsByRecentActivity<P extends { readonly id: string }>(
 export type ChatWaitingOn =
 	| "question"
 	| "secret"
+	| "push"
 	| "plan"
 	| "paused"
 	| "failed";
 
 /**
  * A chat needs the user when its turn ended on a card only they can answer
- * (an ask_user question, a secret request, a proposed plan, a paused model
+ * (an ask_user question, a secret request, a push to approve, a proposed plan, a paused model
  * switch) and nothing was sent since, or when its last turn failed.
  */
 export function chatWaitingOn(
@@ -541,6 +542,7 @@ export function chatWaitingOn(
 		if (!item || startsTurn(item)) break;
 		if (item.kind === "userQuestion") return "question";
 		if (item.kind === "secretRequest") return "secret";
+		if (item.kind === "pushApproval") return "push";
 		if (item.kind === "planProposal") return "plan";
 		if (item.kind === "modelSwitch" && item.state === "awaitingApproval")
 			return "paused";
@@ -552,6 +554,7 @@ export function chatWaitingOnLabel(waitingOn: ChatWaitingOn) {
 	return {
 		question: "Has a question for you",
 		secret: "Needs a secret",
+		push: "Push waits for your approval",
 		plan: "Plan waits for your approval",
 		paused: "Paused for your approval",
 		failed: "Last run failed",

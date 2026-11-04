@@ -89,12 +89,12 @@ export function leanToolInstructions(
 }
 
 /**
- * The workspace's origin holds no GitHub credentials (the server fetches and
- * pushes with a short-lived grant), so a shell `git fetch`/`pull`/`push` can
- * only fail with "could not read Username"; say so before the agent tries.
+ * Shell git reaches GitHub through the git proxy with a short-lived grant
+ * per operation (src/domain/machine-git.ts); the proxy refuses a push to the
+ * default branch until the user approves it, unless the project allows it.
  */
 const GIT_REMOTE_LINE =
-	"- `git fetch/pull/push` to origin fails here (no credentials; don't retry): your branch is already checked out, and your commits are pushed and the PR opened for you.";
+	"- git to GitHub works normally here. Push work to your own branch; pushing to the repo's default branch needs the user's approval (request_push_approval) unless the project allows it.";
 
 /** Small edits over rewrites: a whole file re-sent through a heredoc costs its full length in output. */
 function editLine(shape: LeanToolShape) {

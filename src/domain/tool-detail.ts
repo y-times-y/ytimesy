@@ -575,6 +575,8 @@ function harnessToolActivity(
 			};
 		case "propose_plan":
 			return { verb: "Proposed a plan" };
+		case "request_push_approval":
+			return { verb: "Asked to push", target: text("branch") };
 		case "ask_user":
 			return { verb: "Asked you to choose" };
 		case "request_project_secret": {

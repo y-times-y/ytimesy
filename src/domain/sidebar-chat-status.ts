@@ -88,6 +88,7 @@ export function sidebarChatStatusLabel(
 				plan: "Waiting for your approval",
 				paused: "Waiting for your approval",
 				secret: "Needs a secret",
+				push: "Waiting for your approval to push",
 			}[status.waitingOn];
 		case "working": {
 			const since = status.since ? Date.parse(status.since) : Number.NaN;

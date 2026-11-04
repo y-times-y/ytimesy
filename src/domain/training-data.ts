@@ -132,6 +132,8 @@ export function sessionItemTrainingParts(
 			);
 		case "userQuestion":
 			return part("model", "questions", JSON.stringify(item.questions));
+		case "pushApproval":
+			return part("model", "summary", item.summary);
 		case "memorySave":
 			return part("model", "lines", JSON.stringify(item.lines));
 		case "commandExecution": {

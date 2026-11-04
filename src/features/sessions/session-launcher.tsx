@@ -150,6 +150,7 @@ import { getAgentModelCatalog } from "./model-catalog.fn";
 import { readPastedTextFn } from "./pasted-text.fn";
 import { useMarkPlanLimitFromSwitches } from "./plan-usage";
 import { ProjectContext } from "./project-context";
+import { approvePushRequestFn } from "./push-approval.fn";
 import { SendBlockNotice } from "./send-block-notice";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -629,6 +630,7 @@ export function SessionLauncher({
 	}, [drafting]);
 	const loadProjectCommands = useServerFn(listProjectCommandsFn);
 	const saveProjectSecret = useServerFn(saveProjectSecretFn);
+	const approvePushRequest = useServerFn(approvePushRequestFn);
 	const projectCommands = useQuery({
 		queryKey: ["project-commands", selectedProject?.id, session.agentSessionId],
 		// Only when the user starts a slash command; never wakes a paused VM.
@@ -1368,6 +1370,20 @@ export function SessionLauncher({
 									},
 									onAnswer: (saved, skipped) =>
 										sendText(secretsAnsweredText(saved, skipped)),
+								}
+							: undefined
+					}
+					pushActions={
+						session.agentSessionId
+							? {
+									disabled: busy || turnStatus === "running",
+									onApprove: async (itemId) => {
+										if (!session.agentSessionId) return;
+										await approvePushRequest({
+											data: { sessionId: session.agentSessionId, itemId },
+										});
+									},
+									onAnswer: (text) => sendText(text),
 								}
 							: undefined
 					}

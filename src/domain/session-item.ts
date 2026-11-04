@@ -13,6 +13,7 @@ import type { LocalAgent } from "./local-import-view";
 import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
+import type { PushApprovalRequest } from "./push-approval";
 import { visibleRuntimeUserText } from "./runtime-handoff";
 import type { RequestableSecretKind, RequestedSecret } from "./secret-request";
 import {
@@ -103,6 +104,15 @@ export type SecretRequestItem =
 			readonly secretKind: RequestableSecretKind;
 			readonly reason: string;
 	  };
+
+/**
+ * A push to a repository's default branch the agent asked the user to approve
+ * with request_push_approval; the turn ended to wait for Push or Cancel.
+ */
+export type PushApprovalItem = {
+	readonly kind: "pushApproval";
+	readonly id: SessionItemId;
+} & PushApprovalRequest;
 
 /** Questions the agent asked with ask_user; the turn ended to wait for the user's choice. */
 export type UserQuestionItem = {
@@ -278,6 +288,7 @@ export type SessionItem =
 	| PlanItem
 	| PlanProposalItem
 	| SecretRequestItem
+	| PushApprovalItem
 	| UserQuestionItem
 	| MemorySaveItem
 	| CommandExecutionItem

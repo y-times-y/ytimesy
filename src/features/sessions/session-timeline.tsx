@@ -61,6 +61,7 @@ import {
 import { mcpResult } from "#/domain/mcp-call-view";
 import { isPastedText } from "#/domain/pasted-text";
 import type { EvidenceRecord } from "#/domain/pr-evidence";
+import { pushApprovalOutcome } from "#/domain/push-approval";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
 import { activityGlyphForToolName } from "#/domain/session-activity";
@@ -132,6 +133,10 @@ import {
 } from "./model-switch-card";
 import { PullRequestHandoffRow } from "./pull-request-handoff-row";
 import {
+	type PushApprovalActions,
+	PushApprovalCard,
+} from "./push-approval-card";
+import {
 	type SecretRequestActions,
 	SecretRequestCard,
 } from "./secret-request-card";
@@ -167,6 +172,7 @@ export function SessionTimeline({
 	collapseInstructions = false,
 	recoveryControls,
 	secretActions,
+	pushActions,
 	questionActions,
 	failoverActions,
 	memoryActions,
@@ -225,6 +231,8 @@ export function SessionTimeline({
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
 	secretActions?: SecretRequestActions;
+	/** Approve or cancel a push to the default branch; omitted where nobody can answer. */
+	pushActions?: PushApprovalActions;
 	/** Answer the agent's question card; omitted where nobody can answer. */
 	questionActions?: UserQuestionActions;
 	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
@@ -257,6 +265,7 @@ export function SessionTimeline({
 	const readPasted = useStableCallback(readPastedText);
 	const stableMemoryActions = useStableActions(memoryActions);
 	const stableSecretActions = useStableActions(secretActions);
+	const stablePushActions = useStableActions(pushActions);
 	const stableQuestionActions = useStableActions(questionActions);
 	const stableFailoverActions = useStableActions(failoverActions);
 	// The same while the helpers are: a new value would give every reply's
@@ -365,6 +374,12 @@ export function SessionTimeline({
 								item={row.item}
 								outcome={secretRequestOutcome(items, row.item.id)}
 								actions={stableSecretActions}
+							/>
+						) : row.kind === "item" && row.item.kind === "pushApproval" ? (
+							<MemoPushApprovalCard
+								item={row.item}
+								outcome={pushApprovalOutcome(items, row.item.id)}
+								actions={stablePushActions}
 							/>
 						) : row.kind === "item" &&
 							row.item.kind === "modelSwitch" &&
@@ -590,6 +605,7 @@ function timelineRows(
 // keystroke in the composer or every streamed chunk of another message.
 const MemoUserQuestionCard = memo(UserQuestionCard);
 const MemoSecretRequestCard = memo(SecretRequestCard);
+const MemoPushApprovalCard = memo(PushApprovalCard);
 const MemoModelSwitchCard = memo(ModelSwitchCard);
 const MemoEvidenceCard = memo(EvidenceCard);
 
@@ -681,7 +697,12 @@ function rowEstimate(row: TimelineRow): number {
 		return Math.min(60 + 28 * item.todos.length, 3_000);
 	if (item.kind === "planProposal" || item.kind === "plan")
 		return Math.min(60 + 20 * textLines(item.text, 100), 3_000);
-	if (item.kind === "userQuestion" || item.kind === "secretRequest") return 160;
+	if (
+		item.kind === "userQuestion" ||
+		item.kind === "secretRequest" ||
+		item.kind === "pushApproval"
+	)
+		return 160;
 	return 34;
 }
 
@@ -1246,6 +1267,8 @@ function SessionItemView({
 			return <UserQuestionCard item={item} reply={null} />;
 		case "secretRequest":
 			return <SecretRequestCard item={item} outcome="answered" />;
+		case "pushApproval":
+			return <PushApprovalCard item={item} outcome="answered" />;
 		case "planProposal":
 			return <PlanMessage text={item.text} onOpenFile={onOpenFile} />;
 		case "commandExecution": {
