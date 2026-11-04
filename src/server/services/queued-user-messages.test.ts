@@ -551,6 +551,30 @@ describe("messages held while the project's environment is set up", () => {
 		});
 	});
 
+	it("starts a new project's background setup in its own chat at once when the build is already ready", async () => {
+		mocks.claimSetup.mockResolvedValue({
+			session: { ...heldChat, id: "setup-chat", items: [] },
+			created: true,
+		});
+		mocks.session.mockResolvedValue({ ...heldChat, id: "setup-chat" });
+		mocks.send.mockReturnValue(Effect.succeed(view("running")));
+		await Effect.runPromise(
+			sendComposerMessage(machines, newChatScope, {
+				text: ENVIRONMENT_SETUP_PROMPT,
+				modelId: "connection|model",
+				idempotencyKey: initialSetupMessageId("project"),
+				environmentSetup: true,
+			}),
+		);
+		expect(mocks.claimSetup).toHaveBeenCalledOnce();
+		expect(mocks.hold).not.toHaveBeenCalled();
+		expect(mocks.send).toHaveBeenCalledOnce();
+		expect(mocks.send.mock.calls[0]?.[1]).toMatchObject({
+			sessionId: "setup-chat",
+			createNew: false,
+		});
+	});
+
 	it("lets Rerun setup start another setup chat", async () => {
 		mocks.otherSetup.mockResolvedValue("setup-chat");
 		mocks.session.mockResolvedValue({ ...heldChat, id: "chat" });

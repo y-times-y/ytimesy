@@ -26,6 +26,38 @@ export const HeldForSetupContext = createContext<ReadonlySet<string>>(
 	new Set(),
 );
 
+/**
+ * The project set up in the background (backgroundSetupLine), per project:
+ * its one line replaces the build's progress beside the composer.
+ */
+export const BackgroundSetupContext = createContext<{
+	readonly projectId: string;
+	readonly text: string;
+	/** Opens the setup chat; absent until it exists. */
+	readonly onView?: () => void;
+} | null>(null);
+
+/** "Setting up this project in the background · View". */
+function BackgroundSetupLine({
+	text,
+	onView,
+}: {
+	text: string;
+	onView?: () => void;
+}) {
+	return (
+		<p className="workspace-status workspace-status-background" role="status">
+			<LoaderCircle size={13} className="workspace-status-spin" />
+			<span>{text}</span>
+			{onView ? (
+				<button type="button" onClick={onView}>
+					View
+				</button>
+			) : null}
+		</p>
+	);
+}
+
 const SETUP_STEPS = {
 	queued: "Starting",
 	provisioning: "Starting the machine",
@@ -92,6 +124,9 @@ export function WorkspaceStatus({
 	repairModelLabel?: string;
 }) {
 	const held = useContext(HeldForSetupContext);
+	const backgroundContext = useContext(BackgroundSetupContext);
+	const background =
+		backgroundContext?.projectId === projectId ? backgroundContext : null;
 	const workspace = useQuery({
 		...workspaceStatusQuery(projectId),
 		retry: retryTransientRead,
@@ -157,6 +192,10 @@ export function WorkspaceStatus({
 	const stalled = workspacePrepareStalled(current, Date.now());
 	const rebuilding =
 		current.status === "ready" && current.build?.status === "running";
+	if (background && !stalled && current.status !== "failed")
+		return (
+			<BackgroundSetupLine text={background.text} onView={background.onView} />
+		);
 	if (!stalled && (rebuilding || current.status !== "ready") && building)
 		return (
 			<div className="workspace-status-live">

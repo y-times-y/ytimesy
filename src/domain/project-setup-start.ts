@@ -1,35 +1,14 @@
-/**
- * When a project's setup starts by itself: a project just added, whose
- * first environment build is under way and which has no chat yet. Adding a
- * project opens its setup chat at once (with the build streaming in it),
- * whichever form added it; nobody has to type anything.
- *
- * A project with a working environment (ready, or rebuilding with one), a
- * failed first build, or any chat never starts it again; neither does a
- * project this tab already started (the server also refuses a second start:
- * initialSetupMessageId).
- */
-export function startsProjectSetup(input: {
-	readonly projectId: string | undefined;
-	readonly workspace:
-		| {
-				readonly projectId: string;
-				readonly status: string;
-				readonly build?: { readonly rebuild: boolean } | null;
-		  }
-		| null
-		| undefined;
-	/** The project's chats; undefined while they load. */
-	readonly chats: readonly unknown[] | undefined;
-	readonly startedInThisTab: ReadonlySet<string>;
-}): boolean {
-	const { projectId, workspace, chats } = input;
-	if (!projectId || input.startedInThisTab.has(projectId)) return false;
-	if (!workspace || workspace.projectId !== projectId) return false;
-	if (!FIRST_BUILD_RUNNING.has(workspace.status)) return false;
-	if (workspace.build?.rebuild) return false;
-	return chats !== undefined && chats.length === 0;
-}
+import {
+	ENVIRONMENT_SETUP_TITLE,
+	PREVIOUS_SETUP_TITLES,
+} from "./environment-setup";
+import type { ChatWaitingOn } from "./sidebar-chats";
+
+type SetupWorkspace = {
+	readonly projectId: string;
+	readonly status: string;
+	readonly build?: { readonly rebuild: boolean } | null;
+};
 
 const FIRST_BUILD_RUNNING = new Set([
 	"queued",
@@ -38,55 +17,91 @@ const FIRST_BUILD_RUNNING = new Set([
 	"installing",
 ]);
 
-/**
- * The setup agent starts from the build's report, so a tab that sees a new
- * project's first build running, with nothing sent, waits ("await"), then
- * opens the setup chat when the build is ready ("start"): the person is
- * looking at it. A task sent during the build never waits and never loses
- * its place: it runs at once in its own chat, and the server starts the
- * setup beside it, in the background (startProjectSetupBesideTask), so the
- * tab opens nothing.
- */
-export function projectSetupStep(input: {
-	readonly projectId: string | undefined;
-	readonly workspace: Parameters<typeof startsProjectSetup>[0]["workspace"];
-	readonly chats: readonly unknown[] | undefined;
-	readonly startedInThisTab: ReadonlySet<string>;
-	/** Projects whose first build this tab saw running. */
-	readonly awaitingInThisTab: ReadonlySet<string>;
-	/** The person sent a task in this project from this tab. */
-	readonly taskSent: boolean;
-}): "await" | "start" | null {
-	const { projectId, workspace, chats } = input;
-	if (!projectId || input.startedInThisTab.has(projectId)) return null;
-	if (!workspace || workspace.projectId !== projectId) return null;
-	if (chats === undefined || chats.length > 0 || input.taskSent) return null;
-	if (FIRST_BUILD_RUNNING.has(workspace.status) && !workspace.build?.rebuild)
-		return input.awaitingInThisTab.has(projectId) ? null : "await";
-	if (workspace.status === "ready" && input.awaitingInThisTab.has(projectId))
-		return "start";
-	return null;
+/** The project's first environment build runs (a rebuild keeps its working environment). */
+export function firstBuildRunning(workspace: SetupWorkspace) {
+	return FIRST_BUILD_RUNNING.has(workspace.status) && !workspace.build?.rebuild;
 }
 
 /**
- * A new project's first build is running and nothing has been sent: the empty
- * chat shows the setup streaming in place, where the person is looking.
+ * When a tab starts a new project's setup, in the background: the open
+ * chat stays the person's and nothing navigates. The setup request goes to
+ * the server as a new chat's send (the project's one setup message id, so a
+ * second tab or a task's own start finds the same chat); the server holds it
+ * in that chat until the build is ready, then the setup agent runs there.
+ *
+ * It starts while the project's first build runs, or once that build is
+ * ready if this tab saw it running (no model was known yet, say), and only
+ * while nothing was sent: a task sent first starts the setup beside it on
+ * the server. A project with any chat in use, or one this tab already
+ * started, never starts it again.
  */
-export function showsFirstSetupInChat(input: {
+export function startsBackgroundProjectSetup(input: {
 	readonly projectId: string | undefined;
-	readonly workspace: Parameters<typeof startsProjectSetup>[0]["workspace"];
-	readonly chats: readonly unknown[] | undefined;
-	readonly chatOpen: boolean;
-}) {
+	readonly workspace: SetupWorkspace | null | undefined;
+	/** The project's chats; undefined while they load. */
+	readonly chats: readonly { readonly unused?: boolean }[] | undefined;
+	readonly startedInThisTab: ReadonlySet<string>;
+	/** Projects whose first build this tab saw running. */
+	readonly sawFirstBuildInThisTab: ReadonlySet<string>;
+	/** The person sent a task in this project from this tab. */
+	readonly taskSent: boolean;
+}): boolean {
 	const { projectId, workspace, chats } = input;
-	return Boolean(
-		projectId &&
-			!input.chatOpen &&
-			workspace &&
-			workspace.projectId === projectId &&
-			FIRST_BUILD_RUNNING.has(workspace.status) &&
-			!workspace.build?.rebuild &&
-			chats !== undefined &&
-			chats.length === 0,
+	if (!projectId || input.startedInThisTab.has(projectId)) return false;
+	if (!workspace || workspace.projectId !== projectId) return false;
+	if (input.taskSent || chats === undefined) return false;
+	// The open empty chat is listed as unused: it is not in use.
+	if (chats.some((chat) => !chat.unused)) return false;
+	if (firstBuildRunning(workspace)) return true;
+	return (
+		workspace.status === "ready" && input.sawFirstBuildInThisTab.has(projectId)
 	);
+}
+
+type SetupChat = {
+	readonly id: string;
+	readonly title: string;
+	readonly turnStatus?: string;
+	readonly waitingOn?: ChatWaitingOn | null;
+	readonly waitsForSetup?: boolean;
+};
+
+/** The project's setup chat, the newest by the list's order (latest first). */
+export function projectSetupChat<Chat extends SetupChat>(
+	chats: readonly Chat[] | undefined,
+): Chat | null {
+	const titles: readonly string[] = [
+		ENVIRONMENT_SETUP_TITLE,
+		...PREVIOUS_SETUP_TITLES,
+	];
+	return chats?.find((chat) => titles.includes(chat.title)) ?? null;
+}
+
+/**
+ * The one line beside the composer while the project is set up in the
+ * background: during the first build, and while its setup chat works or
+ * waits for the person. Its View opens the setup chat once there is one.
+ * None in the setup chat itself, nor after a failed build (its failure
+ * shows instead).
+ */
+export function backgroundSetupLine(input: {
+	readonly workspace: SetupWorkspace | null | undefined;
+	readonly setupChat: SetupChat | null;
+	readonly openChatId: string | undefined;
+}): { readonly text: string; readonly chatId: string | null } | null {
+	const { workspace, setupChat } = input;
+	if (!workspace || workspace.status === "failed") return null;
+	if (setupChat && setupChat.id === input.openChatId) return null;
+	const needsYou = Boolean(
+		setupChat?.waitingOn && setupChat.waitingOn !== "failed",
+	);
+	const working =
+		setupChat?.turnStatus === "running" || Boolean(setupChat?.waitsForSetup);
+	if (!firstBuildRunning(workspace) && !needsYou && !working) return null;
+	return {
+		text: needsYou
+			? "Project setup needs you"
+			: "Setting up this project in the background",
+		chatId: setupChat?.id ?? null,
+	};
 }
