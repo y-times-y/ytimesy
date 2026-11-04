@@ -8,6 +8,18 @@ import { boundedFreestyleFetch } from "./bounded-fetch";
 import { admitVmResume, recentAdmissionCovers } from "./usage-admission";
 import { waitUntilGuestReady } from "./wait-until-running";
 
+/** Runs one shell command on a workspace VM (the terminal's git setup); a missing status is a timeout. */
+export function workspaceVmExec(apiKey: string, providerRef: string) {
+	const vm = new Freestyle({
+		apiKey,
+		fetch: boundedFreestyleFetch(),
+	}).vms.ref(providerRef);
+	return async (command: string, timeoutMs: number) => {
+		const result = await vm.exec({ command, timeoutMs });
+		return { exitCode: result.statusCode ?? 124 };
+	};
+}
+
 export async function openWorkspacePty(input: {
 	readonly apiKey: string;
 	readonly providerRef: string;

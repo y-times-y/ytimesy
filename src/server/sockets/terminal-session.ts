@@ -38,7 +38,7 @@ export async function runTerminalSession(
 		);
 		const started = Date.now();
 		let firstOutput = true;
-		const pty = await connectWorkspaceTerminal({
+		const { pty, release } = await connectWorkspaceTerminal({
 			userId: user.id,
 			projectId,
 			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
@@ -62,6 +62,12 @@ export async function runTerminalSession(
 			},
 		});
 		logRelay("terminal", "upstream-open", { ms: Date.now() - started });
+		if (!socket.open) {
+			// Closed while connecting: nothing will close the PTY or its git token later.
+			pty.detach();
+			void release();
+			return;
+		}
 		socket.onMessage((data, binary) => {
 			if (!binary && typeof data === "string") {
 				const control = parseTerminalClientMessage(data);
@@ -77,6 +83,8 @@ export async function runTerminalSession(
 		socket.onClose((close) => {
 			logRelay("terminal", "client-closed", { ...close });
 			pty.detach();
+			// The terminal's git token goes with it.
+			void release();
 		});
 	} catch (cause) {
 		const message =

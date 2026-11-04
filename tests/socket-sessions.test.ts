@@ -66,13 +66,14 @@ const url = (path: string, query: string) =>
 	new URL(`http://x${path}?${query}`);
 afterEach(() => vi.resetAllMocks());
 
-it("relays terminal input, resize controls and output, and detaches on close", async () => {
+it("relays terminal input, resize controls and output, and detaches and releases git on close", async () => {
 	mocks.user.mockResolvedValue({ id: "u" });
 	mocks.project.mockResolvedValue({ fullName: "org/repo" });
 	const pty = { write: vi.fn(), resize: vi.fn(), detach: vi.fn() };
+	const release = vi.fn(async () => {});
 	mocks.terminal.mockImplementation(async (input) => {
 		input.onData("hello");
-		return pty;
+		return { pty, release };
 	});
 	const socket = fakeSocket();
 	await runTerminalSession(
@@ -91,6 +92,7 @@ it("relays terminal input, resize controls and output, and detaches on close", a
 	expect(pty.write).toHaveBeenCalledWith(new Uint8Array([3]));
 	socket.emit.close?.();
 	expect(pty.detach).toHaveBeenCalled();
+	expect(release).toHaveBeenCalled();
 });
 
 it("reports sign-in and project errors to the terminal without opening a PTY", async () => {

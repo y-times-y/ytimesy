@@ -14,12 +14,10 @@ import { MACHINE_GIT_GRANT_ROUTE } from "../../domain/machine-git";
 import { database } from "../adapters/database";
 import { projectAllowsDefaultBranchPush } from "../adapters/default-branch-push";
 import { gitPushRequests } from "../adapters/git-push-requests";
-import {
-	authorizedGithubRepository,
-	userInstallationForAccount,
-} from "../adapters/github";
+import { authorizedGithubRepository } from "../adapters/github";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import {
+	type MachineGitChat,
 	type MachineGitTokenOwner,
 	machineGitTokens,
 } from "../adapters/machine-git-tokens";
@@ -54,10 +52,10 @@ export type VisibleRepository = {
 /** The reads behind a machine's git access, injectable for tests. */
 export type MachineGitSources = {
 	/** The chat is still there, its owner's, in this project, not archived. */
-	chatIsLive(chat: MachineGitTokenOwner): Promise<boolean>;
+	chatIsLive(chat: MachineGitChat): Promise<boolean>;
 	/** The chat's project repository with this full name (any case), else null. */
 	projectRepository(
-		chat: MachineGitTokenOwner,
+		chat: MachineGitChat,
 		fullName: string,
 	): Promise<{ installationId: number; fullName: string } | null>;
 	/** The owner's GitHub token; throws when GitHub is not connected. */
@@ -68,7 +66,6 @@ export type MachineGitSources = {
 		owner: string,
 		name: string,
 	): Promise<VisibleRepository | null>;
-	installationFor(userToken: string, account: string): Promise<number | null>;
 	/** An installation token for one repository; throws when the installation cannot reach it. */
 	installationToken(
 		installationId: number,
@@ -99,12 +96,13 @@ export type ResolvedMachineAccess = MachineGitAccess & {
 
 /**
  * Decides one repository access for a chat, with the reason the agent reads
- * when refused. Reads: the project's repositories, any repository the user's
- * installation of the app can reach, and public ones (anonymously). Writes:
- * the project's repositories only, with the user's own push permission.
+ * when refused. Reads: the project's repositories, and public ones
+ * (anonymously); no other private repository, even one the user's
+ * installation reaches. Writes: the project's repositories only, with the
+ * user's own push permission.
  */
 export async function resolveMachineAccess(
-	chat: MachineGitTokenOwner,
+	chat: MachineGitChat,
 	input: Pick<GrantRequest, "owner" | "name" | "access">,
 	sources: MachineGitSources,
 ): Promise<ResolvedMachineAccess> {
@@ -147,20 +145,24 @@ export async function resolveMachineAccess(
 			403,
 			`The user's GitHub account cannot push to ${repo}.`,
 		);
-	const installationId =
-		project?.installationId ??
-		(await sources.installationFor(userToken, projectOwner));
 	const resolved = {
 		owner: projectOwner,
 		name: projectName,
 		defaultBranch: visible.defaultBranch,
 	};
-	if (installationId) {
-		const token = await sources
-			.installationToken(installationId, projectName, input.access)
-			.catch(() => null);
-		if (token) return { ...resolved, installationId, token };
+	if (!project) {
+		if (visible.private)
+			throw new MachineGitRefusal(
+				403,
+				`${repo} is not in this project; add it to the project to use it here.`,
+			);
+		return { ...resolved, token: null };
 	}
+	const token = await sources
+		.installationToken(project.installationId, projectName, input.access)
+		.catch(() => null);
+	if (token)
+		return { ...resolved, installationId: project.installationId, token };
 	if (input.access === "read" && !visible.private)
 		return { ...resolved, token: null };
 	throw new MachineGitRefusal(
@@ -260,6 +262,7 @@ export async function answerMachineGitGrant(
 				? { installationId: access.installationId }
 				: {}),
 			access: input.access,
+			...(chat.holder === "terminal" ? { holder: "terminal" as const } : {}),
 			...(input.access === "write" && input.branch
 				? { branch: input.branch }
 				: {}),
@@ -304,10 +307,6 @@ export const machineGitSources: MachineGitSources = {
 	repository: (userToken, owner, name) =>
 		timed("git:reposGet", () =>
 			authorizedGithubRepository(userToken, owner, name),
-		),
-	installationFor: (userToken, account) =>
-		timed("git:installations", () =>
-			userInstallationForAccount(userToken, account),
 		),
 	installationToken: (installationId, name, access) =>
 		timed("git:installationToken", () =>
