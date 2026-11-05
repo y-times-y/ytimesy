@@ -524,7 +524,7 @@ exec ${argv.map(quote).join(" ")} </dev/null`;
 				),
 				`sudo -n chown ${owner} ${quote(inputs)}`,
 			].join(" && "),
-			"could not hand its input to the read-only helper.",
+			"could not hand its input to the read-only subagent.",
 		);
 		command = readerNetworkedCommand(input.sessionId, cli);
 	}

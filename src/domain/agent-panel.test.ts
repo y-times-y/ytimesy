@@ -582,7 +582,7 @@ describe("agents list rows", () => {
 			leadItems: [],
 			leadTurnStatus: "completed",
 		});
-		expect(rows.lead.doing).toBe("Free while helpers work");
+		expect(rows.lead.doing).toBe("Free while subagents work");
 		expect(
 			rows.helpers.map((row) => [row.name, row.doing, row.doingDetail]),
 		).toEqual([
@@ -605,7 +605,7 @@ describe("agents list rows", () => {
 				.lead.doing,
 		).toBe("Failed");
 	});
-	it("shows Main as free while its helpers work after its turn ended", () => {
+	it("shows Main as free while its subagents work after its turn ended", () => {
 		const rows = agentPanelRows({
 			tasks: [task("sk", { sidekick: true })],
 			leadItems: [],
@@ -613,7 +613,7 @@ describe("agents list rows", () => {
 		});
 		expect(rows.lead).toMatchObject({
 			status: "free",
-			doing: "Free while helpers work",
+			doing: "Free while subagents work",
 		});
 	});
 	it("says Main is free while commands run when only a background command works", () => {

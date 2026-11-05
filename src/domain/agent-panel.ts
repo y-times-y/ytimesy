@@ -598,7 +598,7 @@ export function agentPanelRows(input: {
 								"thinking",
 						)
 					: status === "free"
-						? `Free while ${helpersWork ? "helpers work" : "commands run"}`
+						? `Free while ${helpersWork ? "subagents work" : "commands run"}`
 						: status === "failed"
 							? "Failed"
 							: "Waiting for you",

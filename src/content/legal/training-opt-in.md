@@ -49,7 +49,7 @@ Even when the setting is on, these are never training data:
   Anthropic, xAI, OpenRouter, Google, ChatGPT/Codex, Claude Code and Grok
   subscriptions): replies, reasoning, plans, questions, the commands and tool
   arguments it chose, web searches it ran, the code and diffs it generated, a
-  helper agent's reports, and files the agent changed when they are read
+  subagent's reports, and files the agent changed when they are read
   back;
 - a local agent session you continued in ytimesy (its transcript holds model
   replies);

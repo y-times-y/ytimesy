@@ -56,7 +56,7 @@ files before uploading.
 
 **Workspaces.** Each chat runs in a cloud virtual machine with a copy of your
 repositories, installed dependencies, and anything the agent or you create
-there. Read-only helper agents share their chat's machine; machines are not
+there. Read-only subagents share their chat's machine; machines are not
 shared between accounts. Idle workspaces are saved as snapshots so you can
 resume (section 9).
 
@@ -305,7 +305,7 @@ whoever can see the repository on GitHub.
 - **Chats and projects**: deleting one archives it for 30 days (restorable in
   Settings → Archived); then, or when you delete it for good there, we delete
   its messages, saved checkpoints, attachments, workspaces and saved workspace
-  snapshots, and those of its helper chats. Deleting a project also deletes
+  snapshots, and those of its subagent chats. Deleting a project also deletes
   its environment snapshots, imported sessions and pull request evidence. Your
   GitHub repositories are not touched.
 - **Memory**: "Clear memory" deletes your memory repository and its
