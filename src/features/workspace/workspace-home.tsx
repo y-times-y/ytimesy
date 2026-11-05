@@ -1391,9 +1391,54 @@ export function WorkspaceHome({
 		const id = linkedChat.current;
 		if (!id || !chats.data?.some((chat) => chat.id === id)) return;
 		linkedChat.current = null;
-		withoutSearchParam("chat");
 		if (activeSessionId !== id) openChat(id);
 	});
+
+	// The open chat is in the address bar (`/?chat=<id>`): a reload, a copied
+	// link or a second tab opens the same chat, and Back returns to the one
+	// before. The page's first chat replaces the entry; each switch adds one.
+	const addressBarMirrored = useRef(false);
+	useEffect(() => {
+		// A linked chat that has not opened yet keeps its link.
+		if (linkedChat.current) return;
+		const here = new URL(window.location.href);
+		const shown = here.searchParams.get("chat");
+		if (shown === (activeSessionId ?? null)) {
+			addressBarMirrored.current = true;
+			return;
+		}
+		if (activeSessionId) here.searchParams.set("chat", activeSessionId);
+		else here.searchParams.delete("chat");
+		const url = `${here.pathname}${here.search}${here.hash}`;
+		if (addressBarMirrored.current)
+			window.history.pushState(window.history.state, "", url);
+		else window.history.replaceState(window.history.state, "", url);
+		addressBarMirrored.current = true;
+	}, [activeSessionId]);
+	// Back and Forward between those entries open that chat (the router sees
+	// the same page: only the search changed, so nothing reloads).
+	const addressBarLatest = useRef({
+		activeSessionId,
+		openChat,
+		knows: (_id: string): boolean => false,
+	});
+	addressBarLatest.current = {
+		activeSessionId,
+		openChat,
+		knows: (id) =>
+			(chats.data ?? []).some((chat) => chat.id === id) ||
+			projectChats.some((group) => group.chats.some((chat) => chat.id === id)),
+	};
+	useEffect(() => {
+		const onPop = () => {
+			const id = new URLSearchParams(window.location.search).get("chat");
+			const latest = addressBarLatest.current;
+			if (id && id !== latest.activeSessionId && latest.knows(id))
+				latest.openChat(id);
+		};
+		window.addEventListener("popstate", onPop);
+		return () => window.removeEventListener("popstate", onPop);
+	}, []);
 
 	// The project the open chat belongs to; the chat the server rendered open
 	// stays open as the page hydrates.
