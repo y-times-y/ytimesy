@@ -5,7 +5,7 @@ import { routeTree } from "./routeTree.gen";
 export function getRouter() {
 	const router = createTanStackRouter({
 		routeTree,
-		// A chat's address is /chat/<id>; the page reads it as /?chat=<id>.
+		// A chat's address is /thread/<id>; the page reads it as /?chat=<id>.
 		rewrite: { input: chatAddressInput, output: chatAddressOutput },
 		scrollRestoration: true,
 		defaultPreload: "intent",
