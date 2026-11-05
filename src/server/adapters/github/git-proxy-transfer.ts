@@ -40,6 +40,16 @@ export function gitProxyConfiguration() {
 const TRANSFER_FAILED =
 	"Workspace Git proxy transfer failed; check repository access.";
 
+/**
+ * GitHub refuses a push from an app that adds or changes a workflow file
+ * (.github/workflows/...) without the Workflows permission, which ytimesy's
+ * app does not have.
+ */
+const WORKFLOW_PUSH_REFUSED =
+	"GitHub blocked the push: the ytimesy app may not change workflow files under .github/workflows. Remove that file from the commit, or add it yourself.";
+const WORKFLOW_PUSH_REFUSED_PATTERN =
+	/without\s+`?workflows`?\s+permission|workflow[^\n]{0,120}permission/i;
+
 /** Fetches, pushes and the checkout of what was fetched. */
 const NETWORK_GIT_TIMEOUT_MS = 120_000;
 
@@ -418,14 +428,17 @@ ${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/
 		);
 		ran = true;
 		if (result.exitCode !== 0) {
+			const stderr = stderrTail(result, 400);
 			const failure =
 				result.exitCode === PUSH_EXIT.commit
 					? "Workspace Git could not prepare the commit to push."
-					: TRANSFER_FAILED;
+					: WORKFLOW_PUSH_REFUSED_PATTERN.test(stderr)
+						? WORKFLOW_PUSH_REFUSED
+						: TRANSFER_FAILED;
 			console.warn("Workspace Git command failed", {
 				failure,
 				exitCode: result.exitCode,
-				stderr: stderrTail(result, 400),
+				stderr,
 			});
 			throw new Error(failure);
 		}
