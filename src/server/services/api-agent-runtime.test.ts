@@ -1041,6 +1041,7 @@ it("does not begin compaction inference after the run deadline", async () => {
 						{ role: "user", content: "Continue" },
 					],
 					signal: new AbortController().signal,
+					turnTimeoutMs: 60_000,
 					onEvent: async () => {},
 					onStep: async () => {},
 					beforeCompaction: async () => {

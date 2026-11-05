@@ -1,10 +1,19 @@
 import { z } from "zod";
 
-const IMPLEMENTATION_MODEL_STEPS = 128;
+/**
+ * A backstop against a model looping forever, not a limit on real work: usage
+ * limits and per-step token admission are what bound spend. A turn has no
+ * wall-clock deadline; a dead or hung one is caught by its heartbeat.
+ */
+const IMPLEMENTATION_MODEL_STEPS = 1000;
 export const MAX_WORKFLOW_MODEL_STEPS = IMPLEMENTATION_MODEL_STEPS;
-export const MODEL_WORKFLOW_DEADLINE_MS = 30 * 60 * 1000;
 
-/** More tool iterations do not extend a turn's deadline or bypass token admission. */
+/** One durable step must finish inside a single alarm, which Cloudflare stops after 15 minutes. */
+export const STEP_BUDGET_MS = 14 * 60 * 1000;
+/** How long a token minted for one step stays valid: the step's budget and a margin. */
+export const STEP_TOKEN_TTL_MS = STEP_BUDGET_MS + 15 * 60 * 1000;
+
+/** More tool iterations do not bypass token admission. */
 export function modelStepLimit() {
 	return IMPLEMENTATION_MODEL_STEPS;
 }

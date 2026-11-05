@@ -4,10 +4,7 @@ import {
 	claimConversationStep,
 	type StepReceipt,
 } from "../src/domain/conversation-step-receipts";
-import {
-	MODEL_WORKFLOW_DEADLINE_MS,
-	type WorkflowStep,
-} from "../src/domain/model-workflow";
+import type { WorkflowStep } from "../src/domain/model-workflow";
 
 const step: WorkflowStep = {
 	turnId: "00000000-0000-4000-8000-000000000001",
@@ -19,7 +16,6 @@ function storage(): ConversationStepStorage {
 	const key = (value: WorkflowStep) => JSON.stringify(value);
 	return {
 		read: (value) => rows.get(key(value)),
-		firstStartedAt: (value) => rows.get(key({ ...value, index: 1 }))?.startedAt,
 		insert(value, startedAt) {
 			if (rows.has(key(value))) throw new Error("Duplicate receipt");
 			rows.set(key(value), { state: "processing", outcome: null, startedAt });
@@ -37,7 +33,6 @@ describe("chat-local step receipts", () => {
 		const receipts = storage();
 		expect(claimConversationStep(receipts, step, 100)).toEqual({
 			kind: "claimed",
-			remainingMs: MODEL_WORKFLOW_DEADLINE_MS,
 		});
 		expect(claimConversationStep(receipts, step, 200)).toEqual({
 			kind: "unavailable",
@@ -53,7 +48,7 @@ describe("chat-local step receipts", () => {
 			outcome: "continue",
 		});
 	});
-	it("requires the predecessor and preserves the original deadline", () => {
+	it("requires the predecessor and never expires a long turn", () => {
 		const receipts = storage();
 		const next = { ...step, index: 2 };
 		expect(claimConversationStep(receipts, next)).toEqual({
@@ -63,7 +58,6 @@ describe("chat-local step receipts", () => {
 		receipts.finish(step, "continue");
 		expect(claimConversationStep(receipts, next, 1100)).toEqual({
 			kind: "claimed",
-			remainingMs: MODEL_WORKFLOW_DEADLINE_MS - 1000,
 		});
 	});
 	it("does not cross leases or continue after terminal outcomes", () => {
@@ -86,7 +80,6 @@ describe("chat-local step receipts", () => {
 		expect(claimConversationStep(receipts, step, 700, true)).toEqual({
 			kind: "claimed",
 			resumed: true,
-			remainingMs: MODEL_WORKFLOW_DEADLINE_MS - 600,
 		});
 		receipts.finish(step, "continue");
 		expect(claimConversationStep(receipts, step, 800, true)).toEqual({

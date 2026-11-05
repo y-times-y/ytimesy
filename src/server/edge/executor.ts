@@ -20,6 +20,7 @@ import {
 	routeModelConversationStep,
 } from "../../domain/model-conversation-routing";
 import {
+	STEP_BUDGET_MS,
 	type WorkflowStep,
 	type WorkflowTurn,
 	workflowTurnSchema,
@@ -135,8 +136,6 @@ const environmentSecrets = z.object({
 	ENVIRONMENT_EXECUTION_ENABLED: z.literal("1"),
 });
 
-/** One step must finish inside a single alarm, which Cloudflare stops after 15 minutes. */
-const STEP_BUDGET_MS = 14 * 60 * 1000;
 /** Consecutive unfinished attempts (restarts or infrastructure errors) of one step before the turn is abandoned. */
 const MAX_STEP_RESUMES = 3;
 /** Well inside the 45 seconds after which a turn's lease counts as stale. */

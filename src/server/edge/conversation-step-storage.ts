@@ -26,15 +26,6 @@ export class SqliteConversationSteps implements ConversationStepStorage {
 			)
 			.toArray()[0];
 	}
-	firstStartedAt(step: WorkflowStep) {
-		return this.sql
-			.exec<{ startedAt: number }>(
-				"select started_at as startedAt from model_step where turn_id=? and lease_id=? order by step_index limit 1",
-				step.turnId,
-				step.leaseId,
-			)
-			.toArray()[0]?.startedAt;
-	}
 	insert(step: WorkflowStep, startedAt: number) {
 		this.sql.exec(
 			"insert into model_step values(?,?,?,'processing',null,?)",
