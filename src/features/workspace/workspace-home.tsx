@@ -1393,7 +1393,7 @@ export function WorkspaceHome({
 		if (activeSessionId !== id) openChat(id);
 	});
 
-	// The open chat is in the address bar (`/chat/<id>`): a reload, a copied
+	// The open chat is in the address bar (`/thread/<id>`): a reload, a copied
 	// link or a second tab opens the same chat, and Back returns to the one
 	// before. The page's first chat replaces the entry; each switch adds one.
 	const addressBarMirrored = useRef(false);
