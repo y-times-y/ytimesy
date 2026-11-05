@@ -986,7 +986,7 @@ const QueuedMessage = memo(function QueuedMessage({
 						</button>
 					)
 				) : null}
-				{onSend && !item.heldForSetup ? (
+				{onSend && !item.heldForSetup && !item.released ? (
 					<button
 						type="button"
 						className="session-queued-action"
