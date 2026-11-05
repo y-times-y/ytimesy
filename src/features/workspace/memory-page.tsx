@@ -79,11 +79,14 @@ export function MemoryPage({
 	onViewChange,
 	onOpenChat,
 	projects,
+	focus,
 }: {
 	view: MemoryView;
 	onViewChange: (view: MemoryView) => void;
 	onOpenChat: (chatId: string) => boolean;
 	projects?: readonly MemoryViewProject[];
+	/** A memory file to show first, when a chat's memory marker opened this page. */
+	focus?: { path: string };
 }) {
 	return (
 		<section className="memory-page" data-view={view} aria-label="Memory">
@@ -116,6 +119,7 @@ export function MemoryPage({
 					active
 					layout="page"
 					arrangement="tree"
+					focus={focus}
 					projects={projects}
 					onOpenChat={onOpenChat}
 				/>
