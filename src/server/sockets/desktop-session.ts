@@ -50,10 +50,7 @@ export async function runDesktopSession(
 		}
 		pipe(client, await connectRemote(remote, openRemote));
 	} catch (cause) {
-		const message =
-			cause instanceof Response && cause.status === 401
-				? "Sign in required."
-				: publicFailureMessage(cause);
+		const message = desktopFailureMessage(cause);
 		logRelay("desktop", "failed", { reason: message });
 		client.close(4000, message || "Desktop failed to connect.");
 	}
@@ -65,35 +62,60 @@ export type OpenDesktopRemote = (
 	headers: { authorization: string },
 ) => Promise<RemoteSocket>;
 
+/**
+ * How long the relay keeps trying to reach the viewer: a machine just woken
+ * (or a desktop just started) can need longer than one 8-second handshake.
+ */
+const CONNECT_WINDOW_MS = 45_000;
+const CONNECT_RETRY_PAUSE_MS = 2_000;
+
 async function connectRemote(
 	remote: DesktopRemote,
 	openRemote: OpenDesktopRemote,
 ) {
 	const base = remote.origin.replace(/^http/i, "ws");
+	const until = Date.now() + CONNECT_WINDOW_MS;
 	let lastError: unknown;
-	for (const path of ["", "/websockify"]) {
-		const started = Date.now();
-		try {
-			const socket = await openRemote(`${base}${path}`, {
-				authorization: remote.authorization,
-			});
-			logRelay("desktop", "upstream-open", {
-				path: path || "/",
-				ms: Date.now() - started,
-			});
-			return socket;
-		} catch (cause) {
-			logRelay("desktop", "upstream-refused", {
-				path: path || "/",
-				ms: Date.now() - started,
-				reason: cause instanceof Error ? cause.message : String(cause),
-			});
-			lastError = cause;
+	for (;;) {
+		for (const path of ["", "/websockify"]) {
+			const started = Date.now();
+			try {
+				const socket = await openRemote(`${base}${path}`, {
+					authorization: remote.authorization,
+				});
+				logRelay("desktop", "upstream-open", {
+					path: path || "/",
+					ms: Date.now() - started,
+				});
+				return socket;
+			} catch (cause) {
+				logRelay("desktop", "upstream-refused", {
+					path: path || "/",
+					ms: Date.now() - started,
+					reason: cause instanceof Error ? cause.message : String(cause),
+				});
+				lastError = cause;
+			}
 		}
+		if (Date.now() + CONNECT_RETRY_PAUSE_MS >= until) break;
+		await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_PAUSE_MS));
 	}
 	throw lastError instanceof Error
 		? lastError
 		: new Error("Desktop is not ready.");
+}
+
+/** What the viewer shows when the desktop never answered, instead of the runtime's "The operation was aborted". */
+export function desktopFailureMessage(cause: unknown) {
+	if (cause instanceof Response && cause.status === 401)
+		return "Sign in required.";
+	const aborted =
+		cause instanceof Error &&
+		(cause.name === "AbortError" ||
+			cause.name === "TimeoutError" ||
+			/operation was aborted/i.test(cause.message));
+	if (aborted) return "The desktop is still starting. Reconnect in a moment.";
+	return publicFailureMessage(cause);
 }
 
 function pipe(client: ClientSocket, remote: RemoteSocket) {
