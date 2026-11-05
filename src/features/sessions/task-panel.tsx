@@ -66,10 +66,10 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 		? formatSpend(totalSpend(subagents))
 		: null;
 	return (
-		<section className="task-panel" aria-label="Helpers">
+		<section className="task-panel" aria-label="Subagents">
 			<header className="task-panel-header">
 				<h2>
-					Helpers <span className="task-count">{tasks.length}</span>
+					Subagents <span className="task-count">{tasks.length}</span>
 				</h2>
 				{tasks.length > 0 ? (
 					<span className="task-count">
@@ -78,7 +78,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 				) : null}
 			</header>
 			{tasks.length === 0 ? (
-				<p className="task-empty">Helpers appear here when Main starts them.</p>
+				<p className="task-empty">Subagents appear here when Main starts them.</p>
 			) : (
 				<ol className="task-list">
 					{shown.map((task) => {
@@ -160,7 +160,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 			) : null}
 			{treeSpend ? (
 				<p className="task-usage task-usage-total">
-					Helpers {subagents.length} ·{" "}
+					Subagents {subagents.length} ·{" "}
 					{[`${treeSpend.tokens} tok`, treeSpend.dollars, treeSpend.vm]
 						.filter(Boolean)
 						.join(" · ")}

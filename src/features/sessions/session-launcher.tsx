@@ -1531,7 +1531,7 @@ export function SessionLauncher({
 										? "Ask while Main works…"
 										: agents.lead.status === "free"
 											? agents.helpers.some((row) => row.status === "working")
-												? "Ask Main anything while helpers work"
+												? "Ask Main anything while subagents work"
 												: "Ask Main anything while commands run"
 											: setupPlaceholder
 												? setupPlaceholder
