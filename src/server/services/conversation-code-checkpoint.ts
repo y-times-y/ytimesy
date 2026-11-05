@@ -45,7 +45,8 @@ export async function captureConversationCode(
 	const result = await workspace.machines.exec(
 		workspace.vm,
 		`python3 -c ${posixShellQuoted(CODE_CHECKPOINT_SCRIPT)} ${posixShellQuoted(workspace.cwd)} ${posixShellQuoted(ref)}`,
-		25_000,
+		// A large checkout on a machine just woken from sleep reads slowly.
+		90_000,
 	);
 	if (result.exitCode)
 		throw new RecoveryRefused(

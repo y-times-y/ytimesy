@@ -24,7 +24,6 @@ export type WorkflowStepClaim =
 	| {
 			kind: "claimed";
 			turn: ApiTurn;
-			remainingMs: number;
 			/** A previous attempt of this step was interrupted and is being re-run. */
 			resumed?: boolean;
 	  }
@@ -138,27 +137,16 @@ export async function executeModelStep(
 		).catch(() => {});
 		return "cancelled";
 	}
-	const expired = new AbortController();
-	if (claim.remainingMs === 0)
-		expired.abort(new DOMException("Turn deadline reached.", "TimeoutError"));
 	const outcome = await runApiTurn(
 		typeof machines === "function" ? machines() : machines,
 		claim.turn,
 		{
 			index: step.index,
-			signal: AbortSignal.any([
-				signal,
-				expired.signal,
-				AbortSignal.timeout(claim.remainingMs),
-			]),
+			signal,
 			limitReached: step.index > MAX_WORKFLOW_MODEL_STEPS,
 			resumed: claim.resumed,
 			startedAt,
-			waitDeadlineAt: commandWaitDeadline(
-				startedAt,
-				claim.remainingMs,
-				stepBudgetMs,
-			),
+			waitDeadlineAt: commandWaitDeadline(startedAt, stepBudgetMs),
 		},
 	);
 	await receipts.complete(step, outcome);
@@ -167,21 +155,11 @@ export async function executeModelStep(
 
 /** Saving the step's result after its tools finish. */
 const STEP_WAIT_MARGIN_MS = 60_000;
-/** The model call that reads the command's result still needs time inside the turn. */
-const TURN_WAIT_MARGIN_MS = 180_000;
-
-/** A command wait may not outlive the step's alarm budget or eat the turn's last model call. */
-export function commandWaitDeadline(
-	startedAt: number,
-	turnRemainingMs: number,
-	stepBudgetMs?: number,
-) {
-	return Math.min(
-		startedAt + turnRemainingMs - TURN_WAIT_MARGIN_MS,
-		stepBudgetMs === undefined
-			? Number.POSITIVE_INFINITY
-			: startedAt + stepBudgetMs - STEP_WAIT_MARGIN_MS,
-	);
+/** A command wait may not outlive the step's alarm budget. */
+export function commandWaitDeadline(startedAt: number, stepBudgetMs?: number) {
+	return stepBudgetMs === undefined
+		? Number.POSITIVE_INFINITY
+		: startedAt + stepBudgetMs - STEP_WAIT_MARGIN_MS;
 }
 
 /** Fences a turn's owned commands on the chat's machine without preparing a workspace. */

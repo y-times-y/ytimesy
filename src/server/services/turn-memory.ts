@@ -68,7 +68,7 @@ import {
 	selectMemoryMatches,
 	withMemoryParts,
 } from "#/domain/memory-repo";
-import { MODEL_WORKFLOW_DEADLINE_MS } from "#/domain/model-workflow";
+import { STEP_TOKEN_TTL_MS } from "#/domain/model-workflow";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
 import type { SubagentRole } from "#/domain/subagent";
@@ -110,7 +110,7 @@ import type { AgentToolWorkspace } from "./agent-tool-workspace";
  * one) by a few minutes; every step's end, however the step ends, revokes it
  * and removes it from the clone sooner.
  */
-const VM_TOKEN_TTL_SECONDS = MODEL_WORKFLOW_DEADLINE_MS / 1000 + 5 * 60;
+const VM_TOKEN_TTL_SECONDS = STEP_TOKEN_TTL_MS / 1000;
 /**
  * The read hook's budget before the first model call. A chat's first request
  * waits longer: its VM is still starting, and a late recall beats none.

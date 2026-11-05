@@ -2,13 +2,13 @@ import {
 	machineGitReleaseScript,
 	machineGitSetupScript,
 } from "#/domain/machine-git";
-import { MODEL_WORKFLOW_DEADLINE_MS } from "#/domain/model-workflow";
+import { STEP_TOKEN_TTL_MS } from "#/domain/model-workflow";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import { machineGitTokens } from "../adapters/machine-git-tokens";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-/** Like the memory clone's token: the step's deadline and a few minutes. */
-const MACHINE_TOKEN_TTL_MS = MODEL_WORKFLOW_DEADLINE_MS + 5 * 60_000;
+/** Like the memory clone's token: the step's budget and a margin. */
+const MACHINE_TOKEN_TTL_MS = STEP_TOKEN_TTL_MS;
 
 type Workspace = Pick<AgentToolWorkspace, "machines" | "vm">;
 

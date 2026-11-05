@@ -51,7 +51,6 @@ beforeEach(() => {
 	mocks.claim.mockResolvedValue({
 		kind: "claimed",
 		turn: { id: step.turnId },
-		remainingMs: 1000,
 	});
 	mocks.run.mockResolvedValue("continue");
 });
@@ -160,17 +159,15 @@ it("records outcomes only after execution and does not leak messages into the re
 	expect(mocks.complete).toHaveBeenCalledWith(step, "continue");
 });
 
-it("fences expired turns immediately and makes the overflow step a no-inference failure", async () => {
-	mocks.claim.mockResolvedValue({ kind: "claimed", turn: {}, remainingMs: 0 });
+it("makes the overflow step a no-inference failure and never expires a turn by time", async () => {
+	mocks.claim.mockResolvedValue({ kind: "claimed", turn: {} });
 	mocks.run.mockImplementation(async (_machines, _turn, options) => {
-		expect(options.signal.aborted).toBe(true);
-		// A time limit, not a user stop.
-		expect(options.signal.reason.name).toBe("TimeoutError");
+		expect(options.signal.aborted).toBe(false);
 		expect(options.limitReached).toBe(true);
 		return "cancelled";
 	});
 	await executeWorkflowRequest(
-		await request(JSON.stringify({ ...step, index: 129 })),
+		await request(JSON.stringify({ ...step, index: 1001 })),
 		secret,
 		machines,
 		receipts,
@@ -203,12 +200,10 @@ it("stops a cancelled resumed turn's commands and releases the room's rotated le
 	);
 });
 
-it("ends command waits before the step budget and leaves the turn time for a model call", () => {
+it("ends command waits before the step budget", () => {
 	const minute = 60_000;
-	// Plenty of turn left: the 14-minute step budget binds, minus a save margin.
-	expect(commandWaitDeadline(0, 30 * minute, 14 * minute)).toBe(13 * minute);
-	// Near the turn deadline: three minutes stay for the model to read the result.
-	expect(commandWaitDeadline(0, 5 * minute, 14 * minute)).toBe(2 * minute);
-	// No step budget (HTTP orchestrator): only the turn deadline applies.
-	expect(commandWaitDeadline(0, 30 * minute)).toBe(27 * minute);
+	// The 14-minute step budget binds, minus a save margin.
+	expect(commandWaitDeadline(0, 14 * minute)).toBe(13 * minute);
+	// No step budget (HTTP orchestrator): a wait is bounded only by its own limit.
+	expect(commandWaitDeadline(0)).toBe(Number.POSITIVE_INFINITY);
 });

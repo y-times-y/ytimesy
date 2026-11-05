@@ -710,7 +710,9 @@ async function executeModelSteps(
 	const runSignal = AbortSignal.any([
 		input.signal,
 		cancelled.signal,
-		AbortSignal.timeout(input.turnTimeoutMs ?? 30 * 60 * 1000),
+		// No default wall-clock limit: a run ends when it finishes, is stopped,
+		// or its step budget aborts `input.signal`.
+		...(input.turnTimeoutMs ? [AbortSignal.timeout(input.turnTimeoutMs)] : []),
 	]);
 	const { model, cacheSettings = {} } = runtime;
 	const tools = discoverableAgentTools(input.tools);

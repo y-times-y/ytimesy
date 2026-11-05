@@ -1785,14 +1785,14 @@ it.each([
 			expect.arrayContaining([
 				expect.objectContaining({
 					kind: "error",
-					message: expect.stringContaining("reached its time limit"),
+					message: expect.stringContaining("took longer than 14 minutes"),
 				}),
 			]),
 		);
 		expect(mocks.result).toHaveBeenCalledWith(
 			expect.objectContaining({
 				eventType: "failed",
-				summary: expect.stringContaining("reached its time limit"),
+				summary: expect.stringContaining("took longer than 14 minutes"),
 			}),
 		);
 	},
@@ -2529,6 +2529,29 @@ describe("a builder's first request before its workspace is ready", () => {
 		).toBe("completed");
 		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
 		expect(mocks.attachments).toHaveBeenCalledOnce();
+	});
+
+	it("runs the turn without a code point when the capture fails, instead of refusing it", async () => {
+		mocks.workspace.mockResolvedValue({ machines: {}, vm: "vm", cwd: "/repo" });
+		const { ensureConversationCodePoint } = await import(
+			"../services/conversation-recovery"
+		);
+		vi.mocked(ensureConversationCodePoint).mockImplementationOnce(async () => {
+			throw new Error("Could not create the code recovery point");
+		});
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "ananab" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			expect(
+				await runApiTurn({} as WorkspaceMachines, rootTurn, firstStep()),
+			).toBe("completed");
+		} finally {
+			warn.mockRestore();
+		}
+		expect(ensureConversationCodePoint).toHaveBeenCalledOnce();
 	});
 
 	it("records the turn's code point while the checkout's baselines are still being set", async () => {

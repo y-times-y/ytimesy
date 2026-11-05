@@ -1,8 +1,4 @@
-import {
-	MODEL_WORKFLOW_DEADLINE_MS,
-	type WorkflowStep,
-	type WorkflowStepOutcome,
-} from "./model-workflow";
+import type { WorkflowStep, WorkflowStepOutcome } from "./model-workflow";
 
 export type StepReceipt = {
 	state: "processing" | "done";
@@ -13,7 +9,6 @@ export type StepReceipt = {
 /** Storage operations must be synchronous inside one chat's Durable Object. */
 export interface ConversationStepStorage {
 	read(step: WorkflowStep): StepReceipt | undefined;
-	firstStartedAt(step: WorkflowStep): number | undefined;
 	insert(step: WorkflowStep, startedAt: number): void;
 	finish(step: WorkflowStep, outcome: WorkflowStepOutcome): boolean;
 }
@@ -29,7 +24,7 @@ export function claimConversationStep(
 	now = Date.now(),
 	resume = false,
 ):
-	| { kind: "claimed"; remainingMs: number; resumed?: true }
+	| { kind: "claimed"; resumed?: true }
 	| { kind: "done"; outcome: WorkflowStepOutcome }
 	| { kind: "unavailable" } {
 	const existing = storage.read(step);
@@ -37,28 +32,13 @@ export function claimConversationStep(
 		return { kind: "done", outcome: existing.outcome };
 	if (existing) {
 		if (!resume) return { kind: "unavailable" };
-		const firstStartedAt = storage.firstStartedAt(step) ?? existing.startedAt;
-		return {
-			kind: "claimed",
-			resumed: true,
-			remainingMs: Math.max(
-				0,
-				MODEL_WORKFLOW_DEADLINE_MS - (now - firstStartedAt),
-			),
-		};
+		return { kind: "claimed", resumed: true };
 	}
 	if (step.index > 1) {
 		const previous = storage.read({ ...step, index: step.index - 1 });
 		if (previous?.state !== "done" || previous.outcome !== "continue")
 			return { kind: "unavailable" };
 	}
-	const firstStartedAt = storage.firstStartedAt(step) ?? now;
 	storage.insert(step, now);
-	return {
-		kind: "claimed",
-		remainingMs: Math.max(
-			0,
-			MODEL_WORKFLOW_DEADLINE_MS - (now - firstStartedAt),
-		),
-	};
+	return { kind: "claimed" };
 }

@@ -1107,7 +1107,14 @@ async function runApiTurnAttempt(
 					savePreparedCheckoutDirectory(owner.userId, owner.id, cwd),
 				).catch(() => {});
 			}
-			await codePoint;
+			// The turn still waits for the capture (it records the files as they
+			// were before the agent edits), but a capture that fails only means
+			// no code rewind point for this message; it never refuses the turn.
+			await codePoint?.catch((error) => {
+				console.warn("Code recovery point skipped.", {
+					...apiTurnFailureClassification(error),
+				});
+			});
 			await attachmentsWritten;
 			await handoffWritten;
 			await secretsReady;
@@ -3374,8 +3381,9 @@ function abortableDelay(ms: number, signal: AbortSignal) {
 	});
 }
 
+/** A step ran past its 14-minute budget (a hung command or model call), not the turn past some limit. */
 const TURN_TIME_LIMIT_MESSAGE =
-	"This turn reached its time limit and was stopped. Work so far is preserved; inspect any in-flight command, then send a message to continue.";
+	"One step took longer than 14 minutes and was stopped. Work so far is preserved; inspect any in-flight command, then send a message to continue.";
 
 class TurnTimeLimitReached extends Error {
 	constructor() {
