@@ -33,7 +33,6 @@ const INSPECTOR_VIEWS = [
 	"pr",
 	"terminal",
 	"desktop",
-	"memory",
 	"side",
 ] as const;
 export type SavedInspectorView = (typeof INSPECTOR_VIEWS)[number];

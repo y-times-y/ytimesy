@@ -7,7 +7,6 @@ import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
-import { MemoryInspector } from "./memory-inspector";
 import type { PullRequestSummary } from "./pull-request-detail-query";
 import {
 	PullRequestInspector,
@@ -22,7 +21,6 @@ export type ToolsView =
 	| "pr"
 	| "terminal"
 	| "desktop"
-	| "memory"
 	| "side";
 export type InspectorView = ToolsView | "overview";
 
@@ -59,12 +57,6 @@ const views = {
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
-	memory: {
-		label: "Memory",
-		icon: VIEW_ICONS.memory,
-		title: "Memory",
-		description: "What the agent remembers about you across chats.",
-	},
 	side: {
 		label: "Side chat",
 		icon: VIEW_ICONS.side,
@@ -91,8 +83,6 @@ export function WorkspaceInspector({
 	overview,
 	pullRequest,
 	pullRequestSummary,
-	onOpenChat,
-	memoryFocus,
 	onViewIntent,
 	sideChat,
 }: {
@@ -100,8 +90,6 @@ export function WorkspaceInspector({
 	sideChat?: ReactNode;
 	/** The pointer or focus reached a view's entry: it may open next. */
 	onViewIntent?: (view: ToolsView) => void;
-	/** A memory file to show when the Memory tab opens from a chat marker. */
-	memoryFocus?: { path: string };
 	collapsed: boolean;
 	activeView: InspectorView;
 	onActiveViewChange: (view: InspectorView) => void;
@@ -121,8 +109,6 @@ export function WorkspaceInspector({
 	pullRequest?: PullRequestRepository;
 	/** What the Overview knows about pullRequest.number, painted before its details load. */
 	pullRequestSummary?: PullRequestSummary;
-	/** Opens a chat linked from memory; false when it is not in this project's list. */
-	onOpenChat?: (chatId: string) => boolean;
 }) {
 	// The tab it opens on (a saved panel) is open from the server's render.
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>(() =>
@@ -267,12 +253,6 @@ export function WorkspaceInspector({
 				/>
 			) : activeView === "side" && sideChat ? (
 				sideChat
-			) : activeView === "memory" ? (
-				<MemoryInspector
-					active={!collapsed && activeView === "memory"}
-					focus={memoryFocus}
-					onOpenChat={onOpenChat ?? (() => false)}
-				/>
 			) : activeView === "desktop" && !collapsed ? (
 				<DesktopInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}

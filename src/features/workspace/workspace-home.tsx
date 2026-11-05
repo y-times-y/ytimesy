@@ -1737,7 +1737,8 @@ export function WorkspaceHome({
 	const memoryActions: MemoryMarkerActions = {
 		onOpenMemory: (path) => {
 			setMemoryFocus({ path });
-			openInspector("memory");
+			setMemoryView("files");
+			setMemoryPageOpen(true);
 		},
 		onOpenChat: (chatId) => {
 			if (!sidebarChats.some((chat) => chat.id === chatId)) return false;
@@ -2300,10 +2301,6 @@ export function WorkspaceHome({
 		const projectId = selectedProject?.id;
 		const sessionId = activeSessionId;
 		if (!projectId || !sessionId) return;
-		if (view === "memory") {
-			prefetchMemoryPage(queryClient);
-			return;
-		}
 		if (view === "files") {
 			void prefetchWorkspaceFiles(queryClient, {
 				projectId,
@@ -3479,6 +3476,7 @@ export function WorkspaceHome({
 									view={memoryView}
 									onViewChange={setMemoryView}
 									projects={projects.data}
+									focus={memoryFocus}
 									onOpenChat={openMemoryChat}
 								/>
 							) : null}
@@ -3903,15 +3901,8 @@ export function WorkspaceHome({
 											void chats.refetch();
 											openChat(sessionId);
 										}}
-										memoryFocus={memoryFocus}
 										onStartDesktop={() => requestDesktop()}
 										onViewIntent={intendView}
-										onOpenChat={(chatId) => {
-											if (!sidebarChats.some((chat) => chat.id === chatId))
-												return false;
-											openChat(chatId);
-											return true;
-										}}
 										pullRequest={chatPullRequestRepository}
 										pullRequestSummary={
 											sessionPullRequest
