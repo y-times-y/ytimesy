@@ -39,13 +39,12 @@ const PRODUCT_NAME =
 	/^(node|next|vue|three|chart|express|d3|react|nuxt|deno|nest|p5|alpine|ember|moment)\.js$/i;
 
 /**
- * Whether a path an answer names is plausibly a file, or a folder written
- * with its trailing slash. Git refs (`origin/main`), `owner/repo`, branch
- * names and bare folders (`src/server`) are not: a chip for them can only
- * open "no file".
+ * Whether a path an answer names is plausibly a file. Folders (`src/`,
+ * `src/server`), branch refs (`origin/main`), `owner/repo` and branch names
+ * are not: they stay plain text, since a chip for them opens "no file".
  */
 function plausibleWorkspacePath(path: string): boolean {
-	if (path.endsWith("/")) return true;
+	if (path.endsWith("/")) return false;
 	const name = path.split("/").filter(Boolean).at(-1) ?? "";
 	if (!name) return false;
 	if (PRODUCT_NAME.test(name) && !path.includes("/")) return false;

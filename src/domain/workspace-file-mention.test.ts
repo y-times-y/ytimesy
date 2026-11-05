@@ -7,12 +7,7 @@ import {
 } from "./workspace-file-mention";
 
 it("distinguishes workspace paths from external URLs and fragments", () => {
-	for (const path of [
-		"src/main.ts",
-		"/workspace/src/main.ts",
-		"README.md",
-		"src/",
-	])
+	for (const path of ["src/main.ts", "/workspace/src/main.ts", "README.md"])
 		expect(workspaceFileMention(path)).toBe(path);
 	for (const url of [
 		"https://example.com/a.ts",
@@ -20,11 +15,12 @@ it("distinguishes workspace paths from external URLs and fragments", () => {
 		"javascript:alert(1)",
 		"#heading",
 		"plain text",
+		"src/",
 	])
 		expect(workspaceFileMention(url)).toBeNull();
 });
 
-it("links only what is plausibly a file or an explicit folder, never a branch, repo, code or domain", () => {
+it("links only what is plausibly a file, never a folder, a branch, repo, code or domain", () => {
 	for (const path of [
 		"src/main.ts",
 		"package.json",
@@ -34,7 +30,6 @@ it("links only what is plausibly a file or an explicit folder, never a branch, r
 		"Dockerfile",
 		".gitignore",
 		".env.example",
-		"src/server/",
 		"./src/a.ts",
 	])
 		expect(workspaceFileMention(path)).toBe(path);
@@ -45,6 +40,7 @@ it("links only what is plausibly a file or an explicit folder, never a branch, r
 		"y-times-y/ytimesy",
 		"owner/repo",
 		"src/server",
+		"src/server/",
 		"process.env",
 		"Date.now",
 		"console.log",
