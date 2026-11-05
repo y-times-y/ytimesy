@@ -1,9 +1,12 @@
 import { createRouter as createTanStackRouter } from "@tanstack/react-router";
+import { chatAddressInput, chatAddressOutput } from "./domain/chat-address";
 import { routeTree } from "./routeTree.gen";
 
 export function getRouter() {
 	const router = createTanStackRouter({
 		routeTree,
+		// A chat's address is /chat/<id>; the page reads it as /?chat=<id>.
+		rewrite: { input: chatAddressInput, output: chatAddressOutput },
 		scrollRestoration: true,
 		defaultPreload: "intent",
 		defaultPreloadStaleTime: 0,

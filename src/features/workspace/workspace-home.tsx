@@ -27,6 +27,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
 import { shouldPollSubagents } from "#/domain/agent-task";
+import { chatAddress, chatIdInAddress } from "#/domain/chat-address";
 import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
@@ -1383,9 +1384,7 @@ export function WorkspaceHome({
 		selectProject(id);
 	});
 	const linkedChat = useRef(
-		typeof window === "undefined"
-			? null
-			: new URLSearchParams(window.location.search).get("chat"),
+		typeof window === "undefined" ? null : chatIdInAddress(window.location),
 	);
 	useEffect(() => {
 		const id = linkedChat.current;
@@ -1394,22 +1393,19 @@ export function WorkspaceHome({
 		if (activeSessionId !== id) openChat(id);
 	});
 
-	// The open chat is in the address bar (`/?chat=<id>`): a reload, a copied
+	// The open chat is in the address bar (`/chat/<id>`): a reload, a copied
 	// link or a second tab opens the same chat, and Back returns to the one
 	// before. The page's first chat replaces the entry; each switch adds one.
 	const addressBarMirrored = useRef(false);
 	useEffect(() => {
 		// A linked chat that has not opened yet keeps its link.
 		if (linkedChat.current) return;
-		const here = new URL(window.location.href);
-		const shown = here.searchParams.get("chat");
+		const shown = chatIdInAddress(window.location);
 		if (shown === (activeSessionId ?? null)) {
 			addressBarMirrored.current = true;
 			return;
 		}
-		if (activeSessionId) here.searchParams.set("chat", activeSessionId);
-		else here.searchParams.delete("chat");
-		const url = `${here.pathname}${here.search}${here.hash}`;
+		const url = chatAddress(window.location, activeSessionId ?? null);
 		if (addressBarMirrored.current)
 			window.history.pushState(window.history.state, "", url);
 		else window.history.replaceState(window.history.state, "", url);
@@ -1431,7 +1427,7 @@ export function WorkspaceHome({
 	};
 	useEffect(() => {
 		const onPop = () => {
-			const id = new URLSearchParams(window.location.search).get("chat");
+			const id = chatIdInAddress(window.location);
 			const latest = addressBarLatest.current;
 			if (id && id !== latest.activeSessionId && latest.knows(id))
 				latest.openChat(id);
