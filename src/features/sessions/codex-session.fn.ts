@@ -20,6 +20,7 @@ import { savedInspectorFromCookies } from "#/domain/inspector-split";
 import { incomingAttachments } from "#/domain/message-attachment";
 import { openChatFromCookies } from "#/domain/open-chat-cookie";
 import { isValidBranchName } from "#/domain/session-branch";
+import type { SessionReadDelta, SessionReadFull } from "#/domain/session-delta";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { chatOpenedWithProject } from "#/domain/sidebar-chats";
 import { savedSidebarPrsFromCookies } from "#/domain/sidebar-pr-cookie";
@@ -75,6 +76,10 @@ import {
 	updateQueuedComposerMessage,
 	withQueuedMessages,
 } from "#/server/services/queued-user-messages";
+import {
+	readSessionFull,
+	readSessionSince,
+} from "#/server/services/session-delta";
 import { timed, withStepTrace } from "#/server/services/step-timing";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
@@ -185,6 +190,55 @@ export const getCodexSession = createServerFn({ method: "GET" })
 		}
 		return publicSessionView(scope);
 	});
+
+/**
+ * The open chat since the browser's last read (`since`: the transcript token
+ * that read came with): a small delta when it can be told exactly, else the
+ * whole view with a fresh token (session-delta.ts). Without `since` it is
+ * the whole view and the token to ask from next time.
+ */
+export const getCodexSessionDelta = createServerFn({ method: "GET" })
+	.validator(
+		(
+			data:
+				| (Parameters<typeof optionalSessionInput>[0] & {
+						since?: { rev: number; count: number };
+				  })
+				| undefined,
+		) => ({
+			...optionalSessionInput(data),
+			since: data?.since
+				? z
+						.object({
+							rev: z.number().int().min(0),
+							count: z.number().int().min(0),
+						})
+						.parse(data.since)
+				: undefined,
+		}),
+	)
+	.handler(
+		async ({
+			data,
+		}): Promise<SessionReadDelta | SessionReadFull<PublicCodexSession>> => {
+			const scope = await optionalScope(
+				data.projectId,
+				data.harnessId,
+				data.sessionId,
+				data.createNew,
+			);
+			if (!scope)
+				return {
+					mode: "full",
+					view: emptyHarnessSession(),
+					token: null,
+					queuedCount: 0,
+				};
+			return data.since
+				? readSessionSince(scope, data.since)
+				: readSessionFull(scope);
+		},
+	);
 
 /**
  * The turns before the oldest item the reader has (`before`), read as the
