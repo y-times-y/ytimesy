@@ -36,6 +36,7 @@ vi.mock("../adapters/subagents", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
+	agentSessionMetadataForOwner: adapters.session,
 	descendantAgentSessions: vi.fn(async () => []),
 }));
 vi.mock("./subagent-writer", () => ({

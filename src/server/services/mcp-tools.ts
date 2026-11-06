@@ -7,6 +7,12 @@ import { asSchema, type JSONSchema7, type ToolSet } from "ai";
 import { mcpToolName } from "#/domain/mcp-tool-call";
 import { redactSecrets } from "#/domain/redact-secrets";
 import { redirectRefusingFetch } from "../adapters/workers-fetch";
+import {
+	mcpServerInBackoff,
+	mcpServerKey,
+	noteMcpServerFailure,
+	noteMcpServerRecovered,
+} from "./mcp-server-health";
 
 type ConnectableMcpServer = {
 	name: string;
@@ -95,6 +101,12 @@ export async function connectMcpTools(
 		return { client, listed };
 	};
 	for (const server of servers) {
+		const healthKey = mcpServerKey(server);
+		if (mcpServerInBackoff(healthKey)) {
+			// Failed moments ago: report it unavailable without another attempt.
+			unavailable.push(server.name);
+			continue;
+		}
 		try {
 			// This step's live tools for the server, connected at most once.
 			let live: Promise<ToolSet> | undefined;
@@ -132,6 +144,7 @@ export async function connectMcpTools(
 				options.listing && server.key
 					? await options.listing(server.key, load)
 					: await load();
+			noteMcpServerRecovered(healthKey);
 			if (listing.instructions) purposes[server.name] = listing.instructions;
 			for (const entry of listing.catalog)
 				catalog.push({
@@ -174,16 +187,18 @@ export async function connectMcpTools(
 		} catch (error) {
 			unavailable.push(server.name);
 			// Why it did not connect (status, redirect, auth), never a header value.
-			console.warn("MCP server unavailable.", {
-				server: server.name,
-				host: safeHost(server.url),
-				reason: redactSecrets(
-					error instanceof Error
-						? `${error.name}: ${error.message}`
-						: String(error),
-					300,
-				),
-			});
+			const reason = redactSecrets(
+				error instanceof Error
+					? `${error.name}: ${error.message}`
+					: String(error),
+				300,
+			);
+			if (noteMcpServerFailure(healthKey, reason))
+				console.warn("MCP server unavailable.", {
+					server: server.name,
+					host: safeHost(server.url),
+					reason,
+				});
 		}
 	}
 	return {

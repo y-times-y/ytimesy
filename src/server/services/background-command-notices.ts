@@ -290,7 +290,7 @@ export async function wakeChatForBackgroundCommands(
 /** The user stops one of a chat's background commands (no notice: the agent did not ask for it to end). */
 export async function stopBackgroundCommandForUser(
 	machines: WorkspaceMachines,
-	session: AgentSessionRecord,
+	session: Omit<AgentSessionRecord, "items">,
 	commandId: string,
 ) {
 	z.uuid().parse(commandId);

@@ -5,7 +5,6 @@ import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
-	agentSessionForOwner,
 	agentSessionItemsFingerprint,
 	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
@@ -157,7 +156,7 @@ export async function restoreSessionWorkspace(
 	newId: string,
 ) {
 	const checkpoint = await checkpointForSession(userId, sessionId);
-	const session = await agentSessionForOwner(userId, sessionId);
+	const session = await agentSessionMetadataForOwner(userId, sessionId);
 	if (!checkpoint || !session || sharesParentMachine(session))
 		throw new Error(
 			"No recoverable workspace checkpoint exists for this conversation.",

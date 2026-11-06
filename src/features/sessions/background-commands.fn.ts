@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
 import { z } from "zod";
-import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
@@ -33,7 +33,7 @@ export const stopBackgroundCommandFn = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
-		const session = await agentSessionForOwner(user.id, data.sessionId);
+		const session = await agentSessionMetadataForOwner(user.id, data.sessionId);
 		if (!session) throw new Error("Chat not found.");
 		return Effect.runPromise(
 			Effect.gen(function* () {

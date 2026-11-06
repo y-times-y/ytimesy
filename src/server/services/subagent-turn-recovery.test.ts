@@ -13,6 +13,7 @@ vi.mock("../adapters/database", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.owner,
+	agentSessionMetadataForOwner: mocks.owner,
 }));
 vi.mock("../adapters/agent-task-events", () => ({
 	saveAgentTaskResultAndEvent: mocks.save,

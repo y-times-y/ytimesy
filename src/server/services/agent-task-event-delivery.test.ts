@@ -27,6 +27,7 @@ vi.mock("#/server/adapters/agent-task-events", () => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
 }));
 vi.mock("../adapters/server-peer-inbox", () => ({
 	serverPeerMessageAccepted: mocks.accepted,

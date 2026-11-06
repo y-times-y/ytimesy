@@ -5,6 +5,7 @@ import { sidekickState } from "#/domain/sidekick";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { hasActiveApiTurn } from "../adapters/api-turns";
 import {
@@ -30,7 +31,10 @@ export type PeerMessage = {
 };
 
 /** Only a started direct subagent of the sender, same owner and project. */
-async function steerableChild(sender: AgentSessionRecord, recipientId: string) {
+async function steerableChild(
+	sender: Pick<AgentSessionRecord, "id" | "userId" | "projectId">,
+	recipientId: string,
+) {
 	const recipient = await agentSessionForOwner(sender.userId, recipientId);
 	return recipient?.agentRole &&
 		recipient.parentSessionId === sender.id &&
@@ -75,7 +79,10 @@ export async function deliverAgentPeerMessage(
 	message: PeerMessage,
 	messageId: string,
 ) {
-	const sender = await agentSessionForOwner(message.userId, message.senderId);
+	const sender = await agentSessionMetadataForOwner(
+		message.userId,
+		message.senderId,
+	);
 	if (!sender) return;
 	const recipient = await steerableChild(sender, message.recipientId);
 	if (!recipient) return;

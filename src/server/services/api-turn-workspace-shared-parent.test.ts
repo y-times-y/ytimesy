@@ -21,6 +21,7 @@ vi.mock("./verification-baseline", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.read,
+	agentSessionMetadataForOwner: mocks.read,
 }));
 vi.mock("./agent-session-machine", () => ({
 	bindAgentSessionMachine: mocks.root,

@@ -274,7 +274,7 @@ export function sendHarnessWorkspaceTask(
 
 function taskScope(
 	scope: HarnessSessionScope,
-	task: AgentSessionRecord,
+	task: Pick<AgentSessionRecord, "id" | "harness">,
 ): HarnessSessionScope {
 	return {
 		userId: scope.userId,

@@ -3,7 +3,7 @@ import { childTaskEventQueueText } from "#/domain/child-task-activity";
 import { isSideChat } from "#/domain/side-chat";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 } from "#/server/adapters/agent-sessions";
 import {
 	type AgentTaskEvent,
@@ -57,8 +57,8 @@ async function deliverAgentTaskEvent(
 	event: AgentTaskEvent,
 ) {
 	const [parent, child] = await Promise.all([
-		agentSessionForOwner(event.userId, event.parentSessionId),
-		agentSessionForOwner(event.userId, event.childSessionId),
+		agentSessionMetadataForOwner(event.userId, event.parentSessionId),
+		agentSessionMetadataForOwner(event.userId, event.childSessionId),
 	]);
 	if (!parent || !child || parent.projectId !== child.projectId) {
 		throw new Error("The task event hierarchy is no longer available.");
@@ -104,7 +104,7 @@ export class ReportHeldForTurn extends Error {
  */
 export async function deliverParentTaskNotification(
 	machines: WorkspaceMachines,
-	parent: AgentSessionRecord,
+	parent: Omit<AgentSessionRecord, "items">,
 	notificationId: string,
 	runtimeText: string,
 ) {

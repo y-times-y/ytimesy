@@ -25,12 +25,13 @@ vi.mock("../adapters/server-peer-inbox", () => ({
 	serverPeerMessageAccepted: fake.accepted,
 	removePendingServerPeerMessage: fake.removePending,
 }));
-vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: async (owner: string, id: string) => {
+vi.mock("../adapters/agent-sessions", () => {
+	const read = async (owner: string, id: string) => {
 		const row = fake.sessions.get(id);
 		return row?.userId === owner ? row : null;
-	},
-}));
+	};
+	return { agentSessionForOwner: read, agentSessionMetadataForOwner: read };
+});
 vi.mock("../jobs/queue", () => ({ enqueuePeerMessage: fake.enqueue }));
 vi.mock("./harness-workspace-session", () => ({
 	sendHarnessWorkspaceTask: fake.send,

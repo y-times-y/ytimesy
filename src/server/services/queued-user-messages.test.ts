@@ -44,6 +44,7 @@ vi.mock("../adapters/environment-setup-chats", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
 	agentSessionPageForOwner: vi.fn(async () => null),
 	claimChatForSend: mocks.claim,
 	reusableEmptyChat: mocks.reusable,

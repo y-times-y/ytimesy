@@ -8,6 +8,7 @@ const deps = vi.hoisted(() => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: deps.session,
+	agentSessionMetadataForOwner: deps.session,
 }));
 vi.mock("../adapters/projects", () => ({ projectForOwner: deps.project }));
 vi.mock("./pr-evidence", () => ({
