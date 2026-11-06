@@ -1274,6 +1274,31 @@ it("classifies asynchronous progress-storage errors as failures rather than user
 	}
 });
 
+it("resumes instead of failing when a progress write meets a Durable Object reset for new code", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		mocks.progress
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(
+				new Error("Durable Object reset because its code was updated."),
+			);
+		// Like the Claude Code route's poll loop: it never awaits the writer, it
+		// only notices the aborted signal on its next poll.
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "First" });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			input.signal.throwIfAborted();
+			return input.messages;
+		});
+		await expect(
+			runApiTurn({} as WorkspaceMachines, childTurn),
+		).rejects.toThrow(/code was updated/);
+		expect(mocks.finalize).not.toHaveBeenCalled();
+	} finally {
+		warn.mockRestore();
+	}
+});
+
 it("does not show a storage failure for progress fenced by the user's cancellation", async () => {
 	mocks.progress
 		.mockResolvedValueOnce(undefined)

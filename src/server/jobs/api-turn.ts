@@ -615,7 +615,13 @@ async function runApiTurnAttempt(
 				return;
 			}
 			progressFailed = true;
-			abort.abort(new Error("Turn progress could not be saved."));
+			// A Durable Object reset for new code surfaces here first (the write's
+			// wake touches the object); the step must resume, so keep that error.
+			abort.abort(
+				isPlatformRestart(error)
+					? error
+					: new Error("Turn progress could not be saved."),
+			);
 		},
 	);
 	// History is replaced, never mutated, so an unchanged pair is already saved.
@@ -679,9 +685,11 @@ async function runApiTurnAttempt(
 					...apiTurnFailureClassification(error),
 				});
 				abort.abort(
-					new Error(
-						"Turn heartbeat or coordination service became unavailable.",
-					),
+					isPlatformRestart(error)
+						? error
+						: new Error(
+								"Turn heartbeat or coordination service became unavailable.",
+							),
 				);
 			});
 		if (
