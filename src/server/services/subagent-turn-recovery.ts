@@ -29,11 +29,11 @@ export async function recoverChildTurnEvents(machines: WorkspaceMachines) {
 		state: "completed" | "failed";
 		items: unknown;
 	}>(
-		`select t.id,t.session_id,c.user_id,t.state,t.items from api_turn t
-		 join agent_session c on c.id=t.session_id and c.user_id=t.user_id
+		`select t.id,t.session_id,c.user_id,t.state,t.items from agent_session c
+		 cross join lateral (select l.* from api_turn l where l.session_id=c.id and l.user_id=c.user_id
+		   order by l.created_at desc limit 1) t
 		 where c.parent_session_id is not null and c.agent_role is not null and t.state in ('completed','failed')
 		 and t.updated_at < now() - make_interval(secs => $1)
-		 and not exists(select 1 from api_turn newer where newer.session_id=t.session_id and newer.created_at>t.created_at)
 		 and not exists(select 1 from agent_task_event e where e.child_session_id=c.id and
 		   (e.dedupe_key=c.id::text || ':' || t.state || ':' || t.id::text or e.created_at>=t.updated_at))
 		 order by t.updated_at limit 32`,

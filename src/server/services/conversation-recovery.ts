@@ -620,14 +620,17 @@ export async function listConversationRecoveryPoints(
 	sessionId: string,
 ) {
 	const { rows } = await database().query(
-		`select r.response->'result' as point from agent_task_command_receipt r join agent_session s on s.id=r.parent_session_id
+		`select r.point_message_id as "messageId", r.point_has_code as "codeAvailable" from agent_task_command_receipt r join agent_session s on s.id=r.parent_session_id
     where s.user_id=$1 and s.project_id=$2 and s.id=$3 and r.request_id like 'conversation-point:%' and r.status='done' order by r.created_at desc limit 100`,
 		[userId, projectId, sessionId],
 	);
 	return rows.map(
-		({ point }: { point: { userMessageId: string; code?: unknown } }) => ({
-			messageId: point.userMessageId,
-			codeAvailable: !!point.code,
-		}),
+		({
+			messageId,
+			codeAvailable,
+		}: {
+			messageId: string;
+			codeAvailable: boolean;
+		}) => ({ messageId, codeAvailable }),
 	);
 }
