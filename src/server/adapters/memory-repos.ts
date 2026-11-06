@@ -112,6 +112,40 @@ const MAX_FILE_BYTES = 256 * 1024;
 const READ_CONCURRENCY = 8;
 /** Per-isolate file snapshots by commit; history never changes. */
 const snapshots = new Map<string, MemoryFiles>();
+/** The cache holds at most this many characters of file text (about 8 MB), so an isolate shared with other jobs never fills up with old snapshots. */
+export const SNAPSHOT_CACHE_CHARS = 8 * 1024 * 1024;
+const snapshotSizes = new Map<string, number>();
+let snapshotChars = 0;
+
+/** Keeps `files` for repeat reads of the same commit, evicting the oldest past the limits; a snapshot larger than the whole budget is not kept. */
+export function rememberSnapshot(key: string, files: MemoryFiles) {
+	const size = Object.values(files).reduce((sum, text) => sum + text.length, 0);
+	if (size > SNAPSHOT_CACHE_CHARS) return;
+	while (
+		snapshots.size > 0 &&
+		(snapshots.size >= 64 || snapshotChars + size > SNAPSHOT_CACHE_CHARS)
+	) {
+		const oldest = snapshots.keys().next().value as string;
+		snapshots.delete(oldest);
+		snapshotChars -= snapshotSizes.get(oldest) ?? 0;
+		snapshotSizes.delete(oldest);
+	}
+	snapshots.set(key, files);
+	snapshotSizes.set(key, size);
+	snapshotChars += size;
+}
+
+/** Test hook: the cache's current size. */
+export function snapshotCacheState() {
+	return { entries: snapshots.size, chars: snapshotChars };
+}
+
+/** Test hook: empties the cache. */
+export function clearSnapshotCache() {
+	snapshots.clear();
+	snapshotSizes.clear();
+	snapshotChars = 0;
+}
 
 function artifactsMemoryRepo(
 	artifacts: ArtifactsNamespace,
@@ -216,9 +250,7 @@ function artifactsMemoryRepo(
 						if (text !== null) files[path] = text;
 					}),
 			);
-		if (snapshots.size > 64)
-			snapshots.delete(snapshots.keys().next().value as string);
-		snapshots.set(key, files);
+		rememberSnapshot(key, files);
 		return files;
 	}
 
