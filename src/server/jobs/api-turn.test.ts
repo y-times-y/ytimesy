@@ -1798,6 +1798,51 @@ it.each([
 	},
 );
 
+describe("a step's soft deadline", () => {
+	it("ends a step still waiting on its model call and continues, without failing the turn", async () => {
+		mocks.stepRuntime.mockImplementation(hangUntilAborted);
+		const outcome = await runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 3,
+			signal: new AbortController().signal,
+			softDeadlineAt: Date.now() + 20,
+		});
+		expect(outcome).toBe("continue");
+		expect(mocks.checkpoint).toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+	});
+
+	it("never stops a step once a tool has started, and the hard abort still fails it", async () => {
+		mocks.stepRuntime.mockImplementation(
+			(input: { signal: AbortSignal; onToolStart?: () => void }) => {
+				input.onToolStart?.();
+				return hangUntilAborted(input);
+			},
+		);
+		const deadline = new AbortController();
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 3,
+			signal: deadline.signal,
+			softDeadlineAt: Date.now() + 20,
+		});
+		await vi.waitFor(() => expect(mocks.stepRuntime).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		// Past the soft deadline with a tool running: nothing was cut.
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		deadline.abort(new DOMException("Step budget reached.", "TimeoutError"));
+		expect(await outcome).toBe("failed");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: expect.stringContaining("took longer than 14 minutes"),
+				}),
+			]),
+		);
+	});
+});
+
 it("keeps an interrupted durable step that was not out of time a plain stop", async () => {
 	mocks.stepRuntime.mockImplementation(hangUntilAborted);
 	const request = new AbortController();

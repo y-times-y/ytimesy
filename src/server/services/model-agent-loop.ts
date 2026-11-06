@@ -129,6 +129,8 @@ export type ModelAgentInput = {
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
 	endTurnTools?: readonly string[];
 	signal: AbortSignal;
+	/** A tool call of the run started executing (after it, aborting the run could cut a write). */
+	onToolStart?: () => void;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
 	onStep: (messages: ModelMessage[]) => Promise<void>;
 	onToolMetric?: (metric: HarnessToolMetric) => void;
@@ -1330,6 +1332,7 @@ async function executeModelSteps(
 			onToolExecutionStart: ({ toolCall }) => {
 				// Provider-neutral: no reasoning or provider item ids that a native
 				// replay would require to arrive together with their reasoning.
+				input.onToolStart?.();
 				if (!toolCall.providerExecuted) {
 					startedCalls = [
 						...startedCalls,

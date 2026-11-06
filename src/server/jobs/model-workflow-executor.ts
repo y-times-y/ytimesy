@@ -4,6 +4,8 @@ import { verifyDeliveryRequest } from "#/domain/delivery-auth";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	MAX_WORKFLOW_MODEL_STEPS,
+	STEP_BUDGET_MS,
+	STEP_SOFT_DEADLINE_MS,
 	type WorkflowStep,
 	type WorkflowStepOutcome,
 	workflowStepSchema,
@@ -147,10 +149,18 @@ export async function executeModelStep(
 			resumed: claim.resumed,
 			startedAt,
 			waitDeadlineAt: commandWaitDeadline(startedAt, stepBudgetMs),
+			softDeadlineAt: stepSoftDeadline(startedAt, stepBudgetMs),
 		},
 	);
 	await receipts.complete(step, outcome);
 	return outcome;
+}
+
+/** A step still waiting on its model call at 12 of its 14 minutes ends and continues (see api-turn.ts). */
+export function stepSoftDeadline(startedAt: number, stepBudgetMs?: number) {
+	return stepBudgetMs === undefined
+		? undefined
+		: startedAt + (stepBudgetMs * STEP_SOFT_DEADLINE_MS) / STEP_BUDGET_MS;
 }
 
 /** Saving the step's result after its tools finish. */
