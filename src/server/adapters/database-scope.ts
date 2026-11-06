@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool } from "pg";
 import { stepTimingEnabled, timed, timedCall } from "../services/step-timing";
+import {
+	accountQueryBytes,
+	byteAccountingEnabled,
+} from "./database-byte-accounting";
 import { withInvocationTasks } from "./invocation-tasks";
 
 type DatabaseScope = {
@@ -88,6 +92,7 @@ export async function withDatabaseScope<T>(
 	});
 	pool.on("error", () => console.warn("Request database connection failed."));
 	if (stepTimingEnabled()) timePool(pool);
+	if (byteAccountingEnabled()) accountQueryBytes(pool);
 	const current: DatabaseScope = { pool, resources: new Map(), cleanup: [] };
 	try {
 		return await scope.run(current, () => withInvocationTasks(run));

@@ -1,0 +1,46 @@
+name: Database budget report
+# Daily read-only report of database size, biggest tables and heaviest queries
+# (scripts/db-budget-report.ts, docs/database-budget.md). The job fails (WARN)
+# when a threshold in the script is crossed, so GitHub emails the owner.
+#
+# DRAFT: runs only once the owner adds these secrets to the
+# "production-backup" environment (the same environment the backup uses):
+#   DB_REPORT_DATABASE_URL  a read-only role's connection string; the backup's
+#                           PROD_DATABASE_URL also works. The role needs
+#                           pg_read_all_stats to see every query.
+#   SUPABASE_CA_CERT        the Supabase CA certificate (shared with the backup)
+# Without them it fails fast and touches nothing. It only reads.
+on:
+  schedule:
+    - cron: "43 9 * * *" # 09:43 UTC daily
+  workflow_dispatch:
+concurrency:
+  group: database-budget-report
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production-backup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Write the Supabase CA certificate
+        env:
+          SUPABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+        run: |
+          umask 077
+          mkdir -p .secrets
+          printf '%s\n' "$SUPABASE_CA_CERT" > .secrets/supabase-ca.crt
+      - name: Report
+        env:
+          DB_REPORT_DATABASE_URL: ${{ secrets.DB_REPORT_DATABASE_URL }}
+          SUPABASE_CA_PATH: .secrets/supabase-ca.crt
+        run: node --import tsx scripts/db-budget-report.ts
