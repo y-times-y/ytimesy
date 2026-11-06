@@ -1,5 +1,5 @@
 import { sessionItemsFromUnknown } from "#/domain/session-item";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { database } from "../adapters/database";
 import { harnessVariantForUser } from "../adapters/dev-eval-users";
@@ -56,7 +56,10 @@ export async function recoverChildTurnEvents(machines: WorkspaceMachines) {
 						.map((item) => item.text)
 						.join("\n")
 						.slice(-9000) || "(no final report)";
-		const session = await agentSessionForOwner(turn.user_id, turn.session_id);
+		const session = await agentSessionMetadataForOwner(
+			turn.user_id,
+			turn.session_id,
+		);
 		if (!session) continue;
 		const variant = await harnessVariantForUser(turn.user_id).catch(() => null);
 		const summary = await subagentReport({

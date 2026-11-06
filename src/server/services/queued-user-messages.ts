@@ -27,6 +27,7 @@ import {
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	agentSessionPageForOwner,
 	claimChatForSend,
 	claimInitialSetupChat,
@@ -536,7 +537,7 @@ async function deliverQueuedSend(
 	next: QueuedUserSend,
 ): Promise<boolean> {
 	try {
-		const session = await agentSessionForOwner(userId, sessionId);
+		const session = await agentSessionMetadataForOwner(userId, sessionId);
 		if (!session) {
 			await restoreQueuedUserMessage(sessionId, next).catch(() => {});
 			return false;

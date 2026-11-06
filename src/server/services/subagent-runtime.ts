@@ -57,7 +57,7 @@ import {
 } from "#/domain/subagent-usage";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
 import {
@@ -202,7 +202,7 @@ export async function guardSubagentStep(input: {
  */
 export async function subagentReport(input: {
 	readonly machines: WorkspaceMachines;
-	readonly session: AgentSessionRecord;
+	readonly session: Omit<AgentSessionRecord, "items">;
 	readonly items: readonly SessionItem[];
 	readonly outcome: SubagentOutcome;
 	readonly text: string;
@@ -244,7 +244,7 @@ export async function subagentReport(input: {
 	// A sidekick's state as saved now (agent_send may have stopped it mid-round).
 	const sidekick = sidekickState(session)
 		? sidekickState(
-				(await (input.deps?.session ?? agentSessionForOwner)(
+				(await (input.deps?.session ?? agentSessionMetadataForOwner)(
 					session.userId,
 					session.id,
 				)) ?? session,
@@ -341,8 +341,8 @@ export async function subagentReport(input: {
 			siblings.map(async (sibling) => ({
 				label: sibling.label,
 				files:
-					(await agentSessionForOwner(session.userId, sibling.id))?.agentFork
-						?.patch?.files ?? [],
+					(await agentSessionMetadataForOwner(session.userId, sibling.id))
+						?.agentFork?.patch?.files ?? [],
 			})),
 		);
 		parts.push(
@@ -395,7 +395,7 @@ export function sidekickChangesBlock(
 
 /** What the sidekick functions touch outside themselves; tests pass fakes. */
 export type SidekickRuntimeDeps = {
-	readonly session?: typeof agentSessionForOwner;
+	readonly session?: typeof agentSessionMetadataForOwner;
 	readonly transfer?: typeof transferWriterPatch;
 	readonly roundChanges?: typeof sidekickRoundChanges;
 	readonly mergeFork?: typeof mergeSubagentFork;

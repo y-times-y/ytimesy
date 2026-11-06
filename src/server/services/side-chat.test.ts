@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.parent,
+	agentSessionMetadataForOwner: mocks.parent,
 	sideChatForParent: mocks.find,
 	insertAgentSession: mocks.insert,
 	saveAgentTaskState: mocks.saveState,

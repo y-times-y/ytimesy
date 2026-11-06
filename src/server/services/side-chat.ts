@@ -12,6 +12,7 @@ import {
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	deleteAgentSessionForOwner,
 	insertAgentSession,
 	saveAgentTaskState,
@@ -99,7 +100,7 @@ export async function readSideChat(input: {
 	readonly parentSessionId: string;
 	readonly harnessId: AgentProviderId;
 }) {
-	const parent = await agentSessionForOwner(
+	const parent = await agentSessionMetadataForOwner(
 		input.userId,
 		input.parentSessionId,
 	);

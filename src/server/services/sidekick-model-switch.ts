@@ -38,7 +38,7 @@ import {
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { updateSidekickState } from "../adapters/subagents";
 import type { ModelSwitchTarget } from "./model-agent-loop";
@@ -71,7 +71,7 @@ import {
  */
 
 export type SidekickSwitchDeps = {
-	readonly session?: typeof agentSessionForOwner;
+	readonly session?: typeof agentSessionMetadataForOwner;
 	/** Compare-and-set of the state, with the session's model in the same write. */
 	readonly updateState?: typeof updateSidekickState;
 	readonly routes?: (userId: string) => Promise<readonly FailoverConnection[]>;
@@ -124,7 +124,7 @@ export function sidekickSwitchAtCompaction(input: {
 		readonly forced: boolean;
 	}): Promise<CompactionSwitchDecision> => {
 		const none = { target: null };
-		const session = await (deps.session ?? agentSessionForOwner)(
+		const session = await (deps.session ?? agentSessionMetadataForOwner)(
 			input.userId,
 			input.sessionId,
 		);
@@ -174,7 +174,7 @@ export function sidekickSwitchAtCompaction(input: {
 function compactionSummary(
 	state: SidekickState,
 	items: readonly SessionItem[],
-	session: AgentSessionRecord,
+	session: Pick<AgentSessionRecord, "listedModelId">,
 	escalation: string,
 ): ClassifierInput {
 	const round = sidekickRoundItems(items, state.round);
@@ -287,7 +287,7 @@ export async function completeSidekickModelSwitch(input: {
 }): Promise<SidekickSwitchOutcome> {
 	const deps = input.deps ?? {};
 	const now = new Date((deps.now ?? Date.now)()).toISOString();
-	const session = await (deps.session ?? agentSessionForOwner)(
+	const session = await (deps.session ?? agentSessionMetadataForOwner)(
 		input.userId,
 		input.sessionId,
 	);

@@ -10,7 +10,7 @@ import { isGeneratedSessionBranch } from "#/domain/session-branch";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { templateCheckoutCommit } from "../adapters/prepared-checkout";
@@ -305,7 +305,10 @@ export function deferredApiTurnWorkspace(
 		for (;;) {
 			signal.throwIfAborted();
 			const parent = owner.parentSessionId
-				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
+				? await agentSessionMetadataForOwner(
+						owner.userId,
+						owner.parentSessionId,
+					)
 				: null;
 			if (!parent || parent.projectId !== owner.projectId)
 				throw new Error("The shared parent task is unavailable.");

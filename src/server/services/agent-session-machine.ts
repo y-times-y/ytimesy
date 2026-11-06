@@ -206,7 +206,7 @@ export async function openAgentTask(input: {
 	/** Lead mode fusion's sidekick: a writer on its parent's machine (src/domain/sidekick.ts). */
 	readonly sharedWriter?: boolean;
 }) {
-	const parent = await agentSessionForOwner(
+	const parent = await agentSessionMetadataForOwner(
 		input.userId,
 		input.parentSessionId,
 	);
@@ -242,7 +242,10 @@ export async function prepareAgentTaskStart(input: {
 	readonly projectId: string;
 	readonly taskSessionId: string;
 }) {
-	const task = await agentSessionForOwner(input.userId, input.taskSessionId);
+	const task = await agentSessionMetadataForOwner(
+		input.userId,
+		input.taskSessionId,
+	);
 	if (
 		!task ||
 		task.projectId !== input.projectId ||
@@ -253,7 +256,7 @@ export async function prepareAgentTaskStart(input: {
 	if (task.taskState !== "draft" && task.taskState !== "idle")
 		throw new Error("Only a new or idle subagent can be started.");
 	await reserveAgentTaskStart(input.userId, input.projectId, task.id);
-	const started = await agentSessionForOwner(input.userId, task.id);
+	const started = await agentSessionMetadataForOwner(input.userId, task.id);
 	if (!started) throw new Error("The subagent could not be started.");
 	return { task: started };
 }
@@ -398,7 +401,7 @@ export async function bindPreparedAgentTaskMachine(
 		if (!input.task.parentSessionId) {
 			throw new Error("The reader subagent has no parent machine.");
 		}
-		const parent = await agentSessionForOwner(
+		const parent = await agentSessionMetadataForOwner(
 			input.userId,
 			input.task.parentSessionId,
 		);
@@ -465,7 +468,10 @@ export async function deleteAgentSessionMachine(
 		readonly sessionId: string;
 	},
 ) {
-	const session = await agentSessionForOwner(input.userId, input.sessionId);
+	const session = await agentSessionMetadataForOwner(
+		input.userId,
+		input.sessionId,
+	);
 	if (!session || session.projectId !== input.projectId) {
 		throw new Error("Agent session is not available.");
 	}

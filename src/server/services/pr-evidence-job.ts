@@ -2,7 +2,7 @@ import type { BackgroundJob } from "#/domain/background-job";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellCommand } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import {
 	backgroundJobId,
 	dispatchBackgroundJob,
@@ -65,14 +65,14 @@ export async function runPullRequestEvidenceJob(
 	const sleep =
 		options.sleep ??
 		((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-	let session = await agentSessionForOwner(job.userId, job.sessionId);
+	let session = await agentSessionMetadataForOwner(job.userId, job.sessionId);
 	for (
 		let poll = 0;
 		session?.turnStatus === "running" && poll < TURN_SETTLE_POLLS;
 		poll++
 	) {
 		await sleep(TURN_SETTLE_MS);
-		session = await agentSessionForOwner(job.userId, job.sessionId);
+		session = await agentSessionMetadataForOwner(job.userId, job.sessionId);
 	}
 	if (!session?.providerRef) return { kind: "unavailable" };
 	const project = await projectForOwner(job.userId, session.projectId);
