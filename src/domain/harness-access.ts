@@ -177,7 +177,14 @@ export function canResumeDisconnectedFollowUp(input: {
 	return input.harnessId === "codex" && Boolean(input.snapshotAvailable);
 }
 
-export const RUNNING_TURN_POLL_MS = 700;
+/**
+ * How often a running chat is re-read while its live progress stream is not
+ * open. Each read returns the chat's transcript (0.1 to 0.5 MB), so this is
+ * what database egress is made of: 700 ms read a long turn 1.4 times a second.
+ */
+export const RUNNING_TURN_POLL_MS = 2_000;
+/** The same for a chat running in the background of the open one: nothing on screen waits for it. */
+export const BACKGROUND_TURN_POLL_MS = 5_000;
 
 export function composerCanStartSignIn(input: {
 	readonly harnessId: AgentProviderId;

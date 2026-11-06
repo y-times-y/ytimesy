@@ -37,6 +37,7 @@ import {
 	setupRequestKeeping,
 } from "#/domain/environment-setup";
 import {
+	BACKGROUND_TURN_POLL_MS,
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
 	sendAfterConnect,
@@ -1595,7 +1596,10 @@ export function WorkspaceHome({
 				pollMs: RUNNING_TURN_POLL_MS,
 				awaitingHeldDelivery,
 			}),
-		refetchIntervalInBackground: true,
+		// A hidden tab does not poll (each read is the whole transcript); coming
+		// back to the tab reads once.
+		refetchIntervalInBackground: false,
+		refetchOnWindowFocus: true,
 	});
 	refetchOpenSession.current = () => void sessionRead.refetch();
 	useEffect(() => {
@@ -1976,8 +1980,8 @@ export function WorkspaceHome({
 				0,
 			),
 			enabled: Boolean(activeProjectId),
-			refetchInterval: RUNNING_TURN_POLL_MS,
-			refetchIntervalInBackground: true,
+			refetchInterval: BACKGROUND_TURN_POLL_MS,
+			refetchIntervalInBackground: false,
 		})),
 	});
 	const appliedBackgroundReads = useRef(new WeakSet<object>());
