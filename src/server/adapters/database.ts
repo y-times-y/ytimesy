@@ -1,5 +1,9 @@
 import { Pool } from "pg";
 import { databaseConfig } from "../config";
+import {
+	accountQueryBytes,
+	byteAccountingEnabled,
+} from "./database-byte-accounting";
 import { scopedDatabase } from "./database-scope";
 
 const processDatabase = globalThis as typeof globalThis & {
@@ -25,6 +29,7 @@ export function database() {
 				"Idle database connection failed; the pool will replace it.",
 			);
 		});
+		if (byteAccountingEnabled()) accountQueryBytes(pool);
 		processDatabase.ytimesyDatabasePool = pool;
 	}
 	return processDatabase.ytimesyDatabasePool;
