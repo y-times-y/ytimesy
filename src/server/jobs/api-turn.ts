@@ -311,7 +311,10 @@ import {
 	type TurnMemory,
 	turnMemory,
 } from "../services/turn-memory";
-import { turnProgressWriter } from "../services/turn-progress-writer";
+import {
+	PROGRESS_WINDOW_MS,
+	turnProgressWriter,
+} from "../services/turn-progress-writer";
 import {
 	type EarlyRequestReason,
 	type TurnTiming,
@@ -616,6 +619,7 @@ async function runApiTurnAttempt(
 				? checkpointApiTurn(turn, saving.messages, saving.items, clearing)
 				: checkpointApiTurn(turn, saving.messages, saving.items));
 			checkpointed = saving;
+			progress.markStored(saving.items);
 			if (clearing === retryCleared) retryCleared = undefined;
 		});
 	let failureStage: ApiTurnFailureStage = "connection";
@@ -1764,7 +1768,6 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			}
 		}
-		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
 		if (step && (step.limitReached || step.index > modelStepLimit()))
@@ -2189,11 +2192,10 @@ async function runApiTurnAttempt(
 				items = applyApiProgress(items, turn.id, event);
 				if (evaluation && event.type === "usage")
 					await recordEvaluationUsage(evaluation, turn.id, event.usage);
-				if (Date.now() - flushedAt >= 250 || event.type === "finish") {
+				if (event.type === "finish") {
 					progress.offer(items);
-					if (event.type === "finish") await progress.drain();
-					flushedAt = Date.now();
-				} else progress.offerLater(items, flushedAt + 250 - Date.now());
+					await progress.drain();
+				} else progress.stream(items, PROGRESS_WINDOW_MS);
 			},
 			onStep: async (history) => {
 				failureStage = "saving";
@@ -2367,11 +2369,10 @@ async function runApiTurnAttempt(
 							)
 								timing?.mark("firstToken");
 							items = applyApiProgress(items, turn.id, event);
-							if (Date.now() - flushedAt >= 250 || event.type === "finish") {
+							if (event.type === "finish") {
 								progress.offer(items);
-								if (event.type === "finish") await progress.drain();
-								flushedAt = Date.now();
-							} else progress.offerLater(items, flushedAt + 250 - Date.now());
+								await progress.drain();
+							} else progress.stream(items, PROGRESS_WINDOW_MS);
 						},
 						onPlan: (plan) => {
 							items = applyPlanUpdate(items, turn.id, {

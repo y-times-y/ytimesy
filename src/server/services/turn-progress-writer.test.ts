@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
-import { turnProgressWriter } from "./turn-progress-writer";
+import { PROGRESS_WINDOW_MS, turnProgressWriter } from "./turn-progress-writer";
 
 const snapshot = (text: string): SessionItem[] => [
 	{ kind: "agentMessage", id: SessionItemId("message"), text },
@@ -125,4 +125,49 @@ it("never writes a throttled snapshot after a storage failure", async () => {
 	expect(write).toHaveBeenCalledTimes(1);
 	expect(failure).toHaveBeenCalledExactlyOnceWith(error);
 	expect(() => writer.offerLater(snapshot("later"), 100)).toThrow(error);
+});
+
+it("does not write the array a checkpoint stored, or the same array twice", async () => {
+	const write = vi.fn().mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	const stored = snapshot("stored");
+	writer.markStored(stored);
+	writer.offer(stored);
+	await writer.drain();
+	expect(write).not.toHaveBeenCalled();
+	const next = snapshot("next");
+	writer.offer(next);
+	await writer.drain();
+	writer.offer(next);
+	await writer.drain();
+	expect(write).toHaveBeenCalledTimes(1);
+});
+
+/** The stream throttle of api-turn.ts: a delta writes now, or when the window ends. */
+async function streamWrites(windowMs: number, seconds: number) {
+	vi.useFakeTimers();
+	const write = vi.fn().mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	let text = "";
+	for (let t = 0; t < seconds * 1000; t += 40) {
+		text += "word ";
+		writer.stream(snapshot(text), windowMs);
+		await vi.advanceTimersByTimeAsync(40);
+	}
+	await vi.advanceTimersByTimeAsync(windowMs);
+	return write;
+}
+
+it("writes a 20 second stream far less often with the 1.5 s window, ending on the last delta", async () => {
+	const before = await streamWrites(250, 20);
+	vi.useRealTimers();
+	const after = await streamWrites(PROGRESS_WINDOW_MS, 20);
+	console.info("stream writes in 20 s", {
+		window250: before.mock.calls.length,
+		window1500: after.mock.calls.length,
+	});
+	expect(after.mock.calls.length).toBeLessThanOrEqual(15);
+	expect(before.mock.calls.length).toBeGreaterThanOrEqual(70);
+	const last = after.mock.calls.at(-1)?.[0][0];
+	expect(last.text.split(" ").length - 1).toBe(500);
 });
