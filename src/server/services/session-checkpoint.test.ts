@@ -6,6 +6,7 @@ import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
 	session: vi.fn(),
+	fingerprint: vi.fn(),
 	project: vi.fn(),
 	previous: vi.fn(),
 	capture: vi.fn(),
@@ -18,7 +19,8 @@ const mocks = vi.hoisted(() => ({
 	clearFailure: vi.fn(),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
+	agentSessionItemsFingerprint: mocks.fingerprint,
 }));
 vi.mock("../adapters/projects", () => ({ projectForOwner: mocks.project }));
 vi.mock("../adapters/checkpoints/guest", () => ({
@@ -65,13 +67,11 @@ const session = {
 	taskPlacement: "fresh",
 	items: [],
 };
-const fingerprint = createHash("sha256")
-	.update("checkpoint-v2:")
-	.update("[]")
-	.digest("hex");
+const fingerprint = "transcript-fingerprint";
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.session.mockResolvedValue(session);
+	mocks.fingerprint.mockResolvedValue("transcript-fingerprint");
 	mocks.project.mockResolvedValue({ fullName: "owner/repo" });
 	mocks.previous.mockResolvedValue({
 		object_path: "old",
@@ -146,6 +146,16 @@ it("does not confirm or replace a checkpoint when capture fails", async () => {
 	).rejects.toThrow("Capture failed");
 	expect(mocks.confirm).not.toHaveBeenCalled();
 	expect(mocks.remove).not.toHaveBeenCalled();
+});
+
+it("refuses to save if the transcript changed during capture, comparing fingerprints computed in the database", async () => {
+	mocks.fingerprint
+		.mockResolvedValueOnce("before")
+		.mockResolvedValueOnce("after");
+	await expect(
+		captureSessionCheckpoint(machines, "owner", "chat"),
+	).rejects.toThrow("advanced");
+	expect(mocks.upload).not.toHaveBeenCalled();
 });
 
 it("refuses to save if the workspace identity changed during capture", async () => {

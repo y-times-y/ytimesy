@@ -40,6 +40,7 @@ import {
 	BACKGROUND_TURN_POLL_MS,
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
+	SUBAGENT_POLL_MS,
 	sendAfterConnect,
 	sendReplyOutcome,
 } from "#/domain/harness-access";
@@ -1114,7 +1115,7 @@ export function WorkspaceHome({
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
 			shouldPollSubagents(session.turnStatus, query.state.data ?? [])
-				? 2_500
+				? SUBAGENT_POLL_MS
 				: false,
 	});
 	// Background commands of the chat and its helpers, for the agents list.
