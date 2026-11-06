@@ -12,11 +12,14 @@ export async function idleSessionsWithOpenBackgroundCommands(
 	limit = 20,
 ) {
 	const result = await database().query<{ user_id: string; id: string }>(
-		`select user_id,id from agent_session
-		 where provider_ref is not null and turn_status <> 'running'
-		   and updated_at > now() - make_interval(secs => $1)
-		   and jsonb_path_exists(items, '$[*] ? (@.kind == "dynamicToolCall" && exists(@.background) && !exists(@.background.exitCode))')
-		 order by updated_at limit $2`,
+		`select s.user_id,s.id from agent_session s
+		 where s.provider_ref is not null and s.turn_status <> 'running'
+		   and s.updated_at > now() - make_interval(secs => $1)
+		   and exists (select 1 from agent_session_item i where i.session_id=s.id
+		     and i.kind = 'dynamicToolCall'
+		     and i.item->'background' is not null
+		     and (i.item #> '{background,exitCode}') is null)
+		 order by s.updated_at limit $2`,
 		[maxSeconds + 600, limit],
 	);
 	return result.rows.map((row) => ({ userId: row.user_id, id: row.id }));
