@@ -13,9 +13,11 @@ import {
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { isSideChat } from "#/domain/side-chat";
 import { subagentTaskViews } from "#/domain/subagent-tree";
+import { transcriptItemsForOwner } from "#/server/adapters/agent-session-items";
 import {
-	agentSessionForOwner,
-	descendantAgentSessions,
+	agentSessionMetadataForOwner,
+	backgroundCommandItemsForOwner,
+	descendantAgentSessionMetadata,
 } from "#/server/adapters/agent-sessions";
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { backgroundCommandMaxSeconds } from "#/server/services/api-command-scope";
@@ -44,18 +46,38 @@ export async function projectAgentTasksAndBackground(
 	tasks: readonly AgentTaskActivity[];
 	background: Record<string, RunningBackgroundCommand[]>;
 }> {
-	const [root, all] = await Promise.all([
-		agentSessionForOwner(userId, rootSessionId),
-		descendantAgentSessions(userId, rootSessionId),
+	// The shape of the tree first, without any transcript: Main's own
+	// transcript is never read here (nothing below needs it beyond its
+	// background commands), and only the subagents the tree shows have their
+	// transcripts read.
+	const [rootMetadata, all] = await Promise.all([
+		agentSessionMetadataForOwner(userId, rootSessionId),
+		descendantAgentSessionMetadata(userId, rootSessionId),
 	]);
-	if (!root || root.projectId !== projectId || root.parentSessionId) {
+	if (
+		!rootMetadata ||
+		rootMetadata.projectId !== projectId ||
+		rootMetadata.parentSessionId
+	) {
 		return { tasks: [], background: {} };
 	}
+	const root = { ...rootMetadata, items: [] as unknown[] };
 	// Subagents only: rows of the retired lead/child architecture (no
 	// agent role) and anything under them are not shown.
-	const descendants = all.filter(
+	const shown = all.filter(
 		(session) => session.agentRole && !isSideChat(session),
 	);
+	const shownIds = agentTaskTree(root.id, shown as never).map(
+		(task) => task.id,
+	);
+	const [transcripts, rootBackgroundItems] = await Promise.all([
+		transcriptItemsForOwner(userId, shownIds),
+		backgroundCommandItemsForOwner(userId, [root.id]),
+	]);
+	const descendants = shown.map((session) => ({
+		...session,
+		items: transcripts.get(session.id) ?? [],
+	}));
 	const byId = new Map(descendants.map((session) => [session.id, session]));
 	const subagents = subagentTaskViews(
 		root.id,
@@ -86,8 +108,8 @@ export async function projectAgentTasksAndBackground(
 		};
 	});
 	const now = Date.now();
-	const sessions = new Map([
-		[root.id, root],
+	const sessions = new Map<string, { items: unknown }>([
+		[root.id, { items: rootBackgroundItems.get(root.id) ?? [] }],
 		...descendants.map((session) => [session.id, session] as const),
 	]);
 	const background = Object.fromEntries(
