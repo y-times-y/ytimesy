@@ -615,6 +615,16 @@ async function runApiTurnAttempt(
 				return;
 			}
 			progressFailed = true;
+			// The abort below replaces this error with a generic one; keep the real one in the log.
+			console.warn("Turn progress write failed", {
+				turnId: turn.id,
+				platformRestart: isPlatformRestart(error),
+				...apiTurnFailureClassification(error),
+				message: (error instanceof Error ? error.message : String(error)).slice(
+					0,
+					300,
+				),
+			});
 			// A Durable Object reset for new code surfaces here first (the write's
 			// wake touches the object); the step must resume, so keep that error.
 			abort.abort(
