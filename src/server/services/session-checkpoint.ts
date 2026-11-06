@@ -90,7 +90,7 @@ async function captureSessionCheckpointStages(
 			);
 	const transfer = `/tmp/ytimesy-checkpoint-${randomUUID()}`;
 	progress.stage = "export";
-	const workspace = await exportGuestCheckpoint(
+	let workspace: string | null = await exportGuestCheckpoint(
 		host(selected, session.providerRef),
 		paths,
 		null,
@@ -128,12 +128,10 @@ async function captureSessionCheckpointStages(
 		return;
 	}
 	progress.stage = "upload";
-	const path = await uploadCheckpoint(
-		userId,
-		sessionId,
-		randomUUID(),
-		JSON.stringify({ workspace, native }),
-	);
+	const payload = JSON.stringify({ workspace, native });
+	// The guest's payload can be 20 MB; only its wrapped copy is needed from here.
+	workspace = null;
+	const path = await uploadCheckpoint(userId, sessionId, randomUUID(), payload);
 	progress.stage = "save";
 	try {
 		await saveSessionCheckpoint({

@@ -19,12 +19,16 @@ import {
 	type TurnStartRequest,
 } from "../adapters/turn-start";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
+import {
+	deferralDelayMs,
+	peerDeadlineReached,
+	peerRetryDelayMs,
+	tryAdmitJob,
+} from "./background-job-admission";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 
-const PEER_RETRY_MS = 15_000;
-const PEER_ATTEMPTS = 240;
 const RECORD_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -189,6 +193,17 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 			});
 			record = { ...record, interruptions };
 		}
+		// Memory-heavy kinds share the isolate's budget with other jobs; one
+		// that does not fit waits on an alarm (no active time) and keeps its attempts.
+		const release = tryAdmitJob(record.job.kind);
+		if (!release) {
+			await this.ctx.storage.put<JobRecord>("job", {
+				...record,
+				state: "queued",
+			});
+			await this.ctx.storage.setAlarm(Date.now() + deferralDelayMs());
+			return;
+		}
 		await this.ctx.storage.put<JobRecord>("job", {
 			...record,
 			state: "running",
@@ -204,13 +219,15 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 				`error:${error instanceof Error ? error.name : "unknown"}`,
 			);
 			return;
+		} finally {
+			release();
 		}
 		if (outcome === "delivered") {
 			await this.finish(record, "done");
 			return;
 		}
 		const attempts = record.attempts + 1;
-		if (attempts >= PEER_ATTEMPTS) {
+		if (peerDeadlineReached(attempts)) {
 			await this.finish(record, "failed", "peer delivery deadline exceeded");
 			return;
 		}
@@ -219,7 +236,9 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 			state: "queued",
 			attempts,
 		});
-		await this.ctx.storage.setAlarm(Date.now() + PEER_RETRY_MS);
+		await this.ctx.storage.setAlarm(
+			Date.now() + peerRetryDelayMs(record.attempts),
+		);
 	}
 
 	/** Keeps the record for a week so a repeated admission stays a no-op. */
