@@ -22,6 +22,8 @@ import { Route as AuthPathRouteImport } from './routes/auth/$path'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogHarnessRouteImport } from './routes/blog/harness'
 import { Route as BlogHarness10RouteImport } from './routes/blog/harness-1-0'
+import { Route as DevelopersIndexRouteImport } from './routes/developers/index'
+import { Route as DevelopersSplatRouteImport } from './routes/developers/$'
 import { Route as ApiAgentAccountRouteImport } from './routes/api/agent/account'
 import { Route as ApiAgentProgressRouteImport } from './routes/api/agent/progress'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -115,6 +117,16 @@ const BlogHarnessRoute = BlogHarnessRouteImport.update({
 const BlogHarness10Route = BlogHarness10RouteImport.update({
   id: '/blog/harness-1-0',
   path: '/blog/harness-1-0',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevelopersIndexRoute = DevelopersIndexRouteImport.update({
+  id: '/developers/',
+  path: '/developers/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevelopersSplatRoute = DevelopersSplatRouteImport.update({
+  id: '/developers/$',
+  path: '/developers/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAgentAccountRoute = ApiAgentAccountRouteImport.update({
@@ -283,7 +295,9 @@ export interface FileRoutesByFullPath {
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
   '/blog/harness-1-0': typeof BlogHarness10Route
+  '/developers/$': typeof DevelopersSplatRoute
   '/blog/': typeof BlogIndexRoute
+  '/developers/': typeof DevelopersIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -327,7 +341,9 @@ export interface FileRoutesByTo {
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
   '/blog/harness-1-0': typeof BlogHarness10Route
+  '/developers/$': typeof DevelopersSplatRoute
   '/blog': typeof BlogIndexRoute
+  '/developers': typeof DevelopersIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -372,7 +388,9 @@ export interface FileRoutesById {
   '/auth/$path': typeof AuthPathRoute
   '/blog/harness': typeof BlogHarnessRoute
   '/blog/harness-1-0': typeof BlogHarness10Route
+  '/developers/$': typeof DevelopersSplatRoute
   '/blog/': typeof BlogIndexRoute
+  '/developers/': typeof DevelopersIndexRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -418,7 +436,9 @@ export interface FileRouteTypes {
     | '/auth/$path'
     | '/blog/harness'
     | '/blog/harness-1-0'
+    | '/developers/$'
     | '/blog/'
+    | '/developers/'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -462,7 +482,9 @@ export interface FileRouteTypes {
     | '/auth/$path'
     | '/blog/harness'
     | '/blog/harness-1-0'
+    | '/developers/$'
     | '/blog'
+    | '/developers'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -506,7 +528,9 @@ export interface FileRouteTypes {
     | '/auth/$path'
     | '/blog/harness'
     | '/blog/harness-1-0'
+    | '/developers/$'
     | '/blog/'
+    | '/developers/'
     | '/api/agent/account'
     | '/api/agent/progress'
     | '/api/auth/$'
@@ -551,7 +575,9 @@ export interface RootRouteChildren {
   AuthPathRoute: typeof AuthPathRoute
   BlogHarnessRoute: typeof BlogHarnessRoute
   BlogHarness10Route: typeof BlogHarness10Route
+  DevelopersSplatRoute: typeof DevelopersSplatRoute
   BlogIndexRoute: typeof BlogIndexRoute
+  DevelopersIndexRoute: typeof DevelopersIndexRoute
   ApiAgentAccountRoute: typeof ApiAgentAccountRoute
   ApiAgentProgressRoute: typeof ApiAgentProgressRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -671,6 +697,20 @@ declare module '@tanstack/react-router' {
       path: '/blog/harness-1-0'
       fullPath: '/blog/harness-1-0'
       preLoaderRoute: typeof BlogHarness10RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/developers/': {
+      id: '/developers/'
+      path: '/developers'
+      fullPath: '/developers/'
+      preLoaderRoute: typeof DevelopersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/developers/$': {
+      id: '/developers/$'
+      path: '/developers/$'
+      fullPath: '/developers/$'
+      preLoaderRoute: typeof DevelopersSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/account': {
@@ -919,7 +959,9 @@ const rootRouteChildren: RootRouteChildren = {
   AuthPathRoute: AuthPathRoute,
   BlogHarnessRoute: BlogHarnessRoute,
   BlogHarness10Route: BlogHarness10Route,
+  DevelopersSplatRoute: DevelopersSplatRoute,
   BlogIndexRoute: BlogIndexRoute,
+  DevelopersIndexRoute: DevelopersIndexRoute,
   ApiAgentAccountRoute: ApiAgentAccountRoute,
   ApiAgentProgressRoute: ApiAgentProgressRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
