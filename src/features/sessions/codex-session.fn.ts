@@ -203,6 +203,7 @@ export const getCodexSessionDelta = createServerFn({ method: "GET" })
 			data:
 				| (Parameters<typeof optionalSessionInput>[0] & {
 						since?: { rev: number; count: number };
+						fields?: boolean;
 				  })
 				| undefined,
 		) => ({
@@ -215,6 +216,7 @@ export const getCodexSessionDelta = createServerFn({ method: "GET" })
 						})
 						.parse(data.since)
 				: undefined,
+			fields: data?.fields === true,
 		}),
 	)
 	.handler(
@@ -235,7 +237,7 @@ export const getCodexSessionDelta = createServerFn({ method: "GET" })
 					queuedCount: 0,
 				};
 			return data.since
-				? readSessionSince(scope, data.since)
+				? readSessionSince(scope, data.since, data.fields)
 				: readSessionFull(scope);
 		},
 	);
