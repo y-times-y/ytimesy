@@ -10,7 +10,13 @@ const publicTraining = publicLegalMarkdown(
 );
 
 export const Route = createFileRoute("/training")({
-	head: () => ({ meta: [{ title: "Training Data Opt-In · ytimesy" }] }),
+	// Reachable from the app's consent step, but not for search engines.
+	head: () => ({
+		meta: [
+			{ title: "Training Data Opt-In · ytimesy" },
+			{ name: "robots", content: "noindex" },
+		],
+	}),
 	component: () => (
 		<LegalPage markdown={publicTraining} version={TRAINING_POLICY_VERSION} />
 	),
