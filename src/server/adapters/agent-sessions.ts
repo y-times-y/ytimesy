@@ -673,6 +673,38 @@ export async function descendantAgentSessions(
 	return result.rows.map((row: AgentSessionRow) => toSession(row));
 }
 
+/**
+ * descendantAgentSessions without the transcripts (`items` is null): the
+ * tree's shape and state for a caller that reads items by chat id itself.
+ */
+export async function descendantAgentSessionMetadata(
+	userId: string,
+	parentSessionId: string,
+): Promise<Omit<AgentSessionRecord, "items">[]> {
+	const columns = SESSION_COLUMNS.replace(",items,", ",");
+	const result = await database().query(
+		`with recursive descendants as (
+			select ${columns}
+			from agent_session
+			where user_id=$1 and parent_session_id=$2
+			union all
+			select ${columns
+				.split(",")
+				.map((column) => `child.${column}`)
+				.join(",")}
+			from agent_session child
+			join descendants parent on child.parent_session_id=parent.id
+			where child.user_id=$1
+		)
+		select * from descendants order by created_at asc`,
+		[userId, parentSessionId],
+	);
+	return result.rows.map((row: AgentSessionRow) => {
+		const { items: _items, ...metadata } = toSession(row);
+		return metadata;
+	});
+}
+
 /** VMs still bound to one of the owner's sessions outside `sessionIds`. */
 export async function providerRefsHeldOutside(
 	userId: string,
