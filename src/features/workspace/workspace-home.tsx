@@ -228,6 +228,7 @@ import { chatSideKeys } from "../sessions/chat-side-queries";
 import {
 	connectCodexSession,
 	getCodexSession,
+	getCodexSessionDelta,
 	getOlderSessionItems,
 	type OpenChatView,
 	pollCodexLogin,
@@ -248,6 +249,7 @@ import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
+import { createSessionDeltaReader } from "../sessions/session-delta-reader";
 import {
 	COMPOSER_INPUT_ID,
 	type ComposerSendResult,
@@ -820,16 +822,27 @@ export function WorkspaceHome({
 	const viewReads = useRef(
 		new Map<string, Promise<PublicCodexSession | null>>(),
 	);
-	/** The open chat's read: one already under way (a hover, the page's first chat), else a new one. */
+	/** Reads the open chat as small deltas over its last server view (session-delta-reader.ts). */
+	const sessionDeltaReader = useMemo(
+		() =>
+			createSessionDeltaReader({
+				read: (data) => getCodexSessionDelta({ data }),
+			}),
+		[],
+	);
+	/** The open chat's read: one already under way (a hover, the page's first chat), else a delta or a new one. */
 	const readOpenChat = useCallback(
 		async (selection: {
 			projectId: string;
 			sessionId: string;
 			harnessId: AgentProviderId;
 		}) =>
-			(await viewReads.current.get(selection.sessionId)) ??
-			getCodexSession({ data: selection }),
-		[],
+			sessionDeltaReader.read(
+				selection,
+				() =>
+					viewReads.current.get(selection.sessionId) ?? Promise.resolve(null),
+			),
+		[sessionDeltaReader],
 	);
 	// The page's latest chat is read before the page's other reads queue
 	// ahead of it; opening it then takes this read over.
