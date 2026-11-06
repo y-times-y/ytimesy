@@ -5,6 +5,7 @@ import type { WorkspaceMachines } from "../services/workspace-machines";
 import {
 	commandWaitDeadline,
 	executeWorkflowRequest,
+	stepSoftDeadline,
 } from "./model-workflow-executor";
 
 const mocks = vi.hoisted(() => ({
@@ -206,4 +207,11 @@ it("ends command waits before the step budget", () => {
 	expect(commandWaitDeadline(0, 14 * minute)).toBe(13 * minute);
 	// No step budget (HTTP orchestrator): a wait is bounded only by its own limit.
 	expect(commandWaitDeadline(0)).toBe(Number.POSITIVE_INFINITY);
+});
+
+it("sets the soft deadline at 12 of the step's 14 minutes", () => {
+	const minute = 60_000;
+	expect(stepSoftDeadline(0, 14 * minute)).toBe(12 * minute);
+	expect(stepSoftDeadline(1_000, 14 * minute)).toBe(12 * minute + 1_000);
+	expect(stepSoftDeadline(0)).toBeUndefined();
 });

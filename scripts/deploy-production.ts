@@ -30,6 +30,7 @@ import {
 	productionSmokeChecks,
 	runSmokeChecks,
 } from "./production-smoke-check";
+import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
 
 /**
  * Production deploy for the edge executor and the web Worker. It refuses to
@@ -42,6 +43,9 @@ import {
  *
  * --preflight-only builds the web and runs the preflight, then stops: it
  * deploys nothing and skips the migration check (no database access).
+ *
+ * A deploy refuses to start while any chat is running a turn (a restarted
+ * Durable Object can lose it); pass --allow-running-turns to go ahead.
  *
  * .secrets/production.env holds production values only (fresh secrets, the
  * production GitHub App, the production database). Never pass the dev .env.
@@ -150,6 +154,16 @@ if (!preflightOnly) {
 		throw new Error(
 			`Apply pending production migrations first:\n${migrations.trim()}`,
 		);
+}
+
+// A deploy once killed a running turn: count them first and refuse unless allowed.
+if (!preflightOnly) {
+	const decision = runningTurnsDecision(
+		await readRunningTurns(secrets.DATABASE_URL),
+		process.argv.includes("--allow-running-turns"),
+	);
+	console.log(decision.message);
+	if (!decision.proceed) throw new Error(decision.message);
 }
 
 secrets.GITHUB_PRIVATE_KEY = createPrivateKey(

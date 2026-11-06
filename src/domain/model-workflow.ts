@@ -10,6 +10,8 @@ export const MAX_WORKFLOW_MODEL_STEPS = IMPLEMENTATION_MODEL_STEPS;
 
 /** One durable step must finish inside a single alarm, which Cloudflare stops after 15 minutes. */
 export const STEP_BUDGET_MS = 14 * 60 * 1000;
+/** After this a step waiting on its model call, with no tool started, ends and continues in the next step. */
+export const STEP_SOFT_DEADLINE_MS = 12 * 60 * 1000;
 /** How long a token minted for one step stays valid: the step's budget and a margin. */
 export const STEP_TOKEN_TTL_MS = STEP_BUDGET_MS + 15 * 60 * 1000;
 

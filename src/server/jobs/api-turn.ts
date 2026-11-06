@@ -361,6 +361,12 @@ type ApiTurnStep = {
 	limitReached?: boolean;
 	/** Latest epoch ms a tool may keep waiting on a command inside this step. */
 	waitDeadlineAt?: number;
+	/**
+	 * Epoch ms after which a step still waiting on its model call, with no tool
+	 * started, ends cleanly and continues in the next step (the hard abort at the
+	 * step budget stays as the last resort).
+	 */
+	softDeadlineAt?: number;
 	/** The same step is being re-run after its executor restarted mid-step. */
 	resumed?: boolean;
 	/** Epoch ms the executor started this step (its claim), for its timing line. */
@@ -587,6 +593,20 @@ async function runApiTurnAttempt(
 	let heartbeatFailed = false;
 	let coordinationFailure: CoordinationFailure | undefined;
 	let progressFailed = false;
+	// The soft deadline stops only the model call, and only before any tool has
+	// started; it is not `abort`, whose listeners stop the turn's owned commands.
+	const softStop = new AbortController();
+	let toolsStarted = false;
+	const softTimer =
+		step?.softDeadlineAt === undefined
+			? undefined
+			: setTimeout(
+					() => {
+						if (!toolsStarted && !abort.signal.aborted)
+							softStop.abort(new Error("Step soft deadline reached."));
+					},
+					Math.max(0, step.softDeadlineAt - Date.now()),
+				);
 	const progress = turnProgressWriter(
 		(snapshot) => publishApiTurnProgress(turn, snapshot),
 		(error) => {
@@ -1993,7 +2013,12 @@ async function runApiTurnAttempt(
 			tools: earlyPromptCheck
 				? withPromptCheckGate(tools, earlyPromptCheck)
 				: tools,
-			signal: abort.signal,
+			signal: claudeCode
+				? abort.signal
+				: AbortSignal.any([abort.signal, softStop.signal]),
+			onToolStart: () => {
+				toolsStarted = true;
+			},
 			isUserRequest: (message) => isUserRequestMessage(items, message),
 			compactionSnapshot: compactionStateSnapshot({
 				workspace,
@@ -2746,6 +2771,43 @@ async function runApiTurnAttempt(
 			);
 			throw error;
 		}
+		// The step's soft deadline passed while its model call was still running and
+		// no tool had started: nothing ran, so the step ends and the next one samples
+		// again from the last checkpoint. The turn does not fail.
+		if (
+			softStop.signal.aborted &&
+			!claudeCode &&
+			!abort.signal.aborted &&
+			failureStage === "model" &&
+			!failedAttempt?.inFlight &&
+			!progressFailed &&
+			!coordinationFailure &&
+			!heartbeatFailed
+		) {
+			try {
+				const partial = failedAttempt?.uncommittedIds ?? [];
+				if (partial.length)
+					items = applyApiProgress(items, turn.id, {
+						type: "retract",
+						ids: step
+							? partial.map((id) => `step-${step.index}:${id}`)
+							: [...partial],
+					});
+				if (failedAttempt?.droppedStepSaved) messages = failedAttempt.committed;
+				await checkpointApiTurn(turn, messages, items);
+				console.warn("Model step reached its soft deadline; it continues.", {
+					index: step?.index,
+				});
+				// The turn's lease carries over to the next step.
+				coordinated = false;
+				return { failedOver: { ...turn, messages, items } };
+			} catch (cause) {
+				if (!abort.signal.aborted)
+					console.warn("Soft deadline checkpoint failed", {
+						...apiTurnFailureClassification(cause),
+					});
+			}
+		}
 		// A sidekick's run ended at a compaction to switch models: the same
 		// turn continues on the escalation route from the compacted history.
 		if (
@@ -3123,6 +3185,7 @@ async function runApiTurnAttempt(
 		// Tools wait for the clone; a step that called none may end while it
 		// runs, so it is awaited before its token is released.
 		forgetLiveTurn();
+		clearTimeout(softTimer);
 		// A turn that ended at its answer lets its preparation finish, bounded
 		// (a VM that does not answer); a stopped step's ends at its next check.
 		if (preparation && !abort.signal.aborted)
