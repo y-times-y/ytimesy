@@ -8,6 +8,11 @@
 -- whose rev <= V and none of the later ones. A write that sets items to the
 -- value it holds (the queue's `items=items`) still bumps the revision and
 -- changes no row.
+-- Gives up after 5 s instead of queueing behind a long transaction (an ALTER
+-- that waits for its lock blocks every other query on the table meanwhile).
+-- Adding a column with a constant default does not rewrite either table.
+set local lock_timeout = '5s';
+
 alter table public.agent_session add column items_rev bigint not null default 0;
 alter table public.agent_session_item add column rev bigint not null default 0;
 
