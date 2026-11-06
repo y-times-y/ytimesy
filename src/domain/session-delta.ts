@@ -1,3 +1,4 @@
+import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { recordedContextUsage } from "./api-progress";
 import type {
 	SessionItem,
@@ -42,7 +43,39 @@ export type SessionReadDelta = {
 	readonly change: SessionDeltaChange | null;
 	/** The messages still waiting for delivery. */
 	readonly queued: readonly UserMessageItem[];
+	/**
+	 * Present when the browser asked for them: the view's fields that are not
+	 * on the chat row or in its transcript, read as a whole read reads them.
+	 */
+	readonly fields?: SessionViewFields;
 };
+
+/** The view's fields a delta can refresh without the transcript. A key left out means the view has none. */
+export const SESSION_VIEW_FIELD_KEYS = [
+	"snapshotAvailable",
+	"connection",
+	"models",
+	"blockedListedModelIds",
+	"canSend",
+	"sendBlockers",
+] as const;
+
+export type SessionViewFields = Partial<
+	Pick<PublicCodexSession, (typeof SESSION_VIEW_FIELD_KEYS)[number]>
+>;
+
+/** The view with its refreshable fields replaced by `fields` (a key absent from them is removed). */
+export function withViewFields<View extends object>(
+	view: View,
+	fields: SessionViewFields,
+): View {
+	const next = { ...view } as Record<string, unknown>;
+	for (const key of SESSION_VIEW_FIELD_KEYS) {
+		if (key in fields) next[key] = fields[key];
+		else delete next[key];
+	}
+	return next as unknown as View;
+}
 
 export type SessionReadFull<View> = {
 	readonly mode: "full";
@@ -82,9 +115,12 @@ export function applySessionDelta<View extends DeltaView>(
 	/** The route keeps the context usage (Codex) in the view's `usage`. */
 	keepsUsage: boolean,
 ): { view: View; queuedCount: number } | null {
-	const base = held.view.items.slice(
+	const heldView = delta.fields
+		? withViewFields(held.view, delta.fields)
+		: held.view;
+	const base = heldView.items.slice(
 		0,
-		held.view.items.length - held.queuedCount,
+		heldView.items.length - held.queuedCount,
 	);
 	let items: readonly SessionItem[] = base;
 	if (delta.change) {
@@ -102,7 +138,7 @@ export function applySessionDelta<View extends DeltaView>(
 	}
 	const shown = withQueuedUserMessages(items, delta.queued);
 	const view = {
-		...held.view,
+		...heldView,
 		items: sameItems(shown, held.view.items) ? held.view.items : shown,
 		turnStatus: delta.row.turnStatus,
 		workspaceId: delta.row.workspaceId,

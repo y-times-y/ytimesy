@@ -9,8 +9,9 @@ import {
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 
 /**
- * The fields a delta does not carry (connection, models, send permission,
- * usage limits) are read again at least this often while deltas run.
+ * The fields a delta does not carry (connection, models, send permission)
+ * are read again at least this often while deltas run, in the same call
+ * as the delta and without the transcript.
  */
 export const WHOLE_READ_EVERY_MS = 12_000;
 
@@ -30,7 +31,7 @@ type DeltaRead = (
 /**
  * Reads the open chat as small deltas over the last server view the browser
  * holds, and whole when a delta cannot be told exactly: nothing held, the
- * held view is older than WHOLE_READ_EVERY_MS, the turn changed status, the
+ * the turn changed status, the
  * delta does not anchor in the held items, or the delta read failed. What it
  * returns is what a whole read at that moment would return, except the
  * connection, models and send permission, which are at most that old.
@@ -75,11 +76,13 @@ export function createSessionDeltaReader(options: {
 	): Promise<PublicCodexSession> {
 		const key = `${selection.projectId}|${selection.sessionId}|${selection.harnessId}`;
 		const previous = held.get(key);
-		if (previous && now() - previous.fullAt < WHOLE_READ_EVERY_MS) {
+		if (previous) {
+			const refreshFields = now() - previous.fullAt >= WHOLE_READ_EVERY_MS;
 			try {
 				const result = await options.read({
 					...selection,
 					since: previous.token,
+					...(refreshFields ? { fields: true } : {}),
 				});
 				if (result.mode === "full") {
 					if (result.token)
@@ -101,7 +104,7 @@ export function createSessionDeltaReader(options: {
 						view: merged.view,
 						token: result.token,
 						queuedCount: merged.queuedCount,
-						fullAt: previous.fullAt,
+						fullAt: refreshFields ? now() : previous.fullAt,
 					});
 					return merged.view;
 				}

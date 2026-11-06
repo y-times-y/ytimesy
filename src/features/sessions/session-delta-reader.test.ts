@@ -131,18 +131,53 @@ it("reads whole when the turn changed status, the tail has no anchor, or the del
 	}
 });
 
-it("reads whole again once the held view is older than the whole-read interval", async () => {
+it("refreshes the view's other fields beside the delta once they are older than the interval, keeping the held transcript", async () => {
 	let now = 0;
 	const read = vi
 		.fn()
-		.mockResolvedValueOnce(whole([message("a")], 1))
-		.mockResolvedValueOnce(whole([message("a"), message("b")], 2));
+		.mockResolvedValueOnce({
+			...whole([message("a")], 1),
+			view: { ...view([message("a")]), sendBlockers: ["github"] },
+		})
+		.mockResolvedValueOnce({
+			mode: "delta",
+			token: { rev: 2, count: 2 },
+			row: row("running"),
+			change: { anchorId: "a", tail: [message("b")] },
+			queued: [],
+			fields: {
+				snapshotAvailable: false,
+				connection: { status: "expired", provider: "codex", message: "x" },
+				models: [],
+				blockedListedModelIds: [],
+				canSend: false,
+			},
+		} satisfies SessionReadDelta)
+		.mockResolvedValueOnce({
+			mode: "delta",
+			token: { rev: 2, count: 2 },
+			row: row("running"),
+			change: null,
+			queued: [],
+		} satisfies SessionReadDelta);
 	const reader = createSessionDeltaReader({ read, now: () => now });
 	await reader.read(selection);
 	now = WHOLE_READ_EVERY_MS + 1;
 	const next = await reader.read(selection);
-	expect(next.items).toHaveLength(2);
-	expect(read).toHaveBeenLastCalledWith(selection);
+	expect(read).toHaveBeenLastCalledWith({
+		...selection,
+		since: { rev: 1, count: 1 },
+		fields: true,
+	});
+	expect(next.items.map((item) => item.id)).toEqual(["a", "b"]);
+	expect(next.connection.status).toBe("expired");
+	expect(next.canSend).toBe(false);
+	// A field the fresh read no longer has is gone.
+	expect(next.sendBlockers).toBeUndefined();
+	// The fields are fresh now: the next poll does not ask again.
+	await reader.read(selection);
+	expect(read).toHaveBeenCalledTimes(3);
+	expect(read.mock.calls[2]?.[0]).not.toHaveProperty("fields");
 });
 
 it("keeps the waiting messages apart from the transcript", async () => {
