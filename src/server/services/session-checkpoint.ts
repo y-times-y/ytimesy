@@ -4,7 +4,11 @@ import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
 import { sharesParentMachine } from "#/domain/subagent";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	agentSessionForOwner,
+	agentSessionItemsFingerprint,
+	agentSessionMetadataForOwner,
+} from "../adapters/agent-sessions";
 import {
 	exportGuestCheckpoint,
 	restoreGuestCheckpoint,
@@ -71,12 +75,9 @@ async function captureSessionCheckpointStages(
 	sessionId: string,
 	progress: { stage: CheckpointStage },
 ) {
-	const session = await agentSessionForOwner(userId, sessionId);
+	const session = await agentSessionMetadataForOwner(userId, sessionId);
 	if (!session?.providerRef || session.turnStatus === "running") return;
-	const fingerprint = createHash("sha256")
-		.update("checkpoint-v2:")
-		.update(JSON.stringify(session.items))
-		.digest("hex");
+	const fingerprint = await agentSessionItemsFingerprint(userId, sessionId);
 	const previous = await checkpointForSession(userId, sessionId);
 	const project = await projectForOwner(userId, session.projectId);
 	if (!project) return;
@@ -105,15 +106,12 @@ async function captureSessionCheckpointStages(
 				) as { native?: unknown }
 			).native ?? null)
 		: null;
-	const latest = await agentSessionForOwner(userId, sessionId);
+	const latest = await agentSessionMetadataForOwner(userId, sessionId);
 	if (
 		!latest ||
 		latest.turnStatus === "running" ||
 		latest.providerRef !== session.providerRef ||
-		createHash("sha256")
-			.update("checkpoint-v2:")
-			.update(JSON.stringify(latest.items))
-			.digest("hex") !== fingerprint
+		(await agentSessionItemsFingerprint(userId, sessionId)) !== fingerprint
 	) {
 		progress.stage = "advanced";
 		throw new Error(

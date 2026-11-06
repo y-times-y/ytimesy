@@ -379,12 +379,58 @@ export async function agentSessionPageForOwner(
 	};
 }
 
+/**
+ * Only the transcript items that record a background command, of the user's
+ * chats, by chat id and in transcript order. Read from agent_session_item
+ * (kept in step with agent_session.items by a trigger), so the rest of each
+ * transcript stays in the database.
+ */
+export async function backgroundCommandItemsForOwner(
+	userId: string,
+	sessionIds: readonly string[],
+): Promise<Map<string, unknown[]>> {
+	const result = await database().query<{ session_id: string; item: unknown }>(
+		`select i.session_id, i.item
+		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id = any($2::uuid[]) and i.kind='dynamicToolCall' and i.item->'background' is not null
+		 order by i.session_id, i.position`,
+		[userId, [...sessionIds]],
+	);
+	const bySession = new Map<string, unknown[]>();
+	for (const row of result.rows)
+		bySession.set(row.session_id, [
+			...(bySession.get(row.session_id) ?? []),
+			row.item,
+		]);
+	return bySession;
+}
+
+/**
+ * The chat with its whole transcript (`items`, up to 0.5 MB a read). A caller
+ * that does not read `items` should take agentSessionMetadataForOwner: the
+ * transcript is what database egress is made of.
+ */
 export async function agentSessionForOwner(userId: string, sessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+/**
+ * A fingerprint of the chat's transcript, computed in the database: the
+ * checkpoint only compares it with itself, so the transcript need not travel.
+ */
+export async function agentSessionItemsFingerprint(
+	userId: string,
+	sessionId: string,
+) {
+	const result = await database().query<{ fingerprint: string }>(
+		"select md5(items::text) as fingerprint from agent_session where id=$1 and user_id=$2",
+		[sessionId, userId],
+	);
+	return result.rows[0]?.fingerprint ?? null;
 }
 
 /** The project's latest chat without its history (listAgentSessions()[0], metadata only). */

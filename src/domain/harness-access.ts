@@ -185,6 +185,8 @@ export function canResumeDisconnectedFollowUp(input: {
 export const RUNNING_TURN_POLL_MS = 2_000;
 /** The same for a chat running in the background of the open one: nothing on screen waits for it. */
 export const BACKGROUND_TURN_POLL_MS = 5_000;
+/** The subagent tree, with each subagent's transcript, is read this often while subagents work. */
+export const SUBAGENT_POLL_MS = 5_000;
 
 export function composerCanStartSignIn(input: {
 	readonly harnessId: AgentProviderId;
