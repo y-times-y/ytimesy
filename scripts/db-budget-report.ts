@@ -113,14 +113,30 @@ async function report(client: Client) {
 			warn(`table ${row.name} has ${dead} dead tuples against ${live} live`);
 	}
 
-	const extension = await client.query(
-		"select 1 from pg_extension where extname = 'pg_stat_statements'",
+	// On Supabase the extension lives in its own schema, which a narrow role's
+	// search_path does not include, so name the schema.
+	const extension = await client.query<{ schema: string }>(
+		`select n.nspname as schema
+		   from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+		  where e.extname = 'pg_stat_statements'`,
 	);
 	if (!extension.rowCount) {
 		console.log("\npg_stat_statements is not enabled: no query statistics.");
 		warn("pg_stat_statements is not enabled, so query volume is not visible");
 		return;
 	}
+	const schema = (extension.rows[0]?.schema ?? "").replace(/"/g, '""');
+	try {
+		await statementReport(client, `"${schema}".pg_stat_statements`);
+	} catch (cause) {
+		// A role without access to the statistics must not fail the table report.
+		const reason = cause instanceof Error ? cause.message : "unknown error";
+		console.log(`\nQuery statistics are not readable by this role: ${reason}`);
+		warn(`query statistics unavailable: ${reason}`);
+	}
+}
+
+async function statementReport(client: Client, view: string) {
 	for (const [label, column, limit] of [
 		["calls", "calls", THRESHOLDS.queryCalls],
 		["rows returned", "rows", THRESHOLDS.queryRows],
@@ -132,7 +148,7 @@ async function report(client: Client) {
 			mean_ms: number;
 		}>(
 			`select query, calls, rows, mean_exec_time as mean_ms
-			   from pg_stat_statements
+			   from ${view}
 			  where dbid = (select oid from pg_database where datname = current_database())
 			    and query not ilike '%pg_stat_statements%'
 			  order by ${column} desc limit $1`,
