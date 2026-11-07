@@ -30,6 +30,7 @@ import {
 	productionSmokeChecks,
 	runSmokeChecks,
 } from "./production-smoke-check";
+import { deploySourceProblem } from "./production-source";
 import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
 
 /**
@@ -44,6 +45,9 @@ import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
  * --preflight-only builds the web and runs the preflight, then stops: it
  * deploys nothing and skips the migration check (no database access).
  *
+ * It also refuses unless the checkout is exactly origin/main with no changed
+ * tracked files (production-source.ts); --allow-unverified-source overrides.
+ *
  * A deploy refuses to start while any chat is running a turn (a restarted
  * Durable Object can lose it); pass --allow-running-turns to go ahead.
  *
@@ -57,6 +61,19 @@ const DEVELOPMENT_DATABASE_REF = "zqkptvyvoyqqtpihlshw";
 const preflightOnly = process.argv.includes("--preflight-only");
 if (!preflightOnly && !process.argv.includes("--confirm-production"))
 	throw new Error("Pass --confirm-production to deploy production.");
+
+// Build only from origin/main: a stale or detached checkout once shipped old code.
+if (!preflightOnly && !process.argv.includes("--allow-unverified-source")) {
+	const read = (...args: string[]) =>
+		execFileSync("git", args, { encoding: "utf8" });
+	execFileSync("git", ["fetch", "--quiet", "origin", "main"]);
+	const sourceProblem = deploySourceProblem({
+		head: read("rev-parse", "HEAD"),
+		originMain: read("rev-parse", "origin/main"),
+		trackedChanges: read("status", "--porcelain", "--untracked-files=no"),
+	});
+	if (sourceProblem) throw new Error(sourceProblem);
+}
 
 const required = [
 	"DATABASE_URL",
