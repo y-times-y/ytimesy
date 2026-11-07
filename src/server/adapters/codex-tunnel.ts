@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { Client } from "tunnelfetch";
 
 /** A request owns its TLS connection until its response is consumed or cancelled. */
@@ -14,6 +15,17 @@ export async function codexTunnelFetch(
 	}
 	const proxy = process.env.YTIMESY_CODEX_TUNNEL_URL;
 	if (!proxy) throw new Error("Codex tunnel is not configured.");
+	const secret = process.env.YTIMESY_CODEX_TUNNEL_SECRET;
+	if (!secret || secret.length < 64)
+		throw new Error("Codex tunnel signing key is missing.");
+	const proxyUrl = new URL(proxy);
+	const expires = String(Date.now() + 60_000);
+	const nonce = randomBytes(16).toString("hex");
+	const signature = createHmac("sha256", secret)
+		.update(`${expires}.${nonce}.chatgpt.com:443`)
+		.digest("hex");
+	proxyUrl.username = "ytimesy";
+	proxyUrl.password = `${expires}.${nonce}.${signature}`;
 	const { connect } = await import("cloudflare:sockets");
 	const client = new Client({
 		connect: (address, options) => {
@@ -32,7 +44,7 @@ export async function codexTunnelFetch(
 				},
 			);
 		},
-		proxy,
+		proxy: proxyUrl.href,
 		trust: { mode: "system" },
 		timeouts: { idleMs: 0, totalMs: 0 },
 	});
