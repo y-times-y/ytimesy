@@ -26,6 +26,7 @@ import { codexExternalTokens } from "../auth/codex-managed-auth";
 import { recordStepTiming, timed } from "../services/step-timing";
 import { markTurnPhase } from "../services/turn-timing";
 import { captureServerAnalytics } from "./analytics";
+import { codexTunnelFetch } from "./codex-tunnel";
 import { trackInvocationTask } from "./invocation-tasks";
 import { alertOwner } from "./owner-alerts";
 
@@ -121,7 +122,15 @@ function configuredRelays(
 function egressPaths(): EgressPath[] {
 	const vpc = subscriptionEgress.getStore();
 	const relays = configuredRelays();
-	if (vpc) return [{ id: "vpc", kind: "upstream", request: vpc }, ...relays];
+	if (vpc)
+		return [
+			{
+				id: "vpc",
+				kind: "upstream",
+				request: process.env.YTIMESY_CODEX_TUNNEL_URL ? codexTunnelFetch : vpc,
+			},
+			...relays,
+		];
 	if (relays.length) return relays;
 	return [
 		{
