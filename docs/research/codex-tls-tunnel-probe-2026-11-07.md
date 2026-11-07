@@ -53,6 +53,29 @@ These moving upstream sources are supporting context, not proof that every deplo
 
 This does **not** establish that native TCP CONNECT plus `cloudflare:sockets.startTls({ expectedServerHostname: 'chatgpt.com' })` is infeasible. That separate approach still needs a reachable authenticated TCP endpoint, verified certificate rejection tests, and a deployed Worker proof. Do not substitute a homemade TLS implementation or disable certificate verification.
 
+## Follow-up: deployed native TCP probe
+
+A disposable Worker, `ytimesy-native-tunnel-proof`, was deployed with compatibility date `2026-10-08` and `nodejs_compat`. It used `cloudflare:sockets.connect` to the dedicated Freestyle VM's public IPv6 address on port 18080, requested a fixed `CONNECT chatgpt.com:443` tunnel, released the plaintext reader/writer, and called `startTls({ expectedServerHostname })`. The VM ran a disposable standard-library Python TCP forwarder with a bounded lifetime; it accepted no destination other than ChatGPT. This unauthenticated fixed-destination probe was temporary, not a production proxy.
+
+Results:
+
+- Unbracketed IPv6 failed to connect. Bracketed IPv6 reached the TCP forwarder and received its CONNECT acknowledgement.
+- Both `expectedServerHostname: 'chatgpt.com'` and `'wrong-host.invalid'` ended with EOF before an HTTP response. Neither is a successful certificate rejection test.
+- The forwarder recorded a client TLS record prefix `16030105a70100` and a server fatal handshake-failure alert `15030100020228`. The first client chunk contained neither requested hostname. These observations are consistent with the hostname override not taking effect; they do not identify every TLS failure cause.
+- A Python `ssl.create_default_context().wrap_socket(..., server_hostname='chatgpt.com')` client on Freestyle, using the same forwarder over loopback, completed TLS verification and received `HTTP/1.1 401 Unauthorized` from the unauthenticated catalog request. Thus the forwarder and its upstream route can carry working TLS.
+- Current upstream `sockets.c++` explicitly includes an autogate that can reject `expectedServerHostname` as unsupported. This supports investigating platform support; it is not proof of which autogate the deployed service uses.
+
+Commands and actual outcomes:
+
+- `pnpm exec wrangler deploy --config .ytimesy/native-tunnel-proof/wrangler.jsonc`: exit 0 on each of three probe deployments.
+- `curl -fsS --max-time 40 https://ytimesy-native-tunnel-proof.example-account.workers.dev`: exit 0; returned connect failures initially, then the EOF results. Transport command success is not TLS success.
+- `curl -fsS --max-time 30 https://ytimesy-native-tunnel-proof.example-account.workers.dev`: exit 0 for follow-up EOF observations.
+- `npx freestyle vm exec vm-5532c00fd90d4aeca2a3320ff628e019 -- bash -lc '<Python loopback TLS control>'`: exit 0; certificate-verified HTTP 401. An earlier IPv4-loopback control exited 1 because the listener was IPv6-only; a self-public-address curl also timed out (curl 28).
+- First forwarder replacement failed to bind because the old process was still running. Stopping the process by listening port and restarting resolved that probe setup error.
+- Cleanup removed firewall rule `fw-6cae7acd4bd84c2380b7de8fb11738b4`, stopped the forwarder, paused the VM, and deleted the disposable Worker. The CLI cleanup batch exited 0, but shell removal of the uploaded script was denied; `npx freestyle vm fs rm vm-5532c00fd90d4aeca2a3320ff628e019 /tmp/ytimesy-tunnel-probe.py` then removed it successfully (exit 0). Temporary local proof files were removed.
+
+No OAuth token, database key, prompt, or authenticated inference was used. No production Worker was changed. End-to-end encrypted Worker-to-ChatGPT transport remains **unproven** on this runtime. Do not deploy this path, claim certificate verification passed, or work around it by disabling verification. Next steps are to establish supported hostname-aware TLS transport with Cloudflare, or explicitly choose a trusted access-token relay with its different security boundary.
+
 ## Deployment state
 
 Production was not changed by this investigation. Earlier setup created a dedicated Freestyle relay VM, `vm-5532c00fd90d4aeca2a3320ff628e019`; it was paused and its temporary public ingress rule removed before this investigation. No secrets or tokens were sent to it by this probe.
