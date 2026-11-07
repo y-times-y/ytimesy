@@ -1,0 +1,27 @@
+[Unit]
+Description=ytimesy fixed-destination Codex TCP proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=proxy-key:/etc/ytimesy-codex-proxy.key
+Environment=CODEX_PROXY_SECRET_FILE=%d/proxy-key
+ExecStart=/usr/bin/python3 /opt/ytimesy-codex-proxy.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LimitCORE=0
+MemoryMax=256M
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target
