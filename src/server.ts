@@ -68,6 +68,7 @@ export default createServerEntry({
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(
 				await monitored(request, () => renderPage(request)),
+				request,
 			);
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
@@ -81,6 +82,7 @@ export default createServerEntry({
 						async () =>
 							(await handleWorkerSocket(request)) ?? renderPage(request),
 					),
+					request,
 				),
 			`${request.method} ${new URL(request.url).pathname}`,
 		);
