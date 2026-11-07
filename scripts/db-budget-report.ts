@@ -136,6 +136,13 @@ async function report(client: Client) {
 	}
 }
 
+/** Another role's query text is hidden from this login; its id still identifies the statement. */
+function queryLabel(row: { query: string; queryid: string }) {
+	return row.query.includes("insufficient privilege")
+		? `(text hidden from this role) queryid ${row.queryid}`
+		: oneLine(row.query);
+}
+
 async function statementReport(client: Client, view: string) {
 	for (const [label, column, limit] of [
 		["calls", "calls", THRESHOLDS.queryCalls],
@@ -143,11 +150,12 @@ async function statementReport(client: Client, view: string) {
 	] as const) {
 		const statements = await client.query<{
 			query: string;
+			queryid: string;
 			calls: string;
 			rows: string;
 			mean_ms: number;
 		}>(
-			`select query, calls, rows, mean_exec_time as mean_ms
+			`select query, queryid::text, calls, rows, mean_exec_time as mean_ms
 			   from ${view}
 			  where dbid = (select oid from pg_database where datname = current_database())
 			    and query not ilike '%pg_stat_statements%'
@@ -157,11 +165,11 @@ async function statementReport(client: Client, view: string) {
 		console.log(`\nTop ${TOP} queries by ${label} since the last stats reset`);
 		for (const row of statements.rows) {
 			console.log(
-				`  calls ${row.calls}  rows ${row.rows}  mean ${Number(row.mean_ms).toFixed(1)} ms  ${oneLine(row.query)}`,
+				`  calls ${row.calls}  rows ${row.rows}  mean ${Number(row.mean_ms).toFixed(1)} ms  ${queryLabel(row)}`,
 			);
 			if (Number(row[column]) > limit)
 				warn(
-					`query with ${row[column]} ${label}, over ${limit}: ${oneLine(row.query).slice(0, 100)}`,
+					`query with ${row[column]} ${label}, over ${limit}: ${queryLabel(row).slice(0, 100)}`,
 				);
 		}
 	}
