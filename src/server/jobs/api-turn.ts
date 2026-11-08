@@ -315,10 +315,7 @@ import {
 	type TurnMemory,
 	turnMemory,
 } from "../services/turn-memory";
-import {
-	PROGRESS_WINDOW_MS,
-	turnProgressWriter,
-} from "../services/turn-progress-writer";
+import { turnProgressWriter } from "../services/turn-progress-writer";
 import {
 	type EarlyRequestReason,
 	type TurnTiming,
@@ -2273,7 +2270,7 @@ async function runApiTurnAttempt(
 				if (event.type === "finish") {
 					progress.offer(items);
 					await progress.drain();
-				} else progress.stream(items, PROGRESS_WINDOW_MS);
+				} else progress.stream(items, progress.window());
 			},
 			onStep: async (history) => {
 				failureStage = "saving";
@@ -2450,7 +2447,7 @@ async function runApiTurnAttempt(
 							if (event.type === "finish") {
 								progress.offer(items);
 								await progress.drain();
-							} else progress.stream(items, PROGRESS_WINDOW_MS);
+							} else progress.stream(items, progress.window());
 						},
 						onPlan: (plan) => {
 							items = applyPlanUpdate(items, turn.id, {

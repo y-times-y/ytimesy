@@ -192,6 +192,7 @@ export function createFreestyleWorkspaceMachines(
 			command: string,
 			timeoutMs = 120_000,
 		): Promise<CommandOutput> {
+			const startedAt = Date.now();
 			try {
 				const result = await onReadyGuest(
 					freestyle.vms.ref(workspaceId),
@@ -203,6 +204,18 @@ export function createFreestyleWorkspaceMachines(
 							timeoutMs,
 						}),
 				);
+				// 124 is also what a provider answer with no exit status becomes: say
+				// so, with how long it took and what came back (never the command).
+				if (result.statusCode == null)
+					console.warn("Machine command returned no exit status.", {
+						vm: workspaceId,
+						budgetMs: timeoutMs,
+						elapsedMs: Date.now() - startedAt,
+						stdoutBytes: result.stdout?.length ?? 0,
+						stderr: String(result.stderr ?? "")
+							.replace(/https?:\/\/\S+/g, "<url>")
+							.slice(-200),
+					});
 				return {
 					exitCode: result.statusCode ?? 124,
 					stdout: result.stdout ?? "",

@@ -74,15 +74,21 @@ export async function runClaudeCodeTurnStep(input: {
 		throw new ClaudeCodeRunFailure(
 			"this deployment has no edge address for the machine to reach.",
 		);
-	// Safety net: the real token is redacted from anything the turn shows.
-	const token = await claudeSubscriptionTokenForRedaction(input.userId).catch(
-		() => null,
-	);
-	if (token) input.addRedaction(token);
-	const ready = await input.workspace();
+	// Safety net: the real token is redacted from anything the turn shows. Read
+	// while the machine is prepared, not before it.
+	const redactingToken = claudeSubscriptionTokenForRedaction(input.userId)
+		.catch(() => null)
+		.then((token) => {
+			if (token) input.addRedaction(token);
+		});
+	const [ready, definitions] = await Promise.all([
+		input.workspace(),
+		mcpToolDefinitions(input.tools),
+		redactingToken,
+	]);
 	const vm = ready.vm;
 	const { machines } = input;
-	publishClaudeCodeTools(input.turnId, await mcpToolDefinitions(input.tools));
+	publishClaudeCodeTools(input.turnId, definitions);
 	const running = new Set<Promise<void>>();
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;

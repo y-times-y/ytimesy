@@ -14,6 +14,9 @@ export function useSmoothText(text: string, streaming: boolean): string {
 		shown: text.length,
 		text,
 		arrivals: [] as TextArrival[],
+		/** When the last snapshot with new text arrived, and a running mean of the gaps. */
+		lastArrival: 0,
+		cadence: 0,
 	});
 	const frame = useRef(0);
 	useEffect(() => {
@@ -23,11 +26,21 @@ export function useSmoothText(text: string, streaming: boolean): string {
 		if (!streaming || replaced || document.hidden) {
 			current.shown = text.length;
 			current.arrivals = [];
+			current.lastArrival = 0;
+			current.cadence = 0;
 			setShown(text.length);
 			return;
 		}
 		if (text.length <= current.shown) return;
-		current.arrivals.push({ end: text.length, at: performance.now() });
+		const arrivedAt = performance.now();
+		if (current.lastArrival) {
+			const gap = Math.min(arrivedAt - current.lastArrival, 5_000);
+			current.cadence = current.cadence
+				? current.cadence * 0.6 + gap * 0.4
+				: gap;
+		}
+		current.lastArrival = arrivedAt;
+		current.arrivals.push({ end: text.length, at: arrivedAt });
 		if (frame.current) return;
 		let last = performance.now();
 		const step = (now: number) => {
@@ -37,6 +50,7 @@ export function useSmoothText(text: string, streaming: boolean): string {
 				arrivals: current.arrivals,
 				now,
 				elapsed: now - last,
+				cadence: current.cadence,
 			});
 			last = now;
 			current.shown = next;
