@@ -66,6 +66,35 @@ function stderrTail(result: { stderr?: unknown }, limit: number) {
 	);
 }
 
+/**
+ * A busy or just-woken guest can take far longer than a normal command to
+ * answer `git status` (production, 2026-11-08: two chats failed with exit 124
+ * and no stderr, the 15 s budget). A read is safe to repeat, so a timeout is
+ * retried with a larger budget before it counts as a failure.
+ */
+const STATUS_READ_BUDGETS_MS = [30_000, 60_000, 120_000] as const;
+const COMMAND_TIMED_OUT_EXIT = 124;
+
+async function readCheckoutStatus(host: GitTransferHost, dest: string) {
+	const command = `git -C ${dest} status --porcelain`;
+	for (const [attempt, budget] of STATUS_READ_BUDGETS_MS.entries()) {
+		const started = Date.now();
+		const result = await host.exec(command, budget);
+		if (result.exitCode === 0) return result.stdout.trim();
+		const timedOut = result.exitCode === COMMAND_TIMED_OUT_EXIT;
+		console.warn("Workspace Git command failed", {
+			failure: "Workspace Git could not read the checkout's status.",
+			exitCode: result.exitCode,
+			attempt: attempt + 1,
+			budgetMs: budget,
+			elapsedMs: Date.now() - started,
+			stderr: stderrTail(result, 400),
+		});
+		if (!timedOut || attempt === STATUS_READ_BUDGETS_MS.length - 1) break;
+	}
+	throw new Error("Workspace Git could not read the checkout's status.");
+}
+
 async function checked(
 	host: GitTransferHost,
 	command: string,
@@ -290,11 +319,7 @@ export async function receiveProxiedRepository(
 	const branch = input.workingBranch || input.branch;
 	await checkBranchNames(host, [input.branch, branch]);
 	if (input.mode !== "clone") {
-		const dirty = await checked(
-			host,
-			`git -C ${dest} status --porcelain`,
-			"Workspace Git could not read the checkout's status.",
-		);
+		const dirty = await readCheckoutStatus(host, dest);
 		if (dirty && input.mode === "switch")
 			throw new Error(
 				"Commit or stash this chat's uncommitted changes before switching branches.",
@@ -308,6 +333,7 @@ export async function receiveProxiedRepository(
 			input.mode === "clone"
 				? "Workspace Git could not create the checkout."
 				: "Workspace Git found uncommitted changes in the checkout.",
+			input.mode === "clone" ? undefined : STATUS_READ_BUDGETS_MS[1],
 		);
 		await checked(
 			host,
