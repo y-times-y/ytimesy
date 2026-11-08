@@ -206,3 +206,64 @@ it("fast-forwards a clean checkout in one guest command, and leaves a dirty one 
 		}),
 	).resolves.toBe("dirty");
 });
+
+function hostWhoseStatusTimesOut(timeouts: number) {
+	const budgets: number[] = [];
+	let remaining = timeouts;
+	return {
+		budgets,
+		host: {
+			writeTextFile: async () => {},
+			exec: async (command: string, budgetMs = 0) => {
+				if (!command.includes("status --porcelain"))
+					return { exitCode: 0, stdout: "", stderr: "" };
+				budgets.push(budgetMs ?? 0);
+				if (remaining-- > 0) return { exitCode: 124, stdout: "", stderr: "" };
+				return { exitCode: 0, stdout: "", stderr: "" };
+			},
+		},
+	};
+}
+
+it("repeats a checkout status that timed out, with a larger budget each time", async () => {
+	const { host, budgets } = hostWhoseStatusTimesOut(2);
+	await receiveProxiedRepository(host, {
+		...repository,
+		destination: "/home/user/r",
+		mode: "switch",
+	}).catch(() => undefined);
+	expect(budgets.slice(0, 3)).toEqual([30_000, 60_000, 120_000]);
+});
+
+it("fails with the status message only when every attempt timed out", async () => {
+	const { host, budgets } = hostWhoseStatusTimesOut(3);
+	await expect(
+		receiveProxiedRepository(host, {
+			...repository,
+			destination: "/home/user/r",
+			mode: "switch",
+		}),
+	).rejects.toThrow("Workspace Git could not read the checkout's status.");
+	expect(budgets).toEqual([30_000, 60_000, 120_000]);
+});
+
+it("does not repeat a status that failed for another reason", async () => {
+	const budgets: number[] = [];
+	const host = {
+		writeTextFile: async () => {},
+		exec: async (command: string, budgetMs = 0) => {
+			if (command.includes("status --porcelain")) budgets.push(budgetMs ?? 0);
+			return command.includes("status --porcelain")
+				? { exitCode: 128, stdout: "", stderr: "fatal: not a git repository" }
+				: { exitCode: 0, stdout: "", stderr: "" };
+		},
+	};
+	await expect(
+		receiveProxiedRepository(host, {
+			...repository,
+			destination: "/home/user/r",
+			mode: "switch",
+		}),
+	).rejects.toThrow("could not read the checkout's status");
+	expect(budgets).toEqual([30_000]);
+});
