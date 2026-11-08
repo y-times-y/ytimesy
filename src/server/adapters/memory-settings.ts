@@ -22,7 +22,7 @@ function defaultMemoryMode(): MemoryMode {
 	const value = process.env.YTIMESY_MEMORY_MODE;
 	return MEMORY_MODES.includes(value as MemoryMode)
 		? (value as MemoryMode)
-		: "full";
+		: "spec";
 }
 
 export async function memorySettings(userId: string): Promise<MemorySettings> {
