@@ -46,8 +46,8 @@ export type SetupTokenCheck = "accepted" | "refused" | "unknown";
 
 /**
  * One free call (token counting) with the token, sent the way Claude Code
- * sends an OAuth token through the proxy. Only a 401/403 says the token is
- * bad; a busy or unreachable Anthropic is "unknown", which must not block
+ * sends an OAuth token through the proxy. Only a 401 rejects the token;
+ * a 403 can be endpoint or model permission, not invalid credentials; a busy or unreachable Anthropic is "unknown", which must not block
  * the save. Nothing here logs the token.
  */
 export async function checkClaudeSetupToken(
@@ -81,7 +81,7 @@ export async function checkClaudeSetupToken(
 		return "unknown";
 	}
 	await response.body?.cancel().catch(() => undefined);
-	if (response.status === 401 || response.status === 403) return "refused";
+	if (response.status === 401) return "refused";
 	if (response.ok) return "accepted";
 	console.warn("Claude setup token check got no answer from Anthropic.", {
 		status: response.status,
@@ -336,7 +336,15 @@ async function readFreshClaudePlanUsage(
 	}
 	await response.body?.cancel().catch(() => undefined);
 	const outcome = claudeCodeUpstreamOutcome(response);
-	if (outcome) await recordClaudeCodeUpstream(userId, outcome);
+	// Usage is optional bookkeeping, not an authentication gate. A rejected
+	// model-specific probe must not disable a previously saved connection.
+	if (outcome && outcome.kind !== "refused")
+		await recordClaudeCodeUpstream(userId, outcome);
+	if (response.status === 401 || response.status === 403)
+		console.warn("Claude usage probe denied; saved login retained.", {
+			status: response.status,
+			operation: "plan-usage",
+		});
 	const usage =
 		outcome?.kind === "refused"
 			? null

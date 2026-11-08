@@ -66,6 +66,19 @@ describe("agent captures in the chat", () => {
 		expect(html).toContain("Recording, 5 s");
 	});
 
+	it("adds no chat card for a pull request capture with only CLI output", () => {
+		const cliOnly = {
+			...shot,
+			source: "harness",
+			fullName: "y-times-y/ytimesy",
+			pullNumber: 23,
+			kind: "cli",
+			status: "captured",
+			files: [{ name: "cli.txt", bytes: 10, sha256: "0".repeat(64) }],
+		} as EvidenceRecord;
+		expect(renderToStaticMarkup(<EvidenceCard evidence={cliOnly} />)).toBe("");
+	});
+
 	it("shows every capture of the chat on the evidence page the pull request links", () => {
 		const html = renderToStaticMarkup(
 			<EvidenceDetail evidence={recording} captures={[recording, shot]} />,

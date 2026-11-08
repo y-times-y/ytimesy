@@ -2812,12 +2812,16 @@ async function runApiTurnAttempt(
 		workspaceReuse?.forget();
 		await progress.drain().catch(() => {});
 		// A deploy replaced this Worker mid-step: the step is resumed on the new
-		// version from its checkpoint (executor.ts alarm), never failed.
-		if (isPlatformRestart(error)) {
+		// version from its checkpoint (executor.ts alarm), never failed. The
+		// provider stream may report only "Model run cancelled" after the abort.
+		const platformRestart = [error, abort.signal.reason].find((cause) =>
+			isPlatformRestart(cause),
+		);
+		if (platformRestart) {
 			console.warn(
 				"Turn step interrupted by a new Worker version; it resumes.",
 			);
-			throw error;
+			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and
 		// no tool had started: nothing ran, so the step ends and the next one samples
