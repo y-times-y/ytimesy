@@ -75,7 +75,9 @@ import { MachineSizeSettings } from "./machine-size-settings";
 import { MemorySettings } from "./memory-settings";
 import { NetworkAccessSettings } from "./network-access-settings";
 import {
+	deleteAccountSecretFn,
 	deleteProjectSecretFn,
+	listAccountSecretsFn,
 	listProjectSecretsFn,
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
@@ -404,6 +406,7 @@ function ProjectPage({
 				branch={project.branch}
 			/>
 			<ProjectSecretsSection project={project} />
+			<AccountSecretsSection />
 			<ProjectTrainingSettings projectId={project.id} />
 		</>
 	);
@@ -1245,5 +1248,67 @@ function XaiSubscriptionRow({
 			</div>
 			{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 		</li>
+	);
+}
+
+/** Secrets shared with every project; the agent saves one here when the user picks "all my projects". */
+function AccountSecretsSection() {
+	const listSecrets = useServerFn(listAccountSecretsFn);
+	const deleteSecret = useServerFn(deleteAccountSecretFn);
+	const [secrets, setSecrets] = useState<readonly PublicProjectSecret[]>([]);
+	const [error, setError] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+
+	useEffect(() => {
+		void listSecrets()
+			.then(setSecrets)
+			.catch(() => setSecrets([]));
+	}, [listSecrets]);
+
+	async function onDelete(secretId: string) {
+		if (busy) return;
+		setBusy(true);
+		setError(null);
+		try {
+			setSecrets(await deleteSecret({ data: { secretId } }));
+		} catch (cause) {
+			setError(
+				cause instanceof Error ? cause.message : "Could not remove secret.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	if (!secrets.length) return null;
+
+	return (
+		<section className="settings-section">
+			<SettingsHeader
+				title="Shared with all projects"
+				description="Saved when you chose “all my projects”. A project's own secret of the same name wins."
+			/>
+			<ul className="settings-group">
+				{secrets.map((secret) => (
+					<li key={secret.id} className="settings-row">
+						<div className="settings-row-text">
+							<code className="settings-row-title">{secret.name}</code>
+							<span className="settings-row-meta">
+								{SECRET_KIND_LABELS[secret.kind]} · {secret.hint}
+							</span>
+						</div>
+						<button
+							type="button"
+							className="settings-secondary"
+							onClick={() => void onDelete(secret.id)}
+							disabled={busy}
+						>
+							Remove
+						</button>
+					</li>
+				))}
+			</ul>
+			{error ? <p role="alert">{error}</p> : null}
+		</section>
 	);
 }

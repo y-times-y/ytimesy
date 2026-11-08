@@ -214,3 +214,14 @@ export async function deleteAccountSecret(input: {
 		[input.secretId, input.userId],
 	);
 }
+
+export async function listAccountSecrets(
+	userId: string,
+): Promise<readonly PublicProjectSecret[]> {
+	const result = await database().query(
+		`select id, name, kind, hint, updated_at as "updatedAt"
+		 from account_secret where user_id = $1 order by name`,
+		[userId],
+	);
+	return result.rows.map(publicSecret);
+}

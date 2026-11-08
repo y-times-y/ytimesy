@@ -27,6 +27,7 @@ import {
 import {
 	deleteAccountSecret,
 	deleteProjectSecretForOwner,
+	listAccountSecrets,
 	listProjectSecretsForOwner,
 	loadAccountSecrets,
 	loadProjectSecretsForOwner,
@@ -309,4 +310,8 @@ export async function removeAccountWideSecret(input: {
 	readonly secretId: string;
 }) {
 	await deleteAccountSecret(input);
+}
+
+export function listAccountWideSecrets(userId: string) {
+	return listAccountSecrets(userId);
 }
