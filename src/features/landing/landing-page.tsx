@@ -54,7 +54,18 @@ export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 		<header className="landing-header">
 			<div className="landing-header-inner">
 				<YtimesyBrand />
-				<nav className="landing-nav" aria-label="Account">
+				<nav className="landing-nav" aria-label="Resources and account">
+					<a
+						className="landing-github-link"
+						href="https://github.com/y-times-y/harness"
+						target="_blank"
+						rel="noreferrer"
+						aria-label="Open-source harness on GitHub"
+						title="Open-source harness on GitHub"
+					>
+						<GithubMark size={18} />
+						<span>GitHub</span>
+					</a>
 					{signedIn ? (
 						<a className="landing-button" href="/">
 							Open ytimesy
