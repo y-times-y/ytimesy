@@ -3,9 +3,11 @@ import type { SessionItem } from "#/domain/session-item";
 /**
  * A streaming step writes its progress at most once per window; the last
  * deltas of a window still go out when it ends (offerLater), and step end,
- * turn end, stop and failure write at once.
+ * turn end, stop and failure write at once. Keep the window within the reveal
+ * layer’s catch-up time: a longer window drains its text buffer before the
+ * next snapshot and makes continuous output stop/start.
  */
-export const PROGRESS_WINDOW_MS = 1500;
+export const PROGRESS_WINDOW_MS = 250;
 
 /** Streams do not wait on storage; checkpoint/finalization must drain this writer first. */
 export function turnProgressWriter(

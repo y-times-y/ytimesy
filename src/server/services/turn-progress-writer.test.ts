@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
+import { REVEAL_CATCH_UP_MS } from "#/domain/smooth-reveal";
 import { PROGRESS_WINDOW_MS, turnProgressWriter } from "./turn-progress-writer";
 
 const snapshot = (text: string): SessionItem[] => [
@@ -158,16 +159,33 @@ async function streamWrites(windowMs: number, seconds: number) {
 	return write;
 }
 
-it("writes a 20 second stream far less often with the 1.5 s window, ending on the last delta", async () => {
-	const before = await streamWrites(250, 20);
-	vi.useRealTimers();
-	const after = await streamWrites(PROGRESS_WINDOW_MS, 20);
-	console.info("stream writes in 20 s", {
-		window250: before.mock.calls.length,
-		window1500: after.mock.calls.length,
-	});
-	expect(after.mock.calls.length).toBeLessThanOrEqual(15);
-	expect(before.mock.calls.length).toBeGreaterThanOrEqual(70);
-	const last = after.mock.calls.at(-1)?.[0][0];
+it("delivers continuous output within the reveal catch-up time while coalescing deltas", async () => {
+	expect(PROGRESS_WINDOW_MS).toBeLessThanOrEqual(REVEAL_CATCH_UP_MS);
+	const write = await streamWrites(PROGRESS_WINDOW_MS, 20);
+	// 500 model deltas need about 80 snapshots, not one write per token.
+	expect(write.mock.calls.length).toBeGreaterThanOrEqual(80);
+	expect(write.mock.calls.length).toBeLessThanOrEqual(81);
+	const last = write.mock.calls.at(-1)?.[0][0];
 	expect(last.text.split(" ").length - 1).toBe(500);
+});
+
+it("delivers the first delta immediately and the newest tail on time without another model event", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(new Date("2026-11-07T12:00:00Z"));
+	const write = vi.fn().mockResolvedValue(undefined);
+	const writer = turnProgressWriter(write, vi.fn());
+	writer.stream(snapshot("Bonjour"), PROGRESS_WINDOW_MS);
+	expect(write).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(40);
+	writer.stream(snapshot("Bonjour le"), PROGRESS_WINDOW_MS);
+	await vi.advanceTimersByTimeAsync(40);
+	writer.stream(snapshot("Bonjour le monde 🌍"), PROGRESS_WINDOW_MS);
+	await vi.advanceTimersByTimeAsync(PROGRESS_WINDOW_MS - 81);
+	expect(write).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(1);
+	expect(write.mock.calls.map((call) => call[0][0].text)).toEqual([
+		"Bonjour",
+		"Bonjour le monde 🌍",
+	]);
+	await writer.drain();
 });

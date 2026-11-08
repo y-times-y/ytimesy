@@ -131,18 +131,21 @@ export async function removeMcpServer(userId: string, id: string) {
 
 /**
  * Server-side only: enabled personal servers plus this project's, with unsealed
- * headers. A plugin's servers join only while its install is still in the catalog.
+ * headers. A project server overrides an account server with the same name,
+ * so a turn never mixes two credentials behind the same tool names. A plugin's
+ * servers join only while its enabled install is still in the catalog.
  */
 export async function connectableMcpServers(
 	userId: string,
 	projectId: string | null,
 ) {
 	const { rows } = await database().query<Row>(
-		`select * from mcp_server where user_id=$1 and enabled
+		`select distinct on (name) * from mcp_server where user_id=$1 and enabled
 		 and (project_id is null or project_id=$2)
 		 and (plugin_id is null or plugin_id in (select id::text from plugin_install
-		  where user_id=$1 and catalog_id = any($3)))
-		 order by name`,
+		  where user_id=$1 and enabled and (project_id is null or project_id=$2)
+		  and catalog_id = any($3)))
+		 order by name, project_id nulls last, id`,
 		[userId, projectId, catalogIds()],
 	);
 	return Promise.all(

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { connectableMcpServers, listMcpServersWithOAuth } from "./mcp-servers";
+import {
+	connectableMcpServers,
+	listMcpServersWithOAuth,
+	saveMcpServerToken,
+} from "./mcp-servers";
 import {
 	enabledPluginComponents,
 	listInstalls,
@@ -10,6 +14,15 @@ import {
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
+vi.mock("#/server/auth/token-vault", () => ({
+	seal: async (value: string, binding: { userId: string }) =>
+		JSON.stringify({ value, userId: binding.userId }),
+	unseal: async (sealed: string, binding: { userId: string }) => {
+		const record = JSON.parse(sealed);
+		if (record.userId !== binding.userId) throw new Error("Wrong owner.");
+		return record.value;
+	},
+}));
 
 let db: PGlite;
 const components = {
@@ -48,6 +61,82 @@ async function server(userId: string, name: string, pluginId: string | null) {
 		[randomUUID(), userId, name, `https://${name}.example.com/mcp`, pluginId],
 	);
 }
+
+it("inherits a saved account MCP token in new project and no-project turns, never another account", async () => {
+	await server("alice", "private-api", null);
+	const id = (await listMcpServersWithOAuth("alice"))[0].server.id;
+	await saveMcpServerToken("alice", id, {
+		Authorization: "Bearer synthetic-token",
+	});
+	for (const projectId of [null, randomUUID(), randomUUID()]) {
+		expect(
+			(await connectableMcpServers("alice", projectId))[0].headers,
+		).toEqual({
+			Authorization: "Bearer synthetic-token",
+		});
+		expect(await connectableMcpServers("bob", projectId)).toEqual([]);
+	}
+	await saveMcpServerToken("bob", id, {
+		Authorization: "Bearer unrelated-token",
+	});
+	expect((await connectableMcpServers("alice", null))[0].headers).toEqual({
+		Authorization: "Bearer synthetic-token",
+	});
+	expect(JSON.stringify(await listMcpServersWithOAuth("alice"))).not.toContain(
+		"synthetic-token",
+	);
+});
+
+it("uses a project MCP credential once per name and keeps account credentials in other projects", async () => {
+	await server("alice", "shared-api", null);
+	const account = (await listMcpServersWithOAuth("alice"))[0].server.id;
+	await saveMcpServerToken("alice", account, {
+		Authorization: "Bearer account-token",
+	});
+	const projectId = randomUUID();
+	const projectServer = randomUUID();
+	await db.query(
+		"insert into mcp_server(id,user_id,project_id,name,url) values($1,'alice',$2,'shared-api','https://project.example/mcp')",
+		[projectServer, projectId],
+	);
+	await saveMcpServerToken("alice", projectServer, {
+		Authorization: "Bearer project-token",
+	});
+	const selected = await connectableMcpServers("alice", projectId);
+	expect(selected).toHaveLength(1);
+	expect(selected[0]).toMatchObject({
+		id: projectServer,
+		headers: { Authorization: "Bearer project-token" },
+	});
+	for (const otherProject of [null, randomUUID()])
+		expect(
+			(await connectableMcpServers("alice", otherProject))[0],
+		).toMatchObject({
+			id: account,
+			headers: { Authorization: "Bearer account-token" },
+		});
+	await db.query("update mcp_server set enabled=false where id=$1", [
+		projectServer,
+	]);
+	expect((await connectableMcpServers("alice", projectId))[0].id).toBe(account);
+});
+
+it("does not inherit servers from a disabled or differently scoped plugin install", async () => {
+	const plugin = await install("alice", "linear");
+	await server("alice", "linear", plugin);
+	const projectId = randomUUID();
+	await db.query("update plugin_install set project_id=$1 where id=$2", [
+		projectId,
+		plugin,
+	]);
+	expect(await connectableMcpServers("alice", null)).toEqual([]);
+	expect(await connectableMcpServers("alice", randomUUID())).toEqual([]);
+	expect(await connectableMcpServers("alice", projectId)).toHaveLength(1);
+	await db.query("update plugin_install set enabled=false where id=$1", [
+		plugin,
+	]);
+	expect(await connectableMcpServers("alice", projectId)).toEqual([]);
+});
 
 async function seed() {
 	// slack was dropped from the catalog after these users installed it.
