@@ -3,7 +3,11 @@ import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { MemoryWorkspaceRuntime } from "../adapters/workspace-runtime";
-import { commitCompletedSessionTurn, commitSubject } from "./turn-commit";
+import {
+	answerSubject,
+	commitCompletedSessionTurn,
+	commitSubject,
+} from "./turn-commit";
 
 const lookup = vi.hoisted(() => vi.fn());
 const evaluation = vi.hoisted(() => vi.fn());
@@ -116,6 +120,10 @@ it("commits a root chat's turn without the verification gate and returns where i
 	// No verified tree: the commit takes whatever the turn left.
 	expect(runtime.commands[0].argv[6]).toBe("");
 	expect(runtime.commands[0].argv[5]).toContain("Agent: Fix parser");
+	// The request rides in the body, after the subject.
+	expect(runtime.commands[0].argv[5]).toContain(
+		"Agent: Fix parser\n\nRequest: Fix parser",
+	);
 	expect(runtime.commands[0].argv[5]).toContain(
 		"GIT_AUTHOR_EMAIL='7+het@users.noreply.github.com'",
 	);
@@ -359,6 +367,52 @@ describe("commitSubject", () => {
 		expect(commitSubject(null, "Title")).toBe("Title");
 		expect(commitSubject("ok", "")).toBe("ok");
 		expect(commitSubject("x ".repeat(60), null)).toHaveLength(72);
+	});
+});
+
+describe("answerSubject", () => {
+	it("takes the first sentence of the answer as plain text", () => {
+		expect(
+			answerSubject(
+				"**Memory now defaults to the spec loop.** The builder searches it itself.\n\nMore detail.",
+			),
+		).toBe("Memory now defaults to the spec loop");
+		expect(answerSubject("## Fixed the `commitSubject` fallback\nbody")).toBe(
+			"Fixed the commitSubject fallback",
+		);
+	});
+	it("cuts a long sentence at a word, within 72 characters", () => {
+		const subject = answerSubject(
+			"Subagents now get read-only search and read tools over the memory snapshot instead of nothing",
+		);
+		expect(subject).toBe(
+			"Subagents now get read-only search and read tools over the memory",
+		);
+		expect(subject?.length).toBeLessThanOrEqual(72);
+	});
+	it("says nothing when the answer does not open with an outcome", () => {
+		for (const answer of [
+			"Yes, that makes sense.",
+			"Sorry, I broke it.",
+			"Should I also rename the flag?",
+			"Done.",
+			"```\ncode\n```",
+			"",
+			null,
+		])
+			expect(answerSubject(answer)).toBeNull();
+	});
+	it("heads a commit before the request does, and the request stays as the fallback", () => {
+		expect(
+			commitSubject(
+				"then do it please",
+				"Memory",
+				"Both changes are already committed on the branch.",
+			),
+		).toBe("Both changes are already committed on the branch");
+		expect(commitSubject("Add a --version flag to hello.py", "t", "Yes.")).toBe(
+			"Add a --version flag to hello.py",
+		);
 	});
 });
 

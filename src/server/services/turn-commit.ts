@@ -15,7 +15,11 @@ import {
 } from "#/domain/publication";
 import { handoffFactsFromItems } from "#/domain/pull-request-handoff";
 import { branchFromGitHead } from "#/domain/session-branch";
-import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
+import {
+	lastAgentMessageText,
+	lastUserMessageText,
+	type SessionItem,
+} from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
 	saveAgentWorkingBranch,
@@ -139,6 +143,7 @@ async function commitChatTurn(
 		};
 	const turn = turnIdentity(session, items);
 	const description = turnDescription(session, items);
+	const body = turnRequestBody(items);
 	// GitHub's answers overlap the checkout reads below.
 	const identity = timed("commit:identity", () =>
 		Promise.all([
@@ -175,7 +180,9 @@ async function commitChatTurn(
 				automaticTurnCommitArgv(
 					directory,
 					turn,
-					`Agent: ${description || "Update workspace"}`,
+					[`Agent: ${description || "Update workspace"}`, body]
+						.filter(Boolean)
+						.join("\n\n"),
 					"",
 					authorship.author,
 					coAuthor,
@@ -315,7 +322,57 @@ function turnDescription(
 	session: AgentSessionRecord,
 	items: readonly SessionItem[],
 ) {
-	return commitSubject(lastUserMessageText(items), session.title);
+	return commitSubject(
+		lastUserMessageText(items),
+		session.title,
+		lastAgentMessageText(items),
+	);
+}
+
+/** The commit body: what was asked, so the subject can say what was done. */
+function turnRequestBody(items: readonly SessionItem[]) {
+	const request = (lastUserMessageText(items) ?? "").trim();
+	return request ? `Request: ${request.slice(0, BODY_REQUEST_CHARS)}` : "";
+}
+const BODY_REQUEST_CHARS = 1000;
+const SUBJECT_CHARS = 72;
+
+/** An answer that opens with a pleasantry or an apology says nothing about the change. */
+const NO_OUTCOME_OPENING =
+	/^(?:yes|yep|yeah|no|ok(?:ay)?|sure|got it|done|thanks?|thank you|sorry|you(?:'|’)re right|i(?:'|’)ll|let me|here(?:'|’)s|there(?:'|’)s)\b/i;
+
+/**
+ * What the agent's final answer says it did: its first sentence, as plain
+ * text, or null when the answer opens with something that is not an outcome
+ * (a pleasantry, a question). Agents lead with the result, so this names the
+ * change where the request often cannot ("do it", a long discussion).
+ */
+export function answerSubject(answer: string | null | undefined) {
+	const line = (answer ?? "")
+		.replace(/```[\s\S]*?```/g, " ")
+		.split("\n")
+		.map((text) =>
+			text
+				.replace(/^[#>*\-\s]+/, "")
+				.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+				.replace(/[*_`]/g, "")
+				.trim(),
+		)
+		.find(Boolean);
+	if (!line) return null;
+	const sentence = line
+		.split(/(?<=[.!?:])\s/)[0]
+		.replace(/[.:]$/, "")
+		.trim();
+	if (
+		sentence.length < 12 ||
+		sentence.endsWith("?") ||
+		NO_OUTCOME_OPENING.test(sentence)
+	)
+		return null;
+	if (sentence.length <= SUBJECT_CHARS) return sentence;
+	const cut = sentence.slice(0, SUBJECT_CHARS + 1);
+	return cut.slice(0, cut.lastIndexOf(" ") || SUBJECT_CHARS).trimEnd();
 }
 
 /** A reply that says nothing about the change: "Yes, do that.", "ok", "continue". */
@@ -323,20 +380,24 @@ const BARE_REPLY =
 	/^(?:yes|yep|yeah|ok(?:ay)?|sure|go(?: ahead)?|do (?:it|that|this)|please|continue|proceed|sounds good|looks good|lgtm|thanks?|thank you)\b/i;
 
 /**
- * The commit subject: the last request, unless it is a short reply to the
- * agent ("Yes, do that."), which names nothing; then the chat's title.
+ * The commit subject: what the agent's final answer says it did, else the
+ * last request, unless it is a short reply to the agent ("Yes, do that."),
+ * which names nothing; then the chat's title.
  */
 export function commitSubject(
 	message: string | null | undefined,
 	title: string | null | undefined,
+	answer?: string | null,
 ) {
+	const outcome = answerSubject(answer);
+	if (outcome) return outcome;
 	const request = (message ?? "").replace(/\s+/g, " ").trim();
 	const named = (title ?? "").replace(/\s+/g, " ").trim();
 	const bare =
 		!request ||
 		request.split(" ").length < 4 ||
 		(BARE_REPLY.test(request) && request.split(" ").length < 8);
-	return (bare && named ? named : request || named).slice(0, 72);
+	return (bare && named ? named : request || named).slice(0, SUBJECT_CHARS);
 }
 
 /** Each repository's checkout, under the recorded path ($HOME/<repo>) where baselines are pinned. */
