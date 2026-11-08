@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { VISIBLE_APP_ERROR_SOURCE } from "./visible-app-error";
 
 export const browserAssertion = z.object({
 	selector: z.string().min(1).max(500),
@@ -8,6 +9,8 @@ export const browserAssertion = z.object({
 
 export const browserInspection = z.object({
 	passed: z.boolean(),
+	/** What the page shows instead of the app (a crash heading or error overlay), or "". */
+	appError: z.string().default(""),
 	url: z.string(),
 	title: z.string(),
 	snapshot: z.string(),
@@ -41,6 +44,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(process.argv[1] + '/package.json');
 const { chromium } = require('playwright-core');
 const input = JSON.parse(process.argv[2]);
+${VISIBLE_APP_ERROR_SOURCE}
 const browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: 10000 });
 try {
   const same = (value) => { try { const url = new URL(value); url.hash = ''; return url.href.endsWith('/') ? url.href.slice(0, -1) : url.href; } catch { return value; } };
@@ -69,9 +73,10 @@ try {
     assertions.push({ selector: assertion.selector, passed, reason: passed ? 'Matched' : count !== 1 ? 'Selector must match exactly one element' : visible !== assertion.visible ? 'Visibility differed' : 'Expected text was not found' });
   }
   await page.waitForTimeout(input.observeMilliseconds);
+  const appError = await visibleAppError(page);
   const snapshot = await page.locator('body').innerText({ timeout: 5000 });
   const controls = await page.locator('button,a,input,textarea,select,[role="button"]').evaluateAll(nodes => nodes.slice(0, 100).map(node => ({ tag: node.tagName.toLowerCase(), role: node.getAttribute('role') || '', type: node.getAttribute('type') || '', label: (node.getAttribute('aria-label') || (node.matches('button,a,[role="button"]') ? node.textContent : '') || '').slice(0, 200) })));
-  console.log(JSON.stringify({ passed: assertions.every(assertion => assertion.passed), url: cleanUrl(page.url()), title: (await page.title()).slice(0, 1000), snapshot: snapshot.slice(0, 24000), truncated: snapshot.length > 24000, controls, assertions, console: consoleEntries, network, observationMilliseconds: input.observeMilliseconds }));
+  console.log(JSON.stringify({ passed: !appError && assertions.every(assertion => assertion.passed), appError, url: cleanUrl(page.url()), title: (await page.title()).slice(0, 1000), snapshot: snapshot.slice(0, 24000), truncated: snapshot.length > 24000, controls, assertions, console: consoleEntries, network, observationMilliseconds: input.observeMilliseconds }));
 } finally {
   await browser.close();
 }
