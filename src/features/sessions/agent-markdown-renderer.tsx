@@ -25,6 +25,7 @@ import {
 	withoutDanglingMarker,
 	withoutPullRequestBlock,
 } from "#/domain/markdown-text";
+import { readableModelCitations } from "#/domain/model-citation";
 import type { FileChangeEntry } from "#/domain/session-item";
 import {
 	type FileReference,
@@ -82,6 +83,7 @@ function rehypeAgentNames(options: { readonly names: readonly string[] }) {
 				return [child];
 			}
 			if (child.type !== "text" || !child.value) return [child];
+			child.value = readableModelCitations(child.value);
 			// `review-2` ("Audit chat lifecycle"): the chip already names it.
 			if (
 				before?.type === "element" &&
@@ -146,13 +148,10 @@ export function AgentMarkdown({
 		[sharedKey],
 	);
 	const rehypePlugins = useMemo<RehypePlugins>(
-		() =>
-			agentNames.size
-				? [
-						...markdownPlugins,
-						[rehypeAgentNames, { names: [...agentNames].sort() }],
-					]
-				: markdownPlugins,
+		() => [
+			...markdownPlugins,
+			[rehypeAgentNames, { names: [...agentNames].sort() }],
+		],
 		[agentNames],
 	);
 	const components = useMemo<Components>(() => {

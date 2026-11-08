@@ -1,4 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { readableModelCitations } from "./model-citation";
+
+it("renders unresolved model citations honestly and suppresses streaming fragments", () => {
+	expect(readableModelCitations("Cost. citeturn1search0")).toBe(
+		"Cost. (source unavailable)",
+	);
+	expect(
+		readableModelCitations("Other citeturn82view7turn93search2 text"),
+	).toBe("Other (source unavailable) text");
+	for (const fragment of ["", "c", "ci", "cit", "cite", "citeturn1se"])
+		expect(readableModelCitations(`Text ${fragment}`)).toBe("Text ");
+	expect(readableModelCitations("[Pricing](https://example.com/pricing)")).toBe(
+		"[Pricing](https://example.com/pricing)",
+	);
+});
+
 import {
 	inlineMarkdownSegments,
 	reportSummaryLine,
