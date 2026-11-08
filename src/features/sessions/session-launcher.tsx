@@ -1127,7 +1127,7 @@ export function SessionLauncher({
 				kind: "userMessage",
 				id: SessionItemId(userMessageId),
 				text,
-				// Sent during a run, it waits for the run's next step.
+				// Sent during a run, it waits for the turn to end.
 				...(turnStatus === "running" ? { queued: true as const } : {}),
 				...(files.length
 					? {
