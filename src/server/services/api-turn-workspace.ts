@@ -32,6 +32,35 @@ import { establishVerificationBaselines } from "./verification-baseline";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Only repository-backed tool execution waits for a VM; model and coordination tools do not. */
+/** A checkout that took this long to prepare is a slow machine, and is looked at. */
+const SLOW_PREPARATION_MS = 20_000;
+
+/** Load, memory, disk and the busiest processes: the usual reasons a machine crawls. */
+const MACHINE_HEALTH_COMMAND =
+	"uptime; free -m | sed -n 1,2p; df -h / | tail -1; ps -eo pcpu,pmem,etimes,comm --sort=-pcpu | head -6";
+
+/**
+ * Records why a slow machine is slow, in the logs. Fire and forget: it
+ * never delays the turn, and its own failure says nothing about the user's.
+ */
+function logSlowMachine(
+	machines: WorkspaceMachines,
+	vm: WorkspaceId,
+	preparationMs: number,
+) {
+	void machines
+		.exec(vm, MACHINE_HEALTH_COMMAND, 10_000)
+		.then((health) =>
+			console.warn("Slow workspace preparation.", {
+				vm,
+				preparationMs,
+				exitCode: health.exitCode,
+				health: health.stdout.slice(0, 900),
+			}),
+		)
+		.catch(() => {});
+}
+
 export function deferredApiTurnWorkspace(
 	machines: WorkspaceMachines,
 	owner: AgentSessionRecord,
@@ -129,6 +158,7 @@ export function deferredApiTurnWorkspace(
 		session: AgentSessionRecord;
 	}> {
 		if (sharesParentMachine(owner)) return attachSharedParent();
+		const preparationStartedAt = Date.now();
 		let additionalRepositoryNames: string[] = [];
 		const checkoutScope = {
 			userId: owner.userId,
@@ -238,6 +268,8 @@ export function deferredApiTurnWorkspace(
 		);
 		await metadataBlocked;
 		options.onPhase?.("checkoutPrepared");
+		if (Date.now() - preparationStartedAt > SLOW_PREPARATION_MS)
+			logSlowMachine(scoped, vm, Date.now() - preparationStartedAt);
 		// A machine that booted without the project's template installs in the
 		// background once its checkout is there; the turn does not wait.
 		if (!owner.parentSessionId)

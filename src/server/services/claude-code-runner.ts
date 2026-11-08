@@ -135,6 +135,9 @@ const WRITE_CHUNK = 36 * 1024;
 const POLL_MIN_MS = 500;
 const POLL_MAX_MS = 2_000;
 const BUSY_GRACE_MS = 30_000;
+/** Polls in a row the machine may leave unanswered before the turn fails. */
+const MAX_UNREADABLE_POLLS = 4;
+const UNREADABLE_POLL_PAUSE_MS = 1_500;
 
 /**
  * Reports a run's state and the complete lines since its saved offset,
@@ -201,29 +204,67 @@ async function checked(
 	return result.stdout;
 }
 
-/** Writes a file through the shell in bounded chunks (mode 0600, under umask 077). */
-async function writeThroughShell(
+type FileToWrite = { readonly path: string; readonly contents: string };
+
+/**
+ * Shell commands that create the directory and write every file (mode 0600,
+ * under umask 077), packed so each stays inside WRITE_CHUNK of base64: a
+ * run's inputs usually fit one command, one round trip instead of seven.
+ * A file larger than a command is appended in pieces.
+ */
+function fileWriteCommands(
+	directory: string,
+	files: readonly FileToWrite[],
+): string[] {
+	const commands: string[] = [];
+	let current: string[] = [`umask 077`, `mkdir -p ${quote(directory)}`];
+	let size = 0;
+	const flush = () => {
+		if (current.length) commands.push(current.join(" && "));
+		current = ["umask 077"];
+		size = 0;
+	};
+	for (const { path, contents } of files) {
+		const encoded = Buffer.from(contents, "utf8").toString("base64");
+		if (!encoded.length) {
+			current.push(`: > ${quote(path)}`);
+			continue;
+		}
+		for (let start = 0; start < encoded.length; start += WRITE_CHUNK) {
+			const piece = encoded.slice(start, start + WRITE_CHUNK);
+			if (size && size + piece.length > WRITE_CHUNK) flush();
+			current.push(
+				`printf %s ${quote(piece)} | base64 -d ${start ? ">>" : ">"} ${quote(path)}`,
+			);
+			size += piece.length;
+		}
+	}
+	if (current.length > 1) commands.push(current.join(" && "));
+	return commands;
+}
+
+/** Longest command the VM takes (its limit is 64 KiB). */
+const COMMAND_LIMIT = 60_000;
+
+/**
+ * Writes the files, then runs `then` in the last command when it fits (the
+ * launch rides along with the inputs it reads).
+ */
+async function writeFilesThenRun(
 	shell: ClaudeCodeShell,
-	path: string,
-	contents: string,
+	directory: string,
+	files: readonly FileToWrite[],
+	then: string | null,
 ) {
-	const encoded = Buffer.from(contents, "utf8").toString("base64");
-	if (!encoded.length) {
-		await checked(
-			shell,
-			`umask 077; : > ${quote(path)}`,
-			"could not write its input.",
-		);
-		return;
+	const commands = fileWriteCommands(directory, files);
+	if (then !== null) {
+		const last = commands.at(-1);
+		if (last !== undefined && last.length + then.length + 8 < COMMAND_LIMIT)
+			commands[commands.length - 1] = `${last} && { ${then}\n}`;
+		else commands.push(then);
 	}
-	for (let start = 0; start < encoded.length; start += WRITE_CHUNK) {
-		const chunk = encoded.slice(start, start + WRITE_CHUNK);
-		await checked(
-			shell,
-			`umask 077; printf %s ${quote(chunk)} | base64 -d ${start ? ">>" : ">"} ${quote(path)}`,
-			"could not write its input.",
-		);
-	}
+	for (const command of commands)
+		await checked(shell, command, "could not write its input.");
 }
 
 function systemPrompt(cwd: string, reader: boolean) {
@@ -247,17 +288,8 @@ export async function runClaudeCodeStep(
 	const { shell, turnId } = input;
 	if (!/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("Invalid turn id.");
 	input.signal.throwIfAborted();
-	const home = (
-		await checked(
-			shell,
-			'printf %s "$HOME"',
-			"could not read the machine's home.",
-		)
-	).trim();
-	if (!home.startsWith("/"))
-		throw new ClaudeCodeRunFailure("the machine has no home directory.");
+	const { home, state } = await readMachineAndRunState(shell, turnId);
 	const turnDirectory = `${home}/${RUNS}/${turnId}`;
-	const state = await readRunState(shell, turnDirectory);
 	let run = state.run;
 	let claudeSessionId = state.sessionId;
 	if (run === null || state.consumed) {
@@ -277,24 +309,36 @@ export async function runClaudeCodeStep(
 	let wait = POLL_MIN_MS;
 	/** Claude Code's own API error line (never shown): why the run is failing. */
 	let apiError: string | null = null;
+	let unreadablePolls = 0;
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
 		const poll = await shell(
 			`python3 -c ${quote(POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
 			30_000,
-		);
-		if (poll.exitCode !== 0)
-			throw new ClaudeCodeRunFailure("its output could not be read.");
-		const [headerLine = "", ...lines] = poll.stdout.split("\n");
-		const header = parseJson(headerLine) as {
+		).catch(() => null);
+		const [headerLine = "", ...lines] = (poll?.stdout ?? "").split("\n");
+		const header = poll?.exitCode === 0 ? parseJson(headerLine) : null;
+		const readable =
+			header !== null &&
+			typeof header === "object" &&
+			typeof (header as { next?: unknown }).next === "number";
+		if (!readable) {
+			// The run lives on the machine and its output stays there: one poll
+			// the machine did not answer (no exit status, a dropped connection)
+			// is read again, and only a machine that stays silent fails the turn.
+			if (++unreadablePolls > MAX_UNREADABLE_POLLS)
+				throw new ClaudeCodeRunFailure("its output could not be read.");
+			await sleep(UNREADABLE_POLL_PAUSE_MS * unreadablePolls);
+			continue;
+		}
+		unreadablePolls = 0;
+		const polled = header as {
 			offset?: number;
-			next?: number;
+			next: number;
 			status?: string | null;
 			size?: number;
-		} | null;
-		if (!header || typeof header.next !== "number")
-			throw new ClaudeCodeRunFailure("its output could not be read.");
+		};
 		commit = -1;
 		let result: ClaudeCodeResult | null = null;
 		for (const entry of lines) {
@@ -316,7 +360,7 @@ export async function runClaudeCodeStep(
 				else await emit(input, effect.event);
 			}
 		}
-		if (header.next !== header.offset) commit = header.next;
+		if (polled.next !== polled.offset) commit = polled.next;
 		if (result) {
 			await finishRun(shell, runDirectory, commit);
 			const sessionId = result.sessionId ?? claudeSessionId;
@@ -330,15 +374,15 @@ export async function runClaudeCodeStep(
 			return completeRun(input, result, home, apiError);
 		}
 		const exited =
-			typeof header.status === "string" &&
-			header.next === header.offset &&
-			header.next === header.size;
+			typeof polled.status === "string" &&
+			polled.next === polled.offset &&
+			polled.next === polled.size;
 		if (exited) {
 			await finishRun(shell, runDirectory, commit);
 			throw await exitFailure(
 				input,
 				runDirectory,
-				header.status as string,
+				polled.status as string,
 				apiError,
 			);
 		}
@@ -378,24 +422,33 @@ async function emit(input: ClaudeCodeStepInput, event: ApiAgentEvent) {
 	);
 }
 
-async function readRunState(
+/**
+ * The machine's home and this turn's run state in one round trip (each
+ * round trip to the VM costs a second or more before the first word).
+ */
+async function readMachineAndRunState(
 	shell: ClaudeCodeShell,
-	turnDirectory: string,
-): Promise<RunState> {
+	turnId: string,
+): Promise<{ home: string; state: RunState }> {
 	const output = await checked(
 		shell,
-		`d=${quote(turnDirectory)}; n=$(cat "$d/current" 2>/dev/null || true); printf '%s\\n' "$n"; if [ -n "$n" ]; then [ -f "$d/$n/consumed" ] && echo consumed || echo active; cat "$d/session" 2>/dev/null || true; fi`,
+		`printf '%s\\n' "$HOME"; d="$HOME/${RUNS}/${turnId}"; n=$(cat "$d/current" 2>/dev/null || true); printf '%s\\n' "$n"; if [ -n "$n" ]; then [ -f "$d/$n/consumed" ] && echo consumed || echo active; cat "$d/session" 2>/dev/null || true; fi`,
 		"its state could not be read.",
 	);
-	const [runText = "", consumedText = "", sessionText = ""] =
+	const [home = "", runText = "", consumedText = "", sessionText = ""] =
 		output.split("\n");
+	if (!home.startsWith("/"))
+		throw new ClaudeCodeRunFailure("the machine has no home directory.");
 	const run = /^\d{1,4}$/.test(runText.trim()) ? Number(runText.trim()) : null;
 	return {
-		run,
-		consumed: consumedText.trim() === "consumed",
-		sessionId: isClaudeCodeSessionId(sessionText.trim())
-			? sessionText.trim()
-			: null,
+		home,
+		state: {
+			run,
+			consumed: consumedText.trim() === "consumed",
+			sessionId: isClaudeCodeSessionId(sessionText.trim())
+				? sessionText.trim()
+				: null,
+		},
 	};
 }
 
@@ -414,28 +467,27 @@ async function launchRun(
 	const { shell } = input;
 	if (run > 50)
 		throw new ClaudeCodeRunFailure("this turn ran Claude Code too many times.");
-	await checked(
-		shell,
-		claudeAgentSdkInstallScript(false),
-		"the Claude Agent SDK could not be installed on this machine.",
-		300_000,
-	);
-	const resumeId = input.reader
-		? turnSessionId
-		: (turnSessionId ?? (await restoredSession(input, home)));
+	const runDirectory = `${turnDirectory}/${run}`;
+	// Independent of each other: the SDK check and probing the machine for
+	// the chat's session each cost a round trip, the grant none.
+	const [, resumeId, grant] = await Promise.all([
+		checked(
+			shell,
+			claudeAgentSdkInstallScript(false),
+			"the Claude Agent SDK could not be installed on this machine.",
+			300_000,
+		),
+		input.reader
+			? turnSessionId
+			: (turnSessionId ?? restoredSession(input, home)),
+		issueClaudeCodeGrant(input.grantSecret, {
+			userId: input.userId,
+			sessionId: input.sessionId,
+			turnId: input.turnId,
+		}),
+	]);
 	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));
 	if (!prompt.trim()) return null;
-	const runDirectory = `${turnDirectory}/${run}`;
-	await checked(
-		shell,
-		`umask 077; mkdir -p ${quote(runDirectory)}`,
-		"could not prepare its run directory.",
-	);
-	const grant = await issueClaudeCodeGrant(input.grantSecret, {
-		userId: input.userId,
-		sessionId: input.sessionId,
-		turnId: input.turnId,
-	});
 	input.addRedaction?.(grant);
 	const inputs = input.reader
 		? `${readerScratchDirectory(input.sessionId)}/claude-${input.turnId}-${run}`
@@ -456,48 +508,45 @@ async function launchRun(
 		MCP_TIMEOUT: "30000",
 		MCP_TOOL_TIMEOUT: String(PROCESS_SECONDS * 1000),
 	};
-	await writeThroughShell(
-		shell,
-		`${runDirectory}/env`,
-		`${Object.entries(environment)
-			.map(([name, value]) => `${name}=${quote(value)}`)
-			.join("\n")}\n`,
-	);
-	await writeThroughShell(
-		shell,
-		`${runDirectory}/mcp.json`,
-		JSON.stringify({
-			mcpServers: {
-				[CLAUDE_CODE_MCP_SERVER]: {
-					type: "http",
-					url: `${input.edgeOrigin}${CLAUDE_CODE_PROXY_PREFIX}/mcp`,
-					headers: { Authorization: `Bearer ${grant}` },
+	const inputFiles: FileToWrite[] = [
+		{
+			path: `${runDirectory}/env`,
+			contents: `${Object.entries(environment)
+				.map(([name, value]) => `${name}=${quote(value)}`)
+				.join("\n")}\n`,
+		},
+		{
+			path: `${runDirectory}/mcp.json`,
+			contents: JSON.stringify({
+				mcpServers: {
+					[CLAUDE_CODE_MCP_SERVER]: {
+						type: "http",
+						url: `${input.edgeOrigin}${CLAUDE_CODE_PROXY_PREFIX}/mcp`,
+						headers: { Authorization: `Bearer ${grant}` },
+					},
 				},
-			},
-		}),
-	);
-	await writeThroughShell(
-		shell,
-		`${runDirectory}/system`,
-		systemPrompt(input.cwd, input.reader),
-	);
-	await writeThroughShell(shell, `${runDirectory}/prompt`, prompt);
-	await writeThroughShell(
-		shell,
-		`${runDirectory}/options.json`,
-		JSON.stringify({
-			model: input.modelId,
-			disallowedTools: input.reader
-				? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
-				: ["AskUserQuestion"],
-			resume: resumeId ?? null,
-		}),
-	);
-	await writeThroughShell(
-		shell,
-		`${runDirectory}/runner.mjs`,
-		CLAUDE_AGENT_RUNNER_SCRIPT,
-	);
+			}),
+		},
+		{
+			path: `${runDirectory}/system`,
+			contents: systemPrompt(input.cwd, input.reader),
+		},
+		{ path: `${runDirectory}/prompt`, contents: prompt },
+		{
+			path: `${runDirectory}/options.json`,
+			contents: JSON.stringify({
+				model: input.modelId,
+				disallowedTools: input.reader
+					? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
+					: ["AskUserQuestion"],
+				resume: resumeId ?? null,
+			}),
+		},
+		{
+			path: `${runDirectory}/runner.mjs`,
+			contents: CLAUDE_AGENT_RUNNER_SCRIPT,
+		},
+	];
 	const argv = [
 		"/usr/local/bin/node",
 		`${inputs}/runner.mjs`,
@@ -511,6 +560,7 @@ set -a; . ${quote(`${inputs}/env`)}; set +a
 exec ${argv.map(quote).join(" ")} </dev/null`;
 	let command = cli;
 	if (input.reader) {
+		await writeFilesThenRun(shell, runDirectory, inputFiles, null);
 		await input.prepareReader?.();
 		// The reader cannot read the builder's 0600 files: hand it copies.
 		const owner = `${READER_LINUX_USER}:${READER_LINUX_USER}`;
@@ -535,11 +585,12 @@ exec ${argv.map(quote).join(" ")} </dev/null`;
 		seconds: PROCESS_SECONDS,
 		commandId: claudeCodeCommandId(input.turnId, run),
 	});
-	await checked(
-		shell,
-		`d=${quote(runDirectory)}; t=${quote(turnDirectory)}; if [ ! -f "$d/started" ]; then setsid nohup bash -c ${quote(`${scoped} >"$1/out" 2>"$1/err" </dev/null; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"`)} _ "$d" </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; printf '%s' ${run} >"$t/current.tmp"; mv "$t/current.tmp" "$t/current"; fi`,
-		"Claude Code could not be started.",
-	);
+	const launch = `d=${quote(runDirectory)}; t=${quote(turnDirectory)}; if [ ! -f "$d/started" ]; then setsid nohup bash -c ${quote(`${scoped} >"$1/out" 2>"$1/err" </dev/null; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"`)} _ "$d" </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; printf '%s' ${run} >"$t/current.tmp"; mv "$t/current.tmp" "$t/current"; fi`;
+	// The builder's inputs and the launch go out together; the reader's
+	// were written above, before they were handed over.
+	if (input.reader)
+		await checked(shell, launch, "Claude Code could not be started.");
+	else await writeFilesThenRun(shell, runDirectory, inputFiles, launch);
 	return { run };
 }
 
