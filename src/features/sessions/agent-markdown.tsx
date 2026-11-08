@@ -1,4 +1,5 @@
 import { type ComponentProps, Suspense, use } from "react";
+import { readableModelCitations } from "#/domain/model-citation";
 import type { AgentMarkdown as Renderer } from "./agent-markdown-renderer";
 
 type RendererModule = typeof import("./agent-markdown-renderer");
@@ -62,5 +63,9 @@ function LoadedMarkdown(props: ComponentProps<typeof Renderer>) {
 }
 
 function PlainMarkdown({ text }: { text: string }) {
-	return <div className="whitespace-pre-wrap break-words">{text}</div>;
+	return (
+		<div className="whitespace-pre-wrap break-words">
+			{readableModelCitations(text)}
+		</div>
+	);
 }

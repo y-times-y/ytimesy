@@ -9,6 +9,21 @@ const render = (text: string, streaming = false) =>
 	);
 
 describe("assistant Markdown", () => {
+	it("replaces unresolved citations in prose without altering literal code", () => {
+		for (const streaming of [false, true]) {
+			const html = render(
+				"Price citeturn1search0.\n\n`citeturn99search4`\n\n[Pricing](https://example.com/pricing)",
+				streaming,
+			);
+			expect(html.replace(/<[^>]+>/g, "")).toContain(
+				"Price (source unavailable).",
+			);
+			expect(html).not.toContain("turn1search0");
+			expect(html).toContain("turn99search4");
+			expect(html).toContain('href="https://example.com/pricing"');
+		}
+		expect(render("Text citeturn3", true)).not.toContain("turn3");
+	});
 	it("renders headings, emphasis, quotes and external links", () => {
 		const html = render(
 			"## Heading\n\n*italic* and ~~removed~~\n\n> Quote\n\n[Docs](https://example.com/docs)",
