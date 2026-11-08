@@ -5,7 +5,6 @@ import {
 	Camera,
 	Check,
 	CornerDownRight,
-	Github,
 	Terminal,
 	X,
 } from "lucide-react";
@@ -20,6 +19,7 @@ import { ClaudeMark } from "#/features/sessions/claude-mark";
 import { CodexMark } from "#/features/sessions/codex-mark";
 import { GrokMark } from "#/features/sessions/grok-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
+import { GithubMark } from "#/features/workspace/github-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
 	BENCH_COLUMNS,
@@ -504,7 +504,7 @@ export function SiteFooter() {
 					target="_blank"
 					rel="noreferrer"
 				>
-					<Github size={15} aria-hidden="true" />
+					<GithubMark size={15} />
 					Open-source harness
 					<ArrowUpRight size={13} aria-hidden="true" />
 				</a>
