@@ -77,6 +77,12 @@ describe("agent captures in the chat", () => {
 			files: [{ name: "cli.txt", bytes: 10, sha256: "0".repeat(64) }],
 		} as EvidenceRecord;
 		expect(renderToStaticMarkup(<EvidenceCard evidence={cliOnly} />)).toBe("");
+		const failed = {
+			...cliOnly,
+			status: "app-failed",
+			files: [],
+		} as EvidenceRecord;
+		expect(renderToStaticMarkup(<EvidenceCard evidence={failed} />)).toBe("");
 	});
 
 	it("shows every capture of the chat on the evidence page the pull request links", () => {
