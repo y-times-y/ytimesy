@@ -3,6 +3,9 @@ import { z } from "zod";
 import { parseProjectSecretName } from "#/domain/project-secret";
 import { REQUESTABLE_SECRET_KINDS } from "#/domain/secret-request";
 
+export const SECRET_SCOPES = ["project", "account"] as const;
+export type SecretScope = (typeof SECRET_SCOPES)[number];
+
 export const SAVE_PROJECT_SECRET_TOOL = "save_project_secret";
 
 /**
@@ -20,12 +23,13 @@ export function saveProjectSecretTools(input: {
 		name: string;
 		kind: (typeof REQUESTABLE_SECRET_KINDS)[number];
 		value: string;
+		scope: SecretScope;
 	}) => Promise<void>;
 }): ToolSet {
 	return {
 		[SAVE_PROJECT_SECRET_TOOL]: tool({
 			description:
-				"Save a credential you now hold as a project secret, so every other chat in this project has it as an environment variable without the user doing the sign-in again. Use it after the user approved access and you signed in with a CLI or obtained a token. Give a command whose output is exactly the value, for example `gh auth token`; it runs in the workspace and the output is saved without you seeing it. Never pass the value itself. Saving replaces a secret of the same name.",
+				"Save a credential you now hold as a project secret, so every other chat in this project has it as an environment variable without the user doing the sign-in again. Use it after the user approved access and you signed in with a CLI or obtained a token. Give a command whose output is exactly the value, for example `gh auth token`; it runs in the workspace and the output is saved without you seeing it. Never pass the value itself. Saving replaces a secret of the same name. Always ask the user first with ask_user, and only call this once they say yes: offer 'this project only', 'all my projects' and 'do not save'. Use scope \"project\" or \"account\" to match their answer; an account secret reaches every project they own.",
 			inputSchema: z.object({
 				name: z.string().describe("Environment variable name, e.g. GH_TOKEN."),
 				valueCommand: z
@@ -34,8 +38,11 @@ export function saveProjectSecretTools(input: {
 					.max(2_000)
 					.describe("Shell command whose stdout is the secret value."),
 				kind: z.enum(REQUESTABLE_SECRET_KINDS).default("runtime"),
+				scope: z
+					.enum(SECRET_SCOPES)
+					.describe("What the user chose when you asked."),
 			}),
-			execute: async ({ name, valueCommand, kind }) => {
+			execute: async ({ name, valueCommand, kind, scope }) => {
 				const parsed = parseProjectSecretName(name);
 				const ran = await input.runInWorkspace(valueCommand);
 				const value = ran.stdout.trim();
@@ -45,7 +52,7 @@ export function saveProjectSecretTools(input: {
 						error: "The command did not print a value; nothing was saved.",
 					};
 				try {
-					await input.save({ name: parsed, kind, value });
+					await input.save({ name: parsed, kind, value, scope });
 				} catch (error) {
 					return {
 						saved: false,
@@ -55,7 +62,7 @@ export function saveProjectSecretTools(input: {
 				return {
 					saved: true,
 					name: parsed,
-					note: "Saved to the project; new chats have it as an environment variable.",
+					note: `Saved ${scope === "account" ? "for all the user's projects" : "to this project"}; new chats have it as an environment variable.`,
 				};
 			},
 		}),

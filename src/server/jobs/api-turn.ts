@@ -264,6 +264,7 @@ import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
 	loadAgentProjectSecrets,
+	saveAccountWideSecret,
 	saveVisibleProjectSecret,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
@@ -1658,12 +1659,18 @@ async function runApiTurnAttempt(
 									30_000,
 								);
 							},
-							save: async (secret) => {
-								await saveVisibleProjectSecret({
-									userId: owner.userId,
-									projectId: owner.projectId as string,
-									...secret,
-								});
+							save: async ({ scope, ...secret }) => {
+								if (scope === "account")
+									await saveAccountWideSecret({
+										userId: owner.userId,
+										...secret,
+									});
+								else
+									await saveVisibleProjectSecret({
+										userId: owner.userId,
+										projectId: owner.projectId as string,
+										...secret,
+									});
 							},
 						})
 					: {},

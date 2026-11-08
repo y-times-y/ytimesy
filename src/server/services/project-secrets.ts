@@ -25,9 +25,12 @@ import {
 	parseProjectSecretValue,
 } from "#/domain/project-secret";
 import {
+	deleteAccountSecret,
 	deleteProjectSecretForOwner,
 	listProjectSecretsForOwner,
+	loadAccountSecrets,
 	loadProjectSecretsForOwner,
+	saveAccountSecret,
 	saveProjectSecretForOwner,
 } from "#/server/adapters/project-secrets";
 import { projectForOwner } from "#/server/adapters/projects";
@@ -151,7 +154,14 @@ export async function loadAgentProjectSecrets(
 	userId: string,
 	projectId: string,
 ): Promise<AgentProjectSecrets> {
-	const all = await loadProjectSecretsForOwner(userId, projectId);
+	const own = await loadProjectSecretsForOwner(userId, projectId);
+	const ownNames = new Set(own.map(({ name }) => name));
+	const all = [
+		...own,
+		...(await loadSharedAccountSecrets(userId)).filter(
+			({ name }) => !ownNames.has(name),
+		),
+	];
 	const names = all.map(({ name, kind }) => ({ name, kind }));
 	const stored = all.filter((secret) => secret.kind !== "build");
 	if (!stored.length)
@@ -259,4 +269,44 @@ export async function saveSecretsPastedInMessage(input: {
 		}
 	}
 	return messageWithSecretsAsVariables(input.text, saved);
+}
+
+/** Account-wide secrets are a convenience: if they cannot load, the turn runs with the project's own. */
+async function loadSharedAccountSecrets(userId: string) {
+	try {
+		return await loadAccountSecrets(userId);
+	} catch (error) {
+		console.warn("Account secrets could not be loaded.", {
+			reason: error instanceof Error ? error.message : "unknown",
+		});
+		return [];
+	}
+}
+
+/** Saves a secret every project of the user receives; a project's own secret of the same name wins. */
+export async function saveAccountWideSecret(input: {
+	readonly userId: string;
+	readonly name: string;
+	readonly value: string;
+	readonly kind: unknown;
+}): Promise<PublicProjectSecret> {
+	const name = parseProjectSecretName(input.name);
+	const kind = parseProjectSecretKind(input.kind);
+	if (kind === "build")
+		throw new Error("Build secrets cannot be shared across projects.");
+	const value = parseProjectSecretValue(input.value, kind);
+	return saveAccountSecret({
+		userId: input.userId,
+		name,
+		kind,
+		hint: secretHint(value),
+		encrypted: encryptSecret(await loadSecretMasterKey(), value),
+	});
+}
+
+export async function removeAccountWideSecret(input: {
+	readonly userId: string;
+	readonly secretId: string;
+}) {
+	await deleteAccountSecret(input);
 }
