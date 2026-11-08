@@ -496,13 +496,14 @@ export async function publishApiTurnProgress(
 	turn: ApiTurn,
 	items: readonly SessionItem[],
 ) {
+	const text = jsonbText(items);
 	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set items=$3,updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, jsonbText(items)],
+		[turn.id, turn.lease_id, text],
 	);
 	if (result.rows[0])
 		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
@@ -515,6 +516,7 @@ export async function publishApiTurnProgress(
 		throw new Error("API turn lease was lost.");
 	}
 	await wakeConversationProgress();
+	return text.length;
 }
 
 /** Whichever watcher noticed first, a stop the user asked for is a clean stop. */

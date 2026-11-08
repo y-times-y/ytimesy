@@ -71,3 +71,36 @@ export function xaiSubscriptionModels(
 		? [...discovered]
 		: catalog;
 }
+
+/**
+ * How long a refusal stands before the connection is tried again. A refusal
+ * is a reading of one request, not a verdict on the plan: xAI also answers 403
+ * for limits and edge blocks. Without this, one 403 hid a working Grok plan
+ * for a day (production, 2026-11-07) while every turn quietly ran elsewhere.
+ */
+export const XAI_REFUSAL_COOLDOWN_MS = 10 * 60_000;
+
+/** Whether a connection in `status`, last changed `ageMs` ago, may serve a request. */
+export function xaiConnectionMayServe(
+	status: XaiSubscriptionStatus,
+	ageMs: number,
+): boolean {
+	return (
+		status === "ready" ||
+		(status === "not-eligible" && ageMs >= XAI_REFUSAL_COOLDOWN_MS)
+	);
+}
+
+const PLAN_REFUSAL =
+	/subscri|supergrok|plan\b|eligib|entitle|upgrade|premium|not (?:allowed|permitted|authorized) to use/i;
+
+/**
+ * What a 403's body says about the plan: "not-eligible" only when it names
+ * the subscription or plan; any other 403 (a limit, a block, an empty body)
+ * fails the request without recording a verdict.
+ */
+export function xaiForbiddenVerdict(
+	body: string,
+): "not-eligible" | "unavailable" {
+	return PLAN_REFUSAL.test(body) ? "not-eligible" : "unavailable";
+}

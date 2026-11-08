@@ -9,15 +9,38 @@ import type { SessionItem } from "#/domain/session-item";
  */
 export const PROGRESS_WINDOW_MS = 250;
 
+/**
+ * Every snapshot carries the whole chat (a long chat is 0.5-1 MB, written
+ * to two rows and read back by the relay), so a short window on a big chat
+ * costs the database more than it gains. The window grows with the payload
+ * to keep writes near this many bytes per ms, up to the cap; the client's
+ * reveal spreads each burst over the cadence it sees (smooth-reveal.ts).
+ */
+const PROGRESS_BYTES_PER_MS = 400;
+const PROGRESS_MAX_WINDOW_MS = 1_500;
+
+export function progressWindowMs(snapshotBytes: number) {
+	return Math.min(
+		PROGRESS_MAX_WINDOW_MS,
+		Math.max(
+			PROGRESS_WINDOW_MS,
+			Math.round(snapshotBytes / PROGRESS_BYTES_PER_MS),
+		),
+	);
+}
+
 /** Streams do not wait on storage; checkpoint/finalization must drain this writer first. */
 export function turnProgressWriter(
-	write: (items: readonly SessionItem[]) => Promise<void>,
+	/** Resolves to the snapshot's size in bytes when it knows it. */
+	write: (items: readonly SessionItem[]) => Promise<unknown>,
 	onFailure: (error: unknown) => void,
 ) {
 	let latest: readonly SessionItem[] | undefined;
 	let running: Promise<void> | undefined;
 	let failed = false;
 	let failure: unknown;
+	/** Size of the last snapshot written. */
+	let lastBytes = 0;
 	/** Items history is replaced, never mutated, so the same array is already stored. */
 	let stored: readonly SessionItem[] | undefined;
 	/** A throttled snapshot waiting for its window to end (offerLater). */
@@ -35,7 +58,8 @@ export function turnProgressWriter(
 				const snapshot = latest;
 				latest = undefined;
 				if (snapshot === stored) continue;
-				await write(snapshot);
+				const bytes: unknown = await write(snapshot);
+				if (typeof bytes === "number") lastBytes = bytes;
 				stored = snapshot;
 			}
 		})()
@@ -60,6 +84,8 @@ export function turnProgressWriter(
 	};
 	return {
 		offer,
+		/** The window a stream delta waits for, sized to what a write costs now. */
+		window: () => progressWindowMs(lastBytes),
 		/** A checkpoint stored `items` with the model history, so writing them again is wasted. */
 		markStored(items: readonly SessionItem[]) {
 			stored = items;

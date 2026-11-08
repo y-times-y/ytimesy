@@ -2,7 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { REVEAL_CATCH_UP_MS } from "#/domain/smooth-reveal";
-import { PROGRESS_WINDOW_MS, turnProgressWriter } from "./turn-progress-writer";
+import {
+	PROGRESS_WINDOW_MS,
+	progressWindowMs,
+	turnProgressWriter,
+} from "./turn-progress-writer";
 
 const snapshot = (text: string): SessionItem[] => [
 	{ kind: "agentMessage", id: SessionItemId("message"), text },
@@ -188,4 +192,23 @@ it("delivers the first delta immediately and the newest tail on time without ano
 		"Bonjour le monde 🌍",
 	]);
 	await writer.drain();
+});
+
+it("sizes the window to the snapshot: short for a small chat, longer for a big one, capped", () => {
+	expect(progressWindowMs(20_000)).toBe(PROGRESS_WINDOW_MS);
+	expect(progressWindowMs(0)).toBe(PROGRESS_WINDOW_MS);
+	expect(progressWindowMs(480_000)).toBeGreaterThan(1_000);
+	expect(progressWindowMs(480_000)).toBeLessThan(1_500);
+	expect(progressWindowMs(5_000_000)).toBe(1_500);
+});
+
+it("widens its stream window after writing a big snapshot", async () => {
+	const writer = turnProgressWriter(
+		async () => 900_000,
+		() => {},
+	);
+	expect(writer.window()).toBe(PROGRESS_WINDOW_MS);
+	writer.offer(snapshot("first"));
+	await writer.drain();
+	expect(writer.window()).toBe(1_500);
 });
