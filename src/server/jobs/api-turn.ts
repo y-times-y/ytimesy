@@ -162,6 +162,7 @@ import {
 import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
+import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
 import {
 	readPreparedCheckoutDirectory,
@@ -730,6 +731,17 @@ async function runApiTurnAttempt(
 					abort.abort(
 						new Error("Turn ownership or cancellation state changed."),
 					);
+				// Send on a queued message: a model call still sampling (no tool
+				// started) is dropped like a soft deadline, so the next step
+				// reads the message now. A running tool is never interrupted.
+				if (
+					alive &&
+					!toolsStarted &&
+					!softStop.signal.aborted &&
+					turn.session_id &&
+					queuedMessageSentNow(turn.session_id)
+				)
+					softStop.abort(new Error("A queued message was sent."));
 			}),
 		);
 		const evaluationHeartbeat = evaluation
@@ -2088,6 +2100,8 @@ async function runApiTurnAttempt(
 			afterTools: async (history) =>
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				// Each model call starts with no tool run yet: Send may cut it.
+				toolsStarted = false;
 				// The local worker's loop calls the model several times in one
 				// run; durable steps wait before their one call instead (below).
 				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
@@ -2849,8 +2863,9 @@ async function runApiTurnAttempt(
 					});
 				if (failedAttempt?.droppedStepSaved) messages = failedAttempt.committed;
 				await checkpointApiTurn(turn, messages, items);
-				console.warn("Model step reached its soft deadline; it continues.", {
+				console.warn("Model step was cut short; it continues.", {
 					index: step?.index,
+					reason: String(softStop.signal.reason?.message ?? ""),
 				});
 				// The turn's lease carries over to the next step.
 				coordinated = false;

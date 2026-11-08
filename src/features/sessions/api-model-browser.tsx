@@ -25,10 +25,14 @@ import {
 	getModelConnections,
 	saveModelConnectionFn,
 } from "./model-connections.fn";
+import type { RenderModelFavorite } from "./model-favorite-button";
+import { favoriteModelKey } from "./model-picker-favorites";
 import { ModelProviderLogo } from "./model-provider-logo";
 import { ProviderConfirmation } from "./provider-confirmation";
 
 export function ApiModelBrowser({
+	renderFavorite,
+	favoriteIds,
 	author,
 	search,
 	onSelect,
@@ -39,6 +43,8 @@ export function ApiModelBrowser({
 	source,
 	usage,
 }: {
+	renderFavorite?: RenderModelFavorite;
+	favoriteIds?: readonly string[];
 	author: string | null;
 	search: string;
 	onSelect: (route: string) => void;
@@ -91,7 +97,12 @@ export function ApiModelBrowser({
 					providerConnections(modelAuthor, connections.data ?? []),
 					selectedRoute ?? "",
 				);
-		return (source ? [source] : []).flatMap((connection) =>
+		const sources = favoriteIds
+			? providerConnections(modelAuthor, connections.data ?? [])
+			: source
+				? [source]
+				: [];
+		return sources.flatMap((connection) =>
 			connectionModels(connection, catalog.data ?? [])
 				.filter(
 					(model) =>
@@ -108,7 +119,13 @@ export function ApiModelBrowser({
 				})),
 		);
 	});
-	const visibleConnected = visibleModelChoices(connected, search);
+	const visibleConnected = visibleModelChoices(connected, search).filter(
+		(model) =>
+			!favoriteIds ||
+			favoriteIds.includes(
+				favoriteModelKey("api", modelRouteId(model.connectionId, model.id)),
+			),
+	);
 	function update(rows: PublicModelConnection[]) {
 		client.setQueryData(["model-connections"], rows);
 		if (identity.data?.user.id)
@@ -134,6 +151,7 @@ export function ApiModelBrowser({
 	const locked = visibleModelChoices(
 		API_MODEL_LIST.filter(
 			(model) =>
+				!favoriteIds &&
 				!plan &&
 				authors.includes(model.author) &&
 				!coveredIds?.includes(model.openRouterId) &&
@@ -296,6 +314,7 @@ export function ApiModelBrowser({
 								<ChevronRight size={14} />
 							)}
 						</button>
+						{renderFavorite?.(route, model.label)}
 					</div>
 				);
 			})}

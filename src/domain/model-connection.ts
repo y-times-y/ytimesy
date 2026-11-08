@@ -245,6 +245,9 @@ export function availableConnectionModels(
 				...(reasoning ? { reasoning } : {}),
 				...(speeds.length ? { speeds } : {}),
 				...(contextWindow ? { contextWindow } : {}),
+				...(model.contextWindow
+					? { contextCapacity: model.contextWindow }
+					: {}),
 			};
 		}),
 	);

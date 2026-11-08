@@ -19,6 +19,7 @@ import { ClaudeMark } from "#/features/sessions/claude-mark";
 import { CodexMark } from "#/features/sessions/codex-mark";
 import { GrokMark } from "#/features/sessions/grok-mark";
 import { ModelProviderLogo } from "#/features/sessions/model-provider-logo";
+import { GithubMark } from "#/features/workspace/github-mark";
 import { AppShot, SHOT_HELPERS } from "./landing-app-shot";
 import {
 	BENCH_COLUMNS,
@@ -53,7 +54,18 @@ export function LandingHeader({ signedIn = false }: { signedIn?: boolean }) {
 		<header className="landing-header">
 			<div className="landing-header-inner">
 				<YtimesyBrand />
-				<nav className="landing-nav" aria-label="Account">
+				<nav className="landing-nav" aria-label="Resources and account">
+					<a
+						className="landing-github-link"
+						href="https://github.com/y-times-y/harness"
+						target="_blank"
+						rel="noreferrer"
+						aria-label="Open-source harness on GitHub"
+						title="Open-source harness on GitHub"
+					>
+						<GithubMark size={18} />
+						<span>GitHub</span>
+					</a>
 					{signedIn ? (
 						<a className="landing-button" href="/">
 							Open ytimesy
@@ -496,7 +508,17 @@ export function SiteFooter() {
 			<span role="img" aria-label="Y times Y">
 				<Wordmark size={18} />
 			</span>
-			<nav aria-label="Legal and support">
+			<nav aria-label="Resources, legal and support">
+				<a
+					className="landing-harness-link"
+					href="https://github.com/y-times-y/harness"
+					target="_blank"
+					rel="noreferrer"
+				>
+					<GithubMark size={15} />
+					Open-source harness
+					<ArrowUpRight size={13} aria-hidden="true" />
+				</a>
 				<Link to="/blog">Blog</Link>
 				<Link to="/terms">Terms</Link>
 				<Link to="/privacy">Privacy</Link>
