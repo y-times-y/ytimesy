@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
 import {
 	checkerStandingRules,
@@ -11,9 +11,11 @@ import {
 } from "#/domain/harness-variant";
 import {
 	byRecency,
+	keyMatchesProject,
 	lineInScope,
 	type MemoryProject,
 	memoryIndexFor,
+	memoryPathScope,
 	memoryProjectKey,
 	projectFolderPath,
 } from "#/domain/memory-layout";
@@ -42,6 +44,7 @@ import {
 	MEMORY_MATCH_POLICY,
 	MEMORY_RERANK_ON,
 	MEMORY_RERANK_POLICY,
+	type MemoryFiles,
 	type MemoryLine,
 	type MemoryMode,
 	memoryAppUrl,
@@ -104,6 +107,7 @@ import {
 	memoryVmTokens,
 } from "../adapters/memory-vm-tokens";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
+import { memoryReadTools } from "./memory-read-tools";
 
 /**
  * The VM's Git token outlives any single durable step (each step mints a new
@@ -642,7 +646,32 @@ export async function turnMemory(
 	};
 }
 
+/** What a subagent is told about the index it is shown, and the tools that read past it. */
+const SUBAGENT_MEMORY_HINT =
+	"Only this index is in context: before work that may depend on an earlier decision, preference or correction, search the notes with search_memory and read them with read_memory. Memory is read-only for you; report anything it should gain to your parent agent.";
+
+/** The files of this chat's scope: personal/ and its project's folder (not other projects, not legacy files). */
+function filesInScope(files: MemoryFiles, project: MemoryProject | null) {
+	return Object.fromEntries(
+		Object.entries(files).filter(([path]) => {
+			const scope = memoryPathScope(path);
+			return (
+				scope.kind === "personal" ||
+				(scope.kind === "project" &&
+					project !== null &&
+					keyMatchesProject(scope.key, project))
+			);
+		}),
+	);
+}
+
 export type SubagentMemory = {
+	/**
+	 * Read-only search and read over this chat's scope of the memory repo,
+	 * served from the snapshot: a subagent has no ~/memory clone, so it finds
+	 * what it needs itself.
+	 */
+	tools: ToolSet;
 	/**
 	 * The project's always-on rules on the child's first request, and the read
 	 * hook's lines for its brief (a checker's: the user's request) on each
@@ -666,10 +695,15 @@ export async function subagentMemory(
 	options: MemoryOptions = {},
 ): Promise<SubagentMemory | null> {
 	const source = await memorySource(owner, options);
-	if (source?.mode !== "full") return null;
-	const { embed, rerank, project, today, wording } = source;
+	if (!source) return null;
+	const { mode, embed, rerank, project, today, wording } = source;
 	const checker = owner.role === "checker";
 	return {
+		tools: memoryReadTools(
+			async () =>
+				filesInScope((await source.loaded())?.snapshot.files ?? {}, project),
+			{ search: "search_memory", read: "read_memory" },
+		),
 		async attach(messages, items) {
 			const unchanged = { messages, recall: null };
 			const index = currentRequestIndex(messages, items);
@@ -679,6 +713,35 @@ export async function subagentMemory(
 			const loaded = await source.loaded();
 			if (!loaded) return unchanged;
 			const { snapshot, vectors } = loaded;
+			if (mode !== "full") {
+				// The spec's loop: the index and how to look further; the rest is the
+				// subagent's to search for.
+				const raw = snapshot.files[MEMORY_ENTRY];
+				const entry =
+					raw !== undefined && raw.trim() !== EMPTY_MEMORY.trim()
+						? memoryIndexFor(raw, project)
+						: null;
+				if (!entry?.content.trim()) return unchanged;
+				const next = [...messages];
+				next[index] = withMemoryParts(
+					current as { role: "user"; content: string },
+					[
+						memoryEntryPart(
+							`${entry.content}\n\n${SUBAGENT_MEMORY_HINT}`,
+							wording,
+						),
+					],
+				) as ModelMessage;
+				return {
+					messages: next,
+					recall: {
+						head: snapshot.head,
+						index: true as const,
+						indexLines: entry.lines,
+						lines: [],
+					},
+				};
+			}
 			// An empty memory (for this project) leaves the child's request as it was.
 			if (!recallableLines(snapshot, project).length) return unchanged;
 			const spans: Record<string, number> = {

@@ -24,6 +24,8 @@ const reads = new Set([
 	"read_repository_guidance",
 	"search_project_memory",
 	"read_project_memory",
+	"search_memory",
+	"read_memory",
 	"read_work_plan",
 ]);
 const writes = new Set([
