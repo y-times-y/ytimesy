@@ -24,6 +24,28 @@ describe("context usage", () => {
 		expect(html).toContain("93% full");
 		expect(html).toContain("239K / 258K tokens used");
 	});
+	it("recalculates usage against the selected model capacity", () => {
+		const html = renderToStaticMarkup(
+			<ContextUsage
+				context={{ last: { totalTokens: 120000 }, modelContextWindow: 1000000 }}
+				selectedCapacity={300000}
+				modelChanged
+			/>,
+		);
+		expect(html).toContain("Approximately 40% full");
+		expect(html).toContain("120K / 300K tokens used");
+		expect(html).not.toContain("1M tokens used");
+	});
+	it("does not reuse the previous model capacity for an unknown model", () => {
+		const html = renderToStaticMarkup(
+			<ContextUsage
+				context={{ last: { totalTokens: 120000 }, modelContextWindow: 1000000 }}
+				modelChanged
+			/>,
+		);
+		expect(html).toContain("Context capacity is unavailable");
+		expect(html).not.toContain("tokens used");
+	});
 	it("hides the ring without a reading", () => {
 		expect(renderToStaticMarkup(<ContextUsage />)).toBe("");
 	});
