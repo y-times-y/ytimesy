@@ -4,6 +4,7 @@ import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
+import { observePeerInbox } from "../adapters/peer-inbox-observation";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { loadModelConnection } from "../adapters/model-connections";
 import { FIRST_REQUEST_WORKSPACE_WAIT_MS } from "../services/first-request-gate";
@@ -1840,6 +1841,21 @@ describe("a step's soft deadline", () => {
 		expect(mocks.checkpoint).toHaveBeenCalled();
 		expect(mocks.finalize).not.toHaveBeenCalled();
 	});
+
+	it("ends a sampling step when the user presses Send on a queued message, so the next step reads it", async () => {
+		mocks.stepRuntime.mockImplementation(hangUntilAborted);
+		mocks.renew.mockImplementation(async () => {
+			observePeerInbox("session", Date.now(), true, true);
+			return true;
+		});
+		const outcome = await runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 3,
+			signal: new AbortController().signal,
+		});
+		expect(outcome).toBe("continue");
+		expect(mocks.checkpoint).toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+	}, 10_000);
 
 	it("never stops a step once a tool has started, and the hard abort still fails it", async () => {
 		mocks.stepRuntime.mockImplementation(

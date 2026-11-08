@@ -119,6 +119,9 @@ export async function injectServerPeerMessages(
 		"update agent_peer_inbox set accepted=true where recipient_id=$1 and id=any($2::text[])",
 		[recipientId, delivering.map((row) => row.id)],
 	);
+	// A heartbeat that read the inbox before this must not report these as
+	// still waiting (queuedMessageSentNow would restart the step for nothing).
+	forgetPeerInboxObservation(recipientId);
 	return injected;
 }
 

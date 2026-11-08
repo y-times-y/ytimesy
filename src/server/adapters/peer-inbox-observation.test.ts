@@ -3,7 +3,20 @@ import {
 	forgetPeerInboxObservation,
 	observePeerInbox,
 	peerInboxMayHaveMessages,
+	queuedMessageSentNow,
 } from "./peer-inbox-observation";
+
+it("reports a sent queued message only from a fresh heartbeat after the last inbox write", () => {
+	observePeerInbox("chat-sent", 1_000, true, true);
+	expect(queuedMessageSentNow("chat-sent", 1_200)).toBe(true);
+	expect(queuedMessageSentNow("chat-sent", 2_600)).toBe(false);
+	// The step took it: a heartbeat that read the inbox before then is ignored.
+	forgetPeerInboxObservation("chat-sent", 3_000);
+	observePeerInbox("chat-sent", 2_900, true, true);
+	expect(queuedMessageSentNow("chat-sent", 3_100)).toBe(false);
+	observePeerInbox("chat-queued", 1_000, true);
+	expect(queuedMessageSentNow("chat-queued", 1_100)).toBe(false);
+});
 
 it("a fresh heartbeat that found nothing lets a step skip the inbox read", () => {
 	observePeerInbox("chat-empty", 1_000, false);

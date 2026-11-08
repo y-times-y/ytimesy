@@ -11,20 +11,22 @@
 const FRESH_MS = 1_500;
 const observations = new Map<
 	string,
-	{ at: number; pending: boolean; written?: true }
+	{ at: number; pending: boolean; sent?: boolean; written?: true }
 >();
 
 export function observePeerInbox(
 	sessionId: string,
 	at: number,
 	pending: boolean,
+	/** A queued message the user pressed Send on is waiting. */
+	sent = false,
 ) {
 	const previous = observations.get(sessionId);
 	// A heartbeat that started no later than this isolate's own write may
 	// not have seen it: its answer must not hide that write.
 	if (previous && (previous.at > at || (previous.written && previous.at >= at)))
 		return;
-	observations.set(sessionId, { at, pending });
+	observations.set(sessionId, { at, pending, sent });
 	if (observations.size > 1_000)
 		for (const [id, seen] of observations)
 			if (at - seen.at > FRESH_MS) observations.delete(id);
@@ -35,6 +37,12 @@ export function peerInboxMayHaveMessages(sessionId: string, now = Date.now()) {
 	const seen = observations.get(sessionId);
 	if (!seen || seen.pending) return true;
 	return now - seen.at > FRESH_MS || now < seen.at;
+}
+
+/** True while a fresh heartbeat saw a queued message the user pressed Send on. */
+export function queuedMessageSentNow(sessionId: string, now = Date.now()) {
+	const seen = observations.get(sessionId);
+	return !!seen?.sent && now - seen.at <= FRESH_MS && now >= seen.at;
 }
 
 /**
