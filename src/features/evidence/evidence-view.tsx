@@ -257,9 +257,10 @@ export function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
 	if (evidence.source === "agent") return <AgentCapture evidence={evidence} />;
 	const shots = screenshots(evidence);
 	const video = videoFile(evidence);
-	// A successful capture with nothing to look at (CLI output only) adds no card
-	// to the chat; its facts stay on the evidence page the pull request links.
-	if (evidence.status === "captured" && !shots.length && !video) return null;
+	// A finished capture with nothing to look at (CLI output only, or an app that
+	// did not start) adds no card to the chat; its facts stay on the evidence
+	// page the pull request links.
+	if (evidence.status !== "capturing" && !shots.length && !video) return null;
 	const summary = evidenceMediaSummary({
 		files: evidence.files,
 		videoSeconds: evidence.videoSeconds,
