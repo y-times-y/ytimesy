@@ -148,6 +148,32 @@ describe("Claude Code proxy", () => {
 		expect(upstream).not.toHaveBeenCalled();
 	});
 
+	it("returns a permission denial without marking the saved login invalid", async () => {
+		const denied = await setup(() =>
+			Response.json(
+				{ error: { type: "permission_error", message: "Model access denied" } },
+				{ status: 403 },
+			),
+		);
+		expect((await denied.call("/claude-code/v1/messages")).status).toBe(403);
+		expect(denied.onUpstream).not.toHaveBeenCalled();
+		expect(denied.log).toHaveBeenCalledWith(
+			"Claude Code upstream permission denied; saved login retained.",
+			{ status: 403, route: "messages" },
+		);
+	});
+	it("does not invalidate a saved login from a token-counting probe", async () => {
+		const probe = await setup(() =>
+			Response.json(
+				{ error: { type: "authentication_error" } },
+				{ status: 401 },
+			),
+		);
+		expect(
+			(await probe.call("/claude-code/v1/messages/count_tokens")).status,
+		).toBe(401);
+		expect(probe.onUpstream).not.toHaveBeenCalled();
+	});
 	it("reports a refused token and a spent plan", async () => {
 		const refused = await setup(() => new Response("{}", { status: 401 }));
 		expect((await refused.call("/claude-code/v1/messages")).status).toBe(401);

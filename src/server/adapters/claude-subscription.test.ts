@@ -257,8 +257,8 @@ describe("checks the token with Anthropic before saving", () => {
 		});
 	});
 
-	it("rejects a token Anthropic refuses and stores nothing", async () => {
-		for (const status of [401, 403]) {
+	it("rejects an authentication failure and stores nothing", async () => {
+		for (const status of [401]) {
 			await expect(
 				saveClaudeSubscriptionToken("u1", token, {
 					fetch: answering(status),
@@ -272,6 +272,10 @@ describe("checks the token with Anthropic before saving", () => {
 		});
 	});
 
+	it("retains a submitted token when an endpoint returns a permission denial", async () => {
+		await saveClaudeSubscriptionToken("u1", token, { fetch: answering(403) });
+		expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
+	});
 	it("saves a token Anthropic accepts as connected", async () => {
 		await saveClaudeSubscriptionToken("u1", token, {
 			fetch: answering(200),
@@ -422,7 +426,7 @@ describe("reads the Claude plan's usage for the picker", () => {
 		).toBeNull();
 	});
 
-	it("marks a refused token as refused and returns nothing", async () => {
+	it("does not disconnect a saved token when the usage probe is denied", async () => {
 		for (const status of [401, 403]) {
 			await db.query(
 				"update claude_subscription set status='connected',plan_usage_at=null",
@@ -430,7 +434,7 @@ describe("reads the Claude plan's usage for the picker", () => {
 			expect(
 				await claudePlanUsageForPicker("u1", { fetch: answering(status) }),
 			).toBeNull();
-			expect((await claudeSubscriptionStatus("u1")).status).toBe("refused");
+			expect((await claudeSubscriptionStatus("u1")).status).toBe("connected");
 		}
 	});
 

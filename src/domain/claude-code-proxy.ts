@@ -75,7 +75,8 @@ function loggedPath(url: URL) {
 export function claudeCodeUpstreamOutcome(
 	response: Response,
 ): ClaudeCodeUpstreamOutcome | null {
-	if (response.status === 401 || response.status === 403)
+	// A permission denial is not proof that the saved login is invalid.
+	if (response.status === 401)
 		return { kind: "refused", status: response.status };
 	if (response.status !== 429) return null;
 	// A spent plan window says so in the unified rate-limit headers.
@@ -210,10 +211,18 @@ export async function proxyClaudeCode(
 		log("Claude Code proxy refused an upstream redirect.", { route });
 		return new Response(null, { status: 502 });
 	}
+	if (response.status === 403)
+		log("Claude Code upstream permission denied; saved login retained.", {
+			status: response.status,
+			route,
+		});
 	const outcome = claudeCodeUpstreamOutcome(response);
 	if (outcome) {
 		log("Claude Code upstream refused.", { status: response.status, route });
-		await options.onUpstream?.(grant, outcome).catch(() => undefined);
+		// A model-specific token-counting probe cannot invalidate the login
+		// used for inference. Only an actual message authentication failure can.
+		if (outcome.kind !== "refused" || route === "messages")
+			await options.onUpstream?.(grant, outcome).catch(() => undefined);
 	}
 	const usage = options.onUsage
 		? claudePlanUsageFromHeaders(response.headers, Date.now())
