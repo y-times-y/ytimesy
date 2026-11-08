@@ -67,6 +67,7 @@ import {
 	type OpenChatSide,
 	openChatSide,
 } from "#/server/services/open-chat-side";
+import { saveSecretsPastedInMessage } from "#/server/services/project-secrets";
 import {
 	publicSessionView,
 	releaseQueuedComposerMessage,
@@ -701,8 +702,15 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				await timed("send:rate", () =>
 					consumeUserAction(scope.userId, "chat-send"),
 				);
+				const text = data.projectId
+					? await saveSecretsPastedInMessage({
+							userId: scope.userId,
+							projectId: data.projectId,
+							text: data.text,
+						})
+					: data.text;
 				const sent = await runWithMachines((machines) =>
-					sendComposerMessage(machines, scope, data),
+					sendComposerMessage(machines, scope, { ...data, text }),
 				);
 				return timed("send:queued", () => withQueuedMessages(sent));
 			}).catch(async (cause: unknown) => {

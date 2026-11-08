@@ -5,6 +5,11 @@ import {
 } from "#/domain/encrypted-secret";
 import type { WorkspaceId } from "#/domain/ids";
 import {
+	findPastedSecrets,
+	messageWithSecretsAsVariables,
+	type PastedSecret,
+} from "#/domain/pasted-secrets";
+import {
 	posixShellQuoted,
 	privateDirectoryShell,
 } from "#/domain/posix-command";
@@ -220,4 +225,38 @@ export async function loadProjectSecretEnvironment(
 			decryptSecret(masterKey, secret.encrypted),
 		]),
 	);
+}
+
+/**
+ * Saves credentials typed into a chat message as project secrets, so every
+ * chat of the project has them, and returns the message with the values
+ * replaced by their variable names. Never blocks the send: if saving fails,
+ * the message goes through as typed.
+ */
+export async function saveSecretsPastedInMessage(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly text: string;
+}): Promise<string> {
+	const pasted = findPastedSecrets(input.text);
+	if (!pasted.length) return input.text;
+	const saved: PastedSecret[] = [];
+	for (const secret of pasted) {
+		try {
+			await saveVisibleProjectSecret({
+				userId: input.userId,
+				projectId: input.projectId,
+				name: secret.name,
+				value: secret.value,
+				kind: "runtime",
+			});
+			saved.push(secret);
+		} catch (error) {
+			console.warn("A secret pasted in a message was not saved.", {
+				name: secret.name,
+				reason: error instanceof Error ? error.message : "unknown",
+			});
+		}
+	}
+	return messageWithSecretsAsVariables(input.text, saved);
 }
