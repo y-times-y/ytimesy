@@ -171,6 +171,7 @@ import {
 	saveSessionDerivedValue,
 } from "../adapters/prepared-checkout";
 import { nodePublicHost } from "../adapters/public-host";
+import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -733,6 +734,18 @@ async function runApiTurnAttempt(
 					abort.abort(
 						new Error("Turn ownership or cancellation state changed."),
 					);
+				// Send on a queued message: a model call still sampling (no tool
+				// started) is dropped like a soft deadline, so the next step
+				// reads the message now. A running tool is never interrupted.
+				if (
+					alive &&
+					step &&
+					!toolsStarted &&
+					!softStop.signal.aborted &&
+					turn.session_id &&
+					queuedMessageSentNow(turn.session_id)
+				)
+					softStop.abort(new Error("A queued message was sent."));
 			}),
 		);
 		const evaluationHeartbeat = evaluation
@@ -2847,8 +2860,9 @@ async function runApiTurnAttempt(
 					});
 				if (failedAttempt?.droppedStepSaved) messages = failedAttempt.committed;
 				await checkpointApiTurn(turn, messages, items);
-				console.warn("Model step reached its soft deadline; it continues.", {
+				console.warn("Model step was cut short; it continues.", {
 					index: step?.index,
+					reason: String(softStop.signal.reason?.message ?? ""),
 				});
 				// The turn's lease carries over to the next step.
 				coordinated = false;
