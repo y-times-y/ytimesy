@@ -2098,29 +2098,31 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="empty"] .session-toolbar {
 	padding: 4px 10px 10px;
 }
-.session-launcher[data-layout="chat"]
-	.session-composer:not(
-		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
-	) {
-	grid-template-columns: auto minmax(48px, 1fr) auto auto auto;
-	grid-template-areas: "attach input harness fast send";
-	border-radius: 9999px;
-	padding: 4px 8px 4px 6px;
-}
-.session-launcher[data-layout="chat"]
-	.session-composer:not(
-		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
-	)
-	.composer-input {
-	padding: 0;
-}
-.session-launcher[data-layout="chat"]
-	.session-composer:not(
-		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
-	)
-	textarea {
-	min-height: 36px;
-	padding: 8px 4px;
+@container composer (min-width: 601px) {
+	.session-launcher[data-layout="chat"]
+		.session-composer:not(
+			:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
+		) {
+		grid-template-columns: auto minmax(48px, 1fr) auto auto auto;
+		grid-template-areas: "attach input harness fast send";
+		border-radius: 9999px;
+		padding: 4px 8px 4px 6px;
+	}
+	.session-launcher[data-layout="chat"]
+		.session-composer:not(
+			:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
+		)
+		.composer-input {
+		padding: 0;
+	}
+	.session-launcher[data-layout="chat"]
+		.session-composer:not(
+			:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
+		)
+		textarea {
+		min-height: 36px;
+		padding: 8px 4px;
+	}
 }
 .session-launcher[data-layout="chat"] textarea:placeholder-shown {
 	height: 36px;
@@ -2129,7 +2131,7 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="chat"] textarea::placeholder {
 	white-space: nowrap;
 }
-@container composer (max-width: 520px) {
+@container composer (max-width: 600px) {
 	.session-launcher[data-layout="chat"] .session-composer {
 		grid-template-columns: auto minmax(0, 1fr) auto auto;
 		grid-template-areas:
@@ -2140,12 +2142,20 @@ details[open] > summary .session-activity-chevron {
 		border-radius: 16px;
 		padding: 8px;
 		min-height: 0;
-		row-gap: 2px;
+		row-gap: 8px;
 	}
 	.session-launcher[data-layout="chat"] .composer-input {
 		width: auto;
+		padding: 8px 4px 12px;
+		border-bottom: 1px solid #ffffff12;
+	}
+	.session-launcher[data-layout="chat"] .session-composer textarea {
+		min-height: 64px;
+		font-size: 16px;
+		line-height: 22px;
 	}
 	.session-launcher[data-layout="chat"] .harness-select {
+		min-height: 44px;
 		max-width: none;
 		min-width: 0;
 	}
