@@ -77,6 +77,7 @@ import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand, posixShellQuoted } from "#/domain/posix-command";
 import {
 	agentSecretsEnvFile,
+	SOURCE_AGENT_SECRETS,
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
 import { publicFailureMessage } from "#/domain/project-workspace";
@@ -263,6 +264,7 @@ import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
 	loadAgentProjectSecrets,
+	saveVisibleProjectSecret,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
 import { withPushResultNotices } from "../services/push-approval";
@@ -274,6 +276,7 @@ import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import { hasRepositoryInstructions } from "../services/repository-instructions";
 import { createReviewLoop } from "../services/review-loop";
+import { saveProjectSecretTools } from "../services/save-project-secret-tool";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
 	secretRequestTools,
@@ -1642,6 +1645,26 @@ async function runApiTurnAttempt(
 							userId: owner.userId,
 							projectId: owner.projectId,
 							sessionId: owner.id,
+						})
+					: {},
+			saveSecret:
+				rootChat && owner.projectId
+					? saveProjectSecretTools({
+							runInWorkspace: async (command) => {
+								const ready = await workspace();
+								return ready.machines.exec(
+									ready.vm,
+									`${SOURCE_AGENT_SECRETS}\n${command}`,
+									30_000,
+								);
+							},
+							save: async (secret) => {
+								await saveVisibleProjectSecret({
+									userId: owner.userId,
+									projectId: owner.projectId as string,
+									...secret,
+								});
+							},
 						})
 					: {},
 			pushApproval:
@@ -3269,6 +3292,8 @@ function turnTools(input: {
 	environmentSetup: ToolSet;
 	/** request_push_approval, in a person's root chats. */
 	pushApproval: ToolSet;
+	/** save_project_secret, in a person's root chats in a project. */
+	saveSecret: ToolSet;
 }) {
 	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
@@ -3295,6 +3320,7 @@ function turnTools(input: {
 					...questionTools,
 					...input.environmentSetup,
 					...input.pushApproval,
+					...input.saveSecret,
 				},
 				redact,
 			),
