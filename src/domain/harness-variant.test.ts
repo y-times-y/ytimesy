@@ -11,10 +11,10 @@ import {
 } from "./harness-variant";
 
 describe("harness variants", () => {
-	it("defaults to the lean tools, the rules wording and observer-written memory", () => {
+	it("defaults to the lean tools, the rules wording and builder-written memory", () => {
 		expect(DEFAULT_HARNESS_VARIANT).toEqual({
 			memoryWording: "rules",
-			memoryWriter: "observer",
+			memoryWriter: "agent",
 			toolSurface: "lean",
 			promptCacheScope: "chat",
 			codeMode: "off",
@@ -52,7 +52,7 @@ describe("harness variants", () => {
 		]);
 		expect(variant).toEqual({
 			memoryWording: "notes",
-			memoryWriter: "observer",
+			memoryWriter: "agent",
 			toolSurface: "current",
 			promptCacheScope: "chat",
 			codeMode: "off",
@@ -84,7 +84,7 @@ describe("harness variants", () => {
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
 		).toEqual({
 			memoryWording: "notes",
-			memoryWriter: "observer",
+			memoryWriter: "agent",
 			toolSurface: "lean-native",
 			promptCacheScope: "chat",
 			codeMode: "off",
@@ -136,7 +136,7 @@ describe("harness variants", () => {
 			}),
 		).toEqual({
 			memoryWording: "notes",
-			memoryWriter: "observer",
+			memoryWriter: "agent",
 			toolSurface: "lean",
 			promptCacheScope: "chat",
 			codeMode: "off",
@@ -178,9 +178,9 @@ describe("harness variants", () => {
 		expect(harnessVariantLabel(DEFAULT_HARNESS_VARIANT)).toBe("default");
 		expect(
 			harnessVariantLabel(
-				harnessVariantFromFlags(["memoryWriter=agent,memoryWording=notes"]),
+				harnessVariantFromFlags(["memoryWriter=observer,memoryWording=notes"]),
 			),
-		).toBe("memoryWording=notes,memoryWriter=agent");
+		).toBe("memoryWording=notes,memoryWriter=observer");
 	});
 
 	it("offers code mode only when asked", () => {

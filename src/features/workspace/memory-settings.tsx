@@ -20,17 +20,17 @@ type MemoryMode = Awaited<ReturnType<typeof readMemoryModeFn>>;
 /** The switch moves at once; memory and dreams refetch once the save lands. */
 export function memoryModeChange(
 	queryClient: QueryClient,
-	save: (input: { data: { mode: "full" | "off" } }) => Promise<unknown>,
+	save: (input: { data: { mode: "spec" | "off" } }) => Promise<unknown>,
 ) {
 	return {
-		mutationFn: (on: boolean) => save({ data: { mode: on ? "full" : "off" } }),
+		mutationFn: (on: boolean) => save({ data: { mode: on ? "spec" : "off" } }),
 		...optimisticMutation<unknown, boolean>({
 			queryClient,
 			scope: "memory-mode",
 			writes: (on) => [
 				cacheWrite<MemoryMode>(MODE_KEY, (current) =>
 					current.available
-						? { ...current, mode: on ? "full" : "off" }
+						? { ...current, mode: on ? "spec" : "off" }
 						: current,
 				),
 			],

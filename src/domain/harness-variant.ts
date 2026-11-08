@@ -23,10 +23,11 @@ export const HARNESS_VARIANT_VALUES = {
 	memoryWording: ["notes", "rules"],
 	/**
 	 * Who writes cross-chat memory during a chat (dreaming always runs):
-	 * observer = only the save hook (full mode) and dreaming, and the builder
-	 * writes ~/memory only when the user explicitly asks it to remember
-	 * something (the default); both = the builder saves proactively and the
-	 * save hook runs after every turn; agent = only the builder, no save hook.
+	 * agent = only the builder, no save hook (the default, with the spec's
+	 * memory mode: the builder reads and saves memory itself); observer = only
+	 * the save hook (full mode) and dreaming, and the builder writes ~/memory
+	 * only when the user explicitly asks it to remember something; both = the
+	 * builder saves proactively and the save hook runs after every turn.
 	 */
 	memoryWriter: ["both", "agent", "observer"],
 	/**
@@ -295,7 +296,7 @@ export type OutputCap = HarnessVariant["outputCap"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
-	memoryWriter: "observer",
+	memoryWriter: "agent",
 	toolSurface: "lean",
 	promptCacheScope: "chat",
 	codeMode: "off",

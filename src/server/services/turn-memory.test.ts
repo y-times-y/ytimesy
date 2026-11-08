@@ -422,6 +422,7 @@ describe("read hook", () => {
 				embed,
 				today: () => "2026-10-15",
 				project: null,
+				writer: "observer",
 			},
 		);
 		if (!memory) throw new Error("memory should be on");
@@ -472,6 +473,7 @@ describe("freshness", () => {
 				embed: null,
 				today: () => "2026-10-15",
 				project: null,
+				writer: "observer",
 				recentMessages,
 			},
 		);
@@ -631,6 +633,7 @@ describe("saves still running in other chats", () => {
 			embed: null,
 			today: () => "2026-10-15",
 			project: null,
+			writer: "observer",
 			pendingSaves,
 		});
 		if (!memory) throw new Error("memory should be on");
@@ -920,8 +923,20 @@ describe("who writes memory (harness variant memoryWriter)", () => {
 		expect(dispatched).toEqual([]);
 	});
 
-	it("observer (the default): memory is saved automatically and the agent writes only when asked", async () => {
+	it("agent (the default): the builder searches memory before work and saves what a later chat needs, with no save hook", async () => {
 		const memory = await memoryFor({}, "default", "default");
+		const text = memory.instructions;
+		expect(text).toContain(
+			"Only the index is in context, so recall is yours to do",
+		);
+		expect(text).toContain("Save what a later chat would need");
+		expect(text).not.toContain("Memory is saved automatically after each turn");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toEqual([]);
+	});
+
+	it("observer: memory is saved automatically and the agent writes only when asked", async () => {
+		const memory = await memoryFor({}, "default", "observer");
 		const text = memory.instructions;
 		expect(text).toContain("Memory is saved automatically after each turn");
 		expect(text).toContain(
@@ -1224,6 +1239,7 @@ describe("read hook timing", () => {
 				embed,
 				today: () => "2026-10-15",
 				project: null,
+				writer: "observer",
 				pendingSaves,
 			},
 		);
@@ -1355,6 +1371,7 @@ describe("per-project scope", () => {
 				embed: null,
 				today: () => "2026-10-15",
 				project: ACME,
+				writer: "observer",
 			},
 		);
 		await memory?.attach(

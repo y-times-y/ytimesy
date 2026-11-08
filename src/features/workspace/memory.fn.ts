@@ -113,15 +113,18 @@ export const readMemoryHistoryFn = createServerFn({ method: "GET" })
 		}));
 	});
 
-/** The settings switch: memory off or full. "spec" is set only by evals. */
+/**
+ * The settings switch: memory off or on (spec). A tab from before the move to
+ * the spec loop still sends "full"; accepted for one deploy, saved as "spec".
+ */
 export const saveMemoryModeFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) =>
-		z.object({ mode: z.enum(["off", "full"]) }).parse(data),
+		z.object({ mode: z.enum(["off", "spec", "full"]) }).parse(data),
 	)
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
-		await saveMemoryMode(user.id, data.mode);
+		await saveMemoryMode(user.id, data.mode === "off" ? "off" : "spec");
 	});
 
 /**
