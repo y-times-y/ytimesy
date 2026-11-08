@@ -3,7 +3,9 @@ import { getRequest } from "@tanstack/react-start/server";
 import type { PublicProjectSecret } from "#/domain/project-secret";
 import { requireUser } from "#/server/auth/auth";
 import {
+	listAccountWideSecrets,
 	listVisibleProjectSecrets,
+	removeAccountWideSecret,
 	removeVisibleProjectSecret,
 	saveVisibleProjectSecret,
 } from "#/server/services/project-secrets";
@@ -64,4 +66,22 @@ export const deleteProjectSecretFn = createServerFn({ method: "POST" })
 			secretId: data.secretId,
 		});
 		return listVisibleProjectSecrets(user.id, data.projectId);
+	});
+
+export const listAccountSecretsFn = createServerFn({ method: "GET" }).handler(
+	async (): Promise<readonly PublicProjectSecret[]> => {
+		const user = await requireUser(getRequest().headers);
+		return listAccountWideSecrets(user.id);
+	},
+);
+
+export const deleteAccountSecretFn = createServerFn({ method: "POST" })
+	.validator((data: { secretId?: string }) => ({
+		secretId: typeof data.secretId === "string" ? data.secretId.trim() : "",
+	}))
+	.handler(async ({ data }): Promise<readonly PublicProjectSecret[]> => {
+		const user = await requireUser(getRequest().headers);
+		if (!data.secretId) throw new Error("Secret is not available.");
+		await removeAccountWideSecret({ userId: user.id, secretId: data.secretId });
+		return listAccountWideSecrets(user.id);
 	});
