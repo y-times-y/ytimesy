@@ -973,7 +973,8 @@ async function runApiTurnAttempt(
 					).catch(() => null)
 				: Promise.resolve(null);
 		// Its subagents read the same project's memory, never write it: no
-		// save hook, no ~/memory clone, no memory instructions. Same
+		// save hook, no ~/memory clone; they get read-only search and read
+		// tools over the memory snapshot and its index. Same
 		// exclusions as the root chat's.
 		const childRole = owner.parentSessionId ? owner.agentRole : null;
 		const subagentMemoryLoading =
@@ -1241,20 +1242,24 @@ async function runApiTurnAttempt(
 		// cannot write the checkout (reader-workspace-machines.ts), so it gets
 		// the command runner its shell surface is built on.
 		const reader = isReaderRole(owner.agentRole) || sideReadOnly;
-		const originalTools = apiAgentTools({
-			machines,
-			session: owner,
-			workspace,
-			turnId: turn.id,
-			nativePatch,
-			freeformPatch,
-			toolCallPrefix: step ? `step-${step.index}:` : undefined,
-			signal: abort.signal,
-			writable,
-			readerCommands: reader,
-			waitDeadlineAt: step?.waitDeadlineAt,
-			repositoryWorkspace: checkout,
-		});
+		const subagentMemoryTools = (await subagentMemoryLoading)?.tools;
+		const originalTools: ToolSet = {
+			...apiAgentTools({
+				machines,
+				session: owner,
+				workspace,
+				turnId: turn.id,
+				nativePatch,
+				freeformPatch,
+				toolCallPrefix: step ? `step-${step.index}:` : undefined,
+				signal: abort.signal,
+				writable,
+				readerCommands: reader,
+				waitDeadlineAt: step?.waitDeadlineAt,
+				repositoryWorkspace: checkout,
+			}),
+			...subagentMemoryTools,
+		};
 		// Why the chat's hook configuration was not known without the
 		// workspace, for the step's timing line (knownConfig below).
 		let hookConfigUnknown: EarlyRequestReason = "hook-config-unknown";

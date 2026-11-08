@@ -1104,7 +1104,7 @@ describe("subagents and the checker (read only)", () => {
 		const memory = await subagentMemory(owner("writer"), options);
 		if (!memory) throw new Error("memory should be on");
 		// Read only: nothing to save, clone or instruct.
-		expect(Object.keys(memory)).toEqual(["attach"]);
+		expect(Object.keys(memory).sort()).toEqual(["attach", "tools"]);
 		const brief = "Fix the timestamps in the export";
 		const { messages, recall } = await memory.attach(
 			[{ role: "user", content: brief }],
@@ -1174,9 +1174,64 @@ describe("subagents and the checker (read only)", () => {
 		expect(dispatched).toEqual([]);
 	});
 
-	it("is off outside full mode and leaves the request as it was with an empty memory", async () => {
-		vi.mocked(memorySettings).mockResolvedValueOnce({
+	it("in the spec's mode shows the index and searches the notes itself, within its scope", async () => {
+		vi.mocked(memorySettings).mockResolvedValue({
 			mode: "spec",
+			repo: null,
+			dreamedThrough: null,
+		});
+		try {
+			const memory = await subagentMemory(owner("researcher"), options);
+			if (!memory) throw new Error("memory should be on");
+			const brief = "Fix the timestamps in the export";
+			const { messages, recall } = await memory.attach(
+				[{ role: "user", content: brief }],
+				[user("a", brief)],
+			);
+			const parts = (messages[0].content as { text: string }[]).map(
+				(part) => part.text,
+			);
+			expect(parts[1]).toContain("Prefers tabs");
+			expect(parts[1]).toContain("search_memory");
+			// No injected rules or matched lines: the subagent looks for them.
+			expect(parts).toHaveLength(2);
+			expect(recall).toMatchObject({ index: true, lines: [] });
+			const run = async (name: string, input: object) =>
+				(
+					memory.tools[name] as unknown as {
+						execute: (input: object) => Promise<string>;
+					}
+				).execute(input);
+			expect(await run("search_memory", { pattern: "UTC" })).toBe(
+				"personal/time.md:2: - Store timestamps in UTC [source: y]",
+			);
+			expect(await run("search_memory", { pattern: "ULIDs" })).toContain(
+				"projects/acme-web--7/ids.md",
+			);
+			// Another project's notes are out of scope.
+			expect(await run("search_memory", { pattern: "log tokens" })).toBe(
+				"no matches",
+			);
+			expect(
+				await run("read_memory", { path: "personal/time.md", from: 2 }),
+			).toBe(
+				"personal/time.md (3 lines)\n2: - Store timestamps in UTC [source: y]\n3: ",
+			);
+			expect(
+				await run("read_memory", { path: "projects/other-app--9/other.md" }),
+			).toContain("no such file");
+		} finally {
+			vi.mocked(memorySettings).mockResolvedValue({
+				mode: "full",
+				repo: null,
+				dreamedThrough: null,
+			});
+		}
+	});
+
+	it("is off when memory is off, and leaves the request as it was with an empty memory", async () => {
+		vi.mocked(memorySettings).mockResolvedValueOnce({
+			mode: "off",
 			repo: null,
 			dreamedThrough: null,
 		});

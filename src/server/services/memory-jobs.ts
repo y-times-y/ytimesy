@@ -87,6 +87,7 @@ import {
 import { runApiAgent } from "./api-agent-runtime";
 import { runCodexSubscriptionAgent } from "./codex-subscription-agent";
 import { memoryInLayout } from "./memory-layout";
+import { memoryReadTools } from "./memory-read-tools";
 import type { ModelAgentInput } from "./model-agent-loop";
 
 /** Seconds a user's chats must be idle before their memory is dreamed. */
@@ -105,7 +106,6 @@ const SAVE_TIMEOUT_MS = 90_000;
 /** The save hook's one retry after a failed model call (a 5xx, a dropped connection). */
 const SAVE_RETRY_DELAY_MS = 2000;
 const SOURCE_CHARS = 12_000;
-const READ_LINES = 200;
 
 /** Everything a memory job touches outside itself; tests replace these. */
 export type MemoryJobDeps = {
@@ -773,52 +773,7 @@ function dreamTools(input: {
 }): ToolSet {
 	const { files } = input;
 	return {
-		search: tool({
-			description:
-				"Search every memory line with a case-insensitive regular expression. Returns path:line: text for up to 60 lines.",
-			inputSchema: z.object({ pattern: z.string().min(1).max(200) }),
-			execute: async ({ pattern }) => {
-				let regex: RegExp;
-				try {
-					regex = new RegExp(pattern, "i");
-				} catch {
-					regex = new RegExp(
-						pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-						"i",
-					);
-				}
-				const hits = Object.entries(files).flatMap(([path, content]) =>
-					content
-						.split("\n")
-						.flatMap((line, index) =>
-							regex.test(line) ? [`${path}:${index + 1}: ${line}`] : [],
-						),
-				);
-				return hits.slice(0, 60).join("\n") || "no matches";
-			},
-		}),
-		read_file: tool({
-			description: `Read lines of a memory file (1-based, at most ${READ_LINES} lines per call).`,
-			inputSchema: z.object({
-				path: z.string(),
-				from: z.number().int().min(1).optional(),
-				to: z.number().int().min(1).optional(),
-			}),
-			execute: async ({ path, from = 1, to }) => {
-				const relative = memoryPath(path);
-				const content = relative ? files[relative] : undefined;
-				if (content === undefined) return `no such file: ${path}`;
-				const lines = content.split("\n");
-				const end = Math.min(
-					to ?? from + READ_LINES - 1,
-					from + READ_LINES - 1,
-				);
-				return `${relative} (${lines.length} lines)\n${lines
-					.slice(from - 1, end)
-					.map((line, index) => `${from + index}: ${line}`)
-					.join("\n")}`;
-			},
-		}),
+		...memoryReadTools(() => files),
 		write_file: tool({
 			description: "Create or replace a whole memory file.",
 			inputSchema: z.object({
