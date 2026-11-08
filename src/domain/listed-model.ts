@@ -30,6 +30,8 @@ export type ListedModel = {
 	readonly reasoning?: ListedReasoning;
 	/** A second context window the route offers; absent when it has none. */
 	readonly contextWindow?: ListedContextWindow;
+	/** The standard context capacity reported by this route, even without a second-window option. */
+	readonly contextCapacity?: number;
 };
 
 export function listedModelSupportsFastMode(row: {
