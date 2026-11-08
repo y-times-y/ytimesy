@@ -32,36 +32,41 @@ class FakeVm {
 	out = "";
 	status: string | null = null;
 	stderr = "";
+	commandCount = 0;
 
 	shell = vi.fn(async (command: string) => {
 		const ok = (stdout = "") => ({ exitCode: 0, stdout, stderr: "" });
-		if (command === 'printf %s "$HOME"') return ok(HOME);
 		if (command.includes('/current" 2>/dev/null')) {
 			const run = this.files.get(`${RUNS}/current`) ?? "";
-			if (!run) return ok("\n");
+			if (!run) return ok(`${HOME}\n\n`);
 			const consumed = this.files.has(`${RUNS}/${run}/consumed`);
 			return ok(
-				`${run}\n${consumed ? "consumed" : "active"}\n${this.files.get(`${RUNS}/session`) ?? ""}`,
+				`${HOME}\n${run}\n${consumed ? "consumed" : "active"}\n${this.files.get(`${RUNS}/session`) ?? ""}`,
 			);
 		}
 		if (command.includes("npm install --silent --no-save")) {
 			this.installs.push(command);
 			return ok();
 		}
-		const write = /printf %s '([^']*)' \| base64 -d (>>?) '([^']+)'$/.exec(
-			command,
-		);
-		if (write) {
+		this.commandCount++;
+		for (const write of command.matchAll(
+			/printf %s '([^']*)' \| base64 -d (>>?) '([^']+)'/g,
+		)) {
 			const [, data = "", mode, path = ""] = write;
 			const text = Buffer.from(data, "base64").toString("utf8");
 			this.files.set(
 				path,
 				mode === ">>" ? (this.files.get(path) ?? "") + text : text,
 			);
-			return ok();
 		}
+		if (!command.includes("setsid nohup") && command.includes("base64 -d"))
+			return ok();
 		if (command.includes("setsid nohup")) {
-			const decoded = (command.match(/[A-Za-z0-9+/=]{60,}/g) ?? [])
+			const decoded = (
+				command
+					.slice(command.indexOf("setsid nohup"))
+					.match(/[A-Za-z0-9+/=]{60,}/g) ?? []
+			)
 				.map((token) => Buffer.from(token, "base64").toString("utf8"))
 				.find((text) => text.includes("exec ") || text.includes("sudo -n -u"));
 			this.launched.push(decoded ?? command);
@@ -513,6 +518,55 @@ describe("Claude Code runner", () => {
 		expect(step.events.some((event) => event.type === "text-delta")).toBe(
 			false,
 		);
+	});
+
+	it("starts a fresh run in three round trips: state, SDK check, then inputs with the launch", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		await runClaudeCodeStep(input(vm));
+		const commands = vm.shell.mock.calls.map(([command]) => String(command));
+		const firstPoll = commands.findIndex((command) =>
+			command.startsWith("python3 -c"),
+		);
+		expect(firstPoll).toBe(3);
+		expect(commands[2]).toContain("setsid nohup");
+		for (const name of ["env", "mcp.json", "system", "prompt", "options.json"])
+			expect(vm.files.has(`${RUNS}/1/${name}`)).toBe(true);
+	});
+
+	it("reads again after a poll the machine did not answer, and fails only when it stays silent", async () => {
+		const flaky = (silent: number) => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			const original = vm.shell.getMockImplementation();
+			let missed = 0;
+			vm.shell.mockImplementation(async (command: string) =>
+				command.startsWith("python3 -c") && missed++ < silent
+					? { exitCode: 124, stdout: "", stderr: "" }
+					: (original?.(command) as never),
+			);
+			return vm;
+		};
+		await expect(runClaudeCodeStep(input(flaky(3)))).resolves.toMatchObject({
+			outcome: "completed",
+		});
+		await expect(runClaudeCodeStep(input(flaky(9)))).rejects.toThrow(
+			"its output could not be read",
+		);
+	});
+
+	it("does not launch when writing an input failed", async () => {
+		const vm = new FakeVm();
+		const original = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command: string) =>
+			command.includes("base64 -d")
+				? { exitCode: 1, stdout: "", stderr: "" }
+				: (original?.(command) as never),
+		);
+		await expect(runClaudeCodeStep(input(vm))).rejects.toThrow();
+		expect(vm.launched).toEqual([]);
 	});
 
 	it("stops the run it launched, alone, once the turn moves to another model", async () => {

@@ -70,19 +70,20 @@ function ensureSingleProjectCheckout(
 		);
 		const reusedPath = preparedCheckoutPathFromReuse(reused.stdout);
 		if (reusedPath) {
-			yield* Effect.tryPromise(() =>
-				machines.writeTextFile(
-					workspaceId,
-					PROJECT_CWD_PATH,
-					`${reusedPath}\n`,
-				),
-			);
-			const branch = yield* Effect.tryPromise(() =>
-				machines.exec(
-					workspaceId,
-					`git -C ${posixShellQuoted(reusedPath)} branch --show-current`,
-					15_000,
-				),
+			// Independent round trips to the guest: the path note and the branch.
+			const [, branch] = yield* Effect.tryPromise(() =>
+				Promise.all([
+					machines.writeTextFile(
+						workspaceId,
+						PROJECT_CWD_PATH,
+						`${reusedPath}\n`,
+					),
+					machines.exec(
+						workspaceId,
+						`git -C ${posixShellQuoted(reusedPath)} branch --show-current`,
+						15_000,
+					),
+				]),
 			);
 			const switching = branch.stdout.trim() !== checkout.workingBranch;
 			// A pinned revision is always fetched: the checkout must land on it.
