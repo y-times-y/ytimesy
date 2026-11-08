@@ -18,7 +18,12 @@ function run(stdout: string, exitCode = 0) {
 		save,
 		call: () =>
 			execute(
-				{ name: "GH_TOKEN", valueCommand: "gh auth token", kind: "runtime" },
+				{
+					name: "GH_TOKEN",
+					valueCommand: "gh auth token",
+					kind: "runtime",
+					scope: "account",
+				},
 				{},
 			),
 	};
@@ -32,6 +37,7 @@ describe("save_project_secret", () => {
 			name: "GH_TOKEN",
 			kind: "runtime",
 			value: "gho_secretvalue123",
+			scope: "account",
 		});
 		expect(JSON.stringify(result)).not.toContain("gho_secretvalue123");
 	});

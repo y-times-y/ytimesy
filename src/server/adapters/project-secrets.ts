@@ -151,3 +151,66 @@ function storedSecret(row: {
 		},
 	};
 }
+
+/** Secrets the user shares with all their projects; a project's own secret of the same name wins. */
+export async function loadAccountSecrets(
+	userId: string,
+): Promise<readonly StoredProjectSecret[]> {
+	const result = await database().query(
+		`select id, name, kind, hint, updated_at as "updatedAt",
+		        encrypted_iv as iv, encrypted_tag as tag,
+		        encrypted_ciphertext as ciphertext, encrypted_version as version
+		 from account_secret
+		 where user_id = $1
+		 order by name`,
+		[userId],
+	);
+	return result.rows.map(storedSecret);
+}
+
+export async function saveAccountSecret(input: {
+	readonly userId: string;
+	readonly name: string;
+	readonly kind: ProjectSecretKind;
+	readonly hint: string;
+	readonly encrypted: EncryptedSecret;
+}): Promise<PublicProjectSecret> {
+	const result = await database().query(
+		`insert into account_secret(
+		   id, user_id, name, hint, encrypted_iv, encrypted_tag,
+		   encrypted_ciphertext, encrypted_version, kind, updated_at
+		 )
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		 on conflict (user_id, name) do update
+		   set hint = excluded.hint,
+		       kind = excluded.kind,
+		       encrypted_iv = excluded.encrypted_iv,
+		       encrypted_tag = excluded.encrypted_tag,
+		       encrypted_ciphertext = excluded.encrypted_ciphertext,
+		       encrypted_version = excluded.encrypted_version,
+		       updated_at = now()
+		 returning id, name, kind, hint, updated_at as "updatedAt"`,
+		[
+			randomUUID(),
+			input.userId,
+			input.name,
+			input.hint,
+			input.encrypted.iv,
+			input.encrypted.tag,
+			input.encrypted.ciphertext,
+			input.encrypted.version,
+			input.kind,
+		],
+	);
+	return publicSecret(result.rows[0]);
+}
+
+export async function deleteAccountSecret(input: {
+	readonly userId: string;
+	readonly secretId: string;
+}): Promise<void> {
+	await database().query(
+		"delete from account_secret where id = $1 and user_id = $2",
+		[input.secretId, input.userId],
+	);
+}
