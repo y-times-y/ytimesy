@@ -162,6 +162,7 @@ import {
 import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
+import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
 import {
 	readPreparedCheckoutDirectory,
@@ -171,7 +172,6 @@ import {
 	saveSessionDerivedValue,
 } from "../adapters/prepared-checkout";
 import { nodePublicHost } from "../adapters/public-host";
-import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -739,7 +739,6 @@ async function runApiTurnAttempt(
 				// reads the message now. A running tool is never interrupted.
 				if (
 					alive &&
-					step &&
 					!toolsStarted &&
 					!softStop.signal.aborted &&
 					turn.session_id &&
@@ -2099,6 +2098,8 @@ async function runApiTurnAttempt(
 			afterTools: async (history) =>
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				// Each model call starts with no tool run yet: Send may cut it.
+				toolsStarted = false;
 				// The local worker's loop calls the model several times in one
 				// run; durable steps wait before their one call instead (below).
 				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
