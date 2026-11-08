@@ -5,6 +5,7 @@ import {
 	Camera,
 	Check,
 	CornerDownRight,
+	Github,
 	Terminal,
 	X,
 } from "lucide-react";
@@ -496,7 +497,17 @@ export function SiteFooter() {
 			<span role="img" aria-label="Y times Y">
 				<Wordmark size={18} />
 			</span>
-			<nav aria-label="Legal and support">
+			<nav aria-label="Resources, legal and support">
+				<a
+					className="landing-harness-link"
+					href="https://github.com/y-times-y/harness"
+					target="_blank"
+					rel="noreferrer"
+				>
+					<Github size={15} aria-hidden="true" />
+					Open-source harness
+					<ArrowUpRight size={13} aria-hidden="true" />
+				</a>
 				<Link to="/blog">Blog</Link>
 				<Link to="/terms">Terms</Link>
 				<Link to="/privacy">Privacy</Link>
