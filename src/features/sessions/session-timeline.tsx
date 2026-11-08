@@ -950,7 +950,7 @@ const QueuedMessage = memo(function QueuedMessage({
 						: stopping
 							? "Stopping…"
 							: item.released
-								? "Sends after this step"
+								? "Sending now (after any running tool)"
 								: "Queued in this chat"}
 				</span>
 				{onEdit ? (
@@ -993,8 +993,8 @@ const QueuedMessage = memo(function QueuedMessage({
 						aria-label="Send queued message"
 						title={
 							item.released
-								? "Sends when the current step finishes"
-								: "Send after the current step, or now if the turn already finished"
+								? "Sending now, after any running tool"
+								: "Send now: the agent reads it right away, after any running tool"
 						}
 						disabled={!shown}
 						onClick={() => {

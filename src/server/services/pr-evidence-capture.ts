@@ -4,6 +4,7 @@ import {
 	guestCapabilityDirectory,
 	guestCapabilityPackages,
 } from "./guest-node-capability";
+import { VISIBLE_APP_ERROR_SOURCE } from "./visible-app-error";
 
 /**
  * The capture engine that runs in the workspace VM: a Python orchestrator
@@ -30,7 +31,7 @@ const { chromium } = require('playwright-core');
 const input = JSON.parse(process.argv[3]);
 const started = Date.now();
 const browser = await chromium.launch({ headless: true, executablePath: input.executablePath || undefined, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-const result = { pages: [], flow: [], video: null, browser: 'Chrome ' + browser.version() + ' headless, Playwright ' + input.playwright, viewport: input.viewport.width + 'x' + input.viewport.height };
+const result = { pages: [], flow: [], video: null, appError: '', browser: 'Chrome ' + browser.version() + ' headless, Playwright ' + input.playwright, viewport: input.viewport.width + 'x' + input.viewport.height };
 const videoDir = join(input.outDir, 'video-tmp');
 mkdirSync(videoDir, { recursive: true });
 const context = await browser.newContext({ viewport: input.viewport, ignoreHTTPSErrors: true, recordVideo: { dir: videoDir, size: input.videoSize } });
@@ -61,6 +62,9 @@ const describe = step => {
     default: return String(step.action);
   }
 };
+${VISIBLE_APP_ERROR_SOURCE}
+// The first broken page wins: the capture is then refused, not published.
+const noteAppError = (where, problem) => { if (problem && !result.appError) result.appError = where + ': ' + problem; return problem; };
 const settle = async () => {
   await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(400);
@@ -73,6 +77,7 @@ for (const url of input.urls) {
     entry.status = response ? response.status() : null;
     await settle();
     entry.title = (await page.title()).slice(0, 300);
+    entry.error = noteAppError(url, entry.status >= 400 ? 'answered HTTP ' + entry.status : await visibleAppError(page)) || '';
     const path = new URL(url).pathname;
     entry.screenshot = await shoot(path === '/' ? 'home' : path);
   } catch (error) {
@@ -94,6 +99,8 @@ for (const [index, step] of input.flow.entries()) {
     else if (step.action === 'waitFor') await page.waitForSelector(step.selector, { state: 'visible' });
     else if (step.action === 'screenshot') entry.screenshot = await shoot(step.name || 'step-' + (index + 1));
     else throw new Error('unknown step');
+    const shown = noteAppError('after "' + entry.step + '"', await visibleAppError(page));
+    if (shown) throw new Error('the page shows an error: ' + shown);
     entry.ok = true;
   } catch (error) {
     entry.error = message(error);
@@ -329,6 +336,8 @@ if captured.returncode or not isinstance(result, dict):
     finish('tooling-failed', 'The browser capture failed: ' + ((captured.stderr.strip().splitlines() or ['timed out' if captured.returncode == 124 else 'no output'])[-1])[:200])
 for key in ('pages', 'flow', 'video', 'browser', 'viewport'):
     manifest[key] = result.get(key, manifest[key])
+if result.get('appError'):
+    finish('app-failed', 'The app showed an error instead of the change (%s), so its screenshots and recording were not kept.' % str(result['appError'])[:300])
 finish()
 `;
 
