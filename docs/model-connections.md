@@ -52,3 +52,17 @@ Supabase migration history. Live checks confirmed RLS on all four new tables.
 No paid inference or VM creation was performed during that migration validation.
 SDK stream fixtures prove normalization and tool-loop behavior, not live provider
 compatibility or benchmark performance.
+
+## Grok plan refusals are retried (2026-11-08)
+
+A Grok turn whose request got a 403 used to set the connection to
+`not-eligible` for good: the next turns tried it, were refused by our own
+status check, and ran on the fallback model, with Settings still showing
+"connected". Production had one such row stuck for a day after a single 403 on
+step 48 of a long turn. Now a 403 is recorded as `not-eligible` only when its
+body names the plan or subscription (`xaiForbiddenVerdict`); any other 403
+fails that request and records nothing (the body is logged as
+`xAI refused a Grok request.`). A `not-eligible` row is tried again after 10
+minutes (`XAI_REFUSAL_COOLDOWN_MS`) and returns to `ready` when a request
+succeeds. A 401 after a forced refresh still means `reconnect` and waits for
+the user.

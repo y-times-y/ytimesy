@@ -7,6 +7,8 @@ import {
 	XAI_SUBSCRIPTION_LABEL,
 	type XaiSubscriptionStatus,
 	type XaiSubscriptionView,
+	xaiConnectionMayServe,
+	xaiForbiddenVerdict,
 	xaiSubscriptionEnabled,
 } from "#/domain/xai-subscription";
 import { database } from "../adapters/database";
@@ -42,6 +44,8 @@ type SealedTokens = z.infer<typeof sealedTokens>;
 export type XaiAccessToken = {
 	readonly token: string;
 	readonly expiresAt: number;
+	/** The connection was refused earlier and is being tried again. */
+	readonly trial?: true;
 };
 
 async function sealTokens(tokens: SealedTokens) {
@@ -87,14 +91,29 @@ function sealedFrom(
 	};
 }
 
-type Row = { id: string; status: XaiSubscriptionStatus; sealed: string };
+type Row = {
+	id: string;
+	status: XaiSubscriptionStatus;
+	sealed: string;
+	/** Since the status last changed, by the database's clock. */
+	ageMs: string;
+};
 
-const SELECT_ROW = `select id,status,sealed_credential as sealed from model_connection
-	where user_id=$1 and id=$2 and kind='xai-subscription'`;
+const SELECT_ROW = `select id,status,sealed_credential as sealed,
+	(extract(epoch from now()-updated_at)*1000)::bigint as "ageMs"
+	from model_connection where user_id=$1 and id=$2 and kind='xai-subscription'`;
 
+/**
+ * The row when it may serve: ready, or refused long enough ago to try again
+ * (xaiConnectionMayServe). A retried row is only a trial: its status is not
+ * changed until a request says otherwise.
+ */
 function ready(row: Row | undefined): Row {
 	if (!row) throw new Error("The SuperGrok subscription was disconnected.");
-	if (row.status !== "ready") throw new XaiSubscriptionUnavailable(row.status);
+	if (!xaiConnectionMayServe(row.status, Number(row.ageMs)))
+		throw new XaiSubscriptionUnavailable(
+			row.status === "ready" ? "unavailable" : row.status,
+		);
 	return row;
 }
 
@@ -142,7 +161,11 @@ export async function xaiSubscriptionAccessToken(
 		);
 		const tokens = await openTokens(row.sealed, userId, connectionId);
 		if (tokens.expiresAt >= Date.now() + REFRESH_SKEW_MS)
-			return { token: tokens.accessToken, expiresAt: tokens.expiresAt };
+			return {
+				token: tokens.accessToken,
+				expiresAt: tokens.expiresAt,
+				...(row.status === "ready" ? {} : { trial: true as const }),
+			};
 	}
 	const client = await database().connect();
 	try {
@@ -186,13 +209,25 @@ export async function xaiSubscriptionAccessToken(
 			);
 		}
 		await client.query("commit");
-		return { token: tokens.accessToken, expiresAt: tokens.expiresAt };
+		return {
+			token: tokens.accessToken,
+			expiresAt: tokens.expiresAt,
+			...(row.status === "ready" ? {} : { trial: true as const }),
+		};
 	} catch (cause) {
 		await client.query("rollback").catch(() => undefined);
 		throw cause;
 	} finally {
 		client.release();
 	}
+}
+
+/** A refused connection that just served a request is ready again. */
+async function recoverXaiSubscription(userId: string, connectionId: string) {
+	await database().query(
+		"update model_connection set status='ready',updated_at=now() where user_id=$1 and id=$2 and kind='xai-subscription' and status='not-eligible'",
+		[userId, connectionId],
+	);
 }
 
 /** Records that xAI refused the connection; it waits until the user signs in again. */
@@ -219,9 +254,11 @@ export function xaiSubscriptionFetch(
 	transport: typeof globalThis.fetch,
 ): typeof globalThis.fetch {
 	let current: XaiAccessToken | undefined;
+	let recovering = false;
 	const token = async (force = false) => {
 		if (force || !current || current.expiresAt < Date.now() + REFRESH_SKEW_MS)
 			current = await xaiSubscriptionAccessToken(userId, connectionId, force);
+		if (current.trial) recovering = true;
 		return current.token;
 	};
 	return async (input, init) => {
@@ -245,11 +282,36 @@ export function xaiSubscriptionFetch(
 			await response.body?.cancel().catch(() => {});
 			response = await send(await token(true));
 		}
-		if (response.status === 401 || response.status === 403) {
+		if (response.status === 401) {
 			await response.body?.cancel().catch(() => {});
-			const status = response.status === 401 ? "reconnect" : "not-eligible";
-			await markXaiSubscription(userId, connectionId, status).catch(() => {});
-			throw new XaiSubscriptionUnavailable(status);
+			await markXaiSubscription(userId, connectionId, "reconnect").catch(
+				() => {},
+			);
+			throw new XaiSubscriptionUnavailable("reconnect");
+		}
+		if (response.status === 403) {
+			const body = await response
+				.clone()
+				.text()
+				.then((text) => text.slice(0, 1_000))
+				.catch(() => "");
+			await response.body?.cancel().catch(() => {});
+			const verdict = xaiForbiddenVerdict(body);
+			// Operators need what xAI said; tokens never appear in a response body.
+			console.warn("xAI refused a Grok request.", {
+				verdict,
+				body: body.replace(/\s+/g, " ").slice(0, 300),
+			});
+			if (verdict === "not-eligible")
+				await markXaiSubscription(userId, connectionId, verdict).catch(
+					() => {},
+				);
+			throw new XaiSubscriptionUnavailable(verdict);
+		}
+		// A connection tried again after a refusal works: say so.
+		if (response.ok && recovering) {
+			recovering = false;
+			await recoverXaiSubscription(userId, connectionId).catch(() => {});
 		}
 		return response;
 	};
