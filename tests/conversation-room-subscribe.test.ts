@@ -70,6 +70,36 @@ it("never regresses a room to an older subscription snapshot, nor accepts anothe
 	expect(mismatched.status).toBe(400);
 });
 
+it("shares one large broadcast frame across viewers and fences direct publications", async () => {
+	const room = new ConversationRoom(durableObjectState().ctx as never);
+	expect((await room.publish(snapshot("1", "seed") as never)).status).toBe(204);
+	const readers = await Promise.all(
+		Array.from({ length: 16 }, async () => {
+			const response = await room.fetch(new Request(streamUrl));
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Missing stream");
+			await reader.read();
+			return reader;
+		}),
+	);
+	try {
+		const text = "共同仕様🛠".repeat(100_000);
+		expect((await room.publish(snapshot("2", text) as never)).status).toBe(204);
+		const frames = await Promise.all(readers.map((reader) => reader.read()));
+		for (const frame of frames) expect(frame.value).toBe(frames[0].value);
+		expect(new TextDecoder().decode(frames[0].value)).toContain(text);
+		expect(
+			(await room.publish(snapshot("3", "other", "mallory") as never)).status,
+		).toBe(403);
+		await room.purge();
+		expect((await room.publish(snapshot("4", "deleted") as never)).status).toBe(
+			410,
+		);
+	} finally {
+		await Promise.all(readers.map((reader) => reader.cancel()));
+	}
+});
+
 it("routes only a signed subscription with a snapshot", async () => {
 	const forward = vi.fn(async () => new Response(null, { status: 200 }));
 	const url = `https://edge.test/stream?${new URLSearchParams({ userId, sessionId })}`;

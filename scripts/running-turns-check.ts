@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import pg from "pg";
+import { supabaseCertificate } from "./supabase-certificate";
 
 /**
  * Pre-flight for a production deploy: which chats are running a turn right
@@ -60,7 +60,10 @@ export async function readRunningTurns(
 			connectionString: databaseUrl
 				.replace(/[?&]sslrootcert=[^&]*/, "")
 				.replace(/[?&]sslmode=[^&]*/, ""),
-			ssl: { ca: readFileSync(caPath, "utf8"), rejectUnauthorized: true },
+			ssl: {
+				ca: supabaseCertificate(process.env, caPath),
+				rejectUnauthorized: true,
+			},
 			connectionTimeoutMillis: 5_000,
 			statement_timeout: 5_000,
 			options: "-c default_transaction_read_only=on",

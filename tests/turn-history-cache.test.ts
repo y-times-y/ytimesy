@@ -1,6 +1,20 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { TurnHistoryCache } from "../src/server/edge/turn-history-cache";
 import { durableObjectState } from "./support/durable-object-state";
+
+it("checks message existence without reconstructing large history for each progress delta", () => {
+	const sql = durableObjectState().ctx.storage.sql;
+	const exec = vi.spyOn(sql, "exec");
+	const history = new TurnHistoryCache(sql as never);
+	history.write("large-turn", "v1", { messages, items: [] });
+	exec.mockClear();
+	for (let i = 2; i <= 30; i++)
+		history.write("large-turn", `v${i}`, { items: [] });
+	expect(
+		exec.mock.calls.some(([query]) => query.startsWith("select data")),
+	).toBe(false);
+	expect(history.read("large-turn", "v30")).toEqual({ messages, items: [] });
+});
 
 function cache() {
 	return new TurnHistoryCache(durableObjectState().ctx.storage.sql as never);
