@@ -81,7 +81,6 @@ describe("Claude Code routes", () => {
 			"claude-code/claude-haiku-5-5",
 			"claude-code/claude-fable-5-2",
 			"claude-code/claude-fable-5-1",
-			"claude-code/claude-mythos-5-2",
 		]);
 	});
 
