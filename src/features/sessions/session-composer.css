@@ -2098,18 +2098,10 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="empty"] .session-toolbar {
 	padding: 4px 10px 10px;
 }
-/* Empty, the composer is a compact pill; any text (or an attachment or slash
- * menu) opens it into the roomy layout. :placeholder-shown keeps this in CSS,
- * so the first paint matches what hydration leaves. */
 .session-launcher[data-layout="chat"]
-.session-composer:not(
-	:has(
-		textarea:not(:placeholder-shown),
-		textarea[data-expanded="true"],
-		.attachment-tiles,
-		.slash-palette
-	)
-) {
+	.session-composer:not(
+		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
+	) {
 	grid-template-columns: auto minmax(48px, 1fr) auto auto auto;
 	grid-template-areas: "attach input harness fast send";
 	border-radius: 9999px;
@@ -2117,24 +2109,14 @@ details[open] > summary .session-activity-chevron {
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:not(
-		:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		)
+		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
 	)
 	.composer-input {
 	padding: 0;
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:not(
-		:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		)
+		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
 	)
 	textarea {
 	min-height: 36px;
@@ -2147,43 +2129,8 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="chat"] textarea::placeholder {
 	white-space: nowrap;
 }
-/* Narrow: the pill keeps the model selector apart (a divider, a gap, a short
- * cap) so tapping the text field cannot land on it; typing opens the roomy
- * two-row layout with a full-size model button below the text. */
-@container composer (max-width: 600px) {
-	.session-launcher[data-layout="chat"]
-		.session-composer:not(
-			:has(
-				textarea:not(:placeholder-shown),
-				textarea[data-expanded="true"],
-				.attachment-tiles,
-				.slash-palette
-			)
-		) {
-		column-gap: 6px;
-	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:not(
-			:has(
-				textarea:not(:placeholder-shown),
-				textarea[data-expanded="true"],
-				.attachment-tiles,
-				.slash-palette
-			)
-		)
-		.harness-select {
-		max-width: 8rem;
-		margin-left: 6px;
-		border-left: 1px solid #ffffff14;
-		border-radius: 0 9999px 9999px 0;
-	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		) {
+@container composer (max-width: 520px) {
+	.session-launcher[data-layout="chat"] .session-composer {
 		grid-template-columns: auto minmax(0, 1fr) auto auto;
 		grid-template-areas:
 			"slash slash slash slash"
@@ -2193,43 +2140,12 @@ details[open] > summary .session-activity-chevron {
 		border-radius: 16px;
 		padding: 8px;
 		min-height: 0;
-		row-gap: 8px;
+		row-gap: 2px;
 	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		)
-		.composer-input {
+	.session-launcher[data-layout="chat"] .composer-input {
 		width: auto;
-		padding: 8px 4px 12px;
-		border-bottom: 1px solid #ffffff12;
 	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		)
-		textarea {
-		min-height: 64px;
-		line-height: 22px;
-	}
-	.session-launcher[data-layout="chat"] .session-composer textarea {
-		font-size: 16px;
-	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(
-			textarea:not(:placeholder-shown),
-			textarea[data-expanded="true"],
-			.attachment-tiles,
-			.slash-palette
-		)
-		.harness-select {
-		min-height: 44px;
+	.session-launcher[data-layout="chat"] .harness-select {
 		max-width: none;
 		min-width: 0;
 	}
