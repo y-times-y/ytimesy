@@ -1275,16 +1275,25 @@ it("classifies asynchronous progress-storage errors as failures rather than user
 	}
 });
 
-it.each(["abort reason", "model cancellation"])(
-	"resumes after a progress-write deploy reset even when the runtime reports %s",
-	async (reported) => {
+it.each([
+	["abort reason", "Durable Object reset because its code was updated."],
+	["model cancellation", "Durable Object reset because its code was updated."],
+	[
+		"abort reason",
+		"Durable Object's isolate exceeded its memory limit and was reset.",
+	],
+	[
+		"model cancellation",
+		"Durable Object's isolate exceeded its memory limit and was reset.",
+	],
+])(
+	"resumes after a progress-write reset when the runtime reports %s (%s)",
+	async (reported, resetMessage) => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			mocks.progress
 				.mockResolvedValueOnce(undefined)
-				.mockRejectedValueOnce(
-					new Error("Durable Object reset because its code was updated."),
-				);
+				.mockRejectedValueOnce(new Error(resetMessage));
 			// Like the Claude Code route's poll loop: it never awaits the writer, it
 			// only notices the aborted signal on its next poll.
 			mocks.runtime.mockImplementation(async (input) => {
@@ -1297,7 +1306,7 @@ it.each(["abort reason", "model cancellation"])(
 			});
 			await expect(
 				runApiTurn({} as WorkspaceMachines, childTurn),
-			).rejects.toThrow(/code was updated/);
+			).rejects.toThrow(resetMessage);
 			expect(mocks.finalize).not.toHaveBeenCalled();
 		} finally {
 			warn.mockRestore();

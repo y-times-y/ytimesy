@@ -138,4 +138,14 @@ it("recognizes a Durable Object reset for a new version, however wrapped", () =>
 		),
 	).toBe(true);
 	expect(isPlatformRestart(new Error("Internal server error"))).toBe(false);
+	expect(
+		isPlatformRestart(
+			new Error(
+				"Durable Object's isolate exceeded its memory limit and was reset.",
+			),
+		),
+	).toBe(true);
+	expect(
+		isPlatformRestart(new Error("Command exceeded its memory limit")),
+	).toBe(false);
 });
