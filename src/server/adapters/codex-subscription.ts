@@ -400,6 +400,7 @@ export async function codexSubscriptionCatalog(
 		.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
 		.map((row) => ({
 			id: row.slug,
+			...(row.context_window ? { contextCapacity: row.context_window } : {}),
 			label: row.display_name ?? row.slug,
 			reasoning: listedReasoningFromRow({
 				supportedReasoningEfforts: row.supported_reasoning_levels?.map(

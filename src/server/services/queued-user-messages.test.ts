@@ -173,7 +173,7 @@ it("queues a send behind the running turn instead of rejecting it", async () => 
 		harnessId: "api",
 		modelId: "connection|model",
 		speed: "fast",
-		released: true,
+		released: false,
 	});
 	expect(queued.message).toContain("Also the README");
 	expect(queued.message).toContain("/tmp/ytimesy-attachments/");

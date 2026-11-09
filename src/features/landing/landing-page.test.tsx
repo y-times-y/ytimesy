@@ -77,6 +77,13 @@ it("shows the pitch, the benchmark, and sign-in, sign-up, terms, privacy and sup
 	expect(html).toContain('href="/terms"');
 	expect(html).toContain('href="/privacy"');
 	expect(html).toContain('href="mailto:support@ytimesy.com"');
+	expect(html).toContain('href="https://github.com/y-times-y/harness"');
+	expect(text).toContain("Open-source harness");
+	const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+	expect(header).toContain('href="https://github.com/y-times-y/harness"');
+	expect(header).toContain('aria-label="Open-source harness on GitHub"');
+	expect(header).toContain("GitHub");
+	expect(html).not.toContain('href="https://github.com/y-times-y/ytimesy"');
 	// No emoji anywhere on the page.
 	expect(/\p{Extended_Pictographic}/u.test(text)).toBe(false);
 });

@@ -62,6 +62,7 @@ export interface SessionModel {
 	speeds: readonly ListedSpeed[];
 	/** A second context window the route offers; null when it has none. */
 	contextWindow: ListedContextWindow | null;
+	contextCapacity?: number;
 }
 
 /** The composer's speed choice; "" is standard speed. */
@@ -90,6 +91,7 @@ export function sessionModelsFromListed(
 		readonly speeds?: readonly ListedSpeed[];
 		readonly reasoning?: SessionModel["reasoning"];
 		readonly contextWindow?: ListedContextWindow;
+		readonly contextCapacity?: number;
 	}[],
 ): SessionModel[] {
 	return models.map((model) => ({
@@ -101,6 +103,9 @@ export function sessionModelsFromListed(
 			model.speeds ??
 			(listedModelSupportsFastMode(model) ? [{ id: "fast" as const }] : []),
 		contextWindow: model.contextWindow ?? null,
+		...(model.contextCapacity
+			? { contextCapacity: model.contextCapacity }
+			: {}),
 	}));
 }
 

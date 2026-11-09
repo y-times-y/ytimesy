@@ -40,6 +40,7 @@ import {
 	saveComposerDraft,
 } from "#/domain/composer-drafts";
 import { composerProjectNotice } from "#/domain/composer-project";
+import { chosenContextWindow } from "#/domain/context-window-option";
 import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
@@ -1126,7 +1127,7 @@ export function SessionLauncher({
 				kind: "userMessage",
 				id: SessionItemId(userMessageId),
 				text,
-				// Sent during a run, it waits for the run's next step.
+				// Sent during a run, it waits for the turn to end.
 				...(turnStatus === "running" ? { queued: true as const } : {}),
 				...(files.length
 					? {
@@ -1618,6 +1619,13 @@ export function SessionLauncher({
 									) : harnessId === "codex" ||
 										recordedContextUsage(session.items) ? (
 										<ContextUsage
+											selectedCapacity={
+												chosenContextWindow(
+													selectedModel?.contextWindow ?? undefined,
+													alternateContext,
+												) ?? selectedModel?.contextCapacity
+											}
+											modelChanged={modelId !== session.listedModelId}
 											context={
 												session.usage?.context ??
 												recordedContextUsage(session.items)?.context

@@ -66,6 +66,28 @@
 	color: #fff;
 }
 
+.landing-github-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-width: 44px;
+	min-height: 44px;
+}
+.landing-github-link:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+@media (max-width: 480px) {
+	.landing-nav {
+		gap: 8px;
+	}
+	.landing-github-link span {
+		display: none;
+	}
+}
+
 /* Buttons and chips */
 .landing-button {
 	display: inline-flex;
@@ -1169,6 +1191,16 @@
 }
 .landing-footer a:hover {
 	color: #fff;
+}
+.landing-footer .landing-harness-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.landing-harness-link:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 4px;
+	border-radius: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
