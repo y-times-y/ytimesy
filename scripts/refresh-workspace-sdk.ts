@@ -25,6 +25,10 @@ if (
 	throw new Error(
 		"Pass --session <an owned chat UUID> to scope this maintenance.",
 	);
+const vmIndex = process.argv.indexOf("--vm");
+const targetVm = vmIndex >= 0 ? process.argv[vmIndex + 1] : undefined;
+if (vmIndex >= 0 && !/^vm-[a-f0-9]{31,32}$/.test(targetVm ?? ""))
+	throw new Error("Pass --vm <a machine id> to retry one owned machine.");
 const apply = process.argv.includes("--apply");
 const templates = process.argv.includes("--refresh-templates");
 const key = process.env.FREESTYLE_API_KEY;
@@ -69,6 +73,10 @@ await withDatabaseScope(
 			);
 			if (offset + 100 >= page.totalCount) break;
 		}
+		if (targetVm && !inventory.some((vm) => vm.id === targetVm))
+			throw new Error(
+				"The requested machine is not an owned workspace machine.",
+			);
 		console.log(
 			JSON.stringify({
 				sdk: PINNED_CLAUDE_AGENT_SDK_VERSION,
@@ -81,6 +89,7 @@ await withDatabaseScope(
 		);
 		// Resume paused machines one at a time to avoid provider cold-start pressure.
 		for (const entry of inventory) {
+			if (targetVm && entry.id !== targetVm) continue;
 			if (!apply) {
 				console.log(JSON.stringify({ vm: entry.id, state: entry.state }));
 				continue;
