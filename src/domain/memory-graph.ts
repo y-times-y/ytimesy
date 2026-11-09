@@ -18,8 +18,11 @@ import { memoryTokens } from "./memory-ranking";
  * the page's flow to fit its width. Pure.
  */
 
-/** Added within this many days reads as new. */
-export const NEW_DAYS = 7;
+/**
+ * Added within this many days reads as new. A week marked nearly every line
+ * of a memory that is itself a week or two old, which says nothing.
+ */
+export const NEW_DAYS = 2;
 /** Cell side and the gap between cells, in CSS pixels. */
 export const CELL = 20;
 export const CELL_GAP = 6;

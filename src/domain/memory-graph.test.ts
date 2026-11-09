@@ -16,7 +16,7 @@ const WEB = "projects/acme-web--7";
 const CLI = "projects/tools-cli--9";
 const files = {
 	"MEMORY.md": `# Memory\n\n## Index\n- [[${WEB}/api]]\n- [[personal/style]]\n`,
-	[`${WEB}/api.md`]: `# API\n\n- New webhook events go to v1 [superseded-by: /?chat=${B}; source: /?chat=${A}; added: 2026-10-01]\n- Errors are problem+json [source: /?chat=${A}; added: 2026-10-16]\n- New webhook events go to v2 only [source: /?chat=${B}; added: 2026-10-18]\n`,
+	[`${WEB}/api.md`]: `# API\n\n- New webhook events go to v1 [superseded-by: /?chat=${B}; source: /?chat=${A}; added: 2026-10-01]\n- Errors are problem+json [source: /?chat=${A}; added: 2026-10-16]\n- New webhook events go to v2 only [source: /?chat=${B}; added: 2026-10-19]\n`,
 	"personal/style.md":
 		"# Style\n\n- Beta flag stays on [expires: 2026-10-28; source: manual; added: 2026-09-01]\n- Uses tabs\n",
 	[`${CLI}/build.md`]:
@@ -62,7 +62,8 @@ describe("memory blocks", () => {
 		expect(web.columns).toBe(5);
 		expect(web.width).toBe(5 * step - CELL_GAP);
 		expect(web.height).toBe(CELL);
-		expect(web).toMatchObject({ active: 2, fresh: 2, newest: "2026-10-18" });
+		// Only the line from two days ago is new; the one from five days ago is not.
+		expect(web).toMatchObject({ active: 2, fresh: 1, newest: "2026-10-19" });
 	});
 
 	it("marks pinned, inferred, archived and new, and what replaced what", () => {
@@ -77,8 +78,12 @@ describe("memory blocks", () => {
 		expect(byText("New webhook events go to v2")).toMatchObject({
 			archived: false,
 			fresh: true,
-			age: 3,
+			age: 2,
 			replaces: `${WEB}/api.md:3`,
+		});
+		expect(byText("Errors are problem+json")).toMatchObject({
+			fresh: false,
+			age: 5,
 		});
 		expect(byText("Always pnpm")).toMatchObject({
 			pinned: true,
