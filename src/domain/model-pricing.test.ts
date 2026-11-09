@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { API_MODEL_LIST } from "./api-model-list";
 import { addApiTokenUsage, requestTokenUsage } from "./api-token-usage";
 import {
 	KNOWN_MODEL_PRICES,
@@ -108,6 +109,26 @@ describe("price table", () => {
 			),
 		).toMatchObject({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 });
 		expect(modelPrice("acme/unknown")).toBeNull();
+	});
+
+	it("prices every listed Anthropic model, by direct and OpenRouter id", () => {
+		expect(modelPrice("claude-fable-5-2")).toMatchObject({
+			input: 8,
+			output: 40,
+			cacheRead: 0.2,
+		});
+		expect(modelPrice("anthropic/claude-mythos-5.2")).toEqual(
+			modelPrice("claude-fable-5-2"),
+		);
+		expect(modelPrice("claude-fable-5-1")).toMatchObject({
+			input: 10,
+			output: 50,
+			cacheRead: 0.25,
+		});
+		for (const model of API_MODEL_LIST.filter(
+			(listed) => listed.author === "anthropic",
+		))
+			expect(modelPrice(model.openRouterId), model.label).not.toBeNull();
 	});
 
 	it("applies announced price changes from their date", () => {
