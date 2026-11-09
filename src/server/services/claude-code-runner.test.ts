@@ -44,7 +44,10 @@ class FakeVm {
 				`${HOME}\n${run}\n${consumed ? "consumed" : "active"}\n${this.files.get(`${RUNS}/session`) ?? ""}`,
 			);
 		}
-		if (command.includes("npm install --silent --no-save")) {
+		if (
+			command.includes(CLAUDE_AGENT_SDK_MODULE) &&
+			command.includes("--version")
+		) {
 			this.installs.push(command);
 			return ok();
 		}
@@ -533,6 +536,32 @@ describe("Claude Code runner", () => {
 		expect(commands[2]).toContain("setsid nohup");
 		for (const name of ["env", "mcp.json", "system", "prompt", "options.json"])
 			expect(vm.files.has(`${RUNS}/1/${name}`)).toBe(true);
+	});
+
+	it("continues the step without launching Claude while the SDK download is pending", async () => {
+		const vm = new FakeVm();
+		const original = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command: string) => {
+			if (
+				command.includes(CLAUDE_AGENT_SDK_MODULE) &&
+				command.includes("--version")
+			)
+				return { exitCode: 78, stdout: "", stderr: "" };
+			if (command.includes("run.sh"))
+				return {
+					exitCode: 0,
+					stdout: String(Math.floor(Date.now() / 1000)),
+					stderr: "",
+				};
+			if (command.startsWith("cat '/tmp/ytimesy-detached/"))
+				return { exitCode: 0, stdout: "", stderr: "" };
+			return original?.(command) as never;
+		});
+		expect(
+			await runClaudeCodeStep(input(vm, { deadline: Date.now() })),
+		).toMatchObject({ outcome: "continue" });
+		expect(vm.launched).toEqual([]);
+		expect(vm.files.has(`${RUNS}/1/prompt`)).toBe(false);
 	});
 
 	it("reads again after a poll the machine did not answer, and fails only when it stays silent", async () => {

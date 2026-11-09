@@ -19,10 +19,7 @@ import {
 	claudeCodePrompt,
 	isClaudeCodeSessionId,
 } from "#/domain/claude-code-stream";
-import {
-	CLAUDE_AGENT_SDK_MODULE,
-	claudeAgentSdkInstallScript,
-} from "#/domain/guest-cli-pin";
+import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
 import {
@@ -39,6 +36,7 @@ import {
 	commandScopeRoot,
 	scopedShellCommand,
 } from "./api-command-scope";
+import { ensureClaudeAgentSdk } from "./claude-agent-sdk";
 
 /**
  * One durable step of a Claude Code turn: the Claude Agent SDK runs Claude
@@ -302,6 +300,8 @@ export async function runClaudeCodeStep(
 		);
 		if (!launched)
 			return { messages: [...input.messages], outcome: "completed" };
+		if ("pending" in launched)
+			return { messages: [...input.messages], outcome: "continue" };
 		run = launched.run;
 	}
 	const runDirectory = `${turnDirectory}/${run}`;
@@ -463,20 +463,22 @@ async function launchRun(
 	turnDirectory: string,
 	run: number,
 	turnSessionId: string | null,
-): Promise<{ run: number } | null> {
+): Promise<{ run: number } | { pending: true } | null> {
 	const { shell } = input;
 	if (run > 50)
 		throw new ClaudeCodeRunFailure("this turn ran Claude Code too many times.");
 	const runDirectory = `${turnDirectory}/${run}`;
 	// Independent of each other: the SDK check and probing the machine for
 	// the chat's session each cost a round trip, the grant none.
-	const [, resumeId, grant] = await Promise.all([
-		checked(
+	const [sdk, resumeId, grant] = await Promise.all([
+		ensureClaudeAgentSdk({
 			shell,
-			claudeAgentSdkInstallScript(false),
-			"the Claude Agent SDK could not be installed on this machine.",
-			300_000,
-		),
+			turnId: input.turnId,
+			deadline: input.deadline,
+			signal: input.signal,
+			redact: input.redact,
+			sleep: input.sleep,
+		}),
 		input.reader
 			? turnSessionId
 			: (turnSessionId ?? restoredSession(input, home)),
@@ -486,6 +488,7 @@ async function launchRun(
 			turnId: input.turnId,
 		}),
 	]);
+	if (sdk === "pending") return { pending: true };
 	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));
 	if (!prompt.trim()) return null;
 	input.addRedaction?.(grant);
