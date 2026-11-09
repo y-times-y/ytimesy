@@ -19,6 +19,9 @@ export const CLAUDE_CODE_MODELS: readonly ListedModel[] = [
 	{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
 	{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
 	{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+	{ id: "claude-fable-5-2", label: "Claude Fable 5.2" },
+	{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+	{ id: "claude-mythos-5-2", label: "Claude Mythos 5.2" },
 ];
 
 /** Claude Code models as the OpenRouter ids failover compares (model-failover.ts). */
@@ -26,6 +29,9 @@ export const CLAUDE_CODE_MODEL_EQUIVALENTS: Readonly<Record<string, string>> = {
 	"claude-opus-5-5": "anthropic/claude-opus-5.5",
 	"claude-sonnet-5-5": "anthropic/claude-sonnet-5.5",
 	"claude-haiku-5-5": "anthropic/claude-haiku-5.5",
+	"claude-fable-5-2": "anthropic/claude-fable-5.2",
+	"claude-fable-5-1": "anthropic/claude-fable-5.1",
+	"claude-mythos-5-2": "anthropic/claude-mythos-5.2",
 };
 
 /** The feature switch, for the web app and the edge alike (off unless "1"). */

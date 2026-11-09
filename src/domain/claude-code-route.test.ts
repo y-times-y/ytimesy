@@ -12,8 +12,14 @@ it("finds the connected Claude subscription's models in a picker search", () => 
 	expect(claudeCodeSearchMatches(models, "Opus 5.5")).toEqual([
 		{ id: "claude-code/claude-opus-5-5", label: "Claude Opus 5.5" },
 	]);
-	expect(claudeCodeSearchMatches(models, "claude")).toHaveLength(3);
-	expect(claudeCodeSearchMatches(models, "anthropic")).toHaveLength(3);
+	expect(claudeCodeSearchMatches(models, "claude")).toHaveLength(6);
+	expect(claudeCodeSearchMatches(models, "anthropic")).toHaveLength(6);
+	expect(claudeCodeSearchMatches(models, "Fable 5.2")).toEqual([
+		{ id: "claude-code/claude-fable-5-2", label: "Claude Fable 5.2" },
+	]);
+	expect(claudeCodeSearchMatches(models, "Mythos")).toEqual([
+		{ id: "claude-code/claude-mythos-5-2", label: "Claude Mythos 5.2" },
+	]);
 	expect(claudeCodeSearchMatches(models, "gpt")).toEqual([]);
 	expect(claudeCodeSearchMatches(models, "  ")).toEqual([]);
 	// A refused or disconnected subscription lists no models, so search finds none.

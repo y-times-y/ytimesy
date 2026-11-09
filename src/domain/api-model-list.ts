@@ -139,9 +139,21 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "anthropic",
+		label: "Claude Fable 5.2",
+		openRouterId: "anthropic/claude-fable-5.2",
+		directId: "claude-fable-5-2",
+	},
+	{
+		author: "anthropic",
 		label: "Claude Fable 5.1",
 		openRouterId: "anthropic/claude-fable-5.1",
 		directId: "claude-fable-5-1",
+	},
+	{
+		author: "anthropic",
+		label: "Claude Mythos 5.2",
+		openRouterId: "anthropic/claude-mythos-5.2",
+		directId: "claude-mythos-5-2",
 	},
 	{
 		author: "google",
