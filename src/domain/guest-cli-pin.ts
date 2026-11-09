@@ -10,13 +10,15 @@ export function pinnedCodexInstallCommand(): string {
 
 /**
  * The Claude Agent SDK that Claude Code chats run on the chat's VM. The SDK
- * starts the Claude Code build bundled with its release: 0.3.296 bundles
- * Claude Code 2.1.296, the version verified with the edge proxy on
- * 2026-11-01. Installed under /opt (root owned, readable by every user, so a
+ * starts the Claude Code build bundled with its release: 0.3.321 bundles
+ * Claude Code 2.1.321, the first to know Fable 5.2 and Mythos 5.2 (0.3.296
+ * verified with the edge proxy on 2026-11-01; 0.3.321 on 2026-11-09 against a
+ * mock Anthropic API: the same single `POST /v1/messages` per request, no new
+ * endpoint). Installed under /opt (root owned, readable by every user, so a
  * read-only helper running as the reader user can run it too); auto-updates
  * stay off so a turn never changes version under itself.
  */
-export const PINNED_CLAUDE_AGENT_SDK_VERSION = "0.3.296";
+export const PINNED_CLAUDE_AGENT_SDK_VERSION = "0.3.321";
 export const CLAUDE_AGENT_SDK_PREFIX = `/opt/ytimesy-claude-agent-sdk/${PINNED_CLAUDE_AGENT_SDK_VERSION}`;
 const SDK_PACKAGES = `${CLAUDE_AGENT_SDK_PREFIX}/node_modules/@anthropic-ai`;
 /** The SDK's entry module, which the runner imports by path. */
