@@ -68,14 +68,14 @@ export async function retryTransientProviderFailure<T>(
 	}
 }
 
-/** Cloudflare's wording when a Durable Object is reset for a new version mid-operation. */
+/** Cloudflare resets for deployments or isolate memory exhaustion interrupt the owning step. */
 const PLATFORM_RESTART =
-	/Durable Object reset because|Durable Object's code has been updated|its code was updated|code was updated, this version can no longer/i;
+	/Durable Object reset because|Durable Object's code has been updated|its code was updated|code was updated, this version can no longer|Durable Object's isolate exceeded its memory limit and was reset/i;
 
 /**
- * The failure is this Worker being replaced by a new version (a deploy or a
- * secret change), not the operation's own: the step must be resumed on the
- * new version, never settled as failed.
+ * The runtime interrupted this Worker (a deploy, secret change, or isolate
+ * memory reset), not the operation itself. Preserve the processing receipt so
+ * the owning object can resume under its existing bounded recovery policy.
  */
 export function isPlatformRestart(error: unknown, depth = 0): boolean {
 	if (depth > 5 || !error || typeof error !== "object") return false;

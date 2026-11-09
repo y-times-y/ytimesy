@@ -2834,9 +2834,7 @@ async function runApiTurnAttempt(
 			isPlatformRestart(cause),
 		);
 		if (platformRestart) {
-			console.warn(
-				"Turn step interrupted by a new Worker version; it resumes.",
-			);
+			console.warn("Turn step interrupted by a platform reset; it resumes.");
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and
