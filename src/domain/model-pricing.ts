@@ -112,6 +112,26 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 		cacheRead: 0.1,
 		cacheWrite: 2.5,
 	},
+	// Fable and Mythos 5.2: platform.claude.com pricing tier 8/40; 5.1: tier 10/50.
+	// Cache reads are 1/40 of input, writes 1.25x (as the 5.5 models).
+	"anthropic/claude-fable-5.2": {
+		input: 8,
+		output: 40,
+		cacheRead: 0.2,
+		cacheWrite: 10,
+	},
+	"anthropic/claude-fable-5.1": {
+		input: 10,
+		output: 50,
+		cacheRead: 0.25,
+		cacheWrite: 12.5,
+	},
+	"anthropic/claude-mythos-5.2": {
+		input: 8,
+		output: 40,
+		cacheRead: 0.2,
+		cacheWrite: 10,
+	},
 	"anthropic/claude-haiku-5.5": {
 		input: 0.1,
 		output: 0.5,

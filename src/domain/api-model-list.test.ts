@@ -78,3 +78,19 @@ it("offers faster speeds only through an OpenRouter key", () => {
 	);
 	expect(direct?.speeds).toBeUndefined();
 });
+
+it("lists the Claude 5.2 models with ids that match their routes", () => {
+	const anthropic = API_MODEL_LIST.filter(
+		(model) => model.author === "anthropic",
+	).map((model) => [model.label, model.directId, model.openRouterId]);
+	expect(anthropic).toEqual(
+		expect.arrayContaining([
+			["Claude Fable 5.2", "claude-fable-5-2", "anthropic/claude-fable-5.2"],
+			["Claude Mythos 5.2", "claude-mythos-5-2", "anthropic/claude-mythos-5.2"],
+		]),
+	);
+	for (const [, direct, openRouter] of anthropic)
+		expect(openRouter).toBe(
+			`anthropic/${String(direct).replace(/-(\d)-(\d)$/, "-$1.$2")}`,
+		);
+});
