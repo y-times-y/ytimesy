@@ -17,7 +17,23 @@ const input = () => ({
 	signal: new AbortController().signal,
 	redact: () => ["private-test-value"],
 });
-afterEach(() => vi.resetAllMocks());
+afterEach(() => {
+	vi.resetAllMocks();
+	vi.useRealTimers();
+});
+
+it("retries a cold-machine SDK probe with the same harmless command", async () => {
+	vi.useFakeTimers();
+	shell
+		.mockResolvedValueOnce({ exitCode: 124, stdout: "", stderr: "" })
+		.mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" });
+	const ready = ensureClaudeAgentSdk(input());
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(await ready).toBe("ready");
+	expect(shell).toHaveBeenCalledTimes(2);
+	expect(shell.mock.calls[0]).toEqual(shell.mock.calls[1]);
+	expect(detached).not.toHaveBeenCalled();
+});
 
 it("uses a healthy preinstalled SDK without launching an installer", async () => {
 	shell.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });

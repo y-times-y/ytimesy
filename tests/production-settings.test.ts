@@ -8,6 +8,27 @@ import {
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
 } from "../scripts/production-settings";
+import {
+	PRODUCTION_TOOLS_IMAGE,
+	productionToolsSnapshotId,
+} from "../scripts/production-tools-image";
+import { PINNED_CLAUDE_AGENT_SDK_VERSION } from "../src/domain/guest-cli-pin";
+
+it("ships the boot-verified SDK image instead of a stale environment override", () => {
+	expect(PRODUCTION_TOOLS_IMAGE.claudeAgentSdkVersion).toBe(
+		PINNED_CLAUDE_AGENT_SDK_VERSION,
+	);
+	expect(
+		productionRuntimeSettings({ YTIMESY_TOOLS_SNAPSHOT_ID: "sh-stale" })
+			.YTIMESY_TOOLS_SNAPSHOT_ID,
+	).toBe(PRODUCTION_TOOLS_IMAGE.snapshotId);
+	expect(() =>
+		productionToolsSnapshotId({
+			snapshotId: "sh-stale",
+			claudeAgentSdkVersion: "0.0.0",
+		}),
+	).toThrow("Rebuild and boot-verify");
+});
 
 it("deploys production with workspace retention on and an enrollment cutover", () => {
 	const settings = productionRuntimeSettings({});
