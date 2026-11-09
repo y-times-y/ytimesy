@@ -1,3 +1,5 @@
+import { productionToolsSnapshotId } from "./production-tools-image";
+
 /**
  * The fixed runtime settings production always deploys with, kept apart from
  * scripts/deploy-production.ts (which has deployment side effects) so they
@@ -16,6 +18,8 @@ export function productionRuntimeSettings(
 	return {
 		// Set here, not in a wrangler vars block (that breaks the generated types).
 		YTIMESY_ENVIRONMENT: "production",
+		// Image and SDK ship as one approved pair, not a stale environment override.
+		YTIMESY_TOOLS_SNAPSHOT_ID: productionToolsSnapshotId(),
 		GIT_PROXY_ENABLED: "1",
 		MODEL_EXECUTION_ENABLED: "1",
 		ENVIRONMENT_EXECUTION_ENABLED: "1",
@@ -118,7 +122,8 @@ export function assertProductionRoutes(input: {
 			parsed = block ? JSON.parse(block) : null;
 		} catch {}
 		const appHost = new URL(input.appUrl).host;
-		const only = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : null;
+		const only =
+			Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : null;
 		if (
 			declared !== 1 ||
 			!only ||

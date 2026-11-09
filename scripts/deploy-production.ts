@@ -215,7 +215,6 @@ Object.assign(secrets, productionAnalyticsSettings(process.env));
 for (const name of [
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
-	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_TUNNEL_URL",
 	"YTIMESY_CODEX_TUNNEL_SECRET",
 	"YTIMESY_CODEX_RELAY_URL",

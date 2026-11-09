@@ -3,9 +3,14 @@ import { Freestyle, type Vm } from "freestyle";
 import { dockerRegistryMirrorScript } from "#/domain/docker-registry-mirror";
 import {
 	CLAUDE_AGENT_SDK_CLAUDE_BINARY,
+	CLAUDE_AGENT_SDK_MODULE,
 	claudeAgentSdkInstallScript,
+	PINNED_CLAUDE_AGENT_SDK_VERSION,
 } from "#/domain/guest-cli-pin";
-import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
+import {
+	READER_LINUX_USER,
+	READER_USER_SETUP_SCRIPT,
+} from "#/domain/subagent-reader";
 import { BROWSER_USE_INSTALL } from "#/server/adapters/browser-use-cli";
 import { boundedFreestyleFetch } from "#/server/adapters/freestyle/bounded-fetch";
 import { DESKTOP_IMAGE_SCRIPT } from "#/server/adapters/freestyle/desktop-image";
@@ -21,6 +26,7 @@ import { waitUntilGuestReady } from "#/server/adapters/freestyle/wait-until-runn
 //
 //   node --env-file=.env --import tsx scripts/build-tools-snapshot.ts           build (or reuse) and print the id
 //   node --env-file=.env --import tsx scripts/build-tools-snapshot.ts --force   rebuild even if this recipe exists
+//   node --import tsx scripts/build-tools-snapshot.ts --refresh-sdk             upgrade the configured clean tools image only
 //   node --env-file=.env --import tsx scripts/build-tools-snapshot.ts --verify sh-...   boot it and print versions
 //
 // The snapshot slug carries a hash of the recipe below, so a rerun with an
@@ -150,13 +156,25 @@ printf '%-24s %s\\n' "docker mirrors" "$(cat /etc/docker/daemon.json 2>/dev/null
 
 const TIMING = `bash -c 'TIMEFORMAT=%R; for i in 1 2 3; do time bash -lc true; done; for i in 1 2 3; do time bash -c true; done' 2>&1 | tr '\\n' ' '`;
 
+const refreshSdk = process.argv.includes("--refresh-sdk");
+const sourceSnapshot = refreshSdk
+	? process.env.YTIMESY_TOOLS_SNAPSHOT_ID?.trim()
+	: CHEAP_BASE_SNAPSHOT;
+if (!sourceSnapshot)
+	throw new Error(
+		"--refresh-sdk requires YTIMESY_TOOLS_SNAPSHOT_ID (a clean shared tools image, never a project snapshot).",
+	);
+const buildSteps = refreshSdk
+	? ROOT_STEPS.filter((step) => step.name === "claude agent sdk")
+	: ROOT_STEPS;
+
 const recipeHash = createHash("sha256")
 	.update(
 		JSON.stringify({
-			CHEAP_BASE_SNAPSHOT,
-			ROOT_STEPS,
-			USER_STEP,
-			BROWSER_USE_STEP,
+			sourceSnapshot,
+			buildSteps,
+			USER_STEP: refreshSdk ? null : USER_STEP,
+			BROWSER_USE_STEP: refreshSdk ? null : BROWSER_USE_STEP,
 		}),
 	)
 	.digest("hex")
@@ -208,6 +226,14 @@ async function bootVm(snapshotId: string, purpose: string) {
 }
 
 async function report(vm: Vm) {
+	const sdkCheck = `cd /tmp
+node -e 'if (require("${CLAUDE_AGENT_SDK_MODULE.replace("sdk.mjs", "package.json")}").version !== "${PINNED_CLAUDE_AGENT_SDK_VERSION}") process.exit(1)'
+node --input-type=module -e 'const sdk=await import("${CLAUDE_AGENT_SDK_MODULE}"); if(typeof sdk.query!=="function") process.exit(1)'
+${CLAUDE_AGENT_SDK_CLAUDE_BINARY} --version`;
+	console.error(await run(vm, "pinned SDK (builder)", sdkCheck));
+	console.error(
+		await run(vm, "pinned SDK (reader)", sdkCheck, READER_LINUX_USER),
+	);
 	console.error(await run(vm, "versions (agent user)", VERSIONS));
 	console.error(
 		"login PATH check:",
@@ -256,8 +282,8 @@ async function verify(snapshotId: string) {
 	}
 }
 
-async function build() {
-	const { id, vm } = await bootVm(CHEAP_BASE_SNAPSHOT, "build");
+async function build(baseSnapshotId: string) {
+	const { id, vm } = await bootVm(baseSnapshotId, "build");
 	try {
 		console.error(
 			`builder ${id}; before:\n${await run(vm, "disk", "df -h /")}`,
@@ -266,11 +292,13 @@ async function build() {
 			"bash -lc x3, bash -c x3 (s):",
 			await run(vm, "timing", TIMING),
 		);
-		for (const step of ROOT_STEPS)
+		for (const step of buildSteps)
 			await run(vm, step.name, step.script, "root");
-		await run(vm, "pnpm/yarn cache (ubuntu)", USER_STEP);
-		await run(vm, "pnpm/yarn cache (root)", USER_STEP, "root");
-		await run(vm, "browser-use (ubuntu)", BROWSER_USE_STEP);
+		if (!refreshSdk) {
+			await run(vm, "pnpm/yarn cache (ubuntu)", USER_STEP);
+			await run(vm, "pnpm/yarn cache (root)", USER_STEP, "root");
+			await run(vm, "browser-use (ubuntu)", BROWSER_USE_STEP);
+		}
 		await report(vm);
 		await run(
 			vm,
@@ -293,6 +321,14 @@ async function build() {
 	}
 }
 
+if (refreshSdk) {
+	const source = await client.vms.snapshots.get(sourceSnapshot);
+	if (source.public || !source.slug?.startsWith("ytimesy-tools-"))
+		throw new Error(
+			"SDK refresh accepts only a private ytimesy tools image, never a project snapshot.",
+		);
+}
+
 const args = process.argv.slice(2);
 const verifyIndex = args.indexOf("--verify");
 if (verifyIndex >= 0) {
@@ -303,7 +339,7 @@ if (verifyIndex >= 0) {
 	const reused = args.includes("--force")
 		? undefined
 		: await existingSnapshot();
-	const snapshotId = reused ?? (await build());
+	const snapshotId = reused ?? (await build(sourceSnapshot));
 	console.error(reused ? `reusing ${SNAPSHOT_SLUG}` : `built ${SNAPSHOT_SLUG}`);
 	console.log(snapshotId);
 }
