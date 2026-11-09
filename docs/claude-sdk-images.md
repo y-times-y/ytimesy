@@ -24,7 +24,7 @@ node --import tsx scripts/refresh-workspace-sdk.ts --session <owned-chat-id>
 node --import tsx scripts/refresh-workspace-sdk.ts --session <owned-chat-id> --apply --refresh-templates
 ```
 
-The default is inventory-only. Apply mode:
+The default is inventory-only. Add `--vm <machine-id>` to inventory or retry one machine without waking machines already verified; ownership and purpose checks still apply. Apply mode:
 
 - Restricts maintenance to the named chat owner's database-bound workspace machines with `ytimesy-workspace` metadata. Other users' machines, relay services and unrelated/unbound machines are excluded.
 - Uses normal infrastructure admission before resuming a machine and during setup. It does not disable quotas or replace runtime caps manually.
@@ -34,4 +34,4 @@ The default is inventory-only. Apply mode:
 - Optionally refreshes private project template snapshots after successful installation. It refuses sources used as chat machines or being rebuilt. Updating the workspace pointer is owner-scoped and compare-and-swap fenced; the previous snapshot stays available.
 - Reports missing/retired VM bindings without recreating them. Those are recovered through the existing lifecycle when the chat is resumed.
 
-Both production Workers' boot-image setting was updated to the verified image on 2026-11-09. This configuration change is distinct from deploying the pending turn-recovery application code. Existing projects use their own templates, so those also need the maintenance command; changing only the shared base image is insufficient.
+Both production Workers' boot-image setting was updated to the verified image on 2026-11-09. The turn-recovery application fixes and image pin then shipped in build `18e920b47843-mw9w8pux`; production preflight and the home-page, web-version and edge-health smoke checks passed. Existing projects use their own templates, so those also need the maintenance command; changing only the shared base image is insufficient. Fleet maintenance completion is reported separately from application deployment.
