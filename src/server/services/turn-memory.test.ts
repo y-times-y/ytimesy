@@ -1193,9 +1193,15 @@ describe("subagents and the checker (read only)", () => {
 			);
 			expect(parts[1]).toContain("Prefers tabs");
 			expect(parts[1]).toContain("search_memory");
-			// No injected rules or matched lines: the subagent looks for them.
-			expect(parts).toHaveLength(2);
-			expect(recall).toMatchObject({ index: true, lines: [] });
+			// Only what the user pinned rides along; matched lines are for the
+			// subagent to look for.
+			expect(parts).toHaveLength(3);
+			expect(parts[2]).toContain("- New entity IDs use ULIDs\n");
+			expect(parts.join("\n")).not.toContain("Order IDs were sequential");
+			expect(recall).toMatchObject({ index: true });
+			expect(recall?.lines.map((line) => line.text)).toEqual([
+				"New entity IDs use ULIDs",
+			]);
 			const run = async (name: string, input: object) =>
 				(
 					memory.tools[name] as unknown as {

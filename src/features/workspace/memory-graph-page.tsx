@@ -27,6 +27,7 @@ import {
 	CELL,
 	CELL_GAP,
 	memoryBlocks,
+	NEW_DAYS,
 	nodeId,
 	PERSONAL_HUE,
 	recencyTint,
@@ -451,7 +452,7 @@ export function MemoryGraphPage({
 					<button
 						type="button"
 						aria-pressed={newOnly}
-						title="Added in the last 7 days"
+						title={`Added in the last ${NEW_DAYS} days`}
 						onClick={() => setNewOnly((value) => !value)}
 					>
 						New
@@ -877,7 +878,7 @@ export function MemoryBlocksKey({ hatch }: { hatch: string }) {
 	};
 	const marks: [string, string, typeof base][] = [
 		["Pinned", "Always on: attached to every chat", { ...base, pinned: true }],
-		["Memory", "Used when relevant", base],
+		["Memory", "The agent searches it when relevant", base],
 		[
 			"Inferred",
 			"The agent concluded it; you never said it",
@@ -888,7 +889,7 @@ export function MemoryBlocksKey({ hatch }: { hatch: string }) {
 			"Replaced or expired; kept, not used",
 			{ ...base, archived: true },
 		],
-		["New", "Added in the last 7 days", { ...base, fresh: true }],
+		["New", `Added in the last ${NEW_DAYS} days`, { ...base, fresh: true }],
 	];
 	return (
 		<div className="memory-blocks-key">

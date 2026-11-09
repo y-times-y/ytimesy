@@ -484,8 +484,10 @@ export async function turnMemory(
 			const entry = index?.content;
 			const showEntry =
 				firstRequest && entry !== undefined && Boolean(entry.trim());
+			// Pinned lines are the user's own choice to attach to every chat, so
+			// they ride on it in the spec's mode too.
 			const rules =
-				mode === "full" && firstMessage && !projectRulesShown(shown)
+				firstMessage && !projectRulesShown(shown)
 					? projectRules({
 							lines: scopedLines(snapshot, project),
 							today: today(),
@@ -721,24 +723,43 @@ export async function subagentMemory(
 					raw !== undefined && raw.trim() !== EMPTY_MEMORY.trim()
 						? memoryIndexFor(raw, project)
 						: null;
-				if (!entry?.content.trim()) return unchanged;
+				// Lines the user pinned ride on a subagent's first request too.
+				const pinned =
+					items.filter((item) => item.kind === "userMessage").length === 1
+						? projectRules({
+								lines: scopedLines(snapshot, project),
+								today: today(),
+							})
+						: [];
+				if (!entry?.content.trim() && !pinned.length) return unchanged;
 				const next = [...messages];
 				next[index] = withMemoryParts(
 					current as { role: "user"; content: string },
 					[
-						memoryEntryPart(
-							`${entry.content}\n\n${SUBAGENT_MEMORY_HINT}`,
-							wording,
-						),
+						...(entry?.content.trim()
+							? [
+									memoryEntryPart(
+										`${entry.content}\n\n${SUBAGENT_MEMORY_HINT}`,
+										wording,
+									),
+								]
+							: []),
+						...(pinned.length && !checker
+							? [memoryRulesPart(pinned, wording)]
+							: []),
 					],
 				) as ModelMessage;
 				return {
 					messages: next,
 					recall: {
 						head: snapshot.head,
-						index: true as const,
-						indexLines: entry.lines,
-						lines: [],
+						...(entry?.content.trim()
+							? { index: true as const, indexLines: entry.lines }
+							: {}),
+						lines: markedRules(
+							await source.recalledLines(pinned),
+							pinned.length,
+						),
 					},
 				};
 			}
