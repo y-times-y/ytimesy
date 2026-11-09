@@ -13,17 +13,23 @@ const tokens = new Intl.NumberFormat("en", {
 export function ContextUsage({
 	context,
 	compacting = false,
+	selectedCapacity,
+	modelChanged = false,
 }: {
 	context?: CodexUsage["context"];
 	compacting?: boolean;
+	selectedCapacity?: number;
+	modelChanged?: boolean;
 }) {
-	const capacity = context?.modelContextWindow;
+	const capacity =
+		selectedCapacity ??
+		(modelChanged ? undefined : context?.modelContextWindow);
 	const used = context?.last.totalTokens;
 	const percent =
 		capacity && used !== undefined
 			? Math.min(100, (used / capacity) * 100)
 			: null;
-	if (percent === null && !compacting) return null;
+	if (percent === null && !compacting && !modelChanged) return null;
 	return (
 		<Popover>
 			<PopoverTrigger
@@ -78,9 +84,17 @@ export function ContextUsage({
 				<div className="context-usage-title">
 					{compacting ? "Compacting context…" : "Context window:"}
 				</div>
+				{modelChanged ? (
+					<p>
+						{capacity
+							? "Estimated from the last measured conversation. The selected model will report its actual token usage on the next turn."
+							: "Context capacity is unavailable for the selected model until its next turn."}
+					</p>
+				) : null}
 				{percent !== null && capacity && used !== undefined ? (
 					<>
 						<div className="context-usage-percent">
+							{modelChanged ? "Approximately " : ""}
 							{Math.round(percent)}% full
 						</div>
 						<div className="context-usage-tokens">

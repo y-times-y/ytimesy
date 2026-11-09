@@ -92,7 +92,7 @@ export function apiAgentBrowserTools(
 	const tools: ToolSet = {
 		browser_inspect: tool({
 			description:
-				"Inspect an already-open shared browser page: rendered text and control structure (without input values), selector/text/visibility assertions, and console/network observations during a bounded interval. This is not historical logging. Do not inspect private account pages or expose secrets unnecessarily.",
+				"Inspect an already-open shared browser page: rendered text and control structure (without input values), selector/text/visibility assertions, and console/network observations during a bounded interval. passed is false and appError is set when the page shows a crash (error heading or dev-server overlay) instead of the app. This is not historical logging. Do not inspect private account pages or expose secrets unnecessarily.",
 			inputSchema: z.object({
 				url: z.url().max(2048),
 				assertions: z.array(browserAssertion).max(20).default([]),

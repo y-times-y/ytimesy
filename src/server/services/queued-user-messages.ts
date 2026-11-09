@@ -276,10 +276,7 @@ async function queueBehindRunningTurn(
 		...(input.alternateContext !== undefined
 			? { alternateContext: input.alternateContext }
 			: {}),
-		// The model receives it at its next step, as a message typed while a
-		// coding agent works does: it need not wait for the turn to end. Edit
-		// and Remove work until that step takes it.
-		released: input.released !== false,
+		released: input.released === true,
 	});
 	// The turn ended meanwhile: this send starts the next one with the stored files.
 	if (outcome === "not-running") return { storedAttachments: attachments };

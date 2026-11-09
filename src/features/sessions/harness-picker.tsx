@@ -37,6 +37,10 @@ import {
 import { getAgentModelCatalog } from "./model-catalog.fn";
 import { getModelConnections } from "./model-connections.fn";
 import {
+	ModelFavoriteButton,
+	type RenderModelFavorite,
+} from "./model-favorite-button";
+import {
 	favoriteModelKey,
 	readModelFavorites,
 	writeModelFavorites,
@@ -168,21 +172,28 @@ export function HarnessPicker({
 		onModelIdChange(id);
 		setOpen(false);
 	}
-	const visibleModels = recentModelGenerations(models).filter(
-		(candidate) =>
-			candidate.label.toLowerCase().includes(search.trim().toLowerCase()) &&
-			(!favoritesOnly ||
-				favorites.includes(favoriteModelKey(harnessId, candidate.id))),
+	const visibleModels = recentModelGenerations(models).filter((candidate) =>
+		candidate.label.toLowerCase().includes(search.trim().toLowerCase()),
 	);
 	if (!selected) return null;
 
-	function toggleFavorite(id: string) {
-		const key = favoriteModelKey(harnessId, id);
+	function toggleFavorite(id: string, provider: AgentProviderId = harnessId) {
+		const key = favoriteModelKey(provider, id);
 		const next = favorites.includes(key)
 			? favorites.filter((value) => value !== key)
 			: [...favorites, key];
 		setFavorites(next);
 		writeModelFavorites(next);
+	}
+
+	function renderFavorite(provider: AgentProviderId): RenderModelFavorite {
+		return (id, label) => (
+			<ModelFavoriteButton
+				label={label}
+				favorite={favorites.includes(favoriteModelKey(provider, id))}
+				onToggle={() => toggleFavorite(id, provider)}
+			/>
+		);
 	}
 
 	return (
@@ -265,8 +276,8 @@ export function HarnessPicker({
 					<nav className="model-provider-rail" aria-label="Model providers">
 						<button
 							type="button"
-							aria-label={`Favorites in ${selected.name}`}
-							title={`Favorites in ${selected.name}`}
+							aria-label="Favorites"
+							title="Favorites across all models"
 							aria-pressed={favoritesOnly}
 							onClick={() => {
 								setBrowse(false);
@@ -353,19 +364,28 @@ export function HarnessPicker({
 					<section
 						className="model-picker-catalog"
 						aria-label={
-							searching
-								? "Search all models"
-								: browse
-									? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
-									: claudeView && claudeData
-										? "Claude Agent"
-										: selected.name
+							favoritesOnly
+								? "Favorite models"
+								: searching
+									? "Search all models"
+									: browse
+										? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
+										: claudeView && claudeData
+											? "Claude Agent"
+											: selected.name
 						}
 					>
-						{searching ? (
+						{searching || favoritesOnly ? (
 							<>
+								{favoritesOnly && favorites.length === 0 ? (
+									<p className="model-picker-status">
+										No favorites yet. Star a model in any list to add it here.
+									</p>
+								) : null}
 								{claudeData ? (
 									<ClaudeCodeSearch
+										favoriteIds={favoritesOnly ? favorites : undefined}
+										renderFavorite={renderFavorite("api")}
 										models={claudeData.models}
 										search={search}
 										selectedRoute={harnessId === "api" ? modelId : ""}
@@ -377,6 +397,8 @@ export function HarnessPicker({
 									/>
 								) : null}
 								<CodexModelSearch
+									favoriteIds={favoritesOnly ? favorites : undefined}
+									renderFavorite={renderFavorite("codex")}
 									search={search}
 									fallbackModels={harnessId === "codex" ? models : []}
 									onSelect={(id) => {
@@ -386,7 +408,9 @@ export function HarnessPicker({
 									}}
 								/>
 								<ApiModelBrowser
+									renderFavorite={renderFavorite("api")}
 									author={null}
+									favoriteIds={favoritesOnly ? favorites : undefined}
 									search={search}
 									// The subscription row above is the usable one; no locked copy.
 									coveredIds={
@@ -395,6 +419,7 @@ export function HarnessPicker({
 											: undefined
 									}
 									hasOtherResults={
+										favoritesOnly ||
 										claudeCodeSearchMatches(claudeData?.models ?? [], search)
 											.length > 0
 									}
@@ -413,6 +438,7 @@ export function HarnessPicker({
 							</>
 						) : claudeView && claudeData ? (
 							<ClaudeCodeModels
+								renderFavorite={renderFavorite("api")}
 								models={claudeData.models}
 								usage={
 									<SectionPlanUsage
@@ -430,6 +456,7 @@ export function HarnessPicker({
 							/>
 						) : browse ? (
 							<ApiModelBrowser
+								renderFavorite={renderFavorite("api")}
 								key={`${apiProvider}:${grokView ? "plan" : "keys"}`}
 								author={apiProvider}
 								// Grok's plan has its own rail entry; xAI lists API keys only.
@@ -454,11 +481,7 @@ export function HarnessPicker({
 						) : (
 							<>
 								<div className="model-section-head">
-									<h3>
-										{favoritesOnly
-											? `Favorites · ${selected.name}`
-											: selected.name}
-									</h3>
+									<h3>{selected.name}</h3>
 									{harnessId === "codex" ? (
 										<SectionPlanUsage line={planUsage} label="ChatGPT plan" />
 									) : null}
@@ -469,9 +492,6 @@ export function HarnessPicker({
 								<div className="model-picker-list">
 									{connectionContent}
 									{visibleModels.map((candidate) => {
-										const favorite = favorites.includes(
-											favoriteModelKey(harnessId, candidate.id),
-										);
 										return (
 											<div
 												className="model-picker-row"
@@ -494,18 +514,10 @@ export function HarnessPicker({
 														<Check size={14} aria-hidden="true" />
 													) : null}
 												</button>
-												<button
-													type="button"
-													className="model-favorite"
-													aria-label={`${favorite ? "Unfavorite" : "Favorite"} ${candidate.label}`}
-													aria-pressed={favorite}
-													onClick={() => toggleFavorite(candidate.id)}
-												>
-													<Star
-														size={16}
-														fill={favorite ? "currentColor" : "none"}
-													/>
-												</button>
+												{renderFavorite(harnessId)(
+													candidate.id,
+													candidate.label,
+												)}
 											</div>
 										);
 									})}
@@ -557,12 +569,14 @@ export function HarnessPicker({
 
 /** Claude Code's models (the user's Claude subscription), apart from API keys. */
 export function ClaudeCodeModels({
+	renderFavorite,
 	models,
 	usage,
 	selectedRoute,
 	onSelect,
 }: {
 	models: readonly { readonly id: string; readonly label: string }[];
+	renderFavorite?: RenderModelFavorite;
 	/** The Claude plan's usage line, under the caption. */
 	usage?: ReactNode;
 	selectedRoute: string;
@@ -600,6 +614,7 @@ export function ClaudeCodeModels({
 								<Check size={14} aria-hidden="true" />
 							) : null}
 						</button>
+						{renderFavorite?.(model.id, model.label)}
 					</div>
 				))}
 				{models.length === 0 ? (
@@ -614,48 +629,65 @@ export function ClaudeCodeModels({
 
 /** Search results from the connected Claude subscription, ranked above API-key models. */
 function ClaudeCodeSearch({
+	favoriteIds,
+	renderFavorite,
 	models,
 	search,
 	selectedRoute,
 	onSelect,
 }: {
 	models: readonly { readonly id: string; readonly label: string }[];
+	renderFavorite?: RenderModelFavorite;
 	search: string;
+	favoriteIds?: readonly string[];
 	selectedRoute: string;
 	onSelect: (id: string) => void;
 }) {
-	const results = claudeCodeSearchMatches(models, search);
+	const results = (
+		favoriteIds && !search.trim()
+			? models
+			: claudeCodeSearchMatches(models, search)
+	).filter(
+		(model) =>
+			!favoriteIds || favoriteIds.includes(favoriteModelKey("api", model.id)),
+	);
 	if (!results.length) return null;
 	return (
 		<>
 			<h3>Claude Agent · Claude subscription</h3>
 			{results.map((model) => (
-				<button
-					type="button"
-					className="model-browser-option"
-					key={model.id}
-					aria-pressed={model.id === selectedRoute}
-					title={`${model.label} in Claude Agent`}
-					onClick={() => onSelect(model.id)}
-				>
-					<ModelProviderLogo provider="anthropic" size={16} />
-					<span>{model.label}</span>
-					{model.id === selectedRoute ? (
-						<Check size={14} aria-hidden="true" />
-					) : null}
-				</button>
+				<div className="model-picker-row" key={model.id}>
+					<button
+						type="button"
+						className="model-browser-option model-browser-choice"
+						aria-pressed={model.id === selectedRoute}
+						title={`${model.label} in Claude Agent`}
+						onClick={() => onSelect(model.id)}
+					>
+						<ModelProviderLogo provider="anthropic" size={16} />
+						<span>{model.label}</span>
+						{model.id === selectedRoute ? (
+							<Check size={14} aria-hidden="true" />
+						) : null}
+					</button>
+					{renderFavorite?.(model.id, model.label)}
+				</div>
 			))}
 		</>
 	);
 }
 
 function CodexModelSearch({
+	favoriteIds,
+	renderFavorite,
 	search,
 	fallbackModels,
 	onSelect,
 }: {
 	search: string;
 	fallbackModels: readonly SessionModel[];
+	favoriteIds?: readonly string[];
+	renderFavorite?: RenderModelFavorite;
 	onSelect: (id: string) => void;
 }) {
 	const identity = authClient.useSession();
@@ -669,25 +701,33 @@ function CodexModelSearch({
 	const models = catalog.data
 		? sessionModelsFromListed(catalog.data)
 		: fallbackModels;
-	const results = models.filter(
-		(model) =>
-			model.label.toLowerCase().includes(search.trim().toLowerCase()) ||
-			"codex".includes(search.trim().toLowerCase()),
-	);
+	const results = models
+		.filter(
+			(model) =>
+				!favoriteIds ||
+				favoriteIds.includes(favoriteModelKey("codex", model.id)),
+		)
+		.filter(
+			(model) =>
+				model.label.toLowerCase().includes(search.trim().toLowerCase()) ||
+				"codex".includes(search.trim().toLowerCase()),
+		);
 	if (!results.length) return null;
 	return (
 		<>
 			<h3>Codex · ChatGPT subscription</h3>
 			{results.map((model) => (
-				<button
-					type="button"
-					className="model-browser-option"
-					key={model.id}
-					onClick={() => onSelect(model.id)}
-				>
-					<AgentProviderMark provider="codex" size={16} />
-					<span>{model.label}</span>
-				</button>
+				<div className="model-picker-row" key={model.id}>
+					<button
+						type="button"
+						className="model-browser-option model-browser-choice"
+						onClick={() => onSelect(model.id)}
+					>
+						<AgentProviderMark provider="codex" size={16} />
+						<span>{model.label}</span>
+					</button>
+					{renderFavorite?.(model.id, model.label)}
+				</div>
 			))}
 		</>
 	);
