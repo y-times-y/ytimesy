@@ -37,9 +37,9 @@ export const CLAUDE_RUNNER_DISALLOWED_TOOLS = [
 	"AskUserQuestion",
 ] as const;
 
-function turnHash(turnId: string) {
+function sessionHash(sessionId: string) {
 	let hash = 2166136261;
-	for (const char of turnId) {
+	for (const char of sessionId) {
 		hash ^= char.charCodeAt(0);
 		hash = Math.imul(hash, 16777619) >>> 0;
 	}
@@ -74,13 +74,15 @@ export function claudeRunnerUrls(
 
 /**
  * The box a Claude Code turn runs on, or null (the chat's own machine runs it
- * as before). The same turn always gets the same box, so each step finds the
- * process it started. Read-only helpers stay on the chat machine.
+ * as before). The box follows the chat, not the turn: the chat's Claude
+ * session file lives on that box between turns (it can be hundreds of MB, far
+ * past what is saved to storage), and every step of a turn finds its process
+ * there. Read-only helpers stay on the chat machine.
  */
 export function claudeRunnerFor(input: {
 	readonly env: Readonly<Record<string, string | undefined>>;
 	readonly userId: string;
-	readonly turnId: string;
+	readonly sessionId: string;
 	readonly reader: boolean;
 }): ClaudeRunnerBox | null {
 	const { env } = input;
@@ -92,7 +94,7 @@ export function claudeRunnerFor(input: {
 		.map((value) => value.trim())
 		.filter(Boolean);
 	if (!allowed.includes("*") && !allowed.includes(input.userId)) return null;
-	return { baseUrl: urls[turnHash(input.turnId) % urls.length], secret };
+	return { baseUrl: urls[sessionHash(input.sessionId) % urls.length], secret };
 }
 
 /** What the system prompt says of working through tools when the code is not on this machine. */

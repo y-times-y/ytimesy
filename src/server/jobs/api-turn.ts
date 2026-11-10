@@ -1652,7 +1652,7 @@ async function runApiTurnAttempt(
 				? claudeRunnerFor({
 						env: process.env,
 						userId: turn.user_id,
-						turnId: turn.id,
+						sessionId: owner.id,
 						reader,
 					})
 				: null;
