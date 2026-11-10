@@ -188,7 +188,8 @@ it("checks owner subscription and queues Codex without an API connection", async
 		sql.startsWith("with queued as (insert into api_turn"),
 	);
 	expect(queued?.[0]).toContain("update agent_session set harness=$14");
-	expect(queued?.[1].slice(-2)).toEqual(["model", "codex"]);
+	// The last argument is the turn row's first-item marker (null off the durable object).
+	expect(queued?.[1].slice(-3, -1)).toEqual(["model", "codex"]);
 	expect(mocks.release).toHaveBeenCalled();
 	expect(mocks.capture).toHaveBeenCalledWith(
 		"owner",

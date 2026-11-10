@@ -98,3 +98,20 @@ it("changes nothing for a chat that no longer holds the item", async () => {
 	expect(await items("agent_session")).toEqual([[answer]]);
 	expect(holder.wake).not.toHaveBeenCalled();
 });
+
+it("replaces the item in the chat and leaves a running new-shape turn's marker, bumping its version so its cached history reloads", async () => {
+	await seed([answer, opening]);
+	const running = randomUUID();
+	await db.query(
+		"insert into api_turn(id,session_id,user_id,state,items,updated_at) values($1,$2,'alice','running',$3,'2000-01-01')",
+		[running, session, JSON.stringify({ from: "u9" })],
+	);
+	expect(await replaceSettledTurnItem(turn, opening.id, opened)).toBe(true);
+	const row = await db.query<{ items: unknown; fresh: boolean }>(
+		"select items, updated_at > '2000-01-02' as fresh from api_turn where id=$1",
+		[running],
+	);
+	expect(row.rows[0].items).toEqual({ from: "u9" });
+	expect(row.rows[0].fresh).toBe(true);
+	expect(await items("agent_session")).toEqual([[answer, opened]]);
+});
