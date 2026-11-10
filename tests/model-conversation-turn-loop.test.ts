@@ -187,7 +187,9 @@ it("renews the lease and chat coordination before resuming", async () => {
 	expect(rotated).not.toBe(turn.leaseId);
 	expect(mocks.query.mock.calls[1][1]).toEqual([turn.turnId, rotated]);
 	expect(mocks.query.mock.calls[1][0]).not.toContain("t.*");
-	expect(mocks.query.mock.calls[2][0]).toContain("select messages,items");
+	// The loader reads a new-shape turn row's items from the chat.
+	expect(mocks.query.mock.calls[2][0]).toContain("select t.messages,");
+	expect(mocks.query.mock.calls[2][0]).toContain("jsonb_typeof(t.items)");
 	expect(
 		sql.exec("select current_lease_id as l from turn_loop").toArray(),
 	).toEqual([]);
