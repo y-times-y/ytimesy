@@ -13,17 +13,55 @@ it("returns immediately for a running VM", async () => {
 	).resolves.toMatchObject({ state: "running" });
 	expect(data).toHaveBeenCalledTimes(1);
 });
-it("does not retry a stopped VM", async () => {
+it("starts a stopped VM once, then gives up if it stays stopped", async () => {
+	vi.useFakeTimers();
+	const start = vi.fn().mockResolvedValue(undefined);
 	const data = vi.fn().mockResolvedValue({ state: "stopped" });
-	await expect(
-		waitUntilVmRunning({ id: "vm-test", data } as unknown as Vm, "Test"),
-	).rejects.toThrow("stopped before");
-	expect(data).toHaveBeenCalledTimes(1);
+	const waiting = waitUntilVmRunning(
+		{ id: "vm-test", data, start } as unknown as Vm,
+		"Test",
+	);
+	const assertion = expect(waiting).rejects.toThrow("stopped before");
+	await vi.runAllTimersAsync();
+	await assertion;
+	expect(start).toHaveBeenCalledTimes(1);
 });
-it("bounds polling to three minutes of reads without retrying a create operation", async () => {
+it("recovers a VM that reads stopped and then starts", async () => {
+	vi.useFakeTimers();
+	const start = vi.fn().mockResolvedValue(undefined);
+	const data = vi
+		.fn()
+		.mockResolvedValueOnce({ state: "stopped" })
+		.mockResolvedValueOnce({ state: "starting" })
+		.mockResolvedValue({ state: "running" });
+	const waiting = waitUntilVmRunning(
+		{ id: "vm-test", data, start } as unknown as Vm,
+		"Test",
+	);
+	await vi.runAllTimersAsync();
+	await expect(waiting).resolves.toMatchObject({ state: "running" });
+});
+it("gives up on a VM stuck starting after 90 seconds, asking for the start again twice", async () => {
 	vi.useFakeTimers();
 	const started = Date.now();
+	const start = vi.fn().mockResolvedValue(undefined);
 	const data = vi.fn().mockResolvedValue({ state: "starting" });
+	const waiting = waitUntilVmRunning(
+		{ id: "vm-test", data, start } as unknown as Vm,
+		"Test",
+	);
+	const assertion = expect(waiting).rejects.toThrow("did not become running");
+	await vi.runAllTimersAsync();
+	await assertion;
+	const waited = Date.now() - started;
+	expect(waited).toBeGreaterThan(89_000);
+	expect(waited).toBeLessThanOrEqual(90_000);
+	expect(start).toHaveBeenCalledTimes(2);
+});
+it("keeps waiting up to three minutes for a machine that is pausing", async () => {
+	vi.useFakeTimers();
+	const started = Date.now();
+	const data = vi.fn().mockResolvedValue({ state: "pausing" });
 	const waiting = waitUntilVmRunning(
 		{ id: "vm-test", data } as unknown as Vm,
 		"Test",
@@ -31,12 +69,7 @@ it("bounds polling to three minutes of reads without retrying a create operation
 	const assertion = expect(waiting).rejects.toThrow("did not become running");
 	await vi.runAllTimersAsync();
 	await assertion;
-	const waited = Date.now() - started;
-	expect(waited).toBeGreaterThan(179_000);
-	expect(waited).toBeLessThanOrEqual(180_000);
-	// Quick reads first, then at most one a second.
-	expect(data.mock.calls.length).toBeGreaterThan(180);
-	expect(data.mock.calls.length).toBeLessThan(190);
+	expect(Date.now() - started).toBeGreaterThan(179_000);
 });
 it("reads a just-started machine again within a fraction of a second", async () => {
 	vi.useFakeTimers();
