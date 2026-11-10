@@ -145,6 +145,23 @@ it("restores both public and actual history without resurrecting an incompatible
 	).rejects.toThrow("restored");
 });
 
+it("does not read the saved model history of a restored point the transcript has moved past", async () => {
+	const point = await conversationPoint("alice", session, "first");
+	if (!point) throw new Error("Missing point");
+	await saveRecoveredConversation(holder, "alice", session, point);
+	await db.query("update agent_session set items=$2 where id=$1", [
+		session,
+		JSON.stringify([
+			{ kind: "userMessage", id: "first", text: "Implement" },
+			{ kind: "agentMessage", id: "later", text: "A new turn" },
+		]),
+	]);
+	holder.query.mockClear();
+	expect(await recoveredConversation("alice", session)).toBeNull();
+	// The head holds a full copy of the history: one small read, not two.
+	expect(holder.query).toHaveBeenCalledTimes(1);
+});
+
 it("forks into independent session ancestry and retains the original conversation", async () => {
 	const recovered = await recoverConversation(
 		{} as WorkspaceMachines,

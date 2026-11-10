@@ -6,6 +6,10 @@ import {
 	streamText,
 	type ToolSet,
 } from "ai";
+import {
+	ClaudeSubscriptionLimitReached,
+	SubscriptionUsageLimitReached,
+} from "#/domain/api-turn-failure";
 import type { ModelAgentRuntime } from "../services/model-agent-loop";
 
 export type NativeCompactionInput = {
@@ -200,6 +204,14 @@ export function nativeModelCompactor(
 			onError: () => {},
 		});
 		for await (const event of result.fullStream) {
+			// A spent plan allowance is the user's limit, not a failed compaction:
+			// it keeps its own wording and reset time.
+			if (
+				event.type === "error" &&
+				(event.error instanceof SubscriptionUsageLimitReached ||
+					event.error instanceof ClaudeSubscriptionLimitReached)
+			)
+				throw event.error;
 			if (event.type === "error" || event.type === "abort")
 				throw new Error(
 					"Native context compaction failed; history was preserved.",

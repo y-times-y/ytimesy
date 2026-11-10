@@ -44,6 +44,36 @@ const call = (id: string): SessionItem => ({
 const wake = (id: string): SessionItem =>
 	user(id, `\u2063ytimesy-child-event:${id}`);
 
+describe("push approval placement", () => {
+	it("keeps approval cards above the final answer when a running turn finishes", () => {
+		const approval: SessionItem = {
+			kind: "pushApproval",
+			id: SessionItemId("push-card"),
+			requestId: "11111111-1111-4111-8111-111111111111",
+			repo: "example/project",
+			branch: "main",
+			commits: 2,
+			summary: "Fix the checkout",
+		};
+		const items = [
+			user("request"),
+			call("build"),
+			approval,
+			answer("final", "The push is waiting for approval."),
+		];
+		for (const status of ["running", "completed", "idle"] as const) {
+			const rows = groupTimelineRows(items, status);
+			const ids = rows.map((row) =>
+				row.kind === "item" ? row.item.id : row.id,
+			);
+			expect(ids.filter((id) => id === approval.id)).toHaveLength(1);
+			expect(ids.indexOf(approval.id)).toBeLessThan(
+				ids.indexOf(SessionItemId("final")),
+			);
+		}
+	});
+});
+
 describe("wake-up turns and question replies", () => {
 	it("keeps Main's answer in view when a wake-up turn follows it", () => {
 		const rows = groupTimelineRows(

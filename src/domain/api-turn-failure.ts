@@ -297,6 +297,9 @@ export function failureCause(error: unknown): string | null {
 		if (!(current instanceof Error)) break;
 		current =
 			(current as { providerError?: unknown }).providerError ??
+			// A harness failure keeps the error it wrapped out of `cause`, so it is
+			// never serialized; the owner-only cause line still follows it.
+			(current as { runtimeError?: unknown }).runtimeError ??
 			(RetryError.isInstance(current) ? current.lastError : current.cause);
 	}
 	return redactSecrets(lines.join(" <- "), 600) || null;
