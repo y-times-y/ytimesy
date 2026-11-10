@@ -26,6 +26,38 @@ const tools = {
 };
 
 describe("Claude Code tool bridge", () => {
+	it("distinguishes a queued timeout from a started command with unknown outcome", async () => {
+		vi.useFakeTimers();
+		try {
+			const queued = requestClaudeCodeCall(
+				"timeout-queued",
+				"bash",
+				{ command: "printf queued" },
+				20,
+			);
+			const active = requestClaudeCodeCall(
+				"timeout-active",
+				"bash",
+				{ command: "printf active" },
+				20,
+			);
+			expect(takeClaudeCodeCalls("timeout-active")).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(20);
+			expect(await queued).toMatchObject({
+				isError: true,
+				text: expect.stringContaining("did not start"),
+			});
+			expect(pendingClaudeCodeCalls("timeout-queued")).toBe(0);
+			expect(await active).toMatchObject({
+				isError: true,
+				text: expect.stringContaining("outcome is unknown"),
+			});
+		} finally {
+			closeClaudeCodeBridge("timeout-queued");
+			closeClaudeCodeBridge("timeout-active");
+			vi.useRealTimers();
+		}
+	});
 	it("offers the turn's tools once its step published them", async () => {
 		const turnId = "turn-tools";
 		const listing = claudeCodeBridgeTools(turnId, 5_000);

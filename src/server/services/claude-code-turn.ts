@@ -44,12 +44,12 @@ import {
 } from "./claude-code-runner";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-/** Tools Claude Code has its own of; everything else of the turn's is offered over MCP. */
+/** Native web tools stay local; workspace work uses the tracked MCP tool lifecycle on either host. */
 export function claudeCodeBridgeToolSet(
 	tools: ToolSet,
 	own: readonly string[],
-	/** On a runner box, run_code is offered too (the chat's tools are a network hop away). */
-	offerCodeMode = false,
+	/** Kept explicit for callers that intentionally restrict a helper's tool set. */
+	offerCodeMode = true,
 ): ToolSet {
 	const skipped = new Set([
 		...own,
@@ -208,6 +208,11 @@ export async function runClaudeCodeTurnStep(input: {
 		});
 		ended = result.outcome === "completed";
 		return result;
+	} catch (error) {
+		// The detached agent and waiting MCP calls belong to the turn, not this
+		// interrupted step. Do not answer "turn ended" when it will reattach.
+		if (leavesClaudeCodeRunning([error, input.signal.reason])) ended = false;
+		throw error;
 	} finally {
 		// A call still answering keeps its own context; it settles on its own.
 		await Promise.race([
