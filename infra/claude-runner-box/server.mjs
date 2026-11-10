@@ -62,13 +62,25 @@ export function createRunnerServer({ secret, home, now = Date.now, disk = diskUs
 	};
 	const exec = (command, timeoutMs) =>
 		new Promise((done) => {
-			const child = spawn("bash", ["-c", command], { cwd: root, env: { ...process.env, HOME: root }, stdio: ["ignore", "pipe", "pipe"] });
+			const environment = { ...process.env, HOME: root };
+			// Host authentication must never become a credential of the agent process.
+			delete environment.RUNNER_SIGNING_KEY;
+			const child = spawn("bash", ["-c", command], { cwd: root, env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 			let stdout = "";
 			let stderr = "";
 			const take = (current, chunk) => (current.length < MAX_OUTPUT ? current + chunk : current);
 			child.stdout.on("data", (chunk) => (stdout = take(stdout, chunk)));
 			child.stderr.on("data", (chunk) => (stderr = take(stderr, chunk)));
-			const timer = setTimeout(() => child.kill("SIGKILL"), Math.min(timeoutMs, MAX_EXEC_MS));
+			const timer = setTimeout(() => {
+				// Kill this short exec's whole group, not a detached Claude run.
+				try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch (error) {
+					if (error.code !== "ESRCH") child.kill("SIGKILL");
+				}
+			}, Math.min(timeoutMs, MAX_EXEC_MS));
+			child.once("error", (error) => {
+				clearTimeout(timer);
+				done({ exitCode: 1, stdout, stderr: `Runner command could not start (${error.code ?? error.name}).` });
+			});
 			child.on("close", (code, signal) => {
 				clearTimeout(timer);
 				done({ exitCode: code ?? (signal ? 128 : 1), stdout, stderr });

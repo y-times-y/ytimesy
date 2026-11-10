@@ -21,6 +21,7 @@ import type {
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 import { heldForSetupSql } from "./queued-user-messages";
+import { boundedPageStartSql } from "./transcript-page-sql";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -356,10 +357,11 @@ export async function agentSessionPageForOwner(
 		 st as (select case when $3::text is null
 		   then (select coalesce(max(i.position)+1,0) from agent_session_item i where i.session_id=$1)
 		   else (select min(i.position) from agent_session_item i where i.session_id=$1 and i.item_id=$3::text) end as stop),
-		 b as (select st.stop, (select case when count(*) < $4 then 0 else min(t.position) end
+		 turn_bounds as (select st.stop, (select case when count(*) < $4 then 0 else min(t.position) end
 		  from (select i.position from agent_session_item i
 		   where i.session_id=$1 and i.starts_turn and i.position < st.stop
-		   order by i.position desc limit $4) t) as first from st)
+		   order by i.position desc limit $4) t) as first from st),
+		 b as (select stop,case when stop is null then 0 else ${boundedPageStartSql("$1", "turn_bounds.first", "turn_bounds.stop")} end as first from turn_bounds)
 		 select s.*,
 		  case when b.stop is null or b.stop <= b.first then '[]'::jsonb
 		  else (select jsonb_agg(i.item order by i.position) from agent_session_item i

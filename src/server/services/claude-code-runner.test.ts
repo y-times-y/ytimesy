@@ -113,6 +113,10 @@ class FakeVm {
 				].join("\n"),
 			);
 		}
+		if (command.startsWith("stat -c %s ")) {
+			const path = /'([^']+)'/.exec(command)?.[1] ?? "";
+			return ok(String(Buffer.byteLength(this.files.get(path) ?? "")));
+		}
 		if (command.startsWith("test -s ")) {
 			const path = /'([^']+)'/.exec(command)?.[1] ?? "";
 			return { exitCode: this.files.get(path) ? 0 : 1, stdout: "", stderr: "" };
@@ -715,6 +719,32 @@ describe("Claude Code runner", () => {
 		expect(stop).toContain(`/tmp/ytimesy-api-command-scopes/${TURN}`);
 		expect(stop).toContain('"$d/$n/consumed"');
 		await expect(stopClaudeCodeRun(vm.shell, "../x")).rejects.toThrow();
+	});
+
+	it("never transfers a 249 MiB transcript through the edge just to reject it", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		const original = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command) =>
+			command.startsWith("stat -c %s ")
+				? { exitCode: 0, stdout: String(249 * 1024 * 1024), stderr: "" }
+				: original
+					? original(command)
+					: { exitCode: 0, stdout: "", stderr: "" },
+		);
+		const readFile = vi.fn(async () => "must not be loaded");
+		const step = input(vm, { readFile });
+		await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+			outcome: "completed",
+		});
+		expect(readFile).not.toHaveBeenCalled();
+		expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+		expect(step.store.saveSession).toHaveBeenCalledWith({
+			claudeSessionId: CLAUDE_SESSION,
+			transcriptPath: null,
+			cwd: CWD,
+		});
 	});
 
 	it("runs a read-only helper as the reader user without write tools", async () => {

@@ -243,10 +243,14 @@ export async function stopClaudeCodeTurnRun(input: {
 	readonly machines: WorkspaceMachines;
 	readonly vm: WorkspaceId | null;
 	readonly turnId: string;
+	readonly runner?: ClaudeRunnerBox | null;
 }): Promise<void> {
 	const { vm } = input;
-	if (!vm) return;
+	const box = input.runner ? claudeRunnerMachine(input.runner) : null;
+	if (!vm && !box) return;
 	await stopClaudeCodeRun(async (command, timeoutMs) => {
+		if (box) return box.shell(command, timeoutMs);
+		if (!vm) throw new Error("The workspace machine is unavailable.");
 		const result = await input.machines.exec(vm, command, timeoutMs);
 		return {
 			exitCode: result.exitCode,

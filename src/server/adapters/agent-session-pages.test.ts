@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { SessionItem } from "#/domain/session-item";
+import {
+	type SessionItem,
+	sessionItemsFromUnknown,
+} from "#/domain/session-item";
 import {
 	latestTranscriptPage,
 	olderTranscriptPage,
@@ -113,6 +116,46 @@ it("matches the page the browser's own code cuts, for every cursor", async () =>
 			expect(page?.hasOlderItems).toBe(cut?.hasOlderItems);
 		}
 	}
+});
+
+it("pages an oversized single turn without dropping or duplicating any work", async () => {
+	const items: SessionItem[] = [
+		{
+			kind: "userMessage",
+			id: "large-request" as never,
+			text: "Inspect the atlas",
+		},
+		...Array.from(
+			{ length: 511 },
+			(_, index): SessionItem => ({
+				kind: "agentMessage",
+				id: `atlas-${index}` as never,
+				text: "λ🛰️".repeat(900),
+			}),
+		),
+	];
+	const id = await chat(items);
+	let cursor: string | undefined;
+	let collected: SessionItem[] = [];
+	for (let pages = 0; ; pages++) {
+		expect(pages).toBeLessThan(100);
+		const page = await agentSessionPageForOwner("alice", id, {
+			turns: 30,
+			beforeId: cursor,
+		});
+		expect(page?.pageFound).toBe(true);
+		const pageItems = sessionItemsFromUnknown(page?.items);
+		expect(pageItems.length).toBeGreaterThan(0);
+		expect(pageItems.length).toBeLessThanOrEqual(200);
+		expect(Buffer.byteLength(JSON.stringify(page?.items))).toBeLessThan(
+			270_000,
+		);
+		collected = [...pageItems, ...collected];
+		if (!page?.hasOlderItems) break;
+		cursor = pageItems[0]?.id;
+	}
+	expect(ids(collected)).toEqual(ids(items));
+	expect(new Set(ids(collected)).size).toBe(items.length);
 });
 
 it("reads an empty chat, a cursor the transcript lost, and nothing of another user's chat", async () => {
