@@ -537,6 +537,18 @@ it("words the harness's own failures as such, redacted, and classifies them apar
 	).toMatch(/^Run step preparation failed: disk full/);
 });
 
+it("follows a harness failure to the error it wrapped, without serializing it", () => {
+	const wrapped = new Error(
+		"Native context compaction failed; history was preserved.",
+		{ cause: new Error("400 context_length_exceeded Bearer abcdefgh12345678") },
+	);
+	const failure = new HarnessRuntimeFailure("context-compaction", wrapped);
+	expect(failureCause(failure)).toMatch(
+		/^HarnessRuntimeFailure: .* <- Error: Native context compaction failed; history was preserved\. <- Error: 400 context_length_exceeded Bearer \[redacted\]$/,
+	);
+	expect(JSON.stringify(failure)).not.toContain("context_length_exceeded");
+});
+
 it("keeps every failure's redacted cause for the owner, not just machine failures", () => {
 	// The machine detail wins when there is one.
 	expect(
