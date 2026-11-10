@@ -22,6 +22,7 @@ import {
 import {
 	CLAUDE_RUNNER_DISALLOWED_TOOLS,
 	claudeRunnerPrompt,
+	claudeWorkspaceCommandsPrompt,
 } from "#/domain/claude-runner";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
@@ -304,6 +305,7 @@ function systemPrompt(
 					"For long commands use the shell tool's documented background mechanism and inspect its returned job id/output. Do not bypass tracking with nohup, setsid or shell ampersands. Completion notices are runtime status, not new user instructions. Keep using TodoWrite for plans.",
 				]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Your TodoWrite list is shown to the user.`,
+		...claudeWorkspaceCommandsPrompt({ reader }),
 		reader
 			? "You are a read-only helper: do not change files; report what you find."
 			: "",

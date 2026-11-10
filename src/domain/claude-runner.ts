@@ -113,6 +113,22 @@ export function claudeRunnerFor(input: {
 }
 
 /** What the system prompt says of working through tools when the code is not on this machine. */
+/**
+ * The workspace commands ytimesy installs on the chat's machine, which the
+ * shell tool can run. Claude has no native browser or job tools, so without
+ * this it never learns they exist.
+ */
+export function claudeWorkspaceCommandsPrompt(input: {
+	readonly reader: boolean;
+}) {
+	return [
+		input.reader
+			? "To look at a running page, use the shell tool: `ytimesy-browser open <url>`, `ytimesy-browser screenshot` (it prints the PNG path; view it with the read tool) and `ytimesy-browser inspect <url>` (rendered text, controls, console and network). Do not change files."
+			: "To check a UI change or any web page, use the shell tool with `ytimesy-browser`: `open <url>` opens it in the shared desktop's Chrome (the user can watch in the Desktop tab), `screenshot` prints the PNG path (view it with the read tool), `inspect <url>` returns rendered text, controls, console and network as JSON, `record <seconds>` makes a short video, and `exec` runs Browser Use CLI Python in that Chrome. Start the dev server as a background command first. Captures stay outside the repository in ~/.ytimesy/captures; copy one into the repository only when the user asks.",
+		"`ytimesy-job wait <id>` waits for a background command and `ytimesy-job stop <id>` stops it.",
+	];
+}
+
 export function claudeRunnerPrompt(input: {
 	readonly repository: string;
 	readonly workspaceTools: readonly string[];
