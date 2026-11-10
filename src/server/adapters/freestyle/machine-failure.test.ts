@@ -149,3 +149,41 @@ it("recognizes a Durable Object reset for a new version, however wrapped", () =>
 		isPlatformRestart(new Error("Command exceeded its memory limit")),
 	).toBe(false);
 });
+
+it("repeats a start that never reached running once, with a fresh attempt, then surfaces it", async () => {
+	const stuck = () =>
+		new Error("Workspace VM did not become running", {
+			cause: new Error("WorkspaceProvisionError"),
+		});
+	expect(machineFailureKind(stuck())).toBe("stuck");
+	expect(
+		machineFailureKind(
+			new Error("Agent session VM stopped before it became running"),
+		),
+	).toBe("stuck");
+	const operation = vi.fn(() => Promise.reject(stuck()));
+	await expect(
+		resumableMachineStart(
+			operation,
+			{ operation: "test", vmId: "vm-9" },
+			[1, 2, 4, 8],
+			async () => {},
+		),
+	).rejects.toThrow("did not become running");
+	expect(operation).toHaveBeenCalledTimes(2);
+});
+
+it("returns the machine when the repeated start comes up", async () => {
+	const operation = vi
+		.fn()
+		.mockRejectedValueOnce(new Error("Workspace VM did not become running"))
+		.mockResolvedValue("vm-9");
+	await expect(
+		resumableMachineStart(
+			operation,
+			{ operation: "test", vmId: "vm-9" },
+			[1],
+			async () => {},
+		),
+	).resolves.toBe("vm-9");
+});
