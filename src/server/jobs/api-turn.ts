@@ -203,6 +203,7 @@ import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	claudeCodeBridgeToolSet,
+	leavesClaudeCodeRunning,
 	runClaudeCodeTurnStep,
 	stopClaudeCodeTurnRun,
 } from "../services/claude-code-turn";
@@ -568,6 +569,13 @@ async function runApiTurnAttempt(
 	const leadWrites = leadWriteTracker();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
+		// A deploy resumes the step, and a Claude Code turn's agent loop is its
+		// process on the VM: let it run for the resumed step to re-attach to.
+		if (
+			stopClaudeCodeRun &&
+			leavesClaudeCodeRunning([abort.signal.reason, step?.signal.reason])
+		)
+			return;
 		if (execution)
 			commandStop ??= stopApiTurnCommands(execution, turn.id).catch(() => {
 				console.warn(
