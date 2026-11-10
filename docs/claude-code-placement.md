@@ -60,3 +60,39 @@ Revisit if losing VMs mid-turn becomes common, or if turns spend long
 stretches (over 3 minutes) thinking between tool calls. A cheaper first step
 than a runner pool is saving the transcript during the turn, not only at its
 end.
+
+## Update 2026-11-10: runner boxes, behind a flag (off)
+
+The decision above stands: by default `claude` runs on the chat's VM. Code now
+exists to run it on a **runner box** instead, because a chat VM lost or reset
+mid-turn took the whole turn with it, and the VM also runs untrusted repo code
+with `sudo`. Nothing is enabled or provisioned until the settings below exist.
+
+- **The split.** `claude` runs on a small AWS box that holds no repository
+  (`infra/claude-runner-box/server.mjs`: signed `/exec`, `/write`, `/read`,
+  confined to its home, the delivery signature plus a single-use nonce). The
+  chat's Freestyle VM is only the workspace: Claude's own Bash/Read/Edit/Write/
+  Glob/Grep/Task are off (`CLAUDE_RUNNER_DISALLOWED_TOOLS`) and ytimesy's file
+  and shell tools, plus `run_code`, are served over the existing MCP bridge and
+  run on the VM. Claude's own TodoWrite stays; the chat already shows it
+  (`claude-code-stream.ts`), so ytimesy's `update_plan` is not offered.
+- **Settings** (`src/domain/claude-runner.ts`): `YTIMESY_CLAUDE_RUNNER_URLS`
+  (comma-separated HTTPS origins), `YTIMESY_CLAUDE_RUNNER_SECRET` (32+ chars,
+  the same as the boxes' `RUNNER_SIGNING_KEY`), `YTIMESY_CLAUDE_RUNNER_USERS`
+  (user ids, or `*`). A turn always maps to the same box (hash of its id), so
+  each step finds the process it started. Read-only helpers stay on the VM.
+- **Code mode** is on for these turns whatever the harness variant says: each
+  tool call is a network hop, and `run_code` batches them. The prompt
+  (`claudeRunnerPrompt`) says when to use it; whether Claude actually uses it
+  is not measured yet, so count `run_code` calls and adjust the prompt.
+- **Disposable.** The session transcript is saved every minute while the run
+  goes (not only when it ends), so a lost box can be replaced and the turn
+  resumed from it. Failing over to another box is **not built**: today a turn
+  stays on its box.
+- **Not done / not measured:** provisioning the boxes and their HTTPS names
+  (Cloudflare Tunnel is the plan); tool-call latency over the extra hop on a
+  real network; memory and CPU per `claude` process (about 200 MB resident in
+  the localhost benchmark); how Claude behaves with ytimesy's file tools
+  instead of its own; drain on scale-in. The box image needs Node at
+  `/usr/local/bin/node`, python3, and the pinned Agent SDK installed at the
+  path `src/domain/guest-cli-pin.ts` names.

@@ -46,7 +46,10 @@ async function call(
 			"x-ytimesy-runner-nonce": nonce,
 		},
 	});
-	return { status: response.status, body: await response.json() };
+	return {
+		status: response.status,
+		body: (await response.json()) as Record<string, unknown>,
+	};
 }
 
 describe("the runner box", () => {
