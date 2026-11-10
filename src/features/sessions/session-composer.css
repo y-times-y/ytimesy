@@ -1260,6 +1260,12 @@ button.attachment-tile-body[data-state="open"] {
 .session-markdown td .session-file-name {
 	white-space: nowrap;
 }
+/* A link's `anywhere` wrapping lets the table shrink its column to one
+   letter, so "Cursor" breaks as "Cur / sor". In a cell a link breaks only
+   when its whole word cannot fit, like the cell's other text. */
+.session-markdown :is(th, td) a {
+	overflow-wrap: break-word;
+}
 .session-markdown :is(th, td):last-child {
 	padding-right: 0;
 }
