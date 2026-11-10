@@ -20,9 +20,10 @@ import {
 	isClaudeCodeSessionId,
 } from "#/domain/claude-code-stream";
 import {
-	CLAUDE_AGENT_SDK_MODULE,
-	claudeAgentSdkInstallScript,
-} from "#/domain/guest-cli-pin";
+	CLAUDE_RUNNER_DISALLOWED_TOOLS,
+	claudeRunnerPrompt,
+} from "#/domain/claude-runner";
+import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
 import {
@@ -39,6 +40,7 @@ import {
 	commandScopeRoot,
 	scopedShellCommand,
 } from "./api-command-scope";
+import { ensureClaudeAgentSdk } from "./claude-agent-sdk";
 
 /**
  * One durable step of a Claude Code turn: the Claude Agent SDK runs Claude
@@ -88,6 +90,16 @@ export type ClaudeCodeStepInput = {
 	readonly grantSecret: string;
 	/** A read-only helper: the CLI runs as the reader user, without write tools. */
 	readonly reader: boolean;
+	/**
+	 * Set when this machine is a runner box and the code is on the chat's
+	 * machine at `repository`: Claude's own file and shell tools are off and
+	 * `workspaceTools` (ytimesy's, over MCP) do their jobs. The transcript is
+	 * also saved while the run goes, so a lost box need not lose the turn.
+	 */
+	readonly remote?: {
+		readonly repository: string;
+		readonly workspaceTools: readonly string[];
+	};
 	/** Isolates the reader on this VM before its first command. */
 	readonly prepareReader?: () => Promise<void>;
 	/** When this step yields to the next one (epoch ms). */
@@ -130,6 +142,8 @@ const CONFIG = ".ytimesy/claude-code";
 const READ_LIMIT = 512 * 1024;
 const PROCESS_SECONDS = 6 * 60 * 60;
 const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
+/** How often a runner box run saves its session while it goes. */
+const TRANSCRIPT_SAVE_INTERVAL_MS = 60_000;
 /** Base64 per exec: well inside the VM's 64 KiB command limit. */
 const WRITE_CHUNK = 36 * 1024;
 const POLL_MIN_MS = 500;
@@ -267,10 +281,22 @@ async function writeFilesThenRun(
 		await checked(shell, command, "could not write its input.");
 }
 
-function systemPrompt(cwd: string, reader: boolean) {
+function systemPrompt(
+	cwd: string,
+	reader: boolean,
+	remote?: ClaudeCodeStepInput["remote"],
+) {
 	return [
-		"You are running inside ytimesy, on this chat's own cloud machine.",
-		`The repository is at ${cwd}.`,
+		remote
+			? "You are running inside ytimesy."
+			: "You are running inside ytimesy, on this chat's own cloud machine.",
+		...(remote
+			? claudeRunnerPrompt({
+					repository: remote.repository,
+					workspaceTools: remote.workspaceTools,
+					server: CLAUDE_CODE_MCP_SERVER,
+				})
+			: [`The repository is at ${cwd}.`]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Your TodoWrite list is shown to the user.`,
 		reader
 			? "You are a read-only helper: do not change files; report what you find."
@@ -302,6 +328,8 @@ export async function runClaudeCodeStep(
 		);
 		if (!launched)
 			return { messages: [...input.messages], outcome: "completed" };
+		if ("pending" in launched)
+			return { messages: [...input.messages], outcome: "continue" };
 		run = launched.run;
 	}
 	const runDirectory = `${turnDirectory}/${run}`;
@@ -310,6 +338,7 @@ export async function runClaudeCodeStep(
 	/** Claude Code's own API error line (never shown): why the run is failing. */
 	let apiError: string | null = null;
 	let unreadablePolls = 0;
+	let lastTranscriptSave = now();
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
@@ -361,6 +390,24 @@ export async function runClaudeCodeStep(
 			}
 		}
 		if (polled.next !== polled.offset) commit = polled.next;
+		// On a runner box the session is saved as the run goes, not only when it
+		// ends: the box can be lost, and the next one resumes from this.
+		if (
+			input.remote &&
+			!result &&
+			claudeSessionId &&
+			isClaudeCodeSessionId(claudeSessionId) &&
+			now() - lastTranscriptSave >= TRANSCRIPT_SAVE_INTERVAL_MS
+		) {
+			lastTranscriptSave = now();
+			await saveTranscript(input, home, claudeSessionId).catch(
+				(error: unknown) =>
+					console.warn("Claude Code transcript was not saved.", {
+						message:
+							error instanceof Error ? error.message.slice(0, 200) : "unknown",
+					}),
+			);
+		}
 		if (result) {
 			await finishRun(shell, runDirectory, commit);
 			const sessionId = result.sessionId ?? claudeSessionId;
@@ -463,20 +510,22 @@ async function launchRun(
 	turnDirectory: string,
 	run: number,
 	turnSessionId: string | null,
-): Promise<{ run: number } | null> {
+): Promise<{ run: number } | { pending: true } | null> {
 	const { shell } = input;
 	if (run > 50)
 		throw new ClaudeCodeRunFailure("this turn ran Claude Code too many times.");
 	const runDirectory = `${turnDirectory}/${run}`;
 	// Independent of each other: the SDK check and probing the machine for
 	// the chat's session each cost a round trip, the grant none.
-	const [, resumeId, grant] = await Promise.all([
-		checked(
+	const [sdk, resumeId, grant] = await Promise.all([
+		ensureClaudeAgentSdk({
 			shell,
-			claudeAgentSdkInstallScript(false),
-			"the Claude Agent SDK could not be installed on this machine.",
-			300_000,
-		),
+			turnId: input.turnId,
+			deadline: input.deadline,
+			signal: input.signal,
+			redact: input.redact,
+			sleep: input.sleep,
+		}),
 		input.reader
 			? turnSessionId
 			: (turnSessionId ?? restoredSession(input, home)),
@@ -486,6 +535,7 @@ async function launchRun(
 			turnId: input.turnId,
 		}),
 	]);
+	if (sdk === "pending") return { pending: true };
 	const prompt = claudeCodePrompt(input.messages, Boolean(resumeId));
 	if (!prompt.trim()) return null;
 	input.addRedaction?.(grant);
@@ -529,16 +579,18 @@ async function launchRun(
 		},
 		{
 			path: `${runDirectory}/system`,
-			contents: systemPrompt(input.cwd, input.reader),
+			contents: systemPrompt(input.cwd, input.reader, input.remote),
 		},
 		{ path: `${runDirectory}/prompt`, contents: prompt },
 		{
 			path: `${runDirectory}/options.json`,
 			contents: JSON.stringify({
 				model: input.modelId,
-				disallowedTools: input.reader
-					? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
-					: ["AskUserQuestion"],
+				disallowedTools: input.remote
+					? CLAUDE_RUNNER_DISALLOWED_TOOLS
+					: input.reader
+						? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
+						: ["AskUserQuestion"],
 				resume: resumeId ?? null,
 			}),
 		},

@@ -32,6 +32,7 @@ import {
 } from "./production-smoke-check";
 import { deploySourceProblem } from "./production-source";
 import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
+import { supabaseCertificate } from "./supabase-certificate";
 
 /**
  * Production deploy for the edge executor and the web Worker. It refuses to
@@ -214,7 +215,6 @@ Object.assign(secrets, productionAnalyticsSettings(process.env));
 for (const name of [
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
-	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_TUNNEL_URL",
 	"YTIMESY_CODEX_TUNNEL_SECRET",
 	"YTIMESY_CODEX_RELAY_URL",
@@ -251,7 +251,10 @@ const key = Buffer.from(
 );
 if (key.length !== 32) throw new Error("Production encryption key is invalid.");
 const certPath = database.searchParams.get("sslrootcert");
-if (certPath) secrets.DATABASE_SSL_CA = await readFile(certPath, "utf8");
+secrets.DATABASE_SSL_CA = supabaseCertificate(
+	process.env,
+	certPath ?? undefined,
+);
 
 /** Calls that carry secrets (masked) show wrangler's error with every value masked. */
 function run(

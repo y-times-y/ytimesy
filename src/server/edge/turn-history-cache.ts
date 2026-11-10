@@ -42,7 +42,15 @@ export class TurnHistoryCache {
 		version: string,
 		history: { messages?: ModelMessage[]; items: readonly SessionItem[] },
 	) {
-		if (!history.messages && !this.part(turnId, "messages")) {
+		if (
+			!history.messages &&
+			!this.sql
+				.exec(
+					"select 1 from turn_history where turn_id=? and part='messages' limit 1",
+					turnId,
+				)
+				.toArray().length
+		) {
 			this.clear(turnId);
 			return;
 		}

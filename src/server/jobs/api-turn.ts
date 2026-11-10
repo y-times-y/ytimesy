@@ -29,6 +29,7 @@ import {
 	claudeSubscriptionEnabled,
 	isClaudeCodeRevision,
 } from "#/domain/claude-code-route";
+import { claudeRunnerFor } from "#/domain/claude-runner";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
@@ -203,6 +204,7 @@ import { builderToolSurface } from "../services/builder-shell-surface";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	claudeCodeBridgeToolSet,
+	leavesClaudeCodeRunning,
 	runClaudeCodeTurnStep,
 	stopClaudeCodeTurnRun,
 } from "../services/claude-code-turn";
@@ -568,6 +570,13 @@ async function runApiTurnAttempt(
 	const leadWrites = leadWriteTracker();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
+		// A deploy resumes the step, and a Claude Code turn's agent loop is its
+		// process on the VM: let it run for the resumed step to re-attach to.
+		if (
+			stopClaudeCodeRun &&
+			leavesClaudeCodeRunning([abort.signal.reason, step?.signal.reason])
+		)
+			return;
 		if (execution)
 			commandStop ??= stopApiTurnCommands(execution, turn.id).catch(() => {
 				console.warn(
@@ -1635,9 +1644,23 @@ async function runApiTurnAttempt(
 		// Code mode is a development harness variant on a lean surface only
 		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
 		// MCP setup's search and call tools are callable only from inside it.
+		// A Claude Code turn on a runner box (src/domain/claude-runner.ts) gets
+		// code mode whatever the variant says: the chat's tools are a network hop
+		// away there, and run_code batches them.
+		const claudeRunner =
+			claudeCode && !reader
+				? claudeRunnerFor({
+						env: process.env,
+						userId: turn.user_id,
+						turnId: turn.id,
+						reader,
+					})
+				: null;
 		const codeMode =
-			surface.lean && variant.codeMode !== "off" && !thinLead
-				? variant.codeMode
+			surface.lean && (variant.codeMode !== "off" || claudeRunner) && !thinLead
+				? variant.codeMode !== "off"
+					? variant.codeMode
+					: "on"
 				: null;
 		// Harness variant fetch (on in the product): web_fetch for every agent,
 		// as the benchmark bridge's fetch=on, fetched from here (never the VM);
@@ -2430,12 +2453,25 @@ async function runApiTurnAttempt(
 						workspace,
 						machines: unscopedMachines,
 						messages,
-						// Claude Code has its own file, shell and web tools.
-						tools: claudeCodeBridgeToolSet(tools, [
-							...Object.keys(surfaceTools),
-							...Object.keys(webSearch),
-							...Object.keys(webFetch),
-						]),
+						// Claude Code has its own file, shell and web tools; on a runner
+						// box its file and shell tools are off and ytimesy's take over.
+						tools: claudeCodeBridgeToolSet(
+							tools,
+							[
+								...(claudeRunner ? [] : Object.keys(surfaceTools)),
+								...Object.keys(webSearch),
+								...Object.keys(webFetch),
+							],
+							Boolean(claudeRunner),
+						),
+						...(claudeRunner
+							? {
+									runner: {
+										box: claudeRunner,
+										workspaceTools: Object.keys(surfaceTools),
+									},
+								}
+							: {}),
 						deadline: step?.waitDeadlineAt ?? Date.now() + 10 * 60_000,
 						signal: abort.signal,
 						redact: () => redact,
@@ -2834,9 +2870,7 @@ async function runApiTurnAttempt(
 			isPlatformRestart(cause),
 		);
 		if (platformRestart) {
-			console.warn(
-				"Turn step interrupted by a new Worker version; it resumes.",
-			);
+			console.warn("Turn step interrupted by a platform reset; it resumes.");
 			throw platformRestart;
 		}
 		// The step's soft deadline passed while its model call was still running and

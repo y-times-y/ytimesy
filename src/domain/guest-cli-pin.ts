@@ -38,11 +38,13 @@ export function claudeAgentSdkInstallScript(asRoot: boolean): string {
 if [ ! -f ${CLAUDE_AGENT_SDK_MODULE} ] || [ ! -x ${CLAUDE_AGENT_SDK_CLAUDE_BINARY} ]; then
   ${sudo}mkdir -p /opt/ytimesy-claude-agent-sdk
   (
-    flock -w 300 9
+    # The detached caller bounds installation; do not fail a second chat
+    # merely because the first download takes more than five minutes.
+    flock 9
     if [ ! -f ${CLAUDE_AGENT_SDK_MODULE} ] || [ ! -x ${CLAUDE_AGENT_SDK_CLAUDE_BINARY} ]; then
       ${sudo}rm -rf ${CLAUDE_AGENT_SDK_PREFIX}.tmp
       ${sudo}mkdir -p ${CLAUDE_AGENT_SDK_PREFIX}.tmp
-      ${sudo}env npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false npm install --silent --no-save --prefix ${CLAUDE_AGENT_SDK_PREFIX}.tmp @anthropic-ai/claude-agent-sdk@${PINNED_CLAUDE_AGENT_SDK_VERSION} >/dev/null
+      ${sudo}env npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false npm install --loglevel=error --prefer-online --registry=https://registry.npmjs.org --no-save --prefix ${CLAUDE_AGENT_SDK_PREFIX}.tmp @anthropic-ai/claude-agent-sdk@${PINNED_CLAUDE_AGENT_SDK_VERSION} >/dev/null
       # The read-only helper runs it as another user: readable and runnable by all.
       ${sudo}chmod -R a+rX ${CLAUDE_AGENT_SDK_PREFIX}.tmp
       ${sudo}rm -rf ${CLAUDE_AGENT_SDK_PREFIX}

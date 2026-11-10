@@ -218,12 +218,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 							snapshot.sessionId !== scope.sessionId
 						)
 							return false;
-						const response = await this.room.fetch(
-							new Request("https://chat.internal/snapshot", {
-								method: "POST",
-								body: JSON.stringify(snapshot),
-							}),
-						);
+						const response = await this.room.publish(snapshot);
 						return response.status === 204;
 					},
 					() =>

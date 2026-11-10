@@ -44,7 +44,10 @@ class FakeVm {
 				`${HOME}\n${run}\n${consumed ? "consumed" : "active"}\n${this.files.get(`${RUNS}/session`) ?? ""}`,
 			);
 		}
-		if (command.includes("npm install --silent --no-save")) {
+		if (
+			command.includes(CLAUDE_AGENT_SDK_MODULE) &&
+			command.includes("--version")
+		) {
 			this.installs.push(command);
 			return ok();
 		}
@@ -533,6 +536,90 @@ describe("Claude Code runner", () => {
 		expect(commands[2]).toContain("setsid nohup");
 		for (const name of ["env", "mcp.json", "system", "prompt", "options.json"])
 			expect(vm.files.has(`${RUNS}/1/${name}`)).toBe(true);
+	});
+
+	it("continues the step without launching Claude while the SDK download is pending", async () => {
+		const vm = new FakeVm();
+		const original = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command: string) => {
+			if (
+				command.includes(CLAUDE_AGENT_SDK_MODULE) &&
+				command.includes("--version")
+			)
+				return { exitCode: 78, stdout: "", stderr: "" };
+			if (command.includes("run.sh"))
+				return {
+					exitCode: 0,
+					stdout: String(Math.floor(Date.now() / 1000)),
+					stderr: "",
+				};
+			if (command.startsWith("cat '/tmp/ytimesy-detached/"))
+				return { exitCode: 0, stdout: "", stderr: "" };
+			return original?.(command) as never;
+		});
+		expect(
+			await runClaudeCodeStep(input(vm, { deadline: Date.now() })),
+		).toMatchObject({ outcome: "continue" });
+		expect(vm.launched).toEqual([]);
+		expect(vm.files.has(`${RUNS}/1/prompt`)).toBe(false);
+	});
+
+	it("on a runner box turns Claude's own file and shell tools off and says where the code is", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		await runClaudeCodeStep(
+			input(vm, {
+				remote: {
+					repository: "/home/ubuntu/app",
+					workspaceTools: ["read", "bash"],
+				},
+			}),
+		);
+		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
+		expect(options.disallowedTools).toEqual(
+			expect.arrayContaining(["Bash", "Read", "Edit", "Write", "Glob", "Grep"]),
+		);
+		expect(options.disallowedTools).not.toContain("TodoWrite");
+		const system = vm.files.get(`${RUNS}/1/system`) ?? "";
+		expect(system).toContain("/home/ubuntu/app");
+		expect(system).toContain("mcp__ytimesy__read, mcp__ytimesy__bash");
+		expect(system).toContain("mcp__ytimesy__run_code");
+		expect(system).toContain("TodoWrite");
+		expect(system).not.toContain("on this chat's own cloud machine");
+	});
+
+	it("on a runner box saves the session while the run goes, once a minute", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		vm.files.set(
+			`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
+			"transcript so far",
+		);
+		const step = input(vm, {
+			remote: { repository: "/home/ubuntu/app", workspaceTools: [] },
+		});
+		const result = await runClaudeCodeStep({
+			...step,
+			deadline: 1_000_000 + 400_000,
+		});
+		expect(result.outcome).toBe("continue");
+		expect(step.store.uploadTranscript).toHaveBeenCalledWith(
+			CLAUDE_SESSION,
+			"transcript so far",
+		);
+		// Not on every poll: a few uploads across several minutes, not dozens.
+		expect(
+			vi.mocked(step.store.uploadTranscript).mock.calls.length,
+		).toBeLessThan(10);
+	});
+
+	it("on the chat's own machine saves the session only when the run ends", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		const step = input(vm);
+		await runClaudeCodeStep({ ...step, deadline: 1_000_000 + 400_000 });
+		expect(step.store.uploadTranscript).not.toHaveBeenCalled();
 	});
 
 	it("reads again after a poll the machine did not answer, and fails only when it stays silent", async () => {
