@@ -41,6 +41,19 @@ describe("turn items storage", () => {
 		expect(write.session).toContain("$5");
 	});
 
+	it("binds the first item's id where the statement says", () => {
+		const loaded = [user("u1"), user("u2")];
+		const write = planItemsWrite(
+			{ items: loaded, items_from: "u2" },
+			[...loaded, note("b")],
+			4,
+			"s.items",
+			6,
+		);
+		expect(write.session).toContain("$6");
+		expect(write.session).not.toContain("$5");
+	});
+
 	it("sends everything when an earlier item changed", () => {
 		const loaded = [user("u1"), user("u2")];
 		const items = [note("changed"), user("u2")];

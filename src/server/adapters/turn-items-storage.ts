@@ -52,6 +52,8 @@ export function planItemsWrite(
 	items: readonly SessionItem[],
 	itemsParam: number,
 	sessionColumn: string,
+	/** Where the statement binds `extra`: the position after its last other parameter. */
+	extraParam = itemsParam + 1,
 ): ItemsWrite {
 	const param = `$${itemsParam}`;
 	const full = () => {
@@ -72,7 +74,7 @@ export function planItemsWrite(
 		unchanged = turn.items[index] === items[index];
 	if (!unchanged)
 		return { apiTurn: "items", session: param, extra: [], ...full() };
-	const fromParam = `$${itemsParam + 1}`;
+	const fromParam = `$${extraParam}`;
 	const itemsText = jsonbText(items.slice(start));
 	return {
 		apiTurn: "items",
