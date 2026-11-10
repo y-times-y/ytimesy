@@ -70,9 +70,9 @@ const PAUSING_WAIT_SECONDS = 180;
  * still "starting" after this long is stuck, so the start is asked for again
  * and, past the limit, the wait ends instead of holding the user for minutes.
  */
-const STARTING_REISSUE_SECONDS = 30;
+const STARTING_REISSUE_SECONDS = 20;
 const MAX_START_REISSUES = 2;
-const STARTING_WAIT_SECONDS = 90;
+const STARTING_WAIT_SECONDS = 60;
 /** A machine that reads stopped is started again this many times before giving up. */
 const MAX_STOPPED_RESTARTS = 1;
 /**

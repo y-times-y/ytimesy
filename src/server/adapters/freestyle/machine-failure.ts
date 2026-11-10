@@ -10,6 +10,8 @@ import { isTransientProviderFailure } from "./provider-retry";
  *   possibly still running) attempt is making;
  * - busy: our own per-VM usage lease is held, e.g. by an attempt a Durable
  *   Object restart killed (the lease outlives it by up to 90 s);
+ * - stuck: the provider never reported the VM running (or it stopped while
+ *   starting); a fresh start request may succeed, so it is repeated once;
  * - not-found: the VM or snapshot is gone;
  * - quota: the account's VM or compute allowance;
  * - permanent: anything else (a refusal, a bad request, our own config).
@@ -19,10 +21,13 @@ export type MachineFailureKind =
 	| "rate-limited"
 	| "conflict"
 	| "busy"
+	| "stuck"
 	| "not-found"
 	| "quota"
 	| "permanent";
 
+const NOT_RUNNING_IN_TIME =
+	/did not become running|stopped before it became running/i;
 const LEASE_BUSY = /another operation is updating this machine/i;
 const QUOTA =
 	/LIMIT_EXCEEDED|limit of \d+ VMs|at its VM limit|allowance for vcpu_time|memory_time has been used|compute allowance/i;
@@ -61,6 +66,7 @@ export function machineFailureKind(error: unknown): MachineFailureKind {
 		.join(" ");
 	if (QUOTA.test(text)) return "quota";
 	if (LEASE_BUSY.test(text)) return "busy";
+	if (NOT_RUNNING_IN_TIME.test(text)) return "stuck";
 	if (isTransientProviderFailure(error)) return "transient";
 	return "permanent";
 }
@@ -71,7 +77,8 @@ export function machineFailureRetryable(kind: MachineFailureKind) {
 		kind === "transient" ||
 		kind === "rate-limited" ||
 		kind === "conflict" ||
-		kind === "busy"
+		kind === "busy" ||
+		kind === "stuck"
 	);
 }
 
@@ -161,6 +168,8 @@ export function logMachineFailure(input: {
 	});
 }
 
+const MAX_STUCK_REPEATS = 1;
+
 /**
  * Backoff for a machine start that met a passing condition: about 90 s in
  * all, which outlasts the usage lease (90 s) an attempt killed by a Durable
@@ -189,13 +198,21 @@ export async function resumableMachineStart<T>(
 	wait: (ms: number) => Promise<void> = (ms) =>
 		new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<T> {
+	let stuckRepeats = 0;
 	for (let attempt = 0; ; attempt++) {
 		try {
 			return await operation();
 		} catch (error) {
+			const kind = machineFailureKind(error);
+			// A machine that stayed stuck gets one more start, not the full
+			// backoff: each try already waited about a minute.
+			const stuckExhausted =
+				kind === "stuck" && stuckRepeats >= MAX_STUCK_REPEATS;
 			const willRetry =
 				attempt < delaysMs.length &&
-				machineFailureRetryable(machineFailureKind(error));
+				machineFailureRetryable(kind) &&
+				!stuckExhausted;
+			if (kind === "stuck" && willRetry) stuckRepeats++;
 			logMachineFailure({ ...context, error, attempt: attempt + 1, willRetry });
 			if (!willRetry) throw error;
 			await wait(delaysMs[attempt] ?? 0);

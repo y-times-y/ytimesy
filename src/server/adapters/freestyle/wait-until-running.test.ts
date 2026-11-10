@@ -41,7 +41,7 @@ it("recovers a VM that reads stopped and then starts", async () => {
 	await vi.runAllTimersAsync();
 	await expect(waiting).resolves.toMatchObject({ state: "running" });
 });
-it("gives up on a VM stuck starting after 90 seconds, asking for the start again twice", async () => {
+it("gives up on a VM stuck starting after 60 seconds, asking for the start again twice", async () => {
 	vi.useFakeTimers();
 	const started = Date.now();
 	const start = vi.fn().mockResolvedValue(undefined);
@@ -54,8 +54,8 @@ it("gives up on a VM stuck starting after 90 seconds, asking for the start again
 	await vi.runAllTimersAsync();
 	await assertion;
 	const waited = Date.now() - started;
-	expect(waited).toBeGreaterThan(89_000);
-	expect(waited).toBeLessThanOrEqual(90_000);
+	expect(waited).toBeGreaterThan(59_000);
+	expect(waited).toBeLessThanOrEqual(60_000);
 	expect(start).toHaveBeenCalledTimes(2);
 });
 it("keeps waiting up to three minutes for a machine that is pausing", async () => {
