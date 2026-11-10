@@ -6,7 +6,7 @@
 // (src/domain/delivery-auth.ts) plus a single-use nonce.
 import { spawn } from "node:child_process";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, statfs, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve, sep } from "node:path";
 
@@ -27,10 +27,21 @@ function sign(secret, method, target, expires, nonce, body) {
 /** The signature the edge must send; exported so the edge client signs the same bytes. */
 export const runnerSignature = sign;
 
-export function createRunnerServer({ secret, home, now = Date.now }) {
+/** Share of the disk holding `home` that is used (0-1). */
+async function diskUsedShare(home) {
+	const info = await statfs(home);
+	return 1 - info.bavail / info.blocks;
+}
+
+/** Above this share the box logs a warning; the edge refuses new runs at 95% (runnerFull in the app). */
+export const DISK_WARN_SHARE = 0.8;
+const WARN_EVERY_MS = 5 * 60_000;
+
+export function createRunnerServer({ secret, home, now = Date.now, disk = diskUsedShare }) {
 	if (!secret || secret.length < 32) throw new Error("Runner signing key is too short.");
 	const root = resolve(home);
 	const seen = new Map();
+	let lastWarning = 0;
 	const inside = (path) => {
 		const full = resolve(root, path);
 		return full === root || full.startsWith(root + sep) ? full : null;
@@ -69,7 +80,14 @@ export function createRunnerServer({ secret, home, now = Date.now }) {
 			response.end(JSON.stringify(value));
 		};
 		try {
-			if (request.method === "GET" && request.url === "/health") return reply(200, { ok: true });
+			if (request.method === "GET" && request.url === "/health") {
+				const share = await disk(root);
+				if (share >= DISK_WARN_SHARE && now() - lastWarning >= WARN_EVERY_MS) {
+					lastWarning = now();
+					console.warn(JSON.stringify({ level: "warn", message: "Runner disk above 80% used", usedShare: Number(share.toFixed(3)) }));
+				}
+				return reply(200, { ok: true, disk: { usedShare: Number(share.toFixed(4)) } });
+			}
 			let size = 0;
 			const chunks = [];
 			for await (const chunk of request) {

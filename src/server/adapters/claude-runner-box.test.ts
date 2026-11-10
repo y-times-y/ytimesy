@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runnerSignature } from "../../../infra/claude-runner-box/server.mjs";
 import {
+	claudeRunnerDiskShare,
 	claudeRunnerMachine,
 	runnerRequestSignature,
 } from "./claude-runner-box";
@@ -68,5 +69,34 @@ describe("claudeRunnerMachine", () => {
 		const machine = claudeRunnerMachine(box, refuse);
 		expect(await machine.readFile("nope")).toBeNull();
 		await expect(machine.shell("true", 1000)).rejects.toThrow("403");
+	});
+});
+
+describe("claudeRunnerDiskShare", () => {
+	const answer = (value: unknown, status = 200) =>
+		(async () =>
+			new Response(JSON.stringify(value), {
+				status,
+			})) as unknown as typeof fetch;
+
+	it("reads the share of the disk in use", async () => {
+		expect(
+			await claudeRunnerDiskShare(
+				box,
+				answer({ ok: true, disk: { usedShare: 0.97 } }),
+			),
+		).toBe(0.97);
+	});
+
+	it("is null when the box cannot say, so a health problem never blocks a turn", async () => {
+		expect(await claudeRunnerDiskShare(box, answer({ ok: true }))).toBeNull();
+		expect(
+			await claudeRunnerDiskShare(box, answer({ disk: { usedShare: 7 } })),
+		).toBeNull();
+		expect(await claudeRunnerDiskShare(box, answer({}, 500))).toBeNull();
+		const down = (async () => {
+			throw new Error("down");
+		}) as unknown as typeof fetch;
+		expect(await claudeRunnerDiskShare(box, down)).toBeNull();
 	});
 });

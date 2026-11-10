@@ -98,6 +98,16 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
   sessions are evicted down to 70%, never one touched in the last hour. An
   evicted session on a chat's box falls back to the saved copy, which cannot
   hold a large one. Not run on a real box yet.
+- **If the disk still fills.** `GET /health` (no signature) reports
+  `disk.usedShare`, and the box logs a warning above 80% (its `/health` and the
+  cleanup run). The edge asks `/health` before it starts a new run and refuses
+  one at 95% or more with "its runner is full (the disk is almost out of
+  space), so it did not start"; later steps of a run in progress are not
+  blocked, and a `/health` that cannot be read never blocks a turn. The volume
+  grows live: `grow-volume.py --instance i-... --size-gb N` (EBS can grow, not
+  shrink, one change per 6 hours) and the box's root `ytimesy-grow-root` timer
+  grows the partition and filesystem within 15 minutes. Nothing pages anyone
+  yet: the warning is in the box's journal.
 - **Changing the box list moves chats to other boxes** (the box is a hash of
   the chat id over the list). Persist each chat's box before ADDING a box
   (scale-out). For a move to another backend it can be backfilled then, by

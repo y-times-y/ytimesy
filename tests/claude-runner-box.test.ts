@@ -2,9 +2,10 @@ import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	createRunnerServer,
+	DISK_WARN_SHARE,
 	runnerSignature,
 } from "../infra/claude-runner-box/server.mjs";
 
@@ -99,5 +100,42 @@ describe("the runner box", () => {
 		const result = await call("/exec", { command: "sleep 5", timeoutMs: 200 });
 		expect(result.status).toBe(200);
 		expect(result.body.exitCode).not.toBe(0);
+	});
+});
+
+describe("the runner box health", () => {
+	async function health(share: number, at = Date.now()) {
+		const local = createRunnerServer({
+			secret,
+			home,
+			now: () => at,
+			disk: async () => share,
+		});
+		await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
+		const url = `http://127.0.0.1:${(local.address() as AddressInfo).port}/health`;
+		try {
+			return await (await fetch(url)).json();
+		} finally {
+			await new Promise<void>((resolve) => local.close(() => resolve()));
+		}
+	}
+
+	it("reports how full the disk is without asking for a signature", async () => {
+		expect(await health(0.42)).toEqual({ ok: true, disk: { usedShare: 0.42 } });
+	});
+
+	it("logs a warning once the disk is 80% used, not before", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await health(DISK_WARN_SHARE - 0.01);
+			expect(warn).not.toHaveBeenCalled();
+			await health(0.83);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(String(warn.mock.calls[0][0])).toContain(
+				"Runner disk above 80% used",
+			);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

@@ -6,7 +6,7 @@
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y python3 curl ca-certificates xz-utils git
+apt-get install -y python3 curl ca-certificates xz-utils git cloud-guest-utils
 
 # Node at the path the runner expects (/usr/local/bin/node).
 NODE_VERSION=22.11.0
@@ -63,6 +63,36 @@ OnUnitActiveSec=15min
 WantedBy=timers.target
 UNIT
 
+# Growing the EBS volume (infra/claude-runner-box/grow-volume.py) needs no
+# downtime: this root timer then grows the partition and filesystem to match.
+# It is idempotent, so running it when nothing changed does nothing.
+cat > /usr/local/sbin/ytimesy-grow-root <<'GROW'
+#!/bin/bash
+set -u
+device=$(findmnt -n -o SOURCE /)
+disk=/dev/$(lsblk -no pkname "$device")
+partition=$(cat "/sys/class/block/$(basename "$device")/partition")
+growpart "$disk" "$partition" >/dev/null 2>&1 || true
+resize2fs "$device" >/dev/null 2>&1 || true
+GROW
+chmod 755 /usr/local/sbin/ytimesy-grow-root
+cat > /etc/systemd/system/ytimesy-grow-root.service <<'UNIT'
+[Unit]
+Description=Grow the root filesystem to the EBS volume's size
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ytimesy-grow-root
+UNIT
+cat > /etc/systemd/system/ytimesy-grow-root.timer <<'UNIT'
+[Unit]
+Description=Grow the root filesystem, every 15 minutes
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+[Install]
+WantedBy=timers.target
+UNIT
+
 if [ -n '__TUNNEL_TOKEN__' ]; then
   curl -fsSL -o /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
   dpkg -i /tmp/cloudflared.deb
@@ -70,4 +100,4 @@ if [ -n '__TUNNEL_TOKEN__' ]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now ytimesy-runner.service ytimesy-runner-cleanup.timer
+systemctl enable --now ytimesy-runner.service ytimesy-runner-cleanup.timer ytimesy-grow-root.timer

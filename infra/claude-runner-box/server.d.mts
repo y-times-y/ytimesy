@@ -13,4 +13,7 @@ export function createRunnerServer(input: {
 	secret: string;
 	home: string;
 	now?: () => number;
+	disk?: (home: string) => Promise<number>;
 }): Server;
+
+export const DISK_WARN_SHARE: number;

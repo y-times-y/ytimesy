@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
 	ClaudeCodeApiUnavailable,
+	ClaudeCodeRunFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
@@ -612,6 +613,29 @@ describe("Claude Code runner", () => {
 		expect(
 			vi.mocked(step.store.uploadTranscript).mock.calls.length,
 		).toBeLessThan(10);
+	});
+
+	it("asks before launching a run, and refuses the run when told to", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		const beforeLaunch = vi.fn(async () => {});
+		await runClaudeCodeStep(input(vm, { beforeLaunch }));
+		expect(beforeLaunch).toHaveBeenCalledTimes(1);
+
+		const refused = new FakeVm();
+		await expect(
+			runClaudeCodeStep(
+				input(refused, {
+					beforeLaunch: async () => {
+						throw new ClaudeCodeRunFailure(
+							"its runner is full, so it did not start.",
+						);
+					},
+				}),
+			),
+		).rejects.toThrow("its runner is full");
+		expect(refused.launched).toEqual([]);
 	});
 
 	it("on the chat's own machine saves the session only when the run ends", async () => {

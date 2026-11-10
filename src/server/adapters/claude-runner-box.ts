@@ -75,6 +75,26 @@ async function call<T>(
 	return (await response.json()) as T;
 }
 
+/** The share of the box's disk in use (0-1), or null when it could not be read. */
+export async function claudeRunnerDiskShare(
+	box: ClaudeRunnerBox,
+	fetcher: typeof fetch = fetch,
+): Promise<number | null> {
+	try {
+		const response = await fetcher(new URL("/health", box.baseUrl), {
+			redirect: "manual",
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) return null;
+		const share = (
+			(await response.json()) as { disk?: { usedShare?: unknown } }
+		).disk?.usedShare;
+		return typeof share === "number" && share >= 0 && share <= 1 ? share : null;
+	} catch {
+		return null;
+	}
+}
+
 /** The machine the Claude Code runner drives, backed by one runner box. */
 export function claudeRunnerMachine(
 	box: ClaudeRunnerBox,
