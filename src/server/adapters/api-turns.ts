@@ -44,6 +44,7 @@ import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
+import { newTurnItemsColumn, planItemsWrite } from "./turn-items-storage";
 import { startQueuedTurnsDirectly } from "./turn-start";
 
 export type ApiTurn = {
@@ -56,6 +57,8 @@ export type ApiTurn = {
 	state: "queued" | "running" | "completed" | "failed" | "cancelled";
 	messages: ModelMessage[];
 	items: SessionItem[];
+	/** Set when the turn row is in the new shape: the id of the turn's first item (turn-items-storage.ts). */
+	items_from?: string;
 	lease_id: string | null;
 	settings?: unknown;
 	/** The fallback route serving the rest of this turn after a failover (TurnFailover), and its same-route retries. */
@@ -201,6 +204,9 @@ export async function enqueueApiTurn(input: {
 			);
 		await recordConversationPoint(client, input);
 		turnId = randomUUID();
+		const executor = configuredTurnExecutor(
+			process.env.YTIMESY_MODEL_EXECUTION_TARGET,
+		);
 		started = {
 			userId: input.userId,
 			harness: subscription ? "codex" : "api",
@@ -210,7 +216,7 @@ export async function enqueueApiTurn(input: {
 		// The turn and the chat's running state in one statement.
 		await client.query(
 			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,$8),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
 			 update agent_session set harness=$14,listed_model_id=$13,items=$8,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
@@ -222,11 +228,12 @@ export async function enqueueApiTurn(input: {
 				jsonbText(input.messages),
 				jsonbText(input.items),
 				input.idempotencyKey ?? null,
-				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
+				executor,
 				JSON.stringify(input.settings ?? {}),
 				input.failover ? JSON.stringify(input.failover) : null,
 				input.routeId,
 				subscription ? "codex" : "api",
+				executor === "durable-object" ? newTurnItemsColumn(input.items) : null,
 			],
 		);
 		await client.query("commit");
@@ -481,18 +488,20 @@ export async function checkpointApiTurn(
 	items: readonly SessionItem[],
 	failover?: TurnFailoverColumn,
 ) {
+	const write = planItemsWrite(turn, items, 4, "agent_session.items");
 	const result = await database().query<{ version: string }>(
-		`with saved as (update api_turn set messages=$3,items=$4,failover=coalesce($5::jsonb,failover),updated_at=now()
+		`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
-		 update agent_session set items=$4,updated_at=now() where id in(select session_id from saved)
+		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 		 returning (select updated_at::text from saved) as version`,
 		[
 			turn.id,
 			turn.lease_id,
 			jsonbText(messages),
-			jsonbText(items),
+			write.itemsText,
 			failover ? JSON.stringify(failover) : null,
+			...write.extra,
 		],
 	);
 	if (!result.rows[0]) throw new Error("API turn lease was lost.");
@@ -505,14 +514,14 @@ export async function publishApiTurnProgress(
 	turn: ApiTurn,
 	items: readonly SessionItem[],
 ) {
-	const text = jsonbText(items);
+	const write = planItemsWrite(turn, items, 3, "agent_session.items");
 	const result = await database().query<{ version: string }>(
-		`with saved as (update api_turn set items=$3,updated_at=now()
+		`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
-	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved)
+	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, text],
+		[turn.id, turn.lease_id, write.itemsText, ...write.extra],
 	);
 	if (result.rows[0])
 		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
@@ -525,7 +534,7 @@ export async function publishApiTurnProgress(
 		throw new Error("API turn lease was lost.");
 	}
 	await wakeConversationProgress();
-	return text.length;
+	return write.bytes;
 }
 
 /** Whichever watcher noticed first, a stop the user asked for is a clean stop. */
@@ -559,20 +568,22 @@ export async function finalizeApiTurn(
 ) {
 	// Its messages record when it ended (turn-end.ts).
 	const items = settledTurnItems(settled, Date.now());
+	const write = planItemsWrite(turn, items, 4, "s.items");
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(
-		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,messages=coalesce($5::jsonb,messages),updated_at=now()
+		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=${write.apiTurn},messages=coalesce($5::jsonb,messages),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at)
-		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
+		 update agent_session s set items=${write.session},turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
 		[
 			turn.id,
 			turn.lease_id,
 			state,
-			jsonbText(items),
+			write.itemsText,
 			messages ? jsonbText(messages) : null,
+			...write.extra,
 		],
 	);
 	captureSettledTurns(result.rows);
@@ -599,8 +610,8 @@ export async function replaceSettledTurnItem(
 	item: SessionItem | null,
 ) {
 	const result = await database().query<{ id: string }>(
-		`with turns as (update api_turn set items=${REPLACED_ITEM},updated_at=now()
-		 where session_id=$4 and user_id=$5 and (id=$1 or state in ('queued','running')) and ${HAS_ITEM} returning id)
+		`with turns as (update api_turn set items=case when jsonb_typeof(items)='array' then ${REPLACED_ITEM} else items end,updated_at=now()
+		 where session_id=$4 and user_id=$5 and (id=$1 or state in ('queued','running')) and (${HAS_ITEM} or (jsonb_typeof(items)='object' and state in ('queued','running'))) returning id)
 		 update agent_session set items=${REPLACED_ITEM},updated_at=now()
 		 where id=$4 and user_id=$5 and ${HAS_ITEM} returning id`,
 		[

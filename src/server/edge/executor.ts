@@ -100,6 +100,7 @@ import {
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
+import { logTurnStepSizes } from "./turn-step-sizes";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
@@ -547,7 +548,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		// this chat's copy unless another writer changed the turn since.
 		const row = (
 			await database().query<
-				Omit<ApiTurn, "messages" | "items"> & {
+				Omit<ApiTurn, "messages" | "items" | "items_from"> & {
+					items_from: string | null;
 					fresh: boolean;
 					cancel_requested: boolean;
 					past_deadline?: boolean;
@@ -556,7 +558,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				}
 			>(
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
-			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,
+			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,t.items->>'from' as items_from,
 			 (extract(epoch from t.created_at)*1000)::float8 as queued_at_ms,
 			 heartbeat_at>=now()-interval '45 seconds' as fresh,
 			 ${turnPastDeadlineSql("t")} as past_deadline,
@@ -588,10 +590,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			row.cancel_requested = true;
 		}
 		let history = this.history.read(row.id, row.version);
+		const loadedFromDatabase = !history;
 		if (!history) {
 			const loaded = (
 				await database().query<Pick<ApiTurn, "messages" | "items">>(
-					"select messages,items from api_turn where id=$1 and lease_id=$2",
+					// A turn row in the new shape keeps no items; the chat's are the history.
+					`select t.messages,case when jsonb_typeof(t.items)='array' then t.items else s.items end as items
+					 from api_turn t join agent_session s on s.id=t.session_id where t.id=$1 and t.lease_id=$2`,
 					[row.id, leaseId],
 				)
 			).rows[0];
@@ -599,7 +604,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			history = loaded;
 			this.history.write(row.id, row.version, loaded);
 		}
-		const turn = { ...row, ...history };
+		logTurnStepSizes(
+			row.id,
+			history,
+			loadedFromDatabase ? "database" : "cache",
+		);
+		const { items_from: itemsFrom, ...identity } = row;
+		const turn = {
+			...identity,
+			...history,
+			...(itemsFrom === null ? {} : { items_from: itemsFrom }),
+		};
 		if (turn.cancel_requested) return { kind: "cancelled", turn };
 		// No await between reading and inserting: concurrent requests cannot claim the same step.
 		const claimed = claimConversationStep(this.steps, step, Date.now(), resume);

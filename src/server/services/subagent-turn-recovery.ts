@@ -29,7 +29,7 @@ export async function recoverChildTurnEvents(machines: WorkspaceMachines) {
 		state: "completed" | "failed";
 		items: unknown;
 	}>(
-		`select t.id,t.session_id,c.user_id,t.state,t.items from agent_session c
+		`select t.id,t.session_id,c.user_id,t.state,case when jsonb_typeof(t.items)='array' then t.items else c.items end as items from agent_session c
 		 cross join lateral (select l.* from api_turn l where l.session_id=c.id and l.user_id=c.user_id
 		   order by l.created_at desc limit 1) t
 		 where c.parent_session_id is not null and c.agent_role is not null and t.state in ('completed','failed')
