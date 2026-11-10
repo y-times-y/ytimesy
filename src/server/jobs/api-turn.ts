@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
+import { boundActiveTurnItems } from "#/domain/active-turn-bound";
 import { applyPlanUpdate } from "#/domain/agent-todos";
 import {
 	assertApiContextFits,
@@ -119,6 +120,7 @@ import {
 import { ASK_USER_TOOL } from "#/domain/user-question";
 import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
+import { lastUserMessageIndex } from "#/server/adapters/turn-items-storage";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -659,6 +661,11 @@ async function runApiTurnAttempt(
 		| undefined;
 	const saveCheckpoint = () =>
 		timed("turn:checkpoint", async () => {
+			// A long turn keeps recent tool output whole and older output as previews.
+			const activeStart = turn.items_from
+				? items.findIndex((item) => item.id === turn.items_from)
+				: lastUserMessageIndex(items);
+			items = boundActiveTurnItems(items, activeStart);
 			const saved = () =>
 				!retryCleared &&
 				checkpointed?.messages === messages &&

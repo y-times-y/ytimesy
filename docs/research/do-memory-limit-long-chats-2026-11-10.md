@@ -76,3 +76,25 @@ transfer, and a prior valid checkpoint for the same session is retained. The
 full snapshots used by execution checkpoints, and delta delivery remain
 separate work. No heap profiling or unlimited-demand reliability result is
 claimed. See `docs/claude-job-lifecycle-hardening.md` for checks and rollout.
+
+## Execution-history implementation (2026-11-10, not deployed, not live-verified)
+
+- **Sizes per step.** `turn.step_sizes` (`src/server/edge/turn-step-sizes.ts`)
+  logs message/item counts, items after the last user message, serialized bytes
+  when the history came from Postgres, and `heapUsed` where the runtime reports
+  it. Use it to confirm where memory goes before further changes.
+- **No full copy per turn.** A durable-object turn row now stores
+  `items = {"from": <id of its user message>}`; `agent_session.items` is the
+  only history. The step loader reads the chat's items for such rows and the
+  array for old rows (both shapes read for one deploy; old rows keep their
+  own shape until they finish). Drop the old shape later.
+- **Append in SQL.** Writes send only the turn's items; SQL keeps the chat's
+  items before `from` and appends them (`turn-items-storage.ts`). If an earlier
+  item changed in memory, the full list is sent instead.
+- **Bounded active turn.** At each checkpoint, past 1,000,000 characters of
+  tool output in the turn, older outputs become 2,000-character previews (the
+  newest 20 stay whole). This trims display items, not the model's messages;
+  the trimmed full output is not kept elsewhere.
+- Still open: delta delivery (step 3), whether a running turn still sends its
+  whole active slice per write (yes), and measured heap results. Unit tests
+  cover the planner and the bound; the SQL was not run against Postgres.
