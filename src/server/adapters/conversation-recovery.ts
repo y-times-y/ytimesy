@@ -115,13 +115,26 @@ export async function conversationPointCodeRef(
 
 /** The model history a restored conversation continues from, while its transcript is unchanged since. */
 export async function recoveredConversation(userId: string, sessionId: string) {
+	// The head's messages are a full copy of the model history (megabytes on a
+	// long chat) and it matches only until the transcript changes, so read its
+	// small fields first and the messages only when it still matches.
 	const { rows } = await database().query(
-		`select r.response->'result' as head,s.items from agent_task_command_receipt r
+		`select r.response->'result'->>'fingerprint' as fingerprint,s.items from agent_task_command_receipt r
     join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id='conversation-head' and r.status='done'`,
 		[userId, sessionId],
 	);
 	const row = rows[0];
-	const head = row?.head as
+	if (
+		typeof row?.fingerprint !== "string" ||
+		row.fingerprint !== transcriptFingerprint(row.items)
+	)
+		return null;
+	const { rows: heads } = await database().query(
+		`select r.response->'result' as head from agent_task_command_receipt r
+    join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id='conversation-head' and r.status='done'`,
+		[userId, sessionId],
+	);
+	const head = heads[0]?.head as
 		| {
 				fingerprint: string;
 				modelId: string;
@@ -129,8 +142,8 @@ export async function recoveredConversation(userId: string, sessionId: string) {
 				messages: ModelMessage[];
 		  }
 		| undefined;
-	if (!head || head.fingerprint !== transcriptFingerprint(row.items))
-		return null;
+	// The head was replaced between the two reads: it is not this transcript's.
+	if (!head || head.fingerprint !== row.fingerprint) return null;
 	return {
 		messages: head.messages,
 		modelId: head.modelId,
