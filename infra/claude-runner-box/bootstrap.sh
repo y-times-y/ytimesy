@@ -37,6 +37,8 @@ Wants=network-online.target
 User=ytimesy-runner
 EnvironmentFile=/etc/ytimesy-runner.env
 ExecStart=/usr/local/bin/node /opt/ytimesy-runner/server.mjs
+# Agent processes are detached and journaled. Restart the API, not live turns.
+KillMode=process
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes

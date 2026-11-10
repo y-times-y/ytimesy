@@ -159,3 +159,32 @@ These settings apply when a new Claude process launches. They do not import
 old Claude-native background jobs, restart active processes, or repair their
 missing completion records. See `docs/claude-job-lifecycle-hardening.md` for
 checks and the unresolved wider reliability work.
+
+### Follow-up hardening (2026-11-10, pending deployment)
+
+- The conversation DO now stores its chosen runner origin in SQLite through
+  `ClaudeRunnerPlacement`. The configured hash proposes the first origin only;
+  later steps and turns retain the stored origin when the pool changes. Secrets
+  are never stored there. Placement is erased on chat purge, not at turn end.
+  Removing a box still requires migration/draining; it no longer silently moves
+  that chat to a box missing its large session. Keep the feature enabled and its
+  existing hosts reachable until their sessions have been migrated.
+- Cancellation and failover stop the actual AWS runner process when remote
+  mode is selected, even if the Freestyle workspace is unavailable.
+- Transcript saving probes the file size on the execution host before reading
+  it into the edge. Large local sessions are retained, and a previous valid
+  checkpoint for the same session is retained instead of being cleared. The
+  20 MiB checkpoint limit is not raised; large-session host-loss recovery is
+  still limited to the last checkpoint, if one exists.
+- New runner bootstrap units use `KillMode=process`: restarting the API must
+  not let systemd terminate every detached agent in the service's cgroup.
+  Existing boxes need this unit setting applied before their API is restarted.
+  No live boxes have been changed for this follow-up patch.
+- The API no longer passes `RUNNER_SIGNING_KEY` into spawned commands, handles
+  spawn errors without crashing the server, and times out the entire short-exec
+  process group. Detached, independently scoped Claude runs are not members of
+  that short-exec group.
+- Chat display/delivery pages are bounded by item count and serialized byte
+  budget, splitting oversized turns without deleting any stored items. This
+  bounds normal delivery batches; it does not yet normalize the execution
+  history stored in `api_turn`. A single oversized item remains readable.

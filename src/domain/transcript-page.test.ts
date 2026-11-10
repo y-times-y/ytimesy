@@ -4,6 +4,8 @@ import {
 	latestTranscriptPage,
 	olderTranscriptPage,
 	progressPage,
+	TRANSCRIPT_PAGE_BYTES,
+	TRANSCRIPT_PAGE_ITEMS,
 	TRANSCRIPT_PAGE_TURNS,
 	withEarlierPages,
 	withOlderPage,
@@ -24,7 +26,46 @@ const turns = (from: number, to: number) =>
 	Array.from({ length: to - from }, (_, index) => turn(from + index)).flat();
 const ids = (items: readonly SessionItem[]) => items.map((item) => item.id);
 
-describe("pages of whole turns", () => {
+describe("bounded transcript pages", () => {
+	it("splits a long turn at item boundaries and keeps every item pageable", () => {
+		const items = [
+			user("start"),
+			...Array.from({ length: 501 }, (_, n) => reply(`work-${n}`)),
+		];
+		let page = latestTranscriptPage(items);
+		let all = [...page.items];
+		expect(page.items).toHaveLength(TRANSCRIPT_PAGE_ITEMS);
+		while (page.hasOlderItems) {
+			const first = page.items[0];
+			if (!first) throw new Error("An older-page cursor is required.");
+			const older = olderTranscriptPage(items, first.id);
+			if (!older) throw new Error("The cursor must remain in the transcript.");
+			page = older;
+			all = [...page.items, ...all];
+		}
+		expect(ids(all)).toEqual(ids(items));
+	});
+	it("bounds large Unicode output but never hides an individual oversized item", () => {
+		const items = [
+			user("ask"),
+			...Array.from({ length: 10 }, (_, n) => ({
+				...reply(`unicode-${n}`),
+				text: "🧭".repeat(20_000),
+			})),
+		];
+		const page = latestTranscriptPage(items);
+		expect(page.hasOlderItems).toBe(true);
+		expect(
+			new TextEncoder().encode(JSON.stringify(page.items)).length,
+		).toBeLessThan(TRANSCRIPT_PAGE_BYTES);
+		const enormous = {
+			...reply("single"),
+			text: "x".repeat(TRANSCRIPT_PAGE_BYTES + 1),
+		};
+		expect(latestTranscriptPage([user("previous"), enormous]).items).toEqual([
+			enormous,
+		]);
+	});
 	it("cuts at a turn start, never inside a turn", () => {
 		const page = latestTranscriptPage(turns(0, 5), 2);
 		expect(ids(page.items)).toEqual(["u3", "a3", "b3", "u4", "a4", "b4"]);

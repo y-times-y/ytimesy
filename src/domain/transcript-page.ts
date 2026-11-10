@@ -3,11 +3,15 @@ import type { SessionItem } from "./session-item";
 
 /**
  * A long chat loads in pages of whole turns, newest first: opening it reads
- * its last TRANSCRIPT_PAGE_TURNS turns, and scrolling up reads the turns
- * before the oldest one shown. A turn (the message that starts it, its work
- * and its reply) is never split across pages.
+ * its last TRANSCRIPT_PAGE_TURNS turns, and scrolling up reads the items
+ * before the oldest one shown. Whole turns are preferred, but a large turn
+ * is split at item boundaries to keep each delivery bounded. Nothing is deleted.
  */
 export const TRANSCRIPT_PAGE_TURNS = 30;
+/** A single long turn must not make every live update load an unbounded history. */
+export const TRANSCRIPT_PAGE_ITEMS = 200;
+export const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
+const transcriptEncoder = new TextEncoder();
 
 /** Some transcript items, and whether the chat holds turns before them. */
 export type TranscriptPage<Item = SessionItem> = {
@@ -26,13 +30,19 @@ export function transcriptPageBefore<Item extends SessionItem>(
 	turns = TRANSCRIPT_PAGE_TURNS,
 ): TranscriptPage<Item> {
 	let found = 0;
-	for (let index = end - 1; index >= 0; index--) {
+	let bytes = 0;
+	const minimum = Math.max(0, end - TRANSCRIPT_PAGE_ITEMS);
+	for (let index = end - 1; index >= minimum; index--) {
+		bytes += transcriptEncoder.encode(JSON.stringify(items[index])).byteLength;
+		// Always return one item, even a single oversized user message.
+		if (bytes > TRANSCRIPT_PAGE_BYTES && index < end - 1)
+			return { items: items.slice(index + 1, end), hasOlderItems: true };
 		if (!startsTurn(items[index] as SessionItem)) continue;
 		found++;
 		if (found === turns && index > 0)
 			return { items: items.slice(index, end), hasOlderItems: true };
 	}
-	return { items: items.slice(0, end), hasOlderItems: false };
+	return { items: items.slice(minimum, end), hasOlderItems: minimum > 0 };
 }
 
 /** The open page: the chat's last turns. */

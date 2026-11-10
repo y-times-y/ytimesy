@@ -29,7 +29,7 @@ import {
 	claudeSubscriptionEnabled,
 	isClaudeCodeRevision,
 } from "#/domain/claude-code-route";
-import { claudeRunnerFor } from "#/domain/claude-runner";
+import { type ClaudeRunnerBox, claudeRunnerFor } from "#/domain/claude-runner";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
@@ -138,6 +138,7 @@ import {
 	replaceSettledTurnItem,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
+import { pinnedClaudeRunner } from "../adapters/claude-runner-placement";
 import { claudeSubscriptionStatus } from "../adapters/claude-subscription";
 import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { archiveModelContext } from "../adapters/context-archives";
@@ -568,6 +569,7 @@ async function runApiTurnAttempt(
 	let fusionThinLead = false;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
+	let activeClaudeRunner: ClaudeRunnerBox | null = null;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		// A deploy resumes the step, and a Claude Code turn's agent loop is its
@@ -577,12 +579,17 @@ async function runApiTurnAttempt(
 			leavesClaudeCodeRunning([abort.signal.reason, step?.signal.reason])
 		)
 			return;
-		if (execution)
-			commandStop ??= stopApiTurnCommands(execution, turn.id).catch(() => {
-				console.warn(
-					"Command cancellation needs recovery; turn fencing remains active.",
-				);
-			});
+		if (execution || activeClaudeRunner)
+			commandStop ??= Promise.all([
+				execution ? stopApiTurnCommands(execution, turn.id) : undefined,
+				activeClaudeRunner ? stopClaudeCodeRun?.() : undefined,
+			])
+				.then(() => undefined)
+				.catch(() => {
+					console.warn(
+						"Command cancellation needs recovery; turn fencing remains active.",
+					);
+				});
 	};
 	abort.signal.addEventListener("abort", stopCommands, { once: true });
 	let publishProgress:
@@ -925,6 +932,13 @@ async function runApiTurnAttempt(
 				throw new Error("Claude Code chats run on the durable executor only.");
 			// An earlier step's CLI may still run on the chat's machine.
 			const claudeCodeOwner = owner;
+			const candidate = claudeRunnerFor({
+				env: process.env,
+				userId: turn.user_id,
+				sessionId: owner.id,
+				reader: isReaderRole(owner.agentRole) || sideReadOnly,
+			});
+			activeClaudeRunner = candidate ? pinnedClaudeRunner(candidate) : null;
 			stopClaudeCodeRun = () =>
 				stopClaudeCodeTurnRun({
 					machines: unscopedMachines,
@@ -934,6 +948,7 @@ async function runApiTurnAttempt(
 							? WorkspaceId(claudeCodeOwner.providerRef)
 							: null),
 					turnId: turn.id,
+					runner: activeClaudeRunner,
 				});
 			// A refused or removed token is a route failure: the turn fails over.
 			const status = await claudeSubscriptionStatus(turn.user_id);
@@ -1647,15 +1662,7 @@ async function runApiTurnAttempt(
 		// A Claude Code turn on a runner box (src/domain/claude-runner.ts) gets
 		// code mode whatever the variant says: the chat's tools are a network hop
 		// away there, and run_code batches them.
-		const claudeRunner =
-			claudeCode && !reader
-				? claudeRunnerFor({
-						env: process.env,
-						userId: turn.user_id,
-						sessionId: owner.id,
-						reader,
-					})
-				: null;
+		const claudeRunner = activeClaudeRunner;
 		const codeMode =
 			(surface.lean || claudeCode) &&
 			(variant.codeMode !== "off" || claudeCode) &&

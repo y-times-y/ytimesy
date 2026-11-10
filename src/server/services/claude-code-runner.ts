@@ -689,18 +689,35 @@ async function saveTranscript(
 ) {
 	// A read-only helper's session lives in the reader's scratch for this turn only.
 	if (input.reader) return;
-	const text = await input.readFile(
-		transcriptPath(home, input.cwd, claudeSessionId),
+	const source = transcriptPath(home, input.cwd, claudeSessionId);
+	// Probe on the host before transferring: a 250 MB local session must
+	// never be read into the 128 MB edge isolate just to reject its size.
+	const size = await checked(
+		input.shell,
+		`stat -c %s ${quote(source)}`,
+		"its transcript size could not be read.",
 	);
-	if (!text) return;
-	if (Buffer.byteLength(text) > MAX_TRANSCRIPT_BYTES) {
+	const bytes = Number(size.trim());
+	if (!size.trim() || !Number.isSafeInteger(bytes) || bytes < 0)
+		throw new Error("Invalid Claude transcript size.");
+	if (bytes > MAX_TRANSCRIPT_BYTES) {
+		const previous = await input.store.readSession();
 		await input.store.saveSession({
 			claudeSessionId,
-			transcriptPath: null,
+			transcriptPath:
+				previous?.claudeSessionId === claudeSessionId
+					? previous.transcriptPath
+					: null,
 			cwd: input.cwd,
 		});
 		return;
 	}
+	const text = await input.readFile(source);
+	if (!text) return;
+	if (Buffer.byteLength(text) > MAX_TRANSCRIPT_BYTES)
+		throw new Error(
+			"The Claude transcript grew beyond the checkpoint transfer limit.",
+		);
 	const path = await input.store.uploadTranscript(claudeSessionId, text);
 	await input.store.saveSession({
 		claudeSessionId,

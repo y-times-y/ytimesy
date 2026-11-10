@@ -1,3 +1,8 @@
+import {
+	TRANSCRIPT_PAGE_BYTES,
+	TRANSCRIPT_PAGE_ITEMS,
+} from "#/domain/transcript-page";
+
 /**
  * SQL that slices a chat's stored transcript into pages of whole turns, as
  * transcriptPageBefore in domain/transcript-page.ts does, so only the page
@@ -16,10 +21,26 @@ export function latestPageJoin(turns: number) {
 	if (!Number.isInteger(turns) || turns < 1) throw new Error("Invalid page.");
 	return `cross join lateral (select case when count(*) < ${turns} then 0 else min(t.position) end as first
 	 from (select i.position from agent_session_item i where i.session_id=s.id and i.starts_turn
-	  order by i.position desc limit ${turns}) t) page`;
+	  order by i.position desc limit ${turns}) t) turn_page
+	 cross join lateral (select ${boundedPageStartSql("s.id", "turn_page.first")} as first) page`;
 }
 
-/** With latestPageJoin: the row's last turns, and whether it holds turns before them. */
+/** Indexed, bounded candidate rows; PostgreSQL keeps the rest of a long turn out of the Worker. */
+export function boundedPageStartSql(
+	session: string,
+	first: string,
+	stop?: string,
+) {
+	return `(select coalesce(min(p.position) filter (where p.used_bytes <= ${TRANSCRIPT_PAGE_BYTES} or p.ordinal=1),0)
+	 from (select candidates.position,
+	 sum(candidates.bytes) over (order by candidates.position desc) as used_bytes,
+	 row_number() over (order by candidates.position desc) as ordinal
+	 from (select i.position,octet_length(i.item::text) as bytes from agent_session_item i
+	 where i.session_id=${session} and i.position >= ${first}${stop ? ` and i.position < ${stop}` : ""}
+	 order by i.position desc limit ${TRANSCRIPT_PAGE_ITEMS}) candidates) p)`;
+}
+
+/** With latestPageJoin: bounded latest items, and whether older items remain pageable. */
 export const LATEST_PAGE_ITEMS_SQL = `(select coalesce(jsonb_agg(i.item order by i.position),'[]'::jsonb)
 	 from agent_session_item i where i.session_id=s.id and i.position >= page.first)`;
 export const LATEST_PAGE_HAS_OLDER_SQL = "page.first > 0";

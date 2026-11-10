@@ -96,6 +96,42 @@ describe("the runner box", () => {
 		);
 	});
 
+	it("does not expose its signing key to spawned commands", async () => {
+		vi.stubEnv("RUNNER_SIGNING_KEY", "host-secret-not-for-agent");
+		try {
+			const result = await call("/exec", {
+				command:
+					'if [ -z "$RUNNER_SIGNING_KEY" ]; then printf unset; else printf present; fi',
+			});
+			expect(result.body.stdout).toBe("unset");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("reports spawn exhaustion or missing shell without crashing the runner API", async () => {
+		vi.stubEnv("PATH", "/no-shell-here");
+		try {
+			const result = await call("/exec", { command: "true" });
+			expect(result.status).toBe(200);
+			expect(result.body.exitCode).toBe(1);
+			expect(result.body.stderr).toContain("could not start");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+		expect((await fetch(`${base}/health`)).status).toBe(200);
+	});
+
+	it("times out the whole short-exec process group, not just its shell", async () => {
+		const started = Date.now();
+		const result = await call("/exec", {
+			command: "sleep 30 & wait",
+			timeoutMs: 100,
+		});
+		expect(result.body.exitCode).not.toBe(0);
+		expect(Date.now() - started).toBeLessThan(5000);
+	});
+
 	it("kills a command at its timeout", async () => {
 		const result = await call("/exec", { command: "sleep 5", timeoutMs: 200 });
 		expect(result.status).toBe(200);

@@ -5,7 +5,7 @@ import {
 	pendingClaudeCodeCalls,
 	requestClaudeCodeCall,
 } from "./claude-code-bridge";
-import { runClaudeCodeStep } from "./claude-code-runner";
+import { runClaudeCodeStep, stopClaudeCodeRun } from "./claude-code-runner";
 
 vi.mock("./claude-code-runner", () => ({
 	runClaudeCodeStep: vi.fn(),
@@ -25,6 +25,7 @@ import {
 	claudeCodeBridgeToolSet,
 	leavesClaudeCodeRunning,
 	runClaudeCodeTurnStep,
+	stopClaudeCodeTurnRun,
 } from "./claude-code-turn";
 
 describe("leavesClaudeCodeRunning", () => {
@@ -101,6 +102,35 @@ describe("interrupted Claude step bridge lifecycle", () => {
 			}
 		},
 	);
+});
+
+describe("stopping a remote Claude process", () => {
+	it("sends cancellation to AWS even when there is no Freestyle VM", async () => {
+		const fetcher = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify({ exitCode: 0, stdout: "stopped", stderr: "" }),
+				),
+		);
+		vi.stubGlobal("fetch", fetcher);
+		vi.mocked(stopClaudeCodeRun).mockImplementationOnce(async (shell) => {
+			await shell("printf stop", 1000);
+		});
+		try {
+			await stopClaudeCodeTurnRun({
+				machines: {} as never,
+				vm: null,
+				turnId: "22222222-2222-4222-8222-222222222222",
+				runner: { baseUrl: "https://runner-z.example", secret: "z".repeat(40) },
+			});
+			expect(fetcher).toHaveBeenCalledOnce();
+			expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+				"https://runner-z.example/exec",
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 });
 
 describe("claudeCodeBridgeToolSet", () => {

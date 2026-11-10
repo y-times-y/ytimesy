@@ -42,6 +42,10 @@ import {
 	withBackgroundJobDispatcher,
 } from "../adapters/background-job-dispatch";
 import {
+	ClaudeRunnerPlacement,
+	withClaudeRunnerPlacement,
+} from "../adapters/claude-runner-placement";
+import {
 	probeCodexEgress,
 	withCodexSubscriptionEgress,
 } from "../adapters/codex-subscription-transport";
@@ -224,7 +228,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					() =>
 						withCodexSubscriptionEgress(
 							(input, options) => this.env.CODEX_EGRESS.fetch(input, options),
-							() => withEdgeModelEndpoints(run),
+							() =>
+								withClaudeRunnerPlacement(
+									(candidate) =>
+										new ClaudeRunnerPlacement(this.ctx.storage.sql).assign(
+											candidate,
+										),
+									() => withEdgeModelEndpoints(run),
+								),
 						),
 				),
 		);
