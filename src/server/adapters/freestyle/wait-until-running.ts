@@ -9,6 +9,60 @@ import {
 
 class VmStillStarting extends Error {}
 
+/**
+ * What a wait saw, logged when it ends without a running machine. The
+ * provider keeps no history of a machine's states, so without this the cause
+ * of "did not become running" cannot be recovered afterwards.
+ */
+class VmWaitTrace {
+	private readonly states = new Map<string, number>();
+	private readonly startedAt = Date.now();
+	private lastData: Record<string, unknown> = {};
+	private startFailure: string | null = null;
+	constructor(private readonly vmId: string) {}
+	observe(data: object) {
+		const state = String((data as { state?: unknown }).state);
+		this.states.set(state, (this.states.get(state) ?? 0) + 1);
+		this.lastData = data as Record<string, unknown>;
+	}
+	startFailed(error: unknown) {
+		const { status, code, requestId } = error as {
+			status?: unknown;
+			code?: unknown;
+			requestId?: unknown;
+		};
+		this.startFailure = JSON.stringify({
+			message: error instanceof Error ? error.message.slice(0, 200) : "?",
+			status,
+			code,
+			requestId,
+		});
+	}
+	log(outcome: string) {
+		try {
+			const data = this.lastData;
+			console.warn(
+				JSON.stringify({
+					event: "vm.wait_failed",
+					outcome,
+					vmId: this.vmId,
+					waitedMs: Date.now() - this.startedAt,
+					statesSeen: Object.fromEntries(this.states),
+					lastState: data.state,
+					totalRunSeconds: data.totalRunSeconds,
+					maxRunTotalSeconds: data.maxRunTotalSeconds,
+					maxRunSeconds: data.maxRunSeconds,
+					idleTimeoutSeconds: data.idleTimeoutSeconds,
+					automaticRestart: data.automaticRestart,
+					startFailure: this.startFailure,
+				}),
+			);
+		} catch {
+			// Bookkeeping only.
+		}
+	}
+}
+
 /** Freestyle can take over a minute to finish pausing an idle machine. */
 const PAUSING_WAIT_SECONDS = 180;
 /**
@@ -44,7 +98,9 @@ export async function waitUntilVmRunning(
 	const waitStarted = Date.now();
 	let startingSince: number | null = null;
 	let sawPausing = false;
+	const trace = new VmWaitTrace(vm.id);
 	const read = Effect.tryPromise(() => vm.data()).pipe(
+		Effect.tap((data) => Effect.sync(() => trace.observe(data))),
 		Effect.flatMap((data) => {
 			if (data.state === "starting") {
 				startingSince ??= Date.now();
@@ -55,6 +111,9 @@ export async function waitUntilVmRunning(
 					reissued++;
 					startingSince = Date.now();
 					return Effect.tryPromise(() => vm.start()).pipe(
+						Effect.tapError((error) =>
+							Effect.sync(() => trace.startFailed(error)),
+						),
 						Effect.catchAll(() => Effect.void),
 						Effect.flatMap(() => Effect.fail(new VmStillStarting())),
 					);
@@ -101,7 +160,10 @@ export async function waitUntilVmRunning(
 	for (let pause = FIRST_PAUSE_MS; ; ) {
 		const result = await Effect.runPromise(Effect.either(read), { signal });
 		if (result._tag === "Right") return result.right;
-		if (!(result.left instanceof VmStillStarting)) throw result.left;
+		if (!(result.left instanceof VmStillStarting)) {
+			trace.log("stopped");
+			throw result.left;
+		}
 		if (Date.now() + pause > deadline()) break;
 		await new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(done, pause);
@@ -118,6 +180,7 @@ export async function waitUntilVmRunning(
 		});
 		pause = Math.min(Math.round(pause * 1.5), MAX_PAUSE_MS);
 	}
+	trace.log("deadline");
 	throw new WorkspaceProvisionError({
 		operation: "create",
 		message: `${label} did not become running`,
