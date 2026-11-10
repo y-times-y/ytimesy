@@ -564,6 +564,64 @@ describe("Claude Code runner", () => {
 		expect(vm.files.has(`${RUNS}/1/prompt`)).toBe(false);
 	});
 
+	it("on a runner box turns Claude's own file and shell tools off and says where the code is", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		await runClaudeCodeStep(
+			input(vm, {
+				remote: {
+					repository: "/home/ubuntu/app",
+					workspaceTools: ["read", "bash"],
+				},
+			}),
+		);
+		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
+		expect(options.disallowedTools).toEqual(
+			expect.arrayContaining(["Bash", "Read", "Edit", "Write", "Glob", "Grep"]),
+		);
+		expect(options.disallowedTools).not.toContain("TodoWrite");
+		const system = vm.files.get(`${RUNS}/1/system`) ?? "";
+		expect(system).toContain("/home/ubuntu/app");
+		expect(system).toContain("mcp__ytimesy__read, mcp__ytimesy__bash");
+		expect(system).toContain("mcp__ytimesy__run_code");
+		expect(system).toContain("TodoWrite");
+		expect(system).not.toContain("on this chat's own cloud machine");
+	});
+
+	it("on a runner box saves the session while the run goes, once a minute", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		vm.files.set(
+			`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
+			"transcript so far",
+		);
+		const step = input(vm, {
+			remote: { repository: "/home/ubuntu/app", workspaceTools: [] },
+		});
+		const result = await runClaudeCodeStep({
+			...step,
+			deadline: 1_000_000 + 400_000,
+		});
+		expect(result.outcome).toBe("continue");
+		expect(step.store.uploadTranscript).toHaveBeenCalledWith(
+			CLAUDE_SESSION,
+			"transcript so far",
+		);
+		// Not on every poll: a few uploads across several minutes, not dozens.
+		expect(
+			vi.mocked(step.store.uploadTranscript).mock.calls.length,
+		).toBeLessThan(10);
+	});
+
+	it("on the chat's own machine saves the session only when the run ends", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		const step = input(vm);
+		await runClaudeCodeStep({ ...step, deadline: 1_000_000 + 400_000 });
+		expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+	});
+
 	it("reads again after a poll the machine did not answer, and fails only when it stays silent", async () => {
 		const flaky = (silent: number) => {
 			const vm = new FakeVm();
