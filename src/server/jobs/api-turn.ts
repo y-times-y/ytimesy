@@ -1745,8 +1745,9 @@ async function runApiTurnAttempt(
 		// Harness variant plan (on in the product): the root builder's
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
 		// get none. Each accepted update replaces the turn's checklist item.
+		// Claude gets it too: the pinned Claude Code SDK offers no plan tool
+		// of its own (no TodoWrite), so this one feeds the chat's checklist.
 		const planning: ToolSet =
-			!claudeCode &&
 			variant.plan === "on" &&
 			((!owner.parentSessionId && !owner.agentRole) || isSideChat(owner))
 				? planTool({

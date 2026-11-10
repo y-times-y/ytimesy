@@ -694,7 +694,7 @@ describe("Claude Code runner", () => {
 		expect(system).toContain("/home/ubuntu/app");
 		expect(system).toContain("mcp__ytimesy__read, mcp__ytimesy__bash");
 		expect(system).toContain("mcp__ytimesy__run_code");
-		expect(system).toContain("TodoWrite");
+		expect(system).toContain("mcp__ytimesy__update_plan");
 		expect(system).not.toContain("on this chat's own cloud machine");
 	});
 

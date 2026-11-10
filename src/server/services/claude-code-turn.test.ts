@@ -143,18 +143,19 @@ describe("claudeCodeBridgeToolSet", () => {
 		update_plan: {},
 	} as unknown as ToolSet;
 
-	it("on the chat's machine exposes tracked workspace tools and code mode, never a second plan tool", () => {
+	it("on the chat's machine exposes tracked workspace tools, code mode and the plan tool", () => {
 		expect(Object.keys(claudeCodeBridgeToolSet(tools, ["web_fetch"]))).toEqual([
 			"read",
 			"bash",
 			"agent",
 			"run_code",
+			"update_plan",
 		]);
 	});
 
-	it("on a runner box offers the file and shell tools and run_code, never our plan tool", () => {
+	it("on a runner box offers the file and shell tools, run_code and the plan tool", () => {
 		expect(
 			Object.keys(claudeCodeBridgeToolSet(tools, ["web_fetch"], true)).sort(),
-		).toEqual(["agent", "bash", "read", "run_code"]);
+		).toEqual(["agent", "bash", "read", "run_code", "update_plan"]);
 	});
 });
