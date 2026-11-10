@@ -91,11 +91,18 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
   goes (not only when it ends), so a lost box can be replaced and the turn
   resumed from it. Failing over to another box is **not built**: today a turn
   stays on its box.
-- **Box disk and cleanup are not built:** sessions of 250 MB fill a small
-  volume quickly; the boxes need a large volume and removal of session files
-  unused for some days. Changing the box list moves chats to other boxes (they
-  fall back to the saved copy, which cannot hold a large session); persist the
-  chosen box per chat before the list changes.
+- **Disk.** Sessions of 250 MB fill a small volume quickly, so a box gets a
+  100 GB volume (`infra/claude-runner-box/provision.py --size-gb`) and a
+  15-minute timer (`cleanup.mjs`): session files idle over 7 days go, run
+  directories over 3 days go, and above 85% disk use the least recently used
+  sessions are evicted down to 70%, never one touched in the last hour. An
+  evicted session on a chat's box falls back to the saved copy, which cannot
+  hold a large one. Not run on a real box yet.
+- **Changing the box list moves chats to other boxes** (the box is a hash of
+  the chat id over the list). Persist each chat's box before ADDING a box
+  (scale-out). For a move to another backend it can be backfilled then, by
+  recomputing each chat's box from the old list, provided the hash and the old
+  list are kept until it is done.
 - **Not done / not measured:** provisioning the boxes and their HTTPS names
   (Cloudflare Tunnel is the plan); tool-call latency over the extra hop on a
   real network; memory and CPU per `claude` process (about 200 MB resident in
