@@ -55,6 +55,12 @@ export const CLAUDE_RUNNER_DISALLOWED_TOOLS = [
 	"RemoteTrigger",
 	"EnterWorktree",
 	"ExitWorktree",
+	// Services behind Anthropic's own account (mobile push, Claude Design).
+	// The machine's login is a per-turn grant and the edge proxy forwards only
+	// the model API, so these can only fail.
+	"PushNotification",
+	"DesignSync",
+	"ClaudeDesign",
 ] as const;
 
 function sessionHash(sessionId: string) {

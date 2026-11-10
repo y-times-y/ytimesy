@@ -153,6 +153,8 @@ describe("the runner box setup", () => {
 				"RemoteTrigger",
 				"EnterWorktree",
 				"ExitWorktree",
+				"PushNotification",
+				"DesignSync",
 			]),
 		);
 	});
