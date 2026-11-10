@@ -124,6 +124,10 @@ it("pages an oversized single turn without dropping or duplicating any work", as
 			kind: "userMessage",
 			id: "large-request" as never,
 			text: "Inspect the atlas",
+			contextUsage: {
+				context: { last: { totalTokens: 54321 }, modelContextWindow: 200000 },
+				compacting: false,
+			},
 		},
 		...Array.from(
 			{ length: 511 },
@@ -144,6 +148,7 @@ it("pages an oversized single turn without dropping or duplicating any work", as
 			beforeId: cursor,
 		});
 		expect(page?.pageFound).toBe(true);
+		expect(page?.contextUsage?.context?.last.totalTokens).toBe(54321);
 		const pageItems = sessionItemsFromUnknown(page?.items);
 		expect(pageItems.length).toBeGreaterThan(0);
 		expect(pageItems.length).toBeLessThanOrEqual(200);

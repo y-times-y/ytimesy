@@ -41,7 +41,7 @@ mostly not deployment.
 - Whether any Workers memory figure (128 MB per isolate) matches this
   deployment; it is from memory, not checked against Cloudflare's docs.
 
-## What a real fix looks like (not built)
+## Remaining execution-history work
 
 1. **Step cost proportional to the active turn.** Load only the active turn's
    items plus a cursor; append to the history in SQL (`items = items || $new`)
@@ -57,5 +57,22 @@ mostly not deployment.
 
 Steps 1-3 touch `api-turn.ts` (3,000+ lines, 18 tests already failing before any
 change), the delivery protocol and the transcript paging: large changes, to be
-done as a focused project, not alongside other work. Until then the practical
-limit is a chat of roughly 1,000 items (about 1 MB compressed); a new chat avoids it.
+done as a focused project, not alongside other work. The earlier estimate of
+roughly 1,000 items was not a measured safe limit; item sizes and concurrent
+allocations matter, so it must not be treated as an admission guarantee.
+
+## Follow-up implementation (2026-11-10, not deployed)
+
+Display/delivery pages now have item-count and serialized-byte bounds, including
+inside a single oversized turn. Older content is still pageable. Context usage
+is fetched independently so paging out a user message does not erase it.
+This bounds normal snapshot delivery, not cumulative execution history; one
+individually oversized item is still allowed through so it remains readable.
+
+Claude checkpoint saving probes transcript size on its execution host before
+reading it into the Worker. The 249 MiB regression case is rejected before
+transfer, and a prior valid checkpoint for the same session is retained. The
+20 MiB checkpoint limit itself has not changed. Full `api_turn` history loading,
+full snapshots used by execution checkpoints, and delta delivery remain
+separate work. No heap profiling or unlimited-demand reliability result is
+claimed. See `docs/claude-job-lifecycle-hardening.md` for checks and rollout.

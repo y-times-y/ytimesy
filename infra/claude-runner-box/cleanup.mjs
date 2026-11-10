@@ -4,7 +4,8 @@
 // history on this box (the chat falls back to its last messages). Hence: files
 // go by age first, and by least-recently-used only when the disk is nearly
 // full. Anything touched in the last hour belongs to a run in progress.
-import { readdir, rm, stat, statfs } from "node:fs/promises";
+import { readFile, readdir, rm, stat, statfs } from "node:fs/promises";
+import { basename } from "node:path";
 import { join } from "node:path";
 
 const DAY = 24 * 60 * 60_000;
@@ -60,17 +61,47 @@ async function diskUsedShare(home) {
 	return 1 - info.bavail / info.blocks;
 }
 
+/** Protect live runs even while a long tool call leaves its transcript untouched. */
+async function activeWork(home, scopeRoot, processRoot) {
+	const turns = new Set();
+	const sessions = new Set();
+	const runs = join(home, ".ytimesy/claude-runs");
+	for (const turn of await entries(runs)) {
+		if (!/^[a-f0-9-]{36}$/i.test(turn)) continue;
+		try {
+			const current = (await readFile(join(runs, turn, "current"), "utf8")).trim();
+			if (!/^\d{1,4}$/.test(current)) continue;
+			const directory = join(runs, turn, current);
+			if (await stat(join(directory, "status")).catch(() => null)) continue;
+			const saved = JSON.parse(await readFile(join(scopeRoot, turn, `cc-${turn}-${current}.json`), "utf8"));
+			if (!Number.isSafeInteger(saved.pid) || saved.pid <= 1) continue;
+			const info = await readFile(join(processRoot, String(saved.pid), "stat"), "utf8");
+			const start = info.slice(info.lastIndexOf(")") + 1).trim().split(/\s+/)[19];
+			if (start !== String(saved.start)) continue;
+			turns.add(turn);
+			const initialized = (await readFile(join(directory, "active-session"), "utf8").catch(() => "")).trim();
+			const session = initialized || JSON.parse(await readFile(join(directory, "options.json"), "utf8")).resume;
+			if (/^[a-f0-9-]{36}$/i.test(session ?? "")) sessions.add(`${session}.jsonl`);
+		} catch { /* A finished or not-yet-launched command has no live process record. */ }
+	}
+	return { turns, sessions };
+}
+
 /** Removes what is no longer needed; returns what it removed. `usage` is injectable for tests. */
 export async function cleanup({
 	home,
 	now = Date.now(),
 	usage = diskUsedShare,
+	scopeRoot = "/tmp/ytimesy-api-command-scopes",
+	processRoot = "/proc",
 	...overrides
 }) {
 	const limits = { ...CLEANUP_DEFAULTS, ...overrides };
 	const removed = { runs: 0, sessions: 0, bytes: 0 };
+	const active = await activeWork(home, scopeRoot, processRoot);
 	const runs = join(home, ".ytimesy/claude-runs");
 	for (const turn of await entries(runs)) {
+		if (active.turns.has(turn)) continue;
 		const path = join(runs, turn);
 		const info = await stat(path).catch(() => null);
 		const touched = info ? (await newestFile(path)) || info.mtimeMs : 0;
@@ -79,9 +110,10 @@ export async function cleanup({
 			removed.runs++;
 		}
 	}
-	const idle = (file) => now - file.mtime > limits.activeWindowMs;
+	const protectedSession = (file) => active.sessions.has(basename(file.path));
+	const idle = (file) => !protectedSession(file) && now - file.mtime > limits.activeWindowMs;
 	let files = await sessionFiles(home);
-	for (const file of files.filter((file) => now - file.mtime > limits.sessionMaxAgeMs)) {
+	for (const file of files.filter((file) => !protectedSession(file) && now - file.mtime > limits.sessionMaxAgeMs)) {
 		await rm(file.path, { force: true });
 		removed.sessions++;
 		removed.bytes += file.size;

@@ -123,7 +123,10 @@ if [ "$result" -ne 0 ] && [ "$code" -eq 0 ]; then code=$result; fi`,
 		)
 		.join("\n");
 	// No `set -u`: nvm's script (in the prelude) reads unset variables.
-	const script = `exec >"$HOME/${files.log}" 2>&1 </dev/null
+	// Keep the terminal open after redirecting all three standard streams.
+	// Otherwise tmux sees PTY EOF and can terminate a still-running install.
+	const script = `exec 3>&1
+exec >"$HOME/${files.log}" 2>&1 </dev/null
 ${waitForEarlier}code=0
 ${repositories}
 printf 'exit %s\\n' "$code" > "$HOME/${files.status}.tmp"
@@ -144,7 +147,7 @@ rm -f "$HOME/${files.status}"
 : > "$HOME/${files.log}"
 if command -v tmux >/dev/null 2>&1; then
   tmux kill-session -t ${quote(input.terminal)} 2>/dev/null
-  tmux new-session -d -s ${quote(input.terminal)} bash -c ${quote(script)}
+  tmux new-session -d -s ${quote(input.terminal)} env HOME="$HOME" bash -c ${quote(script)}
 elif command -v setsid >/dev/null 2>&1; then
   nohup setsid bash -c ${quote(script)} >/dev/null 2>&1 </dev/null &
 else

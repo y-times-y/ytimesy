@@ -6,6 +6,25 @@ import {
 	subscriptionFetch,
 	withCodexSubscriptionEgress,
 } from "./codex-subscription-transport";
+import { codexTunnelFetch } from "./codex-tunnel";
+
+it("fails closed when the Workers-only TCP tunnel is invoked from Node", async () => {
+	vi.stubEnv("YTIMESY_CODEX_TUNNEL_URL", "http://proxy.example:443");
+	vi.stubEnv("YTIMESY_CODEX_TUNNEL_SECRET", "t".repeat(64));
+	const direct = vi.spyOn(globalThis, "fetch");
+	try {
+		await expect(
+			codexTunnelFetch("https://chatgpt.com/backend-api/codex/models"),
+		).rejects.toThrow("requires the Cloudflare Workers sockets runtime");
+		expect(direct).not.toHaveBeenCalled();
+		await expect(
+			codexTunnelFetch("https://other.example/backend-api/codex/models"),
+		).rejects.toThrow("destination is not allowed");
+	} finally {
+		direct.mockRestore();
+		vi.unstubAllEnvs();
+	}
+});
 
 const auth = vi.hoisted(() => vi.fn());
 vi.mock("../auth/codex-managed-auth", () => ({ codexExternalTokens: auth }));

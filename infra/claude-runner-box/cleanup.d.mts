@@ -9,6 +9,8 @@ export function cleanup(input: {
 	home: string;
 	now?: number;
 	usage?: (home: string) => Promise<number>;
+	scopeRoot?: string;
+	processRoot?: string;
 	sessionMaxAgeMs?: number;
 	runMaxAgeMs?: number;
 	highWatermark?: number;

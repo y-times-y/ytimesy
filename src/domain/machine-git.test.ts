@@ -56,7 +56,7 @@ function run(
 	options: { cwd?: string; input?: string } = {},
 ) {
 	return new Promise<{ status: number | null; stdout: string; stderr: string }>(
-		(resolve) => {
+		(resolve, reject) => {
 			const child = spawn(command, args, {
 				cwd: options.cwd ?? root,
 				env: {
@@ -74,6 +74,11 @@ function run(
 			child.stderr.on("data", (chunk) => {
 				stderr += chunk;
 			});
+			// Git may refuse credentials and exit before consuming the complete body.
+			child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+				if (error.code !== "EPIPE") reject(error);
+			});
+			child.on("error", reject);
 			child.stdin.end(options.input ?? "");
 			child.on("close", (status) => resolve({ status, stdout, stderr }));
 		},

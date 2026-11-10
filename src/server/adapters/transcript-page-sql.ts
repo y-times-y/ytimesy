@@ -44,3 +44,8 @@ export function boundedPageStartSql(
 export const LATEST_PAGE_ITEMS_SQL = `(select coalesce(jsonb_agg(i.item order by i.position),'[]'::jsonb)
 	 from agent_session_item i where i.session_id=s.id and i.position >= page.first)`;
 export const LATEST_PAGE_HAS_OLDER_SQL = "page.first > 0";
+
+/** Usage belongs to the session, even when its user-message row is on an older page. */
+export const LATEST_CONTEXT_USAGE_SQL = `(select i.item->'contextUsage' from agent_session_item i
+ where i.session_id=s.id and i.kind='userMessage' and i.item->'contextUsage' is not null
+ order by i.position desc limit 1)`;

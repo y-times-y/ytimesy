@@ -17,6 +17,51 @@ async function file(path: string, ageMs: number, bytes = 10) {
 }
 
 describe("runner box cleanup", () => {
+	it.each([true, false])(
+		"protects an old active session only while its recorded PID/start match: %s",
+		async (alive) => {
+			const home = await mkdtemp(join(tmpdir(), "box-live-"));
+			const turn = "22222222-2222-4222-8222-222222222222";
+			const session = "11111111-1111-4111-8111-111111111111";
+			const sessionFile = join(
+				home,
+				`.ytimesy/claude-code/projects/-work/${session}.jsonl`,
+			);
+			await file(sessionFile, 8 * DAY);
+			const run = join(home, `.ytimesy/claude-runs/${turn}`);
+			for (const [name, text] of [
+				["current", "1"],
+				["1/active-session", session],
+				["1/out", "waiting on a long command"],
+			]) {
+				const path = join(run, name);
+				await file(path, 4 * DAY);
+				await writeFile(path, text);
+				await utimes(path, (NOW - 4 * DAY) / 1000, (NOW - 4 * DAY) / 1000);
+			}
+			const scopeRoot = join(home, "scopes");
+			const processRoot = join(home, "proc");
+			await mkdir(join(scopeRoot, turn), { recursive: true });
+			await writeFile(
+				join(scopeRoot, turn, `cc-${turn}-1.json`),
+				JSON.stringify({ pid: 1234, start: "5678" }),
+			);
+			await mkdir(join(processRoot, "1234"), { recursive: true });
+			await writeFile(
+				join(processRoot, "1234/stat"),
+				`1234 (claude) S ${"0 ".repeat(18)}${alive ? "5678" : "9999"} 0`,
+			);
+			await cleanup({
+				home,
+				now: NOW,
+				usage: async () => 0.95,
+				scopeRoot,
+				processRoot,
+			});
+			expect(existsSync(sessionFile)).toBe(alive);
+			expect(existsSync(run)).toBe(alive);
+		},
+	);
 	it("removes idle session files and old run directories, keeping the rest", async () => {
 		const home = await mkdtemp(join(tmpdir(), "box-"));
 		const projects = join(home, ".ytimesy/claude-code/projects/-var-work");

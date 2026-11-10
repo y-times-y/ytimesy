@@ -11,13 +11,14 @@ import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
 import { database } from "./database";
 import { queuedTimelineItemSql } from "./queued-user-messages";
 import {
+	LATEST_CONTEXT_USAGE_SQL,
 	LATEST_PAGE_HAS_OLDER_SQL,
 	LATEST_PAGE_ITEMS_SQL,
 	latestPageJoin,
 } from "./transcript-page-sql";
 
 /** A snapshot carries the open page (the chat's last turns), not the whole chat. */
-const SNAPSHOT_ITEMS = `${LATEST_PAGE_ITEMS_SQL} as items,${LATEST_PAGE_HAS_OLDER_SQL} as has_older_items`;
+const SNAPSHOT_ITEMS = `${LATEST_PAGE_ITEMS_SQL} as items,${LATEST_PAGE_HAS_OLDER_SQL} as has_older_items,${LATEST_CONTEXT_USAGE_SQL} as context_usage`;
 const SNAPSHOT_PAGE = latestPageJoin(TRANSCRIPT_PAGE_TURNS);
 
 type DeliveryRow = {
@@ -26,6 +27,7 @@ type DeliveryRow = {
 	revision: string;
 	items: unknown[];
 	has_older_items: boolean;
+	context_usage?: ReturnType<typeof recordedContextUsage>;
 	/** Messages still waiting behind the running turn, oldest first. */
 	queued: UserMessageItem[] | null;
 	turn_status: ConversationSnapshot["progress"]["turnStatus"];
@@ -44,7 +46,7 @@ function snapshot(row: DeliveryRow): ConversationSnapshot {
 			items,
 			hasOlderItems: row.has_older_items,
 			turnStatus: row.turn_status,
-			usage: recordedContextUsage(items),
+			usage: row.context_usage ?? recordedContextUsage(items),
 		},
 	};
 }

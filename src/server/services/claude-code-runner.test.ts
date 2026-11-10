@@ -1,3 +1,15 @@
+import { execFile, execFileSync } from "node:child_process";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
@@ -13,6 +25,7 @@ import {
 	type ClaudeCodeStepInput,
 	type ClaudeCodeStore,
 	claudeCodeCommandId,
+	claudeCodeLaunchCommand,
 	runClaudeCodeStep,
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
@@ -261,6 +274,76 @@ const success = {
 };
 
 describe("Claude Code runner", () => {
+	it("serializes concurrent guest launches and repairs a missing current pointer without launching twice", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude launch "));
+		const run = join(directory, "1");
+		mkdirSync(run);
+		const counter = join(directory, "launches");
+		const command = claudeCodeLaunchCommand(
+			run,
+			directory,
+			1,
+			`{ printf x >> '${counter}'; }`,
+		);
+		try {
+			await Promise.all([
+				promisify(execFile)("bash", ["-c", command]),
+				promisify(execFile)("bash", ["-c", command]),
+			]);
+			await vi.waitFor(() =>
+				expect(readFileSync(join(run, "status"), "utf8").trim()).toBe("0"),
+			);
+			expect(readFileSync(counter, "utf8")).toBe("x");
+			unlinkSync(join(directory, "current"));
+			await promisify(execFile)("bash", ["-c", command]);
+			expect(readFileSync(join(directory, "current"), "utf8")).toBe("1");
+			expect(readFileSync(counter, "utf8")).toBe("x");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("the actual SDK wrapper journals its initialized session before streaming it", () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude-wrapper-"));
+		try {
+			writeFileSync(join(directory, "runner.mjs"), CLAUDE_AGENT_RUNNER_SCRIPT);
+			writeFileSync(
+				join(directory, "sdk.mjs"),
+				`export async function* query() { yield { type: "system", subtype: "init", session_id: "${CLAUDE_SESSION}" }; yield { type: "result" }; }`,
+			);
+			writeFileSync(
+				join(directory, "options.json"),
+				JSON.stringify({ model: "local-test", disallowedTools: [] }),
+			);
+			writeFileSync(
+				join(directory, "mcp.json"),
+				JSON.stringify({ mcpServers: {} }),
+			);
+			writeFileSync(join(directory, "system"), "Local functional test.");
+			writeFileSync(join(directory, "prompt"), "Return a result.");
+			const output = execFileSync(
+				process.execPath,
+				[
+					join(directory, "runner.mjs"),
+					join(directory, "sdk.mjs"),
+					directory,
+					directory,
+				],
+				{ encoding: "utf8" },
+			);
+			expect(readFileSync(join(directory, "active-session"), "utf8")).toBe(
+				CLAUDE_SESSION,
+			);
+			expect(
+				output
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line).type),
+			).toEqual(["system", "result"]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("runs the CLI with a grant, never the token, and maps its stream", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, ...work, success);
@@ -721,31 +804,47 @@ describe("Claude Code runner", () => {
 		await expect(stopClaudeCodeRun(vm.shell, "../x")).rejects.toThrow();
 	});
 
-	it("never transfers a 249 MiB transcript through the edge just to reject it", async () => {
-		const vm = new FakeVm();
-		vm.emit(init, success);
-		vm.status = "0";
-		const original = vm.shell.getMockImplementation();
-		vm.shell.mockImplementation(async (command) =>
-			command.startsWith("stat -c %s ")
-				? { exitCode: 0, stdout: String(249 * 1024 * 1024), stderr: "" }
-				: original
-					? original(command)
-					: { exitCode: 0, stdout: "", stderr: "" },
-		);
-		const readFile = vi.fn(async () => "must not be loaded");
-		const step = input(vm, { readFile });
-		await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
-			outcome: "completed",
-		});
-		expect(readFile).not.toHaveBeenCalled();
-		expect(step.store.uploadTranscript).not.toHaveBeenCalled();
-		expect(step.store.saveSession).toHaveBeenCalledWith({
-			claudeSessionId: CLAUDE_SESSION,
-			transcriptPath: null,
-			cwd: CWD,
-		});
-	});
+	it.each([null, "prefix/last-good.enc"])(
+		"never transfers a 249 MiB transcript and retains prior checkpoint %s",
+		async (previousPath) => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			const original = vm.shell.getMockImplementation();
+			vm.shell.mockImplementation(async (command) =>
+				command.startsWith("stat -c %s ")
+					? { exitCode: 0, stdout: String(249 * 1024 * 1024), stderr: "" }
+					: original
+						? original(command)
+						: { exitCode: 0, stdout: "", stderr: "" },
+			);
+			const readFile = vi.fn(async () => "must not be loaded");
+			const step = input(vm, {
+				readFile,
+				store: store({
+					readSession: vi.fn(async () =>
+						previousPath
+							? {
+									claudeSessionId: CLAUDE_SESSION,
+									transcriptPath: previousPath,
+									cwd: CWD,
+								}
+							: null,
+					),
+				}),
+			});
+			await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+				outcome: "completed",
+			});
+			expect(readFile).not.toHaveBeenCalled();
+			expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+			expect(step.store.saveSession).toHaveBeenCalledWith({
+				claudeSessionId: CLAUDE_SESSION,
+				transcriptPath: previousPath,
+				cwd: CWD,
+			});
+		},
+	);
 
 	it("runs a read-only helper as the reader user without write tools", async () => {
 		const vm = new FakeVm();

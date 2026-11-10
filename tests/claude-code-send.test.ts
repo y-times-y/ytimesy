@@ -92,6 +92,8 @@ it("lists Claude Code beside API keys only when switched on and connected", asyn
 		"claude-code/claude-opus-5-5",
 		"claude-code/claude-sonnet-5-5",
 		"claude-code/claude-haiku-5-5",
+		"claude-code/claude-fable-5-2",
+		"claude-code/claude-fable-5-1",
 		routeId,
 	]);
 	fake.connected.mockResolvedValue(false);

@@ -59,7 +59,8 @@ describe("background installs", () => {
 		const home = mkdtempSync(join(tmpdir(), "fresh-machine-"));
 		const repo = join(home, "app");
 		execFileSync("mkdir", ["-p", repo]);
-		// Without tmux the launch detaches with nohup; tests force that path.
+		// Exercise installed system launchers without inheriting user PATH customizations.
+		// A reused tmux server must not replace this guest's requested HOME.
 		const env = { ...process.env, HOME: home, PATH: "/usr/bin:/bin" };
 		const run = (command: string) =>
 			execFileSync("/bin/bash", ["-c", command], { env, encoding: "utf8" });
