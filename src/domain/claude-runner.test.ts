@@ -4,6 +4,7 @@ import {
 	claudeRunnerFor,
 	claudeRunnerPrompt,
 	claudeRunnerUrls,
+	claudeWorkspaceCommandsPrompt,
 } from "./claude-runner";
 
 const env = {
@@ -153,5 +154,20 @@ describe("the runner box setup", () => {
 		expect(text).toContain("TodoWrite");
 		expect(text).toContain("background mechanism");
 		expect(text).toContain("Do not bypass tracking");
+	});
+});
+
+describe("claudeWorkspaceCommandsPrompt", () => {
+	it("tells a writer about the browser and job commands", () => {
+		const text = claudeWorkspaceCommandsPrompt({ reader: false }).join("\n");
+		expect(text).toContain("ytimesy-browser");
+		expect(text).toContain("screenshot");
+		expect(text).toContain("exec");
+		expect(text).toContain("ytimesy-job wait");
+	});
+	it("keeps a read-only helper to looking, not Python execution", () => {
+		const text = claudeWorkspaceCommandsPrompt({ reader: true }).join("\n");
+		expect(text).toContain("ytimesy-browser");
+		expect(text).not.toContain("Browser Use CLI Python");
 	});
 });

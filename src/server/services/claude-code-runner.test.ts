@@ -410,6 +410,9 @@ describe("Claude Code runner", () => {
 		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
 			"Do not bypass tracking",
 		);
+		// The workspace commands (browser, jobs) it could never discover by itself.
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain("ytimesy-browser");
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain("ytimesy-job wait");
 		expect(
 			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").disallowedTools,
 		).not.toContain("TodoWrite");
