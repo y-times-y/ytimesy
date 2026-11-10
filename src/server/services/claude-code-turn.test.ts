@@ -1,8 +1,30 @@
 import type { ToolSet } from "ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+	closeClaudeCodeBridge,
+	pendingClaudeCodeCalls,
+	requestClaudeCodeCall,
+} from "./claude-code-bridge";
+import { runClaudeCodeStep } from "./claude-code-runner";
+
+vi.mock("./claude-code-runner", () => ({
+	runClaudeCodeStep: vi.fn(),
+	stopClaudeCodeRun: vi.fn(),
+}));
+vi.mock("../adapters/github/git-proxy-transfer", () => ({
+	gitProxyConfiguration: () => ({
+		origin: "https://edge.example",
+		secret: "test-only-grant-secret",
+	}),
+}));
+vi.mock("../adapters/claude-subscription", () => ({
+	claudeSubscriptionTokenForRedaction: async () => null,
+}));
+
 import {
 	claudeCodeBridgeToolSet,
 	leavesClaudeCodeRunning,
+	runClaudeCodeTurnStep,
 } from "./claude-code-turn";
 
 describe("leavesClaudeCodeRunning", () => {
@@ -34,6 +56,53 @@ describe("leavesClaudeCodeRunning", () => {
 	});
 });
 
+describe("interrupted Claude step bridge lifecycle", () => {
+	it.each([
+		["Durable Object reset because its code was updated.", true],
+		["Durable Object's isolate exceeded its memory limit and was reset", true],
+		["Stopped by the user.", false],
+	])(
+		"%s preserves queued calls only for resumable resets",
+		async (message, survives) => {
+			const turnId = `lifecycle-${message}`;
+			const failure = new Error(message);
+			let answer: Promise<unknown> | undefined;
+			vi.mocked(runClaudeCodeStep).mockImplementationOnce(async () => {
+				answer = requestClaudeCodeCall(turnId, "bash", {
+					command: "printf example",
+				});
+				throw failure;
+			});
+			const input = {
+				userId: "u",
+				sessionId: "s",
+				turnId,
+				modelId: "claude-test",
+				agentRole: null,
+				workspace: async () => ({ vm: "vm-test", cwd: "/repo" }),
+				machines: {},
+				messages: [],
+				tools: {},
+				deadline: Date.now() + 1000,
+				signal: new AbortController().signal,
+				redact: () => [],
+				addRedaction: () => {},
+				hasItem: () => false,
+				toolName: () => undefined,
+				onEvent: async () => {},
+				onPlan: () => {},
+			} as unknown as Parameters<typeof runClaudeCodeTurnStep>[0];
+			try {
+				await expect(runClaudeCodeTurnStep(input)).rejects.toBe(failure);
+				expect(pendingClaudeCodeCalls(turnId)).toBe(survives ? 1 : 0);
+			} finally {
+				closeClaudeCodeBridge(turnId);
+				await answer;
+			}
+		},
+	);
+});
+
 describe("claudeCodeBridgeToolSet", () => {
 	const tools = {
 		read: {},
@@ -44,12 +113,13 @@ describe("claudeCodeBridgeToolSet", () => {
 		update_plan: {},
 	} as unknown as ToolSet;
 
-	it("on the chat's machine skips what Claude has its own of, code mode and our plan tool", () => {
-		expect(
-			Object.keys(
-				claudeCodeBridgeToolSet(tools, ["read", "bash", "web_fetch"]),
-			),
-		).toEqual(["agent"]);
+	it("on the chat's machine exposes tracked workspace tools and code mode, never a second plan tool", () => {
+		expect(Object.keys(claudeCodeBridgeToolSet(tools, ["web_fetch"]))).toEqual([
+			"read",
+			"bash",
+			"agent",
+			"run_code",
+		]);
 	});
 
 	it("on a runner box offers the file and shell tools and run_code, never our plan tool", () => {

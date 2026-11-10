@@ -73,7 +73,21 @@ describe("claudeRunnerUrls", () => {
 
 describe("the runner box setup", () => {
 	it("turns off Claude's file and shell tools but not its own plan tool", () => {
-		for (const name of ["Bash", "Read", "Edit", "Write", "Glob", "Grep"])
+		for (const name of [
+			"Bash",
+			"BashOutput",
+			"KillBash",
+			"KillShell",
+			"Read",
+			"Edit",
+			"Write",
+			"Glob",
+			"Grep",
+			"Task",
+			"Agent",
+			"TaskOutput",
+			"TaskStop",
+		])
 			expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).toContain(name);
 		expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).not.toContain("TodoWrite");
 	});
@@ -88,5 +102,7 @@ describe("the runner box setup", () => {
 		expect(text).toContain("mcp__ytimesy__read, mcp__ytimesy__bash");
 		expect(text).toContain("mcp__ytimesy__run_code");
 		expect(text).toContain("TodoWrite");
+		expect(text).toContain("background mechanism");
+		expect(text).toContain("Do not bypass tracking");
 	});
 });

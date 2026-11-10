@@ -136,3 +136,26 @@ installed, `/health` reports the disk. Round trip from the build machine
 through Cloudflare was 270-630 ms for a trivial command (not measured from the
 edge Workers). The signing key is only on the boxes (`/etc/ytimesy-runner.env`)
 and, once the flag is turned on, in the Workers' `YTIMESY_CLAUDE_RUNNER_SECRET`.
+
+### Workspace tool lifecycle hardening (2026-11-10, pending deployment)
+
+The native-tool descriptions above are historical: new Claude runs now disable
+native workspace and agent/task tools on **both** hosts, including Bash and its
+background-task readers/stoppers. The MCP bridge offers ytimesy workspace tools
+and `run_code` on either host. Commands therefore use the existing owned job
+registry, completion notices, cancellation and output controls instead of a
+second Claude-native background-job system. TodoWrite remains native and
+ytimesy's plan tool is omitted, including from the tools callable by code mode.
+Read-only helpers keep their existing owner-scoped read-only workspace tools.
+Native web tools are unchanged.
+
+A platform reset also leaves the turn's queued MCP bridge calls available to
+the next step, rather than incorrectly replying that the turn has ended.
+Ordinary failures and user Stop still close queued calls. A tool-response
+timeout distinguishes work removed before execution from work already started:
+started work has an unknown outcome and must be inspected, not blindly retried.
+
+These settings apply when a new Claude process launches. They do not import
+old Claude-native background jobs, restart active processes, or repair their
+missing completion records. See `docs/claude-job-lifecycle-hardening.md` for
+checks and the unresolved wider reliability work.

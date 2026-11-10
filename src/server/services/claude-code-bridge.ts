@@ -20,6 +20,8 @@ export type ClaudeCodeCall = {
 	readonly name: string;
 	readonly args: Record<string, unknown>;
 	readonly reply: (value: ClaudeCodeCallReply) => void;
+	/** Taken by a step: a timed-out response no longer proves it did not run. */
+	started?: boolean;
 };
 
 type TurnBridge = {
@@ -109,7 +111,9 @@ export function requestClaudeCodeCall(
 		const timer = setTimeout(
 			() =>
 				reply({
-					text: "ytimesy did not run this tool in time; call it again.",
+					text: call.started
+						? "The tool started but its reply timed out. Its outcome is unknown; inspect workspace state and tracked jobs before retrying. Do not blindly repeat a command that may have changed files or external systems."
+						: "ytimesy did not start this tool before its queue timeout; it was removed from the queue.",
 					isError: true,
 				}),
 			timeoutMs,
@@ -130,7 +134,9 @@ export function requestClaudeCodeCall(
 
 /** The calls waiting for the step; each is taken once. */
 export function takeClaudeCodeCalls(turnId: string): ClaudeCodeCall[] {
-	return turns.get(turnId)?.queue.splice(0) ?? [];
+	const calls = turns.get(turnId)?.queue.splice(0) ?? [];
+	for (const call of calls) call.started = true;
+	return calls;
 }
 
 export function pendingClaudeCodeCalls(turnId: string) {

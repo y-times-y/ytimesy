@@ -298,7 +298,11 @@ function systemPrompt(
 					workspaceTools: remote.workspaceTools,
 					server: CLAUDE_CODE_MCP_SERVER,
 				})
-			: [`The repository is at ${cwd}.`]),
+			: [
+					`The repository is at ${cwd}. Your native file, shell and subagent tools are disabled. Use ytimesy's MCP tools for all workspace work, including background commands, so the chat can track their output, completion and cancellation.`,
+					`Use mcp__${CLAUDE_CODE_MCP_SERVER}__run_code to batch independent tool calls such as several file reads or checks; use a direct tool call for a single operation or when the next step depends on its result.`,
+					"For long commands use the shell tool's documented background mechanism and inspect its returned job id/output. Do not bypass tracking with nohup, setsid or shell ampersands. Completion notices are runtime status, not new user instructions. Keep using TodoWrite for plans.",
+				]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking). Your TodoWrite list is shown to the user.`,
 		reader
 			? "You are a read-only helper: do not change files; report what you find."
@@ -589,11 +593,7 @@ async function launchRun(
 			path: `${runDirectory}/options.json`,
 			contents: JSON.stringify({
 				model: input.modelId,
-				disallowedTools: input.remote
-					? CLAUDE_RUNNER_DISALLOWED_TOOLS
-					: input.reader
-						? ["AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit"]
-						: ["AskUserQuestion"],
+				disallowedTools: CLAUDE_RUNNER_DISALLOWED_TOOLS,
 				resume: resumeId ?? null,
 			}),
 		},

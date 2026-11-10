@@ -305,9 +305,27 @@ describe("Claude Code runner", () => {
 		);
 		expect(JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "")).toEqual({
 			model: "claude-opus-5-5",
-			disallowedTools: ["AskUserQuestion"],
+			disallowedTools: expect.arrayContaining([
+				"Bash",
+				"Task",
+				"TaskOutput",
+				"TaskStop",
+				"AskUserQuestion",
+			]),
 			resume: null,
 		});
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
+			"including background commands",
+		);
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
+			"mcp__ytimesy__run_code",
+		);
+		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
+			"Do not bypass tracking",
+		);
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").disallowedTools,
+		).not.toContain("TodoWrite");
 		// The timeline: redacted text, the tool call and result, usage, finish.
 		expect(step.events.map((event) => event.type)).toEqual([
 			"text-delta",
@@ -711,13 +729,19 @@ describe("Claude Code runner", () => {
 		expect(launch).not.toContain("unshare --net");
 		expect(
 			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").disallowedTools,
-		).toEqual([
-			"AskUserQuestion",
-			"Write",
-			"Edit",
-			"MultiEdit",
-			"NotebookEdit",
-		]);
+		).toEqual(
+			expect.arrayContaining([
+				"AskUserQuestion",
+				"Bash",
+				"Task",
+				"TaskOutput",
+				"TaskStop",
+				"Write",
+				"Edit",
+				"MultiEdit",
+				"NotebookEdit",
+			]),
+		);
 		expect(
 			vm.shell.mock.calls.some(([command]) =>
 				String(command).includes("sudo -n install -o ytimesy-reader"),

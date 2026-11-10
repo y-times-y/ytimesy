@@ -1657,7 +1657,9 @@ async function runApiTurnAttempt(
 					})
 				: null;
 		const codeMode =
-			surface.lean && (variant.codeMode !== "off" || claudeRunner) && !thinLead
+			(surface.lean || claudeCode) &&
+			(variant.codeMode !== "off" || claudeCode) &&
+			!thinLead
 				? variant.codeMode !== "off"
 					? variant.codeMode
 					: "on"
@@ -1737,6 +1739,7 @@ async function runApiTurnAttempt(
 		// update_plan, as the benchmark bridge's plan=on gives it; subagents
 		// get none. Each accepted update replaces the turn's checklist item.
 		const planning: ToolSet =
+			!claudeCode &&
 			variant.plan === "on" &&
 			((!owner.parentSessionId && !owner.agentRole) || isSideChat(owner))
 				? planTool({
@@ -2453,16 +2456,12 @@ async function runApiTurnAttempt(
 						workspace,
 						machines: unscopedMachines,
 						messages,
-						// Claude Code has its own file, shell and web tools; on a runner
-						// box its file and shell tools are off and ytimesy's take over.
+						// One workspace tool lifecycle on either host: commands must be
+						// registered for completion notices, Stop and restart recovery.
 						tools: claudeCodeBridgeToolSet(
 							tools,
-							[
-								...(claudeRunner ? [] : Object.keys(surfaceTools)),
-								...Object.keys(webSearch),
-								...Object.keys(webFetch),
-							],
-							Boolean(claudeRunner),
+							[...Object.keys(webSearch), ...Object.keys(webFetch)],
+							true,
 						),
 						...(claudeRunner
 							? {
