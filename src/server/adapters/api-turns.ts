@@ -488,7 +488,8 @@ export async function checkpointApiTurn(
 	items: readonly SessionItem[],
 	failover?: TurnFailoverColumn,
 ) {
-	const write = planItemsWrite(turn, items, 4, "agent_session.items");
+	// $5 is the failover, so the first item's id is $6.
+	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
@@ -568,7 +569,8 @@ export async function finalizeApiTurn(
 ) {
 	// Its messages record when it ended (turn-end.ts).
 	const items = settledTurnItems(settled, Date.now());
-	const write = planItemsWrite(turn, items, 4, "s.items");
+	// $5 is the messages, so the first item's id is $6.
+	const write = planItemsWrite(turn, items, 4, "s.items", 6);
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(
