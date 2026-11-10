@@ -820,6 +820,20 @@
 .session-message[data-role="user"] {
 	display: block;
 }
+.session-message[data-role="user"]:not([data-sender]) {
+	width: fit-content;
+	max-width: 80%;
+	margin-inline-start: auto;
+}
+.session-message[data-role="user"]:not([data-sender])
+	> p:not(.session-queued-note) {
+	border-radius: 18px;
+}
+@media (max-width: 600px) {
+	.session-message[data-role="user"]:not([data-sender]) {
+		max-width: 90%;
+	}
+}
 .session-message[data-role="user"] p {
 	max-width: 100%;
 	width: 100%;
@@ -1039,6 +1053,7 @@ button.attachment-tile-body[data-state="open"] {
 }
 .session-message[data-role="user"] p.session-queued-note {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 5px;
 	margin-top: 4px;
