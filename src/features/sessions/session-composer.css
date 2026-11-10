@@ -2108,7 +2108,7 @@ details[open] > summary .session-activity-chevron {
 	.session-composer:not(
 		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
 	) {
-	grid-template-columns: auto minmax(48px, 1fr) auto auto auto;
+	grid-template-columns: auto minmax(96px, 1fr) minmax(0, auto) auto auto;
 	grid-template-areas: "attach input harness fast send";
 	border-radius: 9999px;
 	padding: 4px 8px 4px 6px;
@@ -2130,9 +2130,10 @@ details[open] > summary .session-activity-chevron {
 }
 .session-launcher[data-layout="chat"] textarea:placeholder-shown {
 	height: 36px;
+	white-space: nowrap;
 	overflow: hidden;
 }
-.session-launcher[data-layout="chat"] textarea {
+.session-launcher[data-layout="chat"] textarea:not(:placeholder-shown) {
 	white-space: pre-wrap;
 }
 @container composer (max-width: 520px) {
