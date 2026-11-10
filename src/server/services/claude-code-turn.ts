@@ -3,6 +3,10 @@ import { PLAN_TOOL } from "#/domain/agent-todos";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { ClaudeCodeRunFailure } from "#/domain/api-turn-failure";
 import type { ClaudeCodePlanStep } from "#/domain/claude-code-stream";
+import {
+	CLAUDE_RUNNER_WORKDIR,
+	type ClaudeRunnerBox,
+} from "#/domain/claude-runner";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
@@ -10,12 +14,14 @@ import {
 	downloadCheckpoint,
 	uploadCheckpoint,
 } from "../adapters/checkpoints/storage";
+import { claudeRunnerMachine } from "../adapters/claude-runner-box";
 import {
 	claudeSubscriptionStatus,
 	claudeSubscriptionTokenForRedaction,
 	readClaudeCodeSession,
 	saveClaudeCodeSession,
 } from "../adapters/claude-subscription";
+import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
@@ -38,8 +44,14 @@ import type { WorkspaceMachines } from "./workspace-machines";
 export function claudeCodeBridgeToolSet(
 	tools: ToolSet,
 	own: readonly string[],
+	/** On a runner box, run_code is offered too (the chat's tools are a network hop away). */
+	offerCodeMode = false,
 ): ToolSet {
-	const skipped = new Set([...own, CODE_MODE_TOOL, PLAN_TOOL]);
+	const skipped = new Set([
+		...own,
+		...(offerCodeMode ? [] : [CODE_MODE_TOOL]),
+		PLAN_TOOL,
+	]);
 	return Object.fromEntries(
 		Object.entries(tools).filter(([name]) => !skipped.has(name)),
 	);
@@ -68,6 +80,14 @@ export async function runClaudeCodeTurnStep(input: {
 	readonly toolName: (id: string) => string | undefined;
 	readonly onEvent: (event: ApiAgentEvent) => Promise<void>;
 	readonly onPlan: (plan: readonly ClaudeCodePlanStep[]) => void;
+	/**
+	 * Run `claude` on this runner box instead of the chat's machine; the
+	 * chat's machine stays the workspace, reached through `workspaceTools`.
+	 */
+	readonly runner?: {
+		readonly box: ClaudeRunnerBox;
+		readonly workspaceTools: readonly string[];
+	};
 }): Promise<ClaudeCodeStepResult> {
 	const edge = gitProxyConfiguration();
 	if (!edge)
@@ -88,23 +108,36 @@ export async function runClaudeCodeTurnStep(input: {
 	]);
 	const vm = ready.vm;
 	const { machines } = input;
+	const box = input.runner ? claudeRunnerMachine(input.runner.box) : null;
 	publishClaudeCodeTools(input.turnId, definitions);
 	const running = new Set<Promise<void>>();
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;
 	try {
 		const result = await runClaudeCodeStep({
-			shell: async (command, timeoutMs) => {
-				const result = await machines.exec(vm, command, timeoutMs);
-				return {
-					exitCode: result.exitCode,
-					stdout: result.stdout,
-					stderr: result.stderr,
-				};
-			},
-			writeFile: (path, contents) => machines.writeTextFile(vm, path, contents),
-			readFile: (path) => machines.readTextFile(vm, path),
-			cwd: ready.cwd,
+			shell:
+				box?.shell ??
+				(async (command, timeoutMs) => {
+					const result = await machines.exec(vm, command, timeoutMs);
+					return {
+						exitCode: result.exitCode,
+						stdout: result.stdout,
+						stderr: result.stderr,
+					};
+				}),
+			writeFile:
+				box?.writeFile ??
+				((path, contents) => machines.writeTextFile(vm, path, contents)),
+			readFile: box?.readFile ?? ((path) => machines.readTextFile(vm, path)),
+			cwd: input.runner ? CLAUDE_RUNNER_WORKDIR : ready.cwd,
+			...(input.runner
+				? {
+						remote: {
+							repository: ready.cwd,
+							workspaceTools: input.runner.workspaceTools,
+						},
+					}
+				: {}),
 			userId: input.userId,
 			sessionId: input.sessionId,
 			turnId: input.turnId,
@@ -166,6 +199,18 @@ export async function runClaudeCodeTurnStep(input: {
 		]);
 		if (ended) closeClaudeCodeBridge(input.turnId);
 	}
+}
+
+/**
+ * Whether an abort that stops the turn's commands should leave its Claude
+ * Code run alone. The agent loop of a Claude Code turn is the `claude`
+ * process itself, so stopping it for a deploy (a Durable Object reset for new
+ * code) loses the whole turn, where a step that only called a model resumes
+ * from its checkpoint. A platform restart resumes the step, which re-attaches
+ * to the process; a user's Stop and the turn's deadline still stop it.
+ */
+export function leavesClaudeCodeRunning(reasons: readonly unknown[]) {
+	return reasons.some((reason) => isPlatformRestart(reason));
 }
 
 /**

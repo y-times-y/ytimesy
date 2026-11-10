@@ -59,7 +59,7 @@ export class ConversationRoom {
 	 */
 	private purged = false;
 	private readonly subscribers = new Set<
-		(snapshot: ConversationSnapshot) => void
+		(snapshot: ConversationSnapshot, frame?: Uint8Array) => void
 	>();
 	/**
 	 * `schedule` lets a host object that also uses the alarm (the chat DO's turn
@@ -131,10 +131,7 @@ export class ConversationRoom {
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
 		if (request.method === "POST") {
 			const incoming = conversationSnapshotSchema.parse(await request.json());
-			if (url.pathname !== "/stream")
-				return (
-					(await this.adopt(incoming)) ?? new Response(null, { status: 204 })
-				);
+			if (url.pathname !== "/stream") return this.publish(incoming);
 			// A subscription that brings the chat's snapshot from Postgres: a
 			// room without it (a new chat, a restarted object) is seeded in the
 			// same round trip instead of a miss, a publish and a resubscribe.
@@ -167,14 +164,16 @@ export class ConversationRoom {
 				start: (controller) => {
 					let ended = false;
 					let revision = 0n;
-					const send = (value: ConversationSnapshot) => {
+					const send = (value: ConversationSnapshot, frame?: Uint8Array) => {
 						if (ended || BigInt(value.revision) <= revision) return;
 						if ((controller.desiredSize ?? 0) <= 0) {
 							stop();
 							return;
 						}
 						revision = BigInt(value.revision);
-						controller.enqueue(encoder.encode(conversationEvent(value)));
+						controller.enqueue(
+							frame ?? encoder.encode(conversationEvent(value)),
+						);
 					};
 					const heartbeat = setInterval(() => {
 						if (!ended && (controller.desiredSize ?? 0) > 0)
@@ -209,6 +208,11 @@ export class ConversationRoom {
 				"Cache-Control": "no-store, no-transform",
 			},
 		});
+	}
+	/** Trusted in-process publication avoids a JSON Request/parse round trip. */
+	async publish(incoming: ConversationSnapshot): Promise<Response> {
+		if (this.purged) return new Response(null, { status: 410 });
+		return (await this.adopt(incoming)) ?? new Response(null, { status: 204 });
 	}
 	/** Keeps a newer snapshot and broadcasts it; a refusal's response otherwise. */
 	private async adopt(
@@ -260,7 +264,12 @@ export class ConversationRoom {
 				BigInt(incoming.revision) > BigInt(this.latest.revision)
 			) {
 				this.latest = incoming;
-				for (const send of this.subscribers) send(incoming);
+				// All viewers receive the same immutable frame, not one large JSON
+				// serialization and byte buffer per viewer.
+				if (this.subscribers.size) {
+					const frame = encoder.encode(conversationEvent(incoming));
+					for (const send of this.subscribers) send(incoming, frame);
+				}
 			}
 		}
 		return null;

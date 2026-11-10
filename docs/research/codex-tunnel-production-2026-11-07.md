@@ -28,3 +28,23 @@ This uses pinned `tunnelfetch` 1.13.1, whose userland TLS implementation is not 
 The emergency deployment used Wrangler directly because production secret values were unavailable locally; normal deploy-script preflight was not run. Saved pre-deploy version IDs and tunnel settings remain in the gitignored `.ytimesy/codex-deploy/` operator directory, not in Git. The normal deployment script now forwards the two tunnel settings when supplied; operators must preserve them in the canonical production configuration.
 
 No public harness port is required for this product-specific cloud infrastructure.
+
+## Follow-up — 2026-11-10: the proxy accepted IPv6 only
+
+Production logged `Every Codex egress path is blocked` (`path: vpc`, `reason: transport`) from 2026-11-09 23:37 UTC. On the proxy VM the service was active and listening, but only on `[::]:18080`: `asyncio.start_server(handle, "::", …)` makes that socket IPv6-only, so a connection to `127.0.0.1:18080` (or the VM's IPv4 address `169.254.77.2`) was refused. A signed request over `::1` worked end to end (200 from the proxy, ChatGPT's 401 behind it), so the key, the clock and the VM's path to `chatgpt.com` were fine.
+
+Fix, applied on the VM only (not in this repo): `/opt/ytimesy-codex-proxy.py` line 78 now binds `["0.0.0.0", "::"]`; the original is at `/opt/ytimesy-codex-proxy.py.bak`. After the restart both `127.0.0.1` and `::1` returned 200 plus ChatGPT's 401.
+
+Not verified: that the Worker was in fact connecting over IPv4 (so this is the likely cause, not a proven one), why it worked on 2026-11-07, and a real Codex request through the production Workers afterwards. The proxy logs nothing about refused requests (it only answers 403), so a wrong signing secret, an expired credential and an unreachable address all look the same from the Worker: `transport`.
+
+If the VM is rebuilt, rebind the proxy to both `0.0.0.0` and `::`.
+
+## 2026-11-10: the proxy moved from Freestyle to AWS
+
+Reason: the Freestyle VM (2 vCPU, 4 GiB, always on) cost roughly $80-100 a month for a script that copies bytes. It was deleted on 2026-11-10 once Codex worked through AWS.
+
+Now: one `t4g.nano` (Ubuntu 24.04 arm64, `i-085117377ce2e2e08`) in AWS account 703705584492, us-east-2, with Elastic IP `3.143.8.158` (`eipalloc-078d4c2decbd22814`) and security group `sg-04c90283931cbd7ce` (ingress tcp/443 from anywhere; auth is the signed single-use credential). Same proxy script, bound to `0.0.0.0` and `::`, as a systemd service `ytimesy-codex-proxy` (`PORT=443`, `CAP_NET_BIND_SERVICE`, signing key in `/etc/ytimesy-codex-proxy.key`, written by the instance's startup script). IMDSv2 is required. Port 443 because it passes the most firewalls, including the chat machines' own egress filter.
+
+Production: `YTIMESY_CODEX_TUNNEL_URL=http://3.143.8.158:443` and a new `YTIMESY_CODEX_TUNNEL_SECRET` on both Workers (edge version `264701cb`, web `1b3bf477`). Verified: a bad credential gets 403, a signed one gets a tunnel to chatgpt.com and its 401 with no Cloudflare challenge, and a real Codex chat worked afterwards with zero `Codex egress path blocked` events in the Workers logs.
+
+Known limits: a single instance with no failover (the transport supports one tunnel URL; `YTIMESY_CODEX_RELAY_URL*` relays are separate and need the app route). Rolling back to the pre-move Worker versions no longer works, because they point at the deleted Freestyle VM. If the instance is lost, launch a new one with the same startup script and re-point the two secrets. Monthly cost was not measured; the estimate was about $7-10.

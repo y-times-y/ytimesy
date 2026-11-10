@@ -11,6 +11,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import pg from "pg";
+import { supabaseCertificate } from "./supabase-certificate";
 
 const apply = process.argv.includes("--apply");
 const url = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -21,7 +22,10 @@ const client = new pg.Client({
 	connectionString: url
 		.replace(/[?&]sslrootcert=[^&]*/, "")
 		.replace(/[?&]sslmode=[^&]*/, ""),
-	ssl: { ca: readFileSync(caPath, "utf8"), rejectUnauthorized: true },
+	ssl: {
+		ca: supabaseCertificate(process.env, caPath),
+		rejectUnauthorized: true,
+	},
 });
 
 await client.connect();
