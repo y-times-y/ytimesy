@@ -2230,17 +2230,30 @@ details[open] > summary .session-activity-chevron {
 .conversation-recovery-trigger {
 	pointer-events: auto;
 }
-/* On a user message the icon sits inside the bubble's right end, so it
-   takes no row of its own; an error keeps its line under the bubble. */
+/* On a user message the icon sits just left of the bubble, on the bubble's
+   first line, so it takes no row of its own and the bubble keeps even
+   padding (no empty strip reserved inside it). The icon's width is fixed,
+   with or without the icon, so the bubble never shifts when the recovery
+   points load. An error keeps its line under the bubble. */
+li[data-kind="userMessage"]:has(> .conversation-recovery:not([data-error])) {
+	display: flex;
+	align-items: flex-start;
+	justify-content: flex-end;
+	gap: 6px;
+}
 li[data-kind="userMessage"] > .conversation-recovery:not([data-error]) {
-	position: absolute;
-	top: 4px;
-	right: 4px;
-	margin: 0;
+	order: -1;
+	flex: none;
+	width: 26px;
+	margin: 4px 0 0 auto;
+	min-height: 0;
 }
-.session-message[data-role="user"] p:not(.session-queued-note) {
-	padding-right: 36px;
+li[data-kind="userMessage"]:has(> .conversation-recovery:not([data-error]))
+	> .session-message[data-role="user"]:not([data-sender]) {
+	margin-inline-start: 0;
 }
+/* The whole row counts, so the pointer crossing the gap to the icon keeps it shown. */
+li[data-kind="userMessage"]:hover > .conversation-recovery,
 li:has(> .session-message:hover) > .conversation-recovery,
 li:has(.session-message[data-role="user"]:hover) > .conversation-recovery,
 .conversation-recovery:has(.conversation-recovery-trigger:hover),
