@@ -42,6 +42,19 @@ export const CLAUDE_RUNNER_DISALLOWED_TOOLS = [
 	"TaskOutput",
 	"TaskStop",
 	"AskUserQuestion",
+	// Native orchestration and scheduling: each starts or schedules work that
+	// ytimesy's job lifecycle (Stop, restart recovery, completion notices)
+	// cannot see. ytimesy's own agent tools cover delegation.
+	"Workflow",
+	"ListAgents",
+	"SendMessage",
+	"CronCreate",
+	"CronDelete",
+	"CronList",
+	"ScheduleWakeup",
+	"RemoteTrigger",
+	"EnterWorktree",
+	"ExitWorktree",
 ] as const;
 
 function sessionHash(sessionId: string) {
