@@ -1,5 +1,5 @@
 #!/bin/bash
-# First-boot setup of a runner box (Ubuntu 24.04 arm64, run as root from the
+# First-boot setup of a runner box (Ubuntu 24.04 x86_64, run as root from the
 # instance's user data). The provisioning script fills the three placeholders.
 # The box runs `claude` only: no repository, no user secrets, no inbound ports
 # when reached through a Cloudflare Tunnel (__TUNNEL_TOKEN__ set).
@@ -10,7 +10,7 @@ apt-get install -y python3 curl ca-certificates xz-utils git cloud-guest-utils
 
 # Node at the path the runner expects (/usr/local/bin/node).
 NODE_VERSION=22.11.0
-curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz" | tar -xJ -C /usr/local --strip-components=1
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" | tar -xJ -C /usr/local --strip-components=1
 
 useradd --system --create-home --home-dir /var/lib/ytimesy-runner --shell /usr/sbin/nologin ytimesy-runner || true
 install -d -o ytimesy-runner -g ytimesy-runner /var/lib/ytimesy-runner/work /opt/ytimesy-runner
@@ -24,7 +24,8 @@ cat > /opt/ytimesy-runner/cleanup.mjs <<'CLEANUP'
 __CLEANUP_MJS__
 CLEANUP
 
-# The pinned Claude Agent SDK, at the path the runner checks.
+# The pinned Claude Agent SDK, at the path the runner checks. That path is the
+# x64 build (src/domain/guest-cli-pin.ts), so the box is x86_64 like the chat VMs.
 __SDK_INSTALL__
 
 cat > /etc/systemd/system/ytimesy-runner.service <<'UNIT'
@@ -94,7 +95,7 @@ WantedBy=timers.target
 UNIT
 
 if [ -n '__TUNNEL_TOKEN__' ]; then
-  curl -fsSL -o /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
+  curl -fsSL -o /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
   dpkg -i /tmp/cloudflared.deb
   cloudflared service install '__TUNNEL_TOKEN__'
 fi

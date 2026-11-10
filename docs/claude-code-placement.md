@@ -120,3 +120,19 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
   instead of its own; drain on scale-in. The box image needs Node at
   `/usr/local/bin/node`, python3, and the pinned Agent SDK installed at the
   path `src/domain/guest-cli-pin.ts` names.
+
+### Provisioned 2026-11-10 (flag still off)
+
+Two boxes in AWS account 703705584492, us-east-2: `i-00abdba63343ac96b`
+(`runner-1.ytimesy.com`) and `i-071ce164aa7ae12c4` (`runner-2.ytimesy.com`),
+each a `t3.small` (x86_64, like the chat VMs: the pinned SDK path is the x64
+build, so an ARM `t4g` box fails its bootstrap), 100 GB gp3, no inbound ports,
+reached through Cloudflare Tunnels `ytimesy-runner-1/2` (ids
+`480072d7-c988-433a-b043-334995744949`, `f85224d0-6980-4913-add3-2a1aab73fb10`;
+DNS CNAMEs, proxied). Verified through the real edge client on both: signed
+`/exec`, `/write`, `/read`, a wrong key answered 403, Node 22.11, Python 3.12,
+the SDK ready check passes (claude 2.1.321), the cleanup and grow timers are
+installed, `/health` reports the disk. Round trip from the build machine
+through Cloudflare was 270-630 ms for a trivial command (not measured from the
+edge Workers). The signing key is only on the boxes (`/etc/ytimesy-runner.env`)
+and, once the flag is turned on, in the Workers' `YTIMESY_CLAUDE_RUNNER_SECRET`.
