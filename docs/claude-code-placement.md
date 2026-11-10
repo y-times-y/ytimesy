@@ -201,3 +201,31 @@ checks and the unresolved wider reliability work.
   status file is published and explicitly preserves HOME when reusing tmux.
   Redirecting all standard streams previously allowed tmux to terminate the
   installer before it published completion.
+
+### Live runner maintenance and scoped canary (2026-11-10)
+
+The Worker lifecycle fixes above were deployed as build
+`0a0ce5c96012-mwavvhha`. Both existing AWS runners have now been updated with
+the matching server and cleanup files and a systemd drop-in setting
+`KillMode=process`. Their original root/session volumes were preserved; the
+updates used temporary private repair instances after confirming no Claude
+processes were active. Both repair instances were terminated afterward.
+
+Live signed checks verified the exact source-file hashes, the active KillMode
+and that command children do not inherit the runner signing key. A real Node
+process in each runner service's cgroup survived an API restart with the same
+PID/start tick while the API acquired a new PID. Those are live process-lifecycle
+checks, not real Claude inference or workspace-tool tests.
+
+The optional `YTIMESY_CLAUDE_RUNNER_SESSIONS` setting narrows the existing
+account allowlist to comma-separated chat IDs. An absent setting retains the
+account rollout behavior; a present empty list enables no chats. `*` is not a
+chat wildcard. Account authorization and reader exclusion still apply. This
+allows testing one new chat without moving old chats whose newest transcripts
+may exceed their encrypted checkpoints. Do not remove this restriction until
+the affected existing sessions have been copied and verified on their pinned
+runners, or the owner has explicitly accepted starting them without that state.
+
+Canary-gate validation: 59 targeted runner/placement/turn/API/cleanup tests,
+full typecheck and production build passed. The gate has not yet been deployed
+or activated; no real Claude inference is claimed for this maintenance stage.
