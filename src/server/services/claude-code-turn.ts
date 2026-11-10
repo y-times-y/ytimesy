@@ -16,6 +16,7 @@ import {
 	readClaudeCodeSession,
 	saveClaudeCodeSession,
 } from "../adapters/claude-subscription";
+import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
@@ -166,6 +167,18 @@ export async function runClaudeCodeTurnStep(input: {
 		]);
 		if (ended) closeClaudeCodeBridge(input.turnId);
 	}
+}
+
+/**
+ * Whether an abort that stops the turn's commands should leave its Claude
+ * Code run alone. The agent loop of a Claude Code turn is the `claude`
+ * process itself, so stopping it for a deploy (a Durable Object reset for new
+ * code) loses the whole turn, where a step that only called a model resumes
+ * from its checkpoint. A platform restart resumes the step, which re-attaches
+ * to the process; a user's Stop and the turn's deadline still stop it.
+ */
+export function leavesClaudeCodeRunning(reasons: readonly unknown[]) {
+	return reasons.some((reason) => isPlatformRestart(reason));
 }
 
 /**
