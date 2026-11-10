@@ -12,11 +12,11 @@ const env = {
 	YTIMESY_CLAUDE_RUNNER_SECRET: "s".repeat(40),
 	YTIMESY_CLAUDE_RUNNER_USERS: "u1,u2",
 };
-const turn = "11111111-1111-4111-8111-111111111111";
+const chat = "11111111-1111-4111-8111-111111111111";
 
 describe("claudeRunnerFor", () => {
 	it("is off without its settings, for other users and for read-only helpers", () => {
-		const base = { env, userId: "u1", turnId: turn, reader: false };
+		const base = { env, userId: "u1", sessionId: chat, reader: false };
 		expect(claudeRunnerFor({ ...base, env: {} })).toBeNull();
 		expect(
 			claudeRunnerFor({
@@ -34,13 +34,13 @@ describe("claudeRunnerFor", () => {
 		).toBeNull();
 	});
 
-	it("gives one turn the same box every time, and spreads turns over the boxes", () => {
-		const pick = (turnId: string) =>
-			claudeRunnerFor({ env, userId: "u2", turnId, reader: false })?.baseUrl;
-		expect(pick(turn)).toBe(pick(turn));
+	it("gives one chat the same box every time, and spreads chats over the boxes", () => {
+		const pick = (sessionId: string) =>
+			claudeRunnerFor({ env, userId: "u2", sessionId, reader: false })?.baseUrl;
+		expect(pick(chat)).toBe(pick(chat));
 		const seen = new Set(
 			Array.from({ length: 40 }, (_, index) =>
-				pick(`${index}`.padStart(8, "0") + turn.slice(8)),
+				pick(`${index}`.padStart(8, "0") + chat.slice(8)),
 			),
 		);
 		expect(seen).toEqual(
@@ -53,7 +53,7 @@ describe("claudeRunnerFor", () => {
 			claudeRunnerFor({
 				env: { ...env, YTIMESY_CLAUDE_RUNNER_USERS: "*" },
 				userId: "anyone",
-				turnId: turn,
+				sessionId: chat,
 				reader: false,
 			}),
 		).not.toBeNull();

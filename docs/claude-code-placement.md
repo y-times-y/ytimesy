@@ -79,8 +79,10 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
 - **Settings** (`src/domain/claude-runner.ts`): `YTIMESY_CLAUDE_RUNNER_URLS`
   (comma-separated HTTPS origins), `YTIMESY_CLAUDE_RUNNER_SECRET` (32+ chars,
   the same as the boxes' `RUNNER_SIGNING_KEY`), `YTIMESY_CLAUDE_RUNNER_USERS`
-  (user ids, or `*`). A turn always maps to the same box (hash of its id), so
-  each step finds the process it started. Read-only helpers stay on the VM.
+  (user ids, or `*`). A chat always maps to the same box (hash of its session id): the
+  chat's Claude session file lives on that box between turns and can reach
+  hundreds of MB, far past the 20 MiB saved to storage, and each step of a
+  turn finds the process it started. Read-only helpers stay on the VM.
 - **Code mode** is on for these turns whatever the harness variant says: each
   tool call is a network hop, and `run_code` batches them. The prompt
   (`claudeRunnerPrompt`) says when to use it; whether Claude actually uses it
@@ -89,6 +91,11 @@ with `sudo`. Nothing is enabled or provisioned until the settings below exist.
   goes (not only when it ends), so a lost box can be replaced and the turn
   resumed from it. Failing over to another box is **not built**: today a turn
   stays on its box.
+- **Box disk and cleanup are not built:** sessions of 250 MB fill a small
+  volume quickly; the boxes need a large volume and removal of session files
+  unused for some days. Changing the box list moves chats to other boxes (they
+  fall back to the saved copy, which cannot hold a large session); persist the
+  chosen box per chat before the list changes.
 - **Not done / not measured:** provisioning the boxes and their HTTPS names
   (Cloudflare Tunnel is the plan); tool-call latency over the extra hop on a
   real network; memory and CPU per `claude` process (about 200 MB resident in
