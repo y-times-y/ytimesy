@@ -544,7 +544,7 @@ it("follows a harness failure to the error it wrapped, without serializing it", 
 	);
 	const failure = new HarnessRuntimeFailure("context-compaction", wrapped);
 	expect(failureCause(failure)).toMatch(
-		/^HarnessRuntimeFailure: .* <- Error: Native context compaction failed; history was preserved\. <- Error: 400 context_length_exceeded Bearer \[redacted\]$/,
+		/^HarnessRuntimeFailure: .* <- Error: Native context compaction failed; history was preserved\. <- Error: 400 context_length_exceeded \[redacted\]$/,
 	);
 	expect(JSON.stringify(failure)).not.toContain("context_length_exceeded");
 });
