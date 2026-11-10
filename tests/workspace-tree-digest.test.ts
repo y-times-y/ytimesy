@@ -9,9 +9,11 @@ import {
 } from "../src/server/adapters/freestyle/workspace-retention";
 
 // The digest runs in the guest (Ubuntu: dash, GNU find and coreutils). Run
-// it the same way: natively on Linux, else in a throwaway Ubuntu container.
+// it the same way, including root ownership changes: natively as root on
+// Linux, otherwise in a throwaway Ubuntu container, never by elevating host commands.
 const native =
 	process.platform === "linux" &&
+	process.getuid?.() === 0 &&
 	spawnSync("find", ["--version"]).stdout?.toString().includes("GNU");
 const docker =
 	!native && spawnSync("docker", ["info"], { timeout: 10_000 }).status === 0;

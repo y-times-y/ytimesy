@@ -339,6 +339,40 @@ it("does not acknowledge peer input until the actual model history is checkpoint
 	).toEqual(history);
 });
 
+it("keeps context usage when a large turn pushes its user message outside the delivered page", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw new Error("Missing turn");
+	const usage = {
+		compacting: false,
+		context: { last: { totalTokens: 87654 }, modelContextWindow: 400000 },
+	};
+	await publishApiTurnProgress(turn, [
+		{
+			kind: "userMessage",
+			id: SessionItemId("usage-source"),
+			text: "Inspect orbital routes",
+			contextUsage: usage,
+		},
+		...Array.from({ length: 301 }, (_, index) => ({
+			kind: "agentMessage" as const,
+			id: SessionItemId(`orbit-${index}`),
+			text: `Finding ${index}`,
+		})),
+	]);
+	const delivered = await conversationSnapshot("alice", sessionId);
+	expect(delivered?.progress.items).toHaveLength(200);
+	expect(
+		delivered?.progress.items.some(
+			(item) => (item as { id: string }).id === "usage-source",
+		),
+	).toBe(false);
+	expect(delivered?.progress.usage).toEqual(usage);
+	expect(delivered?.progress.hasOlderItems).toBe(true);
+	const [claimed] = await claimConversationDeliveries();
+	expect(claimed.snapshot.progress.usage).toEqual(usage);
+});
+
 it("coalesces streamed checkpoints into one recoverable owner-scoped mailbox", async () => {
 	await submit();
 	const turn = await claimApiTurn();

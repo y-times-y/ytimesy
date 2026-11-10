@@ -6,6 +6,7 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import type { CodexUsage } from "#/domain/codex-usage";
 import {
 	ENVIRONMENT_SETUP_TITLE,
 	PREVIOUS_SETUP_TITLES,
@@ -21,7 +22,10 @@ import type {
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 import { heldForSetupSql } from "./queued-user-messages";
-import { boundedPageStartSql } from "./transcript-page-sql";
+import {
+	boundedPageStartSql,
+	LATEST_CONTEXT_USAGE_SQL,
+} from "./transcript-page-sql";
 
 const SESSION_COLUMNS =
 	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
@@ -177,6 +181,8 @@ export type AgentSessionRecord = {
 	title: string;
 	briefing: string | null;
 	items: unknown;
+	/** Latest context measurement outside the bounded visible page. */
+	contextUsage?: Pick<CodexUsage, "context" | "compacting">;
 	listedModelId: string | null;
 	turnStatus: "idle" | "running" | "completed" | "failed";
 	status: "starting" | "ready" | "failed";
@@ -362,7 +368,7 @@ export async function agentSessionPageForOwner(
 		   where i.session_id=$1 and i.starts_turn and i.position < st.stop
 		   order by i.position desc limit $4) t) as first from st),
 		 b as (select stop,case when stop is null then 0 else ${boundedPageStartSql("$1", "turn_bounds.first", "turn_bounds.stop")} end as first from turn_bounds)
-		 select s.*,
+		 select s.*, ${LATEST_CONTEXT_USAGE_SQL} as context_usage,
 		  case when b.stop is null or b.stop <= b.first then '[]'::jsonb
 		  else (select jsonb_agg(i.item order by i.position) from agent_session_item i
 		   where i.session_id=$1 and i.position >= b.first and i.position < b.stop) end as items,
@@ -371,12 +377,17 @@ export async function agentSessionPageForOwner(
 		[sessionId, userId, page.beforeId ?? null, page.turns],
 	);
 	const row = result.rows[0] as
-		| (AgentSessionRow & { has_older_items: boolean; page_found: boolean })
+		| (AgentSessionRow & {
+				has_older_items: boolean;
+				page_found: boolean;
+				context_usage?: AgentSessionRecord["contextUsage"];
+		  })
 		| undefined;
 	if (!row) return null;
 	return {
 		...toSession(row),
 		hasOlderItems: row.has_older_items,
+		contextUsage: row.context_usage ?? undefined,
 		pageFound: row.page_found,
 	};
 }

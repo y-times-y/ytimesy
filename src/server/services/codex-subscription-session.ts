@@ -120,7 +120,7 @@ async function readSubscriptionSessionState(
 		...emptyCodexSession(),
 		items,
 		models,
-		usage: recordedContextUsage(items),
+		usage: session?.contextUsage ?? recordedContextUsage(items),
 		agentSessionId: session?.id ?? null,
 		workspaceId: session?.providerRef ?? null,
 		selectedBranch:

@@ -12,6 +12,8 @@ let root: string;
 let source: string;
 
 beforeEach(async () => {
+	vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+	vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
 	vi.stubEnv("YTIMESY_GIT_PROXY_URL", `${ORIGIN}/`);
 	vi.stubEnv("YTIMESY_GIT_PROXY_SECRET", "p".repeat(48));
 	root = await mkdtemp(join(tmpdir(), "ytimesy-proxy-clone-"));

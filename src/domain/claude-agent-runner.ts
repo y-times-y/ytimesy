@@ -8,7 +8,7 @@
  * Claude Code's stderr goes to stderr, where failures are classified.
  * Exits 0 once a result message was printed, 1 otherwise.
  */
-export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync } from "node:fs";
+export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync, writeFileSync } from "node:fs";
 const [sdkModule, inputs, cwd] = process.argv.slice(2);
 const { query } = await import(sdkModule);
 const read = (name) => readFileSync(inputs + "/" + name, "utf8");
@@ -30,6 +30,8 @@ const write = (line) =>
 	new Promise((resolve) => (process.stdout.write(line) ? resolve() : process.stdout.once("drain", resolve)));
 let finished = false;
 for await (const message of query({ prompt: read("prompt"), options })) {
+	if (message.type === "system" && message.subtype === "init" && /^[a-f0-9-]{36}$/i.test(message.session_id ?? ""))
+		writeFileSync(inputs + "/active-session", message.session_id, { mode: 0o600 });
 	await write(JSON.stringify(message) + "\\n");
 	if (message.type === "result") finished = true;
 }

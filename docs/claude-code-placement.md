@@ -188,3 +188,16 @@ checks and the unresolved wider reliability work.
   budget, splitting oversized turns without deleting any stored items. This
   bounds normal delivery batches; it does not yet normalize the execution
   history stored in `api_turn`. A single oversized item remains readable.
+  Context usage is selected independently of the page so the context indicator
+  survives when the user message is on an older page.
+- The SDK records the initialized session ID, and cleanup protects live runs
+  and their session files by checking scoped PID/start-tick ownership, including
+  while a long tool call leaves the transcript untouched. Stale/reused PIDs do
+  not protect old sessions from cleanup.
+- Launch/reattach uses a per-run shell lock. The detached child closes its copy
+  of the lock descriptor; retries repair a missing current pointer without
+  spawning the same run twice.
+- Background workspace installation keeps a terminal descriptor open until its
+  status file is published and explicitly preserves HOME when reusing tmux.
+  Redirecting all standard streams previously allowed tmux to terminate the
+  installer before it published completion.

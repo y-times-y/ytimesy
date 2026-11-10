@@ -26,7 +26,14 @@ export async function codexTunnelFetch(
 		.digest("hex");
 	proxyUrl.username = "ytimesy";
 	proxyUrl.password = `${expires}.${nonce}.${signature}`;
-	const { connect } = await import("cloudflare:sockets");
+	const { connect } = await import("cloudflare:sockets").catch(
+		(cause: unknown) => {
+			throw new Error(
+				"The Codex TCP tunnel requires the Cloudflare Workers sockets runtime.",
+				{ cause },
+			);
+		},
+	);
 	const client = new Client({
 		connect: (address, options) => {
 			const hostname = address.hostname;

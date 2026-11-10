@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const transport = vi.hoisted(() => ({
 	repository: "",
@@ -59,8 +59,13 @@ import {
 } from "./git-broker";
 
 const execute = promisify(execFile);
+beforeEach(() => {
+	vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+	vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+});
 afterEach(() => {
 	transport.commands = [];
+	vi.unstubAllEnvs();
 });
 
 it("clones and pushes Git bundles while no guest command, file or remote contains a credential", async () => {

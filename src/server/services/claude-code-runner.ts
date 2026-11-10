@@ -640,13 +640,28 @@ exec ${argv.map(quote).join(" ")} </dev/null`;
 		seconds: PROCESS_SECONDS,
 		commandId: claudeCodeCommandId(input.turnId, run),
 	});
-	const launch = `d=${quote(runDirectory)}; t=${quote(turnDirectory)}; if [ ! -f "$d/started" ]; then setsid nohup bash -c ${quote(`${scoped} >"$1/out" 2>"$1/err" </dev/null; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"`)} _ "$d" </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; printf '%s' ${run} >"$t/current.tmp"; mv "$t/current.tmp" "$t/current"; fi`;
+	const launch = claudeCodeLaunchCommand(
+		runDirectory,
+		turnDirectory,
+		run,
+		scoped,
+	);
 	// The builder's inputs and the launch go out together; the reader's
 	// were written above, before they were handed over.
 	if (input.reader)
 		await checked(shell, launch, "Claude Code could not be started.");
 	else await writeFilesThenRun(shell, runDirectory, inputFiles, launch);
 	return { run };
+}
+
+/** Concurrent resumed steps may propose the same launch; only one may spawn it. */
+export function claudeCodeLaunchCommand(
+	runDirectory: string,
+	turnDirectory: string,
+	run: number,
+	scoped: string,
+) {
+	return `d=${quote(runDirectory)}; t=${quote(turnDirectory)}; (flock -x 9 || exit 1; if [ ! -f "$d/started" ]; then setsid nohup bash -c ${quote(`${scoped} >"$1/out" 2>"$1/err" </dev/null; echo $? >"$1/status.tmp"; mv "$1/status.tmp" "$1/status"`)} _ "$d" 9>&- </dev/null >/dev/null 2>&1 & date +%s >"$d/started"; fi; printf '%s' ${run} >"$t/current.tmp"; mv "$t/current.tmp" "$t/current") 9>"$d/launch.lock"`;
 }
 
 /** The chat's saved session, restored onto this machine when it is not here yet. */
