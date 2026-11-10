@@ -2,6 +2,7 @@ import { simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
+import { SubscriptionUsageLimitReached } from "#/domain/api-turn-failure";
 import {
 	nativeModelCompactor,
 	responsesEndpointCompactor,
@@ -39,6 +40,27 @@ it("preserves a compaction provider failure as its cause without exposing it as 
 		message: "Native context compaction failed; history was preserved.",
 		cause: failure,
 	});
+});
+
+it("reports a spent plan allowance as the limit it is, not as a failed compaction", async () => {
+	const limit = new SubscriptionUsageLimitReached(new Date(1_800_000_000_000));
+	const model = new MockLanguageModelV4({
+		doStream: async () => ({
+			stream: simulateReadableStream({
+				chunks: [{ type: "error" as const, error: limit }],
+				initialDelayInMs: null,
+				chunkDelayInMs: null,
+			}),
+		}),
+	});
+	await expect(
+		nativeModelCompactor(model, "openai", () => ({}))({
+			messages: [{ role: "user", content: "Keep the requirement" }],
+			instructions: "Stable instructions",
+			tools: {},
+			signal: new AbortController().signal,
+		}),
+	).rejects.toBe(limit);
 });
 
 it("uses SDK wire conversion for xAI's explicit compact endpoint and replays its encrypted result", async () => {
