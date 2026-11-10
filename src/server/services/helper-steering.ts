@@ -82,7 +82,8 @@ export async function sendUserMessageToHelper(
 			"That agent has finished; message the lead instead.",
 		);
 	const nodes = subagentTree(root.id, [root, ...helpers], deps.now()).nodes;
-	const name = nodes.find((node) => node.id === helper.id)?.name ?? "a subagent";
+	const name =
+		nodes.find((node) => node.id === helper.id)?.name ?? "a subagent";
 	// The helper reads who the message's @mentions name (Main, other helpers).
 	const context = mentionNoteFromTree(message, nodes, helper.id);
 	if (resting)

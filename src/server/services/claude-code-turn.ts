@@ -4,6 +4,7 @@ import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { ClaudeCodeRunFailure } from "#/domain/api-turn-failure";
 import type { ClaudeCodePlanStep } from "#/domain/claude-code-stream";
 import {
+	CLAUDE_RUNNER_FULL_SHARE,
 	CLAUDE_RUNNER_WORKDIR,
 	type ClaudeRunnerBox,
 } from "#/domain/claude-runner";
@@ -14,7 +15,10 @@ import {
 	downloadCheckpoint,
 	uploadCheckpoint,
 } from "../adapters/checkpoints/storage";
-import { claudeRunnerMachine } from "../adapters/claude-runner-box";
+import {
+	claudeRunnerDiskShare,
+	claudeRunnerMachine,
+} from "../adapters/claude-runner-box";
 import {
 	claudeSubscriptionStatus,
 	claudeSubscriptionTokenForRedaction,
@@ -130,6 +134,19 @@ export async function runClaudeCodeTurnStep(input: {
 				((path, contents) => machines.writeTextFile(vm, path, contents)),
 			readFile: box?.readFile ?? ((path) => machines.readTextFile(vm, path)),
 			cwd: input.runner ? CLAUDE_RUNNER_WORKDIR : ready.cwd,
+			...(input.runner
+				? {
+						beforeLaunch: async () => {
+							const share = await claudeRunnerDiskShare(
+								(input.runner as { box: ClaudeRunnerBox }).box,
+							);
+							if (share !== null && share >= CLAUDE_RUNNER_FULL_SHARE)
+								throw new ClaudeCodeRunFailure(
+									"its runner is full (the disk is almost out of space), so it did not start.",
+								);
+						},
+					}
+				: {}),
 			...(input.runner
 				? {
 						remote: {

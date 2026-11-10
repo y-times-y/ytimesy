@@ -13,6 +13,9 @@ export type ClaudeRunnerBox = {
 	readonly secret: string;
 };
 
+/** A box this full takes no new run: writing would fail halfway (cleanup frees space within minutes). */
+export const CLAUDE_RUNNER_FULL_SHARE = 0.95;
+
 /** The runner box's working directory for `claude` (it has no repository). */
 export const CLAUDE_RUNNER_WORKDIR = "/var/lib/ytimesy-runner/work";
 

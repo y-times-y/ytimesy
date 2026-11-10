@@ -100,6 +100,8 @@ export type ClaudeCodeStepInput = {
 		readonly repository: string;
 		readonly workspaceTools: readonly string[];
 	};
+	/** Runs before a new run starts (not on later steps of one); throws to refuse it. */
+	readonly beforeLaunch?: () => Promise<void>;
 	/** Isolates the reader on this VM before its first command. */
 	readonly prepareReader?: () => Promise<void>;
 	/** When this step yields to the next one (epoch ms). */
@@ -514,6 +516,7 @@ async function launchRun(
 	const { shell } = input;
 	if (run > 50)
 		throw new ClaudeCodeRunFailure("this turn ran Claude Code too many times.");
+	await input.beforeLaunch?.();
 	const runDirectory = `${turnDirectory}/${run}`;
 	// Independent of each other: the SDK check and probing the machine for
 	// the chat's session each cost a round trip, the grant none.

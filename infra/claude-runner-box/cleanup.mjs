@@ -100,5 +100,9 @@ export async function cleanup({
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
 	const home = process.env.RUNNER_HOME ?? "/var/lib/ytimesy-runner";
-	console.log(JSON.stringify(await cleanup({ home })));
+	const removed = await cleanup({ home });
+	console.log(JSON.stringify(removed));
+	const share = await diskUsedShare(home);
+	if (share >= 0.8)
+		console.warn(JSON.stringify({ level: "warn", message: "Runner disk above 80% used after cleanup", usedShare: Number(share.toFixed(3)) }));
 }
