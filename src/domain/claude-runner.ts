@@ -7,6 +7,7 @@
  *
  * Off unless YTIMESY_CLAUDE_RUNNER_URLS and YTIMESY_CLAUDE_RUNNER_SECRET are
  * set; YTIMESY_CLAUDE_RUNNER_USERS limits it to listed user ids ("*": everyone).
+ * YTIMESY_CLAUDE_RUNNER_SESSIONS, when present, further restricts rollout to those chats.
  */
 export type ClaudeRunnerBox = {
 	readonly baseUrl: string;
@@ -100,6 +101,14 @@ export function claudeRunnerFor(input: {
 		.map((value) => value.trim())
 		.filter(Boolean);
 	if (!allowed.includes("*") && !allowed.includes(input.userId)) return null;
+	const scoped = env.YTIMESY_CLAUDE_RUNNER_SESSIONS;
+	if (scoped !== undefined) {
+		const sessions = scoped
+			.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean);
+		if (!sessions.includes(input.sessionId)) return null;
+	}
 	return { baseUrl: urls[sessionHash(input.sessionId) % urls.length], secret };
 }
 

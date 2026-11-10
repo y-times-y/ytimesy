@@ -48,6 +48,55 @@ describe("claudeRunnerFor", () => {
 		);
 	});
 
+	it("restricts a canary to named chats without moving other chats of the same user", () => {
+		const canary = "57b2472e-fc46-4b0b-8df8-f14916a64b58";
+		const base = {
+			env: {
+				...env,
+				YTIMESY_CLAUDE_RUNNER_USERS: "*",
+				YTIMESY_CLAUDE_RUNNER_SESSIONS: ` ${canary}, ${chat} `,
+			},
+			userId: "u2",
+			reader: false,
+		};
+		expect(claudeRunnerFor({ ...base, sessionId: canary })).not.toBeNull();
+		expect(claudeRunnerFor({ ...base, sessionId: chat })).not.toBeNull();
+		expect(
+			claudeRunnerFor({
+				...base,
+				sessionId: "dbba792d-b42d-4c89-80f5-7c655b737805",
+			}),
+		).toBeNull();
+		expect(
+			claudeRunnerFor({ ...base, sessionId: canary, reader: true }),
+		).toBeNull();
+	});
+
+	it.each(["", " , ", "*"])(
+		"fails closed for an empty or wildcard chat restriction %s",
+		(sessions) => {
+			expect(
+				claudeRunnerFor({
+					env: { ...env, YTIMESY_CLAUDE_RUNNER_SESSIONS: sessions },
+					userId: "u1",
+					sessionId: chat,
+					reader: false,
+				}),
+			).toBeNull();
+		},
+	);
+
+	it("keeps account authorization even when the chat is in the canary", () => {
+		expect(
+			claudeRunnerFor({
+				env: { ...env, YTIMESY_CLAUDE_RUNNER_SESSIONS: chat },
+				userId: "not-allowed",
+				sessionId: chat,
+				reader: false,
+			}),
+		).toBeNull();
+	});
+
 	it("lets everyone in with *", () => {
 		expect(
 			claudeRunnerFor({
