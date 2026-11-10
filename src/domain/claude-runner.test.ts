@@ -142,7 +142,7 @@ describe("the runner box setup", () => {
 		expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).not.toContain("TodoWrite");
 	});
 
-	it("tells the model where the code is, when to use run_code and to keep TodoWrite", () => {
+	it("tells the model where the code is, when to use run_code and to keep a plan with update_plan", () => {
 		const text = claudeRunnerPrompt({
 			repository: "/home/ubuntu/app",
 			workspaceTools: ["read", "bash"],
@@ -151,7 +151,7 @@ describe("the runner box setup", () => {
 		expect(text).toContain("/home/ubuntu/app");
 		expect(text).toContain("mcp__ytimesy__read, mcp__ytimesy__bash");
 		expect(text).toContain("mcp__ytimesy__run_code");
-		expect(text).toContain("TodoWrite");
+		expect(text).toContain("mcp__ytimesy__update_plan");
 		expect(text).toContain("background mechanism");
 		expect(text).toContain("Do not bypass tracking");
 	});

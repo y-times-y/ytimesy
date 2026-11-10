@@ -1,5 +1,4 @@
 import type { ModelMessage, ToolSet } from "ai";
-import { PLAN_TOOL } from "#/domain/agent-todos";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { ClaudeCodeRunFailure } from "#/domain/api-turn-failure";
 import type { ClaudeCodePlanStep } from "#/domain/claude-code-stream";
@@ -51,11 +50,7 @@ export function claudeCodeBridgeToolSet(
 	/** Kept explicit for callers that intentionally restrict a helper's tool set. */
 	offerCodeMode = true,
 ): ToolSet {
-	const skipped = new Set([
-		...own,
-		...(offerCodeMode ? [] : [CODE_MODE_TOOL]),
-		PLAN_TOOL,
-	]);
+	const skipped = new Set([...own, ...(offerCodeMode ? [] : [CODE_MODE_TOOL])]);
 	return Object.fromEntries(
 		Object.entries(tools).filter(([name]) => !skipped.has(name)),
 	);
