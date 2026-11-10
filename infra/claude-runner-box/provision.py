@@ -24,7 +24,7 @@ parser.add_argument("--region", default="us-east-2")
 parser.add_argument("--signing-key-file", required=True)
 parser.add_argument("--tunnel-token-file")
 parser.add_argument("--size-gb", type=int, default=100)
-parser.add_argument("--instance-type", default="t4g.small")
+parser.add_argument("--instance-type", default="t3.small")
 args = parser.parse_args()
 
 key = Path(args.signing_key_file).read_text().strip()
@@ -46,11 +46,13 @@ for placeholder, value in {
 
 ec2 = boto3.client("ec2", region_name=args.region)
 vpc = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"][0]["VpcId"]
-group = ec2.create_security_group(
+existing = ec2.describe_security_groups(
+    Filters=[{"Name": "group-name", "Values": [f"ytimesy-{args.name}"]}, {"Name": "vpc-id", "Values": [vpc]}])["SecurityGroups"]
+group = existing[0]["GroupId"] if existing else ec2.create_security_group(
     GroupName=f"ytimesy-{args.name}", Description="Claude runner box: no inbound rules", VpcId=vpc)["GroupId"]
 image = sorted(
     ec2.describe_images(Owners=["099720109477"], Filters=[
-        {"Name": "name", "Values": ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*"]},
+        {"Name": "name", "Values": ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]},
         {"Name": "state", "Values": ["available"]}])["Images"],
     key=lambda item: item["CreationDate"])[-1]["ImageId"]
 run = ec2.run_instances(
