@@ -10,7 +10,17 @@ import {
 class VmStillStarting extends Error {}
 
 /** Freestyle can take over a minute to finish pausing an idle machine. */
-const WAIT_SECONDS = 180;
+const PAUSING_WAIT_SECONDS = 180;
+/**
+ * A machine that was asked to start is normally running within seconds. One
+ * still "starting" after this long is stuck, so the start is asked for again
+ * and, past the limit, the wait ends instead of holding the user for minutes.
+ */
+const STARTING_REISSUE_SECONDS = 30;
+const MAX_START_REISSUES = 2;
+const STARTING_WAIT_SECONDS = 90;
+/** A machine that reads stopped is started again this many times before giving up. */
+const MAX_STOPPED_RESTARTS = 1;
 /**
  * A started or resumed machine is usually running within a second: the first
  * reads come quickly, then once a second for a slow one.
@@ -29,8 +39,40 @@ export async function waitUntilVmRunning(
 	signal?: AbortSignal,
 ) {
 	let started = false;
+	let restartedFromStopped = 0;
+	let reissued = 0;
+	const waitStarted = Date.now();
+	let startingSince: number | null = null;
+	let sawPausing = false;
 	const read = Effect.tryPromise(() => vm.data()).pipe(
 		Effect.flatMap((data) => {
+			if (data.state === "starting") {
+				startingSince ??= Date.now();
+				if (
+					reissued < MAX_START_REISSUES &&
+					Date.now() - startingSince >= STARTING_REISSUE_SECONDS * 1000
+				) {
+					reissued++;
+					startingSince = Date.now();
+					return Effect.tryPromise(() => vm.start()).pipe(
+						Effect.catchAll(() => Effect.void),
+						Effect.flatMap(() => Effect.fail(new VmStillStarting())),
+					);
+				}
+				return Effect.fail(new VmStillStarting());
+			}
+			startingSince = null;
+			if (data.state === "pausing") sawPausing = true;
+			if (
+				data.state === "stopped" &&
+				restartedFromStopped < MAX_STOPPED_RESTARTS
+			) {
+				restartedFromStopped++;
+				return Effect.tryPromise(() => vm.start()).pipe(
+					Effect.catchAll(() => Effect.void),
+					Effect.flatMap(() => Effect.fail(new VmStillStarting())),
+				);
+			}
 			if (data.state === "stopped") {
 				return Effect.fail(
 					new WorkspaceProvisionError({
@@ -51,12 +93,16 @@ export async function waitUntilVmRunning(
 			return Effect.fail(new VmStillStarting());
 		}),
 	);
-	const deadline = Date.now() + WAIT_SECONDS * 1000;
+	// A machine that only ever read as starting is stuck, not slow: end its
+	// wait early. One that was pausing keeps the long wait.
+	const deadline = () =>
+		waitStarted +
+		(sawPausing ? PAUSING_WAIT_SECONDS : STARTING_WAIT_SECONDS) * 1000;
 	for (let pause = FIRST_PAUSE_MS; ; ) {
 		const result = await Effect.runPromise(Effect.either(read), { signal });
 		if (result._tag === "Right") return result.right;
 		if (!(result.left instanceof VmStillStarting)) throw result.left;
-		if (Date.now() + pause > deadline) break;
+		if (Date.now() + pause > deadline()) break;
 		await new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(done, pause);
 			function done() {
