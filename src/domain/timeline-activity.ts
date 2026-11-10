@@ -137,6 +137,12 @@ export function groupTimelineRows(
 				.filter((item) => item.kind === "modelSwitch")
 				.map((item) => ({ kind: "item" as const, item })),
 		);
+		// Push approvals keep their place above the answer when work folds away.
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "pushApproval")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
 		if (final) rows.push({ kind: "item", item: final });
 		// A proposed plan or secret request stays in view with its controls.
 		rows.push(
@@ -145,7 +151,6 @@ export function groupTimelineRows(
 					(item) =>
 						item.kind === "planProposal" ||
 						item.kind === "secretRequest" ||
-						item.kind === "pushApproval" ||
 						item.kind === "userQuestion",
 				)
 				.map((item) => ({ kind: "item" as const, item })),
