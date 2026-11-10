@@ -50,13 +50,11 @@ export function PushApprovalCard({
 	// A pending card asks the server when shown, whenever the chat changes
 	// after it, and every 30 s while the tab is visible, until settled.
 	const checker = useRef<ReturnType<typeof createPushCardChecker> | null>(null);
-	const [checking, setChecking] = useState(false);
 	useEffect(() => {
 		if (shownAnswer !== "pending" || !status) return;
 		const next = createPushCardChecker({
 			status: () => status(item.id),
 			onState: setState,
-			onChecking: setChecking,
 			visible: () => document.visibilityState !== "hidden",
 		});
 		checker.current = next;
@@ -64,7 +62,6 @@ export function PushApprovalCard({
 		return () => {
 			next.stop();
 			checker.current = null;
-			setChecking(false);
 		};
 	}, [item.id, shownAnswer, status]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `revision` is the trigger: it changes with the chat's items and turn status.
@@ -73,7 +70,8 @@ export function PushApprovalCard({
 	}, [revision]);
 
 	async function answer(kind: "push" | "cancel") {
-		if (!actions || working) return;
+		if (!actions || actions.disabled || working || state.answer !== "pending")
+			return;
 		setWorking(kind);
 		setError(null);
 		try {
@@ -140,7 +138,7 @@ export function PushApprovalCard({
 					<button
 						type="button"
 						className="plan-proposal-revise"
-						disabled={actions.disabled || working !== null || checking}
+						disabled={actions.disabled || working !== null}
 						onClick={() => answer("cancel")}
 					>
 						Cancel
@@ -148,7 +146,7 @@ export function PushApprovalCard({
 					<button
 						type="button"
 						className="plan-proposal-approve"
-						disabled={actions.disabled || working !== null || checking}
+						disabled={actions.disabled || working !== null}
 						onClick={() => answer("push")}
 					>
 						{working === "push" ? "Pushing…" : "Push"}

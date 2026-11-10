@@ -12,8 +12,8 @@ export const PUSH_CARD_RECHECK_MS = 30_000;
 export function createPushCardChecker(input: {
 	status(): Promise<PushCardState>;
 	onState(state: PushCardState): void;
-	/** True while a call is in flight (the card disables Push meanwhile). */
-	onChecking(checking: boolean): void;
+	/** Optional observer for background status checks; they do not block approval. */
+	onChecking?(checking: boolean): void;
 	visible(): boolean;
 	intervalMs?: number;
 	timers?: {
@@ -39,10 +39,10 @@ export function createPushCardChecker(input: {
 			return;
 		}
 		inFlight = true;
-		input.onChecking(true);
+		input.onChecking?.(true);
 		try {
 			const state = await input.status();
-			if (stopped) return;
+			if (stopped || settled) return;
 			input.onState(state);
 			if (state.answer !== "pending") {
 				settled = true;
@@ -52,7 +52,7 @@ export function createPushCardChecker(input: {
 			// The next change or interval asks again.
 		} finally {
 			inFlight = false;
-			if (!stopped) input.onChecking(false);
+			if (!stopped) input.onChecking?.(false);
 		}
 		if (again && !settled && !stopped) {
 			again = false;

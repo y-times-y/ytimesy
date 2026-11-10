@@ -106,6 +106,25 @@ describe("a pending push card's re-checks", () => {
 		expect(checking.at(-1)).toBe(false);
 	});
 
+	it("does not overwrite a clicked approval with an older background response", async () => {
+		let resolveStatus: (state: PushCardState) => void = () => {};
+		const onState = vi.fn();
+		const checker = createPushCardChecker({
+			status: () =>
+				new Promise((resolve) => {
+					resolveStatus = resolve;
+				}),
+			onState,
+			visible: () => true,
+			timers: { repeat: () => "handle", clear: () => {} },
+		});
+		const checking = checker.start();
+		checker.settle();
+		resolveStatus({ answer: "pending" });
+		await checking;
+		expect(onState).not.toHaveBeenCalled();
+	});
+
 	it("keeps going after a failed call and stops on demand", async () => {
 		const t = setup();
 		t.status.mockRejectedValueOnce(new Error("offline"));
