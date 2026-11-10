@@ -140,6 +140,21 @@ describe("the runner box setup", () => {
 		])
 			expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).toContain(name);
 		expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).not.toContain("TodoWrite");
+		// Native orchestration and scheduling would run outside the job lifecycle.
+		expect(CLAUDE_RUNNER_DISALLOWED_TOOLS).toEqual(
+			expect.arrayContaining([
+				"Workflow",
+				"ListAgents",
+				"SendMessage",
+				"CronCreate",
+				"CronDelete",
+				"CronList",
+				"ScheduleWakeup",
+				"RemoteTrigger",
+				"EnterWorktree",
+				"ExitWorktree",
+			]),
+		);
 	});
 
 	it("tells the model where the code is, when to use run_code and to keep a plan with update_plan", () => {

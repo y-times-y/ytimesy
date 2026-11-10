@@ -687,7 +687,16 @@ describe("Claude Code runner", () => {
 		);
 		const options = JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "");
 		expect(options.disallowedTools).toEqual(
-			expect.arrayContaining(["Bash", "Read", "Edit", "Write", "Glob", "Grep"]),
+			expect.arrayContaining([
+				"Bash",
+				"Read",
+				"Edit",
+				"Write",
+				"Glob",
+				"Grep",
+				"Workflow",
+				"CronCreate",
+			]),
 		);
 		expect(options.disallowedTools).not.toContain("TodoWrite");
 		const system = vm.files.get(`${RUNS}/1/system`) ?? "";
