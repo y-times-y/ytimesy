@@ -410,6 +410,10 @@ describe("Claude Code runner", () => {
 		expect(vm.files.get(`${RUNS}/1/system`)).toContain(
 			"Do not bypass tracking",
 		);
+		// The run asks for summarized reasoning; by default the API omits its text.
+		expect(CLAUDE_AGENT_RUNNER_SCRIPT).toContain(
+			'thinking: { type: "adaptive", display: "summarized" }',
+		);
 		// The workspace commands (browser, jobs) it could never discover by itself.
 		expect(vm.files.get(`${RUNS}/1/system`)).toContain("ytimesy-browser");
 		expect(vm.files.get(`${RUNS}/1/system`)).toContain("ytimesy-job wait");

@@ -22,6 +22,8 @@ const options = {
 	mcpServers,
 	strictMcpConfig: true,
 	disallowedTools: settings.disallowedTools,
+	// Without display "summarized" the API sends thinking blocks with their text omitted (only a signature), so the chat shows no reasoning.
+	thinking: { type: "adaptive", display: "summarized" },
 	systemPrompt: { type: "preset", preset: "claude_code", append: read("system") },
 	stderr: (data) => process.stderr.write(data),
 };
