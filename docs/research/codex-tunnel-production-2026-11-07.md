@@ -28,3 +28,13 @@ This uses pinned `tunnelfetch` 1.13.1, whose userland TLS implementation is not 
 The emergency deployment used Wrangler directly because production secret values were unavailable locally; normal deploy-script preflight was not run. Saved pre-deploy version IDs and tunnel settings remain in the gitignored `.ytimesy/codex-deploy/` operator directory, not in Git. The normal deployment script now forwards the two tunnel settings when supplied; operators must preserve them in the canonical production configuration.
 
 No public harness port is required for this product-specific cloud infrastructure.
+
+## Follow-up — 2026-11-10: the proxy accepted IPv6 only
+
+Production logged `Every Codex egress path is blocked` (`path: vpc`, `reason: transport`) from 2026-11-09 23:37 UTC. On the proxy VM the service was active and listening, but only on `[::]:18080`: `asyncio.start_server(handle, "::", …)` makes that socket IPv6-only, so a connection to `127.0.0.1:18080` (or the VM's IPv4 address `169.254.77.2`) was refused. A signed request over `::1` worked end to end (200 from the proxy, ChatGPT's 401 behind it), so the key, the clock and the VM's path to `chatgpt.com` were fine.
+
+Fix, applied on the VM only (not in this repo): `/opt/ytimesy-codex-proxy.py` line 78 now binds `["0.0.0.0", "::"]`; the original is at `/opt/ytimesy-codex-proxy.py.bak`. After the restart both `127.0.0.1` and `::1` returned 200 plus ChatGPT's 401.
+
+Not verified: that the Worker was in fact connecting over IPv4 (so this is the likely cause, not a proven one), why it worked on 2026-11-07, and a real Codex request through the production Workers afterwards. The proxy logs nothing about refused requests (it only answers 403), so a wrong signing secret, an expired credential and an unreachable address all look the same from the Worker: `transport`.
+
+If the VM is rebuilt, rebind the proxy to both `0.0.0.0` and `::`.
