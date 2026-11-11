@@ -64,9 +64,9 @@ secrets.YTIMESY_ENVIRONMENT = "development";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
-// Idle chat VMs are snapshotted and deleted as in production. Dev and
-// production share one Freestyle account, so without this every dev test
-// chat's paused VM stays (and bills its disk) forever.
+// As in production: only restores and expires snapshots from before
+// recycling stopped (2026-11-11). Dev and production share one Freestyle
+// account; idle dev VMs are now deleted by Freestyle after 90 days unused.
 secrets.YTIMESY_WORKSPACE_RETENTION = "true";
 secrets.YTIMESY_RETENTION_ENROLL_AFTER =
 	process.env.YTIMESY_RETENTION_ENROLL_AFTER ||

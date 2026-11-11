@@ -28,9 +28,10 @@ export function productionRuntimeSettings(
 		YTIMESY_MODEL_EXECUTION_TARGET: "durable-object",
 		// Production meters regardless (usage-admission.ts); kept explicit.
 		YTIMESY_INFRASTRUCTURE_ADMISSION: "true",
-		// Idle agent VMs are snapshotted (verified on an independent copy), then
-		// deleted; their snapshots expire after 90 days. Without this, paused VMs
-		// and snapshots accumulate forever on the provider plan.
+		// Recycling stopped on 2026-11-11: idle VMs stay paused and Freestyle
+		// deletes them after 90 days unused (docs/workspace-retention.md). This
+		// stays on only so chats recycled before then restore from, and expire,
+		// their snapshots. Turn it off once none is left in phase 'retained'.
 		YTIMESY_WORKSPACE_RETENTION: "true",
 		YTIMESY_RETENTION_ENROLL_AFTER:
 			env.YTIMESY_RETENTION_ENROLL_AFTER || PRODUCTION_RETENTION_ENROLL_AFTER,
