@@ -3268,3 +3268,111 @@ describe("a builder's first request before its workspace is ready", () => {
 		expect(mocks.preparedDirectory).not.toHaveBeenCalled();
 	});
 });
+
+describe("goal mode (the model starts it)", () => {
+	const rootTurn = {
+		id: "turn-goal",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [{ role: "user", content: "Build the whole thing" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("user"),
+				text: "Build the whole thing",
+			},
+		],
+		lease_id: "lease",
+	} as ApiTurn;
+	type GoalCall = (args: Record<string, unknown>) => Promise<string>;
+	const goalCall = (tools: unknown) =>
+		(tools as { goal: { execute: GoalCall } }).goal.execute;
+	const complete = {
+		op: "update",
+		status: "complete",
+		evidence: [{ requirement: "Build the whole thing", proof: "ran: ok" }],
+	};
+
+	it("sends a started goal back as the next durable step, with the audit notice", async () => {
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await goalCall(input.tools)({
+				op: "start",
+				objective: "Build the whole thing",
+			});
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done?" });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		const result = await runApiTurn({} as WorkspaceMachines, rootTurn, {
+			index: 2,
+			signal: new AbortController().signal,
+		});
+		expect(result).toBe("continue");
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		const { checkpointApiTurn } = await import("../adapters/api-turns");
+		const [, messages, items] = vi
+			.mocked(checkpointApiTurn)
+			.mock.calls.at(-1) as unknown as [unknown, unknown[], unknown[]];
+		expect(messages).toContainEqual(
+			expect.objectContaining({
+				role: "user",
+				content: expect.stringContaining("The goal below is still active"),
+			}),
+		);
+		expect(items).toContainEqual(
+			expect.objectContaining({
+				kind: "notice",
+				goal: expect.objectContaining({
+					state: expect.objectContaining({
+						status: "active",
+						continuations: 1,
+					}),
+				}),
+			}),
+		);
+	});
+
+	it("ends the turn once the model marks the goal complete", async () => {
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			const goal = goalCall(input.tools);
+			await goal({ op: "start", objective: "Build the whole thing" });
+			await goal(complete);
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+		expect(
+			await runApiTurn({} as WorkspaceMachines, rootTurn, {
+				index: 2,
+				signal: new AbortController().signal,
+			}),
+		).toBe("completed");
+	});
+
+	it("runs the continuation as the same turn's next attempt on the local worker", async () => {
+		let calls = 0;
+		mocks.runtime.mockImplementation(async (input) => {
+			calls++;
+			const goal = goalCall(input.tools);
+			if (calls === 1)
+				await goal({ op: "start", objective: "Build the whole thing" });
+			else {
+				expect(JSON.stringify(input.messages)).toContain(
+					"The goal below is still active",
+				);
+				await goal(complete);
+			}
+			await input.onEvent({
+				type: "text-delta",
+				id: `reply-${calls}`,
+				text: "Working.",
+			});
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn)).toBe(
+			"completed",
+		);
+		expect(calls).toBe(2);
+	});
+});
