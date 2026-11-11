@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, Square, Target } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type ReactNode,
@@ -41,6 +41,7 @@ import {
 } from "#/domain/composer-drafts";
 import { composerProjectNotice } from "#/domain/composer-project";
 import { chosenContextWindow } from "#/domain/context-window-option";
+import { activeGoal } from "#/domain/goal-notice";
 import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
@@ -690,6 +691,8 @@ export function SessionLauncher({
 		[items, heldMessageId],
 	);
 	const turnStatus = session.turnStatus;
+	// Goal mode (the model started it): the composer says so while it runs.
+	const goal = activeGoal(items, turnStatus);
 	// The turn answered and only commits its changes: Send (which waits for
 	// the commit) instead of Stop.
 	const stoppable =
@@ -1513,6 +1516,25 @@ export function SessionLauncher({
 								})}
 							</ul>
 						)}
+						{goal ? (
+							<div
+								className="composer-goal"
+								role="status"
+								data-kind="goal-mode"
+								title={goal.objective}
+							>
+								<Target size={13} aria-hidden="true" />
+								<span className="composer-goal-label">Goal mode</span>
+								<span className="composer-goal-objective">
+									{goal.objective}
+								</span>
+								{goal.continuations > 0 ? (
+									<span className="composer-goal-count">
+										round {goal.continuations + 1}
+									</span>
+								) : null}
+							</div>
+						) : null}
 						<TaskInput
 							id={inputId}
 							draftKey={draftKey}

@@ -7,6 +7,7 @@ import {
 	ENVIRONMENT_SETUP_TITLE,
 	isEnvironmentSetupPrompt,
 } from "./environment-setup";
+import type { Goal } from "./goal";
 import type { HandoffFiles, HandoffSummary } from "./handoff-summary";
 import { SessionItemId } from "./ids";
 import type { LocalAgent } from "./local-import-view";
@@ -241,6 +242,11 @@ export type NoticeSessionItem = {
 	 * turn-saving.ts); removed before the turn is marked done.
 	 */
 	readonly savingChanges?: true;
+	/**
+	 * The turn's goal (goal-notice.ts): the model started goal mode, so the
+	 * harness keeps it working until it marks the goal complete or blocked.
+	 */
+	readonly goal?: { readonly state: Goal; readonly toolMark: number };
 };
 
 export type PullRequestHandoffState =

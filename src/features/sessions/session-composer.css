@@ -3240,3 +3240,36 @@ button.helper-card:hover {
 	span[style*="--shiki-dark-font-style"][style*="italic"] {
 	font-style: italic;
 }
+
+.composer-goal {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	margin: 0 0 6px;
+	padding: 3px 8px;
+	border-radius: 999px;
+	align-self: flex-start;
+	max-width: 100%;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--text-muted, currentColor);
+	background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.composer-goal-label {
+	font-weight: 600;
+	flex: none;
+}
+
+.composer-goal-objective {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.composer-goal-count {
+	flex: none;
+	opacity: 0.7;
+}
