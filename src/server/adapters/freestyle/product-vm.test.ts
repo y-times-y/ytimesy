@@ -13,8 +13,8 @@ import {
 import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 
 describe("productCreateVmFields", () => {
-	it("boots the cheap Ubuntu image, pauses when idle and is deleted after 90 days unused", () => {
-		expect(PRODUCT_AUTO_DELETE_SECONDS).toBe(7_776_000);
+	it("boots the cheap Ubuntu image, pauses when idle and is deleted after 30 days unused", () => {
+		expect(PRODUCT_AUTO_DELETE_SECONDS).toBe(2_592_000);
 		expect(productCreateVmFields({ slug: "ytimesy-ws-abc" })).toEqual({
 			slug: "ytimesy-ws-abc",
 			displayName: "ytimesy workspace",
