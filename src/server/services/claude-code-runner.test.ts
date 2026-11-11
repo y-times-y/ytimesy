@@ -678,6 +678,54 @@ describe("Claude Code runner", () => {
 		expect(vm.files.has(`${RUNS}/1/prompt`)).toBe(false);
 	});
 
+	it("reports the context size and window when the run finishes, for the composer's ring", async () => {
+		const vm = new FakeVm();
+		vm.emit(
+			init,
+			{
+				type: "assistant",
+				message: {
+					content: [{ type: "text", text: "Hello." }],
+					usage: {
+						input_tokens: 4,
+						cache_creation_input_tokens: 3784,
+						cache_read_input_tokens: 17250,
+						output_tokens: 8,
+					},
+				},
+			},
+			{
+				...success,
+				modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
+			},
+		);
+		vm.status = "0";
+		const step = input(vm);
+		await runClaudeCodeStep(step);
+		const context = step.events.find((event) => event.type === "context");
+		expect(context).toEqual({
+			type: "context",
+			compacting: false,
+			context: {
+				last: { totalTokens: 21046 },
+				modelContextWindow: 1_000_000,
+			},
+		});
+		// The ring reads this after the usage record and before the run is marked finished.
+		const order = step.events.map((event) => event.type);
+		expect(order.indexOf("context")).toBeGreaterThan(order.indexOf("usage"));
+		expect(order.indexOf("context")).toBeLessThan(order.indexOf("finish"));
+	});
+
+	it("shows no ring reading when the result names no context window", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		const step = input(vm);
+		await runClaudeCodeStep(step);
+		expect(step.events.some((event) => event.type === "context")).toBe(false);
+	});
+
 	it("hands the effort chosen in the picker to the run, and none when none was chosen", async () => {
 		const chosen = new FakeVm();
 		chosen.emit(init, success);

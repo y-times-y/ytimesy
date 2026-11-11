@@ -349,6 +349,9 @@ export async function runClaudeCodeStep(
 	let apiError: string | null = null;
 	let unreadablePolls = 0;
 	let lastTranscriptSave = now();
+	// What the latest model call put in the context window; with the window
+	// Claude Code reports at the end, it is the composer's context ring.
+	let contextTokens: number | null = null;
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
@@ -396,6 +399,7 @@ export async function runClaudeCodeStep(
 				} else if (effect.kind === "plan") input.onPlan(effect.plan);
 				else if (effect.kind === "api-error") apiError = effect.text;
 				else if (effect.kind === "result") result = effect.result;
+				else if (effect.kind === "context") contextTokens = effect.totalTokens;
 				else await emit(input, effect.event);
 			}
 		}
@@ -428,7 +432,7 @@ export async function runClaudeCodeStep(
 							error instanceof Error ? error.message.slice(0, 200) : "unknown",
 					}),
 				);
-			return completeRun(input, result, home, apiError);
+			return completeRun(input, result, home, apiError, contextTokens);
 		}
 		const exited =
 			typeof polled.status === "string" &&
@@ -762,6 +766,7 @@ async function completeRun(
 	result: ClaudeCodeResult,
 	home: string,
 	apiError: string | null,
+	contextTokens: number | null = null,
 ): Promise<ClaudeCodeStepResult> {
 	if (result.sessionId && isClaudeCodeSessionId(result.sessionId)) {
 		await input
@@ -779,6 +784,16 @@ async function completeRun(
 				: result,
 		);
 	if (result.usage) await input.onEvent({ type: "usage", usage: result.usage });
+	// The composer's context ring: how full the window is after this run.
+	if (contextTokens !== null && result.contextWindow)
+		await input.onEvent({
+			type: "context",
+			compacting: false,
+			context: {
+				last: { totalTokens: contextTokens },
+				modelContextWindow: result.contextWindow,
+			},
+		});
 	await input.onEvent({
 		type: "finish",
 		inputTokens: result.usage?.inputTokens ?? null,
