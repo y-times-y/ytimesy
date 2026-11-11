@@ -24,6 +24,13 @@ import {
 	claudeRunnerPrompt,
 	claudeWorkspaceCommandsPrompt,
 } from "#/domain/claude-runner";
+import {
+	type DirectTranscriptStore,
+	directDownloadCommand,
+	directUploadCommand,
+	isDirectTranscriptPath,
+	MAX_DIRECT_TRANSCRIPT_BYTES,
+} from "#/domain/direct-transcript";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecretValues } from "#/domain/project-secret";
@@ -70,6 +77,12 @@ export type ClaudeCodeStore = {
 		text: string,
 	) => Promise<string>;
 	readonly downloadTranscript: (path: string) => Promise<string>;
+	/**
+	 * Sends a transcript above the inline limit from the VM straight to R2,
+	 * encrypted there with a one-time key, so the Durable Object never holds it.
+	 * Absent where private R2 storage is not configured.
+	 */
+	readonly direct?: DirectTranscriptStore;
 	readonly subscriptionStatus: () => Promise<ClaudeSubscriptionStatus>;
 };
 
@@ -693,6 +706,10 @@ async function restoredSession(
 	if (present.exitCode === 0) return record.claudeSessionId;
 	if (!record.transcriptPath) return null;
 	try {
+		if (isDirectTranscriptPath(record.transcriptPath)) {
+			await restoreDirectTranscript(input, home, record.transcriptPath, path);
+			return record.claudeSessionId;
+		}
 		const text = await input.store.downloadTranscript(record.transcriptPath);
 		await checked(
 			input.shell,
@@ -708,6 +725,84 @@ async function restoredSession(
 		});
 		return null;
 	}
+}
+
+/** Where a direct transfer's one-use config (a presigned URL and key) is written on the VM. */
+function directConfigPath(home: string) {
+	return `${home}/.ytimesy/claude-direct/${crypto.randomUUID()}.json`;
+}
+const DIRECT_TRANSFER_MS = 240_000;
+
+/**
+ * Runs one direct transfer on the VM: writes its config to a private file
+ * (the script deletes it first thing), runs the command, and removes the file
+ * again whatever happens. Throws only a generic message, never the command.
+ */
+async function runDirectTransfer(
+	input: ClaudeCodeStepInput,
+	home: string,
+	config: Record<string, string>,
+	command: (configPath: string) => string,
+) {
+	const configPath = directConfigPath(home);
+	try {
+		await checked(
+			input.shell,
+			`umask 077; mkdir -p ${quote(configPath.slice(0, configPath.lastIndexOf("/")))}`,
+			"could not prepare a direct transfer.",
+		);
+		await input.writeFile(configPath, JSON.stringify(config));
+		const result = await input.shell(command(configPath), DIRECT_TRANSFER_MS);
+		if (result.exitCode !== 0) throw new Error("the direct transfer failed.");
+	} finally {
+		await input
+			.shell(`rm -f ${quote(configPath)}`, 15_000)
+			.catch(() => undefined);
+	}
+}
+
+/**
+ * Backs up a transcript too large for the Durable Object by encrypting and
+ * uploading it on the VM. Returns its object path, or null (never throws) when
+ * that is not possible, so the caller keeps the previous backup.
+ */
+async function saveTranscriptDirect(
+	input: ClaudeCodeStepInput,
+	home: string,
+	claudeSessionId: string,
+	source: string,
+): Promise<string | null> {
+	try {
+		const prepared = await input.store.direct?.prepareUpload(claudeSessionId);
+		if (!prepared) return null;
+		await runDirectTransfer(input, home, prepared.config, (configPath) =>
+			directUploadCommand(configPath, source),
+		);
+		return prepared.path;
+	} catch (error) {
+		console.warn("Claude Code transcript could not be backed up directly.", {
+			message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+		});
+		return null;
+	}
+}
+
+async function restoreDirectTranscript(
+	input: ClaudeCodeStepInput,
+	home: string,
+	objectPath: string,
+	destination: string,
+) {
+	const prepared = await input.store.direct?.prepareDownload(objectPath);
+	if (!prepared) throw new Error("its direct backup is unavailable.");
+	await checked(
+		input.shell,
+		`umask 077; mkdir -p ${quote(destination.slice(0, destination.lastIndexOf("/")))}`,
+		"could not restore its session.",
+	);
+	await runDirectTransfer(input, home, prepared.config, (configPath) =>
+		directDownloadCommand(configPath, destination),
+	);
 }
 
 function transcriptPath(home: string, cwd: string, claudeSessionId: string) {
@@ -732,6 +827,22 @@ async function saveTranscript(
 	const bytes = Number(size.trim());
 	if (!size.trim() || !Number.isSafeInteger(bytes) || bytes < 0)
 		throw new Error("Invalid Claude transcript size.");
+	if (bytes > INLINE_TRANSCRIPT_BYTES && bytes <= MAX_DIRECT_TRANSCRIPT_BYTES) {
+		const direct = await saveTranscriptDirect(
+			input,
+			home,
+			claudeSessionId,
+			source,
+		);
+		if (direct) {
+			await input.store.saveSession({
+				claudeSessionId,
+				transcriptPath: direct,
+				cwd: input.cwd,
+			});
+			return;
+		}
+	}
 	if (bytes > INLINE_TRANSCRIPT_BYTES) {
 		console.warn("Claude Code transcript is too large to back up inline.", {
 			bytes,

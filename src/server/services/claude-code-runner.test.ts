@@ -20,6 +20,7 @@ import {
 } from "#/domain/api-turn-failure";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
+import type { DirectTranscriptStore } from "#/domain/direct-transcript";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import {
 	type ClaudeCodeStepInput,
@@ -964,6 +965,199 @@ describe("Claude Code runner", () => {
 			claudeSessionId: CLAUDE_SESSION,
 			transcriptPath: "prefix/last-good.enc",
 			cwd: CWD,
+		});
+	});
+
+	describe("direct transcript backup (the VM encrypts and uploads; the Durable Object never holds the file)", () => {
+		const direct = (overrides: Partial<DirectTranscriptStore> = {}) => ({
+			prepareUpload: vi.fn(async (id: string) => ({
+				path: `prefix/claude-code-${id}.direct`,
+				config: {
+					url: "https://r2.example/put?X-Amz-Signature=sig1",
+					dataKey: "DATAKEY",
+					path: `prefix/claude-code-${id}.direct`,
+					header: "v2.wrapped",
+				},
+			})),
+			prepareDownload: vi.fn(async (path: string) => ({
+				config: {
+					url: "https://r2.example/get?X-Amz-Signature=sig2",
+					dataKey: "DATAKEY",
+					path,
+				},
+			})),
+			...overrides,
+		});
+		const withSize = (vm: FakeVm, bytes: number, nodeExit = 0) => {
+			const original = vm.shell.getMockImplementation();
+			vm.shell.mockImplementation(async (command) => {
+				if (command.startsWith("stat -c %s "))
+					return { exitCode: 0, stdout: String(bytes), stderr: "" };
+				if (command.startsWith("/usr/local/bin/node -e "))
+					return { exitCode: nodeExit, stdout: "", stderr: "" };
+				return original
+					? original(command)
+					: { exitCode: 0, stdout: "", stderr: "" };
+			});
+		};
+		const nodeCommands = (vm: FakeVm) =>
+			vm.shell.mock.calls
+				.map(([command]) => String(command))
+				.filter((command) => command.startsWith("/usr/local/bin/node -e "));
+
+		it("uploads a 12 MiB transcript from the VM, with the key and URL only in a one-use file", async () => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			withSize(vm, 12 * 1024 * 1024);
+			const readFile = vi.fn(async () => "must not be loaded");
+			const channel = direct();
+			const step = input(vm, {
+				readFile,
+				store: store({ direct: channel }),
+			});
+			await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+				outcome: "completed",
+			});
+			expect(channel.prepareUpload).toHaveBeenCalledWith(CLAUDE_SESSION);
+			expect(readFile).not.toHaveBeenCalled();
+			expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+			expect(step.store.saveSession).toHaveBeenCalledWith({
+				claudeSessionId: CLAUDE_SESSION,
+				transcriptPath: `prefix/claude-code-${CLAUDE_SESSION}.direct`,
+				cwd: CWD,
+			});
+			const [upload] = nodeCommands(vm);
+			expect(upload).toContain(
+				`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
+			);
+			// Neither the signed URL nor the key is on a command line.
+			expect(upload).not.toContain("sig1");
+			expect(upload).not.toContain("DATAKEY");
+			const configPath = [...vm.files.keys()].find((path) =>
+				path.includes("/.ytimesy/claude-direct/"),
+			) as string;
+			expect(JSON.parse(vm.files.get(configPath) ?? "")).toMatchObject({
+				dataKey: "DATAKEY",
+				header: "v2.wrapped",
+			});
+			expect(upload).toContain(configPath);
+			expect(
+				vm.shell.mock.calls.some(
+					([command]) => command === `rm -f '${configPath}'`,
+				),
+			).toBe(true);
+		});
+
+		it("keeps the previous backup, and the turn, when the VM upload fails", async () => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			withSize(vm, 12 * 1024 * 1024, 1);
+			const step = input(vm, {
+				store: store({
+					direct: direct(),
+					readSession: vi.fn(async () => ({
+						claudeSessionId: CLAUDE_SESSION,
+						transcriptPath: "prefix/last-good.enc",
+						cwd: CWD,
+					})),
+				}),
+			});
+			await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+				outcome: "completed",
+			});
+			expect(step.store.saveSession).toHaveBeenCalledWith({
+				claudeSessionId: CLAUDE_SESSION,
+				transcriptPath: "prefix/last-good.enc",
+				cwd: CWD,
+			});
+		});
+
+		it("falls back to the inline guard when no direct channel is available, or the transcript is beyond 128 MiB", async () => {
+			for (const [bytes, channel] of [
+				[12 * 1024 * 1024, direct({ prepareUpload: vi.fn(async () => null) })],
+				[200 * 1024 * 1024, direct()],
+			] as const) {
+				const vm = new FakeVm();
+				vm.emit(init, success);
+				vm.status = "0";
+				withSize(vm, bytes);
+				const step = input(vm, { store: store({ direct: channel }) });
+				await runClaudeCodeStep(step);
+				expect(nodeCommands(vm)).toHaveLength(0);
+				expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+				expect(step.store.saveSession).toHaveBeenCalledWith({
+					claudeSessionId: CLAUDE_SESSION,
+					transcriptPath: null,
+					cwd: CWD,
+				});
+			}
+		});
+
+		it("restores a direct backup onto a new machine without the Durable Object downloading it", async () => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			withSize(vm, 1024);
+			const path = `prefix/claude-code-${CLAUDE_SESSION}.direct`;
+			const channel = direct();
+			const saved = store({
+				direct: channel,
+				readSession: vi.fn(async () => ({
+					claudeSessionId: CLAUDE_SESSION,
+					transcriptPath: path,
+					cwd: CWD,
+				})),
+			});
+			const step = input(vm, {
+				store: saved,
+				messages: [
+					{ role: "user", content: "First." },
+					{ role: "assistant", content: "Done first." },
+					{ role: "user", content: "Second." },
+				],
+			});
+			await runClaudeCodeStep(step);
+			expect(channel.prepareDownload).toHaveBeenCalledWith(path);
+			expect(saved.downloadTranscript).not.toHaveBeenCalled();
+			const [download] = nodeCommands(vm);
+			expect(download).toContain("direct restore failed");
+			expect(download).toContain(
+				`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
+			);
+			expect(download).not.toContain("sig2");
+			expect(
+				JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
+			).toBe(CLAUDE_SESSION);
+		});
+
+		it("starts a fresh session when a direct restore fails", async () => {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			withSize(vm, 1024, 1);
+			const step = input(vm, {
+				store: store({
+					direct: direct(),
+					readSession: vi.fn(async () => ({
+						claudeSessionId: CLAUDE_SESSION,
+						transcriptPath: `prefix/claude-code-${CLAUDE_SESSION}.direct`,
+						cwd: CWD,
+					})),
+				}),
+				messages: [
+					{ role: "user", content: "First." },
+					{ role: "assistant", content: "Done first." },
+					{ role: "user", content: "Second." },
+				],
+			});
+			await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+				outcome: "completed",
+			});
+			expect(
+				JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").resume,
+			).toBeNull();
 		});
 	});
 
