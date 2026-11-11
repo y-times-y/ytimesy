@@ -1776,11 +1776,10 @@ async function runApiTurnAttempt(
 				: {};
 		// Goal mode: the model starts it for long work that must be finished
 		// and proven; the harness then sends it back (the completion boundary
-		// below) until it marks the goal complete or blocked. Durable steps
-		// only, since the continuation is a step. The goal lives in the turn's
-		// own notice item, so it survives steps and restarts.
+		// below) until it marks the goal complete or blocked. The goal lives in
+		// the turn's own notice item, so it survives durable steps and restarts.
 		const goalMode: ToolSet =
-			step && rootChat && !owner.agentRole && !isSideChat(owner)
+			rootChat && !owner.agentRole && !isSideChat(owner)
 				? goalTool({
 						state: {
 							get goal() {
@@ -2714,7 +2713,7 @@ async function runApiTurnAttempt(
 		// Goal mode: while the goal is active the model goes back with the
 		// audit notice, until it marks the goal complete or blocked or a
 		// deterministic stop (deadline, idle turns, continuation cap) ends it.
-		const heldGoal = step ? goalOfTurn(items, turn.id) : null;
+		const heldGoal = goalOfTurn(items, turn.id);
 		if (heldGoal && !abort.signal.aborted) {
 			const cards = turnToolCards(items, turn.id);
 			const { goal, step: goalStep } = nextGoalStep(heldGoal.state, {
@@ -2732,7 +2731,9 @@ async function runApiTurnAttempt(
 				messages = [...messages, { role: "user", content: goalStep.text }];
 				await saveCheckpoint();
 				coordinated = false;
-				return "continue";
+				// A durable step ends and the next one runs the notice; the local
+				// worker runs it as the same turn's next attempt.
+				return step ? "continue" : { failedOver: { ...turn, messages, items } };
 			}
 			await saveCheckpoint();
 		}
