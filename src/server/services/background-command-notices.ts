@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
 import {
+	type BackgroundCommandExit,
 	backgroundCommandNoticeMessage,
 	hasOpenBackgroundCommand,
 	withBackgroundCommandExits,
@@ -116,9 +117,7 @@ export async function withBackgroundCommandNotices(
 
 /** Dependencies of the idle-chat watcher (tests replace them). */
 export type BackgroundWatchDependencies = {
-	readonly candidates: (
-		maxSeconds: number,
-	) => Promise<readonly { userId: string; id: string }[]>;
+	readonly candidates: () => Promise<readonly { userId: string; id: string }[]>;
 	readonly session: (
 		userId: string,
 		sessionId: string,
@@ -185,9 +184,7 @@ export async function wakeChatsForBackgroundCommands(
 	);
 	const now = options.now ?? Date.now;
 	const deadline = now() + (options.budgetMs ?? BACKGROUND_WAKE_BUDGET_MS);
-	const candidates = [
-		...(await dependencies.candidates(backgroundCommandMaxSeconds())),
-	];
+	const candidates = [...(await dependencies.candidates())];
 	let woken = 0;
 	let next = 0;
 	const worker = async () => {
@@ -244,16 +241,28 @@ export async function wakeChatForBackgroundCommands(
 			return "busy";
 		const scoped = machinesForAgentSession(machines, session);
 		const vm = WorkspaceId(session.providerRef);
-		// A stopped machine stopped its commands; never start one to look.
-		if (!(await scoped.isRunning(vm))) return "idle";
-		const exits = await observeBackgroundCommands({
-			machines: scoped,
-			vm,
-			cwd: "/",
-			sessionId: session.id,
-			ids: open,
-			claim: true,
-		});
+		// A stopped machine stopped its commands (nothing ran on to exit
+		// normally): their cards close as interrupted, without starting it.
+		const running = await scoped.isRunning(vm);
+		const observed = running
+			? await observeBackgroundCommands({
+					machines: scoped,
+					vm,
+					cwd: "/",
+					sessionId: session.id,
+					ids: open,
+					claim: true,
+				})
+			: [];
+		const exits = [
+			...observed,
+			...interruptedBackgroundCommands(
+				stored,
+				open.filter((id) => !observed.some((exit) => exit.id === id)),
+				running,
+				Date.now(),
+			),
+		];
 		if (!exits.length) return "idle";
 		const next = withBackgroundCommandExits(stored, exits);
 		if (next !== stored)
@@ -285,6 +294,43 @@ export async function wakeChatForBackgroundCommands(
 		});
 		return "idle";
 	}
+}
+
+/**
+ * Open cards whose command cannot still be running: its machine is stopped,
+ * or it is older than the safety cap (which ends commands). They close as
+ * interrupted with no notice (nobody is left to act on one); without this a
+ * card whose notice was lost stays "running" forever.
+ */
+function interruptedBackgroundCommands(
+	items: readonly SessionItem[],
+	ids: readonly string[],
+	machineRunning: boolean,
+	now: number,
+): (BackgroundCommandExit & { announced: boolean; fresh: boolean })[] {
+	const cap = backgroundCommandMaxSeconds() * 1000;
+	const exits: (BackgroundCommandExit & {
+		announced: boolean;
+		fresh: boolean;
+	})[] = [];
+	for (const item of items) {
+		const record =
+			item.kind === "dynamicToolCall" ? item.background : undefined;
+		if (!record || !ids.includes(record.id)) continue;
+		if (machineRunning && now - record.startedAt <= cap) continue;
+		exits.push({
+			id: record.id,
+			label: record.label,
+			startedAt: record.startedAt,
+			endedAt: now,
+			exitCode: "interrupted",
+			outputPath: "",
+			lastLines: "",
+			announced: false,
+			fresh: false,
+		});
+	}
+	return exits;
 }
 
 /** The user stops one of a chat's background commands (no notice: the agent did not ask for it to end). */

@@ -1,6 +1,10 @@
 import { asSchema, type Tool, type ToolSet } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
-import type { McpToolDefinition } from "#/domain/claude-code-mcp";
+import type {
+	McpCallResult,
+	McpContentBlock,
+	McpToolDefinition,
+} from "#/domain/claude-code-mcp";
 
 /**
  * ytimesy's own tools for a running Claude Code turn, served to the VM's
@@ -14,7 +18,7 @@ import type { McpToolDefinition } from "#/domain/claude-code-mcp";
  */
 type ExecuteOptions = Parameters<NonNullable<Tool["execute"]>>[1];
 
-export type ClaudeCodeCallReply = { text: string; isError: boolean };
+export type ClaudeCodeCallReply = McpCallResult;
 
 export type ClaudeCodeCall = {
 	readonly name: string;
@@ -167,6 +171,43 @@ export async function mcpToolDefinitions(
 	);
 }
 
+/**
+ * What the tool's own model conversion says the model should see: text and
+ * image blocks, so a screenshot reaches Claude as pixels instead of its
+ * base64 written out as text. Other shapes use the plain text reply.
+ */
+export async function modelContentBlocks(
+	definition: Tool,
+	options: { toolCallId: string; input: unknown; output: unknown },
+): Promise<McpContentBlock[] | undefined> {
+	if (!definition.toModelOutput) return undefined;
+	const converted = (await definition.toModelOutput(options as never)) as {
+		type?: string;
+		value?: unknown;
+	};
+	if (converted?.type !== "content" || !Array.isArray(converted.value))
+		return undefined;
+	const blocks: McpContentBlock[] = [];
+	for (const part of converted.value as Record<string, unknown>[]) {
+		if (part.type === "text" && typeof part.text === "string")
+			blocks.push({ type: "text", text: part.text });
+		else if (
+			(part.type === "file" || part.type === "image") &&
+			typeof part.mediaType === "string" &&
+			part.mediaType.startsWith("image/")
+		) {
+			const data = part.data as { type?: string; data?: unknown } | undefined;
+			if (data?.type === "data" && typeof data.data === "string")
+				blocks.push({
+					type: "image",
+					data: data.data,
+					mimeType: part.mediaType,
+				});
+		}
+	}
+	return blocks.some((block) => block.type === "image") ? blocks : undefined;
+}
+
 function outputText(output: unknown) {
 	if (typeof output === "string") return output;
 	try {
@@ -231,7 +272,19 @@ export async function runClaudeCodeCall(
 			output,
 			...(failed ? { failed: true } : {}),
 		});
-		call.reply({ text: outputText(output), isError: failed });
+		const parsedInput = parsed?.success ? parsed.value : call.args;
+		const content = failed
+			? undefined
+			: await modelContentBlocks(definition, {
+					toolCallId: id,
+					input: parsedInput,
+					output,
+				}).catch(() => undefined);
+		call.reply({
+			text: content ? "" : outputText(output),
+			isError: failed,
+			...(content ? { content } : {}),
+		});
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "The tool call failed.";

@@ -324,10 +324,11 @@ describe("waking a chat between turns", () => {
 		const id = crypto.randomUUID();
 		const chat = await session([{ id, status: "0" }]);
 		const notify = vi.fn(async () => undefined);
+		const replaceItems = vi.fn(async () => true);
 		const dependencies = {
 			candidates: async () => [{ userId: "user", id: chat.sessionId }],
 			session: async () => record(chat.sessionId, chat.items),
-			replaceItems: async () => true,
+			replaceItems,
 			notify,
 		};
 		const busy = hostMachines();
@@ -343,6 +344,14 @@ describe("waking a chat between turns", () => {
 		expect(busy.exec).not.toHaveBeenCalled();
 		expect(stopped.exec).not.toHaveBeenCalled();
 		expect(notify).not.toHaveBeenCalled();
+		// The busy chat is left alone; the stopped machine's card closes as interrupted.
+		expect(replaceItems).toHaveBeenCalledTimes(1);
+		const closed = (replaceItems.mock.calls[0] as unknown[])[3] as {
+			background?: { exitCode?: unknown };
+		}[];
+		expect(closed.find((item) => item.background)?.background?.exitCode).toBe(
+			"interrupted",
+		);
 	});
 
 	it("a command's exit callback wakes its chat once, even racing the cron's watcher", async () => {
