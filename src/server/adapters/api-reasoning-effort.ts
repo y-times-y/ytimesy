@@ -19,6 +19,8 @@ export function withReasoningEffort<T extends { providerOptions?: unknown }>(
 	settings: T,
 	provider: ModelProvider,
 	effort: ReasoningEffort | null,
+	/** The options key to send the effort under, when the provider alone does not say (xAI's endpoint). */
+	optionsKey?: "openai",
 ): T {
 	if (!effort) return settings;
 	const options = (settings.providerOptions ?? {}) as ProviderOptions;
@@ -26,6 +28,8 @@ export function withReasoningEffort<T extends { providerOptions?: unknown }>(
 		...settings,
 		providerOptions: { ...options, [key]: { ...options[key], ...value } },
 	});
+	if (optionsKey === "openai")
+		return merge("openai", { reasoningEffort: effort });
 	switch (provider) {
 		case "anthropic":
 			return merge("anthropic", { effort });

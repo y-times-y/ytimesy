@@ -65,6 +65,8 @@ export async function runClaudeCodeTurnStep(input: {
 	readonly sessionId: string;
 	readonly turnId: string;
 	readonly modelId: string;
+	/** The reasoning effort the user chose; the model's own default when absent. */
+	readonly effort?: string;
 	readonly agentRole: SubagentRole | null | undefined;
 	readonly workspace: () => Promise<AgentToolWorkspace>;
 	/** The machines before the session's scoping, to run as the default user. */
@@ -154,6 +156,7 @@ export async function runClaudeCodeTurnStep(input: {
 			sessionId: input.sessionId,
 			turnId: input.turnId,
 			modelId: input.modelId,
+			...(input.effort ? { effort: input.effort } : {}),
 			messages: input.messages,
 			edgeOrigin: edge.origin,
 			grantSecret: edge.secret,

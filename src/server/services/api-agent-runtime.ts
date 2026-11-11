@@ -4,6 +4,7 @@ import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
 import {
 	apiContextWindowOption,
+	apiModelReasoning,
 	type ModelProvider,
 	modelRouteId,
 } from "#/domain/model-connection";
@@ -273,11 +274,23 @@ export async function apiModelRuntime(
 							}
 						: {}),
 				};
+	// xAI's own endpoint is reached as an OpenAI-compatible connection on the
+	// Responses route, where the effort is the `openai` reasoning effort; it
+	// has no "max", so that maps to its highest level.
+	const xaiEffort =
+		input.provider === "compatible" &&
+		origin === "https://api.x.ai" &&
+		apiModelReasoning(input.provider, input.modelId, input.baseUrl)
+			? effort === "max"
+				? "xhigh"
+				: effort
+			: null;
 	const requestSettings = (instructions: string) =>
 		withReasoningEffort(
 			baseRequestSettings(instructions),
 			input.provider,
-			effort,
+			xaiEffort ?? effort,
+			xaiEffort ? "openai" : undefined,
 		);
 	onStage("inference");
 	return {

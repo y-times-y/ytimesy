@@ -39,6 +39,7 @@ import {
 	agentSessionForOwner,
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
+import { apiReasoningEffort } from "../adapters/api-reasoning-effort";
 import {
 	enqueueApiTurn,
 	inheritedApiTurnSettings,
@@ -433,6 +434,7 @@ async function sendClaudeCodeTask(
 	if (sendWasQueued(current, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
 	const revision = claudeCodeTurnRevision();
+	const effort = apiReasoningEffort(input.variant);
 	const failover = input.continueOn
 		? await pinnedTurnFailover(
 				scope.userId,
@@ -440,7 +442,7 @@ async function sendClaudeCodeTask(
 					connectionId: null,
 					connectionRevision: revision,
 					modelId,
-					settings: {},
+					settings: effort ? { reasoning: effort } : {},
 				},
 				input.continueOn,
 			)
@@ -484,7 +486,8 @@ async function sendClaudeCodeTask(
 		items,
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
-		settings: {},
+		// The chosen effort, when it is one Claude takes; anything else is dropped.
+		settings: effort ? { reasoning: effort } : {},
 		failover,
 	});
 	const title = () =>

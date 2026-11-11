@@ -62,3 +62,14 @@ it("reads and replaces the effort a request's provider options name", () => {
 	});
 	expect(options.openai.reasoningEffort).toBe("max");
 });
+
+it("sends xAI's effort as the OpenAI-compatible reasoning effort when told to", () => {
+	const settings = { providerOptions: { openai: { store: false } } };
+	expect(
+		withReasoningEffort(settings, "compatible", "xhigh", "openai"),
+	).toEqual({
+		providerOptions: { openai: { store: false, reasoningEffort: "xhigh" } },
+	});
+	// Without the key a custom OpenAI-compatible host is left alone.
+	expect(withReasoningEffort(settings, "compatible", "xhigh")).toBe(settings);
+});

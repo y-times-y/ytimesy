@@ -117,6 +117,7 @@ import {
 	withoutSavingChanges,
 } from "#/domain/turn-saving";
 import { ASK_USER_TOOL } from "#/domain/user-question";
+import { apiReasoningEffort } from "#/server/adapters/api-reasoning-effort";
 import { isPlatformRestart } from "#/server/adapters/freestyle/provider-retry";
 import {
 	type AgentSessionRecord,
@@ -2460,6 +2461,8 @@ async function runApiTurnAttempt(
 						sessionId: owner.id,
 						turnId: turn.id,
 						modelId: route.modelId,
+						// The effort chosen in the picker (Claude Code's `effort`).
+						effort: apiReasoningEffort(turnReasoning) ?? undefined,
 						agentRole: owner.agentRole,
 						workspace,
 						machines: unscopedMachines,

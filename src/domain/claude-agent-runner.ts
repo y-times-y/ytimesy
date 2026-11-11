@@ -28,6 +28,7 @@ const options = {
 	stderr: (data) => process.stderr.write(data),
 };
 if (settings.resume) options.resume = settings.resume;
+if (settings.effort) options.effort = settings.effort;
 const write = (line) =>
 	new Promise((resolve) => (process.stdout.write(line) ? resolve() : process.stdout.once("drain", resolve)));
 let finished = false;
