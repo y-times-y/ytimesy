@@ -741,6 +741,32 @@ function captureSettledTurns(rows: readonly SettledTurnRow[]) {
  * Chat Durable Objects resume their own interrupted steps (alarm retries back off
  * for up to about two minutes), so their turns get a longer grace period.
  */
+/** Shown when a chat's own executor gives up on a step that kept being cut off. */
+export const ABANDONED_TURN_MESSAGE =
+	"This step kept being interrupted by the platform, so the turn was stopped. Inspect the workspace before continuing; uncertain tool calls were not replayed.";
+
+/**
+ * Fails the turn the executor has just stopped driving, now. Waiting for its
+ * lease to lapse left the chat "running" for three minutes with a generic
+ * message. Fenced by the lease, so only the attempt that owns the turn (or a
+ * settled one, a no-op) can do it. Returns whether a running turn was failed.
+ */
+export async function abandonApiTurn(turnId: string, leaseId: string) {
+	const result = await database().query<SettledTurnRow>(
+		`with saved as (
+	 update api_turn set state='failed',updated_at=now()
+	 where id=$1 and lease_id=$2 and state='running'
+	 returning session_id,id,state,created_at
+	) update agent_session s set turn_status='failed',
+	 items=s.items || jsonb_build_array(jsonb_build_object('kind','error','id',saved.id::text || ':lost','message',$3::text)),
+	 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
+	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
+		[turnId, leaseId, ABANDONED_TURN_MESSAGE],
+	);
+	captureSettledTurns(result.rows ?? []);
+	return (result.rows?.length ?? 0) > 0;
+}
+
 export async function expireApiTurnLeases() {
 	const result = await database().query<SettledTurnRow>(`with saved as (
 	 update api_turn set state='failed',updated_at=now()
