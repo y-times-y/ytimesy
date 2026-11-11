@@ -7,6 +7,7 @@ import {
 	PEER_DEADLINE_MS,
 	peerDeadlineReached,
 	peerRetryDelayMs,
+	retryDelayMs,
 	tryAdmitJob,
 } from "./background-job-admission";
 
@@ -94,5 +95,15 @@ describe("peer retry schedule", () => {
 		expect(waited - PEER_DEADLINE_MS).toBeLessThan(60_000);
 		// 240 alarms before; the backoff needs about 73.
 		expect(attempts).toBeLessThan(80);
+	});
+
+	it("a background-wake job waits two minutes between looks, not fifteen seconds", () => {
+		expect(retryDelayMs("background-wake", 0)).toBe(120_000);
+		expect(retryDelayMs("background-wake", 30)).toBe(120_000);
+		expect(retryDelayMs("peer-message", 0)).toBe(15_000);
+		// Same one-hour deadline, in far fewer looks.
+		let attempts = 0;
+		while (!peerDeadlineReached(attempts, "background-wake")) attempts++;
+		expect(attempts).toBe(30);
 	});
 });

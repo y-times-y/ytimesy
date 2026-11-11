@@ -65,11 +65,27 @@ export function peerRetryDelayMs(attempts: number) {
 	return 60_000;
 }
 
+/**
+ * A background-wake job retries while its chat's turn runs, and the turn reads
+ * exits itself at every step, so a quick look gains nothing: each one woke the
+ * object, read the chat's whole row and held the object awake for the hour a
+ * long turn can last. It looks every two minutes instead (the cron's sweep
+ * closes any card still open once the job gives up).
+ */
+export const BACKGROUND_WAKE_RETRY_MS = 120_000;
+
+/** Delay before the next look at a job that returned "pending". */
+export function retryDelayMs(kind: string, attempts: number) {
+	return kind === "background-wake"
+		? BACKGROUND_WAKE_RETRY_MS
+		: peerRetryDelayMs(attempts);
+}
+
 /** Whether the total wait so far (attempts already made) has reached the deadline. */
-export function peerDeadlineReached(attempts: number) {
+export function peerDeadlineReached(attempts: number, kind = "peer-message") {
 	let waited = 0;
 	for (let attempt = 0; attempt < attempts; attempt++)
-		waited += peerRetryDelayMs(attempt);
+		waited += retryDelayMs(kind, attempt);
 	return waited >= PEER_DEADLINE_MS;
 }
 

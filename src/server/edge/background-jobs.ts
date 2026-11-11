@@ -22,7 +22,7 @@ import { deliverBackgroundJob } from "../services/background-job-delivery";
 import {
 	deferralDelayMs,
 	peerDeadlineReached,
-	peerRetryDelayMs,
+	retryDelayMs,
 	tryAdmitJob,
 } from "./background-job-admission";
 import {
@@ -237,7 +237,7 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 			return;
 		}
 		const attempts = record.attempts + 1;
-		if (peerDeadlineReached(attempts)) {
+		if (peerDeadlineReached(attempts, record.job.kind)) {
 			await this.finish(record, "failed", "peer delivery deadline exceeded");
 			return;
 		}
@@ -247,7 +247,7 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 			attempts,
 		});
 		await this.ctx.storage.setAlarm(
-			Date.now() + peerRetryDelayMs(record.attempts),
+			Date.now() + retryDelayMs(record.job.kind, record.attempts),
 		);
 	}
 
