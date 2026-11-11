@@ -44,7 +44,11 @@ import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
-import { newTurnItemsColumn, planItemsWrite } from "./turn-items-storage";
+import {
+	newTurnItemsColumn,
+	planItemsWrite,
+	rebaseAfterWrite,
+} from "./turn-items-storage";
 import { startQueuedTurnsDirectly } from "./turn-start";
 
 export type ApiTurn = {
@@ -506,6 +510,7 @@ export async function checkpointApiTurn(
 		],
 	);
 	if (!result.rows[0]) throw new Error("API turn lease was lost.");
+	rebaseAfterWrite(turn, items, write);
 	mirrorTurnHistory(turn.id, result.rows[0].version, { messages, items });
 	await wakeConversationProgress();
 }
@@ -524,9 +529,10 @@ export async function publishApiTurnProgress(
 	 returning (select updated_at::text from saved) as version`,
 		[turn.id, turn.lease_id, write.itemsText, ...write.extra],
 	);
-	if (result.rows[0])
+	if (result.rows[0]) {
+		rebaseAfterWrite(turn, items, write);
 		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
-	else {
+	} else {
 		const cancelled = await database().query(
 			"select 1 from api_turn where id=$1 and lease_id=$2 and user_id=$3 and cancel_requested",
 			[turn.id, turn.lease_id, turn.user_id],
