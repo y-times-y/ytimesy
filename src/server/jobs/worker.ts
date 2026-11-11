@@ -14,7 +14,7 @@ import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
-import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
+import { settleRetainedWorkspaces } from "../adapters/freestyle/workspace-retention";
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listenForQueuedTurns } from "../adapters/turn-queue-wake";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
@@ -245,7 +245,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 					await observeFleetCosts(infrastructureClient);
 					fleetObservedAt = Date.now();
 				}
-				await recycleIdleWorkspaces(infrastructureClient);
+				await settleRetainedWorkspaces(infrastructureClient);
 			})
 			.catch(() => {
 				console.warn("Infrastructure reconciliation deferred.");

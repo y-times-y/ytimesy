@@ -44,9 +44,8 @@ import {
 	resumableMachineStart,
 } from "./machine-failure";
 import {
-	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
-	productIdleTimeoutNeedsUpdate,
+	productLifecycleUpdate,
 	WORKSPACE_METADATA_PURPOSE,
 } from "./product-vm";
 import {
@@ -708,11 +707,8 @@ async function resumeProductVm(
 ) {
 	const data = read ?? (await vm.data());
 	await admitVmResume(vm, data, requiredSeconds);
-	if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
-		await vm
-			.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
-			.catch(() => undefined);
-	}
+	const lifecycle = productLifecycleUpdate(data);
+	if (lifecycle) await vm.update(lifecycle).catch(() => undefined);
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}
@@ -725,7 +721,7 @@ async function resumeProductVm(
 /** A running VM whose recent admission still covers the operation needs no new admission. */
 function admittedAndRunning(data: VmData, requiredSeconds: number) {
 	return (
-		!productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds) &&
+		!productLifecycleUpdate(data) &&
 		recentAdmissionCovers(data, requiredSeconds)
 	);
 }

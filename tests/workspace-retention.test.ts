@@ -8,10 +8,10 @@ import {
 	expireRetainedWorkspace,
 	RecycleDeferred,
 	rebindWorkspaceRetention,
-	recycleIdleWorkspaces,
 	recycleWorkspace,
 	restoreRetainedWorkspace,
 	retainedTreeDigest,
+	settleRetainedWorkspaces,
 	touchWorkspaceRetention,
 } from "../src/server/adapters/freestyle/workspace-retention";
 
@@ -493,7 +493,30 @@ it("expires only the owned recovery artifact, preserving conversation and VM", a
 	).toMatchObject({ phase: "expired", snapshot_id: null });
 });
 
-it("defers a verification past its time budget: keeps the VM, logs once, no throw", async () => {
+it("the scheduled step no longer recycles: an idle workspace keeps its VM", async () => {
+	const { client, source } = provider();
+	await expect(settleRetainedWorkspaces(client)).resolves.toBeUndefined();
+	expect(source.exec).not.toHaveBeenCalled();
+	expect(source.snapshot).not.toHaveBeenCalled();
+	expect(source.delete).not.toHaveBeenCalled();
+	expect(
+		(await query("select phase from workspace_retention")).rows[0],
+	).toMatchObject({ phase: "active" });
+});
+
+it("returns an interrupted capture to active on the scheduled step", async () => {
+	const { client, source } = provider();
+	await query(
+		"update workspace_retention set phase='capturing',phase_updated_at=now()-interval '20 minutes'",
+	);
+	await settleRetainedWorkspaces(client);
+	expect(source.snapshot).not.toHaveBeenCalled();
+	expect(
+		(await query("select phase from workspace_retention")).rows[0],
+	).toMatchObject({ phase: "active" });
+});
+
+it("defers a verification past its time budget and keeps the VM", async () => {
 	const { client, source } = provider();
 	// The in-guest digest is killed by its exec timeout: no status code.
 	source.exec.mockImplementation(async (input: { command: string }) =>
@@ -501,17 +524,11 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 			? { statusCode: null }
 			: { statusCode: 0 },
 	);
-	const info = vi.spyOn(console, "info").mockImplementation(() => {});
-	await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
+	await expect(recycleWorkspace(client, session)).rejects.toBeInstanceOf(
+		RecycleDeferred,
+	);
 	expect(source.snapshot).not.toHaveBeenCalled();
 	expect(source.delete).not.toHaveBeenCalled();
-	expect(info).toHaveBeenCalledTimes(1);
-	expect(info.mock.calls[0][1]).toMatchObject({
-		sessionId: session,
-		category: "timeout",
-		reason: expect.stringContaining("time budget"),
-	});
-	info.mockRestore();
 	expect(
 		(
 			await query(
@@ -519,17 +536,6 @@ it("defers a verification past its time budget: keeps the VM, logs once, no thro
 			)
 		).rows[0],
 	).toMatchObject({ phase: "active", deferred: true });
-	// A direct call still reports the deferral to its caller.
-	await query("update workspace_retention set retry_after=now()");
-	const slow = provider();
-	slow.source.exec.mockImplementation(async (input: { command: string }) =>
-		input.command.includes("ytimesy-tree-v2")
-			? { statusCode: null }
-			: { statusCode: 0 },
-	);
-	await expect(recycleWorkspace(slow.client, session)).rejects.toBeInstanceOf(
-		RecycleDeferred,
-	);
 });
 
 it("treats a source VM the provider no longer has as already gone", async () => {
@@ -543,7 +549,7 @@ it("treats a source VM the provider no longer has as already gone", async () => 
 		throw missing;
 	};
 	const info = vi.spyOn(console, "info").mockImplementation(() => {});
-	await expect(recycleIdleWorkspaces(client)).resolves.toBeUndefined();
+	await expect(recycleWorkspace(client, session)).resolves.toBeUndefined();
 	info.mockRestore();
 	expect(source.snapshot).not.toHaveBeenCalled();
 	expect((await query("select * from workspace_retention")).rows).toHaveLength(

@@ -13,9 +13,8 @@ import { runLongCommand } from "./long-command";
 import {
 	FREESTYLE_EXEC_TIMEOUT_MS_MAX,
 	freestyleExecTimeoutMs,
-	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
-	productIdleTimeoutNeedsUpdate,
+	productLifecycleUpdate,
 } from "./product-vm";
 import { retryTransientProviderFailure } from "./provider-retry";
 import { forgetRunningGuest } from "./recent-guest-state";
@@ -148,11 +147,8 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
 		await admitVmResume(vm, data, requiredSeconds);
-		if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
-			await vm
-				.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
-				.catch(() => undefined);
-		}
+		const lifecycle = productLifecycleUpdate(data);
+		if (lifecycle) await vm.update(lifecycle).catch(() => undefined);
 		if (data.state === "paused" || data.state === "stopped") {
 			await vm.start();
 		}

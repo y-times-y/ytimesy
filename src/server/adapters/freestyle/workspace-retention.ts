@@ -415,7 +415,12 @@ async function stillIdle(
 	return data;
 }
 
-/** Retires only enrolled, settled, idle writer VMs. The native exhausted cap fences public wakeups before deletion. */
+/**
+ * Retires only enrolled, settled, idle writer VMs. The native exhausted cap fences public wakeups before deletion.
+ * No longer scheduled (2026-11-11): settleRetainedWorkspaces replaced the
+ * recycle sweep. Kept until the last retained snapshot expires, then removed
+ * with the rest of recycling (docs/workspace-retention.md).
+ */
 export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 	if (!workspaceRetentionEnabled()) return;
 	const found = await database().query<Retention>(
@@ -675,7 +680,15 @@ export async function restoreRetainedWorkspace(
 	return restoredId;
 }
 
-export async function recycleIdleWorkspaces(client: Freestyle) {
+/**
+ * The scheduled retention step since recycling stopped (2026-11-11): expires
+ * retained snapshots as they come due and returns interrupted captures to
+ * active. It no longer captures or deletes idle VMs. Idle chats stay paused
+ * and Freestyle deletes them after PRODUCT_AUTO_DELETE_SECONDS unused
+ * (docs/workspace-retention.md). Snapshots already retained still restore
+ * through restoreRetainedWorkspace until they expire.
+ */
+export async function settleRetainedWorkspaces(client: Freestyle) {
 	if (!workspaceRetentionEnabled()) return;
 	await expireRetainedWorkspace(client);
 	const interrupted = await database().query<{
@@ -691,21 +704,6 @@ export async function recycleIdleWorkspaces(client: Freestyle) {
 				[row.session_id],
 			);
 		});
-	const rows = await database().query<{ session_id: string }>(
-		"select session_id from workspace_retention where phase='active' and retry_after <= now() and last_activity_at < now()-interval '1 hour' order by last_activity_at limit 1",
-	);
-	// One workspace per tick: each verification runs two in-guest digests of up to 20 seconds.
-	for (const row of rows.rows)
-		try {
-			await recycleWorkspace(client, row.session_id);
-		} catch (error) {
-			if (!(error instanceof RecycleDeferred)) throw error;
-			console.info("Workspace recycling deferred; the source VM is kept.", {
-				sessionId: row.session_id,
-				category: error.category,
-				reason: error.message,
-			});
-		}
 }
 
 /** Expire only application-owned recovery artifacts; conversation records and source machines are untouched. */

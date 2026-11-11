@@ -12,7 +12,12 @@ vi.mock("freestyle", async (importOriginal) => {
 		id,
 		data: async () => {
 			provider.reads++;
-			return { id, state: provider.state, idleTimeoutSeconds: 180 };
+			return {
+				id,
+				state: provider.state,
+				idleTimeoutSeconds: 180,
+				autoDeleteSeconds: 7_776_000,
+			};
 		},
 		exec: provider.exec,
 		fs: { writeTextFile: async () => {} },

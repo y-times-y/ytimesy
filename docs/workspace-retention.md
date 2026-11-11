@@ -1,5 +1,59 @@
 # Workspace retention
 
+## Decision 2026-11-11: pause and auto-delete replace recycling
+
+Recycling (capture an idle chat VM to a snapshot after an hour, delete the VM,
+restore a new VM from the snapshot later) is stopped. Idle chat VMs stay paused
+and Freestyle deletes them after 90 days without running
+(`PRODUCT_AUTO_DELETE_SECONDS` in `src/server/adapters/freestyle/product-vm.ts`).
+Do not bring recycling back to save money: it saves none.
+
+Why, all checked on the live Freestyle account (Hobby plan) on 2026-11-11:
+
+- **Same storage cost.** Freestyle bills a paused VM for its allocated disk
+  and saved memory, and a snapshot for its allocated disk and captured memory,
+  at the same rate ($0.000086/GiB-hour). Recycling moved the bytes; it did not
+  shrink them. It added compute (the capture run, the in-guest digests and a
+  verification VM) on every recycle.
+- **Same state kept.** Both a pause and a snapshot keep memory and disk. A
+  marker written to `/dev/shm` survived a resume and a snapshot boot alike.
+- **Pause returns faster.** Resuming the same paused VM was ready in 0.25,
+  0.29 and 1.2 s; a new VM from a snapshot of it in 3.9, 1.1 and 0.9 s
+  (2 vCPU, 4 GiB, 16 GiB, ready = the guest answers a command). A restore
+  also rebinds the chat to a new VM and re-delivers the scrubbed secrets, which
+  a resume does not. These are small samples; the big slowness of returning to
+  a chat, if any, lives in ytimesy's own resume steps, not the provider.
+- **The VM-level window now exists.** This doc's original reason for
+  application tracking was the *snapshot* `autoDeleteSeconds`, which counts
+  from the last VM created from it. Freestyle SDK 0.2.13 also has a VM-level
+  `autoDeleteSeconds`: "Delete the VM once it has gone this many seconds
+  without running. Every start resets the clock." A 90-day value was accepted
+  on create and on update on this account (no plan cap).
+- **VM slots are not the constraint.** 53 of 200 VMs were in use.
+
+What runs now:
+
+- New product VMs are created with the 90-day window. Older ones get it on
+  their next resume (`productLifecycleUpdate`, applied in `resumeProductVm`
+  and `FreestyleWorkspaceRuntime.resume`), the moment they run, so it never
+  lands on a VM that is already long idle.
+- The scheduled step is `settleRetainedWorkspaces`: it only expires retained
+  snapshots and returns interrupted captures to active. Nothing captures or
+  deletes idle VMs any more.
+- Chats already recycled still restore from their snapshot
+  (`restoreRetainedWorkspace`) until it expires (90 days after capture), so
+  `YTIMESY_WORKSPACE_RETENTION` stays `true` for now.
+
+Left to do: once the last retained snapshot expires (no `workspace_retention`
+row left in phase `retained`), delete `recycleWorkspace`, the restore path,
+the retention touch in admission and the `workspace_retention` table. VMs that
+are never resumed again do not get the window from the resume path; give them
+one with a one-off update, or delete the ones nobody will return to.
+
+The sections below describe recycling as it was built.
+
+## Original design (2026-10-03)
+
 Development rollout enabled on 2026-10-03; production is unchanged.
 
 ## User behavior

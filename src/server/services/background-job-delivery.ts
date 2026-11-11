@@ -17,7 +17,7 @@ import { boundedFreestyleFetch } from "../adapters/freestyle/bounded-fetch";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { releaseReplacedTemplateSnapshots } from "../adapters/freestyle/template-snapshot-release";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
-import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
+import { settleRetainedWorkspaces } from "../adapters/freestyle/workspace-retention";
 import { memoryReposAvailable } from "../adapters/memory-repos";
 import { memoryDreamCandidates } from "../adapters/memory-settings";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
@@ -130,8 +130,8 @@ export async function deliverBackgroundJob(
 						},
 						{ name: "fleet-costs", run: () => observeFleetCosts(client) },
 						{
-							name: "recycle-workspaces",
-							run: () => recycleIdleWorkspaces(client),
+							name: "settle-retained-workspaces",
+							run: () => settleRetainedWorkspaces(client),
 						},
 						{
 							name: "release-replaced-templates",

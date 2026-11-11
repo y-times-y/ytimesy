@@ -22,6 +22,7 @@ vi.mock("freestyle", async (importOriginal) => {
 			resources: provider.resources,
 			metadata: provider.metadata,
 			idleTimeoutSeconds: 180,
+			autoDeleteSeconds: 7_776_000,
 		}),
 		resize: provider.resize,
 		delete: provider.remove,

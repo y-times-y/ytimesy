@@ -45,7 +45,12 @@ vi.mock("freestyle", async (importOriginal) => {
 			data: async () => {
 				const vm = find();
 				// A starting VM is running on the next read.
-				const read = { ...vm, idleTimeoutSeconds: 180, totalRunSeconds: 0 };
+				const read = {
+					...vm,
+					idleTimeoutSeconds: 180,
+					autoDeleteSeconds: 7_776_000,
+					totalRunSeconds: 0,
+				};
 				if (vm.state === "starting") vm.state = "running";
 				return read;
 			},
