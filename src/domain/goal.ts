@@ -48,8 +48,11 @@ export type Goal = {
 	readonly claim: GoalClaim | null;
 	/** Set once, when the loop stops. */
 	readonly stopReason: GoalStopReason | null;
-	/** Continuations this goal may send (default GOAL_MAX_CONTINUATIONS). */
-	readonly maxContinuations?: number;
+	/**
+	 * Continuations this goal may send: absent = GOAL_MAX_CONTINUATIONS, null =
+	 * no cap (a chat's goal runs until it is done or the user's plan limit stops it).
+	 */
+	readonly maxContinuations?: number | null;
 };
 
 /** Continuations per goal at most. */
@@ -63,14 +66,10 @@ export const GOAL_MIN_WRAP_UP_MS = 60_000;
 /** Characters of the objective a continuation repeats (the full request stays in the conversation). */
 export const GOAL_OBJECTIVE_MAX_CHARS = 8_000;
 
-/** A goal the model starts in a chat: more continuations, a wall-clock cap. */
-export const PRODUCT_GOAL_MAX_CONTINUATIONS = 20;
-export const PRODUCT_GOAL_DEADLINE_MS = 3 * 60 * 60_000;
-
 export function newGoal(input: {
 	objective: string;
 	deadlineAtMs: number | null;
-	maxContinuations?: number;
+	maxContinuations?: number | null;
 }): Goal {
 	return {
 		objective: input.objective,
@@ -80,7 +79,7 @@ export function newGoal(input: {
 		idleStreak: 0,
 		claim: null,
 		stopReason: null,
-		...(input.maxContinuations
+		...(input.maxContinuations !== undefined
 			? { maxContinuations: input.maxContinuations }
 			: {}),
 	};
@@ -199,7 +198,11 @@ export function nextGoalStep(
 			step: { kind: "wrapUp", reason: "deadline", text: GOAL_WRAP_UP_NOTICE },
 		};
 	}
-	if (goal.continuations >= (goal.maxContinuations ?? GOAL_MAX_CONTINUATIONS))
+	const cap =
+		goal.maxContinuations === undefined
+			? GOAL_MAX_CONTINUATIONS
+			: goal.maxContinuations;
+	if (cap !== null && goal.continuations >= cap)
 		return stop("max-continuations", "budget_limited", { idleStreak });
 	const round = goal.continuations + 1;
 	return {

@@ -1,13 +1,6 @@
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
-import {
-	claimGoal,
-	type Goal,
-	goalSummary,
-	newGoal,
-	PRODUCT_GOAL_DEADLINE_MS,
-	PRODUCT_GOAL_MAX_CONTINUATIONS,
-} from "../../domain/goal";
+import { claimGoal, type Goal, goalSummary, newGoal } from "../../domain/goal";
 
 export const GOAL_TOOL = "goal";
 
@@ -85,10 +78,13 @@ export function goalTool(input: {
 					const objective = args.objective?.trim();
 					if (!objective)
 						return 'Not started: op "start" needs the objective, the whole task in the user\'s own words.';
+					// No time or round cap: it runs until done, blocked, stuck (no
+					// tool calls for a few rounds), stopped by the user, or the plan's
+					// usage limit fails the turn.
 					const goal = newGoal({
 						objective,
-						deadlineAtMs: input.now() + PRODUCT_GOAL_DEADLINE_MS,
-						maxContinuations: PRODUCT_GOAL_MAX_CONTINUATIONS,
+						deadlineAtMs: null,
+						maxContinuations: null,
 					});
 					state.goal = goal;
 					input.onStart?.(goal);
