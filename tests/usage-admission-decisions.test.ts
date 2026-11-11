@@ -109,6 +109,7 @@ function machine(initial: Partial<Provider> = {}) {
 				slug,
 				resources,
 				idleTimeoutSeconds: 180,
+				autoDeleteSeconds: 7_776_000,
 			}) as unknown as VmData,
 		update: async (patch: Partial<Provider>) => {
 			updates.push(patch);

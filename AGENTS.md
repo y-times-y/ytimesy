@@ -14,6 +14,8 @@ The first release must include Diff, Terminal, and Desktop. ytimesy runs only it
 
 Before database schema changes, Supabase setup, or migration deployment, read [Supabase and GitHub workflow](PLAN.md#supabase-and-github-workflow). It records the selected provider, migration ownership, integration settings, and unverified setup state.
 
+Workspace VM lifecycle: idle chat VMs pause after 180 s and Freestyle deletes them after 90 days without running. Recycling (snapshot the VM, delete it, restore a new one) was stopped on 2026-11-11 because it saves no storage and returns slower; read the decision at the top of [Workspace retention](docs/workspace-retention.md) before proposing snapshots as a cost saving.
+
 Cloudflare execution: there are no Workflows. Before adding one, moving work into a Durable Object alarm or cron, or changing how chat turns or environment builds run or resume, read [Cloudflare execution model](docs/edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12). Alarms and cron stop after 15 minutes, and Durable Objects restart on every deploy.
 
 Bookkeeping never blocks the user: usage accounting, analytics, logging, alerts and other records about an action must not fail the action itself (starting a VM, sending a message, saving work). When their numbers disagree or their write fails, log it (and alert if it repeats) and let the action through. A usage-settlement mismatch once refused to wake a chat's VM forever (`settleHold`, 2026-11-04), and a crash-looping log source once used most of the log quota.
