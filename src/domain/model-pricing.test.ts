@@ -103,6 +103,15 @@ describe("price table", () => {
 		expect(modelPrice("codex:gpt-6-luna")).toBe(luna);
 		expect(modelPrice("claude-opus-5-5")).toMatchObject({ input: 4 });
 		expect(modelPrice("gemini-3.8-flash")).toMatchObject({ input: 0.75 });
+		const terra = modelPrice("openai/gpt-6.1-terra");
+		expect(terra).toMatchObject({
+			input: 1,
+			cacheRead: 0.05,
+			output: 5,
+			longContext: { aboveInputTokens: 272_000, input: 2, output: 7.5 },
+		});
+		expect(modelPrice("gpt-6.1-terra")).toBe(terra);
+		expect(modelPrice("codex:gpt-6.1-terra")).toBe(terra);
 		expect(
 			modelPrice(
 				`api/${"5".repeat(8)}-5555-4555-8555-${"5".repeat(12)}/${encodeURIComponent("moonshotai/kimi-k3")}`,

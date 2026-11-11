@@ -61,6 +61,21 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 			cacheWrite: 5,
 		},
 	},
+	"openai/gpt-6.1-terra": {
+		input: 1,
+		output: 5,
+		cacheRead: 0.05,
+		// Cache write follows the other OpenAI entries (1.25x input); the model
+		// page lists no separate cache-write price.
+		cacheWrite: 1.25,
+		longContext: {
+			aboveInputTokens: 272_000,
+			input: 2,
+			output: 7.5,
+			cacheRead: 0.1,
+			cacheWrite: 2.5,
+		},
+	},
 	"openai/gpt-6-sol": {
 		input: 2,
 		output: 10,
