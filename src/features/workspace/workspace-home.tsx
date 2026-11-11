@@ -163,6 +163,7 @@ import {
 } from "#/domain/sidebar-pr-cookie";
 import {
 	progressPage,
+	snapshotLeavesGap,
 	withEarlierPages,
 	withOlderPage,
 } from "#/domain/transcript-page";
@@ -1897,6 +1898,11 @@ export function WorkspaceHome({
 					agentSessionId: activeSessionId,
 					...page,
 				});
+			// A view that missed more turns than a snapshot carries reads the chat again.
+			if (snapshotLeavesGap(currentSessionRef.current.items, page)) {
+				refetchOpenSession.current();
+				return;
+			}
 			const incoming = shown(currentSessionRef.current);
 			if (!progressMatchesTurn(currentSessionRef.current.items, incoming.items))
 				return;

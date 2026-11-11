@@ -8,6 +8,14 @@ import type { SessionItem } from "./session-item";
  * is split at item boundaries to keep each delivery bounded. Nothing is deleted.
  */
 export const TRANSCRIPT_PAGE_TURNS = 30;
+/**
+ * The live snapshot carries only the chat's last SNAPSHOT_TURNS turns. The
+ * browser already shows the older ones (it merges a snapshot onto them; see
+ * withEarlierPages) and reads more by paging, so re-sending thirty turns on
+ * every progress update only moved megabytes out of Postgres: on the two longest
+ * production chats six turns were 2 to 18 percent of thirty.
+ */
+export const SNAPSHOT_TURNS = 6;
 /** A single long turn must not make every live update load an unbounded history. */
 export const TRANSCRIPT_PAGE_ITEMS = 200;
 export const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
@@ -138,4 +146,24 @@ export function progressPage(progress: {
 		items: page.items,
 		hasOlderItems: Boolean(progress.hasOlderItems) || page.hasOlderItems,
 	};
+}
+
+/**
+ * Whether a snapshot starts after everything the view shows: its first item is
+ * not in the view although the chat has older turns, so merging it would drop
+ * the older pages (or the snapshot would be refused). That happens to a view
+ * that missed more than SNAPSHOT_TURNS turns (a tab that slept through a long
+ * goal run); the caller then reads the chat again instead of waiting.
+ */
+export function snapshotLeavesGap(
+	current: readonly SessionItem[],
+	next: TranscriptPage,
+): boolean {
+	const first = next.items[0];
+	return (
+		Boolean(first) &&
+		next.hasOlderItems &&
+		current.length > 0 &&
+		!current.some((item) => item.id === first.id)
+	);
 }

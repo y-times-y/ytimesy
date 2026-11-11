@@ -4,6 +4,8 @@ import {
 	latestTranscriptPage,
 	olderTranscriptPage,
 	progressPage,
+	SNAPSHOT_TURNS,
+	snapshotLeavesGap,
 	TRANSCRIPT_PAGE_BYTES,
 	TRANSCRIPT_PAGE_ITEMS,
 	TRANSCRIPT_PAGE_TURNS,
@@ -171,5 +173,58 @@ describe("the browser's copy of a paged chat", () => {
 		const whole = progressPage({ items: turns(0, TRANSCRIPT_PAGE_TURNS + 2) });
 		expect(ids(whole.items)).toEqual(ids(turns(2, TRANSCRIPT_PAGE_TURNS + 2)));
 		expect(whole.hasOlderItems).toBe(true);
+	});
+});
+
+describe("a short live snapshot onto the view the browser already has", () => {
+	const shown = (from: number, to: number) => ({
+		agentSessionId: "chat",
+		items: turns(from, to),
+		hasOlderItems: true,
+	});
+	const snapshot = (from: number, to: number) => ({
+		agentSessionId: "chat",
+		items: turns(from, to),
+		hasOlderItems: true,
+	});
+
+	it("carries far fewer turns than a page, and a page still covers it", () => {
+		expect(SNAPSHOT_TURNS).toBeGreaterThanOrEqual(2);
+		expect(SNAPSHOT_TURNS).toBeLessThan(TRANSCRIPT_PAGE_TURNS);
+	});
+
+	it("keeps the older turns already shown and updates the tail", () => {
+		const view = shown(1, 31);
+		const tail = snapshot(31 - SNAPSHOT_TURNS + 1, 32);
+		expect(snapshotLeavesGap(view.items, tail)).toBe(false);
+		const merged = withEarlierPages(view, tail);
+		expect(ids(merged.items)).toEqual(ids(turns(1, 32)));
+		expect(merged.hasOlderItems).toBe(true);
+	});
+
+	it("follows a new turn that slides the window by one", () => {
+		const view = shown(1, 31);
+		const slid = snapshot(32 - SNAPSHOT_TURNS + 1, 33);
+		expect(snapshotLeavesGap(view.items, slid)).toBe(false);
+		expect(ids(withEarlierPages(view, slid).items)).toEqual(ids(turns(1, 33)));
+	});
+
+	it("reports a gap when the view missed more turns than a snapshot carries", () => {
+		const view = shown(1, 21);
+		const far = snapshot(40, 47);
+		expect(snapshotLeavesGap(view.items, far)).toBe(true);
+	});
+
+	it("reports no gap for an empty view, a whole-chat snapshot, or no older turns", () => {
+		expect(snapshotLeavesGap([], snapshot(40, 47))).toBe(false);
+		expect(
+			snapshotLeavesGap(turns(1, 3), {
+				items: turns(1, 3),
+				hasOlderItems: false,
+			}),
+		).toBe(false);
+		expect(
+			snapshotLeavesGap(turns(5, 9), { items: [], hasOlderItems: true }),
+		).toBe(false);
 	});
 });

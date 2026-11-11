@@ -7,7 +7,7 @@ import {
 	type UserMessageItem,
 	withQueuedUserMessages,
 } from "#/domain/session-item";
-import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
+import { SNAPSHOT_TURNS } from "#/domain/transcript-page";
 import { database } from "./database";
 import { queuedTimelineItemSql } from "./queued-user-messages";
 import {
@@ -17,9 +17,9 @@ import {
 	latestPageJoin,
 } from "./transcript-page-sql";
 
-/** A snapshot carries the open page (the chat's last turns), not the whole chat. */
+/** A snapshot carries the chat's last few turns (SNAPSHOT_TURNS), not the whole chat or a full page. */
 const SNAPSHOT_ITEMS = `${LATEST_PAGE_ITEMS_SQL} as items,${LATEST_PAGE_HAS_OLDER_SQL} as has_older_items,${LATEST_CONTEXT_USAGE_SQL} as context_usage`;
-const SNAPSHOT_PAGE = latestPageJoin(TRANSCRIPT_PAGE_TURNS);
+const SNAPSHOT_PAGE = latestPageJoin(SNAPSHOT_TURNS);
 
 type DeliveryRow = {
 	user_id: string;
