@@ -26,6 +26,40 @@ const tools = {
 };
 
 describe("Claude Code tool bridge", () => {
+	it("hands an image result to Claude as an image block, not its base64 as text", async () => {
+		const viewer = tool({
+			inputSchema: z.object({}),
+			execute: async () => ({ path: "a.png", base64: "AAAA" }),
+			toModelOutput: ({ output }) => ({
+				type: "content",
+				value: [
+					{ type: "text", text: `Image ${output.path}` },
+					{
+						type: "file",
+						data: { type: "data", data: output.base64 },
+						mediaType: "image/png",
+					},
+				],
+			}),
+		});
+		const turnId = "turn-image";
+		const reply = requestClaudeCodeCall(turnId, "view_image", {});
+		const [call] = takeClaudeCodeCalls(turnId);
+		await runClaudeCodeCall(turnId, call, {
+			tools: { view_image: viewer },
+			onEvent: async () => undefined,
+			signal: new AbortController().signal,
+		});
+		expect(await reply).toEqual({
+			text: "",
+			isError: false,
+			content: [
+				{ type: "text", text: "Image a.png" },
+				{ type: "image", data: "AAAA", mimeType: "image/png" },
+			],
+		});
+		closeClaudeCodeBridge(turnId);
+	});
 	it("distinguishes a queued timeout from a started command with unknown outcome", async () => {
 		vi.useFakeTimers();
 		try {

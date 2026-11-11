@@ -10,12 +10,28 @@ export type McpToolDefinition = {
 	readonly inputSchema: Record<string, unknown>;
 };
 
+/** One block of a tool result: text, or an image the model should see as pixels. */
+export type McpContentBlock =
+	| { readonly type: "text"; readonly text: string }
+	| {
+			readonly type: "image";
+			readonly data: string;
+			readonly mimeType: string;
+	  };
+
+export type McpCallResult = {
+	readonly text: string;
+	readonly isError: boolean;
+	/** Replaces `text` as the result's content when present (images as pixels). */
+	readonly content?: readonly McpContentBlock[];
+};
+
 export type McpServerHandlers = {
 	readonly tools: () => Promise<readonly McpToolDefinition[]>;
 	readonly call: (
 		name: string,
 		args: Record<string, unknown>,
-	) => Promise<{ readonly text: string; readonly isError: boolean }>;
+	) => Promise<McpCallResult>;
 };
 
 export type McpReply = { readonly status: number; readonly body?: unknown };
@@ -79,7 +95,9 @@ export async function handleMcpMessage(
 			if (!known) return error(id, -32602, `Unknown tool: ${name}`);
 			const called = await handlers.call(name, args);
 			return result({
-				content: [{ type: "text", text: called.text }],
+				content: called.content?.length
+					? called.content
+					: [{ type: "text", text: called.text }],
 				isError: called.isError,
 			});
 		}
