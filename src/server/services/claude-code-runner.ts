@@ -147,6 +147,14 @@ const CONFIG = ".ytimesy/claude-code";
 const READ_LIMIT = 512 * 1024;
 const PROCESS_SECONDS = 6 * 60 * 60;
 const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
+/**
+ * The largest transcript the chat's Durable Object backs up itself. Reading it,
+ * wrapping, sealing and signing it holds about five live copies in a 128 MB
+ * isolate shared with other chats, so a larger file is left on the VM (the
+ * previous backup stays) rather than risk a platform reset that fails a turn
+ * that has already answered. Production logs showed 15 MB saves doing this.
+ */
+const INLINE_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 /** How often a runner box run saves its session while it goes. */
 const TRANSCRIPT_SAVE_INTERVAL_MS = 60_000;
 /** Base64 per exec: well inside the VM's 64 KiB command limit. */
@@ -724,7 +732,11 @@ async function saveTranscript(
 	const bytes = Number(size.trim());
 	if (!size.trim() || !Number.isSafeInteger(bytes) || bytes < 0)
 		throw new Error("Invalid Claude transcript size.");
-	if (bytes > MAX_TRANSCRIPT_BYTES) {
+	if (bytes > INLINE_TRANSCRIPT_BYTES) {
+		console.warn("Claude Code transcript is too large to back up inline.", {
+			bytes,
+			limit: INLINE_TRANSCRIPT_BYTES,
+		});
 		const previous = await input.store.readSession();
 		await input.store.saveSession({
 			claudeSessionId,
