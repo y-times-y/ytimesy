@@ -21,6 +21,7 @@ const receive = vi.hoisted(() => vi.fn(async () => "updated"));
 
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: async () => store.chat,
+	agentSessionMetadataForOwner: async () => store.chat,
 	projectBranchHeldByOtherSession: async () => false,
 	saveSessionWorkingBranch: async (
 		_user: string,
