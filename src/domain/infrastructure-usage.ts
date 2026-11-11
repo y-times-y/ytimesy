@@ -31,10 +31,12 @@ export function infrastructureBalance(input: {
 }
 
 /**
- * Per-user VM usage is limited over two rolling windows (as Claude and Codex
- * subscriptions are): a short one that refills within hours and a weekly
- * one. Hitting either refuses new work; running work finishes, up to a hard
- * ceiling about an hour of runtime past the limit.
+ * Per-user VM usage is limited over two windows that reset the way Claude's
+ * do: a user's first usage after a window ends starts the next one, its
+ * reset time is fixed then (5 hours or a week later), and at that time all
+ * of its usage clears at once. Hitting either refuses new work; running
+ * work finishes, up to a hard ceiling about an hour of runtime past the
+ * limit.
  */
 export const USAGE_WINDOWS = [
 	{ id: "five_hour", label: "5-hour limit", ms: 5 * 60 * 60 * 1000 },
@@ -42,12 +44,17 @@ export const USAGE_WINDOWS = [
 ] as const;
 export type UsageWindowId = (typeof USAGE_WINDOWS)[number]["id"];
 
+export function usageWindowMs(id: UsageWindowId) {
+	return USAGE_WINDOWS.find((window) => window.id === id)?.ms ?? 0;
+}
+
 /** Share of a window at which the user gets a heads-up. */
 export const USAGE_WINDOW_WARNING_SHARE = 0.8;
 
 /**
- * One reservation as usage: settled ones count at their settlement, open
- * holds (running machines) count now, at their full held amount.
+ * One reservation as usage, dated when its hold started (`at`): settled ones
+ * at what they consumed, open holds (running machines) at their full held
+ * amount.
  */
 export type UsageCharge = { at: number; microUsd: number; open: boolean };
 
@@ -58,45 +65,46 @@ export type UsageWindowState = {
 	usedPercent: number;
 	exhausted: boolean;
 	/**
-	 * When exhausted: the first moment usage falls back under the limit as old
-	 * charges leave the window. Otherwise when the oldest counted charge
-	 * leaves. Null with nothing counted. Epoch milliseconds.
+	 * When the current window resets and all of its usage clears: fixed when
+	 * the window started. Null with no window running (the next usage starts
+	 * one). Epoch milliseconds.
 	 */
 	resetsAt: number | null;
 };
 
+/**
+ * Whether usage at `now` starts a new window: none has started yet, or the
+ * last one has reset.
+ */
+export function usageWindowExpired(
+	id: UsageWindowId,
+	startedAt: number | null,
+	now = Date.now(),
+) {
+	return startedAt === null || startedAt + usageWindowMs(id) <= now;
+}
+
+/**
+ * A window's state from its start time and the user's charges: settled
+ * usage counts from the window's start, and open holds (machines still
+ * running) always count, so work in progress uses the current window.
+ */
 export function usageWindowState(
 	id: UsageWindowId,
 	charges: readonly UsageCharge[],
 	limitMicroUsd: number,
+	startedAt: number | null,
 	now = Date.now(),
 ): UsageWindowState {
 	validUsageAmount(limitMicroUsd);
-	const { ms } = USAGE_WINDOWS.find((window) => window.id === id) ?? {
-		ms: 0,
-	};
-	const counted = charges
-		.filter((charge) => charge.open || charge.at > now - ms)
-		.map((charge) => ({
-			at: charge.open ? now : charge.at,
-			microUsd: validUsageAmount(charge.microUsd),
-		}))
-		.sort((a, b) => a.at - b.at);
-	const usedMicroUsd = counted.reduce(
-		(sum, charge) => sum + charge.microUsd,
-		0,
-	);
-	const exhausted = usedMicroUsd >= limitMicroUsd;
-	let resetsAt: number | null = null;
-	if (counted.length && !exhausted) resetsAt = counted[0].at + ms;
-	else if (counted.length) {
-		let remaining = usedMicroUsd;
-		for (const charge of counted) {
-			remaining -= charge.microUsd;
-			resetsAt = charge.at + ms;
-			if (remaining < limitMicroUsd) break;
-		}
-	}
+	const running = !usageWindowExpired(id, startedAt, now);
+	const usedMicroUsd = charges
+		.filter(
+			(charge) =>
+				charge.open ||
+				(running && startedAt !== null && charge.at >= startedAt),
+		)
+		.reduce((sum, charge) => sum + validUsageAmount(charge.microUsd), 0);
 	return {
 		id,
 		limitMicroUsd,
@@ -105,8 +113,9 @@ export function usageWindowState(
 			limitMicroUsd > 0
 				? Math.min(100, Math.floor((usedMicroUsd * 100) / limitMicroUsd))
 				: 100,
-		exhausted,
-		resetsAt,
+		exhausted: usedMicroUsd >= limitMicroUsd,
+		resetsAt:
+			running && startedAt !== null ? startedAt + usageWindowMs(id) : null,
 	};
 }
 

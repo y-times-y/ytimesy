@@ -40,7 +40,7 @@ export function UsageWindowBars({
 					</div>
 					{window.resetsAt ? (
 						<p className="settings-row-meta">
-							{window.exhausted ? "New work resumes" : "Starts to refill"}{" "}
+							{window.exhausted ? "New work resumes" : "Resets"}{" "}
 							{usageResetLabel(window.resetsAt)}
 						</p>
 					) : null}
@@ -66,7 +66,7 @@ export type PickerUsageBar = {
 	readonly label: string;
 	readonly usedPercent: number;
 	readonly low: boolean;
-	/** The tooltip: when the window refills. */
+	/** The tooltip: when the window resets. */
 	readonly detail?: string;
 };
 
@@ -147,7 +147,7 @@ export function ModelPickerUsage({
 				usedPercent: window.usedPercent,
 				low: window.usedPercent >= LOW_PERCENT,
 				detail: window.resetsAt
-					? `${window.exhausted ? "New work resumes" : "Starts to refill"} ${usageResetLabel(window.resetsAt)}`
+					? `${window.exhausted ? "New work resumes" : "Resets"} ${usageResetLabel(window.resetsAt)}`
 					: undefined,
 			}))}
 		/>

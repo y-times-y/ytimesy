@@ -6,6 +6,7 @@ import {
 	type UsageCharge,
 	UsageWindowExhausted,
 	usageWindowCeiling,
+	usageWindowMs,
 	usageWindowState,
 	utcUsageMonth,
 	validUsageAmount,
@@ -42,9 +43,11 @@ function infrastructureUsageLimits(): BudgetLimits {
 const WEEK_MS = USAGE_WINDOWS[USAGE_WINDOWS.length - 1].ms;
 
 /**
- * A user's usage windows: settled reservations of the last week at their
- * settlement, open holds now; a per-user override in
- * infrastructure_usage_policy replaces a deployment limit.
+ * A user's usage windows: each runs from its start in
+ * infrastructure_usage_window to a fixed reset, counting reservations dated
+ * when their hold started (settled ones of the last week, open holds
+ * whatever their age); a per-user override in infrastructure_usage_policy
+ * replaces a deployment limit.
  */
 async function readWindows(
 	client: Pick<PoolClient, "query">,
@@ -58,11 +61,15 @@ async function readWindows(
 		at: string | null;
 		five_hour: string | null;
 		weekly: string | null;
+		five_hour_start: string | null;
+		weekly_start: string | null;
 	}>(
 		`select coalesce(r.consumed_micro_usd,r.reserved_micro_usd) as amount,
 		 r.consumed_micro_usd is null as open,
-		 (extract(epoch from coalesce(r.settled_at,r.created_at))*1000)::float8 as at,
-		 p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly
+		 (extract(epoch from r.created_at)*1000)::float8 as at,
+		 p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly,
+		 (select (extract(epoch from started_at)*1000)::float8 from infrastructure_usage_window where user_id=$1 and window_id='five_hour') as five_hour_start,
+		 (select (extract(epoch from started_at)*1000)::float8 from infrastructure_usage_window where user_id=$1 and window_id='weekly') as weekly_start
 		 from (select 1) one
 		 left join infrastructure_usage_policy p on p.user_id=$1
 		 left join infrastructure_usage_reservation r on r.user_id=$1
@@ -77,6 +84,8 @@ async function readWindows(
 			open: row.open === true,
 		}));
 	const policy = result.rows[0];
+	const start = (value: string | null | undefined) =>
+		value === null || value === undefined ? null : Number(value);
 	const limit = (override: string | null | undefined, fallback: number) =>
 		override === null || override === undefined ? fallback : Number(override);
 	const windows = [
@@ -84,12 +93,14 @@ async function readWindows(
 			"five_hour",
 			charges,
 			limit(policy?.five_hour, limits.fiveHourMicroUsd),
+			start(policy?.five_hour_start),
 			now,
 		),
 		usageWindowState(
 			"weekly",
 			charges,
 			limit(policy?.weekly, limits.weeklyMicroUsd),
+			start(policy?.weekly_start),
 			now,
 		),
 	];
@@ -185,6 +196,29 @@ async function usageTransaction<T>(
 		if (!existingClient) client.release();
 	}
 }
+
+/**
+ * Usage after a window has reset starts the next one: its reset time is
+ * fixed then and does not move. Prefixed (as a CTE) to the statement that
+ * writes the reservation; now() is the transaction's time, the same as the
+ * reservation's created_at, so that usage counts in the new window.
+ * Parameters from $first: user id, then each window's length in ms.
+ */
+function startWindows(first: number) {
+	const [user, fiveHour, weekly] = [first, first + 1, first + 2].map(
+		(n) => `$${n}`,
+	);
+	return `with started as (insert into infrastructure_usage_window(user_id,window_id,started_at)
+	 values(${user},'five_hour',now()),(${user},'weekly',now())
+	 on conflict(user_id,window_id) do update set started_at=excluded.started_at
+	 where infrastructure_usage_window.started_at + make_interval(secs => (case infrastructure_usage_window.window_id
+	  when 'five_hour' then ${fiveHour}::float8 else ${weekly}::float8 end)/1000) <= now())`;
+}
+const windowStartParams = (userId: string) => [
+	userId,
+	usageWindowMs("five_hour"),
+	usageWindowMs("weekly"),
+];
 
 /**
  * Replays reuse the same reservation; an uncertain remote failure retains the
@@ -325,14 +359,21 @@ export async function reserveInfrastructureUsage(
 			);
 		if (mode === "increase") {
 			await client.query(
-				"update infrastructure_usage_reservation set reserved_micro_usd=$2 where id=$1",
-				[input.id, total],
+				`${startWindows(3)} update infrastructure_usage_reservation set reserved_micro_usd=$2 where id=$1`,
+				[input.id, total, ...windowStartParams(input.userId)],
 			);
 			return total;
 		}
 		await client.query(
-			"insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd) values($1,$2,$3,$4,$5)",
-			[input.id, input.userId, input.resourceKey, period, total],
+			`${startWindows(6)} insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd) values($1,$2,$3,$4,$5)`,
+			[
+				input.id,
+				input.userId,
+				input.resourceKey,
+				period,
+				total,
+				...windowStartParams(input.userId),
+			],
 		);
 		return total;
 	}, existingClient);

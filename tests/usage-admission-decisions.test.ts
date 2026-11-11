@@ -55,6 +55,7 @@ beforeAll(async () => {
 		"20261013060000_infrastructure_vm_lease",
 		"20261020130000_infrastructure_usage_windows",
 		"20261026120000_infrastructure_usage_total",
+		"20261110120000_infrastructure_usage_window_start",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 });
@@ -68,7 +69,7 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
 	forgetRecentAdmission();
 	await db.exec(
-		"truncate workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_policy,infrastructure_usage_adjustment,agent_session,api_turn;",
+		"truncate infrastructure_usage_window,workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_policy,infrastructure_usage_adjustment,agent_session,api_turn;",
 	);
 	await query(
 		"insert into agent_session values($1,'alice','project','vm-1','running',null)",
@@ -135,6 +136,11 @@ async function seedAdmission(input: {
 			`vm:${slug}`,
 			Math.ceil(((input.cap - input.baseline + 60) * hourly) / 3600),
 		],
+	);
+	// The hold started the user's windows, as reserving it would have.
+	await query(
+		"insert into infrastructure_usage_window(user_id,window_id,started_at) select $1,w,created_at from infrastructure_usage_reservation, unnest(array['five_hour','weekly']) w where id=$2 on conflict do nothing",
+		[input.userId ?? "alice", reservation],
 	);
 	await query(
 		"insert into infrastructure_vm_admission(slug,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd,vm_id,updated_at) values($1,$2,$3,$4,$5,$6,$7,now()-make_interval(secs=>$8))",
