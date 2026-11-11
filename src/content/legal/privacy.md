@@ -285,7 +285,7 @@ whoever can see the repository on GitHub.
 | Account, projects, chats, tool output | Until you delete them or your account |
 | Deleted (archived) chats and projects | 30 days in Settings → Archived, where you can restore them or delete them for good; then deleted automatically |
 | Workspace machine | Pauses after a few minutes without activity. After about 1 hour idle, it is saved as a snapshot (with project secrets removed) and the machine is deleted |
-| Saved workspace snapshot | 90 days, then deleted; sooner when you delete the chat, project or account |
+| Saved workspace (idle machine) | 30 days without use, then deleted; sooner when you delete the chat, project or account |
 | Chat checkpoints, attachments and imported sessions (encrypted) | Until you delete the chat, project or account |
 | Pull request evidence | 30 days, or until the pull request is no longer open, whichever is first; sooner when you delete the project or account |
 | Memory repository and embeddings | Until you clear memory or delete your account |

@@ -8,12 +8,12 @@ export const PRODUCT_IDLE_TIMEOUT_SECONDS = 180;
 
 /**
  * Delete a product VM after this long without running. Freestyle resets the
- * clock on every start, so this is "90 days unused", not an age limit. It
+ * clock on every start, so this is "30 days unused", not an age limit. It
  * replaces workspace recycling as the cap on idle storage: a paused VM keeps
  * memory and disk, resumes in place, and bills the same storage a snapshot
  * would (docs/workspace-retention.md, decision 2026-11-11).
  */
-export const PRODUCT_AUTO_DELETE_SECONDS = 90 * 24 * 60 * 60;
+export const PRODUCT_AUTO_DELETE_SECONDS = 30 * 24 * 60 * 60;
 
 /** Smallest real Ubuntu image. Copies from a 4 vCPU snapshot stay 4 vCPU; resize cannot shrink. */
 export const CHEAP_BASE_SNAPSHOT = "freestyle/ubuntu-sm";

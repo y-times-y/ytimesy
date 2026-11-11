@@ -1,5 +1,15 @@
 # Workspace retention
 
+## Decision 2026-11-12: the unused window is 30 days
+
+`PRODUCT_AUTO_DELETE_SECONDS` is 30 days (was 90). A paused large VM costs
+about $0.004 an hour for its 32 GiB disk and saved memory ($0.000086/GiB-hour),
+about $3 a month, so 90 days of an abandoned chat was about $9 and 30 days is
+$3. It applies to new VMs and to older ones on their next resume; VMs already
+paused keep the 90-day window they were given on 2026-11-11 until they run.
+Snapshots already retained still last 90 days (`WORKSPACE_RETENTION_SECONDS`).
+The text below describing 90 days is the 2026-11-11 state.
+
 ## Decision 2026-11-11: pause and auto-delete replace recycling
 
 Recycling (capture an idle chat VM to a snapshot after an hour, delete the VM,
