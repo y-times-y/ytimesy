@@ -72,3 +72,10 @@ if [ "$previous_base" = "$before" ] && [ "$(${git} rev-parse HEAD)" = "$(${git} 
 fi
 ${git} remote set-url origin ${origin} 2>/dev/null || ${git} remote add origin ${origin}`;
 }
+
+/**
+ * Raised when a chat's checkout is on a different branch than the one on
+ * record and has uncommitted work: switching would overwrite that work.
+ */
+export const DIRTY_BRANCH_SWITCH_MESSAGE =
+	"Commit or stash this chat's uncommitted changes before switching branches.";
