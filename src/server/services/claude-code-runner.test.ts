@@ -932,6 +932,41 @@ describe("Claude Code runner", () => {
 		},
 	);
 
+	it("leaves a 12 MiB transcript on the VM instead of copying it through the Durable Object", async () => {
+		const vm = new FakeVm();
+		vm.emit(init, success);
+		vm.status = "0";
+		const original = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command) =>
+			command.startsWith("stat -c %s ")
+				? { exitCode: 0, stdout: String(12 * 1024 * 1024), stderr: "" }
+				: original
+					? original(command)
+					: { exitCode: 0, stdout: "", stderr: "" },
+		);
+		const readFile = vi.fn(async () => "must not be loaded");
+		const step = input(vm, {
+			readFile,
+			store: store({
+				readSession: vi.fn(async () => ({
+					claudeSessionId: CLAUDE_SESSION,
+					transcriptPath: "prefix/last-good.enc",
+					cwd: CWD,
+				})),
+			}),
+		});
+		await expect(runClaudeCodeStep(step)).resolves.toMatchObject({
+			outcome: "completed",
+		});
+		expect(readFile).not.toHaveBeenCalled();
+		expect(step.store.uploadTranscript).not.toHaveBeenCalled();
+		expect(step.store.saveSession).toHaveBeenCalledWith({
+			claudeSessionId: CLAUDE_SESSION,
+			transcriptPath: "prefix/last-good.enc",
+			cwd: CWD,
+		});
+	});
+
 	it("runs a read-only helper as the reader user without write tools", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);
