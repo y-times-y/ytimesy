@@ -25,6 +25,10 @@ import {
 	peerRetryDelayMs,
 	tryAdmitJob,
 } from "./background-job-admission";
+import {
+	JobTimeLimitReached,
+	runWithJobTimeLimit,
+} from "./background-job-time-limit";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
@@ -210,8 +214,14 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 		});
 		let outcome: "delivered" | "pending";
 		try {
-			outcome = await runBackgroundJob(this.env, record.job);
+			outcome = await runWithJobTimeLimit(record.job, () =>
+				runBackgroundJob(this.env, record.job),
+			);
 		} catch (error) {
+			if (error instanceof JobTimeLimitReached) {
+				await this.givenUp(record);
+				return;
+			}
 			// Messages can carry provider or SQL diagnostics; log the class only.
 			await this.finish(
 				record,
@@ -239,6 +249,25 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 		await this.ctx.storage.setAlarm(
 			Date.now() + peerRetryDelayMs(record.attempts),
 		);
+	}
+
+	/**
+	 * A run that outlived its time limit is treated like an interrupted one: a
+	 * job safe to repeat runs again (a few times at most); any other fails,
+	 * since what it did before hanging is unknown.
+	 */
+	private async givenUp(record: JobRecord) {
+		const interruptions = (record.interruptions ?? 0) + 1;
+		if (interruptedJobDecision(record.job.kind, interruptions - 1) === "fail") {
+			await this.finish(record, "failed", "time limit");
+			return;
+		}
+		await this.ctx.storage.put<JobRecord>("job", {
+			...record,
+			interruptions,
+			state: "queued",
+		});
+		await this.ctx.storage.setAlarm(Date.now() + deferralDelayMs());
 	}
 
 	/** Keeps the record for a week so a repeated admission stays a no-op. */
