@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	claudeCodeContextTokens,
+	claudeCodeContextWindow,
 	claudeCodeEffects,
 	claudeCodeFailure,
 	claudeCodeProjectDirectory,
@@ -199,6 +201,8 @@ describe("Claude Code stream-json", () => {
 					cacheReadTokens: 100,
 					cacheWriteTokens: 20,
 				},
+				// A result without modelUsage names no context window.
+				contextWindow: null,
 			},
 		});
 		const [limited] = claudeCodeEffects(
@@ -332,5 +336,83 @@ describe("Claude Code prompts", () => {
 		expect(claudeCodeProjectDirectory("/home/ubuntu/my.repo")).toBe(
 			"-home-ubuntu-my-repo",
 		);
+	});
+});
+
+// The usage and modelUsage shapes below are copied from a real run's output.
+describe("Claude Code context size", () => {
+	const realUsage = {
+		input_tokens: 4,
+		cache_creation_input_tokens: 3784,
+		cache_read_input_tokens: 17250,
+		output_tokens: 8,
+		service_tier: "standard",
+	};
+
+	it("counts everything a model call read and wrote", () => {
+		expect(claudeCodeContextTokens(realUsage)).toBe(4 + 3784 + 17250 + 8);
+		expect(claudeCodeContextTokens({})).toBeNull();
+		expect(claudeCodeContextTokens(undefined)).toBeNull();
+	});
+
+	it("reports the call's context on a top-level assistant line", () => {
+		const effects = claudeCodeEffects(
+			line({
+				type: "assistant",
+				message: {
+					content: [{ type: "text", text: "Done." }],
+					usage: realUsage,
+				},
+			}),
+			"0",
+			context,
+		);
+		expect(effects).toContainEqual({ kind: "context", totalTokens: 21046 });
+	});
+
+	it("leaves a subagent's calls out of the chat's context", () => {
+		expect(
+			claudeCodeEffects(
+				line({
+					type: "assistant",
+					parent_tool_use_id: "toolu_1",
+					message: { content: [], usage: realUsage },
+				}),
+				"0",
+				context,
+			),
+		).toEqual([]);
+	});
+
+	it("reads the model's context window from the result, the largest when several models ran", () => {
+		expect(
+			claudeCodeContextWindow({
+				"claude-sonnet-5-5": { inputTokens: 6, contextWindow: 1_000_000 },
+			}),
+		).toBe(1_000_000);
+		expect(
+			claudeCodeContextWindow({
+				a: { contextWindow: 200_000 },
+				b: { contextWindow: 1_000_000 },
+			}),
+		).toBe(1_000_000);
+		expect(claudeCodeContextWindow({ a: {} })).toBeNull();
+		expect(claudeCodeContextWindow(undefined)).toBeNull();
+		const [result] = claudeCodeEffects(
+			line({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: "ok",
+				usage: { input_tokens: 1, output_tokens: 1 },
+				modelUsage: { "claude-sonnet-5-5": { contextWindow: 1_000_000 } },
+			}),
+			"1",
+			context,
+		);
+		expect(result).toMatchObject({
+			kind: "result",
+			result: { contextWindow: 1_000_000 },
+		});
 	});
 });

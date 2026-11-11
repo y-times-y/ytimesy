@@ -24,6 +24,8 @@ export type ClaudeCodeResult = {
 	readonly text: string;
 	readonly sessionId: string | null;
 	readonly usage: ApiTokenUsage | null;
+	/** The model's context window, as Claude Code reports it for this run. */
+	readonly contextWindow?: number | null;
 	readonly failure?: ClaudeCodeFailure;
 	readonly resetsAt?: number | null;
 };
@@ -39,6 +41,8 @@ export type ClaudeCodeEffect =
 			readonly failedMcpServers: readonly string[];
 	  }
 	| { readonly kind: "result"; readonly result: ClaudeCodeResult }
+	/** The context one model call used (its whole input and output), from an assistant line's usage. */
+	| { readonly kind: "context"; readonly totalTokens: number }
 	/** Claude Code's own API error, written as an assistant line: never the agent's reply. */
 	| { readonly kind: "api-error"; readonly text: string };
 
@@ -114,6 +118,32 @@ export function claudeCodeUsage(value: unknown): ApiTokenUsage | null {
 		cacheReadTokens: cacheRead,
 		cacheWriteTokens: cacheWrite,
 	};
+}
+
+/**
+ * What one model call put in the context window: everything it read (fresh,
+ * cached and newly cached input) and wrote. Null when the line has no usage.
+ */
+export function claudeCodeContextTokens(usage: unknown): number | null {
+	const row = record(usage);
+	if (!row) return null;
+	const total =
+		count(row.input_tokens) +
+		count(row.cache_read_input_tokens) +
+		count(row.cache_creation_input_tokens) +
+		count(row.output_tokens);
+	return total > 0 ? total : null;
+}
+
+/** The context window Claude Code reports for the run's model(s): the largest, when it names several. */
+export function claudeCodeContextWindow(modelUsage: unknown): number | null {
+	const models = record(modelUsage);
+	if (!models) return null;
+	const windows = Object.values(models).flatMap((entry) => {
+		const window = record(entry)?.contextWindow;
+		return typeof window === "number" && window > 0 ? [window] : [];
+	});
+	return windows.length ? Math.max(...windows) : null;
 }
 
 /** Why a finished run failed, from its result text (never shown verbatim). */
@@ -235,6 +265,7 @@ export function claudeCodeEffects(
 					sessionId:
 						typeof event.session_id === "string" ? event.session_id : null,
 					usage: claudeCodeUsage(event.usage),
+					contextWindow: claudeCodeContextWindow(event.modelUsage),
 					...(failure
 						? { failure: failure.failure, resetsAt: failure.resetsAt }
 						: {}),
@@ -292,6 +323,9 @@ export function claudeCodeEffects(
 				});
 			}
 		});
+		const contextTokens = claudeCodeContextTokens(record(event.message)?.usage);
+		if (contextTokens !== null)
+			effects.push({ kind: "context", totalTokens: contextTokens });
 		return effects;
 	}
 	if (event.type === "user") {
