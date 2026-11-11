@@ -6,6 +6,7 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import { callerHintFromStack } from "#/domain/caller-hint";
 import type { CodexUsage } from "#/domain/codex-usage";
 import {
 	ENVIRONMENT_SETUP_TITLE,
@@ -423,11 +424,41 @@ export async function backgroundCommandItemsForOwner(
  * that does not read `items` should take agentSessionMetadataForOwner: the
  * transcript is what database egress is made of.
  */
+/** Above this many items a whole-row read is worth attributing (it is megabytes). */
+const FULL_READ_LOG_ITEMS = 300;
+
+/**
+ * One log line when a caller reads a chat's whole row with a long transcript:
+ * these reads were about a third of database egress and the callers were not
+ * known. Cheap: only a count and a stack, only for long transcripts.
+ */
+function noteFullSessionRead(reader: string, row: { items?: unknown }) {
+	try {
+		const count = Array.isArray(row.items) ? row.items.length : 0;
+		if (count < FULL_READ_LOG_ITEMS) return;
+		console.info(
+			JSON.stringify({
+				event: "session.full_read",
+				reader,
+				items: count,
+				caller: callerHintFromStack(new Error().stack, [
+					"agent-sessions",
+					"noteFullSessionRead",
+				]),
+			}),
+		);
+	} catch {
+		// Bookkeeping only.
+	}
+}
+
 export async function agentSessionForOwner(userId: string, sessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
 	);
+	if (result.rows[0])
+		noteFullSessionRead("agentSessionForOwner", result.rows[0]);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
@@ -626,6 +657,7 @@ export async function agentSessionById(sessionId: string) {
 		`select ${SESSION_COLUMNS} from agent_session where id=$1`,
 		[sessionId],
 	);
+	if (result.rows[0]) noteFullSessionRead("agentSessionById", result.rows[0]);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
