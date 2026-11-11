@@ -1622,6 +1622,16 @@ function SessionItemView({
 					</p>
 				);
 			if (item.pullRequest) return <PullRequestHandoffRow item={item} />;
+			if (item.goal)
+				return (
+					<p
+						className="session-activity session-system-notice"
+						data-kind="goal"
+						role="status"
+					>
+						{item.message}
+					</p>
+				);
 			if (item.savingChanges)
 				return (
 					<div

@@ -39,6 +39,13 @@ import {
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
 import { SETUP_CAUGHT_UP_NOTICE } from "#/domain/fresh-machine-setup";
 import { fusionPairFor } from "#/domain/fusion-pairs";
+import { nextGoalStep } from "#/domain/goal";
+import {
+	goalNoticeItem,
+	goalOfTurn,
+	turnToolCards,
+	withGoalNotice,
+} from "#/domain/goal-notice";
 import {
 	leadReasoningEffort,
 	outputCapCharacters,
@@ -242,6 +249,7 @@ import {
 	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
+import { goalTool } from "../services/goal-tool";
 import { materializeHandoffHistory } from "../services/handoff-history";
 import {
 	harnessLifecycleHooks,
@@ -1766,6 +1774,38 @@ async function runApiTurnAttempt(
 						},
 					})
 				: {};
+		// Goal mode: the model starts it for long work that must be finished
+		// and proven; the harness then sends it back (the completion boundary
+		// below) until it marks the goal complete or blocked. Durable steps
+		// only, since the continuation is a step. The goal lives in the turn's
+		// own notice item, so it survives steps and restarts.
+		const goalMode: ToolSet =
+			step && rootChat && !owner.agentRole && !isSideChat(owner)
+				? goalTool({
+						state: {
+							get goal() {
+								return goalOfTurn(items, turn.id)?.state ?? null;
+							},
+							// The notice (onStart, onUpdate) holds the goal.
+							set goal(_goal) {},
+						},
+						now: Date.now,
+						canStart: true,
+						onStart: (goal) => {
+							// No continuation yet: the first run's tool calls are not counted.
+							items = withGoalNotice(items, goalNoticeItem(turn.id, goal, -1));
+							progress.offer(items);
+						},
+						onUpdate: (goal) => {
+							const mark = goalOfTurn(items, turn.id)?.toolMark ?? -1;
+							items = withGoalNotice(
+								items,
+								goalNoticeItem(turn.id, goal, mark),
+							);
+							progress.offer(items);
+						},
+					})
+				: {};
 		// The thin lead only inspects, so a round needs no write guard.
 		const baseTools: ToolSet = thinLead
 			? { ...thinLeadTools({ ...ownTools, ...delegation }), ...planning }
@@ -1775,6 +1815,7 @@ async function runApiTurnAttempt(
 						: ownTools),
 					...delegation,
 					...planning,
+					...goalMode,
 				};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
 		// call tools (run_code only). agent, agent_send and
@@ -2670,6 +2711,31 @@ async function runApiTurnAttempt(
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
+		// Goal mode: while the goal is active the model goes back with the
+		// audit notice, until it marks the goal complete or blocked or a
+		// deterministic stop (deadline, idle turns, continuation cap) ends it.
+		const heldGoal = step ? goalOfTurn(items, turn.id) : null;
+		if (heldGoal && !abort.signal.aborted) {
+			const cards = turnToolCards(items, turn.id);
+			const { goal, step: goalStep } = nextGoalStep(heldGoal.state, {
+				nowMs: Date.now(),
+				toolCalls: heldGoal.toolMark < 0 ? null : cards - heldGoal.toolMark,
+			});
+			const sending =
+				goalStep.kind === "continue" || goalStep.kind === "wrapUp";
+			items = withGoalNotice(
+				items,
+				goalNoticeItem(turn.id, goal, sending ? cards : heldGoal.toolMark),
+			);
+			progress.offer(items);
+			if (sending) {
+				messages = [...messages, { role: "user", content: goalStep.text }];
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+			await saveCheckpoint();
+		}
 		if (attemptLoop) {
 			const next = await timed("turn:attemptLoop", () =>
 				attemptLoop.afterAttempt({
