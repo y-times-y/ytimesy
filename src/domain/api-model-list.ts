@@ -98,6 +98,14 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "openai",
+		label: "GPT-6.1 Terra",
+		openRouterId: "openai/gpt-6.1-terra",
+		directId: "gpt-6.1-terra",
+		speeds: [OPENAI_FAST],
+		longContext: OPENAI_LONG_CONTEXT,
+	},
+	{
+		author: "openai",
 		label: "GPT-6 Luna",
 		openRouterId: "openai/gpt-6-luna",
 		directId: "gpt-6-luna",
