@@ -69,6 +69,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261110120000_infrastructure_usage_window_start.sql",
+			"utf8",
+		),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");
@@ -78,7 +84,7 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "1000");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
 	await db.exec(
-		"truncate infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy,api_turn;",
+		"truncate infrastructure_usage_window,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy,api_turn;",
 	);
 });
 afterAll(async () => {
@@ -552,7 +558,7 @@ it("refuses new holds once a window is exhausted, but never work already running
 		],
 	});
 });
-it("reopens the 5-hour window as settled usage ages out, while the weekly one still counts it", async () => {
+it("resets the 5-hour window at its fixed time, while the weekly one still counts it", async () => {
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
 	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "1000");
 	const hold = reservation("alice", 100);
@@ -566,14 +572,56 @@ it("reopens the 5-hour window as settled usage ages out, while the weekly one st
 		"5-hour cloud usage limit",
 	);
 	await query(
-		"update infrastructure_usage_reservation set settled_at=now()-interval '6 hours',created_at=now()-interval '7 hours'",
+		"update infrastructure_usage_reservation set settled_at=settled_at-interval '7 hours',created_at=created_at-interval '7 hours'",
+	);
+	await query(
+		"update infrastructure_usage_window set started_at=started_at-interval '7 hours'",
 	);
 	const usage = await userInfrastructureUsage("alice");
 	expect(usage.windows).toMatchObject([
-		{ id: "five_hour", usedMicroUsd: 0, exhausted: false },
+		{ id: "five_hour", usedMicroUsd: 0, exhausted: false, resetsAt: null },
 		{ id: "weekly", usedMicroUsd: 100, usedPercent: 10 },
 	]);
 	await reserveInfrastructureUsage(reservation());
+	// That usage started a new 5-hour window; the weekly one keeps its start.
+	const after = await userInfrastructureUsage("alice");
+	expect(after.windows[0].resetsAt).toBeGreaterThan(
+		Date.now() + 4.9 * 3_600_000,
+	);
+	expect(after.windows[1].resetsAt).toBeLessThan(
+		Date.now() + 6.8 * 24 * 3_600_000,
+	);
+});
+it("fixes a window's reset time at its first usage and keeps it as more usage arrives", async () => {
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "1000");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "1000");
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "1000");
+	const first = reservation("alice", 100);
+	await reserveInfrastructureUsage(first);
+	await query(
+		"update infrastructure_usage_window set started_at=started_at-interval '2 hours'",
+	);
+	await query(
+		"update infrastructure_usage_reservation set created_at=created_at-interval '2 hours'",
+	);
+	const before = (await userInfrastructureUsage("alice")).windows[0].resetsAt;
+	expect(before).not.toBeNull();
+	await settleInfrastructureUsage({
+		id: first.id,
+		userId: "alice",
+		consumedMicroUsd: 100,
+	});
+	await reserveInfrastructureUsage(reservation("alice", 300));
+	await reserveInfrastructureUsage(reservation("alice", 600));
+	const exhausted = await userInfrastructureUsage("alice");
+	expect(exhausted.windows[0]).toMatchObject({
+		usedMicroUsd: 1000,
+		exhausted: true,
+		resetsAt: before,
+	});
+	await expect(assertUsageWindowsOpen("alice")).rejects.toThrow(
+		"cloud usage limit",
+	);
 });
 it("retries a hold once and rejects changing its owner or amount", async () => {
 	const hold = reservation();

@@ -69,6 +69,6 @@ export function usageWarning(
 		level: "warning",
 		window: fullest.id,
 		usedPercent: fullest.usedPercent,
-		message: `You have used ${fullest.usedPercent}% of your ${WINDOW_NAMES[fullest.id]} cloud usage limit.${fullest.resetsAt ? ` It starts to refill at ${label(fullest.resetsAt)}.` : ""} At the limit, running work finishes and new work waits.`,
+		message: `You have used ${fullest.usedPercent}% of your ${WINDOW_NAMES[fullest.id]} cloud usage limit.${fullest.resetsAt ? ` It resets at ${label(fullest.resetsAt)}.` : ""} At the limit, running work finishes and new work waits.`,
 	};
 }

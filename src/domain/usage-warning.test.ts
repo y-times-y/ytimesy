@@ -9,12 +9,14 @@ const windows = (fiveHourUsed: number, weeklyUsed = fiveHourUsed) => [
 		"five_hour",
 		[{ at: now - 60_000, microUsd: fiveHourUsed, open: false }],
 		1000,
+		now - 60_000,
 		now,
 	),
 	usageWindowState(
 		"weekly",
 		[{ at: now - 60_000, microUsd: weeklyUsed, open: false }],
 		5000,
+		now - 60_000,
 		now,
 	),
 ];

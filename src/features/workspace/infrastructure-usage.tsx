@@ -165,7 +165,7 @@ export function InfrastructureUsage() {
 			<header className="settings-section-head">
 				<div>
 					<h3>Cloud usage</h3>
-					<p title="Larger machines use it faster. At a limit, work already running finishes and new work waits until it refills. Model usage is billed by your model provider.">
+					<p title="Larger machines use it faster. At a limit, work already running finishes and new work waits until it resets. Model usage is billed by your model provider.">
 						Machine time, over a rolling 5-hour and weekly limit.
 					</p>
 				</div>
