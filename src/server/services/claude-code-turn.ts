@@ -10,6 +10,7 @@ import {
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import type { WorkspaceId } from "#/domain/ids";
 import { isReaderRole, type SubagentRole } from "#/domain/subagent";
+import { directTranscriptStore } from "../adapters/checkpoints/direct-transcript";
 import {
 	downloadCheckpoint,
 	uploadCheckpoint,
@@ -111,6 +112,8 @@ export async function runClaudeCodeTurnStep(input: {
 	const { machines } = input;
 	const box = input.runner ? claudeRunnerMachine(input.runner.box) : null;
 	publishClaudeCodeTools(input.turnId, definitions);
+	const direct = directTranscriptStore(input.userId, input.sessionId);
+	const directTranscript = direct ? { direct } : {};
 	const running = new Set<Promise<void>>();
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;
@@ -201,6 +204,8 @@ export async function runClaudeCodeTurnStep(input: {
 					),
 				downloadTranscript: (path) =>
 					downloadCheckpoint(input.userId, input.sessionId, path),
+				// Transcripts above the inline limit go from the VM straight to R2.
+				...directTranscript,
 				subscriptionStatus: () => claudeSubscriptionStatus(input.userId),
 			},
 		});
