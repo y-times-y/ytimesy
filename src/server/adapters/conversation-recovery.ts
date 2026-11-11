@@ -95,6 +95,32 @@ export async function conversationPoint(
 	return point?.type === "conversation-point" ? point : null;
 }
 
+/**
+ * Whether the message has a saved recovery point and whether it already has
+ * its code, without loading the point's transcript (megabytes on a long chat,
+ * and this is asked on every turn).
+ */
+export async function conversationPointState(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+	client: Pick<PoolClient, "query"> = database(),
+): Promise<{ exists: boolean; hasCode: boolean }> {
+	const { rows } = await client.query(
+		`select r.response->'result'->>'type' as type,
+    coalesce(jsonb_typeof(r.response->'result'->'code'),'null') as code_type
+    from agent_task_command_receipt r
+    join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id=$3 and r.status='done' and r.response->>'ok'='true'`,
+		[userId, sessionId, `conversation-point:${messageId}`],
+	);
+	const row = rows[0] as { type?: string; code_type?: string } | undefined;
+	return {
+		exists: row?.type === "conversation-point",
+		// Matches `point.code` being truthy: a stored object, never null.
+		hasCode: row?.type === "conversation-point" && row.code_type === "object",
+	};
+}
+
 /** Only the recorded code ref, without loading the point's transcript. */
 export async function conversationPointCodeRef(
 	userId: string,

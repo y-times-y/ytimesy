@@ -15,6 +15,7 @@ import type { WorkspaceMachines } from "../services/workspace-machines";
 import { withAfterResponse } from "./after-response";
 import {
 	conversationPoint,
+	conversationPointState,
 	recordConversationPoint,
 	recoveredConversation,
 	saveRecoveredConversation,
@@ -108,6 +109,36 @@ beforeEach(async () => {
 	]);
 });
 afterEach(() => db.close());
+
+it("reports whether a recovery point and its code exist without loading the point", async () => {
+	expect(await conversationPointState("alice", session, "first")).toEqual({
+		exists: true,
+		hasCode: false,
+	});
+	expect(await conversationPointState("bob", session, "first")).toEqual({
+		exists: false,
+		hasCode: false,
+	});
+	expect(await conversationPointState("alice", session, "missing")).toEqual({
+		exists: false,
+		hasCode: false,
+	});
+	await db.query(
+		"update agent_task_command_receipt set response=jsonb_set(response,'{result,code}',$1::jsonb)",
+		[JSON.stringify({ ref: "refs/ytimesy/recovery/point-1" })],
+	);
+	expect(await conversationPointState("alice", session, "first")).toEqual({
+		exists: true,
+		hasCode: true,
+	});
+	await db.query(
+		"update agent_task_command_receipt set response=jsonb_set(response,'{result,code}','null'::jsonb)",
+	);
+	expect(await conversationPointState("alice", session, "first")).toEqual({
+		exists: true,
+		hasCode: false,
+	});
+});
 
 it("restores both public and actual history without resurrecting an incompatible model route", async () => {
 	const point = await conversationPoint("alice", session, "first");

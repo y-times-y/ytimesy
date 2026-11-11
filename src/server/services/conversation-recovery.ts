@@ -38,6 +38,7 @@ import {
 import {
 	type ConversationPoint,
 	conversationPoint,
+	conversationPointState,
 	laterConversationCode,
 	saveRecoveredConversation,
 } from "../adapters/conversation-recovery";
@@ -71,8 +72,8 @@ export async function ensureConversationCodePoint(
 	messageId: string,
 	workspace: AgentToolWorkspace,
 ) {
-	const point = await conversationPoint(userId, sessionId, messageId);
-	if (!point || point.code) return;
+	const point = await conversationPointState(userId, sessionId, messageId);
+	if (!point.exists || point.hasCode) return;
 	const code = await captureConversationCode(workspace);
 	await database().query(
 		`update agent_task_command_receipt r set response=jsonb_set(response,'{result,code}',$4::jsonb),updated_at=now()
