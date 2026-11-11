@@ -103,3 +103,42 @@ it("fails instead of keeping a stale checkout when a pinned update fails", async
 	expect(Exit.isSuccess(await outcome())).toBe(true);
 	expect(Exit.isFailure(await outcome("b".repeat(40)))).toBe(true);
 });
+
+const DIRTY_SWITCH =
+	"Commit or stash this chat's uncommitted changes before switching branches.";
+
+it("keeps a checkout's own branch when switching would overwrite its uncommitted work", async () => {
+	vi.spyOn(console, "warn").mockImplementation(() => {});
+	const failing = { ...checkout, preserveCurrentBranch: true };
+	receive.mockImplementation(() => {
+		throw new Error(DIRTY_SWITCH);
+	});
+	// The checkout is on another branch than the one on record: a switch is tried.
+	await expect(run(machines("fix/other"), failing)).resolves.toBe(
+		"/home/ubuntu/app",
+	);
+	expect(receive).toHaveBeenCalledWith(
+		expect.anything(),
+		expect.objectContaining({ mode: "switch" }),
+	);
+});
+
+it("still fails a pinned revision, or any other switch failure", async () => {
+	vi.spyOn(console, "warn").mockImplementation(() => {});
+	receive.mockImplementation(() => {
+		throw new Error(DIRTY_SWITCH);
+	});
+	await expect(
+		run(machines("fix/other"), {
+			...checkout,
+			pinnedRevision: "c".repeat(40),
+		}),
+	).rejects.toThrow("uncommitted changes");
+	receive.mockReset();
+	receive.mockImplementation(() => {
+		throw new Error("GitHub transfer failed.");
+	});
+	await expect(run(machines("fix/other"), checkout)).rejects.toThrow(
+		"GitHub transfer failed",
+	);
+});

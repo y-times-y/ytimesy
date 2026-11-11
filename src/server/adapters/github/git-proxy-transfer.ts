@@ -1,5 +1,8 @@
 import { edgeSigningSecret } from "#/domain/edge-signing-secret";
-import { fetchedBranchCommand } from "#/domain/git-branch-switch";
+import {
+	DIRTY_BRANCH_SWITCH_MESSAGE,
+	fetchedBranchCommand,
+} from "#/domain/git-branch-switch";
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { redactSecrets } from "#/domain/redact-secrets";
@@ -321,9 +324,7 @@ export async function receiveProxiedRepository(
 	if (input.mode !== "clone") {
 		const dirty = await readCheckoutStatus(host, dest);
 		if (dirty && input.mode === "switch")
-			throw new Error(
-				"Commit or stash this chat's uncommitted changes before switching branches.",
-			);
+			throw new Error(DIRTY_BRANCH_SWITCH_MESSAGE);
 		if (dirty) return "dirty";
 	}
 	return withProxyGit(host, input, "read", async (git, url) => {

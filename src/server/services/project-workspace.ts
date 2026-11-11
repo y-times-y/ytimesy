@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { failureMessage } from "#/domain/failure-message";
+import { DIRTY_BRANCH_SWITCH_MESSAGE } from "#/domain/git-branch-switch";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
@@ -30,6 +31,16 @@ import { githubInstallationAccessToken } from "#/server/adapters/github/installa
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+/** Effect wraps what a promise throws, so the message may sit a few causes down. */
+function isDirtyBranchSwitch(error: unknown): boolean {
+	let current: unknown = error;
+	for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+		if (current.message.includes(DIRTY_BRANCH_SWITCH_MESSAGE)) return true;
+		current = current.cause;
+	}
+	return false;
+}
 
 /**
  * Reuses the sealed project checkout when the guest already has it.
@@ -108,13 +119,28 @@ function ensureSingleProjectCheckout(
 					},
 				),
 			).pipe(
-				Effect.catchAll((error) =>
-					switching || checkout.pinnedRevision
+				Effect.catchAll((error) => {
+					// A checkout on another branch than the one on record, with work
+					// of its own: switching would overwrite it. The chat's agent (or
+					// the user) moved it there, so the turn goes on where it is.
+					// A pinned revision must land exactly, so it still fails.
+					if (
+						switching &&
+						!checkout.pinnedRevision &&
+						isDirtyBranchSwitch(error)
+					) {
+						console.warn(
+							"Kept the checkout's own branch: it has uncommitted changes.",
+							{ recordedBranch: checkout.workingBranch },
+						);
+						return Effect.void;
+					}
+					return switching || checkout.pinnedRevision
 						? Effect.fail(
 								error instanceof Error ? error : new Error(String(error)),
 							)
-						: Effect.void,
-				),
+						: Effect.void;
+				}),
 			);
 			return reusedPath;
 		}

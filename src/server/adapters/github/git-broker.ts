@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { fetchedBranchCommand } from "#/domain/git-branch-switch";
+import {
+	DIRTY_BRANCH_SWITCH_MESSAGE,
+	fetchedBranchCommand,
+} from "#/domain/git-branch-switch";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
@@ -152,9 +155,7 @@ export async function receiveBrokeredRepository(
 			);
 			if (state) {
 				if (input.mode === "switch")
-					throw new Error(
-						"Commit or stash this chat's uncommitted changes before switching branches.",
-					);
+					throw new Error(DIRTY_BRANCH_SWITCH_MESSAGE);
 				return "dirty";
 			}
 		}
