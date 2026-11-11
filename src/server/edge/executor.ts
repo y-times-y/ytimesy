@@ -98,6 +98,7 @@ import {
 	machineGitSources,
 } from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
+import { stepFailureCause } from "./step-failure-cause";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 import { logTurnStepSizes } from "./turn-step-sizes";
@@ -490,9 +491,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					),
 				null,
 			);
-		} catch {
+		} catch (error) {
 			// Unknown outcome: a started step keeps its receipt and is resumed next time.
-			console.warn("Chat step failed; retrying.", { index: step.index });
+			// The cause is logged (redacted, bounded): without it a step that fails
+			// at once, three times over, abandons the turn with nothing to diagnose.
+			console.warn("Chat step failed; retrying.", {
+				index: step.index,
+				cause: stepFailureCause(error),
+			});
 			return this.wake("turn", Date.now() + 5_000 * (active.resumes + 1));
 		} finally {
 			stopRefreshing();
