@@ -19,7 +19,7 @@ function setup(canStart: boolean, goal: Goal | null = null) {
 }
 
 describe("goal tool start", () => {
-	it("starts a goal with the product's limits", async () => {
+	it("starts a goal with no time or round cap", async () => {
 		const { state, started, run } = setup(true);
 		expect(await run({ op: "get" })).toMatch(/No goal is set/);
 		expect(await run({ op: "start", objective: "  Build it  " })).toMatch(
@@ -28,9 +28,9 @@ describe("goal tool start", () => {
 		expect(state.goal).toMatchObject({
 			objective: "Build it",
 			status: "active",
-			maxContinuations: 20,
+			maxContinuations: null,
+			deadlineAtMs: null,
 		});
-		expect(state.goal?.deadlineAtMs).toBeGreaterThan(1_000);
 		expect(started).toHaveLength(1);
 	});
 

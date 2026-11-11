@@ -148,3 +148,36 @@ describe("goal text", () => {
 		expect(blocked.ok && goalCompactionNote(blocked.goal)).toBeNull();
 	});
 });
+
+describe("a goal with no caps (a chat's goal)", () => {
+	const uncapped = () =>
+		newGoal({
+			objective: "Build it",
+			deadlineAtMs: null,
+			maxContinuations: null,
+		});
+
+	it("keeps going past the default cap, even saved and reloaded between rounds", () => {
+		let goal = uncapped();
+		for (let round = 1; round <= GOAL_MAX_CONTINUATIONS * 5; round++) {
+			// Saved with the turn's items between steps.
+			goal = JSON.parse(JSON.stringify(goal));
+			const next = nextGoalStep(goal, {
+				nowMs: 100 * 60 * 60_000,
+				toolCalls: round === 1 ? null : 1,
+			});
+			expect(next.step).toMatchObject({ kind: "continue", round });
+			goal = next.goal;
+		}
+	});
+
+	it("still stops a model that stops calling tools", () => {
+		let goal = uncapped();
+		let last = nextGoalStep(goal, { nowMs: 0, toolCalls: null });
+		for (let index = 0; index < 3; index++) {
+			goal = last.goal;
+			last = nextGoalStep(goal, { nowMs: 0, toolCalls: 0 });
+		}
+		expect(last.step).toEqual({ kind: "stop", reason: "no-progress" });
+	});
+});
