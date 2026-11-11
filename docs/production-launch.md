@@ -14,6 +14,27 @@ route until the owner says go live. Nothing here has been deployed to production
 | Migrations | Dry run `MIGRATION_DATABASE_URL=$(cat .secrets/prod-database-url) pnpm db:migrate`, then add `--apply`; the deploy script refuses while any is pending. As of 2026-10-14, applied to dev but not prod: `20261014040000_auth_email_delivery.sql` and `20261014050000_account_deletion_foreign_keys.sql`. |
 | Email | Done on the account. ytimesy.com is onboarded to Cloudflare Email Sending (DKIM selector `cf-bounce`, DMARC `p=none`; tighten to `quarantine` after a clean week). Both Workers' production envs carry the `EMAIL` send_email binding, limited to `noreply@ytimesy.com`; Reply-To is support@. Email Routing forwards het@, support@ and contact@ to the owner's Gmail. |
 
+## Deploying from any chat
+
+The production deploy values are account secrets, so every project of the owner
+receives them in its chats: `PRODUCTION_ENV_FILE` (the whole production env file,
+with its line breaks flattened onto one line), `CLOUDFLARE_DEPLOY_TOKEN` (the
+Cloudflare token with Workers VPC access, which the edge executor needs; the
+project's plain `CLOUDFLARE_API_TOKEN` fails with error 10196) and `SUPABASE_CA_CERT`.
+
+```sh
+node --import tsx scripts/deploy-production-from-secret.ts --preflight-only
+node --import tsx scripts/deploy-production-from-secret.ts --confirm-production
+```
+
+It rebuilds the env file in a temporary folder (deleted afterwards), runs
+`scripts/deploy-production.ts` in a clean environment and passes every argument
+through, so all of that script's checks still apply. The clean environment matters:
+a chat has its own development `DATABASE_URL`, and `node --env-file` never
+overrides a variable that is already set. The checkout must still be exactly
+`origin/main`; add `--allow-running-turns` only when interrupting a chat is
+acceptable (a deploy restarts the Durable Objects).
+
 ## Secrets
 
 Generate fresh for production; never reuse development values.
