@@ -102,7 +102,11 @@ export function apiFailoverConnections(
 			? []
 			: connectionModels(connection, browsed)
 		).map((model) => {
-			const reasoning = apiModelReasoning(connection.provider, model.id);
+			const reasoning = apiModelReasoning(
+				connection.provider,
+				model.id,
+				connection.baseUrl,
+			);
 			return {
 				id: model.id,
 				label: model.label,

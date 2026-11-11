@@ -1,4 +1,5 @@
 import type { ListedModel } from "./listed-model";
+import { CLAUDE_EFFORT_LEVELS, reasoningCapability } from "./model-connection";
 
 /**
  * "Claude Code": chats that run Claude Code through the Claude Agent SDK on the chat's
@@ -61,6 +62,8 @@ export function claudeCodeListedModels(): ListedModel[] {
 	return CLAUDE_CODE_MODELS.map((model) => ({
 		...model,
 		id: claudeCodeRouteId(model.id),
+		// The run's effort (Claude Code's own setting): shown in the picker.
+		reasoning: reasoningCapability([...CLAUDE_EFFORT_LEVELS]),
 	}));
 }
 

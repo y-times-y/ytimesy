@@ -1,13 +1,14 @@
 import { APICallError, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { Effect } from "effect";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { applyApiProgress } from "#/domain/api-progress";
 import type { SessionItem } from "#/domain/session-item";
 import { nativeModelCompactor } from "../adapters/model-compaction";
 import {
 	type ApiAgentEvent,
+	apiModelRuntime,
 	runApiAgent,
 	runModelAgent,
 } from "./api-agent-runtime";
@@ -1754,4 +1755,60 @@ it("does not resample a durable step whose tool call already started", async () 
 		),
 	).rejects.toThrow();
 	expect(call).toBe(1);
+});
+
+describe("Grok's reasoning effort", () => {
+	const runtimeFor = (input: {
+		baseUrl: string;
+		modelId: string;
+		reasoning?: string;
+	}) =>
+		apiModelRuntime({
+			provider: "compatible",
+			apiKey: "fixture-secret",
+			userId: "alice",
+			connectionId: "grok-connection",
+			cacheScopeId: "chat",
+			contextCacheKey: `grok:${input.modelId}:${input.baseUrl}`,
+			contextWindow: 256_000,
+			fetch: vi.fn(async () => new Response("{}", { status: 404 })),
+			...input,
+		});
+	const effortSent = async (input: Parameters<typeof runtimeFor>[0]) => {
+		const settings = (await runtimeFor(input)).requestSettings?.(
+			"instructions",
+		) as { providerOptions?: { openai?: { reasoningEffort?: string } } };
+		return settings.providerOptions?.openai?.reasoningEffort;
+	};
+
+	it("sends the chosen effort on xAI's own endpoint, mapping max to xhigh", async () => {
+		const xai = "https://api.x.ai/v1";
+		expect(
+			await effortSent({
+				baseUrl: xai,
+				modelId: "grok-4.7",
+				reasoning: "medium",
+			}),
+		).toBe("medium");
+		expect(
+			await effortSent({ baseUrl: xai, modelId: "grok-4.7", reasoning: "max" }),
+		).toBe("xhigh");
+	});
+
+	it("sends none without a choice, for a model xAI documents none for, or on another host", async () => {
+		const xai = "https://api.x.ai/v1";
+		expect(
+			await effortSent({ baseUrl: xai, modelId: "grok-4.7" }),
+		).toBeUndefined();
+		expect(
+			await effortSent({ baseUrl: xai, modelId: "grok-4", reasoning: "high" }),
+		).toBeUndefined();
+		expect(
+			await effortSent({
+				baseUrl: "https://gateway.example.com/v1",
+				modelId: "grok-4.7",
+				reasoning: "high",
+			}),
+		).toBeUndefined();
+	});
 });

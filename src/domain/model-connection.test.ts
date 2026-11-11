@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	apiContextWindowOption,
+	apiModelReasoning,
 	availableConnectionModels,
 	connectionModelSpeeds,
 	modelConnectionInput,
@@ -228,5 +229,68 @@ describe("connection model speeds", () => {
 			[],
 		);
 		expect(model?.speeds).toEqual([{ id: "fast", priceMultiple: 2 }]);
+	});
+});
+
+describe("apiModelReasoning", () => {
+	const ids = (reasoning: ReturnType<typeof apiModelReasoning>) =>
+		reasoning?.levels.map((level) => level.id);
+
+	it("gives Grok 4.6 and later low to xhigh, defaulting to high as xAI does", () => {
+		const reasoning = apiModelReasoning("openrouter", "x-ai/grok-4.7");
+		expect(ids(reasoning)).toEqual(["low", "medium", "high", "xhigh"]);
+		expect(reasoning?.defaultLevelId).toBe("high");
+		expect(ids(apiModelReasoning("openrouter", "x-ai/grok-4.6"))).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+		]);
+	});
+
+	it("gives Grok 4.5 no xhigh, which xAI treats as high there", () => {
+		expect(ids(apiModelReasoning("openrouter", "x-ai/grok-4.5"))).toEqual([
+			"low",
+			"medium",
+			"high",
+		]);
+	});
+
+	it("offers an older Grok model no effort, since xAI documents none for it", () => {
+		expect(apiModelReasoning("openrouter", "x-ai/grok-4")).toBeNull();
+		expect(apiModelReasoning("openrouter", "x-ai/grok-3-mini")).toBeNull();
+	});
+
+	it("offers Grok's effort on xAI's own endpoint, but not on another custom host", () => {
+		expect(
+			ids(apiModelReasoning("compatible", "grok-4.7", "https://api.x.ai/v1")),
+		).toEqual(["low", "medium", "high", "xhigh"]);
+		expect(
+			apiModelReasoning(
+				"compatible",
+				"grok-4.7",
+				"https://gateway.example.com/v1",
+			),
+		).toBeNull();
+		expect(apiModelReasoning("compatible", "grok-4.7")).toBeNull();
+	});
+
+	it("keeps OpenAI's and Anthropic's levels as they were", () => {
+		expect(ids(apiModelReasoning("openai", "gpt-6"))).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+		]);
+		expect(ids(apiModelReasoning("anthropic", "claude-opus-5-5"))).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		expect(
+			apiModelReasoning("openrouter", "mistralai/mistral-large"),
+		).toBeNull();
 	});
 });

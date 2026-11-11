@@ -122,24 +122,64 @@ const reasoningLabels: Record<string, string> = {
 	max: "Max",
 };
 
-/** Effort levels the API runtime sends, per model family; null when none apply. */
-export function apiModelReasoning(
-	provider: ModelProvider,
-	modelId: string,
-): ApiModelReasoning | null {
-	const family = provider === "openrouter" ? modelId.split("/")[0] : provider;
-	const ids =
-		family === "openai"
-			? ["low", "medium", "high", "xhigh"]
-			: family === "anthropic"
-				? ["low", "medium", "high", "xhigh", "max"]
-				: null;
-	if (!ids) return null;
+/**
+ * Grok's effort levels (xAI's reasoning guide): grok-4.5 and later take
+ * low, medium and high (the default; reasoning cannot be turned off), and
+ * xhigh from grok-4.6. Older Grok models take no effort setting.
+ */
+function grokEffortLevels(modelId: string): readonly string[] | null {
+	const match = /^(?:x-ai\/)?grok-(\d+)\.(\d+)/.exec(modelId);
+	if (!match) return null;
+	const version = Number(match[1]) * 100 + Number(match[2]);
+	if (version < 405) return null;
+	return version >= 406
+		? ["low", "medium", "high", "xhigh"]
+		: ["low", "medium", "high"];
+}
+
+/** Claude's effort levels, for the API and for a Claude subscription route alike. */
+export const CLAUDE_EFFORT_LEVELS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+
+/** A listed reasoning capability: `ids` labelled, with the level a model runs at by default. */
+export function reasoningCapability(
+	ids: readonly string[],
+	defaultLevelId = "medium",
+): ApiModelReasoning {
 	const [first, ...rest] = ids.map((id) => ({
 		id,
 		label: reasoningLabels[id] ?? id,
 	}));
-	return { levels: [first, ...rest], defaultLevelId: "medium" };
+	return { levels: [first, ...rest], defaultLevelId };
+}
+
+/**
+ * Effort levels the API runtime sends, per model family; null when none apply.
+ * `baseUrl` tells a Grok model on xAI's own endpoint (an OpenAI-compatible
+ * connection) from any other custom host.
+ */
+export function apiModelReasoning(
+	provider: ModelProvider,
+	modelId: string,
+	baseUrl?: string,
+): ApiModelReasoning | null {
+	const family = provider === "openrouter" ? modelId.split("/")[0] : provider;
+	if (family === "openai")
+		return reasoningCapability(["low", "medium", "high", "xhigh"]);
+	if (family === "anthropic")
+		return reasoningCapability([...CLAUDE_EFFORT_LEVELS]);
+	// OpenRouter documents effort for Grok models; xAI's endpoint for grok-4.5+.
+	const grok =
+		(provider === "openrouter" && family === "x-ai") ||
+		(provider === "compatible" &&
+			sameOrigin(baseUrl ?? "", "https://api.x.ai"));
+	const grokLevels = grok ? grokEffortLevels(modelId) : null;
+	return grokLevels ? reasoningCapability(grokLevels, "high") : null;
 }
 
 /**
@@ -234,7 +274,11 @@ export function availableConnectionModels(
 ) {
 	return connections.flatMap((connection) =>
 		connectionModels(connection, browseModels).map((model) => {
-			const reasoning = apiModelReasoning(connection.provider, model.id);
+			const reasoning = apiModelReasoning(
+				connection.provider,
+				model.id,
+				connection.baseUrl,
+			);
 			const speeds = connectionModelSpeeds(connection, model.id).map(
 				({ id, priceMultiple }) => ({ id, priceMultiple }),
 			);

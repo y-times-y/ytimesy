@@ -392,6 +392,7 @@ describe("Claude Code runner", () => {
 		);
 		expect(JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "")).toEqual({
 			model: "claude-opus-5-5",
+			effort: null,
 			disallowedTools: expect.arrayContaining([
 				"Bash",
 				"Task",
@@ -675,6 +676,27 @@ describe("Claude Code runner", () => {
 		).toMatchObject({ outcome: "continue" });
 		expect(vm.launched).toEqual([]);
 		expect(vm.files.has(`${RUNS}/1/prompt`)).toBe(false);
+	});
+
+	it("hands the effort chosen in the picker to the run, and none when none was chosen", async () => {
+		const chosen = new FakeVm();
+		chosen.emit(init, success);
+		chosen.status = "0";
+		await runClaudeCodeStep(input(chosen, { effort: "xhigh" }));
+		expect(
+			JSON.parse(chosen.files.get(`${RUNS}/1/options.json`) ?? "").effort,
+		).toBe("xhigh");
+		const unchosen = new FakeVm();
+		unchosen.emit(init, success);
+		unchosen.status = "0";
+		await runClaudeCodeStep(input(unchosen));
+		expect(
+			JSON.parse(unchosen.files.get(`${RUNS}/1/options.json`) ?? "").effort,
+		).toBeNull();
+		// The run program passes it on to the SDK only when there is one.
+		expect(CLAUDE_AGENT_RUNNER_SCRIPT).toContain(
+			"if (settings.effort) options.effort = settings.effort;",
+		);
 	});
 
 	it("on a runner box turns Claude's own file and shell tools off and says where the code is", async () => {

@@ -85,6 +85,8 @@ export type ClaudeCodeStepInput = {
 	readonly turnId: string;
 	/** Claude Code's --model. */
 	readonly modelId: string;
+	/** Claude Code's effort (low to max); the model's own default when absent. */
+	readonly effort?: string;
 	readonly messages: readonly ModelMessage[];
 	/** The edge's public origin (the git proxy's), which the VM reaches. */
 	readonly edgeOrigin: string;
@@ -595,6 +597,7 @@ async function launchRun(
 			path: `${runDirectory}/options.json`,
 			contents: JSON.stringify({
 				model: input.modelId,
+				effort: input.effort ?? null,
 				disallowedTools: CLAUDE_RUNNER_DISALLOWED_TOOLS,
 				resume: resumeId ?? null,
 			}),

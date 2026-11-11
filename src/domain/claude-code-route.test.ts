@@ -9,12 +9,20 @@ import {
 
 it("finds the connected Claude subscription's models in a picker search", () => {
 	const models = claudeCodeListedModels();
-	expect(claudeCodeSearchMatches(models, "Opus 5.5")).toEqual([
-		{ id: "claude-code/claude-opus-5-5", label: "Claude Opus 5.5" },
-	]);
+	expect(
+		claudeCodeSearchMatches(models, "Opus 5.5").map(({ id, label }) => ({
+			id,
+			label,
+		})),
+	).toEqual([{ id: "claude-code/claude-opus-5-5", label: "Claude Opus 5.5" }]);
 	expect(claudeCodeSearchMatches(models, "claude")).toHaveLength(5);
 	expect(claudeCodeSearchMatches(models, "anthropic")).toHaveLength(5);
-	expect(claudeCodeSearchMatches(models, "Fable 5.2")).toEqual([
+	expect(
+		claudeCodeSearchMatches(models, "Fable 5.2").map(({ id, label }) => ({
+			id,
+			label,
+		})),
+	).toEqual([
 		{ id: "claude-code/claude-fable-5-2", label: "Claude Fable 5.2" },
 	]);
 	expect(claudeCodeSearchMatches(models, "Mythos")).toEqual([]);
@@ -44,4 +52,17 @@ it("offers no context window option: the subscription's models already run 1M", 
 	expect(
 		claudeCodeListedModels().filter((model) => model.contextWindow),
 	).toEqual([]);
+});
+
+it("lists Claude's effort levels on every subscription model so the picker can show them", () => {
+	for (const model of claudeCodeListedModels()) {
+		expect(model.reasoning?.levels.map((level) => level.id)).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		expect(model.reasoning?.defaultLevelId).toBe("medium");
+	}
 });
