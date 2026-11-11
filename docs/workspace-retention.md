@@ -44,11 +44,16 @@ What runs now:
   (`restoreRetainedWorkspace`) until it expires (90 days after capture), so
   `YTIMESY_WORKSPACE_RETENTION` stays `true` for now.
 
+Development and production share one Freestyle account, so the same VMs and
+snapshots hold both environments' chats. On 2026-11-11 all 54 existing product
+VMs (both environments) were given the 90-day window by a one-off update;
+none had any auto-delete before. Retained recovery snapshots then numbered 6
+(production) and 15 (development), the last expiring 2027-02-07.
+
 Left to do: once the last retained snapshot expires (no `workspace_retention`
-row left in phase `retained`), delete `recycleWorkspace`, the restore path,
-the retention touch in admission and the `workspace_retention` table. VMs that
-are never resumed again do not get the window from the resume path; give them
-one with a one-off update, or delete the ones nobody will return to.
+row left in phase `retained`, in either database), turn
+`YTIMESY_WORKSPACE_RETENTION` off and delete `recycleWorkspace`, the restore
+path, the retention touch in admission and the `workspace_retention` table.
 
 The sections below describe recycling as it was built.
 
