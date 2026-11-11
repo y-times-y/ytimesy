@@ -148,6 +148,7 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 	// Introductory prices; see SCHEDULED_PRICE_CHANGES.
 	"google/gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075 },
 	"google/gemini-4-argon": { input: 2, output: 10, cacheRead: 0.1 },
+	"google/gemini-4-carbon": { input: 2, output: 10, cacheRead: 0.1 },
 	"deepseek/deepseek-v4.1-flash": {
 		input: 0.45,
 		output: 1.8,
@@ -184,6 +185,9 @@ export const SCHEDULED_PRICE_CHANGES: Readonly<
 		},
 	],
 	"google/gemini-4-argon": [
+		{ from: "2026-12-01", price: { input: 4, output: 20, cacheRead: 0.2 } },
+	],
+	"google/gemini-4-carbon": [
 		{ from: "2026-12-01", price: { input: 4, output: 20, cacheRead: 0.2 } },
 	],
 };
