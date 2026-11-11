@@ -66,6 +66,9 @@ try {
 				PATH: process.env.PATH,
 				HOME: process.env.HOME,
 				CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_DEPLOY_TOKEN,
+				// The migration check (scripts/db-migrate.ts) reads the certificate
+				// itself; --preflight-only never reaches it.
+				SUPABASE_CA_CERT: process.env.SUPABASE_CA_CERT,
 				YTIMESY_GO_LIVE: "1",
 			},
 		},
