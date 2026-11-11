@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+	ABANDONED_TURN_MESSAGE,
 	type ApiTurn,
+	abandonApiTurn,
 	cancelApiTurn,
 	cancelWaitingApiTurn,
 	expireApiTurnLeases,
@@ -82,6 +84,41 @@ it("captures a stopped queued turn as cancelled and a lost worker as failed", as
 	await expireApiTurnLeases();
 	expect(holder.capture.mock.calls[0][2]).toMatchObject({ outcome: "failed" });
 	expect(holder.capture.mock.calls[0][3].key).toBe(`turn:${lost}:finished`);
+});
+
+it("fails an abandoned turn at once with its own message, only for the attempt that owns it", async () => {
+	const id = randomUUID();
+	const lease = randomUUID();
+	await db.query(
+		`insert into api_turn(id,session_id,user_id,state,lease_id,heartbeat_at,executor) values($1,$2,'alice','running',$3,now(),'durable-object')`,
+		[id, child, lease],
+	);
+	expect(await abandonApiTurn(id, randomUUID())).toBe(false);
+	expect(holder.capture).not.toHaveBeenCalled();
+	expect(await abandonApiTurn(id, lease)).toBe(true);
+	expect(
+		(
+			await db.query<{ state: string }>(
+				"select state from api_turn where id=$1",
+				[id],
+			)
+		).rows[0].state,
+	).toBe("failed");
+	const session = (
+		await db.query<{ turn_status: string; items: unknown[] }>(
+			"select turn_status,items from agent_session where id=$1",
+			[child],
+		)
+	).rows[0];
+	expect(session.turn_status).toBe("failed");
+	expect(session.items).toEqual([
+		{ kind: "error", id: `${id}:lost`, message: ABANDONED_TURN_MESSAGE },
+	]);
+	expect(holder.capture.mock.calls[0][2]).toMatchObject({ outcome: "failed" });
+	// Settled already: a second call changes nothing, and the sweep finds nothing.
+	expect(await abandonApiTurn(id, lease)).toBe(false);
+	holder.capture.mockReset();
+	expect(await expireApiTurnLeases()).toBe(0);
 });
 
 it("keeps a chat running when Stop cancels a waiting turn while another still runs", async () => {

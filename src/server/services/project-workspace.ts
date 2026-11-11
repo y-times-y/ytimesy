@@ -15,7 +15,10 @@ import {
 } from "#/domain/projects";
 import { sessionCloneBranch } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
-import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
+import {
+	agentSessionForOwner,
+	agentSessionMetadataForOwner,
+} from "#/server/adapters/agent-sessions";
 import {
 	PROJECT_CWD_PATH,
 	preparedCheckoutPathFromReuse,
@@ -180,13 +183,15 @@ export function loadTenantProjectCheckout(scope: {
 			? await projectForOwner(scope.userId, scope.projectId)
 			: ((await listProjects(scope.userId))[0] ?? null);
 		if (!project) return null;
+		// Metadata only: the chat's items can be megabytes and this runs every
+		// step. They are read below, and only for a chat with no working branch.
 		let session = scope.sessionId
-			? await agentSessionForOwner(scope.userId, scope.sessionId)
+			? await agentSessionMetadataForOwner(scope.userId, scope.sessionId)
 			: null;
 		if (session && session.projectId !== project.id)
 			throw new Error("This chat is not in the selected project.");
 		while (session?.parentSessionId && !session.workingBranch) {
-			session = await agentSessionForOwner(
+			session = await agentSessionMetadataForOwner(
 				scope.userId,
 				session.parentSessionId,
 			);
@@ -202,11 +207,11 @@ export function loadTenantProjectCheckout(scope: {
 		);
 		if (!checkout) return null;
 		const legacyConversation =
-			Boolean(session) &&
-			!session?.workingBranch &&
-			sessionItemsFromUnknown(session?.items).some(
-				(item) => item.kind === "userMessage",
-			);
+			session !== null &&
+			!session.workingBranch &&
+			sessionItemsFromUnknown(
+				(await agentSessionForOwner(scope.userId, session.id))?.items,
+			).some((item) => item.kind === "userMessage");
 		const additionalRepositories = [];
 		for (const repository of repositoriesForProject(project).slice(1)) {
 			const additional = await checkoutForProject(scope.userId, {
