@@ -72,7 +72,7 @@ must perform explicit authorization.
 
 Required configuration for the ledger:
 
-- `YTIMESY_USER_5H_MICRO_USD` and `YTIMESY_USER_WEEKLY_MICRO_USD`: each user's rolling 5-hour and 7-day limits (deploy defaults $5 and $25). `infrastructure_usage_policy.five_hour_micro_usd` / `weekly_micro_usd` override them per user. An exhausted window refuses new turns, subagents and VM starts (unless that VM's own session still has a turn running) and names when it reopens. Work already running finishes up to a hard ceiling per window: the limit plus about one hour of the running machine's runtime. Holds of running machines shrink to fit under it, and past it nothing extends.
+- `YTIMESY_USER_5H_MICRO_USD` and `YTIMESY_USER_WEEKLY_MICRO_USD`: each user's 5-hour and 7-day limits (deploy defaults $5 and $25). They reset the way Claude's do: the first usage after a window ends starts the next one (`infrastructure_usage_window.started_at`), its reset time is fixed then, and at that time all of its usage clears. Running machines' open holds always count in the current window. `infrastructure_usage_policy.five_hour_micro_usd` / `weekly_micro_usd` override them per user. An exhausted window refuses new turns, subagents and VM starts (unless that VM's own session still has a turn running) and names when it reopens. Work already running finishes up to a hard ceiling per window: the limit plus about one hour of the running machine's runtime. Holds of running machines shrink to fit under it, and past it nothing extends.
 - `YTIMESY_FLEET_MONTHLY_MICRO_USD`: monthly fleet execution ceiling.
 - `YTIMESY_FLEET_LIFETIME_MICRO_USD`: aggregate execution ceiling over all months.
 - `YTIMESY_ADMIN_USER_IDS`: comma-separated exact Better Auth user IDs. Empty grants
