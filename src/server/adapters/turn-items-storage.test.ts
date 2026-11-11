@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SessionItem } from "#/domain/session-item";
-import { newTurnItemsColumn, planItemsWrite } from "./turn-items-storage";
+import {
+	newTurnItemsColumn,
+	planItemsWrite,
+	rebaseAfterWrite,
+} from "./turn-items-storage";
 
 const user = (id: string): SessionItem =>
 	({ kind: "userMessage", id, text: id }) as SessionItem;
@@ -66,5 +70,21 @@ describe("turn items storage", () => {
 		expect(write.session).toBe("$4");
 		expect(write.extra).toEqual([]);
 		expect(JSON.parse(write.itemsText)).toHaveLength(2);
+	});
+
+	it("after one whole-history write the next writes send only the turn's items again", () => {
+		const turn = { items: [user("u1"), user("u2")], items_from: "u2" };
+		const items = [note("changed"), user("u2")];
+		const first = planItemsWrite(turn, items, 4, "s.items");
+		expect(first.rewroteHistory).toBe(true);
+		rebaseAfterWrite(turn, items, first);
+		const next = [...items, note("n3")];
+		const second = planItemsWrite(turn, next, 4, "s.items");
+		expect(second.rewroteHistory).toBeUndefined();
+		expect(JSON.parse(second.itemsText)).toHaveLength(2);
+		// A partial write leaves the baseline alone.
+		const before = turn.items;
+		rebaseAfterWrite(turn, next, second);
+		expect(turn.items).toBe(before);
 	});
 });

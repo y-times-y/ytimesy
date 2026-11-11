@@ -39,7 +39,34 @@ export type ItemsWrite = {
 	extra: string[];
 	/** Serialized bytes sent for the items. */
 	bytes: number;
+	/** The whole chat went out although the turn row has the new shape: an earlier item changed in memory. */
+	rewroteHistory?: boolean;
 };
+
+const warnedRewrite = new WeakSet<object>();
+
+/**
+ * After a write that sent the whole history, the saved history is `items`:
+ * the turn's baseline moves there, so the next write sends only the turn's
+ * own items again. Without this, one earlier item changed in memory (a
+ * background card closing, say) made every later write of the turn resend
+ * the whole chat: megabytes serialized and sent about every second.
+ */
+export function rebaseAfterWrite(
+	turn: { items: SessionItem[] },
+	items: readonly SessionItem[],
+	write: ItemsWrite,
+) {
+	if (!write.rewroteHistory) return;
+	if (!warnedRewrite.has(turn)) {
+		warnedRewrite.add(turn);
+		console.warn("Turn rewrote the whole chat history once.", {
+			items: items.length,
+			bytes: write.bytes,
+		});
+	}
+	turn.items = items as SessionItem[];
+}
 
 /**
  * One turn write's items. A turn in the new shape sends only its own items
@@ -73,7 +100,13 @@ export function planItemsWrite(
 	for (let index = 0; unchanged && index < start; index++)
 		unchanged = turn.items[index] === items[index];
 	if (!unchanged)
-		return { apiTurn: "items", session: param, extra: [], ...full() };
+		return {
+			apiTurn: "items",
+			session: param,
+			extra: [],
+			rewroteHistory: true,
+			...full(),
+		};
 	const fromParam = `$${extraParam}`;
 	const itemsText = jsonbText(items.slice(start));
 	return {
