@@ -33,6 +33,7 @@ import {
 } from "../../realtime/worker";
 import {
 	type ApiTurn,
+	abandonApiTurn,
 	cancelWaitingApiTurn,
 	refreshWaitingApiTurns,
 	turnPastDeadlineSql,
@@ -433,10 +434,16 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			index: active.stepIndex,
 		};
 		if (active.resumes >= MAX_STEP_RESUMES) {
-			// Stop driving it; lease expiry marks the turn failed and tells the user.
+			// Stop driving it and fail it now, so the chat is free and the user is
+			// told why. If that write fails, lease expiry still marks it failed.
 			console.warn("Chat step kept failing; turn abandoned.", {
 				index: step.index,
 			});
+			await withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() => abandonApiTurn(step.turnId, step.leaseId),
+				null,
+			).catch(() => console.warn("Abandoned turn could not be failed now."));
 			return this.endTurn();
 		}
 		const resume = this.steps.read(step)?.state === "processing";
