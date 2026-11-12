@@ -394,6 +394,7 @@ vi.mock("../services/builder-shell-surface", () => ({
 		mocks.lean ? { tools, lean: mocks.lean } : { tools },
 }));
 vi.mock("../services/api-command-scope", () => ({
+	COMMAND_SCOPES_DIRECTORY: "/tmp/ytimesy-api-command-scopes",
 	stopApiTurnCommands: mocks.stop,
 }));
 vi.mock("../services/project-secrets", () => ({

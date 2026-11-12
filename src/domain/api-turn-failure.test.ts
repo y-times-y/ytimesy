@@ -5,6 +5,8 @@ import {
 	apiModelFailureMessage,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
+	ClaudeCodeRunInterrupted,
+	ClaudeRunnerTransportFailure,
 	CodexReconnectRequired,
 	ContextWindowExhausted,
 	contextOverflow,
@@ -25,6 +27,41 @@ import {
 	PROJECT_SECRETS_PREPARATION_FAILED,
 	ProjectSecretsPreparationFailure,
 } from "./project-secret";
+
+it("words a lost runner process without recommending a blind retry", () => {
+	const error = new ClaudeCodeRunInterrupted();
+	expect(apiTurnFailureMessage("model", error)).toBe(error.message);
+	expect(apiTurnFailureClassification(error).name).toBe(
+		"ClaudeCodeRunInterrupted",
+	);
+	expect(error.message).toContain("do not blindly replay commands");
+});
+
+it("labels runner transport as infrastructure without claiming a command did not run", () => {
+	const error = new ClaudeRunnerTransportFailure("exec", "http", 530);
+	for (const wrapped of [
+		error,
+		new Error("private host", { cause: error }),
+		new SafeApiModelFailure(error),
+	]) {
+		expect(apiTurnFailureMessage("model", wrapped)).toBe(error.message);
+		expect(apiModelFailureMessage(wrapped)).toContain("outcome is unknown");
+		expect(apiModelFailureMessage(wrapped)).not.toContain("private host");
+	}
+	expect(apiTurnFailureClassification(error)).toMatchObject({
+		name: "ClaudeRunnerTransportFailure",
+		operation: "exec",
+		reason: "http",
+		runnerHttpStatus: 530,
+	});
+	expect(apiTurnFailureMessage("workspace", error)).toBe(error.message);
+	expect(failureCause(error)).toBe(
+		"ClaudeRunnerTransportFailure: exec http HTTP 530",
+	);
+	expect(
+		apiModelFailureMessage(new ClaudeRunnerTransportFailure("poll", "timeout")),
+	).toContain("process may still be running");
+});
 
 it("preserves safe metadata failure categories in the visible model-stage error", () => {
 	for (const reason of [

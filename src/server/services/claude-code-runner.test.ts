@@ -15,6 +15,7 @@ import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
 	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
+	ClaudeRunnerTransportFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
@@ -23,6 +24,7 @@ import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
 import type { DirectTranscriptStore } from "#/domain/direct-transcript";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import {
+	CLAUDE_CODE_POLL_SCRIPT,
 	type ClaudeCodeStepInput,
 	type ClaudeCodeStore,
 	claudeCodeCommandId,
@@ -30,6 +32,47 @@ import {
 	runClaudeCodeStep,
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
+
+it.skipIf(process.platform !== "linux")(
+	"the real poll script checks scoped PID/start ownership, tolerates launch races and detects a reboot-lost record",
+	() => {
+		const results = execFileSync(
+			"python3",
+			[
+				"-c",
+				`import json,os,pathlib,shutil,subprocess,sys,tempfile,time,uuid
+turn=str(uuid.uuid4()); root=pathlib.Path(tempfile.mkdtemp()); d=root/turn/'1'; d.mkdir(parents=True)
+scope=pathlib.Path('/tmp/ytimesy-api-command-scopes')/turn; scope.mkdir(parents=True)
+record=scope/('cc-'+turn+'-1.json'); started=d/'started'; started.touch()
+p=subprocess.Popen(['python3','-c','import time; time.sleep(60)'],start_new_session=True)
+def poll(): return json.loads(subprocess.check_output(['python3','-c',sys.argv[1],str(d),'-1','1024'],text=True).splitlines()[0])
+try:
+    tick=pathlib.Path('/proc/'+str(p.pid)+'/stat').read_text().rsplit(')',1)[1].split()[19]
+    fresh=poll()['process']
+    os.utime(started,(time.time()-60,time.time()-60))
+    record.write_text(json.dumps({'pid':p.pid,'start':tick}))
+    live=poll()['process']
+    record.write_text(json.dumps({'pid':p.pid,'start':'wrong-start-tick'}))
+    reused=poll()['process']
+    record.unlink(); lost=poll()['process']
+    (d/'status').write_text('0'); completed=poll()['process']
+    print(json.dumps([fresh,live,reused,lost,completed]))
+finally:
+    p.terminate(); p.wait(); shutil.rmtree(root); shutil.rmtree(scope)
+`,
+				CLAUDE_CODE_POLL_SCRIPT,
+			],
+			{ encoding: "utf8" },
+		);
+		expect(JSON.parse(results)).toEqual([
+			null,
+			"alive",
+			"missing",
+			"missing",
+			null,
+		]);
+	},
+);
 
 const HOME = "/home/ubuntu";
 const CWD = "/home/ubuntu/repo";
@@ -858,6 +901,159 @@ describe("Claude Code runner", () => {
 		await expect(runClaudeCodeStep(input(flaky(9)))).rejects.toThrow(
 			"its output could not be read",
 		);
+	});
+
+	it("retries a transient transport poll without replaying launch, and bounds a runner outage", async () => {
+		for (const missed of [2, 9]) {
+			const vm = new FakeVm();
+			vm.emit(init, success);
+			vm.status = "0";
+			const original = vm.shell.getMockImplementation();
+			let polls = 0;
+			vm.shell.mockImplementation(async (command) => {
+				if (command.startsWith("python3 -c") && ++polls <= missed)
+					throw new ClaudeRunnerTransportFailure("exec", "http", 502);
+				return original?.(command) as never;
+			});
+			const result = runClaudeCodeStep(input(vm));
+			if (missed === 2)
+				await expect(result).resolves.toMatchObject({ outcome: "completed" });
+			else
+				await expect(result).rejects.toMatchObject({
+					name: "ClaudeRunnerTransportFailure",
+					operation: "poll",
+					httpStatus: 502,
+				});
+			expect(polls).toBe(missed === 2 ? 3 : 5);
+			expect(vm.launched).toHaveLength(1);
+		}
+	});
+
+	it("continues remote state/read outages and reattaches after recovery without replaying launch", async () => {
+		for (const phase of ["state", "poll"]) {
+			const vm = new FakeVm();
+			const original = vm.shell.getMockImplementation();
+			let down = true;
+			let failedReads = 0;
+			vm.shell.mockImplementation(async (command) => {
+				const observation =
+					phase === "state"
+						? command.includes('n=$(cat "$d/current"')
+						: command.startsWith("python3 -c");
+				if (down && observation) {
+					failedReads++;
+					throw new ClaudeRunnerTransportFailure("exec", "http", 530);
+				}
+				return original?.(command) as never;
+			});
+			const remote = { repository: CWD, workspaceTools: [] };
+			await expect(
+				runClaudeCodeStep(input(vm, { remote })),
+			).resolves.toMatchObject({ outcome: "continue" });
+			expect(failedReads).toBe(5);
+			expect(vm.launched).toHaveLength(phase === "state" ? 0 : 1);
+			down = false;
+			vm.emit(init, success);
+			vm.status = "0";
+			await expect(
+				runClaudeCodeStep(input(vm, { remote })),
+			).resolves.toMatchObject({ outcome: "completed" });
+			expect(vm.launched).toHaveLength(1);
+		}
+	});
+
+	it("does not turn an aborted remote observation into continuation", async () => {
+		const vm = new FakeVm();
+		const controller = new AbortController();
+		vm.shell.mockImplementation(async () => {
+			controller.abort(new Error("user stopped"));
+			throw new ClaudeRunnerTransportFailure("exec", "network");
+		});
+		await expect(
+			runClaudeCodeStep(
+				input(vm, {
+					remote: { repository: CWD, workspaceTools: [] },
+					signal: controller.signal,
+				}),
+			),
+		).rejects.toThrow("user stopped");
+		expect(vm.launched).toHaveLength(0);
+	});
+
+	it("reports a lost process after two observations without relaunching or consuming its output", async () => {
+		const vm = new FakeVm();
+		const original = vm.shell.getMockImplementation();
+		let polls = 0;
+		vm.shell.mockImplementation(async (command) => {
+			if (command.startsWith("python3 -c")) {
+				polls++;
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({
+						offset: 0,
+						next: 0,
+						size: 0,
+						status: null,
+						process: "missing",
+					}),
+					stderr: "",
+				};
+			}
+			return original?.(command) as never;
+		});
+		await expect(runClaudeCodeStep(input(vm))).rejects.toMatchObject({
+			name: "ClaudeCodeRunInterrupted",
+		});
+		expect(polls).toBe(2);
+		expect(vm.launched).toHaveLength(1);
+		expect(vm.files.has(`${RUNS}/1/consumed`)).toBe(false);
+	});
+
+	it("does not wait through a runner outage past this step's budget", async () => {
+		const vm = new FakeVm();
+		const original = vm.shell.getMockImplementation();
+		let polls = 0;
+		vm.shell.mockImplementation(async (command) => {
+			if (command.startsWith("python3 -c")) {
+				polls++;
+				throw new ClaudeRunnerTransportFailure("exec", "timeout");
+			}
+			return original?.(command) as never;
+		});
+		const sleep = vi.fn(async () => {});
+		await expect(
+			runClaudeCodeStep(input(vm, { deadline: 1_002_000, sleep })),
+		).rejects.toMatchObject({ operation: "poll", reason: "timeout" });
+		expect(polls).toBe(1);
+		expect(sleep).not.toHaveBeenCalled();
+	});
+
+	it("does not retry an unauthorized observation or a lost launch reply", async () => {
+		for (const launch of [false, true]) {
+			const vm = new FakeVm();
+			const original = vm.shell.getMockImplementation();
+			let failedCalls = 0;
+			vm.shell.mockImplementation(async (command) => {
+				if (
+					launch
+						? command.includes("setsid nohup")
+						: command.startsWith("python3 -c")
+				) {
+					failedCalls++;
+					throw new ClaudeRunnerTransportFailure(
+						"exec",
+						"http",
+						launch ? 502 : 403,
+					);
+				}
+				return original?.(command) as never;
+			});
+			await expect(runClaudeCodeStep(input(vm))).rejects.toMatchObject({
+				operation: launch ? "exec" : "poll",
+				httpStatus: launch ? 502 : 403,
+			});
+			expect(failedCalls).toBe(1);
+		}
 	});
 
 	it("does not launch when writing an input failed", async () => {

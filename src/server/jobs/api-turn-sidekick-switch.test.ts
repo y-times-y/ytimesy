@@ -124,6 +124,7 @@ vi.mock("../services/codex-subscription-agent", () => ({
 }));
 vi.mock("../services/api-agent-tools", () => ({ apiAgentTools: () => ({}) }));
 vi.mock("../services/api-command-scope", () => ({
+	COMMAND_SCOPES_DIRECTORY: "/tmp/ytimesy-api-command-scopes",
 	stopApiTurnCommands: vi.fn(async () => undefined),
 }));
 vi.mock("../services/project-secrets", () => ({

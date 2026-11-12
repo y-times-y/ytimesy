@@ -3,6 +3,8 @@ import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import {
 	ClaudeCodeApiUnavailable,
 	ClaudeCodeRunFailure,
+	ClaudeCodeRunInterrupted,
+	ClaudeRunnerTransportFailure,
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
@@ -44,6 +46,7 @@ import type {
 	ClaudeSubscriptionStatus,
 } from "../adapters/claude-subscription";
 import {
+	COMMAND_SCOPES_DIRECTORY,
 	COMMAND_STOP_SCRIPT,
 	commandScopeRoot,
 	scopedShellCommand,
@@ -186,7 +189,7 @@ const UNREADABLE_POLL_PAUSE_MS = 1_500;
  * then one "<byte offset>\t<line>" per line. A line longer than the limit
  * is skipped and reported as {"type":"ytimesy_oversize"}.
  */
-const POLL_SCRIPT = `import json,os,sys
+export const CLAUDE_CODE_POLL_SCRIPT = `import json,os,sys,time
 d,commit,limit=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
 if commit>=0:
     t=os.path.join(d,'offset.tmp'); open(t,'w').write(str(commit)); os.replace(t,os.path.join(d,'offset'))
@@ -216,7 +219,20 @@ try:
             if found:
                 lines.append((off,json.dumps({'type':'ytimesy_oversize'}))); nxt=off+skipped
 except FileNotFoundError: size=0
-print(json.dumps({'offset':off,'next':nxt,'status':status,'size':size}))
+process=None
+if status is None and os.path.isdir('/proc/self'):
+    try:
+        started=os.path.join(d,'started')
+        if time.time()-os.path.getmtime(started)>=30:
+            turn=os.path.basename(os.path.dirname(d)); run=os.path.basename(d)
+            record=os.path.join('${COMMAND_SCOPES_DIRECTORY}',turn,'cc-'+turn+'-'+run+'.json')
+            try:
+                saved=json.load(open(record)); pid=int(saved['pid'])
+                fields=open('/proc/'+str(pid)+'/stat').read().rsplit(')',1)[1].split()
+                process='alive' if pid>1 and os.getpgid(pid)==pid and fields[19]==saved['start'] and fields[0]!='Z' else 'missing'
+            except (FileNotFoundError,ProcessLookupError): process='missing'
+    except FileNotFoundError: pass
+print(json.dumps({'offset':off,'next':nxt,'status':status,'size':size,'process':process}))
 for pos,line in lines: print(str(pos)+'\\t'+line)`;
 
 type RunState = {
@@ -345,7 +361,35 @@ export async function runClaudeCodeStep(
 	const { shell, turnId } = input;
 	if (!/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("Invalid turn id.");
 	input.signal.throwIfAborted();
-	const { home, state } = await readMachineAndRunState(shell, turnId);
+	let machineState: Awaited<ReturnType<typeof readMachineAndRunState>> | null =
+		null;
+	// Only this explicit observation is replayable, never an arbitrary exec.
+	for (let attempt = 0; machineState === null; attempt++) {
+		input.signal.throwIfAborted();
+		try {
+			machineState = await readMachineAndRunState(
+				shell,
+				turnId,
+				Math.max(1, Math.min(30_000, input.deadline - now() - 10_000)),
+			);
+		} catch (error) {
+			if (
+				!input.remote ||
+				!(error instanceof ClaudeRunnerTransportFailure) ||
+				!error.retryable
+			)
+				throw error;
+			input.signal.throwIfAborted();
+			const pause = UNREADABLE_POLL_PAUSE_MS * (attempt + 1);
+			if (
+				attempt >= MAX_UNREADABLE_POLLS ||
+				now() + pause + 10_000 >= input.deadline
+			)
+				return { messages: [...input.messages], outcome: "continue" };
+			await sleep(pause);
+		}
+	}
+	const { home, state } = machineState;
 	const turnDirectory = `${home}/${RUNS}/${turnId}`;
 	let run = state.run;
 	let claudeSessionId = state.sessionId;
@@ -369,6 +413,7 @@ export async function runClaudeCodeStep(
 	/** Claude Code's own API error line (never shown): why the run is failing. */
 	let apiError: string | null = null;
 	let unreadablePolls = 0;
+	let missingProcessPolls = 0;
 	let lastTranscriptSave = now();
 	// What the latest model call put in the context window; with the window
 	// Claude Code reports at the end, it is the composer's context ring.
@@ -376,10 +421,22 @@ export async function runClaudeCodeStep(
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
+		let transportFailure: ClaudeRunnerTransportFailure | null = null;
+		// The runner HTTP adapter reserves another 10 seconds for the exec reply.
 		const poll = await shell(
-			`python3 -c ${quote(POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
-			30_000,
-		).catch(() => null);
+			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
+			Math.max(1, Math.min(30_000, input.deadline - now() - 10_000)),
+		).catch((error: unknown) => {
+			if (error instanceof ClaudeRunnerTransportFailure) {
+				transportFailure = new ClaudeRunnerTransportFailure(
+					"poll",
+					error.reason,
+					error.httpStatus,
+				);
+				if (!error.retryable) throw transportFailure;
+			}
+			return null;
+		});
 		const [headerLine = "", ...lines] = (poll?.stdout ?? "").split("\n");
 		const header = poll?.exitCode === 0 ? parseJson(headerLine) : null;
 		const readable =
@@ -390,8 +447,22 @@ export async function runClaudeCodeStep(
 			// The run lives on the machine and its output stays there: one poll
 			// the machine did not answer (no exit status, a dropped connection)
 			// is read again, and only a machine that stays silent fails the turn.
-			if (++unreadablePolls > MAX_UNREADABLE_POLLS)
-				throw new ClaudeCodeRunFailure("its output could not be read.");
+			if (
+				++unreadablePolls > MAX_UNREADABLE_POLLS ||
+				now() + UNREADABLE_POLL_PAUSE_MS * unreadablePolls + 10_000 >=
+					input.deadline
+			) {
+				// A remote process owns the run and its tools independently of this
+				// step. Reattach next step; never turn transport loss into a launch.
+				input.signal.throwIfAborted();
+				if (input.remote && transportFailure) {
+					return { messages: [...input.messages], outcome: "continue" };
+				}
+				throw (
+					transportFailure ??
+					new ClaudeCodeRunFailure("its output could not be read.")
+				);
+			}
 			await sleep(UNREADABLE_POLL_PAUSE_MS * unreadablePolls);
 			continue;
 		}
@@ -401,6 +472,7 @@ export async function runClaudeCodeStep(
 			next: number;
 			status?: string | null;
 			size?: number;
+			process?: "alive" | "missing" | null;
 		};
 		commit = -1;
 		let result: ClaudeCodeResult | null = null;
@@ -468,6 +540,11 @@ export async function runClaudeCodeStep(
 				apiError,
 			);
 		}
+		// The detached wrapper may be publishing status just after its scoped
+		// process exits. Require a second observation before calling it lost.
+		missingProcessPolls =
+			polled.process === "missing" ? missingProcessPolls + 1 : 0;
+		if (missingProcessPolls >= 2) throw new ClaudeCodeRunInterrupted();
 		// Yield at the deadline, never with a ytimesy tool call still answering.
 		const due = now() + wait >= input.deadline;
 		// A tool call still answering holds the step a little past its
@@ -478,7 +555,7 @@ export async function runClaudeCodeStep(
 		) {
 			if (commit >= 0)
 				await shell(
-					`python3 -c ${quote(POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
+					`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
 					30_000,
 				).catch(() => undefined);
 			return { messages: [...input.messages], outcome: "continue" };
@@ -511,11 +588,13 @@ async function emit(input: ClaudeCodeStepInput, event: ApiAgentEvent) {
 async function readMachineAndRunState(
 	shell: ClaudeCodeShell,
 	turnId: string,
+	timeoutMs: number,
 ): Promise<{ home: string; state: RunState }> {
 	const output = await checked(
 		shell,
 		`printf '%s\\n' "$HOME"; d="$HOME/${RUNS}/${turnId}"; n=$(cat "$d/current" 2>/dev/null || true); printf '%s\\n' "$n"; if [ -n "$n" ]; then [ -f "$d/$n/consumed" ] && echo consumed || echo active; cat "$d/session" 2>/dev/null || true; fi`,
 		"its state could not be read.",
+		timeoutMs,
 	);
 	const [home = "", runText = "", consumedText = "", sessionText = ""] =
 		output.split("\n");

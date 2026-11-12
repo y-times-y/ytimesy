@@ -12,6 +12,46 @@ import {
 import { redactSecrets } from "./redact-secrets";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
+export type ClaudeRunnerOperation = "exec" | "write" | "read" | "poll";
+
+/** Transport loss says nothing about whether a remote command completed. */
+export class ClaudeRunnerTransportFailure extends Error {
+	constructor(
+		readonly operation: ClaudeRunnerOperation,
+		readonly reason: "http" | "network" | "timeout" | "invalid-response",
+		readonly httpStatus: number | null = null,
+	) {
+		super(
+			operation === "exec" || operation === "write"
+				? "The Claude runner connection failed. The command's outcome is unknown: it may still be running or may have completed. Check the latest task state before continuing; do not blindly retry it. This is infrastructure, not a model provider error."
+				: "The Claude runner could not be reached to read its progress. The process may still be running. Check the latest task state before continuing; do not start a duplicate. This is infrastructure, not a model provider error.",
+		);
+		this.name = "ClaudeRunnerTransportFailure";
+	}
+
+	get retryable() {
+		return (
+			this.reason !== "http" ||
+			this.httpStatus === 408 ||
+			this.httpStatus === 429 ||
+			(this.httpStatus !== null && this.httpStatus >= 500)
+		);
+	}
+}
+
+function runnerTransportFailure(
+	error: unknown,
+	depth = 0,
+): ClaudeRunnerTransportFailure | null {
+	if (error instanceof ClaudeRunnerTransportFailure) return error;
+	if (depth > 4 || !(error instanceof Error)) return null;
+	return runnerTransportFailure(
+		(error as { providerError?: unknown }).providerError ??
+			(RetryError.isInstance(error) ? error.lastError : error.cause),
+		depth + 1,
+	);
+}
+
 export class ApiTurnCancelled extends Error {
 	constructor() {
 		super("API turn was cancelled.");
@@ -46,6 +86,7 @@ const FAILURE_NAMES = new Set([
 	"MachineUsageLimitReached",
 	"XaiSubscriptionUnavailable",
 	"MachineNotResponding",
+	"ClaudeCodeRunInterrupted",
 ]);
 const FAILURE_CODES = new Set([
 	"ECONNRESET",
@@ -86,6 +127,14 @@ export function apiTurnFailureClassification(error: unknown) {
 			...(error.failure.kind === "command"
 				? { exitCode: error.failure.exitCode }
 				: {}),
+		};
+	if (error instanceof ClaudeRunnerTransportFailure)
+		return {
+			name: error.name,
+			code: "unknown",
+			operation: error.operation,
+			reason: error.reason,
+			runnerHttpStatus: error.httpStatus,
 		};
 	if (error instanceof HarnessRuntimeFailure)
 		return { name: error.name, code: "unknown", stage: error.stage };
@@ -281,6 +330,8 @@ export function machineFailureCause(error: unknown): string | null {
 }
 
 function errorLine(error: unknown): string {
+	if (error instanceof ClaudeRunnerTransportFailure)
+		return `${error.name}: ${error.operation} ${error.reason}${error.httpStatus === null ? "" : ` HTTP ${error.httpStatus}`}`;
 	if (error instanceof Error) {
 		const tag = (error as { _tag?: unknown })._tag;
 		const code = (error as { code?: unknown }).code;
@@ -425,6 +476,16 @@ export class ClaudeCodeApiUnavailable extends Error {
 					: "Anthropic is having problems right now. Retry in a few minutes. Your work is saved.",
 		);
 		this.name = "ClaudeCodeApiUnavailable";
+	}
+}
+
+/** The execution host lost a run without publishing a completion status. */
+export class ClaudeCodeRunInterrupted extends Error {
+	constructor() {
+		super(
+			"The Claude runner process was interrupted before it recorded a result. This is an infrastructure failure, not a model provider error. Inspect the latest task state and saved work before continuing; do not blindly replay commands.",
+		);
+		this.name = "ClaudeCodeRunInterrupted";
 	}
 }
 
@@ -818,6 +879,8 @@ export function visibleErrorMessage(item: {
 }
 
 export function apiModelFailureMessage(error: unknown): string {
+	const runner = runnerTransportFailure(error);
+	if (runner) return runner.message;
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
@@ -849,6 +912,7 @@ export function apiModelFailureMessage(error: unknown): string {
 		error instanceof ClaudeSubscriptionLimitReached ||
 		error instanceof ClaudeSubscriptionRefused ||
 		error instanceof ClaudeCodeRunFailure ||
+		error instanceof ClaudeCodeRunInterrupted ||
 		error instanceof ClaudeCodeApiUnavailable ||
 		error instanceof UnsupportedEdgeModelEndpoint ||
 		error instanceof ApiModelPreparationFailure ||
@@ -954,6 +1018,8 @@ export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
 ): string {
+	const runner = runnerTransportFailure(error);
+	if (runner) return runner.message;
 	if (error instanceof CoordinationFailure) return error.message;
 	if (error instanceof IncompleteAgentTurn) return error.message;
 	if (error instanceof InitialAgentReadFailure) return error.message;
@@ -962,6 +1028,7 @@ export function apiTurnFailureMessage(
 	if (error instanceof VerificationPolicyFailure) return error.message;
 	if (error instanceof LifecycleHookRefusal) return error.message;
 	if (error instanceof MachineNotResponding) return error.message;
+	if (error instanceof ClaudeCodeRunInterrupted) return error.message;
 	const reconnect = reconnectCause(error);
 	if (reconnect) return reconnect.message;
 	const machine = machineFailureMessage(error);
