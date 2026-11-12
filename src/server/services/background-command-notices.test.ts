@@ -414,4 +414,51 @@ describe("waking a chat between turns", () => {
 		).toBe("woken");
 		expect(notify).toHaveBeenCalledTimes(1);
 	});
+
+	it("reads the whole transcript only when a command exited, not on every check", async () => {
+		const id = crypto.randomUUID();
+		const exited = await session([{ id, status: "0" }]);
+		const full = vi.fn(async () => record(exited.sessionId, exited.items));
+		const replaceItems = vi.fn(async () => true);
+		const notify = vi.fn(async () => undefined);
+		const { session: whole, ...metadata } = record(
+			exited.sessionId,
+			exited.items,
+		) as unknown as { session?: unknown; items: SessionItem[] };
+		void whole;
+		const open = vi.fn(async () => ({
+			session: { ...metadata, items: undefined } as never,
+			items: exited.items,
+		}));
+		const dependencies = {
+			candidates: async () => [],
+			session: full,
+			open,
+			activeTurn: async () => false,
+			replaceItems,
+			notify,
+		};
+		// Nothing open: no full read.
+		expect(
+			await wakeChatForBackgroundCommands(
+				hostMachines(),
+				{ userId: "user", id: exited.sessionId },
+				{
+					...dependencies,
+					open: async () => ({ ...(await open()), items: [] }),
+				},
+			),
+		).toBe("idle");
+		expect(full).not.toHaveBeenCalled();
+		// A command exited: one full read, to record it.
+		expect(
+			await wakeChatForBackgroundCommands(
+				hostMachines(),
+				{ userId: "user", id: exited.sessionId },
+				dependencies,
+			),
+		).toBe("woken");
+		expect(full).toHaveBeenCalledTimes(1);
+		expect(replaceItems).toHaveBeenCalledTimes(1);
+	});
 });

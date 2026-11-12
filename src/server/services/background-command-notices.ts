@@ -13,6 +13,8 @@ import type { SessionItem } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
+	backgroundCommandItemsForOwner,
 } from "../adapters/agent-sessions";
 import { hasActiveApiTurn } from "../adapters/api-turns";
 import {
@@ -122,6 +124,19 @@ export type BackgroundWatchDependencies = {
 		userId: string,
 		sessionId: string,
 	) => Promise<AgentSessionRecord | null>;
+	/**
+	 * The chat without its transcript, with only its background command
+	 * items. The check runs every minute per chat with an open command, so
+	 * reading the whole transcript (up to megabytes) each time made it a third
+	 * of the database's egress; `session` is read only when something exits.
+	 */
+	readonly open?: (
+		userId: string,
+		sessionId: string,
+	) => Promise<{
+		session: Omit<AgentSessionRecord, "items">;
+		items: SessionItem[];
+	} | null>;
 	readonly activeTurn: (userId: string, sessionId: string) => Promise<boolean>;
 	readonly replaceItems: (
 		userId: string,
@@ -140,6 +155,15 @@ export type BackgroundWatchDependencies = {
 const watchDependencies = (): BackgroundWatchDependencies => ({
 	candidates: idleSessionsWithOpenBackgroundCommands,
 	session: agentSessionForOwner,
+	open: async (userId, sessionId) => {
+		const session = await agentSessionMetadataForOwner(userId, sessionId);
+		if (!session) return null;
+		const items = await backgroundCommandItemsForOwner(userId, [sessionId]);
+		return {
+			session,
+			items: (items.get(sessionId) ?? []) as SessionItem[],
+		};
+	},
 	activeTurn: hasActiveApiTurn,
 	replaceItems: replaceIdleSessionItems,
 	notify: async (machines, session, notificationId, text) => {
@@ -222,12 +246,18 @@ export async function wakeChatForBackgroundCommands(
 	dependencies: BackgroundWatchDependencies = watchDependencies(),
 ): Promise<"woken" | "busy" | "idle"> {
 	try {
-		const session = await dependencies.session(candidate.userId, candidate.id);
+		const opened = dependencies.open
+			? await dependencies.open(candidate.userId, candidate.id)
+			: null;
+		const read = opened
+			? null
+			: await dependencies.session(candidate.userId, candidate.id);
+		const session = opened?.session ?? read;
 		if (!session?.providerRef) return "idle";
-		// The stored items as they are (compare-and-set below).
-		const stored = Array.isArray(session.items)
-			? (session.items as SessionItem[])
-			: [];
+		// The background items (or the whole transcript on the full path).
+		const stored: SessionItem[] =
+			opened?.items ??
+			(Array.isArray(read?.items) ? (read?.items as SessionItem[]) : []);
 		const open = openBackgroundCommandIds(stored);
 		if (
 			!open.length ||
@@ -264,12 +294,19 @@ export async function wakeChatForBackgroundCommands(
 			),
 		];
 		if (!exits.length) return "idle";
-		const next = withBackgroundCommandExits(stored, exits);
-		if (next !== stored)
+		// Something exits: only now is the whole transcript read (compare-and-set).
+		const current =
+			read ?? (await dependencies.session(candidate.userId, candidate.id));
+		if (!current) return "idle";
+		const whole = Array.isArray(current.items)
+			? (current.items as SessionItem[])
+			: [];
+		const next = withBackgroundCommandExits(whole, exits);
+		if (next !== whole)
 			await dependencies.replaceItems(
-				session.userId,
-				session.id,
-				session.items,
+				current.userId,
+				current.id,
+				current.items,
 				next,
 			);
 		const fresh = exits.filter((exit) => exit.fresh);
@@ -277,7 +314,7 @@ export async function wakeChatForBackgroundCommands(
 		try {
 			await dependencies.notify(
 				machines,
-				session,
+				current,
 				backgroundNoticeId(session.id, fresh[0].id),
 				backgroundCommandNoticeMessage(fresh),
 			);
