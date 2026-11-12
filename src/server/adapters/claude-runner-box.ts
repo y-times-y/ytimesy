@@ -1,3 +1,4 @@
+import { ClaudeRunnerTransportFailure } from "#/domain/api-turn-failure";
 import type { ClaudeRunnerBox } from "#/domain/claude-runner";
 
 /**
@@ -52,27 +53,71 @@ async function call<T>(
 	const body = JSON.stringify(input);
 	const expires = String(Date.now() + 30_000);
 	const nonce = crypto.randomUUID().replaceAll("-", "");
-	const response = await fetcher(new URL(path, box.baseUrl), {
-		method: "POST",
-		body,
-		redirect: "manual",
-		signal: AbortSignal.timeout(timeoutMs),
-		headers: {
-			[EXPIRY_HEADER]: expires,
-			[NONCE_HEADER]: nonce,
-			[SIGNATURE_HEADER]: await runnerRequestSignature(
-				box.secret,
-				"POST",
-				path,
-				expires,
-				nonce,
-				body,
-			),
-		},
-	});
+	let response: Response;
+	try {
+		response = await fetcher(new URL(path, box.baseUrl), {
+			method: "POST",
+			body,
+			redirect: "manual",
+			signal: AbortSignal.timeout(timeoutMs),
+			headers: {
+				[EXPIRY_HEADER]: expires,
+				[NONCE_HEADER]: nonce,
+				[SIGNATURE_HEADER]: await runnerRequestSignature(
+					box.secret,
+					"POST",
+					path,
+					expires,
+					nonce,
+					body,
+				),
+			},
+		});
+	} catch (error) {
+		throw new ClaudeRunnerTransportFailure(
+			path.slice(1) as "exec" | "write" | "read",
+			error instanceof Error &&
+				(error.name === "TimeoutError" || error.name === "AbortError")
+				? "timeout"
+				: "network",
+		);
+	}
+	// The box reports a missing file as HTTP 500 with this fixed code.
+	if (path === "/read" && response.status === 500) {
+		const missing = (await response.json().catch(() => null)) as {
+			error?: unknown;
+		} | null;
+		if (missing?.error === "ENOENT") return { contents: null } as T;
+	}
 	if (!response.ok)
-		throw new Error(`The runner box answered ${response.status}.`);
-	return (await response.json()) as T;
+		throw new ClaudeRunnerTransportFailure(
+			path.slice(1) as "exec" | "write" | "read",
+			"http",
+			response.status,
+		);
+	try {
+		const result = (await response.json()) as Record<string, unknown> | null;
+		const valid =
+			result &&
+			typeof result === "object" &&
+			(path === "/exec"
+				? Number.isInteger(result.exitCode) &&
+					typeof result.stdout === "string" &&
+					typeof result.stderr === "string"
+				: path === "/read"
+					? typeof result.contents === "string"
+					: result.ok === true);
+		if (!valid) throw new Error("invalid response");
+		return result as T;
+	} catch (error) {
+		throw new ClaudeRunnerTransportFailure(
+			path.slice(1) as "exec" | "write" | "read",
+			error instanceof Error &&
+				(error.name === "TimeoutError" || error.name === "AbortError")
+				? "timeout"
+				: "invalid-response",
+		);
+	}
 }
 
 /** The share of the box's disk in use (0-1), or null when it could not be read. */
@@ -117,18 +162,28 @@ export function claudeRunnerMachine(
 			await call(box, "/write", { path, contents }, 60_000, fetcher);
 		},
 		readFile: async (path: string) => {
-			try {
-				return (
-					await call<{ contents: string }>(
-						box,
-						"/read",
-						{ path },
-						60_000,
-						fetcher,
+			for (let attempt = 0; ; attempt++) {
+				try {
+					return (
+						await call<{ contents: string | null }>(
+							box,
+							"/read",
+							{ path },
+							10_000,
+							fetcher,
+						)
+					).contents;
+				} catch (error) {
+					if (
+						!(error instanceof ClaudeRunnerTransportFailure) ||
+						!error.retryable ||
+						attempt >= 2
 					)
-				).contents;
-			} catch {
-				return null;
+						throw error;
+					await new Promise((resolve) =>
+						setTimeout(resolve, 250 * (attempt + 1)),
+					);
+				}
 			}
 		},
 	};

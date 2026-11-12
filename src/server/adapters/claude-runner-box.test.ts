@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runnerSignature } from "../../../infra/claude-runner-box/server.mjs";
 import {
 	claudeRunnerDiskShare,
@@ -63,13 +63,99 @@ describe("claudeRunnerMachine", () => {
 		}
 	});
 
-	it("reads a missing file as null and fails a refused command", async () => {
+	it("does not hide refused reads or replay refused commands", async () => {
 		const refuse = (async () =>
 			new Response("{}", { status: 403 })) as unknown as typeof fetch;
 		const machine = claudeRunnerMachine(box, refuse);
-		expect(await machine.readFile("nope")).toBeNull();
-		await expect(machine.shell("true", 1000)).rejects.toThrow("403");
+		await expect(machine.readFile("nope")).rejects.toMatchObject({
+			operation: "read",
+			httpStatus: 403,
+		});
+		await expect(machine.shell("true", 1000)).rejects.toMatchObject({
+			operation: "exec",
+			httpStatus: 403,
+		});
 	});
+});
+
+it("retries only observations with fresh signatures, and distinguishes missing files", async () => {
+	const fetcher = vi
+		.fn<typeof fetch>()
+		.mockResolvedValueOnce(new Response("tunnel unavailable", { status: 530 }))
+		.mockResolvedValueOnce(
+			new Response(JSON.stringify({ contents: "recovered" })),
+		);
+	expect(
+		await claudeRunnerMachine(box, fetcher).readFile("runs/another-session"),
+	).toBe("recovered");
+	expect(fetcher).toHaveBeenCalledTimes(2);
+	const headers = fetcher.mock.calls.map(
+		([, init]) => init?.headers as Record<string, string>,
+	);
+	expect(headers[0]?.["x-ytimesy-runner-nonce"]).not.toBe(
+		headers[1]?.["x-ytimesy-runner-nonce"],
+	);
+	const missing = vi
+		.fn<typeof fetch>()
+		.mockResolvedValue(new Response('{"error":"ENOENT"}', { status: 500 }));
+	expect(await claudeRunnerMachine(box, missing).readFile("absent")).toBeNull();
+	expect(missing).toHaveBeenCalledTimes(1);
+});
+
+it("types timeouts and rejects malformed success envelopes without replay", async () => {
+	for (const [fetcher, reason] of [
+		[
+			async () => {
+				throw new DOMException("private detail", "TimeoutError");
+			},
+			"timeout",
+		],
+		[
+			async () => new Response('{"stdout":"no exit status"}'),
+			"invalid-response",
+		],
+	] as const) {
+		const send = vi.fn<typeof fetch>().mockImplementation(fetcher);
+		await expect(
+			claudeRunnerMachine(box, send).shell("do work", 100),
+		).rejects.toMatchObject({ operation: "exec", reason });
+		expect(send).toHaveBeenCalledTimes(1);
+	}
+});
+
+it("bounds unavailable reads and never replays mutations, including lost or unreadable replies", async () => {
+	const down = vi
+		.fn<typeof fetch>()
+		.mockImplementation(
+			async () => new Response("private upstream detail", { status: 502 }),
+		);
+	const machine = claudeRunnerMachine(box, down);
+	await expect(machine.readFile("session")).rejects.toMatchObject({
+		operation: "read",
+		reason: "http",
+		httpStatus: 502,
+	});
+	expect(down).toHaveBeenCalledTimes(3);
+	for (const response of [
+		() => new Response("bad", { status: 502 }),
+		() => new Response("not json"),
+		() => {
+			throw new TypeError("private host");
+		},
+	]) {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockImplementation(async () => response());
+		const target = claudeRunnerMachine(box, fetcher);
+		await expect(target.shell("launch", 100)).rejects.toMatchObject({
+			operation: "exec",
+		});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		await expect(target.writeFile("input", "payload")).rejects.toMatchObject({
+			operation: "write",
+		});
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	}
 });
 
 describe("claudeRunnerDiskShare", () => {
