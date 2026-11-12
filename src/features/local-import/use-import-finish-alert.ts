@@ -11,6 +11,7 @@ import {
 	withPendingImport,
 } from "#/domain/import-finish-alert";
 import { tabTitle } from "#/domain/turn-finish-alerts";
+import { showNotification } from "../app/safe-notification";
 import { localImportStatusFn } from "./local-import.fn";
 
 const POLL_MS = 5000;
@@ -122,21 +123,15 @@ export function useImportFinishAlert() {
 			});
 			if (!pageAway()) return;
 			document.title = tabTitle(document.title, true);
-			if (
-				typeof Notification === "undefined" ||
-				Notification.permission !== "granted"
-			)
-				return;
-			const notification = new Notification(alert.title, {
-				body: alert.action,
-				tag: `ytimesy-import-${item.id}`,
-				icon: "/brand/github-avatar.png",
-			});
-			notification.onclick = () => {
-				window.focus();
-				notification.close();
-				open();
-			};
+			showNotification(
+				alert.title,
+				{
+					body: alert.action,
+					tag: `ytimesy-import-${item.id}`,
+					icon: "/brand/github-avatar.png",
+				},
+				open,
+			);
 		});
 	});
 }

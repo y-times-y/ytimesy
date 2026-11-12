@@ -5,6 +5,10 @@ import {
 	tabTitle,
 	type WatchedChat,
 } from "#/domain/turn-finish-alerts";
+import {
+	requestNotificationPermission,
+	showNotification,
+} from "../app/safe-notification";
 
 function pageAway() {
 	return document.hidden || !document.hasFocus();
@@ -30,19 +34,16 @@ export function useTurnFinishAlerts(
 		);
 		if (finished.length === 0 || !pageAway()) return;
 		document.title = tabTitle(document.title, true);
-		if (typeof Notification === "undefined") return;
-		if (Notification.permission !== "granted") return;
 		for (const chat of finished) {
-			const notification = new Notification(chat.title, {
-				body: finishedChatBody(chat.outcome),
-				tag: `ytimesy-turn-${chat.id}`,
-				icon: "/brand/github-avatar.png",
-			});
-			notification.onclick = () => {
-				window.focus();
-				openChat.current(chat.id);
-				notification.close();
-			};
+			showNotification(
+				chat.title,
+				{
+					body: finishedChatBody(chat.outcome),
+					tag: `ytimesy-turn-${chat.id}`,
+					icon: "/brand/github-avatar.png",
+				},
+				() => openChat.current(chat.id),
+			);
 		}
 	});
 
@@ -61,7 +62,5 @@ export function useTurnFinishAlerts(
 
 /** Asks once, from a send, whether finished turns may show desktop notifications. */
 export function askForFinishNotifications() {
-	if (typeof Notification === "undefined") return;
-	if (Notification.permission !== "default") return;
-	void Notification.requestPermission().catch(() => undefined);
+	requestNotificationPermission();
 }
