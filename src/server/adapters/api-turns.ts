@@ -39,6 +39,7 @@ import {
 	recoveredConversation,
 } from "./conversation-recovery";
 import { database } from "./database";
+import { retryDroppedConnection } from "./dropped-connection-retry";
 import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
 import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
@@ -494,20 +495,22 @@ export async function checkpointApiTurn(
 ) {
 	// $5 is the failover, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
-	const result = await database().query<{ version: string }>(
-		`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
+	const result = await retryDroppedConnection(() =>
+		database().query<{ version: string }>(
+			`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 		 returning (select updated_at::text from saved) as version`,
-		[
-			turn.id,
-			turn.lease_id,
-			jsonbText(messages),
-			write.itemsText,
-			failover ? JSON.stringify(failover) : null,
-			...write.extra,
-		],
+			[
+				turn.id,
+				turn.lease_id,
+				jsonbText(messages),
+				write.itemsText,
+				failover ? JSON.stringify(failover) : null,
+				...write.extra,
+			],
+		),
 	);
 	if (!result.rows[0]) throw new Error("API turn lease was lost.");
 	rebaseAfterWrite(turn, items, write);
@@ -521,13 +524,15 @@ export async function publishApiTurnProgress(
 	items: readonly SessionItem[],
 ) {
 	const write = planItemsWrite(turn, items, 3, "agent_session.items");
-	const result = await database().query<{ version: string }>(
-		`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
+	const result = await retryDroppedConnection(() =>
+		database().query<{ version: string }>(
+			`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, write.itemsText, ...write.extra],
+			[turn.id, turn.lease_id, write.itemsText, ...write.extra],
+		),
 	);
 	if (result.rows[0]) {
 		rebaseAfterWrite(turn, items, write);
