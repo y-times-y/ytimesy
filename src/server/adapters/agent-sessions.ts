@@ -424,8 +424,8 @@ export async function backgroundCommandItemsForOwner(
  * that does not read `items` should take agentSessionMetadataForOwner: the
  * transcript is what database egress is made of.
  */
-/** Above this many items a whole-row read is worth attributing (it is megabytes). */
-const FULL_READ_LOG_ITEMS = 300;
+/** Above this many items a whole-row read is worth attributing (hundreds of KB and up). */
+const FULL_READ_LOG_ITEMS = 60;
 
 /**
  * One log line when a caller reads a chat's whole row with a long transcript:
