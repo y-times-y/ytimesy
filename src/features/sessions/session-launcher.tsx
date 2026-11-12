@@ -1484,6 +1484,23 @@ export function SessionLauncher({
 						busy={busy}
 						onConnect={onConnect}
 					/>
+					{goal ? (
+						<div
+							className="composer-goal"
+							role="status"
+							data-kind="goal-mode"
+							title={goal.objective}
+						>
+							<Target size={13} aria-hidden="true" />
+							<span className="composer-goal-label">Goal mode</span>
+							<span className="composer-goal-objective">{goal.objective}</span>
+							{goal.continuations > 0 ? (
+								<span className="composer-goal-count">
+									round {goal.continuations + 1}
+								</span>
+							) : null}
+						</div>
+					) : null}
 					<div className="session-composer">
 						{visibleMentions.length > 0 ? (
 							<MentionPopover
@@ -1529,25 +1546,6 @@ export function SessionLauncher({
 								})}
 							</ul>
 						)}
-						{goal ? (
-							<div
-								className="composer-goal"
-								role="status"
-								data-kind="goal-mode"
-								title={goal.objective}
-							>
-								<Target size={13} aria-hidden="true" />
-								<span className="composer-goal-label">Goal mode</span>
-								<span className="composer-goal-objective">
-									{goal.objective}
-								</span>
-								{goal.continuations > 0 ? (
-									<span className="composer-goal-count">
-										round {goal.continuations + 1}
-									</span>
-								) : null}
-							</div>
-						) : null}
 						<TaskInput
 							id={inputId}
 							draftKey={draftKey}
