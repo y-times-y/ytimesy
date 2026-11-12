@@ -1,10 +1,17 @@
-import { FileText, type LucideIcon, RotateCcw, Sparkles } from "lucide-react";
+import {
+	FileText,
+	type LucideIcon,
+	Minimize2,
+	RotateCcw,
+	Sparkles,
+} from "lucide-react";
 import type { SlashCommand, SlashCommandId } from "#/domain/slash-command";
 import { VIEW_ICONS } from "../workspace/view-icons";
 
 /** Commands that open a right-sidebar view use that view's icon. */
 const icons: Record<SlashCommandId, LucideIcon> = {
 	retry: RotateCcw,
+	compact: Minimize2,
 	model: Sparkles,
 	files: VIEW_ICONS.files,
 	diff: VIEW_ICONS.diff,

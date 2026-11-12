@@ -1,5 +1,6 @@
 export type SlashCommandId =
 	| "retry"
+	| "compact"
 	| "model"
 	| "files"
 	| "diff"
@@ -28,6 +29,7 @@ const PROJECT_COMMAND_PATH =
 const BUILT_IN_TRIGGERS = new Set([
 	"stop",
 	"retry",
+	"compact",
 	"model",
 	"files",
 	"diff",
@@ -76,6 +78,13 @@ export function expandProjectCommand(template: string, argument: string) {
 		.replace(/\$([1-9])/g, (_match, index) => words[Number(index) - 1] ?? "");
 }
 
+/** The message a /compact sends: the turn that reads it compacts the context first. */
+export const COMPACT_COMMAND_TEXT = "/compact";
+
+export function isCompactCommandText(text: string | null | undefined) {
+	return text?.trim() === COMPACT_COMMAND_TEXT;
+}
+
 type SlashDraft = {
 	readonly query: string;
 	readonly argument: string;
@@ -88,6 +97,9 @@ type SlashCommandContext = {
 	readonly canSend: boolean;
 	readonly hasLastUserMessage: boolean;
 	readonly hasModels: boolean;
+	/** The run uses the harness's own context compaction (not Claude Code's) and has earlier messages. */
+	readonly canCompact: boolean;
+	readonly compactUnavailableReason?: string;
 };
 
 export function parseSlashDraft(draft: string): SlashDraft | null {
@@ -118,6 +130,16 @@ export function composerSlashCommands(
 			unavailableReason: context.turnRunning
 				? "Wait for the current run to finish"
 				: "Nothing to retry yet",
+		},
+		{
+			id: "compact",
+			trigger: "/compact",
+			label: "Compact",
+			description: "Compact the conversation context now",
+			availability: context.canCompact ? "ready" : "unavailable",
+			unavailableReason: context.turnRunning
+				? "Wait for the current run to finish"
+				: (context.compactUnavailableReason ?? "Nothing to compact yet"),
 		},
 		{
 			id: "model",

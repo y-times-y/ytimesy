@@ -15,6 +15,7 @@ const connected = composerSlashCommands({
 	turnRunning: false,
 	canSend: true,
 	hasLastUserMessage: true,
+	canCompact: true,
 	hasModels: true,
 });
 
@@ -45,6 +46,7 @@ describe("slash commands", () => {
 				turnRunning: true,
 				canSend: false,
 				hasLastUserMessage: true,
+				canCompact: false,
 				hasModels: true,
 			}).map((command) => command.trigger),
 		).not.toContain("/stop");
@@ -57,6 +59,7 @@ describe("slash commands", () => {
 			turnRunning: false,
 			canSend: false,
 			hasLastUserMessage: false,
+			canCompact: false,
 			hasModels: false,
 		});
 		expect(
@@ -71,6 +74,7 @@ describe("slash commands", () => {
 			),
 		).toEqual([
 			"retry",
+			"compact",
 			"model",
 			"files",
 			"diff",
