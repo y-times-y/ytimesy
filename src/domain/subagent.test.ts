@@ -6,7 +6,6 @@ import {
 	liveChildrenAllowed,
 	overlappingWriters,
 	SUBAGENT_LEVEL_LIMITS,
-	SUBAGENT_TREE_TOKEN_BUDGET,
 	subagentAdmission,
 	subagentBudgetState,
 	subagentLabelFromTaskLabel,
@@ -32,7 +31,7 @@ describe("subagent placement", () => {
 
 describe("subagent budgets", () => {
 	it("gives the builder's children level-1 limits while the tree has room", () => {
-		expect(childSubagentBudget(1, builderRemaining(0))).toEqual({
+		expect(childSubagentBudget(1, builderRemaining())).toEqual({
 			steps: 150,
 			minutes: 30,
 			tokens: 2_000_000,
@@ -58,12 +57,41 @@ describe("subagent budgets", () => {
 		).toEqual({ steps: 40, minutes: 8, tokens: 500_000 });
 	});
 
-	it("caps the builder's children at half of the tree's remaining tokens", () => {
-		const nearlySpent = builderRemaining(SUBAGENT_TREE_TOKEN_BUDGET - 600_000);
-		expect(childSubagentBudget(1, nearlySpent)?.tokens).toBe(300_000);
+	it("never refuses the builder's helpers for lack of a per-task token allowance", () => {
+		// The builder has no step, time or token cap of its own, so a long task
+		// (any number of tokens already used) still gets level-1 helpers.
+		const remaining = builderRemaining();
+		expect(remaining.tokens).toBe(Number.POSITIVE_INFINITY);
+		expect(childSubagentBudget(1, remaining)).toEqual({
+			steps: 150,
+			minutes: 30,
+			tokens: 2_000_000,
+		});
 		expect(
-			childSubagentBudget(1, builderRemaining(SUBAGENT_TREE_TOKEN_BUDGET)),
-		).toBeNull();
+			subagentAdmission({
+				parentLevel: 0,
+				liveChildrenOfParent: 0,
+				liveInTree: 0,
+				parentRemaining: remaining,
+			}),
+		).toMatchObject({ admitted: true, level: 1 });
+		// The structural limits still hold: the tree's shape bounds it.
+		expect(
+			subagentAdmission({
+				parentLevel: 0,
+				liveChildrenOfParent: 4,
+				liveInTree: 4,
+				parentRemaining: remaining,
+			}).admitted,
+		).toBe(false);
+		expect(
+			subagentAdmission({
+				parentLevel: 1,
+				liveChildrenOfParent: 0,
+				liveInTree: 8,
+				parentRemaining: remaining,
+			}).admitted,
+		).toBe(false);
 	});
 
 	it("asks for a wrap-up at 90% and stops at 100% of any dimension", () => {
@@ -102,7 +130,7 @@ describe("subagent budgets", () => {
 });
 
 describe("subagent admission", () => {
-	const roomy = builderRemaining(0);
+	const roomy = builderRemaining();
 
 	it("admits the builder's first child at level 1", () => {
 		expect(
