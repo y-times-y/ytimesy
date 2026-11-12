@@ -32,8 +32,10 @@ It rebuilds the env file in a temporary folder (deleted afterwards), runs
 through, so all of that script's checks still apply. The clean environment matters:
 a chat has its own development `DATABASE_URL`, and `node --env-file` never
 overrides a variable that is already set. The checkout must still be exactly
-`origin/main`; add `--allow-running-turns` only when interrupting a chat is
-acceptable (a deploy restarts the Durable Objects).
+`origin/main`. Chats running a turn are listed but do not block the deploy:
+each Worker takes one new version, Durable Objects move to it once idle, and an
+interrupted step resumes from its checkpoint. Only an unreadable running-turn
+count (a database fault) stops it.
 
 ## Secrets
 

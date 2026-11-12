@@ -49,8 +49,8 @@ import { supabaseCertificate } from "./supabase-certificate";
  * It also refuses unless the checkout is exactly origin/main with no changed
  * tracked files (production-source.ts); --allow-unverified-source overrides.
  *
- * A deploy refuses to start while any chat is running a turn (a restarted
- * Durable Object can lose it); pass --allow-running-turns to go ahead.
+ * A deploy reports the chats running a turn and goes ahead: they resume from
+ * their checkpoint on the new version.
  *
  * .secrets/production.env holds production values only (fresh secrets, the
  * production GitHub App, the production database). Never pass the dev .env.
@@ -174,11 +174,10 @@ if (!preflightOnly) {
 		);
 }
 
-// A deploy once killed a running turn: count them first and refuse unless allowed.
+// Count running turns and report them; only an unreadable count stops the deploy.
 if (!preflightOnly) {
 	const decision = runningTurnsDecision(
 		await readRunningTurns(secrets.DATABASE_URL),
-		process.argv.includes("--allow-running-turns"),
 	);
 	console.log(decision.message);
 	if (!decision.proceed) throw new Error(decision.message);
