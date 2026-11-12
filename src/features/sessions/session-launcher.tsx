@@ -32,6 +32,7 @@ import {
 import { parseSteering } from "#/domain/agent-steering";
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
+import { isClaudeCodeRoute } from "#/domain/claude-code-route";
 import {
 	composerDraftKey,
 	createDraftSaver,
@@ -87,6 +88,7 @@ import {
 } from "#/domain/session-item";
 import { slashCommandOpensSideChat } from "#/domain/side-chat";
 import {
+	COMPACT_COMMAND_TEXT,
 	composerSlashCommands,
 	exactSlashCommand,
 	expandProjectCommand,

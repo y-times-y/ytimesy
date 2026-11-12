@@ -228,6 +228,10 @@ import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
+import {
+	endsWithCompactCommand,
+	withCompactInstruction,
+} from "../services/compact-command";
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
@@ -2109,6 +2113,7 @@ async function runApiTurnAttempt(
 				failedAttempt = state;
 			},
 			messages,
+			compactNow: endsWithCompactCommand(messages),
 			// Lead mode fusion's sidekick: each compaction may switch its model;
 			// a pending switch compacts first (src/server/services/sidekick-model-switch.ts).
 			...(sidekickState(owner)
@@ -2220,6 +2225,7 @@ async function runApiTurnAttempt(
 					});
 					failureStage = "model";
 				}
+				history = withCompactInstruction(history);
 				history = hooks.drain(await repositoryContext.prepare(history));
 				history = await withBackgroundCommandContext({
 					workspace,
