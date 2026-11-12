@@ -32,6 +32,7 @@ const menu = slashMenuCommands(
 		turnRunning: true,
 		canSend: false,
 		hasLastUserMessage: true,
+		canCompact: true,
 		hasModels: true,
 	}),
 );

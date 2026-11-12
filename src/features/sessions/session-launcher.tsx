@@ -908,6 +908,7 @@ export function SessionLauncher({
 		});
 	}
 	const slashDraft = parseSlashDraft(draft);
+	const claudeRoute = isClaudeCodeRoute(modelId);
 	const slashCommands = useMemo(
 		() =>
 			composerSlashCommands({
@@ -917,11 +918,16 @@ export function SessionLauncher({
 				canSend: composerReady,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
+				canCompact: composerReady && Boolean(lastUserText) && !claudeRoute,
+				compactUnavailableReason: claudeRoute
+					? "Claude Agent manages its own context"
+					: undefined,
 			}),
 		[
 			composerReady,
 			harnessId,
 			lastUserText,
+			claudeRoute,
 			models.length,
 			harnessReady,
 			turnStatus,
@@ -1217,6 +1223,11 @@ export function SessionLauncher({
 			sendText(
 				expandProjectCommand(command.template, slashDraft?.argument ?? ""),
 			);
+			return;
+		}
+		if (command.id === "compact") {
+			setDraft("");
+			sendText(COMPACT_COMMAND_TEXT);
 			return;
 		}
 		if (command.id === "retry" && lastUserText) {
