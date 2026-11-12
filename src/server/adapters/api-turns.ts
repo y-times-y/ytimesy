@@ -39,7 +39,10 @@ import {
 	recoveredConversation,
 } from "./conversation-recovery";
 import { database } from "./database";
-import { retryDroppedConnection } from "./dropped-connection-retry";
+import {
+	isDroppedConnection,
+	retryDroppedConnection,
+} from "./dropped-connection-retry";
 import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
 import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
@@ -476,8 +479,9 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 				while: (error) =>
 					typeof error === "object" &&
 					error !== null &&
-					"code" in error &&
-					["ECONNRESET", "EPIPE", "08006"].includes(String(error.code)),
+					(isDroppedConnection(error) ||
+						("code" in error &&
+							["ECONNRESET", "EPIPE", "08006"].includes(String(error.code)))),
 			}),
 			Effect.either,
 		),

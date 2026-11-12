@@ -717,11 +717,28 @@ async function runApiTurnAttempt(
 	 */
 	let preparation: Promise<void> | undefined;
 	let lastCoordinationRenewal = 0;
+	/** The database heartbeat's last success; the lease holds 45 s past it. */
+	let lastDatabaseRenewal = Date.now();
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
 		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
 			operation.catch((error: unknown) => {
 				if (turnSettled) return;
+				// One failed database renewal (a dropped connection, a blip shared
+				// by every chat at once, Nov 12 00:16 and 00:19) says nothing about
+				// the lease, which holds 45 s past the last success. The next tick
+				// tries again; only a failure that lasts stops the turn.
+				if (
+					stage === "database-renewal" &&
+					!isPlatformRestart(error) &&
+					Date.now() - lastDatabaseRenewal < DATABASE_HEARTBEAT_GRACE_MS
+				) {
+					console.warn("Turn heartbeat failed once; trying again.", {
+						sinceLastRenewalMs: Date.now() - lastDatabaseRenewal,
+						...apiTurnFailureClassification(error),
+					});
+					return;
+				}
 				heartbeatFailed = true;
 				if (error instanceof CoordinationFailure) coordinationFailure ??= error;
 				console.warn("Turn heartbeat failed", {
@@ -759,6 +776,7 @@ async function runApiTurnAttempt(
 		const databaseHeartbeat = guardHeartbeat(
 			"database-renewal",
 			renewApiTurn(turn).then(async (alive) => {
+				lastDatabaseRenewal = Date.now();
 				if (!alive && !turnSettled)
 					abort.abort(
 						new Error("Turn ownership or cancellation state changed."),
@@ -3599,6 +3617,8 @@ export function untilAborted<T>(
 
 /** How long a finished step waits for a preparation its turn did not need. */
 const PREPARATION_SETTLE_MS = 60_000;
+/** A failing database renewal stops the turn once it has lasted this long: well inside the 45 s lease. */
+const DATABASE_HEARTBEAT_GRACE_MS = 20_000;
 
 /** Waits for `work` to settle, at most `ms` and never past the signal's abort. */
 function settledWithin(
