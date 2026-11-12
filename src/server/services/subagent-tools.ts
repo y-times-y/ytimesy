@@ -1042,19 +1042,14 @@ async function spawnSubagent(
 	);
 	const tree = await loadTreeFor(deps, parent);
 	const own = tree.nodes.find((node) => node.id === parent.id);
-	const parentRemaining = own
-		? subagentNodeRemaining(own)
-		: builderRemaining(
-				subagentTree(tree.root.id, tree.sessions, deps.now()).total
-					.budgetTokens,
-			);
+	const parentRemaining = own ? subagentNodeRemaining(own) : builderRemaining();
 	const admission = subagentAdmission({
 		parentLevel: tree.level,
 		liveChildrenOfParent: tree.nodes.filter(
 			(node) => node.parentId === parent.id && node.live,
 		).length,
 		liveInTree: tree.nodes.filter((node) => node.live).length,
-		parentRemaining: parentRemaining ?? builderRemaining(0),
+		parentRemaining: parentRemaining ?? builderRemaining(),
 	});
 	if (!admission.admitted) throw new Error(admission.reason);
 	const admitted =
@@ -1179,7 +1174,7 @@ function workerBudget(
 	const judgeMinutes = judge.agentBudget?.minutes;
 	const budget = checkerWorkerBudget({
 		level,
-		judgeRemaining: judgeRemaining ?? builderRemaining(0),
+		judgeRemaining: judgeRemaining ?? builderRemaining(),
 		judgeWrapUpMinutes: judgeMinutes
 			? checkerWrapUpLeadMs(judgeMinutes * 60_000) / 60_000
 			: 0,

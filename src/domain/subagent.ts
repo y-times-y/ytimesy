@@ -65,8 +65,6 @@ export function subagentPlacement(role: SubagentRole): SubagentPlacement {
 export const MAX_SUBAGENT_LEVEL = 3;
 /** Agents running at once anywhere in one tree. */
 export const SUBAGENT_TREE_LIVE_LIMIT = 8;
-/** The tree's whole token allowance: the existing per-task api_usage_budget. */
-export const SUBAGENT_TREE_TOKEN_BUDGET = 5_000_000;
 export const SUBAGENT_TITLE_MAX = 80;
 export const SUBAGENT_BRIEF_MAX = 12_000;
 
@@ -154,12 +152,19 @@ export function subagentRemaining(
 	};
 }
 
-/** The builder's remaining budget: the tree's token allowance, no step or time cap of its own. */
-export function builderRemaining(treeTokens: number): SubagentRemaining {
+/**
+ * The builder's remaining budget: no step, time or token cap of its own. How
+ * much a task may spend is the user's account usage (the rolling limits and
+ * the daily api_usage_budget), not a per-task allowance: a fixed per-task
+ * token cap refused helpers while the account still had plenty of usage left.
+ * What still bounds a tree is its shape (MAX_SUBAGENT_LEVEL, the live limits)
+ * and each helper's own level budget.
+ */
+export function builderRemaining(): SubagentRemaining {
 	return {
 		steps: Number.POSITIVE_INFINITY,
 		minutes: Number.POSITIVE_INFINITY,
-		tokens: Math.max(0, SUBAGENT_TREE_TOKEN_BUDGET - treeTokens),
+		tokens: Number.POSITIVE_INFINITY,
 	};
 }
 
