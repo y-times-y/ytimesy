@@ -2065,7 +2065,6 @@ details[open] > summary .session-activity-chevron {
 	grid-template-areas:
 		"slash slash slash slash"
 		"files files files files"
-		"goal goal goal goal"
 		"input input input input"
 		"attach harness fast send";
 	align-items: center;
@@ -2135,9 +2134,7 @@ details[open] > summary .session-activity-chevron {
 		:has(textarea[data-expanded="true"], .attachment-tiles, .slash-palette)
 	) {
 	grid-template-columns: auto minmax(96px, 1fr) minmax(0, auto) auto auto;
-	grid-template-areas:
-		"goal goal goal goal goal"
-		"attach input harness fast send";
+	grid-template-areas: "attach input harness fast send";
 	border-radius: 9999px;
 	padding: 4px 8px 4px 6px;
 }
@@ -2170,7 +2167,6 @@ details[open] > summary .session-activity-chevron {
 		grid-template-areas:
 			"slash slash slash slash"
 			"files files files files"
-			"goal goal goal goal"
 			"input input input input"
 			"attach harness harness send";
 		border-radius: 16px;
@@ -3245,25 +3241,16 @@ button.helper-card:hover {
 	font-style: italic;
 }
 
-.session-launcher[data-layout="chat"] .session-composer:has(.composer-goal) {
-	border-radius: 16px;
-}
-
 .composer-goal {
-	grid-area: goal;
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	min-width: 0;
-	margin: 0 0 6px;
-	padding: 3px 8px;
-	border-radius: 999px;
-	align-self: flex-start;
-	max-width: 100%;
+	margin: 0 12px 8px;
+	max-width: calc(100% - 24px);
 	font-size: 12px;
 	line-height: 1.4;
 	color: var(--text-muted, currentColor);
-	background: color-mix(in srgb, currentColor 8%, transparent);
 }
 
 .composer-goal-label {
