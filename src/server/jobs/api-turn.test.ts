@@ -803,7 +803,10 @@ it("classifies heartbeat failures without logging database error details", async
 			input.signal.throwIfAborted();
 		});
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		// One failed renewal is retried; the turn stops once failures last.
 		await vi.advanceTimersByTimeAsync(1001);
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(25_000);
 		await run;
 		expect(mocks.finalize).toHaveBeenCalledWith(
 			expect.anything(),
