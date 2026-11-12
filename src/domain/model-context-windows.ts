@@ -32,6 +32,7 @@ const KNOWN_MODEL_LIMITS: Readonly<Record<string, KnownModelLimits>> = {
 	"claude-fable-5.1": { contextWindow: 1_000_000, imageInput: true },
 	"claude-mythos-5.2": { contextWindow: 1_000_000, imageInput: true },
 	"gemini-4-carbon": { contextWindow: 1_048_576, imageInput: true },
+	"gemini-4-hydrogen": { contextWindow: 1_048_576, imageInput: true },
 	"gemini-4-argon": { contextWindow: 1_048_576, imageInput: true },
 	"gemini-3.8-flash": { contextWindow: 1_048_576, imageInput: true },
 	"gemini-3.7-flash": { contextWindow: 1_048_576, imageInput: true },

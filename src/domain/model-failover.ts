@@ -219,6 +219,7 @@ export const MODEL_TIERS: Readonly<Record<ModelTier, readonly string[]>> = {
 	balanced: [
 		"anthropic/claude-sonnet-5.5",
 		"openai/gpt-6.1-terra",
+		"google/gemini-4-hydrogen",
 		"x-ai/grok-4.6",
 	],
 	fast: [
