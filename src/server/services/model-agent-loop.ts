@@ -169,6 +169,11 @@ export type ModelAgentInput = {
 	 */
 	compactFirst?: boolean;
 	/**
+	 * Compact at the first step whatever the context size: the user ran
+	 * /compact (compact-command.ts). Later steps compact only by size.
+	 */
+	compactNow?: boolean;
+	/**
 	 * Asked at each compaction before it runs (lead mode fusion's sidekick):
 	 * a model to continue on after it, or null. With one, the compaction
 	 * writes a provider-neutral text summary (a native checkpoint is bound to
@@ -747,6 +752,7 @@ async function executeModelSteps(
 	let history = input.messages;
 	let pendingCompaction = forceCompaction;
 	let compactFirst = input.compactFirst === true;
+	let manualCompact = input.compactNow === true;
 	// A rejected request proved the last measurement wrong; estimate afresh.
 	// Otherwise a run continuing a history this process measured (a follow-up
 	// run, a helper's next round, a resumed or retried run) starts from that
@@ -958,6 +964,8 @@ async function executeModelSteps(
 				pendingCompaction = undefined;
 				const firstForced = compactFirst;
 				compactFirst = false;
+				const manual = manualCompact;
+				manualCompact = false;
 				const budget = forced
 					? overflowCompactionBudget(contextBudget(history), forced)
 					: contextBudget(history);
@@ -1181,7 +1189,7 @@ async function executeModelSteps(
 					return { messages, compacted: true };
 				};
 				let prepared: { messages: ModelMessage[]; compacted: boolean };
-				if (!forced && contextTokens < budget.compactAtTokens) {
+				if (!forced && !manual && contextTokens < budget.compactAtTokens) {
 					prepared = { messages: history, compacted: false };
 				} else if (runtime.compact) {
 					try {

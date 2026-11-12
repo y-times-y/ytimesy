@@ -22,6 +22,7 @@ const running = composerSlashCommands({
 	turnRunning: true,
 	canSend: false,
 	hasLastUserMessage: true,
+	canCompact: false,
 	hasModels: true,
 });
 

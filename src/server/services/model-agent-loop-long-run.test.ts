@@ -780,3 +780,41 @@ it("streams its own summary on a route that refuses unstreamed requests (the Cha
 	expect(record.archives).toHaveLength(1);
 	expect(record.lastUsage()?.requests).toBe(streamed.length);
 });
+
+it("compacts at the first step when the user ran /compact, whatever the size; not otherwise", async () => {
+	const window = 1_050_000;
+	const history = (): ModelMessage[] => [
+		{ role: "user", content: TASK },
+		{ role: "assistant", content: [{ type: "text", text: "Earlier answer." }] },
+		{ role: "user", content: "Second request." },
+		{ role: "assistant", content: [{ type: "text", text: "Second answer." }] },
+		{ role: "user", content: "Reply briefly." },
+	];
+	const run = async (compactNow: boolean) => {
+		const provider = scriptedProvider({
+			window,
+			steps: 0,
+			reasoningBytes: 100,
+			label: "quiet",
+		});
+		const out = await runModelAgent(
+			{
+				...agentInput(history(), recorder(), 100),
+				...(compactNow ? { compactNow: true } : {}),
+			},
+			{
+				model: provider.model,
+				contextWindow: window,
+				maxOutputTokens: 64_000,
+				fallbackContextPolicy: "whole-turns",
+				compactFallback: true,
+			},
+		);
+		return { provider, out };
+	};
+	const plain = await run(false);
+	expect(plain.provider.stats.summaries).toBe(0);
+	const manual = await run(true);
+	expect(manual.provider.stats.summaries).toBeGreaterThanOrEqual(1);
+	expect(finalText(manual.out)).toEqual(["quiet done."]);
+});
