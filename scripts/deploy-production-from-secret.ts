@@ -16,8 +16,8 @@ import {
  *   node --import tsx scripts/deploy-production-from-secret.ts --confirm-production
  *
  * Every argument goes to scripts/deploy-production.ts, which keeps all its own
- * checks (the checkout must be origin/main, no pending migration, no running
- * turn without --allow-running-turns). This only gives it what it needs:
+ * checks (the checkout must be origin/main, no pending migration, running
+ * turns are reported, not a reason to wait). This only gives it what it needs:
  *
  * - the env file rebuilt from the secret, in a private temporary folder that
  *   is deleted afterwards, whatever happens;

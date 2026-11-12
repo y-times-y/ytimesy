@@ -3,8 +3,9 @@ import { supabaseCertificate } from "./supabase-certificate";
 
 /**
  * Pre-flight for a production deploy: which chats are running a turn right
- * now. A deploy replaces the Workers and a Durable Object that restarts mid
- * step can lose a turn, so the operator decides knowingly.
+ * now. A deploy never waits for them: each Worker takes one new version,
+ * Durable Objects move to it once idle, and an interrupted step resumes from
+ * its checkpoint. The count is only reported, so the operator knows.
  */
 export type RunningTurnsCheck =
 	| { readonly kind: "counted"; readonly chatIds: readonly string[] }
@@ -21,10 +22,9 @@ export function shortChatId(id: string) {
 	return id.slice(0, 8);
 }
 
-/** Whether the deploy may continue, and what to tell the operator. Never continues on an unreadable count. */
+/** Whether the deploy may continue, and what to tell the operator. Running turns never block it; an unreadable count still does (that is a database fault, not a busy chat). */
 export function runningTurnsDecision(
 	check: RunningTurnsCheck,
-	allowRunningTurns: boolean,
 ): RunningTurnsDecision {
 	if (check.kind === "unreadable")
 		return {
@@ -38,15 +38,10 @@ export function runningTurnsDecision(
 	const more =
 		ids.length > SHOWN_IDS ? `, +${ids.length - SHOWN_IDS} more` : "";
 	const summary = `${ids.length} chat${ids.length === 1 ? " is" : "s are"} running a turn (${shown}${more}).`;
-	return allowRunningTurns
-		? {
-				proceed: true,
-				message: `${summary} Continuing because --allow-running-turns was passed.`,
-			}
-		: {
-				proceed: false,
-				message: `${summary} Refusing to deploy. Wait for them to finish, or pass --allow-running-turns.`,
-			};
+	return {
+		proceed: true,
+		message: `${summary} Deploying anyway: they resume from their checkpoint.`,
+	};
 }
 
 /** Read-only and fast: one select, 5 s to connect and 5 s to answer. */
