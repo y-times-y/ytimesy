@@ -28,3 +28,6 @@ dist/
 .wrangler/
 .dev.vars
 .dev.vars.*
+
+# Generated announcement images
+/gemini-*.png
