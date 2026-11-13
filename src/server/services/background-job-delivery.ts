@@ -28,7 +28,7 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
-import { purgeExpiredArchives } from "./archive";
+import { purgeExpiredArchives, releaseArchivedMachines } from "./archive";
 import {
 	wakeChatForBackgroundCommands,
 	wakeChatsForBackgroundCommands,
@@ -161,7 +161,9 @@ export async function deliverBackgroundJob(
 					await expirePullRequestEvidence();
 					break;
 				case "archive-expiry":
-					// Archived chats and projects past their 30 days.
+					// Archived chats and projects past their 30 days; machines of
+					// archived chats whose workspace is checkpointed.
+					await releaseArchivedMachines(machines);
 					await purgeExpiredArchives(machines);
 					break;
 			}
