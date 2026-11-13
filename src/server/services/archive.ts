@@ -1,6 +1,10 @@
 import type { ArchivedKind } from "#/domain/archive";
+import { WorkspaceId } from "#/domain/ids";
+import { providerRefsHeldOutside } from "../adapters/agent-sessions";
 import {
+	archivedChatsToRelease,
 	expiredArchives,
+	markMachineReleased,
 	projectRootChatIds,
 	setChatArchived,
 	setProjectArchived,
@@ -79,4 +83,30 @@ export async function purgeExpiredArchives(
 				kind: item.kind,
 			}),
 		);
+}
+
+/**
+ * An archived chat keeps its transcript and workspace checkpoint (Settings >
+ * Archived restores it), but a paused machine costs about $3 a month in
+ * storage while nobody uses it. Once the checkpoint is current the machine
+ * goes; opening the chat again copies a fresh machine and restores the
+ * checkpoint (the path a machine deleted after 30 days unused takes). A machine
+ * another chat still holds is never destroyed. Failures retry on the next run.
+ */
+export async function releaseArchivedMachines(
+	machines: Pick<WorkspaceMachines, "destroy">,
+) {
+	let released = 0;
+	for (const chat of await archivedChatsToRelease()) {
+		try {
+			const held = await providerRefsHeldOutside(chat.userId, [chat.id]);
+			if (!held.has(chat.providerRef))
+				await machines.destroy(WorkspaceId(chat.providerRef));
+			await markMachineReleased(chat.userId, chat.id);
+			released += 1;
+		} catch {
+			console.warn("An archived chat's machine was not released; retried.");
+		}
+	}
+	return released;
 }

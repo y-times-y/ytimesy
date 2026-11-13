@@ -12,7 +12,8 @@ export async function setChatArchived(
 	archived: boolean,
 ): Promise<boolean> {
 	const result = await database().query(
-		`update agent_session set archived_at = case when $3 then now() else null end
+		`update agent_session set archived_at = case when $3 then now() else null end,
+		   machine_released_at = case when $3 then machine_released_at else null end
 		 where id=$2 and user_id=$1 and parent_session_id is null returning id`,
 		[userId, sessionId, archived],
 	);
@@ -96,4 +97,40 @@ export async function expiredArchives(limit = 20) {
 		projectId: row.project_id,
 		userId: row.user_id,
 	}));
+}
+
+/**
+ * Archived root chats whose machine can go: archived a few minutes ago, a
+ * workspace checkpoint newer than the chat's last change and bound to this
+ * very machine (recovery restores only such a checkpoint), machine not yet
+ * released. Without that checkpoint the machine is kept until the archive's
+ * keep ends.
+ */
+export async function archivedChatsToRelease(limit = 10) {
+	const result = await database().query<{
+		id: string;
+		user_id: string;
+		provider_ref: string;
+	}>(
+		`select s.id::text id, s.user_id, s.provider_ref
+		 from agent_session s join session_checkpoint c on c.session_id=s.id
+		 where s.archived_at is not null and s.archived_at < now()-interval '5 minutes'
+		   and s.parent_session_id is null and s.machine_released_at is null
+		   and s.provider_ref is not null and s.turn_status <> 'running'
+		   and c.created_at >= s.updated_at and c.executor_id = s.provider_ref
+		 order by s.archived_at limit $1`,
+		[limit],
+	);
+	return result.rows.map((row) => ({
+		id: row.id,
+		userId: row.user_id,
+		providerRef: row.provider_ref,
+	}));
+}
+
+export async function markMachineReleased(userId: string, sessionId: string) {
+	await database().query(
+		"update agent_session set machine_released_at=now() where id=$2 and user_id=$1",
+		[userId, sessionId],
+	);
 }
