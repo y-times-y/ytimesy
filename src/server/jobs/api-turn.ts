@@ -2535,7 +2535,10 @@ async function runApiTurnAttempt(
 						// The effort chosen in the picker (Claude Code's `effort`).
 						effort: apiReasoningEffort(turnReasoning) ?? undefined,
 						agentRole: owner.agentRole,
-						workspace,
+						// Claude starts once the checkout is ready; ~/memory keeps
+						// cloning beside it (22-72 s per turn in production), and the
+						// tools that read it wait for it through `workspace`.
+						workspace: checkout,
 						machines: unscopedMachines,
 						messages,
 						// One workspace tool lifecycle on either host: commands must be
