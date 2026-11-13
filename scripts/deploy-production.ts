@@ -30,7 +30,10 @@ import {
 	productionSmokeChecks,
 	runSmokeChecks,
 } from "./production-smoke-check";
-import { deploySourceProblem } from "./production-source";
+import {
+	ALLOW_UNVERIFIED_SOURCE_VARIABLE,
+	deploySourceProblem,
+} from "./production-source";
 import { readRunningTurns, runningTurnsDecision } from "./running-turns-check";
 import { supabaseCertificate } from "./supabase-certificate";
 
@@ -64,7 +67,10 @@ if (!preflightOnly && !process.argv.includes("--confirm-production"))
 	throw new Error("Pass --confirm-production to deploy production.");
 
 // Build only from origin/main: a stale or detached checkout once shipped old code.
-if (!preflightOnly && !process.argv.includes("--allow-unverified-source")) {
+const allowUnverifiedSource = process.argv.includes(
+	"--allow-unverified-source",
+);
+if (!preflightOnly && !allowUnverifiedSource) {
 	const read = (...args: string[]) =>
 		execFileSync("git", args, { encoding: "utf8" });
 	execFileSync("git", ["fetch", "--quiet", "origin", "main"]);
@@ -330,7 +336,14 @@ process.env.YTIMESY_BUILD_ID = buildId;
 // Build the web first: its plain variables are part of what it runs with, and
 // the preflight below checks both Workers before anything is deployed.
 run("pnpm", ["exec", "vite", "build"], {
-	env: { YTIMESY_TARGET: "cloudflare", CLOUDFLARE_ENV: "production" },
+	env: {
+		YTIMESY_TARGET: "cloudflare",
+		CLOUDFLARE_ENV: "production",
+		// The build's own source guard (vite.config.ts) honours the same override.
+		...(allowUnverifiedSource
+			? { [ALLOW_UNVERIFIED_SOURCE_VARIABLE]: "1" }
+			: {}),
+	},
 });
 const { unstable_readConfig } = await import("wrangler");
 const edgeConfig = unstable_readConfig({
