@@ -7,6 +7,23 @@ export const COMMAND_WAIT_STALL_SECONDS = 180;
 /** Each guest observation waits at most this long, so output growth is sampled regularly. */
 const CHUNK_SECONDS = 20;
 
+/**
+ * One observation the machine did not answer in time (it was busy: a build
+ * saturating its CPU, or just resumed). The command itself is untouched and
+ * may still be running, so a wait retries instead of failing the tool call.
+ */
+export class CommandObservationUnavailable extends Error {
+	constructor() {
+		super(
+			"The command could not be observed just now (the machine was slow to answer); it may still be running.",
+		);
+		this.name = "CommandObservationUnavailable";
+	}
+}
+
+/** Consecutive unanswered observations a wait rides out before giving up. */
+const MAX_UNAVAILABLE_OBSERVATIONS = 6;
+
 export type CommandWaitObservation = {
 	status: number | "running" | "interrupted";
 	/** Size of the command's output so far; unchanged size means no new output. */
@@ -44,6 +61,8 @@ export async function waitForCommand(input: {
 	stallSeconds?: number;
 	chunkSeconds?: number;
 	now?: () => number;
+	/** Pauses between retries of an unanswered observation (tests replace it). */
+	sleep?: (ms: number) => Promise<void>;
 }): Promise<CommandWaitResult> {
 	const now = input.now ?? Date.now;
 	const stallMs = (input.stallSeconds ?? COMMAND_WAIT_STALL_SECONDS) * 1000;
@@ -58,13 +77,33 @@ export async function waitForCommand(input: {
 		reason,
 		waitedSeconds: Math.round((now() - started) / 1000),
 	});
+	const sleep =
+		input.sleep ??
+		((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 	let lastBytes: number | undefined;
 	let lastGrowth = started;
+	let unavailable = 0;
 	for (;;) {
 		input.signal.throwIfAborted();
 		const left = Math.floor((end - now()) / 1000);
 		const seconds = Math.max(0, Math.min(chunk, left));
-		const observed = await abortable(input.observe(seconds), input.signal);
+		let observed: CommandWaitObservation;
+		try {
+			observed = await abortable(input.observe(seconds), input.signal);
+			unavailable = 0;
+		} catch (error) {
+			if (
+				!(error instanceof CommandObservationUnavailable) ||
+				++unavailable >= MAX_UNAVAILABLE_OBSERVATIONS ||
+				now() >= end
+			)
+				throw error;
+			await abortable(
+				sleep(Math.min(10, 2 ** unavailable) * 1000),
+				input.signal,
+			);
+			continue;
+		}
 		if (observed.status !== "running") return result("exited");
 		const at = now();
 		// The first sample is the baseline: growth before it is unknown.

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type CommandWaitObservation, waitForCommand } from "./command-wait";
+import {
+	CommandObservationUnavailable,
+	type CommandWaitObservation,
+	waitForCommand,
+} from "./command-wait";
 
 /** A fake clock where each guest observation takes the seconds it was asked to wait. */
 function guest(
@@ -126,5 +130,57 @@ describe("waitForCommand", () => {
 			waitForCommand({ ...fake, seconds: 300, signal: controller.signal }),
 		).rejects.toThrow("Stopped by user.");
 		expect(fake.asked).toEqual([]);
+	});
+
+	it("rides out a few unanswered observations (a busy machine) instead of failing", async () => {
+		let calls = 0;
+		const clock = { t: 0 };
+		const result = await waitForCommand({
+			observe: async () => {
+				calls++;
+				clock.t += 1000;
+				if (calls <= 3) throw new CommandObservationUnavailable();
+				return { status: 0 };
+			},
+			seconds: 300,
+			signal: new AbortController().signal,
+			now: () => clock.t,
+			sleep: async (ms) => {
+				clock.t += ms;
+			},
+		});
+		expect(result.reason).toBe("exited");
+		expect(calls).toBe(4);
+	});
+
+	it("gives up after several unanswered observations in a row, and never retries a real error", async () => {
+		const clock = { t: 0 };
+		const options = {
+			seconds: 600,
+			signal: new AbortController().signal,
+			now: () => clock.t,
+			sleep: async (ms: number) => {
+				clock.t += ms;
+			},
+		};
+		await expect(
+			waitForCommand({
+				...options,
+				observe: async () => {
+					throw new CommandObservationUnavailable();
+				},
+			}),
+		).rejects.toBeInstanceOf(CommandObservationUnavailable);
+		let calls = 0;
+		await expect(
+			waitForCommand({
+				...options,
+				observe: async () => {
+					calls++;
+					throw new Error("Command was not found in this agent session.");
+				},
+			}),
+		).rejects.toThrow("not found");
+		expect(calls).toBe(1);
 	});
 });
