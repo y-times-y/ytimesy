@@ -13,6 +13,7 @@ import {
 	MachineUsageLimitReached,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
+	visibleErrorMessage,
 } from "./api-turn-failure";
 import {
 	FLEET_LIFETIME_CAP_MESSAGE,
@@ -20,7 +21,10 @@ import {
 	failureMessage,
 	USER_USAGE_CAP_MESSAGE,
 } from "./failure-message";
-import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
+import {
+	PROJECT_SECRETS_PREPARATION_FAILED,
+	ProjectSecretsPreparationFailure,
+} from "./project-secret";
 
 it("preserves safe metadata failure categories in the visible model-stage error", () => {
 	for (const reason of [
@@ -70,6 +74,52 @@ it("reports a project secrets failure as a workspace failure, never a connection
 	);
 	expect(message).toContain("secrets could not be written");
 	expect(message).not.toContain("API connection");
+});
+
+it("classifies lazy secret preparation failures across stages and wrappers without exposing values", () => {
+	for (const source of [
+		new Error(PROJECT_SECRETS_PREPARATION_FAILED),
+		new ProjectSecretsPreparationFailure("directory", { kind: "timeout" }),
+		new ProjectSecretsPreparationFailure("ownership", {
+			kind: "command",
+			exitCode: 1,
+		}),
+	]) {
+		for (const error of [
+			source,
+			new Error("private-host-and-secret", { cause: source }),
+			new SafeApiModelFailure(source),
+		]) {
+			for (const stage of ["model", "workspace", "saving"] as const) {
+				const message = apiTurnFailureMessage(stage, error);
+				expect(message).toContain("They remain saved");
+				expect(message).toContain("workspace problem");
+				expect(message).not.toContain("provider didn't say why");
+				expect(message).not.toContain("private-host-and-secret");
+			}
+		}
+	}
+	const error = new ProjectSecretsPreparationFailure("ownership", {
+		kind: "command",
+		exitCode: 13,
+	});
+	expect(failureCause(error)).toBe(
+		"ProjectSecretsPreparationFailure: ownership command exit 13",
+	);
+	expect(
+		visibleErrorMessage({
+			message:
+				"The model request failed and the provider didn't say why. Retry, or pick another model. Your work is saved.",
+			cause: `Error: ${PROJECT_SECRETS_PREPARATION_FAILED}`,
+		}),
+	).toContain("workspace problem");
+	expect(
+		visibleErrorMessage({
+			message:
+				"The model request failed and the provider didn't say why. Retry, or pick another model. Your work is saved.",
+			cause: "Error: sk-live-secret-value",
+		}),
+	).toContain("provider didn't say why");
 });
 
 function providerFailure(statusCode: number, data?: unknown) {

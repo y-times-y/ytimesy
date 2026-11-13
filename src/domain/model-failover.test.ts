@@ -44,6 +44,7 @@ import {
 	fallbackAccountReason,
 	retriesSameRoute,
 } from "./model-failover-reason";
+import { ProjectSecretsPreparationFailure } from "./project-secret";
 import {
 	subscriptionTurnRevision,
 	subscriptionTurnSettings,
@@ -911,4 +912,12 @@ describe("SuperGrok subscription", () => {
 		});
 		expect(candidate).toMatchObject({ connectionKey: SUPERGROK, paid: false });
 	});
+});
+
+it("never fails over a workspace secrets failure to another model", () => {
+	const failure = new ProjectSecretsPreparationFailure("directory", {
+		kind: "timeout",
+	});
+	expect(failoverReason(failure)).toBeNull();
+	expect(failoverReason(new Error("wrapped", { cause: failure }))).toBeNull();
 });

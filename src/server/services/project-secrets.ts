@@ -1,3 +1,4 @@
+import { FreestyleApiError } from "freestyle";
 import {
 	decryptSecret,
 	encryptSecret,
@@ -18,7 +19,7 @@ import {
 	AGENT_SECRETS_ENV_PATH,
 	type AgentSecretName,
 	agentSecretsEnvFile,
-	PROJECT_SECRETS_PREPARATION_FAILED,
+	ProjectSecretsPreparationFailure,
 	type PublicProjectSecret,
 	parseProjectSecretKind,
 	parseProjectSecretName,
@@ -36,6 +37,11 @@ import {
 } from "#/server/adapters/project-secrets";
 import { projectForOwner } from "#/server/adapters/projects";
 import { loadSecretMasterKey } from "#/server/secrets/master-key";
+import {
+	PROVIDER_TIMEOUT_CODE,
+	providerTimeoutError,
+} from "../adapters/freestyle/bounded-fetch";
+import { retryTransientProviderFailure } from "../adapters/freestyle/provider-retry";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function listVisibleProjectSecrets(
@@ -191,17 +197,62 @@ export async function writeAgentProjectSecrets(
 	vm: WorkspaceId,
 	secrets: AgentProjectSecrets,
 ) {
-	const prepared = await machines.exec(
+	await prepareAgentSecretsOperation(
+		machines,
 		vm,
+		"directory",
 		privateDirectoryShell(AGENT_SECRETS_DIRECTORY),
-		10_000,
 	);
-	if (prepared.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
 	await machines.writeTextFile(vm, AGENT_SECRETS_ENV_PATH, secrets.envFile);
 	// The provider writes files as root, while commands run as the default
 	// user; a file only root can read was skipped silently by every command.
-	const owned = await machines.exec(vm, agentSecretsOwnershipShell(), 10_000);
-	if (owned.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
+	await prepareAgentSecretsOperation(
+		machines,
+		vm,
+		"ownership",
+		agentSecretsOwnershipShell(),
+	);
+}
+
+/**
+ * Each retry of a timed-out setup command gets a longer budget: a slow VM
+ * (one answered with no exit status after ~18 s) needs more than 10 s, not
+ * the same 10 s again.
+ */
+export const AGENT_SECRETS_SETUP_BUDGETS_MS = [10_000, 30_000, 60_000] as const;
+
+/** Only these fixed, idempotent setup commands may be retried; never user work. */
+async function prepareAgentSecretsOperation(
+	machines: WorkspaceMachines,
+	vm: WorkspaceId,
+	phase: "directory" | "ownership",
+	command: string,
+) {
+	let attempt = 0;
+	try {
+		await retryTransientProviderFailure(async () => {
+			const budgetMs =
+				AGENT_SECRETS_SETUP_BUDGETS_MS[
+					Math.min(attempt++, AGENT_SECRETS_SETUP_BUDGETS_MS.length - 1)
+				];
+			const result = await machines.exec(vm, command, budgetMs);
+			// The provider adapter maps an absent exit status to 124 as well.
+			if (result.exitCode === 124 || !Number.isInteger(result.exitCode))
+				throw providerTimeoutError(`project-secrets-${phase}`);
+			if (result.exitCode !== 0)
+				throw new ProjectSecretsPreparationFailure(phase, {
+					kind: "command",
+					exitCode: result.exitCode,
+				});
+		});
+	} catch (error) {
+		if (
+			error instanceof FreestyleApiError &&
+			error.code === PROVIDER_TIMEOUT_CODE
+		)
+			throw new ProjectSecretsPreparationFailure(phase, { kind: "timeout" });
+		throw error;
+	}
 }
 
 /** Hands the env file to the command user (0600) and proves it can read it. */

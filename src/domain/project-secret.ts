@@ -26,6 +26,19 @@ export function sessionReceivesProjectSecrets(session: {
 export const PROJECT_SECRETS_PREPARATION_FAILED =
 	"Could not prepare project secrets in the workspace.";
 
+/** Fixed setup metadata only: never command output or a secret value. */
+export class ProjectSecretsPreparationFailure extends Error {
+	constructor(
+		readonly phase: "directory" | "ownership",
+		readonly failure:
+			| { readonly kind: "timeout" }
+			| { readonly kind: "command"; readonly exitCode: number },
+	) {
+		super(PROJECT_SECRETS_PREPARATION_FAILED);
+		this.name = "ProjectSecretsPreparationFailure";
+	}
+}
+
 /** Shell that loads the project's variables when present. */
 export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; fi`;
 

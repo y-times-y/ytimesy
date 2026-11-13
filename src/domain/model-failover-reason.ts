@@ -19,6 +19,7 @@ import {
 	XaiSubscriptionUnavailable,
 } from "./api-turn-failure";
 import type { FailoverReason } from "./model-failover";
+import { ProjectSecretsPreparationFailure } from "./project-secret";
 import { publicToolDetail } from "./tool-detail";
 
 /** Failures a different route cannot fix: the user (or the request) must change. */
@@ -32,6 +33,8 @@ const NEVER_FAIL_OVER = [
 	LifecycleHookRefusal,
 	// The harness's own bug: another route would hide it, not fix it.
 	HarnessRuntimeFailure,
+	// The workspace failed; another model would meet the same workspace.
+	ProjectSecretsPreparationFailure,
 ];
 
 /** Provider codes for caller problems, including permanent quota and refusals. */

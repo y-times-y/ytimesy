@@ -22,6 +22,7 @@ import {
 	LEAD_ROW_ID,
 	steeringSender,
 } from "#/domain/agent-panel";
+import { visibleErrorMessage } from "#/domain/api-turn-failure";
 import {
 	type BackgroundCommandRecord,
 	backgroundCommandStateText,
@@ -1590,7 +1591,9 @@ function SessionItemView({
 				<div className="session-activity" data-kind="error" role="alert">
 					<p>
 						<ActivityIcon glyph="error" />
-						<span className="session-activity-title">{item.message}</span>
+						<span className="session-activity-title">
+							{visibleErrorMessage(item)}
+						</span>
 					</p>
 				</div>
 			);
