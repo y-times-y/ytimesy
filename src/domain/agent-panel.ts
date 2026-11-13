@@ -1,5 +1,6 @@
 import { parseSteering } from "./agent-steering";
 import type { AgentTaskStatus } from "./agent-task";
+import { visibleErrorMessage } from "./api-turn-failure";
 import type { RunningBackgroundCommand } from "./background-command";
 import {
 	type AgentTaskActivity,
@@ -269,7 +270,7 @@ export function agentDoing(input: {
 	if (input.status === "failed") {
 		const error = [...items].reverse().find((item) => item.kind === "error");
 		return error?.kind === "error"
-			? `failed: ${firstLine(error.message, 70)}`
+			? `failed: ${firstLine(visibleErrorMessage(error), 70)}`
 			: "failed";
 	}
 	if (input.status === "idle") return "waiting";
@@ -709,7 +710,7 @@ export function helperFinishCard(
 		: undefined;
 	const line =
 		error?.kind === "error"
-			? firstLine(error.message, 240)
+			? firstLine(visibleErrorMessage(error), 240)
 			: reportSummaryLine(body) || reportSummaryLine(lastAgentText(items));
 	const metric = helperMetric(task);
 	const meta = task.summary ? splitReportHeader(task.summary).meta : null;

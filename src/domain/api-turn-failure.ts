@@ -5,7 +5,10 @@ import {
 	isWorkspaceComputeAllowanceExhausted,
 	usageCapFailureMessage,
 } from "./failure-message";
-import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
+import {
+	PROJECT_SECRETS_PREPARATION_FAILED,
+	ProjectSecretsPreparationFailure,
+} from "./project-secret";
 import { redactSecrets } from "./redact-secrets";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
@@ -74,6 +77,16 @@ const FAILURE_CODES = new Set([
 
 /** Only predefined diagnostic categories may leave the worker; error text never does. */
 export function apiTurnFailureClassification(error: unknown) {
+	if (error instanceof ProjectSecretsPreparationFailure)
+		return {
+			name: error.name,
+			code: "unknown",
+			phase: error.phase,
+			reason: error.failure.kind,
+			...(error.failure.kind === "command"
+				? { exitCode: error.failure.exitCode }
+				: {}),
+		};
 	if (error instanceof HarnessRuntimeFailure)
 		return { name: error.name, code: "unknown", stage: error.stage };
 	if (error instanceof VerificationPolicyFailure)
@@ -136,6 +149,8 @@ function machineError(error: unknown, depth = 0): Error | null {
 	if (depth > 4 || !(error instanceof Error)) return null;
 	const tag = (error as { _tag?: unknown })._tag;
 	if (
+		error instanceof ProjectSecretsPreparationFailure ||
+		error.message === PROJECT_SECRETS_PREPARATION_FAILED ||
 		MACHINE_ERROR_TAGS.has(error.name) ||
 		(typeof tag === "string" && MACHINE_ERROR_TAGS.has(tag))
 	)
@@ -253,6 +268,8 @@ function usageCapFailure(error: unknown, depth = 0): string | null {
 export function machineFailureCause(error: unknown): string | null {
 	const found = machineError(error);
 	if (!found) return null;
+	if (found instanceof ProjectSecretsPreparationFailure)
+		return `${found.name}: ${found.phase} ${found.failure.kind}${found.failure.kind === "command" ? ` exit ${found.failure.exitCode}` : ""}`;
 	const detail = (found as { detail?: unknown }).detail;
 	const tag = (found as { _tag?: unknown })._tag;
 	return redactSecrets(
@@ -312,6 +329,11 @@ export function machineFailureMessage(error: unknown): string | null {
 	if (capped) return capped;
 	const found = machineError(error);
 	if (!found) return null;
+	if (found.message === PROJECT_SECRETS_PREPARATION_FAILED)
+		return projectSecretsUserMessage(
+			found instanceof ProjectSecretsPreparationFailure &&
+				found.failure.kind === "timeout",
+		);
 	const reason = machineFailureReason(found.message);
 	if (reason === null) return MACHINE_USAGE_LIMIT_MESSAGE;
 	const action =
@@ -766,6 +788,35 @@ const WORKSPACE_STEP_FAILURES = [
 const UNKNOWN_MODEL_FAILURE =
 	"The model request failed and the provider didn't say why. Retry, or pick another model. Your work is saved.";
 
+/** Fixed wording for a secret-file setup failure. `timeout` is only the diagnosed no-exit case. */
+export function projectSecretsUserMessage(timeout: boolean) {
+	const problem = timeout
+		? "The workspace timed out while preparing this project's saved secrets."
+		: "The project's secrets could not be written into the workspace.";
+	return `${problem} They remain saved; retry this chat. This is a workspace problem, not a model-provider failure.`;
+}
+
+/**
+ * What the chat shows for a stored error. A generic provider sentence is
+ * rewritten only when its owner-only cause is one of the known infrastructure
+ * failures; the cause text itself is never shown.
+ */
+export function visibleErrorMessage(item: {
+	readonly message: string;
+	readonly cause?: string;
+}) {
+	if (item.message !== UNKNOWN_MODEL_FAILURE) return item.message;
+	const cause = item.cause ?? "";
+	if (
+		cause.includes(PROJECT_SECRETS_PREPARATION_FAILED) ||
+		cause.startsWith("ProjectSecretsPreparationFailure:")
+	)
+		return projectSecretsUserMessage(/\btimeout\b/.test(cause));
+	if (/^Error: The runner box answered \d{3}\.$/.test(cause))
+		return "The Claude runner could not be reached. This is infrastructure, not a model provider error. Your work is saved; retry the turn.";
+	return item.message;
+}
+
 export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
@@ -924,11 +975,6 @@ export function apiTurnFailureMessage(
 				error.message === "Prepared repository path is unavailable."
 			)
 				return "The prepared repository is missing from this workspace. Repair the environment before retrying.";
-			if (
-				error instanceof Error &&
-				error.message === PROJECT_SECRETS_PREPARATION_FAILED
-			)
-				return "The project's secrets could not be written into the workspace. Check the workspace and retry; no model request was sent.";
 			if (
 				error instanceof Error &&
 				/(?:LIMIT_EXCEEDED|vcpu_time|memory_time|allowance)/i.test(
