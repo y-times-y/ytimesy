@@ -25,6 +25,7 @@ import {
 	COMMAND_WAIT_DEFAULT_SECONDS,
 	COMMAND_WAIT_MAX_SECONDS,
 	COMMAND_WAIT_STALL_SECONDS,
+	CommandObservationUnavailable,
 	waitForCommand,
 } from "./command-wait";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
@@ -144,10 +145,15 @@ export async function completedAgentCommands(
 const WRITE_JOB_SCRIPT =
 	"import base64,os,sys; fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,base64.b64decode(sys.argv[2])); os.close(fd)";
 
+/** READ_COMMAND_SCRIPT exits with this when the command's output file is missing. */
+const COMMAND_NOT_FOUND_EXIT = 3;
+
 const READ_COMMAND_SCRIPT = `import json, os, pathlib, stat, subprocess, sys, time
 output, status, session, start, seconds = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
 if not 0 <= start <= 100000000 or not 0 <= seconds <= 55:
     raise ValueError('Command page or wait is outside the supported range')
+if not pathlib.Path(output).exists():
+    sys.exit(3)
 deadline = time.monotonic() + seconds
 while not pathlib.Path(status).exists() and time.monotonic() < deadline:
     if subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', session], capture_output=True).returncode:
@@ -220,10 +226,15 @@ export function apiAgentCommandTools(
 		const result = await machines.exec(
 			vm,
 			`python3 -c ${quote(READ_COMMAND_SCRIPT)} ${quote(path.output)} ${quote(path.status)} ${quote(path.session)} ${start} ${seconds}${input.output ? ` ${quote(`${input.output.directory}/${id}.stdout`)}` : ""}`,
-			(seconds + 5) * 1000,
+			// The guest returns by itself within `seconds`; the slack covers a
+			// busy machine (a build saturating its CPU) answering late.
+			(seconds + 15) * 1000,
 		);
-		if (result.exitCode)
+		// Exit 3: the command's output file is not there (not this session's
+		// command). Any other failure is the observation, not the command.
+		if (result.exitCode === COMMAND_NOT_FOUND_EXIT)
 			throw new Error("Command was not found in this agent session.");
+		if (result.exitCode) throw new CommandObservationUnavailable();
 		return JSON.parse(result.stdout) as {
 			status: number | "running" | "interrupted";
 			stopped?: "timeout" | "output_limit" | null;
@@ -285,10 +296,31 @@ export function apiAgentCommandTools(
 			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)}${marker} && tmux -L ${COMMAND_TMUX_SOCKET} new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
 			15000 + (observeSeconds ?? 0) * 1000,
 		);
-		if (result.exitCode)
-			throw new Error(
-				"Could not start or observe command. Inspect owned command state before retrying uncertain execution.",
-			);
+		if (result.exitCode) {
+			// Launch and first look are one call: when only the look failed (a
+			// busy machine), the command is running and is reported as such.
+			const started =
+				observeSeconds !== undefined &&
+				(await machines
+					.exec(vm, `test -f ${quote(path.output)}`, 15000)
+					.then((check) => check.exitCode === 0)
+					.catch(() => false));
+			if (!started)
+				throw new Error(
+					"Could not start or observe command. Inspect owned command state before retrying uncertain execution.",
+				);
+			return {
+				id,
+				status: "running",
+				stopped: null,
+				stdout: "",
+				start: 0,
+				nextStart: 0,
+				note: "Started; its first look timed out because the machine was busy. Wait for it with continue_command.",
+				...(input.output ? { reference: id } : {}),
+				...(background ? { background: true } : {}),
+			};
+		}
 		return {
 			id,
 			...(observeSeconds === undefined
