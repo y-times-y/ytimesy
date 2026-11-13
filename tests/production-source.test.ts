@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { deploySourceProblem } from "../scripts/production-source";
+import {
+	deploySourceProblem,
+	productionBuildSourceProblem,
+} from "../scripts/production-source";
 
 const main = "ee011af376d8aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const old = "969b5dd1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -33,6 +36,38 @@ describe("deploySourceProblem", () => {
 	it("refuses when a commit could not be read", () => {
 		expect(
 			deploySourceProblem({ head: "", originMain: main, trackedChanges: "" }),
+		).not.toBeNull();
+	});
+});
+
+describe("productionBuildSourceProblem", () => {
+	it("allows a checkout that contains origin/main", () => {
+		expect(
+			productionBuildSourceProblem({
+				head: old,
+				originMain: main,
+				containsOriginMain: true,
+			}),
+		).toBeNull();
+	});
+
+	it("refuses a checkout missing origin/main and names both commits", () => {
+		const problem = productionBuildSourceProblem({
+			head: old,
+			originMain: main,
+			containsOriginMain: false,
+		});
+		expect(problem).toContain("969b5dd1");
+		expect(problem).toContain("ee011af3");
+	});
+
+	it("refuses when origin/main could not be fetched", () => {
+		expect(
+			productionBuildSourceProblem({
+				head: main,
+				originMain: "",
+				containsOriginMain: false,
+			}),
 		).not.toBeNull();
 	});
 });

@@ -6,6 +6,11 @@ import viteReact from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { inlineGuestPrograms } from "./scripts/guest-program-assets.ts";
 import { assertProductionBuildAnalytics } from "./scripts/production-settings.ts";
+import {
+	ALLOW_UNVERIFIED_SOURCE_VARIABLE,
+	productionBuildSourceProblem,
+	readBuildSource,
+} from "./scripts/production-source.ts";
 import { terminalWebsocketPlugin } from "./src/server/terminal-vite-plugin.ts";
 
 /** Production bundles cannot read guest programs from the checkout at runtime. */
@@ -54,6 +59,30 @@ function productionAnalyticsGuard(): Plugin {
 }
 
 /**
+ * Fails a production web build whose checkout lacks origin/main. Every web
+ * deploy ships this build's output, so the check holds for hand-rolled deploy
+ * scripts too, not only scripts/deploy-production.ts.
+ */
+function productionSourceGuard(): Plugin {
+	return {
+		name: "ytimesy-production-source-guard",
+		apply: "build",
+		config() {
+			if (!cloudflareTarget || process.env.CLOUDFLARE_ENV !== "production")
+				return;
+			if (process.env[ALLOW_UNVERIFIED_SOURCE_VARIABLE] === "1") {
+				console.warn(
+					`${ALLOW_UNVERIFIED_SOURCE_VARIABLE}=1: building production without checking it contains origin/main.`,
+				);
+				return;
+			}
+			const problem = productionBuildSourceProblem(readBuildSource());
+			if (problem) throw new Error(problem);
+		},
+	};
+}
+
+/**
  * Bakes the build id (src/lib/build-id.ts) into the page and the web Worker
  * alike: the production deploy passes YTIMESY_BUILD_ID, other builds get a
  * fresh one, and the dev server stays "development".
@@ -94,6 +123,7 @@ const config = defineConfig({
 		terminalWebsocketPlugin(),
 		guestProgramAssets(),
 		productionAnalyticsGuard(),
+		productionSourceGuard(),
 		buildIdentity(),
 	],
 });
