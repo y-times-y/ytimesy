@@ -125,6 +125,34 @@ describe("project secrets", () => {
 		expect(() => sh(`git add -A && ${guard}`)).toThrow(/STRIPE_KEY/);
 		expect(sh("git diff --cached --name-only")).toBe("");
 	});
+
+	it("scans only this branch's unpushed history, not other local refs", () => {
+		const repo = mkdtempSync(join(tmpdir(), "secret-guard-refs-"));
+		const env = join(repo, "..", `${repo.split("/").pop()}.env`);
+		writeFileSync(
+			env,
+			agentSecretsEnvFile([
+				{ name: "FLEET_CAP", value: "4242424242", kind: "runtime" },
+			]),
+		);
+		const guard = SECRET_COMMIT_GUARD.replaceAll(AGENT_SECRETS_ENV_PATH, env);
+		const sh = (script: string) =>
+			execFileSync("bash", ["-c", script], { cwd: repo, encoding: "utf8" });
+		const commit = "git -c user.name=t -c user.email=t@t commit -q";
+		sh(`git init -q && ${commit} --allow-empty -m init`);
+		// A helper's result ref snapshots files that happen to hold the value.
+		sh(
+			`git checkout -q -b side && echo 'cap: 4242424242' > fixture.txt && git add -A && ${commit} -m snapshot && git update-ref refs/ytimesy/agents/1 HEAD && git checkout -q - && git branch -q -D side`,
+		);
+		writeFileSync(join(repo, "safe.txt"), "uses process.env.FLEET_CAP\n");
+		expect(() => sh(`git add -A && ${guard}`)).not.toThrow();
+		// This branch's own unpushed commit still blocks the next commit.
+		sh(
+			`${commit} -m safe && echo 'cap 4242424242' > leak.txt && git add leak.txt && ${commit} -m leak`,
+		);
+		writeFileSync(join(repo, "next.txt"), "next\n");
+		expect(() => sh(`git add -A && ${guard}`)).toThrow(/FLEET_CAP/);
+	});
 });
 
 describe("who receives project secrets", () => {
