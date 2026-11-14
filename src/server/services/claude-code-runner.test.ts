@@ -887,6 +887,21 @@ describe("Claude Code runner", () => {
 		expect(uploading).toBe(false);
 	});
 
+	it("a deploy cutting a poll interrupts the step (it resumes), never fails the run", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		const step = input(vm);
+		let polls = 0;
+		const shell: typeof step.shell = async (command, timeoutMs) => {
+			if (command.includes("python3 -c") && ++polls === 2)
+				throw new Error("Durable Object reset because its code was updated.");
+			return vm.shell(command, timeoutMs);
+		};
+		await expect(runClaudeCodeStep({ ...step, shell })).rejects.toThrow(
+			"its code was updated",
+		);
+	});
+
 	it("asks before launching a run, and refuses the run when told to", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);
