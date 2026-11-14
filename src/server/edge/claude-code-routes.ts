@@ -16,7 +16,9 @@ import {
 	recordClaudePlanUsage,
 } from "../adapters/claude-subscription";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { queuedMessageMaybeSent } from "../adapters/peer-inbox-observation";
 import {
+	CLAUDE_CODE_INBOX_CALL,
 	claudeCodeBridgeTools,
 	requestClaudeCodeCall,
 } from "../services/claude-code-bridge";
@@ -171,6 +173,20 @@ export async function answerClaudeCodeMcp(
 	const reply = await handleMcpMessage(message, {
 		tools: async () => (await claudeCodeBridgeTools(grant.turnId)) ?? [],
 		call: (name, args) => requestClaudeCodeCall(grant.turnId, name, args),
+		// Asked after every tool call: answered here at once unless the turn's
+		// heartbeat (in this object) saw a sent message or cannot rule one out.
+		// The step takes it once picked up, so a slow answer is waited for.
+		inbox: async () => {
+			if (!queuedMessageMaybeSent(grant.sessionId)) return "";
+			const reply = await requestClaudeCodeCall(
+				grant.turnId,
+				CLAUDE_CODE_INBOX_CALL,
+				{},
+				20_000,
+				120_000,
+			);
+			return reply.isError ? "" : reply.text;
+		},
 	});
 	return reply.body === undefined
 		? new Response(null, { status: reply.status })

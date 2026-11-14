@@ -26,8 +26,17 @@ export type McpCallResult = {
 	readonly content?: readonly McpContentBlock[];
 };
 
+/**
+ * Not an MCP method: the run's PostToolUse and Stop hooks (claude-agent-runner.ts)
+ * ask with it for messages the user sent (Send on a queued message) while the
+ * run works. Never listed as a tool, so the model cannot call it.
+ */
+export const CLAUDE_CODE_INBOX_METHOD = "ytimesy/inbox";
+
 export type McpServerHandlers = {
 	readonly tools: () => Promise<readonly McpToolDefinition[]>;
+	/** The text for the model now; empty when nothing waits. */
+	readonly inbox?: () => Promise<string>;
 	readonly call: (
 		name: string,
 		args: Record<string, unknown>,
@@ -80,6 +89,8 @@ export async function handleMcpMessage(
 		}
 		case "ping":
 			return result({});
+		case CLAUDE_CODE_INBOX_METHOD:
+			return result({ text: handlers.inbox ? await handlers.inbox() : "" });
 		case "tools/list":
 			return result({ tools: await handlers.tools() });
 		case "tools/call": {

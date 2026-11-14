@@ -29,6 +29,7 @@ import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
 import { gitProxyConfiguration } from "../adapters/github/git-proxy-transfer";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
+	CLAUDE_CODE_INBOX_CALL,
 	closeClaudeCodeBridge,
 	mcpToolDefinitions,
 	pendingClaudeCodeCalls,
@@ -82,6 +83,12 @@ export async function runClaudeCodeTurnStep(input: {
 	readonly toolName: (id: string) => string | undefined;
 	readonly onEvent: (event: ApiAgentEvent) => Promise<void>;
 	readonly onPlan: (plan: readonly ClaudeCodePlanStep[]) => void;
+	/**
+	 * Takes the messages the user sent (Send on a queued message) since the
+	 * run started and returns what the model reads for them; empty for none.
+	 * The run's hooks ask after each tool call and before it would end.
+	 */
+	readonly inbox?: () => Promise<string>;
 	/** Timing only: each bridged tool call's start and end (turn-tool-time.ts). */
 	readonly toolTime?: {
 		start(id: string, tool: string): void;
@@ -185,6 +192,16 @@ export async function runClaudeCodeTurnStep(input: {
 			bridge: {
 				pump: () => {
 					for (const call of takeClaudeCodeCalls(input.turnId)) {
+						if (call.name === CLAUDE_CODE_INBOX_CALL) {
+							const run = (input.inbox?.() ?? Promise.resolve(""))
+								.then(
+									(text) => call.reply({ text, isError: false }),
+									() => call.reply({ text: "", isError: false }),
+								)
+								.finally(() => running.delete(run));
+							running.add(run);
+							continue;
+						}
 						const timingId = `cc-${++timedCalls}`;
 						input.toolTime?.start(timingId, call.name);
 						const run = runClaudeCodeCall(input.turnId, call, {
@@ -235,6 +252,33 @@ export async function runClaudeCodeTurnStep(input: {
 		]);
 		if (ended) closeClaudeCodeBridge(input.turnId);
 	}
+}
+
+/** What the run's model reads for messages the user sent while it worked. */
+export function claudeCodeSentMessagesText(sent: readonly ModelMessage[]) {
+	const texts = sent
+		.map((message) =>
+			typeof message.content === "string" ? message.content.trim() : "",
+		)
+		.filter(Boolean);
+	if (!texts.length) return "";
+	return `The user sent ${texts.length === 1 ? "this message" : "these messages"} while you were working. Read ${texts.length === 1 ? "it" : "them"} now and take ${texts.length === 1 ? "it" : "them"} into account before you continue; where ${texts.length === 1 ? "it conflicts" : "they conflict"} with your current plan, the user's message wins.\n\n${texts.join("\n\n---\n\n")}`;
+}
+
+/**
+ * The turn's history after a Claude Code step: messages its hooks delivered
+ * mid-run go before the run's answer (they were part of that run), so the
+ * next run's prompt (the user messages after the last answer) leaves them out.
+ */
+export function withMessagesSentDuringRun(
+	messages: readonly ModelMessage[],
+	sent: readonly ModelMessage[],
+): ModelMessage[] {
+	if (!sent.length) return [...messages];
+	const last = messages.at(-1);
+	return last?.role === "assistant"
+		? [...messages.slice(0, -1), ...sent, last]
+		: [...messages, ...sent];
 }
 
 /**

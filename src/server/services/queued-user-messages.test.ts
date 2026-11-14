@@ -240,6 +240,88 @@ it("never queues runtime sends, approvals or idle chats", async () => {
 	expect(mocks.send).toHaveBeenCalledTimes(4);
 });
 
+it("a send while the ended turn has not yet taken its waiting message starts that message first and queues behind it", async () => {
+	const waitingId = "33333333-3333-4333-8333-333333333333";
+	const idle = {
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	};
+	const running = { ...idle, turnStatus: "running" };
+	// The chat runs once the waiting message's turn has started.
+	let current = idle;
+	mocks.session.mockImplementation(async () => current);
+	mocks.send.mockImplementation(() => {
+		current = running;
+		return Effect.succeed(view());
+	});
+	mocks.queued.mockResolvedValue([
+		{ kind: "userMessage", id: waitingId, text: "First" },
+	]);
+	mocks.take.mockResolvedValueOnce({
+		item: { kind: "userMessage", id: waitingId, text: "First" },
+		message: "First",
+		harnessId: "api",
+		modelId: "connection|model",
+	});
+	await Effect.runPromise(
+		sendComposerMessage(machines, scope, {
+			text: "Second",
+			modelId: "connection|model",
+			idempotencyKey: messageId,
+		}),
+	);
+	// Only the waiting message started a turn; the new send waits behind it.
+	expect(mocks.send).toHaveBeenCalledOnce();
+	expect(mocks.send).toHaveBeenCalledWith(
+		machines,
+		expect.anything(),
+		expect.objectContaining({ text: "First", idempotencyKey: waitingId }),
+		expect.anything(),
+	);
+	expect(mocks.queue).toHaveBeenCalledWith(
+		"owner",
+		"chat",
+		expect.objectContaining({
+			item: expect.objectContaining({ id: messageId, text: "Second" }),
+		}),
+	);
+});
+
+it("an idle chat's send goes at once when its waiting message cannot start", async () => {
+	mocks.session.mockResolvedValue({
+		id: "chat",
+		projectId: "project",
+		harness: "api",
+		turnStatus: "idle",
+		items: [],
+	});
+	mocks.queued.mockResolvedValue([
+		{
+			kind: "userMessage",
+			id: "33333333-3333-4333-8333-333333333333",
+			text: "First",
+		},
+	]);
+	mocks.take.mockResolvedValue(null);
+	await Effect.runPromise(
+		sendComposerMessage(machines, scope, {
+			text: "Second",
+			modelId: "connection|model",
+			idempotencyKey: messageId,
+		}),
+	);
+	expect(mocks.queue).not.toHaveBeenCalled();
+	expect(mocks.send).toHaveBeenCalledWith(
+		machines,
+		scope,
+		expect.objectContaining({ text: "Second" }),
+		expect.anything(),
+	);
+});
+
 it("starts the next turn with the oldest waiting message and its settings", async () => {
 	const attachment = {
 		id: "22222222-2222-4222-8222-222222222222",

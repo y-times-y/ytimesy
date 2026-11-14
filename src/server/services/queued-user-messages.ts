@@ -110,7 +110,7 @@ export function sendComposerMessage(
 				// A project's own setup start sends into the chat it claimed.
 				const scope = started?.scope ?? requested;
 				const queued = await timed("send:queueCheck", () =>
-					queueBehindRunningTurn(scope, input),
+					queueBehindRunningTurn(machines, scope, input),
 				);
 				if ("view" in queued) return queued;
 				const held = await holdUntilEnvironmentReady(
@@ -224,6 +224,7 @@ async function setupStartAbandoned(
 }
 
 async function queueBehindRunningTurn(
+	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	input: ComposerSend,
 ): Promise<
@@ -241,13 +242,33 @@ async function queueBehindRunningTurn(
 		input.continueOn
 	)
 		return {};
-	const session = await agentSessionForOwner(scope.userId, scope.sessionId);
-	if (
-		session?.turnStatus !== "running" ||
-		(scope.projectId && session.projectId !== scope.projectId)
-	)
+	let session = await agentSessionForOwner(scope.userId, scope.sessionId);
+	if (!session || (scope.projectId && session.projectId !== scope.projectId))
 		return { session };
 	const messageId = input.idempotencyKey ?? randomUUID();
+	if (session.turnStatus !== "running") {
+		// A turn shows ended a while before its end takes the next waiting
+		// message (publication, reports). A send in that window must not jump
+		// ahead: the oldest waiting message starts now and this one queues
+		// behind it. A message the queue itself delivers never comes here.
+		if (input.released) return { session };
+		const waiting = (await queuedUserMessageItems(session.id)).filter(
+			(item) => !item.heldForSetup,
+		);
+		if (!waiting.length) return { session };
+		const started = await startQueuedUserTurn(
+			machines,
+			scope.userId,
+			session.id,
+		);
+		// A replay of a send that is itself waiting: starting the queue sent it.
+		if (waiting.some((item) => item.id === messageId))
+			return { view: await publicSessionView(scope) };
+		// The waiting message could not start: this send goes as before.
+		if (!started) return { session };
+		session = await agentSessionForOwner(scope.userId, session.id);
+		if (session?.turnStatus !== "running") return { session };
+	}
 	if (sendWasQueued(sessionItemsFromUnknown(session.items), messageId))
 		return { view: await publicSessionView(scope) };
 	const attachments = input.storedAttachments

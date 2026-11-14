@@ -388,6 +388,102 @@ describe("Claude Code runner", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+	it("the actual SDK wrapper's hooks hand the model messages the user sent meanwhile", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "claude-wrapper-"));
+		const { createServer } = await import("node:http");
+		const asked: { method: string; authorization?: string }[] = [];
+		let answers = ["", "Use pnpm.", "Also add a test."];
+		const server = createServer((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => {
+				body += chunk;
+			});
+			request.on("end", () => {
+				asked.push({
+					method: JSON.parse(body).method,
+					authorization: request.headers.authorization,
+				});
+				const [text = "", ...rest] = answers;
+				answers = rest;
+				response.setHeader("content-type", "application/json");
+				response.end(
+					JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text } }),
+				);
+			});
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const port = (server.address() as { port: number }).port;
+		try {
+			writeFileSync(join(directory, "runner.mjs"), CLAUDE_AGENT_RUNNER_SCRIPT);
+			// The fake SDK fires the hooks as Claude Code would: after two tool
+			// calls, then as the run would end.
+			writeFileSync(
+				join(directory, "sdk.mjs"),
+				`export async function* query({ options }) {
+					const post = options.hooks.PostToolUse[0].hooks[0];
+					const stop = options.hooks.Stop[0].hooks[0];
+					yield { type: "hook", output: await post({}) };
+					yield { type: "hook", output: await post({}) };
+					yield { type: "hook", output: await stop({}) };
+					yield { type: "result" };
+				}`,
+			);
+			writeFileSync(
+				join(directory, "options.json"),
+				JSON.stringify({ model: "local-test", disallowedTools: [] }),
+			);
+			writeFileSync(
+				join(directory, "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						ytimesy: {
+							type: "http",
+							url: `http://127.0.0.1:${port}/claude-code/mcp`,
+							headers: { Authorization: "Bearer grant" },
+						},
+					},
+				}),
+			);
+			writeFileSync(join(directory, "system"), "Local functional test.");
+			writeFileSync(join(directory, "prompt"), "Return a result.");
+			const { stdout } = await promisify(execFile)(process.execPath, [
+				join(directory, "runner.mjs"),
+				join(directory, "sdk.mjs"),
+				directory,
+				directory,
+			]);
+			const hooks = stdout
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line))
+				.filter((message) => message.type === "hook")
+				.map((message) => message.output);
+			expect(hooks).toEqual([
+				// Nothing sent: the tool's result goes on alone.
+				{},
+				{
+					hookSpecificOutput: {
+						hookEventName: "PostToolUse",
+						additionalContext: "Use pnpm.",
+					},
+				},
+				// Sent as the run would end: it goes on with the message.
+				{ decision: "block", reason: "Also add a test." },
+			]);
+			expect(asked).toEqual(
+				Array(3).fill({
+					method: "ytimesy/inbox",
+					authorization: "Bearer grant",
+				}),
+			);
+		} finally {
+			server.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("runs the CLI with a grant, never the token, and maps its stream", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, ...work, success);

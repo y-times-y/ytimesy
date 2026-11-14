@@ -74,6 +74,8 @@ export async function injectServerPeerMessages(
 	delivered: (messageId: string) => boolean = () => false,
 	/** Told when the read found the chat's setup catch-up ready (setup-catch-up.ts); it is never injected. */
 	onSetupCatchUp?: () => void,
+	/** Only the user's queued messages Send was pressed on (a Claude Code run's hooks). */
+	sentUserMessagesOnly = false,
 ) {
 	if (!peerInboxMayHaveMessages(recipientId)) return history;
 	const result = await database().query<{
@@ -89,10 +91,11 @@ export async function injectServerPeerMessages(
 	if (catchUp) onSetupCatchUp?.();
 	// A queued follow-up stays editable until Send. The turn's end takes it
 	// whether or not Send was pressed; this step does not.
-	const delivering = result.rows.filter(
-		(row) =>
-			!isSetupCatchUpRow(row.id) &&
-			!(row.queued_send?.item && row.queued_send.released === false),
+	const delivering = result.rows.filter((row) =>
+		sentUserMessagesOnly
+			? Boolean(row.queued_send?.item) && row.queued_send?.released === true
+			: !isSetupCatchUpRow(row.id) &&
+				!(row.queued_send?.item && row.queued_send.released === false),
 	);
 	if (!delivering.length) return history;
 	const injected = [...history];
