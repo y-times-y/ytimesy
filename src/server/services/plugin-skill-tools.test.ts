@@ -49,6 +49,37 @@ it("lists plugin skills in one line each and loads a body only on request", asyn
 	});
 });
 
+it("reads a listed skill's body from its install only when asked", async () => {
+	const readBody = async (installId: string, skill: string) =>
+		installId === "install-1" && skill === "triage"
+			? { body: "Label and assign." }
+			: null;
+	const listed = [
+		{
+			id: "install-1",
+			plugin: "linear-tools",
+			skills: [{ name: "triage", description: "Triage new issues" }],
+		},
+	];
+	const tools = pluginSkillTools(listed, readBody);
+	expect(
+		await tools.read_plugin_skill.execute?.(
+			{ plugin: "linear-tools", skill: "triage" },
+			options,
+		),
+	).toEqual({
+		plugin: "linear-tools",
+		skill: "triage",
+		instructions: "Label and assign.",
+	});
+	expect(
+		await tools.read_plugin_skill.execute?.(
+			{ plugin: "linear-tools", skill: "other" },
+			options,
+		),
+	).toEqual({ error: "No installed skill linear-tools:other." });
+});
+
 it("adds nothing when no plugin has skills", () => {
 	expect(pluginSkillsInstructions([])).toBe("");
 	expect(pluginSkillTools([{ plugin: "p", skills: [] }])).toEqual({});

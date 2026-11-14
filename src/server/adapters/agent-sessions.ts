@@ -420,6 +420,67 @@ export async function backgroundCommandItemsForOwner(
 }
 
 /**
+ * Only the transcript items of the given kinds, of the user's chats, by chat
+ * id and in transcript order (agent_session_item mirrors agent_session.items
+ * row by row), for a caller that reads a few kinds of a long transcript.
+ */
+export async function agentSessionItemsOfKindsForOwner(
+	userId: string,
+	sessionIds: readonly string[],
+	kinds: readonly string[],
+): Promise<Map<string, unknown[]>> {
+	const bySession = new Map<string, unknown[]>();
+	if (!sessionIds.length || !kinds.length) return bySession;
+	const result = await database().query<{ session_id: string; item: unknown }>(
+		`select i.session_id, i.item
+		 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id = any($2::uuid[]) and i.kind = any($3::text[])
+		 order by i.session_id, i.position`,
+		[userId, [...sessionIds], [...kinds]],
+	);
+	for (const row of result.rows) {
+		const items = bySession.get(row.session_id);
+		if (items) items.push(row.item);
+		else bySession.set(row.session_id, [row.item]);
+	}
+	return bySession;
+}
+
+/**
+ * The session's ancestors without their transcripts, nearest first (the root
+ * last), at most `limit` of them: one recursive read of the parent chain
+ * instead of a whole row per level. A parent that is not the user's ends it.
+ */
+export async function agentSessionAncestorMetadata(
+	userId: string,
+	sessionId: string,
+	limit: number,
+): Promise<Omit<AgentSessionRecord, "items">[]> {
+	const columns = SESSION_COLUMNS.replace(",items,", ",");
+	const result = await database().query(
+		`with recursive chain as (
+			select ${columns}, 0 as depth
+			from agent_session
+			where id=$2 and user_id=$1
+			union all
+			select ${columns
+				.split(",")
+				.map((column) => `parent.${column}`)
+				.join(",")}, chain.depth + 1
+			from agent_session parent
+			join chain on parent.id=chain.parent_session_id
+			where parent.user_id=$1 and chain.depth < $3
+		)
+		select * from chain where depth > 0 order by depth asc`,
+		[userId, sessionId, limit],
+	);
+	return result.rows.map((row: AgentSessionRow) => {
+		const { items: _items, ...metadata } = toSession(row);
+		return metadata;
+	});
+}
+
+/**
  * The chat with its whole transcript (`items`, up to 0.5 MB a read). A caller
  * that does not read `items` should take agentSessionMetadataForOwner: the
  * transcript is what database egress is made of.

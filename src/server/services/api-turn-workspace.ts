@@ -155,7 +155,7 @@ export function deferredApiTurnWorkspace(
 	}
 	async function prepare(): Promise<{
 		workspace: AgentToolWorkspace;
-		session: AgentSessionRecord;
+		session: Omit<AgentSessionRecord, "items">;
 	}> {
 		if (sharesParentMachine(owner)) return attachSharedParent();
 		const preparationStartedAt = Date.now();
@@ -329,7 +329,7 @@ export function deferredApiTurnWorkspace(
 	 */
 	async function attachSharedParent(): Promise<{
 		workspace: AgentToolWorkspace;
-		session: AgentSessionRecord;
+		session: Omit<AgentSessionRecord, "items">;
 	}> {
 		const deadline = Date.now() + SHARED_PARENT_WAIT_MS;
 		let pause = 250;

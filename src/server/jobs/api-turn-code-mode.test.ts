@@ -59,7 +59,8 @@ vi.mock("../adapters/mcp-servers", () => ({
 	connectableMcpServers: async () => [],
 }));
 vi.mock("../adapters/plugin-installs", () => ({
-	enabledPluginComponents: async () => [],
+	enabledPluginSkillIndex: async () => [],
+	pluginSkillBody: async () => null,
 }));
 vi.mock("../services/api-agent-command-tools", async (importOriginal) => ({
 	...(await importOriginal<
@@ -87,6 +88,24 @@ vi.mock("../adapters/conversation-turn-control", () => ({
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.owner,
 	agentSessionMetadataForOwner: mocks.owner,
+	// The parent chain, as the real query walks it (nearest first, at most `limit`).
+	agentSessionAncestorMetadata: async (
+		userId: string,
+		sessionId: string,
+		limit: number,
+	) => {
+		const chain: { parentSessionId?: string | null }[] = [];
+		let current = await mocks.owner(userId, sessionId);
+		while (current?.parentSessionId && chain.length < limit) {
+			const parent = await mocks.owner(userId, current.parentSessionId);
+			if (!parent) break;
+			chain.push(parent);
+			current = parent;
+		}
+		return chain;
+	},
+	descendantAgentSessionMetadata: async () => [],
+	agentSessionItemsOfKindsForOwner: async () => new Map(),
 }));
 beforeEach(() => {
 	vi.clearAllMocks();

@@ -55,7 +55,7 @@ import { detachedFromTurn } from "./machine-call-signal";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-async function resolveAgentSessionRecord(input: {
+type ResolveAgentSessionInput = {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly harness: AgentProviderId;
@@ -69,17 +69,42 @@ async function resolveAgentSessionRecord(input: {
 		readonly placement: AgentTaskPlacement;
 		readonly access: AgentTaskAccess;
 	};
-}) {
+};
+
+type ResolvedAgentSession<Session> = {
+	session: Session;
+	workspace: {
+		id: string;
+		providerRef: string | null;
+		templateSnapshotId: string | null;
+	};
+};
+
+/**
+ * A chat that already exists is returned without its transcript; a new one
+ * (`createNew`) is the row just inserted, transcript included.
+ */
+async function resolveAgentSessionRecord(
+	input: ResolveAgentSessionInput & { readonly createNew: true },
+): Promise<ResolvedAgentSession<AgentSessionRecord>>;
+async function resolveAgentSessionRecord(
+	input: ResolveAgentSessionInput,
+): Promise<ResolvedAgentSession<Omit<AgentSessionRecord, "items">>>;
+async function resolveAgentSessionRecord(
+	input: ResolveAgentSessionInput,
+): Promise<ResolvedAgentSession<Omit<AgentSessionRecord, "items">>> {
 	// The named chat (and a subagent's parent) is read by id beside the
 	// project's environment; the project's whole chat list is read only when
 	// it is needed: to pick its latest chat, or the model a new chat inherits.
+	// Both are read without their transcripts (megabytes, read at every turn
+	// step); only a new chat inheriting its parent's model reads the parent's.
 	const [workspace, named, parent] = await Promise.all([
 		workspaceForProject(input.userId, input.projectId),
 		input.sessionId && !input.createNew
-			? agentSessionForOwner(input.userId, input.sessionId)
+			? agentSessionMetadataForOwner(input.userId, input.sessionId)
 			: null,
 		input.parentSessionId
-			? agentSessionForOwner(input.userId, input.parentSessionId)
+			? agentSessionMetadataForOwner(input.userId, input.parentSessionId)
 			: null,
 	]);
 	// A chat never waits for the project's environment (being built, or its
@@ -121,7 +146,12 @@ async function resolveAgentSessionRecord(input: {
 									{
 										harness: parent.harness,
 										listedModelId: parent.listedModelId,
-										items: parent.items,
+										items:
+											parent.harness === input.harness &&
+											parent.listedModelId?.trim()
+												? ((await agentSessionForOwner(input.userId, parent.id))
+														?.items ?? [])
+												: [],
 									},
 								]
 							: []),

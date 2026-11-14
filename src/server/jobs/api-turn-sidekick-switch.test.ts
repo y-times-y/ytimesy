@@ -83,7 +83,8 @@ vi.mock("../adapters/mcp-servers", () => ({
 	connectableMcpServers: async () => [],
 }));
 vi.mock("../adapters/plugin-installs", () => ({
-	enabledPluginComponents: async () => [],
+	enabledPluginSkillIndex: async () => [],
+	pluginSkillBody: async () => null,
 }));
 vi.mock("../services/api-agent-command-tools", () => ({
 	completedAgentCommands: vi.fn(async () => []),

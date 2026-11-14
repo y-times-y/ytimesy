@@ -6,8 +6,10 @@ import type {
 } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
-	descendantAgentSessions,
+	agentSessionAncestorMetadata,
+	agentSessionItemsOfKindsForOwner,
+	agentSessionMetadataForOwner,
+	descendantAgentSessionMetadata,
 } from "./agent-sessions";
 import { database } from "./database";
 
@@ -56,30 +58,48 @@ export async function mergeSubagentFork(
 	);
 }
 
-/** The session's ancestors, nearest first (the root last). */
+/**
+ * The session's ancestors, nearest first (the root last), at most 8; without
+ * their transcripts (callers read their ids, models and the chain's length).
+ */
 export async function subagentAncestors(
 	userId: string,
 	sessionId: string,
-): Promise<AgentSessionRecord[]> {
-	const ancestors: AgentSessionRecord[] = [];
-	let current = await agentSessionForOwner(userId, sessionId);
-	while (current?.parentSessionId && ancestors.length < 8) {
-		const parent = await agentSessionForOwner(userId, current.parentSessionId);
-		if (!parent) break;
-		ancestors.push(parent);
-		current = parent;
-	}
-	return ancestors;
+): Promise<Omit<AgentSessionRecord, "items">[]> {
+	return agentSessionAncestorMetadata(userId, sessionId, 8);
 }
 
-/** The whole tree under a root: the root first, then every descendant. */
+/**
+ * The transcript item kinds the subagent tree reads (subagentTree in
+ * src/domain/subagent-tree.ts): usage and turn ends live on user messages,
+ * a wake-up turn's start on a notice.
+ */
+export const SUBAGENT_TREE_ITEM_KINDS = ["userMessage", "notice"] as const;
+
+/**
+ * The whole tree under a root: the root first, then every descendant. Each
+ * session's `items` holds only its SUBAGENT_TREE_ITEM_KINDS items, in order
+ * (what the tree's spend and clocks read), not its whole transcript.
+ */
 export async function subagentTree(
 	userId: string,
 	rootSessionId: string,
 ): Promise<AgentSessionRecord[]> {
-	const root = await agentSessionForOwner(userId, rootSessionId);
+	const [root, descendants] = await Promise.all([
+		agentSessionMetadataForOwner(userId, rootSessionId),
+		descendantAgentSessionMetadata(userId, rootSessionId),
+	]);
 	if (!root) return [];
-	return [root, ...(await descendantAgentSessions(userId, rootSessionId))];
+	const sessions = [root, ...descendants];
+	const items = await agentSessionItemsOfKindsForOwner(
+		userId,
+		sessions.map((session) => session.id),
+		SUBAGENT_TREE_ITEM_KINDS,
+	);
+	return sessions.map((session) => ({
+		...session,
+		items: items.get(session.id) ?? [],
+	}));
 }
 
 /**

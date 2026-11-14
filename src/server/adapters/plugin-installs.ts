@@ -120,6 +120,65 @@ export async function enabledPluginComponents(
 	return rows.map((row) => ({ plugin: row.plugin_name, ...row.components }));
 }
 
+/** A plugin skill as a turn lists it: everything stored but its body. */
+export type PluginSkillSummary = Omit<PluginSkill, "body"> & {
+	readonly body?: undefined;
+};
+
+const SKILLS_ARRAY_SQL =
+	"case when jsonb_typeof(components->'skills')='array' then components->'skills' else '[]'::jsonb end";
+
+/**
+ * The skills of enabledPluginComponents without their bodies (and without
+ * the commands' templates and the rest of `components`, which a turn does not
+ * read): the bodies are most of an install's size and a turn loads one only
+ * when the agent asks for it (pluginSkillBody).
+ */
+export async function enabledPluginSkillIndex(
+	userId: string,
+	projectId: string | null,
+): Promise<{ id: string; plugin: string; skills: PluginSkillSummary[] }[]> {
+	const { rows } = await database().query<{
+		id: string;
+		plugin_name: string;
+		skills: PluginSkillSummary[];
+	}>(
+		`select id::text as id, plugin_name,
+		  coalesce((select jsonb_agg(case when jsonb_typeof(s)='object' then s - 'body' else s end order by o)
+		   from jsonb_array_elements(${SKILLS_ARRAY_SQL}) with ordinality e(s, o)), '[]'::jsonb) as skills
+		 from plugin_install where user_id=$1 and enabled
+		 and (project_id is null or project_id=$2) and catalog_id = any($3)
+		 order by plugin_name`,
+		[userId, projectId, catalogIds()],
+	);
+	return rows.map((row) => ({
+		id: row.id,
+		plugin: row.plugin_name,
+		skills: row.skills,
+	}));
+}
+
+/**
+ * One skill's body from the install a turn listed (enabledPluginSkillIndex):
+ * the first skill of that name, as the listing found it. Not found is null.
+ */
+export async function pluginSkillBody(
+	userId: string,
+	installId: string,
+	skill: string,
+): Promise<{ body: PluginSkill["body"] | undefined } | null> {
+	const { rows } = await database().query<{
+		body: PluginSkill["body"] | null;
+	}>(
+		`select e.s->'body' as body
+		 from plugin_install, jsonb_array_elements(${SKILLS_ARRAY_SQL}) with ordinality e(s, o)
+		 where user_id=$1 and id::text=$2 and e.s->'name' = to_jsonb($3::text)
+		 order by e.o limit 1`,
+		[userId, installId, skill],
+	);
+	return rows[0] ? { body: rows[0].body ?? undefined } : null;
+}
+
 /** Toggling or removing a plugin applies to its MCP servers too (tagged with the install id). */
 export async function setInstallEnabled(
 	userId: string,

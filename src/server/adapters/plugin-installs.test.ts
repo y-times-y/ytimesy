@@ -8,7 +8,9 @@ import {
 } from "./mcp-servers";
 import {
 	enabledPluginComponents,
+	enabledPluginSkillIndex,
 	listInstalls,
+	pluginSkillBody,
 	pruneRemovedInstalls,
 } from "./plugin-installs";
 
@@ -145,6 +147,38 @@ async function seed() {
 	await server("alice", "mine", null);
 	await server("bob", "slack", await install("bob", "slack"));
 }
+
+it("lists a turn's plugin skills without bodies and reads one body from its install", async () => {
+	await seed();
+	const linear = (await enabledPluginComponents("alice", null))[0];
+	const id = (await listInstalls("alice")).find(
+		(row) => row.catalogId === "linear",
+	)?.id as string;
+	const skills = [
+		{ name: "triage", description: "Triage issues", body: "x".repeat(5000) },
+		{ name: "plan", description: "Plan a cycle", body: "Plan it." },
+		{ name: "plan", description: "Shadowed", body: "Later copy." },
+	];
+	await db.query(
+		"update plugin_install set components=jsonb_set(components,'{skills}',$2::jsonb) where id=$1",
+		[id, JSON.stringify(skills)],
+	);
+	const index = await enabledPluginSkillIndex("alice", null);
+	expect(index).toEqual([
+		{
+			id,
+			plugin: linear?.plugin,
+			skills: skills.map(({ body: _body, ...skill }) => skill),
+		},
+	]);
+	expect(JSON.stringify(index)).not.toContain("xxxx");
+	expect(await pluginSkillBody("alice", id, "plan")).toEqual({
+		body: "Plan it.",
+	});
+	expect(await pluginSkillBody("alice", id, "missing")).toBeNull();
+	expect(await pluginSkillBody("bob", id, "plan")).toBeNull();
+	expect(await enabledPluginSkillIndex("bob", null)).toEqual([]);
+});
 
 it("turns skip installs and MCP servers of plugins removed from the catalog", async () => {
 	await seed();
