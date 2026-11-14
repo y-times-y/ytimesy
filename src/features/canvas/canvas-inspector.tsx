@@ -490,6 +490,8 @@ function RevisionStepper({
 	shown: CanvasItem;
 	onStep: (revision: number) => void;
 }) {
+	// A single revision has nothing to step through: no control at all.
+	if (thread.revisions.length < 2) return null;
 	const position = thread.revisions.indexOf(shown);
 	const latest = thread.revisions.at(-1) as CanvasItem;
 	const step = (offset: number) => {
