@@ -68,6 +68,11 @@ import {
 	executeWorkflowRequest,
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
+import { pendingClaudeCodeCalls } from "../services/claude-code-bridge";
+import {
+	registerClaudeTurn,
+	takeClaudeStepPause,
+} from "../services/claude-step-pause";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { abortLiveTurn } from "../services/live-turn-abort";
 import { alertCronFailure } from "../services/operational-alerts";
@@ -281,6 +286,21 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			)
 			.toArray()[0];
 	}
+	/**
+	 * A request from the turn's Claude Code run (a tool call, a tool list)
+	 * while its turn sleeps between steps: the next step runs now, so the
+	 * call is answered without waiting out the pause.
+	 */
+	private async wakeSleepingTurn() {
+		if (this.stepping || !this.activeTurn()) return;
+		const at = this.ctx.storage.sql
+			.exec<{ at: number }>(
+				"select at from conversation_wake where purpose='turn'",
+			)
+			.toArray()[0]?.at;
+		if (at !== undefined && at > Date.now())
+			await this.wake("turn", Date.now());
+	}
 	/** The turn loop and the room's lease expiry share this object's single alarm. */
 	private async wake(purpose: "turn" | "room", at: number | null) {
 		if (this.purged) return;
@@ -455,6 +475,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return this.endTurn();
 		let outcome: Awaited<ReturnType<typeof executeModelStep>>;
 		const stopRefreshing = this.keepWaitingTurnsFresh();
+		const unregister = registerClaudeTurn(step.turnId, {
+			watched: () => this.room.watched(),
+		});
 		try {
 			outcome = await withDatabaseScope(
 				this.env.HYPERDRIVE.connectionString,
@@ -511,12 +534,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return this.wake("turn", Date.now() + 5_000 * (active.resumes + 1));
 		} finally {
 			stopRefreshing();
+			unregister();
 		}
 		if (outcome === "continue") {
 			this.ctx.storage.sql.exec(
 				"update turn_loop set step_index=step_index+1,resumes=0",
 			);
-			return this.wake("turn", Date.now());
+			// A Claude Code step that paused (nothing to answer, nobody
+			// watching) sleeps before the next; a call already waiting does not.
+			const pause = takeClaudeStepPause(step.turnId);
+			return this.wake(
+				"turn",
+				Date.now() +
+					(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0),
+			);
 		}
 		await this.endTurn();
 		if (
@@ -658,6 +689,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		// The VM's Claude Code asking for ytimesy's tools; the turn's step runs them.
 		if (path === CLAUDE_CODE_MCP_PATH) {
 			if (this.purged) return new Response(null, { status: 410 });
+			await this.wakeSleepingTurn();
 			return answerClaudeCodeMcp(
 				request,
 				this.env,

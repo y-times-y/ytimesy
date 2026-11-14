@@ -1015,6 +1015,34 @@ describe("Claude Code runner", () => {
 		expect(result.outcome).toBe("continue");
 	});
 
+	it("a quiet, unwatched step ends early and asks the chat's object to sleep", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		const requestPause = vi.fn();
+		const result = await runClaudeCodeStep(
+			input(vm, { mayPause: () => true, requestPause }),
+		);
+		expect(result.outcome).toBe("continue");
+		expect(requestPause).toHaveBeenCalledWith(15_000);
+	});
+
+	it("never pauses with a tool call in flight or someone watching", async () => {
+		for (const overrides of [
+			{
+				mayPause: () => true,
+				bridge: { pump: vi.fn(), busy: () => true, wait: async () => {} },
+			},
+			{ mayPause: () => false },
+		]) {
+			const vm = new FakeVm();
+			vm.emit(init);
+			const requestPause = vi.fn();
+			const step = input(vm, { ...overrides, requestPause });
+			await runClaudeCodeStep({ ...step, deadline: 1_000_000 + 30_000 });
+			expect(requestPause).not.toHaveBeenCalled();
+		}
+	});
+
 	it("asks before launching a run, and refuses the run when told to", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);

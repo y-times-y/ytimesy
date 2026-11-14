@@ -54,6 +54,10 @@ import {
 	scopedShellCommand,
 } from "./api-command-scope";
 import { ensureClaudeAgentSdk } from "./claude-agent-sdk";
+import {
+	CLAUDE_STEP_MIN_AWAKE_MS,
+	CLAUDE_STEP_PAUSE_MS,
+} from "./claude-step-pause";
 
 /**
  * One durable step of a Claude Code turn: the Claude Agent SDK runs Claude
@@ -92,6 +96,13 @@ export type ClaudeCodeStore = {
 };
 
 export type ClaudeCodeStepInput = {
+	/**
+	 * Whether this step may end early so the chat's object sleeps while
+	 * Claude works on its own (claude-step-pause.ts); absent: never.
+	 */
+	readonly mayPause?: () => boolean;
+	/** The step ended early: its next one should start after `ms`. */
+	readonly requestPause?: (ms: number) => void;
 	/** Runs a command on the VM as its default (builder) user. */
 	readonly shell: ClaudeCodeShell;
 	/** Writes and reads a file as the default user (transcript restore and save). */
@@ -175,6 +186,11 @@ const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
 const INLINE_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 /** How often a runner box run saves its session while it goes. */
 const TRANSCRIPT_SAVE_INTERVAL_MS = 60_000;
+/**
+ * When each turn's transcript was last saved, across its steps: a step that
+ * pauses after a few seconds would otherwise never reach the interval.
+ */
+const lastTranscriptSaves = new Map<string, number>();
 /** Base64 per exec: well inside the VM's 64 KiB command limit. */
 const WRITE_CHUNK = 36 * 1024;
 const POLL_MIN_MS = 500;
@@ -421,7 +437,11 @@ export async function runClaudeCodeStep(
 	let apiError: string | null = null;
 	let unreadablePolls = 0;
 	let missingProcessPolls = 0;
-	let lastTranscriptSave = now();
+	const savedAt = lastTranscriptSaves.get(turnId);
+	let lastTranscriptSave =
+		savedAt !== undefined && savedAt <= now() ? savedAt : now();
+	lastTranscriptSaves.set(turnId, lastTranscriptSave);
+	const stepStartedAt = now();
 	/**
 	 * The periodic backup of a long run's transcript (several MB on long
 	 * chats) runs beside the poll loop: awaited inline, every tool call that
@@ -563,6 +583,7 @@ export async function runClaudeCodeStep(
 			now() - lastTranscriptSave >= TRANSCRIPT_SAVE_INTERVAL_MS
 		) {
 			lastTranscriptSave = now();
+			lastTranscriptSaves.set(turnId, lastTranscriptSave);
 			backingUp = saveTranscript(input, home, claudeSessionId)
 				.catch((error: unknown) =>
 					console.warn("Claude Code transcript was not saved.", {
@@ -622,6 +643,21 @@ export async function runClaudeCodeStep(
 			// Nothing of this step may outlive it in the chat's object.
 			await backupSettled();
 			return { messages: [...input.messages], outcome: "continue" };
+		}
+		// Nothing to answer and nobody watching: the step ends and the chat's
+		// object sleeps until the next one (or a tool call wakes it). Never
+		// with a call in flight or a transcript backup due or running.
+		if (
+			readOnce &&
+			!input.bridge.busy() &&
+			!backingUp &&
+			(!input.remote ||
+				now() - lastTranscriptSave < TRANSCRIPT_SAVE_INTERVAL_MS) &&
+			now() - stepStartedAt >= CLAUDE_STEP_MIN_AWAKE_MS &&
+			input.mayPause?.()
+		) {
+			input.requestPause?.(CLAUDE_STEP_PAUSE_MS);
+			return yieldStep();
 		}
 		if (lines.some(Boolean)) wait = POLL_MIN_MS;
 		else {
