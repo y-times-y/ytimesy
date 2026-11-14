@@ -1,6 +1,9 @@
 import type { ArchivedKind } from "#/domain/archive";
 import { WorkspaceId } from "#/domain/ids";
-import { providerRefsHeldOutside } from "../adapters/agent-sessions";
+import {
+	descendantAgentSessionMetadata,
+	providerRefsHeldOutside,
+} from "../adapters/agent-sessions";
 import {
 	archivedChatsToRelease,
 	expiredArchives,
@@ -99,7 +102,16 @@ export async function releaseArchivedMachines(
 	let released = 0;
 	for (const chat of await archivedChatsToRelease()) {
 		try {
-			const held = await providerRefsHeldOutside(chat.userId, [chat.id]);
+			// Its own helpers are not "another chat": readers name its VM (they
+			// share it) and must not keep it alive once the chat is archived.
+			const helpers = await descendantAgentSessionMetadata(
+				chat.userId,
+				chat.id,
+			);
+			const held = await providerRefsHeldOutside(chat.userId, [
+				chat.id,
+				...helpers.map((helper) => helper.id),
+			]);
 			if (!held.has(chat.providerRef))
 				await machines.destroy(WorkspaceId(chat.providerRef));
 			await markMachineReleased(chat.userId, chat.id);

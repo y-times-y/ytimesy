@@ -40,6 +40,8 @@ import {
 } from "#/domain/sidekick-signals";
 import {
 	AGENT_SEND_TOOL,
+	HELPER_FORK_RELEASE_MINUTES,
+	helperForkReleaseBlocker,
 	overlappingWriters,
 	type SubagentOutcome,
 	subagentBudgetState,
@@ -62,9 +64,12 @@ import {
 } from "../adapters/agent-sessions";
 import {
 	addSessionRequestUsage,
-	forkedWritersDueForTeardown,
+	claimHelperForkRelease,
+	forgetDeletedHelperForks,
+	helperForksDueForRelease,
 	idleSidekicksPastTtl,
 	subagentTree as loadSubagentTree,
+	markHelperForkReleased,
 	mergeSubagentFork,
 	recordSubagentStep,
 	requestSubagentStop,
@@ -327,8 +332,12 @@ export async function subagentReport(input: {
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);
 		}
+		// Written after the patch and ref reached the parent's checkout: the
+		// teardown sweep deletes the fork only once this says so (and keeps it
+		// when the export failed, as the fork then holds the only copy).
 		await (input.deps?.mergeFork ?? mergeSubagentFork)(session.id, {
 			patch,
+			patchError: failure ? failure.slice(0, 400) : null,
 			reportedAt: new Date(now).toISOString(),
 		}).catch(() => {});
 		const siblings = (tree?.nodes ?? []).filter(
@@ -644,16 +653,34 @@ export async function retireLeadSidekicks(
 	return retired;
 }
 
+/** What the fork teardown touches outside itself; tests pass fakes. */
+export type HelperForkTeardownDeps = {
+	readonly due?: typeof helperForksDueForRelease;
+	readonly claim?: typeof claimHelperForkRelease;
+	readonly markReleased?: typeof markHelperForkReleased;
+	readonly forgetDeleted?: typeof forgetDeletedHelperForks;
+	readonly now?: () => number;
+};
+
 /**
- * Deletes writer forks 30 minutes after their report (the parent has the
- * patch and ref by then), and retires sidekicks idle past their TTL (they
- * hold no VM, so only their state changes); run from the maintenance sweep.
+ * Deletes finished writers' forks HELPER_FORK_RELEASE_MINUTES after their
+ * report when nothing still needs them (helperForkReleaseBlocker), and
+ * retires sidekicks idle past their TTL (they hold no VM, so only their
+ * state changes); run from the maintenance sweep (the edge cron's
+ * `supervise` job each minute, and the Node worker).
+ *
+ * Each fork goes in three steps, so a failure anywhere is retried by the
+ * next sweep and a turn starting meanwhile never runs on a deleted VM: the
+ * session stops naming the fork (claim, re-checked atomically), the VM is
+ * deleted (a VM already gone counts), then `deletedAt` is recorded. Writers
+ * whose fork was deleted before this still named it: they stop naming it.
  * Returns the forks deleted.
  */
 export async function teardownSubagentForks(
 	machines: WorkspaceMachines,
-	graceMinutes = 30,
+	graceMinutes = HELPER_FORK_RELEASE_MINUTES,
 	idleMinutes = sidekickIdleTtlMinutes(),
+	deps: HelperForkTeardownDeps = {},
 ) {
 	let deleted = 0;
 	for (const idle of await idleSidekicksPastTtl(idleMinutes))
@@ -666,12 +693,28 @@ export async function teardownSubagentForks(
 				message: cause instanceof Error ? cause.message.slice(0, 200) : "",
 			});
 		});
-	for (const fork of await forkedWritersDueForTeardown(graceMinutes)) {
+	await (deps.forgetDeleted ?? forgetDeletedHelperForks)().catch(() =>
+		console.warn("Deleted helper forks could not be forgotten yet."),
+	);
+	const now = deps.now?.() ?? Date.now();
+	for (const fork of await (deps.due ?? helperForksDueForRelease)(
+		graceMinutes,
+	)) {
+		if (helperForkReleaseBlocker(fork, now, graceMinutes)) continue;
 		try {
+			if (
+				!fork.fork.releasingAt &&
+				!(await (deps.claim ?? claimHelperForkRelease)(
+					fork.sessionId,
+					fork.vmId,
+				))
+			)
+				continue;
 			await machines.destroy(WorkspaceId(fork.vmId));
-			await mergeSubagentFork(fork.sessionId, {
-				deletedAt: new Date().toISOString(),
-			});
+			await (deps.markReleased ?? markHelperForkReleased)(
+				fork.sessionId,
+				fork.vmId,
+			);
 			deleted += 1;
 		} catch (cause) {
 			console.warn("A subagent fork could not be deleted yet.", {

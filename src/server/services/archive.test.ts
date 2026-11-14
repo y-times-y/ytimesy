@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
 	toRelease: vi.fn(),
 	marked: vi.fn(async () => undefined),
 	held: vi.fn(),
+	helpers: vi.fn(async (): Promise<{ id: string }[]> => []),
 }));
 vi.mock("../adapters/archive", () => ({
 	archivedChatsToRelease: mocks.toRelease,
@@ -15,6 +16,7 @@ vi.mock("../adapters/archive", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	providerRefsHeldOutside: mocks.held,
+	descendantAgentSessionMetadata: mocks.helpers,
 }));
 vi.mock("./agent-session-machine", () => ({
 	deleteAgentSessionMachine: vi.fn(),
@@ -53,6 +55,15 @@ describe("releaseArchivedMachines", () => {
 		await releaseArchivedMachines({ destroy });
 		expect(destroy).not.toHaveBeenCalled();
 		expect(mocks.marked).toHaveBeenCalledWith("user", "c1");
+	});
+
+	it("does not count the chat's own helpers (readers share its VM) as holding it", async () => {
+		mocks.toRelease.mockResolvedValue([chat("c1", "vm-1")]);
+		mocks.helpers.mockResolvedValueOnce([{ id: "reader" }, { id: "writer" }]);
+		const destroy = vi.fn(async () => undefined);
+		expect(await releaseArchivedMachines({ destroy })).toBe(1);
+		expect(mocks.held).toHaveBeenCalledWith("user", ["c1", "reader", "writer"]);
+		expect(destroy).toHaveBeenCalledWith("vm-1");
 	});
 
 	it("leaves a chat unmarked when the destroy fails, so the next run retries it", async () => {

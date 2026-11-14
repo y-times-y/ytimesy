@@ -1,5 +1,6 @@
 import type { SidekickState } from "#/domain/sidekick";
 import type {
+	HelperForkFacts,
 	SubagentBudget,
 	SubagentFork,
 	SubagentRole,
@@ -199,35 +200,143 @@ export async function addSessionRequestUsage(
 	return false;
 }
 
+/** A writer's fork row as the teardown sweep reads it. */
+type HelperForkRow = {
+	id: string;
+	user_id: string;
+	vm_id: string;
+	agent_role: SubagentRole | null;
+	task_placement: string | null;
+	agent_fork: SubagentFork;
+	turn_status: string;
+	parent_vm_id: string | null;
+	active_turn: boolean;
+	pending_message: boolean;
+	report_undelivered: boolean;
+	open_background_command: boolean;
+	held_elsewhere: boolean;
+	active_sidekick: boolean;
+};
+
 /**
- * Forked writer VMs to delete: reported at least `graceMinutes` ago and
- * idle, or whose session is no longer running anything. Lead mode
- * fusion's sidekick has no fork (it works in the lead's checkout); an
- * older forked one stays while active.
+ * Writer forks the teardown sweep may delete, with what decides it
+ * (helperForkReleaseBlocker): reported at least `graceMinutes` ago, or a
+ * release already claimed and not finished. Any age, so a fork an earlier
+ * sweep missed is still found. Forks that can never go by themselves (their
+ * patch was not captured, an active sidekick, a shared writer) are left out
+ * here so they never crowd out the rest.
  */
-export async function forkedWritersDueForTeardown(graceMinutes: number) {
-	const result = await database().query(
-		`select id, user_id, agent_fork->>'vmId' as vm_id
-		 from agent_session
-		 where agent_role='writer'
-		   and agent_fork ? 'vmId'
-		   and not (agent_fork ? 'deletedAt')
-		   and agent_fork ? 'reportedAt'
-		   and (agent_fork->>'reportedAt')::timestamptz < now() - make_interval(mins => $1)
-		   and turn_status <> 'running'
-		   and not (
-		     agent_budget ? 'sidekick'
-		     and not (agent_budget->'sidekick' ? 'retired')
-		   )
-		 limit 32`,
-		[graceMinutes],
+export async function helperForksDueForRelease(
+	graceMinutes: number,
+	limit = 32,
+): Promise<
+	(HelperForkFacts & { readonly sessionId: string; readonly userId: string })[]
+> {
+	const result = await database().query<HelperForkRow>(
+		`select s.id::text id, s.user_id, s.agent_fork->>'vmId' vm_id, s.agent_role,
+		   s.task_placement, s.agent_fork, s.turn_status, parent.provider_ref parent_vm_id,
+		   exists (select 1 from api_turn t where t.session_id=s.id and t.state in ('queued','running')) active_turn,
+		   exists (select 1 from agent_peer_inbox m where m.recipient_id=s.id and not m.accepted) pending_message,
+		   exists (select 1 from agent_task_event e where e.child_session_id=s.id and e.status<>'delivered') report_undelivered,
+		   exists (select 1 from agent_session_item i where i.session_id=s.id
+		     and i.kind='dynamicToolCall' and i.item->'background' is not null
+		     and (i.item #> '{background,exitCode}') is null) open_background_command,
+		   (exists (select 1 from agent_session o where o.provider_ref=s.agent_fork->>'vmId' and o.id<>s.id)
+		     or exists (select 1 from workspace w where w.provider_ref=s.agent_fork->>'vmId')) held_elsewhere,
+		   (s.agent_budget ? 'sidekick' and not (s.agent_budget->'sidekick' ? 'retired')) active_sidekick
+		 from agent_session s
+		 left join agent_session parent on parent.id=s.parent_session_id
+		 where s.agent_role='writer' and s.parent_session_id is not null
+		   and s.task_placement is distinct from 'shared'
+		   and s.agent_fork ? 'vmId'
+		   and not (s.agent_fork ? 'deletedAt')
+		   and (s.agent_fork ? 'releasingAt' or (
+		     s.agent_fork ? 'reportedAt'
+		     and (s.agent_fork->>'reportedAt')::timestamptz < now() - make_interval(mins => $1)
+		     and coalesce(s.agent_fork->>'patchError','')=''
+		     and not (s.agent_budget ? 'sidekick' and not (s.agent_budget->'sidekick' ? 'retired'))
+		   ))
+		 order by s.agent_fork ? 'releasingAt' desc, (s.agent_fork->>'reportedAt') asc
+		 limit $2`,
+		[graceMinutes, limit],
 	);
-	return result.rows.map(
-		(row: { id: string; user_id: string; vm_id: string }) => ({
-			sessionId: row.id,
-			userId: row.user_id,
-			vmId: row.vm_id,
-		}),
+	return result.rows.map((row) => ({
+		sessionId: row.id,
+		userId: row.user_id,
+		vmId: row.vm_id,
+		role: row.agent_role,
+		taskPlacement: row.task_placement,
+		fork: row.agent_fork,
+		turnStatus: row.turn_status,
+		parentVmId: row.parent_vm_id,
+		activeTurn: row.active_turn,
+		pendingMessage: row.pending_message,
+		reportUndelivered: row.report_undelivered,
+		openBackgroundCommand: row.open_background_command,
+		heldElsewhere: row.held_elsewhere,
+		activeSidekick: row.active_sidekick,
+	}));
+}
+
+/**
+ * Claims a fork for deletion: the session stops naming it (a turn that
+ * starts from now on gets a fresh fork) and `releasingAt` marks the claim,
+ * so a failed delete is retried. Re-checked in the same statement: no turn
+ * running or queued and no message waiting. False when that no longer holds.
+ */
+export async function claimHelperForkRelease(sessionId: string, vmId: string) {
+	const result = await database().query(
+		`update agent_session s
+		 set provider_ref = case when s.provider_ref=$2 then null else s.provider_ref end,
+		     agent_fork = s.agent_fork || jsonb_build_object('releasingAt',
+		       coalesce(s.agent_fork->>'releasingAt', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+		 where s.id=$1 and s.agent_fork->>'vmId'=$2 and not (s.agent_fork ? 'deletedAt')
+		   and s.turn_status <> 'running'
+		   and not exists (select 1 from api_turn t where t.session_id=s.id and t.state in ('queued','running'))
+		   and not exists (select 1 from agent_peer_inbox m where m.recipient_id=s.id and not m.accepted)
+		 returning s.id`,
+		[sessionId, vmId],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
+
+/** Records that the claimed fork's VM is deleted; a no-op once recorded or re-forked. */
+export async function markHelperForkReleased(sessionId: string, vmId: string) {
+	await database().query(
+		`update agent_session
+		 set agent_fork = agent_fork || jsonb_build_object('deletedAt', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+		     provider_ref = case when provider_ref=$2 then null else provider_ref end
+		 where id=$1 and agent_fork->>'vmId'=$2 and not (agent_fork ? 'deletedAt')`,
+		[sessionId, vmId],
+	);
+}
+
+/**
+ * Writers whose fork was deleted before releases cleared the session's
+ * provider ref still name the deleted VM (resuming them failed on it):
+ * they stop naming it. Returns how many changed.
+ */
+export async function forgetDeletedHelperForks() {
+	const result = await database().query(
+		`update agent_session set provider_ref=null
+		 where agent_role='writer' and parent_session_id is not null
+		   and agent_fork ? 'deletedAt' and provider_ref=agent_fork->>'vmId'`,
+	);
+	return result.rowCount ?? 0;
+}
+
+/**
+ * A released writer resumed on a fresh fork: its fork record is replaced
+ * (the earlier report's patch stays in `previousPatch` for reference).
+ */
+export async function replaceHelperFork(sessionId: string, fork: SubagentFork) {
+	await database().query(
+		`update agent_session
+		 set agent_fork = $2::jsonb || case when agent_fork->'patch' is not null and jsonb_typeof(agent_fork->'patch')='object'
+		       then jsonb_build_object('previousPatch', agent_fork->'patch') else '{}'::jsonb end,
+		     provider_ref = $3, updated_at = now()
+		 where id=$1`,
+		[sessionId, JSON.stringify(fork), fork.vmId],
 	);
 }
 

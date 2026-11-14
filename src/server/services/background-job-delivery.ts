@@ -83,7 +83,7 @@ export async function deliverBackgroundJob(
 						recoverChildTurnEvents(machines),
 						// Background commands that exited while their chat was between turns.
 						wakeChatsForBackgroundCommands(machines),
-						// Writer subagents' forks, 30 minutes after their report.
+						// Finished writers' forks, 10 minutes after their report (HELPER_FORK_RELEASE_MINUTES).
 						teardownSubagentForks(machines),
 						// New chats' machines copied ahead, when nothing was sent.
 						sweepUnusedChatMachines(machines),

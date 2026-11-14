@@ -29,7 +29,10 @@ vi.mock("../adapters/subagents", () => ({
 	subagentTree: adapters.tree,
 	mergeSubagentFork: adapters.mergeFork,
 	recordSubagentStep: vi.fn(),
-	forkedWritersDueForTeardown: vi.fn(async () => []),
+	helperForksDueForRelease: vi.fn(async () => []),
+	claimHelperForkRelease: vi.fn(async () => true),
+	markHelperForkReleased: vi.fn(async () => {}),
+	forgetDeletedHelperForks: vi.fn(async () => 0),
 	idleSidekicksPastTtl: adapters.idle,
 	saveSidekickState: adapters.saveState,
 	requestSubagentStop: vi.fn(async () => {}),
@@ -1040,5 +1043,122 @@ describe("sidekick (lead mode fusion)", () => {
 				retired: expect.objectContaining({ reason: "the lead's turn ended" }),
 			}),
 		);
+	});
+});
+
+describe("helper fork teardown", () => {
+	const reportedAt = new Date(NOW - 11 * 60_000).toISOString();
+	const due = (overrides: Record<string, unknown> = {}) => ({
+		sessionId: "writer",
+		userId: "user",
+		vmId: "vm-fork",
+		role: "writer" as const,
+		taskPlacement: "fresh",
+		fork: {
+			vmId: "vm-fork",
+			sourceVmId: "vm-parent",
+			bootedAt: reportedAt,
+			patch: null,
+			patchError: null,
+			reportedAt,
+		},
+		turnStatus: "completed",
+		parentVmId: "vm-parent",
+		activeTurn: false,
+		pendingMessage: false,
+		reportUndelivered: false,
+		openBackgroundCommand: false,
+		heldElsewhere: false,
+		activeSidekick: false,
+		...overrides,
+	});
+	function deps(rows: ReturnType<typeof due>[], claimed = true) {
+		return {
+			due: vi.fn(async () => rows),
+			claim: vi.fn(async () => claimed),
+			markReleased: vi.fn(async () => {}),
+			forgetDeleted: vi.fn(async () => 0),
+			now: () => NOW,
+		};
+	}
+
+	it("claims, deletes and records a finished writer's fork 10 minutes after its report", async () => {
+		const destroy = vi.fn(async () => {});
+		const fakes = deps([due()]);
+		expect(
+			await teardownSubagentForks({ destroy } as never, 10, 45, fakes as never),
+		).toBe(1);
+		expect(fakes.due).toHaveBeenCalledWith(10);
+		expect(fakes.claim).toHaveBeenCalledWith("writer", "vm-fork");
+		expect(destroy).toHaveBeenCalledWith("vm-fork");
+		expect(fakes.markReleased).toHaveBeenCalledWith("writer", "vm-fork");
+		expect(fakes.claim.mock.invocationCallOrder[0]).toBeLessThan(
+			destroy.mock.invocationCallOrder[0] ?? 0,
+		);
+		// The backlog: writers still naming forks deleted earlier.
+		expect(fakes.forgetDeleted).toHaveBeenCalled();
+	});
+
+	it("never touches a fork something still needs, nor the parent's VM", async () => {
+		const destroy = vi.fn(async () => {});
+		const fakes = deps([
+			due({ turnStatus: "running" }),
+			due({ activeTurn: true }),
+			due({ openBackgroundCommand: true }),
+			due({ reportUndelivered: true }),
+			due({
+				fork: { ...due().fork, patchError: "the export failed" },
+			}),
+			due({ role: "reviewer", taskPlacement: "shared", vmId: "vm-parent" }),
+		]);
+		expect(
+			await teardownSubagentForks({ destroy } as never, 10, 45, fakes as never),
+		).toBe(0);
+		expect(fakes.claim).not.toHaveBeenCalled();
+		expect(destroy).not.toHaveBeenCalled();
+	});
+
+	it("leaves the fork when a turn started before the claim", async () => {
+		const destroy = vi.fn(async () => {});
+		const fakes = deps([due()], false);
+		expect(
+			await teardownSubagentForks({ destroy } as never, 10, 45, fakes as never),
+		).toBe(0);
+		expect(destroy).not.toHaveBeenCalled();
+		expect(fakes.markReleased).not.toHaveBeenCalled();
+	});
+
+	it("is idempotent: a failed delete is retried from its claim, and a finished one is not repeated", async () => {
+		const destroy = vi
+			.fn(async () => {})
+			.mockRejectedValueOnce(new Error("provider outage"));
+		const first = deps([due()]);
+		expect(
+			await teardownSubagentForks({ destroy } as never, 10, 45, first as never),
+		).toBe(0);
+		expect(first.markReleased).not.toHaveBeenCalled();
+		// Next sweep: the row now carries the claim (and no longer names the VM).
+		const claimed = due({
+			fork: { ...due().fork, releasingAt: new Date(NOW).toISOString() },
+		});
+		const second = deps([claimed]);
+		expect(
+			await teardownSubagentForks(
+				{ destroy } as never,
+				10,
+				45,
+				second as never,
+			),
+		).toBe(1);
+		expect(second.claim).not.toHaveBeenCalled();
+		expect(second.markReleased).toHaveBeenCalledWith("writer", "vm-fork");
+		// Once recorded, the row is no longer due and nothing is deleted again.
+		const third = deps([
+			due({ fork: { ...due().fork, deletedAt: new Date(NOW).toISOString() } }),
+		]);
+		expect(
+			await teardownSubagentForks({ destroy } as never, 10, 45, third as never),
+		).toBe(0);
+		expect(destroy).toHaveBeenCalledTimes(2);
 	});
 });

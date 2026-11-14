@@ -421,7 +421,7 @@ function sizeLabel(bytes: number) {
 
 /** The new files a writer's patch left out, so the parent knows they exist. */
 export function excludedFilesNote(excluded: WriterPatchExclusions) {
-	return `${excluded.count} new file${excluded.count === 1 ? "" : "s"} (${sizeLabel(excluded.bytes)}) in scratch, download or cache directories or large binaries the brief did not name: ${excluded.paths.join(", ")}${excluded.count > excluded.paths.length ? ", …" : ""}. They stay only on the writer's fork, which is deleted about 30 minutes after this report; name them in a brief if they are deliverables.`;
+	return `${excluded.count} new file${excluded.count === 1 ? "" : "s"} (${sizeLabel(excluded.bytes)}) in scratch, download or cache directories or large binaries the brief did not name: ${excluded.paths.join(", ")}${excluded.count > excluded.paths.length ? ", …" : ""}. They stay only on the writer's fork, which is deleted about ${HELPER_FORK_RELEASE_MINUTES} minutes after this report; name them in a brief if they are deliverables.`;
 }
 
 export function writerPatchRef(label: string) {
@@ -492,6 +492,86 @@ export type SubagentFork = {
 	/** The parent's HEAD when the fork was taken (the bundle's boundary). */
 	readonly parentHead?: string;
 	readonly patch?: WriterPatch | null;
+	/** Set when the report could not export the fork's work: the fork is then its only copy. */
+	readonly patchError?: string | null;
+	/** A resumed writer's earlier report's patch, kept when its fork was replaced. */
+	readonly previousPatch?: WriterPatch;
 	readonly reportedAt?: string;
+	/** The teardown claimed the fork (the session no longer names it) and is deleting it. */
+	readonly releasingAt?: string;
 	readonly deletedAt?: string;
 };
+
+/**
+ * Minutes a finished writer's fork is kept after its report before it is
+ * deleted. The work is safe at report time (the patch and git ref are
+ * imported into the parent's checkout before `reportedAt` is written), so
+ * the delay only covers the report reaching the parent and the parent's
+ * quick follow-up (agent_send) resuming on the same fork; a later follow-up
+ * gets a fresh fork of the parent's checkout. A paused fork bills its disk
+ * and saved memory (about $0.10 a day) until it is deleted.
+ */
+export const HELPER_FORK_RELEASE_MINUTES = 10;
+
+/** What the teardown sweep knows about one writer's fork. */
+export type HelperForkFacts = {
+	readonly vmId: string;
+	readonly role: SubagentRole | null;
+	readonly taskPlacement: string | null;
+	readonly fork: SubagentFork;
+	readonly turnStatus: string;
+	/** The parent's VM, which the fork must never be. */
+	readonly parentVmId: string | null;
+	/** A model turn queued or running for the session. */
+	readonly activeTurn: boolean;
+	/** A message to it not yet taken by a turn (agent_send). */
+	readonly pendingMessage: boolean;
+	/** Its report event not yet delivered to the parent. */
+	readonly reportUndelivered: boolean;
+	/** A background command its timeline records as not exited. */
+	readonly openBackgroundCommand: boolean;
+	/** Another session, or the project template, names the VM. */
+	readonly heldElsewhere: boolean;
+	/** A lead mode sidekick not retired (it keeps its machine while active). */
+	readonly activeSidekick: boolean;
+};
+
+/**
+ * Why a finished helper's fork must stay, or null when it can be deleted:
+ * its report delivered, its patch and ref captured, no turn running or
+ * queued, no background command running, not resumable mid-work, and the
+ * VM is the helper's own (a reader or a shared writer never owns one). A
+ * release already claimed is finished unless something else holds the VM.
+ */
+export function helperForkReleaseBlocker(
+	facts: HelperForkFacts,
+	now: number,
+	delayMinutes = HELPER_FORK_RELEASE_MINUTES,
+): string | null {
+	const { fork } = facts;
+	if (fork.deletedAt) return "already released";
+	if (
+		facts.role !== "writer" ||
+		sharesParentMachine({
+			agentRole: facts.role,
+			taskPlacement: facts.taskPlacement,
+		})
+	)
+		return "it shares its parent's machine";
+	if (!facts.vmId || facts.vmId !== fork.vmId) return "not its fork";
+	if (facts.vmId === facts.parentVmId || facts.heldElsewhere)
+		return "another session holds the machine";
+	if (fork.releasingAt) return null;
+	if (facts.activeSidekick) return "an active sidekick";
+	if (!fork.reportedAt) return "it has not reported";
+	if (Date.parse(fork.reportedAt) > now - delayMinutes * 60_000)
+		return "it finished too recently";
+	if (facts.turnStatus === "running" || facts.activeTurn)
+		return "a turn is running or queued";
+	if (facts.pendingMessage) return "a message waits for it";
+	if (facts.reportUndelivered) return "its report is not delivered";
+	if (!("patch" in fork) || fork.patchError)
+		return "its patch was not captured";
+	if (facts.openBackgroundCommand) return "a background command is running";
+	return null;
+}
