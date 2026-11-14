@@ -746,6 +746,22 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 	}
 
+	// The room's live viewers are hibernatable sockets of this object.
+	webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+		this.room.webSocketMessage(socket, message);
+	}
+	webSocketClose(
+		socket: WebSocket,
+		code: number,
+		reason: string,
+		wasClean: boolean,
+	) {
+		this.room.webSocketClose(socket, code, reason, wasClean);
+	}
+	webSocketError(socket: WebSocket, error: unknown) {
+		this.room.webSocketError(socket, error);
+	}
+
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
 		super(ctx, env);
 		registerMemoryRepos(env.ARTIFACTS);

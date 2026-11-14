@@ -19,6 +19,16 @@ import {
 	turnControlSchema,
 } from "../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../domain/delivery-auth";
+import {
+	LIVE_SOCKET_CLOSE,
+	liveProgressMessage,
+} from "../domain/live-progress-socket";
+import {
+	pingAutoResponse,
+	type ServerSocket,
+	socketPair,
+	upgradeResponse,
+} from "./socket-upgrade";
 
 type RealtimeEnvironment = {
 	CONVERSATIONS: DurableObjectNamespace;
@@ -33,7 +43,11 @@ type SnapshotHead = { revision: string; chunks: number };
  */
 type Frames = {
 	full: () => Uint8Array;
-	delta?: { baseRevision: string; frame: Uint8Array };
+	delta?: {
+		baseRevision: string;
+		frame: Uint8Array;
+		update: ConversationDelta;
+	};
 };
 
 // This narrow storage port works with both workers-types and Wrangler's generated
@@ -55,6 +69,51 @@ interface ConversationRoomState {
 		): Promise<T>;
 	};
 	blockConcurrencyWhile<T>(run: () => Promise<T>): Promise<T>;
+	// Hibernatable WebSockets (absent from the tests' storage-only fakes).
+	acceptWebSocket?(socket: ServerSocket, tags?: string[]): void;
+	getWebSockets?(tag?: string): ServerSocket[];
+	setWebSocketAutoResponse?(pair?: unknown): void;
+}
+
+/** How the room makes viewer sockets; tests replace the Workers runtime's. */
+export type ViewerSockets = {
+	pair: typeof socketPair;
+	upgrade: typeof upgradeResponse;
+	autoResponse: typeof pingAutoResponse;
+};
+const workersViewerSockets: ViewerSockets = {
+	pair: socketPair,
+	upgrade: upgradeResponse,
+	autoResponse: pingAutoResponse,
+};
+
+/** The tag of a live viewer's socket, so other sockets are never pushed to. */
+const VIEWER_TAG = "viewer";
+/** Most viewers (sockets and old event streams together) one chat serves. */
+const MAX_VIEWERS = 16;
+/**
+ * How long a socket's authorization holds. The first push after it closes
+ * the socket (no timer), and the browser's reconnect checks the user again,
+ * as the old event stream's 60-second bound did.
+ */
+const VIEWER_AUTHORIZATION_MS = 60_000;
+type ViewerAttachment = {
+	sessionId: string;
+	openedAt: number;
+	authorizedUntil: number;
+	revision: string;
+};
+function viewerAttachment(socket: ServerSocket): ViewerAttachment | null {
+	try {
+		const value = socket.deserializeAttachment() as ViewerAttachment | null;
+		return value && typeof value.openedAt === "number" ? value : null;
+	} catch {
+		return null;
+	}
+}
+/** One line per socket open and close, to measure how long viewers stay. */
+function logViewer(event: string, detail: Record<string, unknown>) {
+	console.info(`live-progress ${JSON.stringify({ event, ...detail })}`);
 }
 
 async function boundedBody(request: Request) {
@@ -87,7 +146,10 @@ export class ConversationRoom {
 		private readonly state: ConversationRoomState,
 		// The realtime Worker instantiates this class as a Durable Object, passing its env here.
 		schedule?: unknown,
+		private readonly sockets: ViewerSockets = workersViewerSockets,
 	) {
+		// Keep-alive pings are answered by the runtime while the object sleeps.
+		state.setWebSocketAutoResponse?.(sockets.autoResponse());
 		this.schedule =
 			typeof schedule === "function"
 				? (schedule as (at: number | null) => Promise<void>)
@@ -129,6 +191,11 @@ export class ConversationRoom {
 	async purge() {
 		this.purged = true;
 		this.latest = null;
+		for (const socket of this.viewers()) {
+			try {
+				socket.close(LIVE_SOCKET_CLOSE.gone, "deleted");
+			} catch {}
+		}
 		await this.state.storage.deleteAll?.();
 		await this.state.storage.put(PURGED_KEY, true);
 	}
@@ -145,6 +212,7 @@ export class ConversationRoom {
 			return new Response(null, { status: 204 });
 		}
 		if (this.purged) return new Response(null, { status: 410 });
+		if (url.pathname === "/live") return this.admitViewer(request, url);
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
 		if (request.method === "POST" && url.pathname === "/delta")
 			return this.publish(conversationDeltaSchema.parse(await request.json()));
@@ -162,22 +230,9 @@ export class ConversationRoom {
 			const refused = await this.serialized(() => this.adopt(incoming));
 			if (refused) return refused;
 		}
-		if (
-			!this.latest ||
-			this.latest.userId !== url.searchParams.get("userId") ||
-			this.latest.sessionId !== url.searchParams.get("sessionId")
-		)
-			return new Response(null, { status: 404 });
-		if (this.subscribers.size >= 16) return new Response(null, { status: 429 });
-		// A viewer that merges deltas asks for them; others get full snapshots only.
+		const refused = this.refuseViewer(url);
+		if (refused) return refused;
 		const deltas = url.searchParams.get("deltas") === "1";
-		const minimumRevision = url.searchParams.get("revision");
-		if (
-			minimumRevision &&
-			(!/^[1-9]\d{0,19}$/.test(minimumRevision) ||
-				BigInt(this.latest.revision) < BigInt(minimumRevision))
-		)
-			return new Response(null, { status: 409 });
 		let stop = () => {};
 		let cancelled = false;
 		const stream = new ReadableStream<Uint8Array>(
@@ -239,9 +294,130 @@ export class ConversationRoom {
 		});
 	}
 	/**
-	 * Trusted in-process publication avoids a JSON Request/parse round trip.
-	 * A delta this room cannot merge answers 409: the publisher sends the full snapshot.
+	 * Why this chat's snapshot cannot be shown to a new viewer: none here or
+	 * another chat's (404, the caller seeds it from Postgres), too many viewers
+	 * (429), or older than the caller's copy (409, seeded again).
 	 */
+	private refuseViewer(url: URL): Response | null {
+		if (
+			!this.latest ||
+			this.latest.userId !== url.searchParams.get("userId") ||
+			this.latest.sessionId !== url.searchParams.get("sessionId")
+		)
+			return new Response(null, { status: 404 });
+		if (this.subscribers.size + this.viewers().length >= MAX_VIEWERS)
+			return new Response(null, { status: 429 });
+		const minimumRevision = url.searchParams.get("revision");
+		if (
+			minimumRevision &&
+			(!/^[1-9]\d{0,19}$/.test(minimumRevision) ||
+				BigInt(this.latest.revision) < BigInt(minimumRevision))
+		)
+			return new Response(null, { status: 409 });
+		return null;
+	}
+	private viewers(): ServerSocket[] {
+		return this.state.getWebSockets?.(VIEWER_TAG) ?? [];
+	}
+	/**
+	 * A live viewer's hibernatable socket: it gets the current snapshot now and
+	 * every newer one as it is published; between them the object sleeps.
+	 */
+	private admitViewer(request: Request, url: URL): Response {
+		if (!this.state.acceptWebSocket) return new Response(null, { status: 404 });
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+			return new Response(null, { status: 426 });
+		const refused = this.refuseViewer(url);
+		if (refused || !this.latest)
+			return refused ?? new Response(null, { status: 404 });
+		const { client, server } = this.sockets.pair();
+		this.state.acceptWebSocket(server, [VIEWER_TAG]);
+		const openedAt = Date.now();
+		const viewer: ViewerAttachment = {
+			sessionId: this.latest.sessionId,
+			openedAt,
+			authorizedUntil: openedAt + VIEWER_AUTHORIZATION_MS,
+			revision: this.latest.revision,
+		};
+		server.serializeAttachment(viewer);
+		server.send(liveProgressMessage(this.latest));
+		logViewer("open", {
+			sessionId: viewer.sessionId,
+			viewers: this.viewers().length,
+		});
+		return this.sockets.upgrade(client);
+	}
+	/** Only a ping is expected, and the runtime answers it; the rest is ignored. */
+	webSocketMessage(_socket: ServerSocket, _message: unknown) {}
+	webSocketClose(
+		socket: ServerSocket,
+		code: number,
+		reason: string,
+		wasClean: boolean,
+	) {
+		this.endViewer(socket, "close", { code, reason, wasClean });
+		try {
+			socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+		} catch {}
+	}
+	webSocketError(socket: ServerSocket, _error: unknown) {
+		this.endViewer(socket, "error", {});
+	}
+	private endViewer(
+		socket: ServerSocket,
+		event: string,
+		detail: Record<string, unknown>,
+	) {
+		const viewer = viewerAttachment(socket);
+		if (!viewer) return;
+		// Logged once: an error and the close after it are one ending.
+		try {
+			socket.serializeAttachment(null);
+		} catch {}
+		logViewer(event, {
+			sessionId: viewer.sessionId,
+			seconds: Math.round((Date.now() - viewer.openedAt) / 1000),
+			viewers: this.viewers().filter((other) => other !== socket).length,
+			...detail,
+		});
+	}
+	/**
+	 * Pushes one frame to every live viewer; a viewer whose authorization
+	 * window ended is closed instead and reconnects for a full snapshot.
+	 */
+	private pushToViewers(
+		viewers: ServerSocket[],
+		snapshot: ConversationSnapshot,
+		delta?: { baseRevision: string; update: ConversationDelta },
+	) {
+		let full: string | undefined;
+		const now = Date.now();
+		for (const socket of viewers) {
+			const viewer = viewerAttachment(socket);
+			try {
+				if (viewer && viewer.authorizedUntil > now) {
+					if (!delta || viewer.revision !== delta.baseRevision)
+						full ??= liveProgressMessage(snapshot);
+					const message =
+						delta && viewer.revision === delta.baseRevision
+							? JSON.stringify({
+									revision: snapshot.revision,
+									delta: delta.update,
+								})
+							: (full ?? liveProgressMessage(snapshot));
+					socket.send(message);
+					socket.serializeAttachment({
+						...viewer,
+						revision: snapshot.revision,
+					});
+				} else if (viewer)
+					socket.close(LIVE_SOCKET_CLOSE.reauthorize, "reauthorize");
+			} catch {
+				// A socket closing meanwhile: its close handler ends it.
+			}
+		}
+	}
+	/** Trusted in-process publication avoids a JSON Request/parse round trip. */
 	async publish(incoming: ConversationUpdate): Promise<Response> {
 		if (this.purged) return new Response(null, { status: 410 });
 		const refused = await this.serialized(() =>
@@ -276,6 +452,7 @@ export class ConversationRoom {
 			{
 				baseRevision: latest.revision,
 				frame: encoder.encode(conversationDeltaEvent(delta)),
+				update: delta,
 			},
 		);
 	}
@@ -344,6 +521,9 @@ export class ConversationRoom {
 					};
 					for (const send of this.subscribers) send(incoming, frames);
 				}
+				// No viewer: no frame is built and nothing is sent.
+				const viewers = this.viewers();
+				if (viewers.length) this.pushToViewers(viewers, incoming, delta);
 			}
 		}
 		return null;
@@ -493,6 +673,7 @@ export function isRealtimeRoute(pathname: string) {
 		pathname === "/snapshot" ||
 		pathname === "/delta" ||
 		pathname === "/stream" ||
+		pathname === "/live" ||
 		pathname === "/purge" ||
 		ROOM_TURN_PATH.test(pathname)
 	);
@@ -517,7 +698,8 @@ export async function routeRealtimeRequest(
 						url.pathname === "/stream" ||
 						url.pathname === "/purge" ||
 						ROOM_TURN_PATH.test(url.pathname))) ||
-				(request.method === "GET" && url.pathname === "/stream")
+				(request.method === "GET" &&
+					(url.pathname === "/stream" || url.pathname === "/live"))
 			)
 		)
 			return new Response(null, { status: 404 });
@@ -545,11 +727,13 @@ export async function routeRealtimeRequest(
 		)
 			return new Response(null, { status: 400 });
 		// Worker types and the web app use separate DOM type declarations for Request/Response.
+		// A WebSocket upgrade carries no signal: one would stay bound to the
+		// socket after the handshake.
 		const forwarded = new Request(request.url, {
 			method: request.method,
 			headers: request.headers,
 			...(request.method === "POST" ? { body } : {}),
-			signal: request.signal,
+			...(url.pathname === "/live" ? {} : { signal: request.signal }),
 		});
 		return await forward(
 			{ userId: scope.userId, sessionId: scope.sessionId },
