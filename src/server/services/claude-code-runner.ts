@@ -45,6 +45,7 @@ import type {
 	ClaudeCodeSessionRecord,
 	ClaudeSubscriptionStatus,
 } from "../adapters/claude-subscription";
+import { isPlatformRestart } from "../adapters/freestyle/provider-retry";
 import {
 	COMMAND_SCOPES_DIRECTORY,
 	COMMAND_STOP_SCRIPT,
@@ -436,6 +437,12 @@ export async function runClaudeCodeStep(
 			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
 			Math.max(1, Math.min(30_000, input.deadline - now() - 10_000)),
 		).catch((error: unknown) => {
+			// A deploy or isolate reset cut this object's own request: the step
+			// is interrupted (and resumes on the new code, re-attaching to the
+			// run), not the run. Counted as unreadable, such polls failed whole
+			// turns with "its output could not be read" (Nov 14, within two
+			// minutes of each deploy).
+			if (isPlatformRestart(error)) throw error;
 			if (error instanceof ClaudeRunnerTransportFailure) {
 				transportFailure = new ClaudeRunnerTransportFailure(
 					"poll",
