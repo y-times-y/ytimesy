@@ -1,4 +1,4 @@
-import { App } from "octokit";
+import { App, Octokit } from "octokit";
 import {
 	type GitHubRepository,
 	gitHubRepositoryFromApi,
@@ -134,9 +134,21 @@ export function flattenBranchNames(pages: unknown): string[] {
 	});
 }
 
+/**
+ * Octokit without its throttling plugin. On its first request that plugin
+ * starts five Bottleneck groups, each with a 60 s cleanup interval that is
+ * never cleared (unref() does nothing on Workers). In a Durable Object an
+ * interval keeps the object awake: a pull request evidence job that minted a
+ * token in 30 s held its BackgroundJobRunner awake for up to hours after it
+ * returned (Nov 11-13). Transient failures and 429s are still retried by the
+ * retry plugin; a 403 rate limit now fails instead of waiting in the object.
+ */
+const UnthrottledOctokit = Octokit.defaults({ throttle: { enabled: false } });
+
 function githubApp(credentials: GitHubAppCredentials) {
 	return new App({
 		appId: credentials.appId,
 		privateKey: credentials.privateKey,
+		Octokit: UnthrottledOctokit,
 	});
 }
