@@ -1092,3 +1092,89 @@ it("rebuilds a new turn's transcript from a copy and only the rows written since
 		),
 	).toEqual(stored);
 });
+
+it("restores a point without its own transcript copy from the stored transcript before its message", async () => {
+	const { conversationPoint } = await import(
+		"../src/server/adapters/conversation-recovery"
+	);
+	const items = [
+		{ kind: "userMessage", id: "m1", text: "first" },
+		{ kind: "agentMessage", id: "a1", text: "done" },
+		{ kind: "userMessage", id: "m2", text: "second" },
+		{ kind: "agentMessage", id: "a2", text: "done too" },
+	];
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(items),
+	]);
+	const point = (messageId: string) => ({
+		id: `conversation-point:${messageId}`,
+		ok: true,
+		result: {
+			type: "conversation-point",
+			userMessageId: messageId,
+			prompt: "second",
+			messages: [{ role: "user", content: "first" }],
+			modelId: "test-model",
+			routeId: "route",
+			revision,
+		},
+	});
+	for (const messageId of ["m2", "gone"])
+		await db.query(
+			"insert into agent_task_command_receipt(parent_session_id,request_id,status,response) values($1,$2,'done',$3::jsonb)",
+			[
+				sessionId,
+				`conversation-point:${messageId}`,
+				JSON.stringify(point(messageId)),
+			],
+		);
+	const restored = await conversationPoint("alice", sessionId, "m2");
+	expect(restored?.items).toEqual(items.slice(0, 2));
+	expect(restored?.messages).toEqual([{ role: "user", content: "first" }]);
+	// Its message left the transcript (an earlier restore): nothing to restore.
+	expect(await conversationPoint("alice", sessionId, "gone")).toBeNull();
+	// Another user never reads it.
+	expect(await conversationPoint("mallory", sessionId, "m2")).toBeNull();
+	await db.exec("truncate agent_task_command_receipt");
+});
+
+it("empties settled turns' conversation copies except each chat's latest and training-eligible ones", async () => {
+	const { compactSettledTurns } = await import(
+		"../src/server/adapters/api-turns"
+	);
+	const big = JSON.stringify(
+		Array.from({ length: 50 }, (_, index) => ({
+			role: "user",
+			content: `message ${index} ${"x".repeat(40)}`,
+		})),
+	);
+	const turn = async (age: string, state: string, eligible = false) =>
+		(
+			await db.query<{ id: string }>(
+				`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,training_eligible,created_at,updated_at)
+				 values(gen_random_uuid(),$1,'alice',$2,$3,'m',$4,$5::jsonb,$5::jsonb,$6,now()-$7::interval,now()-$7::interval) returning id`,
+				[sessionId, connectionId, revision, state, big, eligible, age],
+			)
+		).rows[0]?.id as string;
+	const old = await turn("3 hours", "completed");
+	const kept = await turn("150 minutes", "completed", true);
+	const recent = await turn("10 minutes", "failed");
+	const latest = await turn("2 hours", "completed");
+	// The newest one is the chat's latest whatever its age (created last).
+	await db.query("update api_turn set created_at=now() where id=$1", [latest]);
+	expect(await compactSettledTurns()).toBe(1);
+	const rows = await db.query<{
+		id: string;
+		messages: unknown[];
+		items: unknown[];
+	}>("select id,messages,items from api_turn where id = any($1::uuid[])", [
+		[old, kept, recent, latest],
+	]);
+	const byId = new Map(rows.rows.map((row) => [row.id, row]));
+	expect(byId.get(old)).toMatchObject({ messages: [], items: [] });
+	for (const id of [kept, recent, latest])
+		expect(byId.get(id)?.messages).toHaveLength(50);
+	// Already compacted rows are not visited again.
+	expect(await compactSettledTurns()).toBe(0);
+});
