@@ -33,14 +33,15 @@ it("renders a frame sandboxed to scripts only, never same-origin", () => {
 	expect(html).toContain('referrerPolicy="no-referrer"');
 });
 
-it("shows a card with its title, revision, thumbnail and Open", () => {
+it("shows a card with its title, thumbnail and Open, and no revision", () => {
 	const html = renderToStaticMarkup(
 		<CanvasOpenContext.Provider value={() => undefined}>
 			<CanvasCard item={item(2)} latest />
 		</CanvasOpenContext.Provider>,
 	);
 	expect(html).toContain("Checkout mockup");
-	expect(html).toContain("rev 2");
+	expect(html).not.toContain("rev 2");
+	expect(html).not.toContain("revision");
 	expect(html).toContain(">Open<");
 	expect(sandboxes(html)).toEqual(["allow-scripts"]);
 	expect(html).toContain('loading="lazy"');

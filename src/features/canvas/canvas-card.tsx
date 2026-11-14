@@ -7,7 +7,8 @@ import "./canvas.css";
 
 /**
  * A canvas the agent showed, in the transcript: a live thumbnail, its title
- * and revision, and Open, which shows it in the right panel.
+ * and Open, which shows it in the right panel. No revision number here: the
+ * panel has the revision switcher.
  */
 export function CanvasCard({
 	item,
@@ -29,7 +30,7 @@ export function CanvasCard({
 		<article
 			className="canvas-card"
 			data-kept={item.html === null ? "false" : undefined}
-			aria-label={`Canvas ${item.title}, revision ${item.revision}`}
+			aria-label={`Canvas ${item.title}`}
 		>
 			<div className="canvas-card-thumb">
 				{item.html === null ? (
@@ -56,14 +57,6 @@ export function CanvasCard({
 				<span className="canvas-card-kicker">
 					<AppWindow size={13} strokeWidth={1.75} aria-hidden="true" />
 					Canvas
-					{item.revision > 1 ? (
-						<>
-							<span className="canvas-card-dot" aria-hidden="true">
-								·
-							</span>
-							rev {item.revision}
-						</>
-					) : null}
 				</span>
 				<strong className="canvas-card-title" title={item.title}>
 					{item.title}
