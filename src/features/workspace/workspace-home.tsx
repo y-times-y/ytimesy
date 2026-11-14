@@ -53,7 +53,6 @@ import {
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
 import { adjacentChatId, titleWithShortcut } from "#/domain/keyboard-shortcuts";
-import { createLiveProgressCopy } from "#/domain/live-progress";
 import { memoryHoldsLine } from "#/domain/memory-marker";
 import {
 	base64ByteLength,
@@ -109,7 +108,6 @@ import {
 	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
-	progressReopenDelayMs,
 	progressRevivesStoppedTurn,
 	progressStreamWanted,
 	SEND_TIMEOUT_MESSAGE,
@@ -271,6 +269,7 @@ import {
 } from "./explorer.fn";
 import { prefetchWorkspaceFiles } from "./files-inspector";
 import { UsageWarningBanner } from "./infrastructure-usage";
+import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import {
 	DEFAULT_MEMORY_VIEW,
@@ -1862,41 +1861,26 @@ export function WorkspaceHome({
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	const pageRestores = usePageRestores();
-	// A stream the browser gave up on (a deploy answered a reconnect with an
-	// error) is reopened here with backoff, without telling the user.
-	const [progressReopens, setProgressReopens] = useState(0);
-	const progressReopenAttempt = useRef(0);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache, or a reopen after the browser gave up, reopens the stream.
+	// The live connection (a WebSocket when the server offers it, else the
+	// event stream) reconnects by itself with backoff, without telling the user.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a page back from the back/forward cache reopens the connection.
 	useEffect(() => {
 		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
-		const source = new EventSource(
-			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId, deltas: "1" })}`,
-		);
 		let lastRevision = "";
-		// Full snapshots replace this copy; `delta` events merge into it.
-		const live = createLiveProgressCopy(activeSessionId);
-		const stale = (event: MessageEvent) =>
-			epoch !== sessionEpoch.current ||
-			selectedSessionIdRef.current !== activeSessionId ||
-			Boolean(event.lastEventId && event.lastEventId === lastRevision);
-		const eventData = (event: MessageEvent): unknown => {
-			try {
-				return JSON.parse(event.data);
-			} catch {
-				return null;
-			}
-		};
-		// A delta the copy cannot take (one was missed): the reopened stream
-		// starts with a full snapshot.
-		const resync = () => {
-			source.close();
-			liveProgress.current = null;
-			if (progressStreamOpen.current === activeSessionId)
-				progressStreamOpen.current = null;
-			setProgressReopens((count) => count + 1);
-		};
-		const showProgress = (progress: SessionProgress, eventId: string) => {
+		const onProgress = (revision: string, received: unknown) => {
+			if (
+				epoch !== sessionEpoch.current ||
+				selectedSessionIdRef.current !== activeSessionId
+			)
+				return;
+			if (revision && revision === lastRevision) return;
+			const progress = received as SessionProgress | null;
+			if (
+				progress?.sessionId !== activeSessionId ||
+				!Array.isArray(progress.items)
+			)
+				return;
 			// A snapshot holds the chat's last turns; older ones shown stay above.
 			const page = progressPage(progress);
 			const shown = (current: PublicCodexSession) =>
@@ -1921,7 +1905,7 @@ export function WorkspaceHome({
 				})
 			)
 				return;
-			lastRevision = eventId;
+			lastRevision = revision;
 			liveProgress.current = {
 				sessionId: activeSessionId,
 				receivedAt: Date.now(),
@@ -1953,41 +1937,24 @@ export function WorkspaceHome({
 					.catch(() => undefined);
 			}
 		};
-		source.addEventListener("progress", (event: MessageEvent) => {
-			if (stale(event)) return;
-			const progress = live.full(eventData(event));
-			if (progress) showProgress(progress, event.lastEventId);
+		const close = openLiveProgress({
+			projectId: activeProjectId,
+			sessionId: activeSessionId,
+			onProgress,
+			onOpen: () => {
+				progressStreamOpen.current = activeSessionId;
+			},
+			onDrop: () => {
+				liveProgress.current = null;
+				// Polling stands in until the connection is back.
+				if (progressStreamOpen.current === activeSessionId) {
+					progressStreamOpen.current = null;
+					refetchOpenSession.current();
+				}
+			},
 		});
-		source.addEventListener("delta", (event: MessageEvent) => {
-			if (stale(event)) return;
-			const progress = live.delta(eventData(event));
-			if (progress === "resync") resync();
-			else if (progress) showProgress(progress, event.lastEventId);
-		});
-		let reopenTimer: ReturnType<typeof setTimeout> | undefined;
-		source.onopen = () => {
-			progressStreamOpen.current = activeSessionId;
-			progressReopenAttempt.current = 0;
-		};
-		source.onerror = () => {
-			liveProgress.current = null;
-			// Polling stands in until the stream reconnects.
-			if (progressStreamOpen.current === activeSessionId) {
-				progressStreamOpen.current = null;
-				refetchOpenSession.current();
-			}
-			// The browser retries by itself unless the reconnect was refused.
-			if (source.readyState === EventSource.CLOSED && !reopenTimer) {
-				const attempt = progressReopenAttempt.current++;
-				reopenTimer = setTimeout(
-					() => setProgressReopens((count) => count + 1),
-					progressReopenDelayMs(attempt),
-				);
-			}
-		};
 		return closeOnPageHide(() => {
-			clearTimeout(reopenTimer);
-			source.close();
+			close();
 			liveProgress.current = null;
 			if (progressStreamOpen.current === activeSessionId)
 				progressStreamOpen.current = null;
@@ -1998,7 +1965,6 @@ export function WorkspaceHome({
 		listenForProgress,
 		harnessId,
 		pageRestores,
-		progressReopens,
 	]);
 
 	const backgroundIds = backgroundTurnPollChatIds({

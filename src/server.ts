@@ -2,6 +2,7 @@ import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { captureServerException } from "./server/adapters/analytics";
 import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
+import { handleLiveProgressSocket } from "./server/sockets/live-progress-socket";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import { proxyAnalytics } from "./server/web/analytics-proxy";
 import { canonicalOriginRedirect } from "./server/web/canonical-origin";
@@ -80,7 +81,9 @@ export default createServerEntry({
 					await monitored(
 						request,
 						async () =>
-							(await handleWorkerSocket(request)) ?? renderPage(request),
+							(await handleWorkerSocket(request)) ??
+							(await handleLiveProgressSocket(request)) ??
+							renderPage(request),
 					),
 					request,
 				),

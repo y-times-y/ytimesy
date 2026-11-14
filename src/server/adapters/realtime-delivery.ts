@@ -6,7 +6,7 @@ import {
 	MAX_DELIVERY_BYTES,
 } from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
-import { executorFetch } from "./executor-fetch";
+import { executorFetch, hasExecutorBinding } from "./executor-fetch";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
 
 /**
@@ -112,6 +112,43 @@ export async function purgeConversationState(
 	await response.body?.cancel().catch(() => {});
 	if (!response.ok)
 		throw new Error(`Chat state could not be deleted (${response.status}).`);
+}
+/**
+ * Opens a live viewer's WebSocket on the chat's object (the response to hand
+ * the browser), seeding an empty or stale room from `snapshot` (read from
+ * Postgres) first. Null when there is no edge to hold it: the socket needs the
+ * web Worker's service binding.
+ */
+export async function openConversationLiveSocket(
+	snapshot: ConversationSnapshot,
+) {
+	const config = realtimeDeliveryConfiguration();
+	if (!config || !hasExecutorBinding()) return null;
+	const query = new URLSearchParams({
+		userId: snapshot.userId,
+		sessionId: snapshot.sessionId,
+		revision: snapshot.revision,
+	});
+	const url = `${config.url}/live?${query}`;
+	const connect = async () =>
+		executorFetch(url, {
+			headers: {
+				...(await signDeliveryRequest(config.secret, "GET", url)),
+				Upgrade: "websocket",
+			},
+		});
+	let response = await connect();
+	if (response.status === 404 || response.status === 409) {
+		await response.body?.cancel();
+		// Recover an absent/stale room from PG; never rerun inference to rebuild it.
+		await publishConversationSnapshot(snapshot);
+		response = await connect();
+	}
+	if (response.status !== 101) {
+		await response.body?.cancel();
+		throw new Error(`Live progress socket unavailable (${response.status}).`);
+	}
+	return response;
 }
 export async function subscribeConversationSnapshot(
 	snapshot: ConversationSnapshot,
