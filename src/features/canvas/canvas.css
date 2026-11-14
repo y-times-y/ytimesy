@@ -66,9 +66,6 @@
 	font-size: 11px;
 	line-height: 16px;
 }
-.canvas-card-dot {
-	color: #5c5c5c;
-}
 .canvas-card-title {
 	overflow: hidden;
 	color: var(--list-text-strong);
