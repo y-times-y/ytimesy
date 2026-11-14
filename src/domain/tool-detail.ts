@@ -90,22 +90,34 @@ export function publicToolDetail(
 							: entry,
 					2,
 				) ?? "No output");
-	const safe = redactSecrets(format === "output" ? toolOutputText(text) : text)
-		.replace(/\bsk-[\w-]{12,}/g, "[redacted]")
-		.replace(/\bAIza[\w-]{20,}/g, "[redacted]")
-		// Google's newer key format (AQ. and an opaque token).
-		.replace(/\bAQ\.[\w-]{30,}/g, "[redacted]")
-		.replace(
-			/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(["'])(.*?)\2/gi,
-			"$1$2[redacted]$2",
-		)
-		.replace(
-			/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(?!["'])[^\s,"'}]+/gi,
-			"$1[redacted]",
-		);
+	const safe = redactToolText(
+		format === "output" ? toolOutputText(text) : text,
+	);
 	return safe.length > 16000
 		? `${safe.slice(0, 16000)}\n[Output truncated for display]`
 		: safe;
+}
+
+/**
+ * Tool text the chat shows with credential-shaped values (tokens, keys,
+ * `password: …` assignments) replaced by [redacted], unbounded.
+ */
+export function redactToolText(text: string): string {
+	return (
+		redactSecrets(text)
+			.replace(/\bsk-[\w-]{12,}/g, "[redacted]")
+			.replace(/\bAIza[\w-]{20,}/g, "[redacted]")
+			// Google's newer key format (AQ. and an opaque token).
+			.replace(/\bAQ\.[\w-]{30,}/g, "[redacted]")
+			.replace(
+				/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(["'])(.*?)\2/gi,
+				"$1$2[redacted]$2",
+			)
+			.replace(
+				/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(?!["'])[^\s,"'}]+/gi,
+				"$1[redacted]",
+			)
+	);
 }
 
 /** A tool row as a short sentence: "Ran `make test`", "Edited lsm_db.h +12 −3". */

@@ -78,6 +78,7 @@ const TOOL_GLYPHS: Readonly<Record<string, SessionActivityGlyph>> = {
 	enter_plan_mode: "plan",
 	propose_plan: "plan",
 	request_project_secret: "secret",
+	canvas: "browser",
 	request_push_approval: "plan",
 	ask_user: "plan",
 	agent: "agent",

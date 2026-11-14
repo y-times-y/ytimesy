@@ -1,3 +1,4 @@
+import { CANVAS_TOOL } from "./canvas";
 import { leanToolNames } from "./harness-model-profile";
 import { SessionItemId } from "./ids";
 import type {
@@ -6,10 +7,11 @@ import type {
 	SessionTurnStatus,
 } from "./session-item";
 
-/** Lean tools that only read the checkout (or an image in it). */
-const READ_ONLY_TOOLS = new Set<string>(
-	leanToolNames(["read", "glob", "grep", "image"]),
-);
+/** Lean tools that only read the checkout (or an image in it), and the display-only canvas. */
+const READ_ONLY_TOOLS = new Set<string>([
+	...leanToolNames(["read", "glob", "grep", "image"]),
+	CANVAS_TOOL,
+]);
 
 /**
  * Whether this turn ran a tool that could have changed the workspace, read

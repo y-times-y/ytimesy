@@ -28,6 +28,7 @@ import {
 	backgroundCommandStateText,
 	backgroundCommandStatus,
 } from "#/domain/background-command";
+import { latestCanvasRevision } from "#/domain/canvas";
 import { checkSummary } from "#/domain/check-summary";
 import {
 	type AgentTaskActivity,
@@ -97,6 +98,11 @@ import {
 	SetupRequestItem,
 	SetupRequestRow,
 } from "#/features/projects/environment-build-progress";
+import { CanvasCard, MemoCanvasCard } from "../canvas/canvas-card";
+import {
+	type CanvasFocus,
+	CanvasOpenContext,
+} from "../canvas/canvas-open-context";
 import { evidenceAnchors } from "../evidence/evidence-anchors";
 import { EvidenceCard } from "../evidence/evidence-view";
 import { HandoffCard } from "../local-import/handoff-card";
@@ -167,6 +173,7 @@ export function SessionTimeline({
 	turnStatus,
 	fill = false,
 	onOpenFile,
+	onOpenCanvas,
 	tasks = [],
 	taskParentId,
 	autoScroll = true,
@@ -243,6 +250,8 @@ export function SessionTimeline({
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
 	onOpenFile?: (path: string) => void;
+	/** Opens a canvas card's canvas in the right panel; cards have no Open without it. */
+	onOpenCanvas?: (focus: CanvasFocus) => void;
 	tasks?: readonly AgentTaskActivity[];
 	taskParentId?: string;
 	autoScroll?: boolean;
@@ -260,6 +269,7 @@ export function SessionTimeline({
 	previous.current = derived;
 	const { queued, items, presented, visible, rows, fileChanges } = derived;
 	const openFile = useStableCallback(onOpenFile);
+	const openCanvas = useStableCallback(onOpenCanvas);
 	const removeQueued = useStableCallback(onRemoveQueued);
 	const editQueued = useStableCallback(onEditQueued);
 	const sendQueued = useStableCallback(onSendQueued);
@@ -375,6 +385,14 @@ export function SessionTimeline({
 								item={row.item}
 								outcome={secretRequestOutcome(items, row.item.id)}
 								actions={stableSecretActions}
+							/>
+						) : row.kind === "item" && row.item.kind === "canvas" ? (
+							<MemoCanvasCard
+								item={row.item}
+								latest={
+									latestCanvasRevision(items, row.item.title) ===
+									row.item.revision
+								}
 							/>
 						) : row.kind === "item" && row.item.kind === "pushApproval" ? (
 							<MemoPushApprovalCard
@@ -512,6 +530,7 @@ export function SessionTimeline({
 			memoryActions={stableMemoryActions}
 			readPastedText={readPasted}
 			setupProjectId={setupProjectId}
+			openCanvas={openCanvas}
 		>
 			<SenderContext.Provider value={senderName ?? null}>
 				<AgentMentionContext.Provider value={mentions}>
@@ -705,6 +724,7 @@ function rowEstimate(row: TimelineRow): number {
 		item.kind === "pushApproval"
 	)
 		return 160;
+	if (item.kind === "canvas") return 100;
 	return 34;
 }
 
@@ -719,18 +739,22 @@ function TimelineProviders({
 	memoryActions,
 	readPastedText,
 	setupProjectId,
+	openCanvas,
 	children,
 }: {
 	memoryActions?: MemoryMarkerActions;
 	readPastedText?: (attachmentId: string) => Promise<PastedTextPreview>;
 	setupProjectId?: string;
+	openCanvas?: (focus: CanvasFocus) => void;
 	children: ReactNode;
 }) {
 	return (
 		<MemoryMarkerProvider actions={memoryActions}>
 			<PastedTextReader.Provider value={readPastedText ?? null}>
 				<SetupProjectContext.Provider value={setupProjectId ?? null}>
-					{children}
+					<CanvasOpenContext.Provider value={openCanvas ?? null}>
+						{children}
+					</CanvasOpenContext.Provider>
 				</SetupProjectContext.Provider>
 			</PastedTextReader.Provider>
 		</MemoryMarkerProvider>
@@ -1271,6 +1295,8 @@ function SessionItemView({
 			return <SecretRequestCard item={item} outcome="answered" />;
 		case "pushApproval":
 			return <PushApprovalCard item={item} outcome={{ answer: "pending" }} />;
+		case "canvas":
+			return <CanvasCard item={item} latest={false} />;
 		case "planProposal":
 			return <PlanMessage text={item.text} onOpenFile={onOpenFile} />;
 		case "commandExecution": {

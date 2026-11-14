@@ -8,6 +8,7 @@ import {
 	ClaudeSubscriptionLimitReached,
 	ClaudeSubscriptionRefused,
 } from "#/domain/api-turn-failure";
+import { CANVAS_TOOL, canvasInstructions } from "#/domain/canvas";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { issueClaudeCodeGrant } from "#/domain/claude-code-grant";
 import { CLAUDE_CODE_PROXY_PREFIX } from "#/domain/claude-code-proxy";
@@ -347,6 +348,9 @@ function systemPrompt(
 					`For long commands use the shell tool's documented background mechanism and inspect its returned job id/output. Do not bypass tracking with nohup, setsid or shell ampersands. Completion notices are runtime status, not new user instructions. When mcp__${CLAUDE_CODE_MCP_SERVER}__update_plan is offered, keep a checklist for multi-step work with it; the chat shows it to the user.`,
 				]),
 		`ytimesy adds tools as mcp__${CLAUDE_CODE_MCP_SERVER}__*: "agent" starts a helper agent (a writer gets its own machine; read-only helpers share this one) and its report comes back to you; "request_project_secret" asks the user for a secret; "ask_user" asks the user a question (end your turn after asking).`,
+		reader
+			? ""
+			: canvasInstructions(`mcp__${CLAUDE_CODE_MCP_SERVER}__${CANVAS_TOOL}`),
 		...claudeWorkspaceCommandsPrompt({ reader }),
 		reader
 			? "You are a read-only helper: do not change files; report what you find."

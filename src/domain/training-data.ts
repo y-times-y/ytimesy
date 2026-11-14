@@ -183,6 +183,12 @@ export function sessionItemTrainingParts(
 				...part("environment", "status", item.status),
 			];
 		}
+		case "canvas":
+			// The document is the model's own output.
+			return [
+				...part("model", "title", item.title),
+				...part("model", "html", item.html),
+			];
 		case "webSearch":
 			return part("model", "query", item.query);
 		case "error":

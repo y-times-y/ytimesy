@@ -1,4 +1,5 @@
 import type { ToolSet } from "ai";
+import { CANVAS_TOOL } from "#/domain/canvas";
 import {
 	LEAN_COMMAND_ARGUMENTS,
 	leanToolRole,
@@ -19,7 +20,7 @@ import { withOutputCap } from "./tool-output-cap";
  *   head, wc, grep and the like), no redirection, substitution or
  *   background jobs, its output capped,
  * - the few conversational tools (ask_user, report_task_blocked,
- *   request_project_secret).
+ *   request_project_secret) and the display-only canvas.
  *
  * Everything else is dropped: edit, write, apply_patch, stdin to a running
  * command, run_code, MCP, browser and web search. Model-facing text names
@@ -36,6 +37,7 @@ const KEPT = new Set<string>([
 	"ask_user",
 	"report_task_blocked",
 	"request_project_secret",
+	CANVAS_TOOL,
 ]);
 
 /** Read-only programs one pipeline stage may run. */

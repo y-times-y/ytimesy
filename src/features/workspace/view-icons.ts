@@ -1,4 +1,5 @@
 import {
+	AppWindow,
 	BookMarked,
 	FolderTree,
 	GitCompare,
@@ -21,4 +22,5 @@ export const VIEW_ICONS = {
 	desktop: Monitor,
 	memory: BookMarked,
 	side: MessagesSquare,
+	canvas: AppWindow,
 } as const satisfies Record<string, LucideIcon>;

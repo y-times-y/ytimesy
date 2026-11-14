@@ -121,6 +121,7 @@ export function groupTimelineRows(
 				item.kind !== "pushApproval" &&
 				item.kind !== "userQuestion" &&
 				item.kind !== "memorySave" &&
+				item.kind !== "canvas" &&
 				item.kind !== "modelSwitch" &&
 				item.kind !== "notice",
 		);
@@ -137,10 +138,12 @@ export function groupTimelineRows(
 				.filter((item) => item.kind === "modelSwitch")
 				.map((item) => ({ kind: "item" as const, item })),
 		);
-		// Push approvals keep their place above the answer when work folds away.
+		// Push approvals and canvases keep their place above the answer when work folds away.
 		rows.push(
 			...visible
-				.filter((item) => item.kind === "pushApproval")
+				.filter(
+					(item) => item.kind === "pushApproval" || item.kind === "canvas",
+				)
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 		if (final) rows.push({ kind: "item", item: final });

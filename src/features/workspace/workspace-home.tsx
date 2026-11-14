@@ -27,6 +27,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
 import { shouldPollSubagents } from "#/domain/agent-task";
+import { chatCanvases } from "#/domain/canvas";
 import { chatAddress, chatIdInAddress } from "#/domain/chat-address";
 import {
 	NO_SAVED_DEFAULT_BRANCHES,
@@ -199,6 +200,7 @@ import {
 } from "../app/keyboard-shortcuts";
 import { closeOnPageHide, usePageRestores } from "../app/page-lifecycle";
 import { authClient } from "../auth/client";
+import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { useImportFinishAlert } from "../local-import/use-import-finish-alert";
 import { requestJson, retryTransientRead } from "../projects/api";
 import {
@@ -257,6 +259,7 @@ import {
 	SideChat,
 } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
+import { useStableCallback } from "../sessions/stable-callbacks";
 import {
 	getWorkspaceDesktop,
 	prepareWorkspaceDesktopFn,
@@ -626,6 +629,8 @@ export function WorkspaceHome({
 		savedInspector.view,
 	);
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
+	/** The canvas the Canvas tab shows; the chat's latest when unset. */
+	const [canvasFocus, setCanvasFocus] = useState<CanvasFocus>();
 	/** The memory file a chat's memory marker asked the Memory tab to show. */
 	const [memoryFocus, setMemoryFocus] = useState<{ path: string }>();
 	const [customSplit, setCustomSplit] = useState<number | null>(
@@ -1062,6 +1067,12 @@ export function WorkspaceHome({
 	}, [session.turnStatus, refetchChanges]);
 	const fileChanges =
 		gitChanges.data ?? fileChangesFromSessionItems(session.items);
+	const canvases = useMemo(() => chatCanvases(session.items), [session.items]);
+	// A card's Open: one function for the whole chat, so memoized cards keep it.
+	const openCanvas = useStableCallback((focus: CanvasFocus) => {
+		setCanvasFocus(focus);
+		openInspector("canvas");
+	});
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		wide: inspectorPaneIsWide(inspectorView),
@@ -3845,6 +3856,7 @@ export function WorkspaceHome({
 											}}
 											onOpenInspector={openInspector}
 											onOpenFile={openMentionedFile}
+											onOpenCanvas={openCanvas}
 											projects={projects.data ?? []}
 											selectedProject={selectedProject}
 											onSelectProject={(id) => {
@@ -3898,6 +3910,9 @@ export function WorkspaceHome({
 										fileChanges={fileChanges}
 										selectedFilePath={selectedFilePath}
 										onSelectFilePath={setSelectedFilePath}
+										canvases={canvases}
+										canvasFocus={canvasFocus}
+										onCanvasFocusChange={setCanvasFocus}
 										desktop={desktop}
 										desktopBusy={desktopBusy}
 										projectId={selectedProject?.id}

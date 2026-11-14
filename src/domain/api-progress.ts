@@ -3,6 +3,12 @@ import { PLAN_TOOL } from "./agent-todos";
 import type { ApiAgentEvent } from "./api-agent-event";
 import { backgroundCommandLabel } from "./background-command";
 import {
+	CANVAS_TOOL,
+	canvasItem,
+	shownCanvas,
+	withBoundedCanvasHistory,
+} from "./canvas";
+import {
 	CODE_MODE_TOOL,
 	type CodeModeResult,
 	storedCodeModeResult,
@@ -143,6 +149,34 @@ export function applyApiProgress(
 	} else if (event.type === "tool-call" && event.name === ASK_USER_TOOL)
 		return [...items];
 	else if (
+		event.type === "tool-result" &&
+		event.name === CANVAS_TOOL &&
+		shownCanvas(event.output, event.failed)
+	) {
+		// A shown canvas is its own card; the HTML the call carried is not repeated.
+		const shown = shownCanvas(event.output, event.failed);
+		if (!shown) return [...items];
+		const added = existing
+			? items.map((item) => (item.id === id ? canvasItem(id, shown) : item))
+			: [...items, canvasItem(id, shown)];
+		return withBoundedCanvasHistory(added);
+	} else if (event.type === "tool-call" && event.name === CANVAS_TOOL) {
+		// Its input is a whole document: the card shows the title until it is shown.
+		const { title, path } = (event.input ?? {}) as {
+			title?: unknown;
+			path?: unknown;
+		};
+		next = {
+			kind: "dynamicToolCall",
+			id,
+			tool: CANVAS_TOOL,
+			input: publicToolDetail({
+				title: typeof title === "string" ? title.slice(0, 200) : "",
+				...(typeof path === "string" ? { path: path.slice(0, 500) } : {}),
+			}),
+			status: "inProgress",
+		};
+	} else if (
 		(event.type === "tool-call" || event.type === "tool-result") &&
 		event.name === PLAN_TOOL
 	)
