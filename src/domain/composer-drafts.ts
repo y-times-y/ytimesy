@@ -63,6 +63,15 @@ export function storageWithDraft(
 }
 
 /** The draft key of a composer: its chat, or the new-chat composer. */
+/** The message box after a prefill: the text, or after what is typed when appending. */
+export function draftWithPrefill(
+	current: string,
+	text: string,
+	append: boolean,
+): string {
+	return append && current.trim() ? `${current.trimEnd()}\n\n${text}` : text;
+}
+
 export function composerDraftKey(chatId: string | null | undefined) {
 	return chatId || NEW_CHAT_DRAFT_KEY;
 }

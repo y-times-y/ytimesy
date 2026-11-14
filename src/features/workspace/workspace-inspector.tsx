@@ -72,7 +72,7 @@ const views = {
 		icon: VIEW_ICONS.canvas,
 		title: "No canvas yet.",
 		description:
-			"When an agent shows a mockup, prototype, chart or diagram, it opens here as a live preview.",
+			"When an agent shares a design (mockups, options side by side, a flow), it opens here to review, annotate and compare.",
 	},
 } as const;
 
@@ -99,12 +99,15 @@ export function WorkspaceInspector({
 	canvases = [],
 	canvasFocus,
 	onCanvasFocusChange,
+	onCanvasCompose,
 }: {
 	/** The chat's canvases (canvas.ts), shown in the Canvas tab. */
 	canvases?: readonly CanvasThread[];
 	/** The canvas and revision the Canvas tab shows; the latest when absent. */
 	canvasFocus?: CanvasFocus;
 	onCanvasFocusChange?: (focus: CanvasFocus) => void;
+	/** Puts a canvas's notes or prompt in the chat's message box (not sent). */
+	onCanvasCompose?: (text: string, mode: "append" | "replace") => void;
 	/** The side chat beside Main, shown in the Side chat tab. */
 	sideChat?: ReactNode;
 	/** The pointer or focus reached a view's entry: it may open next. */
@@ -275,6 +278,7 @@ export function WorkspaceInspector({
 					canvases={canvases}
 					focus={canvasFocus}
 					onFocusChange={onCanvasFocusChange ?? (() => undefined)}
+					onCompose={onCanvasCompose}
 				/>
 			) : activeView === "side" && sideChat ? (
 				sideChat

@@ -1,11 +1,15 @@
+import { CANVAS_BRIDGE_SCRIPT } from "./canvas-annotation";
 import { SessionItemId } from "./ids";
 import type { CanvasItem, SessionItem } from "./session-item";
 
 /**
- * The canvas: an agent shows the user a self-contained HTML document (a UI
- * mockup, a prototype, a chart, a diagram) with the `canvas` tool. The chat
- * shows a card; the right panel's Canvas view renders it in a sandboxed
- * frame. Calling again with the same title adds a revision of that canvas.
+ * The canvas: a surface where the agent and the user iterate on a design.
+ * The agent shows a self-contained HTML document (UI mockups, layout and
+ * visual options side by side, flows) with the `canvas` tool; the chat
+ * shows a card and the right panel's Canvas view renders it in a sandboxed
+ * frame, where the user pins notes on elements and sends them back
+ * (canvas-annotation.ts). Calling again with the same title adds the next
+ * revision, which the user can compare with the last.
  */
 export const CANVAS_TOOL = "canvas";
 
@@ -57,15 +61,17 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${CANVAS_C
 const LEADING_DOCTYPE = /^(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
 
 /**
- * The document the frame renders: the agent's HTML with the policy first.
- * A policy element read before any of the document's own markup applies to
- * all of it, and removing the element later does not lift it.
+ * The document the frame renders: the agent's HTML with the policy first,
+ * then the bridge the Canvas view annotates through. A policy element read
+ * before any of the document's own markup applies to all of it (the bridge
+ * included), and removing the element later does not lift it.
  */
 export function canvasDocument(html: string): string {
+	const head = `${CSP_META}${CANVAS_BRIDGE_SCRIPT}`;
 	const doctype = LEADING_DOCTYPE.exec(html);
-	if (!doctype) return `${CSP_META}${html}`;
+	if (!doctype) return `${head}${html}`;
 	const end = doctype[0].length;
-	return `${html.slice(0, end)}${CSP_META}${html.slice(end)}`;
+	return `${html.slice(0, end)}${head}${html.slice(end)}`;
 }
 
 function attributeText(value: string) {
@@ -219,7 +225,7 @@ export function chatCanvases(items: readonly SessionItem[]): CanvasThread[] {
 
 /** The few lines of system guidance; the tool's description has the rules. */
 export function canvasInstructions(toolName: string = CANVAS_TOOL): string {
-	return `Canvas: show, don't describe. When ${toolName} is offered, use it to put HTML in front of the user whenever a picture beats prose: a UI mockup or prototype before you build a frontend change and the result after, design options side by side, charts of data, and diagrams of plans or architecture. To show what you built, write or build a single self-contained .html file and pass its path. The user sees it beside the chat, so your reply only says what to look at.`;
+	return `Canvas: design with the user, don't describe. When ${toolName} is offered, use it to iterate on a design together: UI mockups, layout and visual options, flows, and comparisons (before/after, screenshots or options side by side). For exploration, put two or three labelled options (A/B/C) side by side in one canvas, with data-ytimesy-prompt buttons such as "Go with option B", and ask the user to pick or annotate. The user can pin notes on elements and send them as a "Canvas feedback on …" message: apply every note, then call ${toolName} again with the same title for the next revision (never a new title for the same design). Charts and diagrams are a secondary use. The user sees it beside the chat, so your reply only says what changed and what to look at.`;
 }
 
 /** The model's short confirmation; the HTML itself is not sent back. */

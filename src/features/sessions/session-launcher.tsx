@@ -37,6 +37,7 @@ import {
 	composerDraftKey,
 	createDraftSaver,
 	type DraftSaver,
+	draftWithPrefill,
 	loadComposerDraft,
 	saveComposerDraft,
 } from "#/domain/composer-drafts";
@@ -298,13 +299,15 @@ export function SessionLauncher({
 	/**
 	 * Text put in the message box whenever `at` changes. With `send` it goes
 	 * by itself once the chat can take it, without passing through the box
-	 * (the setup's request), as `messageId` when given.
+	 * (the setup's request), as `messageId` when given. With `append` it
+	 * goes after what is already typed instead of replacing it.
 	 */
 	prefill?: {
 		readonly text: string;
 		readonly at: number;
 		readonly send?: boolean;
 		readonly messageId?: string;
+		readonly append?: boolean;
 	};
 	/** A `send` prefill went (or showed why it cannot); the page drops it. */
 	onPrefillSent?: () => void;
@@ -600,7 +603,8 @@ export function SessionLauncher({
 			setAutoSendAt(prefill.at);
 			return;
 		}
-		setDraft(prefill.text);
+		const { text, append } = prefill;
+		setDraft((current) => draftWithPrefill(current, text, append === true));
 		requestAnimationFrame(() => textareaRef.current?.focus());
 	}, [prefillAt]);
 	// Saved as it is typed, under the chat it was typed in; cleared at once

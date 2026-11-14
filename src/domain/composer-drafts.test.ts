@@ -4,6 +4,7 @@ import {
 	createDraftSaver,
 	DRAFT_MAX_AGE_MS,
 	draftFromStorage,
+	draftWithPrefill,
 	NEW_CHAT_DRAFT_KEY,
 	storageWithDraft,
 } from "./composer-drafts";
@@ -152,5 +153,18 @@ describe("draft saver", () => {
 		drafts.typed("chat-1", "");
 		elapse();
 		expect(saved).toEqual([["chat-1", ""]]);
+	});
+});
+describe("draftWithPrefill", () => {
+	it("replaces the draft, or adds after what is typed when appending", () => {
+		expect(draftWithPrefill("half a thought", "Go with option B", false)).toBe(
+			"Go with option B",
+		);
+		expect(
+			draftWithPrefill("Context first.  \n", "Canvas feedback", true),
+		).toBe("Context first.\n\nCanvas feedback");
+		expect(draftWithPrefill("  ", "Canvas feedback", true)).toBe(
+			"Canvas feedback",
+		);
 	});
 });
