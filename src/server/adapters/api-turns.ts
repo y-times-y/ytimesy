@@ -514,12 +514,12 @@ export async function checkpointApiTurn(
 	// $5 is the failover, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string; previous: string }>(
+		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
+		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[
 				turn.id,
 				turn.lease_id,
@@ -537,6 +537,7 @@ export async function checkpointApiTurn(
 		result.rows[0].version,
 		{ messages, items },
 		result.rows[0].previous,
+		result.rows[0].items_rev,
 	);
 	await wakeConversationProgress();
 }
@@ -557,12 +558,12 @@ export async function publishApiTurnProgress(
 ) {
 	const write = planItemsWrite(turn, items, 3, "agent_session.items");
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string; previous: string }>(
+		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
+	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[turn.id, turn.lease_id, write.itemsText, ...write.extra],
 		),
 	);
@@ -573,6 +574,7 @@ export async function publishApiTurnProgress(
 			result.rows[0].version,
 			{ items },
 			result.rows[0].previous,
+			result.rows[0].items_rev,
 		);
 	} else {
 		const cancelled = await database().query(
