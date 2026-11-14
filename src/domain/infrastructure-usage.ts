@@ -54,9 +54,14 @@ export const USAGE_WINDOW_WARNING_SHARE = 0.8;
 /**
  * One reservation as usage, dated when its hold started (`at`): settled ones
  * at what they consumed, open holds (running machines) at their full held
- * amount.
+ * amount. `settledAt` is when a settled one settled.
  */
-export type UsageCharge = { at: number; microUsd: number; open: boolean };
+export type UsageCharge = {
+	at: number;
+	microUsd: number;
+	open: boolean;
+	settledAt?: number | null;
+};
 
 export type UsageWindowState = {
 	id: UsageWindowId;
@@ -84,10 +89,18 @@ export function usageWindowExpired(
 	return startedAt === null || startedAt + usageWindowMs(id) <= now;
 }
 
+const sumCharges = (charges: readonly UsageCharge[]) =>
+	charges.reduce((sum, charge) => sum + validUsageAmount(charge.microUsd), 0);
+
 /**
  * A window's state from its start time and the user's charges: settled
  * usage counts from the window's start, and open holds (machines still
  * running) always count, so work in progress uses the current window.
+ *
+ * A window an auto-reset started (`carriedMicroUsd` set: see
+ * resetUsageWindows) starts empty instead: holds that were open at the reset
+ * count only for what they added since, which is their amount now (open, or
+ * settled since the reset) less what they held then.
  */
 export function usageWindowState(
 	id: UsageWindowId,
@@ -95,16 +108,30 @@ export function usageWindowState(
 	limitMicroUsd: number,
 	startedAt: number | null,
 	now = Date.now(),
+	carriedMicroUsd: number | null = null,
 ): UsageWindowState {
 	validUsageAmount(limitMicroUsd);
 	const running = !usageWindowExpired(id, startedAt, now);
-	const usedMicroUsd = charges
-		.filter(
-			(charge) =>
-				charge.open ||
-				(running && startedAt !== null && charge.at >= startedAt),
-		)
-		.reduce((sum, charge) => sum + validUsageAmount(charge.microUsd), 0);
+	const usedMicroUsd =
+		running && startedAt !== null && carriedMicroUsd !== null
+			? sumCharges(charges.filter((charge) => charge.at >= startedAt)) +
+				Math.max(
+					0,
+					sumCharges(
+						charges.filter(
+							(charge) =>
+								charge.at < startedAt &&
+								(charge.open || (charge.settledAt ?? -1) >= startedAt),
+						),
+					) - validUsageAmount(carriedMicroUsd),
+				)
+			: sumCharges(
+					charges.filter(
+						(charge) =>
+							charge.open ||
+							(running && startedAt !== null && charge.at >= startedAt),
+					),
+				);
 	return {
 		id,
 		limitMicroUsd,
@@ -118,6 +145,17 @@ export function usageWindowState(
 			running && startedAt !== null ? startedAt + usageWindowMs(id) : null,
 	};
 }
+
+/**
+ * A window an auto-reset policy restarted (instead of refusing work), while
+ * an ordinary user would still be waiting for it: `normalResetsAt` is when
+ * the exhausted window would have reset (null when it had no reset time).
+ */
+export type UsageAutoReset = {
+	id: UsageWindowId;
+	resetAt: number;
+	normalResetsAt: number | null;
+};
 
 /** The window that refuses new work now: the one that reopens last. */
 export function blockingUsageWindow(windows: readonly UsageWindowState[]) {

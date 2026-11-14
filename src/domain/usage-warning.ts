@@ -1,14 +1,17 @@
 import {
 	blockingUsageWindow,
 	USAGE_WINDOW_WARNING_SHARE,
+	type UsageAutoReset,
 	type UsageWindowState,
 } from "./infrastructure-usage";
 
 export type UsageWarning = {
-	readonly level: "warning" | "exhausted";
+	readonly level: "warning" | "exhausted" | "reset";
 	readonly window: UsageWindowState["id"];
 	readonly usedPercent: number;
 	readonly message: string;
+	/** For a "reset" notice: when the window was reset (each reset is shown once). */
+	readonly resetAt?: number;
 };
 
 const WINDOW_NAMES = { five_hour: "5-hour", weekly: "weekly" } as const;
@@ -71,4 +74,42 @@ export function usageWarning(
 		usedPercent: fullest.usedPercent,
 		message: `You have used ${fullest.usedPercent}% of your ${WINDOW_NAMES[fullest.id]} cloud usage limit.${fullest.resetsAt ? ` It resets at ${label(fullest.resetsAt)}.` : ""} At the limit, running work finishes and new work waits.`,
 	};
+}
+
+/**
+ * For an account with the auto-reset policy: the notice it gets in place of
+ * a refusal, about the latest window that was reset while an ordinary user
+ * would still be waiting.
+ */
+export function autoResetNotice(
+	resets: readonly UsageAutoReset[],
+	label: (ms: number) => string = usageResetLabel,
+): UsageWarning | null {
+	const latest = [...resets].sort((a, b) => b.resetAt - a.resetAt)[0];
+	if (!latest) return null;
+	return {
+		level: "reset",
+		window: latest.id,
+		usedPercent: 0,
+		resetAt: latest.resetAt,
+		message: `You reached your ${WINDOW_NAMES[latest.id]} cloud usage limit. Your account resets automatically, so it has been reset; a normal user would now wait ${latest.normalResetsAt ? `until ${label(latest.normalResetsAt)}` : "for it to reset"}.`,
+	};
+}
+
+/**
+ * What the user is shown about their cloud usage: the ordinary warning or
+ * limit notice first (an auto-reset account sees exactly what anyone would),
+ * else the notice of a recent auto-reset.
+ */
+export function usageNotice(
+	usage: {
+		readonly windows: readonly UsageWindowState[];
+		readonly autoResets?: readonly UsageAutoReset[];
+	},
+	label: (ms: number) => string = usageResetLabel,
+): UsageWarning | null {
+	return (
+		usageWarning(usage.windows, label) ??
+		autoResetNotice(usage.autoResets ?? [], label)
+	);
 }
