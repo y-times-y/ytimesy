@@ -175,10 +175,13 @@ export function projectSecretsInstructions(
 
 /**
  * Shell run after `git add -A` in a repository: refuses when the staged
- * changes, or any commit not yet on a remote (content or message), contain a
- * runtime secret's value. Unstages first so nothing is committed.
+ * changes, or a commit of this branch not yet on a remote (content or
+ * message), contain a runtime secret's value. Unstages first so nothing is
+ * committed. Only HEAD's history: other local refs (helper results under
+ * refs/ytimesy/agents, other branches) are not what this commit pushes, and
+ * scanning them refused chats for values those refs only snapshot.
  */
-export const SECRET_COMMIT_GUARD = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then ( . ${AGENT_SECRETS_ENV_PATH}; for name in $${REDACTED_NAMES_VARIABLE}; do value="\${!name}"; if [ -n "$value" ] && { git diff --cached; git log -p --format=%B --all --not --remotes; } | grep -qF -- "$value"; then git reset -q; echo "Refusing to commit: the changes or an unpushed commit contain the value of runtime secret $name. Remove it and use the environment variable instead." >&2; exit 3; fi; done ); fi`;
+export const SECRET_COMMIT_GUARD = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then ( . ${AGENT_SECRETS_ENV_PATH}; for name in $${REDACTED_NAMES_VARIABLE}; do value="\${!name}"; if [ -n "$value" ] && { git diff --cached; git log -p --format=%B HEAD --not --remotes; } | grep -qF -- "$value"; then git reset -q; echo "Refusing to commit: the changes or an unpushed commit contain the value of runtime secret $name. Remove it and use the environment variable instead." >&2; exit 3; fi; done ); fi`;
 
 /** Encoded variants are matched only for values at least this long, to avoid false positives. */
 const MIN_ENCODED_SECRET_LENGTH = 8;
