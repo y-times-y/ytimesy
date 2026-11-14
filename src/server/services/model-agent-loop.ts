@@ -130,7 +130,13 @@ export type ModelAgentInput = {
 	endTurnTools?: readonly string[];
 	signal: AbortSignal;
 	/** A tool call of the run started executing (after it, aborting the run could cut a write). */
-	onToolStart?: () => void;
+	onToolStart?: (call?: {
+		readonly toolCallId: string;
+		readonly toolName: string;
+		readonly providerExecuted?: boolean;
+	}) => void;
+	/** A tool call that onToolStart announced finished executing (timing only). */
+	onToolEnd?: (call: { readonly toolCallId: string }) => void;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
 	onStep: (messages: ModelMessage[]) => Promise<void>;
 	onToolMetric?: (metric: HarnessToolMetric) => void;
@@ -1340,7 +1346,11 @@ async function executeModelSteps(
 			onToolExecutionStart: ({ toolCall }) => {
 				// Provider-neutral: no reasoning or provider item ids that a native
 				// replay would require to arrive together with their reasoning.
-				input.onToolStart?.();
+				input.onToolStart?.({
+					toolCallId: toolCall.toolCallId,
+					toolName: toolCall.toolName,
+					providerExecuted: toolCall.providerExecuted,
+				});
 				if (!toolCall.providerExecuted) {
 					startedCalls = [
 						...startedCalls,
@@ -1359,6 +1369,11 @@ async function executeModelSteps(
 				startBackground();
 			},
 			onToolExecutionEnd: ({ toolCall, toolOutput, toolExecutionMs }) => {
+				try {
+					input.onToolEnd?.({ toolCallId: toolCall.toolCallId });
+				} catch {
+					/* Observability cannot interrupt coding. */
+				}
 				const category = toolMetricCategory(toolCall.toolName);
 				const key =
 					category === "read"
