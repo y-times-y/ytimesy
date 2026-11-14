@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { usageWindowState } from "./infrastructure-usage";
-import { usageResetLabel, usageWarning } from "./usage-warning";
+import {
+	autoResetNotice,
+	usageNotice,
+	usageResetLabel,
+	usageWarning,
+} from "./usage-warning";
 
 const now = Date.parse("2026-10-20T12:00:00Z");
 const label = (ms: number) => new Date(ms).toISOString();
@@ -66,4 +71,36 @@ it("labels a reset with its date and how far away it is, in the given zone", () 
 			timeZone: "Asia/Tokyo",
 		}),
 	).toBe("Fri, Oct 23, 7:15 PM (in 2 days)");
+});
+
+it("shows an auto-reset account the ordinary warnings, and a notice of a reset in place of the refusal", () => {
+	const reset = {
+		id: "five_hour" as const,
+		resetAt: now - 60_000,
+		normalResetsAt: now + 2 * 3_600_000,
+	};
+	// The 80% warning and the limit notice win, as for anyone.
+	expect(
+		usageNotice({ windows: windows(850), autoResets: [reset] }, label)?.level,
+	).toBe("warning");
+	expect(
+		usageNotice({ windows: windows(1000), autoResets: [reset] }, label)?.level,
+	).toBe("exhausted");
+	const notice = usageNotice(
+		{ windows: windows(0), autoResets: [reset] },
+		label,
+	);
+	expect(notice).toMatchObject({
+		level: "reset",
+		window: "five_hour",
+		resetAt: reset.resetAt,
+	});
+	expect(notice?.message).toBe(
+		`You reached your 5-hour cloud usage limit. Your account resets automatically, so it has been reset; a normal user would now wait until ${label(reset.normalResetsAt)}.`,
+	);
+	expect(
+		autoResetNotice([{ ...reset, id: "weekly", normalResetsAt: null }], label)
+			?.message,
+	).toContain("weekly cloud usage limit");
+	expect(usageNotice({ windows: windows(0) }, label)).toBeNull();
 });

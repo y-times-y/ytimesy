@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import {
 	blockingUsageWindow,
 	USAGE_WINDOWS,
+	type UsageAutoReset,
 	UsageCeilingReached,
 	type UsageCharge,
 	UsageWindowExhausted,
+	type UsageWindowState,
 	usageWindowCeiling,
 	usageWindowMs,
 	usageWindowState,
@@ -47,7 +50,9 @@ const WEEK_MS = USAGE_WINDOWS[USAGE_WINDOWS.length - 1].ms;
  * infrastructure_usage_window to a fixed reset, counting reservations dated
  * when their hold started (settled ones of the last week, open holds
  * whatever their age); a per-user override in infrastructure_usage_policy
- * replaces a deployment limit.
+ * replaces a deployment limit. `autoReset` is the user's auto-reset policy;
+ * `autoResets` lists the windows it restarted that an ordinary user would
+ * still be waiting for, for the one-time notice.
  */
 async function readWindows(
 	client: Pick<PoolClient, "query">,
@@ -59,53 +64,78 @@ async function readWindows(
 		amount: string | null;
 		open: boolean | null;
 		at: string | null;
+		settled: string | null;
 		five_hour: string | null;
 		weekly: string | null;
+		auto_reset: boolean | null;
 		five_hour_start: string | null;
+		five_hour_carried: string | null;
+		five_hour_waived: string | null;
 		weekly_start: string | null;
+		weekly_carried: string | null;
+		weekly_waived: string | null;
 	}>(
 		`select coalesce(r.consumed_micro_usd,r.reserved_micro_usd) as amount,
 		 r.consumed_micro_usd is null as open,
 		 (extract(epoch from r.created_at)*1000)::float8 as at,
-		 p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly,
-		 (select (extract(epoch from started_at)*1000)::float8 from infrastructure_usage_window where user_id=$1 and window_id='five_hour') as five_hour_start,
-		 (select (extract(epoch from started_at)*1000)::float8 from infrastructure_usage_window where user_id=$1 and window_id='weekly') as weekly_start
+		 (extract(epoch from r.settled_at)*1000)::float8 as settled,
+		 p.five_hour_micro_usd as five_hour,p.weekly_micro_usd as weekly,p.auto_reset,
+		 (extract(epoch from w5.started_at)*1000)::float8 as five_hour_start,w5.carried_micro_usd as five_hour_carried,
+		 (extract(epoch from w5.waived_until)*1000)::float8 as five_hour_waived,
+		 (extract(epoch from ww.started_at)*1000)::float8 as weekly_start,ww.carried_micro_usd as weekly_carried,
+		 (extract(epoch from ww.waived_until)*1000)::float8 as weekly_waived
 		 from (select 1) one
 		 left join infrastructure_usage_policy p on p.user_id=$1
+		 left join infrastructure_usage_window w5 on w5.user_id=$1 and w5.window_id='five_hour'
+		 left join infrastructure_usage_window ww on ww.user_id=$1 and ww.window_id='weekly'
 		 left join infrastructure_usage_reservation r on r.user_id=$1
 		  and (r.consumed_micro_usd is null or r.settled_at > to_timestamp($2::float8/1000))`,
 		[userId, now - WEEK_MS],
 	);
+	const number = (value: string | null | undefined) =>
+		value === null || value === undefined ? null : Number(value);
 	const charges: UsageCharge[] = result.rows
 		.filter((row) => row.amount !== null)
 		.map((row) => ({
 			at: Number(row.at),
 			microUsd: Number(row.amount),
 			open: row.open === true,
+			settledAt: number(row.settled),
 		}));
 	const policy = result.rows[0];
-	const start = (value: string | null | undefined) =>
-		value === null || value === undefined ? null : Number(value);
 	const limit = (override: string | null | undefined, fallback: number) =>
 		override === null || override === undefined ? fallback : Number(override);
-	const windows = [
-		usageWindowState(
-			"five_hour",
-			charges,
-			limit(policy?.five_hour, limits.fiveHourMicroUsd),
-			start(policy?.five_hour_start),
-			now,
-		),
-		usageWindowState(
-			"weekly",
-			charges,
-			limit(policy?.weekly, limits.weeklyMicroUsd),
-			start(policy?.weekly_start),
-			now,
-		),
+	const rows = [
+		{
+			id: "five_hour" as const,
+			limit: limit(policy?.five_hour, limits.fiveHourMicroUsd),
+			start: number(policy?.five_hour_start),
+			carried: number(policy?.five_hour_carried),
+			waived: number(policy?.five_hour_waived),
+		},
+		{
+			id: "weekly" as const,
+			limit: limit(policy?.weekly, limits.weeklyMicroUsd),
+			start: number(policy?.weekly_start),
+			carried: number(policy?.weekly_carried),
+			waived: number(policy?.weekly_waived),
+		},
 	];
+	const windows = rows.map((row) =>
+		usageWindowState(row.id, charges, row.limit, row.start, now, row.carried),
+	);
+	const autoResets: UsageAutoReset[] = rows.flatMap((row, index) =>
+		row.carried !== null &&
+		row.start !== null &&
+		windows[index].resetsAt !== null &&
+		(row.waived === null || row.waived > now)
+			? [{ id: row.id, resetAt: row.start, normalResetsAt: row.waived }]
+			: [],
+	);
 	return {
 		windows,
+		autoReset: policy?.auto_reset === true,
+		autoResets,
 		consumedMicroUsd: charges
 			.filter((charge) => !charge.open)
 			.reduce((sum, charge) => sum + charge.microUsd, 0),
@@ -129,16 +159,76 @@ export async function userInfrastructureUsage(
 /**
  * Refuses new work (a turn the user starts) once a usage window is
  * exhausted, with the time it reopens. Never called for work already
- * running, and a no-op where VM usage is not metered.
+ * running, and a no-op where VM usage is not metered. A user with the
+ * auto-reset policy is not refused: the exhausted windows restart now
+ * (resetUsageWindows) and the work goes ahead.
  */
 export async function assertUsageWindowsOpen(
 	userId: string,
 	client: Pick<PoolClient, "query"> = database(),
 ) {
-	const blocking = blockingUsageWindow(
-		(await userInfrastructureUsage(userId, client)).windows,
-	);
-	if (blocking) throw new UsageWindowExhausted(blocking);
+	const limits = infrastructureUsageLimits();
+	const usage = await readWindows(client, userId, limits);
+	const blocking = blockingUsageWindow(usage.windows);
+	if (!blocking) return;
+	if (!usage.autoReset) throw new UsageWindowExhausted(blocking);
+	// Read again under the budget lock: a concurrent admission may have
+	// reset the window already.
+	await usageTransaction(async (locked) => {
+		const current = await readWindows(locked, userId, limits);
+		await resetUsageWindows(
+			locked,
+			userId,
+			current.windows.filter((window) => window.exhausted),
+		);
+	});
+}
+
+export const AUTO_RESET_ACTOR = "system";
+export const AUTO_RESET_REASON = "auto-reset policy";
+
+/**
+ * The auto-reset policy's answer to a refusal, inside the caller's budget
+ * transaction: each window restarts now, so earlier settled usage falls
+ * outside it, and records what the user's holds open at the reset already
+ * counted (carried_micro_usd) so that a running machine counts only what it
+ * adds from here (usageWindowState). Each reset is audited as a
+ * 'window_reset' adjustment of the usage it cleared. Rolled back with the
+ * transaction when the work is refused anyway (a fleet cap).
+ */
+async function resetUsageWindows(
+	client: Pick<PoolClient, "query">,
+	userId: string,
+	windows: readonly UsageWindowState[],
+) {
+	const period = utcUsageMonth();
+	for (const window of windows) {
+		await client.query(
+			`with carried as (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) as amount
+			  from infrastructure_usage_reservation
+			  where user_id=$1 and created_at<now() and (consumed_micro_usd is null or settled_at>=now()))
+			 insert into infrastructure_usage_window(user_id,window_id,started_at,carried_micro_usd,waived_until)
+			 select $1,$2,now(),carried.amount,to_timestamp($3::float8/1000) from carried
+			 on conflict(user_id,window_id) do update set started_at=excluded.started_at,
+			  carried_micro_usd=excluded.carried_micro_usd,waived_until=excluded.waived_until`,
+			[userId, window.id, window.resetsAt],
+		);
+		await client.query(
+			"insert into infrastructure_usage_adjustment(id,actor_id,user_id,kind,period,amount_micro_usd,reason) values($1,$2,$3,'window_reset',$4,$5,$6)",
+			[
+				randomUUID(),
+				AUTO_RESET_ACTOR,
+				userId,
+				period,
+				window.usedMicroUsd,
+				AUTO_RESET_REASON,
+			],
+		);
+		console.info("Usage window auto-reset.", {
+			window: window.id,
+			clearedMicroUsd: window.usedMicroUsd,
+		});
+	}
 }
 
 /**
@@ -210,7 +300,7 @@ function startWindows(first: number) {
 	);
 	return `with started as (insert into infrastructure_usage_window(user_id,window_id,started_at)
 	 values(${user},'five_hour',now()),(${user},'weekly',now())
-	 on conflict(user_id,window_id) do update set started_at=excluded.started_at
+	 on conflict(user_id,window_id) do update set started_at=excluded.started_at,carried_micro_usd=null,waived_until=null
 	 where infrastructure_usage_window.started_at + make_interval(secs => (case infrastructure_usage_window.window_id
 	  when 'five_hour' then ${fiveHour}::float8 else ${weekly}::float8 end)/1000) <= now())`;
 }
@@ -315,7 +405,17 @@ export async function reserveInfrastructureUsage(
 		} else if (mode === "increase")
 			throw new Error("Infrastructure reservation is unavailable.");
 		if (!row.owner) throw new Error("Usage account is unavailable.");
-		const { windows } = await readWindows(client, input.userId, limits);
+		let { windows, autoReset } = await readWindows(
+			client,
+			input.userId,
+			limits,
+		);
+		// An auto-reset user is never refused by their own windows: what would
+		// refuse them restarts the windows instead (fleet caps still apply).
+		const resetInstead = async (exhausted: readonly UsageWindowState[]) => {
+			await resetUsageWindows(client, input.userId, exhausted);
+			({ windows } = await readWindows(client, input.userId, limits));
+		};
 		if (!input.continuing && mode === "create") {
 			const blocking = blockingUsageWindow(windows);
 			if (blocking) {
@@ -326,27 +426,39 @@ export async function reserveInfrastructureUsage(
 					 and 'vm:ytimesy-ag-' || left(replace(t.session_id::text,'-',''),16)=$2 limit 1`,
 					[input.userId, input.resourceKey],
 				);
-				if (!running.rows.length) throw new UsageWindowExhausted(blocking);
+				if (!running.rows.length) {
+					if (!autoReset) throw new UsageWindowExhausted(blocking);
+					await resetInstead(windows.filter((window) => window.exhausted));
+				}
 			}
 		}
 		// The hard ceiling holds for every hold, running machines included.
 		const held = mode === "increase" ? Number(row.reserved_micro_usd) : 0;
 		const overrun = input.hourlyMicroUsd ?? 0;
-		const [binding] = windows
-			.map((window) => ({
-				window,
-				room:
-					usageWindowCeiling(window.limitMicroUsd, overrun) -
-					window.usedMicroUsd,
-			}))
-			.sort((a, b) => a.room - b.room);
-		if (binding && amountToReserve > binding.room) {
-			if (
-				input.minimumMicroUsd === undefined ||
+		const rooms = () =>
+			windows
+				.map((window) => ({
+					window,
+					room:
+						usageWindowCeiling(window.limitMicroUsd, overrun) -
+						window.usedMicroUsd,
+				}))
+				.sort((a, b) => a.room - b.room);
+		const refused = (binding: { room: number } | undefined) =>
+			binding !== undefined &&
+			amountToReserve > binding.room &&
+			(input.minimumMicroUsd === undefined ||
 				held + binding.room < input.minimumMicroUsd ||
-				binding.room <= 0
-			)
-				throw new UsageCeilingReached(binding.window);
+				binding.room <= 0);
+		if (autoReset && refused(rooms()[0]))
+			await resetInstead(
+				rooms()
+					.filter(({ room }) => amountToReserve > room)
+					.map(({ window }) => window),
+			);
+		const [binding] = rooms();
+		if (binding && amountToReserve > binding.room) {
+			if (refused(binding)) throw new UsageCeilingReached(binding.window);
 			amountToReserve = binding.room;
 		}
 		const total = held + amountToReserve;

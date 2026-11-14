@@ -141,3 +141,40 @@ it("puts the hard ceiling an hour of the machine past the limit and words its re
 	expect(refusal).toContain("until 2026-10-20 16:00 UTC");
 	expect(usageCapFailureMessage(`Error: ${refusal}`)).toBe(refusal);
 });
+
+it("starts a window an auto-reset began empty, counting only what running holds add after it", () => {
+	const resetAt = now - hour;
+	const before = settled(3, 900);
+	// A machine running at the reset: it held 400 then and 650 now.
+	const running = { at: now - 2 * hour, microUsd: 650, open: true };
+	const after = settled(0.5, 100);
+	const state = (charges: Parameters<typeof usageWindowState>[1]) =>
+		usageWindowState("five_hour", charges, 1000, resetAt, now, 400);
+	expect(state([before]).usedMicroUsd).toBe(0);
+	expect(state([before, running]).usedMicroUsd).toBe(250);
+	expect(state([before, running, after])).toMatchObject({
+		usedMicroUsd: 350,
+		resetsAt: resetAt + 5 * hour,
+		exhausted: false,
+	});
+	// It settled after the reset below what it held then: no credit is taken
+	// from new usage, and nothing goes negative.
+	const refunded = { ...running, open: false, microUsd: 300, settledAt: now };
+	expect(state([before, refunded, after]).usedMicroUsd).toBe(100);
+	// Without a carried amount the window counts the ordinary way.
+	expect(
+		usageWindowState("five_hour", [before, running], 1000, resetAt, now)
+			.usedMicroUsd,
+	).toBe(650);
+	// Once the reset window itself ends, it counts like any expired window.
+	expect(
+		usageWindowState(
+			"five_hour",
+			[running],
+			1000,
+			resetAt,
+			resetAt + 5 * hour,
+			400,
+		).usedMicroUsd,
+	).toBe(650);
+});

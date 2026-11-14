@@ -2,8 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { type FormEvent, useRef, useState } from "react";
 import { MenuSelect } from "#/components/ui/menu-select";
-import type { UsageWindowState } from "#/domain/infrastructure-usage";
-import { usageWarning } from "#/domain/usage-warning";
+import type {
+	UsageAutoReset,
+	UsageWindowState,
+} from "#/domain/infrastructure-usage";
+import { usageNotice } from "#/domain/usage-warning";
 import { InfrastructureStatements } from "./infrastructure-statements";
 import {
 	adjustInfrastructureUsageFn,
@@ -24,14 +27,18 @@ const ADJUSTMENT_LABELS: Record<string, string> = {
 	weekly_limit: "Weekly limit set",
 	monthly_limit: "Monthly allowance set (no longer enforced)",
 	grant: "Credit added (no longer enforced)",
+	window_reset: "Window auto-reset (usage cleared)",
 };
 
 function UsageSummary({
 	usage,
 }: {
-	usage: { windows: readonly UsageWindowState[] };
+	usage: {
+		windows: readonly UsageWindowState[];
+		autoResets?: readonly UsageAutoReset[];
+	};
 }) {
-	const warning = usageWarning(usage.windows);
+	const warning = usageNotice(usage);
 	return (
 		<div className="settings-group settings-group-body">
 			<UsageWindowBars windows={usage.windows} />
@@ -49,7 +56,8 @@ const DISMISSED_USAGE_WARNING = "ytimesy:dismissed-usage-warning";
 /**
  * Heads-up in the workspace once 80% of either cloud usage window is used,
  * and again when one runs out. Dismissing hides it for this browser session
- * until the next 10% step.
+ * until the next 10% step. An auto-reset account also gets a notice once
+ * per reset of a window it would otherwise have been refused by.
  */
 export function UsageWarningBanner() {
 	const readUsage = useServerFn(infrastructureUsageFn);
@@ -59,9 +67,9 @@ export function UsageWarningBanner() {
 		refetchInterval: 60_000,
 		retry: false,
 	});
-	const warning = usage.data ? usageWarning(usage.data.windows) : null;
+	const warning = usage.data ? usageNotice(usage.data) : null;
 	const step = warning
-		? `${warning.level}:${warning.window}:${Math.floor(warning.usedPercent / 10)}`
+		? `${warning.level}:${warning.window}:${warning.resetAt ?? Math.floor(warning.usedPercent / 10)}`
 		: null;
 	const [dismissed, setDismissed] = useState(() => {
 		try {
