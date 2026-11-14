@@ -77,3 +77,24 @@ describe("freestyleExecTimeoutMs", () => {
 		expect(freestyleExecTimeoutMs(12_000)).toBe(12_000);
 	});
 });
+
+it("keeps a background command's longer idle timeout and fixes any other value", () => {
+	expect(
+		productLifecycleUpdate({
+			idleTimeoutSeconds: 60,
+			autoDeleteSeconds: 2_592_000,
+		}),
+	).toBeUndefined();
+	expect(
+		productLifecycleUpdate({
+			idleTimeoutSeconds: 180,
+			autoDeleteSeconds: 2_592_000,
+		}),
+	).toBeUndefined();
+	expect(
+		productLifecycleUpdate({
+			idleTimeoutSeconds: 300,
+			autoDeleteSeconds: 2_592_000,
+		}),
+	).toEqual({ idleTimeoutSeconds: 60 });
+});
