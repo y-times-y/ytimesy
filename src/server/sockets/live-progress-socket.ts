@@ -18,9 +18,18 @@ const selection = z.object({
 	sessionId: z.string().uuid(),
 });
 
-/** Off unless set: until then every browser stays on the event stream. */
-export function liveProgressSocketEnabled() {
-	return process.env.YTIMESY_LIVE_WS === "1";
+/**
+ * Off unless set: until then every browser stays on the event stream.
+ * YTIMESY_LIVE_WS=1 offers it to everyone; YTIMESY_LIVE_WS_USERS (comma
+ * separated user ids) to those users only, for a staged rollout.
+ */
+export function liveProgressSocketEnabled(userId?: string) {
+	if (process.env.YTIMESY_LIVE_WS === "1") return true;
+	if (!userId) return false;
+	return (process.env.YTIMESY_LIVE_WS_USERS ?? "")
+		.split(",")
+		.map((id) => id.trim())
+		.includes(userId);
 }
 
 /**
@@ -41,9 +50,9 @@ export async function handleLiveProgressSocket(
 		return new Response(SOCKET_ORIGIN_REFUSED, { status: 403 });
 	const notOffered = () =>
 		closedSocketResponse(LIVE_SOCKET_CLOSE.notOffered, "use the event stream");
-	if (!liveProgressSocketEnabled()) return notOffered();
 	try {
 		const user = await requireUser(request.headers);
+		if (!liveProgressSocketEnabled(user.id)) return notOffered();
 		const scope = selection.parse(Object.fromEntries(url.searchParams));
 		const snapshot = await watchableChatSnapshot({
 			...scope,
