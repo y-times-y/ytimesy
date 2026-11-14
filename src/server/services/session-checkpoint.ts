@@ -8,6 +8,7 @@ import {
 	agentSessionItemsFingerprint,
 	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
+import { markMachineReleased } from "../adapters/archive";
 import {
 	exportGuestCheckpoint,
 	restoreGuestCheckpoint,
@@ -29,6 +30,12 @@ import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+/** Freestyle says the machine no longer exists. */
+export function machineGone(error: unknown) {
+	const text = String(failureCause(error) ?? "");
+	return /404/.test(text) && /not found: vm /i.test(text);
+}
 
 function host(machines: WorkspaceMachines, id: string) {
 	const workspaceId = WorkspaceId(id);
@@ -60,9 +67,17 @@ export async function captureSessionCheckpoint(
 			sessionId,
 			cause: failureCause(error),
 		});
-		await recordCheckpointFailure(sessionId, progress.stage).catch(
-			() => undefined,
-		);
+		// The machine was deleted: nothing to capture until a turn gives the
+		// chat a new one (each try woke nothing but failed again, for days).
+		if (progress.stage === "wake" && machineGone(error)) {
+			await markMachineReleased(userId, sessionId).catch(() => undefined);
+			return;
+		}
+		await recordCheckpointFailure(
+			sessionId,
+			progress.stage,
+			error instanceof Error && error.name === "CheckpointTooLarge",
+		).catch(() => undefined);
 		throw error;
 	}
 	await clearCheckpointFailure(sessionId);
