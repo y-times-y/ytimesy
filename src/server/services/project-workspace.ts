@@ -21,7 +21,7 @@ import {
 } from "#/server/adapters/agent-sessions";
 import {
 	PROJECT_CWD_PATH,
-	preparedCheckoutPathFromReuse,
+	preparedCheckoutFromReuse,
 	reusePreparedCheckoutCommand,
 } from "#/server/adapters/freestyle/clone-project";
 import {
@@ -82,21 +82,28 @@ function ensureSingleProjectCheckout(
 				15_000,
 			),
 		);
-		const reusedPath = preparedCheckoutPathFromReuse(reused.stdout);
-		if (reusedPath) {
-			// Independent round trips to the guest: the path note and the branch.
+		const prepared = preparedCheckoutFromReuse(reused.stdout);
+		if (prepared) {
+			const reusedPath = prepared.path;
+			// The reuse command already read the branch and the path note; a note
+			// that already names this checkout is not written again. Whatever it
+			// did not say takes its own round trip, as before.
 			const [, branch] = yield* Effect.tryPromise(() =>
 				Promise.all([
-					machines.writeTextFile(
-						workspaceId,
-						PROJECT_CWD_PATH,
-						`${reusedPath}\n`,
-					),
-					machines.exec(
-						workspaceId,
-						`git -C ${posixShellQuoted(reusedPath)} branch --show-current`,
-						15_000,
-					),
+					prepared.cwdNote === reusedPath
+						? undefined
+						: machines.writeTextFile(
+								workspaceId,
+								PROJECT_CWD_PATH,
+								`${reusedPath}\n`,
+							),
+					prepared.branch !== undefined
+						? { stdout: prepared.branch }
+						: machines.exec(
+								workspaceId,
+								`git -C ${posixShellQuoted(reusedPath)} branch --show-current`,
+								15_000,
+							),
 				]),
 			);
 			const switching = branch.stdout.trim() !== checkout.workingBranch;

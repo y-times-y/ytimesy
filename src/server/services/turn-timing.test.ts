@@ -1,7 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
 	markTurnPhase,
 	timedModelFetch,
+	turnSpan,
+	turnSpanFetch,
 	turnTiming,
 	turnTimingLine,
 	withTurnTimingMarks,
@@ -137,4 +139,62 @@ it("feeds marks from code under a step into that step's line only", async () => 
 	markTurnPhase("egress:relay-1");
 	timing.write("completed", (line) => lines.push(line));
 	expect(JSON.parse(lines[0]).phases).toEqual({ "egress:vpc": 900, end: 900 });
+});
+
+it("records sub-phase spans under a step: first start and duration, then totals for repeats", async () => {
+	vi.useFakeTimers({ now: 10_000 });
+	try {
+		const lines: string[] = [];
+		const timing = turnTiming({ turnId: "t", step: 1, startedAt: 10_000 });
+		const wait = (ms: number) =>
+			new Promise((resolve) => setTimeout(resolve, ms));
+		const work = withTurnTimingMarks(
+			(phase) => timing.mark(phase),
+			async () => {
+				await vi.advanceTimersByTimeAsync(100);
+				await turnSpan("vm:admit", () => wait(300));
+				const failing = turnSpan("vm:guestProbe", async () => {
+					await wait(50);
+					throw new Error("fetch failed");
+				});
+				await failing.catch(() => {});
+				await turnSpan("vm:guestProbe", () => wait(20));
+				const spanned = turnSpanFetch(
+					"freestyle",
+					async () => new Response("ok"),
+				);
+				await spanned(
+					"https://api.freestyle.sh/v1/vms/abcdef0123456789abcd/exec-await",
+					{
+						method: "POST",
+					},
+				);
+			},
+			(name, at, ms) => timing.span(name, at, ms),
+		);
+		await vi.runAllTimersAsync();
+		await work;
+		// Outside the step: untouched, and not recorded.
+		await expect(turnSpan("late", async () => 7)).resolves.toBe(7);
+		timing.write("completed", (line) => lines.push(line));
+		const { spans } = JSON.parse(lines[0]);
+		expect(spans["vm:admit"]).toEqual([100, 300]);
+		expect(spans["vm:guestProbe"]).toEqual([400, 70, 2, 50]);
+		expect(spans["freestyle:POST v1/vms/:id/exec-await"]).toEqual([470, 0]);
+		expect(spans.late).toBeUndefined();
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("leaves spans out of a line that has none", () => {
+	const lines: string[] = [];
+	const timing = turnTiming({
+		turnId: "t",
+		step: 1,
+		startedAt: 0,
+		now: () => 5,
+	});
+	timing.write("completed", (line) => lines.push(line));
+	expect(JSON.parse(lines[0])).not.toHaveProperty("spans");
 });

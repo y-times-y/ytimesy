@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { Vm } from "freestyle";
 import { WorkspaceProvisionError } from "#/server/services/errors";
+import { turnSpan } from "#/server/services/turn-timing";
 import { providerTimeoutError } from "./bounded-fetch";
 import {
 	isTransientProviderFailure,
@@ -188,12 +189,23 @@ export async function waitUntilVmRunning(
 	});
 }
 
-/** Backoff between probes of a guest that just started (about 15 s in all). */
+/**
+ * Backoff between probes of a guest that just started (about 16 s in all).
+ * A resumed guest usually answers within a second, so the first retries come
+ * quickly instead of after a full second.
+ */
 export const GUEST_PROBE_RETRY_DELAYS_MS = [
-	1_000, 2_000, 4_000, 8_000,
+	250, 500, 1_000, 2_000, 4_000, 8_000,
 ] as const;
-/** A probe is `true`; one that takes this long hit a guest that is not answering. */
-const GUEST_PROBE_MS = 20_000;
+/**
+ * How long each probe (`true`) may take before it counts as unanswered and
+ * the next one is sent: an answering guest replies in well under a second,
+ * while a request sent before it was up can hang until the provider gives up.
+ * Later probes get longer, for a guest that is only slow.
+ */
+export const GUEST_PROBE_BUDGETS_MS = [
+	3_000, 3_000, 5_000, 10_000, 20_000,
+] as const;
 
 /**
  * A just-started VM reads as running before its guest answers: the first
@@ -206,22 +218,27 @@ export async function waitUntilGuestAnswers(
 	vm: Pick<Vm, "id" | "exec">,
 	label: string,
 	delaysMs: readonly number[] = GUEST_PROBE_RETRY_DELAYS_MS,
-	probeMs = GUEST_PROBE_MS,
+	budgetsMs: readonly number[] = GUEST_PROBE_BUDGETS_MS,
 ) {
+	let attempt = 0;
 	try {
 		await retryTransientProviderFailure(async () => {
+			const probeMs = budgetsMs[Math.min(attempt, budgetsMs.length - 1)];
+			attempt++;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				// An abandoned probe keeps polling only until the client's own bound.
-				await Promise.race([
-					vm.exec({ command: "true", timeoutMs: 10_000 }),
-					new Promise<never>((_, reject) => {
-						timer = setTimeout(
-							() => reject(providerTimeoutError("exec probe")),
-							probeMs,
-						);
-					}),
-				]);
+				await turnSpan("vm:guestProbe", () =>
+					Promise.race([
+						vm.exec({ command: "true", timeoutMs: 10_000 }),
+						new Promise<never>((_, reject) => {
+							timer = setTimeout(
+								() => reject(providerTimeoutError("exec probe")),
+								probeMs,
+							);
+						}),
+					]),
+				);
 			} finally {
 				clearTimeout(timer);
 			}
@@ -242,7 +259,9 @@ export async function waitUntilGuestReady(
 	label: string,
 	signal?: AbortSignal,
 ) {
-	const data = await waitUntilVmRunning(vm, label, signal);
+	const data = await turnSpan("vm:waitRunning", () =>
+		waitUntilVmRunning(vm, label, signal),
+	);
 	await waitUntilGuestAnswers(vm, label);
 	return data;
 }

@@ -21,6 +21,7 @@ import {
 	persistentGuestCapabilityRunner,
 } from "#/server/services/persistent-guest-capability";
 import { stepTimingEnabled, timedFetch } from "#/server/services/step-timing";
+import { turnSpan, turnSpanFetch } from "#/server/services/turn-timing";
 import type {
 	CommandOutput,
 	CreateProofWorkspaceOptions,
@@ -117,8 +118,13 @@ export function createFreestyleWorkspaceMachines(
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
 	// A turn's machine call (cancellableMachines) aborts its requests on Stop.
-	const transport = callSignalFetch(
-		requestIdRecordingFetch(fastPollFreestyleFetch(boundedFreestyleFetch())),
+	// Every provider call (a poll loop's included) is a span of the running
+	// durable step, so its timing line counts and sums them.
+	const transport = turnSpanFetch(
+		"freestyle",
+		callSignalFetch(
+			requestIdRecordingFetch(fastPollFreestyleFetch(boundedFreestyleFetch())),
+		),
 	);
 	const freestyle = new Freestyle({
 		apiKey,
@@ -299,18 +305,26 @@ export function createFreestyleWorkspaceMachines(
 		},
 
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
+			// A guest that answered within the last seconds, under an admission
+			// that still covers a minute, is running: no provider read is needed
+			// (a turn ensures its machine twice, at binding and before its checkout).
+			const known = recentlyRunningGuest(workspaceId, 60);
+			if (known && !productLifecycleUpdate(known)) return workspaceId;
 			try {
 				const vm = freestyle.vms.ref(workspaceId);
 				// Resumable: a resume interrupted by a restart is simply run again.
-				await resumableMachineStart(
-					async () => {
-						const data = await vm.data();
-						if (!admittedAndRunning(data, 60))
-							await resumeProductVm(vm, "Workspace VM", 60, data);
-					},
-					{ operation: "ensureRunning", vmId: workspaceId },
+				await turnSpan("vm:ensureRunning", () =>
+					resumableMachineStart(
+						async () => {
+							const data = await vm.data();
+							if (!admittedAndRunning(data, 60))
+								await resumeProductVm(vm, "Workspace VM", 60, data);
+						},
+						{ operation: "ensureRunning", vmId: workspaceId },
+					),
 				);
-				await clearWakeFailures(workspaceId);
+				// Never throws; the turn need not wait for the bookkeeping.
+				void clearWakeFailures(workspaceId);
 				return workspaceId;
 			} catch (cause) {
 				await recordWakeFailure(workspaceId, cause);
@@ -706,16 +720,27 @@ async function resumeProductVm(
 	probeGuest = false,
 ) {
 	const data = read ?? (await vm.data());
-	await admitVmResume(vm, data, requiredSeconds);
+	const admitted = await turnSpan("vm:admit", () =>
+		admitVmResume(vm, data, requiredSeconds),
+	);
 	const lifecycle = productLifecycleUpdate(data);
 	if (lifecycle) await vm.update(lifecycle).catch(() => undefined);
 	if (data.state === "paused" || data.state === "stopped") {
-		await vm.start();
+		await turnSpan("vm:start", () => vm.start());
 	}
 	// A machine that was not running yet has a guest that may not answer yet.
-	return probeGuest || data.state !== "running"
-		? waitUntilGuestReady(vm, label)
-		: waitUntilVmRunning(vm, label);
+	if (probeGuest || data.state !== "running") {
+		const ready = await turnSpan("vm:guestReady", () =>
+			waitUntilGuestReady(vm, label),
+		);
+		// Its guest just answered: the next operations skip the provider read.
+		rememberRunningGuest(ready);
+		return ready;
+	}
+	// The admission read the running machine under its lease a moment ago
+	// (and nothing changed its lifecycle since): reading it again tells nothing.
+	if (!lifecycle && admitted?.state === "running") return admitted;
+	return turnSpan("vm:waitRunning", () => waitUntilVmRunning(vm, label));
 }
 
 /** A running VM whose recent admission still covers the operation needs no new admission. */
