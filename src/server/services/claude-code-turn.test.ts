@@ -1,6 +1,7 @@
 import type { ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import {
+	CLAUDE_CODE_INBOX_CALL,
 	closeClaudeCodeBridge,
 	pendingClaudeCodeCalls,
 	requestClaudeCodeCall,
@@ -23,10 +24,81 @@ vi.mock("../adapters/claude-subscription", () => ({
 
 import {
 	claudeCodeBridgeToolSet,
+	claudeCodeSentMessagesText,
 	leavesClaudeCodeRunning,
 	runClaudeCodeTurnStep,
 	stopClaudeCodeTurnRun,
+	withMessagesSentDuringRun,
 } from "./claude-code-turn";
+
+describe("messages sent while a Claude Code run works", () => {
+	it("the step answers the run's inbox call with the turn's sent messages, as no tool call", async () => {
+		const turnId = "inbox-turn";
+		const onEvent = vi.fn(async () => {});
+		const inbox = vi.fn(async () => "The user sent this message: use pnpm");
+		let answer: unknown;
+		vi.mocked(runClaudeCodeStep).mockImplementationOnce(async (step) => {
+			const asked = requestClaudeCodeCall(turnId, CLAUDE_CODE_INBOX_CALL, {});
+			step.bridge.pump();
+			answer = await asked;
+			return { messages: [], outcome: "completed" };
+		});
+		await runClaudeCodeTurnStep({
+			userId: "u",
+			sessionId: "s",
+			turnId,
+			modelId: "claude-test",
+			agentRole: null,
+			workspace: async () => ({ vm: "vm-test", cwd: "/repo" }),
+			machines: {},
+			messages: [],
+			tools: {},
+			deadline: Date.now() + 1000,
+			signal: new AbortController().signal,
+			redact: () => [],
+			addRedaction: () => {},
+			hasItem: () => false,
+			toolName: () => undefined,
+			onEvent,
+			onPlan: () => {},
+			inbox,
+		} as unknown as Parameters<typeof runClaudeCodeTurnStep>[0]);
+		expect(answer).toEqual({
+			text: "The user sent this message: use pnpm",
+			isError: false,
+		});
+		expect(inbox).toHaveBeenCalledOnce();
+		// Not a tool call: nothing shows in the timeline for it.
+		expect(onEvent).not.toHaveBeenCalled();
+	});
+
+	it("keeps them before the run's answer, so the next run does not send them again", () => {
+		const before = [{ role: "user" as const, content: "Build it" }];
+		const sent = [{ role: "user" as const, content: "Use pnpm" }];
+		const answer = { role: "assistant" as const, content: "Built with pnpm." };
+		expect(withMessagesSentDuringRun([...before, answer], sent)).toEqual([
+			...before,
+			...sent,
+			answer,
+		]);
+		// A step that yields (the run goes on) keeps them at the end.
+		expect(withMessagesSentDuringRun(before, sent)).toEqual([
+			...before,
+			...sent,
+		]);
+		expect(withMessagesSentDuringRun(before, [])).toEqual(before);
+	});
+
+	it("tells the model the user's message wins over its plan", () => {
+		expect(claudeCodeSentMessagesText([])).toBe("");
+		const text = claudeCodeSentMessagesText([
+			{ role: "user", content: "Use pnpm" },
+		]);
+		expect(text).toContain("while you were working");
+		expect(text).toContain("the user's message wins");
+		expect(text.endsWith("Use pnpm")).toBe(true);
+	});
+});
 
 describe("leavesClaudeCodeRunning", () => {
 	it("lets Claude Code keep running when a deploy reset the Durable Object", () => {

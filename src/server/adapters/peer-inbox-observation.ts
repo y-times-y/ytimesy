@@ -39,6 +39,16 @@ export function peerInboxMayHaveMessages(sessionId: string, now = Date.now()) {
 	return now - seen.at > FRESH_MS || now < seen.at;
 }
 
+/**
+ * Whether a queued message the user pressed Send on may be waiting: what a
+ * fresh heartbeat saw, or true without one (it cannot rule it out).
+ */
+export function queuedMessageMaybeSent(sessionId: string, now = Date.now()) {
+	const seen = observations.get(sessionId);
+	if (!seen || now - seen.at > FRESH_MS || now < seen.at) return true;
+	return !!seen.sent || (!!seen.written && seen.pending);
+}
+
 /** True while a fresh heartbeat saw a queued message the user pressed Send on. */
 export function queuedMessageSentNow(sessionId: string, now = Date.now()) {
 	const seen = observations.get(sessionId);

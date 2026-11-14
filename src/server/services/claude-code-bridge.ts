@@ -102,26 +102,39 @@ export async function claudeCodeBridgeTools(
 	return entry.definitions;
 }
 
+/**
+ * The run's hooks asking for messages the user sent meanwhile (never a
+ * tool: no tool name starts with a NUL). The step answers it itself.
+ */
+export const CLAUDE_CODE_INBOX_CALL = "\u0000inbox";
+
 /** Queues one call for the running step and waits for its answer. */
 export function requestClaudeCodeCall(
 	turnId: string,
 	name: string,
 	args: Record<string, unknown>,
 	timeoutMs = 60 * 60_000,
+	/** A call the step took gets this much longer before it times out. */
+	startedGraceMs = 0,
 ): Promise<ClaudeCodeCallReply> {
 	const entry = bridge(turnId);
 	return new Promise((resolve) => {
 		let settled = false;
-		const timer = setTimeout(
-			() =>
-				reply({
-					text: call.started
-						? "The tool started but its reply timed out. Its outcome is unknown; inspect workspace state and tracked jobs before retrying. Do not blindly repeat a command that may have changed files or external systems."
-						: "ytimesy did not start this tool before its queue timeout; it was removed from the queue.",
-					isError: true,
-				}),
-			timeoutMs,
-		);
+		let graced = false;
+		const expire = () => {
+			if (call.started && startedGraceMs > 0 && !graced) {
+				graced = true;
+				timer = setTimeout(expire, startedGraceMs);
+				return;
+			}
+			reply({
+				text: call.started
+					? "The tool started but its reply timed out. Its outcome is unknown; inspect workspace state and tracked jobs before retrying. Do not blindly repeat a command that may have changed files or external systems."
+					: "ytimesy did not start this tool before its queue timeout; it was removed from the queue.",
+				isError: true,
+			});
+		};
+		let timer = setTimeout(expire, timeoutMs);
 		const reply = (value: ClaudeCodeCallReply) => {
 			if (settled) return;
 			settled = true;

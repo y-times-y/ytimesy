@@ -219,9 +219,11 @@ import { canvasTools } from "../services/canvas-tool";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	claudeCodeBridgeToolSet,
+	claudeCodeSentMessagesText,
 	leavesClaudeCodeRunning,
 	runClaudeCodeTurnStep,
 	stopClaudeCodeTurnRun,
+	withMessagesSentDuringRun,
 } from "../services/claude-code-turn";
 import {
 	CODE_MODE_TOOL,
@@ -2568,6 +2570,40 @@ async function runApiTurnAttempt(
 				if (loopStep.items || loopStep.messages) await saveCheckpoint();
 			}
 			if (claudeCode) {
+				// Send on a queued message while the run works: its hooks take it
+				// after the next tool call (a run is one model loop, so the step
+				// prelude above never sees it). It joins the history before the
+				// run's answer, so a later run does not send it again.
+				const sentDuringRun: ModelMessage[] = [];
+				const takeSentMessages = async () => {
+					const before = messages;
+					let taken: ModelMessage[] = [];
+					await injectServerPeerMessages(
+						owner.id,
+						before,
+						async (injected, delivered) => {
+							taken = injected.slice(before.length);
+							sentDuringRun.push(...taken);
+							messages = injected;
+							if (delivered.length) {
+								items = [
+									...items,
+									...delivered.map((item) => ({
+										...item,
+										timing: { startedAt: Date.now() },
+									})),
+								];
+								await materializeDeliveredAttachments(delivered);
+							}
+							await saveCheckpoint();
+							await publishProgress?.("running");
+						},
+						(messageId) => items.some((item) => item.id === messageId),
+						undefined,
+						true,
+					);
+					return claudeCodeSentMessagesText(taken);
+				};
 				const claudeResult = await timed("turn:claudeCode", () =>
 					runClaudeCodeTurnStep({
 						userId: owner.userId,
@@ -2634,11 +2670,15 @@ async function runApiTurnAttempt(
 							});
 							progress.offer(items);
 						},
+						inbox: takeSentMessages,
 						...(toolTime ? { toolTime } : {}),
 					}),
 				);
-				messages = claudeResult.messages;
-				result = claudeResult;
+				messages = withMessagesSentDuringRun(
+					claudeResult.messages,
+					sentDuringRun,
+				);
+				result = { ...claudeResult, messages };
 			} else
 				result = await timed("turn:runAgent", async () =>
 					runAgent({ ...agentInput, messages }),

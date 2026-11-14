@@ -7,6 +7,11 @@
  * stream-json output, so src/domain/claude-code-stream.ts reads either.
  * Claude Code's stderr goes to stderr, where failures are classified.
  * Exits 0 once a result message was printed, 1 otherwise.
+ *
+ * After each tool call, and before the run would end, its hooks ask ytimesy
+ * (the MCP server's address, a method no tool list shows) for messages the
+ * user sent meanwhile: Send on a queued message reaches the model at its
+ * next step, not after the turn. Any failure reads as none.
  */
 export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync, writeFileSync } from "node:fs";
 const [sdkModule, inputs, cwd] = process.argv.slice(2);
@@ -29,6 +34,32 @@ const options = {
 };
 if (settings.resume) options.resume = settings.resume;
 if (settings.effort) options.effort = settings.effort;
+const inboxServer = mcpServers?.ytimesy;
+const inbox = async () => {
+	if (!inboxServer?.url) return "";
+	try {
+		const response = await fetch(inboxServer.url, {
+			method: "POST",
+			headers: { ...inboxServer.headers, "content-type": "application/json", accept: "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ytimesy/inbox" }),
+			signal: AbortSignal.timeout(170000),
+		});
+		const reply = await response.json();
+		return typeof reply?.result?.text === "string" ? reply.result.text : "";
+	} catch {
+		return "";
+	}
+};
+options.hooks = {
+	PostToolUse: [{ timeout: 180, hooks: [async () => {
+		const text = await inbox();
+		return text ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } } : {};
+	}] }],
+	Stop: [{ timeout: 180, hooks: [async () => {
+		const text = await inbox();
+		return text ? { decision: "block", reason: text } : {};
+	}] }],
+};
 const write = (line) =>
 	new Promise((resolve) => (process.stdout.write(line) ? resolve() : process.stdout.once("drain", resolve)));
 let finished = false;

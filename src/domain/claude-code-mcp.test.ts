@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleMcpMessage } from "./claude-code-mcp";
+import { CLAUDE_CODE_INBOX_METHOD, handleMcpMessage } from "./claude-code-mcp";
 
 const handlers = () => ({
 	tools: vi.fn(async () => [
@@ -31,6 +31,29 @@ describe("ytimesy's MCP server for Claude Code", () => {
 				serverInfo: { name: "ytimesy" },
 			},
 		});
+	});
+
+	it("answers the run's hooks with the messages sent meanwhile, never as a tool", async () => {
+		const server = { ...handlers(), inbox: vi.fn(async () => "Use pnpm.") };
+		const reply = await handleMcpMessage(
+			{ jsonrpc: "2.0", id: 9, method: CLAUDE_CODE_INBOX_METHOD },
+			server,
+		);
+		expect(reply.body).toMatchObject({ id: 9, result: { text: "Use pnpm." } });
+		const list = await handleMcpMessage(
+			{ jsonrpc: "2.0", id: 10, method: "tools/list" },
+			server,
+		);
+		expect(JSON.stringify(list.body)).not.toContain("inbox");
+		// A server without an inbox has nothing waiting.
+		expect(
+			(
+				await handleMcpMessage(
+					{ jsonrpc: "2.0", id: 11, method: CLAUDE_CODE_INBOX_METHOD },
+					handlers(),
+				)
+			).body,
+		).toMatchObject({ result: { text: "" } });
 	});
 
 	it("acknowledges notifications without a body", async () => {

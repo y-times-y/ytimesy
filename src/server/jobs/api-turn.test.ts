@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 	stop: vi.fn(),
 	runtime: vi.fn(),
 	stepRuntime: vi.fn(),
+	subscriptionStepRuntime: vi.fn(),
 	result: vi.fn(),
 	enqueue: vi.fn(),
 	owner: vi.fn(),
@@ -395,7 +396,7 @@ vi.mock("../services/api-agent-runtime", () => ({
 }));
 vi.mock("../services/codex-subscription-agent", () => ({
 	runCodexSubscriptionAgent: mocks.subscriptionRuntime,
-	runCodexSubscriptionAgentStep: vi.fn(),
+	runCodexSubscriptionAgentStep: mocks.subscriptionStepRuntime,
 }));
 vi.mock("../services/api-agent-tools", () => ({
 	apiAgentTools: (input: unknown) =>
@@ -1884,6 +1885,26 @@ describe("a step's soft deadline", () => {
 		});
 		expect(outcome).toBe("continue");
 		expect(mocks.checkpoint).toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+	}, 10_000);
+
+	it("does the same for Codex on a ChatGPT plan: Send on a queued message is not only for API keys", async () => {
+		mocks.subscriptionStepRuntime.mockImplementation(hangUntilAborted);
+		mocks.renew.mockImplementation(async () => {
+			observePeerInbox("session", Date.now(), true, true);
+			return true;
+		});
+		const outcome = await runApiTurn(
+			{} as WorkspaceMachines,
+			{
+				...childTurn,
+				connection_id: null,
+				connection_revision: subscriptionTurnRevision("medium"),
+			} as ApiTurn,
+			{ index: 3, signal: new AbortController().signal },
+		);
+		expect(mocks.subscriptionStepRuntime).toHaveBeenCalled();
+		expect(outcome).toBe("continue");
 		expect(mocks.finalize).not.toHaveBeenCalled();
 	}, 10_000);
 
