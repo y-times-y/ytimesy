@@ -1005,3 +1005,77 @@ it("appends a send's message to the stored transcript without the caller reading
 		);
 	}
 });
+
+it("rebuilds a new turn's transcript from a copy and only the rows written since", async () => {
+	const { turnHistorySince } = await import(
+		"../src/server/adapters/turn-history-seed"
+	);
+	const { seededTranscript } = await import(
+		"../src/server/edge/turn-history-cache"
+	);
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	const earlier = Array.from({ length: 40 }, (_, index) => ({
+		kind: index % 2 ? "agentMessage" : "userMessage",
+		id: `i${index}`,
+		text: `item ${index}`,
+	}));
+	await db.query(
+		"update agent_session set items=$2::jsonb,turn_status='idle' where id=$1",
+		[sessionId, JSON.stringify(earlier)],
+	);
+	// The chat object's copy, as the last turn left it.
+	const copyRev = (
+		await db.query<{ rev: string }>(
+			"select items_rev::text as rev from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.rev as string;
+	// Meanwhile one earlier item is rewritten, then a send appends its message.
+	const edited = earlier.map((item, index) =>
+		index === 7 ? { ...item, text: "edited" } : item,
+	);
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(edited),
+	]);
+	const sent = { kind: "userMessage", id: "u-new", text: "next" };
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId,
+		revision,
+		modelId: "test-model",
+		routeId: `api/${connectionId}/test-model`,
+		messages: [{ role: "user", content: "next" }],
+		items: [],
+		appendItems: [sent as never],
+	});
+	const turn = (
+		await db.query<{ id: string }>(
+			"select id from api_turn where session_id=$1",
+			[sessionId],
+		)
+	).rows[0] as { id: string };
+	const lease = "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c";
+	await db.query("update api_turn set lease_id=$2 where id=$1", [
+		turn.id,
+		lease,
+	]);
+	const since = await turnHistorySince(turn.id, lease, copyRev);
+	expect(since?.wholeItems).toBe(false);
+	// Only the edited row and the new message leave the database.
+	expect(since?.changed.map((row) => row.position)).toEqual([7, 40]);
+	const stored = (
+		await db.query<{ items: unknown[] }>(
+			"select items from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.items;
+	expect(
+		seededTranscript(
+			earlier as never,
+			since?.count ?? -1,
+			since?.changed ?? [],
+		),
+	).toEqual(stored);
+});

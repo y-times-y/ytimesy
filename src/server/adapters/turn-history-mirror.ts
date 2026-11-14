@@ -13,6 +13,8 @@ type TurnHistoryMirror = (
 	version: string,
 	history: { messages?: ModelMessage[]; items: readonly SessionItem[] },
 	previous: string,
+	/** agent_session.items_rev after the write (the items' revision). */
+	itemsRev?: string,
 ) => void;
 
 const mirror = new AsyncLocalStorage<TurnHistoryMirror>();
