@@ -524,7 +524,7 @@ describe("lead mode fusion instructions", () => {
 
 describe("canvas instructions", () => {
 	it("teaches the canvas only when the turn offers it, on either surface", () => {
-		const line = "Canvas: show, don't describe.";
+		const line = "Canvas: design with the user, don't describe.";
 		for (const surface of [base, { plugins: [], projectKnowledge: null }]) {
 			expect(
 				agentTurnInstructions({

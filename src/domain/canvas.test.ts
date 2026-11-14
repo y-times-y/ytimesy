@@ -12,6 +12,7 @@ import {
 	shownCanvas,
 	withBoundedCanvasHistory,
 } from "./canvas";
+import { CANVAS_BRIDGE_SCRIPT } from "./canvas-annotation";
 import { SessionItemId } from "./ids";
 import type { CanvasItem, SessionItem } from "./session-item";
 import { turnMayHaveChangedWorkspace } from "./turn-saving";
@@ -52,6 +53,22 @@ describe("canvasDocument", () => {
 		expect(CANVAS_CSP).toContain("connect-src 'none'");
 		expect(CANVAS_CSP).toContain("form-action 'none'");
 		expect(CANVAS_CSP).not.toMatch(/https?:/);
+	});
+
+	it("keeps the policy and sandbox exactly as reviewed", () => {
+		expect(CANVAS_CSP).toBe(
+			"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data: blob:; img-src data: blob:; font-src data: blob:; media-src data: blob:; worker-src blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'",
+		);
+		expect(CANVAS_SANDBOX).toBe("allow-scripts");
+	});
+
+	it("puts the annotation bridge after the policy and before the canvas's markup", () => {
+		const document = canvasDocument("<!doctype html><script>mine()</script>");
+		const policy = document.indexOf("Content-Security-Policy");
+		const bridge = document.indexOf(CANVAS_BRIDGE_SCRIPT);
+		expect(policy).toBeGreaterThan(0);
+		expect(bridge).toBeGreaterThan(policy);
+		expect(bridge).toBeLessThan(document.indexOf("<script>mine()"));
 	});
 
 	it("sandboxes scripts into an opaque origin", () => {

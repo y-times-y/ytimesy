@@ -750,6 +750,7 @@ export function WorkspaceHome({
 		readonly at: number;
 		readonly send?: boolean;
 		readonly messageId?: string;
+		readonly append?: boolean;
 	}>();
 	// The message box takes it in its own effect (children's run first); it
 	// must not come back when another chat's box mounts later. One to send
@@ -1073,6 +1074,15 @@ export function WorkspaceHome({
 		setCanvasFocus(focus);
 		openInspector("canvas");
 	});
+	/** A canvas's notes or prompt button: into the message box, never sent by itself. */
+	const composeFromCanvas = useStableCallback(
+		(text: string, mode: "append" | "replace") =>
+			setComposerPrefill({
+				text,
+				at: Date.now(),
+				...(mode === "append" ? { append: true } : {}),
+			}),
+	);
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		wide: inspectorPaneIsWide(inspectorView),
@@ -3913,6 +3923,7 @@ export function WorkspaceHome({
 										canvases={canvases}
 										canvasFocus={canvasFocus}
 										onCanvasFocusChange={setCanvasFocus}
+										onCanvasCompose={composeFromCanvas}
 										desktop={desktop}
 										desktopBusy={desktopBusy}
 										projectId={selectedProject?.id}
