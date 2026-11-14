@@ -15,6 +15,38 @@ const adapters = vi.hoisted(() => ({
 }));
 vi.mock("../src/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
+	agentSessionMetadataForOwner: async (user: string, id: string) => {
+		const chat = (await adapters.session(user, id)) as {
+			items?: unknown;
+		} | null;
+		return chat && { ...chat, items: null };
+	},
+	sessionHoldsUserMessage: async (
+		user: string,
+		id: string,
+		messageId?: string,
+	) => {
+		const chat = (await adapters.session(user, id)) as {
+			items?: unknown;
+		} | null;
+		return (Array.isArray(chat?.items) ? chat.items : []).some(
+			(item: { kind?: string; id?: string }) =>
+				item.kind === "userMessage" && (!messageId || item.id === messageId),
+		);
+	},
+	agentSessionPageForOwner: async (user: string, id: string) => {
+		const chat = (await adapters.session(user, id)) as {
+			items?: unknown;
+		} | null;
+		return (
+			chat && {
+				...chat,
+				items: Array.isArray(chat.items) ? chat.items : [],
+				hasOlderItems: false,
+				pageFound: true,
+			}
+		);
+	},
 	saveSessionBranchSelection: adapters.selection,
 	saveSessionWorkingBranch: adapters.working,
 	projectBranchHeldByOtherSession: adapters.held,

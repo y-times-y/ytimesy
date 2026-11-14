@@ -45,6 +45,17 @@ vi.mock("../adapters/environment-setup-chats", () => ({
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
 	agentSessionMetadataForOwner: mocks.session,
+	sessionHoldsUserMessage: async (
+		user: string,
+		id: string,
+		messageId?: string,
+	) => {
+		const chat = (await mocks.session(user, id)) as { items?: unknown } | null;
+		return (Array.isArray(chat?.items) ? chat.items : []).some(
+			(item: { kind?: string; id?: string }) =>
+				item.kind === "userMessage" && (!messageId || item.id === messageId),
+		);
+	},
 	agentSessionPageForOwner: vi.fn(async () => null),
 	claimChatForSend: mocks.claim,
 	reusableEmptyChat: mocks.reusable,
@@ -279,7 +290,7 @@ it("a send while the ended turn has not yet taken its waiting message starts tha
 		machines,
 		expect.anything(),
 		expect.objectContaining({ text: "First", idempotencyKey: waitingId }),
-		expect.anything(),
+		undefined,
 	);
 	expect(mocks.queue).toHaveBeenCalledWith(
 		"owner",
@@ -318,7 +329,8 @@ it("an idle chat's send goes at once when its waiting message cannot start", asy
 		machines,
 		scope,
 		expect.objectContaining({ text: "Second" }),
-		expect.anything(),
+		// The queue check reads only the chat's row; the send reads what it needs.
+		undefined,
 	);
 });
 
@@ -361,8 +373,8 @@ it("starts the next turn with the oldest waiting message and its settings", asyn
 			idempotencyKey: messageId,
 			storedAttachments: [attachment],
 		},
-		// The idle chat as the queue check read it, so the send skips that read.
-		expect.objectContaining({ id: "chat", turnStatus: "idle" }),
+		// The queue check reads only the chat's row; the send reads what it needs.
+		undefined,
 	);
 	expect(mocks.restore).not.toHaveBeenCalled();
 });
@@ -482,7 +494,8 @@ it("marks Send for the next step while the turn runs, and starts it once the tur
 			text: "Then deploy",
 			idempotencyKey: messageId,
 		}),
-		expect.objectContaining({ id: "chat", turnStatus: "idle" }),
+		// The queue check reads only the chat's row; the send reads what it needs.
+		undefined,
 	);
 });
 

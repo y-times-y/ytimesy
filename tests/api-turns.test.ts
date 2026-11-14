@@ -959,3 +959,49 @@ it("queues a send only behind a running turn and shows it until a step takes it"
 	);
 	expect(await takeNextQueuedUserMessage("alice", sessionId)).toBeNull();
 });
+
+it("appends a send's message to the stored transcript without the caller reading it", async () => {
+	const earlier = [
+		{ kind: "userMessage", id: "u1", text: "first" },
+		{ kind: "agentMessage", id: "a1", text: "done" },
+	];
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(earlier),
+	]);
+	const sent = { kind: "userMessage", id: "u2", text: "second" };
+	for (const target of ["node", "durable-object"] as const) {
+		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", target);
+		await db.exec("truncate api_turn cascade");
+		await db.query(
+			"update agent_session set items=$2::jsonb,turn_status='idle' where id=$1",
+			[sessionId, JSON.stringify(earlier)],
+		);
+		await enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "second" }],
+			items: [],
+			appendItems: [sent as never],
+		});
+		const chat = await db.query<{ items: unknown[]; rows: number }>(
+			"select items,(select count(*)::int from agent_session_item where session_id=$1) as rows from agent_session where id=$1",
+			[sessionId],
+		);
+		expect(chat.rows[0]?.items).toEqual([...earlier, sent]);
+		// The per-item rows (the transcript's index) follow the append.
+		expect(chat.rows[0]?.rows).toBe(3);
+		const turn = await db.query<{ items: unknown }>(
+			"select items from api_turn where session_id=$1",
+			[sessionId],
+		);
+		// A durable-object turn keeps only where its items start; a node turn the whole.
+		expect(turn.rows[0]?.items).toEqual(
+			target === "durable-object" ? { from: "u2" } : [...earlier, sent],
+		);
+	}
+});
