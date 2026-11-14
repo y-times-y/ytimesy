@@ -850,6 +850,43 @@ describe("Claude Code runner", () => {
 		).toBeLessThan(10);
 	});
 
+	it("keeps polling and answering tool calls while a slow transcript backup uploads", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		vm.files.set(
+			`${HOME}/.ytimesy/claude-code/projects/-home-ubuntu-repo/${CLAUDE_SESSION}.jsonl`,
+			"transcript so far",
+		);
+		const step = input(vm, {
+			remote: { repository: "/home/ubuntu/app", workspaceTools: [] },
+		});
+		let release: () => void = () => {};
+		let uploading = false;
+		let pumpsWhileUploading = 0;
+		vi.mocked(step.store.uploadTranscript).mockImplementation(async () => {
+			uploading = true;
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			uploading = false;
+			return "path";
+		});
+		const pump = vi.fn(() => {
+			// Each upload is let go after five more polls.
+			if (uploading && ++pumpsWhileUploading % 5 === 0) release();
+		});
+		const result = await runClaudeCodeStep({
+			...step,
+			bridge: { ...step.bridge, pump },
+			deadline: 1_000_000 + 400_000,
+		});
+		expect(result.outcome).toBe("continue");
+		// The loop went on (and would hand tool calls over) during the upload.
+		expect(pumpsWhileUploading).toBeGreaterThanOrEqual(5);
+		// The step never returns with the upload still running.
+		expect(uploading).toBe(false);
+	});
+
 	it("asks before launching a run, and refuses the run when told to", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);
