@@ -1,6 +1,6 @@
 import { backgroundReadChatIds } from "#/domain/agent-panel";
 import { parseSteering } from "#/domain/agent-steering";
-import { agentTaskTree } from "#/domain/agent-task";
+import { agentTaskTree, taskStatusFromTurn } from "#/domain/agent-task";
 import { recordedContextUsage } from "#/domain/api-progress";
 import {
 	type RunningBackgroundCommand,
@@ -9,6 +9,7 @@ import {
 import {
 	type AgentTaskActivity,
 	childTaskPublicItems,
+	reusableHelperIds,
 } from "#/domain/child-task-activity";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { isSideChat } from "#/domain/side-chat";
@@ -18,6 +19,7 @@ import {
 	agentSessionMetadataForOwner,
 	backgroundCommandItemsForOwner,
 	descendantAgentSessionMetadata,
+	itemsRevisionsForOwner,
 } from "#/server/adapters/agent-sessions";
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { backgroundCommandMaxSeconds } from "#/server/services/api-command-scope";
@@ -27,9 +29,15 @@ export async function projectAgentTasks(
 	userId: string,
 	projectId: string,
 	rootSessionId: string,
+	known: Readonly<Record<string, string>> = {},
 ): Promise<readonly AgentTaskActivity[]> {
 	return (
-		await projectAgentTasksAndBackground(userId, projectId, rootSessionId)
+		await projectAgentTasksAndBackground(
+			userId,
+			projectId,
+			rootSessionId,
+			known,
+		)
 	).tasks;
 }
 
@@ -42,6 +50,8 @@ export async function projectAgentTasksAndBackground(
 	userId: string,
 	projectId: string,
 	rootSessionId: string,
+	/** Transcript revisions the browser holds (knownHelperRevisions). */
+	known: Readonly<Record<string, string>> = {},
 ): Promise<{
 	tasks: readonly AgentTaskActivity[];
 	background: Record<string, RunningBackgroundCommand[]>;
@@ -70,8 +80,31 @@ export async function projectAgentTasksAndBackground(
 	const shownIds = agentTaskTree(root.id, shown as never).map(
 		(task) => task.id,
 	);
+	// Revisions first, transcripts after: a transcript read is never older
+	// than the revision sent with it. Finished helpers whose transcripts the
+	// browser already holds are not read again (megabytes on every poll).
+	const revisions = await itemsRevisionsForOwner(userId, shownIds);
+	const reused = Object.keys(known).length
+		? reusableHelperIds(
+				root.id,
+				shown
+					.filter((session) => shownIds.includes(session.id))
+					.map((session) => ({
+						id: session.id,
+						parentSessionId: session.parentSessionId,
+						live: ["working", "waiting"].includes(
+							taskStatusFromTurn(session.turnStatus, session.taskState),
+						),
+					})),
+				revisions,
+				known,
+			)
+		: new Set<string>();
 	const [transcripts, rootBackgroundItems] = await Promise.all([
-		transcriptItemsForOwner(userId, shownIds),
+		transcriptItemsForOwner(
+			userId,
+			shownIds.filter((id) => !reused.has(id)),
+		),
 		backgroundCommandItemsForOwner(userId, [root.id]),
 	]);
 	const descendants = shown.map((session) => ({
@@ -96,9 +129,20 @@ export async function projectAgentTasksAndBackground(
 			const steering = parseSteering(row.message);
 			return steering ? [{ id: row.id, ...steering }] : [];
 		});
+		const itemsRev = revisions.get(task.id);
+		if (reused.has(task.id))
+			return {
+				...task,
+				...(queuedSteering.length ? { queuedSteering } : {}),
+				items: [],
+				turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
+				...(itemsRev ? { itemsRev } : {}),
+				unchanged: true as const,
+			};
 		const items = sessionItemsFromUnknown(byId.get(task.id)?.items);
 		const contextUsage = recordedContextUsage(items);
 		return {
+			...(itemsRev ? { itemsRev } : {}),
 			...task,
 			...(queuedSteering.length ? { queuedSteering } : {}),
 			...(contextUsage ? { contextUsage } : {}),

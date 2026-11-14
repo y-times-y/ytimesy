@@ -30,6 +30,11 @@ import { shouldPollSubagents } from "#/domain/agent-task";
 import { chatCanvases } from "#/domain/canvas";
 import { chatAddress, chatIdInAddress } from "#/domain/chat-address";
 import {
+	type AgentTaskActivity,
+	knownHelperRevisions,
+	mergeAgentTaskActivity,
+} from "#/domain/child-task-activity";
+import {
 	NO_SAVED_DEFAULT_BRANCHES,
 	type SavedDefaultBranches,
 } from "#/domain/default-branch-cookie";
@@ -1140,13 +1145,25 @@ export function WorkspaceHome({
 	}, [activeProjectId, activeSessionId]);
 	const agentTasks = useQuery({
 		queryKey: chatSideKeys.tasks(activeProjectId, activeSessionId),
-		queryFn: () =>
-			listProjectAgentTasks({
-				data: {
-					projectId: activeProjectId,
-					rootSessionId: activeSessionId,
-				},
-			}),
+		queryFn: async () => {
+			// Finished helpers' transcripts the page already holds are not
+			// sent again (each read was megabytes on every poll).
+			const key = chatSideKeys.tasks(activeProjectId, activeSessionId);
+			const held = queryClient.getQueryData<readonly AgentTaskActivity[]>(key);
+			const read = (known: Record<string, string>) =>
+				listProjectAgentTasks({
+					data: {
+						projectId: activeProjectId,
+						rootSessionId: activeSessionId,
+						known,
+					},
+				});
+			const next = await read(knownHelperRevisions(held));
+			return (
+				mergeAgentTaskActivity(held, next) ??
+				(await read({})).filter((task) => !task.unchanged)
+			);
+		},
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
 			shouldPollSubagents(session.turnStatus, query.state.data ?? [])

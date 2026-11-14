@@ -17,7 +17,103 @@ export type AgentTaskActivity = AgentTask & {
 		readonly from: "parent" | "user";
 		readonly text: string;
 	}[];
+	/** Its transcript's write count: the browser sends it back as `known`. */
+	readonly itemsRev?: string;
+	/**
+	 * The transcript did not change since the `itemsRev` the browser sent:
+	 * `items`, `contextUsage` and `subagent` are left out (the browser keeps
+	 * its own), so a finished helper's transcript is not read on every poll.
+	 */
+	readonly unchanged?: true;
 };
+
+type HelperShape = {
+	readonly id: string;
+	readonly parentSessionId: string | null;
+	readonly live: boolean;
+};
+
+/**
+ * The helpers whose transcripts need not be read again: every helper of a
+ * subtree under the root is reused only when none of them is working and
+ * each one's transcript is still at the revision the browser holds (a
+ * helper's spend sums its descendants', so a subtree is read whole or not
+ * at all).
+ */
+export function reusableHelperIds(
+	rootId: string,
+	helpers: readonly HelperShape[],
+	revisions: ReadonlyMap<string, string>,
+	known: Readonly<Record<string, string>>,
+): Set<string> {
+	const byId = new Map(helpers.map((helper) => [helper.id, helper]));
+	const topOf = (helper: HelperShape) => {
+		let current = helper;
+		const seen = new Set<string>();
+		while (current.parentSessionId && current.parentSessionId !== rootId) {
+			if (seen.has(current.id)) return null;
+			seen.add(current.id);
+			const parent = byId.get(current.parentSessionId);
+			if (!parent) return null;
+			current = parent;
+		}
+		return current.parentSessionId === rootId ? current.id : null;
+	};
+	const subtrees = new Map<string, string[]>();
+	const stale = new Set<string>();
+	for (const helper of helpers) {
+		const top = topOf(helper);
+		if (!top) continue;
+		subtrees.set(top, [...(subtrees.get(top) ?? []), helper.id]);
+		const revision = revisions.get(helper.id);
+		if (helper.live || revision === undefined || known[helper.id] !== revision)
+			stale.add(top);
+	}
+	const reusable = new Set<string>();
+	for (const [top, ids] of subtrees)
+		if (!stale.has(top)) for (const id of ids) reusable.add(id);
+	return reusable;
+}
+
+/**
+ * The tasks a poll returned, with the transcripts it left out (`unchanged`)
+ * taken from the copy the browser holds. Null when one is missing there:
+ * the caller reads again without `known`.
+ */
+export function mergeAgentTaskActivity(
+	previous: readonly AgentTaskActivity[] | undefined,
+	next: readonly AgentTaskActivity[],
+): AgentTaskActivity[] | null {
+	const held = new Map((previous ?? []).map((task) => [task.id, task]));
+	const merged: AgentTaskActivity[] = [];
+	for (const task of next) {
+		if (!task.unchanged) {
+			merged.push(task);
+			continue;
+		}
+		const before = held.get(task.id);
+		if (!before || before.unchanged) return null;
+		const { unchanged: _unchanged, ...rest } = task;
+		merged.push({
+			...rest,
+			items: before.items,
+			...(before.contextUsage ? { contextUsage: before.contextUsage } : {}),
+			...(before.subagent ? { subagent: before.subagent } : {}),
+		});
+	}
+	return merged;
+}
+
+/** The transcript revisions a poll sends back (`known`). */
+export function knownHelperRevisions(
+	tasks: readonly AgentTaskActivity[] | undefined,
+): Record<string, string> {
+	return Object.fromEntries(
+		(tasks ?? []).flatMap((task) =>
+			task.itemsRev && !task.unchanged ? [[task.id, task.itemsRev]] : [],
+		),
+	);
+}
 
 const INTERNAL_EVENT_PREFIX = "\u2063ytimesy-child-event:";
 export function childTaskEventQueueText(eventId: string) {

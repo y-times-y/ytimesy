@@ -811,6 +811,19 @@ export async function descendantAgentSessionMetadata(
 	});
 }
 
+/** Each of the owner's chats' transcript write count (items_rev), as text. */
+export async function itemsRevisionsForOwner(
+	userId: string,
+	sessionIds: readonly string[],
+): Promise<Map<string, string>> {
+	if (!sessionIds.length) return new Map();
+	const result = await database().query<{ id: string; items_rev: string }>(
+		"select id, items_rev::text as items_rev from agent_session where user_id=$1 and id = any($2::uuid[])",
+		[userId, [...sessionIds]],
+	);
+	return new Map(result.rows.map((row) => [row.id, row.items_rev]));
+}
+
 /** VMs still bound to one of the owner's sessions outside `sessionIds`. */
 export async function providerRefsHeldOutside(
 	userId: string,
