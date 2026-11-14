@@ -63,6 +63,7 @@ import {
 	type SubagentRole,
 	subagentAdmission,
 	subagentPlacement,
+	type WriterPatch,
 } from "#/domain/subagent";
 import {
 	type SubagentNode,
@@ -220,6 +221,15 @@ export type SubagentToolContext = {
 	readonly leadBackgroundCommands?: () => readonly string[];
 	readonly deps?: Partial<SubagentToolDeps>;
 };
+
+/**
+ * Told to a finished writer resumed after its fork was released: it now
+ * works on a fresh fork of its parent's checkout, where its earlier work is
+ * the git ref of its report.
+ */
+function releasedWriterNote(patch: WriterPatch | null | undefined) {
+	return `Your earlier VM was released after your report; you now work on a fresh fork of your parent's current checkout.${patch?.ref ? ` Your earlier work is at git ref ${patch.ref} there: if \`git diff ${patch.base} ${patch.ref}\` shows changes your checkout lacks, merge or apply them before continuing.` : ""}`;
+}
 
 /** A sidekick started before the shared checkout, on its own fork. */
 const FORKED_SIDEKICK = "it ran on a fork from before the shared checkout";
@@ -565,7 +575,13 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				if (handled) return handled;
 			}
 			if (input.stop) await deps.stop(target.id);
+			const released =
+				!!input.message &&
+				!input.stop &&
+				!target.live &&
+				!!(session?.agentFork?.deletedAt || session?.agentFork?.releasingAt);
 			const text = [
+				released ? releasedWriterNote(session?.agentFork?.patch) : undefined,
 				input.message,
 				input.stop
 					? "Your parent asked you to stop: start nothing new, finish the step you are on, and write your report now (what is done, how it was verified, what is not)."

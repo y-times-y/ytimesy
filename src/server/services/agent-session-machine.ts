@@ -48,11 +48,13 @@ import { conversationForkPending } from "../adapters/conversation-fork";
 import { prewarmedMachine } from "../adapters/machine-prewarm";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { markFreshChatMachine } from "../adapters/setup-catch-up";
+import { replaceHelperFork } from "../adapters/subagents";
 import { workspaceBootSnapshotId } from "../records/tools-snapshot-store";
 import { cancelServerTurn } from "./cancel-server-turn";
 import { startEnvironmentServices } from "./environment-services";
 import { detachedFromTurn } from "./machine-call-signal";
 import { restoreSessionWorkspace } from "./session-checkpoint";
+import { forkWriterWorkspace } from "./subagent-writer";
 import { turnSpan } from "./turn-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -458,12 +460,60 @@ export async function bindPreparedAgentTaskMachine(
 		);
 		return { session, providerRef: parentProviderRef };
 	}
+	if (input.task.agentRole === "writer")
+		await reforkReleasedWriter(machines, input);
 	return bindAgentSessionMachine(machines, {
 		userId: input.userId,
 		projectId: input.projectId,
 		harness: input.task.harness,
 		sessionId: input.task.id,
 		createNew: false,
+	});
+}
+
+/**
+ * A writer whose fork the teardown released (teardownSubagentForks) and that
+ * is resumed (agent_send, or a message in its chat) gets a fresh fork of its
+ * parent's VM, as a new writer would: its earlier work is in the parent's
+ * checkout as the patch and git ref of its report. A release still in
+ * progress has its VM deleted first, so the fork's slug is not reused.
+ */
+async function reforkReleasedWriter(
+	machines: WorkspaceMachines,
+	input: { readonly userId: string; readonly task: AgentSessionRecord },
+) {
+	const fork = input.task.agentFork;
+	if (!fork?.vmId || (!fork.deletedAt && !fork.releasingAt)) return;
+	// A row from before releases cleared it may still name the deleted fork.
+	if (input.task.providerRef && input.task.providerRef !== fork.vmId) return;
+	if (!input.task.parentSessionId)
+		throw new Error("The writer subagent has no parent machine.");
+	const parent = await agentSessionMetadataForOwner(
+		input.userId,
+		input.task.parentSessionId,
+	);
+	if (!parent?.providerRef)
+		throw new Error("Start the parent workspace before resuming its writer.");
+	if (!fork.deletedAt) await machines.destroy(WorkspaceId(fork.vmId));
+	const parentVm =
+		(await machines.restoreRetainedSession?.(
+			input.userId,
+			parent.id,
+			parent.providerRef,
+		)) ?? parent.providerRef;
+	await machines.ensureRunning(WorkspaceId(parentVm));
+	const forked = await forkWriterWorkspace({
+		machines,
+		parentVm: WorkspaceId(parentVm),
+		slug: agentSessionMachineSlug(input.task.id),
+	});
+	await replaceHelperFork(input.task.id, {
+		vmId: forked.vm,
+		sourceVmId: parentVm,
+		forkMs: forked.forkMs,
+		bootedAt: new Date().toISOString(),
+		base: forked.base,
+		parentHead: forked.parentHead,
 	});
 }
 
