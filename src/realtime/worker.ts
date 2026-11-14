@@ -316,6 +316,10 @@ export class ConversationRoom {
 			return new Response(null, { status: 409 });
 		return null;
 	}
+	/** Someone has the chat open live: a socket or an older event stream. */
+	watched(): boolean {
+		return this.subscribers.size + this.viewers().length > 0;
+	}
 	private viewers(): ServerSocket[] {
 		return this.state.getWebSockets?.(VIEWER_TAG) ?? [];
 	}

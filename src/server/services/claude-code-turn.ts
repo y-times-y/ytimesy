@@ -43,6 +43,10 @@ import {
 	runClaudeCodeStep,
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
+import {
+	claudeTurnMayPause,
+	requestClaudeStepPause,
+} from "./claude-step-pause";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Native web tools stay local; workspace work uses the tracked MCP tool lifecycle on either host. */
@@ -132,6 +136,8 @@ export async function runClaudeCodeTurnStep(input: {
 	let ended = true;
 	try {
 		const result = await runClaudeCodeStep({
+			mayPause: () => claudeTurnMayPause(input.turnId),
+			requestPause: (ms) => requestClaudeStepPause(input.turnId, ms),
 			shell:
 				box?.shell ??
 				(async (command, timeoutMs) => {
