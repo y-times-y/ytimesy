@@ -415,6 +415,15 @@ export async function runClaudeCodeStep(
 	let unreadablePolls = 0;
 	let missingProcessPolls = 0;
 	let lastTranscriptSave = now();
+	/**
+	 * The periodic backup of a long run's transcript (several MB on long
+	 * chats) runs beside the poll loop: awaited inline, every tool call that
+	 * arrived meanwhile waited for the upload to finish.
+	 */
+	let backingUp: Promise<void> | undefined;
+	const backupSettled = async () => {
+		await backingUp;
+	};
 	// What the latest model call put in the context window; with the window
 	// Claude Code reports at the end, it is the composer's context ring.
 	let contextTokens: number | null = null;
@@ -502,20 +511,25 @@ export async function runClaudeCodeStep(
 		if (
 			input.remote &&
 			!result &&
+			!backingUp &&
 			claudeSessionId &&
 			isClaudeCodeSessionId(claudeSessionId) &&
 			now() - lastTranscriptSave >= TRANSCRIPT_SAVE_INTERVAL_MS
 		) {
 			lastTranscriptSave = now();
-			await saveTranscript(input, home, claudeSessionId).catch(
-				(error: unknown) =>
+			backingUp = saveTranscript(input, home, claudeSessionId)
+				.catch((error: unknown) =>
 					console.warn("Claude Code transcript was not saved.", {
 						message:
 							error instanceof Error ? error.message.slice(0, 200) : "unknown",
 					}),
-			);
+				)
+				.finally(() => {
+					backingUp = undefined;
+				});
 		}
 		if (result) {
+			await backupSettled();
 			await finishRun(shell, runDirectory, commit);
 			const sessionId = result.sessionId ?? claudeSessionId;
 			if (sessionId && isClaudeCodeSessionId(sessionId))
@@ -532,6 +546,7 @@ export async function runClaudeCodeStep(
 			polled.next === polled.offset &&
 			polled.next === polled.size;
 		if (exited) {
+			await backupSettled();
 			await finishRun(shell, runDirectory, commit);
 			throw await exitFailure(
 				input,
@@ -558,6 +573,8 @@ export async function runClaudeCodeStep(
 					`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
 					30_000,
 				).catch(() => undefined);
+			// Nothing of this step may outlive it in the chat's object.
+			await backupSettled();
 			return { messages: [...input.messages], outcome: "continue" };
 		}
 		if (lines.some(Boolean)) wait = POLL_MIN_MS;
