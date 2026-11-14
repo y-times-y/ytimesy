@@ -108,6 +108,11 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	for (const file of [
+		"20261105100000_agent_session_items_rev",
+		"20261114120000_conversation_delivery_items_rev",
+	])
+		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 	await db.exec(
 		await readFile(
 			"supabase/migrations/20261017130000_queued_user_messages.sql",
@@ -370,7 +375,10 @@ it("keeps context usage when a large turn pushes its user message outside the de
 	expect(delivered?.progress.usage).toEqual(usage);
 	expect(delivered?.progress.hasOlderItems).toBe(true);
 	const [claimed] = await claimConversationDeliveries();
-	expect(claimed.snapshot.progress.usage).toEqual(usage);
+	// No delivery reached its room yet: the first one is a full snapshot.
+	expect("progress" in claimed.update && claimed.update.progress.usage).toEqual(
+		usage,
+	);
 });
 
 it("coalesces streamed checkpoints into one recoverable owner-scoped mailbox", async () => {
@@ -441,10 +449,10 @@ it("backs off a failed room without blocking another room", async () => {
 	const deliveries = await claimConversationDeliveries();
 	expect(deliveries).toHaveLength(2);
 	const failed = deliveries.find(
-		(value) => value.snapshot.sessionId === sessionId,
+		(value) => value.update.sessionId === sessionId,
 	);
 	const successful = deliveries.find(
-		(value) => value.snapshot.sessionId === other,
+		(value) => value.update.sessionId === other,
 	);
 	if (!failed || !successful) throw new Error("Missing delivery");
 	await settleConversationDelivery(failed, false);
@@ -457,7 +465,7 @@ it("backs off a failed room without blocking another room", async () => {
 	await db.query("update agent_session set items='[]' where id=$1", [other]);
 	expect(
 		(await claimConversationDeliveries()).map(
-			(value) => value.snapshot.sessionId,
+			(value) => value.update.sessionId,
 		),
 	).toEqual([other]);
 });

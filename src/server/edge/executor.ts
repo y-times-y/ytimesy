@@ -219,13 +219,15 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			},
 			() =>
 				withConversationPublisher(
-					async (snapshot) => {
+					async (update) => {
 						if (
-							snapshot.userId !== scope.userId ||
-							snapshot.sessionId !== scope.sessionId
+							update.userId !== scope.userId ||
+							update.sessionId !== scope.sessionId
 						)
 							return false;
-						const response = await this.room.publish(snapshot);
+						const response = await this.room.publish(update);
+						// A delta the room cannot merge: the publisher sends the full snapshot.
+						if (response.status === 409) return "resync";
 						return response.status === 204;
 					},
 					() =>

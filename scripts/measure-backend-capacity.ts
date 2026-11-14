@@ -66,6 +66,13 @@ try {
 			"utf8",
 		),
 	);
+	for (const file of [
+		"20261105100000_agent_session_items_rev",
+		"20261114120000_conversation_delivery_items_rev",
+	])
+		await fixture.query(
+			await readFile(`supabase/migrations/${file}.sql`, "utf8"),
+		);
 	worker = await unstable_dev("src/realtime/worker.ts", {
 		config: "wrangler.realtime.jsonc",
 		local: true,
@@ -159,11 +166,11 @@ try {
 					await Promise.all(
 						batch.map(async (d) => {
 							const begin = performance.now();
-							const body = JSON.stringify(d.snapshot);
+							const body = JSON.stringify(d.update);
 							let ok = false;
 							try {
 								const response = await request(
-									"/snapshot",
+									"progress" in d.update ? "/snapshot" : "/delta",
 									body,
 									AbortSignal.timeout(5000),
 								);
