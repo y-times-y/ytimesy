@@ -5,11 +5,13 @@ const mocks = vi.hoisted(() => ({
 	descendants: vi.fn(),
 	transcripts: vi.fn(),
 	background: vi.fn(),
+	revisions: vi.fn(async () => new Map([["kid", "4"]])),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionMetadataForOwner: mocks.root,
 	descendantAgentSessionMetadata: mocks.descendants,
 	backgroundCommandItemsForOwner: mocks.background,
+	itemsRevisionsForOwner: mocks.revisions,
 }));
 vi.mock("#/server/adapters/agent-session-items", () => ({
 	transcriptItemsForOwner: mocks.transcripts,
@@ -98,4 +100,41 @@ it("shows nothing for a chat of another project", async () => {
 		tasks: [],
 		background: {},
 	});
+});
+
+it("does not read a finished helper's transcript the browser already holds", async () => {
+	mocks.root.mockResolvedValue({
+		...base,
+		id: "root",
+		parentSessionId: null,
+		title: "Main",
+	});
+	mocks.descendants.mockResolvedValue([
+		{
+			...base,
+			id: "kid",
+			parentSessionId: "root",
+			title: "Kid",
+			agentRole: "researcher",
+			agentBudget: { steps: 10, minutes: 10, tokens: 1000 },
+		},
+	]);
+	mocks.transcripts.mockResolvedValue(new Map([["kid", []]]));
+	mocks.background.mockResolvedValue(new Map());
+	mocks.transcripts.mockClear();
+	const { tasks } = await projectAgentTasksAndBackground("u", "p", "root", {
+		kid: "4",
+	});
+	expect(mocks.transcripts).toHaveBeenCalledWith("u", []);
+	expect(tasks).toEqual([
+		expect.objectContaining({ id: "kid", itemsRev: "4", unchanged: true }),
+	]);
+	// A revision the browser does not hold is read again.
+	mocks.transcripts.mockClear();
+	const again = await projectAgentTasksAndBackground("u", "p", "root", {
+		kid: "3",
+	});
+	expect(mocks.transcripts).toHaveBeenCalledWith("u", ["kid"]);
+	expect(again.tasks[0]).toMatchObject({ itemsRev: "4" });
+	expect(again.tasks[0]?.unchanged).toBeUndefined();
 });

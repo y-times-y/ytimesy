@@ -140,16 +140,35 @@ export const prewarmProjectAgentSession = createServerFn({ method: "POST" })
 
 export const listProjectAgentTasks = createServerFn({ method: "GET" })
 	.validator(
-		(data: { projectId?: string; rootSessionId?: string } | undefined) => ({
+		(
+			data:
+				| {
+						projectId?: string;
+						rootSessionId?: string;
+						known?: Record<string, string>;
+				  }
+				| undefined,
+		) => ({
 			projectId: data?.projectId?.trim() ?? "",
 			rootSessionId: data?.rootSessionId?.trim() ?? "",
+			known: knownRevisions.catch({}).parse(data?.known ?? {}),
 		}),
 	)
 	.handler(async ({ data }): Promise<readonly AgentTaskActivity[]> => {
 		if (!data.projectId || !data.rootSessionId) return [];
 		const user = await requireUser(getRequest().headers);
-		return projectAgentTasks(user.id, data.projectId, data.rootSessionId);
+		return projectAgentTasks(
+			user.id,
+			data.projectId,
+			data.rootSessionId,
+			data.known,
+		);
 	});
+
+/** Helper transcript revisions the browser holds; anything odd is ignored. */
+const knownRevisions = z
+	.record(z.uuid(), z.string().regex(/^\d{1,19}$/))
+	.refine((known) => Object.keys(known).length <= 200);
 
 const helperMessageInput = z.object({
 	projectId: z.uuid(),
