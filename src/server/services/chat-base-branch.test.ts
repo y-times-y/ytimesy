@@ -148,9 +148,11 @@ it("plans the chat's checkout from the picked base onto its own branch", async (
 	const machines = {
 		exec: vi.fn(async (_vm: unknown, command: string) => ({
 			exitCode: 0,
-			stdout: command.includes("branch --show-current")
-				? "main\n"
-				: "present\n/home/ubuntu/app\n",
+			stdout:
+				!command.includes("echo present") &&
+				command.includes("branch --show-current")
+					? "main\n"
+					: "present\n/home/ubuntu/app\n",
 			stderr: "",
 		})),
 		writeTextFile: vi.fn(async () => undefined),
@@ -190,9 +192,11 @@ it("keeps the agent's branch on the next turn instead of switching back", async 
 	const machines = {
 		exec: vi.fn(async (_vm: unknown, command: string) => ({
 			exitCode: 0,
-			stdout: command.includes("branch --show-current")
-				? "agent/hotfix\n"
-				: "present\n/home/ubuntu/app\n",
+			stdout:
+				!command.includes("echo present") &&
+				command.includes("branch --show-current")
+					? "agent/hotfix\n"
+					: "present\n/home/ubuntu/app\n",
 			stderr: "",
 		})),
 		writeTextFile: vi.fn(async () => undefined),
