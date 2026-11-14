@@ -37,6 +37,7 @@ import { wakeConversationProgress } from "./conversation-progress-wake";
 import {
 	recordConversationPoint,
 	recoveredConversation,
+	storePointMessages,
 } from "./conversation-recovery";
 import { database } from "./database";
 import {
@@ -153,6 +154,20 @@ export async function enqueueApiTurn(input: {
 	// turn still finishes, without starting more work past the limit).
 	if (infrastructureAdmissionEnabled())
 		await assertUsageWindowsOpen(input.userId);
+	// The recovery point's messages go to private storage first, so neither
+	// its row (megabytes per message otherwise) nor the chat's lock waits on it.
+	const sentMessage = [...(input.appendItems ?? input.items)]
+		.reverse()
+		.find((item) => item.kind === "userMessage");
+	const messagesObject =
+		input.messages.at(-1)?.role === "user"
+			? await storePointMessages({
+					userId: input.userId,
+					sessionId: input.sessionId,
+					messageId: sentMessage?.id,
+					messages: input.messages,
+				})
+			: null;
 	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;
@@ -217,7 +232,7 @@ export async function enqueueApiTurn(input: {
 			throw new Error(
 				"Finish or stop the current turn before sending another prompt.",
 			);
-		await recordConversationPoint(client, input);
+		await recordConversationPoint(client, { ...input, messagesObject });
 		turnId = randomUUID();
 		const executor = configuredTurnExecutor(
 			process.env.YTIMESY_MODEL_EXECUTION_TARGET,
@@ -815,6 +830,28 @@ export async function abandonApiTurn(turnId: string, leaseId: string) {
 	);
 	captureSettledTurns(result.rows ?? []);
 	return (result.rows?.length ?? 0) > 0;
+}
+
+/**
+ * Empties the model history and whole-transcript copy of settled turns no
+ * reader needs: every reader takes a chat's latest turn (the next send's
+ * history, recovery, helper reports), recovery points keep their own, and
+ * training keeps the turns marked eligible. Each turn row held the whole
+ * conversation again (half a gigabyte for one user); batches stay small.
+ */
+export async function compactSettledTurns(limit = 50) {
+	const result = await database().query(
+		`update api_turn t set messages='[]'::jsonb,
+		  items=case when jsonb_typeof(t.items)='array' then '[]'::jsonb else t.items end
+		 where t.id in (select o.id from api_turn o
+		  where o.state in ('completed','failed','cancelled') and not o.training_eligible
+		  and o.updated_at < now() - interval '1 hour'
+		  and (pg_column_size(o.messages) > 64 or pg_column_size(o.items) > 200)
+		  and exists(select 1 from api_turn n where n.session_id=o.session_id and n.created_at > o.created_at)
+		  order by o.created_at limit $1)`,
+		[limit],
+	);
+	return result.rowCount ?? 0;
 }
 
 export async function expireApiTurnLeases() {

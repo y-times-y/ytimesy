@@ -1,7 +1,10 @@
 import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
-import { expireApiTurnLeases } from "../adapters/api-turns";
+import {
+	compactSettledTurns,
+	expireApiTurnLeases,
+} from "../adapters/api-turns";
 import {
 	backgroundJobId,
 	dispatchBackgroundJob,
@@ -75,6 +78,13 @@ export async function deliverBackgroundJob(
 					await recoverExpiredEnvironmentBuilds();
 					await recoverStaleQueuedWorkspaces();
 					await alertAbandonedTurns(await expireApiTurnLeases());
+					// Old turns' copies of the whole conversation (database size).
+					await compactSettledTurns().catch((error: unknown) =>
+						console.warn("Settled turns were not compacted.", {
+							message:
+								error instanceof Error ? error.message.slice(0, 200) : "",
+						}),
+					);
 					break;
 				case "supervise": {
 					// Independent sweeps, side by side: a slow one never holds a
