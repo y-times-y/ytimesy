@@ -902,6 +902,23 @@ describe("Claude Code runner", () => {
 		);
 	});
 
+	it("polls that fail near the step's end yield the step instead of failing the run", async () => {
+		const vm = new FakeVm();
+		vm.emit(init);
+		const original = vm.shell.getMockImplementation();
+		let polls = 0;
+		vm.shell.mockImplementation(async (command, timeoutMs) => {
+			if (command.startsWith("python3 -c") && ++polls > 1)
+				throw new Error("The operation was aborted due to timeout");
+			return original?.(command, timeoutMs) as never;
+		});
+		const result = await runClaudeCodeStep(
+			input(vm, { deadline: 1_000_000 + 20_000 }),
+		);
+		// Before: "Claude Agent stopped: its output could not be read."
+		expect(result.outcome).toBe("continue");
+	});
+
 	it("asks before launching a run, and refuses the run when told to", async () => {
 		const vm = new FakeVm();
 		vm.emit(init, success);
