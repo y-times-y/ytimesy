@@ -134,7 +134,14 @@ export async function enqueueApiTurn(input: {
 	modelId: string;
 	routeId: string;
 	messages: ModelMessage[];
+	/** The chat's whole transcript after this send (replaces the stored one). */
 	items: readonly SessionItem[];
+	/**
+	 * Instead: the items this send adds, appended in the database, so the
+	 * send never reads the transcript (megabytes) nor overwrites a write
+	 * that landed after it read.
+	 */
+	appendItems?: readonly SessionItem[];
 	preparedTask?: boolean;
 	idempotencyKey?: string;
 	settings?: ApiTurnSettings;
@@ -222,10 +229,17 @@ export async function enqueueApiTurn(input: {
 			taskAccess: checked.task_access ?? null,
 		};
 		// The turn and the chat's running state in one statement.
+		const append = input.appendItems !== undefined;
+		const written = append ? (input.appendItems ?? []) : input.items;
+		// Appending: the stored transcript plus this send's items (the row is
+		// locked above); a turn row keeping whole items gets the same.
+		const whole = append
+			? "coalesce((select a.items from agent_session a where a.id=$2),'[]'::jsonb)||$8::jsonb"
+			: "$8";
 		await client.query(
 			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,$8),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
-			 update agent_session set harness=$14,listed_model_id=$13,items=$8,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,${whole}),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			 update agent_session set harness=$14,listed_model_id=$13,items=${append ? "coalesce(items,'[]'::jsonb)||$8::jsonb" : "$8"},turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
 				input.sessionId,
@@ -234,14 +248,14 @@ export async function enqueueApiTurn(input: {
 				input.revision,
 				input.modelId,
 				jsonbText(input.messages),
-				jsonbText(input.items),
+				jsonbText(written),
 				input.idempotencyKey ?? null,
 				executor,
 				JSON.stringify(input.settings ?? {}),
 				input.failover ? JSON.stringify(input.failover) : null,
 				input.routeId,
 				subscription ? "codex" : "api",
-				executor === "durable-object" ? newTurnItemsColumn(input.items) : null,
+				executor === "durable-object" ? newTurnItemsColumn(written) : null,
 			],
 		);
 		await client.query("commit");

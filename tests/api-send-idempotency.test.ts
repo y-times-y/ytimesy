@@ -6,6 +6,7 @@ const connectionId = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const routeId = `api/${connectionId}/gpt-test`;
 const fake = vi.hoisted(() => ({
 	owner: vi.fn(),
+	previous: vi.fn(async (): Promise<unknown[] | null> => null),
 	enqueue: vi.fn(async () => {}),
 	holding: vi.fn(async (): Promise<string | null> => null),
 	open: vi.fn(),
@@ -13,6 +14,38 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
+	agentSessionMetadataForOwner: async (user: string, id: string) => {
+		const chat = (await (
+			fake.owner.getMockImplementation() ?? (async () => null)
+		)(user, id)) as { items?: unknown } | null;
+		return chat && { ...chat, items: null };
+	},
+	sessionHoldsUserMessage: async (
+		user: string,
+		id: string,
+		messageId?: string,
+	) => {
+		const chat = (await (
+			fake.owner.getMockImplementation() ?? (async () => null)
+		)(user, id)) as { items?: unknown } | null;
+		return (Array.isArray(chat?.items) ? chat.items : []).some(
+			(item: { kind?: string; id?: string }) =>
+				item.kind === "userMessage" && (!messageId || item.id === messageId),
+		);
+	},
+	agentSessionPageForOwner: async (user: string, id: string) => {
+		const chat = (await (
+			fake.owner.getMockImplementation() ?? (async () => null)
+		)(user, id)) as { items?: unknown } | null;
+		return (
+			chat && {
+				...chat,
+				items: Array.isArray(chat.items) ? chat.items : [],
+				hasOlderItems: false,
+				pageFound: true,
+			}
+		);
+	},
 	chatHoldingSend: fake.holding,
 	releasingChatClaimOnFailure: (
 		_user: string,
@@ -25,7 +58,7 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 vi.mock("#/server/adapters/api-turns", () => ({
 	enqueueApiTurn: fake.enqueue,
 	inheritedApiTurnSettings: vi.fn(async () => ({})),
-	previousTurnMessages: vi.fn(async () => null),
+	previousTurnMessages: fake.previous,
 }));
 vi.mock("#/server/adapters/model-connections", () => ({
 	listModelConnections: vi.fn(async () => []),
@@ -176,4 +209,30 @@ it("answers a send with the committed chat, reading the chat once", async () => 
 		listedModelId: routeId,
 		items,
 	});
+});
+
+it("with the model history to continue, appends the message without reading the transcript", async () => {
+	fake.owner.mockClear();
+	fake.enqueue.mockClear();
+	fake.previous.mockResolvedValueOnce([{ role: "user", content: "earlier" }]);
+	const view = await sendApiWorkspaceTask(scope, {
+		text: "next step",
+		modelId: routeId,
+		idempotencyKey: "9b2f3c4d-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+	});
+	// No whole-transcript read: only the chat's row, an index lookup and a page.
+	expect(fake.owner).not.toHaveBeenCalled();
+	expect(fake.enqueue).toHaveBeenCalledWith(
+		expect.objectContaining({
+			items: [],
+			appendItems: [
+				expect.objectContaining({
+					kind: "userMessage",
+					id: "9b2f3c4d-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+					text: "next step",
+				}),
+			],
+		}),
+	);
+	expect(view).toMatchObject({ agentSessionId: "s1", turnStatus: "running" });
 });

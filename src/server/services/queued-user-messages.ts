@@ -33,6 +33,7 @@ import {
 	claimInitialSetupChat,
 	insertAgentSession,
 	reusableEmptyChat,
+	sessionHoldsUserMessage,
 } from "../adapters/agent-sessions";
 import {
 	backgroundJobId,
@@ -242,20 +243,25 @@ async function queueBehindRunningTurn(
 		input.continueOn
 	)
 		return {};
-	let session = await agentSessionForOwner(scope.userId, scope.sessionId);
+	// The chat's row only: a send's transcript is asked in the database
+	// (sessionHoldsUserMessage), never read whole here (megabytes per send).
+	let session = await agentSessionMetadataForOwner(
+		scope.userId,
+		scope.sessionId,
+	);
 	if (!session || (scope.projectId && session.projectId !== scope.projectId))
-		return { session };
+		return {};
 	const messageId = input.idempotencyKey ?? randomUUID();
 	if (session.turnStatus !== "running") {
 		// A turn shows ended a while before its end takes the next waiting
 		// message (publication, reports). A send in that window must not jump
 		// ahead: the oldest waiting message starts now and this one queues
 		// behind it. A message the queue itself delivers never comes here.
-		if (input.released) return { session };
+		if (input.released) return {};
 		const waiting = (await queuedUserMessageItems(session.id)).filter(
 			(item) => !item.heldForSetup,
 		);
-		if (!waiting.length) return { session };
+		if (!waiting.length) return {};
 		const started = await startQueuedUserTurn(
 			machines,
 			scope.userId,
@@ -265,11 +271,11 @@ async function queueBehindRunningTurn(
 		if (waiting.some((item) => item.id === messageId))
 			return { view: await publicSessionView(scope) };
 		// The waiting message could not start: this send goes as before.
-		if (!started) return { session };
-		session = await agentSessionForOwner(scope.userId, session.id);
-		if (session?.turnStatus !== "running") return { session };
+		if (!started) return {};
+		session = await agentSessionMetadataForOwner(scope.userId, session.id);
+		if (session?.turnStatus !== "running") return {};
 	}
-	if (sendWasQueued(sessionItemsFromUnknown(session.items), messageId))
+	if (await sessionHoldsUserMessage(scope.userId, session.id, messageId))
 		return { view: await publicSessionView(scope) };
 	const attachments = input.storedAttachments
 		? [...input.storedAttachments]

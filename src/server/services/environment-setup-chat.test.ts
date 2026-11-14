@@ -13,6 +13,38 @@ vi.mock("#/server/adapters/environment-setup-chats", () => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: async () => store.chat,
+	agentSessionMetadataForOwner: async (user: string, id: string) => {
+		const chat = (await (async () => store.chat)(user, id)) as {
+			items?: unknown;
+		} | null;
+		return chat && { ...chat, items: null };
+	},
+	sessionHoldsUserMessage: async (
+		user: string,
+		id: string,
+		messageId?: string,
+	) => {
+		const chat = (await (async () => store.chat)(user, id)) as {
+			items?: unknown;
+		} | null;
+		return (Array.isArray(chat?.items) ? chat.items : []).some(
+			(item: { kind?: string; id?: string }) =>
+				item.kind === "userMessage" && (!messageId || item.id === messageId),
+		);
+	},
+	agentSessionPageForOwner: async (user: string, id: string) => {
+		const chat = (await (async () => store.chat)(user, id)) as {
+			items?: unknown;
+		} | null;
+		return (
+			chat && {
+				...chat,
+				items: Array.isArray(chat.items) ? chat.items : [],
+				hasOlderItems: false,
+				pageFound: true,
+			}
+		);
+	},
 	projectBranchHeldByOtherSession: async () => false,
 	saveSessionWorkingBranch: async (
 		_user: string,

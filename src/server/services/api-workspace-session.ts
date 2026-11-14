@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	assertApiContextFits,
@@ -23,11 +24,14 @@ import {
 } from "#/domain/model-connection";
 import type { SendBlocker } from "#/domain/send-blocked";
 import {
+	queuedUserItem,
+	type SessionItem,
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
+import { TRANSCRIPT_PAGE_TURNS } from "#/domain/transcript-page";
 import {
 	chatHoldingSend,
 	releasingChatClaimOnFailure,
@@ -37,7 +41,10 @@ import { startAfterResponse } from "../adapters/after-response";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	agentSessionMetadataForOwner,
+	agentSessionPageForOwner,
 	descendantAgentSessions,
+	sessionHoldsUserMessage,
 } from "../adapters/agent-sessions";
 import { apiReasoningEffort } from "../adapters/api-reasoning-effort";
 import {
@@ -263,10 +270,9 @@ export async function sendApiWorkspaceTask(
 	// response shows are independent reads; each is checked in order below.
 	const catalog = apiModelCatalog(scope.userId);
 	catalog.catch(() => {});
+	const held = heldTranscript(read, sessionId);
 	const [session, connection, inherited] = await Promise.all([
-		read?.id === sessionId
-			? read
-			: agentSessionForOwner(scope.userId, sessionId),
+		held && read ? read : agentSessionMetadataForOwner(scope.userId, sessionId),
 		selected ? loadModelConnection(scope.userId, selected.connectionId) : null,
 		selected && inheritsSettings
 			? inheritedApiTurnSettings(
@@ -314,9 +320,8 @@ export async function sendApiWorkspaceTask(
 		throw new Error(
 			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
 		);
-	const current = sessionItemsFromUnknown(session.items);
 	// The send's key is its message id: a replayed request was already queued.
-	if (sendWasQueued(current, input.idempotencyKey))
+	if (await alreadySent(scope, session.id, held, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
 	const failover = input.continueOn
 		? await pinnedTurnFailover(
@@ -330,7 +335,10 @@ export async function sendApiWorkspaceTask(
 				input.continueOn,
 			)
 		: undefined;
-	if (input.approvesPlan && !pendingPlanId(current))
+	const planned = input.approvesPlan
+		? await wholeTranscript(scope, session.id, held)
+		: held;
+	if (input.approvesPlan && !pendingPlanId(planned ?? []))
 		throw new Error("That plan was already answered.");
 	const [attachments, previous] = await Promise.all([
 		input.storedAttachments
@@ -343,13 +351,11 @@ export async function sendApiWorkspaceTask(
 			connection.revision,
 		),
 	]);
-	const items = sessionItemsQueuedWithUser(
-		current,
-		input.text,
-		input.idempotencyKey,
-		input.approvesPlan,
-		attachments,
-	);
+	const current =
+		planned ??
+		(previous ? null : await wholeTranscript(scope, session.id, held));
+	const sent = sendItems(current, input, attachments);
+	const items = sent.items;
 	let messages = nextTurnMessages({
 		previous,
 		items,
@@ -371,7 +377,7 @@ export async function sendApiWorkspaceTask(
 		modelId: selected.modelId,
 		routeId: input.modelId,
 		messages,
-		items,
+		...sent.write,
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
 		settings,
@@ -388,18 +394,8 @@ export async function sendApiWorkspaceTask(
 		).catch(() => undefined);
 	if (!startAfterResponse(title)) await title();
 	// The chat as just committed: its transcript with the sent message and a
-	// running turn on the route it was sent to. Re-reading it would repeat
-	// the chat and catalog reads above.
-	return apiWorkspaceView(
-		{
-			...session,
-			items,
-			turnStatus: "running",
-			harness: "api",
-			listedModelId: input.modelId,
-		},
-		await catalog,
-	);
+	// running turn on the route it was sent to.
+	return sentView(scope, session, sent, input.modelId, catalog);
 }
 
 /**
@@ -418,10 +414,9 @@ async function sendClaudeCodeTask(
 		throw new Error("Claude Code is not available.");
 	const catalog = apiModelCatalog(scope.userId);
 	catalog.catch(() => {});
+	const held = heldTranscript(read, sessionId);
 	const [session, connected] = await Promise.all([
-		read?.id === sessionId
-			? read
-			: agentSessionForOwner(scope.userId, sessionId),
+		held && read ? read : agentSessionMetadataForOwner(scope.userId, sessionId),
 		claudeCodeSendable(scope.userId),
 	]);
 	if (!session || session.projectId !== scope.projectId)
@@ -430,8 +425,7 @@ async function sendClaudeCodeTask(
 		throw new Error(
 			"Connect your Claude subscription in Settings > Agents first.",
 		);
-	const current = sessionItemsFromUnknown(session.items);
-	if (sendWasQueued(current, input.idempotencyKey))
+	if (await alreadySent(scope, session.id, held, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
 	const revision = claudeCodeTurnRevision();
 	const effort = apiReasoningEffort(input.variant);
@@ -447,7 +441,10 @@ async function sendClaudeCodeTask(
 				input.continueOn,
 			)
 		: undefined;
-	if (input.approvesPlan && !pendingPlanId(current))
+	const planned = input.approvesPlan
+		? await wholeTranscript(scope, session.id, held)
+		: held;
+	if (input.approvesPlan && !pendingPlanId(planned ?? []))
 		throw new Error("That plan was already answered.");
 	const [attachments, previous] = await Promise.all([
 		input.storedAttachments
@@ -455,13 +452,13 @@ async function sendClaudeCodeTask(
 			: storeMessageAttachments(scope.userId, session.id, input.attachments),
 		previousTurnMessages(scope.userId, session.id, modelId, revision),
 	]);
-	const items = sessionItemsQueuedWithUser(
-		current,
-		input.text,
-		input.idempotencyKey,
-		input.approvesPlan,
-		attachments,
-	);
+	// The model's messages continue the stored ones; only without them is the
+	// whole transcript read (they are rebuilt from it).
+	const current =
+		planned ??
+		(previous ? null : await wholeTranscript(scope, session.id, held));
+	const sent = sendItems(current, input, attachments);
+	const items = sent.items;
 	let messages = nextTurnMessages({
 		previous,
 		items,
@@ -483,7 +480,7 @@ async function sendClaudeCodeTask(
 		modelId,
 		routeId: input.modelId,
 		messages,
-		items,
+		...sent.write,
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
 		// The chosen effort, when it is one Claude takes; anything else is dropped.
@@ -497,16 +494,126 @@ async function sendClaudeCodeTask(
 			sessionTitleFromItems(items),
 		).catch(() => undefined);
 	if (!startAfterResponse(title)) await title();
-	return apiWorkspaceView(
+	return sentView(scope, session, sent, input.modelId, catalog);
+}
+
+/**
+ * The transcript the caller already read, only when it really holds it: a
+ * chat read without its transcript (metadata) must never pass for an empty
+ * one, or the send would overwrite the stored transcript with its message.
+ */
+function heldTranscript(
+	read: AgentSessionRecord | undefined,
+	sessionId: string,
+): readonly SessionItem[] | null {
+	return read?.id === sessionId && Array.isArray(read.items)
+		? sessionItemsFromUnknown(read.items)
+		: null;
+}
+
+/** The chat's whole transcript: the one held, else read (megabytes; rare). */
+async function wholeTranscript(
+	scope: CodexSessionScope,
+	sessionId: string,
+	held: readonly SessionItem[] | null,
+): Promise<readonly SessionItem[]> {
+	if (held) return held;
+	const whole = await agentSessionForOwner(scope.userId, sessionId);
+	if (!whole || !Array.isArray(whole.items))
+		throw new Error("Session is not available.");
+	return sessionItemsFromUnknown(whole.items);
+}
+
+/** A replayed send: its message (keyed by its id) is already in the transcript. */
+async function alreadySent(
+	scope: CodexSessionScope,
+	sessionId: string,
+	held: readonly SessionItem[] | null,
+	messageId: string | undefined,
+) {
+	if (!messageId) return false;
+	return held
+		? sendWasQueued(held, messageId)
+		: sessionHoldsUserMessage(scope.userId, sessionId, messageId);
+}
+
+type SentItems = {
+	/** The transcript after the send, or only its new items when appended. */
+	readonly items: readonly SessionItem[];
+	/** How enqueueApiTurn stores them. */
+	readonly write:
+		| { readonly items: readonly SessionItem[] }
+		| {
+				readonly items: readonly SessionItem[];
+				readonly appendItems: readonly SessionItem[];
+		  };
+	readonly appended: boolean;
+};
+
+/**
+ * The send's message added to the transcript: to the whole one when the send
+ * holds it, else appended in the database (the transcript never read).
+ */
+function sendItems(
+	current: readonly SessionItem[] | null,
+	input: {
+		readonly text: string;
+		readonly idempotencyKey?: string;
+		readonly approvesPlan?: boolean;
+	},
+	attachments: readonly MessageAttachment[],
+): SentItems {
+	if (current) {
+		const items = sessionItemsQueuedWithUser(
+			current,
+			input.text,
+			input.idempotencyKey,
+			input.approvesPlan,
+			attachments,
+		);
+		return { items, write: { items }, appended: false };
+	}
+	const item = queuedUserItem(
+		input.text,
+		input.idempotencyKey ?? `queued-user-${randomUUID()}`,
+		input.approvesPlan,
+		attachments,
+	);
+	if (!item) throw new Error("Write a message before sending.");
+	return {
+		items: [item],
+		write: { items: [], appendItems: [item] },
+		appended: true,
+	};
+}
+
+/**
+ * The view a send answers with: the whole transcript it wrote, or, when it
+ * appended, the chat's latest page read from the database (not the whole).
+ */
+async function sentView(
+	scope: CodexSessionScope,
+	session: Omit<NonNullable<Parameters<typeof apiWorkspaceView>[0]>, "items">,
+	sent: SentItems,
+	listedModelId: string,
+	catalog: ReturnType<typeof apiModelCatalog>,
+): Promise<PublicCodexSession> {
+	const page = sent.appended
+		? await agentSessionPageForOwner(scope.userId, session.id, {
+				turns: TRANSCRIPT_PAGE_TURNS,
+			})
+		: null;
+	const view = apiWorkspaceView(
 		{
 			...session,
-			items,
+			items: page ? page.items : sent.items,
 			turnStatus: "running",
 			harness: "api",
-			listedModelId: input.modelId,
+			listedModelId,
 		},
 		await catalog,
 	);
+	return page?.hasOlderItems ? { ...view, hasOlderItems: true } : view;
 }
 
 /**
