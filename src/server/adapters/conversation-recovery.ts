@@ -32,12 +32,15 @@ export async function recordConversationPoint(
 		userId: string;
 		sessionId: string;
 		items: readonly SessionItem[];
+		/** The send appends these to the stored transcript (it never read it). */
+		appendItems?: readonly SessionItem[];
 		messages: ModelMessage[];
 		modelId: string;
 		routeId: string;
 		revision: string;
 	},
 ) {
+	if (input.appendItems) return recordAppendedPoint(client, input);
 	let index = input.items.length - 1;
 	while (index >= 0 && input.items[index].kind !== "userMessage") index--;
 	const message = input.items[index];
@@ -77,6 +80,49 @@ export async function recordConversationPoint(
 			key,
 			jsonbText({ id: key, ok: true, result: point }),
 		],
+	);
+}
+
+/**
+ * The point of a send that appends its message: the transcript before it is
+ * the stored one, so the database copies it into the point itself (the send
+ * never read it). No restore can land in between: the append and this insert
+ * share the chat row's lock and apply to whatever the transcript is then.
+ */
+async function recordAppendedPoint(
+	client: Pick<PoolClient, "query">,
+	input: {
+		userId: string;
+		sessionId: string;
+		appendItems?: readonly SessionItem[];
+		messages: ModelMessage[];
+		modelId: string;
+		routeId: string;
+		revision: string;
+	},
+) {
+	const message = [...(input.appendItems ?? [])]
+		.reverse()
+		.find((item) => item.kind === "userMessage");
+	if (message?.kind !== "userMessage" || input.messages.at(-1)?.role !== "user")
+		return;
+	const key = `conversation-point:${message.id}`;
+	const point = {
+		type: "conversation-point",
+		userMessageId: message.id,
+		prompt: message.text,
+		messages: input.messages.slice(0, -1),
+		modelId: input.modelId,
+		routeId: input.routeId,
+		revision: input.revision,
+	};
+	await client.query(
+		`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
+    select id,$3,'done',jsonb_build_object('id',$3::text,'ok',true,'result',
+      $4::jsonb || jsonb_build_object('items',coalesce(items,'[]'::jsonb))),now()
+    from agent_session where id=$1 and user_id=$2
+    on conflict(parent_session_id,request_id) do nothing`,
+		[input.sessionId, input.userId, key, jsonbText(point)],
 	);
 }
 

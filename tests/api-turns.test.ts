@@ -134,7 +134,7 @@ beforeAll(async () => {
 		[connectionId, revision],
 	);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 });
 beforeEach(async () => {
@@ -710,7 +710,7 @@ it("keeps a stopped step's started tool call in the history the next turn contin
 		"cancelled",
 	);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	expect(
 		await previousTurnMessages("alice", sessionId, "test-model", revision),
@@ -738,7 +738,7 @@ it("keeps the last checkpoint when a turn settles without in-flight calls", asyn
 	if (!turn) throw Error("missing turn");
 	await finalizeApiTurn(turn, "failed", []);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	expect(
 		await previousTurnMessages("alice", sessionId, "test-model", revision),
@@ -841,7 +841,7 @@ it("moves a running turn to its fallback in one fenced checkpoint and keeps the 
 	expect(await finishApiTurn(turn, "completed", [])).toBe(true);
 	// No recovery point exists; the previous turn's history is the source.
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	// The next message returns to the chosen model with a history it can read.
 	expect(
@@ -993,6 +993,19 @@ it("appends a send's message to the stored transcript without the caller reading
 			[sessionId],
 		);
 		expect(chat.rows[0]?.items).toEqual([...earlier, sent]);
+		// Its recovery point holds the transcript before the message, copied
+		// in the database (the send never read it).
+		const point = await db.query<{ result: Record<string, unknown> }>(
+			"select response->'result' as result from agent_task_command_receipt where request_id='conversation-point:u2'",
+		);
+		expect(point.rows[0]?.result).toMatchObject({
+			type: "conversation-point",
+			userMessageId: "u2",
+			prompt: "second",
+			items: earlier,
+			messages: [],
+		});
+		await db.exec("truncate agent_task_command_receipt");
 		// The per-item rows (the transcript's index) follow the append.
 		expect(chat.rows[0]?.rows).toBe(3);
 		const turn = await db.query<{ items: unknown }>(
