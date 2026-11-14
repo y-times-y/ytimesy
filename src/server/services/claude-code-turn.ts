@@ -82,6 +82,11 @@ export async function runClaudeCodeTurnStep(input: {
 	readonly toolName: (id: string) => string | undefined;
 	readonly onEvent: (event: ApiAgentEvent) => Promise<void>;
 	readonly onPlan: (plan: readonly ClaudeCodePlanStep[]) => void;
+	/** Timing only: each bridged tool call's start and end (turn-tool-time.ts). */
+	readonly toolTime?: {
+		start(id: string, tool: string): void;
+		end(id: string): void;
+	};
 	/**
 	 * Run `claude` on this runner box instead of the chat's machine; the
 	 * chat's machine stays the workspace, reached through `workspaceTools`.
@@ -115,6 +120,7 @@ export async function runClaudeCodeTurnStep(input: {
 	const direct = directTranscriptStore(input.userId, input.sessionId);
 	const directTranscript = direct ? { direct } : {};
 	const running = new Set<Promise<void>>();
+	let timedCalls = 0;
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;
 	try {
@@ -179,11 +185,16 @@ export async function runClaudeCodeTurnStep(input: {
 			bridge: {
 				pump: () => {
 					for (const call of takeClaudeCodeCalls(input.turnId)) {
+						const timingId = `cc-${++timedCalls}`;
+						input.toolTime?.start(timingId, call.name);
 						const run = runClaudeCodeCall(input.turnId, call, {
 							tools: input.tools,
 							onEvent: input.onEvent,
 							signal: input.signal,
-						}).finally(() => running.delete(run));
+						}).finally(() => {
+							running.delete(run);
+							input.toolTime?.end(timingId);
+						});
 						running.add(run);
 					}
 				},

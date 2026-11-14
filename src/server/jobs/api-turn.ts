@@ -341,6 +341,7 @@ import {
 	turnTiming,
 	withTurnTimingMarks,
 } from "../services/turn-timing";
+import { type TurnToolTime, turnToolTime } from "../services/turn-tool-time";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import { webFetchTool } from "../services/web-fetch-tool";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -470,6 +471,14 @@ export async function runApiTurn(
 				queuedAt: turn.queued_at_ms ?? undefined,
 			})
 		: undefined;
+	// How much of the step tools were executing (turn-tool-time.ts).
+	const toolTime = step
+		? turnToolTime({
+				turnId: turn.id,
+				step: step.index,
+				startedAt: step.startedAt ?? Date.now(),
+			})
+		: undefined;
 	timing?.mark("turnStart");
 	let ended = "error";
 	try {
@@ -478,7 +487,7 @@ export async function runApiTurn(
 		// MODEL_STEP_RETRY_DELAYS_MS.length times before a step succeeds.
 		for (let continued = false; ; continued = true) {
 			const attempt = () =>
-				runApiTurnAttempt(machines, turn, step, continued, timing);
+				runApiTurnAttempt(machines, turn, step, continued, timing, toolTime);
 			// Model and egress code below marks its own phases (request start,
 			// response headers, first body byte, egress path).
 			const outcome = await (timing
@@ -497,6 +506,7 @@ export async function runApiTurn(
 		}
 	} finally {
 		timing?.write(ended);
+		toolTime?.write(ended);
 	}
 }
 
@@ -507,6 +517,7 @@ async function runApiTurnAttempt(
 	/** The local worker is continuing this turn on a fallback route. */
 	continued: boolean,
 	timing?: TurnTiming,
+	toolTime?: TurnToolTime,
 ): Promise<ApiTurnStepOutcome | { failedOver: ApiTurn }> {
 	const abort = new AbortController();
 	// The executor's step budget and turn deadline abort with a TimeoutError.
@@ -1015,6 +1026,9 @@ async function runApiTurnAttempt(
 				webSearch = nativeWebSearchTools(connection.provider);
 		}
 		timing?.mark("settings");
+		toolTime?.setKind(
+			claudeCode ? "claude-code" : owner.harness === "codex" ? "codex" : "api",
+		);
 		failoverScope = {
 			evaluation: Boolean(evaluation),
 			child: Boolean(owner.parentSessionId),
@@ -2183,9 +2197,12 @@ async function runApiTurnAttempt(
 			signal: claudeCode
 				? abort.signal
 				: AbortSignal.any([abort.signal, softStop.signal]),
-			onToolStart: () => {
+			onToolStart: (call) => {
 				toolsStarted = true;
+				if (call && !call.providerExecuted)
+					toolTime?.start(call.toolCallId, call.toolName);
 			},
+			onToolEnd: (call) => toolTime?.end(call.toolCallId),
 			isUserRequest: (message) => isUserRequestMessage(items, message),
 			compactionSnapshot: compactionStateSnapshot({
 				workspace,
@@ -2592,6 +2609,7 @@ async function runApiTurnAttempt(
 							});
 							progress.offer(items);
 						},
+						...(toolTime ? { toolTime } : {}),
 					}),
 				);
 				messages = claudeResult.messages;
