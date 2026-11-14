@@ -892,10 +892,10 @@ describe("Claude Code runner", () => {
 		vm.emit(init);
 		const step = input(vm);
 		let polls = 0;
-		const shell: typeof step.shell = async (command, timeoutMs) => {
+		const shell: typeof step.shell = async (command) => {
 			if (command.includes("python3 -c") && ++polls === 2)
 				throw new Error("Durable Object reset because its code was updated.");
-			return vm.shell(command, timeoutMs);
+			return vm.shell(command);
 		};
 		await expect(runClaudeCodeStep({ ...step, shell })).rejects.toThrow(
 			"its code was updated",
@@ -907,10 +907,10 @@ describe("Claude Code runner", () => {
 		vm.emit(init);
 		const original = vm.shell.getMockImplementation();
 		let polls = 0;
-		vm.shell.mockImplementation(async (command, timeoutMs) => {
+		vm.shell.mockImplementation(async (command: string) => {
 			if (command.startsWith("python3 -c") && ++polls > 1)
 				throw new Error("The operation was aborted due to timeout");
-			return original?.(command, timeoutMs) as never;
+			return original?.(command) as never;
 		});
 		const result = await runClaudeCodeStep(
 			input(vm, { deadline: 1_000_000 + 20_000 }),
