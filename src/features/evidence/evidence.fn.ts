@@ -4,11 +4,6 @@ import type { EvidenceContext, EvidenceRecord } from "#/domain/pr-evidence";
 import { requireUser } from "#/server/auth/auth";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-function uuid(value: unknown) {
-	if (typeof value !== "string" || !UUID.test(value))
-		throw new Response("Not found.", { status: 404 });
-	return value;
-}
 
 /** The evidence page's data: null when the capture is not the signed-in user's. */
 export const getEvidencePage = createServerFn({ method: "GET" })
@@ -63,15 +58,3 @@ export const getEvidencePage = createServerFn({ method: "GET" })
 			};
 		},
 	);
-
-/** A chat's evidence cards; `enabled` says whether new captures can appear. */
-export const listChatEvidence = createServerFn({ method: "GET" })
-	.validator((data: { projectId: string; sessionId: string }) => ({
-		projectId: uuid(data.projectId),
-		sessionId: uuid(data.sessionId),
-	}))
-	.handler(async ({ data }) => {
-		const user = await requireUser(getRequest().headers);
-		const { chatEvidence } = await import("#/server/services/chat-evidence");
-		return chatEvidence(user.id, data.projectId, data.sessionId);
-	});

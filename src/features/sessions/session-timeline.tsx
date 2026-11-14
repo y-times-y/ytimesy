@@ -62,7 +62,6 @@ import {
 } from "#/domain/helper-names";
 import { mcpResult } from "#/domain/mcp-call-view";
 import { isPastedText } from "#/domain/pasted-text";
-import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { pushApprovalOutcome } from "#/domain/push-approval";
 import { requirementsSegments } from "#/domain/rigor";
 import { secretRequestOutcome } from "#/domain/secret-request";
@@ -103,8 +102,6 @@ import {
 	type CanvasFocus,
 	CanvasOpenContext,
 } from "../canvas/canvas-open-context";
-import { evidenceAnchors } from "../evidence/evidence-anchors";
-import { EvidenceCard } from "../evidence/evidence-view";
 import { HandoffCard } from "../local-import/handoff-card";
 import { ActivityIcon } from "./activity-icon";
 import {
@@ -188,7 +185,6 @@ export function SessionTimeline({
 	onEditQueued,
 	onSendQueued,
 	stopping = false,
-	evidence = [],
 	helperLines,
 	senderName,
 	queuedSteering = [],
@@ -225,8 +221,6 @@ export function SessionTimeline({
 		readonly from: string;
 		readonly text: string;
 	}[];
-	/** Pull request evidence captured for this chat's turns (prEvidence). */
-	evidence?: readonly EvidenceRecord[];
 	/** The user pressed Stop and the turn has not settled yet: queued messages say so. */
 	stopping?: boolean;
 	/** Takes back a message still waiting behind the running turn. */
@@ -337,10 +331,6 @@ export function SessionTimeline({
 		(row.kind === "item"
 			? row.item.id === id
 			: row.items.some((item) => item.id === id));
-	const evidenceAt = evidenceAnchors(
-		visible,
-		olderItems ? evidenceSince(visible, evidence) : evidence,
-	);
 	const currentTurnIds = new Set<SessionItem["id"]>();
 	for (const item of presented) {
 		if (startsTurn(item)) currentTurnIds.clear();
@@ -351,7 +341,6 @@ export function SessionTimeline({
 		visible.length === 0 &&
 		queued.length === 0 &&
 		childTasks.length === 0 &&
-		evidence.length === 0 &&
 		turnStatus !== "running" &&
 		!trailing &&
 		!fill
@@ -443,16 +432,11 @@ export function SessionTimeline({
 			rowHas(row, mark.finish),
 		))
 			add(helperFinishEntry(task, stableHelperLines));
-		for (const record of row.kind === "item"
-			? (evidenceAt.anchored.get(row.item.id) ?? [])
-			: row.items.flatMap((item) => evidenceAt.anchored.get(item.id) ?? []))
-			add(evidenceEntry(record));
 	}
 	for (const { task } of helperMarks.filter((mark) => !mark.start))
 		add(helperStartEntry(task, stableHelperLines));
 	for (const { task } of helperMarks.filter((mark) => mark.finish === null))
 		add(helperFinishEntry(task, stableHelperLines));
-	for (const record of evidenceAt.trailing) add(evidenceEntry(record));
 	if (showTurnWorking(items, turnStatus))
 		add({
 			key: "working",
@@ -628,7 +612,6 @@ const MemoUserQuestionCard = memo(UserQuestionCard);
 const MemoSecretRequestCard = memo(SecretRequestCard);
 const MemoPushApprovalCard = memo(PushApprovalCard);
 const MemoModelSwitchCard = memo(ModelSwitchCard);
-const MemoEvidenceCard = memo(EvidenceCard);
 
 /** A user message's recovery controls, drawn again when the controls change. */
 const RecoveryControls = memo(function RecoveryControls({
@@ -675,32 +658,6 @@ function helperFinishEntry(
 		estimate: 120,
 		content: <HelperFinishCard task={task} lines={lines} />,
 	};
-}
-
-function evidenceEntry(
-	record: EvidenceRecord,
-): Omit<TranscriptEntry, "follows"> {
-	return {
-		key: `evidence:${record.id}`,
-		kind: "evidence",
-		estimate: 160,
-		content: <MemoEvidenceCard evidence={record} />,
-	};
-}
-
-/** Evidence from the loaded turns on: earlier records show with their own turns. */
-function evidenceSince(
-	visible: readonly SessionItem[],
-	evidence: readonly EvidenceRecord[],
-) {
-	const first = visible.find(
-		(item) => item.kind === "userMessage" && item.timing,
-	);
-	const since =
-		first?.kind === "userMessage" ? first.timing?.startedAt : undefined;
-	return since === undefined
-		? evidence
-		: evidence.filter((record) => Date.parse(record.createdAt) >= since);
 }
 
 /**

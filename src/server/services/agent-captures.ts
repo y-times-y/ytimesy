@@ -28,9 +28,9 @@ import { readWorkspaceBytes, type WorkspaceShell } from "./pr-evidence";
  * ~/.ytimesy/captures/ in the workspace, outside the repository, and
  * registered in ~/.ytimesy/captures/pending/. After the agent's command, the
  * runtime copies registered captures into private evidence storage, records
- * them on the chat (pr_evidence, source 'agent') so the chat shows them
- * inline, and the chat's pull request's Evidence section counts them and
- * links to their evidence page.
+ * them on the chat (pr_evidence, source 'agent'), and the chat's pull
+ * request's Evidence section counts them and links to their evidence page.
+ * The chat itself does not show them.
  */
 
 /** Where ytimesy-browser keeps captures and their registrations in the workspace. */
@@ -211,10 +211,10 @@ export function agentCapturesNote(collected: readonly CollectedCapture[]) {
 	const missing = collected.filter((capture) => capture.problem);
 	return [
 		shown.length
-			? `Shown in the chat and linked from the pull request's Evidence section: ${shown.map((capture) => capture.name).join(", ")}. Do not add these files to the repository unless the user asked for that.`
+			? `Added to the pull request's Evidence section (the chat does not show them): ${shown.map((capture) => capture.name).join(", ")}. Do not add these files to the repository unless the user asked for that.`
 			: "",
 		...missing.map(
-			(capture) => `Not shown: ${capture.name} (${capture.problem}).`,
+			(capture) => `Not added: ${capture.name} (${capture.problem}).`,
 		),
 	]
 		.filter(Boolean)

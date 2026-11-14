@@ -240,10 +240,10 @@ describe("collecting agent captures", () => {
 			`done '${listing[0].id}' '${listing[1].id}'`,
 		);
 		const note = agentCapturesNote(collected);
-		expect(note).toContain(`Shown in the chat`);
+		expect(note).toContain(`Added to the pull request's Evidence section`);
 		expect(note).toContain(listing[0].name);
 		expect(note).toContain(
-			`Not shown: ${listing[1].name} (over the 8 MB limit; record fewer seconds).`,
+			`Not added: ${listing[1].name} (over the 8 MB limit; record fewer seconds).`,
 		);
 	});
 

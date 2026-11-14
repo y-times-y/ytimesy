@@ -5,7 +5,7 @@ import {
 	evidenceAge,
 	evidenceContext,
 } from "#/domain/pr-evidence";
-import { EvidenceCard, EvidenceDetail, EvidenceSummary } from "./evidence-view";
+import { EvidenceDetail, EvidenceSummary } from "./evidence-view";
 
 const PROJECT = "22222222-2222-4222-8222-222222222222";
 
@@ -49,40 +49,21 @@ const recording = agentCapture(
 const media = (record: EvidenceRecord) =>
 	`/api/projects/${PROJECT}/evidence/${record.id}/${record.files[0]?.name}`;
 
-describe("agent captures in the chat", () => {
-	it("shows a screenshot inline, linked to full size", () => {
-		const html = renderToStaticMarkup(<EvidenceCard evidence={shot} />);
+describe("agent captures on the evidence page", () => {
+	it("shows a screenshot, linked to full size", () => {
+		const html = renderToStaticMarkup(<EvidenceDetail evidence={shot} />);
 		expect(html).toContain(`<img src="${media(shot)}"`);
 		expect(html).toContain(`<a href="${media(shot)}" target="_blank"`);
 		expect(html).toContain("Screenshot");
 		expect(html).not.toContain("Evidence for");
 	});
 
-	it("plays a recording inline", () => {
-		const html = renderToStaticMarkup(<EvidenceCard evidence={recording} />);
+	it("plays a recording", () => {
+		const html = renderToStaticMarkup(<EvidenceDetail evidence={recording} />);
 		expect(html).toContain(
 			`<video controls="" preload="metadata" src="${media(recording)}"`,
 		);
 		expect(html).toContain("Recording, 5 s");
-	});
-
-	it("adds no chat card for a pull request capture with only CLI output", () => {
-		const cliOnly = {
-			...shot,
-			source: "harness",
-			fullName: "y-times-y/ytimesy",
-			pullNumber: 23,
-			kind: "cli",
-			status: "captured",
-			files: [{ name: "cli.txt", bytes: 10, sha256: "0".repeat(64) }],
-		} as EvidenceRecord;
-		expect(renderToStaticMarkup(<EvidenceCard evidence={cliOnly} />)).toBe("");
-		const failed = {
-			...cliOnly,
-			status: "app-failed",
-			files: [],
-		} as EvidenceRecord;
-		expect(renderToStaticMarkup(<EvidenceCard evidence={failed} />)).toBe("");
 	});
 
 	it("shows every capture of the chat on the evidence page the pull request links", () => {

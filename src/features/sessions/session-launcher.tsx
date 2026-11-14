@@ -113,7 +113,6 @@ import {
 } from "#/features/app/keyboard-shortcuts";
 import { useHoldNewBuildReload } from "#/features/app/new-build-reload";
 import { authClient } from "#/features/auth/client";
-import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import type { OpenChatSide } from "#/server/services/open-chat-side";
 import type { CanvasFocus } from "../canvas/canvas-open-context";
@@ -530,38 +529,6 @@ export function SessionLauncher({
 			setForkRetrying(false);
 		}
 	}
-	const loadEvidence = useServerFn(listChatEvidence);
-	// Pull request evidence (prEvidence) arrives after the turn, from a background
-	// job; the agent's own captures (ytimesy-browser) during it.
-	const chatEvidence = useQuery({
-		queryKey: chatSideKeys.evidence(
-			selectedProject?.id,
-			session.agentSessionId,
-			session.turnStatus,
-		),
-		enabled: !!selectedProject?.id && !!session.agentSessionId,
-		// Read again on the interval below, not on every switch back to the chat.
-		staleTime: 30_000,
-		queryFn: () => {
-			if (!selectedProject || !session.agentSessionId)
-				return { enabled: false, evidence: [] };
-			return loadEvidence({
-				data: {
-					projectId: selectedProject.id,
-					sessionId: session.agentSessionId,
-				},
-			});
-		},
-		refetchInterval: (query) => {
-			const data = query.state.data;
-			// The agent's own screenshots and recordings arrive during its turn.
-			if (session.turnStatus === "running") return 10_000;
-			if (!data?.enabled) return false;
-			return data.evidence.some((record) => record.status === "capturing")
-				? 10_000
-				: 30_000;
-		},
-	});
 	// Text typed before the page's scripts ran, or this browser's saved draft
 	// that the first-paint script filled in, stays in the composer. It
 	// hydrates as the server rendered it (no draft) and takes the text up
@@ -1384,7 +1351,6 @@ export function SessionLauncher({
 					recoveryControls={recoveryControls}
 					tasks={childTasks}
 					helperLines={helperLines}
-					evidence={chatEvidence.data?.evidence}
 					memoryActions={memoryActions}
 					items={timelineItems}
 					turnStatus={turnStatus}

@@ -22,9 +22,9 @@ function leanVisualQaText(tools: { command: string; image: string }) {
 const NOT_EVIDENCE =
 	'A screenshot of an error page ("Something went wrong", a dev-server overlay) or of a page the change does not touch is not evidence: fix what broke it or report visual QA as blocked.';
 
-/** Showing the user (and the pull request) a screenshot or recording without committing it. */
+/** Adding a screenshot or recording to the pull request without committing it. */
 export const LEAN_CAPTURES_INSTRUCTION =
-	"Asked for a screenshot or recording (also for the PR)? Use `ytimesy-browser screenshot` or `record <seconds>`: they show in the chat and the PR's Evidence section, so never commit media files unless the user wants them in the repository.";
+	"Asked for a screenshot or recording (also for the PR)? Use `ytimesy-browser screenshot` or `record <seconds>`: they go only to the PR's Evidence section, so never commit media files unless the user wants them in the repository.";
 
 export function visualQaInstructions(): string {
 	return `Visual QA: when a change affects what a user sees (pages, components, styles, layout) or the task asks you to check the UI, verify it on the shared desktop before reporting done. Start the app with execute_command (a dev server in the background), open it with browser_open on its localhost URL, then browser_screenshot and look at the image; use browser_inspect to check text, console and network, and, when offered, browser_execute (Browser Use) to click, type and assert behavior. For windows outside Chrome (native dialogs, other apps), run xdotool through execute_command with DISPLAY=:0. The first browser tool starts the shared desktop, which the user can watch in the Desktop tab. Fix what the screenshot shows is wrong. ${NOT_EVIDENCE} In the final report, state the URL you checked and what the screenshot showed, or why visual QA was not possible.`;

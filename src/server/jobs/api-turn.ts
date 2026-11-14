@@ -1510,8 +1510,8 @@ async function runApiTurnAttempt(
 				toolCallPrefix: step ? `step-${step.index}:` : undefined,
 				signal: abort.signal,
 				memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
-				// The agent's ytimesy-browser screenshots and recordings show in
-				// its chat at the call that made them (agent-captures.ts).
+				// The agent's ytimesy-browser screenshots and recordings go to its
+				// pull request's Evidence section (agent-captures.ts).
 				...(rootChat && owner.projectId
 					? {
 							collectCaptures: async (captureWorkspace, toolCallId) =>
