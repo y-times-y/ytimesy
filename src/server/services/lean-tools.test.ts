@@ -861,13 +861,15 @@ describe("agent captures", () => {
 			installHelpers: async () => {},
 			collectCaptures: async (_workspace, toolCallId) => {
 				calls.push(toolCallId);
-				return "Shown in the chat: shot.png.";
+				return "Added to the pull request's Evidence section: shot.png.";
 			},
 		});
 		const shot = (await run(tools, "bash", {
 			command: "ytimesy-browser screenshot",
 		})) as LeanCommandResult;
-		expect(shot.note).toBe("Shown in the chat: shot.png.");
+		expect(shot.note).toBe(
+			"Added to the pull request's Evidence section: shot.png.",
+		);
 		expect(calls).toEqual(["call-1"]);
 		// Other commands do not look for captures.
 		const other = (await run(tools, "bash", {

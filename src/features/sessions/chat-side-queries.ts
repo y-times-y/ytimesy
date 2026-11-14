@@ -2,7 +2,7 @@ import type { SessionTurnStatus } from "#/domain/session-item";
 
 /**
  * Query keys of the open chat's side reads (helpers, background commands,
- * evidence, recovery points). One place, because the page seeds these queries with what the
+ * recovery points). One place, because the page seeds these queries with what the
  * server read alongside the chat (OpenChatSide) and the views read them.
  */
 export const chatSideKeys = {
@@ -10,11 +10,6 @@ export const chatSideKeys = {
 		["agent-tasks", projectId, sessionId] as const,
 	background: (sessionId: string | undefined, chatIds: readonly string[]) =>
 		["background-commands", sessionId, chatIds] as const,
-	evidence: (
-		projectId: string | undefined,
-		sessionId: string | null | undefined,
-		turnStatus: SessionTurnStatus,
-	) => ["chat-evidence", projectId, sessionId, turnStatus] as const,
 	recoveryPoints: (
 		projectId: string | undefined,
 		sessionId: string | null | undefined,

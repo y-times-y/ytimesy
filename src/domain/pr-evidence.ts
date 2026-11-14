@@ -447,7 +447,7 @@ export function renderEvidenceSection(input: RenderedEvidence) {
  */
 export type EvidenceSource = "harness" | "agent";
 
-/** One stored capture as the app shows it (evidence page and chat card). */
+/** One stored capture as the evidence page shows it. */
 export type EvidenceRecord = {
 	readonly id: string;
 	readonly projectId: string;

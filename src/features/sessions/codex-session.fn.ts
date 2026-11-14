@@ -403,8 +403,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 				};
 			})
 			.catch(() => undefined);
-		// What the open chat shows beside its items (helpers, evidence,
-		// recovery rows) renders with it. A linked chat's starts at once, in
+		// What the open chat shows beside its items (helpers, recovery rows)
+		// renders with it. A linked chat's starts at once, in
 		// parallel with the reads before the view, so it does not hold the view.
 		const linkedSideProject = link.chatId
 			? (link.projectId ?? linkedChatProject)

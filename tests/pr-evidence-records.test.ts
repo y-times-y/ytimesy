@@ -20,7 +20,6 @@ import {
 	failStaleCaptures,
 	finishEvidence,
 	insertCapturingEvidence,
-	listSessionEvidence,
 	supersededEvidence,
 } from "../src/server/adapters/pr-evidence-records";
 
@@ -137,10 +136,6 @@ describe("pr_evidence rows", () => {
 		expect((await evidenceForOwner("alice", project, id(1)))?.status).toBe(
 			"captured",
 		);
-		expect(
-			(await listSessionEvidence("alice", project, session)).map((r) => r.id),
-		).toEqual([id(1)]);
-		expect(await listSessionEvidence("bob", project, session)).toEqual([]);
 	});
 
 	it("keeps the newest five per pull request", async () => {

@@ -466,7 +466,7 @@ export function WorkspaceHome({
 			if (!queryClient.getQueryData(projectKey))
 				queryClient.setQueryData(projectKey, group.chats);
 		}
-		// The open chat's helper lines, evidence cards and recovery rows,
+		// The open chat's helper lines and recovery rows,
 		// read with it: they render on the server, not in after the page loads.
 		const side = initialChatView?.side;
 		const projectId = initialChats?.projectId;
@@ -486,10 +486,6 @@ export function WorkspaceHome({
 				),
 				side.background,
 			);
-		seed(
-			chatSideKeys.evidence(projectId, sessionId, turnStatus),
-			side.evidence,
-		);
 		seed(
 			chatSideKeys.recoveryPoints(
 				projectId,

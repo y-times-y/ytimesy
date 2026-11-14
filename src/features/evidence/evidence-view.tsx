@@ -14,8 +14,6 @@ import {
 	type EvidenceStatus,
 	evidenceAge,
 	evidenceMediaPath,
-	evidenceMediaSummary,
-	evidencePagePath,
 	evidenceVerifiedAtHead,
 	evidenceVideoFile,
 } from "#/domain/pr-evidence";
@@ -178,13 +176,7 @@ function EvidenceFacts({
 	);
 }
 
-function EvidenceHeader({
-	evidence,
-	link,
-}: {
-	evidence: EvidenceRecord;
-	link?: boolean;
-}) {
+function EvidenceHeader({ evidence }: { evidence: EvidenceRecord }) {
 	return (
 		<header className="evidence-header">
 			<Camera size={14} aria-hidden="true" />
@@ -194,21 +186,11 @@ function EvidenceHeader({
 			<span className="evidence-status" data-status={evidence.status}>
 				{STATUS_LABEL[evidence.status]}
 			</span>
-			{link ? (
-				<a
-					className="evidence-open"
-					href={evidencePagePath(evidence.projectId, evidence.id)}
-					target="_blank"
-					rel="noreferrer"
-				>
-					Open <ExternalLink size={14} aria-hidden="true" />
-				</a>
-			) : null}
 		</header>
 	);
 }
 
-/** The agent's own screenshot or recording, shown where it was made; opens full size. */
+/** One of the agent's own screenshots or recordings on the evidence page; opens full size. */
 function AgentCapture({ evidence }: { evidence: EvidenceRecord }) {
 	const file = evidence.files[0];
 	if (!file) return null;
@@ -249,73 +231,6 @@ function AgentCapture({ evidence }: { evidence: EvidenceRecord }) {
 				</a>
 			</figcaption>
 		</figure>
-	);
-}
-
-/** The chat timeline's card for one capture: thumbnails, the recording and the facts. */
-export function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
-	if (evidence.source === "agent") return <AgentCapture evidence={evidence} />;
-	const shots = screenshots(evidence);
-	const video = videoFile(evidence);
-	// A finished capture with nothing to look at (CLI output only, or an app that
-	// did not start) adds no card to the chat; its facts stay on the evidence
-	// page the pull request links.
-	if (evidence.status !== "capturing" && !shots.length && !video) return null;
-	const summary = evidenceMediaSummary({
-		files: evidence.files,
-		videoSeconds: evidence.videoSeconds,
-		kind: evidence.kind,
-	});
-	return (
-		<section
-			className="evidence-card"
-			data-status={evidence.status}
-			aria-label="Pull request evidence"
-		>
-			<EvidenceHeader evidence={evidence} link />
-			<div className="evidence-body">
-				{evidence.status === "capturing" ? (
-					<p className="evidence-note">
-						Capturing commit <code>{short(evidence.commitSha)}</code> in the
-						background.
-					</p>
-				) : summary ? (
-					<p className="evidence-note">{summary}</p>
-				) : null}
-				{shots.length ? (
-					<ul className="evidence-thumbnails">
-						{shots.slice(0, 4).map((shot) => (
-							<li key={shot.name}>
-								<a
-									href={media(evidence, shot.name)}
-									target="_blank"
-									rel="noreferrer"
-								>
-									<img
-										src={media(evidence, shot.name)}
-										alt={shot.label}
-										loading="lazy"
-									/>
-								</a>
-							</li>
-						))}
-					</ul>
-				) : null}
-				{video ? (
-					<video
-						className="evidence-video"
-						controls
-						preload="metadata"
-						src={media(evidence, video)}
-					>
-						<track kind="captions" />
-					</video>
-				) : null}
-				{evidence.status !== "capturing" ? (
-					<EvidenceFacts evidence={evidence} />
-				) : null}
-			</div>
-		</section>
 	);
 }
 

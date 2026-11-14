@@ -221,21 +221,6 @@ export async function evidenceForOwner(
 	return result.rows[0] ? toRecord(result.rows[0]) : null;
 }
 
-/** A chat's captures, oldest first, for the timeline cards. */
-export async function listSessionEvidence(
-	userId: string,
-	projectId: string,
-	sessionId: string,
-) {
-	const result = await database().query<Row>(
-		`select ${COLUMNS} from pr_evidence
-		where user_id=$1 and project_id=$2 and session_id=$3
-		order by created_at desc limit 60`,
-		[userId, projectId, sessionId],
-	);
-	return result.rows.map(toRecord).reverse();
-}
-
 export type EvidenceScope = { id: string; userId: string; projectId: string };
 
 /** A pull request's captures beyond the newest few, to remove after a new capture. */

@@ -194,8 +194,8 @@ usage: ytimesy-browser open <url>                 open a page in the shared desk
        ytimesy-browser inspect <url> [ms]         rendered text, controls, console and network of an open page, as JSON
        ytimesy-browser exec [code]                run Browser Use CLI Python (code argument or stdin) in that Chrome:
                                                   new_tab(url), page_info(), js(code), click_at_xy(x, y), fill_input(selector, text), wait_for_load()
-Screenshots and recordings are kept in ~/.ytimesy/captures (outside the repository) and shown in the chat and in the
-pull request description. A file argument also copies one there: only when the user wants it in the repository.
+Screenshots and recordings are kept in ~/.ytimesy/captures (outside the repository) and linked from the pull
+request's Evidence section only; the chat does not show them. A file argument also copies one there: only when the user wants it in the repository.
 EOF
 }
 captures=${AGENT_CAPTURES_DIRECTORY}
