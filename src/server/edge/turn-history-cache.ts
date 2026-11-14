@@ -22,13 +22,7 @@ export class TurnHistoryCache {
 	}
 
 	read(turnId: string, version: string): History | null {
-		const current = this.sql
-			.exec<{ version: string }>(
-				"select version from turn_history_version where turn_id=?",
-				turnId,
-			)
-			.toArray()[0];
-		if (current?.version !== version) return null;
+		if (this.version(turnId) !== version) return null;
 		const messages = this.part(turnId, "messages");
 		const items = this.part(turnId, "items");
 		return messages && items
@@ -36,12 +30,22 @@ export class TurnHistoryCache {
 			: null;
 	}
 
-	/** A write without messages keeps the cached ones; it only applies on top of a full copy. */
+	/**
+	 * A write without messages keeps the cached ones; it only applies on top of a full copy.
+	 * With `previous` (the row's version just before this write), it applies
+	 * only on top of exactly that version: if another writer changed the turn
+	 * in between, the copy no longer matches Postgres and is dropped.
+	 */
 	write(
 		turnId: string,
 		version: string,
 		history: { messages?: ModelMessage[]; items: readonly SessionItem[] },
+		previous?: string,
 	) {
+		if (previous !== undefined && this.version(turnId) !== previous) {
+			this.clear(turnId);
+			return;
+		}
 		if (
 			!history.messages &&
 			!this.sql
@@ -72,6 +76,15 @@ export class TurnHistoryCache {
 		}
 		this.sql.exec("delete from turn_history where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_version where turn_id=?", turnId);
+	}
+
+	private version(turnId: string) {
+		return this.sql
+			.exec<{ version: string }>(
+				"select version from turn_history_version where turn_id=?",
+				turnId,
+			)
+			.toArray()[0]?.version;
 	}
 
 	private part(turnId: string, part: "messages" | "items") {

@@ -4,13 +4,15 @@ import type { SessionItem } from "#/domain/session-item";
 
 /**
  * Receives every turn write the executor makes, tagged with the row version
- * (api_turn.updated_at) it produced, so the chat Durable Object can keep the
- * turn's history locally instead of reading it back from Postgres each step.
+ * (api_turn.updated_at) it produced and the version the row had just before
+ * it, so the chat Durable Object can keep the turn's history locally instead
+ * of reading it back from Postgres each step.
  */
 type TurnHistoryMirror = (
 	turnId: string,
 	version: string,
 	history: { messages?: ModelMessage[]; items: readonly SessionItem[] },
+	previous: string,
 ) => void;
 
 const mirror = new AsyncLocalStorage<TurnHistoryMirror>();

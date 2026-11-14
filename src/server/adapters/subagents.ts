@@ -183,9 +183,15 @@ export async function addSessionRequestUsage(
 		if (!Array.isArray(items)) return false;
 		const next = add(items);
 		if (!next) return false;
+		// A running turn's history copy (the chat Durable Object's, keyed by
+		// api_turn.updated_at) is invalidated in the same statement. The turn row
+		// is locked first (the subquery runs before the chat's update), in the
+		// order the turn's own writes lock them.
 		const saved = await database().query(
-			`update agent_session set items=$2::jsonb, updated_at=now()
-			 where id=$1 and items = $3::jsonb`,
+			`with turns as (update api_turn set updated_at=now() where session_id=$1 and state='running'
+			 and exists(select 1 from agent_session where id=$1 and items = $3::jsonb) returning id)
+			 update agent_session set items=$2::jsonb, updated_at=now()
+			 where id=$1 and items = $3::jsonb and (select count(*) from turns)>=0`,
 			[sessionId, JSON.stringify(next), JSON.stringify(items)],
 		);
 		if (saved.rowCount) return true;
