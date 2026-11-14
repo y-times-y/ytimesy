@@ -3,6 +3,7 @@ import {
 	type Range,
 	useVirtualizer,
 	type VirtualItem,
+	type Virtualizer,
 } from "@tanstack/react-virtual";
 import { ArrowDown } from "lucide-react";
 import {
@@ -15,6 +16,7 @@ import {
 	useState,
 } from "react";
 import { TIMELINE_END_SCRIPT, useHydrated } from "../app/first-paint";
+import { type RowHeight, RowHeights } from "./transcript-row-heights";
 
 /** One row of a transcript list. */
 export type TranscriptEntry = {
@@ -54,6 +56,12 @@ const AT_END_PX = 4;
 
 /** How near the top (px) the reader is when onNearStart asks for more. */
 const NEAR_START_PX = 1_200;
+
+/**
+ * Row heights learned in this tab, shared by every transcript list: a page
+ * of older turns, or a chat opened again, starts from them.
+ */
+const rowHeights = new RowHeights();
 
 /**
  * A transcript as a list that mounts only the rows near the view (and its
@@ -100,6 +108,36 @@ export function VirtualTranscript({
 	// sending a message starts it again.
 	const following = useRef(followEnd);
 	const [awayFromEnd, setAwayFromEnd] = useState(false);
+	const entriesRef = useRef(entries);
+	entriesRef.current = entries;
+	// A row's estimate holds once given, until the row is measured: the
+	// virtualizer re-reads estimates at every render, and rows not mounted
+	// above the reader would otherwise move as estimates are learned. Rows
+	// first seen later (a page of older turns) start from what was learned.
+	const estimates = useRef(new Map<string, number>());
+	const estimate = (entry: TranscriptEntry) => {
+		let height = estimates.current.get(entry.key);
+		if (height === undefined) {
+			height = rowHeights.estimate(entry);
+			estimates.current.set(entry.key, height);
+		}
+		return height;
+	};
+	// Each mounted row's room while the browser skips laying it out, chosen
+	// as it mounts: if it followed the estimates as they are learned, a row
+	// never rendered would change height above the reader at every render.
+	const placeholders = useRef(new Map<string, number>());
+	// A rendered row's height, remembered for when it or its kind is not
+	// mounted. A row the browser skips measures as the room it was given.
+	const measure = useCallback((element: Element) => {
+		const height = rowHeight(element);
+		const row = element as HTMLElement;
+		const entry = entriesRef.current[Number(row.dataset.index)];
+		const list = listRef.current;
+		if (entry?.key === row.dataset.key && list && !layoutSkipped(row))
+			rowHeights.measured(entry, height, list.clientWidth);
+		return height.box + height.margins;
+	}, []);
 	const lastScrollTop = useRef<number | null>(null);
 	const rangeExtractor = useCallback(
 		(range: Range) => {
@@ -119,9 +157,12 @@ export function VirtualTranscript({
 	const virtualizer = useVirtualizer({
 		count: entries.length,
 		getScrollElement: () => listRef.current,
-		estimateSize: (index) => entries[index]?.estimate ?? 40,
+		estimateSize: (index) => {
+			const entry = entries[index];
+			return entry ? estimate(entry) : 40;
+		},
 		getItemKey: (index) => entries[index]?.key ?? index,
-		measureElement: rowHeight,
+		measureElement: measure,
 		rangeExtractor,
 		overscan: OVERSCAN,
 		paddingStart: PADDING_START + (first?.height ?? 0),
@@ -131,7 +172,7 @@ export function VirtualTranscript({
 		initialOffset: () =>
 			serverLayout?.scrollTop ??
 			(followEnd
-				? entries.reduce((total, entry) => total + entry.estimate, 0)
+				? entries.reduce((total, entry) => total + estimate(entry), 0)
 				: 0),
 		initialMeasurementsCache: serverLayout?.sizes,
 		anchorTo: "end",
@@ -140,6 +181,7 @@ export function VirtualTranscript({
 		scrollEndThreshold:
 			followEnd && !awayFromEnd ? Number.POSITIVE_INFINITY : 0,
 	});
+	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = keepRowsAboveInPlace;
 	const follow = useCallback(
 		(smooth: boolean) => {
 			following.current = true;
@@ -173,6 +215,9 @@ export function VirtualTranscript({
 		const list = listRef.current;
 		if (!list || !followEnd || !hydrated || !following.current) return;
 		if (distanceFromEnd(list) > 1) list.scrollTop = list.scrollHeight;
+		// Where the list keeps itself: the reader's first move up from here
+		// stops following, even when no scroll event came before it.
+		lastScrollTop.current = list.scrollTop;
 	});
 	const sentKey = useRef(followKey);
 	useLayoutEffect(() => {
@@ -180,6 +225,23 @@ export function VirtualTranscript({
 		sentKey.current = followKey;
 		if (followEnd && !following.current) follow(false);
 	}, [followKey, followEnd, follow]);
+	// The list keeps its own place (it opens at its end). The router's scroll
+	// restoration matches lists by their CSS path, which every chat's list
+	// shares, so it put this one where the last chat's was (its top) after
+	// it opened; under an id of its own, no saved position matches it.
+	useLayoutEffect(() => {
+		listRef.current?.setAttribute(
+			"data-scroll-restoration-id",
+			`transcript-${Math.random().toString(36).slice(2)}`,
+		);
+	}, []);
+	// The server's rows painted at their real heights: they keep them when
+	// the browser starts skipping the ones away from the view.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: once, as the list hydrates.
+	useLayoutEffect(() => {
+		for (const { entry, height } of serverLayout?.rows ?? [])
+			rowHeights.measured(entry, height, serverLayout?.width ?? 0);
+	}, []);
 	// Opened in the browser (another chat): at the end, as the server's paints.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: once, when the list mounts.
 	useLayoutEffect(() => {
@@ -192,9 +254,9 @@ export function VirtualTranscript({
 		(row: HTMLLIElement | null) => {
 			virtualizer.measureElement(row);
 			if (row?.isConnected)
-				virtualizer.resizeItem(Number(row.dataset.index), rowHeight(row));
+				virtualizer.resizeItem(Number(row.dataset.index), measure(row));
 		},
-		[virtualizer],
+		[virtualizer, measure],
 	);
 	const rows = virtualizer.getVirtualItems();
 	const scrollOffset = virtualizer.scrollOffset;
@@ -219,9 +281,17 @@ export function VirtualTranscript({
 			</li>,
 		);
 	let laidOut = PADDING_START + (first?.height ?? 0);
+	const mounted = new Map<string, number>();
 	for (const row of rows) {
 		const entry = entries[row.index];
 		if (!entry) continue;
+		// The server paints the estimate and the hydrating page matches it;
+		// rows are only skipped once hydrated, by then with their real height.
+		const placeholder = hydrated
+			? (placeholders.current.get(entry.key) ??
+				rowHeights.placeholder(entry, estimate(entry)))
+			: entry.estimate;
+		if (hydrated) mounted.set(entry.key, placeholder);
 		if (row.start - laidOut > 0.5)
 			children.push(spacer(`space:${row.index}`, row.start - laidOut));
 		children.push(
@@ -234,12 +304,16 @@ export function VirtualTranscript({
 				data-row={entry.row}
 				data-follows={entry.follows}
 				data-queued={entry.queued ? "true" : undefined}
+				// The room it keeps while the browser skips laying it out (see
+				// data-skip-offscreen): once rendered, its own last height.
+				style={{ containIntrinsicSize: `auto ${placeholder}px` }}
 			>
 				{entry.content}
 			</li>,
 		);
 		laidOut = row.end;
 	}
+	placeholders.current = mounted;
 	const rest = virtualizer.getTotalSize() - PADDING_END - laidOut;
 	if (rest > 0.5) children.push(spacer("space:end", rest));
 
@@ -250,6 +324,9 @@ export function VirtualTranscript({
 				id={id}
 				className="session-timeline"
 				aria-label="Session"
+				// Rows away from the view skip layout (session-composer.css), once
+				// the server's rows have painted at their real heights.
+				data-skip-offscreen={hydrated ? "" : undefined}
 				onScroll={followEnd ? onScroll : undefined}
 			>
 				{children}
@@ -293,33 +370,71 @@ function spacer(key: string, height: number) {
 	return <li key={key} aria-hidden="true" style={{ height, flex: "none" }} />;
 }
 
-/** A row's height with its margins: rows sit edge to edge in the list's flow. */
-function rowHeight(element: Element) {
+/** A row's height and its margins: rows sit edge to edge in the list's flow. */
+function rowHeight(element: Element): RowHeight {
 	const style = getComputedStyle(element);
+	return {
+		box: element.getBoundingClientRect().height,
+		margins:
+			Number.parseFloat(style.marginTop) +
+			Number.parseFloat(style.marginBottom),
+	};
+}
+
+/** The browser skips laying out the row's content (content-visibility: auto, away from the view). */
+function layoutSkipped(row: HTMLElement) {
+	const content = row.firstElementChild;
 	return (
-		element.getBoundingClientRect().height +
-		Number.parseFloat(style.marginTop) +
-		Number.parseFloat(style.marginBottom)
+		content !== null &&
+		typeof content.checkVisibility === "function" &&
+		!content.checkVisibility({ contentVisibilityAuto: true })
 	);
+}
+
+/**
+ * Which row size changes move the view, so the row being read stays in
+ * place: a row's first measurement when it starts above the view, and any
+ * later change of a row wholly above it, whichever way the reader scrolls.
+ * The virtualizer's own rule leaves out the latter while scrolling up, but
+ * that is exactly when a row the browser skipped lays out, as it nears the
+ * view from above.
+ */
+export function keepRowsAboveInPlace(
+	item: VirtualItem,
+	_delta: number,
+	instance: Virtualizer<HTMLOListElement, Element>,
+) {
+	const top = (instance.scrollOffset ?? 0) + instance.scrollAdjustments;
+	return instance.itemSizeCache.has(item.key)
+		? item.end <= top
+		: item.start < top;
 }
 
 /** The server-rendered list this hydrating one takes over: its rows' heights and its scroll position. */
 function readServerLayout(
 	id: string,
 	entries: readonly TranscriptEntry[],
-): { scrollTop: number; sizes: VirtualItem[] } | null {
+): {
+	scrollTop: number;
+	sizes: VirtualItem[];
+	rows: { entry: TranscriptEntry; height: RowHeight }[];
+	width: number;
+} | null {
 	if (typeof document === "undefined") return null;
 	const list = document.getElementById(id);
 	if (!(list instanceof HTMLOListElement)) return null;
 	const sizes: VirtualItem[] = [];
+	const rows: { entry: TranscriptEntry; height: RowHeight }[] = [];
 	for (const row of list.querySelectorAll<HTMLElement>(
 		":scope > li[data-index]",
 	)) {
 		const index = Number(row.dataset.index);
-		const key = entries[index]?.key;
-		if (key === undefined || key !== row.dataset.key) continue;
-		const size = rowHeight(row);
-		sizes.push({ index, key, start: 0, size, end: size, lane: 0 });
+		const entry = entries[index];
+		if (!entry || entry.key !== row.dataset.key) continue;
+		const height = rowHeight(row);
+		const size = height.box + height.margins;
+		sizes.push({ index, key: entry.key, start: 0, size, end: size, lane: 0 });
+		rows.push({ entry, height });
 	}
-	return { scrollTop: list.scrollTop, sizes };
+	return { scrollTop: list.scrollTop, sizes, rows, width: list.clientWidth };
 }
