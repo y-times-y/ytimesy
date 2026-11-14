@@ -53,6 +53,7 @@ import { cancelServerTurn } from "./cancel-server-turn";
 import { startEnvironmentServices } from "./environment-services";
 import { detachedFromTurn } from "./machine-call-signal";
 import { restoreSessionWorkspace } from "./session-checkpoint";
+import { turnSpan } from "./turn-timing";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 type ResolveAgentSessionInput = {
@@ -309,7 +310,9 @@ export async function bindAgentSessionMachine(
 		? projectNetworkPolicy(input.userId, input.projectId)
 		: undefined;
 	policy?.catch(() => {});
-	const { session, workspace } = await resolveAgentSessionRecord(input);
+	const { session, workspace } = await turnSpan("bind:session", () =>
+		resolveAgentSessionRecord(input),
+	);
 	// A fork's VM is still being copied: a VM made here would take its slug.
 	if (!session.providerRef && (await conversationForkPending(session.id)))
 		throw new Error("This chat's workspace is still being prepared.");
@@ -323,10 +326,9 @@ export async function bindAgentSessionMachine(
 					input.harness,
 				);
 	if (selectedSession.providerRef && machines.restoreRetainedSession) {
-		const recovered = await machines.restoreRetainedSession(
-			input.userId,
-			session.id,
-			selectedSession.providerRef,
+		const providerRef = selectedSession.providerRef;
+		const recovered = await turnSpan("bind:retained", async () =>
+			machines.restoreRetainedSession?.(input.userId, session.id, providerRef),
 		);
 		if (recovered) {
 			await machines.ensureRunning(WorkspaceId(recovered));
@@ -339,7 +341,7 @@ export async function bindAgentSessionMachine(
 	}
 	const templateSnapshotId =
 		input.sourceSnapshotId ?? workspace.templateSnapshotId;
-	const executed = await executeSessionMachinePlan({
+	const plan: Parameters<typeof executeSessionMachinePlan>[0] = {
 		machines,
 		sessionId: session.id,
 		sessionProviderRef: session.providerRef,
@@ -382,8 +384,13 @@ export async function bindAgentSessionMachine(
 			snapshotId: workspaceBootSnapshotId,
 			record: () => markFreshChatMachine(session.id),
 		},
-	});
-	await applyProjectNetworkPolicy(machines, policy, executed.providerRef);
+	};
+	const executed = await turnSpan("bind:machine", () =>
+		executeSessionMachinePlan(plan),
+	);
+	await turnSpan("bind:networkPolicy", () =>
+		applyProjectNetworkPolicy(machines, policy, executed.providerRef),
+	);
 	// A fresh copy of the template has none of the project's saved services
 	// running: they start in the background, and how each went is added to
 	// the environment report the agent reads.

@@ -341,6 +341,7 @@ import { turnProgressWriter } from "../services/turn-progress-writer";
 import {
 	type EarlyRequestReason,
 	type TurnTiming,
+	turnSpan,
 	turnTiming,
 	withTurnTimingMarks,
 } from "../services/turn-timing";
@@ -494,7 +495,11 @@ export async function runApiTurn(
 			// Model and egress code below marks its own phases (request start,
 			// response headers, first body byte, egress path).
 			const outcome = await (timing
-				? withTurnTimingMarks((phase) => timing.mark(phase), attempt)
+				? withTurnTimingMarks(
+						(phase) => timing.mark(phase),
+						attempt,
+						(name, at, ms) => timing.span(name, at, ms),
+					)
 				: attempt());
 			if (typeof outcome === "string") {
 				if (outcome !== "continue") forgetTurnMemo(turn.id);
@@ -1178,7 +1183,10 @@ async function runApiTurnAttempt(
 				// The env file stays on the VM's disk across steps; a new VM gets it written.
 				secretsWritten ??= turnMemo(
 					`${turn.id}:project-secrets-written:${vm}`,
-					() => writeAgentProjectSecrets(vmMachines, vm, projectSecrets),
+					() =>
+						turnSpan("turn:secretsWritten", () =>
+							writeAgentProjectSecrets(vmMachines, vm, projectSecrets),
+						),
 				);
 				// Written outside the repository, so it overlaps the attachments and
 				// code point below; the workspace is returned only after all three.
@@ -1186,15 +1194,22 @@ async function runApiTurnAttempt(
 				secretsReady.catch(() => {});
 			}
 			// Outside the repository too; its token joins the redaction list first.
-			machineGitPrepared ??= machineGit?.prepareVm(ready, (token) => {
-				if (!redact.includes(token)) redact.push(token);
-			});
-			attachmentsWritten ??= materializeMessageAttachments(
-				ready.machines,
-				ready.vm,
-				owner.userId,
-				owner.id,
-				sessionAttachments(items),
+			const git = machineGit;
+			machineGitPrepared ??= git
+				? turnSpan("turn:machineGit", () =>
+						git.prepareVm(ready, (token) => {
+							if (!redact.includes(token)) redact.push(token);
+						}),
+					)
+				: undefined;
+			attachmentsWritten ??= turnSpan("turn:attachments", () =>
+				materializeMessageAttachments(
+					ready.machines,
+					ready.vm,
+					owner.userId,
+					owner.id,
+					sessionAttachments(items),
+				),
 			).catch((error) => {
 				// A missing file surfaces when the agent opens it; other tools keep working.
 				console.warn("Attached files could not be restored.", error);
@@ -1225,11 +1240,13 @@ async function runApiTurnAttempt(
 					// It captures the files without moving HEAD or the index
 					// (a temporary index and its own ref), so the baselines'
 					// pristine check beside it reads the same checkout.
-					codePoint ??= ensureConversationCodePoint(
-						owner.userId,
-						owner.id,
-						prompt.id,
-						ready,
+					codePoint ??= turnSpan("turn:codePoint", () =>
+						ensureConversationCodePoint(
+							owner.userId,
+							owner.id,
+							prompt.id,
+							ready,
+						),
 					);
 					codePoint.catch(() => {});
 				}

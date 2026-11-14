@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDevelopmentEnvironment } from "#/domain/development-environment";
+import { requestShape, turnSpan } from "./turn-timing";
 
 /**
  * Development diagnostics (YTIMESY_DEBUG_STEP_TIMING=1, development only): one log line per
@@ -115,13 +116,17 @@ export function recordStepTiming(name: string, ms: number, startedAt?: number) {
 	} else trace.spans.set(name, { count: 1, ms, maxMs: ms, firstAt: at });
 }
 
+/**
+ * Times a named phase: in development's step trace, and (always) as a span
+ * of the running durable step's turn-timing line (turnSpan).
+ */
 export async function timed<T>(name: string, run: () => Promise<T>) {
 	const trace = traces.getStore();
-	if (!trace) return run();
+	if (!trace) return turnSpan(name, run);
 	const startedAt = Date.now();
 	trace.open.set(name, (trace.open.get(name) ?? 0) + 1);
 	try {
-		return await run();
+		return await turnSpan(name, run);
 	} finally {
 		const left = (trace.open.get(name) ?? 1) - 1;
 		if (left) trace.open.set(name, left);
@@ -159,18 +164,7 @@ export async function timedCall<T>(
 export function timedFetch(prefix: string, transport: typeof fetch) {
 	return (async (request: RequestInfo | URL, init?: RequestInit) => {
 		if (!traces.getStore()) return transport(request, init);
-		const url = new URL(
-			request instanceof Request ? request.url : String(request),
-		);
-		const method =
-			init?.method ?? (request instanceof Request ? request.method : "GET");
-		const shape = url.pathname
-			.split("/")
-			.filter(Boolean)
-			.map((part) =>
-				/^[0-9a-z]{16,}$/i.test(part) || /\d/.test(part) ? ":id" : part,
-			)
-			.join("/");
+		const [method, shape] = requestShape(request, init).split(" ");
 		let detail = "";
 		try {
 			const body = JSON.parse(String(init?.body ?? "{}"));

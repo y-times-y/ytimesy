@@ -348,11 +348,16 @@ async function admittedCap(
 	return { cap: baseline + seconds, row: saved.rows[0] };
 }
 
+/**
+ * Admits a resume of the VM. With admission on, it answers with the VM's
+ * record as read (or updated) under the admission's lease, so a caller that
+ * finds it already running need not read it again; undefined otherwise.
+ */
 export async function admitVmResume(
 	vm: Vm,
 	data: VmData,
 	requiredSeconds = 60,
-) {
+): Promise<VmData | undefined> {
 	if (!infrastructureAdmissionEnabled()) {
 		// Starting a spent VM only earns the provider's 409; say why instead.
 		if (
@@ -372,11 +377,11 @@ export async function admitVmResume(
 				"The machine's runtime budget is used up and this deployment cannot extend it.",
 			);
 		}
-		return;
+		return undefined;
 	}
 	if (!data.slug) throw new Error("VM usage identity is missing.");
 	const slug = data.slug;
-	await lockedVm(slug, async (client) => {
+	return lockedVm(slug, async (client): Promise<VmData> => {
 		let latest = await vm.data();
 		const context = await admissionContext(client, slug, latest);
 		assertRetentionTouched(context.retention, latest);
@@ -497,6 +502,7 @@ export async function admitVmResume(
 				updated?.maxRunTotalSeconds === cap ? updated : await vm.data();
 			if (confirmed.maxRunTotalSeconds !== cap)
 				throw new Error("Provider did not confirm the execution budget.");
+			latest = confirmed;
 		}
 		// Binding a row already bound to this VM would change nothing.
 		if (row.vm_id !== latest.id)
@@ -512,6 +518,7 @@ export async function admitVmResume(
 			usedSeconds: runningUsage ?? total,
 			at: Date.now(),
 		});
+		return latest;
 	});
 }
 

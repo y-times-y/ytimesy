@@ -24,14 +24,17 @@ const checkout: ProjectCheckout = {
 	installationId: "1",
 	preserveCurrentBranch: true,
 };
-/** A reused template checkout whose current branch is `current`. */
-function machines(current: string) {
+/**
+ * A reused template checkout whose current branch is `current`, its path
+ * note holding `note`.
+ */
+function machines(current: string, note = "/home/ubuntu/app") {
 	return {
 		exec: vi.fn(async (_vm: unknown, command: string) => ({
 			exitCode: 0,
-			stdout: command.includes("branch --show-current")
-				? `${current}\n`
-				: "present\n/home/ubuntu/app\n",
+			stdout: command.includes("echo present")
+				? `present\n/home/ubuntu/app\nbranch:${current}\ncwd:${note}\n`
+				: `${current}\n`,
 			stderr: "",
 		})),
 		writeTextFile: vi.fn(async () => undefined),
@@ -43,6 +46,36 @@ const run = (host: WorkspaceMachines, planned: ProjectCheckout) =>
 beforeEach(() => {
 	receive.mockReset();
 	transfer.failing = false;
+});
+
+it("reuses a checkout in one guest command, writing the path note only when it names another directory", async () => {
+	const same = machines(checkout.workingBranch);
+	await expect(run(same, checkout)).resolves.toBe("/home/ubuntu/app");
+	expect(same.exec).toHaveBeenCalledTimes(1);
+	expect(same.writeTextFile).not.toHaveBeenCalled();
+	const stale = machines(checkout.workingBranch, "/home/ubuntu/api");
+	await expect(run(stale, checkout)).resolves.toBe("/home/ubuntu/app");
+	expect(stale.exec).toHaveBeenCalledTimes(1);
+	expect(stale.writeTextFile).toHaveBeenCalledWith(
+		"vm",
+		"/tmp/ytimesy-project-cwd",
+		"/home/ubuntu/app\n",
+	);
+	// An answer without the branch (an older guest script) asks for it apart.
+	const legacy = {
+		exec: vi.fn(async (_vm: unknown, command: string) => ({
+			exitCode: 0,
+			stdout: command.includes("echo present")
+				? "present\n/home/ubuntu/app\n"
+				: `${checkout.workingBranch}\n`,
+			stderr: "",
+		})),
+		writeTextFile: vi.fn(async () => undefined),
+	} as unknown as WorkspaceMachines;
+	await run(legacy, checkout);
+	expect(legacy.exec).toHaveBeenCalledTimes(2);
+	expect(legacy.writeTextFile).toHaveBeenCalledTimes(1);
+	expect(receive).not.toHaveBeenCalled();
 });
 
 it("fetches a pinned revision even when the checkout is already on its branch", async () => {

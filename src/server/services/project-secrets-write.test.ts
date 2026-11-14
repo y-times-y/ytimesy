@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import {
@@ -7,6 +12,7 @@ import {
 } from "#/domain/project-secret";
 import {
 	AGENT_SECRETS_SETUP_BUDGETS_MS,
+	agentSecretsDigestShell,
 	writeAgentProjectSecrets,
 } from "./project-secrets";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -126,5 +132,58 @@ it("gives each retry of a timed-out setup command a longer budget", async () => 
 		expect(budgets).toEqual([...AGENT_SECRETS_SETUP_BUDGETS_MS]);
 	} finally {
 		vi.useRealTimers();
+	}
+});
+
+it("leaves an env file that already holds these exact secrets, owned and private, as it is", async () => {
+	const digest = createHash("sha256").update(secrets.envFile).digest("hex");
+	const same = machines(() => 0);
+	vi.mocked(same.fake.exec).mockImplementation(async (_vm, command) => {
+		same.commands.push(command);
+		return {
+			exitCode: 0,
+			stdout: command.includes("install -d") ? `sha256:${digest}\n` : "",
+			stderr: "",
+		};
+	});
+	await writeAgentProjectSecrets(same.fake, vm, secrets);
+	expect(same.commands).toHaveLength(1);
+	expect(same.writes).toHaveLength(0);
+	// Changed (or removed) secrets: the file is rewritten and handed over.
+	const changed = machines(() => 0);
+	vi.mocked(changed.fake.exec).mockImplementation(async (_vm, command) => {
+		changed.commands.push(command);
+		return {
+			exitCode: 0,
+			stdout: command.includes("install -d")
+				? `sha256:${"0".repeat(64)}\n`
+				: "",
+			stderr: "",
+		};
+	});
+	await writeAgentProjectSecrets(changed.fake, vm, secrets);
+	expect(changed.writes).toEqual([AGENT_SECRETS_ENV_PATH]);
+	expect(changed.commands.at(-1)).toContain("chown");
+});
+
+it("reports the env file's digest only when the command user owns it alone", () => {
+	const directory = mkdtempSync(join(tmpdir(), "secrets-"));
+	const file = join(directory, "agent.env");
+	const script = agentSecretsDigestShell().replaceAll(
+		`'${AGENT_SECRETS_ENV_PATH}'`,
+		`'${file}'`,
+	);
+	const run = () => execFileSync("sh", ["-c", script], { encoding: "utf8" });
+	try {
+		expect(run()).toBe("");
+		writeFileSync(file, secrets.envFile, { mode: 0o600 });
+		chmodSync(file, 0o600);
+		expect(run()).toBe(
+			`sha256:${createHash("sha256").update(secrets.envFile).digest("hex")}\n`,
+		);
+		chmodSync(file, 0o644);
+		expect(run()).toBe("");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
 	}
 });

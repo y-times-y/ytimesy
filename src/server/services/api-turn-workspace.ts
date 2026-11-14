@@ -27,6 +27,7 @@ import {
 	loadTenantProjectCheckout,
 } from "./project-workspace";
 import { machinesForAgentSession } from "./session-workspace-machines";
+import { turnSpan } from "./turn-timing";
 import type { TurnWorkspaceReuse } from "./turn-workspace-reuse";
 import { establishVerificationBaselines } from "./verification-baseline";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -174,6 +175,7 @@ export function deferredApiTurnWorkspace(
 					Effect.either(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
+		if (earlyCheckout) void turnSpan("ws:checkoutPlan", () => earlyCheckout);
 		// Only a chat that never had a machine gets a fresh copy of the project
 		// template, where its own new branch cannot exist yet: the checkout
 		// switches to it at the pinned commit, which becomes its baseline.
@@ -217,33 +219,35 @@ export function deferredApiTurnWorkspace(
 		}
 		const pinning = pinnedBase;
 		signal.throwIfAborted();
-		const bound = owner.parentSessionId
-			? await bindPreparedAgentTaskMachine(
-					machinesForAgentSession(machines, owner),
-					{
-						userId: owner.userId,
-						projectId: owner.projectId,
-						task: owner,
-					},
-				)
-			: await bindAgentSessionMachine(machines, {
+		const binding = owner.parentSessionId
+			? bindPreparedAgentTaskMachine(machinesForAgentSession(machines, owner), {
+					userId: owner.userId,
+					projectId: owner.projectId,
+					task: owner,
+				})
+			: bindAgentSessionMachine(machines, {
 					userId: owner.userId,
 					projectId: owner.projectId,
 					sessionId: owner.id,
 					harness: owner.harness,
 				});
+		const bound = await turnSpan("ws:bind", () => binding);
 		options.onPhase?.("workspaceBound");
 		const scoped = machinesForAgentSession(machines, bound.session);
 		const vm = WorkspaceId(bound.providerRef);
 		signal.throwIfAborted();
-		await scoped.ensureRunning(vm);
+		await turnSpan("ws:ensureRunning", () => scoped.ensureRunning(vm));
 		options.onPhase?.("workspaceRunning");
 		signal.throwIfAborted();
 		// Cloud metadata is refused for every user on the VM, re-applied each
 		// turn (a cold boot drops the rules); it overlaps the checkout.
-		const metadataBlocked = blockGuestMetadata(machines, vm, signal);
+		const metadataBlocked = turnSpan("ws:metadataGuard", () =>
+			blockGuestMetadata(machines, vm, signal),
+		);
 		metadataBlocked.catch(() => {});
-		await Effect.runPromise(
+		// The primary checkout's directory, as ensureProjectCheckout left it in
+		// the path note; null without a project checkout.
+		const checkingOut = Effect.runPromise(
 			Effect.gen(function* () {
 				const checkout = earlyCheckout
 					? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
@@ -257,7 +261,7 @@ export function deferredApiTurnWorkspace(
 				const pinnedRevision = (yield* Effect.promise(() => pinsCheckout))
 					? yield* Effect.promise(() => pinning)
 					: null;
-				yield* ensureProjectCheckout(
+				return yield* ensureProjectCheckout(
 					scoped,
 					vm,
 					checkout && pinnedRevision
@@ -266,6 +270,7 @@ export function deferredApiTurnWorkspace(
 				);
 			}),
 		);
+		const checkoutPath = await turnSpan("ws:checkout", () => checkingOut);
 		await metadataBlocked;
 		options.onPhase?.("checkoutPrepared");
 		if (Date.now() - preparationStartedAt > SLOW_PREPARATION_MS)
@@ -284,11 +289,19 @@ export function deferredApiTurnWorkspace(
 				),
 			);
 		signal.throwIfAborted();
-		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
+		// The checkout just wrote (or confirmed) the path note: its path needs
+		// no read back. Without a project checkout the note is read as before.
+		const cwd = (
+			checkoutPath?.startsWith("/")
+				? checkoutPath
+				: await turnSpan("ws:cwdRead", () =>
+						scoped.readTextFile(vm, PROJECT_CWD_PATH),
+					)
+		)?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("Prepared repository path is unavailable.");
 		checkedOut?.({ machines: scoped, vm, cwd });
-		const baselines = () =>
+		const establish = () =>
 			establishVerificationBaselines({
 				machines: scoped,
 				vm,
@@ -305,6 +318,7 @@ export function deferredApiTurnWorkspace(
 							}
 						: undefined,
 			});
+		const baselines = () => turnSpan("ws:baselines", establish);
 		// A writer subagent's patch is measured from its pinned baseline.
 		if (bound.session.agentRole === "writer") await baselines();
 		// A root chat commits and publishes without that gate (turn-commit.ts);

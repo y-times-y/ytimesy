@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { FreestyleApiError } from "freestyle";
 import {
 	decryptSecret,
@@ -189,20 +190,31 @@ export async function loadAgentProjectSecrets(
 }
 
 /**
- * Rewrites the VM's env file every turn (empty when the project has none), so
- * a removed or changed secret never outlives the next turn.
+ * Makes the VM's env file hold exactly this turn's secrets (empty when the
+ * project has none), so a removed or changed secret never outlives the next
+ * turn. The private-directory check also reports the file's SHA-256 when the
+ * command user already owns it, alone (0600), and can read it: a file that
+ * already holds these exact contents that way is left as it is, saving the
+ * write and the ownership round trips on most turns. Any other file is
+ * rewritten and handed over as before.
  */
 export async function writeAgentProjectSecrets(
 	machines: WorkspaceMachines,
 	vm: WorkspaceId,
 	secrets: AgentProjectSecrets,
 ) {
-	await prepareAgentSecretsOperation(
+	const directory = await prepareAgentSecretsOperation(
 		machines,
 		vm,
 		"directory",
-		privateDirectoryShell(AGENT_SECRETS_DIRECTORY),
+		`${privateDirectoryShell(AGENT_SECRETS_DIRECTORY)}
+${agentSecretsDigestShell()}`,
 	);
+	if (
+		agentSecretsDigestFromOutput(directory.stdout) ===
+		createHash("sha256").update(secrets.envFile).digest("hex")
+	)
+		return;
 	await machines.writeTextFile(vm, AGENT_SECRETS_ENV_PATH, secrets.envFile);
 	// The provider writes files as root, while commands run as the default
 	// user; a file only root can read was skipped silently by every command.
@@ -230,7 +242,7 @@ async function prepareAgentSecretsOperation(
 ) {
 	let attempt = 0;
 	try {
-		await retryTransientProviderFailure(async () => {
+		return await retryTransientProviderFailure(async () => {
 			const budgetMs =
 				AGENT_SECRETS_SETUP_BUDGETS_MS[
 					Math.min(attempt++, AGENT_SECRETS_SETUP_BUDGETS_MS.length - 1)
@@ -244,6 +256,7 @@ async function prepareAgentSecretsOperation(
 					kind: "command",
 					exitCode: result.exitCode,
 				});
+			return result;
 		});
 	} catch (error) {
 		if (
@@ -253,6 +266,20 @@ async function prepareAgentSecretsOperation(
 			throw new ProjectSecretsPreparationFailure(phase, { kind: "timeout" });
 		throw error;
 	}
+}
+
+/**
+ * Prints `sha256:<hex>` for an env file the command user owns, alone (mode
+ * 0600) and can read; prints nothing otherwise, and never fails (the
+ * directory check before it decides the command's exit status).
+ */
+export function agentSecretsDigestShell() {
+	const file = posixShellQuoted(AGENT_SECRETS_ENV_PATH);
+	return `{ if [ -f ${file} ] && [ ! -L ${file} ] && [ -O ${file} ] && [ -r ${file} ] && [ -z "$(find ${file} -prune ! -perm 600)" ]; then digest="$( { sha256sum ${file} || shasum -a 256 ${file}; } 2>/dev/null | cut -d ' ' -f 1)"; [ -n "$digest" ] && printf 'sha256:%s\\n' "$digest"; fi; } 2>/dev/null; true`;
+}
+
+function agentSecretsDigestFromOutput(stdout: string) {
+	return /^sha256:([0-9a-f]{64})$/m.exec(stdout)?.[1] ?? null;
 }
 
 /** Hands the env file to the command user (0600) and proves it can read it. */

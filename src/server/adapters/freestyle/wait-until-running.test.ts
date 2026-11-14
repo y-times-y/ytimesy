@@ -1,6 +1,8 @@
 import { FreestyleApiError, type Vm } from "freestyle";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+	GUEST_PROBE_BUDGETS_MS,
+	GUEST_PROBE_RETRY_DELAYS_MS,
 	waitUntilGuestAnswers,
 	waitUntilVmRunning,
 } from "./wait-until-running";
@@ -146,11 +148,33 @@ it("abandons a probe that hangs and tries again", async () => {
 		{ id: "vm-test", exec },
 		"Test",
 		[1_000],
-		20_000,
+		[20_000],
 	);
 	await vi.advanceTimersByTimeAsync(21_000);
 	await waiting;
 	expect(exec).toHaveBeenCalledTimes(2);
+});
+it("probes a just-resumed guest again within a second, and gives later probes longer", async () => {
+	vi.useFakeTimers();
+	const sentAt: number[] = [];
+	const exec = vi.fn().mockImplementation(() => {
+		sentAt.push(Date.now());
+		// The first two hang (sent before the guest was up); the third answers.
+		return sentAt.length < 3
+			? new Promise(() => {})
+			: Promise.resolve({ statusCode: 0 });
+	});
+	const start = Date.now();
+	const waiting = waitUntilGuestAnswers({ id: "vm-test", exec }, "Test");
+	await vi.advanceTimersByTimeAsync(10_000);
+	await waiting;
+	expect(exec).toHaveBeenCalledTimes(3);
+	// 3 s budget, 250 ms pause, 3 s budget, 500 ms pause: answered at 6.75 s,
+	// where hanging probes (each bound at 10 s or more) and a 1 s first
+	// pause took over 20 s.
+	expect(sentAt.map((at) => at - start)).toEqual([0, 3_250, 6_750]);
+	expect(GUEST_PROBE_RETRY_DELAYS_MS[0]).toBeLessThanOrEqual(250);
+	expect(GUEST_PROBE_BUDGETS_MS.at(-1)).toBe(20_000);
 });
 it("says plainly that a guest never answered, and rethrows other failures at once", async () => {
 	const failing = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
