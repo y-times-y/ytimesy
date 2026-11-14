@@ -132,7 +132,8 @@ vi.mock("../adapters/mcp-servers", () => ({
 	connectableMcpServers: async () => [],
 }));
 vi.mock("../adapters/plugin-installs", () => ({
-	enabledPluginComponents: async () => [],
+	enabledPluginSkillIndex: async () => [],
+	pluginSkillBody: async () => null,
 }));
 vi.mock("../services/api-agent-command-tools", () => ({
 	completedAgentCommands: mocks.commandCompletions,
@@ -164,6 +165,22 @@ vi.mock("../adapters/conversation-turn-control", () => ({
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.owner,
 	agentSessionMetadataForOwner: mocks.owner,
+	// The parent chain, walked through the same fake as each chat is read.
+	agentSessionAncestorMetadata: async (
+		userId: string,
+		sessionId: string,
+		limit: number,
+	) => {
+		const ancestors: { parentSessionId?: string | null }[] = [];
+		let current = await mocks.owner(userId, sessionId);
+		while (current?.parentSessionId && ancestors.length < limit) {
+			const parent = await mocks.owner(userId, current.parentSessionId);
+			if (!parent) break;
+			ancestors.push(parent);
+			current = parent;
+		}
+		return ancestors;
+	},
 }));
 beforeEach(() => {
 	vi.clearAllMocks();

@@ -3,7 +3,7 @@ import type { AgentSessionRecord } from "../adapters/agent-sessions";
 
 /** What a durable step learned preparing its workspace; machines are per invocation. */
 export type PreparedTurnWorkspace = {
-	session: AgentSessionRecord;
+	session: Omit<AgentSessionRecord, "items">;
 	vm: WorkspaceId;
 	cwd: string;
 };

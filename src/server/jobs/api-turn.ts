@@ -175,7 +175,10 @@ import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { queuedMessageSentNow } from "../adapters/peer-inbox-observation";
-import { enabledPluginComponents } from "../adapters/plugin-installs";
+import {
+	enabledPluginSkillIndex,
+	pluginSkillBody,
+} from "../adapters/plugin-installs";
 import {
 	readPreparedCheckoutDirectory,
 	readProjectDerivedValue,
@@ -1616,7 +1619,7 @@ async function runApiTurnAttempt(
 		);
 		const loadingPlugins = timed("turn:plugins", () =>
 			turnMemo(`${turn.id}:plugins`, () =>
-				enabledPluginComponents(owner.userId, owner.projectId ?? null),
+				enabledPluginSkillIndex(owner.userId, owner.projectId ?? null),
 			),
 		);
 		// Independent loads run together; connected MCP clients are always
@@ -1732,6 +1735,8 @@ async function runApiTurnAttempt(
 			surfaceTools,
 			mcp,
 			plugins,
+			pluginSkillBody: (installId, skill) =>
+				pluginSkillBody(owner.userId, installId, skill),
 			webSearch,
 			webFetch,
 			hooks,
@@ -3472,7 +3477,9 @@ function turnHarnessVariant(turnId: string, userId: string) {
 function turnTools(input: {
 	surfaceTools: ToolSet;
 	mcp: Awaited<ReturnType<typeof connectMcpTools>>;
-	plugins: Awaited<ReturnType<typeof enabledPluginComponents>>;
+	plugins: Awaited<ReturnType<typeof enabledPluginSkillIndex>>;
+	/** A listed skill's body, read when the agent asks for it. */
+	pluginSkillBody: NonNullable<Parameters<typeof pluginSkillTools>[1]>;
 	webSearch: ToolSet;
 	webFetch: ToolSet;
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
@@ -3490,7 +3497,7 @@ function turnTools(input: {
 	const withMcp = {
 		...input.surfaceTools,
 		...mcp.tools,
-		...pluginSkillTools(input.plugins),
+		...pluginSkillTools(input.plugins, input.pluginSkillBody),
 		...input.webSearch,
 		...input.webFetch,
 	};

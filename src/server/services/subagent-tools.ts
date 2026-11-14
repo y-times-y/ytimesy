@@ -108,10 +108,15 @@ const WAIT_POLL_MS = 3_000;
 export type SubagentToolDeps = {
 	readonly now: () => number;
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	/** Without transcripts (subagentAncestors). */
 	readonly ancestors: (
 		userId: string,
 		sessionId: string,
-	) => Promise<readonly AgentSessionRecord[]>;
+	) => Promise<readonly Omit<AgentSessionRecord, "items">[]>;
+	/**
+	 * Each session's `items` holds only what the tree reads (subagentTree in
+	 * adapters/subagents.ts), not its whole transcript: read it with `session`.
+	 */
 	readonly tree: (
 		userId: string,
 		rootId: string,
@@ -302,7 +307,8 @@ const sendInput = z.object({
 });
 
 type Tree = {
-	root: AgentSessionRecord;
+	/** The calling agent (with its items) or an ancestor (without them). */
+	root: Omit<AgentSessionRecord, "items"> & { readonly items?: unknown };
 	sessions: readonly (SubagentTreeSession & AgentSessionRecord)[];
 	nodes: readonly SubagentNode[];
 };
@@ -407,7 +413,10 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					)
 					.at(-1);
 				if (last && input.brief?.trim()) {
-					const items = sessionItemsFromUnknown(last.session.items);
+					// The tree holds only some of its items: its last report needs the transcript.
+					const items = sessionItemsFromUnknown(
+						(await deps.session(last.session.userId, last.session.id))?.items,
+					);
 					const round = currentSidekickRound(last.state);
 					handoff = (brief) =>
 						sidekickHandoffBrief({
@@ -1285,7 +1294,7 @@ function publicBudget(budget: SubagentBudget, childModelId: string) {
 
 async function checkerBriefFor(
 	context: SubagentToolContext,
-	root: AgentSessionRecord,
+	root: Tree["root"],
 	workspace: AgentToolWorkspace,
 ) {
 	const rootSession =
