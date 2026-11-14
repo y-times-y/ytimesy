@@ -38,7 +38,7 @@
 	width: 1120px;
 	height: 700px;
 	border: 0;
-	background: #fff;
+	background: transparent;
 	transform: scale(0.1);
 	transform-origin: 0 0;
 	pointer-events: none;
@@ -235,7 +235,9 @@ button.canvas-picker:hover {
 	flex: 1;
 	min-height: 0;
 	overflow: hidden;
-	background: #fff;
+	/* The panel's own dark, never white: a page's background paints its
+	   whole frame, so this shows only where a page has none of its own. */
+	background: #0d0d0d;
 }
 .canvas-stage[data-device="true"] {
 	display: flex;
@@ -255,7 +257,7 @@ button.canvas-picker:hover {
 	overflow: hidden;
 	border: 1px solid #ffffff24;
 	border-radius: 14px;
-	background: #fff;
+	background: #0d0d0d;
 	box-shadow: 0 12px 40px #00000080;
 	transform-origin: top center;
 }
@@ -264,7 +266,7 @@ button.canvas-picker:hover {
 	width: 100%;
 	height: 100%;
 	border: 0;
-	background: #fff;
+	background: transparent;
 }
 /* Annotate and Compare (canvas-inspector.tsx, canvas-stage.tsx, canvas-notes.tsx). */
 .canvas-modes {

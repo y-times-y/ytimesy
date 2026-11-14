@@ -56,10 +56,14 @@ export function CanvasCard({
 				<span className="canvas-card-kicker">
 					<AppWindow size={13} strokeWidth={1.75} aria-hidden="true" />
 					Canvas
-					<span className="canvas-card-dot" aria-hidden="true">
-						·
-					</span>
-					rev {item.revision}
+					{item.revision > 1 ? (
+						<>
+							<span className="canvas-card-dot" aria-hidden="true">
+								·
+							</span>
+							rev {item.revision}
+						</>
+					) : null}
 				</span>
 				<strong className="canvas-card-title" title={item.title}>
 					{item.title}
