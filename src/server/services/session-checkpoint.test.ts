@@ -17,7 +17,9 @@ const mocks = vi.hoisted(() => ({
 	confirm: vi.fn(),
 	recordFailure: vi.fn(),
 	clearFailure: vi.fn(),
+	released: vi.fn(async () => undefined),
 }));
+vi.mock("../adapters/archive", () => ({ markMachineReleased: mocks.released }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionMetadataForOwner: mocks.session,
 	agentSessionItemsFingerprint: mocks.fingerprint,
@@ -166,7 +168,7 @@ it("refuses to save if the workspace identity changed during capture", async () 
 		captureSessionCheckpoint(machines, "owner", "chat"),
 	).rejects.toThrow("advanced");
 	expect(mocks.upload).not.toHaveBeenCalled();
-	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "advanced");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "advanced", false);
 });
 
 it("records the failing stage so the backstop backs off instead of waking the VM every minute", async () => {
@@ -174,7 +176,7 @@ it("records the failing stage so the backstop backs off instead of waking the VM
 	await expect(
 		captureSessionCheckpoint(machines, "owner", "chat"),
 	).rejects.toThrow("safety limit");
-	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "export");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "export", false);
 	expect(mocks.clearFailure).not.toHaveBeenCalled();
 });
 
@@ -189,7 +191,7 @@ it("logs a wake failure's redacted cause with its stage", async () => {
 	await expect(
 		captureSessionCheckpoint(machines, "owner", "chat"),
 	).rejects.toThrow("did not wake");
-	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "wake");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "wake", false);
 	expect(warn).toHaveBeenCalledWith("Session checkpoint failed", {
 		stage: "wake",
 		sessionId: "chat",
@@ -203,7 +205,7 @@ it("records an upload failure at its stage", async () => {
 	await expect(
 		captureSessionCheckpoint(machines, "owner", "chat"),
 	).rejects.toThrow("storage unavailable");
-	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "upload");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "upload", false);
 });
 
 it("clears a recorded failure once a capture succeeds", async () => {
@@ -216,4 +218,27 @@ it("does not wake the machine when the project is gone", async () => {
 	mocks.project.mockResolvedValue(null);
 	await captureSessionCheckpoint(machines, "owner", "chat");
 	expect(machines.ensureRunning).not.toHaveBeenCalled();
+});
+
+it("stops trying for a chat whose machine was deleted, until a turn gives it a new one", async () => {
+	vi.mocked(machines.ensureRunning).mockRejectedValueOnce(
+		Object.assign(new Error("404 NOT_FOUND /v5/vms/vm-1: not found: vm vm-1"), {
+			name: "FreestyleApiError",
+		}),
+	);
+	await captureSessionCheckpoint(machines, "owner", "chat");
+	expect(mocks.released).toHaveBeenCalledWith("owner", "chat");
+	expect(mocks.recordFailure).not.toHaveBeenCalled();
+});
+
+it("waits a day after a workspace too large to checkpoint", async () => {
+	mocks.capture.mockRejectedValue(
+		Object.assign(new Error("The workspace is too large to checkpoint."), {
+			name: "CheckpointTooLarge",
+		}),
+	);
+	await expect(
+		captureSessionCheckpoint(machines, "owner", "chat"),
+	).rejects.toThrow("too large");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "export", true);
 });

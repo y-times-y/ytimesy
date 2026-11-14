@@ -14,6 +14,15 @@ def git(path,*args):
  return subprocess.check_output(['git','-C',path,*args])
 def enc(data): return base64.b64encode(data).decode()
 result={'repositories':[],'native':{}}
+# The payload is base64 (4/3) of every repository's packed history: one
+# over the limit is refused before any bundling (the limit check below
+# came only after minutes of work, on every try).
+def packed(path):
+ stats=dict(line.split(': ',1) for line in git(path,'count-objects','-v').decode().splitlines() if ': ' in line)
+ return (int(stats.get('size-pack','0'))+int(stats.get('size','0')))*1024
+if sum(packed(path) for path in repos)*4//3>20000000:
+ print('checkpoint-too-large',flush=True)
+ raise SystemExit(3)
 for path in repos:
  with tempfile.TemporaryDirectory() as temp:
   bundle=temp+'/repo.bundle'
@@ -50,6 +59,14 @@ pathlib.Path(${JSON.stringify(output)}).write_text(payload)
 os.chmod(${JSON.stringify(output)},0o600)`)} `;
 }
 
+/** The repositories' history is over the checkpoint's size limit. */
+export class CheckpointTooLarge extends Error {
+	constructor() {
+		super("The workspace is too large to checkpoint.");
+		this.name = "CheckpointTooLarge";
+	}
+}
+
 export async function exportGuestCheckpoint(
 	host: GitTransferHost,
 	repositories: readonly string[],
@@ -63,9 +80,11 @@ export async function exportGuestCheckpoint(
 			exportCheckpointScript(repositories, nativeRoot, output),
 			120_000,
 		);
+		if (result.exitCode === 3 && result.stdout.includes("checkpoint-too-large"))
+			throw new CheckpointTooLarge();
 		if (result.exitCode !== 0)
 			throw new Error(
-				"Could not capture checkpoint; the previous checkpoint remains available.",
+				`Could not capture checkpoint; the previous checkpoint remains available. ${(result.stderr ?? "").trim().split("\n").slice(-1)[0]?.slice(0, 200) ?? ""}`.trim(),
 			);
 		const text = await host.readTextFile(output);
 		if (!text) throw new Error("Checkpoint capture returned no data.");

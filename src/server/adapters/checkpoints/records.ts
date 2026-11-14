@@ -15,6 +15,7 @@ export async function sessionsAwaitingCheckpoint() {
          where s.provider_ref is not null and s.turn_status in ('completed','failed')
            and (c.session_id is null or s.updated_at>c.created_at)
            and not exists (select 1 from session_checkpoint_failure f where f.session_id=s.id and f.retry_after>now())
+           and (s.machine_released_at is null or s.updated_at>s.machine_released_at)
          order by s.updated_at desc limit 100`,
 	);
 	return rows;
@@ -24,6 +25,8 @@ export async function sessionsAwaitingCheckpoint() {
 export async function recordCheckpointFailure(
 	sessionId: string,
 	stage: CheckpointStage,
+	/** A failure that repeats until the workspace changes: wait a day. */
+	lasting = false,
 ) {
 	await database().query(
 		`insert into session_checkpoint_failure(session_id,failures,stage,retry_after)
@@ -32,6 +35,11 @@ export async function recordCheckpointFailure(
            retry_after=now()+least(interval '5 minutes'*power(2,least(session_checkpoint_failure.failures,9)),interval '1 day')`,
 		[sessionId, stage],
 	);
+	if (lasting)
+		await database().query(
+			"update session_checkpoint_failure set retry_after=now()+interval '1 day' where session_id=$1",
+			[sessionId],
+		);
 }
 
 export async function clearCheckpointFailure(sessionId: string) {
