@@ -467,8 +467,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 									() => relayConversationDeliveriesOnce(active.sessionId),
 									() =>
 										withTurnHistoryMirror(
-											(turnId, version, written) =>
-												this.history.write(turnId, version, written),
+											(turnId, version, written, previous) =>
+												this.mirrorHistory(turnId, version, written, previous),
 											() =>
 												executeModelStep(
 													step,
@@ -525,6 +525,24 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				id: backgroundJobId(`completed:${step.turnId}:${step.leaseId}`),
 				kind: "model-admission",
 			});
+	}
+	/**
+	 * Runs after Postgres committed the write: a local storage failure must not
+	 * fail the step, it only costs the next step a read from Postgres.
+	 */
+	private mirrorHistory(...args: Parameters<TurnHistoryCache["write"]>): void {
+		try {
+			this.history.write(...args);
+		} catch (error) {
+			console.warn("Turn history copy could not be saved here.", {
+				cause: stepFailureCause(error),
+			});
+			try {
+				this.history.clear(args[0]);
+			} catch {
+				// Its stored version predates this committed write, so it never matches again.
+			}
+		}
 	}
 	private async claim(
 		step: WorkflowStep,

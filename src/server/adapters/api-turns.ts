@@ -500,12 +500,12 @@ export async function checkpointApiTurn(
 	// $5 is the failover, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string }>(
+		database().query<{ version: string; previous: string }>(
 			`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-		 returning (select updated_at::text from saved) as version`,
+		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
 			[
 				turn.id,
 				turn.lease_id,
@@ -518,9 +518,23 @@ export async function checkpointApiTurn(
 	);
 	if (!result.rows[0]) throw new Error("API turn lease was lost.");
 	rebaseAfterWrite(turn, items, write);
-	mirrorTurnHistory(turn.id, result.rows[0].version, { messages, items });
+	mirrorTurnHistory(
+		turn.id,
+		result.rows[0].version,
+		{ messages, items },
+		result.rows[0].previous,
+	);
 	await wakeConversationProgress();
 }
+
+/**
+ * The turn row's version just before the write (the statement's snapshot
+ * does not see its own update): the local history copy may move to the new
+ * version only from this one, so a write by anyone else in between is not
+ * folded into it unseen.
+ */
+const PREVIOUS_VERSION =
+	"(select updated_at::text from api_turn where id=$1) as previous";
 
 /** Stream checkpoints avoid rewriting the model history on every text delta. */
 export async function publishApiTurnProgress(
@@ -529,18 +543,23 @@ export async function publishApiTurnProgress(
 ) {
 	const write = planItemsWrite(turn, items, 3, "agent_session.items");
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string }>(
+		database().query<{ version: string; previous: string }>(
 			`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-	 returning (select updated_at::text from saved) as version`,
+	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
 			[turn.id, turn.lease_id, write.itemsText, ...write.extra],
 		),
 	);
 	if (result.rows[0]) {
 		rebaseAfterWrite(turn, items, write);
-		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
+		mirrorTurnHistory(
+			turn.id,
+			result.rows[0].version,
+			{ items },
+			result.rows[0].previous,
+		);
 	} else {
 		const cancelled = await database().query(
 			"select 1 from api_turn where id=$1 and lease_id=$2 and user_id=$3 and cancel_requested",

@@ -37,6 +37,18 @@ it("applies an items-only write on top of the cached messages", () => {
 	expect(history.read("t", "v1")).toBeNull();
 });
 
+it("moves to a new version only from the version it holds", () => {
+	const history = cache();
+	history.write("t", "v1", { messages, items: [] });
+	const items = [{ kind: "error", id: "e", message: "m" }] as never;
+	history.write("t", "v2", { items }, "v1");
+	expect(history.read("t", "v2")).toEqual({ messages, items });
+	// Someone else wrote v3 after v2; this step's write on top of it is v4.
+	history.write("t", "v4", { messages, items }, "v3");
+	expect(history.read("t", "v4")).toBeNull();
+	expect(history.read("t", "v2")).toBeNull();
+});
+
 it("drops a partial write it cannot complete and clears finished turns", () => {
 	const history = cache();
 	history.write("t", "v1", { items: [] });
