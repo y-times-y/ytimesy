@@ -1,5 +1,15 @@
-import { conversationEvent } from "#/domain/conversation-delivery";
-import { conversationSnapshot } from "../adapters/conversation-delivery";
+import {
+	applyConversationDelta,
+	type ConversationDelta,
+	type ConversationSnapshot,
+	conversationDeltaEvent,
+	conversationEvent,
+	isConversationDelta,
+} from "#/domain/conversation-delivery";
+import {
+	conversationSnapshot,
+	conversationUpdateSince,
+} from "../adapters/conversation-delivery";
 import { subscribeConversationSnapshot } from "../adapters/realtime-delivery";
 
 /** Development fallback only; live deployments fan out through the configured DO relay. */
@@ -7,10 +17,16 @@ export async function serverSessionProgressResponse(input: {
 	userId: string;
 	sessionId: string;
 	signal: AbortSignal;
+	/** The viewer merges `delta` events; otherwise it is sent full snapshots only. */
+	deltas?: boolean;
 }) {
 	const initial = await conversationSnapshot(input.userId, input.sessionId);
 	if (!initial) return new Response(null, { status: 404 });
-	const realtime = await subscribeConversationSnapshot(initial, input.signal);
+	const realtime = await subscribeConversationSnapshot(
+		initial,
+		input.signal,
+		input.deltas,
+	);
 	if (realtime) return realtime;
 	const encoder = new TextEncoder();
 	let stop = () => {};
@@ -20,21 +36,58 @@ export async function serverSessionProgressResponse(input: {
 			start(controller) {
 				let ended = false;
 				let busy = false;
-				let revision = initial.revision;
+				// The stream's copy: each poll reads only the rows written since it.
+				let copy: ConversationSnapshot = initial;
 				controller.enqueue(encoder.encode(conversationEvent(initial)));
+				const read = async (): Promise<{
+					next: ConversationSnapshot;
+					delta?: ConversationDelta;
+				} | null> => {
+					const since = copy.window?.itemsRev;
+					const update = since
+						? await conversationUpdateSince(
+								input.userId,
+								input.sessionId,
+								since,
+							)
+						: await conversationSnapshot(input.userId, input.sessionId);
+					if (!update) return null;
+					if (!isConversationDelta(update)) return { next: update };
+					if (BigInt(update.revision) <= BigInt(copy.revision))
+						return { next: copy };
+					const merged = applyConversationDelta(copy, update);
+					if (merged)
+						return {
+							next: { ...copy, revision: update.revision, ...merged },
+							delta: update,
+						};
+					// The copy lost track: start again from a full snapshot.
+					const full = await conversationSnapshot(
+						input.userId,
+						input.sessionId,
+					);
+					return full && { next: full };
+				};
 				const poll = setInterval(() => {
 					if (ended || busy) return;
 					busy = true;
-					void conversationSnapshot(input.userId, input.sessionId)
-						.then((next) => {
+					void read()
+						.then((result) => {
 							if (ended) return;
-							if (!next || (controller.desiredSize ?? 0) <= 0) {
+							if (!result || (controller.desiredSize ?? 0) <= 0) {
 								stop();
 								return;
 							}
-							if (BigInt(next.revision) > BigInt(revision)) {
-								revision = next.revision;
-								controller.enqueue(encoder.encode(conversationEvent(next)));
+							const { next, delta } = result;
+							if (BigInt(next.revision) > BigInt(copy.revision)) {
+								copy = next;
+								controller.enqueue(
+									encoder.encode(
+										delta && input.deltas
+											? conversationDeltaEvent(delta)
+											: conversationEvent(next),
+									),
+								);
 							}
 						})
 						.catch(stop)

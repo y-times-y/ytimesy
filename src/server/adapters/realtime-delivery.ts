@@ -1,15 +1,24 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ConversationSnapshot } from "#/domain/conversation-delivery";
-import { MAX_DELIVERY_BYTES } from "#/domain/conversation-delivery";
+import {
+	type ConversationSnapshot,
+	type ConversationUpdate,
+	isConversationDelta,
+	MAX_DELIVERY_BYTES,
+} from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import { executorFetch } from "./executor-fetch";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
 
-const publisher = new AsyncLocalStorage<
-	(snapshot: ConversationSnapshot) => Promise<boolean>
->();
+/**
+ * True once the room took the update; "resync" when it could not merge a
+ * delta (its copy is at another revision, it has none, or it predates
+ * deltas): it needs a full snapshot.
+ */
+export type PublishResult = boolean | "resync";
+type Publisher = (update: ConversationUpdate) => Promise<PublishResult>;
+const publisher = new AsyncLocalStorage<Publisher>();
 export function withConversationPublisher<T>(
-	publish: (snapshot: ConversationSnapshot) => Promise<boolean>,
+	publish: Publisher,
 	run: () => Promise<T>,
 ) {
 	return publisher.run(publish, run);
@@ -38,15 +47,24 @@ export function realtimeDeliveryConfiguration() {
 }
 export async function publishConversationSnapshot(
 	snapshot: ConversationSnapshot,
-) {
+): Promise<boolean> {
+	return (await publishConversationUpdate(snapshot)) === true;
+}
+/** A delta goes to /delta: a room (or executor) that predates it answers 404, so it is resynced. */
+export async function publishConversationUpdate(
+	update: ConversationUpdate,
+): Promise<PublishResult> {
 	const publish = publisher.getStore();
-	if (publish) return publish(snapshot);
+	if (publish) return publish(update);
 	const config = realtimeDeliveryConfiguration();
 	if (!config) return false;
-	const body = JSON.stringify(snapshot);
-	if (Buffer.byteLength(body) > MAX_DELIVERY_BYTES)
+	const delta = isConversationDelta(update);
+	const body = JSON.stringify(update);
+	if (Buffer.byteLength(body) > MAX_DELIVERY_BYTES) {
+		if (delta) return "resync";
 		throw new Error("Conversation snapshot exceeds delivery limit.");
-	const url = `${config.url}/snapshot`;
+	}
+	const url = `${config.url}/${delta ? "delta" : "snapshot"}`;
 	const response = await executorFetch(url, {
 		method: "POST",
 		headers: {
@@ -56,6 +74,14 @@ export async function publishConversationSnapshot(
 		body,
 		signal: AbortSignal.timeout(5000),
 	});
+	await response.body?.cancel().catch(() => {});
+	if (
+		delta &&
+		(response.status === 400 ||
+			response.status === 404 ||
+			response.status === 409)
+	)
+		return "resync";
 	if (!response.ok)
 		throw new Error(
 			`Realtime delivery rejected snapshot (${response.status}).`,
@@ -90,6 +116,8 @@ export async function purgeConversationState(
 export async function subscribeConversationSnapshot(
 	snapshot: ConversationSnapshot,
 	signal: AbortSignal,
+	/** The viewer merges `delta` events (a room that predates them ignores this). */
+	deltas = false,
 ) {
 	const config = realtimeDeliveryConfiguration();
 	if (!config) return null;
@@ -97,6 +125,7 @@ export async function subscribeConversationSnapshot(
 		userId: snapshot.userId,
 		sessionId: snapshot.sessionId,
 		revision: snapshot.revision,
+		...(deltas ? { deltas: "1" } : {}),
 	});
 	const url = `${config.url}/stream?${query}`;
 	const subscribe = async () =>

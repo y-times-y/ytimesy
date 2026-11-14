@@ -53,6 +53,7 @@ import {
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
 import { adjacentChatId, titleWithShortcut } from "#/domain/keyboard-shortcuts";
+import { createLiveProgressCopy } from "#/domain/live-progress";
 import { memoryHoldsLine } from "#/domain/memory-marker";
 import {
 	base64ByteLength,
@@ -1870,27 +1871,32 @@ export function WorkspaceHome({
 		if (!activeProjectId || !activeSessionId || !listenForProgress) return;
 		const epoch = sessionEpoch.current;
 		const source = new EventSource(
-			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId })}`,
+			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId, deltas: "1" })}`,
 		);
 		let lastRevision = "";
-		source.addEventListener("progress", (event: MessageEvent) => {
-			if (
-				epoch !== sessionEpoch.current ||
-				selectedSessionIdRef.current !== activeSessionId
-			)
-				return;
-			if (event.lastEventId && event.lastEventId === lastRevision) return;
-			let progress: SessionProgress;
+		// Full snapshots replace this copy; `delta` events merge into it.
+		const live = createLiveProgressCopy(activeSessionId);
+		const stale = (event: MessageEvent) =>
+			epoch !== sessionEpoch.current ||
+			selectedSessionIdRef.current !== activeSessionId ||
+			Boolean(event.lastEventId && event.lastEventId === lastRevision);
+		const eventData = (event: MessageEvent): unknown => {
 			try {
-				progress = JSON.parse(event.data);
+				return JSON.parse(event.data);
 			} catch {
-				return;
+				return null;
 			}
-			if (
-				progress.sessionId !== activeSessionId ||
-				!Array.isArray(progress.items)
-			)
-				return;
+		};
+		// A delta the copy cannot take (one was missed): the reopened stream
+		// starts with a full snapshot.
+		const resync = () => {
+			source.close();
+			liveProgress.current = null;
+			if (progressStreamOpen.current === activeSessionId)
+				progressStreamOpen.current = null;
+			setProgressReopens((count) => count + 1);
+		};
+		const showProgress = (progress: SessionProgress, eventId: string) => {
 			// A snapshot holds the chat's last turns; older ones shown stay above.
 			const page = progressPage(progress);
 			const shown = (current: PublicCodexSession) =>
@@ -1915,7 +1921,7 @@ export function WorkspaceHome({
 				})
 			)
 				return;
-			lastRevision = event.lastEventId;
+			lastRevision = eventId;
 			liveProgress.current = {
 				sessionId: activeSessionId,
 				receivedAt: Date.now(),
@@ -1946,6 +1952,17 @@ export function WorkspaceHome({
 					.then((next) => applySessionViewRef.current(epoch, next))
 					.catch(() => undefined);
 			}
+		};
+		source.addEventListener("progress", (event: MessageEvent) => {
+			if (stale(event)) return;
+			const progress = live.full(eventData(event));
+			if (progress) showProgress(progress, event.lastEventId);
+		});
+		source.addEventListener("delta", (event: MessageEvent) => {
+			if (stale(event)) return;
+			const progress = live.delta(eventData(event));
+			if (progress === "resync") resync();
+			else if (progress) showProgress(progress, event.lastEventId);
 		});
 		let reopenTimer: ReturnType<typeof setTimeout> | undefined;
 		source.onopen = () => {

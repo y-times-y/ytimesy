@@ -6,6 +6,7 @@ export async function sessionProgressResponse(input: {
 	projectId: string;
 	sessionId: string;
 	signal: AbortSignal;
+	deltas?: boolean;
 }) {
 	// Only whose chat it is: the stream reads the transcript page itself.
 	const session = await agentSessionMetadataForOwner(
@@ -18,5 +19,6 @@ export async function sessionProgressResponse(input: {
 		userId: input.userId,
 		sessionId: session.id,
 		signal: input.signal,
+		deltas: input.deltas,
 	});
 }

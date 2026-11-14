@@ -45,6 +45,17 @@ export const LATEST_PAGE_ITEMS_SQL = `(select coalesce(jsonb_agg(i.item order by
 	 from agent_session_item i where i.session_id=s.id and i.position >= page.first)`;
 export const LATEST_PAGE_HAS_OLDER_SQL = "page.first > 0";
 
+/**
+ * With latestPageJoin: the latest page's rows written after items revision
+ * `since` (agent_session_item.rev), with their positions. A delta's rows.
+ */
+export function latestPageRowsSinceSql(since: string) {
+	return `(select coalesce(jsonb_agg(jsonb_build_object('position',i.position,'item',i.item) order by i.position),'[]'::jsonb)
+	 from agent_session_item i where i.session_id=s.id and i.position >= page.first and i.rev > ${since})`;
+}
+/** The chat's item count: one past its last stored position (primary-key index only). */
+export const ITEM_COUNT_SQL = `(select coalesce(max(i.position)+1,0)::int from agent_session_item i where i.session_id=s.id)`;
+
 /** Usage belongs to the session, even when its user-message row is on an older page. */
 export const LATEST_CONTEXT_USAGE_SQL = `(select i.item->'contextUsage' from agent_session_item i
  where i.session_id=s.id and i.kind='userMessage' and i.item->'contextUsage' is not null

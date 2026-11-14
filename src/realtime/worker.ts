@@ -1,9 +1,15 @@
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { readBoundedRequestBody } from "../domain/bounded-request-body";
 import {
+	applyConversationDelta,
+	type ConversationDelta,
 	type ConversationSnapshot,
+	type ConversationUpdate,
+	conversationDeltaEvent,
+	conversationDeltaSchema,
 	conversationEvent,
 	conversationSnapshotSchema,
+	isConversationDelta,
 	MAX_DELIVERY_BYTES,
 } from "../domain/conversation-delivery";
 import {
@@ -20,6 +26,15 @@ type RealtimeEnvironment = {
 };
 const encoder = new TextEncoder();
 type SnapshotHead = { revision: string; chunks: number };
+/**
+ * What one broadcast sends: the full snapshot's frame (built once, only if a
+ * viewer needs it), and the delta's frame for viewers that merge deltas and
+ * hold the snapshot it applies to (`baseRevision`).
+ */
+type Frames = {
+	full: () => Uint8Array;
+	delta?: { baseRevision: string; frame: Uint8Array };
+};
 
 // This narrow storage port works with both workers-types and Wrangler's generated
 // runtime declarations without coupling chat state to either SDK's full global types.
@@ -59,8 +74,10 @@ export class ConversationRoom {
 	 */
 	private purged = false;
 	private readonly subscribers = new Set<
-		(snapshot: ConversationSnapshot, frame?: Uint8Array) => void
+		(snapshot: ConversationSnapshot, frames?: Frames) => void
 	>();
+	/** Publications run one at a time: a delta merges into the snapshot the last one left. */
+	private publications: Promise<unknown> = Promise.resolve();
 	/**
 	 * `schedule` lets a host object that also uses the alarm (the chat DO's turn
 	 * loop) multiplex it; by default the room owns the alarm.
@@ -129,6 +146,8 @@ export class ConversationRoom {
 		}
 		if (this.purged) return new Response(null, { status: 410 });
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
+		if (request.method === "POST" && url.pathname === "/delta")
+			return this.publish(conversationDeltaSchema.parse(await request.json()));
 		if (request.method === "POST") {
 			const incoming = conversationSnapshotSchema.parse(await request.json());
 			if (url.pathname !== "/stream") return this.publish(incoming);
@@ -140,7 +159,7 @@ export class ConversationRoom {
 				incoming.sessionId !== url.searchParams.get("sessionId")
 			)
 				return new Response(null, { status: 400 });
-			const refused = await this.adopt(incoming);
+			const refused = await this.serialized(() => this.adopt(incoming));
 			if (refused) return refused;
 		}
 		if (
@@ -150,6 +169,8 @@ export class ConversationRoom {
 		)
 			return new Response(null, { status: 404 });
 		if (this.subscribers.size >= 16) return new Response(null, { status: 429 });
+		// A viewer that merges deltas asks for them; others get full snapshots only.
+		const deltas = url.searchParams.get("deltas") === "1";
 		const minimumRevision = url.searchParams.get("revision");
 		if (
 			minimumRevision &&
@@ -164,15 +185,23 @@ export class ConversationRoom {
 				start: (controller) => {
 					let ended = false;
 					let revision = 0n;
-					const send = (value: ConversationSnapshot, frame?: Uint8Array) => {
+					const send = (value: ConversationSnapshot, frames?: Frames) => {
 						if (ended || BigInt(value.revision) <= revision) return;
 						if ((controller.desiredSize ?? 0) <= 0) {
 							stop();
 							return;
 						}
+						const delta =
+							deltas &&
+							frames?.delta &&
+							BigInt(frames.delta.baseRevision) === revision
+								? frames.delta.frame
+								: undefined;
 						revision = BigInt(value.revision);
 						controller.enqueue(
-							frame ?? encoder.encode(conversationEvent(value)),
+							delta ??
+								frames?.full() ??
+								encoder.encode(conversationEvent(value)),
 						);
 					};
 					const heartbeat = setInterval(() => {
@@ -209,14 +238,51 @@ export class ConversationRoom {
 			},
 		});
 	}
-	/** Trusted in-process publication avoids a JSON Request/parse round trip. */
-	async publish(incoming: ConversationSnapshot): Promise<Response> {
+	/**
+	 * Trusted in-process publication avoids a JSON Request/parse round trip.
+	 * A delta this room cannot merge answers 409: the publisher sends the full snapshot.
+	 */
+	async publish(incoming: ConversationUpdate): Promise<Response> {
 		if (this.purged) return new Response(null, { status: 410 });
-		return (await this.adopt(incoming)) ?? new Response(null, { status: 204 });
+		const refused = await this.serialized(() =>
+			isConversationDelta(incoming)
+				? this.adoptDelta(incoming)
+				: this.adopt(incoming),
+		);
+		return refused ?? new Response(null, { status: 204 });
+	}
+	private serialized<T>(run: () => Promise<T>): Promise<T> {
+		const next = this.publications.then(run, run);
+		this.publications = next.catch(() => {});
+		return next;
+	}
+	/** Merges a delta into the latest snapshot; 409 when this copy is not the one it applies to. */
+	private async adoptDelta(delta: ConversationDelta): Promise<Response | null> {
+		const latest = this.latest;
+		if (!latest) return new Response(null, { status: 409 });
+		if (latest.userId !== delta.userId || latest.sessionId !== delta.sessionId)
+			return new Response(null, { status: 403 });
+		// Already past it (a full snapshot arrived meanwhile): nothing to do.
+		if (BigInt(delta.revision) <= BigInt(latest.revision)) return null;
+		const merged = applyConversationDelta(latest, delta);
+		if (!merged) return new Response(null, { status: 409 });
+		return this.adopt(
+			{
+				userId: latest.userId,
+				sessionId: latest.sessionId,
+				revision: delta.revision,
+				...merged,
+			},
+			{
+				baseRevision: latest.revision,
+				frame: encoder.encode(conversationDeltaEvent(delta)),
+			},
+		);
 	}
 	/** Keeps a newer snapshot and broadcasts it; a refusal's response otherwise. */
 	private async adopt(
 		incoming: ConversationSnapshot,
+		delta?: Frames["delta"],
 	): Promise<Response | null> {
 		if (incoming.sessionId !== incoming.progress.sessionId)
 			return new Response(null, { status: 400 });
@@ -265,10 +331,18 @@ export class ConversationRoom {
 			) {
 				this.latest = incoming;
 				// All viewers receive the same immutable frame, not one large JSON
-				// serialization and byte buffer per viewer.
+				// serialization and byte buffer per viewer; the full one only if a
+				// viewer cannot take the delta.
 				if (this.subscribers.size) {
-					const frame = encoder.encode(conversationEvent(incoming));
-					for (const send of this.subscribers) send(incoming, frame);
+					let full: Uint8Array | undefined;
+					const frames: Frames = {
+						full: () => {
+							full ??= encoder.encode(conversationEvent(incoming));
+							return full;
+						},
+						delta,
+					};
+					for (const send of this.subscribers) send(incoming, frames);
 				}
 			}
 		}
@@ -417,6 +491,7 @@ const ROOM_TURN_PATH = /^\/turn\/(acquire|renew|release|cancel)$/;
 export function isRealtimeRoute(pathname: string) {
 	return (
 		pathname === "/snapshot" ||
+		pathname === "/delta" ||
 		pathname === "/stream" ||
 		pathname === "/purge" ||
 		ROOM_TURN_PATH.test(pathname)
@@ -438,6 +513,7 @@ export async function routeRealtimeRequest(
 			!(
 				(request.method === "POST" &&
 					(url.pathname === "/snapshot" ||
+						url.pathname === "/delta" ||
 						url.pathname === "/stream" ||
 						url.pathname === "/purge" ||
 						ROOM_TURN_PATH.test(url.pathname))) ||
@@ -452,9 +528,11 @@ export async function routeRealtimeRequest(
 			request.method === "POST"
 				? (url.pathname === "/snapshot" || url.pathname === "/stream"
 						? conversationSnapshotSchema
-						: url.pathname === "/purge"
-							? conversationPurgeSchema
-							: turnControlSchema
+						: url.pathname === "/delta"
+							? conversationDeltaSchema
+							: url.pathname === "/purge"
+								? conversationPurgeSchema
+								: turnControlSchema
 					).parse(JSON.parse(body))
 				: {
 						userId: url.searchParams.get("userId"),
