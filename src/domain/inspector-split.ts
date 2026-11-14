@@ -14,7 +14,7 @@ export function clampInspectorSplit(ratio: number): number {
 }
 
 export function inspectorPaneIsWide(view: string): boolean {
-	return view === "desktop" || view === "files";
+	return view === "desktop" || view === "files" || view === "canvas";
 }
 
 export function inspectorSplitRatio(input: {
@@ -34,6 +34,7 @@ const INSPECTOR_VIEWS = [
 	"terminal",
 	"desktop",
 	"side",
+	"canvas",
 ] as const;
 export type SavedInspectorView = (typeof INSPECTOR_VIEWS)[number];
 

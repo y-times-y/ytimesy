@@ -521,3 +521,25 @@ describe("lead mode fusion instructions", () => {
 		expect(later).toBe(sidekick);
 	});
 });
+
+describe("canvas instructions", () => {
+	it("teaches the canvas only when the turn offers it, on either surface", () => {
+		const line = "Canvas: show, don't describe.";
+		for (const surface of [base, { plugins: [], projectKnowledge: null }]) {
+			expect(
+				agentTurnInstructions({
+					...surface,
+					session: {},
+					tools: { bash: stub, canvas: stub },
+				}),
+			).toContain(line);
+			expect(
+				agentTurnInstructions({
+					...surface,
+					session: {},
+					tools: { bash: stub },
+				}),
+			).not.toContain(line);
+		}
+	});
+});

@@ -215,6 +215,7 @@ import {
 } from "../services/background-command-context";
 import { withBackgroundCommandNotices } from "../services/background-command-notices";
 import { builderToolSurface } from "../services/builder-shell-surface";
+import { canvasTools } from "../services/canvas-tool";
 import { checkerPairGate } from "../services/checker-pair-gate";
 import {
 	claudeCodeBridgeToolSet,
@@ -1760,6 +1761,8 @@ async function runApiTurnAttempt(
 			rootChat,
 			projectSecrets,
 			redact,
+			// Display only: a person in a root chat sees the canvas.
+			canvas: rootChat ? canvasTools({ items: () => items, workspace }) : {},
 			environmentSetup:
 				rootChat && owner.projectId
 					? environmentSetupTools({
@@ -3509,6 +3512,8 @@ function turnTools(input: {
 	pushApproval: ToolSet;
 	/** save_project_secret, in a person's root chats in a project. */
 	saveSecret: ToolSet;
+	/** canvas, in a person's root chats. */
+	canvas: ToolSet;
 }) {
 	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
@@ -3533,6 +3538,7 @@ function turnTools(input: {
 					...withMcp,
 					...secretTools,
 					...questionTools,
+					...input.canvas,
 					...input.environmentSetup,
 					...input.pushApproval,
 					...input.saveSecret,

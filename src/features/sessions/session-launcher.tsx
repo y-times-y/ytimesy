@@ -115,6 +115,7 @@ import { authClient } from "#/features/auth/client";
 import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import type { OpenChatSide } from "#/server/services/open-chat-side";
+import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import { AgentIcon } from "./agent-icon";
@@ -195,6 +196,7 @@ export function SessionLauncher({
 	onStop,
 	onOpenInspector,
 	onOpenFile,
+	onOpenCanvas,
 	onRecovered,
 	initialDraft = "",
 	prefill,
@@ -285,6 +287,8 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
+	/** Opens a canvas card's canvas in the right panel (Main's timeline only). */
+	onOpenCanvas?: (focus: CanvasFocus) => void;
 	onRecovered?: (
 		sessionId: string,
 		prompt: string | null,
@@ -1382,6 +1386,7 @@ export function SessionLauncher({
 					turnStatus={turnStatus}
 					fill={followUpLayout}
 					onOpenFile={onOpenFile}
+					onOpenCanvas={onOpenCanvas}
 					secretActions={
 						selectedProject
 							? {

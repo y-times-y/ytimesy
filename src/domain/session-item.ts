@@ -122,6 +122,21 @@ export type UserQuestionItem = {
 	readonly questions: readonly UserQuestion[];
 };
 
+/**
+ * An HTML document the agent showed the user with the canvas tool (canvas.ts):
+ * one revision of the canvas with this title. Rendered only in a sandboxed
+ * frame. `html` is null once newer revisions used the chat's canvas budget.
+ */
+export type CanvasItem = {
+	readonly kind: "canvas";
+	readonly id: SessionItemId;
+	readonly title: string;
+	readonly revision: number;
+	readonly html: string | null;
+	/** The workspace file it was read from, when the agent passed a path. */
+	readonly path?: string;
+};
+
 /** Memory lines this turn added: by the agent's own commits or the save hook after it. */
 export type MemorySaveItem = {
 	readonly kind: "memorySave";
@@ -303,6 +318,7 @@ export type SessionItem =
 	| SecretRequestItem
 	| PushApprovalItem
 	| UserQuestionItem
+	| CanvasItem
 	| MemorySaveItem
 	| CommandExecutionItem
 	| FileChangeItem

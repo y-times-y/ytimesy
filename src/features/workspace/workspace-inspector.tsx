@@ -2,8 +2,11 @@ import { Check, ListTodo, Plus, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import type { CanvasThread } from "#/domain/canvas";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
+import { CanvasInspector } from "../canvas/canvas-inspector";
+import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
@@ -21,7 +24,8 @@ export type ToolsView =
 	| "pr"
 	| "terminal"
 	| "desktop"
-	| "side";
+	| "side"
+	| "canvas";
 export type InspectorView = ToolsView | "overview";
 
 const views = {
@@ -63,6 +67,13 @@ const views = {
 		title: "Side chat",
 		description: "Open a chat first; the side chat talks beside it.",
 	},
+	canvas: {
+		label: "Canvas",
+		icon: VIEW_ICONS.canvas,
+		title: "No canvas yet.",
+		description:
+			"When an agent shows a mockup, prototype, chart or diagram, it opens here as a live preview.",
+	},
 } as const;
 
 export function WorkspaceInspector({
@@ -85,7 +96,15 @@ export function WorkspaceInspector({
 	pullRequestSummary,
 	onViewIntent,
 	sideChat,
+	canvases = [],
+	canvasFocus,
+	onCanvasFocusChange,
 }: {
+	/** The chat's canvases (canvas.ts), shown in the Canvas tab. */
+	canvases?: readonly CanvasThread[];
+	/** The canvas and revision the Canvas tab shows; the latest when absent. */
+	canvasFocus?: CanvasFocus;
+	onCanvasFocusChange?: (focus: CanvasFocus) => void;
 	/** The side chat beside Main, shown in the Side chat tab. */
 	sideChat?: ReactNode;
 	/** The pointer or focus reached a view's entry: it may open next. */
@@ -250,6 +269,12 @@ export function WorkspaceInspector({
 					modelId={modelId}
 					currentSessionId={sessionId}
 					onReviewStarted={onReviewStarted}
+				/>
+			) : activeView === "canvas" ? (
+				<CanvasInspector
+					canvases={canvases}
+					focus={canvasFocus}
+					onFocusChange={onCanvasFocusChange ?? (() => undefined)}
 				/>
 			) : activeView === "side" && sideChat ? (
 				sideChat
