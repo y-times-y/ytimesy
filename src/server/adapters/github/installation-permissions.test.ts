@@ -8,6 +8,7 @@ vi.mock("octokit", () => ({
 			return { auth };
 		}
 	},
+	Octokit: { defaults: () => class {} },
 }));
 
 it("requests PR write permission through the SDK while preserving content-only broker scopes", async () => {
