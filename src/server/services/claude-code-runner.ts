@@ -179,6 +179,8 @@ const WRITE_CHUNK = 36 * 1024;
 const POLL_MIN_MS = 500;
 const POLL_MAX_MS = 2_000;
 const BUSY_GRACE_MS = 30_000;
+/** A poll needs at least this long to be worth sending (else the step yields). */
+const MIN_POLL_BUDGET_MS = 3_000;
 /** Polls in a row the machine may leave unanswered before the turn fails. */
 const MAX_UNREADABLE_POLLS = 4;
 const UNREADABLE_POLL_PAUSE_MS = 1_500;
@@ -428,14 +430,39 @@ export async function runClaudeCodeStep(
 	// What the latest model call put in the context window; with the window
 	// Claude Code reports at the end, it is the composer's context ring.
 	let contextTokens: number | null = null;
+	/** This step read the run's output at least once (it made progress). */
+	let readOnce = false;
+	/** Ends the step for the next one to re-attach, keeping what it has read. */
+	const yieldStep = async (): Promise<ClaudeCodeStepResult> => {
+		if (commit >= 0)
+			await shell(
+				`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
+				10_000,
+			).catch(() => undefined);
+		await backupSettled();
+		return { messages: [...input.messages], outcome: "continue" };
+	};
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
 		let transportFailure: ClaudeRunnerTransportFailure | null = null;
 		// The runner HTTP adapter reserves another 10 seconds for the exec reply.
+		const pollBudget = Math.min(30_000, input.deadline - now() - 10_000);
+		// Too close to the step's end for a poll to answer: the step yields
+		// (the run keeps going on its host and the next step re-attaches). A
+		// poll given a few milliseconds always "failed", and near the deadline
+		// that failure ended the whole turn with "its output could not be
+		// read": every run longer than one step (Nov 14 helpers, ~13 min in).
+		if (pollBudget < MIN_POLL_BUDGET_MS && readOnce) {
+			if (input.bridge.busy() && now() < input.deadline + BUSY_GRACE_MS) {
+				await sleep(POLL_MIN_MS);
+				continue;
+			}
+			return yieldStep();
+		}
 		const poll = await shell(
 			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} ${READ_LIMIT}`,
-			Math.max(1, Math.min(30_000, input.deadline - now() - 10_000)),
+			Math.max(MIN_POLL_BUDGET_MS, pollBudget),
 		).catch((error: unknown) => {
 			// A deploy or isolate reset cut this object's own request: the step
 			// is interrupted (and resumes on the new code, re-attaching to the
@@ -463,11 +490,18 @@ export async function runClaudeCodeStep(
 			// The run lives on the machine and its output stays there: one poll
 			// the machine did not answer (no exit status, a dropped connection)
 			// is read again, and only a machine that stays silent fails the turn.
+			// Out of step time (not out of patience): yield, never fail. The run
+			// and its output stay on the host for the next step to read.
 			if (
-				++unreadablePolls > MAX_UNREADABLE_POLLS ||
-				now() + UNREADABLE_POLL_PAUSE_MS * unreadablePolls + 10_000 >=
-					input.deadline
+				now() + UNREADABLE_POLL_PAUSE_MS * (unreadablePolls + 1) + 10_000 >=
+				input.deadline
 			) {
+				input.signal.throwIfAborted();
+				// A machine-hosted run's transport loss keeps its own handling.
+				if (transportFailure && !input.remote) throw transportFailure;
+				return yieldStep();
+			}
+			if (++unreadablePolls > MAX_UNREADABLE_POLLS) {
 				// A remote process owns the run and its tools independently of this
 				// step. Reattach next step; never turn transport loss into a launch.
 				input.signal.throwIfAborted();
@@ -483,6 +517,7 @@ export async function runClaudeCodeStep(
 			continue;
 		}
 		unreadablePolls = 0;
+		readOnce = true;
 		const polled = header as {
 			offset?: number;
 			next: number;
