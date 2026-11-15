@@ -1,0 +1,19 @@
+[
+	{ "action": "waitFor", "selector": ".gh-table-open" },
+	{ "action": "screenshot", "name": "pull-request-table" },
+	{ "action": "click", "selector": ".gh-table-open >> nth=0" },
+	{ "action": "waitFor", "selector": ".gh-fields" },
+	{ "action": "screenshot", "name": "pull-request-conversation" },
+	{ "action": "click", "selector": "button[role=tab]:has-text('Files')" },
+	{ "action": "waitFor", "selector": ".diff-line-comment" },
+	{
+		"action": "click",
+		"selector": "button[aria-label='Comment on new line 2 of src/editor.ts']"
+	},
+	{ "action": "screenshot", "name": "inline-review-comment" },
+	{ "action": "click", "selector": ".qa-nav button:has-text('Issues')" },
+	{ "action": "waitFor", "selector": ".gh-issue-row" },
+	{ "action": "click", "selector": ".gh-issue-row" },
+	{ "action": "waitFor", "selector": ".gh-comment-box" },
+	{ "action": "screenshot", "name": "issue-conversation" }
+]

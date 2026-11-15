@@ -31,6 +31,7 @@ const INSPECTOR_VIEWS = [
 	"files",
 	"diff",
 	"pr",
+	"issues",
 	"terminal",
 	"desktop",
 	"side",

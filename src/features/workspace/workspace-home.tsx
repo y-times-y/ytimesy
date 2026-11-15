@@ -3301,6 +3301,13 @@ export function WorkspaceHome({
 			run: () => openInspector("pr"),
 		},
 		{
+			id: "issues",
+			group: "Actions",
+			label: "Open issues",
+			disabled: !chatPullRequestRepository,
+			run: () => openInspector("issues"),
+		},
+		{
 			id: "side",
 			group: "Actions",
 			label: "Open side chat",

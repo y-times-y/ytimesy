@@ -1,6 +1,9 @@
+import { Plus } from "lucide-react";
+import type { ReactNode } from "react";
 import {
 	type ChangeData,
 	Diff,
+	getChangeKey,
 	Hunk,
 	type HunkData,
 	type HunkTokens,
@@ -48,14 +51,51 @@ function diffViewHunk(preview: DiffPreviewHunk): HunkData {
 	};
 }
 
+/** A diff line as GitHub addresses it for review comments. */
+export type DiffLineAddress = {
+	readonly path: string;
+	readonly side: "LEFT" | "RIGHT";
+	readonly line: number;
+};
+
+/**
+ * Comments on diff lines (a pull request review): what shows under a line,
+ * and what clicking a line's number starts.
+ */
+export type DiffLineComments = {
+	readonly widget: (address: DiffLineAddress) => ReactNode;
+	readonly onLine: (address: DiffLineAddress) => void;
+};
+
+function lineAddress(path: string, change: ChangeData): DiffLineAddress {
+	if (change.type === "delete")
+		return { path, side: "LEFT", line: change.lineNumber };
+	return {
+		path,
+		side: "RIGHT",
+		line: change.type === "normal" ? change.newLineNumber : change.lineNumber,
+	};
+}
+
 export function DiffHunkPreview({
 	preview,
 	language,
+	path,
+	lineComments,
 }: {
 	preview: DiffPreviewHunk;
 	language: SourceLanguage;
+	/** The file, needed only with lineComments. */
+	path?: string;
+	lineComments?: DiffLineComments;
 }) {
 	const hunk = diffViewHunk(preview);
+	const widgets: Record<string, ReactNode> = {};
+	if (lineComments && path)
+		for (const change of hunk.changes) {
+			const widget = lineComments.widget(lineAddress(path, change));
+			if (widget) widgets[getChangeKey(change)] = widget;
+		}
 	const oldLines = preview.lines.filter((line) => line.oldNumber !== null);
 	const newLines = preview.lines.filter((line) => line.newNumber !== null);
 	const oldHighlight = useHighlightedLines(
@@ -83,13 +123,30 @@ export function DiffHunkPreview({
 			diffType="modify"
 			hunks={[hunk]}
 			tokens={tokens}
-			renderGutter={({ change, side }) =>
-				side === "old"
-					? null
-					: change.type === "normal"
-						? change.newLineNumber
-						: change.lineNumber
-			}
+			widgets={widgets}
+			className={lineComments ? "diff-commentable" : undefined}
+			renderGutter={({ change, side, inHoverState, renderDefault }) => {
+				const activeSide = change.type === "delete" ? "old" : "new";
+				if (!lineComments || !path || side !== activeSide)
+					return renderDefault();
+				const address = lineAddress(path, change);
+				return (
+					<button
+						type="button"
+						className="diff-line-comment"
+						aria-label={`Comment on ${address.side === "LEFT" ? "old" : "new"} line ${address.line} of ${path}`}
+						onClick={() => lineComments.onLine(address)}
+					>
+						{inHoverState ? (
+							<span className="diff-line-add">
+								<Plus size={12} aria-hidden="true" />
+							</span>
+						) : (
+							renderDefault()
+						)}
+					</button>
+				);
+			}}
 			renderToken={(token, renderDefault, index) =>
 				token.type === "shiki" ? (
 					<HighlightedTokens

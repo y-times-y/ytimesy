@@ -5,6 +5,15 @@ export type PullRequestCheck = {
 	readonly name: string;
 	readonly state: "passed" | "failed" | "pending" | "skipped";
 	readonly url: string | null;
+	/** The GitHub Actions job behind the check, which can be re-run and whose log can be read. */
+	readonly job?: { readonly runId: number; readonly jobId: number } | null;
+};
+
+export type PullRequestLabel = {
+	readonly name: string;
+	/** Hex without '#', as GitHub sends it. */
+	readonly color: string;
+	readonly description?: string | null;
 };
 
 export type PullRequestReview = {
@@ -31,6 +40,18 @@ export type PullRequestComment = {
 	readonly path?: string;
 	readonly line?: number | null;
 	readonly diffHunk?: string;
+	/** GitHub's id, for replying, editing and deleting. */
+	readonly databaseId?: number;
+	/** An inline reply names the comment that started its thread. */
+	readonly inReplyTo?: number | null;
+	readonly side?: "LEFT" | "RIGHT" | null;
+	/** The review thread an inline comment starts, for resolving it. */
+	readonly thread?: { readonly id: string; readonly resolved: boolean } | null;
+};
+
+/** A conversation entry with the inline replies that answer it. */
+export type PullRequestThreadEntry = PullRequestComment & {
+	readonly replies: readonly PullRequestComment[];
 };
 
 export type PullRequestDetail = {
@@ -57,7 +78,57 @@ export type PullRequestDetail = {
 	readonly files: readonly FileChangeEntry[];
 	readonly conversation: readonly PullRequestComment[];
 	readonly participants: readonly PullRequestPerson[];
+	/** The signed-in user's GitHub login: their own comments can be edited. */
+	readonly viewer?: string | null;
+	readonly labels?: readonly PullRequestLabel[];
+	readonly assignees?: readonly PullRequestPerson[];
+	readonly requestedReviewers?: readonly PullRequestPerson[];
 };
+
+/** Labels and people a repository offers for labelling, assigning and review requests. */
+export type RepositoryChoices = {
+	readonly labels: readonly PullRequestLabel[];
+	readonly people: readonly PullRequestPerson[];
+};
+
+/**
+ * The conversation with each inline reply moved under the comment that
+ * started its thread, in time order. A reply whose thread start is gone
+ * stays on its own.
+ */
+export function groupReviewThreads(
+	conversation: readonly PullRequestComment[],
+): PullRequestThreadEntry[] {
+	const roots = new Map<number, PullRequestComment[]>();
+	for (const entry of conversation)
+		if (entry.kind === "inline" && !entry.inReplyTo && entry.databaseId)
+			roots.set(entry.databaseId, []);
+	const entries: PullRequestComment[] = [];
+	for (const entry of conversation) {
+		const thread =
+			entry.kind === "inline" && entry.inReplyTo
+				? roots.get(entry.inReplyTo)
+				: undefined;
+		if (thread) thread.push(entry);
+		else entries.push(entry);
+	}
+	return entries.map((entry) => ({
+		...entry,
+		replies:
+			(entry.databaseId !== undefined && roots.get(entry.databaseId)) || [],
+	}));
+}
+
+/** Whether the signed-in user wrote this entry (and so may edit or delete it). */
+export function viewerWrote(
+	entry: Pick<PullRequestComment, "author">,
+	viewer: string | null | undefined,
+): boolean {
+	return (
+		Boolean(viewer) &&
+		entry.author.login.toLowerCase() === viewer?.toLowerCase()
+	);
+}
 
 export type ListedRepositoryPullRequest = {
 	readonly number: number;
@@ -70,6 +141,17 @@ export type ListedRepositoryPullRequest = {
 	readonly authorAvatarUrl: string | null;
 	readonly draft: boolean;
 };
+
+/** A repository table row; the compact open-PR picker keeps its smaller model. */
+export type RepositoryPullRequest = ListedRepositoryPullRequest & {
+	readonly state: PullRequestDetail["state"];
+	readonly head: string;
+	readonly base: string;
+	readonly updatedAt: string;
+	readonly labels: readonly PullRequestLabel[];
+};
+
+export type PullRequestFilter = "open" | "merged" | "closed" | "all";
 
 type GithubUser = {
 	login?: string;

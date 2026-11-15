@@ -10,6 +10,7 @@ import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
+import { IssuesInspector } from "./issues-inspector";
 import type { PullRequestSummary } from "./pull-request-detail-query";
 import {
 	PullRequestInspector,
@@ -22,6 +23,7 @@ export type ToolsView =
 	| "files"
 	| "diff"
 	| "pr"
+	| "issues"
 	| "terminal"
 	| "desktop"
 	| "side"
@@ -47,6 +49,13 @@ const views = {
 		title: "No repository connected.",
 		description:
 			"Connect this project to a GitHub repository to review its pull requests here.",
+	},
+	issues: {
+		label: "Issues",
+		icon: VIEW_ICONS.issues,
+		title: "No repository connected.",
+		description:
+			"Connect this project to a GitHub repository to work on its issues here.",
 	},
 	terminal: {
 		label: "Terminal",
@@ -132,6 +141,14 @@ export function WorkspaceInspector({
 	/** What the Overview knows about pullRequest.number, painted before its details load. */
 	pullRequestSummary?: PullRequestSummary;
 }) {
+	const [linkedPull, setLinkedPull] = useState<{
+		repositoryId: number;
+		number: number;
+	} | null>(null);
+	const linkedNumber =
+		linkedPull?.repositoryId === pullRequest?.repositoryId
+			? linkedPull?.number
+			: undefined;
 	// The tab it opens on (a saved panel) is open from the server's render.
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>(() =>
 		activeView === "overview" ? [] : [activeView],
@@ -264,14 +281,30 @@ export function WorkspaceInspector({
 				/>
 			) : activeView === "pr" && pullRequest ? (
 				<PullRequestInspector
-					key={`${pullRequest.repositoryId}:${pullRequest.number ?? ""}`}
-					repository={pullRequest}
+					key={`${pullRequest.repositoryId}:${linkedNumber ?? pullRequest.number ?? ""}`}
+					repository={{
+						...pullRequest,
+						number: linkedNumber ?? pullRequest.number,
+					}}
 					summary={pullRequestSummary}
 					projectId={projectId}
 					harnessId={harnessId}
 					modelId={modelId}
 					currentSessionId={sessionId}
 					onReviewStarted={onReviewStarted}
+				/>
+			) : activeView === "issues" && pullRequest ? (
+				<IssuesInspector
+					key={pullRequest.repositoryId}
+					repository={pullRequest}
+					projectId={projectId}
+					harnessId={harnessId}
+					modelId={modelId}
+					onChatStarted={onReviewStarted}
+					onOpenPullRequest={(number) => {
+						setLinkedPull({ repositoryId: pullRequest.repositoryId, number });
+						onActiveViewChange("pr");
+					}}
 				/>
 			) : activeView === "canvas" ? (
 				<CanvasInspector

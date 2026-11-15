@@ -1,5 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { actionsJobFromUrl } from "../../domain/github-write";
 import {
 	agentCapturesSection,
 	withAgentCapturesSection,
@@ -429,7 +430,7 @@ export async function repositoryFileAtCommit(
 	}
 }
 
-function repositoryOwnerName(fullName: string) {
+export function repositoryOwnerName(fullName: string) {
 	const [owner, repo] = fullName.split("/");
 	if (!owner || !repo) throw new Error("Repository name is invalid.");
 	return { owner, repo };
@@ -752,6 +753,7 @@ async function headChecks(
 			name: run.name,
 			state: checkState(run),
 			url: run.html_url ?? null,
+			job: actionsJobFromUrl(run.html_url),
 		})),
 		...statuses.map((status) => ({
 			name: status.context,
@@ -772,49 +774,54 @@ export async function pullRequestDetail(
 	const pullRead = github.pulls.get({ owner, repo, pull_number: number });
 	// Every read starts at once; the head's checks start as soon as the pull
 	// request names its head, without waiting for the file list.
-	const [pull, checks, files, reviews, comments, inline] = await Promise.all([
-		pullRead,
-		pullRead.then((read) =>
-			headChecks(github, owner, repo, read.data.head.sha),
-		),
-		github.paginate(github.pulls.listFiles, {
-			owner,
-			repo,
-			pull_number: number,
-			per_page: 100,
-		}),
-		github.pulls.listReviews({
-			owner,
-			repo,
-			pull_number: number,
-			per_page: 100,
-		}),
-		github.issues.listComments({
-			owner,
-			repo,
-			issue_number: number,
-			per_page: 100,
-		}),
-		github.pulls.listReviewComments({
-			owner,
-			repo,
-			pull_number: number,
-			per_page: 100,
-		}),
-	]);
+	const [pull, checks, files, reviews, comments, inline, threads, viewer] =
+		await Promise.all([
+			pullRead,
+			pullRead.then((read) =>
+				headChecks(github, owner, repo, read.data.head.sha),
+			),
+			github.paginate(github.pulls.listFiles, {
+				owner,
+				repo,
+				pull_number: number,
+				per_page: 100,
+			}),
+			github.paginate(github.pulls.listReviews, {
+				owner,
+				repo,
+				pull_number: number,
+				per_page: 100,
+			}),
+			github.paginate(github.issues.listComments, {
+				owner,
+				repo,
+				issue_number: number,
+				per_page: 100,
+			}),
+			github.paginate(github.pulls.listReviewComments, {
+				owner,
+				repo,
+				pull_number: number,
+				per_page: 100,
+			}),
+			reviewThreadStates(github, owner, repo, number),
+			signedInLogin(github),
+		]);
 	const conversation: PullRequestComment[] = [
-		...comments.data.map((comment) => ({
+		...comments.map((comment) => ({
 			id: `comment:${comment.id}`,
+			databaseId: comment.id,
 			kind: "comment" as const,
 			author: pullRequestPerson(comment.user),
 			body: comment.body ?? "",
 			createdAt: comment.created_at,
 			url: comment.html_url,
 		})),
-		...reviews.data
+		...reviews
 			.filter((review) => review.state !== "PENDING" && review.body?.trim())
 			.map((review) => ({
 				id: `review:${review.id}`,
+				databaseId: review.id,
 				kind: "review" as const,
 				author: pullRequestPerson(review.user),
 				body: review.body ?? "",
@@ -822,8 +829,9 @@ export async function pullRequestDetail(
 				url: review.html_url,
 				reviewState: review.state,
 			})),
-		...inline.data.map((comment) => ({
+		...inline.map((comment) => ({
 			id: `inline:${comment.id}`,
+			databaseId: comment.id,
 			kind: "inline" as const,
 			author: pullRequestPerson(comment.user),
 			body: comment.body,
@@ -831,6 +839,9 @@ export async function pullRequestDetail(
 			url: comment.html_url,
 			path: comment.path,
 			line: comment.line ?? comment.original_line ?? null,
+			side: comment.side ?? null,
+			inReplyTo: comment.in_reply_to_id ?? null,
+			thread: comment.in_reply_to_id ? null : (threads.get(comment.id) ?? null),
 			diffHunk: comment.diff_hunk.split("\n").slice(-8).join("\n"),
 		})),
 	].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -861,7 +872,7 @@ export async function pullRequestDetail(
 		changedFiles: pull.data.changed_files,
 		comments: pull.data.comments + pull.data.review_comments,
 		checks,
-		reviews: reviews.data
+		reviews: reviews
 			.filter((review) => review.state !== "PENDING")
 			.map((review) => ({
 				author: review.user?.login ?? "",
@@ -871,7 +882,78 @@ export async function pullRequestDetail(
 		files: files.map(pullRequestFileChange),
 		conversation,
 		participants: pullRequestParticipants(author, conversation),
+		viewer,
+		labels: (pull.data.labels ?? []).map((label) => ({
+			name: label.name ?? "",
+			color: label.color ?? "777777",
+			description: label.description ?? null,
+		})),
+		assignees: (pull.data.assignees ?? []).map(pullRequestPerson),
+		requestedReviewers: (pull.data.requested_reviewers ?? []).map(
+			pullRequestPerson,
+		),
 	};
+}
+
+type GithubReviewThreadsPage = {
+	repository: {
+		pullRequest: {
+			reviewThreads: {
+				nodes: {
+					id: string;
+					isResolved: boolean;
+					comments: { nodes: { databaseId: number | null }[] };
+				}[];
+				pageInfo: { hasNextPage: boolean; endCursor: string | null };
+			};
+		} | null;
+	} | null;
+};
+
+/**
+ * Each review thread's state, by the id of the comment that starts it. Empty
+ * when GitHub's GraphQL API refuses: the conversation still shows, without
+ * resolve buttons.
+ */
+async function reviewThreadStates(
+	github: ReturnType<typeof githubClient>,
+	owner: string,
+	repo: string,
+	number: number,
+): Promise<Map<number, { id: string; resolved: boolean }>> {
+	const states = new Map<number, { id: string; resolved: boolean }>();
+	try {
+		let cursor: string | null = null;
+		do {
+			const result: GithubReviewThreadsPage =
+				await github.graphql<GithubReviewThreadsPage>(
+					"query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100, after: $cursor) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } pageInfo { hasNextPage endCursor } } } } }",
+					{ owner, repo, number, cursor },
+				);
+			for (const thread of result.repository?.pullRequest?.reviewThreads
+				.nodes ?? []) {
+				const first = thread.comments.nodes[0]?.databaseId;
+				if (first)
+					states.set(first, { id: thread.id, resolved: thread.isResolved });
+			}
+			const page = result.repository?.pullRequest?.reviewThreads.pageInfo;
+			cursor = page?.hasNextPage ? page.endCursor : null;
+		} while (cursor);
+	} catch {
+		// Without thread states the panel hides Resolve; nothing else depends on them.
+	}
+	return states;
+}
+
+/** The token owner's login, or null when GitHub does not say. */
+export async function signedInLogin(
+	github: ReturnType<typeof githubClient>,
+): Promise<string | null> {
+	try {
+		return (await github.users.getAuthenticated()).data.login;
+	} catch {
+		return null;
+	}
 }
 
 /** Open pull requests in the repository, for reviewing any of them in-app. */

@@ -1,26 +1,30 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import {
-	authorizedRepository,
 	listOpenPullRequests,
 	markPullRequestReady,
 	mergePullRequest,
 	pullRequestDetail,
 } from "../../../server/adapters/github";
-import { repositoryAccess } from "../../../server/adapters/github/repository-access-cache";
-import { requireUser } from "../../../server/auth/auth";
-import { githubAccessToken } from "../../../server/auth/github-connection";
+import {
+	actionsJobLog,
+	repositoryChoices,
+	runPullRequestAction,
+} from "../../../server/adapters/github/pull-request-actions";
+import { listRepositoryPullRequests } from "../../../server/adapters/github/pull-request-list";
 import { endpoint, requireSameOrigin } from "../../../server/http";
+import {
+	githubRepositoryFor,
+	repositorySelection,
+} from "../../../server/services/github-repository-request";
+import { pullRequestWriteAction } from "../../../server/services/github-write-requests";
 import { timed } from "../../../server/services/step-timing";
 
-const repositorySelection = z.object({
-	installationId: z.coerce.number().int().positive().safe(),
-	repositoryId: z.coerce.number().int().positive().safe(),
-});
 const selection = repositorySelection.extend({
 	number: z.coerce.number().int().positive().safe(),
 });
-const action = z.discriminatedUnion("action", [
+const positive = z.coerce.number().int().positive().safe();
+const mergeActions = z.discriminatedUnion("action", [
 	selection.extend({ action: z.literal("ready") }),
 	selection.extend({
 		action: z.literal("merge"),
@@ -29,79 +33,82 @@ const action = z.discriminatedUnion("action", [
 ]);
 
 /**
- * The signed-in user's token and the repository's name. Reads reuse a
- * confirmed access for a minute (repository-access-cache.ts); changes always
- * ask GitHub again.
+ * In-app work on a repository's pull requests: list, details, comments,
+ * reviews, readiness, merge and the rest of what GitHub's pull request page
+ * offers. Every change runs with the signed-in user's GitHub token.
+ *
+ * GET without a number lists the open pull requests; with `choices=1` it
+ * returns the repository's labels and assignable people; with `jobId` the
+ * end of that Actions job's log.
  */
-async function repositoryFor(
-	request: Request,
-	params: z.infer<typeof repositorySelection>,
-	{ reuseAccess }: { reuseAccess: boolean },
-) {
-	const user = await requireUser(request.headers);
-	const token = await timed("github:token", () => githubAccessToken(user.id));
-	const key = { userId: user.id, ...params };
-	const check = () =>
-		authorizedRepository(token, params.installationId, params.repositoryId);
-	const repository = await timed("github:authorize", () =>
-		reuseAccess ? repositoryAccess.access(key, check) : check(),
-	);
-	return {
-		token,
-		fullName: repository.fullName,
-		/** GitHub refused the token for this repository: check again next time. */
-		refused: repositoryAccess.refused(key),
-	};
-}
-
-/** In-app review of a repository's pull requests: list, details, readiness and merge. */
 export const Route = createFileRoute("/api/github/pull-request")({
 	server: {
 		handlers: {
 			GET: ({ request }) =>
 				endpoint(async () => {
 					const search = Object.fromEntries(new URL(request.url).searchParams);
-					// Without a number: the repository's open pull requests.
-					if (!search.number) {
-						const params = repositorySelection.parse(search);
-						const { token, fullName, refused } = await repositoryFor(
-							request,
-							params,
-							{ reuseAccess: true },
-						);
-						return {
-							pullRequests: await timed("github:list", () =>
-								listOpenPullRequests(token, fullName),
-							).catch(refused),
-						};
-					}
-					const params = selection.parse(search);
-					const { token, fullName, refused } = await repositoryFor(
+					const params = repositorySelection.parse(search);
+					const { token, fullName, refused } = await githubRepositoryFor(
 						request,
 						params,
 						{ reuseAccess: true },
 					);
+					if (search.choices)
+						return timed("github:choices", () =>
+							repositoryChoices(token, fullName),
+						).catch(refused);
+					if (search.jobId)
+						return timed("github:job-log", () =>
+							actionsJobLog(token, fullName, positive.parse(search.jobId)),
+						).catch(refused);
+					if (!search.number)
+						return {
+							pullRequests: await timed("github:list", () =>
+								search.state
+									? listRepositoryPullRequests(
+											token,
+											fullName,
+											z
+												.enum(["open", "merged", "closed", "all"])
+												.parse(search.state),
+										)
+									: listOpenPullRequests(token, fullName),
+							).catch(refused),
+						};
+					const { number } = selection.parse(search);
 					return timed("github:detail", () =>
-						pullRequestDetail(token, fullName, params.number),
+						pullRequestDetail(token, fullName, number),
 					).catch(refused);
 				}),
 			POST: ({ request }) =>
 				endpoint(async () => {
 					requireSameOrigin(request);
-					const input = action.parse(await request.json());
-					const { token, fullName } = await repositoryFor(request, input, {
-						reuseAccess: false,
-					});
-					if (input.action === "ready")
-						await markPullRequestReady(token, fullName, input.number);
-					else
-						await mergePullRequest(
+					const raw = await request.json();
+					const target = selection.parse(raw);
+					const { token, fullName } = await githubRepositoryFor(
+						request,
+						target,
+						{ reuseAccess: false },
+					);
+					const merge = mergeActions.safeParse(raw);
+					if (merge.success) {
+						if (merge.data.action === "ready")
+							await markPullRequestReady(token, fullName, target.number);
+						else
+							await mergePullRequest(
+								token,
+								fullName,
+								target.number,
+								merge.data.headSha,
+							);
+					} else
+						await runPullRequestAction(
 							token,
 							fullName,
-							input.number,
-							input.headSha,
+							target.number,
+							pullRequestWriteAction.parse(raw),
 						);
-					return pullRequestDetail(token, fullName, input.number);
+					return pullRequestDetail(token, fullName, target.number);
 				}),
 		},
 	},
