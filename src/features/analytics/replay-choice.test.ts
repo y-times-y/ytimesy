@@ -87,5 +87,5 @@ it("tells the three rules apart", () => {
 	expect(consentTier({ analyticsOptIn: false, replayConsent: false })).toBe(
 		"notice",
 	);
-	expect(consentBannerCopy("notice").reject).toBe("Turn off");
+	expect(consentBannerCopy("notice").reject).toBe("Reject all");
 });
