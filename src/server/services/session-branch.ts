@@ -13,9 +13,10 @@ import {
 } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	projectBranchHeldByOtherSession,
 	saveSessionWorkingBranch,
+	sessionHoldsUserMessage,
 } from "#/server/adapters/agent-sessions";
 import { markEnvironmentSetupChat } from "#/server/adapters/environment-setup-chats";
 import {
@@ -41,10 +42,16 @@ export async function commitChatBranchForSubmission(input: {
 	/** A project setup request: the new chat is a setup chat (never publishes). */
 	environmentSetup?: boolean;
 }) {
+	// Without the caller's read, only the chat's row: its transcript (megabytes)
+	// is asked one question below, in the database. Its `items` is then null,
+	// never an empty transcript (the send treats it so: heldTranscript).
 	const session =
 		input.session !== undefined && input.session?.id === input.sessionId
 			? input.session
-			: await agentSessionForOwner(input.userId, input.sessionId);
+			: ((await agentSessionMetadataForOwner(
+					input.userId,
+					input.sessionId,
+				)) as AgentSessionRecord | null);
 	if (!session || session.projectId !== input.projectId)
 		throw new Error("This chat is not available.");
 	if (session.parentSessionId) return session;
@@ -72,9 +79,11 @@ export async function commitChatBranchForSubmission(input: {
 	const project = await projectForOwner(input.userId, input.projectId);
 	if (!project) throw new Error("This project is not available.");
 	// Existing chats keep their checkout; only a genuinely new task gets a generated branch.
-	const hasConversation = sessionItemsFromUnknown(session.items).some(
-		(item) => item.kind === "userMessage",
-	);
+	const hasConversation = Array.isArray(session.items)
+		? sessionItemsFromUnknown(session.items).some(
+				(item) => item.kind === "userMessage",
+			)
+		: await sessionHoldsUserMessage(input.userId, session.id);
 	if (hasConversation && !session.selectedBranch) return session;
 	const token = await githubAccessToken(input.userId).catch(
 		async (cause: unknown) => {

@@ -100,18 +100,51 @@ export function checkpointObjectPrefix(userId: string, sessionId: string) {
 	return `${createHash("sha256").update(userId).digest("hex")}/${createHash("sha256").update(sessionId).digest("hex")}/`;
 }
 
+/**
+ * Objects under this prefix expire on their own (the bucket's lifecycle rule,
+ * 30 days): recovery points, which nothing needs after their chat's machine
+ * is gone. Everything else under a chat's prefix stays until deleted.
+ */
+export const EXPIRING_PREFIX = "points/";
+
+async function gzipBase64(text: string) {
+	const stream = new Blob([text])
+		.stream()
+		.pipeThrough(new CompressionStream("gzip"));
+	return Buffer.from(await new Response(stream).arrayBuffer()).toString(
+		"base64",
+	);
+}
+
+async function gunzipBase64(base64: string) {
+	const stream = new Blob([Buffer.from(base64, "base64")])
+		.stream()
+		.pipeThrough(new DecompressionStream("gzip"));
+	return new Response(stream).text();
+}
+
 export async function uploadCheckpoint(
 	userId: string,
 	sessionId: string,
 	revision: string,
 	payload: string,
+	options: { readonly expiring?: boolean } = {},
 ) {
 	if (Buffer.byteLength(payload) > 20 * 1024 * 1024)
 		throw new Error("Checkpoint exceeds the 20 MiB payload safety limit.");
 	if (!/^[a-zA-Z0-9-]+$/.test(revision))
 		throw new Error("Invalid checkpoint revision.");
-	const path = `${checkpointObjectPrefix(userId, sessionId)}${revision}.enc`;
-	const ciphertext = await seal(JSON.stringify({ userId, sessionId, payload }));
+	const path = `${options.expiring ? EXPIRING_PREFIX : ""}${checkpointObjectPrefix(userId, sessionId)}${revision}.enc`;
+	// Stored compressed: these are JSON (transcripts, model messages, patches)
+	// and shrink several times over; storage is billed by size.
+	const ciphertext = await seal(
+		JSON.stringify({
+			userId,
+			sessionId,
+			encoding: "gzip",
+			payload: await gzipBase64(payload),
+		}),
+	);
 	const result = await request(`object/${BUCKET}/${path}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/octet-stream" },
@@ -129,8 +162,11 @@ export async function downloadCheckpoint(
 	sessionId: string,
 	path: string,
 ) {
+	const prefix = checkpointObjectPrefix(userId, sessionId);
 	if (
-		!path.startsWith(checkpointObjectPrefix(userId, sessionId)) ||
+		!(
+			path.startsWith(prefix) || path.startsWith(`${EXPIRING_PREFIX}${prefix}`)
+		) ||
 		path.includes("..")
 	)
 		throw new Error("Checkpoint ownership mismatch.");
@@ -146,7 +182,10 @@ export async function downloadCheckpoint(
 		typeof envelope.payload !== "string"
 	)
 		throw new Error("Checkpoint ownership mismatch.");
-	return envelope.payload as string;
+	// Objects stored before compression hold the payload as it is.
+	return envelope.encoding === "gzip"
+		? gunzipBase64(envelope.payload)
+		: (envelope.payload as string);
 }
 
 export async function removeCheckpoint(path: string) {
@@ -244,7 +283,11 @@ export async function removeContextArchives(userId: string, sessionId: string) {
  */
 export async function removeChatObjects(userId: string, sessionId: string) {
 	const chat = checkpointObjectPrefix(userId, sessionId);
-	for (const prefix of [chat, `attachments/${chat}`]) {
+	for (const prefix of [
+		chat,
+		`attachments/${chat}`,
+		`${EXPIRING_PREFIX}${chat}`,
+	]) {
 		let finished = false;
 		for (let batch = 0; batch < 100 && !finished; batch++) {
 			const result = await request(`object/list/${BUCKET}`, {

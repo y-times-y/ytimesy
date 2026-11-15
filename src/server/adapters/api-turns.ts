@@ -37,6 +37,7 @@ import { wakeConversationProgress } from "./conversation-progress-wake";
 import {
 	recordConversationPoint,
 	recoveredConversation,
+	storePointMessages,
 } from "./conversation-recovery";
 import { database } from "./database";
 import {
@@ -134,7 +135,14 @@ export async function enqueueApiTurn(input: {
 	modelId: string;
 	routeId: string;
 	messages: ModelMessage[];
+	/** The chat's whole transcript after this send (replaces the stored one). */
 	items: readonly SessionItem[];
+	/**
+	 * Instead: the items this send adds, appended in the database, so the
+	 * send never reads the transcript (megabytes) nor overwrites a write
+	 * that landed after it read.
+	 */
+	appendItems?: readonly SessionItem[];
 	preparedTask?: boolean;
 	idempotencyKey?: string;
 	settings?: ApiTurnSettings;
@@ -146,6 +154,20 @@ export async function enqueueApiTurn(input: {
 	// turn still finishes, without starting more work past the limit).
 	if (infrastructureAdmissionEnabled())
 		await assertUsageWindowsOpen(input.userId);
+	// The recovery point's messages go to private storage first, so neither
+	// its row (megabytes per message otherwise) nor the chat's lock waits on it.
+	const sentMessage = [...(input.appendItems ?? input.items)]
+		.reverse()
+		.find((item) => item.kind === "userMessage");
+	const messagesObject =
+		input.messages.at(-1)?.role === "user"
+			? await storePointMessages({
+					userId: input.userId,
+					sessionId: input.sessionId,
+					messageId: sentMessage?.id,
+					messages: input.messages,
+				})
+			: null;
 	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;
@@ -210,7 +232,7 @@ export async function enqueueApiTurn(input: {
 			throw new Error(
 				"Finish or stop the current turn before sending another prompt.",
 			);
-		await recordConversationPoint(client, input);
+		await recordConversationPoint(client, { ...input, messagesObject });
 		turnId = randomUUID();
 		const executor = configuredTurnExecutor(
 			process.env.YTIMESY_MODEL_EXECUTION_TARGET,
@@ -222,10 +244,17 @@ export async function enqueueApiTurn(input: {
 			taskAccess: checked.task_access ?? null,
 		};
 		// The turn and the chat's running state in one statement.
+		const append = input.appendItems !== undefined;
+		const written = append ? (input.appendItems ?? []) : input.items;
+		// Appending: the stored transcript plus this send's items (the row is
+		// locked above); a turn row keeping whole items gets the same.
+		const whole = append
+			? "coalesce((select a.items from agent_session a where a.id=$2),'[]'::jsonb)||$8::jsonb"
+			: "$8";
 		await client.query(
 			`with queued as (insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,$8),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
-			 update agent_session set harness=$14,listed_model_id=$13,items=$8,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,coalesce($15::jsonb,${whole}),$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")}))
+			 update agent_session set harness=$14,listed_model_id=$13,items=${append ? "coalesce(items,'[]'::jsonb)||$8::jsonb" : "$8"},turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$2 and user_id=$3`,
 			[
 				turnId,
 				input.sessionId,
@@ -234,14 +263,14 @@ export async function enqueueApiTurn(input: {
 				input.revision,
 				input.modelId,
 				jsonbText(input.messages),
-				jsonbText(input.items),
+				jsonbText(written),
 				input.idempotencyKey ?? null,
 				executor,
 				JSON.stringify(input.settings ?? {}),
 				input.failover ? JSON.stringify(input.failover) : null,
 				input.routeId,
 				subscription ? "codex" : "api",
-				executor === "durable-object" ? newTurnItemsColumn(input.items) : null,
+				executor === "durable-object" ? newTurnItemsColumn(written) : null,
 			],
 		);
 		await client.query("commit");
@@ -500,12 +529,12 @@ export async function checkpointApiTurn(
 	// $5 is the failover, so the first item's id is $6.
 	const write = planItemsWrite(turn, items, 4, "agent_session.items", 6);
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string; previous: string }>(
+		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set messages=$3,items=${write.apiTurn},failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
+		 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[
 				turn.id,
 				turn.lease_id,
@@ -523,6 +552,7 @@ export async function checkpointApiTurn(
 		result.rows[0].version,
 		{ messages, items },
 		result.rows[0].previous,
+		result.rows[0].items_rev,
 	);
 	await wakeConversationProgress();
 }
@@ -543,12 +573,12 @@ export async function publishApiTurnProgress(
 ) {
 	const write = planItemsWrite(turn, items, 3, "agent_session.items");
 	const result = await retryDroppedConnection(() =>
-		database().query<{ version: string; previous: string }>(
+		database().query<{ version: string; previous: string; items_rev: string }>(
 			`with saved as (update api_turn set items=${write.apiTurn},updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=${write.session},updated_at=now() where id in(select session_id from saved)
-	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION}`,
+	 returning (select updated_at::text from saved) as version,${PREVIOUS_VERSION},items_rev::text as items_rev`,
 			[turn.id, turn.lease_id, write.itemsText, ...write.extra],
 		),
 	);
@@ -559,6 +589,7 @@ export async function publishApiTurnProgress(
 			result.rows[0].version,
 			{ items },
 			result.rows[0].previous,
+			result.rows[0].items_rev,
 		);
 	} else {
 		const cancelled = await database().query(
@@ -799,6 +830,28 @@ export async function abandonApiTurn(turnId: string, leaseId: string) {
 	);
 	captureSettledTurns(result.rows ?? []);
 	return (result.rows?.length ?? 0) > 0;
+}
+
+/**
+ * Empties the model history and whole-transcript copy of settled turns no
+ * reader needs: every reader takes a chat's latest turn (the next send's
+ * history, recovery, helper reports), recovery points keep their own, and
+ * training keeps the turns marked eligible. Each turn row held the whole
+ * conversation again (half a gigabyte for one user); batches stay small.
+ */
+export async function compactSettledTurns(limit = 50) {
+	const result = await database().query(
+		`update api_turn t set messages='[]'::jsonb,
+		  items=case when jsonb_typeof(t.items)='array' then '[]'::jsonb else t.items end
+		 where t.id in (select o.id from api_turn o
+		  where o.state in ('completed','failed','cancelled') and not o.training_eligible
+		  and o.updated_at < now() - interval '1 hour'
+		  and (pg_column_size(o.messages) > 64 or pg_column_size(o.items) > 200)
+		  and exists(select 1 from api_turn n where n.session_id=o.session_id and n.created_at > o.created_at)
+		  order by o.created_at limit $1)`,
+		[limit],
+	);
+	return result.rowCount ?? 0;
 }
 
 export async function expireApiTurnLeases() {

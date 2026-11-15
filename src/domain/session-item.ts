@@ -465,24 +465,39 @@ export function sessionItemsQueuedWithUser(
 	approvesPlan?: boolean,
 	attachments?: readonly MessageAttachment[],
 ): SessionItem[] {
-	const queued = text.trim();
-	if (!queued) return [...items];
 	if (sendWasQueued(items, messageId)) return [...items];
 	// An approval repeats the same words each time; it is a duplicate only once nothing waits.
 	if (approvesPlan && !pendingPlanId(items)) return [...items];
-	return [
-		...items,
-		{
-			kind: "userMessage",
-			id: SessionItemId(
-				messageId ?? `queued-user-${items.length}-${queued.length}`,
-			),
-			text: queued,
-			...(attachments?.length ? { attachments } : {}),
-			...(approvesPlan ? { approvesPlan: true as const } : {}),
-			timing: { startedAt: Date.now() },
-		},
-	];
+	const item = queuedUserItem(
+		text,
+		messageId ?? `queued-user-${items.length}-${text.trim().length}`,
+		approvesPlan,
+		attachments,
+	);
+	return item ? [...items, item] : [...items];
+}
+
+/**
+ * The user's message a send adds to the transcript (sessionItemsQueuedWithUser
+ * without the transcript: a send that appends it in the database). Null for
+ * an empty message.
+ */
+export function queuedUserItem(
+	text: string,
+	id: string,
+	approvesPlan?: boolean,
+	attachments?: readonly MessageAttachment[],
+): UserMessageItem | null {
+	const queued = text.trim();
+	if (!queued) return null;
+	return {
+		kind: "userMessage",
+		id: SessionItemId(id),
+		text: queued,
+		...(attachments?.length ? { attachments } : {}),
+		...(approvesPlan ? { approvesPlan: true as const } : {}),
+		timing: { startedAt: Date.now() },
+	};
 }
 
 function lastUserMessage(

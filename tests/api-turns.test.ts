@@ -134,7 +134,7 @@ beforeAll(async () => {
 		[connectionId, revision],
 	);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 });
 beforeEach(async () => {
@@ -710,7 +710,7 @@ it("keeps a stopped step's started tool call in the history the next turn contin
 		"cancelled",
 	);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	expect(
 		await previousTurnMessages("alice", sessionId, "test-model", revision),
@@ -738,7 +738,7 @@ it("keeps the last checkpoint when a turn settles without in-flight calls", asyn
 	if (!turn) throw Error("missing turn");
 	await finalizeApiTurn(turn, "failed", []);
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	expect(
 		await previousTurnMessages("alice", sessionId, "test-model", revision),
@@ -841,7 +841,7 @@ it("moves a running turn to its fallback in one fenced checkpoint and keeps the 
 	expect(await finishApiTurn(turn, "completed", [])).toBe(true);
 	// No recovery point exists; the previous turn's history is the source.
 	await db.exec(
-		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb,completed_at timestamptz,created_at timestamptz not null default now(),primary key(parent_session_id,request_id))",
 	);
 	// The next message returns to the chosen model with a history it can read.
 	expect(
@@ -958,4 +958,223 @@ it("queues a send only behind a running turn and shows it until a step takes it"
 		true,
 	);
 	expect(await takeNextQueuedUserMessage("alice", sessionId)).toBeNull();
+});
+
+it("appends a send's message to the stored transcript without the caller reading it", async () => {
+	const earlier = [
+		{ kind: "userMessage", id: "u1", text: "first" },
+		{ kind: "agentMessage", id: "a1", text: "done" },
+	];
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(earlier),
+	]);
+	const sent = { kind: "userMessage", id: "u2", text: "second" };
+	for (const target of ["node", "durable-object"] as const) {
+		vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", target);
+		await db.exec("truncate api_turn cascade");
+		await db.query(
+			"update agent_session set items=$2::jsonb,turn_status='idle' where id=$1",
+			[sessionId, JSON.stringify(earlier)],
+		);
+		await enqueueApiTurn({
+			sessionId,
+			userId: "alice",
+			connectionId,
+			revision,
+			modelId: "test-model",
+			routeId: `api/${connectionId}/test-model`,
+			messages: [{ role: "user", content: "second" }],
+			items: [],
+			appendItems: [sent as never],
+		});
+		const chat = await db.query<{ items: unknown[]; rows: number }>(
+			"select items,(select count(*)::int from agent_session_item where session_id=$1) as rows from agent_session where id=$1",
+			[sessionId],
+		);
+		expect(chat.rows[0]?.items).toEqual([...earlier, sent]);
+		// Its recovery point holds the transcript before the message, copied
+		// in the database (the send never read it).
+		const point = await db.query<{ result: Record<string, unknown> }>(
+			"select response->'result' as result from agent_task_command_receipt where request_id='conversation-point:u2'",
+		);
+		expect(point.rows[0]?.result).toMatchObject({
+			type: "conversation-point",
+			userMessageId: "u2",
+			prompt: "second",
+			items: earlier,
+			messages: [],
+		});
+		await db.exec("truncate agent_task_command_receipt");
+		// The per-item rows (the transcript's index) follow the append.
+		expect(chat.rows[0]?.rows).toBe(3);
+		const turn = await db.query<{ items: unknown }>(
+			"select items from api_turn where session_id=$1",
+			[sessionId],
+		);
+		// A durable-object turn keeps only where its items start; a node turn the whole.
+		expect(turn.rows[0]?.items).toEqual(
+			target === "durable-object" ? { from: "u2" } : [...earlier, sent],
+		);
+	}
+});
+
+it("rebuilds a new turn's transcript from a copy and only the rows written since", async () => {
+	const { turnHistorySince } = await import(
+		"../src/server/adapters/turn-history-seed"
+	);
+	const { seededTranscript } = await import(
+		"../src/server/edge/turn-history-cache"
+	);
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	const earlier = Array.from({ length: 40 }, (_, index) => ({
+		kind: index % 2 ? "agentMessage" : "userMessage",
+		id: `i${index}`,
+		text: `item ${index}`,
+	}));
+	await db.query(
+		"update agent_session set items=$2::jsonb,turn_status='idle' where id=$1",
+		[sessionId, JSON.stringify(earlier)],
+	);
+	// The chat object's copy, as the last turn left it.
+	const copyRev = (
+		await db.query<{ rev: string }>(
+			"select items_rev::text as rev from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.rev as string;
+	// Meanwhile one earlier item is rewritten, then a send appends its message.
+	const edited = earlier.map((item, index) =>
+		index === 7 ? { ...item, text: "edited" } : item,
+	);
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(edited),
+	]);
+	const sent = { kind: "userMessage", id: "u-new", text: "next" };
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId,
+		revision,
+		modelId: "test-model",
+		routeId: `api/${connectionId}/test-model`,
+		messages: [{ role: "user", content: "next" }],
+		items: [],
+		appendItems: [sent as never],
+	});
+	const turn = (
+		await db.query<{ id: string }>(
+			"select id from api_turn where session_id=$1",
+			[sessionId],
+		)
+	).rows[0] as { id: string };
+	const lease = "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c";
+	await db.query("update api_turn set lease_id=$2 where id=$1", [
+		turn.id,
+		lease,
+	]);
+	const since = await turnHistorySince(turn.id, lease, copyRev);
+	expect(since?.wholeItems).toBe(false);
+	// Only the edited row and the new message leave the database.
+	expect(since?.changed.map((row) => row.position)).toEqual([7, 40]);
+	const stored = (
+		await db.query<{ items: unknown[] }>(
+			"select items from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.items;
+	expect(
+		seededTranscript(
+			earlier as never,
+			since?.count ?? -1,
+			since?.changed ?? [],
+		),
+	).toEqual(stored);
+});
+
+it("restores a point without its own transcript copy from the stored transcript before its message", async () => {
+	const { conversationPoint } = await import(
+		"../src/server/adapters/conversation-recovery"
+	);
+	const items = [
+		{ kind: "userMessage", id: "m1", text: "first" },
+		{ kind: "agentMessage", id: "a1", text: "done" },
+		{ kind: "userMessage", id: "m2", text: "second" },
+		{ kind: "agentMessage", id: "a2", text: "done too" },
+	];
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(items),
+	]);
+	const point = (messageId: string) => ({
+		id: `conversation-point:${messageId}`,
+		ok: true,
+		result: {
+			type: "conversation-point",
+			userMessageId: messageId,
+			prompt: "second",
+			messages: [{ role: "user", content: "first" }],
+			modelId: "test-model",
+			routeId: "route",
+			revision,
+		},
+	});
+	for (const messageId of ["m2", "gone"])
+		await db.query(
+			"insert into agent_task_command_receipt(parent_session_id,request_id,status,response) values($1,$2,'done',$3::jsonb)",
+			[
+				sessionId,
+				`conversation-point:${messageId}`,
+				JSON.stringify(point(messageId)),
+			],
+		);
+	const restored = await conversationPoint("alice", sessionId, "m2");
+	expect(restored?.items).toEqual(items.slice(0, 2));
+	expect(restored?.messages).toEqual([{ role: "user", content: "first" }]);
+	// Its message left the transcript (an earlier restore): nothing to restore.
+	expect(await conversationPoint("alice", sessionId, "gone")).toBeNull();
+	// Another user never reads it.
+	expect(await conversationPoint("mallory", sessionId, "m2")).toBeNull();
+	await db.exec("truncate agent_task_command_receipt");
+});
+
+it("empties settled turns' conversation copies except each chat's latest and training-eligible ones", async () => {
+	const { compactSettledTurns } = await import(
+		"../src/server/adapters/api-turns"
+	);
+	const big = JSON.stringify(
+		Array.from({ length: 50 }, (_, index) => ({
+			role: "user",
+			content: `message ${index} ${"x".repeat(40)}`,
+		})),
+	);
+	const turn = async (age: string, state: string, eligible = false) =>
+		(
+			await db.query<{ id: string }>(
+				`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,training_eligible,created_at,updated_at)
+				 values(gen_random_uuid(),$1,'alice',$2,$3,'m',$4,$5::jsonb,$5::jsonb,$6,now()-$7::interval,now()-$7::interval) returning id`,
+				[sessionId, connectionId, revision, state, big, eligible, age],
+			)
+		).rows[0]?.id as string;
+	const old = await turn("3 hours", "completed");
+	const kept = await turn("150 minutes", "completed", true);
+	const recent = await turn("10 minutes", "failed");
+	const latest = await turn("2 hours", "completed");
+	// The newest one is the chat's latest whatever its age (created last).
+	await db.query("update api_turn set created_at=now() where id=$1", [latest]);
+	expect(await compactSettledTurns()).toBe(1);
+	const rows = await db.query<{
+		id: string;
+		messages: unknown[];
+		items: unknown[];
+	}>("select id,messages,items from api_turn where id = any($1::uuid[])", [
+		[old, kept, recent, latest],
+	]);
+	const byId = new Map(rows.rows.map((row) => [row.id, row]));
+	expect(byId.get(old)).toMatchObject({ messages: [], items: [] });
+	for (const id of [kept, recent, latest])
+		expect(byId.get(id)?.messages).toHaveLength(50);
+	// Already compacted rows are not visited again.
+	expect(await compactSettledTurns()).toBe(0);
 });

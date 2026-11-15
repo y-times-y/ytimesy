@@ -3,7 +3,26 @@ import type { ModelMessage } from "ai";
 import type { PoolClient } from "pg";
 import { jsonbText } from "#/domain/jsonb";
 import type { SessionItem } from "#/domain/session-item";
+import {
+	checkpointStorageConfigured,
+	downloadCheckpoint,
+	uploadCheckpoint,
+} from "./checkpoints/storage";
 import { database } from "./database";
+
+/**
+ * A point as stored: older points hold their transcript and messages inline;
+ * newer ones hold the messages in private object storage (messagesObject)
+ * and no transcript (the chat's transcript before the message is the point's,
+ * read at restore); migrated ones hold both in one object (bodyObject). The
+ * database keeps only the small rest.
+ */
+type StoredConversationPoint = Omit<ConversationPoint, "items" | "messages"> & {
+	items?: readonly SessionItem[];
+	messages?: ModelMessage[];
+	messagesObject?: string;
+	bodyObject?: string;
+};
 
 export type ConversationPoint = {
 	type: "conversation-point";
@@ -32,12 +51,17 @@ export async function recordConversationPoint(
 		userId: string;
 		sessionId: string;
 		items: readonly SessionItem[];
+		/** The send appends these to the stored transcript (it never read it). */
+		appendItems?: readonly SessionItem[];
 		messages: ModelMessage[];
+		/** The point's messages, already in private storage (storePointMessages). */
+		messagesObject?: string | null;
 		modelId: string;
 		routeId: string;
 		revision: string;
 	},
 ) {
+	if (input.appendItems) return recordAppendedPoint(client, input);
 	let index = input.items.length - 1;
 	while (index >= 0 && input.items[index].kind !== "userMessage") index--;
 	const message = input.items[index];
@@ -56,12 +80,19 @@ export async function recordConversationPoint(
 		throw new Error(
 			"The conversation was restored before this prompt was admitted. Reload the chat and retry.",
 		);
-	const point: ConversationPoint = {
+	const point: StoredConversationPoint = {
 		type: "conversation-point",
 		userMessageId: message.id,
 		prompt: message.text,
-		items: input.items.slice(0, index),
-		messages: input.messages.slice(0, -1),
+		// With the messages in private storage, the point keeps no copy of the
+		// transcript either: the stored transcript before the message is it
+		// (read at restore). Without storage, both stay inline as before.
+		...(input.messagesObject
+			? { messagesObject: input.messagesObject }
+			: {
+					items: input.items.slice(0, index),
+					messages: input.messages.slice(0, -1),
+				}),
 		modelId: input.modelId,
 		routeId: input.routeId,
 		revision: input.revision,
@@ -80,6 +111,60 @@ export async function recordConversationPoint(
 	);
 }
 
+/**
+ * The point of a send that appends its message: the transcript before it is
+ * the stored one, so the database copies it into the point itself (the send
+ * never read it). No restore can land in between: the append and this insert
+ * share the chat row's lock and apply to whatever the transcript is then.
+ */
+async function recordAppendedPoint(
+	client: Pick<PoolClient, "query">,
+	input: {
+		userId: string;
+		sessionId: string;
+		appendItems?: readonly SessionItem[];
+		messages: ModelMessage[];
+		messagesObject?: string | null;
+		modelId: string;
+		routeId: string;
+		revision: string;
+	},
+) {
+	const message = [...(input.appendItems ?? [])]
+		.reverse()
+		.find((item) => item.kind === "userMessage");
+	if (message?.kind !== "userMessage" || input.messages.at(-1)?.role !== "user")
+		return;
+	const key = `conversation-point:${message.id}`;
+	const point: StoredConversationPoint = {
+		type: "conversation-point",
+		userMessageId: message.id,
+		prompt: message.text,
+		...(input.messagesObject
+			? { messagesObject: input.messagesObject }
+			: { messages: input.messages.slice(0, -1) }),
+		modelId: input.modelId,
+		routeId: input.routeId,
+		revision: input.revision,
+	};
+	// Without private storage the point keeps the transcript inline, copied
+	// in the database from the stored one (the send never read it).
+	await client.query(
+		`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
+    select id,$3,'done',jsonb_build_object('id',$3::text,'ok',true,'result',
+      $4::jsonb || case when $5::boolean then '{}'::jsonb else jsonb_build_object('items',coalesce(items,'[]'::jsonb)) end),now()
+    from agent_session where id=$1 and user_id=$2
+    on conflict(parent_session_id,request_id) do nothing`,
+		[
+			input.sessionId,
+			input.userId,
+			key,
+			jsonbText(point),
+			Boolean(input.messagesObject),
+		],
+	);
+}
+
 export async function conversationPoint(
 	userId: string,
 	sessionId: string,
@@ -91,8 +176,96 @@ export async function conversationPoint(
     join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id=$3 and r.status='done' and r.response->>'ok'='true'`,
 		[userId, sessionId, `conversation-point:${messageId}`],
 	);
-	const point = rows[0]?.point as ConversationPoint | undefined;
-	return point?.type === "conversation-point" ? point : null;
+	const stored = rows[0]?.point as StoredConversationPoint | undefined;
+	return stored?.type === "conversation-point"
+		? resolvedPoint(userId, sessionId, stored, client)
+		: null;
+}
+
+/**
+ * A stored point with its transcript and messages, wherever they are kept.
+ * Null when they can no longer be had (the message left the transcript, or
+ * its stored messages are gone): the point cannot be restored.
+ */
+async function resolvedPoint(
+	userId: string,
+	sessionId: string,
+	stored: StoredConversationPoint,
+	client: Pick<PoolClient, "query">,
+): Promise<ConversationPoint | null> {
+	let items = Array.isArray(stored.items) ? stored.items : null;
+	let messages = Array.isArray(stored.messages) ? stored.messages : null;
+	try {
+		if (stored.bodyObject && (!items || !messages)) {
+			const body = JSON.parse(
+				await downloadCheckpoint(userId, sessionId, stored.bodyObject),
+			) as { items?: SessionItem[]; messages?: ModelMessage[] };
+			items ??= Array.isArray(body.items) ? body.items : null;
+			messages ??= Array.isArray(body.messages) ? body.messages : null;
+		}
+		if (!messages && stored.messagesObject) {
+			const body = JSON.parse(
+				await downloadCheckpoint(userId, sessionId, stored.messagesObject),
+			);
+			messages = Array.isArray(body) ? body : null;
+		}
+	} catch {
+		return null;
+	}
+	items ??= await transcriptBefore(
+		userId,
+		sessionId,
+		stored.userMessageId,
+		client,
+	);
+	if (!items || !messages) return null;
+	const { messagesObject: _m, bodyObject: _b, ...rest } = stored;
+	return { ...rest, items, messages };
+}
+
+/** The chat's transcript before the item `messageId`; null once it left it. */
+async function transcriptBefore(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+	client: Pick<PoolClient, "query">,
+): Promise<SessionItem[] | null> {
+	const { rows } = await client.query(
+		`with s as (select id from agent_session where id=$2 and user_id=$1),
+		 m as (select min(i.position) as at from agent_session_item i, s where i.session_id=s.id and i.item_id=$3)
+		 select m.at, (select coalesce(jsonb_agg(i.item order by i.position),'[]'::jsonb)
+		  from agent_session_item i, s where i.session_id=s.id and i.position < m.at) as items from m`,
+		[userId, sessionId, messageId],
+	);
+	const row = rows[0] as
+		| { at: number | null; items: SessionItem[] }
+		| undefined;
+	return row && row.at !== null && Array.isArray(row.items) ? row.items : null;
+}
+
+/**
+ * Puts a send's point messages (the model's context before the message) in
+ * private object storage before its transaction, so the point's row stays
+ * small. Null when storage is not set up or the upload failed: the point
+ * then keeps them inline, as before.
+ */
+export async function storePointMessages(input: {
+	userId: string;
+	sessionId: string;
+	messageId: string | undefined;
+	messages: readonly ModelMessage[];
+}): Promise<string | null> {
+	if (!input.messageId || !checkpointStorageConfigured()) return null;
+	const name = `conversation-point-${input.messageId.replaceAll(/[^a-zA-Z0-9-]/g, "-")}`;
+	return uploadCheckpoint(
+		input.userId,
+		input.sessionId,
+		name,
+		JSON.stringify(input.messages.slice(0, -1)),
+		// A recovery point is of no use once its chat's machine is gone
+		// (30 days unused): its object expires with the bucket's rule.
+		{ expiring: true },
+	).catch(() => null);
 }
 
 /**
