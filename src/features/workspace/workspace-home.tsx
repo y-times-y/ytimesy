@@ -2035,7 +2035,9 @@ export function WorkspaceHome({
 					harnessId: listedChatHarnessId(sidebarChats, sessionId, harnessId),
 				},
 				0,
-				readOpenChat,
+				// Not readOpenChat: a read made ahead of a click carries no delta
+				// token, and taking it over would leave every poll a whole read.
+				(selection) => sessionDeltaReader.read(selection),
 			),
 			enabled: Boolean(activeProjectId),
 			refetchInterval: BACKGROUND_TURN_POLL_MS,
