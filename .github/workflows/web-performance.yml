@@ -4,10 +4,10 @@ name: Web performance budget
 # warnings regress past scripts/first-paint/budget.json. No secrets: the
 # first-paint check serves the build locally against a Docker Postgres with
 # fixture chats (scripts/first-paint/run.ts).
+# Manual only while GitHub Actions billing is failing. Restore pull_request and
+# push triggers once billing is fixed.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   web-performance:
     runs-on: ubuntu-latest
