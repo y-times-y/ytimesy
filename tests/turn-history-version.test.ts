@@ -33,7 +33,9 @@ beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,items jsonb not null default '[]',items_rev bigint not null default 0,updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,items jsonb not null default '[]',messages jsonb not null default '[]',
-	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now());`);
+	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now());
+	 create function bump_items_rev() returns trigger language plpgsql as $$ begin new.items_rev := old.items_rev + 1; return new; end $$;
+	 create trigger bump_items_rev before update of items on agent_session for each row execute function bump_items_rev();`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -86,8 +88,8 @@ async function turnVersion() {
 }
 const mirrored = <T>(run: () => Promise<T>) =>
 	withTurnHistoryMirror(
-		(turnId, version, written, previous) =>
-			cache.write(turnId, version, written, previous),
+		// As the executor forwards it: everything the write reports.
+		(...written) => cache.write(...written),
 		run,
 	);
 
@@ -144,4 +146,22 @@ it("adds usage to an idle chat without touching finished turns", async () => {
 		await addSessionRequestUsage(SESSION, (items) => [...items, agent("x")]),
 	).toBe(true);
 	expect(await turnVersion()).toBe(before);
+});
+
+it("leaves the chat's copy at the revision of the turn's last write, for the next turn to start from", async () => {
+	const turn = await running([user("u1")]);
+	await mirrored(() =>
+		checkpointApiTurn(turn, messages, [user("u1"), agent("a1")]),
+	);
+	const items = [user("u1"), agent("a1"), agent("a2")];
+	await mirrored(() => publishApiTurnProgress(turn, items));
+	cache.keepChatCopy();
+	const revision = (
+		await db.query<{ revision: string }>(
+			"select items_rev::text as revision from agent_session where id=$1",
+			[SESSION],
+		)
+	).rows[0].revision;
+	expect(revision).toBe("2");
+	expect(cache.chatCopy()).toEqual({ itemsRev: revision, items });
 });
