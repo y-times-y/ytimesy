@@ -622,7 +622,11 @@ export async function listConversationRecoveryPoints(
 ) {
 	const { rows } = await database().query(
 		`select r.point_message_id as "messageId", r.point_has_code as "codeAvailable" from agent_task_command_receipt r join agent_session s on s.id=r.parent_session_id
-    where s.user_id=$1 and s.project_id=$2 and s.id=$3 and r.request_id like 'conversation-point:%' and r.status='done' order by r.created_at desc limit 100`,
+    where s.user_id=$1 and s.project_id=$2 and s.id=$3 and r.request_id like 'conversation-point:%' and r.status='done'
+    -- A point whose stored body has expired (30 days, the bucket's rule) is no longer offered.
+    and not (r.created_at < now() - interval '30 days'
+      and coalesce(r.response->'result'->>'messagesObject', r.response->'result'->>'bodyObject', '') like 'points/%')
+    order by r.created_at desc limit 100`,
 		[userId, projectId, sessionId],
 	);
 	return rows.map(

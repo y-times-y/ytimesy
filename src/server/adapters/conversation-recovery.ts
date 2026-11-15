@@ -262,6 +262,9 @@ export async function storePointMessages(input: {
 		input.sessionId,
 		name,
 		JSON.stringify(input.messages.slice(0, -1)),
+		// A recovery point is of no use once its chat's machine is gone
+		// (30 days unused): its object expires with the bucket's rule.
+		{ expiring: true },
 	).catch(() => null);
 }
 
