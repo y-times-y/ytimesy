@@ -133,9 +133,16 @@ describe("PostHog client", () => {
 		expect(replayPrivacy.maskAttributeFn?.("rel", "stylesheet", link)).toBe(
 			"stylesheet",
 		);
-		expect(
-			replayPrivacy.maskCapturedNetworkRequestFn?.({} as never),
-		).toBeNull();
+		// The page address of a replay's meta event passes, without query or
+		// fragment (a replay with no meta event plays blank); /auth/* and
+		// anything without an address do not.
+		const mask = (name?: string) =>
+			replayPrivacy.maskCapturedNetworkRequestFn?.({ name } as never);
+		expect(mask("https://ytimesy.com/thread/1?token=secret#x")).toEqual({
+			name: "https://ytimesy.com/thread/1",
+		});
+		expect(mask("https://ytimesy.com/auth/reset-password?token=t")).toBeNull();
+		expect(mask(undefined)).toBeNull();
 		expect(replayPrivacy.captureCanvas?.recordCanvas).toBe(false);
 		expect(replayPrivacy.recordHeaders).toBe(false);
 		expect(replayPrivacy.recordBody).toBe(false);

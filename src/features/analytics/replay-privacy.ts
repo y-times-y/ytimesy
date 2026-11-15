@@ -51,7 +51,16 @@ export const replayPrivacy: PostHogConfig["session_recording"] = {
 	recordHeaders: false,
 	recordBody: false,
 	captureJsonLd: false,
-	maskCapturedNetworkRequestFn: () => null,
+	// No network request is ever recorded. posthog-js also runs the page URL
+	// of each rrweb meta event (the page's address and size) through this
+	// function and drops the event when it returns nothing, and a replay with
+	// no meta event plays blank. So it returns the address without a query or
+	// fragment, and nothing for /auth/* pages.
+	maskCapturedNetworkRequestFn: (request) => {
+		const name =
+			typeof request?.name === "string" ? replaySafeUrl(request.name) : null;
+		return name === null ? null : { ...request, name };
+	},
 };
 
 /**
