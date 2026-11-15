@@ -12,7 +12,11 @@ const mocks = vi.hoisted(() => ({
 	size: vi.fn(async () => "large"),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
+	agentSessionHasItems: async (user: string, id: string) => {
+		const chat = (await mocks.session(user, id)) as { items?: unknown } | null;
+		return Array.isArray(chat?.items) && chat.items.length > 0;
+	},
 }));
 vi.mock("../adapters/machine-prewarm", () => ({
 	claimMachinePrewarm: mocks.claim,

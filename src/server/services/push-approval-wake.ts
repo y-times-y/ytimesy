@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { wakeMessageId } from "#/domain/pull-request-wake";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { sendComposerMessage } from "./queued-user-messages";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -27,7 +27,11 @@ export async function wakeChatAfterPush(
 	},
 ) {
 	try {
-		const chat = await agentSessionForOwner(input.userId, input.sessionId);
+		// Its id, runtime and model only: the transcript stays in the database.
+		const chat = await agentSessionMetadataForOwner(
+			input.userId,
+			input.sessionId,
+		);
 		if (!chat?.listedModelId) return;
 		await Effect.runPromise(
 			sendComposerMessage(

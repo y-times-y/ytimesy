@@ -538,6 +538,19 @@ export async function agentSessionItemsFingerprint(
 	return result.rows[0]?.fingerprint ?? null;
 }
 
+/**
+ * Whether the chat's transcript holds any item, answered in the database:
+ * the transcript itself is not read. False for a chat that is not the user's.
+ */
+export async function agentSessionHasItems(userId: string, sessionId: string) {
+	const result = await database().query<{ has_items: boolean }>(
+		`select jsonb_typeof(items)='array' and jsonb_array_length(items) > 0 as has_items
+		 from agent_session where id=$1 and user_id=$2`,
+		[sessionId, userId],
+	);
+	return result.rows[0]?.has_items === true;
+}
+
 /** The project's latest chat without its history (listAgentSessions()[0], metadata only). */
 export async function latestAgentSessionMetadata(
 	userId: string,
@@ -666,15 +679,19 @@ export async function adoptChatPublicationBranch(
 	sessionId: string,
 	branch: string,
 	baseBranch: string,
-) {
+): Promise<Omit<AgentSessionRecord, "items">> {
+	// Its branches are what the publication reads: the transcript is not returned.
 	const result = await database().query(
 		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce(base_branch,$4), updated_at=now()
 		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is null
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${SESSION_COLUMNS.replace(",items,", ",null as items,")}`,
 		[userId, sessionId, branch, baseBranch],
 	);
-	if (result.rows[0]) return toSession(result.rows[0]);
-	const stored = await agentSessionForOwner(userId, sessionId);
+	if (result.rows[0]) {
+		const { items: _items, ...metadata } = toSession(result.rows[0]);
+		return metadata;
+	}
+	const stored = await agentSessionMetadataForOwner(userId, sessionId);
 	if (!stored) throw new Error("This chat is no longer available.");
 	return stored;
 }

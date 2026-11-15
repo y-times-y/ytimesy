@@ -12,7 +12,7 @@ import {
 import { UserActionRateLimited } from "#/domain/user-action-rate";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionMetadataForOwner,
 	listAgentSessions,
 	saveSessionWorkingBranch,
 } from "../adapters/agent-sessions";
@@ -54,8 +54,9 @@ const block = (message: string) =>
 async function pullRequestChat(
 	link: PullRequestLink,
 	title: string,
-): Promise<AgentSessionRecord> {
-	const onBranch = (session: AgentSessionRecord | null) =>
+): Promise<Omit<AgentSessionRecord, "items">> {
+	// The wake reads the chat's id, runtime and model, never its transcript.
+	const onBranch = (session: Omit<AgentSessionRecord, "items"> | null) =>
 		session &&
 		session.projectId === link.projectId &&
 		!session.parentSessionId &&
@@ -64,7 +65,7 @@ async function pullRequestChat(
 			: null;
 	for (const id of [link.sessionId, link.originSessionId]) {
 		const session = id
-			? onBranch(await agentSessionForOwner(link.userId, id))
+			? onBranch(await agentSessionMetadataForOwner(link.userId, id))
 			: null;
 		if (session) {
 			if (session.id !== link.sessionId)

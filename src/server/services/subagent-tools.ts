@@ -74,7 +74,7 @@ import {
 import { budgetTokenWeight } from "#/domain/subagent-usage";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
 	saveAgentSessionProviderRef,
 	saveAgentTaskState,
 } from "../adapters/agent-sessions";
@@ -116,16 +116,21 @@ export type SubagentToolDeps = {
 	) => Promise<readonly Omit<AgentSessionRecord, "items">[]>;
 	/**
 	 * Each session's `items` holds only what the tree reads (subagentTree in
-	 * adapters/subagents.ts), not its whole transcript: read it with `session`.
+	 * adapters/subagents.ts), not its whole transcript: read more with `itemsOfKinds`.
 	 */
 	readonly tree: (
 		userId: string,
 		rootId: string,
 	) => Promise<readonly (SubagentTreeSession & AgentSessionRecord)[]>;
-	readonly session: (
+	/**
+	 * Only the chat's transcript items of these kinds, in order: never the
+	 * whole transcript (megabytes), which the tools only scan for one kind.
+	 */
+	readonly itemsOfKinds: (
 		userId: string,
 		sessionId: string,
-	) => Promise<AgentSessionRecord | null>;
+		kinds: readonly string[],
+	) => Promise<readonly unknown[]>;
 	readonly openTask: typeof openAgentTask;
 	readonly saveSpec: typeof saveSubagentSpec;
 	readonly fork: typeof forkWriterWorkspace;
@@ -166,7 +171,10 @@ const defaultDeps: SubagentToolDeps = {
 		}),
 	ancestors: (...args) => subagentAncestors(...args),
 	tree: (...args) => loadSubagentTree(...args),
-	session: (...args) => agentSessionForOwner(...args),
+	itemsOfKinds: async (userId, sessionId, kinds) =>
+		(await agentSessionItemsOfKindsForOwner(userId, [sessionId], kinds)).get(
+			sessionId,
+		) ?? [],
 	openTask: (...args) => openAgentTask(...args),
 	saveSpec: (...args) => saveSubagentSpec(...args),
 	fork: (...args) => forkWriterWorkspace(...args),
@@ -423,9 +431,12 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					)
 					.at(-1);
 				if (last && input.brief?.trim()) {
-					// The tree holds only some of its items: its last report needs the transcript.
+					// The tree holds only some of its items: its last report is
+					// read from its agent messages.
 					const items = sessionItemsFromUnknown(
-						(await deps.session(last.session.userId, last.session.id))?.items,
+						await deps.itemsOfKinds(last.session.userId, last.session.id, [
+							"agentMessage",
+						]),
 					);
 					const round = currentSidekickRound(last.state);
 					handoff = (brief) =>
@@ -1313,16 +1324,16 @@ async function checkerBriefFor(
 	root: Tree["root"],
 	workspace: AgentToolWorkspace,
 ) {
-	const rootSession =
+	// The root's user messages: held, else read alone (not the transcript).
+	const userMessages =
 		root.items === null || root.items === undefined
-			? await (context.deps?.session ?? agentSessionForOwner)(
+			? await (context.deps?.itemsOfKinds ?? defaultDeps.itemsOfKinds)(
 					root.userId,
 					root.id,
+					["userMessage"],
 				)
-			: root;
-	const taskText = latestUserRequestText(
-		sessionItemsFromUnknown(rootSession?.items),
-	);
+			: root.items;
+	const taskText = latestUserRequestText(sessionItemsFromUnknown(userMessages));
 	if (!taskText.trim())
 		throw new Error("There is no user task for a checker to check.");
 	const status = await context.machines.exec(
