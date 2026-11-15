@@ -59,6 +59,11 @@ vi.mock("#/server/adapters/api-turns", () => ({
 	enqueueApiTurn: fake.enqueue,
 	inheritedApiTurnSettings: vi.fn(async () => ({})),
 	previousTurnMessages: fake.previous,
+	previousTurnHistory: async (...args: unknown[]) => {
+		const messages = await fake.previous(...(args as []));
+		return messages ? { messages } : null;
+	},
+	TurnBaseChanged: class TurnBaseChanged extends Error {},
 }));
 vi.mock("#/server/adapters/model-connections", () => ({
 	listModelConnections: vi.fn(async () => []),

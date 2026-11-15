@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
 import type { PoolClient } from "pg";
+import { apiConversation } from "#/domain/api-conversation";
 import { jsonbText } from "#/domain/jsonb";
 import type { SessionItem } from "#/domain/session-item";
 import {
+	checkpointObjectPrefix,
 	checkpointStorageConfigured,
 	downloadCheckpoint,
+	EXPIRING_PREFIX,
 	uploadCheckpoint,
 } from "./checkpoints/storage";
 import { database } from "./database";
@@ -56,6 +59,11 @@ export async function recordConversationPoint(
 		messages: ModelMessage[];
 		/** The point's messages, already in private storage (storePointMessages). */
 		messagesObject?: string | null;
+		/**
+		 * `messages` hold only what this send adds (the database prepends the
+		 * history): without `messagesObject` the point keeps no messages.
+		 */
+		messagesUnknown?: boolean;
 		modelId: string;
 		routeId: string;
 		revision: string;
@@ -91,7 +99,9 @@ export async function recordConversationPoint(
 			? { messagesObject: input.messagesObject }
 			: {
 					items: input.items.slice(0, index),
-					messages: input.messages.slice(0, -1),
+					...(input.messagesUnknown
+						? {}
+						: { messages: input.messages.slice(0, -1) }),
 				}),
 		modelId: input.modelId,
 		routeId: input.routeId,
@@ -125,6 +135,7 @@ async function recordAppendedPoint(
 		appendItems?: readonly SessionItem[];
 		messages: ModelMessage[];
 		messagesObject?: string | null;
+		messagesUnknown?: boolean;
 		modelId: string;
 		routeId: string;
 		revision: string;
@@ -142,7 +153,9 @@ async function recordAppendedPoint(
 		prompt: message.text,
 		...(input.messagesObject
 			? { messagesObject: input.messagesObject }
-			: { messages: input.messages.slice(0, -1) }),
+			: input.messagesUnknown
+				? {}
+				: { messages: input.messages.slice(0, -1) }),
 		modelId: input.modelId,
 		routeId: input.routeId,
 		revision: input.revision,
@@ -203,14 +216,20 @@ async function resolvedPoint(
 			items ??= Array.isArray(body.items) ? body.items : null;
 			messages ??= Array.isArray(body.messages) ? body.messages : null;
 		}
-		if (!messages && stored.messagesObject) {
+	} catch {
+		return null;
+	}
+	if (!messages && stored.messagesObject) {
+		try {
 			const body = JSON.parse(
 				await downloadCheckpoint(userId, sessionId, stored.messagesObject),
 			);
 			messages = Array.isArray(body) ? body : null;
+		} catch {
+			// A continued turn's history object its executor never stored (or one
+			// that expired): rebuilt from the transcript below.
+			if (!isTurnMessagesObject(stored.messagesObject)) return null;
 		}
-	} catch {
-		return null;
 	}
 	items ??= await transcriptBefore(
 		userId,
@@ -218,6 +237,16 @@ async function resolvedPoint(
 		stored.userMessageId,
 		client,
 	);
+	// A point recorded without its messages (a continued turn without object
+	// storage) or whose turn history object is missing: the model's context is
+	// rebuilt from the visible transcript, as a send without saved history is.
+	if (
+		items &&
+		!messages &&
+		(!stored.messagesObject || isTurnMessagesObject(stored.messagesObject)) &&
+		!stored.bodyObject
+	)
+		messages = apiConversation(items);
 	if (!items || !messages) return null;
 	const { messagesObject: _m, bodyObject: _b, ...rest } = stored;
 	return { ...rest, items, messages };
@@ -241,6 +270,48 @@ async function transcriptBefore(
 		| { at: number | null; items: SessionItem[] }
 		| undefined;
 	return row && row.at !== null && Array.isArray(row.items) ? row.items : null;
+}
+
+const TURN_MESSAGES = "turn-messages-";
+
+/** Named by the turn and its row version: only that exact history is ever found under it. */
+const turnMessagesName = (turnId: string, version: string) =>
+	`${TURN_MESSAGES}${turnId.replaceAll(/[^a-zA-Z0-9-]/g, "-")}-${createHash("sha256").update(version).digest("hex").slice(0, 16)}`;
+
+const isTurnMessagesObject = (path: string) =>
+	path.slice(path.lastIndexOf("/") + 1).startsWith(TURN_MESSAGES);
+
+/**
+ * Where a settled turn's final model history is kept (storeTurnMessages):
+ * the point of the send that continues it refers to it instead of storing a
+ * copy. Null without object storage.
+ */
+export function turnMessagesObject(
+	userId: string,
+	sessionId: string,
+	turn: { readonly turnId: string; readonly version: string },
+): string | null {
+	if (!checkpointStorageConfigured()) return null;
+	return `${EXPIRING_PREFIX}${checkpointObjectPrefix(userId, sessionId)}${turnMessagesName(turn.turnId, turn.version)}.enc`;
+}
+
+/** Stores a turn's final model history where turnMessagesObject points (expires like points). */
+export async function storeTurnMessages(input: {
+	userId: string;
+	sessionId: string;
+	turnId: string;
+	/** The turn row's version (api_turn.updated_at) these messages are. */
+	version: string;
+	messages: readonly ModelMessage[];
+}) {
+	if (!checkpointStorageConfigured()) return;
+	await uploadCheckpoint(
+		input.userId,
+		input.sessionId,
+		turnMessagesName(input.turnId, input.version),
+		JSON.stringify(input.messages),
+		{ expiring: true },
+	);
 }
 
 /**
