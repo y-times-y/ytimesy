@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+	type ClaudeCodeGrant,
 	presentedClaudeCodeGrant,
 	verifyClaudeCodeGrant,
 } from "../../domain/claude-code-grant";
@@ -9,6 +10,11 @@ import {
 	proxyClaudeCode,
 } from "../../domain/claude-code-proxy";
 import { claudeSubscriptionEnabled } from "../../domain/claude-code-route";
+import {
+	CLAUDE_CODE_FEED_PATH,
+	claudeFeedEnabled,
+	presentedFeedGrant,
+} from "../../domain/claude-feed";
 import { modelConversationName } from "../../domain/model-conversation-routing";
 import {
 	authorizeClaudeCodeProxy,
@@ -80,6 +86,26 @@ export async function routeClaudeCodeEdge(
 	if (!secrets.success) return new Response(null, { status: 503 });
 	const secret = secrets.data.GIT_PROXY_SECRET;
 	const path = new URL(request.url).pathname;
+	// The run's output feed: a WebSocket to the same chat object, with the
+	// same grant as its MCP requests (claude-feed.ts).
+	if (path === CLAUDE_CODE_FEED_PATH) {
+		if (!claudeFeedEnabled()) return new Response(null, { status: 404 });
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+			return new Response(null, { status: 426 });
+		const grant = await verifyClaudeCodeGrant(
+			secret,
+			presentedFeedGrant(request.headers),
+		);
+		if (!grant) return new Response(null, { status: 401 });
+		return env.MODEL_CONVERSATIONS.getByName(
+			modelConversationName(grant),
+			durableObjectLocation(),
+		).fetch(
+			new Request(`https://chat.internal${CLAUDE_CODE_FEED_PATH}`, {
+				headers: request.headers,
+			}),
+		);
+	}
 	if (path === CLAUDE_CODE_MCP_PATH) {
 		const grant = await verifyClaudeCodeGrant(
 			secret,
@@ -132,6 +158,30 @@ export async function routeClaudeCodeEdge(
 				}
 			: undefined,
 	});
+}
+
+/**
+ * Inside the chat's Durable Object: the grant of a feed upgrade, checked
+ * again against this chat, or the response refusing it.
+ */
+export async function verifiedClaudeFeedGrant(
+	request: Request,
+	env: EdgeExecutorEnvironment,
+	expectedName: (name: string) => boolean,
+): Promise<ClaudeCodeGrant | Response> {
+	if (!claudeSubscriptionEnabled() || !claudeFeedEnabled())
+		return new Response(null, { status: 404 });
+	const secrets = claudeCodeSecrets.safeParse(env);
+	if (!secrets.success) return new Response(null, { status: 503 });
+	if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+		return new Response(null, { status: 426 });
+	const grant = await verifyClaudeCodeGrant(
+		secrets.data.GIT_PROXY_SECRET,
+		presentedFeedGrant(request.headers),
+	);
+	if (!grant || !expectedName(modelConversationName(grant)))
+		return new Response(null, { status: 401 });
+	return grant;
 }
 
 /**

@@ -21,10 +21,15 @@ import {
 } from "#/domain/api-turn-failure";
 import { CLAUDE_AGENT_RUNNER_SCRIPT } from "#/domain/claude-agent-runner";
 import { verifyClaudeCodeGrant } from "#/domain/claude-code-grant";
+import {
+	CLAUDE_CODE_FEED_PATH,
+	type ClaudeFeedState,
+} from "#/domain/claude-feed";
 import type { DirectTranscriptStore } from "#/domain/direct-transcript";
 import { CLAUDE_AGENT_SDK_MODULE } from "#/domain/guest-cli-pin";
 import {
 	CLAUDE_CODE_POLL_SCRIPT,
+	type ClaudeCodeFeed,
 	type ClaudeCodeStepInput,
 	type ClaudeCodeStore,
 	claudeCodeCommandId,
@@ -32,6 +37,7 @@ import {
 	runClaudeCodeStep,
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
+import { CLAUDE_STEP_PAUSE_MS } from "./claude-step-pause";
 
 it.skipIf(process.platform !== "linux")(
 	"the real poll script checks scoped PID/start ownership, tolerates launch races and detects a reboot-lost record",
@@ -1591,5 +1597,244 @@ describe("Claude Code runner", () => {
 		expect(step.events.some((event) => event.type === "text-delta")).toBe(
 			false,
 		);
+	});
+});
+
+/** The chat object's side of a run's feed, as the step sees it. */
+function fakeFeed(clock: () => number) {
+	const states = new Map<number, ClaudeFeedState>();
+	const stored: { offset: number; next: number; line: string }[] = [];
+	const consumed: [number, number][] = [];
+	const feed: ClaudeCodeFeed = {
+		state: (run) => states.get(run) ?? null,
+		lines: (_run, from, limit) =>
+			stored.filter((line) => line.offset >= from).slice(0, limit),
+		consume: (run, to) => {
+			consumed.push([run, to]);
+		},
+		wait: async () => {},
+	};
+	/** The runner said hello and sent these messages. */
+	const push = (...events: unknown[]) => {
+		let offset = stored.at(-1)?.next ?? 0;
+		for (const event of events) {
+			const line = JSON.stringify(event);
+			const next = offset + Buffer.byteLength(line) + 1;
+			stored.push({ offset, next, line });
+			offset = next;
+		}
+		states.set(1, {
+			run: 1,
+			receivedTo: offset,
+			consumedTo: states.get(1)?.consumedTo ?? 0,
+			lastSeen: clock(),
+			exitStatus: null,
+		});
+	};
+	return { feed, states, stored, consumed, push };
+}
+
+describe("Claude Code runner: feed or poll", () => {
+	const isPoll = (command: string) =>
+		command.startsWith("python3 -c") && / -?\d+ 524288$/.test(command);
+	/** A run already going on the machine, launched by an earlier step. */
+	const attached = () => {
+		const vm = new FakeVm();
+		vm.files.set(`${RUNS}/current`, "1");
+		vm.files.set(`${RUNS}/1/started`, "1");
+		return vm;
+	};
+
+	it("follows the run's feed instead of polling once its runner said hello", async () => {
+		const vm = attached();
+		const clock = 1_000_000;
+		const fed = fakeFeed(() => clock);
+		fed.push(init, ...work, success);
+		const step = input(vm, { feed: fed.feed });
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("completed");
+		expect(vm.shell.mock.calls.some(([command]) => isPoll(command))).toBe(
+			false,
+		);
+		expect(
+			step.events.filter((event) => event.type === "tool-call").length,
+		).toBeGreaterThan(0);
+		const end = fed.stored.at(-1)?.next ?? 0;
+		expect(fed.consumed.at(-1)).toEqual([1, end]);
+		// The run is marked read on the machine too, at the same offset.
+		expect(vm.files.get(`${RUNS}/1/offset`)).toBe(String(end));
+		expect(vm.files.has(`${RUNS}/1/consumed`)).toBe(true);
+	});
+
+	it("reads the same events from the feed as from the out file", async () => {
+		const polled = attached();
+		polled.emit(init, ...work, success);
+		const fromPoll = input(polled);
+		await runClaudeCodeStep(fromPoll);
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init, ...work, success);
+		const fromFeed = input(attached(), { feed: fed.feed });
+		await runClaudeCodeStep(fromFeed);
+		expect(fromFeed.events).toEqual(fromPoll.events);
+	});
+
+	it("polls as before when no hello came (an old runner, or the feed is off)", async () => {
+		const vm = attached();
+		vm.emit(init, ...work, success);
+		const fed = fakeFeed(() => 1_000_000);
+		const result = await runClaudeCodeStep(input(vm, { feed: fed.feed }));
+		expect(result.outcome).toBe("completed");
+		expect(vm.shell.mock.calls.some(([command]) => isPoll(command))).toBe(true);
+	});
+
+	it("hands a silent runner's run back to polling, from where the feed left off", async () => {
+		const vm = attached();
+		vm.emit(init, ...work, success);
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init);
+		const read = fed.stored[0]?.next ?? 0;
+		fed.states.set(1, {
+			run: 1,
+			receivedTo: read,
+			consumedTo: read,
+			lastSeen: 1_000_000 - 61_000,
+			exitStatus: null,
+		});
+		const step = input(vm, { feed: fed.feed });
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("completed");
+		const firstPoll = vm.shell.mock.calls
+			.map(([command]) => command)
+			.find(isPoll);
+		// The poll resumes at the feed's cursor (it writes it as the offset).
+		expect(firstPoll).toMatch(new RegExp(` ${read} 524288$`));
+	});
+
+	it("ends at once with nothing to read and nobody watching, keeping its place", async () => {
+		const vm = attached();
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init, ...work);
+		const requestPause = vi.fn();
+		const step = input(vm, {
+			feed: fed.feed,
+			mayPause: () => true,
+			requestPause,
+		});
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("continue");
+		expect(requestPause).toHaveBeenCalledWith(CLAUDE_STEP_PAUSE_MS);
+		expect(fed.consumed.at(-1)).toEqual([1, fed.stored.at(-1)?.next]);
+		expect(vm.shell.mock.calls.some(([command]) => isPoll(command))).toBe(
+			false,
+		);
+	});
+
+	it("starts where the last committed step stopped", async () => {
+		const vm = attached();
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init, ...work);
+		// Read through the first assistant message (its tool call was shown).
+		const read = fed.stored[1]?.next ?? 0;
+		fed.states.set(1, {
+			...(fed.states.get(1) as ClaudeFeedState),
+			consumedTo: read,
+		});
+		const step = input(vm, { feed: fed.feed, mayPause: () => true });
+		await runClaudeCodeStep(step);
+		// Only the lines after the cursor: the first assistant message is not re-read.
+		expect(
+			step.events.some(
+				(event) => event.type === "tool-call" && event.id === "toolu_1",
+			),
+		).toBe(false);
+	});
+
+	it("does not end while a tool call is answering", async () => {
+		const vm = attached();
+		let clock = 1_000_000;
+		const fed = fakeFeed(() => clock);
+		fed.push(init, ...work);
+		let busy = 3;
+		const step = input(vm, {
+			feed: fed.feed,
+			mayPause: () => true,
+			now: () => clock,
+			bridge: {
+				pump: vi.fn(),
+				busy: () => busy > 0,
+				wait: async (ms) => {
+					busy--;
+					clock += ms;
+					fed.states.set(1, {
+						...(fed.states.get(1) as ClaudeFeedState),
+						lastSeen: clock,
+					});
+				},
+			},
+		});
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("continue");
+		expect(busy).toBe(0);
+	});
+
+	it("fails the turn when the runner reports an exit without a result", async () => {
+		const vm = attached();
+		const fed = fakeFeed(() => 1_000_000);
+		fed.push(init);
+		fed.states.set(1, {
+			...(fed.states.get(1) as ClaudeFeedState),
+			exitStatus: "1",
+		});
+		await expect(
+			runClaudeCodeStep(input(vm, { feed: fed.feed })),
+		).rejects.toThrow(ClaudeCodeRunFailure);
+		expect(vm.files.has(`${RUNS}/1/consumed`)).toBe(true);
+	});
+
+	it("a polling step hands over to the feed when the runner's hello arrives", async () => {
+		const vm = attached();
+		vm.emit(init, ...work);
+		const fed = fakeFeed(() => 1_000_000);
+		const step = input(vm, { feed: fed.feed });
+		const polls = vm.shell.getMockImplementation();
+		vm.shell.mockImplementation(async (command: string, timeoutMs?: number) => {
+			const answer = await (
+				polls as (
+					c: string,
+					t?: number,
+				) => Promise<{
+					exitCode: number;
+					stdout: string;
+					stderr: string;
+				}>
+			)(command, timeoutMs);
+			if (isPoll(command)) fed.push(init);
+			return answer;
+		});
+		const result = await runClaudeCodeStep(step);
+		expect(result.outcome).toBe("continue");
+		const read = Buffer.byteLength(vm.out);
+		expect(fed.consumed.at(-1)).toEqual([1, read]);
+		expect(vm.files.get(`${RUNS}/1/offset`)).toBe(String(read));
+	});
+
+	it("gives the runner a feed address only where the feed is on", async () => {
+		const vm = new FakeVm();
+		const fed = fakeFeed(() => 1_000_000);
+		await runClaudeCodeStep(
+			input(vm, { feed: fed.feed, mayPause: () => true }),
+		);
+		expect(
+			JSON.parse(vm.files.get(`${RUNS}/1/options.json`) ?? "").feed,
+		).toEqual({
+			url: `wss://edge.example${CLAUDE_CODE_FEED_PATH}`,
+			turnId: TURN,
+			run: 1,
+		});
+		const off = new FakeVm();
+		await runClaudeCodeStep(input(off, { mayPause: () => true }));
+		expect(
+			JSON.parse(off.files.get(`${RUNS}/1/options.json`) ?? "").feed,
+		).toBeUndefined();
 	});
 });
