@@ -25,6 +25,32 @@ export class TurnHistoryCache {
 			turn_id text primary key, items_rev text not null)`);
 		sql.exec(`create table if not exists chat_items_copy(
 			id integer primary key check(id=1), turn_id text not null, items_rev text not null)`);
+		// The last turn's model history as of its row version (api_turn.updated_at),
+		// kept across turns: the next turn continuing it reads only what follows.
+		sql.exec(`create table if not exists chat_messages_copy(
+			id integer primary key check(id=1), turn_id text not null, version text not null)`);
+	}
+
+	/** The last turn's history at row version `version` (kept when it ended). */
+	chatMessagesCopy(): {
+		turnId: string;
+		version: string;
+		messages: ModelMessage[];
+	} | null {
+		const copy = this.sql
+			.exec<{ turn_id: string; version: string }>(
+				"select turn_id,version from chat_messages_copy where id=1",
+			)
+			.toArray()[0];
+		if (!copy) return null;
+		const messages = this.part(copy.turn_id, "messages");
+		return messages
+			? {
+					turnId: copy.turn_id,
+					version: copy.version,
+					messages: JSON.parse(messages),
+				}
+			: null;
 	}
 
 	/**
@@ -58,11 +84,31 @@ export class TurnHistoryCache {
 			this.clear();
 			return;
 		}
+		// Its messages stay too when their version is known (its last write
+		// was mirrored here): they are what Postgres holds at that version.
+		const version = this.version(kept.turn_id);
+		const keepMessages =
+			version !== undefined &&
+			this.sql
+				.exec(
+					"select 1 from turn_history where turn_id=? and part='messages' limit 1",
+					kept.turn_id,
+				)
+				.toArray().length > 0;
 		this.sql.exec(
-			"delete from turn_history where turn_id<>? or part<>'items'",
+			keepMessages
+				? "delete from turn_history where turn_id<>?"
+				: "delete from turn_history where turn_id<>? or part<>'items'",
 			kept.turn_id,
 		);
 		this.sql.exec("delete from turn_history_version");
+		if (keepMessages)
+			this.sql.exec(
+				"insert into chat_messages_copy values(1,?,?) on conflict(id) do update set turn_id=excluded.turn_id,version=excluded.version",
+				kept.turn_id,
+				version,
+			);
+		else this.sql.exec("delete from chat_messages_copy");
 		this.sql.exec(
 			"delete from turn_history_items_rev where turn_id<>?",
 			kept.turn_id,
@@ -141,12 +187,14 @@ export class TurnHistoryCache {
 			this.sql.exec("delete from turn_history_version");
 			this.sql.exec("delete from turn_history_items_rev");
 			this.sql.exec("delete from chat_items_copy");
+			this.sql.exec("delete from chat_messages_copy");
 			return;
 		}
 		this.sql.exec("delete from turn_history where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_version where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_items_rev where turn_id=?", turnId);
 		this.sql.exec("delete from chat_items_copy where turn_id=?", turnId);
+		this.sql.exec("delete from chat_messages_copy where turn_id=?", turnId);
 	}
 
 	private version(turnId: string) {

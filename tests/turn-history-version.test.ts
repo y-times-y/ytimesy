@@ -4,6 +4,7 @@ import type { SessionItem } from "../src/domain/session-item";
 import {
 	type ApiTurn,
 	checkpointApiTurn,
+	finalizeApiTurn,
 	publishApiTurnProgress,
 	replaceSettledTurnItem,
 } from "../src/server/adapters/api-turns";
@@ -33,7 +34,8 @@ beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,items jsonb not null default '[]',items_rev bigint not null default 0,updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,items jsonb not null default '[]',messages jsonb not null default '[]',
-	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now());
+	 failover jsonb,lease_id text,cancel_requested boolean not null default false,heartbeat_at timestamptz default now(),updated_at timestamptz default now(),
+	 base_turn_id uuid,base_version text,base_count integer);
 	 create function bump_items_rev() returns trigger language plpgsql as $$ begin new.items_rev := old.items_rev + 1; return new; end $$;
 	 create trigger bump_items_rev before update of items on agent_session for each row execute function bump_items_rev();`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
@@ -164,4 +166,30 @@ it("leaves the chat's copy at the revision of the turn's last write, for the nex
 	).rows[0].revision;
 	expect(revision).toBe("2");
 	expect(cache.chatCopy()).toEqual({ itemsRev: revision, items });
+});
+
+it("keeps the ended turn's history at the version its last write left, for the turn that continues it", async () => {
+	await db.exec(
+		"alter table agent_session add column turn_status text, add column task_state text, add column parent_session_id uuid, add column harness text, add column task_access text; alter table api_turn add column created_at timestamptz default now()",
+	);
+	const turn = await running([user("u1")]);
+	const items = [user("u1"), agent("a1")];
+	await mirrored(() => checkpointApiTurn(turn, messages, items));
+	const final = [...messages, { role: "assistant" as const, content: "done" }];
+	await mirrored(() => finalizeApiTurn(turn, "completed", items, final));
+	cache.keepChatCopy();
+	// What Postgres holds at that version, and the version a send reads.
+	expect(cache.chatMessagesCopy()).toEqual({
+		turnId: TURN,
+		version: await turnVersion(),
+		messages: final,
+	});
+	// A turn whose last write was not mirrored here keeps no messages copy.
+	await db.query("update api_turn set updated_at=now()+interval '1 second'");
+	cache.clear();
+	await mirrored(() => checkpointApiTurn(turn, messages, items)).catch(
+		() => undefined,
+	);
+	cache.keepChatCopy();
+	expect(cache.chatMessagesCopy()).toBeNull();
 });

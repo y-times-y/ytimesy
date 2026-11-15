@@ -2022,6 +2022,10 @@ export function WorkspaceHome({
 		openChatId: activeSessionId,
 		busyChatIds,
 	});
+	// Each running chat in the background is read as deltas over its last
+	// view (a whole page once, then only the rows written since), not a whole
+	// page every few seconds: those whole reads were most of the database's
+	// egress.
 	const backgroundReads = useQueries({
 		queries: backgroundIds.map((sessionId) => ({
 			...sessionReconciliationQuery(
@@ -2031,6 +2035,7 @@ export function WorkspaceHome({
 					harnessId: listedChatHarnessId(sidebarChats, sessionId, harnessId),
 				},
 				0,
+				readOpenChat,
 			),
 			enabled: Boolean(activeProjectId),
 			refetchInterval: BACKGROUND_TURN_POLL_MS,

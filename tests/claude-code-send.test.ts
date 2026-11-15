@@ -62,6 +62,8 @@ vi.mock("#/server/adapters/api-turns", () => ({
 	enqueueApiTurn: fake.enqueue,
 	inheritedApiTurnSettings: vi.fn(async () => ({})),
 	previousTurnMessages: vi.fn(async () => null),
+	previousTurnHistory: vi.fn(async () => null),
+	TurnBaseChanged: class TurnBaseChanged extends Error {},
 }));
 vi.mock("#/server/adapters/claude-subscription", () => ({
 	hasClaudeSubscription: fake.connected,

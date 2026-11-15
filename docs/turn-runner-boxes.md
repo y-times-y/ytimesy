@@ -58,12 +58,30 @@ turn (a WebSocket message bills at 1/20 of a request), with renewals every 30 s
 or less often and progress coalesced. Until then `YTIMESY_BOX_TURN_USERS` stays
 empty and nothing is routed to a box.
 
+## No secrets on a box (decided 2026-11-15)
+
+A turn runner box holds no production secret: no database URL, no model
+API keys, no token vault key, no Freestyle or GitHub credentials. It is a
+thin client of the edge, like Cloudflare's own container egress pattern:
+
+- The box authenticates to the edge with its own short-lived identity
+  (rotated, revocable, scoped to "run turns"), never with a shared secret
+  that also unlocks anything else.
+- Claiming a turn returns a grant scoped to that one turn and its lease:
+  the edge, holding the secrets, does the model call (streams it back), the
+  workspace tool calls (Freestyle), checkpoint writes and progress, each
+  checked against the grant. A lost box exposes at most the turns it was
+  running, until their leases end.
+- `src/server/jobs/box-runner.ts` as written reads secrets from its
+  environment; that path is superseded and must not be provisioned. It stays
+  inert until the thin-client edge API replaces its adapters.
+
 ## Not yet done
 
-- Box <-> room over one WebSocket (above). Required before enabling.
-- The box's environment file (the production secrets a turn needs, including the
-  hand-set `TOKEN_VAULT_KEY`; the Claude runner boxes hold none by design, so
-  turn boxes are a separate fleet) and its systemd unit / bootstrap.
+- The thin-client edge API (claim with grant, model proxy, tool bridge,
+  checkpoint and progress writes), with box <-> room over one WebSocket
+  (above). Required before enabling.
+- The box's bootstrap (systemd unit, its identity) with no secrets in it.
 - AWS: launching the boxes (the current key cannot create or list resources).
 - Codex subscription turns (they reach ChatGPT through a Cloudflare egress path).
 - Measure per-turn memory on a real box to set `YTIMESY_TURN_BOX_CAPACITY`.
