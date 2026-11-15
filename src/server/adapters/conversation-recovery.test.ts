@@ -43,7 +43,35 @@ vi.mock("./conversation-turn-control", () => ({
 	coordinateConversationTurn: coordinate,
 }));
 vi.mock("./agent-sessions", () => ({
-	agentSessionForOwner: async (userId: string, id: string) => {
+	// Read without its transcript: callers must not see `items`.
+	agentSessionMetadataForOwner: async (userId: string, id: string) => {
+		const { items: _items, ...metadata } =
+			(await sessionRow(userId, id)) ?? ({} as never);
+		return _items === undefined ? null : metadata;
+	},
+	agentSessionItemsOfKindsForOwner: async (
+		userId: string,
+		ids: readonly string[],
+		kinds: readonly string[],
+	) => {
+		const map = new Map<string, unknown[]>();
+		for (const id of ids) {
+			const row = await sessionRow(userId, id);
+			if (!row) continue;
+			map.set(
+				id,
+				(row.items as { kind: string }[]).filter((item) =>
+					kinds.includes(item.kind),
+				),
+			);
+		}
+		return map;
+	},
+	agentSessionForOwner: (userId: string, id: string) => sessionRow(userId, id),
+	projectBranchHeldByOtherSession: async () => false,
+}));
+async function sessionRow(userId: string, id: string) {
+	{
 		const row = (
 			await holder.query(
 				"select * from agent_session where id=$1 and user_id=$2",
@@ -68,9 +96,8 @@ vi.mock("./agent-sessions", () => ({
 					taskPlacement: null,
 				}
 			: null;
-	},
-	projectBranchHeldByOtherSession: async () => false,
-}));
+	}
+}
 let db: PGlite;
 const session = randomUUID(),
 	project = randomUUID();
