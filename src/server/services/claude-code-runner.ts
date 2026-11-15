@@ -23,6 +23,11 @@ import {
 	isClaudeCodeSessionId,
 } from "#/domain/claude-code-stream";
 import {
+	CLAUDE_CODE_FEED_PATH,
+	type ClaudeFeedState,
+	claudeStepSource,
+} from "#/domain/claude-feed";
+import {
 	CLAUDE_RUNNER_DISALLOWED_TOOLS,
 	claudeRunnerPrompt,
 	claudeWorkspaceCommandsPrompt,
@@ -95,7 +100,27 @@ export type ClaudeCodeStore = {
 	readonly subscriptionStatus: () => Promise<ClaudeSubscriptionStatus>;
 };
 
+/**
+ * The run's output as the chat's object received it from the runner
+ * (claude-feed.ts); present only where the feed is on and the step runs in
+ * that object.
+ */
+export type ClaudeCodeFeed = {
+	readonly state: (run: number) => ClaudeFeedState | null;
+	readonly lines: (
+		run: number,
+		from: number,
+		limit: number,
+	) => readonly { offset: number; next: number; line: string }[];
+	/** The step read the run through `to`; kept once its checkpoint commits. */
+	readonly consume: (run: number, to: number) => void;
+	/** Resolves when lines (or the exit) arrive, or after `ms`. */
+	readonly wait: (ms: number) => Promise<void>;
+};
+
 export type ClaudeCodeStepInput = {
+	/** The run's pushed output; without it (or its runner's hello) the step polls. */
+	readonly feed?: ClaudeCodeFeed;
 	/**
 	 * Whether this step may end early so the chat's object sleeps while
 	 * Claude works on its own (claude-step-pause.ts); absent: never.
@@ -415,7 +440,7 @@ export async function runClaudeCodeStep(
 	const { home, state } = machineState;
 	const turnDirectory = `${home}/${RUNS}/${turnId}`;
 	let run = state.run;
-	let claudeSessionId = state.sessionId;
+	const claudeSessionId = state.sessionId;
 	if (run === null || state.consumed) {
 		const launched = await launchRun(
 			input,
@@ -431,44 +456,82 @@ export async function runClaudeCodeStep(
 		run = launched.run;
 	}
 	const runDirectory = `${turnDirectory}/${run}`;
-	let commit = -1;
+	const reader = new ClaudeLineReader(input, claudeSessionId);
+	const backups = new TranscriptBackups(input, home, now);
+	/** The run reported its result: save its session, then the turn's answer. */
+	const finishResult = async (result: ClaudeCodeResult, commit: number) => {
+		await backups.settled();
+		await finishRun(shell, runDirectory, commit);
+		const sessionId = result.sessionId ?? reader.sessionId;
+		if (sessionId && isClaudeCodeSessionId(sessionId))
+			await saveTranscript(input, home, sessionId).catch((error: unknown) =>
+				console.warn("Claude Code transcript was not saved.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 200) : "unknown",
+				}),
+			);
+		return completeRun(
+			input,
+			result,
+			home,
+			reader.apiError,
+			reader.contextTokens,
+		);
+	};
+	/** The run exited without a result: why, as the turn's failure. */
+	const exitedFailure = async (status: string, commit: number) => {
+		await backups.settled();
+		await finishRun(shell, runDirectory, commit);
+		return exitFailure(input, runDirectory, status, reader.apiError);
+	};
+	// The run's runner pushes its lines to the chat's object: read them there
+	// instead of polling the machine (claude-feed.ts).
+	if (input.feed && claudeStepSource(input.feed.state(run), now()) === "feed")
+		return followFeed({
+			input,
+			feed: input.feed,
+			run,
+			reader,
+			backups,
+			finishResult,
+			exitedFailure,
+			now,
+		});
+	// Where a feed step left off (it does not write the machine's offset).
+	const fed = input.feed?.state(run)?.consumedTo ?? 0;
+	let commit = fed > 0 ? fed : -1;
 	let wait = POLL_MIN_MS;
-	/** Claude Code's own API error line (never shown): why the run is failing. */
-	let apiError: string | null = null;
 	let unreadablePolls = 0;
 	let missingProcessPolls = 0;
-	const savedAt = lastTranscriptSaves.get(turnId);
-	let lastTranscriptSave =
-		savedAt !== undefined && savedAt <= now() ? savedAt : now();
-	lastTranscriptSaves.set(turnId, lastTranscriptSave);
 	const stepStartedAt = now();
-	/**
-	 * The periodic backup of a long run's transcript (several MB on long
-	 * chats) runs beside the poll loop: awaited inline, every tool call that
-	 * arrived meanwhile waited for the upload to finish.
-	 */
-	let backingUp: Promise<void> | undefined;
-	const backupSettled = async () => {
-		await backingUp;
-	};
-	// What the latest model call put in the context window; with the window
-	// Claude Code reports at the end, it is the composer's context ring.
-	let contextTokens: number | null = null;
 	/** This step read the run's output at least once (it made progress). */
 	let readOnce = false;
+	/** Saves where this step read to, on the machine and for a later feed step. */
+	const saveOffset = async (timeoutMs: number) => {
+		if (commit < 0) return;
+		input.feed?.consume(run, commit);
+		await shell(
+			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
+			timeoutMs,
+		).catch(() => undefined);
+	};
 	/** Ends the step for the next one to re-attach, keeping what it has read. */
 	const yieldStep = async (): Promise<ClaudeCodeStepResult> => {
-		if (commit >= 0)
-			await shell(
-				`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
-				10_000,
-			).catch(() => undefined);
-		await backupSettled();
+		await saveOffset(10_000);
+		await backups.settled();
 		return { messages: [...input.messages], outcome: "continue" };
 	};
 	for (;;) {
 		input.signal.throwIfAborted();
 		input.bridge.pump();
+		// The run's feed started (its runner said hello): the next step follows it.
+		if (
+			input.feed &&
+			readOnce &&
+			!input.bridge.busy() &&
+			claudeStepSource(input.feed.state(run), now()) === "feed"
+		)
+			return yieldStep();
 		let transportFailure: ClaudeRunnerTransportFailure | null = null;
 		// The runner HTTP adapter reserves another 10 seconds for the exec reply.
 		const pollBudget = Math.min(30_000, input.deadline - now() - 10_000);
@@ -555,73 +618,22 @@ export async function runClaudeCodeStep(
 			if (!entry) continue;
 			const tab = entry.indexOf("\t");
 			if (tab <= 0) continue;
-			const key = entry.slice(0, tab);
-			const line = entry.slice(tab + 1);
-			for (const effect of claudeCodeEffects(line, key, {
-				toolName: input.toolName,
-			})) {
-				if (effect.kind === "session") {
-					claudeSessionId = effect.sessionId;
-					if (effect.failedMcpServers.includes(CLAUDE_CODE_MCP_SERVER))
-						console.warn("Claude Code could not connect to ytimesy's tools.");
-				} else if (effect.kind === "plan") input.onPlan(effect.plan);
-				else if (effect.kind === "api-error") apiError = effect.text;
-				else if (effect.kind === "result") result = effect.result;
-				else if (effect.kind === "context") contextTokens = effect.totalTokens;
-				else await emit(input, effect.event);
-			}
+			const read = await reader.read(entry.slice(tab + 1), entry.slice(0, tab));
+			if (read) result = read;
 		}
 		if (polled.next !== polled.offset) commit = polled.next;
+		if (result) {
+			if (commit >= 0) input.feed?.consume(run, commit);
+			return finishResult(result, commit);
+		}
 		// On a runner box the session is saved as the run goes, not only when it
 		// ends: the box can be lost, and the next one resumes from this.
-		if (
-			input.remote &&
-			!result &&
-			!backingUp &&
-			claudeSessionId &&
-			isClaudeCodeSessionId(claudeSessionId) &&
-			now() - lastTranscriptSave >= TRANSCRIPT_SAVE_INTERVAL_MS
-		) {
-			lastTranscriptSave = now();
-			lastTranscriptSaves.set(turnId, lastTranscriptSave);
-			backingUp = saveTranscript(input, home, claudeSessionId)
-				.catch((error: unknown) =>
-					console.warn("Claude Code transcript was not saved.", {
-						message:
-							error instanceof Error ? error.message.slice(0, 200) : "unknown",
-					}),
-				)
-				.finally(() => {
-					backingUp = undefined;
-				});
-		}
-		if (result) {
-			await backupSettled();
-			await finishRun(shell, runDirectory, commit);
-			const sessionId = result.sessionId ?? claudeSessionId;
-			if (sessionId && isClaudeCodeSessionId(sessionId))
-				await saveTranscript(input, home, sessionId).catch((error: unknown) =>
-					console.warn("Claude Code transcript was not saved.", {
-						message:
-							error instanceof Error ? error.message.slice(0, 200) : "unknown",
-					}),
-				);
-			return completeRun(input, result, home, apiError, contextTokens);
-		}
+		backups.maybeStart(reader.sessionId);
 		const exited =
 			typeof polled.status === "string" &&
 			polled.next === polled.offset &&
 			polled.next === polled.size;
-		if (exited) {
-			await backupSettled();
-			await finishRun(shell, runDirectory, commit);
-			throw await exitFailure(
-				input,
-				runDirectory,
-				polled.status as string,
-				apiError,
-			);
-		}
+		if (exited) throw await exitedFailure(polled.status as string, commit);
 		// The detached wrapper may be publishing status just after its scoped
 		// process exits. Require a second observation before calling it lost.
 		missingProcessPolls =
@@ -635,13 +647,9 @@ export async function runClaudeCodeStep(
 			due &&
 			(!input.bridge.busy() || now() >= input.deadline + BUSY_GRACE_MS)
 		) {
-			if (commit >= 0)
-				await shell(
-					`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
-					30_000,
-				).catch(() => undefined);
+			await saveOffset(30_000);
 			// Nothing of this step may outlive it in the chat's object.
-			await backupSettled();
+			await backups.settled();
 			return { messages: [...input.messages], outcome: "continue" };
 		}
 		// Nothing to answer and nobody watching: the step ends and the chat's
@@ -650,9 +658,7 @@ export async function runClaudeCodeStep(
 		if (
 			readOnce &&
 			!input.bridge.busy() &&
-			!backingUp &&
-			(!input.remote ||
-				now() - lastTranscriptSave < TRANSCRIPT_SAVE_INTERVAL_MS) &&
+			backups.idle() &&
 			now() - stepStartedAt >= CLAUDE_STEP_MIN_AWAKE_MS &&
 			input.mayPause?.()
 		) {
@@ -664,6 +670,172 @@ export async function runClaudeCodeStep(
 			await sleep(wait);
 			wait = Math.min(POLL_MAX_MS, wait * 2);
 		}
+	}
+}
+
+/** How many stored lines a feed step reads at a time. */
+const FEED_READ_LINES = 200;
+/** A feed step with nothing to read looks again after this, or on a line or call. */
+const FEED_IDLE_WAIT_MS = 1_000;
+
+/**
+ * The step reading the run's feed: lines from the chat's own storage, in
+ * offset order from where the last committed step stopped, through the same
+ * mapping as a poll. It ends as soon as there is nothing to read or answer
+ * and nobody watches; the object wakes the next step when lines arrive (or
+ * after the pause, which renews the turn's lease). While someone watches it
+ * stays, waiting on the feed rather than the machine. The read position is
+ * saved once the step's checkpoint commits, so an interrupted step reads
+ * those lines again, as a restarted poll does.
+ */
+async function followFeed(ctx: {
+	readonly input: ClaudeCodeStepInput;
+	readonly feed: ClaudeCodeFeed;
+	readonly run: number;
+	readonly reader: ClaudeLineReader;
+	readonly backups: TranscriptBackups;
+	readonly finishResult: (
+		result: ClaudeCodeResult,
+		commit: number,
+	) => Promise<ClaudeCodeStepResult>;
+	readonly exitedFailure: (status: string, commit: number) => Promise<Error>;
+	readonly now: () => number;
+}): Promise<ClaudeCodeStepResult> {
+	const { input, feed, run, reader, backups, now } = ctx;
+	let cursor = feed.state(run)?.consumedTo ?? 0;
+	const yieldStep = async (pause?: number): Promise<ClaudeCodeStepResult> => {
+		feed.consume(run, cursor);
+		if (pause) input.requestPause?.(pause);
+		await backups.settled();
+		return { messages: [...input.messages], outcome: "continue" };
+	};
+	for (;;) {
+		input.signal.throwIfAborted();
+		input.bridge.pump();
+		const state = feed.state(run);
+		const busy = input.bridge.busy();
+		// The runner went silent (a lost socket, a killed process): the next
+		// step polls the machine, which also tells a lost process apart.
+		if (!busy && claudeStepSource(state, now()) !== "feed") return yieldStep();
+		const lines = feed.lines(run, cursor, FEED_READ_LINES);
+		let result: ClaudeCodeResult | null = null;
+		for (const entry of lines) {
+			const read = await reader.read(entry.line, String(entry.offset));
+			cursor = entry.next;
+			if (read) result = read;
+		}
+		if (result) {
+			feed.consume(run, cursor);
+			return ctx.finishResult(result, cursor);
+		}
+		if (
+			state?.exitStatus != null &&
+			!lines.length &&
+			cursor >= state.receivedTo
+		)
+			throw await ctx.exitedFailure(state.exitStatus, cursor);
+		backups.maybeStart(reader.sessionId);
+		if (
+			now() >= input.deadline &&
+			(!busy || now() >= input.deadline + BUSY_GRACE_MS)
+		)
+			return yieldStep();
+		if (lines.length) continue;
+		// Nothing to read or answer and nobody watching: the object sleeps.
+		if (!busy && backups.idle() && input.mayPause?.())
+			return yieldStep(CLAUDE_STEP_PAUSE_MS);
+		await Promise.race([
+			feed.wait(FEED_IDLE_WAIT_MS),
+			input.bridge.wait(FEED_IDLE_WAIT_MS),
+		]);
+	}
+}
+
+/** Maps a run's output lines into the turn, keeping what later lines need. */
+class ClaudeLineReader {
+	/** Claude Code's own API error line (never shown): why the run is failing. */
+	apiError: string | null = null;
+	/**
+	 * What the latest model call put in the context window; with the window
+	 * Claude Code reports at the end, it is the composer's context ring.
+	 */
+	contextTokens: number | null = null;
+	constructor(
+		private readonly input: ClaudeCodeStepInput,
+		public sessionId: string | null,
+	) {}
+	/** One line; its result, if it is the run's last. */
+	async read(line: string, key: string): Promise<ClaudeCodeResult | null> {
+		let result: ClaudeCodeResult | null = null;
+		for (const effect of claudeCodeEffects(line, key, {
+			toolName: this.input.toolName,
+		})) {
+			if (effect.kind === "session") {
+				this.sessionId = effect.sessionId;
+				if (effect.failedMcpServers.includes(CLAUDE_CODE_MCP_SERVER))
+					console.warn("Claude Code could not connect to ytimesy's tools.");
+			} else if (effect.kind === "plan") this.input.onPlan(effect.plan);
+			else if (effect.kind === "api-error") this.apiError = effect.text;
+			else if (effect.kind === "result") result = effect.result;
+			else if (effect.kind === "context")
+				this.contextTokens = effect.totalTokens;
+			else await emit(this.input, effect.event);
+		}
+		return result;
+	}
+}
+
+/**
+ * The periodic backup of a runner box run's transcript (several MB on long
+ * chats), beside the step's reading: awaited inline, every tool call that
+ * arrived meanwhile waited for the upload to finish.
+ */
+class TranscriptBackups {
+	private running: Promise<void> | undefined;
+	private last: number;
+	constructor(
+		private readonly input: ClaudeCodeStepInput,
+		private readonly home: string,
+		private readonly now: () => number,
+	) {
+		const savedAt = lastTranscriptSaves.get(input.turnId);
+		this.last = savedAt !== undefined && savedAt <= now() ? savedAt : now();
+		lastTranscriptSaves.set(input.turnId, this.last);
+	}
+	/** No backup running or due: the step may end early. */
+	idle() {
+		return (
+			!this.running &&
+			(!this.input.remote ||
+				this.now() - this.last < TRANSCRIPT_SAVE_INTERVAL_MS)
+		);
+	}
+	/** Starts the next backup when one is due on a runner box. */
+	maybeStart(claudeSessionId: string | null) {
+		if (
+			!this.input.remote ||
+			this.running ||
+			!claudeSessionId ||
+			!isClaudeCodeSessionId(claudeSessionId) ||
+			this.now() - this.last < TRANSCRIPT_SAVE_INTERVAL_MS
+		)
+			return;
+		this.last = this.now();
+		lastTranscriptSaves.set(this.input.turnId, this.last);
+		this.running = saveTranscript(this.input, this.home, claudeSessionId)
+			.catch((error: unknown) =>
+				console.warn("Claude Code transcript was not saved.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 200) : "unknown",
+				}),
+			)
+			.finally(() => {
+				this.running = undefined;
+			});
+	}
+	/** Nothing of a step may outlive it in the chat's object. */
+	async settled() {
+		await this.running;
 	}
 }
 
@@ -803,6 +975,17 @@ async function launchRun(
 				effort: input.effort ?? null,
 				disallowedTools: CLAUDE_RUNNER_DISALLOWED_TOOLS,
 				resume: resumeId ?? null,
+				// The runner pushes its lines to the chat's object; authenticated
+				// with the grant in mcp.json.
+				...(input.feed
+					? {
+							feed: {
+								url: `${input.edgeOrigin.replace(/^http/, "ws")}${CLAUDE_CODE_FEED_PATH}`,
+								turnId: input.turnId,
+								run,
+							},
+						}
+					: {}),
 			}),
 		},
 		{
