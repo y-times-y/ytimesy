@@ -236,10 +236,10 @@ const UNREADABLE_POLL_PAUSE_MS = 1_500;
  */
 export const CLAUDE_CODE_POLL_SCRIPT = `import json,os,sys,time
 d,commit,limit=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
-if commit>=0:
-    t=os.path.join(d,'offset.tmp'); open(t,'w').write(str(commit)); os.replace(t,os.path.join(d,'offset'))
 try: off=int(open(os.path.join(d,'offset')).read().strip() or 0)
 except FileNotFoundError: off=0
+if commit>off:
+    t=os.path.join(d,'offset.tmp'); open(t,'w').write(str(commit)); os.replace(t,os.path.join(d,'offset')); off=commit
 try: status=open(os.path.join(d,'status')).read().strip() or None
 except FileNotFoundError: status=None
 out=os.path.join(d,'out'); lines=[]; nxt=off
@@ -499,7 +499,8 @@ export async function runClaudeCodeStep(
 		});
 	// Where a feed step left off (it does not write the machine's offset).
 	const fed = input.feed?.state(run)?.consumedTo ?? 0;
-	let commit = fed > 0 ? fed : -1;
+	let readTo = fed > 0 ? fed : -1;
+	let commit = readTo;
 	let wait = POLL_MIN_MS;
 	let unreadablePolls = 0;
 	let missingProcessPolls = 0;
@@ -508,10 +509,10 @@ export async function runClaudeCodeStep(
 	let readOnce = false;
 	/** Saves where this step read to, on the machine and for a later feed step. */
 	const saveOffset = async (timeoutMs: number) => {
-		if (commit < 0) return;
-		input.feed?.consume(run, commit);
+		if (readTo < 0) return;
+		input.feed?.consume(run, readTo);
 		await shell(
-			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${commit} 0`,
+			`python3 -c ${quote(CLAUDE_CODE_POLL_SCRIPT)} ${quote(runDirectory)} ${readTo} 0`,
 			timeoutMs,
 		).catch(() => undefined);
 	};
@@ -622,9 +623,10 @@ export async function runClaudeCodeStep(
 			if (read) result = read;
 		}
 		if (polled.next !== polled.offset) commit = polled.next;
+		readTo = Math.max(readTo, polled.next);
 		if (result) {
-			if (commit >= 0) input.feed?.consume(run, commit);
-			return finishResult(result, commit);
+			input.feed?.consume(run, readTo);
+			return finishResult(result, readTo);
 		}
 		// On a runner box the session is saved as the run goes, not only when it
 		// ends: the box can be lost, and the next one resumes from this.
@@ -633,7 +635,7 @@ export async function runClaudeCodeStep(
 			typeof polled.status === "string" &&
 			polled.next === polled.offset &&
 			polled.next === polled.size;
-		if (exited) throw await exitedFailure(polled.status as string, commit);
+		if (exited) throw await exitedFailure(polled.status as string, readTo);
 		// The detached wrapper may be publishing status just after its scoped
 		// process exits. Require a second observation before calling it lost.
 		missingProcessPolls =

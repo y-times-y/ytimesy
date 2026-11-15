@@ -36,6 +36,7 @@ export const CLAUDE_FEED_STALE_MS = 60_000;
 export const CLAUDE_FEED_LIVE_MS = 1_000;
 export const CLAUDE_FEED_QUIET_MS = 10_000;
 /** Largest message the object takes from a runner. */
+export const CLAUDE_FEED_MAX_ENTRIES = 10_000;
 export const CLAUDE_FEED_MAX_MESSAGE = 2 * 1024 * 1024;
 
 export type ClaudeFeedMode = "live" | "quiet";

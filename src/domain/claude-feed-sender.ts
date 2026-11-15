@@ -1,5 +1,6 @@
 import {
 	CLAUDE_FEED_LIVE_MS,
+	CLAUDE_FEED_MAX_ENTRIES,
 	CLAUDE_FEED_PROTOCOL,
 	CLAUDE_FEED_QUIET_MS,
 } from "./claude-feed";
@@ -27,6 +28,7 @@ const FEED_QUIET_MS = ${CLAUDE_FEED_QUIET_MS};
 const FEED_BEAT_MS = 20000;
 const FEED_MAX_LINE = 512 * 1024;
 const FEED_MAX_BATCH = 900000;
+const FEED_MAX_ENTRIES = ${CLAUDE_FEED_MAX_ENTRIES};
 const FEED_MAX_BUFFER = 16 * 1024 * 1024;
 const FEED_OVERSIZE = JSON.stringify({ type: "ytimesy_oversize" });
 function feedUrgent(message) {
@@ -64,7 +66,7 @@ function feedBatch(buffer, from, maxChars) {
 	for (let index = start; index < buffer.length; index++) {
 		const entry = buffer[index];
 		const cost = JSON.stringify(entry.line).length + 24;
-		if (entries.length && size + cost > maxChars) break;
+		if (entries.length && (size + cost > maxChars || entries.length >= FEED_MAX_ENTRIES)) break;
 		entries.push([entry.offset, entry.line]);
 		size += cost;
 		to = entry.next;

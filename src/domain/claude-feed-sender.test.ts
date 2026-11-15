@@ -97,6 +97,13 @@ describe("Claude feed sender cadence", () => {
 	});
 });
 
+it("caps short-line batches at the receiver entry limit", () => {
+	const entries = Array.from({ length: 10_005 }, (_, index) =>
+		sender.feedEntry(index * 2, "x"),
+	);
+	expect(sender.feedBatch(entries, 0, 900_000)?.entries).toHaveLength(10_000);
+});
+
 describe("the actual runner's feed", () => {
 	it("pushes the lines it prints, with their offsets, resends on need and reports its exit", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "claude-feed-"));
