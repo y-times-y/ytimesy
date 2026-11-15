@@ -15,6 +15,8 @@ type TurnHistoryMirror = (
 	previous: string,
 	/** agent_session.items_rev after the write (the items' revision). */
 	itemsRev?: string,
+	/** The write that settled the turn: its history is final from here. */
+	settled?: boolean,
 ) => void;
 
 const mirror = new AsyncLocalStorage<TurnHistoryMirror>();
