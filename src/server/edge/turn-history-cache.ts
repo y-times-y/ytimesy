@@ -19,6 +19,59 @@ export class TurnHistoryCache {
 			chunk integer not null, data text not null, primary key(turn_id,part,chunk))`);
 		sql.exec(`create table if not exists turn_history_version(
 			turn_id text primary key, version text not null)`);
+		// The chat's transcript revision (agent_session.items_rev) each cached
+		// items copy matches, and the copy kept across turns (keepChatCopy).
+		sql.exec(`create table if not exists turn_history_items_rev(
+			turn_id text primary key, items_rev text not null)`);
+		sql.exec(`create table if not exists chat_items_copy(
+			id integer primary key check(id=1), turn_id text not null, items_rev text not null)`);
+	}
+
+	/**
+	 * The chat's transcript as of revision `itemsRev` (the last turn's copy,
+	 * kept when it ended): a new turn reads only the rows written after it.
+	 */
+	chatCopy(): { itemsRev: string; items: SessionItem[] } | null {
+		const copy = this.sql
+			.exec<{ turn_id: string; items_rev: string }>(
+				"select turn_id,items_rev from chat_items_copy where id=1",
+			)
+			.toArray()[0];
+		if (!copy) return null;
+		const items = this.part(copy.turn_id, "items");
+		return items
+			? { itemsRev: copy.items_rev, items: JSON.parse(items) }
+			: null;
+	}
+
+	/**
+	 * At a turn's end: keep the items of the turn copy whose transcript
+	 * revision is known (the latest), drop everything else.
+	 */
+	keepChatCopy() {
+		const kept = this.sql
+			.exec<{ turn_id: string; items_rev: string }>(
+				"select turn_id,items_rev from turn_history_items_rev order by cast(items_rev as integer) desc limit 1",
+			)
+			.toArray()[0];
+		if (!kept) {
+			this.clear();
+			return;
+		}
+		this.sql.exec(
+			"delete from turn_history where turn_id<>? or part<>'items'",
+			kept.turn_id,
+		);
+		this.sql.exec("delete from turn_history_version");
+		this.sql.exec(
+			"delete from turn_history_items_rev where turn_id<>?",
+			kept.turn_id,
+		);
+		this.sql.exec(
+			"insert into chat_items_copy values(1,?,?) on conflict(id) do update set turn_id=excluded.turn_id,items_rev=excluded.items_rev",
+			kept.turn_id,
+			kept.items_rev,
+		);
 	}
 
 	read(turnId: string, version: string): History | null {
@@ -41,6 +94,8 @@ export class TurnHistoryCache {
 		version: string,
 		history: { messages?: ModelMessage[]; items: readonly SessionItem[] },
 		previous?: string,
+		/** The chat's transcript revision this write left (agent_session.items_rev). */
+		itemsRev?: string,
 	) {
 		if (previous !== undefined && this.version(turnId) !== previous) {
 			this.clear(turnId);
@@ -66,16 +121,32 @@ export class TurnHistoryCache {
 			turnId,
 			version,
 		);
+		// Unknown revision: this copy may not seed a later turn.
+		if (itemsRev === undefined)
+			this.sql.exec(
+				"delete from turn_history_items_rev where turn_id=?",
+				turnId,
+			);
+		else
+			this.sql.exec(
+				"insert into turn_history_items_rev values(?,?) on conflict(turn_id) do update set items_rev=excluded.items_rev",
+				turnId,
+				itemsRev,
+			);
 	}
 
 	clear(turnId?: string) {
 		if (turnId === undefined) {
 			this.sql.exec("delete from turn_history");
 			this.sql.exec("delete from turn_history_version");
+			this.sql.exec("delete from turn_history_items_rev");
+			this.sql.exec("delete from chat_items_copy");
 			return;
 		}
 		this.sql.exec("delete from turn_history where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_version where turn_id=?", turnId);
+		this.sql.exec("delete from turn_history_items_rev where turn_id=?", turnId);
+		this.sql.exec("delete from chat_items_copy where turn_id=?", turnId);
 	}
 
 	private version(turnId: string) {
@@ -115,4 +186,32 @@ export class TurnHistoryCache {
 			offset += CHUNK_CHARACTERS;
 		}
 	}
+}
+
+/**
+ * The chat's transcript rebuilt from a copy at revision V, the item count
+ * now, and every row written after V (agent_session_item.rev > V): rows not
+ * written since keep the copy's item. Null when they do not cover every
+ * position (the copy is not a prefix the database still holds).
+ */
+export function seededTranscript(
+	copy: readonly SessionItem[],
+	count: number,
+	changed: readonly { readonly position: number; readonly item: SessionItem }[],
+): SessionItem[] | null {
+	if (!Number.isInteger(count) || count < 0) return null;
+	const items: (SessionItem | undefined)[] = copy.slice(0, count);
+	items.length = count;
+	for (const row of changed) {
+		if (
+			!Number.isInteger(row.position) ||
+			row.position < 0 ||
+			row.position >= count
+		)
+			return null;
+		items[row.position] = row.item;
+	}
+	for (let index = 0; index < count; index++)
+		if (items[index] === undefined) return null;
+	return items as SessionItem[];
 }

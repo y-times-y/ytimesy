@@ -811,6 +811,23 @@ export async function descendantAgentSessionMetadata(
 	});
 }
 
+/**
+ * Whether the owner's chat holds a user message (with id `messageId`, if
+ * given), from agent_session_item's index: no transcript leaves the database.
+ */
+export async function sessionHoldsUserMessage(
+	userId: string,
+	sessionId: string,
+	messageId?: string,
+): Promise<boolean> {
+	const result = await database().query<{ held: boolean }>(
+		`select exists(select 1 from agent_session_item i join agent_session s on s.id=i.session_id and s.user_id=$1
+		 where i.session_id=$2 and i.kind='userMessage' and ($3::text is null or i.item_id=$3::text)) as held`,
+		[userId, sessionId, messageId ?? null],
+	);
+	return result.rows[0]?.held === true;
+}
+
 /** Each of the owner's chats' transcript write count (items_rev), as text. */
 export async function itemsRevisionsForOwner(
 	userId: string,

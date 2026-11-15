@@ -61,6 +61,7 @@ import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
+import { turnHistorySince } from "../adapters/turn-history-seed";
 import { turnStartRequest } from "../adapters/turn-start";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
@@ -105,7 +106,7 @@ import {
 } from "./machine-git-grant";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { stepFailureCause } from "./step-failure-cause";
-import { TurnHistoryCache } from "./turn-history-cache";
+import { seededTranscript, TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 import { logTurnStepSizes } from "./turn-step-sizes";
 
@@ -386,7 +387,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private stepping = false;
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
-		this.history.clear();
+		// The last turn's transcript stays, so the next turn reads only what
+		// changed after it (seedFromChatCopy).
+		try {
+			this.history.keepChatCopy();
+		} catch {
+			this.history.clear();
+		}
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		const next = this.queue.take();
 		if (next) {
@@ -560,6 +567,35 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			});
 	}
 	/**
+	 * A new turn's history from the chat's copy (kept when its last turn
+	 * ended, at transcript revision V) and only the item rows written after V,
+	 * instead of the whole transcript (megabytes) from Postgres. Null (read
+	 * it whole) when there is no copy, the turn keeps its items itself, or
+	 * the rows do not add up to a whole transcript.
+	 */
+	private async seedFromChatCopy(turnId: string, leaseId: string) {
+		let copy: ReturnType<TurnHistoryCache["chatCopy"]>;
+		try {
+			copy = this.history.chatCopy();
+		} catch {
+			return null;
+		}
+		if (!copy) return null;
+		const row = await turnHistorySince(turnId, leaseId, copy.itemsRev);
+		if (!row || row.wholeItems) return null;
+		const items = seededTranscript(copy.items, row.count, row.changed);
+		if (!items) return null;
+		console.info(
+			JSON.stringify({
+				event: "turn.history_seeded",
+				turnId,
+				items: row.count,
+				rowsRead: row.changed.length,
+			}),
+		);
+		return { messages: row.messages, items, items_rev: row.itemsRev };
+	}
+	/**
 	 * Runs after Postgres committed the write: a local storage failure must not
 	 * fail the step, it only costs the next step a read from Postgres.
 	 */
@@ -656,17 +692,23 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		let history = this.history.read(row.id, row.version);
 		const loadedFromDatabase = !history;
 		if (!history) {
-			const loaded = (
-				await database().query<Pick<ApiTurn, "messages" | "items">>(
-					// A turn row in the new shape keeps no items; the chat's are the history.
-					`select t.messages,case when jsonb_typeof(t.items)='array' then t.items else s.items end as items
-					 from api_turn t join agent_session s on s.id=t.session_id where t.id=$1 and t.lease_id=$2`,
-					[row.id, leaseId],
-				)
-			).rows[0];
+			const loaded =
+				(await this.seedFromChatCopy(row.id, leaseId)) ??
+				(
+					await database().query<
+						Pick<ApiTurn, "messages" | "items"> & { items_rev: string }
+					>(
+						// A turn row in the new shape keeps no items; the chat's are the history.
+						`select t.messages,case when jsonb_typeof(t.items)='array' then t.items else s.items end as items,
+						 s.items_rev::text as items_rev
+						 from api_turn t join agent_session s on s.id=t.session_id where t.id=$1 and t.lease_id=$2`,
+						[row.id, leaseId],
+					)
+				).rows[0];
 			if (!loaded) return { kind: "unavailable" };
-			history = loaded;
-			this.history.write(row.id, row.version, loaded);
+			const { items_rev: itemsRev, ...whole } = loaded;
+			history = whole;
+			this.history.write(row.id, row.version, whole, undefined, itemsRev);
 		}
 		logTurnStepSizes(
 			row.id,

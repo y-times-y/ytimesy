@@ -22,6 +22,32 @@ vi.mock("#/server/adapters/model-failover-preferences", () => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
+	agentSessionMetadataForOwner: async (user: string, id: string) => {
+		const chat = (await fake.owner(user, id)) as { items?: unknown } | null;
+		return chat && { ...chat, items: null };
+	},
+	sessionHoldsUserMessage: async (
+		user: string,
+		id: string,
+		messageId?: string,
+	) => {
+		const chat = (await fake.owner(user, id)) as { items?: unknown } | null;
+		return (Array.isArray(chat?.items) ? chat.items : []).some(
+			(item: { kind?: string; id?: string }) =>
+				item.kind === "userMessage" && (!messageId || item.id === messageId),
+		);
+	},
+	agentSessionPageForOwner: async (user: string, id: string) => {
+		const chat = (await fake.owner(user, id)) as { items?: unknown } | null;
+		return (
+			chat && {
+				...chat,
+				items: Array.isArray(chat.items) ? chat.items : [],
+				hasOlderItems: false,
+				pageFound: true,
+			}
+		);
+	},
 	chatHoldingSend: vi.fn(async () => null),
 	releasingChatClaimOnFailure: (
 		_user: string,

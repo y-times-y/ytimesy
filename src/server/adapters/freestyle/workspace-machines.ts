@@ -45,6 +45,7 @@ import {
 	resumableMachineStart,
 } from "./machine-failure";
 import {
+	BACKGROUND_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productLifecycleUpdate,
 	WORKSPACE_METADATA_PURPOSE,
@@ -142,6 +143,13 @@ export function createFreestyleWorkspaceMachines(
 				"publishHttpRoute" | "listHttpRoutes" | "withdrawHttpRoutes"
 			>
 		> = {
+		async keepAwakeForBackground(workspaceId) {
+			await retryTransientProviderFailure(() =>
+				freestyle.vms
+					.ref(workspaceId)
+					.update({ idleTimeoutSeconds: BACKGROUND_IDLE_TIMEOUT_SECONDS }),
+			);
+		},
 		async applyNetworkPolicy(workspaceId, policy) {
 			await retryTransientProviderFailure(() =>
 				applyVmNetworkPolicy(freestyle, workspaceId, policy),

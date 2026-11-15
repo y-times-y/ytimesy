@@ -3,8 +3,21 @@ import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 export const WORKSPACE_METADATA_PURPOSE = "ytimesy-workspace";
 export const FREESTYLE_EXEC_TIMEOUT_MS_MAX = 300_000;
 
-/** Pause after this long with no public/terminal traffic. -1 keeps the meter running. */
-export const PRODUCT_IDLE_TIMEOUT_SECONDS = 180;
+/**
+ * Pause after this long with no traffic (an exec, including one still
+ * running, public or terminal traffic). A paused VM's next exec resumes it
+ * in under a second, so the VM no longer runs (and bills) through a model's
+ * long thinking between tool calls, nor three minutes after every turn.
+ * Measured 2026-11-14: exec calls and an exec in flight hold it awake; a
+ * detached process alone does not (it freezes until the next traffic).
+ */
+export const PRODUCT_IDLE_TIMEOUT_SECONDS = 60;
+/**
+ * A VM that started a background command (a build, a dev server) keeps the
+ * longer timeout, so the command is not frozen between the watcher's looks
+ * (every two minutes while a turn runs).
+ */
+export const BACKGROUND_IDLE_TIMEOUT_SECONDS = 180;
 
 /**
  * Delete a product VM after this long without running. Freestyle resets the
@@ -27,7 +40,10 @@ export const CHEAP_BASE_RESOURCES = {
 export function productIdleTimeoutNeedsUpdate(
 	current: number | null | undefined,
 ) {
-	return current !== PRODUCT_IDLE_TIMEOUT_SECONDS;
+	return (
+		current !== PRODUCT_IDLE_TIMEOUT_SECONDS &&
+		current !== BACKGROUND_IDLE_TIMEOUT_SECONDS
+	);
 }
 
 /**

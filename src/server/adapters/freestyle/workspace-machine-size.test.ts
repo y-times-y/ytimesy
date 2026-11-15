@@ -19,7 +19,7 @@ vi.mock("freestyle", async (importOriginal) => {
 			state: "running",
 			resources: provider.resources,
 			metadata: provider.metadata,
-			idleTimeoutSeconds: 180,
+			idleTimeoutSeconds: 60,
 			autoDeleteSeconds: 7_776_000,
 		}),
 		resize: provider.resize,
@@ -65,7 +65,7 @@ it("grows a prepared new copy to Large by default", async () => {
 	expect(provider.create).toHaveBeenCalledWith(
 		expect.objectContaining({
 			snapshotId: "sh-template",
-			idleTimeoutSeconds: 180,
+			idleTimeoutSeconds: 60,
 		}),
 	);
 });

@@ -112,11 +112,12 @@ it("keeps isolated evaluation checkpoints on local disk without contacting stora
 	vi.unstubAllEnvs();
 });
 
-it("deletes a chat's checkpoints, archives and attachments, and nothing else", async () => {
+it("deletes a chat's checkpoints, archives, attachments and recovery points, and nothing else", async () => {
 	const chat = checkpointObjectPrefix("alice", "chat");
 	const listings: Record<string, string[][]> = {
 		[chat]: [["rev-1.enc", "context-a.enc"], []],
 		[`attachments/${chat}`]: [["0f.enc"], []],
+		[`points/${chat}`]: [["conversation-point-m1.enc"], []],
 	};
 	const deleted: string[] = [];
 	vi.stubGlobal(
@@ -136,6 +137,7 @@ it("deletes a chat's checkpoints, archives and attachments, and nothing else", a
 		`${chat}rev-1.enc`,
 		`${chat}context-a.enc`,
 		`attachments/${chat}0f.enc`,
+		`points/${chat}conversation-point-m1.enc`,
 	]);
 });
 
@@ -147,4 +149,54 @@ it("stops deleting when a listing returns a nested or traversal name", async () 
 	await expect(removeChatObjects("alice", "chat")).rejects.toThrow(
 		"deletion stopped",
 	);
+});
+
+it("stores checkpoints compressed and still reads ones stored before compression", async () => {
+	const stored = new Map<string, string>();
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: string, options?: RequestInit) => {
+			if (options?.method === "POST") {
+				stored.set(url, String(options.body));
+				return Response.json({});
+			}
+			const body = stored.get(url);
+			return body === undefined
+				? new Response("", { status: 404 })
+				: new Response(body);
+		}),
+	);
+	const payload = JSON.stringify(
+		Array.from({ length: 400 }, (_, index) => ({
+			role: "user",
+			content: `message ${index}: the same words again and again`,
+		})),
+	);
+	const path = await uploadCheckpoint("alice", "chat", "rev-9", payload);
+	expect(await downloadCheckpoint("alice", "chat", path)).toBe(payload);
+	// Several times smaller than the payload, encryption and all.
+	expect([...stored.values()][0]?.length).toBeLessThan(payload.length / 3);
+	// A recovery point goes under the expiring prefix, readable only by its owner.
+	const point = await uploadCheckpoint(
+		"alice",
+		"chat",
+		"conversation-point-m1",
+		payload,
+		{ expiring: true },
+	);
+	expect(point.startsWith("points/")).toBe(true);
+	expect(await downloadCheckpoint("alice", "chat", point)).toBe(payload);
+	await expect(downloadCheckpoint("mallory", "chat", point)).rejects.toThrow(
+		"ownership",
+	);
+	// An object from before compression (the payload as it is).
+	const { seal } = await import("#/server/auth/token-vault");
+	const legacy = `${checkpointObjectPrefix("alice", "chat")}old.enc`;
+	stored.set(
+		[...stored.keys()][0]?.replace(/rev-9\.enc$/, "old.enc") as string,
+		await seal(
+			JSON.stringify({ userId: "alice", sessionId: "chat", payload: "plain" }),
+		),
+	);
+	expect(await downloadCheckpoint("alice", "chat", legacy)).toBe("plain");
 });

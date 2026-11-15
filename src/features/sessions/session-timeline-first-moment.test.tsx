@@ -16,7 +16,7 @@ it("shows the sent message and Thinking in the reply's place before any reply", 
 	expect(html).toContain("Fix the build");
 	// The reply's row comes next; Thinking takes its place (session-composer.css sizes it as the reply's first line).
 	expect(html).toMatch(
-		/<li [^>]*data-kind="working" data-follows="userMessage"><p class="session-working session-shimmer">Thinking<\/p><\/li>/,
+		/<li [^>]*data-kind="working" data-follows="userMessage"[^>]*><p class="session-working session-shimmer">Thinking<\/p><\/li>/,
 	);
 });
 

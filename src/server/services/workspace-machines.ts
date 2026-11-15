@@ -23,6 +23,12 @@ export interface CreateProofWorkspaceOptions {
 }
 
 export interface WorkspaceMachines {
+	/**
+	 * Keeps a VM that is starting a background command from pausing between
+	 * the watcher's looks (the longer idle timeout). Providers without it
+	 * never pause on their own.
+	 */
+	readonly keepAwakeForBackground?: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly runCapability?: (
 		workspaceId: WorkspaceId,
 		request: {

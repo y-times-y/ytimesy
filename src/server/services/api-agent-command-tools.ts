@@ -265,6 +265,18 @@ export function apiAgentCommandTools(
 			seconds: maxSeconds,
 			commandId: id,
 		});
+		// Its VM keeps the longer idle timeout, so the command runs on between
+		// tool calls instead of freezing when the VM pauses (product-vm.ts).
+		if (background)
+			await machines.keepAwakeForBackground?.(vm).catch((error: unknown) =>
+				console.warn(
+					"The VM's idle timeout was not raised for a background command.",
+					{
+						message:
+							error instanceof Error ? error.message.slice(0, 200) : "unknown",
+					},
+				),
+			);
 		// A background command tells the edge when it exits, so its chat wakes
 		// within seconds; without a callback the cron's watcher still does.
 		const exitCallback =
