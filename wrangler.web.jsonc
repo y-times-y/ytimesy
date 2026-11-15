@@ -31,7 +31,7 @@
       "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000001" }],
       "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
       "services": [{ "binding": "EXECUTOR", "service": "ytimesy-edge-executor-production", "remote": true }],
-      "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1", "YTIMESY_ENVIRONMENT": "production", "YTIMESY_LIVE_WS_USERS": "CPQWwchV9x9OPhNaa9qKqv1kZnFAVKjU" },
+      "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1", "YTIMESY_ENVIRONMENT": "production", "YTIMESY_LIVE_WS_USERS": "CPQWwchV9x9OPhNaa9qKqv1kZnFAVKjU", "YTIMESY_USER_HUB_USERS": "CPQWwchV9x9OPhNaa9qKqv1kZnFAVKjU" },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
       "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-production" }],
       // Go live: the public app host. The deploy refuses it unless YTIMESY_GO_LIVE=1.
