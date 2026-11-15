@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import {
 	keepRowsAboveInPlace,
 	MOUNTED_END_ROWS,
+	rowAwayFromView,
 	type TranscriptEntry,
 	VirtualTranscript,
 } from "./virtual-transcript";
@@ -81,4 +82,17 @@ it("keeps the row being read in place as rows above it change, whichever way the
 	expect(keepRowsAboveInPlace(item("below", 1_200, 300), 120, list)).toBe(
 		false,
 	);
+});
+
+it("lets only rows well away from the view skip layout", () => {
+	// A 900px view scrolled to 3000: rows within a view's height of it stay laid out.
+	const row = (start: number, end: number) => ({ start, end });
+	expect(rowAwayFromView(row(3_100, 3_400), 3_000, 900)).toBe(false);
+	expect(rowAwayFromView(row(2_200, 2_400), 3_000, 900)).toBe(false);
+	expect(rowAwayFromView(row(3_900, 4_700), 3_000, 900)).toBe(false);
+	// Wholly beyond a view's height above or below.
+	expect(rowAwayFromView(row(1_000, 2_000), 3_000, 900)).toBe(true);
+	expect(rowAwayFromView(row(5_000, 5_300), 3_000, 900)).toBe(true);
+	// Not yet measured: nothing skips, whatever the rows' places.
+	expect(rowAwayFromView(row(9_000, 9_300), 0, 0)).toBe(false);
 });
