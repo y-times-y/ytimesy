@@ -3,6 +3,7 @@ import { captureServerException } from "./server/adapters/analytics";
 import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
 import { handleLiveProgressSocket } from "./server/sockets/live-progress-socket";
+import { handleUserHubSocket } from "./server/sockets/user-hub-socket";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import { proxyAnalytics } from "./server/web/analytics-proxy";
 import { canonicalOriginRedirect } from "./server/web/canonical-origin";
@@ -83,6 +84,7 @@ export default createServerEntry({
 						async () =>
 							(await handleWorkerSocket(request)) ??
 							(await handleLiveProgressSocket(request)) ??
+							(await handleUserHubSocket(request)) ??
 							renderPage(request),
 					),
 					request,

@@ -25,6 +25,8 @@ import {
 	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
+import type { SessionTurnStatus } from "../../domain/session-item";
+import { settledHubTurnStatus, userHubEnabledFor } from "../../domain/user-hub";
 import { BUILD_ID } from "../../lib/build-id";
 import {
 	ConversationRoom,
@@ -113,6 +115,7 @@ import { logTurnStepSizes } from "./turn-step-sizes";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
+export { UserHub } from "./user-hub";
 
 // Workers cannot compile WebAssembly from bytes; Wrangler precompiles the
 // code-mode sandbox's module, imported only when a program first runs.
@@ -277,7 +280,33 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			turn.leaseId,
 			turn.leaseId,
 		);
+		this.noteTurnStatus(turn, "running");
 		await this.wake("turn", Date.now());
+	}
+	/**
+	 * Tells the user's hub (their open tabs) this chat's turn status. Fire and
+	 * forget: the turn never waits on it, and a failure is only logged.
+	 */
+	private noteTurnStatus(
+		scope: { userId: string; sessionId: string },
+		turnStatus: SessionTurnStatus,
+	) {
+		if (!userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, scope.userId))
+			return;
+		const warn = (error: unknown) =>
+			console.warn("User hub was not told the turn status.", {
+				turnStatus,
+				cause: stepFailureCause(error),
+			});
+		try {
+			this.ctx.waitUntil(
+				this.env.USER_HUBS.getByName(scope.userId, durableObjectLocation())
+					.noteTurn({ sessionId: scope.sessionId, turnStatus, at: Date.now() })
+					.catch(warn),
+			);
+		} catch (error) {
+			warn(error);
+		}
 	}
 	private activeTurn() {
 		return this.ctx.storage.sql
@@ -387,7 +416,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	/** A step of this object's turn is running in this instance. */
 	private stepping = false;
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
-	private async endTurn() {
+	private async endTurn(settled: SessionTurnStatus) {
 		const ended = this.activeTurn();
 		// The last turn's transcript stays, so the next turn reads only what
 		// changed after it (seedFromChatCopy).
@@ -402,7 +431,10 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (next) {
 			await this.refreshWaiting([next]);
 			await this.beginTurn(next);
-		} else await this.wake("turn", null);
+		} else {
+			if (ended) this.noteTurnStatus(ended, settled);
+			await this.wake("turn", null);
+		}
 	}
 	/**
 	 * The ended turn's final model history, kept in private storage: the
@@ -505,13 +537,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				() => abandonApiTurn(step.turnId, step.leaseId),
 				null,
 			).catch(() => console.warn("Abandoned turn could not be failed now."));
-			return this.endTurn();
+			return this.endTurn("failed");
 		}
 		const resume = this.steps.read(step)?.state === "processing";
 		// Counts consecutive attempts that did not finish this step.
 		this.ctx.storage.sql.exec("update turn_loop set resumes=resumes+1");
 		if (executorSecrets.parse(this.env).MODEL_EXECUTION_ENABLED !== "1")
-			return this.endTurn();
+			return this.endTurn("idle");
 		let outcome: Awaited<ReturnType<typeof executeModelStep>>;
 		const stopRefreshing = this.keepWaitingTurnsFresh();
 		const unregister = registerClaudeTurn(step.turnId, {
@@ -589,7 +621,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0),
 			);
 		}
-		await this.endTurn();
+		await this.endTurn(settledHubTurnStatus(outcome));
 		if (
 			outcome !== "unavailable" &&
 			process.env.BACKGROUND_EXECUTION_ENABLED === "1"
@@ -1103,6 +1135,22 @@ export default {
 						modelConversationName(scope),
 						durableObjectLocation(),
 					).fetch(authenticated),
+				);
+			}
+			// A signed-in tab's hub socket, after the web Worker checked the user.
+			if (route === "user-hub") {
+				const secret = process.env.YTIMESY_REALTIME_SECRET;
+				if (!secret || secret.length < 32)
+					return new Response(null, { status: 503 });
+				if (request.method !== "GET")
+					return new Response(null, { status: 404 });
+				if (!(await verifyDeliveryRequest(secret, request, "")))
+					return new Response(null, { status: 401 });
+				const userId = new URL(request.url).searchParams.get("userId");
+				if (!userId) return new Response(null, { status: 400 });
+				// No signal: it would stay bound to the socket after the handshake.
+				return env.USER_HUBS.getByName(userId, durableObjectLocation()).fetch(
+					new Request(request.url, { headers: request.headers }),
 				);
 			}
 			// The web Worker claimed a sent message's turn on its own database
