@@ -19,6 +19,8 @@ import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { settledTurnItems } from "#/domain/turn-end";
 import {
+	boxTurnUsers,
+	chooseTurnExecutor,
 	configuredTurnExecutor,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
@@ -54,6 +56,7 @@ import {
 	planItemsWrite,
 	rebaseAfterWrite,
 } from "./turn-items-storage";
+import { turnRunnerBoxAlive } from "./turn-runner-boxes";
 import { startQueuedTurnsDirectly } from "./turn-start";
 
 export type ApiTurn = {
@@ -74,6 +77,8 @@ export type ApiTurn = {
 	failover?: unknown;
 	/** Epoch ms the turn was queued, when its loader read it (timing only). */
 	queued_at_ms?: number | null;
+	/** How many times a box lost this turn and another took it over. */
+	run_attempts?: number;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */
@@ -168,6 +173,25 @@ export async function enqueueApiTurn(input: {
 					messages: input.messages,
 				})
 			: null;
+	// Where the turn runs: its chat's Durable Object, or a turn runner box
+	// (turn-executor.ts chooseTurnExecutor), decided before the chat is locked.
+	const configuredExecutor = configuredTurnExecutor(
+		process.env.YTIMESY_MODEL_EXECUTION_TARGET,
+	);
+	const boxUsers = boxTurnUsers(process.env.YTIMESY_BOX_TURN_USERS);
+	const eligibleForBox =
+		!subscriptionTurnSettings(input.revision) &&
+		!isClaudeCodeRevision(input.revision);
+	const chosenExecutor = chooseTurnExecutor({
+		configured: configuredExecutor,
+		userId: input.userId,
+		boxUsers,
+		eligible: eligibleForBox,
+		boxAlive:
+			boxUsers.size > 0 && eligibleForBox
+				? await turnRunnerBoxAlive().catch(() => false)
+				: false,
+	});
 	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;
@@ -234,9 +258,7 @@ export async function enqueueApiTurn(input: {
 			);
 		await recordConversationPoint(client, { ...input, messagesObject });
 		turnId = randomUUID();
-		const executor = configuredTurnExecutor(
-			process.env.YTIMESY_MODEL_EXECUTION_TARGET,
-		);
+		const executor = chosenExecutor;
 		started = {
 			userId: input.userId,
 			harness: subscription ? "codex" : "api",
@@ -281,10 +303,7 @@ export async function enqueueApiTurn(input: {
 		client.release();
 	}
 	if (turnId && started) void captureTurnStarted(started, turnId, new Date());
-	if (
-		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) ===
-		"durable-object"
-	) {
+	if (chosenExecutor === "durable-object") {
 		// The turn is committed; waking its executor (an admission claim and the
 		// chat's startTurn) need not hold the sender's response. A web request
 		// sends it after responding; a lost wake is admitted by the next
@@ -854,7 +873,40 @@ export async function compactSettledTurns(limit = 50) {
 	return result.rowCount ?? 0;
 }
 
+/** A turn this lease still owns, read again between a box's steps; null once it is not running. */
+export async function readRunningApiTurn(
+	turnId: string,
+	leaseId: string,
+): Promise<ApiTurn | null> {
+	const result = await database().query<ApiTurn>(
+		"select * from api_turn where id=$1 and lease_id=$2 and state='running'",
+		[turnId, leaseId],
+	);
+	return result.rows[0] ?? null;
+}
+
+/** How many times a box-run turn is handed to another box after its box stopped heartbeating. */
+export const MAX_BOX_TURN_TAKEOVERS = 3;
+
+/**
+ * A turn running on a box whose heartbeat stopped (the box died, lost its
+ * network, or was stopped for an upgrade) goes back to the queue with the
+ * progress it saved, for another box to claim under a new lease (the old
+ * lease's writes are then refused). After MAX_BOX_TURN_TAKEOVERS it is left
+ * to expireApiTurnLeases, which fails it. A turn asked to stop is not resumed.
+ */
+export async function requeueInterruptedBoxTurns() {
+	const result = await database().query(
+		`update api_turn set state='queued',run_attempts=run_attempts+1,updated_at=now()
+		 where state='running' and executor='node' and not cancel_requested
+		 and run_attempts < $1 and heartbeat_at < now()-interval '45 seconds'`,
+		[MAX_BOX_TURN_TAKEOVERS],
+	);
+	return result.rowCount ?? 0;
+}
+
 export async function expireApiTurnLeases() {
+	await requeueInterruptedBoxTurns();
 	const result = await database().query<SettledTurnRow>(`with saved as (
 	 update api_turn set state='failed',updated_at=now()
 	 where state='running' and heartbeat_at < now()-case when executor='durable-object'

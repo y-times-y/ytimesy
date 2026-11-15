@@ -146,12 +146,16 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 						projectId?: string;
 						rootSessionId?: string;
 						known?: Record<string, string>;
+						deltas?: boolean;
+						fresh?: boolean;
 				  }
 				| undefined,
 		) => ({
 			projectId: data?.projectId?.trim() ?? "",
 			rootSessionId: data?.rootSessionId?.trim() ?? "",
 			known: knownRevisions.catch({}).parse(data?.known ?? {}),
+			deltas: data?.deltas === true,
+			fresh: data?.fresh === true,
 		}),
 	)
 	.handler(async ({ data }): Promise<readonly AgentTaskActivity[]> => {
@@ -162,6 +166,7 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 			data.projectId,
 			data.rootSessionId,
 			data.known,
+			{ deltas: data.deltas, fresh: data.fresh },
 		);
 	});
 

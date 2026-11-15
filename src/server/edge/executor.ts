@@ -499,8 +499,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 									() => relayConversationDeliveriesOnce(active.sessionId),
 									() =>
 										withTurnHistoryMirror(
-											(turnId, version, written, previous) =>
-												this.mirrorHistory(turnId, version, written, previous),
+											// Everything the write reports, the transcript's revision
+											// included: dropped, the next turn cannot start from this copy.
+											(...written) => this.mirrorHistory(...written),
 											() =>
 												executeModelStep(
 													step,

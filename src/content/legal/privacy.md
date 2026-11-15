@@ -1,6 +1,6 @@
 # ytimesy Privacy Policy
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-16.
 
 This policy explains what ytimesy ("ytimesy", "we") collects when you use
 ytimesy, why, who else receives it, how long we keep it, and your choices. It
@@ -23,9 +23,15 @@ signing in, you acknowledge this policy.
   as training data.** Turn it off at any time in Settings → Privacy. Today no
   training export exists; see [Training Data](./training-opt-in.md).
 - Memory is **on by default**; you can turn it off or clear it.
-- We record **masked session replays** of how the web app is used, to fix bugs
-  and improve the product. Inputs, chat content, code and secrets are masked.
-  No replays are recorded in the EU, EEA, UK or Switzerland.
+- We record **masked session replays** of how the site and the web app are
+  used, to fix bugs and improve the product, whether or not you are signed in.
+  All text is masked and nothing you type is recorded. In the EU, EEA, UK,
+  Switzerland, Turkey, South Korea and Quebec we record, send and store
+  nothing for analytics until you click Accept. In California, Florida and
+  Illinois replays start only after you click Accept. Elsewhere they are on
+  by default, with a notice on your first visit. We honour "Do Not Track" and
+  Global Privacy Control everywhere, and you can change your mind at any time
+  under **Cookie settings**.
 - We do not sell your personal information or use it for advertising.
 - You can delete chats, projects, your memory, and your whole account yourself.
 - ytimesy is for people 18 and older.
@@ -97,30 +103,59 @@ started/finished", "pull request created" and agent performance measurements
 (timings, token counts, tool outcomes). Events are linked to your account id,
 or before you sign in to a random analytics identifier, and do not contain
 prompts, code or repository names. The web app sends them to PostHog through
-our own domain. IP-based location lookup is turned off. If your browser sends "Do Not
-Track", the web app sends no analytics or session replays; server events are
-still recorded.
+our own domain. IP-based location lookup is turned off. If your browser sends
+"Do Not Track" or a Global Privacy Control signal, the web app sends no
+analytics or session replays; server events are still recorded.
 
 **Referral attribution.** When you first visit, the web app keeps where you
 came from (a `ref` or `utm_*` link tag, the referring site's host name and the
 page you landed on) in a first-party cookie for 90 days, and when you create an
 account we save it with your account and send it to PostHog with the "account
 created" event, so we can see which channels bring sign-ups. It is not set for
-visitors in the EU, EEA, UK or Switzerland, or under "Do Not Track" or Global
-Privacy Control.
+visitors in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec until
+they accept analytics, or under "Do Not Track" or Global Privacy Control.
 
-**Session replays.** While you are signed in, PostHog records masked
-session replays of how you use the web app (clicks, scrolling, which screens
-you open), linked to your account id, so we can fix bugs and improve the
-product. Replays are masked in
-your browser before anything is sent: all text, including chat content, is
-masked, every input is masked, and code, diffs, terminals, file contents,
-secrets, images, previews and the desktop view are blocked. Sign-in pages, network
-traffic and console logs are not recorded. Replays are kept for 30 days and
-deleted with your account. **We do not record session replays for people in
-the EU, EEA, UK or Switzerland**, based on the country our hosting provider
-reports for your connection. To object to replays elsewhere, email us (section
-11).
+**Session replays.** PostHog records masked session replays of how the site
+and the web app are used (clicks, scrolling, which screens are opened), so we
+can fix bugs and improve the product. This applies whether or not you are
+signed in: a visitor's replay is linked to a random analytics identifier, and
+a signed-in user's to their account id. For a signed-in user, recording starts
+only once they have accepted the current version of this policy.
+
+Replays are masked in your browser before anything is sent. Masked means:
+
+- every piece of text on the page, including chat content, is replaced with
+  asterisks, so a replay shows the layout and where you clicked, not what the
+  page said;
+- nothing you type is recorded: text fields and the message box are left out
+  entirely;
+- code, diffs, terminals, file contents, images, video, previews and the
+  desktop view are left out entirely;
+- link addresses, titles and labels are removed, and page addresses are sent
+  without anything after a `?` or `#`;
+- sign-in pages, network traffic and console logs are not recorded.
+
+**When replays and analytics start.** We use the country and region our
+hosting provider reports for your connection:
+
+- **EU, EEA, UK, Switzerland, Turkey, South Korea and Quebec:** we record
+  nothing, send nothing to our analytics provider and store nothing in your
+  browser for analytics until you click **Accept** in the banner. This covers
+  product analytics, error reports and session replays.
+- **California, Florida and Illinois:** product analytics and error reports
+  run as described above, but we record session replays only after you click
+  **Accept**.
+- **Everywhere else:** session replays are on by default. A notice on your
+  first visit explains this and has a button to turn them off.
+- **Everywhere:** if your browser sends **"Do Not Track"** or a **Global
+  Privacy Control** signal, we send no analytics and record no replays.
+
+You can change your choice at any time: open **Cookie settings** (in the site
+footer, or in Settings → Privacy) and switch the setting on or off. Turning it
+off stops recording at once and the choice is remembered in that browser.
+Declining never limits what you can use, and using or scrolling the site is
+never treated as agreeing to anything. Replays are kept for 30 days and
+deleted with your account.
 
 **Logs and bot checks.** Our hosting provider keeps operational logs
 (requests, errors, timings) that can include IP addresses and identifiers, for
@@ -133,9 +168,15 @@ our addresses is forwarded to a mailbox hosted by Google.
 
 **Cookies and browser storage.** We use a sign-in cookie, a few cookies
 that remember interface state (such as open panels) and the referral
-attribution cookie described above. The browser also stores
-unsent message drafts and the analytics identifier. We
-use no advertising cookies.
+attribution cookie described above (`yt_first_touch`). The browser also stores
+unsent message drafts. For analytics and session replays, PostHog's script
+keeps a random analytics identifier and the current session's id in the
+browser's local storage and session storage, under names beginning with
+`ph_`; it sets no cookies. For visitors in the EU, EEA, UK, Switzerland,
+Turkey, South Korea or Quebec it stores nothing, and does not load, until you
+accept. Your choice in the banner or in Cookie settings is kept in local
+storage (`ytimesy.replay-consent`). We use
+no advertising cookies.
 
 ## 2. Children
 
@@ -257,7 +298,7 @@ service to us.
 | Cloudflare, Inc. | Web app and API hosting (Workers, Durable Objects), private object storage (R2: encrypted chat checkpoints, encrypted attachments, encrypted imported sessions, pull request evidence), memory repositories, memory embeddings (Workers AI), sending email, receiving email, bot checks (Turnstile), network egress, logs | All categories above | Global network; storage location chosen by Cloudflare |
 | Supabase, Inc. | Main database (Postgres): account, projects, chats, usage, encrypted credentials | Account, content, credentials (encrypted), usage | United States (AWS us-east-2, Ohio) |
 | Freestyle | Workspace virtual machines, previews and machine snapshots | Repository copies, workspace files, command output, project secrets on the machine | Chosen by Freestyle |
-| PostHog, Inc. | Product analytics, error reports and masked session replays | Account id, product events, error reports, masked replays | United States |
+| PostHog, Inc. | Product analytics, error reports and masked session replays | Account id or a random visitor identifier, product events, error reports, masked replays | United States |
 | Google LLC | Sign-in with Google (if you use it); mailbox for email sent to our addresses | Account; email you send us | United States |
 | GitHub, Inc. | Sign-in and repository access | Account, repository content | United States |
 
@@ -338,14 +379,15 @@ protection law applies, our legal bases are:
 
 - **contract**: running the service and your account;
 - **legitimate interests**: security, abuse prevention, fixing bugs and
-  improving the product, including product analytics (and, outside these
-  regions, masked session replays);
-- **consent**, only where we ask for it, such as the "Help improve ytimesy"
-  setting;
+  improving the product;
+- **consent**, where we ask for it: product analytics and session replays
+  (the banner) and the "Help improve ytimesy" setting;
 - **legal obligations**.
 
-For people in these regions we do not record session replays, and the
-"Help improve ytimesy" switch starts off. You have the right to access,
+For people in these regions we do not record, send or store anything for
+analytics (including session replays) until you accept, and the "Help improve
+ytimesy" switch starts off. The same consent-first rule for analytics applies
+in Turkey, South Korea and Quebec. You have the right to access,
 correct, delete and receive a copy of your data, to restrict processing, to
 object to processing (including product analytics), and to withdraw consent at
 any time. To exercise a right, email support@ytimesy.com with "Privacy

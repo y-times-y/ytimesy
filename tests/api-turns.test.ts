@@ -111,6 +111,7 @@ beforeAll(async () => {
 	for (const file of [
 		"20261105100000_agent_session_items_rev",
 		"20261114120000_conversation_delivery_items_rev",
+		"20261115120000_turn_runner_box",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 	await db.exec(
@@ -748,6 +749,10 @@ it("fails expired leases instead of replaying uncertain side effects", async () 
 	await submit();
 	const turn = await claimApiTurn();
 	if (!turn) throw Error("missing turn");
+	// A box-run turn is handed to another box a few times first
+	// (requeueInterruptedBoxTurns); once those are used up, or for any other
+	// executor, a lost turn is failed, never replayed.
+	await db.exec("update api_turn set run_attempts=3");
 	await db.exec("update api_turn set heartbeat_at=now()-interval '1 minute'");
 	await expireApiTurnLeases();
 	expect(await claimApiTurn()).toBeNull();
@@ -1177,4 +1182,133 @@ it("empties settled turns' conversation copies except each chat's latest and tra
 		expect(byId.get(id)?.messages).toHaveLength(50);
 	// Already compacted rows are not visited again.
 	expect(await compactSettledTurns()).toBe(0);
+});
+
+it("reads each chat's rows written after a revision, with its length now, in one statement", async () => {
+	const { itemRowsSinceForOwner } = await import(
+		"../src/server/adapters/agent-sessions"
+	);
+	const items = Array.from({ length: 6 }, (_, index) => ({
+		kind: "agentMessage",
+		id: `i${index}`,
+		text: `item ${index}`,
+	}));
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(items),
+	]);
+	const base = (
+		await db.query<{ rev: string }>(
+			"select items_rev::text as rev from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.rev as string;
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify([
+			...items.slice(0, 2),
+			{ ...items[2], text: "edited" },
+			...items.slice(3),
+			{ kind: "agentMessage", id: "i6", text: "item 6" },
+		]),
+	]);
+	const read = await itemRowsSinceForOwner("alice", { [sessionId]: base });
+	const got = read.get(sessionId);
+	expect(got?.count).toBe(7);
+	expect(got?.rows.map((row) => row.position)).toEqual([2, 6]);
+	// Not another user's chat, and not a revision ahead of the chat's.
+	expect(
+		(await itemRowsSinceForOwner("mallory", { [sessionId]: base })).size,
+	).toBe(0);
+	expect(
+		(await itemRowsSinceForOwner("alice", { [sessionId]: "999999" })).size,
+	).toBe(0);
+});
+
+it("routes an enabled user's API turn to a box only while one was seen lately", async () => {
+	const { registerTurnRunnerBox, removeTurnRunnerBox } = await import(
+		"../src/server/adapters/turn-runner-boxes"
+	);
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	vi.stubEnv("YTIMESY_BOX_TURN_USERS", "alice");
+	const executorOf = async () => {
+		await db.exec("truncate api_turn cascade");
+		await db.query("update agent_session set turn_status='idle' where id=$1", [
+			sessionId,
+		]);
+		await submit();
+		return (
+			await db.query<{ executor: string }>(
+				"select executor from api_turn where session_id=$1",
+				[sessionId],
+			)
+		).rows[0]?.executor;
+	};
+	// No box yet: the turn runs in its chat's Durable Object.
+	expect(await executorOf()).toBe("durable-object");
+	await registerTurnRunnerBox({ id: "box-1", capacity: 2, running: 0 });
+	expect(await executorOf()).toBe("node");
+	// A box that is full, or not seen for a while, takes none.
+	await registerTurnRunnerBox({ id: "box-1", capacity: 2, running: 2 });
+	expect(await executorOf()).toBe("durable-object");
+	await registerTurnRunnerBox({ id: "box-1", capacity: 2, running: 0 });
+	await db.query(
+		"update turn_runner_box set last_seen_at=now()-interval '2 minutes'",
+	);
+	expect(await executorOf()).toBe("durable-object");
+	// Another user, or a box that left, never changes the default.
+	await registerTurnRunnerBox({ id: "box-1", capacity: 2, running: 0 });
+	vi.stubEnv("YTIMESY_BOX_TURN_USERS", "someone-else");
+	expect(await executorOf()).toBe("durable-object");
+	await removeTurnRunnerBox("box-1");
+	await db.exec("truncate turn_runner_box");
+});
+
+it("hands a turn whose box stopped heartbeating to another box, a bounded number of times", async () => {
+	const { requeueInterruptedBoxTurns, MAX_BOX_TURN_TAKEOVERS } = await import(
+		"../src/server/adapters/api-turns"
+	);
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "node");
+	await submit();
+	const turn = await claimApiTurn(2, 8, "node");
+	expect(turn?.state).toBe("running");
+	const state = async () =>
+		(
+			await db.query<{ state: string; run_attempts: number }>(
+				"select state,run_attempts from api_turn where session_id=$1",
+				[sessionId],
+			)
+		).rows[0];
+	// Alive: left alone.
+	expect(await requeueInterruptedBoxTurns()).toBe(0);
+	// Its box stops heartbeating: queued again for the next box, once per loss.
+	for (let loss = 1; loss <= MAX_BOX_TURN_TAKEOVERS; loss++) {
+		await db.query(
+			"update api_turn set heartbeat_at=now()-interval '2 minutes' where session_id=$1",
+			[sessionId],
+		);
+		expect(await requeueInterruptedBoxTurns()).toBe(1);
+		expect(await state()).toEqual({ state: "queued", run_attempts: loss });
+		const again = await claimApiTurn(2, 8, "node");
+		// Claimed under a new lease, with the progress it saved.
+		expect(again?.lease_id).not.toBe(turn?.lease_id);
+	}
+	// Past the limit the loss is left for the lease sweep, which fails it.
+	await db.query(
+		"update api_turn set heartbeat_at=now()-interval '2 minutes' where session_id=$1",
+		[sessionId],
+	);
+	expect(await requeueInterruptedBoxTurns()).toBe(0);
+	// A turn asked to stop is never resumed.
+	await db.exec("truncate api_turn cascade");
+	await db.query("update agent_session set turn_status='idle' where id=$1", [
+		sessionId,
+	]);
+	await submit();
+	await claimApiTurn(2, 8, "node");
+	await db.query(
+		"update api_turn set cancel_requested=true,heartbeat_at=now()-interval '2 minutes' where session_id=$1",
+		[sessionId],
+	);
+	expect(await requeueInterruptedBoxTurns()).toBe(0);
 });
