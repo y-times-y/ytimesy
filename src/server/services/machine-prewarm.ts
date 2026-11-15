@@ -1,7 +1,9 @@
 import { agentSessionMachineSlug } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
-import { sessionItemsFromUnknown } from "#/domain/session-item";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	agentSessionHasItems,
+	agentSessionMetadataForOwner,
+} from "../adapters/agent-sessions";
 import {
 	claimMachinePrewarm,
 	finishMachinePrewarm,
@@ -23,14 +25,18 @@ export async function prewarmChatMachine(
 	machines: Pick<WorkspaceMachines, "provisionSession">,
 	input: { userId: string; projectId: string; sessionId: string },
 ): Promise<"started" | "skipped"> {
-	const session = await agentSessionForOwner(input.userId, input.sessionId);
+	// Only whether the chat is empty is asked: its transcript is not read.
+	const session = await agentSessionMetadataForOwner(
+		input.userId,
+		input.sessionId,
+	);
 	if (
 		!session ||
 		session.projectId !== input.projectId ||
 		session.parentSessionId ||
 		session.providerRef ||
 		session.turnStatus === "running" ||
-		sessionItemsFromUnknown(session.items).length
+		(await agentSessionHasItems(input.userId, input.sessionId))
 	)
 		return "skipped";
 	const [workspace, size] = await Promise.all([

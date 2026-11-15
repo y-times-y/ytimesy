@@ -21,7 +21,8 @@ import { configuredTurnExecutor } from "#/domain/turn-executor";
 import { startAfterResponse } from "../adapters/after-response";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
+	agentSessionMetadataForOwner,
 	projectBranchHeldByOtherSession,
 } from "../adapters/agent-sessions";
 import {
@@ -190,7 +191,7 @@ async function planConversationFork(
 	input: z.infer<typeof conversationRecoveryRequest>,
 ): Promise<ConversationFork> {
 	const id = randomUUID();
-	const session = await agentSessionForOwner(userId, input.sessionId);
+	const session = await agentSessionMetadataForOwner(userId, input.sessionId);
 	if (!session || session.projectId !== input.projectId)
 		throw new RecoveryRefused("Session is unavailable.");
 	if (session.turnStatus === "running")
@@ -232,16 +233,25 @@ async function planConversationFork(
 	};
 }
 
-function resolveForkCode(
+async function resolveForkCode(
 	userId: string,
-	session: Pick<AgentSessionRecord, "id" | "items">,
+	session: Pick<AgentSessionRecord, "id">,
 	messageId: string,
 	point: ConversationPoint,
 ) {
+	// Only the user's messages: the rest of the transcript stays in the database.
+	const userMessages =
+		(
+			await agentSessionItemsOfKindsForOwner(
+				userId,
+				[session.id],
+				["userMessage"],
+			)
+		).get(session.id) ?? [];
 	return forkCode({
 		messageId,
 		code: point.code,
-		userMessageIds: sessionItemsFromUnknown(session.items)
+		userMessageIds: sessionItemsFromUnknown(userMessages)
 			.filter((item) => item.kind === "userMessage")
 			.map((item) => item.id),
 		later: (laterIds) =>
@@ -296,7 +306,10 @@ export async function prepareForkWorkspace(
 	let scoped: WorkspaceMachines | undefined;
 	let vm: WorkspaceId | undefined;
 	try {
-		const session = await agentSessionForOwner(userId, journal.sourceSessionId);
+		const session = await agentSessionMetadataForOwner(
+			userId,
+			journal.sourceSessionId,
+		);
 		if (!session?.providerRef)
 			throw new RecoveryRefused("The original chat is no longer available.");
 		scoped = machinesForAgentSession(machines, session);
@@ -370,7 +383,7 @@ export async function prepareForkWorkspace(
 		if (!(await bindConversationForkVm(userId, sessionId, attempt, vm))) {
 			// A retry reuses the VM (it is found by its slug); only a deleted
 			// chat's copy is removed.
-			if (!(await agentSessionForOwner(userId, sessionId)))
+			if (!(await agentSessionMetadataForOwner(userId, sessionId)))
 				await scoped.destroy(vm).catch(() => {});
 			return;
 		}
@@ -564,7 +577,10 @@ async function recoverLocked(
 				throw new RecoveryRefused(
 					"This message has no isolated writable code checkpoint.",
 				);
-			const session = await agentSessionForOwner(userId, input.sessionId);
+			const session = await agentSessionMetadataForOwner(
+				userId,
+				input.sessionId,
+			);
 			if (!session) throw new RecoveryRefused("Session is unavailable.");
 			const scoped = machinesForAgentSession(machines, session);
 			await scoped.ensureRunning(WorkspaceId(row.provider_ref));

@@ -4,7 +4,7 @@ import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { sidekickState } from "#/domain/sidekick";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 } from "../adapters/agent-sessions";
 import { hasActiveApiTurn } from "../adapters/api-turns";
@@ -35,7 +35,11 @@ async function steerableChild(
 	sender: Pick<AgentSessionRecord, "id" | "userId" | "projectId">,
 	recipientId: string,
 ) {
-	const recipient = await agentSessionForOwner(sender.userId, recipientId);
+	// Metadata only: the transcript (megabytes) is not needed to authorise.
+	const recipient = await agentSessionMetadataForOwner(
+		sender.userId,
+		recipientId,
+	);
 	return recipient?.agentRole &&
 		recipient.parentSessionId === sender.id &&
 		recipient.projectId === sender.projectId &&
@@ -99,8 +103,17 @@ export async function deliverAgentPeerMessage(
 		...(message.context ? { context: message.context } : {}),
 	});
 	if (await serverPeerMessageAccepted(recipient.id, messageId)) return;
+	// Only the recipient's user messages, not its whole transcript.
+	const userMessages =
+		(
+			await agentSessionItemsOfKindsForOwner(
+				recipient.userId,
+				[recipient.id],
+				["userMessage"],
+			)
+		).get(recipient.id) ?? [];
 	if (
-		sessionItemsFromUnknown(recipient.items).some(
+		sessionItemsFromUnknown(userMessages).some(
 			(item) =>
 				item.kind === "userMessage" &&
 				(item.text === text || item.text === runtimeText),

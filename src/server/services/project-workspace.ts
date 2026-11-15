@@ -16,7 +16,7 @@ import {
 import { sessionCloneBranch } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 } from "#/server/adapters/agent-sessions";
 import {
@@ -216,8 +216,15 @@ export function loadTenantProjectCheckout(scope: {
 		const legacyConversation =
 			session !== null &&
 			!session.workingBranch &&
+			// Only its user messages are read, not the whole transcript.
 			sessionItemsFromUnknown(
-				(await agentSessionForOwner(scope.userId, session.id))?.items,
+				(
+					await agentSessionItemsOfKindsForOwner(
+						scope.userId,
+						[session.id],
+						["userMessage"],
+					)
+				).get(session.id),
 			).some((item) => item.kind === "userMessage");
 		const additionalRepositories = [];
 		for (const repository of repositoriesForProject(project).slice(1)) {

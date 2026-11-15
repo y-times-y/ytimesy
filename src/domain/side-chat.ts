@@ -131,6 +131,23 @@ function sideChatParentContext(items: readonly SessionItem[]) {
 		: body;
 }
 
+/**
+ * The item kinds the side model's snapshot of the main chat reads (each
+ * case of parentContextLine): the main chat's other items are never read.
+ */
+export const SIDE_CHAT_PARENT_ITEM_KINDS = [
+	"userMessage",
+	"agentMessage",
+	"commandExecution",
+	"fileChange",
+	"dynamicToolCall",
+	"mcpToolCall",
+	"webSearch",
+	"error",
+	"plan",
+	"planProposal",
+] as const satisfies readonly SessionItem["kind"][];
+
 function parentContextLine(item: SessionItem): string | null {
 	switch (item.kind) {
 		case "userMessage":
