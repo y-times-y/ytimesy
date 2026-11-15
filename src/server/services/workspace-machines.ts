@@ -29,6 +29,12 @@ export interface WorkspaceMachines {
 	 * never pause on their own.
 	 */
 	readonly keepAwakeForBackground?: (workspaceId: WorkspaceId) => Promise<void>;
+	/**
+	 * Gives a VM back the short idle timeout once no background command runs
+	 * on it any more (background-idle-timeout.ts checks that first). Providers
+	 * without it never pause on their own.
+	 */
+	readonly settleIdleTimeout?: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly runCapability?: (
 		workspaceId: WorkspaceId,
 		request: {

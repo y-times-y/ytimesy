@@ -214,6 +214,7 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { withBackgroundCommandNotices } from "../services/background-command-notices";
+import { settleIdleTimeoutAfterTurn } from "../services/background-idle-timeout";
 import { builderToolSurface } from "../services/builder-shell-surface";
 import { canvasTools } from "../services/canvas-tool";
 import { checkerPairGate } from "../services/checker-pair-gate";
@@ -2766,6 +2767,10 @@ async function runApiTurnAttempt(
 					}).catch(() => null)
 				: null;
 		if (background?.changed) items = background.items;
+		// No background command of this chat runs any more: its VM gets the
+		// short idle timeout back unless another chat's command runs on it.
+		if (checkoutReady || !answerOnly())
+			await settleIdleTimeoutAfterTurn({ workspace, items });
 		// A push card answered during the last step still gets its notice.
 		const pushResults = await withPushResultNotices({
 			userId: owner.userId,

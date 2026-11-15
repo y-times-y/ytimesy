@@ -46,6 +46,7 @@ import {
 } from "./machine-failure";
 import {
 	BACKGROUND_IDLE_TIMEOUT_SECONDS,
+	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productLifecycleUpdate,
 	WORKSPACE_METADATA_PURPOSE,
@@ -148,6 +149,13 @@ export function createFreestyleWorkspaceMachines(
 				freestyle.vms
 					.ref(workspaceId)
 					.update({ idleTimeoutSeconds: BACKGROUND_IDLE_TIMEOUT_SECONDS }),
+			);
+		},
+		async settleIdleTimeout(workspaceId) {
+			await retryTransientProviderFailure(() =>
+				freestyle.vms
+					.ref(workspaceId)
+					.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS }),
 			);
 		},
 		async applyNetworkPolicy(workspaceId, policy) {
