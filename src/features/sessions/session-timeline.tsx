@@ -85,6 +85,7 @@ import {
 	groupTimelineRows,
 	type TimelineRow,
 } from "#/domain/timeline-activity";
+import { type RowKeyMemory, timelineRowKeys } from "#/domain/timeline-row-keys";
 import { toolActivity, toolDetailTitle } from "#/domain/tool-detail";
 import {
 	reuseUnchangedItems,
@@ -261,7 +262,8 @@ export function SessionTimeline({
 		[allItems, turnStatus],
 	);
 	previous.current = derived;
-	const { queued, items, presented, visible, rows, fileChanges } = derived;
+	const { queued, items, presented, visible, rows, rowKeys, fileChanges } =
+		derived;
 	const openFile = useStableCallback(onOpenFile);
 	const openCanvas = useStableCallback(onOpenCanvas);
 	const removeQueued = useStableCallback(onRemoveQueued);
@@ -355,7 +357,9 @@ export function SessionTimeline({
 		const rowId = row.kind === "item" ? row.item.id : row.id;
 		if (!startsHelper(row))
 			add({
-				key: row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`,
+				key:
+					rowKeys.get(row) ??
+					(row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`),
 				kind: row.kind === "item" ? row.item.kind : row.kind,
 				row: rowId,
 				estimate: rowEstimate(row),
@@ -550,6 +554,9 @@ export function SessionTimeline({
 type TimelineRows = ReturnType<typeof timelineRows> & {
 	readonly input: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;
+	/** Each row's key in the list: a group keeps its key as older items join it. */
+	readonly rowKeys: ReadonlyMap<TimelineRow, string>;
+	readonly keyMemory: RowKeyMemory;
 };
 
 /** timelineRows, keeping the previous objects for everything that holds the same data. */
@@ -570,15 +577,21 @@ function stableTimelineRows(
 	const next = timelineRows(input, turnStatus, (presented) =>
 		previous ? reuseUnchangedItems(previous.presented, presented) : presented,
 	);
-	if (!previous) return { ...next, input, turnStatus };
+	const rows = previous
+		? reuseUnchangedRows(previous.rows, next.rows)
+		: next.rows;
+	const { keys, memory } = timelineRowKeys(rows, previous?.keyMemory);
 	return {
 		...next,
-		rows: reuseUnchangedRows(previous.rows, next.rows),
-		fileChanges: sameJsonValue(previous.fileChanges, next.fileChanges)
-			? previous.fileChanges
-			: next.fileChanges,
+		rows,
+		fileChanges:
+			previous && sameJsonValue(previous.fileChanges, next.fileChanges)
+				? previous.fileChanges
+				: next.fileChanges,
 		input,
 		turnStatus,
+		rowKeys: keys,
+		keyMemory: memory,
 	};
 }
 
