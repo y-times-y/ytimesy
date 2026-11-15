@@ -415,6 +415,63 @@ describe("waking a chat between turns", () => {
 		expect(notify).toHaveBeenCalledTimes(1);
 	});
 
+	it("settles the running VM's idle timeout once the chat's last background command exited", async () => {
+		const done = crypto.randomUUID();
+		const still = crypto.randomUUID();
+		const settleIdleTimeout = vi.fn(async () => "settled");
+		const base = {
+			candidates: async () => [],
+			activeTurn: async () => false,
+			replaceItems: async () => true,
+			notify: async () => undefined,
+			settleIdleTimeout,
+		};
+		// One of its commands still runs (its card stays open: a recent start
+		// the machine reports nothing about): the timeout stays long.
+		const busy = await session([
+			{ id: done, status: "0" },
+			{ id: still, status: null },
+		]);
+		await rm(`${busy.root}/${still}.background`);
+		busy.items = busy.items.map((item) =>
+			item.kind === "dynamicToolCall" && item.background?.id === still
+				? { ...item, background: { ...item.background, startedAt: Date.now() } }
+				: item,
+		);
+		expect(
+			await wakeChatForBackgroundCommands(
+				hostMachines(),
+				{ userId: "user", id: busy.sessionId },
+				{ ...base, session: async () => record(busy.sessionId, busy.items) },
+			),
+		).toBe("woken");
+		expect(settleIdleTimeout).not.toHaveBeenCalled();
+		// Its last command exited: settled (the notice is delivered first).
+		const id = crypto.randomUUID();
+		const chat = await session([{ id, status: "0" }]);
+		const machines = hostMachines();
+		expect(
+			await wakeChatForBackgroundCommands(
+				machines,
+				{ userId: "user", id: chat.sessionId, commandId: id },
+				{ ...base, session: async () => record(chat.sessionId, chat.items) },
+			),
+		).toBe("woken");
+		expect(settleIdleTimeout).toHaveBeenCalledExactlyOnceWith(
+			machines,
+			WorkspaceId("vm"),
+		);
+		// A stopped VM is not resumed to settle it.
+		settleIdleTimeout.mockClear();
+		const gone = await session([{ id: crypto.randomUUID(), status: "0" }]);
+		await wakeChatForBackgroundCommands(
+			hostMachines(false),
+			{ userId: "user", id: gone.sessionId },
+			{ ...base, session: async () => record(gone.sessionId, gone.items) },
+		);
+		expect(settleIdleTimeout).not.toHaveBeenCalled();
+	});
+
 	it("reads the whole transcript only when a command exited, not on every check", async () => {
 		const id = crypto.randomUUID();
 		const exited = await session([{ id, status: "0" }]);

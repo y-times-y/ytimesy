@@ -40,6 +40,7 @@ import {
 	commandScopeRoot,
 } from "./api-command-scope";
 import { observeBackgroundCommands } from "./background-command-observation";
+import { settleBackgroundIdleTimeout } from "./background-idle-timeout";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -138,6 +139,11 @@ export type BackgroundWatchDependencies = {
 		items: SessionItem[];
 	} | null>;
 	readonly activeTurn: (userId: string, sessionId: string) => Promise<boolean>;
+	/** Best effort, never throws (background-idle-timeout.ts); tests replace it. */
+	readonly settleIdleTimeout?: (
+		machines: WorkspaceMachines,
+		vm: WorkspaceId,
+	) => Promise<unknown>;
 	readonly replaceItems: (
 		userId: string,
 		sessionId: string,
@@ -310,20 +316,28 @@ export async function wakeChatForBackgroundCommands(
 				next,
 			);
 		const fresh = exits.filter((exit) => exit.fresh);
-		if (!fresh.length) return "idle";
-		try {
-			await dependencies.notify(
+		if (fresh.length)
+			try {
+				await dependencies.notify(
+					machines,
+					current,
+					backgroundNoticeId(session.id, fresh[0].id),
+					backgroundCommandNoticeMessage(fresh),
+				);
+			} catch (error) {
+				// A turn that started meanwhile reads the staged notice at its next step.
+				if (!(await dependencies.activeTurn(session.userId, session.id)))
+					throw error;
+			}
+		// The chat's last background command ended: its running VM goes back to
+		// the short idle timeout, unless another chat's command still runs on it
+		// (checked on the machine). A stopped VM is left alone (no resume).
+		if (running && !hasOpenBackgroundCommand(next))
+			await (dependencies.settleIdleTimeout ?? settleBackgroundIdleTimeout)(
 				machines,
-				current,
-				backgroundNoticeId(session.id, fresh[0].id),
-				backgroundCommandNoticeMessage(fresh),
+				vm,
 			);
-		} catch (error) {
-			// A turn that started meanwhile reads the staged notice at its next step.
-			if (!(await dependencies.activeTurn(session.userId, session.id)))
-				throw error;
-		}
-		return "woken";
+		return fresh.length ? "woken" : "idle";
 	} catch (error) {
 		console.warn("A background command notice was not delivered.", {
 			sessionId: candidate.id,

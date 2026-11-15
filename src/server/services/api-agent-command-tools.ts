@@ -88,9 +88,12 @@ export const commandSessionName = (id: string) =>
 /** The exit status recorded for a command that was stopped (as for Ctrl-C). */
 export const STOPPED_COMMAND_STATUS = 130;
 
+/** The directory holding every session's command root on a machine. */
+export const COMMAND_ROOTS = "/tmp/ytimesy-api-commands";
+
 /** Where a session's commands keep `<id>.output`, `<id>.status` and `<id>.sh`. */
 export const commandRoot = (sessionId: string) =>
-	`/tmp/ytimesy-api-commands/${sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
+	`${COMMAND_ROOTS}/${sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
 
 const COMPLETIONS_SCRIPT = `import json, os, pathlib, stat, subprocess, sys
 root = pathlib.Path(sys.argv[1])
