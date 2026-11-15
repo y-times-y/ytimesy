@@ -13,12 +13,17 @@ import type {
 } from "#/domain/pull-request-review";
 import { requestJson } from "../projects/api";
 import {
-	Avatar,
 	type GithubRepositoryRef,
 	GithubScrollArea,
 	LabelChip,
 	Time,
 } from "./github-ui";
+import {
+	ChatRail,
+	ChecksCell,
+	type PullRequestChat,
+	ReviewMark,
+} from "./pull-request-marks";
 
 export function PullStateIcon({
 	state,
@@ -44,9 +49,13 @@ export function PullStateIcon({
 export function PullRequestList({
 	repository,
 	onOpen,
+	chats,
+	onOpenChat,
 }: {
 	repository: GithubRepositoryRef;
 	onOpen: (pull: RepositoryPullRequest) => void;
+	chats?: ReadonlyMap<string, PullRequestChat>;
+	onOpenChat?: (chatId: string) => void;
 }) {
 	const [filter, setFilter] = useState<PullRequestFilter>("open");
 	const [query, setQuery] = useState("");
@@ -117,8 +126,10 @@ export function PullRequestList({
 						<thead>
 							<tr>
 								<th scope="col">Pull request</th>
-								<th scope="col">Author</th>
-								<th scope="col">Branch</th>
+								<th scope="col">Chat</th>
+								<th scope="col">Checks</th>
+								<th scope="col">Review</th>
+								<th scope="col">Diff</th>
 								<th scope="col">Updated</th>
 							</tr>
 						</thead>
@@ -145,25 +156,26 @@ export function PullRequestList({
 										</button>
 									</td>
 									<td>
-										<span className="gh-person">
-											<Avatar
-												person={{
-													login: pull.author,
-													avatarUrl: pull.authorAvatarUrl,
-													bot: pull.author.endsWith("[bot]"),
-												}}
-												size={18}
-											/>
-											{pull.author}
-										</span>
+										<ChatRail
+											chat={chats?.get(pull.head)}
+											onOpen={onOpenChat}
+										/>
 									</td>
 									<td>
-										<code
-											className="gh-table-branch"
-											title={`${pull.head} → ${pull.base}`}
-										>
-											{pull.head} → {pull.base}
-										</code>
+										<ChecksCell checks={pull.checks} />
+									</td>
+									<td>
+										<ReviewMark mark={pull.review} />
+									</td>
+									<td>
+										{pull.additions !== undefined ? (
+											<span className="gh-diffstat">
+												<b>+{pull.additions}</b>
+												<i>−{pull.deletions ?? 0}</i>
+											</span>
+										) : (
+											<span className="gh-mark-none">—</span>
+										)}
 									</td>
 									<td>
 										<Time iso={pull.updatedAt} />

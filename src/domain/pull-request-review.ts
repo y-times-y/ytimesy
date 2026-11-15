@@ -142,6 +142,24 @@ export type ListedRepositoryPullRequest = {
 	readonly draft: boolean;
 };
 
+/** What a pull request's review comes to, as one mark: who did what, or who is asked. */
+export type PullRequestReviewMark =
+	| { readonly kind: "approved"; readonly by: PullRequestPerson }
+	| { readonly kind: "changes"; readonly by: PullRequestPerson }
+	/** `you`: the signed-in user is among those asked; `from` is then them. */
+	| {
+			readonly kind: "requested";
+			readonly from: PullRequestPerson;
+			readonly you: boolean;
+	  };
+
+/** How many of a head's checks are done, failing or still running. */
+export type PullRequestChecksCount = {
+	readonly passed: number;
+	readonly failed: number;
+	readonly pending: number;
+};
+
 /** A repository table row; the compact open-PR picker keeps its smaller model. */
 export type RepositoryPullRequest = ListedRepositoryPullRequest & {
 	readonly state: PullRequestDetail["state"];
@@ -149,7 +167,62 @@ export type RepositoryPullRequest = ListedRepositoryPullRequest & {
 	readonly base: string;
 	readonly updatedAt: string;
 	readonly labels: readonly PullRequestLabel[];
+	/** Read for open pull requests only; absent when GitHub would not say. */
+	readonly review?: PullRequestReviewMark | null;
+	readonly checks?: PullRequestChecksCount | null;
+	readonly additions?: number;
+	readonly deletions?: number;
 };
+
+/**
+ * The one review mark for a pull request. A reviewer's latest verdict counts:
+ * a request for changes outranks an approval (the pull request is not ready),
+ * both outrank a pending request, and a request to the signed-in user shows
+ * them in preference to someone else who was asked.
+ */
+export function reviewMarkFrom(input: {
+	/** Each reviewer's latest approving or change-requesting review. */
+	readonly decisions: readonly {
+		readonly state: string;
+		readonly person: PullRequestPerson;
+	}[];
+	readonly requested: readonly PullRequestPerson[];
+	readonly viewer: string | null;
+}): PullRequestReviewMark | null {
+	const changes = input.decisions.find(
+		(decision) => decision.state === "CHANGES_REQUESTED",
+	);
+	if (changes) return { kind: "changes", by: changes.person };
+	const approval = input.decisions.find(
+		(decision) => decision.state === "APPROVED",
+	);
+	if (approval) return { kind: "approved", by: approval.person };
+	const viewer = input.viewer?.toLowerCase();
+	const you = input.requested.find(
+		(person) => viewer && person.login.toLowerCase() === viewer,
+	);
+	const from = you ?? input.requested[0];
+	return from ? { kind: "requested", from, you: Boolean(you) } : null;
+}
+
+/** Counts of a head's check results, by the state each reduces to. */
+export function checksCountFrom(
+	results: readonly {
+		readonly status?: string | null;
+		readonly conclusion?: string | null;
+		readonly state?: string | null;
+	}[],
+): PullRequestChecksCount | null {
+	if (!results.length) return null;
+	const count = { passed: 0, failed: 0, pending: 0 };
+	for (const result of results) {
+		const state = checkState(result);
+		if (state === "passed") count.passed += 1;
+		else if (state === "failed") count.failed += 1;
+		else if (state === "pending") count.pending += 1;
+	}
+	return count;
+}
 
 export type PullRequestFilter = "open" | "merged" | "closed" | "all";
 

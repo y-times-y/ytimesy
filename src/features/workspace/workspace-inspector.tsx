@@ -12,6 +12,7 @@ import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
 import type { PullRequestSummary } from "./pull-request-detail-query";
 import type { PullRequestRepository } from "./pull-request-inspector";
+import type { PullRequestChat } from "./pull-request-marks";
 import { TerminalInspector } from "./terminal-inspector";
 import { VIEW_ICONS } from "./view-icons";
 
@@ -113,6 +114,8 @@ export function WorkspaceInspector({
 	harnessId,
 	modelId,
 	onReviewStarted,
+	pullRequestChats,
+	onOpenChat,
 	overview,
 	pullRequest,
 	pullRequestSummary,
@@ -149,6 +152,8 @@ export function WorkspaceInspector({
 	modelId?: string;
 	/** Opens the new chat a pull-request review started. */
 	onReviewStarted?: (sessionId: string) => void;
+	pullRequestChats?: ReadonlyMap<string, PullRequestChat>;
+	onOpenChat?: (chatId: string) => void;
 	overview: ReactNode;
 	pullRequest?: PullRequestRepository;
 	/** What the Overview knows about pullRequest.number, painted before its details load. */
@@ -306,6 +311,8 @@ export function WorkspaceInspector({
 						modelId={modelId}
 						currentSessionId={sessionId}
 						onReviewStarted={onReviewStarted}
+						pullRequestChats={pullRequestChats}
+						onOpenChat={onOpenChat}
 					/>
 				</Suspense>
 			) : activeView === "issues" && pullRequest ? (

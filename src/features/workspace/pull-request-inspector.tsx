@@ -60,6 +60,7 @@ import {
 	pullRequestDetailQuery,
 } from "./pull-request-detail-query";
 import { PullRequestList } from "./pull-request-list";
+import type { PullRequestChat } from "./pull-request-marks";
 import "./pull-request-inspector.css";
 
 export type PullRequestRepository = {
@@ -247,6 +248,8 @@ type ReviewChat = {
 	/** The chat already open. A review must not continue it. */
 	readonly currentSessionId?: string;
 	readonly onReviewStarted?: (sessionId: string) => void;
+	readonly pullRequestChats?: ReadonlyMap<string, PullRequestChat>;
+	readonly onOpenChat?: (chatId: string) => void;
 };
 
 /** Review any open pull request of the project's repository without leaving ytimesy. */
@@ -258,6 +261,8 @@ export function PullRequestInspector({
 	modelId,
 	currentSessionId,
 	onReviewStarted,
+	pullRequestChats,
+	onOpenChat,
 }: {
 	repository: PullRequestRepository;
 	/** What the Overview already knows about the chat's pull request (repository.number). */
@@ -296,6 +301,8 @@ export function PullRequestInspector({
 		return (
 			<PullRequestList
 				repository={repository}
+				chats={pullRequestChats}
+				onOpenChat={onOpenChat}
 				onOpen={(pull) => {
 					setPicked(pull.number);
 					setShowList(false);
