@@ -99,8 +99,15 @@ export function progressStreamWanted(input: {
 
 import type { CodexUsage } from "./codex-usage";
 
-/** A running chat's view is still re-read this often while its progress stream is open, to reconcile. */
-export const LIVE_STREAM_RECONCILE_MS = 10_000;
+/**
+ * A running chat's view is still re-read this often while its progress
+ * stream is open, to reconcile. Each read is the chat's whole latest page
+ * (up to ~250 KB from the database) and the stream already carries every
+ * change (a missed one makes it resync by itself), so this is a safety net:
+ * at 10 s it was the largest database read of a day (a running turn read
+ * ~85 MB an hour).
+ */
+export const LIVE_STREAM_RECONCILE_MS = 60_000;
 
 /**
  * How often the open chat is read while the message it held for setup is on

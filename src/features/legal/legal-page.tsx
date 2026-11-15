@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import "streamdown/styles.css";
 import { type Components, Streamdown } from "streamdown";
 import { LEGAL_DOCUMENTS_IN_EFFECT } from "#/content/legal/versions";
@@ -57,6 +58,8 @@ export function LegalPage(props: {
 	readonly version: string;
 	/** Defaults to LEGAL_DOCUMENTS_IN_EFFECT. */
 	readonly inEffect?: boolean;
+	/** Shown above the document (the Privacy Policy's choices). */
+	readonly before?: ReactNode;
 }) {
 	const inEffect = props.inEffect ?? LEGAL_DOCUMENTS_IN_EFFECT;
 	return (
@@ -70,6 +73,7 @@ export function LegalPage(props: {
 					change before it applies.
 				</p>
 			)}
+			{props.before}
 			<article>
 				<Streamdown
 					mode="static"
