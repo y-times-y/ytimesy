@@ -282,6 +282,8 @@ export function VirtualTranscript({
 		);
 	let laidOut = PADDING_START + (first?.height ?? 0);
 	const mounted = new Map<string, number>();
+	const viewHeight = virtualizer.scrollRect?.height ?? 0;
+	const viewTop = scrollOffset ?? 0;
 	for (const row of rows) {
 		const entry = entries[row.index];
 		if (!entry) continue;
@@ -292,6 +294,12 @@ export function VirtualTranscript({
 				rowHeights.placeholder(entry, estimate(entry)))
 			: entry.estimate;
 		if (hydrated) mounted.set(entry.key, placeholder);
+		// Only a row well away from the view may skip layout: the browser
+		// starts every row it newly may skip with its content skipped for a
+		// frame, so the rows in view (the newest, at hydration) would flash
+		// in and shift. A row near the view is laid out, so one nearing it
+		// is already there; a view of unknown size skips none.
+		const away = hydrated && rowAwayFromView(row, viewTop, viewHeight);
 		if (row.start - laidOut > 0.5)
 			children.push(spacer(`space:${row.index}`, row.start - laidOut));
 		children.push(
@@ -304,6 +312,7 @@ export function VirtualTranscript({
 				data-row={entry.row}
 				data-follows={entry.follows}
 				data-queued={entry.queued ? "true" : undefined}
+				data-away={away ? "" : undefined}
 				// The room it keeps while the browser skips laying it out (see
 				// data-skip-offscreen): once rendered, its own last height.
 				style={{ containIntrinsicSize: `auto ${placeholder}px` }}
@@ -324,8 +333,9 @@ export function VirtualTranscript({
 				id={id}
 				className="session-timeline"
 				aria-label="Session"
-				// Rows away from the view skip layout (session-composer.css), once
-				// the server's rows have painted at their real heights.
+				// Rows away from the view (data-away) skip layout
+				// (session-composer.css), once the server's rows have painted at
+				// their real heights.
 				data-skip-offscreen={hydrated ? "" : undefined}
 				onScroll={followEnd ? onScroll : undefined}
 			>
@@ -388,6 +398,21 @@ function layoutSkipped(row: HTMLElement) {
 		content !== null &&
 		typeof content.checkVisibility === "function" &&
 		!content.checkVisibility({ contentVisibilityAuto: true })
+	);
+}
+
+/**
+ * Whether a row is far enough from the view to skip layout: wholly more than
+ * a view's height beyond either edge. A view of unknown size (0) skips none.
+ */
+export function rowAwayFromView(
+	row: { readonly start: number; readonly end: number },
+	viewTop: number,
+	viewHeight: number,
+) {
+	return (
+		viewHeight > 0 &&
+		(row.end < viewTop - viewHeight || row.start > viewTop + 2 * viewHeight)
 	);
 }
 

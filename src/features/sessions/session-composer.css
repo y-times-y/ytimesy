@@ -3167,13 +3167,13 @@ button.helper-card:hover {
 .session-timeline {
 	overflow-anchor: none;
 }
-/* Rows away from the view skip layout, in the room their inline
+/* Rows well away from the view (data-away, virtual-transcript.tsx) skip layout, in the room their inline
    contain-intrinsic-size keeps (their last height once rendered): without
    it, each row mounted while scrolling laid out every mounted row again,
    the newest ones that stay mounted included (about 16 ms a time). Find in
    page still finds their text. Only after hydration, so the server's rows
    paint, and remember, their real heights first. */
-.session-timeline[data-skip-offscreen] > li[data-index] {
+.session-timeline[data-skip-offscreen] > li[data-index][data-away] {
 	content-visibility: auto;
 }
 /* Above a chat's loaded turns while it holds older ones: a fixed-height row,
