@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	background: vi.fn(),
 	revisions: vi.fn(async () => new Map([["kid", "4"]])),
 	since: vi.fn(),
+	kinds: vi.fn(async (): Promise<Map<string, unknown[]>> => new Map()),
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionMetadataForOwner: mocks.root,
@@ -14,6 +15,7 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	backgroundCommandItemsForOwner: mocks.background,
 	itemsRevisionsForOwner: mocks.revisions,
 	itemRowsSinceForOwner: mocks.since,
+	agentSessionItemsOfKindsForOwner: mocks.kinds,
 }));
 vi.mock("#/server/adapters/agent-session-items", () => ({
 	transcriptItemsForOwner: mocks.transcripts,
@@ -196,6 +198,22 @@ describe("a helper still working", () => {
 				],
 			]),
 		);
+		mocks.kinds.mockResolvedValueOnce(
+			new Map([
+				[
+					"kid",
+					[
+						{
+							kind: "userMessage",
+							id: "a",
+							text: "go",
+							apiUsage: { inputTokens: 100, outputTokens: 20 },
+							contextUsage: { usedTokens: 50, contextWindow: 1000 },
+						},
+					],
+				],
+			]),
+		);
 		const { tasks } = await projectAgentTasksAndBackground(
 			"u",
 			"p",
@@ -203,7 +221,7 @@ describe("a helper still working", () => {
 			{ kid: "7" },
 			{ deltas: true },
 		);
-		// No transcript is read; spend and context use are left to the page's copy.
+		// No transcript is read; spend and context use come from the turns' starts.
 		expect(mocks.transcripts).toHaveBeenCalledWith("u", []);
 		expect(tasks[0]).toMatchObject({
 			id: "kid",
@@ -215,7 +233,12 @@ describe("a helper still working", () => {
 				rows: [{ position: 2, item: { id: "c" } }],
 			},
 		});
-		expect(tasks[0]?.subagent).toBeUndefined();
+		expect(mocks.kinds).toHaveBeenCalledWith(
+			"u",
+			["kid"],
+			["userMessage", "notice"],
+		);
+		expect(tasks[0]?.subagent?.spend.tokens).toBe(120);
 		expect(tasks[0]?.itemPositions).toBeUndefined();
 	});
 
