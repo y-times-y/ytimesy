@@ -1554,6 +1554,22 @@
 	outline: 2px solid #999;
 	outline-offset: 2px;
 }
+/* A text field inside a bordered box (the comment box, the filter field) or
+   with a border of its own shows focus on that border, not as an outline the
+   box's rounded edge cuts into bright bars. */
+.pr .gh-composer-input:focus-visible,
+.pr .gh-search input:focus-visible,
+.pr .gh-input:focus-visible,
+.pr .gh-title-form input:focus-visible {
+	outline: none;
+}
+.pr .gh-composer:focus-within,
+.pr .gh-search:focus-within,
+.pr .gh-input:focus,
+.pr .gh-title-form input:focus {
+	border-color: #ffffff66;
+	box-shadow: 0 0 0 3px #ffffff12;
+}
 @media (max-width: 600px) {
 	.pr .pr-button,
 	.pr .pr-ghost,
