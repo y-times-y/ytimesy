@@ -215,7 +215,7 @@ describe("PostHog client", () => {
 		const client = await import("./client");
 		client.setConsentTier("analytics");
 		client.setAnalyticsUser(null, { replay: true });
-		client.captureAnalytics("app_viewed", { surface: "landing" });
+		client.captureAnalytics("app_viewed", { surface: "other" });
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(sdk.init).not.toHaveBeenCalled();
 		expect(sdk.startSessionRecording).not.toHaveBeenCalled();
