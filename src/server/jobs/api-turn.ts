@@ -353,6 +353,10 @@ import { type TurnToolTime, turnToolTime } from "../services/turn-tool-time";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import { webFetchTool } from "../services/web-fetch-tool";
 import type { WorkspaceMachines } from "../services/workspace-machines";
+import {
+	withWorkspaceNote,
+	workspaceReplacedNote,
+} from "../services/workspace-replaced-note";
 import { enqueueAgentTaskEvent } from "./queue";
 
 /**
@@ -1102,6 +1106,8 @@ async function runApiTurnAttempt(
 		// Values every tool result is redacted of. The memory clone's token
 		// joins once it is on the VM, so tools read this list at call time.
 		const redact: string[] = [...(projectSecrets?.redact ?? [])];
+		/** Told to the agent once, on its first tool result, when its machine was replaced. */
+		let workspaceNote: string | null = null;
 		// Readers' commands run as another user without the network; evaluations never reach GitHub.
 		machineGit = receivesSecrets && !evaluation ? machineGitStep(owner) : null;
 		let secretsWritten: Promise<void> | undefined;
@@ -1257,6 +1263,8 @@ async function runApiTurnAttempt(
 			}
 			execution = await preparing;
 			timing?.mark("workspacePrepared");
+			if (execution.replacedFrom !== undefined)
+				workspaceNote ??= workspaceReplacedNote();
 			if (remembersDirectory) {
 				const { cwd } = execution;
 				void turnMemo(`prepared-checkout-directory:${owner.id}:${cwd}`, () =>
@@ -1889,28 +1897,37 @@ async function runApiTurnAttempt(
 		];
 		// Harness variant outputCap: each result the model reads keeps its
 		// head and tail within the cap (tool-output-cap.ts).
-		const allTools = withOutputCap(
-			withCodeMode(
-				baseTools,
-				codeMode
-					? {
-							signal: abort.signal,
-							sessionId: owner.id,
-							turnId: turn.id,
-							toolCallPrefix: step ? `step-${step.index}:` : undefined,
-							redact,
-							mode: codeMode,
-							deferred:
-								codeMode === "primary"
-									? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
-									: [],
-							// As the bridge: web_fetch and update_plan (whose description
-							// says it may be sent inside run_code) are callable too.
-							callable: [...Object.keys(webFetch), ...Object.keys(planning)],
-						}
-					: null,
+		const allTools = withWorkspaceNote(
+			withOutputCap(
+				withCodeMode(
+					baseTools,
+					codeMode
+						? {
+								signal: abort.signal,
+								sessionId: owner.id,
+								turnId: turn.id,
+								toolCallPrefix: step ? `step-${step.index}:` : undefined,
+								redact,
+								mode: codeMode,
+								deferred:
+									codeMode === "primary"
+										? CODE_MODE_DEFERRED_TOOLS.filter(
+												(name) => name in baseTools,
+											)
+										: [],
+								// As the bridge: web_fetch and update_plan (whose description
+								// says it may be sent inside run_code) are callable too.
+								callable: [...Object.keys(webFetch), ...Object.keys(planning)],
+							}
+						: null,
+				),
+				outputCapCharacters(variant.outputCap),
 			),
-			outputCapCharacters(variant.outputCap),
+			() => {
+				const note = workspaceNote;
+				workspaceNote = null;
+				return note;
+			},
 		);
 		const orderedTools = surface.lean
 			? inLeanToolOrder(allTools, {

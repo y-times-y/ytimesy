@@ -99,6 +99,27 @@ it("does not bind until a repository tool asks, and shares concurrent preparatio
 	);
 });
 
+it("marks the workspace when the chat's machine was replaced, and not otherwise", async () => {
+	mocks.root.mockImplementationOnce(async () => ({
+		session: root,
+		providerRef: "vm-new",
+		replaced: true,
+		replacedProviderRef: "vm-old",
+	}));
+	const replaced = await deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	)();
+	expect(replaced.replacedFrom).toBe("vm-old");
+	const ordinary = await deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	)();
+	expect(ordinary.replacedFrom).toBeUndefined();
+});
+
 it("binds a shared child to its parent's workspace without preparing a checkout", async () => {
 	mocks.read.mockResolvedValue(root);
 	const task = {
