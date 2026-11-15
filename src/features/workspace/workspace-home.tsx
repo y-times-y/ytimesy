@@ -277,6 +277,7 @@ import {
 	resumeWorkspaceMachineFn,
 } from "./explorer.fn";
 import { prefetchWorkspaceFiles } from "./files-inspector";
+import { gitChangesPolling } from "./git-changes-polling";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { openLiveProgress } from "./live-progress-connection";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
@@ -1059,7 +1060,10 @@ export function WorkspaceHome({
 				firstChatRead &&
 				inspectorOpen,
 		),
-		refetchInterval: session.turnStatus === "running" ? 10_000 : 60_000,
+		// Polls only while a turn runs: a read is a guest command, and polling
+		// between turns kept the VM from pausing. Opening the panel, window
+		// focus and a turn's end read (git-changes-polling.ts).
+		...gitChangesPolling(session.turnStatus),
 		staleTime: 5_000,
 	});
 	const refetchChanges = gitChanges.refetch;

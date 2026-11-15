@@ -51,3 +51,41 @@ export async function clearWakeFailures(vmId: string) {
 		/* the next failure starts a fresh streak after the window anyway */
 	}
 }
+
+/** The current streak of refusals for a VM (see recordWakeFailure). */
+export type WakeFailureStreak = {
+	readonly failures: number;
+	readonly firstAt: Date;
+	readonly lastAt: Date;
+};
+
+/**
+ * How long this VM has been refusing to wake, or null when it is not (or
+ * the read failed: a bookkeeping failure never decides to replace a VM, and
+ * never fails the turn). Durable, so a turn resumed on another Durable
+ * Object sees the same streak.
+ */
+export async function readWakeFailureStreak(
+	vmId: string,
+): Promise<WakeFailureStreak | null> {
+	try {
+		const result = await database().query<{
+			failures: number;
+			first_at: Date;
+			last_at: Date;
+		}>(
+			"select failures,first_at,last_at from machine_wake_failure where vm_id=$1",
+			[vmId],
+		);
+		const row = result.rows[0];
+		return row
+			? {
+					failures: row.failures,
+					firstAt: new Date(row.first_at),
+					lastAt: new Date(row.last_at),
+				}
+			: null;
+	} catch {
+		return null;
+	}
+}

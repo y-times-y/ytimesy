@@ -1,6 +1,10 @@
 import { FreestyleApiError } from "freestyle";
+import { refusalIsNotAboutTheMachine } from "#/domain/machine-replacement";
 import { redactSecrets } from "#/domain/redact-secrets";
-import { isTransientProviderFailure } from "./provider-retry";
+import {
+	isTransientProviderFailure,
+	PROVIDER_UNAVAILABLE_MESSAGE,
+} from "./provider-retry";
 
 /**
  * What a failed machine operation means for a retry:
@@ -69,6 +73,29 @@ export function machineFailureKind(error: unknown): MachineFailureKind {
 	if (NOT_RUNNING_IN_TIME.test(text)) return "stuck";
 	if (isTransientProviderFailure(error)) return "transient";
 	return "permanent";
+}
+
+/**
+ * A failed start of an existing VM that is the VM's own (the provider never
+ * brought it up: a 5xx/timeout, "did not become running"), not our account's
+ * (capacity, usage allowance, quota, auth) and not a gone VM. Works on the
+ * wrapped WorkspaceProvisionError too: its message is the public one, its
+ * `detail` carries the raw provider failure.
+ */
+export function machineStartUnstartable(error: unknown): boolean {
+	const detail =
+		error && typeof error === "object"
+			? String((error as { detail?: unknown }).detail ?? "")
+			: "";
+	const text = `${error instanceof Error ? error.message : ""} ${detail}`;
+	if (refusalIsNotAboutTheMachine(text) || QUOTA.test(text)) return false;
+	const kind = machineFailureKind(error);
+	if (kind === "stuck" || kind === "transient") return true;
+	return (
+		text.includes(PROVIDER_UNAVAILABLE_MESSAGE) ||
+		NOT_RUNNING_IN_TIME.test(text) ||
+		/FreestyleApiError 5\d\d|PROVIDER_TIMEOUT/.test(detail)
+	);
 }
 
 /** Kinds a machine start waits out and repeats rather than surface. */

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
+import { nextAgentSessionMachineSlug } from "#/domain/agent-session";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import {
 	effectiveMachineResources,
@@ -46,6 +47,7 @@ import {
 } from "./machine-failure";
 import {
 	BACKGROUND_IDLE_TIMEOUT_SECONDS,
+	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productLifecycleUpdate,
 	WORKSPACE_METADATA_PURPOSE,
@@ -150,6 +152,13 @@ export function createFreestyleWorkspaceMachines(
 					.update({ idleTimeoutSeconds: BACKGROUND_IDLE_TIMEOUT_SECONDS }),
 			);
 		},
+		async settleIdleTimeout(workspaceId) {
+			await retryTransientProviderFailure(() =>
+				freestyle.vms
+					.ref(workspaceId)
+					.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS }),
+			);
+		},
 		async applyNetworkPolicy(workspaceId, policy) {
 			await retryTransientProviderFailure(() =>
 				applyVmNetworkPolicy(freestyle, workspaceId, policy),
@@ -158,6 +167,10 @@ export function createFreestyleWorkspaceMachines(
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		rebindRetainedSession: rebindWorkspaceRetention,
+		async replacementSessionSlug(sessionId, oldVmId) {
+			const old = await freestyle.vms.ref(oldVmId).data();
+			return nextAgentSessionMachineSlug(sessionId, old.slug);
+		},
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {

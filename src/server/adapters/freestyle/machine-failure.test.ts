@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	machineFailureDetail,
 	machineFailureKind,
+	machineStartUnstartable,
 	resumableMachineStart,
 } from "./machine-failure";
 import { isPlatformRestart } from "./provider-retry";
@@ -186,4 +187,29 @@ it("returns the machine when the repeated start comes up", async () => {
 			async () => {},
 		),
 	).resolves.toBe("vm-9");
+});
+
+it("counts only the VM's own failed starts as unstartable", () => {
+	expect(
+		machineStartUnstartable(new Error("Workspace VM did not become running")),
+	).toBe(true);
+	expect(
+		machineStartUnstartable(api(504, "PROVIDER_TIMEOUT", "gateway timeout")),
+	).toBe(true);
+	// The wrapped form the adapter throws: public message, raw detail.
+	expect(
+		machineStartUnstartable(
+			Object.assign(new Error("The workspace machine is not responding."), {
+				detail: "FreestyleApiError 504 PROVIDER_TIMEOUT /v5/vms/x/start",
+			}),
+		),
+	).toBe(true);
+	for (const refused of [
+		api(409, "LIMIT_EXCEEDED", "limit of 20 VMs reached"),
+		new Error("Your compute allowance for vcpu_time has been used"),
+		api(404, "NOT_FOUND", "not found: vm x"),
+		api(401, "UNAUTHORIZED", "bad key"),
+		new Error("something else"),
+	])
+		expect(machineStartUnstartable(refused)).toBe(false);
 });

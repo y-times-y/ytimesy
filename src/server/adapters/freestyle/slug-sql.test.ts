@@ -1,6 +1,6 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
+import { sessionSlugFamily, sessionSlugMatch, uuidSlugMatch } from "./slug-sql";
 
 let db: PGlite;
 const ids = [
@@ -62,4 +62,42 @@ it("finds a uuid slug's row by key and nothing for any other text", async () => 
 		`ytimesy-ag-${ids[0]}`,
 	])
 		expect((await query(slug)).rows, slug).toEqual([]);
+});
+
+it("maps a generation slug back to its session, and only that one", async () => {
+	const match = async (slug: string) =>
+		(
+			await db.query<{ id: string }>(
+				`select id from t where ${sessionSlugMatch("$1")} order by id`,
+				[slug],
+			)
+		).rows.map((row) => row.id);
+	const both = await scanned("ytimesy-ag-3368c614136648c0");
+	expect(await match("ytimesy-ag-3368c614136648c0-r2")).toEqual(both);
+	expect(await match("ytimesy-ag-3368c614136648c0-r13")).toEqual(both);
+	expect(await match("ytimesy-ag-3368c614136648c1-r2")).toEqual(
+		await scanned("ytimesy-ag-3368c614136648c1"),
+	);
+	for (const slug of [
+		"ytimesy-ag-3368c614136648c0-r",
+		"ytimesy-ag-3368c614136648c0-rx",
+		"ytimesy-ag-3368c614136648c0-r2-r3",
+		"ytimesy-ag-3368c614136648c0x",
+	])
+		expect(await match(slug), slug).toEqual([]);
+});
+
+it("matches every generation of a chat by slug family", async () => {
+	const family = async (slug: string) =>
+		(
+			await db.query<{ id: string }>(
+				`select id from t where ${sessionSlugFamily("$1", "id")} order by id`,
+				[slug],
+			)
+		).rows.length;
+	expect(await family("ytimesy-ag-3368c614136648c0")).toBe(2);
+	expect(await family("ytimesy-ag-3368c614136648c0-r4")).toBe(2);
+	expect(await family("ytimesy-ag-3368c614136648c1-r2")).toBe(1);
+	expect(await family("ytimesy-ag-3368c614136648c0-x")).toBe(0);
+	expect(await family("ytimesy-ws-3368c614136648c0")).toBe(0);
 });

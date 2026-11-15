@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	agentSessionMachineSlug,
+	agentSessionSlugGeneration,
 	chatsFromAgentSessions,
 	copiedAgentMachineRef,
 	copiedSessionScratchResetCommand,
 	copiedSessionScratchResetCommands,
+	nextAgentSessionMachineSlug,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
@@ -287,6 +289,34 @@ describe("copiedAgentMachineRef", () => {
 				sessionProviderRef: null,
 				templateProviderRef: "vm-template",
 			}),
+		).toBeNull();
+	});
+});
+
+describe("replacement machine slugs", () => {
+	const id = "11111111-2222-3333-4444-555555555555";
+	const base = "ytimesy-ag-1111111122223333";
+	it("keeps the first machine's slug and suffixes later generations", () => {
+		expect(agentSessionMachineSlug(id)).toBe(base);
+		expect(agentSessionMachineSlug(id, 1)).toBe(base);
+		expect(agentSessionMachineSlug(id, 2)).toBe(`${base}-r2`);
+		expect(agentSessionMachineSlug(id, 10)).toBe(`${base}-r10`);
+	});
+	it("chooses the generation after the machine being replaced", () => {
+		expect(nextAgentSessionMachineSlug(id, base)).toBe(`${base}-r2`);
+		expect(nextAgentSessionMachineSlug(id, `${base}-r2`)).toBe(`${base}-r3`);
+		expect(nextAgentSessionMachineSlug(id, null)).toBe(`${base}-r2`);
+		expect(nextAgentSessionMachineSlug(id, "ytimesy-ag-ffffffffffffffff")).toBe(
+			`${base}-r2`,
+		);
+	});
+	it("reads a generation only from this chat's own slugs", () => {
+		expect(agentSessionSlugGeneration(id, base)).toBe(1);
+		expect(agentSessionSlugGeneration(id, `${base}-r7`)).toBe(7);
+		expect(agentSessionSlugGeneration(id, `${base}-r1`)).toBeNull();
+		expect(agentSessionSlugGeneration(id, `${base}-rx`)).toBeNull();
+		expect(
+			agentSessionSlugGeneration(id, "ytimesy-ag-ffffffffffffffff-r2"),
 		).toBeNull();
 	});
 });
