@@ -30,7 +30,29 @@ vi.mock("../adapters/agent-sessions", () => {
 		const row = fake.sessions.get(id);
 		return row?.userId === owner ? row : null;
 	};
-	return { agentSessionForOwner: read, agentSessionMetadataForOwner: read };
+	return {
+		agentSessionMetadataForOwner: async (owner: string, id: string) => {
+			const row = await read(owner, id);
+			if (!row) return null;
+			const { items: _items, ...metadata } = row;
+			return metadata;
+		},
+		agentSessionItemsOfKindsForOwner: async (
+			owner: string,
+			ids: readonly string[],
+			kinds: readonly string[],
+		) => {
+			const found = new Map<string, unknown[]>();
+			for (const id of ids) {
+				const row = await read(owner, id);
+				const items = (Array.isArray(row?.items) ? row.items : []).filter(
+					(item: { kind?: string }) => kinds.includes(item.kind ?? ""),
+				);
+				if (items.length) found.set(id, items);
+			}
+			return found;
+		},
+	};
 });
 vi.mock("../jobs/queue", () => ({ enqueuePeerMessage: fake.enqueue }));
 vi.mock("./harness-workspace-session", () => ({

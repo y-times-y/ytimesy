@@ -17,8 +17,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: mocks.parent,
 	agentSessionMetadataForOwner: mocks.parent,
+	agentSessionItemsOfKindsForOwner: async (
+		user: string,
+		ids: readonly string[],
+		kinds: readonly string[],
+	) => {
+		const chat = (await mocks.parent(user, ids[0])) as {
+			id: string;
+			items?: { kind: string }[];
+		} | null;
+		return new Map(
+			chat
+				? [[chat.id, (chat.items ?? []).filter((i) => kinds.includes(i.kind))]]
+				: [],
+		);
+	},
 	sideChatForParent: mocks.find,
 	insertAgentSession: mocks.insert,
 	saveAgentTaskState: mocks.saveState,

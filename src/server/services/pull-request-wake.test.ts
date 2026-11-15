@@ -33,7 +33,7 @@ vi.mock("../adapters/pull-request-links", () => ({
 	pullRequestLinkForOwner: mocks.linkForOwner,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: mocks.session,
+	agentSessionMetadataForOwner: mocks.session,
 	listAgentSessions: mocks.sessions,
 	saveSessionWorkingBranch: mocks.saveBranch,
 }));

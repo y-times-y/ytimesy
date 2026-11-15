@@ -26,7 +26,6 @@ import {
 } from "#/domain/transcript-page";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
 	agentSessionMetadataForOwner,
 	agentSessionPageForOwner,
 	claimChatForSend,
@@ -352,7 +351,11 @@ async function holdUntilEnvironmentReady(
 	const waiting = await queuedUserMessageItems(session.id);
 	if (
 		!waiting.some((item) => item.id === messageId) &&
-		!sendWasQueued(sessionItemsFromUnknown(session.items), messageId)
+		// The held transcript when the caller read it, else asked of the
+		// database: the chat was read without it.
+		!(Array.isArray(session.items)
+			? sendWasQueued(sessionItemsFromUnknown(session.items), messageId)
+			: await sessionHoldsUserMessage(scope.userId, session.id, messageId))
 	) {
 		const attachments = input.storedAttachments
 			? [...input.storedAttachments]
@@ -443,18 +446,21 @@ async function chatForHeldSend(
 	messageId: string,
 	text: string,
 	known?: AgentSessionRecord | null,
-): Promise<AgentSessionRecord> {
+): Promise<Omit<AgentSessionRecord, "items"> & { readonly items?: unknown }> {
 	if (scope.sessionId && !scope.createNew) {
+		// Without its transcript unless the caller already holds it: the send
+		// checks for its message in the database instead.
 		const session =
 			known?.id === scope.sessionId
 				? known
-				: await agentSessionForOwner(scope.userId, scope.sessionId);
+				: await agentSessionMetadataForOwner(scope.userId, scope.sessionId);
 		if (!session || session.projectId !== projectId)
 			throw new Error("Agent session is not available.");
 		return session;
 	}
 	const landed = await chatHoldingMessage(scope.userId, projectId, messageId);
-	const replayed = landed && (await agentSessionForOwner(scope.userId, landed));
+	const replayed =
+		landed && (await agentSessionMetadataForOwner(scope.userId, landed));
 	if (replayed) return replayed;
 	const title = sessionTitleFromText(text);
 	return (

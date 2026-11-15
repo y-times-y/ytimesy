@@ -1,3 +1,4 @@
+import { USER_HUB_EDGE_PATH } from "../../domain/user-hub";
 import { isRealtimeRoute } from "../../realtime/worker";
 
 /**
@@ -8,9 +9,10 @@ import { isRealtimeRoute } from "../../realtime/worker";
  */
 export function executorIngressRoute(
 	path: string,
-): "health" | "room" | "turn-start" | "jobs-start" | "other" {
+): "health" | "room" | "user-hub" | "turn-start" | "jobs-start" | "other" {
 	if (path === "/health") return "health";
 	if (isRealtimeRoute(path)) return "room";
+	if (path === USER_HUB_EDGE_PATH) return "user-hub";
 	if (path === "/turn/start") return "turn-start";
 	if (path === "/jobs/start") return "jobs-start";
 	return "other";

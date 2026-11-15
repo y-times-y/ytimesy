@@ -86,6 +86,7 @@ function HomePage() {
 		openChatId,
 		account,
 		renderedAtMs,
+		userHub,
 		inspector,
 		savedPullRequests,
 		savedDefaultBranches,
@@ -101,6 +102,7 @@ function HomePage() {
 			account={account}
 			userId={userId}
 			renderedAtMs={renderedAtMs}
+			userHub={userHub}
 			savedInspector={inspector}
 			savedPullRequests={savedPullRequests}
 			savedDefaultBranches={savedDefaultBranches}
