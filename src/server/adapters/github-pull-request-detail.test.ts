@@ -84,10 +84,16 @@ it("starts every pull request read at once and the checks as soon as the head is
 		inline: deferred<{ data: unknown[] }>(),
 	};
 	api.get.mockReturnValue(reads.pull.promise);
-	api.paginate.mockReturnValue(reads.files.promise);
-	api.listReviews.mockReturnValue(reads.reviews.promise);
-	api.listComments.mockReturnValue(reads.comments.promise);
-	api.listReviewComments.mockReturnValue(reads.inline.promise);
+	api.paginate.mockImplementation((route: unknown) => {
+		if (route === api.listFiles) return reads.files.promise;
+		if (route === api.listReviews)
+			return reads.reviews.promise.then((result) => result.data);
+		if (route === api.listComments)
+			return reads.comments.promise.then((result) => result.data);
+		if (route === api.listReviewComments)
+			return reads.inline.promise.then((result) => result.data);
+		throw new Error("Unexpected paginated read");
+	});
 	api.listForRef.mockResolvedValue({
 		data: {
 			check_runs: [
@@ -105,14 +111,18 @@ it("starts every pull request read at once and the checks as soon as the head is
 	const detail = pullRequestDetail("token", "acme/app", 7);
 	await flush();
 	// Nothing has answered yet, and every independent read is already out.
-	for (const call of [
-		api.get,
-		api.paginate,
+	expect(api.get).toHaveBeenCalledTimes(1);
+	expect(api.paginate).toHaveBeenCalledTimes(4);
+	for (const route of [
+		api.listFiles,
 		api.listReviews,
 		api.listComments,
 		api.listReviewComments,
 	])
-		expect(call).toHaveBeenCalledTimes(1);
+		expect(api.paginate).toHaveBeenCalledWith(
+			route,
+			expect.objectContaining({ per_page: 100 }),
+		);
 	expect(api.listForRef).not.toHaveBeenCalled();
 
 	reads.pull.resolve({ data: pull });

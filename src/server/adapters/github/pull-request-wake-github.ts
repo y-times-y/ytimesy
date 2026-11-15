@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import { logTail } from "#/domain/github-write";
 import {
 	type FailingCheck,
 	mentionInstruction,
@@ -231,13 +232,4 @@ async function actionsLogReader(
 	};
 }
 
-/** The last lines of a job log, without timestamps, where the failure usually is. */
-export function logTail(log: string, lines = 120, chars = 8000) {
-	const tail = log
-		.split(/\r?\n/)
-		.map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, ""))
-		.filter((line) => line.trim())
-		.slice(-lines)
-		.join("\n");
-	return tail.length > chars ? tail.slice(-chars) : tail;
-}
+export { logTail };

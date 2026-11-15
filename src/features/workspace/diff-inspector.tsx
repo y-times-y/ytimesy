@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { diffPreviewHunks } from "#/domain/diff-preview";
 import {
 	fileChangeDisplayPath,
@@ -10,7 +10,7 @@ import type { FileChangeEntry } from "#/domain/session-item";
 import { sourceLanguageFromPath } from "#/domain/source-language";
 import { fileChangeForPath } from "#/domain/workspace-file-tree";
 import { FileChangeCounts } from "../sessions/file-change-counts";
-import { DiffHunkPreview } from "./diff-hunk-preview";
+import { DiffHunkPreview, type DiffLineComments } from "./diff-hunk-preview";
 import { PreviewModeSwitch, WorkspaceDiffPreview } from "./file-preview";
 
 export function DiffInspector({
@@ -18,11 +18,17 @@ export function DiffInspector({
 	selectedPath,
 	projectId,
 	sessionId,
+	lineComments,
+	header,
 }: {
 	changes: readonly FileChangeEntry[];
 	selectedPath?: string;
 	projectId?: string;
 	sessionId?: string;
+	/** Comments on lines, when the diff is a pull request under review. */
+	lineComments?: DiffLineComments;
+	/** Extra controls beside the heading (Review changes). */
+	header?: ReactNode;
 }) {
 	const heading = fileChangesHeading(changes);
 	return (
@@ -33,6 +39,7 @@ export function DiffInspector({
 					additions={heading.additions}
 					deletions={heading.deletions}
 				/>
+				{header}
 			</header>
 			<ul className="diff-file-list">
 				{changes.map((change, index) => (
@@ -41,6 +48,7 @@ export function DiffInspector({
 							projectId={projectId}
 							sessionId={sessionId}
 							change={change}
+							lineComments={lineComments}
 							defaultOpen={index === 0 && !selectedPath}
 							selected={
 								fileChangeForPath(
@@ -62,12 +70,14 @@ export function DiffFilePreview({
 	selected = false,
 	projectId,
 	sessionId,
+	lineComments,
 }: {
 	change: FileChangeEntry;
 	defaultOpen: boolean;
 	selected?: boolean;
 	projectId?: string;
 	sessionId?: string;
+	lineComments?: DiffLineComments;
 }) {
 	const path = fileChangeDisplayPath(change.path);
 	const slash = path.lastIndexOf("/");
@@ -148,7 +158,12 @@ export function DiffFilePreview({
 										</span>
 									</div>
 								) : null}
-								<DiffHunkPreview preview={hunk} language={language} />
+								<DiffHunkPreview
+									preview={hunk}
+									language={language}
+									path={change.path}
+									lineComments={lineComments}
+								/>
 							</Fragment>
 						);
 					})}

@@ -1,45 +1,57 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
+	ArrowLeft,
 	Check,
 	ChevronDown,
 	CircleCheck,
 	CircleDashed,
-	CircleX,
 	ExternalLink,
 	GitMerge,
 	GitPullRequest,
+	GitPullRequestClosed,
 	GitPullRequestDraft,
+	Pencil,
 	TriangleAlert,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
+import type {
+	PullRequestWriteAction,
+	ReviewLineComment,
+} from "#/domain/github-write";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	githubPullFullName,
 	type ListedRepositoryPullRequest,
 	listedPullRequestAuthor,
 	type PullRequestCheck,
-	type PullRequestComment,
 	type PullRequestDetail,
-	type PullRequestPerson,
 	pullRequestReviewStart,
 	startPullRequestReviewThread,
 } from "#/domain/pull-request-review";
-import { sourceLanguageFromPath } from "#/domain/source-language";
 import { requestJson } from "../projects/api";
 import { startPullRequestReviewChat } from "../pull-requests/pull-request-review.fn";
-import { AgentMarkdown } from "../sessions/agent-markdown";
-import {
-	HighlightedTokens,
-	useHighlightedLines,
-} from "../sessions/highlighted-code";
 import { DiffInspector } from "./diff-inspector";
+import {
+	Avatar,
+	displayName,
+	GithubScrollArea,
+	useGithubAction,
+} from "./github-ui";
+import {
+	CheckIcon,
+	Checks,
+	Conversation,
+	PullRequestFields,
+	ReviewSubmit,
+	usePullRequestLineComments,
+} from "./pull-request-collaboration";
 import {
 	type PullRequestSource,
 	type PullRequestSummary,
@@ -47,6 +59,7 @@ import {
 	pullRequestDetailKey,
 	pullRequestDetailQuery,
 } from "./pull-request-detail-query";
+import { PullRequestList } from "./pull-request-list";
 import "./pull-request-inspector.css";
 
 export type PullRequestRepository = {
@@ -68,40 +81,8 @@ const stateLabel: Record<PullRequestDetail["state"], string> = {
 function StateIcon({ state }: { state: PullRequestDetail["state"] }) {
 	if (state === "merged") return <GitMerge size={12} />;
 	if (state === "draft") return <GitPullRequestDraft size={12} />;
+	if (state === "closed") return <GitPullRequestClosed size={12} />;
 	return <GitPullRequest size={12} />;
-}
-
-function CheckIcon({ state }: { state: PullRequestCheck["state"] }) {
-	if (state === "passed") return <CircleCheck size={14} data-tone="ok" />;
-	if (state === "failed") return <CircleX size={14} data-tone="bad" />;
-	return <CircleDashed size={14} data-tone="wait" />;
-}
-
-function Avatar({
-	person,
-	size = 20,
-	className,
-}: {
-	person: PullRequestPerson;
-	size?: number;
-	className?: string;
-}) {
-	const classes = className ? `pr-avatar ${className}` : "pr-avatar";
-	return person.avatarUrl ? (
-		<img
-			className={classes}
-			src={`${person.avatarUrl}${person.avatarUrl.includes("?") ? "&" : "?"}s=${size * 2}`}
-			alt=""
-			width={size}
-			height={size}
-		/>
-	) : (
-		<span className={classes} style={{ width: size, height: size }} />
-	);
-}
-
-function displayName(person: PullRequestPerson) {
-	return person.login.replace(/\[bot\]$/, "");
 }
 
 /** One open pull request in the picker: title, author, and avatar. */
@@ -169,260 +150,6 @@ export function PullRequestPickerRow({
 				</DropdownMenu.Item>
 			) : null}
 		</div>
-	);
-}
-
-function timeAgo(iso: string) {
-	const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
-	if (minutes < 1) return "just now";
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.round(hours / 24);
-	if (days < 30) return `${days}d ago`;
-	const months = Math.round(days / 30);
-	if (months < 12) return `${months}mo ago`;
-	return `${Math.round(months / 12)}y ago`;
-}
-
-function Time({ iso, href }: { iso: string; href?: string | null }) {
-	const label = timeAgo(iso);
-	const title = new Date(iso).toLocaleString();
-	return href ? (
-		<a href={href} target="_blank" rel="noreferrer" title={title}>
-			{label}
-		</a>
-	) : (
-		<time dateTime={iso} title={title}>
-			{label}
-		</time>
-	);
-}
-
-/** Long comments start folded so one bot summary doesn't bury the thread. */
-function Folded({ children }: { children: ReactNode }) {
-	const body = useRef<HTMLDivElement>(null);
-	const [tall, setTall] = useState(false);
-	const [open, setOpen] = useState(false);
-	useLayoutEffect(() => {
-		if (body.current) setTall(body.current.scrollHeight > 340);
-	}, []);
-	return (
-		<div className="pr-fold" data-folded={tall && !open}>
-			<div ref={body} className="pr-comment-body">
-				{children}
-			</div>
-			{tall ? (
-				<button
-					type="button"
-					className="pr-fold-toggle"
-					onClick={() => setOpen((value) => !value)}
-				>
-					{open ? "Show less" : "Show more"}
-				</button>
-			) : null}
-		</div>
-	);
-}
-
-function Hunk({ entry }: { entry: PullRequestComment }) {
-	const lines = (entry.diffHunk ?? "")
-		.split("\n")
-		.filter((line) => !line.startsWith("@@"))
-		.slice(-6);
-	const code = lines.map((line) => line.slice(1));
-	const highlighted = useHighlightedLines(
-		code.join("\n"),
-		sourceLanguageFromPath(entry.path ?? ""),
-	);
-	return (
-		<figure className="pr-hunk">
-			<figcaption>
-				<span>{entry.path}</span>
-				{entry.line ? <span>Line {entry.line}</span> : null}
-			</figcaption>
-			<pre>
-				{lines.map((line, index) => (
-					<span
-						// biome-ignore lint/suspicious/noArrayIndexKey: hunk lines have no identity
-						key={index}
-						data-sign={
-							line.startsWith("+")
-								? "add"
-								: line.startsWith("-")
-									? "del"
-									: undefined
-						}
-						data-target={index === lines.length - 1 || undefined}
-					>
-						<i>{line[0] === "+" || line[0] === "-" ? line[0] : " "}</i>
-						<HighlightedTokens
-							text={code[index] ?? ""}
-							tokens={highlighted?.[index]}
-						/>
-						{"\n"}
-					</span>
-				))}
-			</pre>
-		</figure>
-	);
-}
-
-const reviewVerb: Record<string, string> = {
-	APPROVED: "approved these changes",
-	CHANGES_REQUESTED: "requested changes",
-	DISMISSED: "had a review dismissed",
-};
-
-function Comment({
-	author,
-	verb,
-	tone,
-	createdAt,
-	url,
-	children,
-}: {
-	author: PullRequestPerson;
-	verb: string;
-	tone?: "ok" | "bad";
-	createdAt: string;
-	url?: string | null;
-	children?: ReactNode;
-}) {
-	return (
-		<li className="pr-comment">
-			<Avatar person={author} size={24} />
-			<div className="pr-comment-main">
-				<p className="pr-comment-head">
-					<strong>{displayName(author)}</strong>
-					{author.bot ? <span className="pr-bot">Bot</span> : null}
-					<span data-tone={tone}>{verb}</span>
-					<span aria-hidden>·</span>
-					<Time iso={createdAt} href={url} />
-				</p>
-				{children}
-			</div>
-		</li>
-	);
-}
-
-function Conversation({
-	pr,
-	people,
-	mergeBox,
-}: {
-	pr: PullRequestDetail;
-	people: Map<string, PullRequestPerson>;
-	mergeBox: ReactNode;
-}) {
-	const author = people.get(pr.author) ?? {
-		login: pr.author,
-		avatarUrl: pr.authorAvatarUrl,
-		bot: false,
-	};
-	// Approvals and change requests often have no text; they still belong in the thread.
-	const verdicts = pr.reviews
-		.filter((review) => reviewVerb[review.state] && review.submittedAt)
-		.map((review) => ({
-			id: `verdict:${review.author}:${review.submittedAt}`,
-			author: people.get(review.author) ?? {
-				login: review.author,
-				avatarUrl: null,
-				bot: review.author.endsWith("[bot]"),
-			},
-			state: review.state,
-			createdAt: review.submittedAt ?? "",
-		}));
-	const timeline = [
-		...pr.conversation.map((entry) => ({
-			at: entry.createdAt,
-			node: (
-				<Comment
-					key={entry.id}
-					author={entry.author}
-					verb={
-						entry.kind === "inline"
-							? "commented on code"
-							: entry.kind === "review"
-								? "reviewed"
-								: "commented"
-					}
-					createdAt={entry.createdAt}
-					url={entry.url}
-				>
-					{entry.kind === "inline" ? <Hunk entry={entry} /> : null}
-					<Folded>
-						<AgentMarkdown text={entry.body} fileMentions={false} />
-					</Folded>
-				</Comment>
-			),
-		})),
-		...verdicts.map((verdict) => ({
-			at: verdict.createdAt,
-			node: (
-				<Comment
-					key={verdict.id}
-					author={verdict.author}
-					verb={reviewVerb[verdict.state] ?? "reviewed"}
-					tone={verdict.state === "APPROVED" ? "ok" : "bad"}
-					createdAt={verdict.createdAt}
-				/>
-			),
-		})),
-	].sort((a, b) => a.at.localeCompare(b.at));
-	return (
-		<div className="pr-thread">
-			<ol>
-				<Comment
-					author={author}
-					verb="opened this pull request"
-					createdAt={pr.createdAt}
-				>
-					{pr.body.trim() ? (
-						<Folded>
-							<AgentMarkdown text={pr.body} fileMentions={false} />
-						</Folded>
-					) : (
-						<p className="pr-muted">No description provided.</p>
-					)}
-				</Comment>
-				{timeline.map((item) => item.node)}
-			</ol>
-			{mergeBox}
-		</div>
-	);
-}
-
-function Checks({ checks }: { checks: readonly PullRequestCheck[] }) {
-	if (!checks.length)
-		return <p className="pr-empty">No checks ran on this pull request.</p>;
-	return (
-		<ul className="pr-checks">
-			{checks.map((check) => (
-				<li key={`${check.name}:${check.url ?? ""}`}>
-					<CheckIcon state={check.state} />
-					<span className="pr-check-name">{check.name}</span>
-					<span className="pr-muted">
-						{check.state === "passed"
-							? "Passed"
-							: check.state === "failed"
-								? "Failed"
-								: "Running"}
-					</span>
-					{check.url ? (
-						<a
-							className="pr-ghost"
-							href={check.url}
-							target="_blank"
-							rel="noreferrer"
-							aria-label={`Open ${check.name}`}
-						>
-							<ExternalLink size={14} />
-						</a>
-					) : null}
-				</li>
-			))}
-		</ul>
 	);
 }
 
@@ -546,7 +273,8 @@ export function PullRequestInspector({
 				})}`,
 			),
 	});
-	const [picked, setPicked] = useState<number | undefined>();
+	const [picked, setPicked] = useState<number | undefined>(repository.number);
+	const [showList, setShowList] = useState(repository.number === undefined);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const reviewChat = {
 		projectId,
@@ -564,6 +292,16 @@ export function PullRequestInspector({
 		: undefined;
 	const open = list.data?.pullRequests ?? [];
 	const number = picked ?? repository.number ?? open[0]?.number;
+	if (showList)
+		return (
+			<PullRequestList
+				repository={repository}
+				onOpen={(pull) => {
+					setPicked(pull.number);
+					setShowList(false);
+				}}
+			/>
+		);
 	if (number === undefined)
 		return (
 			<p className="pr-empty" role={list.error ? "alert" : undefined}>
@@ -573,7 +311,7 @@ export function PullRequestInspector({
 						"No open pull requests in this repository.")}
 			</p>
 		);
-	const picker = open.length ? (
+	const pickerMenu = open.length ? (
 		<DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
 			<DropdownMenu.Trigger asChild>
 				<button type="button" className="pr-ghost">
@@ -602,6 +340,20 @@ export function PullRequestInspector({
 			</DropdownMenu.Portal>
 		</DropdownMenu.Root>
 	) : null;
+	const picker = (
+		<>
+			<button
+				type="button"
+				className="pr-ghost"
+				aria-label="All pull requests"
+				onClick={() => setShowList(true)}
+			>
+				<ArrowLeft size={14} />
+				Pull requests
+			</button>
+			{pickerMenu}
+		</>
+	);
 	const listed = open.find((pr) => pr.number === number);
 	const known: PullRequestSummary = {
 		...(listed ? pickedPullRequestSummary(listed) : { number }),
@@ -664,7 +416,36 @@ function PullRequestReview({
 			setConfirmMerge(false);
 		},
 	});
+	/** Every other change: comments, reviews, labels…; the answer is the updated pull request. */
+	const write = async (input: PullRequestWriteAction) => {
+		const next = await requestJson<PullRequestDetail>(
+			"/api/github/pull-request",
+			{ ...source, ...input },
+		);
+		cache.setQueryData(key, next);
+		void cache.invalidateQueries({ queryKey: ["pull-requests"] });
+		return next;
+	};
+	const [pendingComments, setPendingComments] = useState<ReviewLineComment[]>(
+		[],
+	);
+	const [reviewHeadSha, setReviewHeadSha] = useState<string | undefined>();
 	const pr = detail.data;
+	const lineComments = usePullRequestLineComments({
+		pr,
+		write,
+		pending: pendingComments,
+		onPendingChange: (comments) => {
+			if (!pendingComments.length && comments.length)
+				setReviewHeadSha(pr?.headSha);
+			if (!comments.length) setReviewHeadSha(undefined);
+			setPendingComments(comments);
+		},
+	});
+	const repository = {
+		installationId: source.installationId,
+		repositoryId: source.repositoryId,
+	};
 	// Until the details arrive the panel shows what the list knew; the rest
 	// holds its place with skeletons.
 	const view: PullRequestSummary = pr ?? summary;
@@ -757,7 +538,7 @@ function PullRequestReview({
 								act.mutate({ action: "merge", headSha: pr.headSha })
 							}
 						>
-							{act.isPending ? "Merging…" : `Squash into ${pr.base}`}
+							{act.isPending ? "Merging…" : `Merge into ${pr.base}`}
 						</button>
 					</>
 				) : (
@@ -769,7 +550,7 @@ function PullRequestReview({
 						onClick={() => setConfirmMerge(true)}
 					>
 						<GitMerge size={14} />
-						Squash and merge
+						Merge pull request
 					</button>
 				)}
 			</div>
@@ -830,6 +611,15 @@ function PullRequestReview({
 							onReviewStarted={onReviewStarted}
 						/>
 					) : null}
+					{pr ? (
+						<ReviewSubmit
+							pr={pr}
+							pending={pendingComments}
+							reviewHeadSha={reviewHeadSha}
+							onSubmitted={() => setPendingComments([])}
+							write={write}
+						/>
+					) : null}
 					{picker}
 					{view.url ? (
 						<a
@@ -845,7 +635,11 @@ function PullRequestReview({
 					) : null}
 				</div>
 				{view.title !== undefined ? (
-					<h2 className="pr-title">{view.title}</h2>
+					<Title
+						title={view.title}
+						editable={Boolean(pr)}
+						onSave={(title) => write({ action: "edit", title })}
+					/>
 				) : (
 					<Skeleton className="pr-skeleton-title" />
 				)}
@@ -906,7 +700,7 @@ function PullRequestReview({
 					</span>
 				) : null}
 			</div>
-			<div className="pr-pane" role="tabpanel" data-tab={tab}>
+			<GithubScrollArea className="pr-pane" role="tabpanel" data-tab={tab}>
 				{!pr ? (
 					detail.error ? (
 						<p className="pr-empty" role="alert">
@@ -916,18 +710,117 @@ function PullRequestReview({
 						<PaneSkeleton />
 					)
 				) : tab === "conversation" ? (
-					<Conversation pr={pr} people={people} mergeBox={mergeBox} />
+					<Conversation
+						pr={pr}
+						people={people}
+						mergeBox={mergeBox}
+						write={write}
+						fields={
+							<PullRequestFields
+								pr={pr}
+								repository={repository}
+								write={write}
+							/>
+						}
+					/>
 				) : tab === "files" ? (
 					pr.files.length ? (
-						<DiffInspector changes={pr.files} />
+						<DiffInspector
+							changes={pr.files}
+							lineComments={lineComments}
+							header={
+								lineComments ? (
+									<span className="gh-files-hint pr-muted">
+										Click a line number to comment
+									</span>
+								) : null
+							}
+						/>
 					) : (
 						<p className="pr-empty">No file changes in this pull request.</p>
 					)
 				) : (
-					<Checks checks={pr.checks} />
+					<Checks checks={pr.checks} repository={repository} write={write} />
 				)}
-			</div>
+			</GithubScrollArea>
 		</section>
+	);
+}
+
+/** The pull request's title, renamed in place. */
+function Title({
+	title,
+	editable,
+	onSave,
+}: {
+	title: string;
+	editable: boolean;
+	onSave: (title: string) => Promise<unknown>;
+}) {
+	const [draft, setDraft] = useState<string | null>(null);
+	const save = useGithubAction(onSave);
+	const submit = async () => {
+		const next = draft?.trim();
+		if (!next || next === title) return setDraft(null);
+		if (await save.run(next)) setDraft(null);
+	};
+	if (draft === null)
+		return (
+			<h2 className="pr-title gh-title">
+				{title}
+				{editable ? (
+					<button
+						type="button"
+						className="pr-ghost gh-title-edit"
+						aria-label="Edit title"
+						title="Edit title"
+						onClick={() => setDraft(title)}
+					>
+						<Pencil size={13} />
+					</button>
+				) : null}
+			</h2>
+		);
+	return (
+		<form
+			className="gh-title-form"
+			onSubmit={(event) => {
+				event.preventDefault();
+				void submit();
+			}}
+		>
+			<input
+				aria-label="Title"
+				value={draft}
+				maxLength={256}
+				// biome-ignore lint/a11y/noAutofocus: the user asked to edit the title
+				autoFocus
+				onChange={(event) => setDraft(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Escape") setDraft(null);
+				}}
+			/>
+			<button
+				type="button"
+				className="pr-button"
+				onClick={() => setDraft(null)}
+			>
+				Cancel
+			</button>
+			<button
+				type="submit"
+				className="pr-button"
+				data-variant="primary"
+				disabled={save.pending}
+			>
+				{save.pending ? "Saving…" : "Save"}
+			</button>
+			{save.error ? (
+				<p className="gh-error" role="alert">
+					{save.error}
+				</p>
+			) : null}
+		</form>
 	);
 }
 

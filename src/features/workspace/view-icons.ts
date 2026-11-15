@@ -1,6 +1,7 @@
 import {
 	AppWindow,
 	BookMarked,
+	CircleDot,
 	FolderTree,
 	GitCompare,
 	GitPullRequest,
@@ -18,6 +19,7 @@ export const VIEW_ICONS = {
 	files: FolderTree,
 	diff: GitCompare,
 	pr: GitPullRequest,
+	issues: CircleDot,
 	terminal: SquareTerminal,
 	desktop: Monitor,
 	memory: BookMarked,

@@ -1,6 +1,9 @@
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
-import { startPullRequestReview } from "./pull-request-review-chat";
+import {
+	startIssueChat,
+	startPullRequestReview,
+} from "./pull-request-review-chat";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +11,14 @@ const mocks = vi.hoisted(() => ({
 	allow: vi.fn(),
 	open: vi.fn(),
 	send: vi.fn(),
+	project: vi.fn(),
+	access: vi.fn(),
+	token: vi.fn(),
+}));
+vi.mock("../adapters/projects", () => ({ projectForOwner: mocks.project }));
+vi.mock("../adapters/github", () => ({ authorizedRepository: mocks.access }));
+vi.mock("../auth/github-connection", () => ({
+	githubAccessToken: mocks.token,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	chatHoldingSend: mocks.holding,
@@ -33,6 +44,15 @@ const review = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.project.mockResolvedValue({
+		id: "project",
+		fullName: "acme/app",
+		installationId: 1,
+		repositoryId: 2,
+		branch: "main",
+	});
+	mocks.token.mockResolvedValue("token");
+	mocks.access.mockResolvedValue({ fullName: "acme/app" });
 	mocks.holding.mockResolvedValue(null);
 	mocks.allow.mockResolvedValue(undefined);
 	mocks.open.mockResolvedValue({
@@ -77,6 +97,27 @@ it("returns the chat that already accepted this review without sending again", a
 	});
 	expect(mocks.open).not.toHaveBeenCalled();
 	expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it("starts an issue in a new chat and refuses repositories outside the owned project", async () => {
+	await expect(
+		startIssueChat(machines, {
+			...review,
+			number: 42,
+			url: "https://github.com/acme/app/issues/42",
+		}),
+	).resolves.toEqual({ sessionId: "new-chat" });
+	expect(mocks.send.mock.calls[0][2].text).toContain("closes #42");
+	expect(mocks.open.mock.calls[0][0].title).toBe("Issue #42: Add parser");
+	mocks.open.mockClear();
+	await expect(
+		startIssueChat(machines, { ...review, fullName: "other/repo" }),
+	).rejects.toThrow("not in your project");
+	expect(mocks.open).not.toHaveBeenCalled();
+	mocks.project.mockResolvedValue(null);
+	await expect(startPullRequestReview(machines, review)).rejects.toThrow(
+		"not in your project",
+	);
 });
 
 it("does not send when no model is selected", async () => {
