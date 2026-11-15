@@ -87,9 +87,13 @@ function harness(
 		sleep: vi.fn(async () => {}),
 		ancestors: vi.fn(async () => options.ancestors ?? []),
 		tree: vi.fn(async () => sessions),
-		session: vi.fn(
-			async (_user: string, id: string) =>
-				sessions.find((entry) => entry.id === id) ?? null,
+		itemsOfKinds: vi.fn(
+			async (_user: string, id: string, kinds: readonly string[]) => {
+				const items = sessions.find((entry) => entry.id === id)?.items;
+				return (Array.isArray(items) ? items : []).filter((item) =>
+					kinds.includes((item as { kind?: string }).kind ?? ""),
+				);
+			},
 		),
 		openTask: vi.fn(
 			async (input: {

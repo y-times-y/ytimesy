@@ -10,26 +10,31 @@ import type { SessionItem } from "#/domain/session-item";
 import { type SubagentNode, subagentTree } from "#/domain/subagent-tree";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
-	descendantAgentSessions,
+	agentSessionMetadataForOwner,
+	descendantAgentSessionMetadata,
 } from "../adapters/agent-sessions";
+
+/** A chat without its transcript: a mention names helpers, it reads no items. */
+type MentionSession = Omit<AgentSessionRecord, "items">;
 
 export type MentionDeps = {
 	readonly session: (
 		userId: string,
 		sessionId: string,
-	) => Promise<AgentSessionRecord | null>;
+	) => Promise<MentionSession | null>;
 	readonly descendants: (
 		userId: string,
 		rootId: string,
-	) => Promise<readonly AgentSessionRecord[]>;
+	) => Promise<readonly MentionSession[]>;
 	readonly now: () => number;
 };
 
 // Read at call time: a message without a helper mention reads nothing.
 const liveDeps: MentionDeps = {
-	session: (userId, sessionId) => agentSessionForOwner(userId, sessionId),
-	descendants: (userId, rootId) => descendantAgentSessions(userId, rootId),
+	session: (userId, sessionId) =>
+		agentSessionMetadataForOwner(userId, sessionId),
+	descendants: (userId, rootId) =>
+		descendantAgentSessionMetadata(userId, rootId),
 	now: () => Date.now(),
 };
 
@@ -80,9 +85,15 @@ export async function mentionNoteFor(
 	const helpers = (await deps.descendants(userId, root.id)).filter(
 		(session) => session.agentRole && session.userId === userId,
 	);
+	// The note reads each node's name, role, state and title, none of which
+	// come from a transcript (only spend and minutes do): no items are read.
 	return mentionNoteFromTree(
 		text,
-		subagentTree(root.id, [root, ...helpers], deps.now()).nodes,
+		subagentTree(
+			root.id,
+			[root, ...helpers].map((session) => ({ ...session, items: null })),
+			deps.now(),
+		).nodes,
 		null,
 	);
 }

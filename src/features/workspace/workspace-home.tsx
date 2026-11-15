@@ -44,7 +44,6 @@ import {
 	setupRequestKeeping,
 } from "#/domain/environment-setup";
 import {
-	BACKGROUND_TURN_POLL_MS,
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
 	SUBAGENT_POLL_MS,
@@ -175,6 +174,7 @@ import {
 	withOlderPage,
 } from "#/domain/transcript-page";
 import { sessionStoppedByUser } from "#/domain/turn-end";
+import type { HubStateMessage } from "#/domain/user-hub";
 import { replyStartedAfter } from "#/domain/web-vitals";
 import {
 	desktopInspectorShouldStart,
@@ -301,6 +301,11 @@ import {
 	useTurnFinishAlerts,
 } from "./use-turn-finish-alerts";
 import {
+	backgroundTurnPollIntervalMs,
+	hubReadsToMake,
+	openUserHub,
+} from "./user-hub-connection";
+import {
 	type InspectorView,
 	type ToolsView,
 	WorkspaceInspector,
@@ -395,6 +400,7 @@ export function WorkspaceHome({
 	account,
 	userId,
 	renderedAtMs,
+	userHub = false,
 	savedInspector = CLOSED_INSPECTOR,
 	savedPullRequests = NO_SAVED_SIDEBAR_PRS,
 	savedDefaultBranches = NO_SAVED_DEFAULT_BRANCHES,
@@ -409,6 +415,8 @@ export function WorkspaceHome({
 	userId?: string;
 	/** When the server rendered the page: relative times hydrate from it. */
 	renderedAtMs?: number;
+	/** The server offers this user's hub socket (YTIMESY_USER_HUB_USERS). */
+	userHub?: boolean;
 	/** The right panel as this browser left it (a cookie the server reads). */
 	savedInspector?: SavedInspector;
 	/** The sidebar's PR icons as this browser last read them (a cookie the server reads). */
@@ -2031,6 +2039,8 @@ export function WorkspaceHome({
 		pageRestores,
 	]);
 
+	// The user's hub socket delivers (see openUserHub); background chats are polled until then.
+	const [hubOpen, setHubOpen] = useState(false);
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
 		openChatId: activeSessionId,
@@ -2054,10 +2064,44 @@ export function WorkspaceHome({
 				(selection) => sessionDeltaReader.read(selection),
 			),
 			enabled: Boolean(activeProjectId),
-			refetchInterval: BACKGROUND_TURN_POLL_MS,
+			// While the user's hub pushes turn changes, a chat is read only when
+			// its turn changes; without it (closed, not offered) they are polled.
+			refetchInterval: backgroundTurnPollIntervalMs(hubOpen),
 			refetchIntervalInBackground: false,
 		})),
 	});
+	const hubSeenWholeMap = useRef(false);
+	const onHubState = useRef<(message: HubStateMessage) => void>(() => {});
+	onHubState.current = (message) => {
+		const { reads, refreshList } = hubReadsToMake({
+			message,
+			sidebarStatuses: new Map(
+				sidebarChats.map((chat) => [chat.id, chat.turnStatus]),
+			),
+			backgroundChatIds: backgroundIds,
+			openChatId: activeSessionId,
+		});
+		for (const id of reads)
+			void backgroundReads[backgroundIds.indexOf(id)]?.refetch();
+		// A reconnect also reads the chat list once: a turn may have started
+		// or a chat appeared while no socket listened.
+		const reconnected = message.full === true && hubSeenWholeMap.current;
+		if (message.full) hubSeenWholeMap.current = true;
+		if (refreshList || reconnected) void chats.refetch();
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reopened when a page restored from the back/forward cache shows again.
+	useEffect(() => {
+		if (!userHub) return;
+		const close = openUserHub({
+			onState: (message) => onHubState.current(message),
+			onOpen: () => setHubOpen(true),
+			onDrop: () => setHubOpen(false),
+		});
+		return closeOnPageHide(() => {
+			close();
+			setHubOpen(false);
+		});
+	}, [userHub, pageRestores]);
 	const appliedBackgroundReads = useRef(new WeakSet<object>());
 	useEffect(() => {
 		for (const result of backgroundReads) {

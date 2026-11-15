@@ -5,7 +5,7 @@ const send = vi.hoisted(() => vi.fn());
 const session = vi.hoisted(() => vi.fn());
 vi.mock("./queued-user-messages", () => ({ sendComposerMessage: send }));
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: session,
+	agentSessionMetadataForOwner: session,
 }));
 
 import { pushedMessageText, wakeChatAfterPush } from "./push-approval-wake";

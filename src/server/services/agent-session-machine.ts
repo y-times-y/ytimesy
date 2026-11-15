@@ -18,7 +18,7 @@ import { sessionTitleFromText } from "#/domain/session-item";
 import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 	childAgentSession,
 	deleteAgentSessionForOwner,
@@ -152,8 +152,14 @@ async function resolveAgentSessionRecord(
 										items:
 											parent.harness === input.harness &&
 											parent.listedModelId?.trim()
-												? ((await agentSessionForOwner(input.userId, parent.id))
-														?.items ?? [])
+												? // Only what sessionListedModelIsBlocked scans.
+													((
+														await agentSessionItemsOfKindsForOwner(
+															input.userId,
+															[parent.id],
+															["error", "agentMessage"],
+														)
+													).get(parent.id) ?? [])
 												: [],
 									},
 								]

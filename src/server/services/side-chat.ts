@@ -5,13 +5,14 @@ import {
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
 import {
+	SIDE_CHAT_PARENT_ITEM_KINDS,
 	sideChatBudget,
 	sideChatModelText,
 	sideChatSendTarget,
 } from "#/domain/side-chat";
 import {
 	type AgentSessionRecord,
-	agentSessionForOwner,
+	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 	deleteAgentSessionForOwner,
 	insertAgentSession,
@@ -49,12 +50,21 @@ export async function sendSideChatMessage(
 	machines: WorkspaceMachines,
 	input: SideChatSend,
 ) {
-	const parent = await agentSessionForOwner(
+	const parent = await agentSessionMetadataForOwner(
 		input.userId,
 		input.parentSessionId,
 	);
 	if (!parent || parent.projectId !== input.projectId || parent.parentSessionId)
 		throw new Error("Open a chat before starting a side chat.");
+	// Only the item kinds the snapshot shows, not the whole transcript.
+	const parentItems =
+		(
+			await agentSessionItemsOfKindsForOwner(
+				input.userId,
+				[parent.id],
+				SIDE_CHAT_PARENT_ITEM_KINDS,
+			)
+		).get(parent.id) ?? [];
 	const side = await ensureSideChat(parent, input.harnessId, input.modelId);
 	const target = sideChatSendTarget({
 		parentSessionId: parent.id,
@@ -70,7 +80,7 @@ export async function sendSideChatMessage(
 	};
 	const modelText = sideChatModelText(
 		input.text,
-		sessionItemsFromUnknown(parent.items),
+		sessionItemsFromUnknown(parentItems),
 	);
 	if (target.queueOn === "side") {
 		const queued = await queueSideTurn(input, side.id, modelText);
@@ -121,7 +131,7 @@ export async function readSideChat(input: {
 }
 
 async function ensureSideChat(
-	parent: AgentSessionRecord,
+	parent: Omit<AgentSessionRecord, "items">,
 	harnessId: AgentProviderId,
 	modelId: string,
 ) {

@@ -28,6 +28,7 @@ import {
 	TRANSCRIPT_PAGE_TURNS,
 	type TranscriptPage,
 } from "#/domain/transcript-page";
+import { userHubEnabledFor } from "#/domain/user-hub";
 import { xaiSubscriptionEnabled } from "#/domain/xai-subscription";
 import {
 	agentSessionMetadataForOwner,
@@ -524,6 +525,8 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" })
 			),
 			// Relative times render from this on the server and while hydrating.
 			renderedAtMs: Date.now(),
+			// The page opens the user's hub socket instead of polling running chats.
+			userHub: userHubEnabledFor(process.env.YTIMESY_USER_HUB_USERS, user.id),
 			session: {
 				...emptyHarnessSession(),
 				snapshotAvailable,

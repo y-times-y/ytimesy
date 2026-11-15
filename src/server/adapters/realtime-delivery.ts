@@ -6,6 +6,7 @@ import {
 	MAX_DELIVERY_BYTES,
 } from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { USER_HUB_EDGE_PATH } from "#/domain/user-hub";
 import { executorFetch, hasExecutorBinding } from "./executor-fetch";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
 
@@ -147,6 +148,27 @@ export async function openConversationLiveSocket(
 	if (response.status !== 101) {
 		await response.body?.cancel();
 		throw new Error(`Live progress socket unavailable (${response.status}).`);
+	}
+	return response;
+}
+/**
+ * Opens a signed-in tab's socket on the user's hub (the response to hand the
+ * browser). Null when there is no edge to hold it: the socket needs the web
+ * Worker's service binding.
+ */
+export async function openUserHubSocket(userId: string) {
+	const config = realtimeDeliveryConfiguration();
+	if (!config || !hasExecutorBinding()) return null;
+	const url = `${config.url}${USER_HUB_EDGE_PATH}?${new URLSearchParams({ userId })}`;
+	const response = await executorFetch(url, {
+		headers: {
+			...(await signDeliveryRequest(config.secret, "GET", url)),
+			Upgrade: "websocket",
+		},
+	});
+	if (response.status !== 101) {
+		await response.body?.cancel();
+		throw new Error(`User hub socket unavailable (${response.status}).`);
 	}
 	return response;
 }
