@@ -128,3 +128,27 @@ it("uses the rollup when GitHub gives one and makes no REST calls", async () => 
 	expect(row.checks).toEqual({ passed: 1, failed: 0, pending: 0 });
 	expect(fake.listForRef).not.toHaveBeenCalled();
 });
+
+it("makes no REST calls for a pull request the rollup answered with no checks", async () => {
+	const fake = client(async (query) =>
+		query.includes("statusCheckRollup")
+			? {
+					repository: {
+						pullRequests: {
+							nodes: [
+								{
+									number: 7,
+									commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+								},
+							],
+							pageInfo: { hasNextPage: false, endCursor: null },
+						},
+					},
+				}
+			: base,
+	);
+	github.client = fake;
+	const [row] = await listRepositoryPullRequests("t", "o/r", "open");
+	expect(row.checks).toBeNull();
+	expect(fake.listForRef).not.toHaveBeenCalled();
+});
