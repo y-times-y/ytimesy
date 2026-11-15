@@ -100,3 +100,27 @@ export function analyticsOptInRequest(request: {
 		quebecRequest(request, country)
 	);
 }
+
+/** US states where session replay waits for an Accept (wiretap-law suits over replay scripts). */
+export const REPLAY_CONSENT_US_STATES: ReadonlySet<string> = new Set([
+	"CA",
+	"FL",
+	"IL",
+]);
+
+/**
+ * California, Florida or Illinois (Cloudflare's country and region code for
+ * the connection): analytics stays on, session replay waits for an Accept.
+ */
+export function replayConsentRequest(request: {
+	readonly headers: Headers;
+	readonly cf?: unknown;
+}) {
+	const country = requestCountry(request);
+	if (country?.trim().toUpperCase() !== "US") return false;
+	const cf = request.cf as { regionCode?: unknown } | undefined;
+	return (
+		typeof cf?.regionCode === "string" &&
+		REPLAY_CONSENT_US_STATES.has(cf.regionCode.toUpperCase())
+	);
+}

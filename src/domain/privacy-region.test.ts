@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	ANALYTICS_OPT_IN_COUNTRIES,
 	analyticsOptInRequest,
+	replayConsentRequest,
 	requestCountry,
 	STRICT_PRIVACY_COUNTRIES,
 	strictPrivacyCountry,
@@ -67,5 +68,23 @@ describe("privacy region", () => {
 		expect(analyticsOptInRequest({ headers: new Headers() })).toBe(false);
 		// Quebec keeps training's ordinary default.
 		expect(strictPrivacyRequest(canada("QC"))).toBe(false);
+	});
+});
+
+describe("replay consent states", () => {
+	const us = (regionCode?: string, country = "US") => ({
+		headers: new Headers({ "CF-IPCountry": country }),
+		cf: regionCode ? { regionCode } : undefined,
+	});
+
+	it("is California, Florida and Illinois, in the US only", () => {
+		for (const state of ["CA", "FL", "IL", "il"])
+			expect(replayConsentRequest(us(state))).toBe(true);
+		for (const state of ["TX", "NY", "PA", "WA"])
+			expect(replayConsentRequest(us(state))).toBe(false);
+		// Canadian "CA" is a country, and Illinois' code means nothing outside the US.
+		expect(replayConsentRequest(us("FL", "CA"))).toBe(false);
+		expect(replayConsentRequest(us(undefined))).toBe(false);
+		expect(replayConsentRequest({ headers: new Headers() })).toBe(false);
 	});
 });

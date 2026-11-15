@@ -6,6 +6,7 @@ import {
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
 import { redactDeep, replaySafeUrl } from "#/domain/redact-secrets";
+import type { ConsentTier } from "./consent-tier";
 import {
 	type ReplayChoice,
 	readReplayChoice,
@@ -16,20 +17,26 @@ import {
 import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
 
 let client: Promise<PostHog | null> | undefined;
-// EU/EEA/UK/Swiss visitors: nothing is stored in the browser (no consent
-// banner needed); the identifier lives in memory for the page's life.
-let storeNothing = false;
+let tier: ConsentTier = "notice";
 
 /** Set from the server-known region before the client starts (Analytics). */
-export function setAnalyticsStrictRegion(strict: boolean) {
-	if (!client) storeNothing = strict;
+export function setConsentTier(next: ConsentTier) {
+	tier = next;
 }
 
-export function analyticsPersistence(strict: boolean) {
-	return strict ? ("memory" as const) : ("localStorage" as const);
+/**
+ * Whether analytics may run at all. A Do Not Track or Global Privacy Control
+ * signal stops it everywhere; where analytics waits for consent (tier
+ * "analytics") nothing starts, sends or is stored until the visitor accepts.
+ */
+function analyticsAllowed() {
+	if (replayBrowserBlock() !== null) return false;
+	return tier !== "analytics" || readReplayChoice() === "allowed";
 }
+
 function analyticsClient(): Promise<PostHog | null> {
 	if (typeof window === "undefined") return Promise.resolve(null);
+	if (!analyticsAllowed()) return Promise.resolve(null);
 	const token = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN;
 	if (!token) return Promise.resolve(null);
 	client ??= import("posthog-js")
@@ -51,8 +58,8 @@ function analyticsClient(): Promise<PostHog | null> {
 					capture_unhandled_rejections: true,
 					capture_console_errors: false,
 				},
-				// Replay starts outside the opt-in privacy regions, for visitors
-				// and signed-in users (setAnalyticsUser), masked by replayPrivacy.
+				// Replay starts when the region's consent rule allows it
+				// (consent-tier.ts), masked by replayPrivacy.
 				disable_session_recording: true,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
@@ -63,7 +70,7 @@ function analyticsClient(): Promise<PostHog | null> {
 				disable_external_dependency_loading: false,
 				advanced_disable_feature_flags: true,
 				person_profiles: "identified_only",
-				persistence: analyticsPersistence(storeNothing),
+				persistence: "localStorage",
 				respect_dnt: true,
 				before_send: (event) => {
 					if (!event) return null;
@@ -113,22 +120,28 @@ function analyticsClient(): Promise<PostHog | null> {
 }
 
 /**
- * Whether this page may record (setAnalyticsUser): outside the opt-in
- * privacy regions, for anyone signed out and for a signed-in user who has
- * accepted the current Privacy Policy.
+ * Whether this page may record (setAnalyticsUser): anyone signed out, and a
+ * signed-in user who has accepted the current Privacy Policy. The region's
+ * consent rule applies on top (applyReplay).
  */
 let replayAllowed = false;
 
 /**
  * Masked session replay (replayPrivacy) runs when the page allows it, no
  * browser signal (Do Not Track, Global Privacy Control) blocks it and the
- * visitor has not turned it off in Privacy choices; otherwise it stops.
+ * visitor has not turned it off in Cookie settings; otherwise it stops.
  */
 async function applyReplay(posthog: PostHog) {
+	// The SDK's own events (page views, errors, web vitals) don't pass
+	// analyticsClient, so withdrawing consent also opts the SDK out.
+	if (!analyticsAllowed()) posthog.opt_out_capturing();
+	else if (tier === "analytics")
+		posthog.opt_in_capturing({ captureEventName: false });
 	const record = replayRecords({
 		allowed: replayAllowed,
 		block: replayBrowserBlock(),
 		choice: readReplayChoice(),
+		consentRequired: tier !== "notice",
 	});
 	if (record) {
 		// Our own copy of the recorder, fetched only now: the SDK's would load
@@ -138,11 +151,17 @@ async function applyReplay(posthog: PostHog) {
 	} else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
 }
 
-/** Privacy choices: turning replay off stops it at once; on resumes it where allowed. */
+/**
+ * Cookie settings and the consent banner: a choice takes effect at once.
+ * Off stops replay (and, where analytics waits for consent, all of it);
+ * on starts what the region allows.
+ */
 export function setReplayChoice(choice: ReplayChoice) {
 	writeReplayChoice(choice);
-	void analyticsClient()
-		.then((posthog) => (posthog ? applyReplay(posthog) : undefined))
+	// A client that already exists must hear a withdrawal, so it is read
+	// directly: analyticsClient() returns nothing once consent is gone.
+	void (analyticsAllowed() ? analyticsClient() : client)
+		?.then((posthog) => (posthog ? applyReplay(posthog) : undefined))
 		.catch(() => undefined);
 }
 

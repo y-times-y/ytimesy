@@ -1,6 +1,6 @@
 # ytimesy Privacy Policy
 
-Last updated: 2026-11-15.
+Last updated: 2026-11-16.
 
 This policy explains what ytimesy ("ytimesy", "we") collects when you use
 ytimesy, why, who else receives it, how long we keep it, and your choices. It
@@ -25,10 +25,13 @@ signing in, you acknowledge this policy.
 - Memory is **on by default**; you can turn it off or clear it.
 - We record **masked session replays** of how the site and the web app are
   used, to fix bugs and improve the product, whether or not you are signed in.
-  All text is masked and nothing you type is recorded. No replays are recorded
-  in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec, or when your
-  browser sends "Do Not Track" or Global Privacy Control. Elsewhere you can
-  turn them off at any time under **Privacy choices**.
+  All text is masked and nothing you type is recorded. In the EU, EEA, UK,
+  Switzerland, Turkey, South Korea and Quebec we record, send and store
+  nothing for analytics until you click Accept. In California, Florida and
+  Illinois replays start only after you click Accept. Elsewhere they are on
+  by default, with a notice on your first visit. We honour "Do Not Track" and
+  Global Privacy Control everywhere, and you can change your mind at any time
+  under **Cookie settings**.
 - We do not sell your personal information or use it for advertising.
 - You can delete chats, projects, your memory, and your whole account yourself.
 - ytimesy is for people 18 and older.
@@ -109,8 +112,8 @@ came from (a `ref` or `utm_*` link tag, the referring site's host name and the
 page you landed on) in a first-party cookie for 90 days, and when you create an
 account we save it with your account and send it to PostHog with the "account
 created" event, so we can see which channels bring sign-ups. It is not set for
-visitors in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec, or
-under "Do Not Track" or Global Privacy Control.
+visitors in the EU, EEA, UK, Switzerland, Turkey, South Korea or Quebec until
+they accept analytics, or under "Do Not Track" or Global Privacy Control.
 
 **Session replays.** PostHog records masked session replays of how the site
 and the web app are used (clicks, scrolling, which screens are opened), so we
@@ -132,16 +135,27 @@ Replays are masked in your browser before anything is sent. Masked means:
   without anything after a `?` or `#`;
 - sign-in pages, network traffic and console logs are not recorded.
 
-**We do not record session replays for people in the EU, EEA, UK,
-Switzerland, Turkey, South Korea or Quebec**, based on the country and region
-our hosting provider reports for your connection, **or when your browser sends
-"Do Not Track" or a Global Privacy Control signal**. Everywhere else they are
-on by default, and you can turn them off at any time: open **Privacy
-choices** (in the site footer, or in Settings → Privacy) and switch "Session
-replay" off. Recording stops at once and the choice is remembered in that
-browser. Turning it off never limits what you can use, and using or scrolling
-the site is never treated as agreeing to anything. Replays are kept for 30
-days and deleted with your account.
+**When replays and analytics start.** We use the country and region our
+hosting provider reports for your connection:
+
+- **EU, EEA, UK, Switzerland, Turkey, South Korea and Quebec:** we record
+  nothing, send nothing to our analytics provider and store nothing in your
+  browser for analytics until you click **Accept** in the banner. This covers
+  product analytics, error reports and session replays.
+- **California, Florida and Illinois:** product analytics and error reports
+  run as described above, but we record session replays only after you click
+  **Accept**.
+- **Everywhere else:** session replays are on by default. A notice on your
+  first visit explains this and has a button to turn them off.
+- **Everywhere:** if your browser sends **"Do Not Track"** or a **Global
+  Privacy Control** signal, we send no analytics and record no replays.
+
+You can change your choice at any time: open **Cookie settings** (in the site
+footer, or in Settings → Privacy) and switch the setting on or off. Turning it
+off stops recording at once and the choice is remembered in that browser.
+Declining never limits what you can use, and using or scrolling the site is
+never treated as agreeing to anything. Replays are kept for 30 days and
+deleted with your account.
 
 **Logs and bot checks.** Our hosting provider keeps operational logs
 (requests, errors, timings) that can include IP addresses and identifiers, for
@@ -159,9 +173,9 @@ unsent message drafts. For analytics and session replays, PostHog's script
 keeps a random analytics identifier and the current session's id in the
 browser's local storage and session storage, under names beginning with
 `ph_`; it sets no cookies. For visitors in the EU, EEA, UK, Switzerland,
-Turkey, South Korea or Quebec it stores nothing: the identifier lives only in
-the open page and is gone when the page closes. If you turn session replay
-off, that choice is kept in local storage (`ytimesy.replay-consent`). We use
+Turkey, South Korea or Quebec it stores nothing, and does not load, until you
+accept. Your choice in the banner or in Cookie settings is kept in local
+storage (`ytimesy.replay-consent`). We use
 no advertising cookies.
 
 ## 2. Children
@@ -365,16 +379,15 @@ protection law applies, our legal bases are:
 
 - **contract**: running the service and your account;
 - **legitimate interests**: security, abuse prevention, fixing bugs and
-  improving the product, including product analytics (and, outside these
-  regions, masked session replays);
-- **consent**, only where we ask for it, such as the "Help improve ytimesy"
-  setting;
+  improving the product;
+- **consent**, where we ask for it: product analytics and session replays
+  (the banner) and the "Help improve ytimesy" setting;
 - **legal obligations**.
 
-For people in these regions we do not record session replays or keep an
-analytics identifier in the browser, and the "Help improve ytimesy" switch
-starts off. The same applies to session replays and analytics storage in
-Turkey, South Korea and Quebec. You have the right to access,
+For people in these regions we do not record, send or store anything for
+analytics (including session replays) until you accept, and the "Help improve
+ytimesy" switch starts off. The same consent-first rule for analytics applies
+in Turkey, South Korea and Quebec. You have the right to access,
 correct, delete and receive a copy of your data, to restrict processing, to
 object to processing (including product analytics), and to withdraw consent at
 any time. To exercise a right, email support@ytimesy.com with "Privacy
