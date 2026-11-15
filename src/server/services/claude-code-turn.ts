@@ -44,6 +44,7 @@ import {
 	stopClaudeCodeRun,
 } from "./claude-code-runner";
 import {
+	claudeTurnFeed,
 	claudeTurnMayPause,
 	requestClaudeStepPause,
 } from "./claude-step-pause";
@@ -134,8 +135,10 @@ export async function runClaudeCodeTurnStep(input: {
 	let timedCalls = 0;
 	const reader = isReaderRole(input.agentRole);
 	let ended = true;
+	const feed = claudeTurnFeed(input.turnId);
 	try {
 		const result = await runClaudeCodeStep({
+			...(feed ? { feed } : {}),
 			mayPause: () => claudeTurnMayPause(input.turnId),
 			requestPause: (ms) => requestClaudeStepPause(input.turnId, ms),
 			shell:

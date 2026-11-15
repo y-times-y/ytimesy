@@ -10,6 +10,17 @@ import {
 } from "../../domain/background-exit-wake";
 import { backgroundJob } from "../../domain/background-job";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
+import {
+	CLAUDE_CODE_FEED_PATH,
+	CLAUDE_FEED_MAX_MESSAGE,
+	CLAUDE_FEED_PROTOCOL,
+	CLAUDE_FEED_SOCKET_TAG,
+	type ClaudeFeedMode,
+	claudeFeedEnabled,
+	claudeFeedMessage,
+	feedWakeAt,
+	isUrgentFeedLine,
+} from "../../domain/claude-feed";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
 import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
@@ -28,6 +39,7 @@ import {
 import type { SessionTurnStatus } from "../../domain/session-item";
 import { settledHubTurnStatus, userHubEnabledFor } from "../../domain/user-hub";
 import { BUILD_ID } from "../../lib/build-id";
+import { socketPair } from "../../realtime/socket-upgrade";
 import {
 	ConversationRoom,
 	isRealtimeRoute,
@@ -73,6 +85,7 @@ import {
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
 import { pendingClaudeCodeCalls } from "../services/claude-code-bridge";
+import type { ClaudeCodeFeed } from "../services/claude-code-runner";
 import {
 	registerClaudeTurn,
 	takeClaudeStepPause,
@@ -92,7 +105,9 @@ import {
 	CLAUDE_CODE_MCP_PATH,
 	isClaudeCodeEdgePath,
 	routeClaudeCodeEdge,
+	verifiedClaudeFeedGrant,
 } from "./claude-code-routes";
+import { SqliteClaudeFeed } from "./claude-feed-storage";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -183,9 +198,17 @@ async function resolveModelConversation(step: WorkflowStep) {
 const PURGE_TOMBSTONE_TABLE =
 	"create table if not exists conversation_tombstone(id integer primary key check(id=1),purged_at integer not null)";
 
+/** What a Claude Code feed socket carries: its grant's turn and, after hello, its run. */
+type FeedAttachment = { turnId: string; run: number | null };
+
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
+	private readonly claudeFeed: SqliteClaudeFeed;
+	/** A feed step waiting for lines (claude-feed.ts); called when lines or the exit arrive. */
+	private readonly feedWaiters = new Set<() => void>();
+	/** Lines arrived since the turn's last step started: when the first did, and whether any is urgent. */
+	private feedPending: { since: number; urgent: boolean } | null = null;
 	private readonly history: TurnHistoryCache;
 	private readonly queue: SqliteTurnQueue;
 	private readonly room: ConversationRoom;
@@ -426,6 +449,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.history.clear();
 		}
 		if (ended) this.storeEndedHistory(ended);
+		if (ended) this.endClaudeFeed(ended.turnId);
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		const next = this.queue.take();
 		if (next) {
@@ -546,8 +570,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return this.endTurn("idle");
 		let outcome: Awaited<ReturnType<typeof executeModelStep>>;
 		const stopRefreshing = this.keepWaitingTurnsFresh();
+		const feed = claudeFeedEnabled()
+			? this.claudeFeedHook(step.turnId)
+			: undefined;
+		this.feedPending = null;
 		const unregister = registerClaudeTurn(step.turnId, {
 			watched: () => this.room.watched(),
+			...(feed ? { feed: feed.feed } : {}),
 		});
 		try {
 			outcome = await withDatabaseScope(
@@ -608,6 +637,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			stopRefreshing();
 			unregister();
 		}
+		// The step's checkpoint is saved: so is where it read the run's feed.
+		feed?.commit();
 		if (outcome === "continue") {
 			this.ctx.storage.sql.exec(
 				"update turn_loop set step_index=step_index+1,resumes=0",
@@ -615,10 +646,22 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			// A Claude Code step that paused (nothing to answer, nobody
 			// watching) sleeps before the next; a call already waiting does not.
 			const pause = takeClaudeStepPause(step.turnId);
+			const now = Date.now();
+			const at =
+				now +
+				(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0);
+			// Lines that arrived after the step's last read wake the next sooner.
 			return this.wake(
 				"turn",
-				Date.now() +
-					(pause > 0 && pendingClaudeCodeCalls(step.turnId) === 0 ? pause : 0),
+				feed?.unread()
+					? feedWakeAt({
+							now,
+							urgent: this.pendingFeed()?.urgent ?? true,
+							mode: this.feedMode(),
+							pendingSince: this.pendingFeed()?.since ?? now,
+							scheduledAt: at,
+						})
+					: at,
 			);
 		}
 		await this.endTurn(settledHubTurnStatus(outcome));
@@ -827,8 +870,225 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		const claimed = claimConversationStep(this.steps, step, Date.now(), resume);
 		return claimed.kind === "claimed" ? { ...claimed, turn } : claimed;
 	}
+	/**
+	 * The step's view of its run's feed. Where it read to is kept only once
+	 * the step's checkpoint commits (`commit`), so an interrupted step's
+	 * successor reads the same lines again.
+	 */
+	private claudeFeedHook(turnId: string) {
+		let consumed: { run: number; to: number } | null = null;
+		const feed: ClaudeCodeFeed = {
+			state: (run) => this.claudeFeed.state(turnId, run),
+			lines: (run, from, limit) =>
+				this.claudeFeed.lines(turnId, run, from, limit),
+			consume: (run, to) => {
+				consumed = { run, to };
+			},
+			wait: (ms) =>
+				new Promise<void>((resolve) => {
+					const done = () => {
+						clearTimeout(timer);
+						this.feedWaiters.delete(done);
+						resolve();
+					};
+					const timer = setTimeout(done, ms);
+					this.feedWaiters.add(done);
+				}),
+		};
+		return {
+			feed,
+			commit: () => {
+				if (!consumed) return;
+				try {
+					this.claudeFeed.commitConsumed(turnId, consumed.run, consumed.to);
+				} catch (error) {
+					// The next step reads those lines again; never fail the turn for it.
+					console.warn("Claude feed position was not saved.", {
+						cause: stepFailureCause(error),
+					});
+				}
+			},
+			/** The run has lines (or its exit) the step did not read. */
+			unread: () => {
+				if (!consumed) return false;
+				const state = this.claudeFeed.state(turnId, consumed.run);
+				return Boolean(
+					state &&
+						state.lastSeen > 0 &&
+						(state.receivedTo > consumed.to || state.exitStatus !== null),
+				);
+			},
+		};
+	}
+	/** Lines that arrived since the step started (read through a call: a step changes it). */
+	private pendingFeed() {
+		return this.feedPending;
+	}
+	/** Live while someone has the chat open: the runner then batches every second. */
+	private feedMode(): ClaudeFeedMode {
+		return this.room.watched() ? "live" : "quiet";
+	}
+	/** The run's runner opens its feed: a hibernatable socket tagged with its turn. */
+	private async acceptClaudeFeed(request: Request) {
+		if (this.purged) return new Response(null, { status: 410 });
+		const grant = await verifiedClaudeFeedGrant(
+			request,
+			this.env,
+			(name) =>
+				this.ctx.storage.sql
+					.exec<{ name: string }>("select name from conversation_identity")
+					.toArray()[0]?.name === name,
+		);
+		if (grant instanceof Response) return grant;
+		const { client, server } = socketPair();
+		this.ctx.acceptWebSocket(server as unknown as WebSocket, [
+			CLAUDE_FEED_SOCKET_TAG,
+			grant.turnId,
+		]);
+		server.serializeAttachment({
+			turnId: grant.turnId,
+			run: null,
+		} satisfies FeedAttachment);
+		const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+			.split(",")
+			.some((value) => value.trim() === CLAUDE_FEED_PROTOCOL);
+		return new Response(null, {
+			status: 101,
+			webSocket: client,
+			headers: offered
+				? { "sec-websocket-protocol": CLAUDE_FEED_PROTOCOL }
+				: {},
+		} as ResponseInit);
+	}
+	/** One message from a run's feed (claude-feed.ts); anything unexpected stops that feed. */
+	private async claudeFeedMessage(
+		socket: WebSocket,
+		message: string | ArrayBuffer,
+	) {
+		const reply = (value: unknown) => {
+			try {
+				socket.send(JSON.stringify(value));
+			} catch {}
+		};
+		const stop = () => {
+			reply({ type: "stop" });
+			try {
+				socket.close(1000, "stop");
+			} catch {}
+		};
+		if (
+			this.purged ||
+			!claudeFeedEnabled() ||
+			typeof message !== "string" ||
+			message.length > CLAUDE_FEED_MAX_MESSAGE
+		)
+			return stop();
+		let value: unknown;
+		try {
+			value = JSON.parse(message);
+		} catch {
+			return stop();
+		}
+		const parsed = claudeFeedMessage.safeParse(value);
+		if (!parsed.success) return stop();
+		const attachment = socket.deserializeAttachment() as FeedAttachment;
+		const turn = attachment.turnId;
+		// Only the turn running here, and only its current run, is followed.
+		if (this.activeTurn()?.turnId !== turn) return stop();
+		const data = parsed.data;
+		const now = Date.now();
+		const mode = this.feedMode();
+		if (data.type === "hello") {
+			if (data.turnId !== turn || attachment.run !== null) return stop();
+			const receivedTo = this.claudeFeed.hello(turn, data.run, now);
+			if (receivedTo === null) return stop();
+			socket.serializeAttachment({
+				turnId: turn,
+				run: data.run,
+			} satisfies FeedAttachment);
+			return reply({ type: "ack", receivedTo, mode });
+		}
+		const run = attachment.run;
+		const state = run === null ? null : this.claudeFeed.state(turn, run);
+		if (run === null || !state) return stop();
+		if (data.type === "lines") {
+			const decision = this.claudeFeed.accept(turn, run, data, now);
+			if (!decision) return stop();
+			if (decision.kind === "need")
+				return reply({ type: "need", from: decision.from });
+			reply({ type: "ack", receivedTo: decision.receivedTo, mode });
+			if (decision.kind === "accept")
+				await this.claudeFeedArrived(
+					data.entries.some(([, line]) => isUrgentFeedLine(line)),
+					mode,
+					now,
+				);
+			return;
+		}
+		if (data.type === "exit") {
+			this.claudeFeed.exit(turn, run, String(data.status), now);
+			reply({ type: "ack", receivedTo: state.receivedTo, mode });
+			return this.claudeFeedArrived(true, mode, now);
+		}
+		this.claudeFeed.touch(turn, run, now);
+		reply({ type: "ack", receivedTo: state.receivedTo, mode });
+	}
+	/**
+	 * Lines (or the exit) arrived: a waiting step reads them now; a sleeping
+	 * turn is woken at once for urgent ones, else at the mode's cadence.
+	 */
+	private async claudeFeedArrived(
+		urgent: boolean,
+		mode: ClaudeFeedMode,
+		now: number,
+	) {
+		for (const done of [...this.feedWaiters]) done();
+		this.feedPending = {
+			since: this.feedPending?.since ?? now,
+			urgent: urgent || Boolean(this.feedPending?.urgent),
+		};
+		if (this.stepping) return;
+		const scheduledAt =
+			this.ctx.storage.sql
+				.exec<{ at: number }>(
+					"select at from conversation_wake where purpose='turn'",
+				)
+				.toArray()[0]?.at ?? null;
+		const at = feedWakeAt({
+			now,
+			urgent: this.feedPending.urgent,
+			mode,
+			pendingSince: this.feedPending.since,
+			scheduledAt,
+		});
+		if (scheduledAt === null || at < scheduledAt) await this.wake("turn", at);
+	}
+	/** The turn ended: its feed's lines go, and its runner stops sending. */
+	private endClaudeFeed(turnId: string) {
+		try {
+			this.claudeFeed.clearTurn(turnId);
+			for (const socket of this.ctx.getWebSockets(turnId)) {
+				try {
+					socket.send(JSON.stringify({ type: "stop" }));
+					socket.close(1000, "turn ended");
+				} catch {}
+			}
+		} catch (error) {
+			console.warn("Claude feed was not cleared.", {
+				cause: stepFailureCause(error),
+			});
+		}
+	}
+	private isClaudeFeed(socket: WebSocket) {
+		try {
+			return this.ctx.getTags(socket).includes(CLAUDE_FEED_SOCKET_TAG);
+		} catch {
+			return false;
+		}
+	}
 	async fetch(request: Request) {
 		const path = new URL(request.url).pathname;
+		if (path === CLAUDE_CODE_FEED_PATH) return this.acceptClaudeFeed(request);
 		// The VM's Claude Code asking for ytimesy's tools; the turn's step runs them.
 		if (path === CLAUDE_CODE_MCP_PATH) {
 			if (this.purged) return new Response(null, { status: 410 });
@@ -921,8 +1181,11 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 	}
 
-	// The room's live viewers are hibernatable sockets of this object.
-	webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+	// The room's live viewers and the Claude Code runs' feeds are this
+	// object's hibernatable sockets, told apart by tag.
+	async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+		if (this.isClaudeFeed(socket))
+			return this.claudeFeedMessage(socket, message);
 		this.room.webSocketMessage(socket, message);
 	}
 	webSocketClose(
@@ -931,9 +1194,17 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		reason: string,
 		wasClean: boolean,
 	) {
+		// A feed's runner reconnects on its own; the feed's state stays.
+		if (this.isClaudeFeed(socket)) {
+			try {
+				socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+			} catch {}
+			return;
+		}
 		this.room.webSocketClose(socket, code, reason, wasClean);
 	}
 	webSocketError(socket: WebSocket, error: unknown) {
+		if (this.isClaudeFeed(socket)) return;
 		this.room.webSocketError(socket, error);
 	}
 
@@ -945,6 +1216,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.wake("room", at),
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
+		this.claudeFeed = new SqliteClaudeFeed(ctx.storage.sql);
 		this.history = new TurnHistoryCache(ctx.storage.sql);
 		this.queue = new SqliteTurnQueue(ctx.storage.sql);
 		ctx.storage.sql.exec(

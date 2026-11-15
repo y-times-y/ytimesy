@@ -1,3 +1,5 @@
+import { CLAUDE_FEED_SENDER_SOURCE } from "./claude-feed-sender";
+
 /**
  * The Node program that runs one Claude Code run through the Claude Agent
  * SDK on the chat's VM (argv: SDK module path, inputs directory, cwd). It
@@ -12,8 +14,13 @@
  * (the MCP server's address, a method no tool list shows) for messages the
  * user sent meanwhile: Send on a queued message reaches the model at its
  * next step, not after the turn. Any failure reads as none.
+ *
+ * When options.json names a feed (YTIMESY_CLAUDE_FEED), it also pushes each
+ * line to the chat's object over a WebSocket (claude-feed-sender.ts), where
+ * Node has one; stdout is written first and stays complete either way.
  */
 export const CLAUDE_AGENT_RUNNER_SCRIPT = `import { readFileSync, writeFileSync } from "node:fs";
+${CLAUDE_FEED_SENDER_SOURCE}
 const [sdkModule, inputs, cwd] = process.argv.slice(2);
 const { query } = await import(sdkModule);
 const read = (name) => readFileSync(inputs + "/" + name, "utf8");
@@ -62,12 +69,24 @@ options.hooks = {
 };
 const write = (line) =>
 	new Promise((resolve) => (process.stdout.write(line) ? resolve() : process.stdout.once("drain", resolve)));
+const feedGrant = /^Bearer\\s+(\\S+)$/i.exec(inboxServer?.headers?.Authorization ?? "")?.[1];
+const feed = settings.feed?.url && feedGrant && typeof WebSocket === "function"
+	? createFeed({ url: settings.feed.url, turnId: settings.feed.turnId, run: settings.feed.run, grant: feedGrant })
+	: null;
 let finished = false;
-for await (const message of query({ prompt: read("prompt"), options })) {
-	if (message.type === "system" && message.subtype === "init" && /^[a-f0-9-]{36}$/i.test(message.session_id ?? ""))
-		writeFileSync(inputs + "/active-session", message.session_id, { mode: 0o600 });
-	await write(JSON.stringify(message) + "\\n");
-	if (message.type === "result") finished = true;
+try {
+	for await (const message of query({ prompt: read("prompt"), options })) {
+		if (message.type === "system" && message.subtype === "init" && /^[a-f0-9-]{36}$/i.test(message.session_id ?? ""))
+			writeFileSync(inputs + "/active-session", message.session_id, { mode: 0o600 });
+		const line = JSON.stringify(message);
+		await write(line + "\\n");
+		feed?.push(line, message);
+		if (message.type === "result") finished = true;
+	}
+} catch (error) {
+	await feed?.finish(1);
+	throw error;
 }
 process.exitCode = finished ? 0 : 1;
+await feed?.finish(process.exitCode);
 `;
