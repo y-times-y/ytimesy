@@ -173,8 +173,7 @@ const CHECK_FALLBACK_LIMIT = 30;
 /**
  * Check results for the open pull requests: GraphQL's rollup in one read, then
  * GitHub's REST check runs and commit statuses (the reads the review panel
- * uses) for whichever pull request the rollup left without. Each step is
- * allowed to fail on its own.
+ * uses) when the rollup is refused. Each step is allowed to fail on its own.
  */
 async function fillChecks(
 	github: Github,
@@ -183,6 +182,7 @@ async function fillChecks(
 	signals: Map<number, { checks: RepositoryPullRequest["checks"] }>,
 	heads: ReadonlyMap<number, string>,
 ) {
+	let rollupRefused = false;
 	try {
 		let after: string | null = null;
 		for (let page = 0; page < 6; page++) {
@@ -202,8 +202,12 @@ async function fillChecks(
 			after = pulls.pageInfo.endCursor;
 		}
 	} catch (error) {
+		rollupRefused = true;
 		console.warn("Pull request check rollup unavailable", errorText(error));
 	}
+	// A pull request GitHub answered for with no checks (a repository without
+	// CI) stays without; only a refused rollup is worth the REST reads.
+	if (!rollupRefused) return;
 	const missing = [...heads]
 		.filter(([number]) => !signals.get(number)?.checks)
 		.slice(0, CHECK_FALLBACK_LIMIT);
