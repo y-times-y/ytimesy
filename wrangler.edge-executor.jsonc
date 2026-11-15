@@ -11,7 +11,8 @@
     "bindings": [
       { "name": "MODEL_CONVERSATIONS", "class_name": "ModelConversation" },
       { "name": "BACKGROUND_JOBS", "class_name": "BackgroundJobRunner" },
-      { "name": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironment" }
+      { "name": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironment" },
+      { "name": "USER_HUBS", "class_name": "UserHub" }
     ],
     // A new version reaches a busy Durable Object only once it goes idle, up
     // to 15 minutes later (one chat step's budget), so a deploy rarely
@@ -21,7 +22,9 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ModelConversation"] },
     { "tag": "v2", "new_sqlite_classes": ["BackgroundJobRunner"] },
-    { "tag": "v3", "new_sqlite_classes": ["ProjectEnvironment"] }
+    { "tag": "v3", "new_sqlite_classes": ["ProjectEnvironment"] },
+    // Each user's push hub (UserHub, src/server/edge/user-hub.ts).
+    { "tag": "v4", "new_sqlite_classes": ["UserHub"] }
   ],
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000001", "localConnectionString": "postgres://test:test@127.0.0.1:1/test" }],
   "secrets": { "required": [] },
@@ -48,7 +51,8 @@
         "bindings": [
           { "name": "MODEL_CONVERSATIONS", "class_name": "ModelConversation" },
           { "name": "BACKGROUND_JOBS", "class_name": "BackgroundJobRunner" },
-          { "name": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironment" }
+          { "name": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironment" },
+          { "name": "USER_HUBS", "class_name": "UserHub" }
         ],
         "code_update_strategy": { "mode": "deferred", "max_delay": 900 }
       },
