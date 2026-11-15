@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { CircleDashed, LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
 	Tooltip,
 	TooltipContent,
@@ -18,6 +18,7 @@ import {
 	unverifiedItemDetails,
 } from "#/domain/project-environment";
 import { compactRelativeAge } from "#/domain/sidebar-chats";
+import { useAutoGrow } from "../app/use-auto-grow";
 import {
 	getProjectEnvironmentFn,
 	restoreProjectEnvironmentFn,
@@ -273,6 +274,8 @@ function RecipeEditor({
 	const [text, setText] = useState(() =>
 		JSON.stringify(editorStartingRecipe(recipe, setup), null, 2),
 	);
+	const field = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(field, text);
 	const save = useMutation({
 		mutationFn: () => saveFn({ data: { projectId, repository, recipe: text } }),
 		onSuccess: async () => {
@@ -290,6 +293,7 @@ function RecipeEditor({
 	return (
 		<div className="settings-group-body environment-editor">
 			<textarea
+				ref={field}
 				aria-label={`Environment setup for ${repository}`}
 				value={text}
 				spellCheck={false}

@@ -127,6 +127,14 @@
 ::-webkit-scrollbar-thumb:hover {
 	background-color: #666;
 }
+/* No native drag-to-resize grip on any text box. A text box grows with what is
+   typed (useAutoGrow) up to half the screen, then scrolls. */
+textarea {
+	resize: none;
+	max-height: 50dvh;
+	overflow-y: auto;
+}
+
 body {
 	margin: 0;
 }
@@ -4524,7 +4532,6 @@ a.session-title-meta:focus-visible {
 	border-radius: 8px;
 	background: transparent;
 	color: inherit;
-	resize: vertical;
 }
 
 /* Settings errors: one quiet line in the panel's type, never body-size text. */
@@ -5136,7 +5143,6 @@ details.environment-build[open] > summary .session-activity-chevron {
 	font-family: ui-monospace, "SF Mono", Menlo, monospace;
 	font-size: 12px;
 	line-height: 1.5;
-	resize: vertical;
 }
 .environment-editor .settings-form-actions {
 	margin-top: 10px;

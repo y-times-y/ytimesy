@@ -1101,7 +1101,6 @@ button.attachment-tile-body[data-state="open"] {
 	font: inherit;
 	font-size: 13px;
 	line-height: 18px;
-	resize: vertical;
 	min-height: 36px;
 }
 .session-message[data-role="assistant"] {

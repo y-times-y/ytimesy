@@ -1,11 +1,12 @@
 import { ArrowUp, X } from "lucide-react";
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, useRef, useState } from "react";
 import {
 	CANVAS_NOTE_LIMIT,
 	type CanvasElementPick,
 	type CanvasNote,
 	canvasElementLabel,
 } from "#/domain/canvas-annotation";
+import { useAutoGrow } from "../app/use-auto-grow";
 
 /** Enter saves, Shift+Enter is a new line, Escape cancels (and stays here). */
 function noteKeys(
@@ -42,6 +43,8 @@ export function NoteComposer({
 	onCancel: () => void;
 }) {
 	const [text, setText] = useState(initial);
+	const field = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(field, text);
 	const save = () => {
 		if (text.trim()) onSave(text.trim());
 	};
@@ -63,6 +66,7 @@ export function NoteComposer({
 				</span>
 			</div>
 			<textarea
+				ref={field}
 				className="canvas-composer-input"
 				// biome-ignore lint/a11y/noAutofocus: the note box opens for typing.
 				autoFocus
@@ -188,6 +192,8 @@ function NoteRow({
 	onRemove: () => void;
 }) {
 	const [draft, setDraft] = useState<string | null>(null);
+	const editField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(editField, draft ?? "");
 	const save = () => {
 		if (draft?.trim()) onEdit(draft.trim());
 		setDraft(null);
@@ -218,6 +224,7 @@ function NoteRow({
 					</button>
 				) : (
 					<textarea
+						ref={editField}
 						className="canvas-composer-input"
 						// biome-ignore lint/a11y/noAutofocus: editing was just asked for.
 						autoFocus

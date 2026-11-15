@@ -42,6 +42,7 @@ import {
 	projectFolderName,
 } from "#/domain/projects";
 import { saveErrorMessage } from "#/lib/optimistic-mutation";
+import { useAutoGrow } from "../app/use-auto-grow";
 import {
 	clearMemoryFn,
 	editMemoryFn,
@@ -901,6 +902,8 @@ export function MemoryRowItem({
 	onUndo?: () => void;
 }) {
 	const [draft, setDraft] = useState(draftText ?? row.text);
+	const editField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(editField, draft);
 	useEffect(() => {
 		if (editing) setDraft(draftText ?? row.text);
 	}, [editing, row.text, draftText]);
@@ -936,6 +939,7 @@ export function MemoryRowItem({
 		>
 			{editing ? (
 				<textarea
+					ref={editField}
 					className="memory-row-edit"
 					aria-label="Memory text"
 					maxLength={MEMORY_EDIT_TEXT_MAX}
