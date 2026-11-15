@@ -333,7 +333,17 @@ export function deferredApiTurnWorkspace(
 				});
 			});
 		options.onPhase?.("baselinesSet");
-		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
+		return {
+			workspace: {
+				machines: scoped,
+				vm,
+				cwd,
+				...("replaced" in bound && bound.replaced
+					? { replacedFrom: bound.replacedProviderRef ?? "" }
+					: {}),
+			},
+			session: bound.session,
+		};
 	}
 	/**
 	 * A reader (or a shared writer) runs in its parent's prepared checkout and
