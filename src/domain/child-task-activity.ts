@@ -20,12 +20,93 @@ export type AgentTaskActivity = AgentTask & {
 	/** Its transcript's write count: the browser sends it back as `known`. */
 	readonly itemsRev?: string;
 	/**
+	 * Each shown item's stored position (a few shown items are dropped, so
+	 * the list index is not the position): what lets `itemsDelta` rows land
+	 * on the items the browser holds.
+	 */
+	readonly itemPositions?: readonly number[];
+	/**
+	 * A helper still working: only what changed in its transcript since the
+	 * `itemsRev` the browser sent (`base`), instead of the whole transcript
+	 * and its spend (the browser keeps its own `subagent` and `contextUsage`
+	 * until the next full read).
+	 */
+	readonly itemsDelta?: ItemsDelta;
+	/**
 	 * The transcript did not change since the `itemsRev` the browser sent:
 	 * `items`, `contextUsage` and `subagent` are left out (the browser keeps
 	 * its own), so a finished helper's transcript is not read on every poll.
 	 */
 	readonly unchanged?: true;
 };
+
+/**
+ * While helpers work, the page reads only what changed in their transcripts;
+ * every this often it reads them whole, which refreshes their spend and
+ * context use (computed from whole transcripts).
+ */
+export const HELPER_FULL_READ_MS = 30_000;
+
+/** A transcript's rows written after `base` (their positions), and its length now. */
+export type ItemsDelta = {
+	readonly base: string;
+	readonly count: number;
+	/** `item` null: the view drops that row. */
+	readonly rows: readonly {
+		readonly position: number;
+		readonly item: SessionItem | null;
+	}[];
+};
+
+/** A stored transcript as the view shows it, each item with its stored position. */
+export function publicItemsWithPositions(stored: readonly SessionItem[]) {
+	const items: SessionItem[] = [];
+	const positions: number[] = [];
+	stored.forEach((item, position) => {
+		const shown = childTaskPublicItems([item])[0];
+		if (shown) {
+			items.push(shown);
+			positions.push(position);
+		}
+	});
+	return { items, positions };
+}
+
+/**
+ * The items the browser holds (at the delta's `base` revision) with the
+ * delta's rows applied. Null when they do not fit (positions missing, a row
+ * past the transcript's length): the caller reads the whole transcript.
+ */
+export function applyItemsDelta(
+	held: {
+		readonly items: readonly SessionItem[];
+		readonly positions: readonly number[];
+	},
+	delta: ItemsDelta,
+): { items: SessionItem[]; positions: number[] } | null {
+	if (held.items.length !== held.positions.length) return null;
+	if (!Number.isInteger(delta.count) || delta.count < 0) return null;
+	const byPosition = new Map<number, SessionItem>();
+	held.positions.forEach((position, index) => {
+		const item = held.items[index];
+		if (item && position < delta.count) byPosition.set(position, item);
+	});
+	for (const row of delta.rows) {
+		if (
+			!Number.isInteger(row.position) ||
+			row.position < 0 ||
+			row.position >= delta.count
+		)
+			return null;
+		if (row.item) byPosition.set(row.position, row.item);
+		else byPosition.delete(row.position);
+	}
+	const positions = [...byPosition.keys()].sort((a, b) => a - b);
+	return {
+		items: positions.map((position) => byPosition.get(position) as SessionItem),
+		positions,
+	};
+}
 
 type HelperShape = {
 	readonly id: string;
@@ -87,16 +168,31 @@ export function mergeAgentTaskActivity(
 	const held = new Map((previous ?? []).map((task) => [task.id, task]));
 	const merged: AgentTaskActivity[] = [];
 	for (const task of next) {
-		if (!task.unchanged) {
+		if (!task.unchanged && !task.itemsDelta) {
 			merged.push(task);
 			continue;
 		}
 		const before = held.get(task.id);
-		if (!before || before.unchanged) return null;
-		const { unchanged: _unchanged, ...rest } = task;
+		if (!before || before.unchanged || before.itemsDelta) return null;
+		const { unchanged: _unchanged, itemsDelta, ...rest } = task;
+		let items = before.items;
+		let itemPositions = before.itemPositions;
+		if (itemsDelta) {
+			// Only on top of exactly the revision the delta was made from.
+			if (before.itemsRev !== itemsDelta.base || !before.itemPositions)
+				return null;
+			const applied = applyItemsDelta(
+				{ items: before.items, positions: before.itemPositions },
+				itemsDelta,
+			);
+			if (!applied) return null;
+			items = applied.items;
+			itemPositions = applied.positions;
+		}
 		merged.push({
 			...rest,
-			items: before.items,
+			items,
+			...(itemPositions ? { itemPositions } : {}),
 			...(before.contextUsage ? { contextUsage: before.contextUsage } : {}),
 			...(before.subagent ? { subagent: before.subagent } : {}),
 		});

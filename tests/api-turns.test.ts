@@ -1178,3 +1178,44 @@ it("empties settled turns' conversation copies except each chat's latest and tra
 	// Already compacted rows are not visited again.
 	expect(await compactSettledTurns()).toBe(0);
 });
+
+it("reads each chat's rows written after a revision, with its length now, in one statement", async () => {
+	const { itemRowsSinceForOwner } = await import(
+		"../src/server/adapters/agent-sessions"
+	);
+	const items = Array.from({ length: 6 }, (_, index) => ({
+		kind: "agentMessage",
+		id: `i${index}`,
+		text: `item ${index}`,
+	}));
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify(items),
+	]);
+	const base = (
+		await db.query<{ rev: string }>(
+			"select items_rev::text as rev from agent_session where id=$1",
+			[sessionId],
+		)
+	).rows[0]?.rev as string;
+	await db.query("update agent_session set items=$2::jsonb where id=$1", [
+		sessionId,
+		JSON.stringify([
+			...items.slice(0, 2),
+			{ ...items[2], text: "edited" },
+			...items.slice(3),
+			{ kind: "agentMessage", id: "i6", text: "item 6" },
+		]),
+	]);
+	const read = await itemRowsSinceForOwner("alice", { [sessionId]: base });
+	const got = read.get(sessionId);
+	expect(got?.count).toBe(7);
+	expect(got?.rows.map((row) => row.position)).toEqual([2, 6]);
+	// Not another user's chat, and not a revision ahead of the chat's.
+	expect(
+		(await itemRowsSinceForOwner("mallory", { [sessionId]: base })).size,
+	).toBe(0);
+	expect(
+		(await itemRowsSinceForOwner("alice", { [sessionId]: "999999" })).size,
+	).toBe(0);
+});

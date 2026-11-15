@@ -812,6 +812,51 @@ export async function descendantAgentSessionMetadata(
 }
 
 /**
+ * For each of the owner's chats `since` names (id -> the transcript revision
+ * a reader holds): the chat's revision now, its length, and every item row
+ * written after that revision, with positions. A chat whose revision is
+ * ahead of the chat (a restored database) is absent: read it whole.
+ * One statement, so rows and revision are of the same moment.
+ */
+export async function itemRowsSinceForOwner(
+	userId: string,
+	since: Readonly<Record<string, string>>,
+): Promise<
+	Map<
+		string,
+		{
+			itemsRev: string;
+			count: number;
+			rows: { position: number; item: unknown }[];
+		}
+	>
+> {
+	const ids = Object.keys(since);
+	if (!ids.length) return new Map();
+	const result = await database().query<{
+		id: string;
+		items_rev: string;
+		count: number;
+		rows: { position: number; item: unknown }[];
+	}>(
+		`select s.id, s.items_rev::text as items_rev,
+		  (select coalesce(max(i.position)+1,0)::int from agent_session_item i where i.session_id=s.id) as count,
+		  (select coalesce(jsonb_agg(jsonb_build_object('position',i.position,'item',i.item) order by i.position),'[]'::jsonb)
+		   from agent_session_item i where i.session_id=s.id and i.rev > w.rev) as rows
+		 from agent_session s
+		 join unnest($2::uuid[], $3::bigint[]) as w(id, rev) on w.id = s.id
+		 where s.user_id=$1 and w.rev <= s.items_rev`,
+		[userId, ids, ids.map((id) => since[id])],
+	);
+	return new Map(
+		result.rows.map((row) => [
+			row.id,
+			{ itemsRev: row.items_rev, count: row.count, rows: row.rows },
+		]),
+	);
+}
+
+/**
  * Whether the owner's chat holds a user message (with id `messageId`, if
  * given), from agent_session_item's index: no transcript leaves the database.
  */

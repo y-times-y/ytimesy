@@ -36,9 +36,16 @@ export async function openChatSide(
 	sessionId: string,
 ): Promise<OpenChatSide> {
 	const [tree, recoveryPoints] = await Promise.all([
-		projectAgentTasksAndBackground(userId, projectId, sessionId).catch(
-			() => undefined,
-		),
+		// The page applies deltas (their positions come with the first read).
+		projectAgentTasksAndBackground(
+			userId,
+			projectId,
+			sessionId,
+			{},
+			{
+				deltas: true,
+			},
+		).catch(() => undefined),
 		// Only Codex and API chats show them; the read is cheap either way.
 		listConversationRecoveryPoints(userId, projectId, sessionId).catch(
 			() => undefined,
