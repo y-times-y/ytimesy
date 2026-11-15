@@ -29,6 +29,12 @@ export interface WorkspaceMachines {
 	 * never pause on their own.
 	 */
 	readonly keepAwakeForBackground?: (workspaceId: WorkspaceId) => Promise<void>;
+	/**
+	 * Gives a VM back the short idle timeout once no background command runs
+	 * on it any more (background-idle-timeout.ts checks that first). Providers
+	 * without it never pause on their own.
+	 */
+	readonly settleIdleTimeout?: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly runCapability?: (
 		workspaceId: WorkspaceId,
 		request: {
@@ -58,6 +64,15 @@ export interface WorkspaceMachines {
 		fromVmId: string,
 		toVmId: string,
 	) => Promise<void>;
+	/**
+	 * The slug for a chat's replacement VM: one generation past the slug of
+	 * the VM it replaces (nextAgentSessionMachineSlug), so provisionSession
+	 * cannot adopt the unstartable one. Providers without it use generation 2.
+	 */
+	readonly replacementSessionSlug?: (
+		sessionId: string,
+		oldVmId: string,
+	) => Promise<string>;
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;

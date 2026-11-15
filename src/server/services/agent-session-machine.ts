@@ -2,6 +2,7 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	agentSessionMachineSlug,
 	copiedSessionScratchResetCommands,
+	nextAgentSessionMachineSlug,
 	projectEnvironmentSnapshotSlug,
 	type SessionMachinePlan,
 	sessionMachinePlan,
@@ -13,6 +14,7 @@ import type { AgentTaskAccess, AgentTaskPlacement } from "#/domain/agent-task";
 import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
 import { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
+import { machineStartAbandoned } from "#/domain/machine-replacement";
 import type { MachineSizeId } from "#/domain/machine-size";
 import { sessionTitleFromText } from "#/domain/session-item";
 import { sharesParentMachine } from "#/domain/subagent";
@@ -45,7 +47,9 @@ import {
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { conversationForkPending } from "../adapters/conversation-fork";
+import { machineStartUnstartable } from "../adapters/freestyle/machine-failure";
 import { prewarmedMachine } from "../adapters/machine-prewarm";
+import { readWakeFailureStreak } from "../adapters/machine-wake-failures";
 import { purgeConversationState } from "../adapters/realtime-delivery";
 import { markFreshChatMachine } from "../adapters/setup-catch-up";
 import { replaceHelperFork } from "../adapters/subagents";
@@ -344,6 +348,8 @@ export async function bindAgentSessionMachine(
 			return {
 				session: { ...selectedSession, providerRef: recovered },
 				providerRef: recovered,
+				replaced: false,
+				replacedProviderRef: null,
 			};
 		}
 	}
@@ -376,6 +382,19 @@ export async function bindAgentSessionMachine(
 		// and API chats both run through api-turn with their transcript in the
 		// database, so the harness keeps nothing on the VM worth refusing over.
 		replaceMissingReadOnly: !selectedSession.parentSessionId,
+		replaceUnstartable: async (vmId, cause) => {
+			// Only a failed start of the VM itself counts, never capacity,
+			// allowance or auth; and only after it has failed for the whole
+			// window, read from the durable record (turns resume on other
+			// objects). A failed read never replaces.
+			if (!machineStartUnstartable(cause)) return false;
+			const streak = await readWakeFailureStreak(vmId);
+			return machineStartAbandoned({
+				firstFailureAt: streak?.firstAt ?? null,
+				failures: streak?.failures,
+				now: new Date(),
+			});
+		},
 		workspaceId: workspace.id,
 		templateSnapshotId,
 		machineSize: selectedSession.providerRef
@@ -414,6 +433,10 @@ export async function bindAgentSessionMachine(
 	return {
 		session: { ...selectedSession, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,
+		/** True when the chat's VM could not start for too long and a new one replaced it. */
+		replaced: executed.planKind === "replace-unstartable",
+		/** The VM that was replaced (left running or paused, never destroyed), else null. */
+		replacedProviderRef: executed.replacedProviderRef ?? null,
 	};
 }
 
@@ -635,10 +658,20 @@ export async function executeSessionMachinePlan(input: {
 		| "exec"
 		| "writeTextFile"
 		| "rebindRetainedSession"
+		| "replacementSessionSlug"
 	>;
 	readonly sessionId: string;
 	readonly sessionProviderRef: string | null;
 	readonly replaceMissingReadOnly?: boolean;
+	/**
+	 * Whether a VM that failed to start (with `cause`) has refused for long
+	 * enough that the chat should get a new one. Only asked for a root chat
+	 * (replaceMissingReadOnly) resuming its VM. Left out, never replaced.
+	 */
+	readonly replaceUnstartable?: (
+		vmId: string,
+		cause: unknown,
+	) => Promise<boolean>;
 	readonly restoreMissingWorkspace?: (newId: string) => Promise<void>;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
@@ -661,7 +694,10 @@ export async function executeSessionMachinePlan(input: {
 	planKind:
 		| SessionMachinePlan["kind"]
 		| "recover-read-only"
-		| "recover-checkpoint";
+		| "recover-checkpoint"
+		| "replace-unstartable";
+	/** The VM a replace-unstartable copy replaced; never destroyed (it may hold unpushed work). */
+	replacedProviderRef?: string;
 }> {
 	let snapshotId = input.templateSnapshotId;
 	let plan = sessionMachinePlan({
@@ -707,11 +743,42 @@ export async function executeSessionMachinePlan(input: {
 				await input.saveSessionProviderRef(replacement);
 				return { providerRef: replacement, planKind: "recover-checkpoint" };
 			}
+			const gone = workspaceLooksGone(failureMessage(cause));
 			if (
-				!input.replaceMissingReadOnly ||
-				!workspaceLooksGone(failureMessage(cause)) ||
-				!snapshotId
+				input.replaceMissingReadOnly &&
+				snapshotId &&
+				!gone &&
+				input.replaceUnstartable &&
+				(await input.replaceUnstartable(plan.providerRef, cause))
 			) {
+				// The old VM stays (it may hold unpushed work and expires on its
+				// own); the copy gets the next generation's slug so it cannot
+				// adopt it. A retry after a crash finds this copy by that slug.
+				const slug = input.machines.replacementSessionSlug
+					? await input.machines.replacementSessionSlug(
+							input.sessionId,
+							plan.providerRef,
+						)
+					: nextAgentSessionMachineSlug(input.sessionId, null);
+				const replacement = await copyAgentSessionFromTemplate(
+					input,
+					snapshotId,
+					slug,
+				);
+				await input.machines.rebindRetainedSession?.(
+					input.sessionId,
+					plan.providerRef,
+					replacement,
+				);
+				await input.saveSessionProviderRef(replacement);
+				await resetCopiedSessionScratch(input.machines, replacement);
+				return {
+					providerRef: replacement,
+					planKind: "replace-unstartable",
+					replacedProviderRef: plan.providerRef,
+				};
+			}
+			if (!input.replaceMissingReadOnly || !gone || !snapshotId) {
 				throw cause;
 			}
 			const replacement = await copyAgentSessionFromTemplate(input, snapshotId);
@@ -769,8 +836,9 @@ async function copyAgentSessionFromTemplate(
 		readonly machineSize?: MachineSizeId;
 	},
 	snapshotId: string,
+	machineSlug?: string,
 ) {
-	const slug = agentSessionMachineSlug(input.sessionId);
+	const slug = machineSlug ?? agentSessionMachineSlug(input.sessionId);
 	try {
 		return await input.machines.provisionSession(
 			slug,

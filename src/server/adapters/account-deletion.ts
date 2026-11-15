@@ -1,5 +1,6 @@
 import { forgetUserSessions } from "../auth/session-cache";
 import { database } from "./database";
+import { sessionSlugFamily } from "./freestyle/slug-sql";
 
 /**
  * Provider resources an account owns, collected before its rows are deleted:
@@ -106,7 +107,7 @@ export async function projectCleanupTargets(userId: string, projectId: string) {
 			union select provider_ref from owned_workspace
 			union select b.provider_ref from environment_build b join owned_workspace w on w.id=b.workspace_id
 			union select r.vm_id from workspace_retention r join owned_session s on s.id=r.session_id
-			union select a.vm_id from infrastructure_vm_admission a join owned_session s on a.slug='ytimesy-ag-'||left(replace(s.id::text,'-',''),16)
+			union select a.vm_id from infrastructure_vm_admission a join owned_session s on ${sessionSlugFamily("a.slug", "s.id")}
 			-- A first build's machine started early and not yet taken by the build.
 			union select a.vm_id from infrastructure_vm_admission a join owned_workspace w on a.slug='ytimesy-ws-'||w.id::text
 		),
@@ -148,7 +149,9 @@ export async function chatCleanupTargets(
 		vm_ids: string[] | null;
 		snapshot_ids: string[] | null;
 	}>(
-		`with retained as (select vm_id,snapshot_id from workspace_retention where user_id=$1 and session_id=any($2::uuid[]))
+		`with retained as (select vm_id,snapshot_id from workspace_retention where user_id=$1 and session_id=any($2::uuid[])
+			-- Replacement machines (a chat whose VM could not start got a new one; the old stays until it expires).
+			union select a.vm_id,null::text from infrastructure_vm_admission a join agent_session s on s.user_id=$1 and s.id=any($2::uuid[]) and ${sessionSlugFamily("a.slug", "s.id")} where a.vm_id is not null)
 		select
 			(select array_agg(distinct r.vm_id order by r.vm_id) from retained r
 				where r.vm_id<>''
