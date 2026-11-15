@@ -1,8 +1,9 @@
 name: Harness behavior regression
+# Manual only while GitHub Actions billing is failing: pushes and PRs would
+# otherwise fail with "job was not started". Restore pull_request and push
+# triggers once billing is fixed.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   behavior:
     runs-on: ubuntu-latest
