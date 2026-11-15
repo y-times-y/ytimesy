@@ -31,6 +31,7 @@ import { chatCanvases } from "#/domain/canvas";
 import { chatAddress, chatIdInAddress } from "#/domain/chat-address";
 import {
 	type AgentTaskActivity,
+	HELPER_FULL_READ_MS,
 	knownHelperRevisions,
 	mergeAgentTaskActivity,
 } from "#/domain/child-task-activity";
@@ -1139,25 +1140,40 @@ export function WorkspaceHome({
 		// biome-ignore lint/suspicious/noDocumentCookie: one small cookie; cookieStore is missing in older Safari.
 		document.cookie = openChatCookie(activeProjectId, activeSessionId);
 	}, [activeProjectId, activeSessionId]);
+	// When each chat's helpers were last read whole (HELPER_FULL_READ_MS).
+	const tasksFullReadAt = useRef<Record<string, number>>({});
 	const agentTasks = useQuery({
 		queryKey: chatSideKeys.tasks(activeProjectId, activeSessionId),
 		queryFn: async () => {
-			// Finished helpers' transcripts the page already holds are not
-			// sent again (each read was megabytes on every poll).
+			// Helpers' transcripts the page already holds are not sent again:
+			// finished ones not at all, working ones as only the rows written
+			// since (each read was megabytes, every few seconds).
 			const key = chatSideKeys.tasks(activeProjectId, activeSessionId);
 			const held = queryClient.getQueryData<readonly AgentTaskActivity[]>(key);
-			const read = (known: Record<string, string>) =>
+			const read = (known: Record<string, string>, fresh: boolean) =>
 				listProjectAgentTasks({
 					data: {
 						projectId: activeProjectId,
 						rootSessionId: activeSessionId,
 						known,
+						deltas: true,
+						fresh,
 					},
 				});
-			const next = await read(knownHelperRevisions(held));
-			return (
-				mergeAgentTaskActivity(held, next) ??
-				(await read({})).filter((task) => !task.unchanged)
+			const chat = activeSessionId ?? "";
+			const next = await read(
+				knownHelperRevisions(held),
+				Date.now() - (tasksFullReadAt.current[chat] ?? 0) >=
+					HELPER_FULL_READ_MS,
+			);
+			// A read that sent no delta read the helpers whole.
+			if (!next.some((task) => task.itemsDelta))
+				tasksFullReadAt.current[chat] = Date.now();
+			const merged = mergeAgentTaskActivity(held, next);
+			if (merged) return merged;
+			tasksFullReadAt.current[chat] = Date.now();
+			return (await read({}, true)).filter(
+				(task) => !task.unchanged && !task.itemsDelta,
 			);
 		},
 		enabled: Boolean(activeProjectId && activeSessionId),

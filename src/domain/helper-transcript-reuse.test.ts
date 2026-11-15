@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	type AgentTaskActivity,
+	applyItemsDelta,
 	knownHelperRevisions,
 	mergeAgentTaskActivity,
+	publicItemsWithPositions,
 	reusableHelperIds,
 } from "./child-task-activity";
 
@@ -112,5 +114,99 @@ describe("mergeAgentTaskActivity", () => {
 				task("c", { itemsRev: "2", unchanged: true }),
 			]),
 		).toEqual({ a: "5" });
+	});
+});
+
+describe("helper transcript deltas", () => {
+	const msg = (id: string, text = id) =>
+		({ kind: "agentMessage", id, text }) as never;
+	const hidden = (id: string) =>
+		({
+			kind: "agentMessage",
+			id,
+			text: "⁣ytimesy-child-event:abc",
+		}) as never;
+
+	it("numbers the shown items by stored position, skipping the ones the view drops", () => {
+		const shown = publicItemsWithPositions([msg("a"), hidden("h"), msg("b")]);
+		expect(shown.positions).toEqual([0, 2]);
+		expect(shown.items.map((item) => item.id)).toEqual(["a", "b"]);
+	});
+
+	it("applies changed rows: an edit, an append, a row the view drops and a shorter transcript", () => {
+		const held = { items: [msg("a"), msg("b")], positions: [0, 2] };
+		const applied = applyItemsDelta(held, {
+			base: "5",
+			count: 5,
+			rows: [
+				{ position: 2, item: msg("b", "edited") },
+				{ position: 3, item: null },
+				{ position: 4, item: msg("e") },
+			],
+		});
+		expect(applied?.positions).toEqual([0, 2, 4]);
+		expect(
+			applied?.items.map((item) => (item as { text: string }).text),
+		).toEqual(["a", "edited", "e"]);
+		// The transcript shrank: rows past its length are gone.
+		expect(
+			applyItemsDelta(held, { base: "5", count: 1, rows: [] })?.positions,
+		).toEqual([0]);
+		// A row past the transcript, or positions that do not match the items.
+		expect(
+			applyItemsDelta(held, {
+				base: "5",
+				count: 2,
+				rows: [{ position: 7, item: msg("x") }],
+			}),
+		).toBeNull();
+		expect(
+			applyItemsDelta(
+				{ items: [msg("a")], positions: [] },
+				{ base: "5", count: 1, rows: [] },
+			),
+		).toBeNull();
+	});
+
+	it("merges a delta only on top of the revision it was made from, keeping spend and context use", () => {
+		const items = [msg("a"), msg("b")];
+		const held = [
+			task("h", {
+				items,
+				itemsRev: "5",
+				itemPositions: [0, 1],
+				subagent: { steps: 4 } as never,
+				contextUsage: { context: { used: 1, limit: 2 } } as never,
+			}),
+		];
+		const delta = task("h", {
+			itemsRev: "6",
+			turnStatus: "running",
+			itemsDelta: {
+				base: "5",
+				count: 3,
+				rows: [{ position: 2, item: msg("c") }],
+			},
+		});
+		const merged = mergeAgentTaskActivity(held, [delta]);
+		expect(merged?.[0]).toMatchObject({
+			itemsRev: "6",
+			itemPositions: [0, 1, 2],
+			subagent: { steps: 4 },
+			contextUsage: { context: { used: 1, limit: 2 } },
+		});
+		expect(merged?.[0]?.items.map((item) => item.id)).toEqual(["a", "b", "c"]);
+		expect(merged?.[0]?.itemsDelta).toBeUndefined();
+		// The page's copy moved on (or never had positions): read whole.
+		expect(
+			mergeAgentTaskActivity([{ ...held[0], itemsRev: "4" } as never], [delta]),
+		).toBeNull();
+		expect(
+			mergeAgentTaskActivity(
+				[{ ...held[0], itemPositions: undefined } as never],
+				[delta],
+			),
+		).toBeNull();
+		expect(mergeAgentTaskActivity([], [delta])).toBeNull();
 	});
 });
