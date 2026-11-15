@@ -16,6 +16,7 @@ import {
 } from "#/domain/infrastructure-usage";
 import { requireInfrastructureAdmin } from "../auth/infrastructure-admin";
 import { database } from "./database";
+import { sessionSlugFamily } from "./freestyle/slug-sql";
 
 type BudgetLimits = {
 	fiveHourMicroUsd: number;
@@ -423,7 +424,7 @@ export async function reserveInfrastructureUsage(
 				// start past the limit: that turn was admitted before it.
 				const running = await client.query(
 					`select 1 from api_turn t where t.user_id=$1 and t.state in ('queued','running')
-					 and 'vm:ytimesy-ag-' || left(replace(t.session_id::text,'-',''),16)=$2 limit 1`,
+					 and left($2,3)='vm:' and ${sessionSlugFamily("substr($2,4)", "t.session_id")} limit 1`,
 					[input.userId, input.resourceKey],
 				);
 				if (!running.rows.length) {

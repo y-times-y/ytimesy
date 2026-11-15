@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
+import { nextAgentSessionMachineSlug } from "#/domain/agent-session";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import {
 	effectiveMachineResources,
@@ -166,6 +167,10 @@ export function createFreestyleWorkspaceMachines(
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		rebindRetainedSession: rebindWorkspaceRetention,
+		async replacementSessionSlug(sessionId, oldVmId) {
+			const old = await freestyle.vms.ref(oldVmId).data();
+			return nextAgentSessionMachineSlug(sessionId, old.slug);
+		},
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {
