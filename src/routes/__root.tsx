@@ -87,6 +87,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 	const region = Route.useLoaderData();
 	const strictRegion = region?.strict ?? false;
 	const analyticsOptIn = region?.analyticsOptIn ?? strictRegion;
+	const replayConsent = region?.replayConsent ?? false;
 	return (
 		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
@@ -108,6 +109,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 					<PrivacyRegionProvider
 						strict={strictRegion}
 						analyticsOptIn={analyticsOptIn}
+						replayConsent={replayConsent}
 					>
 						<AuthProviders>
 							<Analytics />

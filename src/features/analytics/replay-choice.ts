@@ -1,7 +1,8 @@
 /**
  * The visitor's own session-replay choice, kept in this browser. "declined"
- * was written by the old recording prompt and still holds; "allowed" is a
- * later "on" in Privacy choices. No entry means the default for the region.
+ * is a Reject or an "off" in Cookie settings (and an old recording prompt's
+ * decline still holds); "allowed" is an Accept or OK. No entry means the
+ * region's default (consent-tier.ts).
  */
 export const REPLAY_CHOICE_KEY = "ytimesy.replay-consent";
 export type ReplayChoice = "declined" | "allowed";
@@ -42,14 +43,20 @@ export function replayBrowserBlock(
 }
 
 /**
- * Whether replay records: the page allows it (region, and for a signed-in
- * user the current Privacy Policy), no browser signal blocks it, and the
- * visitor has not turned it off.
+ * Whether replay records: the page allows it (a signed-in user must have
+ * accepted the current Privacy Policy), no browser signal blocks it, and the
+ * visitor has not turned it off. Where consent comes first (consent-tier.ts)
+ * it also needs an Accept.
  */
 export function replayRecords(input: {
 	readonly allowed: boolean;
 	readonly block: ReplayBrowserBlock | null;
 	readonly choice: ReplayChoice | null;
+	/** Where replay waits for an Accept: only "allowed" records. */
+	readonly consentRequired?: boolean;
 }) {
-	return input.allowed && input.block === null && input.choice !== "declined";
+	if (!input.allowed || input.block !== null) return false;
+	return input.consentRequired
+		? input.choice === "allowed"
+		: input.choice !== "declined";
 }
