@@ -2,24 +2,16 @@ import { Button } from "#/components/ui/button";
 import type { ConsentTier } from "./consent-tier";
 import type { ReplayBrowserBlock, ReplayChoice } from "./replay-choice";
 
-/** The banner's words and buttons for each consent rule. */
-export function consentBannerCopy(tier: ConsentTier) {
-	if (tier === "analytics")
-		return {
-			text: "May we use analytics and record masked session replays to find and fix problems? Nothing is recorded, sent or stored unless you accept.",
-			accept: "Accept",
-			reject: "Decline",
-		};
-	if (tier === "replay")
-		return {
-			text: "We count visits and errors. May we also record masked session replays to find and fix problems?",
-			accept: "Accept",
-			reject: "Decline",
-		};
+/**
+ * The banner's words and buttons. One short sentence for every rule, as
+ * banners usually are; where each rule differs (what waits for Accept) is
+ * in the Privacy Policy and in the Cookie settings switch.
+ */
+export function consentBannerCopy(_tier: ConsentTier) {
 	return {
-		text: "We record masked session replays to find and fix problems. Text and anything you type are never recorded.",
-		accept: "OK",
-		reject: "Turn off",
+		text: "We use cookies for analytics and masked session replay to improve ytimesy.",
+		accept: "Accept",
+		reject: "Reject all",
 	};
 }
 
@@ -56,7 +48,7 @@ export function ConsentBanner(props: {
 					href="/privacy#choices"
 					className="underline underline-offset-4 hover:text-foreground"
 				>
-					Privacy Policy
+					Cookie settings
 				</a>
 			</p>
 			<div className="mt-3 flex justify-end gap-2">
