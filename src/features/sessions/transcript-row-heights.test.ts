@@ -74,4 +74,16 @@ describe("RowHeights", () => {
 		// Forgotten: back to its kind's corrected estimate.
 		expect(heights.placeholder(row("a"))).not.toBe(500);
 	});
+
+	it("knows a row's height only once it was measured at the list's width", () => {
+		const heights = new RowHeights();
+		expect(heights.hasMeasured(row("a"))).toBe(false);
+		heights.measured(row("a"), { box: 120, margins: 8 }, 600);
+		expect(heights.hasMeasured(row("a"))).toBe(true);
+		expect(heights.hasMeasured(row("b"))).toBe(false);
+		// Rows measured at another width count as unmeasured until they mount again.
+		heights.measured(row("b"), { box: 90, margins: 8 }, 300);
+		expect(heights.hasMeasured(row("a"))).toBe(false);
+		expect(heights.hasMeasured(row("b"))).toBe(true);
+	});
 });
