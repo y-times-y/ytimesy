@@ -394,7 +394,6 @@
 	border: 1px solid #ffffff2e;
 	border-radius: 7px;
 	outline: none;
-	resize: vertical;
 	background: #0e0e0e;
 	color: #f2f2f2;
 	font: inherit;
@@ -888,7 +887,6 @@ a.memory-row-action:hover {
 	border: 1px solid #ffffff2e;
 	border-radius: 7px;
 	outline: none;
-	resize: vertical;
 	background: #0e0e0e;
 	color: #f2f2f2;
 	font: inherit;

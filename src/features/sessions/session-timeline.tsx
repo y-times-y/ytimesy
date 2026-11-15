@@ -98,6 +98,7 @@ import {
 	SetupRequestItem,
 	SetupRequestRow,
 } from "#/features/projects/environment-build-progress";
+import { useAutoGrow } from "../app/use-auto-grow";
 import { CanvasCard, MemoCanvasCard } from "../canvas/canvas-card";
 import {
 	type CanvasFocus,
@@ -917,6 +918,8 @@ const QueuedMessage = memo(function QueuedMessage({
 	onSend?: (messageId: string, text?: string) => void;
 }) {
 	const [draft, setDraft] = useState<string | null>(null);
+	const editField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(editField, draft ?? "");
 	const editing = draft !== null;
 	const shown = (draft ?? item.text).trim();
 	// The setup's request waiting its turn: one line, not its paragraph.
@@ -926,6 +929,7 @@ const QueuedMessage = memo(function QueuedMessage({
 			<MessageAttachments attachments={item.attachments} />
 			{editing ? (
 				<textarea
+					ref={editField}
 					className="session-queued-edit"
 					aria-label="Edit queued message"
 					rows={Math.min(8, Math.max(2, draft.split("\n").length))}

@@ -8,7 +8,7 @@ import {
 	Wrench,
 	X,
 } from "lucide-react";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	type EnvironmentBuildFailure,
@@ -21,6 +21,7 @@ import {
 	isSetupRequestMessage,
 	PROJECT_SETUP_NAME,
 } from "#/domain/environment-setup";
+import { useAutoGrow } from "../app/use-auto-grow";
 import { requestJson } from "./api";
 
 /** How often the live view reads a running build (ms). */
@@ -175,6 +176,8 @@ export function HeldForSetupMessage({
 	onRemove?: () => void;
 }) {
 	const [draft, setDraft] = useState<string | null>(null);
+	const editField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(editField, draft ?? "");
 	const editing = draft !== null;
 	const edited = (draft ?? "").trim();
 	const progress = useEnvironmentProgress(projectId, {
@@ -201,6 +204,7 @@ export function HeldForSetupMessage({
 				{showMessage ? (
 					editing ? (
 						<textarea
+							ref={editField}
 							className="session-queued-edit"
 							aria-label="Edit held message"
 							rows={Math.min(8, Math.max(2, draft.split("\n").length))}

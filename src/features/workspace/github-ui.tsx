@@ -14,6 +14,7 @@ import type {
 	PullRequestPerson,
 	RepositoryChoices,
 } from "#/domain/pull-request-review";
+import { useAutoGrow } from "../app/use-auto-grow";
 import { requestJson } from "../projects/api";
 import { AgentMarkdown } from "../sessions/agent-markdown";
 
@@ -202,6 +203,8 @@ export function MarkdownComposer({
 }) {
 	const [mode, setMode] = useState<"write" | "preview">("write");
 	const id = useId();
+	const field = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(field, value);
 	return (
 		<div className="gh-composer">
 			<div className="gh-composer-tabs" role="tablist" aria-label={label}>
@@ -227,6 +230,7 @@ export function MarkdownComposer({
 			{mode === "write" ? (
 				<textarea
 					id={id}
+					ref={field}
 					aria-label={label}
 					className="gh-composer-input"
 					value={value}

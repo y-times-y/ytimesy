@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { RadioGroup } from "radix-ui";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
 	DEFAULT_ALLOWED_DOMAINS,
 	parseDomainList,
@@ -18,6 +18,7 @@ import {
 	optimisticMutation,
 	saveErrorMessage,
 } from "#/lib/optimistic-mutation";
+import { useAutoGrow } from "../app/use-auto-grow";
 import { readNetworkAccessFn, saveNetworkAccessFn } from "./network-access.fn";
 
 const MODES: { id: VmNetworkMode; name: string; description: string }[] = [
@@ -157,6 +158,8 @@ export function NetworkAccessView({
 	onText: (text: string) => void;
 	onSubmit: (event: FormEvent) => void;
 }) {
+	const domainsField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(domainsField, text);
 	const save = { isPending: pending };
 	const setMode = onMode;
 	const setText = onText;
@@ -200,6 +203,7 @@ export function NetworkAccessView({
 				<label className="settings-copy network-domains">
 					<span>Allowed domains, one per line</span>
 					<textarea
+						ref={domainsField}
 						aria-label="Allowed domains"
 						rows={5}
 						value={text}

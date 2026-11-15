@@ -34,6 +34,7 @@ import {
 } from "#/domain/memory-graph";
 import { memoryRows } from "#/domain/memory-overview";
 import { saveErrorMessage } from "#/lib/optimistic-mutation";
+import { useAutoGrow } from "../app/use-auto-grow";
 import { editMemoryFn, readMemoryFn, readMemoryGraphFn } from "./memory.fn";
 import { editorToReopen, memoryEditSave } from "./memory-edit-save";
 import {
@@ -701,6 +702,8 @@ function MemoryCard({
 	const { row } = cell;
 	const [editing, setEditing] = useState(Boolean(retryDraft));
 	const [draft, setDraft] = useState(retryDraft?.text ?? row.text);
+	const editField = useRef<HTMLTextAreaElement>(null);
+	useAutoGrow(editField, draft);
 	useEffect(() => {
 		if (!retryDraft) return;
 		setDraft(retryDraft.text);
@@ -746,6 +749,7 @@ function MemoryCard({
 			</header>
 			{editing ? (
 				<textarea
+					ref={editField}
 					aria-label="Memory text"
 					maxLength={MEMORY_EDIT_TEXT_MAX}
 					value={draft}
