@@ -239,8 +239,11 @@ export type SavedTurnHistory = {
 const SUBSCRIPTION_REVISION = "codex-subscription:";
 
 /** Same model on the same credentials: provider-bound items (reasoning, ids) stay valid. */
-function sameTransport(
-	saved: SavedTurnHistory,
+export function sameTransport(
+	saved: Pick<
+		SavedTurnHistory,
+		"modelId" | "connectionRevision" | "failedOver"
+	>,
 	next: { modelId: string; connectionRevision: string },
 ) {
 	if (saved.failedOver || saved.modelId !== next.modelId) return false;

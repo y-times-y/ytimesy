@@ -15,8 +15,8 @@ import type { PublicCodexSession } from "#/server/services/codex-workspace-sessi
  */
 export const WHOLE_READ_EVERY_MS = 12_000;
 
-/** Chats whose last server view is held for deltas. */
-const HELD_CHATS = 6;
+/** Chats whose last server view is held for deltas (the open one and the running ones in the background). */
+const HELD_CHATS = 12;
 
 type ChatSelection = {
 	projectId: string;

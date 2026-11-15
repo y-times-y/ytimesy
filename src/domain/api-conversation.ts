@@ -94,9 +94,13 @@ export function runtimeHandoffPrompt(
 	return runtimeHandoffEnvelope(history, prompt);
 }
 
-export function assertApiContextFits(messages: readonly ModelMessage[]) {
+export function assertApiContextFits(
+	messages: readonly ModelMessage[],
+	/** The size of a history the database prepends to `messages` (JSON characters). */
+	priorCharacters = 0,
+) {
 	// Transport/storage abuse bound, not a model context limit. The model loop compacts before inference.
-	if (JSON.stringify(messages).length > 8_000_000)
+	if (JSON.stringify(messages).length + priorCharacters > 8_000_000)
 		throw new Error(
 			"This conversation exceeds the context transport safety limit. Start a new chat with a handoff summary.",
 		);
