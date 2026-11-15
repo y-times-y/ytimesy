@@ -1,6 +1,6 @@
 import { Check, ListTodo, Plus, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { type ReactNode, useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type { CanvasThread } from "#/domain/canvas";
 import type { FileChangeEntry } from "#/domain/session-item";
@@ -10,14 +10,27 @@ import type { CanvasFocus } from "../canvas/canvas-open-context";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
-import { IssuesInspector } from "./issues-inspector";
 import type { PullRequestSummary } from "./pull-request-detail-query";
-import {
-	PullRequestInspector,
-	type PullRequestRepository,
-} from "./pull-request-inspector";
+import type { PullRequestRepository } from "./pull-request-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 import { VIEW_ICONS } from "./view-icons";
+
+// The pull request and issue panels (code and styles) load when one opens.
+const PullRequestInspector = lazy(() =>
+	import("./pull-request-inspector").then((module) => ({
+		default: module.PullRequestInspector,
+	})),
+);
+const IssuesInspector = lazy(() =>
+	import("./issues-inspector").then((module) => ({
+		default: module.IssuesInspector,
+	})),
+);
+const panelLoading = (
+	<section className="inspector-empty" aria-busy="true">
+		<p>Loading…</p>
+	</section>
+);
 
 export type ToolsView =
 	| "files"
@@ -280,32 +293,36 @@ export function WorkspaceInspector({
 					sessionId={sessionId}
 				/>
 			) : activeView === "pr" && pullRequest ? (
-				<PullRequestInspector
-					key={`${pullRequest.repositoryId}:${linkedNumber ?? pullRequest.number ?? ""}`}
-					repository={{
-						...pullRequest,
-						number: linkedNumber ?? pullRequest.number,
-					}}
-					summary={pullRequestSummary}
-					projectId={projectId}
-					harnessId={harnessId}
-					modelId={modelId}
-					currentSessionId={sessionId}
-					onReviewStarted={onReviewStarted}
-				/>
+				<Suspense fallback={panelLoading}>
+					<PullRequestInspector
+						key={`${pullRequest.repositoryId}:${linkedNumber ?? pullRequest.number ?? ""}`}
+						repository={{
+							...pullRequest,
+							number: linkedNumber ?? pullRequest.number,
+						}}
+						summary={pullRequestSummary}
+						projectId={projectId}
+						harnessId={harnessId}
+						modelId={modelId}
+						currentSessionId={sessionId}
+						onReviewStarted={onReviewStarted}
+					/>
+				</Suspense>
 			) : activeView === "issues" && pullRequest ? (
-				<IssuesInspector
-					key={pullRequest.repositoryId}
-					repository={pullRequest}
-					projectId={projectId}
-					harnessId={harnessId}
-					modelId={modelId}
-					onChatStarted={onReviewStarted}
-					onOpenPullRequest={(number) => {
-						setLinkedPull({ repositoryId: pullRequest.repositoryId, number });
-						onActiveViewChange("pr");
-					}}
-				/>
+				<Suspense fallback={panelLoading}>
+					<IssuesInspector
+						key={pullRequest.repositoryId}
+						repository={pullRequest}
+						projectId={projectId}
+						harnessId={harnessId}
+						modelId={modelId}
+						onChatStarted={onReviewStarted}
+						onOpenPullRequest={(number) => {
+							setLinkedPull({ repositoryId: pullRequest.repositoryId, number });
+							onActiveViewChange("pr");
+						}}
+					/>
+				</Suspense>
 			) : activeView === "canvas" ? (
 				<CanvasInspector
 					canvases={canvases}
