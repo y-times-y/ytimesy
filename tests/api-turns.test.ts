@@ -1420,6 +1420,22 @@ it("continues a settled turn's history inside the database and seeds only the me
 	});
 	expect(stale?.messages).toEqual([...settled, ...tail]);
 	expect(stale?.messagesAfter).toBeNull();
+	// A settled copy is named by its count, whatever the row's version now.
+	const byCount = await turnHistorySince(next?.id as string, lease, itemsRev, {
+		turnId: first.id,
+		version: "elsewhere",
+		settledCount: 4,
+	});
+	expect(byCount?.messages).toEqual(tail);
+	expect(
+		(
+			await turnHistorySince(next?.id as string, lease, itemsRev, {
+				turnId: first.id,
+				version: "elsewhere",
+				settledCount: 3,
+			})
+		)?.messagesAfter,
+	).toBeNull();
 	// The base changed after the send was planned: the send is refused.
 	await db.query(
 		"update api_turn set updated_at=now()+interval '1 second' where id=$1",

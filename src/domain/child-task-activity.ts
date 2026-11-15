@@ -41,11 +41,11 @@ export type AgentTaskActivity = AgentTask & {
 };
 
 /**
- * While helpers work, the page reads only what changed in their transcripts;
- * every this often it reads them whole, which refreshes their spend and
- * context use (computed from whole transcripts).
+ * While helpers work, the page reads only what changed in their transcripts
+ * (spend and context use come with each delta, from the turns' starts);
+ * every this often it reads them whole anyway, as a safety net.
  */
-export const HELPER_FULL_READ_MS = 30_000;
+export const HELPER_FULL_READ_MS = 10 * 60_000;
 
 /** A transcript's rows written after `base` (their positions), and its length now. */
 export type ItemsDelta = {
@@ -193,8 +193,13 @@ export function mergeAgentTaskActivity(
 			...rest,
 			items,
 			...(itemPositions ? { itemPositions } : {}),
-			...(before.contextUsage ? { contextUsage: before.contextUsage } : {}),
-			...(before.subagent ? { subagent: before.subagent } : {}),
+			// A delta carries them read from the turns' starts; else the held ones.
+			...((rest.contextUsage ?? before.contextUsage)
+				? { contextUsage: rest.contextUsage ?? before.contextUsage }
+				: {}),
+			...((rest.subagent ?? before.subagent)
+				? { subagent: rest.subagent ?? before.subagent }
+				: {}),
 		});
 	}
 	return merged;

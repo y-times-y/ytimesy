@@ -14,12 +14,10 @@ import {
 } from "#/domain/child-task-activity";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { isSideChat } from "#/domain/side-chat";
-import {
-	type SubagentTaskView,
-	subagentTaskViews,
-} from "#/domain/subagent-tree";
+import { subagentTaskViews } from "#/domain/subagent-tree";
 import { transcriptItemsForOwner } from "#/server/adapters/agent-session-items";
 import {
+	agentSessionItemsOfKindsForOwner,
 	agentSessionMetadataForOwner,
 	backgroundCommandItemsForOwner,
 	descendantAgentSessionMetadata,
@@ -28,6 +26,9 @@ import {
 } from "#/server/adapters/agent-sessions";
 import { pendingSteeringMessages } from "#/server/adapters/server-peer-inbox";
 import { backgroundCommandMaxSeconds } from "#/server/services/api-command-scope";
+
+/** The items spend, context use and a finished helper's end are read from (turn starts). */
+const SPEND_ITEM_KINDS = ["userMessage", "notice"] as const;
 
 /** How a poll wants its helpers' transcripts. */
 export type AgentTaskReadMode = {
@@ -147,7 +148,7 @@ export async function projectAgentTasksAndBackground(
 		})
 			? deltas
 			: null;
-	const [transcripts, rootBackgroundItems] = await Promise.all([
+	const [transcripts, rootBackgroundItems, spendItems] = await Promise.all([
 		transcriptItemsForOwner(userId, byDelta ? [] : open),
 		// Their background commands, from the rows that record them only.
 		backgroundCommandItemsForOwner(userId, [
@@ -155,17 +156,32 @@ export async function projectAgentTasksAndBackground(
 			...(byDelta ? open : []),
 			...reused,
 		]),
+		// Read by delta, spend and context use still come from the only rows
+		// they are made of (the turns' starts), not whole transcripts.
+		byDelta
+			? agentSessionItemsOfKindsForOwner(userId, open, SPEND_ITEM_KINDS)
+			: null,
 	]);
 	const descendants = shown.map((session) => ({
 		...session,
 		items: transcripts.get(session.id) ?? [],
 	}));
 	const byId = new Map(descendants.map((session) => [session.id, session]));
-	// Spend needs whole transcripts: not computed from a delta (the browser
-	// keeps the last one until its next whole read).
-	const subagents = byDelta
-		? new Map<string, SubagentTaskView>()
-		: subagentTaskViews(root.id, [root, ...descendants], Date.now());
+	// Spend and context use need only the turns' starts: read by delta, from
+	// those rows alone (spendItems).
+	const subagents = subagentTaskViews(
+		root.id,
+		[
+			root,
+			...(spendItems
+				? descendants.map((session) => ({
+						...session,
+						items: spendItems.get(session.id) ?? [],
+					}))
+				: descendants),
+		],
+		Date.now(),
+	);
 	const pending = await pendingSteeringMessages(
 		descendants
 			.filter((session) => session.turnStatus === "running")
@@ -189,10 +205,17 @@ export async function projectAgentTasksAndBackground(
 				unchanged: true as const,
 			};
 		const delta = byDelta?.get(task.id);
+		const deltaContextUsage = spendItems
+			? recordedContextUsage(
+					sessionItemsFromUnknown(spendItems.get(task.id) ?? []),
+				)
+			: undefined;
 		if (delta)
 			return {
 				...task,
 				...(queuedSteering.length ? { queuedSteering } : {}),
+				...(subagent ? { subagent } : {}),
+				...(deltaContextUsage ? { contextUsage: deltaContextUsage } : {}),
 				items: [],
 				turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
 				itemsRev: delta.itemsRev,
