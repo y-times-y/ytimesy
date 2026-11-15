@@ -9,6 +9,8 @@
  * Keyed by turn: chat objects can share an isolate.
  */
 
+import type { ClaudeCodeFeed } from "./claude-code-runner";
+
 /** How long a quiet, unwatched turn sleeps between looks at its run. */
 export const CLAUDE_STEP_PAUSE_MS = 15_000;
 /** A step runs at least this long before it may pause (a wake is not free). */
@@ -17,6 +19,8 @@ export const CLAUDE_STEP_MIN_AWAKE_MS = 4_000;
 type TurnHooks = {
 	/** Someone has the chat open live (a socket or an event stream). */
 	readonly watched: () => boolean;
+	/** The run's output pushed to the chat's object, where the feed is on. */
+	readonly feed?: ClaudeCodeFeed;
 };
 
 const hooks = new Map<string, TurnHooks>();
@@ -41,6 +45,11 @@ export function claudeTurnMayPause(turnId: string) {
 	} catch {
 		return false;
 	}
+}
+
+/** The turn's feed, when its executor offers one (claude-feed.ts). */
+export function claudeTurnFeed(turnId: string) {
+	return hooks.get(turnId)?.feed;
 }
 
 /** The step ends early; its next one should start after `ms`. */
