@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { jsonbText } from "../../domain/jsonb";
 import type { SessionItem } from "../../domain/session-item";
 
 /** Stays well under the 2 MB limit on one SQLite value in a Durable Object. */
@@ -27,19 +28,26 @@ export class TurnHistoryCache {
 			id integer primary key check(id=1), turn_id text not null, items_rev text not null)`);
 		// The last turn's model history as of its row version (api_turn.updated_at),
 		// kept across turns: the next turn continuing it reads only what follows.
-		sql.exec(`create table if not exists chat_messages_copy(
-			id integer primary key check(id=1), turn_id text not null, version text not null)`);
+		// `settled`: the copy is the turn's final history (its settling write
+		// was mirrored here), which Postgres then keeps unchanged.
+		sql.exec("drop table if exists chat_messages_copy");
+		sql.exec(`create table if not exists chat_messages_kept(
+			id integer primary key check(id=1), turn_id text not null, version text not null,
+			settled integer not null default 0)`);
+		sql.exec(`create table if not exists turn_history_settled(
+			turn_id text primary key)`);
 	}
 
 	/** The last turn's history at row version `version` (kept when it ended). */
 	chatMessagesCopy(): {
 		turnId: string;
 		version: string;
+		settled: boolean;
 		messages: ModelMessage[];
 	} | null {
 		const copy = this.sql
-			.exec<{ turn_id: string; version: string }>(
-				"select turn_id,version from chat_messages_copy where id=1",
+			.exec<{ turn_id: string; version: string; settled: number }>(
+				"select turn_id,version,settled from chat_messages_kept where id=1",
 			)
 			.toArray()[0];
 		if (!copy) return null;
@@ -48,6 +56,7 @@ export class TurnHistoryCache {
 			? {
 					turnId: copy.turn_id,
 					version: copy.version,
+					settled: copy.settled === 1,
 					messages: JSON.parse(messages),
 				}
 			: null;
@@ -102,13 +111,22 @@ export class TurnHistoryCache {
 			kept.turn_id,
 		);
 		this.sql.exec("delete from turn_history_version");
+		const settled =
+			this.sql
+				.exec(
+					"select 1 from turn_history_settled where turn_id=?",
+					kept.turn_id,
+				)
+				.toArray().length > 0;
+		this.sql.exec("delete from turn_history_settled");
 		if (keepMessages)
 			this.sql.exec(
-				"insert into chat_messages_copy values(1,?,?) on conflict(id) do update set turn_id=excluded.turn_id,version=excluded.version",
+				"insert into chat_messages_kept values(1,?,?,?) on conflict(id) do update set turn_id=excluded.turn_id,version=excluded.version,settled=excluded.settled",
 				kept.turn_id,
 				version,
+				settled ? 1 : 0,
 			);
-		else this.sql.exec("delete from chat_messages_copy");
+		else this.sql.exec("delete from chat_messages_kept");
 		this.sql.exec(
 			"delete from turn_history_items_rev where turn_id<>?",
 			kept.turn_id,
@@ -142,6 +160,8 @@ export class TurnHistoryCache {
 		previous?: string,
 		/** The chat's transcript revision this write left (agent_session.items_rev). */
 		itemsRev?: string,
+		/** This write settled the turn (finalizeApiTurn). */
+		settled?: boolean,
 	) {
 		if (previous !== undefined && this.version(turnId) !== previous) {
 			this.clear(turnId);
@@ -159,9 +179,18 @@ export class TurnHistoryCache {
 			this.clear(turnId);
 			return;
 		}
+		// As Postgres stores them (jsonbText: NUL replaced), so a copy reads
+		// back exactly what a read from Postgres would.
 		if (history.messages)
-			this.store(turnId, "messages", JSON.stringify(history.messages));
-		this.store(turnId, "items", JSON.stringify(history.items));
+			this.store(turnId, "messages", jsonbText(history.messages));
+		this.store(turnId, "items", jsonbText(history.items));
+		if (settled)
+			this.sql.exec(
+				"insert into turn_history_settled values(?) on conflict(turn_id) do nothing",
+				turnId,
+			);
+		else
+			this.sql.exec("delete from turn_history_settled where turn_id=?", turnId);
 		this.sql.exec(
 			"insert into turn_history_version values(?,?) on conflict(turn_id) do update set version=excluded.version",
 			turnId,
@@ -187,14 +216,16 @@ export class TurnHistoryCache {
 			this.sql.exec("delete from turn_history_version");
 			this.sql.exec("delete from turn_history_items_rev");
 			this.sql.exec("delete from chat_items_copy");
-			this.sql.exec("delete from chat_messages_copy");
+			this.sql.exec("delete from chat_messages_kept");
+			this.sql.exec("delete from turn_history_settled");
 			return;
 		}
 		this.sql.exec("delete from turn_history where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_version where turn_id=?", turnId);
 		this.sql.exec("delete from turn_history_items_rev where turn_id=?", turnId);
 		this.sql.exec("delete from chat_items_copy where turn_id=?", turnId);
-		this.sql.exec("delete from chat_messages_copy where turn_id=?", turnId);
+		this.sql.exec("delete from chat_messages_kept where turn_id=?", turnId);
+		this.sql.exec("delete from turn_history_settled where turn_id=?", turnId);
 	}
 
 	private version(turnId: string) {

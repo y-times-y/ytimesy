@@ -16,7 +16,12 @@ export async function turnHistorySince(
 	turnId: string,
 	leaseId: string,
 	itemsRev: string,
-	messagesCopy?: { readonly turnId: string; readonly version: string },
+	messagesCopy?: {
+		readonly turnId: string;
+		readonly version: string;
+		/** The copy is that turn's settled history: its count names it whatever the row's version. */
+		readonly settledCount?: number;
+	},
 ): Promise<{
 	messages: ModelMessage[];
 	/** `messages` follow this many messages of the copy (null: they are the whole history). */
@@ -36,7 +41,8 @@ export async function turnHistorySince(
 			changed: { position: number; item: SessionItem }[];
 		}>(
 			`with c as (select t.base_count as after from api_turn t
-			  where t.id=$1 and t.base_turn_id::text=$4::text and t.base_version=$5::text and t.base_count is not null)
+			  where t.id=$1 and t.base_turn_id::text=$4::text and t.base_count is not null
+			   and (t.base_version=$5::text or t.base_count=$6::int))
 			 select case when exists(select 1 from c) then (select coalesce(jsonb_agg(e order by n),'[]'::jsonb)
 			   from jsonb_array_elements(t.messages) with ordinality x(e,n) where n > (select after from c)) else t.messages end as messages,
 			 (select after from c) as messages_after,
@@ -51,6 +57,7 @@ export async function turnHistorySince(
 				itemsRev,
 				messagesCopy?.turnId ?? null,
 				messagesCopy?.version ?? null,
+				messagesCopy?.settledCount ?? null,
 			],
 		)
 	).rows[0];

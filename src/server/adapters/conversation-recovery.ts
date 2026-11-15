@@ -274,9 +274,12 @@ async function transcriptBefore(
 
 const TURN_MESSAGES = "turn-messages-";
 
-/** Named by the turn and its row version: only that exact history is ever found under it. */
-const turnMessagesName = (turnId: string, version: string) =>
-	`${TURN_MESSAGES}${turnId.replaceAll(/[^a-zA-Z0-9-]/g, "-")}-${createHash("sha256").update(version).digest("hex").slice(0, 16)}`;
+/**
+ * Named by the turn and its message count: a settled turn's history no
+ * longer changes (only emptied by compaction), so that pair names exactly it.
+ */
+const turnMessagesName = (turnId: string, count: number) =>
+	`${TURN_MESSAGES}${turnId.replaceAll(/[^a-zA-Z0-9-]/g, "-")}-${Math.trunc(count)}`;
 
 const isTurnMessagesObject = (path: string) =>
 	path.slice(path.lastIndexOf("/") + 1).startsWith(TURN_MESSAGES);
@@ -289,10 +292,10 @@ const isTurnMessagesObject = (path: string) =>
 export function turnMessagesObject(
 	userId: string,
 	sessionId: string,
-	turn: { readonly turnId: string; readonly version: string },
+	turn: { readonly turnId: string; readonly count: number },
 ): string | null {
 	if (!checkpointStorageConfigured()) return null;
-	return `${EXPIRING_PREFIX}${checkpointObjectPrefix(userId, sessionId)}${turnMessagesName(turn.turnId, turn.version)}.enc`;
+	return `${EXPIRING_PREFIX}${checkpointObjectPrefix(userId, sessionId)}${turnMessagesName(turn.turnId, turn.count)}.enc`;
 }
 
 /** Stores a turn's final model history where turnMessagesObject points (expires like points). */
@@ -300,15 +303,14 @@ export async function storeTurnMessages(input: {
 	userId: string;
 	sessionId: string;
 	turnId: string;
-	/** The turn row's version (api_turn.updated_at) these messages are. */
-	version: string;
+	/** The settled turn's whole history, as Postgres holds it. */
 	messages: readonly ModelMessage[];
 }) {
 	if (!checkpointStorageConfigured()) return;
 	await uploadCheckpoint(
 		input.userId,
 		input.sessionId,
-		turnMessagesName(input.turnId, input.version),
+		turnMessagesName(input.turnId, input.messages.length),
 		JSON.stringify(input.messages),
 		{ expiring: true },
 	);
