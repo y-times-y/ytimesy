@@ -44,6 +44,7 @@ import {
 	type XaiSubscriptionView,
 	xaiSubscriptionMessage,
 } from "#/domain/xai-subscription";
+import { ReplayChoiceSection } from "#/features/analytics/replay-choice-setting";
 import { authClient } from "../auth/client";
 import { ContinueSessionCard } from "../local-import/continue-session-card";
 import { PastImports } from "../local-import/past-imports";
@@ -255,7 +256,12 @@ export function ProjectSettings({
 										onSignOut={onSignOut}
 									/>
 								) : null}
-								{section === "privacy" ? <TrainingConsentSettings /> : null}
+								{section === "privacy" ? (
+									<>
+										<TrainingConsentSettings />
+										<ReplayChoiceSection />
+									</>
+								) : null}
 								{section === "memory" ? <MemorySettings /> : null}
 								{section === "archived" ? <ArchivedSettings /> : null}
 								{section === "usage" ? (

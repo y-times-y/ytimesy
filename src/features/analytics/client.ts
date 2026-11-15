@@ -6,6 +6,13 @@ import {
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
 import { redactDeep, replaySafeUrl } from "#/domain/redact-secrets";
+import {
+	type ReplayChoice,
+	readReplayChoice,
+	replayBrowserBlock,
+	replayRecords,
+	writeReplayChoice,
+} from "./replay-choice";
 import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
 
 let client: Promise<PostHog | null> | undefined;
@@ -44,8 +51,8 @@ function analyticsClient(): Promise<PostHog | null> {
 					capture_unhandled_rejections: true,
 					capture_console_errors: false,
 				},
-				// Replay starts only for a signed-in user outside the EU/UK
-				// (setAnalyticsUser), masked by replayPrivacy.
+				// Replay starts outside the opt-in privacy regions, for visitors
+				// and signed-in users (setAnalyticsUser), masked by replayPrivacy.
 				disable_session_recording: true,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
@@ -105,33 +112,38 @@ function analyticsClient(): Promise<PostHog | null> {
 	return client;
 }
 
-/** Do Not Track turns off everything the browser would send, replay included. */
-function doNotTrack() {
-	return typeof navigator !== "undefined" && navigator.doNotTrack === "1";
-}
-
-/** Set by the old recording prompt (removed); a "Decline" given there still holds. */
-export const DECLINED_REPLAY_KEY = "ytimesy.replay-consent";
-function replayDeclined() {
-	try {
-		return globalThis.localStorage?.getItem(DECLINED_REPLAY_KEY) === "declined";
-	} catch {
-		return false;
-	}
-}
+/**
+ * Whether this page may record (setAnalyticsUser): outside the opt-in
+ * privacy regions, for anyone signed out and for a signed-in user who has
+ * accepted the current Privacy Policy.
+ */
+let replayAllowed = false;
 
 /**
- * Masked session replay runs for signed-in users, except in the EU/UK
- * (privacy-region.ts), under Do Not Track, or after an earlier decline;
- * signing out stops it.
+ * Masked session replay (replayPrivacy) runs when the page allows it, no
+ * browser signal (Do Not Track, Global Privacy Control) blocks it and the
+ * visitor has not turned it off in Privacy choices; otherwise it stops.
  */
-async function applyReplay(posthog: PostHog, record: boolean) {
-	if (record && !doNotTrack() && !replayDeclined()) {
+async function applyReplay(posthog: PostHog) {
+	const record = replayRecords({
+		allowed: replayAllowed,
+		block: replayBrowserBlock(),
+		choice: readReplayChoice(),
+	});
+	if (record) {
 		// Our own copy of the recorder, fetched only now: the SDK's would load
 		// from /static/<v>/posthog-recorder.js, a file name blockers list.
 		await import("./replay-recorder");
 		if (!posthog.sessionRecordingStarted()) posthog.startSessionRecording();
 	} else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
+}
+
+/** Privacy choices: turning replay off stops it at once; on resumes it where allowed. */
+export function setReplayChoice(choice: ReplayChoice) {
+	writeReplayChoice(choice);
+	void analyticsClient()
+		.then((posthog) => (posthog ? applyReplay(posthog) : undefined))
+		.catch(() => undefined);
 }
 
 /** Error tracking keeps the exception itself and the page path, nothing else. */
@@ -168,7 +180,8 @@ export function setAnalyticsUser(
 			// one page's events across two IDs.
 			else if (posthog.get_property("$user_state") === "identified")
 				posthog.reset();
-			return applyReplay(posthog, Boolean(userId) && options.replay);
+			replayAllowed = options.replay;
+			return applyReplay(posthog);
 		})
 		.catch(() => undefined);
 }
