@@ -289,17 +289,26 @@ export function VirtualTranscript({
 		if (!entry) continue;
 		// The server paints the estimate and the hydrating page matches it;
 		// rows are only skipped once hydrated, by then with their real height.
-		const placeholder = hydrated
-			? (placeholders.current.get(entry.key) ??
-				rowHeights.placeholder(entry, estimate(entry)))
-			: entry.estimate;
+		// Once measured, its real height; before, the guess chosen as it mounted.
+		const measuredRow = hydrated && rowHeights.hasMeasured(entry);
+		const placeholder = !hydrated
+			? entry.estimate
+			: measuredRow
+				? rowHeights.placeholder(entry)
+				: (placeholders.current.get(entry.key) ??
+					rowHeights.placeholder(entry, estimate(entry)));
 		if (hydrated) mounted.set(entry.key, placeholder);
 		// Only a row well away from the view may skip layout: the browser
 		// starts every row it newly may skip with its content skipped for a
 		// frame, so the rows in view (the newest, at hydration) would flash
 		// in and shift. A row near the view is laid out, so one nearing it
 		// is already there; a view of unknown size skips none.
-		const away = hydrated && rowAwayFromView(row, viewTop, viewHeight);
+		// ...and only one whose real height is known: a row skipped before it
+		// was ever rendered keeps an estimate, and jumps when it is laid out
+		// on nearing the view. An unmeasured row renders once, is measured,
+		// and may skip from then on.
+		const away =
+			hydrated && rowAwayFromView(row, viewTop, viewHeight) && measuredRow;
 		if (row.start - laidOut > 0.5)
 			children.push(spacer(`space:${row.index}`, row.start - laidOut));
 		children.push(

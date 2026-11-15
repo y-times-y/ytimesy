@@ -93,6 +93,11 @@ export class RowHeights {
 		return Math.round(row.estimate * this.#ratio(row.kind));
 	}
 
+	/** Whether the row was measured at the list's current width: its height is known, not guessed. */
+	hasMeasured(row: SizedRow): boolean {
+		return this.#known(row) !== undefined;
+	}
+
 	/**
 	 * The room (px, without margins) a mounted row takes while the browser
 	 * skips laying it out: its own last height, or its estimate (the list's
