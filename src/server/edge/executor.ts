@@ -417,14 +417,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		} catch {
 			return;
 		}
-		if (!copy || copy.turnId !== ended.turnId) return;
-		const { messages, version } = copy;
+		// Only a settled copy is the history Postgres keeps (and a send names).
+		if (!copy || copy.turnId !== ended.turnId || !copy.settled) return;
+		const { messages } = copy;
 		this.ctx.waitUntil(
 			storeTurnMessages({
 				userId: ended.userId,
 				sessionId: ended.sessionId,
 				turnId: ended.turnId,
-				version,
 				messages,
 			}).catch((error) =>
 				console.warn("Turn history object was not stored.", {
@@ -626,7 +626,15 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			turnId,
 			leaseId,
 			copy.itemsRev,
-			messagesCopy ?? undefined,
+			messagesCopy
+				? {
+						turnId: messagesCopy.turnId,
+						version: messagesCopy.version,
+						...(messagesCopy.settled
+							? { settledCount: messagesCopy.messages.length }
+							: {}),
+					}
+				: undefined,
 		);
 		if (!row || row.wholeItems) return null;
 		const items = seededTranscript(copy.items, row.count, row.changed);

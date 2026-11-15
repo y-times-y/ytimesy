@@ -442,7 +442,7 @@ export async function previousTurnHistory(
 		}>(
 			`select id,state,model_id,connection_revision,failover,updated_at::text as version,
 			 case when jsonb_typeof(messages)='array' then jsonb_array_length(messages) else 0 end as count,
-			 octet_length(messages::text) as bytes,
+			 length(messages::text) as bytes,
 			 case when jsonb_typeof(messages)='array' then ${UNANSWERED_TOOL_CALL_SQL("messages")} else true end as unanswered
 			 from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1`,
 			[userId, sessionId],
@@ -840,6 +840,7 @@ export async function finalizeApiTurn(
 			messages ? { messages: [...messages], items } : { items },
 			settledRow.previous,
 			settledRow.items_rev,
+			true,
 		);
 		await wakeConversationProgress();
 	}

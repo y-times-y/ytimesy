@@ -182,6 +182,7 @@ it("keeps the ended turn's history at the version its last write left, for the t
 	expect(cache.chatMessagesCopy()).toEqual({
 		turnId: TURN,
 		version: await turnVersion(),
+		settled: true,
 		messages: final,
 	});
 	// A turn whose last write was not mirrored here keeps no messages copy.

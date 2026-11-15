@@ -208,5 +208,10 @@ describe("helper transcript deltas", () => {
 			),
 		).toBeNull();
 		expect(mergeAgentTaskActivity([], [delta])).toBeNull();
+		// A delta carrying spend read from the turns' starts replaces the held one.
+		const fresher = mergeAgentTaskActivity(held, [
+			{ ...delta, subagent: { steps: 9 } as never },
+		]);
+		expect(fresher?.[0]?.subagent).toMatchObject({ steps: 9 });
 	});
 });
