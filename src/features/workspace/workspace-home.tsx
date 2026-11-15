@@ -85,6 +85,7 @@ import {
 	selectedProjectIdAfterDelete,
 } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
+import type { PullRequestChat } from "./pull-request-marks";
 import {
 	latestPullRequestHandoff,
 	OPENING_PULL_REQUEST_TEXT,
@@ -1116,6 +1117,19 @@ export function WorkspaceHome({
 		});
 		return { ...chat, pr: mark?.pr ?? null };
 	});
+	// The chat working on each pull request, by its head branch.
+	const pullRequestChats = new Map<string, PullRequestChat>();
+	for (const chat of sidebarChats) {
+		const head =
+			chat.workingBranch ||
+			(chat.workspaceId ? workspacePublicationBranch(chat.workspaceId) : null);
+		if (!head || pullRequestChats.has(head)) continue;
+		pullRequestChats.set(head, {
+			id: chat.id,
+			title: chat.title,
+			working: chat.turnStatus === "running",
+		});
+	}
 	// The next page load renders the rows with the PRs read now.
 	const livePrMarks =
 		pullRequestsRead && chats.data
@@ -3978,6 +3992,8 @@ export function WorkspaceHome({
 										onStartDesktop={() => requestDesktop()}
 										onViewIntent={intendView}
 										pullRequest={chatPullRequestRepository}
+										pullRequestChats={pullRequestChats}
+										onOpenChat={openChat}
 										pullRequestSummary={
 											sessionPullRequest
 												? listedPullRequestSummary(sessionPullRequest)

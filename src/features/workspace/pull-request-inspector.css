@@ -1602,3 +1602,153 @@
 		flex-wrap: wrap;
 	}
 }
+/* Row marks: people first. */
+.gh-mark-none {
+	color: #5c5c5c;
+}
+.gh-chat-rail {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 150px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: #9a9a9a;
+	font: inherit;
+	cursor: pointer;
+}
+.gh-chat-rail:hover {
+	color: #eee;
+}
+.gh-chat-rail-line {
+	flex: none;
+	width: 2px;
+	height: 22px;
+	border-radius: 2px;
+	background: #3a3a3a;
+}
+.gh-chat-rail-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gh-chat-rail[data-working] {
+	color: #cfe0ff;
+}
+.gh-chat-rail[data-working] .gh-chat-rail-line {
+	background: linear-gradient(180deg, #3a3a3a, #6ea8ff, #3a3a3a);
+	background-size: 100% 300%;
+	animation: gh-rail-sweep 1.6s linear infinite;
+}
+@keyframes gh-rail-sweep {
+	from {
+		background-position: 0 100%;
+	}
+	to {
+		background-position: 0 -100%;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.gh-chat-rail[data-working] .gh-chat-rail-line {
+		animation: none;
+		background: #6ea8ff;
+	}
+}
+.gh-review-mark {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	white-space: nowrap;
+}
+.gh-mark-av {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+}
+.gh-mark-av[data-empty] {
+	border: 1px dashed #666;
+	color: #8a8a8a;
+}
+.gh-mark-av[data-empty] img,
+.gh-mark-av[data-empty] > :first-child:not(.gh-mark-badge) {
+	opacity: 0.45;
+}
+.gh-mark-badge {
+	position: absolute;
+	right: -4px;
+	bottom: -4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid #141414;
+	box-sizing: content-box;
+	background: #555;
+	color: #111;
+}
+.gh-mark-badge[data-kind="approved"] {
+	background: #6fcf8e;
+}
+.gh-mark-badge[data-kind="changes"] {
+	background: #f0a36f;
+}
+.gh-mark-badge[data-kind="requested"] {
+	background: #8a8a8a;
+}
+.gh-review-mark[data-kind="approved"] .gh-review-word {
+	color: #6fcf8e;
+}
+.gh-review-mark[data-kind="changes"] .gh-review-word,
+.gh-review-mark[data-kind="yours"] .gh-review-word {
+	color: #f0a36f;
+}
+.gh-checks-cell {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	white-space: nowrap;
+}
+.gh-ckbar {
+	display: inline-flex;
+	gap: 2px;
+}
+.gh-ckbar i {
+	width: 4px;
+	height: 14px;
+	border-radius: 2px;
+	background: #3a3a3a;
+}
+.gh-ckbar i[data-state="passed"] {
+	background: #6fcf8e;
+}
+.gh-ckbar i[data-state="failed"] {
+	background: #f08a8a;
+}
+.gh-checks-count {
+	color: #8a8a8a;
+	font-variant-numeric: tabular-nums;
+}
+.gh-checks-failing {
+	color: #f08a8a;
+}
+.gh-diffstat {
+	display: inline-flex;
+	gap: 6px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.gh-diffstat b {
+	color: #6fcf8e;
+	font-weight: 500;
+}
+.gh-diffstat i {
+	color: #f08a8a;
+	font-style: normal;
+}

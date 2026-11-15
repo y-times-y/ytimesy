@@ -12,6 +12,7 @@ import { PullRequestInspector } from "../../src/features/workspace/pull-request-
 import "../../src/styles.css";
 
 const author = { login: "morgan", avatarUrl: null, bot: false };
+const reviewer = { login: "jules", avatarUrl: null, bot: false };
 const viewer = { login: "riley", avatarUrl: null, bot: false };
 const date = "2026-11-15T00:00:00Z";
 const repository = { installationId: 11, repositoryId: 22 };
@@ -344,6 +345,22 @@ window.fetch = async (input, init) => {
 			draft: index % 5 === 2,
 			state: index % 5 === 2 ? "draft" : "open",
 			labels: [labels[index % 2]],
+			head: index % 4 === 1 ? "ytimesy/polling" : `feature/row-${index}`,
+			checks: [
+				{ passed: 8, failed: 0, pending: 0 },
+				{ passed: 5, failed: 2, pending: 1 },
+				{ passed: 3, failed: 0, pending: 4 },
+				null,
+			][index % 4],
+			review: [
+				{ kind: "approved", by: reviewer },
+				{ kind: "requested", from: reviewer, you: true },
+				{ kind: "changes", by: reviewer },
+				{ kind: "requested", from: reviewer, you: false },
+				null,
+			][index % 5] as RepositoryPullRequest["review"],
+			additions: 12 + index * 17,
+			deletions: index * 5,
 		}),
 	);
 	return Response.json({
@@ -380,6 +397,18 @@ function Fixture() {
 						<PullRequestInspector
 							key={number ?? "list"}
 							repository={{ ...repository, number }}
+							pullRequestChats={
+								new Map([
+									[
+										"ytimesy/polling",
+										{ id: "c1", title: "Polling fix", working: true },
+									],
+									[
+										"feature/row-2",
+										{ id: "c2", title: "Terminal reconnect", working: false },
+									],
+								])
+							}
 						/>
 					) : (
 						<IssuesInspector
