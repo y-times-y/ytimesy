@@ -64,6 +64,15 @@ export interface WorkspaceMachines {
 		fromVmId: string,
 		toVmId: string,
 	) => Promise<void>;
+	/**
+	 * The slug for a chat's replacement VM: one generation past the slug of
+	 * the VM it replaces (nextAgentSessionMachineSlug), so provisionSession
+	 * cannot adopt the unstartable one. Providers without it use generation 2.
+	 */
+	readonly replacementSessionSlug?: (
+		sessionId: string,
+		oldVmId: string,
+	) => Promise<string>;
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;

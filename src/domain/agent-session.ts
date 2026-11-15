@@ -10,8 +10,38 @@ export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
 }
 
-export function agentSessionMachineSlug(sessionId: string) {
-	return `ytimesy-ag-${compactId(sessionId)}`;
+/**
+ * A chat's VM slug: 'ytimesy-ag-<id16>' for its first machine, and
+ * 'ytimesy-ag-<id16>-r<n>' (n >= 2) for the machine that replaced an
+ * unstartable one (see nextAgentSessionMachineSlug). Slugs are matched in SQL
+ * by sessionSlugMatch (freestyle/slug-sql.ts); keep both in step.
+ */
+export function agentSessionMachineSlug(sessionId: string, generation = 1) {
+	const base = `ytimesy-ag-${compactId(sessionId)}`;
+	return generation > 1 ? `${base}-r${generation}` : base;
+}
+
+/** The generation a slug names for this chat (1 for the original), or null for another chat's or a foreign slug. */
+export function agentSessionSlugGeneration(sessionId: string, slug: string) {
+	const base = agentSessionMachineSlug(sessionId);
+	if (slug === base) return 1;
+	const match = /^-r([2-9]|[1-9][0-9]+)$/.exec(slug.slice(base.length));
+	return slug.startsWith(base) && match ? Number(match[1]) : null;
+}
+
+/**
+ * The slug for the machine replacing the one named `currentSlug`: one
+ * generation on, so a replacement never adopts the VM it replaces. An
+ * unknown current slug counts as the original machine.
+ */
+export function nextAgentSessionMachineSlug(
+	sessionId: string,
+	currentSlug: string | null | undefined,
+) {
+	const generation = currentSlug
+		? (agentSessionSlugGeneration(sessionId, currentSlug) ?? 1)
+		: 1;
+	return agentSessionMachineSlug(sessionId, generation + 1);
 }
 
 export type SessionMachinePlan =
